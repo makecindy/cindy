@@ -495,7 +495,7 @@ describe('Shared create project picker', () => {
     const action = newMakerDraftRouteSource.slice(actionStart, actionEnd);
 
     expect(handler).toContain('applyDraftTarget({');
-    expect(action).toContain('if (deviceChanged || workingDirChanged)');
+    expect(action).toContain('if (fileSystemChanged || workingDirChanged)');
     expect(action).toContain('setWtBaseRepo(null)');
     expect(action).toContain("setWtSourceBranch('')");
   });
@@ -798,7 +798,7 @@ describe('Shared create project picker', () => {
     const action = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
-    const wt = action.slice(action.indexOf('if (deviceChanged || workingDirChanged) {'));
+    const wt = action.slice(action.indexOf('if (fileSystemChanged || workingDirChanged) {'));
     const block = wt.slice(0, wt.indexOf('      }'));
     expect(block).not.toContain('setWtEnabled(false);');
     expect(block).toContain('setWtBaseRepo(null);');
@@ -830,15 +830,17 @@ describe('Shared create project picker', () => {
       actionStart,
       newMakerDraftRouteSource.indexOf('const handleRemoteProjectAdded = useCallback(', actionStart),
     );
-    // dlSel 只在换设备时重种;同机保留用户选择(下一条断言它还会按新能力重校)。
-    expect(action).toContain('if (deviceChanged) {\n          setDlSel(\n');
+    // dlSel 只在换设备或显式替换源任务运行配置时重种;同机保留用户选择。
+    expect(action).toContain(
+      'if (deviceChanged || req.replaceRemoteRuntime === true) {\n          setDlSel(\n',
+    );
     // extraDirs 只在换设备、或进入「对话」时清 —— 同机换项目那些目录仍然有效,
     // 不传则 store 保持原值。
     expect(action).toContain(
-      '...(deviceChanged || req.workingDir == null ? { extraDirs: [] } : {}),',
+      '...(fileSystemChanged || req.workingDir == null ? { extraDirs: [] } : {}),',
     );
     // 但 worktree 的 repo/branch 探测态照常重置 —— 换项目就是换 repo；用户偏好保留。
-    expect(action).toContain('if (deviceChanged || workingDirChanged) {');
+    expect(action).toContain('if (fileSystemChanged || workingDirChanged) {');
     expect(action).not.toContain('setWtEnabled(false);');
   });
 
@@ -880,18 +882,24 @@ describe('Shared create project picker', () => {
    * 同名文件。这比换设备更隐蔽 —— `src/index.ts`、`.claude/agents/reviewer.md` 这类路径在同机两个
    * 项目间恰好都存在的概率相当高,agent 于是读到毫不相关的内容而没有任何报错。
    *
-   * 现在 chip 按 `deviceChanged || workingDirChanged` 剥;而路径型**附件**(存绝对路径)仍然只在
-   * 换设备时丢 —— 原先两件事共用一个条件,所以必然有一边是错的。
+   * 现在 chip 按 `fileSystemChanged || workingDirChanged` 剥;而路径型**附件**(存绝对路径)
+   * 在本机 / SSH host / 被控设备任一文件系统变化时丢弃 —— 同一文件系统内换项目不丢。
    */
   it('strips project-relative mention chips whenever the project changes, not just the device', () => {
     const action = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     expect(action).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (fileSystemChanged || workingDirChanged) stripProjectRelativeMentions();',
     );
     // 附件是另一个条件 —— 别再把这两件事合回一个 gate。
-    expect(action).toContain('if (deviceChanged) dropPathBackedAttachments();');
+    expect(action).toContain('if (fileSystemChanged) dropPathBackedAttachments();');
+    expect(action).toContain(
+      'const remoteHostChanged = (req.remoteHostId ?? null) !== draft.remoteHostId;',
+    );
+    expect(action).toContain(
+      'const fileSystemChanged = deviceChanged || remoteHostChanged;',
+    );
     // 拆分后的两个函数各自绑住自己的解析基准,注释里写明了理由。
     expect(newMakerDraftRouteSource).toContain('const stripProjectRelativeMentions = useCallback(');
     expect(newMakerDraftRouteSource).toContain('const dropPathBackedAttachments = useCallback(');
@@ -1065,7 +1073,7 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     expect(action).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (fileSystemChanged || workingDirChanged) stripProjectRelativeMentions();',
     );
   });
 
@@ -1270,14 +1278,15 @@ describe('Shared create project picker', () => {
    * 变红,#807 的 review 里约十轮都在补格子(切设备漏 worktree 三态、同机换项目误重置运行配置、
    * 指向设备前忘了作废快照、回落路径两样清理都漏、picker 换项目不作废 worktree……)。
    *
-   * 收敛之后只需要锁两件事:① 四条路径都**只声明目标**,不自己做副作用;② 每处连带状态绑对了
-   * 它真正依赖的那一半(设备 / 项目)。第五条路径出现时,①会直接失败,而②保证它自动是对的。
+   * 收敛之后只需要锁两件事:① 每条路径都**只声明目标**,不自己做副作用;② 每处连带状态绑对了
+   * 它真正依赖的那一半(设备 / 项目)。新路径出现时,①会直接失败,而②保证它自动是对的。
    */
   it('routes every draft-target transition through the single action', () => {
-    // 五条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
-    // “对话”分组导航请求。声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
+    // 设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、“对话”
+    // 分组导航请求,以及当前任务种子(device-link 种子分目标落地 / 能力校准两阶段)。
+    // 声明本身是回调声明,不匹配这个模式,所以数出来的就是调用点。
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
-    expect(calls.length).toBe(5);
+    expect(calls.length).toBe(6);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
     // patchDraft 仍可出现(入场清 extraDirs、发送后复位),但不得再带设备字段。
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');
@@ -1305,18 +1314,18 @@ describe('Shared create project picker', () => {
     // 变化判据本身。
     expect(body).toContain('const deviceChanged = req.deviceId !== prevDeviceId;');
     expect(body).toContain('const workingDirChanged = req.workingDir !== draft.workingDir;');
-    // mention chip 存**项目相对**路径 → 设备或项目任一变化都要剥(第 29 轮 P1)。
+    // mention chip 存**项目相对**路径 → 文件系统或项目任一变化都要剥。
     expect(body).toContain(
-      'if (deviceChanged || workingDirChanged) stripProjectRelativeMentions();',
+      'if (fileSystemChanged || workingDirChanged) stripProjectRelativeMentions();',
     );
-    // 路径型附件存**绝对**路径 → 只有换设备才失效,同机换项目不该丢用户的附件。
-    expect(body).toContain('if (deviceChanged) dropPathBackedAttachments();');
+    // 路径型附件存**绝对**路径 → 换文件系统才失效,同机换项目不该丢用户的附件。
+    expect(body).toContain('if (fileSystemChanged) dropPathBackedAttachments();');
     // 三个无 TTL 快照:绑「指向一台**新**设备」或「用户主动重新验证了这台设备」,
     // **不是**「指向设备就作废」—— 详见下面 does not evict… 那条用例的机制说明。
     expect(body).toContain('if (req.deviceId && (deviceChanged || req.remoteSnapshot)) {');
     expect(body).toContain('evictDeviceCapabilities(req.deviceId);');
     // worktree 三态绑 (设备, 项目) 二元组 = 绑 repo。
-    expect(body).toContain('if (deviceChanged || workingDirChanged) {');
+    expect(body).toContain('if (fileSystemChanged || workingDirChanged) {');
     // 判据读 draft.workingDir,必须在依赖数组里,否则闭包比的是上一次渲染的值。
     const deps = action.slice(action.indexOf('    [', action.indexOf('patchDraft({')));
     expect(deps.slice(0, deps.indexOf('  );'))).toContain('draft.workingDir,');

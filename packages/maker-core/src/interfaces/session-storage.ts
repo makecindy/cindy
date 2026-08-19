@@ -17,6 +17,7 @@ export interface SessionMeta {
   effort?: Effort;
   permissionMode?: PermissionMode;
   fastMode?: boolean;
+  planMode?: boolean;
   /** Persist the host-owned Review purpose atomically with session creation. */
   reviewMode?: true;
   createdAt: number;

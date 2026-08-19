@@ -264,8 +264,13 @@ import {
   useDeleteScheduleWithSessions,
   type DeletedScheduleGeneratedSessionResult,
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
+import { getSessionFor } from '@/lib/makerTransport';
 import { resolveDialogueDeviceTarget, type DialogueDeviceTarget } from './lib/dialogueCreateTarget';
 import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
+import {
+  makeSeededDialogueRouteState,
+  useNewMakerFromActiveSession,
+} from './hooks/useNewMakerFromActiveSession';
 
 const log = createLogger('CCAgentSidebarUpper');
 // perf-baseline(与 MessageStream 的 perf/session-switch 探针同通道):
@@ -1264,6 +1269,12 @@ function ExpandedView({
   // 与本地会话一视同仁并入同一份列表 → groupSessions 自动归到独立 device: 远程项目。
   // 远端会话不在本地 DB,故走独立 store,不污染 sessionsStore / 本地链路。
   const remoteProjectSessions = useRemoteProjectSessions();
+  const activeSourceSession = useMemo(
+    () =>
+      remoteProjectSessions.find((session) => session.id === viewedSessionId)
+      ?? sessions.find((session) => session.id === viewedSessionId),
+    [viewedSessionId, remoteProjectSessions, sessions],
+  );
   // 机器切换栏选中机器后整体过滤:本机 → 只本地会话;远程 → 只该机器会话。
   // 过滤在源头做,下游 grouping / pinned / projects / dialogues / date-grouped / search 自动继承。
   const selectedMachineId = useEffectiveSelectedMachineId();
@@ -1822,6 +1833,10 @@ function ExpandedView({
   // viewedSessionId 同理:handleActionClick 只在触发归档那一刻用它算重定向目标。
   const viewedSessionIdRef = useRef(viewedSessionId);
   viewedSessionIdRef.current = viewedSessionId;
+  const dialogueFallbackEpochRef = useRef(0);
+  useEffect(() => () => {
+    dialogueFallbackEpochRef.current += 1;
+  }, []);
   const selectedSessionIdsRef = useRef(selectedSessionIds);
   selectedSessionIdsRef.current = selectedSessionIds;
   const selectionAnchorSessionIdRef = useRef(selectionAnchorSessionId);
@@ -2422,11 +2437,42 @@ function ExpandedView({
         target = deviceTarget;
       }
       handleClearSelection();
+      const navigateDialogue = (sourceSession: Session | undefined = activeSourceSession) => {
+        navigate('/cc-agent/new', {
+          state: makeSeededDialogueRouteState(sourceSession, target),
+        });
+      };
+      if (!activeSourceSession && viewedSessionId) {
+        const sourceSessionId = viewedSessionId;
+        const fallbackEpoch = ++dialogueFallbackEpochRef.current;
+        void getSessionFor(sourceSessionId)
+          .then((sourceSession) => {
+            if (
+              dialogueFallbackEpochRef.current !== fallbackEpoch
+              || viewedSessionIdRef.current !== sourceSessionId
+            ) return;
+            navigateDialogue(sourceSession);
+          })
+          .catch(() => {
+            if (
+              dialogueFallbackEpochRef.current !== fallbackEpoch
+              || viewedSessionIdRef.current !== sourceSessionId
+            ) return;
+            navigateDialogue();
+          });
+        return;
+      }
       navigate('/cc-agent/new', {
-        state: makeDialogueNewMakerRouteState(target),
+        state: makeSeededDialogueRouteState(activeSourceSession, target),
       });
     },
-    [handleClearSelection, navigate, selectedDialogueDeviceResolution],
+    [
+      activeSourceSession,
+      handleClearSelection,
+      navigate,
+      selectedDialogueDeviceResolution,
+      viewedSessionId,
+    ],
   );
 
   const handleLinkCodexProject = useCallback(
@@ -3809,12 +3855,12 @@ function CollapsedView({
   // 折叠视图会把失败误传成"完成了")。
   const urgentSet = useSessionAttentionUrgencySet();
   // delayed-create:与 ExpandedView 同——单按钮 navigate transient draft 单例。
-  // 与展开态 SidebarTopNav 的通用「新建」同口径:只 navigate,不清空 newMakerDraft,
-  // 保留用户上次在草稿页选好的「对话或选择项目」(切走再回来不重置);清空语义只属于
-  // 「新建对话」等显式入口(handleCreateDialogue)。
+  // 与展开态 SidebarTopNav 的通用「新建」同口径:有当前任务则以它为一次性种子,
+  // 没有当前任务才回落 newMakerDraft 的持久偏好。
+  const { startGeneric: startNewMakerFromActiveSession } = useNewMakerFromActiveSession();
   const handleNewCCS = useCallback(() => {
-    navigate('/cc-agent/new', { state: makeNewMakerRouteState('generic') });
-  }, [navigate]);
+    startNewMakerFromActiveSession();
+  }, [startNewMakerFromActiveSession]);
   const handleNavScheduled = useCallback(() => {
     navigate('/cc-agent/scheduled');
   }, [navigate]);

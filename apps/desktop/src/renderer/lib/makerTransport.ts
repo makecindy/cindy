@@ -321,7 +321,12 @@ export function getSessionFor(sessionId: string): Promise<Session> {
   // to the wrong maker instance.
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
-  return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
+  const deviceName = remoteProjectsStore.getDeviceName(deviceId);
+  return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]).then((session) => ({
+    ...(session as Session),
+    deviceLinkDeviceId: deviceId,
+    ...(deviceName ? { deviceLinkDeviceName: deviceName } : {}),
+  }));
 }
 
 /**

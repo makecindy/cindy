@@ -53,6 +53,8 @@ export interface DeviceLinkCreateParams {
    * 落 `sessions.provider_id`,使新远程会话首个请求即按所选来源路由(与会话内切来源对称)。
    */
   providerId?: string | null;
+  /** 仅 true 时进入远端 create payload;缺省 / false 保持旧端兼容。 */
+  planMode?: boolean;
 }
 
 export interface DeviceLinkCreateArgs {
@@ -71,6 +73,8 @@ export interface DeviceLinkCreateArgs {
   extraDirs?: string[];
   /** 仅当草稿显式选了非空来源时出现(null/空 = 跟随默认路由 → 不放进 args,provider_id 留 NULL)。 */
   providerId?: string;
+  /** 仅 true 时透传给被控端;旧端缺字段时保持普通执行模式。 */
+  planMode?: boolean;
 }
 
 export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLinkCreateArgs {
@@ -92,6 +96,7 @@ export function buildDeviceLinkCreateArgs(p: DeviceLinkCreateParams): DeviceLink
     ...(p.extraDirs && p.extraDirs.length > 0 ? { extraDirs: p.extraDirs } : {}),
     // providerId 同理:仅非空显式来源才放进 args;null/空 → 不带 → 被控端 provider_id 留 NULL(默认路由)。
     ...(p.providerId ? { providerId: p.providerId } : {}),
+    ...(p.planMode ? { planMode: true } : {}),
   };
 }
 
@@ -108,6 +113,7 @@ export interface DeviceLinkSubmissionCandidate {
   fastMode: boolean;
   /** 用户显式选中的被控端来源;null / 省略 = 跟随被控端默认路由。 */
   providerId?: string | null;
+  planMode?: boolean;
 }
 
 export interface DeviceLinkSubmissionParams {
@@ -157,6 +163,7 @@ export function resolveDeviceLinkSubmission(p: DeviceLinkSubmissionParams): Devi
     effort: p.candidate.effort,
     permissionMode: p.candidate.permissionMode,
     fastMode: p.candidate.fastMode,
+    planMode: p.candidate.planMode,
     extraDirs: p.extraDirs,
     providerId,
   });
@@ -220,6 +227,7 @@ export function buildProvisionalRemoteSession(p: ProvisionalRemoteSessionParams)
     // Session.agentKind 是本机形态('cc' | 'codex' | 'pi'),args 里是 maker-core 形态,这里转回来。
     agentKind: p.args.agentKind === 'claude-code' ? 'cc' : p.args.agentKind,
     extraDirs: p.args.extraDirs ?? [],
+    planModeEnabled: p.args.planMode === true,
     createdAt: p.nowIso,
     updatedAt: p.nowIso,
   };

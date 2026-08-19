@@ -27,6 +27,8 @@ export interface RemoteDraftDefaults {
   fastMode?: boolean;
   permissionMode?: string;
   providerId?: string | null;
+  /** 兼容旧端：缺省 / false 均按普通执行模式处理。 */
+  planMode?: boolean;
   /**
    * 被控端「每个模型各自记忆」的 effort / fast。控制端在远程草稿里切到**非当前选中**模型时,
    * 按目标 model id 查这两张表还原被控端记的值;旧版被控端不回 → undefined → 回落该模型 capabilities 默认。
@@ -59,6 +61,8 @@ export interface DeviceLinkDraftSelection {
   permissionMode?: PermissionMode;
   /** 来源透传,合法性交 ChatInput 校准;null = 跟随被控端默认路由。 */
   providerId: string | null;
+  /** 仅远端明确支持且源任务开启时为 true;缺省 = 普通执行模式。 */
+  planMode?: boolean;
 }
 
 /**
@@ -101,6 +105,10 @@ export function resolveDeviceLinkDraftDefaults(
   const models = capabilities.availableModels;
   const providerId = remoteDraft?.providerId ?? null;
   const permissionMode = pickPermissionMode(capabilities, remoteDraft?.permissionMode);
+  const planMode =
+    remoteDraft?.planMode === true && capabilities.planMode?.supported === true
+      ? true
+      : undefined;
 
   // 要解析哪个模型:控制端本次显式 targetModel(切模型)永远优先。初始 seed 只有在**新端明确
   // 回传未选过模型**时才采用区域目录默认；旧端缺字段时保守保留 remoteDraft.model，避免
@@ -132,6 +140,7 @@ export function resolveDeviceLinkDraftDefaults(
       fastMode: false,
       permissionMode,
       providerId,
+      ...(planMode ? { planMode } : {}),
     };
   }
 
@@ -157,7 +166,14 @@ export function resolveDeviceLinkDraftDefaults(
       : (chosen.defaultEffort ?? chosen.efforts[0] ?? wantedEffort ?? 'high');
   const fastMode = Boolean(capabilities.hasFastMode && chosen.supportsFastMode && wantedFast);
 
-  return { model: chosen.id, effort, fastMode, permissionMode, providerId };
+  return {
+    model: chosen.id,
+    effort,
+    fastMode,
+    permissionMode,
+    providerId,
+    ...(planMode ? { planMode } : {}),
+  };
 }
 
 /** 被控端草稿权限档仍在被控端支持列表里则带上,否则 undefined(ChatInput 回落自身默认)。 */

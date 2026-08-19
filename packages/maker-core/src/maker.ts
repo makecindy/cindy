@@ -684,6 +684,7 @@ export class Maker {
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
+          planMode: opts.planMode,
           reviewMode: opts.reviewMode,
           parentSessionId: opts.parentSessionId,
           // remoteHostId: 远端 session 把目标机器持久化, 之后 resume / list 都能识别。

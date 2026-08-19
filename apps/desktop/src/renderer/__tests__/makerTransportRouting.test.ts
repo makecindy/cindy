@@ -203,9 +203,14 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     invoke.mockClear();
     remoteProjectsStore.clear();
 
-    await getSessionFor('rs');
+    const session = await getSessionFor('rs');
 
     expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:get', ['rs']);
+    expect(session).toMatchObject({
+      id: 'rs',
+      workingDir: '/remote/worktree',
+      deviceLinkDeviceId: 'dev-1',
+    });
   });
 
   it('regenerateSessionTitleFor:镜像清空期间仍在被控端自动起名，不回落控制端本机', async () => {

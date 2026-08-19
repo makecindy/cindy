@@ -1,4 +1,5 @@
 import type { DialogueDeviceTarget } from './dialogueCreateTarget';
+import type { NewMakerSessionSeed } from './newMakerSessionSeed';
 
 export interface NewMakerDialogueTargetRequest {
   requestId: string;
@@ -13,11 +14,22 @@ export interface NewMakerFolderPickerRequest {
 export interface NewMakerRouteState {
   workspacePrompt: 'generic' | 'dialogue';
   dialogueTargetRequest?: NewMakerDialogueTargetRequest;
+  sessionTargetRequest?: NewMakerSessionTargetRequest;
   folderPickerRequest?: NewMakerFolderPickerRequest;
 }
 
 let dialogueTargetRequestSequence = 0;
 let folderPickerRequestSequence = 0;
+let sessionTargetRequestSequence = 0;
+
+export interface NewMakerSessionTargetRequest {
+  requestId: string;
+  deviceId: string | null;
+  deviceName: string | null;
+  workingDir: string | null;
+  remoteHostId: string | null;
+  runtime: NewMakerSessionSeed['runtime'];
+}
 
 /**
  * “对话”分组每次点击都生成新 requestId。同路由重复 navigate 不会 remount 创建页，
@@ -33,6 +45,24 @@ export function makeDialogueNewMakerRouteState(
       requestId: `${Date.now()}-${dialogueTargetRequestSequence}`,
       deviceId: target?.deviceId ?? null,
       deviceName: target?.deviceName ?? null,
+    },
+  };
+}
+
+export function makeSessionTargetRouteState(
+  seed: NewMakerSessionSeed,
+  workspacePrompt: 'generic' | 'dialogue',
+): NewMakerRouteState {
+  sessionTargetRequestSequence += 1;
+  return {
+    workspacePrompt,
+    sessionTargetRequest: {
+      requestId: 'seed-request-' + Date.now() + '-' + sessionTargetRequestSequence,
+      deviceId: seed.target.deviceId,
+      deviceName: seed.target.deviceName,
+      workingDir: seed.target.workingDir,
+      remoteHostId: seed.target.remoteHostId,
+      runtime: seed.runtime,
     },
   };
 }
@@ -87,5 +117,69 @@ export function consumeNewMakerDialogueTargetRequest(state: unknown): unknown {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
   if (!Object.prototype.hasOwnProperty.call(state, 'dialogueTargetRequest')) return state;
   const { dialogueTargetRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
+  return remainingState;
+}
+
+export function readNewMakerSessionTargetRequest(
+  state: unknown,
+): NewMakerSessionTargetRequest | null {
+  if (!state || typeof state !== 'object') return null;
+  const request = (state as Record<string, unknown>).sessionTargetRequest;
+  if (!request || typeof request !== 'object') return null;
+  const record = request as Record<string, unknown>;
+  if (typeof record.requestId !== 'string' || record.requestId.length === 0) return null;
+  const deviceId = record.deviceId;
+  const deviceName = record.deviceName;
+  const workingDir = record.workingDir;
+  const remoteHostId = record.remoteHostId;
+  if (
+    (deviceId !== null && (typeof deviceId !== 'string' || deviceId.length === 0))
+    || (deviceName !== null && typeof deviceName !== 'string')
+    || (workingDir !== null && (typeof workingDir !== 'string' || workingDir.length === 0))
+    || (remoteHostId !== null && (typeof remoteHostId !== 'string' || remoteHostId.length === 0))
+  ) {
+    return null;
+  }
+  if (deviceId === null && deviceName !== null) return null;
+  if (deviceId !== null && remoteHostId !== null) return null;
+  const runtime = record.runtime;
+  const runtimeRecord = runtime as Record<string, unknown> | undefined;
+  if (
+    !runtimeRecord
+    || typeof runtimeRecord !== 'object'
+    || (
+      runtimeRecord.vendor !== 'cc'
+      && runtimeRecord.vendor !== 'codex'
+      && runtimeRecord.vendor !== 'pi'
+    )
+    || typeof runtimeRecord.model !== 'string'
+    || runtimeRecord.model.length === 0
+    || typeof runtimeRecord.effort !== 'string'
+    || runtimeRecord.effort.length === 0
+    || (
+      typeof runtimeRecord.providerId !== 'string'
+      && runtimeRecord.providerId !== null
+    )
+    || typeof runtimeRecord.permissionMode !== 'string'
+    || runtimeRecord.permissionMode.length === 0
+    || typeof runtimeRecord.planMode !== 'boolean'
+    || typeof runtimeRecord.fastMode !== 'boolean'
+  ) {
+    return null;
+  }
+  return {
+    requestId: record.requestId,
+    deviceId,
+    deviceName,
+    workingDir,
+    remoteHostId,
+    runtime: runtimeRecord as NewMakerSessionTargetRequest['runtime'],
+  };
+}
+
+export function consumeNewMakerSessionTargetRequest(state: unknown): unknown {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return state;
+  if (!Object.prototype.hasOwnProperty.call(state, 'sessionTargetRequest')) return state;
+  const { sessionTargetRequest: _consumed, ...remainingState } = state as Record<string, unknown>;
   return remainingState;
 }
