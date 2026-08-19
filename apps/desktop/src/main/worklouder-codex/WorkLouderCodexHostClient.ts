@@ -65,6 +65,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private disposePromise: Promise<void> | null = null;
   private finishDispose: (() => void) | null = null;
   private disposeTimer: ReturnType<typeof setTimeout> | null = null;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private agentKeyPressHandler: ((slot: number) => void) | null = null;
   private deviceActivityHandler: (() => void) | null = null;
   private hidInputHandler: ((event: WorkLouderCodexHidEvent) => void) | null = null;
@@ -510,6 +511,10 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       clearTimeout(this.disposeTimer);
       this.disposeTimer = null;
     }
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
     if (this.child === child) {
       try {
         child.kill();
@@ -544,17 +549,20 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.clearStableConnection();
     const child = this.child;
     if (child) {
+      if (this.disconnectTimer) {
+        clearTimeout(this.disconnectTimer);
+        this.disconnectTimer = null;
+      }
+      this.disconnectTimer = setTimeout(
+        () => this.completeDispose(child),
+        this.deps.disposeTimeoutMs ?? 1_000,
+      );
+      this.disconnectTimer.unref?.();
       try {
         child.postMessage({ kind: 'stop' } satisfies WorkLouderCodexHostRequest);
       } catch {
-        // The host may already be gone; killing it is still enough to release HID.
+        this.completeDispose(child);
       }
-      try {
-        child.kill();
-      } catch {
-        // Teardown is best effort once the user has asked this instance to let go.
-      }
-      if (this.child === child) this.child = null;
     }
     this.lastStatus = null;
     this.consecutiveCrashes = 0;

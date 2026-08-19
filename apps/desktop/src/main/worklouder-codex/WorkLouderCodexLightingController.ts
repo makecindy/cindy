@@ -187,10 +187,15 @@ export class WorkLouderCodexLightingController {
   }
 
   applySettings(settings: WorkLouderCodexSettings): void {
+    const turningOff = this.settings.deviceEnabled && !settings.deviceEnabled;
     this.settings = cloneWorkLouderCodexSettings(settings);
     this.pendingAgentKeyTap = null;
     this.lightingDimmed = false;
     this.clearWindowRevealTimer();
+    if (turningOff) {
+      this.stopJoystickScroll();
+      this.releaseHeldVoice();
+    }
     this.sink.setDeviceEnabled?.(settings.deviceEnabled);
     if (!settings.deviceEnabled) this.connectionStatus = 'disabled';
     this.publishAgentSlots();

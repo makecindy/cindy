@@ -76,9 +76,12 @@ describe('WorkLouderCodexHostClient', () => {
     client.setDeviceEnabled(false);
 
     expect(child.postMessage).toHaveBeenCalledWith({ kind: 'stop' });
-    expect(child.kill).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith('disabled');
     expect(fork).toHaveBeenCalledTimes(1);
+
+    child.emit('message', { kind: 'stopped' });
+    expect(child.kill).toHaveBeenCalledOnce();
 
     client.probe();
     expect(fork).toHaveBeenCalledTimes(2);
@@ -86,6 +89,27 @@ describe('WorkLouderCodexHostClient', () => {
 
     client.setDeviceEnabled(true);
     expect(fork).toHaveBeenCalledTimes(2);
+  });
+
+  it('kills a host that never acknowledges stop after disable', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork: () => child,
+        log: logger(),
+        disposeTimeoutMs: 50,
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      client.setDeviceEnabled(false);
+
+      expect(child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('starts HID listening even when there is no lighting activity', () => {
