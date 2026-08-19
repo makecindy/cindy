@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decodeWindowsRegistryBase64Lines,
   decodeWindowsPathKindLines,
+  decodeWindowsPathKindsFromProbeError,
   findWindowsExecutablesOnPath,
   gitInstallRootFromPath,
   gitPathsForInstallRoot,
@@ -85,6 +86,32 @@ describe('Windows Git/PATH helpers', () => {
     });
     expect(captured).toContain(git);
     expect(result).toBe(`C:\\Windows;${cmd}`);
+  });
+
+  it('keeps path records emitted before a bounded probe timeout', () => {
+    const root = 'C:\\PortableGit';
+    const cmd = `${root}\\cmd`;
+    const git = `${cmd}\\git.exe`;
+    const partialOutput = [
+      `D\t${Buffer.from(cmd, 'utf16le').toString('base64')}`,
+      `F\t${Buffer.from(git, 'utf16le').toString('base64')}`,
+    ].join('\r\n');
+    const timeout = Object.assign(new Error('probe timed out'), { stdout: partialOutput });
+
+    expect(decodeWindowsPathKindsFromProbeError(timeout)).toEqual(new Map([
+      [cmd.toLowerCase(), 'directory'],
+      [git.toLowerCase(), 'file'],
+    ]));
+
+    expect(resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: `\\\\offline-server\\Git;${cmd};C:\\Windows`,
+      probes: {
+        readRegistryInstallPaths: () => [ '\\\\offline-server\\Git' ],
+        findGitExecutablesOnPath: () => [git],
+        probePathKinds: () => decodeWindowsPathKindsFromProbeError(timeout),
+      },
+    })).toBe(`\\\\offline-server\\Git;${cmd};C:\\Windows`);
   });
 
   it('discovers Git install paths from registry probes', () => {

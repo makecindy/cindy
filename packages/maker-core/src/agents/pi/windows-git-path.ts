@@ -129,6 +129,14 @@ export function decodeWindowsPathKindLines(output: string): Map<string, WindowsP
   return kinds;
 }
 
+/** Preserve records emitted before a bounded native probe fails or times out. */
+export function decodeWindowsPathKindsFromProbeError(error: unknown): Map<string, WindowsPathKind> {
+  const partialOutput = (error as { stdout?: string | Buffer } | undefined)?.stdout;
+  if (typeof partialOutput === 'string') return decodeWindowsPathKindLines(partialOutput);
+  if (Buffer.isBuffer(partialOutput)) return decodeWindowsPathKindLines(partialOutput.toString('utf8'));
+  return new Map();
+}
+
 /**
  * Resolve a batch of filesystem metadata in one native subprocess with one
  * total timeout. A disconnected UNC share or mapped drive can therefore delay
@@ -170,7 +178,12 @@ function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMa
       },
     );
     return decodeWindowsPathKindLines(output);
-  } catch {
+  } catch (error) {
+    // `execFileSync` attaches partial stdout to timeout errors. Keep records
+    // emitted before a disconnected UNC/mapped-drive candidate blocked the
+    // batch; discarding them would also discard already-probed local Git paths.
+    const partialKinds = decodeWindowsPathKindsFromProbeError(error);
+    if (partialKinds.size > 0) return partialKinds;
     // Filesystem discovery is best-effort. PATH resolution must remain fail-open.
     return new Map();
   }
