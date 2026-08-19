@@ -6,8 +6,10 @@
 ## 定位
 
 DSH 是 Cindy 的 DeepSeek Harness agent。它沿用现有的 DeepSeek 供应商配置，并作为该供应商下的一个
-`dsh` runtime 与 Claude Code、Codex、Pi 并列；不得再为 DSH 创建平行的内置 DeepSeek 供应商。它不是
-其它 runtime 的别名，也不是一个可任意改写协议的通用 HTTP 表单。
+`dsh` runtime 与 Claude Code、Codex、Pi 并列；不得再为 DSH 创建平行的内置 DeepSeek 供应商。经过策展、
+且确实兼容 Harness DeepSeek adapter 的其它既有供应商也可以提供 `dsh` runtime，例如 Kimi Code 必须挂在
+既有的 `moonshot-kimi-code` 供应商内，不能另造一个 Kimi DSH 来源。DSH 不是其它 runtime 的别名，也不是
+一个可任意改写协议的通用 HTTP 表单。
 
 一个 DSH 任务始终由“已选择的来源 + 已选择的模型”确定。即使多个来源使用相同模型 ID，也必须按已选择
 的来源读取配置与密钥，不能仅凭模型 ID 跨来源猜测或回落。
@@ -31,19 +33,66 @@ Cindy 的长期职责是 DSH 的呈现与双向传输入口，DSH 自己拥有�
 非敏感字段为：
 
 - Base URL；
-- 每个模型的 ID、显示名称与上下文窗口；
-- 每个模型的思考强度：`off`、`low`、`high` 或 `max`。
+- 每个模型的 ID、显示名称、上下文窗口与最大输出；
+- 每个模型的思考强度，以及该模型允许选择的思考档位：`off`、`low`、`high` 或 `max`。
 
 DSH 固定由 Harness 的 DeepSeek adapter 处理协议和会话配置，因此不暴露、也不得持久化下列通用 runtime
-字段：请求路径、wire protocol、自定义 headers、models URL、模型自动拉取或每模型 route。
+字段：请求路径、wire protocol、自定义 headers、models URL 或每模型 route。设置页可以在用户明确点击时，
+由 Main 从规范化后的 Base URL 派生并请求同一端点的 `/models`；这个地址不是可编辑字段，也不能写入供应商
+配置。模型目录请求与连接测试是两个独立动作，不能用成功列出模型冒充模型可调用。
+
+### Kimi Code 编程计划
+
+Kimi Code 的官方 OpenAI-compatible Base URL 是
+[`https://api.kimi.com/coding/v1`](https://www.kimi.com/code/docs/)。在既有的
+`moonshot-kimi-code` 供应商中，DSH adapter 会在其后请求 `/chat/completions`；用户点击“获取模型列表”时，
+Main 则只请求同一 Base URL 下的 `/models`。Kimi Code 编程计划的密钥与 Moonshot 开放平台密钥、余额彼此
+独立，不能把开放平台地址或密钥预填到这个 runtime。
+
+随包预设按 Kimi 官方模型说明和 Cindy 的保守输出上限策展如下：
+
+| 模型 | 上下文窗口 | Cindy 最大输出 | DSH 思考档位 |
+| --- | ---: | ---: | --- |
+| `k3` | 最高 1,048,576（随会员权益） | 131,072 | `low` / `high` / `max`，默认 `high` |
+| `k3-256k` | 262,144 | 131,072 | `low` / `high` / `max`，默认 `high` |
+| `kimi-for-coding` | 262,144 | 32,768 | Thinking 始终开启（无分档） |
+| `kimi-for-coding-highspeed` | 262,144 | 32,768 | Thinking 始终开启（无分档） |
+
+K3 官方支持 `low`、`high`、`max` 三档且默认 `high`；`k3` 的实际上下文权益随会员变化，随包预设先使用
+262,144 的保守下限，鉴权后的 `/models` 一旦返回 `context_length`，就必须覆盖静态预设和旧配置。两个
+`kimi-for-coding*` 别名
+当前指向固定开启 Thinking 的 K2.7，所以 UI 不应把“始终开启”误画成 `high` 档，也不应显示其它无效档位。
+真实会话和连接测试都只发送 `thinking: enabled`，不附带 `reasoning_effort`；固定关闭模型同理只发送
+`thinking: disabled`。只有声明了可选档位的模型才发送 `reasoning_effort`。
+Kimi Code 的 Standard / HighSpeed 会员差异是速度与
+额度，不是 DSH 的思考强度；不要把会员档位映射成 `reasoning_effort`。详见
+[模型文档](https://www.kimi.com/code/docs/kimi-code/models.html)与
+[会员说明](https://www.kimi.com/help/kimi-code/membership-guide)。请求必须使用真实的 DSH 客户端身份，不能
+伪装成 Kimi CLI；Kimi 的[第三方 Agent 说明](https://www.kimi.com/help/kimi-code/third-party-agents)明确警告
+伪造客户端身份可能导致编程计划权益被暂停。
+
+### 连接测试与模型列表
+
+- “测试连接”使用当前 DSH 配置中的首个可用聊天模型发起一个最小、流式的 Chat Completions 请求，带上该模型的思考策略和很小
+  的输出上限，并把 SSE 完整读到 `[DONE]`：中途错误、畸形帧、无内容或提前断流都算失败；它不依赖
+  `/models` 成功。
+- “获取模型列表”只在用户点击后发起 `GET <baseUrl>/models`，解析 `context_length`、
+  `supports_thinking_type` 与 `think_efforts`。Kimi 返回的上下文、固定 Thinking 策略、有效档位和默认档位
+  随模型一起进入编辑态，并优先于静态预设。
+- 两个请求都由可信 Renderer 经 IPC 进入 Main；Main 固定 DSH 的请求路径和真实 DSH `User-Agent`，拒绝
+  自定义 headers、任意 models URL 或 Chat 请求路径。编辑已保存供应商时，密钥由 Main 按同来源规则读取，
+  不回传 Renderer。
 
 ### 保存语义
 
-Base URL、模型、上下文窗口与思考强度都是非敏感配置。它们可以在尚未填写 DSH 专用 API 密钥时保存，并且
-重新打开编辑页后应仍然存在。旧版已经保存的 DeepSeek 预设会在读取时补上当前预设的 DSH runtime，下一次
-普通保存再把它写回原来的供应商记录，不创建第二个来源。
+Base URL、模型、上下文窗口、最大输出与思考档位都是非敏感配置。它们可以在尚未填写 DSH 专用 API 密钥时保存，并且
+重新打开编辑页后应仍然存在。旧版已经保存的 DeepSeek 或 Kimi Code 预设会通过稳定的 Pi 目录标记，在读取时
+补上当前预设的 DSH runtime；下一次普通保存再把它写回原来的供应商记录，不创建第二个来源。
 
 这个顺序是故意的：用户可先建立或修正运行时配置，再在合适的时候补密钥。空密钥绝不能阻止非敏感配置保存。
+
+未出现在随包预设中的 DSH 模型若没有明确最大输出，Cindy 保存和投影时使用 32,768 tokens 的保守上限，
+并且永远不超过该模型的上下文窗口；不能回落到 adapter 自身过大的 256K 默认值。
 
 ### 兼容恢复边界
 
@@ -92,7 +141,7 @@ DSH 专用密钥优先。为兼容 DSH runtime 出现前已经保存的原 DeepS
 ## 选择与运行时行为
 
 模型选择器按已连接供应商的 DSH runtime 投影可选模型。发起任务时，主进程把选定来源的 Base URL、
-模型清单、上下文窗口和该模型的思考强度传给 DSH adapter；adapter 使用“专用槽优先、同来源同凭证端点
+模型清单、上下文窗口、最大输出和该模型的思考强度传给 DSH adapter；adapter 使用“专用槽优先、同来源同凭证端点
 兼容回退”解析出的密钥启动 Harness。
 
 相关实现入口：
@@ -204,9 +253,10 @@ pnpm check:i18n-glossary
 
 使用真实 API 密钥进行测试时，按以下步骤验收，且只发送纯文本：
 
-1. 新建或编辑一个自定义供应商，在 DSH 页填写 Base URL、模型、上下文窗口和思考强度，先不填写密钥并保存。
+1. 新建或编辑一个自定义供应商，在 DSH 页填写 Base URL、模型、上下文窗口、最大输出和思考强度，先不填写密钥并保存。
 2. 关闭再打开编辑页，确认上述非敏感字段仍存在。
-3. 在同一来源的 DSH 页保存该来源自己的 API 密钥，确认该来源变为已连接。
+3. 在同一来源的 DSH 页保存该来源自己的 API 密钥，分别执行“获取模型列表”和“测试连接”，确认目录元数据
+   被更新且最小 Chat 请求成功；任一动作失败时不能用另一个动作的成功替代。
 4. 新建任务，选择 DSH、该来源和其中一个模型，发送一条短的纯文本消息并确认收到流式回复。
 5. 尝试附图或文件时应被拒绝；不得为了测试而把附件送往 DSH。
 

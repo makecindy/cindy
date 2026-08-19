@@ -14,6 +14,8 @@
 import {
   isLoopbackProviderUrl,
   type AgentKind,
+  type DshReasoningEffort,
+  type DshThinkingPolicy,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 
@@ -22,6 +24,8 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { deriveModelsDiscoveryUrl, parseModelsListResponse } from './generic-oauth.js';
+import { DSH_PROVIDER_USER_AGENT } from './dsh-attribution.js';
+import { normalizeDshProviderBaseUrl } from './dsh-provider-url.js';
 import { outboundFetch } from './outbound-fetch.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
@@ -55,7 +59,14 @@ export interface ProviderModelsFetchSpec {
 export interface ProviderModelsFetchResult {
   ok: boolean;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
-  models?: { id: string; name: string; contextWindow?: number }[];
+  models?: {
+    id: string;
+    name: string;
+    contextWindow?: number;
+    dshReasoningEffort?: DshReasoningEffort;
+    dshReasoningEfforts?: DshReasoningEffort[];
+    dshThinkingPolicy?: DshThinkingPolicy;
+  }[];
   /** 失败分类码（ok=false 时给出）。 */
   code?: ProviderErrorCode;
   /** HTTP 状态码（网络层失败时缺省）。 */
@@ -99,6 +110,7 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
   const headers: Record<string, string> = mustStripCredentialHeaders
     ? withoutCredentialHeaders(spec.headers)
     : normalizedHeaders(spec.headers);
+  if (spec.agent === 'dsh') headers['user-agent'] = DSH_PROVIDER_USER_AGENT;
   const anthropicMessages =
     spec.wireProtocol === 'anthropic-messages'
     || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
@@ -116,9 +128,18 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): { url: s
   }
   // modelsUrl 是用户不可见的隐藏字段（预设/配置快照）。只有与 baseUrl 同源才采用——
   // 防止用户改了 baseUrl 后，key 仍被发往快照里的旧主机 / 被降级成明文（现有预设全部同源）。
+  const baseUrl = spec.agent === 'dsh'
+    ? normalizeDshProviderBaseUrl(spec.baseUrl)
+    : spec.baseUrl;
+  if (!baseUrl) throw new TypeError('invalid DSH provider Base URL');
   const explicit = spec.modelsUrl?.trim();
   return {
-    url: explicit && sameOrigin(explicit, spec.baseUrl) ? explicit : deriveModelsDiscoveryUrl(spec.baseUrl),
+    // The DSH adapter treats its configured endpoint as an exact OpenAI-compatible Base URL and
+    // string-appends `/chat/completions`; model discovery must use the matching exact `/models`
+    // sibling instead of the generic helper, which may insert an extra `/v1` segment.
+    url: spec.agent === 'dsh'
+      ? `${baseUrl}/models`
+      : explicit && sameOrigin(explicit, baseUrl) ? explicit : deriveModelsDiscoveryUrl(baseUrl),
     init: { method: 'GET', headers },
   };
 }
@@ -181,5 +202,64 @@ export async function fetchProviderModels(
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return { ok: false, code: 'UNKNOWN', status: res.status, detail: 'no models found in response' };
   }
-  return { ok: true, models };
+  if (spec.agent !== 'dsh') return { ok: true, models };
+  const rawItems = json && typeof json === 'object' && Array.isArray((json as { data?: unknown }).data)
+    ? (json as { data: unknown[] }).data
+    : [];
+  const dshMetadata = new Map<string, {
+    dshReasoningEffort?: DshReasoningEffort;
+    dshReasoningEfforts?: DshReasoningEffort[];
+    dshThinkingPolicy?: DshThinkingPolicy;
+  }>();
+  for (const item of rawItems) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== 'string') continue;
+    const thinkEfforts = record.think_efforts;
+    let efforts: DshReasoningEffort[] | undefined;
+    let defaultEffort: DshReasoningEffort | undefined;
+    let thinkingPolicy: DshThinkingPolicy | undefined;
+    if (thinkEfforts && typeof thinkEfforts === 'object' && !Array.isArray(thinkEfforts)) {
+      const effortRecord = thinkEfforts as Record<string, unknown>;
+      if (effortRecord.support === true && Array.isArray(effortRecord.valid_efforts)) {
+        const allowed = new Set<DshReasoningEffort>(['off', 'low', 'high', 'max']);
+        const parsed = effortRecord.valid_efforts.filter(
+          (value): value is DshReasoningEffort => typeof value === 'string' && allowed.has(value as DshReasoningEffort),
+        );
+        if (parsed.length > 0 && new Set(parsed).size === parsed.length) efforts = parsed;
+        if (
+          typeof effortRecord.default_effort === 'string'
+          && allowed.has(effortRecord.default_effort as DshReasoningEffort)
+        ) {
+          defaultEffort = effortRecord.default_effort as DshReasoningEffort;
+        }
+      }
+    }
+    if (!efforts && record.supports_thinking_type === 'only') {
+      thinkingPolicy = 'always-on';
+      defaultEffort = 'high';
+    } else if (record.supports_thinking_type === 'no') {
+      thinkingPolicy = 'always-off';
+      defaultEffort = 'off';
+      efforts = undefined;
+    }
+    if (efforts?.length) {
+      const selected = defaultEffort && efforts.includes(defaultEffort)
+        ? defaultEffort
+        : efforts.includes('high') ? 'high' : efforts[0];
+      dshMetadata.set(record.id, {
+        dshReasoningEfforts: efforts,
+        ...(selected ? { dshReasoningEffort: selected } : {}),
+      });
+    } else if (thinkingPolicy && defaultEffort) {
+      dshMetadata.set(record.id, {
+        dshThinkingPolicy: thinkingPolicy,
+        dshReasoningEffort: defaultEffort,
+      });
+    }
+  }
+  return {
+    ok: true,
+    models: models.map((model) => ({ ...model, ...(dshMetadata.get(model.id) ?? {}) })),
+  };
 }

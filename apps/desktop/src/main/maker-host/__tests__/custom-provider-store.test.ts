@@ -190,13 +190,21 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       auth: { method: 'apiKey' },
       runtimes: {
         dsh: {
-          baseUrl: 'https://gateway.example.test/deepseek',
+          baseUrl: 'https://gateway.example.test/deepseek///',
           models: [
             {
               id: 'gateway-pro',
               name: 'Gateway Pro',
               contextWindow: 640_000,
+              maxOutput: 32_768,
+              dshReasoningEfforts: ['low', 'high', 'max'],
               dshReasoningEffort: 'low',
+            },
+            {
+              id: 'fixed-thinking',
+              name: 'Fixed Thinking',
+              dshThinkingPolicy: 'always-on',
+              dshReasoningEffort: 'high',
             },
           ],
         },
@@ -204,6 +212,20 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     };
 
     expect(validateCustomProviderConfig(config)).toEqual({ ok: true });
+    expect(validateCustomProviderConfig({
+      ...config,
+      runtimes: {
+        dsh: {
+          ...config.runtimes.dsh!,
+          models: [{
+            id: 'fixed-thinking',
+            name: 'Fixed Thinking',
+            dshReasoningEffort: 'high',
+            dshThinkingPolicy: 'always-on',
+          }],
+        },
+      },
+    })).toEqual({ ok: true });
     for (const runtime of [
       { ...config.runtimes.dsh!, requestPath: '/chat/completions' },
       { ...config.runtimes.dsh!, wireProtocol: 'openai-chat' },
@@ -239,6 +261,16 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
     expect(
       validateCustomProviderConfig({ ...config, auth: { method: 'none' } }).ok,
     ).toBe(false);
+    for (const baseUrl of [
+      'https://gateway.example.test/deepseek?tenant=wrong',
+      'https://gateway.example.test/deepseek#wrong',
+      'https://user:pass@gateway.example.test/deepseek',
+    ]) {
+      expect(validateCustomProviderConfig({
+        ...config,
+        runtimes: { dsh: { ...config.runtimes.dsh!, baseUrl } },
+      }).ok).toBe(false);
+    }
   });
 
   it('accepts a same-origin model route and rejects unsafe route variants', () => {
@@ -434,13 +466,21 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       auth: { method: 'apiKey' },
       runtimes: {
         dsh: {
-          baseUrl: 'https://gateway.example.test/deepseek',
+          baseUrl: 'https://gateway.example.test/deepseek///',
           models: [
             {
               id: 'gateway-pro',
               name: 'Gateway Pro',
               contextWindow: 640_000,
+              maxOutput: 32_768,
+              dshReasoningEfforts: ['low', 'high', 'max'],
               dshReasoningEffort: 'low',
+            },
+            {
+              id: 'fixed-thinking',
+              name: 'Fixed Thinking',
+              dshThinkingPolicy: 'always-on',
+              dshReasoningEffort: 'high',
             },
           ],
         },
@@ -454,8 +494,63 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
           id: 'gateway-pro',
           name: 'Gateway Pro',
           contextWindow: 640_000,
+          maxOutput: 32_768,
+          dshReasoningEfforts: ['low', 'high', 'max'],
           dshReasoningEffort: 'low',
         },
+        {
+          id: 'fixed-thinking',
+          name: 'Fixed Thinking',
+          dshThinkingPolicy: 'always-on',
+          dshReasoningEffort: 'high',
+        },
+      ],
+    });
+  });
+
+  it('projects the bundled Kimi Code DSH runtime into an older saved preset row', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'saved-kimi-code',
+      name: 'Kimi Code',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://api.kimi.com/coding',
+          wireProtocol: 'anthropic-messages',
+          piCatalogProviderId: 'kimi-coding',
+          models: [{ id: 'kimi-for-coding', name: 'Kimi for Coding' }],
+        },
+        codex: {
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'kimi-for-coding', name: 'Kimi for Coding' }],
+        },
+      },
+    });
+
+    expect((await getCustomProvider('saved-kimi-code'))?.runtimes.dsh).toEqual({
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      models: [
+        expect.objectContaining({
+          id: 'k3',
+          contextWindow: 262_144,
+          maxOutput: 131_072,
+          dshReasoningEfforts: ['low', 'high', 'max'],
+          dshReasoningEffort: 'high',
+        }),
+        expect.objectContaining({
+          id: 'k3-256k',
+          contextWindow: 262_144,
+          dshReasoningEfforts: ['low', 'high', 'max'],
+        }),
+        expect.objectContaining({
+          id: 'kimi-for-coding',
+          maxOutput: 32_768,
+          dshThinkingPolicy: 'always-on',
+          dshReasoningEffort: 'high',
+        }),
+        expect.objectContaining({ id: 'kimi-for-coding-highspeed' }),
       ],
     });
   });

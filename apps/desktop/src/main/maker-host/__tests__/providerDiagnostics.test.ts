@@ -22,6 +22,7 @@ import {
   setDiagnosticsOAuthTokenReader,
   testProviderConnection,
 } from '../provider-diagnostics.js';
+import { DSH_PROVIDER_USER_AGENT } from '../dsh-attribution.js';
 import { setCustomProviders } from '../active-catalog.js';
 
 afterEach(() => {
@@ -210,6 +211,73 @@ describe('buildProbeRequest', () => {
     expect(body.tool_choice).toBeUndefined();
   });
 
+  it.each([
+    ['max', { type: 'enabled' }, 'max'],
+    ['off', { type: 'disabled' }, undefined],
+  ] as const)('DSH probe matches the adapter thinking wire for %s', (effort, thinking, wireEffort) => {
+    const { url, init } = buildProbeRequest({
+      agent: 'dsh',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      modelId: 'k3',
+      wireProtocol: 'openai-chat',
+      dshReasoningEffort: effort,
+      apiKey: 'sk-kimi',
+      headers: { 'User-Agent': 'KimiCLI/impersonation-must-not-pass' },
+    });
+    expect(url).toBe('https://api.kimi.com/coding/v1/chat/completions');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['user-agent']).toBe(DSH_PROVIDER_USER_AGENT);
+    expect(headers['User-Agent']).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer sk-kimi');
+    expect(headers.accept).toBe('text/event-stream');
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.thinking).toEqual(thinking);
+    expect(body.reasoning_effort).toBe(wireEffort);
+    expect(body.stream).toBe(true);
+    expect(body.max_tokens).toBe(16);
+  });
+
+  it.each([
+    ['always-on', { type: 'enabled' }],
+    ['always-off', { type: 'disabled' }],
+  ] as const)('DSH probe sends fixed %s thinking without reasoning_effort', (policy, thinking) => {
+    const { init } = buildProbeRequest({
+      agent: 'dsh',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      modelId: 'kimi-for-coding',
+      wireProtocol: 'openai-chat',
+      dshThinkingPolicy: policy,
+      dshReasoningEffort: 'high',
+    });
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.thinking).toEqual(thinking);
+    expect(body.reasoning_effort).toBeUndefined();
+  });
+
+  it('DSH canonicalizes trailing slashes and rejects Base URL query/fragment state', () => {
+    const { url } = buildProbeRequest({
+      agent: 'dsh',
+      baseUrl: 'https://api.kimi.com/coding/v1///',
+      modelId: 'k3',
+      wireProtocol: 'openai-chat',
+    });
+    expect(url).toBe('https://api.kimi.com/coding/v1/chat/completions');
+    expect(() => buildProbeRequest({
+      agent: 'dsh',
+      baseUrl: 'https://api.kimi.com/coding/v1?tenant=wrong',
+      modelId: 'k3',
+      wireProtocol: 'openai-chat',
+    })).toThrow('invalid DSH provider Base URL');
+    for (const suffix of ['?', '#']) {
+      expect(() => buildProbeRequest({
+        agent: 'dsh',
+        baseUrl: `https://api.kimi.com/coding/v1${suffix}`,
+        modelId: 'k3',
+        wireProtocol: 'openai-chat',
+      })).toThrow('invalid DSH provider Base URL');
+    }
+  });
+
   it('uses an exact request path instead of appending the protocol default', () => {
     const { url } = buildProbeRequest({
       agent: 'codex',
@@ -314,6 +382,98 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     expect(r.ok).toBe(true);
   });
 
+  it('DSH drains a valid content-bearing SSE stream through [DONE]', async () => {
+    const r = await runProviderProbe(
+      {
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        modelId: 'k3',
+        apiKey: 'k',
+        wireProtocol: 'openai-chat',
+      },
+      async () => new Response(
+        'data: {"choices":[{"delta":{"reasoning_content":"ok"}}]}\n\ndata: [DONE]\n\n',
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it('DSH rejects a later streamed provider error after initial content', async () => {
+    const r = await runProviderProbe(
+      {
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        modelId: 'k3',
+        wireProtocol: 'openai-chat',
+      },
+      async () => new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"ok"}}]}',
+          '',
+          'data: {"error":{"type":"server_error","message":"later failure"}}',
+          '',
+        ].join('\n'),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'UPSTREAM_ERROR', status: 200 });
+  });
+
+  it.each([
+    ['truncated', 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'],
+    ['malformed', 'data: not-json\n\ndata: [DONE]\n\n'],
+    ['empty', 'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\ndata: [DONE]\n\n'],
+    [
+      'unsupported finish reason',
+      'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"content_filter"}]}\n\ndata: [DONE]\n\n',
+    ],
+    [
+      'non-array choices after content',
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"choices":{}}\n\ndata: [DONE]\n\n',
+    ],
+    [
+      'non-array tool calls after content',
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: {"choices":[{"delta":{"tool_calls":{}}}]}\n\ndata: [DONE]\n\n',
+    ],
+  ])('DSH rejects %s streamed responses', async (_name, body) => {
+    const r = await runProviderProbe(
+      {
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        modelId: 'k3',
+        wireProtocol: 'openai-chat',
+      },
+      async () => new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 200 });
+  });
+
+  it('DSH returns a structured network classification when the response body read fails', async () => {
+    const readError = new Error('socket reset');
+    (readError as Error & { cause?: { code: string } }).cause = { code: 'ECONNRESET' };
+    const r = await runProviderProbe(
+      {
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        modelId: 'k3',
+        wireProtocol: 'openai-chat',
+      },
+      async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.error(readError);
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'UPSTREAM_UNREACHABLE', status: 200 });
+  });
+
   it('openai-chat 探测:200 SSE 顶层 error 帧 → 分类失败', async () => {
     const r = await runProviderProbe(
       { agent: 'codex', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k', wireProtocol: 'openai-chat' },
@@ -396,6 +556,36 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(headers['x-api-key']).toBe('stale');
     expect(headers.Authorization).toBeUndefined();
     expect(headers['X-API-Key']).toBeUndefined();
+  });
+
+  it('DSH saved probe uses same-endpoint key fallback and the selected model effort', () => {
+    setCustomProviders([buildUserProvider({
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          models: [{ id: 'k3', name: 'Kimi K3' }],
+        },
+        dsh: {
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          models: [{ id: 'k3', name: 'Kimi K3', dshReasoningEffort: 'max' }],
+        },
+      },
+    })]);
+    setDiagnosticsKeyReader((_id, agent) => agent === 'codex' ? 'shared-kimi-key' : null);
+
+    expect(resolveSavedProbeSpec('kimi-code', 'dsh')).toMatchObject({
+      agent: 'dsh',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      modelId: 'k3',
+      authMethod: 'apiKey',
+      wireProtocol: 'openai-chat',
+      requestPath: undefined,
+      dshReasoningEffort: 'max',
+      apiKey: 'shared-kimi-key',
+    });
   });
 
   it('api-key-header + openai-chat 供应商:saved 探测带上 wireProtocol → 打 /chat/completions', async () => {

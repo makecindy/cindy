@@ -20,6 +20,7 @@ import type {
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
   DshReasoningEffort,
+  DshThinkingPolicy,
   OAuthProviderDescriptor,
   PiReasoningEffort,
   PiModelApi,
@@ -30,6 +31,7 @@ import {
   BUNDLED_CATALOG,
   effectivePiWireProtocol,
   DSH_REASONING_EFFORTS,
+  DSH_THINKING_POLICIES,
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
@@ -40,6 +42,7 @@ import {
 
 import { getDbClient } from '../localDb/client/current.js';
 import { customProviders } from '../localDb/schema.js';
+import { normalizeDshProviderBaseUrl } from './dsh-provider-url.js';
 
 /** provider id slug 规则（与 safeStorage key 名 `provider_key_<id>_<agent>` 合法字符对齐）。 */
 export const CUSTOM_PROVIDER_ID_RE = /^[a-z0-9_-]+$/;
@@ -50,6 +53,15 @@ const RESERVED_IDS = new Set(['anthropic', 'openai', 'xai', 'xd', 'cindy']);
 const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'dsh'];
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
+
+/**
+ * Presets that gained DSH after users could already save their Pi-backed configuration.
+ * The Pi catalog marker is stable and avoids guessing from an editable display name or row id.
+ */
+const DSH_PRESET_ID_BY_PI_CATALOG_PROVIDER_ID: Readonly<Record<string, string>> = {
+  deepseek: 'deepseek',
+  'kimi-coding': 'moonshot-kimi-code',
+};
 
 /** 验证结果：ok 或带 code + message（供 handler 映射成 throwIpcError）。 */
 export type ValidationResult =
@@ -102,8 +114,33 @@ function parseStoredDshReasoningEffort(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
-  if (agent !== 'dsh' || !isDshReasoningEffort(model.dshReasoningEffort)) return {};
-  return { dshReasoningEffort: model.dshReasoningEffort };
+  if (agent !== 'dsh') return {};
+  const rawEfforts = model.dshReasoningEfforts;
+  const efforts = Array.isArray(rawEfforts)
+    ? rawEfforts.filter(isDshReasoningEffort)
+    : [];
+  const validEfforts =
+    efforts.length > 0
+    && Array.isArray(rawEfforts)
+    && efforts.length === rawEfforts.length
+    && new Set(efforts).size === efforts.length
+      ? efforts
+      : undefined;
+  const effort = isDshReasoningEffort(model.dshReasoningEffort)
+    && (!validEfforts || validEfforts.includes(model.dshReasoningEffort))
+      ? model.dshReasoningEffort
+      : undefined;
+  const policy = typeof model.dshThinkingPolicy === 'string'
+    && DSH_THINKING_POLICIES.includes(model.dshThinkingPolicy as DshThinkingPolicy)
+    && !validEfforts
+    && (model.dshThinkingPolicy === 'always-off' ? effort === 'off' : effort !== 'off')
+      ? model.dshThinkingPolicy as DshThinkingPolicy
+      : undefined;
+  return {
+    ...(effort ? { dshReasoningEffort: effort } : {}),
+    ...(validEfforts ? { dshReasoningEfforts: validEfforts } : {}),
+    ...(policy ? { dshThinkingPolicy: policy } : {}),
+  };
 }
 
 function parseStoredModelRoute(
@@ -201,6 +238,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   } catch {
     return invalid(`runtime '${agent}' baseUrl is not a valid URL`);
   }
+  if (agent === 'dsh' && !normalizeDshProviderBaseUrl(r.baseUrl)) {
+    return invalid("runtime 'dsh' baseUrl must not contain query, fragment, or credentials");
+  }
   if (r.requestPath !== undefined && !isProviderRequestPath(r.requestPath)) {
     return invalid(`runtime '${agent}' requestPath invalid`);
   }
@@ -227,6 +267,16 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         mm.contextWindow <= 0)
     ) {
       return invalid(`runtime '${agent}' model.contextWindow must be a positive number`);
+    }
+    if (
+      mm.maxOutput !== undefined
+      && (
+        typeof mm.maxOutput !== 'number'
+        || !Number.isSafeInteger(mm.maxOutput)
+        || mm.maxOutput <= 0
+      )
+    ) {
+      return invalid(`runtime '${agent}' model.maxOutput must be a positive safe integer`);
     }
     if (mm.defaultEnabled !== undefined && typeof mm.defaultEnabled !== 'boolean') {
       return invalid(`runtime '${agent}' model.defaultEnabled must be a boolean`);
@@ -310,6 +360,36 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.dshReasoningEffort !== undefined) {
       if (agent !== 'dsh' || !isDshReasoningEffort(mm.dshReasoningEffort)) {
         return invalid(`runtime '${agent}' model.dshReasoningEffort invalid`);
+      }
+    }
+    if (mm.dshReasoningEfforts !== undefined) {
+      if (
+        agent !== 'dsh'
+        || !Array.isArray(mm.dshReasoningEfforts)
+        || mm.dshReasoningEfforts.length === 0
+        || mm.dshReasoningEfforts.some((effort) => !isDshReasoningEffort(effort))
+        || new Set(mm.dshReasoningEfforts).size !== mm.dshReasoningEfforts.length
+      ) {
+        return invalid(`runtime '${agent}' model.dshReasoningEfforts invalid`);
+      }
+      if (
+        mm.dshReasoningEffort !== undefined
+        && !mm.dshReasoningEfforts.includes(mm.dshReasoningEffort)
+      ) {
+        return invalid(`runtime '${agent}' model.dshReasoningEffort must be supported`);
+      }
+    }
+    if (mm.dshThinkingPolicy !== undefined) {
+      if (
+        agent !== 'dsh'
+        || typeof mm.dshThinkingPolicy !== 'string'
+        || !DSH_THINKING_POLICIES.includes(mm.dshThinkingPolicy as DshThinkingPolicy)
+        || mm.dshReasoningEfforts !== undefined
+        || (mm.dshThinkingPolicy === 'always-off'
+          ? mm.dshReasoningEffort !== 'off'
+          : mm.dshReasoningEffort === 'off')
+      ) {
+        return invalid(`runtime '${agent}' model.dshThinkingPolicy invalid`);
       }
     }
   }
@@ -551,6 +631,7 @@ function normalizeRuntime(
           }
         : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+      ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(agent !== 'dsh' && m.supportsImageInput === true ? { supportsImageInput: true } : {}),
       ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
@@ -565,13 +646,24 @@ function normalizeRuntime(
       ...(agent === 'dsh' && m.dshReasoningEffort
         ? { dshReasoningEffort: m.dshReasoningEffort }
         : {}),
+      ...(agent === 'dsh' && m.dshReasoningEfforts?.length
+        ? { dshReasoningEfforts: [...m.dshReasoningEfforts] }
+        : {}),
+      ...(agent === 'dsh' && m.dshThinkingPolicy
+        ? { dshThinkingPolicy: m.dshThinkingPolicy }
+        : {}),
     }))
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
       seen.add(m.id);
       return true;
     });
-  const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
+  const out: CustomProviderRuntimeConfig = {
+    baseUrl: agent === 'dsh'
+      ? (normalizeDshProviderBaseUrl(rt.baseUrl) ?? rt.baseUrl.trim())
+      : rt.baseUrl.trim(),
+    models,
+  };
   if (agent !== 'dsh' && rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
   if ((agent === 'claude-code' || agent === 'codex') && rt.requestPath && rt.requestPath.trim()) {
     out.requestPath = rt.requestPath.trim();
@@ -743,6 +835,11 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               m.contextWindow > 0
                 ? { contextWindow: m.contextWindow }
                 : {}),
+              ...(typeof m.maxOutput === 'number'
+              && Number.isSafeInteger(m.maxOutput)
+              && m.maxOutput > 0
+                ? { maxOutput: m.maxOutput }
+                : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(agent !== 'dsh' && m.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...parseStoredPiReasoningCapability(agent, m),
@@ -787,12 +884,14 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
 function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderConfig {
   const auth = parseAuth(row.auth);
   const runtimes = parseRuntimes(row.runtimes);
-  // DSH was added to the existing DeepSeek preset after some users had already saved it.
-  // The stable Pi catalog marker identifies that preset without guessing from its display name.
-  // Project the bundled DSH runtime on read; the next ordinary edit persists it with the row.
-  if (!runtimes.dsh && runtimes.pi?.piCatalogProviderId === 'deepseek') {
+  // DSH was added to existing presets after some users had already saved them. Project the
+  // bundled runtime on read; the next ordinary edit persists it with the same row.
+  const dshPresetId = runtimes.pi?.piCatalogProviderId
+    ? DSH_PRESET_ID_BY_PI_CATALOG_PROVIDER_ID[runtimes.pi.piCatalogProviderId]
+    : undefined;
+  if (!runtimes.dsh && dshPresetId) {
     const presetDsh = BUNDLED_CATALOG.presets
-      ?.find((preset) => preset.id === 'deepseek')
+      ?.find((preset) => preset.id === dshPresetId)
       ?.runtimes.dsh;
     if (presetDsh) {
       runtimes.dsh = {
@@ -801,9 +900,16 @@ function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderCo
           id: model.id,
           name: model.name,
           ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+          ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
           ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(model.dshReasoningEffort
             ? { dshReasoningEffort: model.dshReasoningEffort }
+            : {}),
+          ...(model.dshReasoningEfforts?.length
+            ? { dshReasoningEfforts: [...model.dshReasoningEfforts] }
+            : {}),
+          ...(model.dshThinkingPolicy
+            ? { dshThinkingPolicy: model.dshThinkingPolicy }
             : {}),
         })),
       };

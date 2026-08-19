@@ -10,12 +10,21 @@ import { CustomProviderDialog } from '../CustomProviderDialog';
 const customProviderMocks = vi.hoisted(() => ({
   readCustomProviderKey: vi.fn(),
   updateCustomProvider: vi.fn(),
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
 }));
 
 vi.mock('@/lib/customProviders', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/customProviders')>()),
   readCustomProviderKey: customProviderMocks.readCustomProviderKey,
   updateCustomProvider: customProviderMocks.updateCustomProvider,
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: {
+    error: customProviderMocks.toastError,
+    success: customProviderMocks.toastSuccess,
+  },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -28,6 +37,8 @@ vi.mock('react-i18next', () => ({
 beforeEach(() => {
   customProviderMocks.readCustomProviderKey.mockReset();
   customProviderMocks.updateCustomProvider.mockReset().mockResolvedValue(undefined);
+  customProviderMocks.toastError.mockReset();
+  customProviderMocks.toastSuccess.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -406,10 +417,176 @@ describe('CustomProviderDialog accessibility', () => {
           id: 'gateway-pro',
           name: 'Gateway Pro',
           contextWindow: 640_000,
+          maxOutput: 32_768,
           dshReasoningEffort: 'max',
         },
       ],
     });
+  });
+
+  it('runs DSH connection and model-list requests from its settings page', async () => {
+    const testProviderConnection = vi.fn(async () => ({ ok: true, latencyMs: 3 }));
+    const fetchProviderModels = vi.fn(async () => ({
+      ok: true,
+      models: [{
+        id: 'k3',
+        name: 'Kimi K3',
+        contextWindow: 262_144,
+        dshReasoningEfforts: ['low', 'high', 'max'],
+        dshReasoningEffort: 'high',
+      }],
+    }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        maker: {
+          listProviderPresets: vi.fn(async () => ({ presets: [] })),
+          testProviderConnection,
+          fetchProviderModels,
+        },
+      },
+    });
+    customProviderMocks.readCustomProviderKey.mockResolvedValue('stored-kimi-key');
+    const initial: CustomProviderConfig = {
+      id: 'kimi-code',
+      name: 'Kimi Code',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://api.kimi.com/coding/v1',
+          models: [{
+            id: 'k3',
+            name: 'Kimi K3',
+            contextWindow: 1_048_576,
+            dshReasoningEfforts: ['low', 'high', 'max'],
+            dshReasoningEffort: 'high',
+          }],
+        },
+      },
+    };
+
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByText('settings.providers.custom.fields.apiKeySaved');
+
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+    await waitFor(() => expect(testProviderConnection).toHaveBeenCalledWith({
+      kind: 'saved',
+      providerId: 'kimi-code',
+      agent: 'dsh',
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    await waitFor(() => expect(fetchProviderModels).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'dsh',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      wireProtocol: 'openai-chat',
+      modelsUrl: null,
+      savedProviderId: 'kimi-code',
+    })));
+    expect(await screen.findByText('settings.providers.custom.fetch.pickerTitle')).not.toBeNull();
+    await user.click(screen.getByRole('button', {
+      name: 'settings.providers.custom.fetch.confirm',
+    }));
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+    expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[0].runtimes.dsh.models[0])
+      .toMatchObject({
+        id: 'k3',
+        contextWindow: 262_144,
+        maxOutput: 32_768,
+        dshReasoningEfforts: ['low', 'high', 'max'],
+        dshReasoningEffort: 'high',
+      });
+  });
+
+  it('renders fixed DSH thinking as a policy instead of a fake effort tier', async () => {
+    const user = userEvent.setup();
+    const testProviderConnection = vi.fn(async (_input: unknown) => ({ ok: true, latencyMs: 1 }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        maker: {
+          listProviderPresets: vi.fn(async () => ({ presets: [] })),
+          testProviderConnection,
+        },
+      },
+    });
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+    render(<CustomProviderDialog
+      initial={{
+        id: 'kimi-k27',
+        name: 'Kimi K2.7',
+        auth: { method: 'apiKey' },
+        runtimes: {
+          dsh: {
+            baseUrl: 'https://api.kimi.com/coding/v1',
+            models: [{
+              id: 'kimi-for-coding',
+              name: 'Kimi K2.7 Code',
+              dshReasoningEffort: 'high',
+              dshThinkingPolicy: 'always-on',
+            }],
+          },
+        },
+      }}
+      onSaved={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    expect(await screen.findByText('settings.providers.custom.fields.dshThinkingPolicy'))
+      .not.toBeNull();
+    expect(screen.getByText('settings.providers.custom.dshThinkingPolicy.always-on'))
+      .not.toBeNull();
+    expect(screen.queryByRole('button', {
+      name: 'settings.providers.custom.dshReasoningEffort.high',
+    })).toBeNull();
+
+    fireEvent.change(screen.getByDisplayValue('https://api.kimi.com/coding/v1'), {
+      target: { value: 'https://api.kimi.com/coding/v1-test' },
+    });
+    await user.click(screen.getByRole('button', {
+      name: 'settings.providers.custom.test.button',
+    }));
+    await waitFor(() => expect(testProviderConnection).toHaveBeenCalledWith({
+      kind: 'adhoc',
+      spec: expect.objectContaining({
+        agent: 'dsh',
+        modelId: 'kimi-for-coding',
+        dshThinkingPolicy: 'always-on',
+      }),
+    }));
+    const call = testProviderConnection.mock.calls[0]?.[0] as {
+      spec: Record<string, unknown>;
+    };
+    expect(call.spec).not.toHaveProperty('dshReasoningEffort');
+  });
+
+  it.each(['?', '#'])('rejects a DSH Base URL ending in bare %s before save', async (suffix) => {
+    const initial: CustomProviderConfig = {
+      id: 'dsh-bare-separator',
+      name: 'DSH bare separator',
+      auth: { method: 'apiKey' },
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/deepseek',
+          models: [{ id: 'gateway-pro', name: 'Gateway Pro' }],
+        },
+      },
+    };
+    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+    const user = userEvent.setup();
+    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.change(await screen.findByDisplayValue('https://gateway.example.test/deepseek'), {
+      target: { value: `https://gateway.example.test/deepseek${suffix}` },
+    });
+    await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    expect(customProviderMocks.toastError)
+      .toHaveBeenCalledWith('settings.providers.custom.errors.baseUrlInvalid');
+    expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
   });
 
   it('saves DSH non-secret settings before its dedicated key is configured', async () => {
@@ -455,6 +632,7 @@ describe('CustomProviderDialog accessibility', () => {
                 id: 'gateway-pro',
                 name: 'Gateway Pro',
                 contextWindow: 640_000,
+                maxOutput: 32_768,
                 dshReasoningEffort: 'max',
               },
             ],

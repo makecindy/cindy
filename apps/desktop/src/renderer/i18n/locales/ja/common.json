@@ -1387,7 +1387,9 @@
           "modelSupportsReasoningHelp": "モデルが推論強度を受け付ける場合のみ有効にし、実際に対応するすべてのレベルを選択してください。保存後、次の Pi Agent セッションから反映されます。",
           "modelReasoningEfforts": "対応する推論強度",
           "dshReasoningEffort": "デフォルトの推論強度",
-          "dshReasoningEffortHelp": "このモデルで DSH を開始するときに適用します。オフにすると DeepSeek の思考を無効にします。",
+          "dshReasoningEffortHelp": "このモデルで DSH を開始するときに適用します。選択可能な強度はプロバイダーとモデルによって異なります。",
+          "dshThinkingPolicy": "思考モード",
+          "dshThinkingPolicyHelp": "このモデルはプロバイダーによって思考のオン／オフが固定されており、選択可能な推論強度はありません。",
           "addModel": "モデルを追加",
           "headers": "リクエストヘッダー(任意)",
           "headerNamePlaceholder": "Header-Name",
@@ -1424,6 +1426,10 @@
           "low": "低",
           "high": "高",
           "max": "最大"
+        },
+        "dshThinkingPolicy": {
+          "always-on": "思考は常にオン",
+          "always-off": "思考は常にオフ"
         },
         "errors": {
           "nameRequired": "表示名を入力してください",

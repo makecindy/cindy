@@ -743,6 +743,7 @@ import {
   mergeDiscoveredModelsIntoConfig,
   updateCustomProviderIfUnchanged,
 } from '../maker-host/custom-provider-store.js';
+import { readDshProviderApiKey } from '../maker-host/dsh-provider-key.js';
 import {
   readCustomProviderHeadersForMutation,
   readCustomProviderKeyForMutation,
@@ -5787,6 +5788,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const routing = provider.routing[agent];
       if (!routing || routing.disabled) return null;
       return { baseUrl: routing.upstream, modelsUrl: routing.modelsUrl ?? null };
+    },
+    readSavedProviderApiKey: (providerId, agent) => {
+      if (agent !== 'dsh') return null;
+      const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+      if (!provider || provider.source !== 'user' || provider.auth.method !== 'apiKey') return null;
+      const routing = provider.routing[agent];
+      if (!routing || routing.disabled) return null;
+      return readDshProviderApiKey(provider, readCustomProviderKeyForMutation);
     },
     getLedgerCurrency: currentLedgerCurrency,
     readModelPriceOverride: (target) =>

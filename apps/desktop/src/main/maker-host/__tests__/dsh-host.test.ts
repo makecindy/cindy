@@ -100,11 +100,77 @@ describe('resolveDshVendorOptions', () => {
           id: 'gateway-pro',
           name: 'Gateway Pro',
           contextWindow: 640_000,
+          maxTokens: 32_768,
         },
       ],
       dshReasoningEffort: 'low',
     });
     expect(readCustomKey).toHaveBeenCalledWith('dsh-gateway', 'dsh');
+  });
+
+  it('normalizes the session Base URL and clamps an explicit output cap to context', () => {
+    const provider = catalog.providers[0]!;
+    const model = provider.models.dsh![0]!;
+    const modified: Catalog = {
+      ...catalog,
+      providers: [{
+        ...provider,
+        routing: {
+          dsh: {
+            ...provider.routing.dsh!,
+            upstream: 'https://gateway.example.test/deepseek///',
+          },
+        },
+        models: {
+          dsh: [{ ...model, maxOutput: 999_999 }],
+        },
+      }],
+    };
+
+    expect(resolveDshVendorOptions({
+      catalog: modified,
+      providerId: 'dsh-gateway',
+      modelId: 'gateway-pro',
+      readCustomKey: () => 'key',
+    })).toMatchObject({
+      dshBaseUrl: 'https://gateway.example.test/deepseek',
+      dshModels: [expect.objectContaining({ maxTokens: 640_000 })],
+    });
+  });
+
+  it('keeps fixed thinking policies separate from unsupported effort tiers', () => {
+    const provider = catalog.providers[0]!;
+    const model = provider.models.dsh![0]!;
+    const withPolicy = (
+      dshThinkingPolicy: 'always-on' | 'always-off',
+      dshReasoningEffort: 'off' | 'high',
+    ): Catalog => ({
+      ...catalog,
+      providers: [{
+        ...provider,
+        models: {
+          dsh: [{ ...model, dshThinkingPolicy, dshReasoningEffort }],
+        },
+      }],
+    });
+
+    const alwaysOn = resolveDshVendorOptions({
+      catalog: withPolicy('always-on', 'off'),
+      providerId: 'dsh-gateway',
+      modelId: 'gateway-pro',
+      readCustomKey: () => 'key',
+    });
+    expect(alwaysOn.dshThinkingPolicy).toBe('always-on');
+    expect(alwaysOn.dshReasoningEffort).toBeUndefined();
+
+    const alwaysOff = resolveDshVendorOptions({
+      catalog: withPolicy('always-off', 'high'),
+      providerId: 'dsh-gateway',
+      modelId: 'gateway-pro',
+      readCustomKey: () => 'key',
+    });
+    expect(alwaysOff.dshThinkingPolicy).toBe('always-off');
+    expect(alwaysOff.dshReasoningEffort).toBeUndefined();
   });
 
   it('does not fall back to another provider key when the selected DSH key is missing', () => {

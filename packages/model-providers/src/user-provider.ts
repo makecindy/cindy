@@ -21,6 +21,7 @@ import type {
   ProviderWireProtocol,
   RoutingDescriptor,
 } from './types.js';
+import { DEFAULT_DSH_MAX_OUTPUT } from './types.js';
 import type { ModelRegistry } from './modelAccessBean.js';
 import { isLoopbackProviderUrl } from './provider-url.js';
 
@@ -129,6 +130,10 @@ function toCatalogModel(
       : effectiveEfforts.includes(DEFAULT_CUSTOM_EFFORT)
         ? DEFAULT_CUSTOM_EFFORT
         : (effectiveEfforts[0] ?? null));
+  const contextWindow = m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW;
+  const maxOutput = agent === 'dsh'
+    ? Math.min(m.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT, contextWindow)
+    : m.maxOutput;
   return {
     id: m.id,
     name: m.name,
@@ -136,8 +141,15 @@ function toCatalogModel(
     ...(agent === 'dsh' && m.dshReasoningEffort
       ? { dshReasoningEffort: m.dshReasoningEffort }
       : {}),
+    ...(agent === 'dsh' && m.dshReasoningEfforts?.length
+      ? { dshReasoningEfforts: [...m.dshReasoningEfforts] }
+      : {}),
+    ...(agent === 'dsh' && m.dshThinkingPolicy
+      ? { dshThinkingPolicy: m.dshThinkingPolicy }
+      : {}),
+    ...(maxOutput !== undefined ? { maxOutput } : {}),
     ...(agent !== 'dsh' && m.route ? { route: { ...m.route } } : {}),
-    contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
+    contextWindow,
     // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
     // 那是「仅用于展示」的保守默认,不能拿去收敛运行期上报的窗口。
     ...(m.contextWindow !== undefined ? { contextWindowVerified: true } : {}),

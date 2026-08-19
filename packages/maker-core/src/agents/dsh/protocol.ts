@@ -247,9 +247,12 @@ export interface DshCompositionOptions {
   models?: readonly DshVendorModel[];
   /** DSH 的会话级默认推理强度；`off` 同时关闭思考过程。 */
   reasoningEffort?: DshReasoningEffort;
+  /** 模型只允许固定开/关思考时，省略无效的 reasoning-effort wire 字段。 */
+  thinkingPolicy?: DshThinkingPolicy;
 }
 
 export type DshReasoningEffort = 'off' | 'low' | 'high' | 'max';
+export type DshThinkingPolicy = 'always-on' | 'always-off';
 
 /** DSH adapter consumes a deliberately small, text-only model descriptor. */
 export interface DshVendorModel {

@@ -62,4 +62,24 @@ describe("DSH Cordis composition", () => {
     expect(yaml).toContain('thinking: "disabled"');
     expect(yaml).toContain('reasoningEffort: "off"');
   });
+
+  it.each([
+    ["always-on", "enabled"],
+    ["always-off", "disabled"],
+  ] as const)("renders fixed %s thinking without an unsupported effort field", (policy, thinking) => {
+    const yaml = renderDshCordisYaml(
+      buildDshCordisConfig({
+        provider: "deepseek-official",
+        model: "fixed-thinking-model",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        cwd: "C:/test-workdir",
+        sessionRoot: "C:/test-sessions",
+        thinkingPolicy: policy,
+        reasoningEffort: "high",
+      }),
+    );
+
+    expect(yaml).toContain(`thinking: "${thinking}"`);
+    expect(yaml).not.toContain("reasoningEffort:");
+  });
 });

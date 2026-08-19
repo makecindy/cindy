@@ -82,6 +82,8 @@ describe('buildUserProvider (per-runtime)', () => {
               id: 'gateway-pro',
               name: 'Gateway Pro',
               contextWindow: 640_000,
+              maxOutput: 32_768,
+              dshReasoningEfforts: ['low', 'high', 'max'],
               dshReasoningEffort: 'low',
               route: {
                 baseUrl: 'https://gateway.example.test/should-not-route',
@@ -101,10 +103,48 @@ describe('buildUserProvider (per-runtime)', () => {
       expect.objectContaining({
         id: 'gateway-pro',
         contextWindow: 640_000,
+        maxOutput: 32_768,
+        dshReasoningEfforts: ['low', 'high', 'max'],
         dshReasoningEffort: 'low',
       }),
     ]);
     expect(provider.models.dsh?.[0]?.route).toBeUndefined();
+  });
+
+  it('gives uncatalogued DSH models a conservative output cap and preserves fixed thinking', () => {
+    const provider = buildUserProvider({
+      id: 'dsh-safe-defaults',
+      name: 'DSH Safe Defaults',
+      runtimes: {
+        dsh: {
+          baseUrl: 'https://gateway.example.test/v1',
+          models: [
+            {
+              id: 'small-context',
+              name: 'Small Context',
+              contextWindow: 16_000,
+              dshThinkingPolicy: 'always-on',
+              dshReasoningEffort: 'high',
+            },
+            {
+              id: 'oversized-output',
+              name: 'Oversized Output',
+              contextWindow: 20_000,
+              maxOutput: 50_000,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(provider.models.dsh).toEqual([
+      expect.objectContaining({
+        id: 'small-context',
+        maxOutput: 16_000,
+        dshThinkingPolicy: 'always-on',
+      }),
+      expect.objectContaining({ id: 'oversized-output', maxOutput: 20_000 }),
+    ]);
   });
 
   it('preserves an explicit Chat Completions protocol for Codex routing', () => {

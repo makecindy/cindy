@@ -1387,7 +1387,9 @@
           "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后，下一个 Pi Agent 会话生效。",
           "modelReasoningEfforts": "支持的推理强度",
           "dshReasoningEffort": "默认推理强度",
-          "dshReasoningEffortHelp": "使用此模型启动 DSH 时应用。关闭会禁用 DeepSeek 的思考过程。",
+          "dshReasoningEffortHelp": "使用此模型启动 DSH 时应用。可选档位由供应商和模型决定。",
+          "dshThinkingPolicy": "思考模式",
+          "dshThinkingPolicyHelp": "供应商已将此模型的思考固定为开启或关闭，没有可选择的推理强度档位。",
           "addModel": "添加模型",
           "headers": "请求头(可选)",
           "headerNamePlaceholder": "Header-Name",
@@ -1424,6 +1426,10 @@
           "low": "低",
           "high": "高",
           "max": "最高"
+        },
+        "dshThinkingPolicy": {
+          "always-on": "始终开启思考",
+          "always-off": "始终关闭思考"
         },
         "errors": {
           "nameRequired": "请填写显示名称",

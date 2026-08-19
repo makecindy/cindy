@@ -5001,16 +5001,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     testProviderConnection: (
       input:
-        | { kind: 'saved'; providerId: string; agent: 'claude-code' | 'codex' | 'pi' }
+        | { kind: 'saved'; providerId: string; agent: 'claude-code' | 'codex' | 'pi' | 'dsh' }
         | {
             kind: 'adhoc';
             spec: {
-              agent: 'claude-code' | 'codex' | 'pi';
+              agent: 'claude-code' | 'codex' | 'pi' | 'dsh';
               baseUrl: string;
               modelId: string;
               authMethod: 'apiKey' | 'oauth' | 'none';
               wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
               requestPath?: string;
+              dshReasoningEffort?: import('@cindy/model-providers').DshReasoningEffort;
+              dshThinkingPolicy?: import('@cindy/model-providers').DshThinkingPolicy;
               apiKey?: string | null;
               headers?: Record<string, string>;
             };
@@ -5027,7 +5029,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 结构化结果：ok=true 带 models；失败 code 走 providerError.* i18n。
      */
     fetchProviderModels: (input: {
-      agent: 'claude-code' | 'codex' | 'pi';
+      agent: 'claude-code' | 'codex' | 'pi' | 'dsh';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
       wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
@@ -5041,7 +5043,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       savedProviderId?: string;
     }): Promise<{
       ok: boolean;
-      models?: { id: string; name: string; contextWindow?: number }[];
+      models?: {
+        id: string;
+        name: string;
+        contextWindow?: number;
+        dshReasoningEffort?: import('@cindy/model-providers').DshReasoningEffort;
+        dshReasoningEfforts?: import('@cindy/model-providers').DshReasoningEffort[];
+        dshThinkingPolicy?: import('@cindy/model-providers').DshThinkingPolicy;
+      }[];
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;

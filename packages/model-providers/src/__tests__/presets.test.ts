@@ -851,6 +851,48 @@ describe('官方渠道预设契约', () => {
     expect(pi?.wireProtocol).toBe('anthropic-messages');
   });
 
+  it('Kimi Code 为 DSH 预填官方 OpenAI 兼容端点与逐模型推理档位', () => {
+    const kimiCode = preset('moonshot-kimi-code');
+    expect(kimiCode?.docsUrl).toBe('https://www.kimi.com/code/docs/');
+    expect(kimiCode?.runtimes.dsh).toEqual({
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      models: [
+        {
+          id: 'k3',
+          name: 'Kimi K3',
+          contextWindow: 262_144,
+          maxOutput: 131_072,
+          dshReasoningEfforts: ['low', 'high', 'max'],
+          dshReasoningEffort: 'high',
+        },
+        {
+          id: 'k3-256k',
+          name: 'Kimi K3-256K',
+          contextWindow: 262_144,
+          maxOutput: 131_072,
+          dshReasoningEfforts: ['low', 'high', 'max'],
+          dshReasoningEffort: 'high',
+        },
+        {
+          id: 'kimi-for-coding',
+          name: 'Kimi K2.7 Code',
+          contextWindow: 262_144,
+          maxOutput: 32_768,
+          dshThinkingPolicy: 'always-on',
+          dshReasoningEffort: 'high',
+        },
+        {
+          id: 'kimi-for-coding-highspeed',
+          name: 'Kimi K2.7 Code HighSpeed',
+          contextWindow: 262_144,
+          maxOutput: 32_768,
+          dshThinkingPolicy: 'always-on',
+          dshReasoningEffort: 'high',
+        },
+      ],
+    });
+  });
+
   it.each([
     ['zhipu-coding-plan-cn', 'https://open.bigmodel.cn/api/coding/paas/v4'],
     ['zai-coding-plan-global', 'https://api.z.ai/api/coding/paas/v4'],

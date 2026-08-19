@@ -1387,7 +1387,9 @@
           "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
           "modelReasoningEfforts": "Supported reasoning effort levels",
           "dshReasoningEffort": "Default reasoning effort",
-          "dshReasoningEffortHelp": "Applied whenever DSH starts with this model. Off disables DeepSeek thinking.",
+          "dshReasoningEffortHelp": "Applied whenever DSH starts with this model. Available choices depend on the provider and model.",
+          "dshThinkingPolicy": "Thinking mode",
+          "dshThinkingPolicyHelp": "The provider fixes thinking on or off for this model, so there is no selectable reasoning-effort tier.",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -1424,6 +1426,10 @@
           "low": "Low",
           "high": "High",
           "max": "Max"
+        },
+        "dshThinkingPolicy": {
+          "always-on": "Thinking always on",
+          "always-off": "Thinking always off"
         },
         "errors": {
           "nameRequired": "Display name is required",

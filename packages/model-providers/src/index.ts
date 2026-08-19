@@ -28,6 +28,7 @@ export type {
   ProviderRuntimeModelConfig,
   PiReasoningEffort,
   DshReasoningEffort,
+  DshThinkingPolicy,
   PiModelApi,
   ProviderPreset,
   ProviderPresetRuntime,
@@ -37,7 +38,13 @@ export type {
   OAuthProviderDescriptor,
 } from './types.js';
 
-export { DSH_REASONING_EFFORTS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+export {
+  DEFAULT_DSH_MAX_OUTPUT,
+  DSH_REASONING_EFFORTS,
+  DSH_THINKING_POLICIES,
+  PI_MODEL_APIS,
+  PI_REASONING_EFFORTS,
+} from './types.js';
 
 export { effectivePiWireProtocol, preservesPiCatalogModels } from './pi-catalog-marker.js';
 

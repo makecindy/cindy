@@ -15,11 +15,15 @@
  */
 
 import {
+  DSH_REASONING_EFFORTS,
+  DSH_THINKING_POLICIES,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   runtimeCustomProviderId,
   type AgentKind,
   type CustomProviderConfig,
+  type DshReasoningEffort,
+  type DshThinkingPolicy,
   type ProviderModelDiscoveryFailure,
   type ProviderPreset,
   type ProviderView,
@@ -68,6 +72,7 @@ import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
 } from '../maker-host/provider-model-fetch.js';
+import { normalizeDshProviderBaseUrl } from '../maker-host/dsh-provider-url.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -75,8 +80,8 @@ const log = createLogger('maker-ipc:provider');
 
 /** Runtimes whose configuration and API-key lifecycle are supported by custom providers. */
 const CUSTOM_PROVIDER_CONFIG_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'dsh'];
-/** Generic HTTP probes are not a DSH transport contract; DSH is tested by its Harness. */
-const PROBEABLE_CUSTOM_PROVIDER_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+/** Runtimes supported by the Main-owned connection and model-discovery diagnostics. */
+const DIAGNOSTIC_CUSTOM_PROVIDER_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi', 'dsh'];
 const VALID_ADHOC_AUTH_METHODS: readonly string[] = ['apiKey', 'oauth', 'none'];
 const PROVIDER_OAUTH_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -315,6 +320,8 @@ export interface ProviderHandlerDeps {
     providerId: string,
     agent: AgentKind,
   ): { baseUrl: string; modelsUrl: string | null } | null;
+  /** Resolve the saved API key without exposing it to Renderer (DSH includes same-endpoint fallback). */
+  readSavedProviderApiKey(providerId: string, agent: AgentKind): string | null;
   /**
    * 本机 agent CLI 安装 / 登录态扫描(生产 = scanLocalCliAuth(createLocalCliScanDeps());
    * 单测注入 stub 不碰真实 home)。只 stat 不读内容(规则 23)。
@@ -366,7 +373,7 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     if (typeof i.providerId !== 'string' || i.providerId.length === 0) return null;
     if (
       typeof i.agent !== 'string' ||
-      !PROBEABLE_CUSTOM_PROVIDER_AGENTS.includes(i.agent as AgentKind)
+      !DIAGNOSTIC_CUSTOM_PROVIDER_AGENTS.includes(i.agent as AgentKind)
     ) return null;
     return { kind: 'saved', providerId: i.providerId, agent: i.agent as AgentKind };
   }
@@ -376,8 +383,9 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     const spec = s as Record<string, unknown>;
     if (
       typeof spec.agent !== 'string' ||
-      !PROBEABLE_CUSTOM_PROVIDER_AGENTS.includes(spec.agent as AgentKind)
+      !DIAGNOSTIC_CUSTOM_PROVIDER_AGENTS.includes(spec.agent as AgentKind)
     ) return null;
+    const agent = spec.agent as AgentKind;
     if (
       typeof spec.authMethod !== 'string'
       || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod)
@@ -396,23 +404,59 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
       if (!spec.headers || typeof spec.headers !== 'object' || Array.isArray(spec.headers)) return null;
       if (Object.values(spec.headers as Record<string, unknown>).some((v) => typeof v !== 'string')) return null;
     }
-    if (spec.wireProtocol !== undefined) {
-      const allowed = spec.agent === 'claude-code'
+    if (
+      spec.dshReasoningEffort !== undefined
+      && (
+        agent !== 'dsh'
+        || typeof spec.dshReasoningEffort !== 'string'
+        || !DSH_REASONING_EFFORTS.includes(spec.dshReasoningEffort as DshReasoningEffort)
+      )
+    ) return null;
+    if (
+      spec.dshThinkingPolicy !== undefined
+      && (
+        agent !== 'dsh'
+        || typeof spec.dshThinkingPolicy !== 'string'
+        || !DSH_THINKING_POLICIES.includes(spec.dshThinkingPolicy as DshThinkingPolicy)
+      )
+    ) return null;
+    if (agent === 'dsh') {
+      if (spec.authMethod !== 'apiKey') return null;
+      if (!normalizeDshProviderBaseUrl(spec.baseUrl)) return null;
+      if (spec.wireProtocol !== undefined && spec.wireProtocol !== 'openai-chat') return null;
+      if (spec.requestPath !== undefined) return null;
+      if (spec.headers && Object.keys(spec.headers as Record<string, unknown>).length > 0) return null;
+    } else if (spec.wireProtocol !== undefined) {
+      const allowed = agent === 'claude-code'
         ? ['anthropic-messages']
         : ['openai-responses', 'openai-chat', 'anthropic-messages'];
       if (typeof spec.wireProtocol !== 'string' || !allowed.includes(spec.wireProtocol)) return null;
     }
-    if (spec.requestPath !== undefined && !isProviderRequestPath(spec.requestPath)) return null;
+    if (agent !== 'dsh' && spec.requestPath !== undefined && !isProviderRequestPath(spec.requestPath)) return null;
     return {
       kind: 'adhoc',
       spec: {
-        agent: spec.agent as AgentKind,
-        baseUrl: spec.baseUrl,
+        agent,
+        baseUrl: agent === 'dsh'
+          ? normalizeDshProviderBaseUrl(spec.baseUrl)!
+          : spec.baseUrl,
         modelId: spec.modelId,
         authMethod: spec.authMethod as ProviderProbeSpec['authMethod'],
-        wireProtocol: spec.wireProtocol as ProviderProbeSpec['wireProtocol'],
+        wireProtocol: agent === 'dsh'
+          ? 'openai-chat'
+          : spec.wireProtocol as ProviderProbeSpec['wireProtocol'],
         requestPath:
-          spec.agent === 'pi' ? undefined : (spec.requestPath as string | undefined),
+          agent === 'pi' || agent === 'dsh' ? undefined : (spec.requestPath as string | undefined),
+        ...(agent === 'dsh'
+          ? {
+              ...(spec.dshThinkingPolicy
+                ? { dshThinkingPolicy: spec.dshThinkingPolicy as DshThinkingPolicy }
+                : {
+                    dshReasoningEffort:
+                      (spec.dshReasoningEffort as DshReasoningEffort | undefined) ?? 'high',
+                  }),
+            }
+          : {}),
         apiKey: (spec.apiKey as string | null | undefined) ?? null,
         headers: spec.headers as Record<string, string> | undefined,
       },
@@ -427,8 +471,9 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   const spec = input as Record<string, unknown>;
   if (
     typeof spec.agent !== 'string' ||
-    !PROBEABLE_CUSTOM_PROVIDER_AGENTS.includes(spec.agent as AgentKind)
+    !DIAGNOSTIC_CUSTOM_PROVIDER_AGENTS.includes(spec.agent as AgentKind)
   ) return null;
+  const agent = spec.agent as AgentKind;
   if (
     typeof spec.authMethod !== 'string'
     || !VALID_ADHOC_AUTH_METHODS.includes(spec.authMethod)
@@ -446,6 +491,7 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   if (spec.modelsUrl !== undefined && spec.modelsUrl !== null) {
     if (typeof spec.modelsUrl !== 'string' || !httpUrlOk(spec.modelsUrl)) return null;
   }
+  if (agent === 'dsh' && typeof spec.modelsUrl === 'string' && spec.modelsUrl.trim()) return null;
   if (
     spec.authMethod === 'none'
     && (
@@ -458,8 +504,12 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     )
   ) return null;
   if (spec.apiKey !== undefined && spec.apiKey !== null && typeof spec.apiKey !== 'string') return null;
-  if (spec.wireProtocol !== undefined) {
-    const allowed = spec.agent === 'claude-code'
+  if (agent === 'dsh') {
+    if (spec.authMethod !== 'apiKey') return null;
+    if (!normalizeDshProviderBaseUrl(spec.baseUrl)) return null;
+    if (spec.wireProtocol !== undefined && spec.wireProtocol !== 'openai-chat') return null;
+  } else if (spec.wireProtocol !== undefined) {
+    const allowed = agent === 'claude-code'
       ? ['anthropic-messages']
       : ['openai-responses', 'openai-chat', 'anthropic-messages'];
     if (typeof spec.wireProtocol !== 'string' || !allowed.includes(spec.wireProtocol)) return null;
@@ -468,18 +518,23 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     if (!spec.headers || typeof spec.headers !== 'object' || Array.isArray(spec.headers)) return null;
     if (Object.values(spec.headers as Record<string, unknown>).some((v) => typeof v !== 'string')) return null;
   }
+  if (agent === 'dsh' && spec.headers && Object.keys(spec.headers as Record<string, unknown>).length > 0) return null;
   if (spec.savedProviderId !== undefined) {
     if (typeof spec.savedProviderId !== 'string' || !/^[a-z0-9_-]+$/.test(spec.savedProviderId)) return null;
   }
   return {
-    agent: spec.agent as AgentKind,
-    baseUrl: spec.baseUrl,
+    agent,
+    baseUrl: agent === 'dsh'
+      ? normalizeDshProviderBaseUrl(spec.baseUrl)!
+      : spec.baseUrl,
     authMethod: spec.authMethod as ProviderModelsFetchSpec['authMethod'],
-    modelsUrl: (spec.modelsUrl as string | null | undefined) ?? null,
+    modelsUrl: agent === 'dsh' ? null : ((spec.modelsUrl as string | null | undefined) ?? null),
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
     ...(typeof spec.savedProviderId === 'string' ? { savedProviderId: spec.savedProviderId } : {}),
-    ...(typeof spec.wireProtocol === 'string'
+    ...(agent === 'dsh'
+      ? { wireProtocol: 'openai-chat' as const }
+      : typeof spec.wireProtocol === 'string'
       ? { wireProtocol: spec.wireProtocol as ProviderModelsFetchSpec['wireProtocol'] }
       : {}),
   };
@@ -1506,7 +1561,10 @@ export function registerProviderHandlers(
 
   // 测试连接：查询型结构化返回（规则 13 例外条款——renderer 需要 code 渲染分类文案）。
   // 入参非法 / saved 解析失败（供应商不存在等）仍走 throwIpcError。
-  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, async (event, input: unknown) => {
+    // The request may carry an unsaved API key to an arbitrary configured endpoint. Keep the
+    // credentialed network capability limited to Cindy's trusted top-level Renderer.
+    assertTrustedProviderMutationSender(event);
     const parsed = parseTestInput(input);
     if (!parsed) throwIpcError('INVALID_PARAMS', 'invalid test-connection input');
     try {
@@ -1539,15 +1597,35 @@ export function registerProviderHandlers(
         savedRoute = null;
       }
       if (savedRoute) {
-        parsed.baseUrl = savedRoute.baseUrl;
-        parsed.modelsUrl = savedRoute.modelsUrl;
+        if (parsed.agent === 'dsh') {
+          const normalizedBaseUrl = normalizeDshProviderBaseUrl(savedRoute.baseUrl);
+          if (!normalizedBaseUrl) {
+            throwIpcError('INVALID_PARAMS', 'saved DSH provider has an invalid Base URL');
+          }
+          parsed.baseUrl = normalizedBaseUrl;
+          parsed.modelsUrl = null;
+        } else {
+          parsed.baseUrl = savedRoute.baseUrl;
+          parsed.modelsUrl = savedRoute.modelsUrl;
+        }
+        if (
+          parsed.agent === 'dsh'
+          && parsed.authMethod === 'apiKey'
+          && !parsed.apiKey?.trim()
+        ) {
+          try {
+            parsed.apiKey = deps.readSavedProviderApiKey(parsed.savedProviderId, parsed.agent);
+          } catch {
+            parsed.apiKey = null;
+          }
+        }
         let storedHeaders: Record<string, string> | null = null;
         try {
           storedHeaders = deps.readCustomProviderHeadersForMutation(parsed.savedProviderId, parsed.agent);
         } catch {
           storedHeaders = null;
         }
-        if (storedHeaders && Object.keys(storedHeaders).length > 0) {
+        if (parsed.agent !== 'dsh' && storedHeaders && Object.keys(storedHeaders).length > 0) {
           // renderer 显式头(现状不传)优先于已存头;目标已钉回已存端点,密文头不会外泄。
           parsed.headers = { ...storedHeaders, ...parsed.headers };
         }

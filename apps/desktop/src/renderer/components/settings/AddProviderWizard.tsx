@@ -34,6 +34,7 @@ import { SettingsTextInput } from './SettingsTextInput';
 import { derivePiRuntimeFromClaudeRuntime } from '@/../shared/piRuntimeInitialization';
 
 import {
+  DEFAULT_DSH_MAX_OUTPUT,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   presetDisplayName,
@@ -42,6 +43,8 @@ import {
 import type {
   AgentKind,
   CustomProviderConfig,
+  DshReasoningEffort,
+  DshThinkingPolicy,
   ProviderModelDiscoverySource,
   ProviderModelRouteConfig,
   ProviderPreset,
@@ -351,8 +354,11 @@ export function AddProviderWizard({
         recommended: boolean;
         agents: AgentKind[];
         /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
-         *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,预设值优先、本值兜底。 */
+         *  cc=1M / codex=272K)；通常预设优先，DSH 因账户权益差异由在线值优先。 */
         contextWindows?: Partial<Record<AgentKind, number>>;
+        dshReasoningEffort?: DshReasoningEffort;
+        dshReasoningEfforts?: DshReasoningEffort[];
+        dshThinkingPolicy?: DshThinkingPolicy;
         /** 附加目录发现出的模型级路由；主 runtime 目录发现的模型保持缺省路由。 */
         routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
       }
@@ -602,6 +608,9 @@ export function AddProviderWizard({
         recommended: boolean;
         agents: AgentKind[];
         contextWindows?: Partial<Record<AgentKind, number>>;
+        dshReasoningEffort?: DshReasoningEffort;
+        dshReasoningEfforts?: DshReasoningEffort[];
+        dshThinkingPolicy?: DshThinkingPolicy;
         routes?: Partial<Record<AgentKind, ProviderModelRouteConfig>>;
       }
     >();
@@ -658,9 +667,6 @@ export function AddProviderWizard({
     );
     const results = await Promise.all(
       agents.flatMap((agent) => {
-        // DSH currently uses Cindy's fixed DeepSeek runtime, rather than the
-        // generic custom-provider discovery wire used by the other harnesses.
-        if (agent === 'dsh') return [];
         const rt = preset.runtimes[agent];
         if (!rt) {
           return [];
@@ -714,7 +720,14 @@ export function AddProviderWizard({
               modelsUrl: source.modelsUrl,
               route: source.route,
               ok: false,
-              models: [] as { id: string; name: string; contextWindow?: number }[],
+              models: [] as {
+                id: string;
+                name: string;
+                contextWindow?: number;
+                dshReasoningEffort?: DshReasoningEffort;
+                dshReasoningEfforts?: DshReasoningEffort[];
+                dshThinkingPolicy?: DshThinkingPolicy;
+              }[],
             };
           }
         });
@@ -738,11 +751,16 @@ export function AddProviderWizard({
               !preservePresetOwnership && !existing.agents.includes(agent)
                 ? [...existing.agents, agent]
                 : existing.agents;
-            // 端点上报的窗口按 agent 分槽、只补该槽的空(同一 id 双端窗口可以不同,
-            // 不能共享一个值;预设推荐模型的窗口在完成创建时以预设为准,这里补的是
-            // 「预设没写窗口」的兜底)。
-            const backfillWindow =
-              existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
+            // DSH 的在线目录描述的是当前账户权益，K3 的窗口和思考档位可能随套餐变化，
+            // 因此显式返回值覆盖静态预设；其它 runtime 继续只补空槽。
+            const updateWindow = m.contextWindow !== undefined && (
+              agent === 'dsh' || existing.contextWindows?.[agent] === undefined
+            );
+            const replaceDshThinking = agent === 'dsh' && (
+              m.dshReasoningEffort !== undefined
+              || m.dshReasoningEfforts !== undefined
+              || m.dshThinkingPolicy !== undefined
+            );
             const presetOwnsModel =
               preset.runtimes[agent]?.models.some((model) => model.id === m.id) === true;
             const discoveredRoute =
@@ -752,12 +770,26 @@ export function AddProviderWizard({
               !existing.routes?.[agent]
                 ? route
                 : undefined;
-            if (mergedAgents !== existing.agents || backfillWindow || discoveredRoute) {
+            if (
+              mergedAgents !== existing.agents
+              || updateWindow
+              || replaceDshThinking
+              || discoveredRoute
+            ) {
               next.set(m.id, {
                 ...existing,
                 agents: mergedAgents,
-                ...(backfillWindow
+                ...(updateWindow
                   ? { contextWindows: { ...existing.contextWindows, [agent]: m.contextWindow } }
+                  : {}),
+                ...(replaceDshThinking
+                  ? {
+                      dshReasoningEffort: m.dshReasoningEffort,
+                      dshReasoningEfforts: m.dshReasoningEfforts
+                        ? [...m.dshReasoningEfforts]
+                        : undefined,
+                      dshThinkingPolicy: m.dshThinkingPolicy,
+                    }
                   : {}),
                 ...(discoveredRoute
                   ? { routes: { ...existing.routes, [agent]: discoveredRoute } }
@@ -772,6 +804,15 @@ export function AddProviderWizard({
               agents: [agent],
               ...(m.contextWindow !== undefined
                 ? { contextWindows: { [agent]: m.contextWindow } }
+                : {}),
+              ...(agent === 'dsh' && m.dshReasoningEffort
+                ? { dshReasoningEffort: m.dshReasoningEffort }
+                : {}),
+              ...(agent === 'dsh' && m.dshReasoningEfforts?.length
+                ? { dshReasoningEfforts: [...m.dshReasoningEfforts] }
+                : {}),
+              ...(agent === 'dsh' && m.dshThinkingPolicy
+                ? { dshThinkingPolicy: m.dshThinkingPolicy }
                 : {}),
               ...(route ? { routes: { [agent]: route } } : {}),
             });
@@ -865,6 +906,9 @@ export function AddProviderWizard({
         name: v.name,
         agents: v.agents,
         contextWindows: v.contextWindows,
+        dshReasoningEffort: v.dshReasoningEffort,
+        dshReasoningEfforts: v.dshReasoningEfforts,
+        dshThinkingPolicy: v.dshThinkingPolicy,
         routes: v.routes,
       }));
     if (selected.length === 0) {
@@ -889,9 +933,31 @@ export function AddProviderWizard({
           .filter((m) => m.agents.includes(agent))
           .map((m) => {
             const presetModel = rt.models.find((candidate) => candidate.id === m.id);
-            // 预设策展值优先;拉取新增模型没有预设条目,落**该 runtime 端点**上报的
-            // 发现值(按 agent 分槽,双端窗口可不同),不再无窗口入库退回 200K 默认。
-            const contextWindow = presetModel?.contextWindow ?? m.contextWindows?.[agent];
+            // Kimi Code 的 K3 窗口取决于当前账户权益，DSH 必须优先采用鉴权后的
+            // /models 值；其它 runtime 保持预设策展值优先。
+            const contextWindow = agent === 'dsh'
+              ? (m.contextWindows?.[agent] ?? presetModel?.contextWindow)
+              : (presetModel?.contextWindow ?? m.contextWindows?.[agent]);
+            const maxOutput = agent === 'dsh'
+              ? Math.min(
+                  presetModel?.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT,
+                  contextWindow ?? DEFAULT_DSH_MAX_OUTPUT,
+                )
+              : presetModel?.maxOutput;
+            const hasDiscoveredDshThinking = agent === 'dsh' && (
+              m.dshReasoningEffort !== undefined
+              || m.dshReasoningEfforts !== undefined
+              || m.dshThinkingPolicy !== undefined
+            );
+            const dshReasoningEffort = hasDiscoveredDshThinking
+              ? m.dshReasoningEffort
+              : presetModel?.dshReasoningEffort;
+            const dshReasoningEfforts = hasDiscoveredDshThinking
+              ? m.dshReasoningEfforts
+              : presetModel?.dshReasoningEfforts;
+            const dshThinkingPolicy = hasDiscoveredDshThinking
+              ? m.dshThinkingPolicy
+              : presetModel?.dshThinkingPolicy;
             return {
               id: m.id,
               name: m.name,
@@ -900,6 +966,9 @@ export function AddProviderWizard({
                 ? { route: presetModel?.route ?? m.routes?.[agent] }
                 : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(maxOutput !== undefined
+                ? { maxOutput }
+                : {}),
               ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length
                 ? {
@@ -910,8 +979,18 @@ export function AddProviderWizard({
                       : {}),
                   }
                 : {}),
-              ...(agent === 'dsh' && presetModel?.dshReasoningEffort
-                ? { dshReasoningEffort: presetModel.dshReasoningEffort }
+              ...(agent === 'dsh'
+                ? {
+                    dshReasoningEffort: dshReasoningEffort ?? 'high',
+                  }
+                : {}),
+              ...(agent === 'dsh' && dshReasoningEfforts?.length
+                ? {
+                    dshReasoningEfforts: [...dshReasoningEfforts],
+                  }
+                : {}),
+              ...(agent === 'dsh' && dshThinkingPolicy
+                ? { dshThinkingPolicy }
                 : {}),
             };
           });
@@ -1009,6 +1088,7 @@ export function AddProviderWizard({
     (fetchState.failed || fetchState.empty) &&
     !presetHasRecommendedModels;
   const presetNeedsApiKey = sel?.kind === 'preset' && sel.preset.authMethod !== 'none';
+  const presetCanDeferApiKey = sel?.kind === 'preset' && presetAgents.includes('dsh');
   const presetBaseUrlsValid =
     sel?.kind === 'preset' &&
     presetAgents.every((agent) => {
@@ -1026,7 +1106,7 @@ export function AddProviderWizard({
   const presetCanContinue =
     sel?.kind === 'preset' &&
     presetBaseUrlsValid &&
-    (!presetNeedsApiKey || apiKey.trim().length > 0);
+    (!presetNeedsApiKey || presetCanDeferApiKey || apiKey.trim().length > 0);
 
   return (
     // DESIGN.md §4 Dialog:关闭 = 底部「取消」/ Esc / 点遮罩,不设右上角 ×(与 ConfirmDialog 同构)。

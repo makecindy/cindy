@@ -17,7 +17,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -80,6 +80,7 @@ import {
 } from '@/lib/customProviderRuntimeFill';
 
 import {
+  DEFAULT_DSH_MAX_OUTPUT,
   isProviderRequestPath,
   DSH_REASONING_EFFORTS,
   PI_REASONING_EFFORTS,
@@ -201,12 +202,14 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
       id: 'deepseek-v4-flash',
       name: 'DeepSeek V4 Flash',
       contextWindow: 1_000_000,
+      maxOutput: DEFAULT_DSH_MAX_OUTPUT,
       dshReasoningEffort: 'high',
     },
     {
       id: 'deepseek-v4-pro',
       name: 'DeepSeek V4 Pro',
       contextWindow: 1_000_000,
+      maxOutput: DEFAULT_DSH_MAX_OUTPUT,
       dshReasoningEffort: 'high',
     },
   ];
@@ -600,11 +603,19 @@ export function CustomProviderDialog({
           : initial.auth?.method === 'none'
             ? 'none'
             : 'apiKey';
+      const savedProbeModel = rc.models.find((model) => model.id.trim().length > 0);
       return {
         baseUrl: rc.baseUrl,
         requestPath: agent === 'claude-code' || agent === 'codex' ? (rc.requestPath ?? '') : '',
         modelsUrl: agent === 'dsh' ? '' : (rc.modelsUrl ?? ''),
         wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
+        modelId: savedProbeModel?.id ?? '',
+        ...(agent === 'dsh' && savedProbeModel?.dshReasoningEffort
+          ? { dshReasoningEffort: savedProbeModel.dshReasoningEffort }
+          : {}),
+        ...(agent === 'dsh' && savedProbeModel?.dshThinkingPolicy
+          ? { dshThinkingPolicy: savedProbeModel.dshThinkingPolicy }
+          : {}),
         authMode: savedAuthMode,
         apiKey: loadedKeyRef.current[agent] ?? '',
         headers:
@@ -1047,11 +1058,12 @@ export function CustomProviderDialog({
   /** 测试当前 Tab 的表单值（未保存也能测；key 仅内存透传给 main，不落盘）。 */
   const handleTest = useCallback(async () => {
     const agent = activeTab;
-    if (agent === 'dsh') return;
     const rf = rt[agent];
-    const probeFields = agent === 'pi' ? { ...rf, requestPath: '' } : rf;
+    const probeFields = agent === 'pi' || agent === 'dsh'
+      ? { ...rf, requestPath: '', modelsUrl: agent === 'dsh' ? '' : rf.modelsUrl }
+      : rf;
     const baseUrl = rf.baseUrl.trim();
-    const firstModel = rf.models.map((m) => m.id.trim()).find((id) => id.length > 0);
+    const firstModel = rf.models.find((model) => model.id.trim().length > 0);
     if (!baseUrl || !firstModel) {
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
@@ -1095,11 +1107,16 @@ export function CustomProviderDialog({
               spec: {
                 agent,
                 baseUrl,
-                modelId: firstModel,
+                modelId: firstModel.id.trim(),
                 authMethod: authMode,
                 wireProtocol: rf.wireProtocol,
-                ...(agent !== 'pi' && rf.requestPath.trim()
+                ...(agent !== 'pi' && agent !== 'dsh' && rf.requestPath.trim()
                   ? { requestPath: rf.requestPath.trim() }
+                  : {}),
+                ...(agent === 'dsh'
+                  ? firstModel.dshThinkingPolicy
+                    ? { dshThinkingPolicy: firstModel.dshThinkingPolicy }
+                    : { dshReasoningEffort: firstModel.dshReasoningEffort ?? 'high' }
                   : {}),
                 apiKey: authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
                 ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
@@ -1108,7 +1125,9 @@ export function CustomProviderDialog({
       );
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
+          agent === 'pi' || agent === 'dsh'
+            ? { ...rtRef.current[agent], requestPath: '', modelsUrl: agent === 'dsh' ? '' : rtRef.current[agent].modelsUrl }
+            : rtRef.current[agent],
           authModeRef.current,
         ) !== requestSig
       )
@@ -1122,7 +1141,9 @@ export function CustomProviderDialog({
     } catch (e) {
       if (
         providerConnectionTestRequestSignature(
-          agent === 'pi' ? { ...rtRef.current[agent], requestPath: '' } : rtRef.current[agent],
+          agent === 'pi' || agent === 'dsh'
+            ? { ...rtRef.current[agent], requestPath: '', modelsUrl: agent === 'dsh' ? '' : rtRef.current[agent].modelsUrl }
+            : rtRef.current[agent],
           authModeRef.current,
         ) !== requestSig
       )
@@ -1135,12 +1156,12 @@ export function CustomProviderDialog({
 
   // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
   // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
-  const anyFetching = fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi;
+  const anyFetching =
+    fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi || fetchingModels.dsh;
 
   /** 获取模型列表：用当前 Tab 表单值 GET 列模型端点（key 仅内存透传），成功后开勾选弹层。 */
   const handleFetchModels = useCallback(async () => {
     const agent = activeTab;
-    if (agent === 'dsh') return;
     const rf = rt[agent];
     if (
       modelFetchInFlightRef.current ||
@@ -1148,7 +1169,8 @@ export function CustomProviderDialog({
       picker ||
       fetchingModels['claude-code'] ||
       fetchingModels.codex ||
-      fetchingModels.pi
+      fetchingModels.pi ||
+      fetchingModels.dsh
     )
       return; // 单飞（按钮已禁用，兜底）
     const baseUrl = rf.baseUrl.trim();
@@ -1208,6 +1230,7 @@ export function CustomProviderDialog({
             ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
             ...(m.route ? { route: { ...m.route } } : {}),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+            ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
             ...(m.reasoning === true && m.reasoningEfforts?.length
@@ -1218,6 +1241,15 @@ export function CustomProviderDialog({
                     ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
                     : {}),
                 }
+              : {}),
+            ...(agent === 'dsh' && m.dshReasoningEffort
+              ? { dshReasoningEffort: m.dshReasoningEffort }
+              : {}),
+            ...(agent === 'dsh' && m.dshReasoningEfforts?.length
+              ? { dshReasoningEfforts: [...m.dshReasoningEfforts] }
+              : {}),
+            ...(agent === 'dsh' && m.dshThinkingPolicy
+              ? { dshThinkingPolicy: m.dshThinkingPolicy }
               : {}),
           }))
           .filter((m) => m.id.length > 0);
@@ -1230,16 +1262,40 @@ export function CustomProviderDialog({
             .map((m) => ({ ...m, name: m.name || m.id })),
           ...result.models.map((m) => {
             const cur = currentById.get(m.id);
-            // contextWindow:表单已有的行以用户当前值为准——包括「显式清空」
-            // (cur 存在但无值时不得被发现值回填,review P1);只有表单没见过的
-            // 新模型才带上端点声明的发现值(否则保存后回落 200K,review P1)。
-            const contextWindow = cur ? cur.contextWindow : m.contextWindow;
+            // DSH 的在线 /models 是当前账户权益的权威能力快照：K3 的上下文窗口会随
+            // 套餐变化，因此端点显式返回的值必须覆盖静态预设/旧表单值。其它 runtime
+            // 保持“已有表单值优先”的既有编辑语义。
+            const contextWindow = agent === 'dsh'
+              ? (m.contextWindow ?? cur?.contextWindow)
+              : (cur ? cur.contextWindow : m.contextWindow);
+            const hasFetchedDshThinkingMetadata = agent === 'dsh' && (
+              m.dshReasoningEffort !== undefined
+              || m.dshReasoningEfforts !== undefined
+              || m.dshThinkingPolicy !== undefined
+            );
+            const dshReasoningEfforts = hasFetchedDshThinkingMetadata
+              ? m.dshReasoningEfforts
+              : cur?.dshReasoningEfforts;
+            const dshThinkingPolicy = hasFetchedDshThinkingMetadata
+              ? m.dshThinkingPolicy
+              : cur?.dshThinkingPolicy;
+            const dshReasoningEffort = hasFetchedDshThinkingMetadata
+              ? (
+                  m.dshThinkingPolicy
+                    ? m.dshReasoningEffort
+                    : cur?.dshReasoningEffort
+                      && m.dshReasoningEfforts?.includes(cur.dshReasoningEffort)
+                      ? cur.dshReasoningEffort
+                      : m.dshReasoningEffort
+                )
+              : cur?.dshReasoningEffort;
             return {
               id: m.id,
               name: cur?.name || m.name,
               ...(agent === 'pi' && cur?.piApi ? { piApi: cur.piApi } : {}),
               ...(cur?.route ? { route: { ...cur.route } } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(cur?.maxOutput !== undefined ? { maxOutput: cur.maxOutput } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
               ...(cur?.reasoning === true && cur.reasoningEfforts?.length
@@ -1250,6 +1306,15 @@ export function CustomProviderDialog({
                       ? { reasoningDefaultEffort: cur.reasoningDefaultEffort }
                       : {}),
                   }
+                : {}),
+              ...(agent === 'dsh' && dshReasoningEffort
+                ? { dshReasoningEffort }
+                : {}),
+              ...(agent === 'dsh' && dshReasoningEfforts?.length
+                ? { dshReasoningEfforts: [...dshReasoningEfforts] }
+                : {}),
+              ...(agent === 'dsh' && dshThinkingPolicy
+                ? { dshThinkingPolicy }
                 : {}),
             };
           }),
@@ -1304,7 +1369,15 @@ export function CustomProviderDialog({
     }
     const merged: ModelRow[] = chosen.map((m) => {
       const latest = latestById.get(m.id);
-      const contextWindow = latest?.contextWindow ?? m.contextWindow;
+      const contextWindow = picker.agent === 'dsh'
+        ? (m.contextWindow ?? latest?.contextWindow)
+        : (latest?.contextWindow ?? m.contextWindow);
+      const maxOutput = picker.agent === 'dsh'
+        ? Math.min(
+            latest?.maxOutput ?? m.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT,
+            contextWindow ?? DEFAULT_DSH_MAX_OUTPUT,
+          )
+        : (latest?.maxOutput ?? m.maxOutput);
       const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       const reasoning = latest ? latest.reasoning : m.reasoning;
@@ -1313,6 +1386,15 @@ export function CustomProviderDialog({
       const reasoningDefaultEffort = latest
         ? latest.reasoningDefaultEffort
         : m.reasoningDefaultEffort;
+      const dshReasoningEffort = picker.agent === 'dsh'
+        ? m.dshReasoningEffort
+        : latest?.dshReasoningEffort;
+      const dshReasoningEfforts = picker.agent === 'dsh'
+        ? m.dshReasoningEfforts
+        : latest?.dshReasoningEfforts;
+      const dshThinkingPolicy = picker.agent === 'dsh'
+        ? m.dshThinkingPolicy
+        : latest?.dshThinkingPolicy;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
@@ -1321,6 +1403,7 @@ export function CustomProviderDialog({
           ? { route: { ...(latest?.route ?? m.route)! } }
           : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxOutput !== undefined ? { maxOutput } : {}),
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
         ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
         ...(reasoning === true && reasoningEfforts?.length
@@ -1329,6 +1412,15 @@ export function CustomProviderDialog({
               reasoningEfforts: [...reasoningEfforts],
               ...(reasoningDefaultEffort ? { reasoningDefaultEffort } : {}),
             }
+          : {}),
+        ...(picker.agent === 'dsh' && dshReasoningEffort
+          ? { dshReasoningEffort }
+          : {}),
+        ...(picker.agent === 'dsh' && dshReasoningEfforts?.length
+          ? { dshReasoningEfforts: [...dshReasoningEfforts] }
+          : {}),
+        ...(picker.agent === 'dsh' && dshThinkingPolicy
+          ? { dshThinkingPolicy }
           : {}),
       };
     });
@@ -1341,6 +1433,7 @@ export function CustomProviderDialog({
           ...(picker.agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+          ...(m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           ...(m.reasoning === true && m.reasoningEfforts?.length
@@ -1351,6 +1444,15 @@ export function CustomProviderDialog({
                   ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
                   : {}),
               }
+            : {}),
+          ...(picker.agent === 'dsh' && m.dshReasoningEffort
+            ? { dshReasoningEffort: m.dshReasoningEffort }
+            : {}),
+          ...(picker.agent === 'dsh' && m.dshReasoningEfforts?.length
+            ? { dshReasoningEfforts: [...m.dshReasoningEfforts] }
+            : {}),
+          ...(picker.agent === 'dsh' && m.dshThinkingPolicy
+            ? { dshThinkingPolicy: m.dshThinkingPolicy }
             : {}),
         });
       }
@@ -1458,13 +1560,23 @@ export function CustomProviderDialog({
         toast.error(t('settings.providers.custom.errors.dshApiKeyRequired'));
         return;
       }
+      let normalizedBaseUrl = rf.baseUrl.trim();
+      if (a === 'dsh' && (normalizedBaseUrl.includes('?') || normalizedBaseUrl.includes('#'))) {
+        setActiveTab(a);
+        toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
+        return;
+      }
       try {
-        const u = new URL(rf.baseUrl.trim());
-        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        const u = new URL(normalizedBaseUrl);
+        if (
+          (u.protocol !== 'http:' && u.protocol !== 'https:')
+          || (a === 'dsh' && (!!u.username || !!u.password || !!u.search || !!u.hash))
+        ) {
           setActiveTab(a);
           toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
           return;
         }
+        if (a === 'dsh') normalizedBaseUrl = u.toString().replace(/\/+$/, '');
       } catch {
         setActiveTab(a);
         toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
@@ -1476,25 +1588,42 @@ export function CustomProviderDialog({
         return;
       }
       const models = rf.models
-        .map((m) => ({
-          id: m.id.trim(),
-          name: m.name.trim(),
-          ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
-          ...(a !== 'dsh' && m.route ? { route: { ...m.route } } : {}),
-          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          ...(a !== 'dsh' && m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-          ...(a === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
-            ? {
-                reasoning: true,
-                reasoningEfforts: [...m.reasoningEfforts],
-                ...(m.reasoningDefaultEffort
-                  ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
-                  : {}),
-              }
-            : {}),
-          ...(a === 'dsh' ? { dshReasoningEffort: m.dshReasoningEffort ?? 'high' } : {}),
-        }))
+        .map((m) => {
+          const dshMaxOutput = a === 'dsh'
+            ? Math.min(
+                m.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT,
+                m.contextWindow ?? DEFAULT_DSH_MAX_OUTPUT,
+              )
+            : undefined;
+          return {
+            id: m.id.trim(),
+            name: m.name.trim(),
+            ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+            ...(a !== 'dsh' && m.route ? { route: { ...m.route } } : {}),
+            ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+            ...(a === 'dsh'
+              ? { maxOutput: dshMaxOutput! }
+              : m.maxOutput !== undefined ? { maxOutput: m.maxOutput } : {}),
+            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+            ...(a !== 'dsh' && m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+            ...(a === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
+              ? {
+                  reasoning: true,
+                  reasoningEfforts: [...m.reasoningEfforts],
+                  ...(m.reasoningDefaultEffort
+                    ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
+                    : {}),
+                }
+              : {}),
+            ...(a === 'dsh' ? { dshReasoningEffort: m.dshReasoningEffort ?? 'high' } : {}),
+            ...(a === 'dsh' && m.dshReasoningEfforts?.length
+              ? { dshReasoningEfforts: [...m.dshReasoningEfforts] }
+              : {}),
+            ...(a === 'dsh' && m.dshThinkingPolicy
+              ? { dshThinkingPolicy: m.dshThinkingPolicy }
+              : {}),
+          };
+        })
         .filter((m) => m.id && m.name);
       const requestPath = a === 'claude-code' || a === 'codex' ? rf.requestPath.trim() : '';
       if (requestPath && !isProviderRequestPath(requestPath)) {
@@ -1524,7 +1653,7 @@ export function CustomProviderDialog({
           ? undefined
           : customProviderWireProtocolForSave(a, rf.wireProtocol, defaultProtocol);
       runtimes[a] = {
-        baseUrl: rf.baseUrl.trim(),
+        baseUrl: normalizedBaseUrl,
         ...(requestPath ? { requestPath } : {}),
         ...(savedWireProtocol ? { wireProtocol: savedWireProtocol } : {}),
         models,
@@ -2239,46 +2368,59 @@ export function CustomProviderDialog({
                       {activeTab === 'dsh' && (
                         <div className="flex basis-full flex-col gap-1.5 pr-12 text-[var(--settings-section-desc)]">
                           <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                            {t('settings.providers.custom.fields.dshReasoningEffort')}
+                            {t(m.dshThinkingPolicy
+                              ? 'settings.providers.custom.fields.dshThinkingPolicy'
+                              : 'settings.providers.custom.fields.dshReasoningEffort')}
                           </span>
                           <div className="flex flex-wrap gap-1.5">
-                            {DSH_REASONING_EFFORTS.map((effort) => {
-                              const selectedDshEffort: DshReasoningEffort =
-                                m.dshReasoningEffort ?? 'high';
-                              const selected = selectedDshEffort === effort;
-                              return (
-                                <button
-                                  key={effort}
-                                  type="button"
-                                  onClick={() =>
-                                    patch(activeTab, (x) => ({
-                                      ...x,
-                                      models: setCustomProviderModelDshReasoningEffort(
-                                        x.models,
-                                        i,
-                                        effort,
-                                      ),
-                                    }))
-                                  }
-                                  className={cn(
-                                    'rounded-full border px-2.5 py-1 text-11 font-medium transition-colors',
-                                    selected
-                                      ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
-                                      : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
-                                  )}
-                                  style={
-                                    selected
-                                      ? { backgroundColor: 'var(--surface-elevated)' }
-                                      : undefined
-                                  }
-                                >
-                                  {t(`settings.providers.custom.dshReasoningEffort.${effort}`)}
-                                </button>
-                              );
-                            })}
+                            {m.dshThinkingPolicy ? (
+                              <span className="rounded-full border border-[var(--settings-input-border-focus)] bg-[var(--surface-elevated)] px-2.5 py-1 text-11 font-medium text-[var(--settings-section-title)]">
+                                {t(`settings.providers.custom.dshThinkingPolicy.${m.dshThinkingPolicy}`)}
+                              </span>
+                            ) : (
+                              (m.dshReasoningEfforts?.length
+                                ? m.dshReasoningEfforts
+                                : DSH_REASONING_EFFORTS
+                              ).map((effort) => {
+                                const selectedDshEffort: DshReasoningEffort =
+                                  m.dshReasoningEffort ?? 'high';
+                                const selected = selectedDshEffort === effort;
+                                return (
+                                  <button
+                                    key={effort}
+                                    type="button"
+                                    onClick={() =>
+                                      patch(activeTab, (x) => ({
+                                        ...x,
+                                        models: setCustomProviderModelDshReasoningEffort(
+                                          x.models,
+                                          i,
+                                          effort,
+                                        ),
+                                      }))
+                                    }
+                                    className={cn(
+                                      'rounded-full border px-2.5 py-1 text-11 font-medium transition-colors',
+                                      selected
+                                        ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
+                                        : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
+                                    )}
+                                    style={
+                                      selected
+                                        ? { backgroundColor: 'var(--surface-elevated)' }
+                                        : undefined
+                                    }
+                                  >
+                                    {t(`settings.providers.custom.dshReasoningEffort.${effort}`)}
+                                  </button>
+                                );
+                              })
+                            )}
                           </div>
                           <span className="text-11 leading-snug">
-                            {t('settings.providers.custom.fields.dshReasoningEffortHelp')}
+                            {t(m.dshThinkingPolicy
+                              ? 'settings.providers.custom.fields.dshThinkingPolicyHelp'
+                              : 'settings.providers.custom.fields.dshReasoningEffortHelp')}
                           </span>
                         </div>
                       )}
@@ -2394,6 +2536,7 @@ export function CustomProviderDialog({
                                   id: '',
                                   name: '',
                                   contextWindow: 1_000_000,
+                                  maxOutput: DEFAULT_DSH_MAX_OUTPUT,
                                   dshReasoningEffort: 'high' as const,
                                 },
                               ]
@@ -2473,7 +2616,7 @@ export function CustomProviderDialog({
 
             {/* 测试连接：用当前 Tab 表单值发最小探测请求（与真实会话同路由口径，未保存也能测）。
                 OAuth 形态隐藏——登录前无凭证可测，保存并授权后可在供应商行验证。 */}
-            {authMode !== 'oauth' && activeTab !== 'dsh' && (
+            {authMode !== 'oauth' && (
               <div className="flex min-h-[32px] flex-wrap items-center gap-2.5">
                 <button
                   type="button"
@@ -2702,14 +2845,6 @@ export function ModelPickerOverlay({
                 })}
               </Dialog.Description>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label={t('settings.providers.custom.cancel')}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-            >
-              <X size={16} />
-            </button>
           </div>
           {/* 搜索（项目多才显示）+ 全选/清空（作用于当前过滤结果） */}
           <div className="flex flex-col gap-2 px-5 pt-2">

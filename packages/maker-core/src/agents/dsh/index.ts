@@ -15,6 +15,7 @@ import type {
   DshReasoningEffort,
   DshSessionEventNotificationParams,
   DshSessionStatusNotificationParams,
+  DshThinkingPolicy,
   DshVendorModel,
 } from './protocol.js';
 import { DshRpcProcess } from './rpc-client.js';
@@ -33,6 +34,7 @@ export interface DshVendorOptions {
   dshBaseUrl?: string;
   dshModels?: readonly DshVendorModel[];
   dshReasoningEffort?: DshReasoningEffort;
+  dshThinkingPolicy?: DshThinkingPolicy;
 }
 
 export class DshAgent extends BaseAgent {
@@ -70,7 +72,9 @@ export class DshAgent extends BaseAgent {
         bashLocal: vendor.dshBashLocal,
         baseUrl: vendor.dshBaseUrl,
         models: vendor.dshModels,
-        reasoningEffort: vendor.dshReasoningEffort ?? 'max',
+        ...(vendor.dshThinkingPolicy
+          ? { thinkingPolicy: vendor.dshThinkingPolicy }
+          : { reasoningEffort: vendor.dshReasoningEffort ?? 'max' }),
       });
       const configYaml = renderDshCordisYaml(config);
       if (opts.remoteHostId) {

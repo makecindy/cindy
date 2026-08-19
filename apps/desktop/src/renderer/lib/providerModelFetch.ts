@@ -12,7 +12,11 @@ export interface ProviderModelFetchSignatureFields {
 
 export interface ProviderConnectionTestSignatureFields extends ProviderModelFetchSignatureFields {
   wireProtocol: string;
-  models: ReadonlyArray<{ id: string }>;
+  models: ReadonlyArray<{
+    id: string;
+    dshReasoningEffort?: string;
+    dshThinkingPolicy?: string;
+  }>;
 }
 
 export function stripCredentialHeaders(headers: Record<string, string>): Record<string, string> {
@@ -74,6 +78,10 @@ export interface SavedProviderProbeBaseline {
   requestPath: string;
   modelsUrl: string;
   wireProtocol: string;
+  /** Saved probe resolves the first selectable model; edited forms may only reuse it unchanged. */
+  modelId: string;
+  dshReasoningEffort?: string;
+  dshThinkingPolicy?: string;
   authMode: CustomProviderAuthMode;
   apiKey: string;
   headers: ReadonlyArray<{ name: string; value: string }>;
@@ -183,6 +191,16 @@ export function connectionTestCanUseSaved(
   if (form.baseUrl.trim() !== baseline.baseUrl.trim()) return false;
   if (form.requestPath.trim() !== baseline.requestPath.trim()) return false;
   if (form.wireProtocol !== baseline.wireProtocol) return false;
+  const firstModel = form.models.find((model) => model.id.trim().length > 0);
+  if ((firstModel?.id.trim() ?? '') !== baseline.modelId.trim()) return false;
+  if (
+    (firstModel?.dshReasoningEffort ?? 'high')
+    !== (baseline.dshReasoningEffort ?? 'high')
+  ) return false;
+  if (
+    (firstModel?.dshThinkingPolicy ?? null)
+    !== (baseline.dshThinkingPolicy ?? null)
+  ) return false;
   if (authMode === 'apiKey' && form.apiKey.trim() !== baseline.apiKey.trim()) return false;
   return headerRowsEqual(form.headers, baseline.headers);
 }
@@ -192,9 +210,12 @@ export function providerConnectionTestRequestSignature(
   fields: ProviderConnectionTestSignatureFields,
   authMode: CustomProviderAuthMode,
 ): string {
+  const firstModel = fields.models.find((model) => model.id.trim().length > 0);
   return JSON.stringify({
     request: providerModelFetchRequestSignature(fields, authMode),
     wireProtocol: fields.wireProtocol,
-    modelId: fields.models.map((model) => model.id.trim()).find(Boolean) ?? null,
+    modelId: firstModel?.id.trim() ?? null,
+    dshReasoningEffort: firstModel?.dshReasoningEffort ?? null,
+    dshThinkingPolicy: firstModel?.dshThinkingPolicy ?? null,
   });
 }

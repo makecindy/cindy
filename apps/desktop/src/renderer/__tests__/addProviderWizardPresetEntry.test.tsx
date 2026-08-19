@@ -189,6 +189,34 @@ const piReasoningPreset = {
   },
 };
 
+const kimiCodeDshPreset = {
+  id: 'moonshot-kimi-code',
+  name: 'Kimi Code（编程计划包月）',
+  runtimes: {
+    dsh: {
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      models: [
+        {
+          id: 'k3',
+          name: 'Kimi K3',
+          contextWindow: 1_048_576,
+          maxOutput: 131_072,
+          dshReasoningEfforts: ['low', 'high', 'max'] as const,
+          dshReasoningEffort: 'high' as const,
+        },
+        {
+          id: 'kimi-for-coding',
+          name: 'Kimi K2.7 Code',
+          contextWindow: 262_144,
+          maxOutput: 32_768,
+          dshThinkingPolicy: 'always-on' as const,
+          dshReasoningEffort: 'high' as const,
+        },
+      ],
+    },
+  },
+};
+
 const explicitPiPreset = {
   id: 'explicit-pi',
   name: 'Explicit Pi',
@@ -242,6 +270,7 @@ beforeEach(() => {
           zhipuCodingPreset,
           editableDiscoveryPreset,
           piReasoningPreset,
+          kimiCodeDshPreset,
           explicitPiPreset,
           claudeRequestPathPreset,
         ],
@@ -408,6 +437,82 @@ describe('AddProviderWizard — preset 直达', () => {
       ]),
     });
     expect(keys.pi).toBe('sk-test');
+  });
+
+  it('Kimi Code DSH 预设会请求模型列表并保存逐模型档位与输出上限', async () => {
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValueOnce({
+      ok: true,
+      models: [
+        {
+          id: 'k3',
+          name: 'Kimi K3',
+          contextWindow: 262_144,
+          dshReasoningEfforts: ['low', 'high', 'max'],
+          dshReasoningEffort: 'high',
+        },
+        {
+          id: 'kimi-for-coding',
+          name: 'Kimi K2.7 Code',
+          contextWindow: 262_144,
+          dshThinkingPolicy: 'always-on',
+          dshReasoningEffort: 'high',
+        },
+      ],
+    });
+    renderWizard('moonshot-kimi-code');
+    await waitFor(() => expect(screen.getByDisplayValue('Kimi Code（编程计划包月）')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'kimi-key' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+
+    await waitFor(() => expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        apiKey: 'kimi-key',
+      }),
+    ));
+    expect(screen.getByText('Kimi K3')).not.toBeNull();
+    expect(screen.getByText('Kimi K2.7 Code')).not.toBeNull();
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.dsh).toMatchObject({
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      models: [
+        {
+          id: 'k3',
+          contextWindow: 262_144,
+          maxOutput: 131_072,
+          dshReasoningEfforts: ['low', 'high', 'max'],
+          dshReasoningEffort: 'high',
+        },
+        {
+          id: 'kimi-for-coding',
+          contextWindow: 262_144,
+          maxOutput: 32_768,
+          dshThinkingPolicy: 'always-on',
+          dshReasoningEffort: 'high',
+        },
+      ],
+    });
+  });
+
+  it('Kimi Code DSH 可先保存非敏感配置，API Key 稍后再补', async () => {
+    renderWizard('moonshot-kimi-code');
+    await waitFor(() => expect(screen.getByDisplayValue('Kimi Code（编程计划包月）')).not.toBeNull());
+
+    const next = screen.getByText('settings.providers.wizard.next')
+      .closest('button') as HTMLButtonElement;
+    expect(next.disabled).toBe(false);
+    fireEvent.click(next);
+
+    expect(await screen.findByText('Kimi K3')).not.toBeNull();
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(createCustomProvider).mock.calls[0][1]).toEqual({});
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.dsh?.baseUrl)
+      .toBe('https://api.kimi.com/coding/v1');
   });
 
   it('Pi 预设保存时保留显式 reasoning 能力与支持档位', async () => {
@@ -632,7 +737,7 @@ describe('AddProviderWizard — preset 直达', () => {
     // 同一 model id 在两端窗口可以不同(如 cc=1M / codex=272K):共享一个发现值
     // 会让其中一端显示与压缩阈值双错,必须按 agent 分槽各取各的端点上报值。
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
-      async ({ agent }: { agent: 'claude-code' | 'codex' | 'pi' }) => ({
+      async ({ agent }) => ({
         ok: true,
         models: [
           {

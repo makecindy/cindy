@@ -130,6 +130,7 @@ const headerAuthBaseline: SavedProviderProbeBaseline = {
   requestPath: '/responses',
   modelsUrl: 'https://gw.example/v1/models',
   wireProtocol: 'openai-responses',
+  modelId: 'm-1',
   authMode: 'none',
   apiKey: '',
   headers: [],
@@ -324,6 +325,31 @@ describe('connectionTestCanUseSaved', () => {
       connectionTestCanUseSaved({ ...connForm, wireProtocol: 'openai-chat' }, headerAuthBaseline, 'none'),
     ).toBe(false);
     expect(connectionTestCanUseSaved(connForm, headerAuthBaseline, 'apiKey')).toBe(false);
+  });
+
+  it('falls back to adhoc when the first model or DSH effort changed', () => {
+    const dshBaseline: SavedProviderProbeBaseline = {
+      ...headerAuthBaseline,
+      wireProtocol: 'openai-chat',
+      modelId: 'k3',
+      dshReasoningEffort: 'high',
+    };
+    const dshForm = {
+      ...connForm,
+      wireProtocol: 'openai-chat',
+      models: [{ id: 'k3', dshReasoningEffort: 'high' }],
+    };
+    expect(connectionTestCanUseSaved(dshForm, dshBaseline, 'none')).toBe(true);
+    expect(connectionTestCanUseSaved(
+      { ...dshForm, models: [{ id: 'k3-256k', dshReasoningEffort: 'high' }] },
+      dshBaseline,
+      'none',
+    )).toBe(false);
+    expect(connectionTestCanUseSaved(
+      { ...dshForm, models: [{ id: 'k3', dshReasoningEffort: 'max' }] },
+      dshBaseline,
+      'none',
+    )).toBe(false);
   });
 
   it('falls back to adhoc when the user changed the api key so the new key is what gets tested', () => {

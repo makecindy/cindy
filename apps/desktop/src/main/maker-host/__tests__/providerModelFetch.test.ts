@@ -11,6 +11,7 @@ import {
   fetchProviderModels,
   type ProviderModelsFetchSpec,
 } from '../provider-model-fetch.js';
+import { DSH_PROVIDER_USER_AGENT } from '../dsh-attribution.js';
 
 function spec(over: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec {
   return { agent: 'claude-code', baseUrl: 'https://api.acme.example/anthropic', apiKey: 'sk-test', ...over };
@@ -83,6 +84,48 @@ describe('buildModelsFetchRequest', () => {
     expect(headers['Anthropic-Version']).toBeUndefined();
     expect(headers['x-api-key']).toBe('sk-test');
     expect(headers.authorization).toBe('Bearer sk-test');
+  });
+
+  it('DSH derives the Kimi /models endpoint and sends the real Harness identity', () => {
+    const request = buildModelsFetchRequest(spec({
+      agent: 'dsh',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      headers: { 'User-Agent': 'KimiCLI/impersonation-must-not-pass' },
+    }));
+    expect(request.url).toBe('https://api.kimi.com/coding/v1/models');
+    const headers = request.init.headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer sk-test');
+    expect(headers['user-agent']).toBe(DSH_PROVIDER_USER_AGENT);
+    expect(headers['User-Agent']).toBeUndefined();
+  });
+
+  it('DSH appends /models to the exact configured Base URL without inventing /v1', () => {
+    expect(buildModelsFetchRequest(spec({
+      agent: 'dsh',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://gateway.example.test/openai-compatible',
+    })).url).toBe('https://gateway.example.test/openai-compatible/models');
+  });
+
+  it('DSH model discovery canonicalizes trailing slashes and rejects query state', () => {
+    expect(buildModelsFetchRequest(spec({
+      agent: 'dsh',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://api.kimi.com/coding/v1///',
+    })).url).toBe('https://api.kimi.com/coding/v1/models');
+    expect(() => buildModelsFetchRequest(spec({
+      agent: 'dsh',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://api.kimi.com/coding/v1#wrong',
+    }))).toThrow('invalid DSH provider Base URL');
+    for (const suffix of ['?', '#']) {
+      expect(() => buildModelsFetchRequest(spec({
+        agent: 'dsh',
+        wireProtocol: 'openai-chat',
+        baseUrl: `https://api.kimi.com/coding/v1${suffix}`,
+      }))).toThrow('invalid DSH provider Base URL');
+    }
   });
 
   it('omits auth headers without apiKey and keeps custom headers', () => {
@@ -163,6 +206,63 @@ describe('fetchProviderModels', () => {
       { id: 'kimi-k3', name: 'Kimi K3' },
       { id: 'kimi-k2.6', name: 'Kimi K2.6' },
       { id: 'bare-id', name: 'bare-id' },
+    ]);
+  });
+
+  it('parses Kimi /models thinking metadata for DSH without inventing unsupported tiers', async () => {
+    const result = await fetchProviderModels(spec({
+      agent: 'dsh',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+    }), async () => fakeResponse(200, JSON.stringify({
+      data: [
+        {
+          id: 'k3',
+          display_name: 'Kimi K3',
+          context_length: 1_048_576,
+          supports_thinking_type: 'both',
+          think_efforts: {
+            support: true,
+            valid_efforts: ['low', 'high', 'max', 'unsupported'],
+            default_effort: 'high',
+          },
+        },
+        {
+          id: 'kimi-for-coding',
+          context_length: 262_144,
+          supports_thinking_type: 'only',
+          think_efforts: { support: false, valid_efforts: ['max'], default_effort: 'max' },
+        },
+        {
+          id: 'non-thinking-model',
+          context_length: 131_072,
+          supports_thinking_type: 'no',
+        },
+      ],
+    })));
+
+    expect(result.models).toEqual([
+      {
+        id: 'k3',
+        name: 'Kimi K3',
+        contextWindow: 1_048_576,
+        dshReasoningEfforts: ['low', 'high', 'max'],
+        dshReasoningEffort: 'high',
+      },
+      {
+        id: 'kimi-for-coding',
+        name: 'kimi-for-coding',
+        contextWindow: 262_144,
+        dshThinkingPolicy: 'always-on',
+        dshReasoningEffort: 'high',
+      },
+      {
+        id: 'non-thinking-model',
+        name: 'non-thinking-model',
+        contextWindow: 131_072,
+        dshThinkingPolicy: 'always-off',
+        dshReasoningEffort: 'off',
+      },
     ]);
   });
 

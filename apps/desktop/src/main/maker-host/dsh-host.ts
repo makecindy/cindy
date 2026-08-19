@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DshAgent, type AgentDeps, type DshVendorOptions } from '@cindy/maker-core';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 import {
+  DEFAULT_DSH_MAX_OUTPUT,
   type AgentKind,
   type Catalog,
   type CatalogModel,
@@ -17,6 +18,7 @@ import { desktopClaudeAuthAdapter } from './auth-adapters.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { createDesktopLocalDshTransport } from './dsh-local-transport.js';
 import { readDshProviderApiKey } from './dsh-provider-key.js';
+import { normalizeDshProviderBaseUrl } from './dsh-provider-url.js';
 import { buildDesktopClaudeRuntimeConfig } from './runtime-configs.js';
 import { createSshDshTransport } from './dsh-remote-transport.js';
 
@@ -59,12 +61,18 @@ export function buildDshAgent(
 type DshRuntimeProvider = Pick<Provider, 'id' | 'source' | 'auth' | 'routing' | 'models'>;
 
 function dshModels(models: readonly CatalogModel[] | undefined): NonNullable<DshVendorOptions['dshModels']> {
-  return (models ?? []).map((model) => ({
-    id: model.id,
-    name: model.name,
-    contextWindow: model.contextWindow,
-    ...(model.maxOutput !== undefined ? { maxTokens: model.maxOutput } : {}),
-  }));
+  return (models ?? []).map((model) => {
+    const maxTokens = Math.min(
+      model.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT,
+      model.contextWindow,
+    );
+    return {
+      id: model.id,
+      name: model.name,
+      contextWindow: model.contextWindow,
+      maxTokens,
+    };
+  });
 }
 
 function resolveDshProvider(
@@ -106,7 +114,10 @@ export interface ResolveDshVendorOptionsInput {
  */
 export function resolveDshVendorOptions(
   input: ResolveDshVendorOptionsInput,
-): Pick<DshVendorOptions, 'dshApiKey' | 'dshBaseUrl' | 'dshModels' | 'dshReasoningEffort'> {
+): Pick<
+  DshVendorOptions,
+  'dshApiKey' | 'dshBaseUrl' | 'dshModels' | 'dshReasoningEffort' | 'dshThinkingPolicy'
+> {
   const catalog = input.catalog ?? getActiveCatalog();
   const provider = resolveDshProvider(catalog, input.providerId, input.modelId);
   if (!provider || !provider.routing.dsh || provider.routing.dsh.disabled) {
@@ -123,11 +134,18 @@ export function resolveDshVendorOptions(
   }
   const apiKey = readDshProviderApiKey(provider, input.readCustomKey);
   if (!apiKey) throw new Error('DSH API key is not configured for the selected provider');
+  const baseUrl = normalizeDshProviderBaseUrl(provider.routing.dsh.upstream);
+  if (!baseUrl) throw new Error('DSH selected provider Base URL is invalid');
+  const dshThinkingPolicy = selectedModel.dshThinkingPolicy;
   return {
     dshApiKey: apiKey,
-    dshBaseUrl: provider.routing.dsh.upstream,
+    dshBaseUrl: baseUrl,
     dshModels: dshModels(models),
-    dshReasoningEffort: selectedModel.dshReasoningEffort ?? 'high',
+    // Fixed-on models (K2.7) must send `thinking:enabled` without inventing an unsupported effort.
+    // Keep the policy separate all the way into Maker Core's adapter composition.
+    ...(dshThinkingPolicy
+      ? { dshThinkingPolicy }
+      : { dshReasoningEffort: selectedModel.dshReasoningEffort ?? 'high' }),
   };
 }
 

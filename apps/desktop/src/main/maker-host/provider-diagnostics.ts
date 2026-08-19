@@ -19,6 +19,8 @@ import {
   isAgentSelectableModel,
   isLoopbackProviderUrl,
   type AgentKind,
+  type DshReasoningEffort,
+  type DshThinkingPolicy,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
 import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
@@ -29,12 +31,17 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { DSH_PROVIDER_USER_AGENT } from './dsh-attribution.js';
+import { readDshProviderApiKey } from './dsh-provider-key.js';
+import { normalizeDshProviderBaseUrl } from './dsh-provider-url.js';
 import { outboundFetch } from './outbound-fetch.js';
 
 /** 探测请求超时。 */
 const PROBE_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
+/** DSH probe drains the full stream; keep a bounded but non-trivial allowance for reasoning frames. */
+const MAX_DSH_PROBE_STREAM_BYTES = 256 * 1024;
 
 /** 一次探测的完整参数（adhoc 直填；saved 由 resolve 得到）。 */
 export interface ProviderProbeSpec {
@@ -45,6 +52,10 @@ export interface ProviderProbeSpec {
   authMethod?: 'apiKey' | 'oauth' | 'none';
   /** 缺省按 agent 保持历史行为。 */
   wireProtocol?: ProviderWireProtocol;
+  /** DSH adapter 的逐模型推理强度；缺省保持 adapter 的 high 默认。 */
+  dshReasoningEffort?: DshReasoningEffort;
+  /** 固定思考模型只发送开关，不伪造其不支持的推理强度。 */
+  dshThinkingPolicy?: DshThinkingPolicy;
   /** 非标准推理端点的精确相对路径。 */
   requestPath?: string;
   /** 用户 API key；缺省 = 不注入鉴权头（端点可能靠自定义 headers 鉴权）。 */
@@ -106,6 +117,12 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
     ? withoutCredentialHeaders(spec.headers)
     : normalizedHeaders(spec.headers);
   headers['content-type'] = 'application/json';
+  if (spec.agent === 'dsh') {
+    // Keep the probe's product identity aligned with the real DSH adapter. In particular, do not
+    // impersonate Kimi CLI to obtain subscription benefits under a different client identity.
+    headers['user-agent'] = DSH_PROVIDER_USER_AGENT;
+    headers.accept = 'text/event-stream';
+  }
   const anthropicMessages =
     spec.wireProtocol === 'anthropic-messages'
     || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
@@ -135,8 +152,19 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
     // 部分供应商的思考模型(如 DeepSeek deepseek-v4-pro)明确拒绝强制工具调用
     // (“Thinking mode does not support this tool_choice”),会把可达的端点误报成失败。
     // 工具调用能力交给真实会话验证(Codex 用 tool_choice:'auto',不强制)。
+    const dshThinkingPolicy = spec.agent === 'dsh' ? spec.dshThinkingPolicy : undefined;
+    const dshEffort = spec.agent === 'dsh' && !dshThinkingPolicy
+      ? (spec.dshReasoningEffort ?? 'high')
+      : undefined;
+    const dshThinking = spec.agent === 'dsh'
+      ? (dshThinkingPolicy === 'always-off' || dshEffort === 'off' ? 'disabled' : 'enabled')
+      : undefined;
+    const baseUrl = spec.agent === 'dsh'
+      ? normalizeDshProviderBaseUrl(spec.baseUrl)
+      : spec.baseUrl;
+    if (!baseUrl) throw new TypeError('invalid DSH provider Base URL');
     return {
-      url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/chat/completions'),
+      url: appendProviderRequestPath(baseUrl, spec.requestPath ?? '/chat/completions'),
       init: {
         method: 'POST',
         headers,
@@ -146,6 +174,12 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
           max_tokens: 16,
           stream: true,
           stream_options: { include_usage: true },
+          ...(dshThinking
+            ? {
+                thinking: { type: dshThinking },
+                ...(dshEffort && dshEffort !== 'off' ? { reasoning_effort: dshEffort } : {}),
+              }
+            : {}),
         }),
       },
     };
@@ -197,6 +231,148 @@ async function readFirstSsePayload(res: Response): Promise<string | null> {
         if (!line.startsWith('data:')) return null;
         return line.slice(5).trim() || null;
       }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* no-op */
+    }
+  }
+}
+
+type DshSseFailure = { code: ProviderErrorCode; detail: string };
+
+/**
+ * DSH's published adapter consumes the complete SSE stream, rejects malformed/later error frames,
+ * requires a content-bearing chunk, and only succeeds after `[DONE]`. Mirror those facts here so
+ * the settings probe cannot pass a stream that the first real Harness turn will reject.
+ */
+async function validateDshSseResponse(res: Response): Promise<DshSseFailure | null> {
+  if (!res.body) return { code: 'WIRE_INCOMPATIBLE', detail: 'stream has no response body' };
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let totalBytes = 0;
+  let dataLines: string[] = [];
+  let sawContent = false;
+  let sawDone = false;
+
+  const inspectPayload = (payload: string): DshSseFailure | null => {
+    if (payload === '[DONE]') {
+      sawDone = true;
+      return sawContent
+        ? null
+        : { code: 'WIRE_INCOMPATIBLE', detail: 'stream completed without model content' };
+    }
+    let event: unknown;
+    try {
+      event = JSON.parse(payload);
+    } catch {
+      return { code: 'WIRE_INCOMPATIBLE', detail: 'SSE data frame is not valid JSON' };
+    }
+    if (!isPlainObject(event)) {
+      return { code: 'WIRE_INCOMPATIBLE', detail: 'SSE data frame is not an object' };
+    }
+    if (isPlainObject(event.error)) {
+      const classified = classifyStreamedError(event.error);
+      return {
+        code: classified.code,
+        detail: classified.detail ?? 'streamed provider error',
+      };
+    }
+    if (event.choices !== undefined && event.choices !== null && !Array.isArray(event.choices)) {
+      return { code: 'WIRE_INCOMPATIBLE', detail: 'SSE choices field is not an array' };
+    }
+    if (Array.isArray(event.choices)) {
+      for (const choice of event.choices) {
+        if (!isPlainObject(choice)) {
+          return { code: 'WIRE_INCOMPATIBLE', detail: 'SSE choice is not an object' };
+        }
+        if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
+          if (typeof choice.finish_reason !== 'string') {
+            return { code: 'WIRE_INCOMPATIBLE', detail: 'SSE finish_reason is not a string' };
+          }
+          if (!['stop', 'tool_calls', 'length'].includes(choice.finish_reason)) {
+            return {
+              code: 'WIRE_INCOMPATIBLE',
+              detail: `DSH adapter rejects finish_reason '${choice.finish_reason}'`,
+            };
+          }
+        }
+        if (!isPlainObject(choice.delta)) continue;
+        const delta = choice.delta;
+        if (
+          delta.tool_calls !== undefined
+          && delta.tool_calls !== null
+          && !Array.isArray(delta.tool_calls)
+        ) {
+          return { code: 'WIRE_INCOMPATIBLE', detail: 'SSE tool_calls field is not an array' };
+        }
+        if (
+          Array.isArray(delta.tool_calls)
+          && delta.tool_calls.some((call) => !isPlainObject(call))
+        ) {
+          return { code: 'WIRE_INCOMPATIBLE', detail: 'SSE tool call is not an object' };
+        }
+        if (
+          (typeof delta.content === 'string' && delta.content.length > 0)
+          || (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0)
+          || (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0)
+        ) {
+          sawContent = true;
+        }
+      }
+    }
+    return null;
+  };
+
+  const consumeLine = (rawLine: string): DshSseFailure | null => {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.length === 0) {
+      if (dataLines.length === 0) return null;
+      const payload = dataLines.join('\n');
+      dataLines = [];
+      return inspectPayload(payload);
+    }
+    if (line.startsWith(':')) return null;
+    const separator = line.indexOf(':');
+    const field = separator < 0 ? line : line.slice(0, separator);
+    if (field !== 'data') return null;
+    let value = separator < 0 ? '' : line.slice(separator + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    dataLines.push(value);
+    return null;
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > MAX_DSH_PROBE_STREAM_BYTES) {
+          return { code: 'WIRE_INCOMPATIBLE', detail: 'probe stream exceeded its validation limit' };
+        }
+        buffer += decoder.decode(value, { stream: !done });
+      }
+      let newline: number;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        const failure = consumeLine(line);
+        if (failure || sawDone) return failure;
+      }
+      if (!done) continue;
+      buffer += decoder.decode();
+      if (buffer.length > 0) {
+        const failure = consumeLine(buffer);
+        if (failure || sawDone) return failure;
+      }
+      if (dataLines.length > 0) {
+        const failure = inspectPayload(dataLines.join('\n'));
+        if (failure || sawDone) return failure;
+      }
+      return { code: 'WIRE_INCOMPATIBLE', detail: 'stream ended without [DONE]' };
     }
   } finally {
     try {
@@ -268,34 +444,58 @@ export async function runProviderProbe(
           detail: `expected text/event-stream, got ${contentType || 'no content-type'}`,
         };
       }
-      const firstPayload = await readFirstSsePayload(res);
-      if (!firstPayload) {
-        return {
-          ok: false,
-          code: 'WIRE_INCOMPATIBLE',
-          status: res.status,
-          latencyMs,
-          detail: 'stream ended before the first SSE data frame',
-        };
-      }
-      if (firstPayload !== '[DONE]') {
-        try {
-          const event: unknown = JSON.parse(firstPayload);
-          if (isPlainObject(event) && isPlainObject(event.error)) {
-            const cls = classifyStreamedError(event.error);
-            return { ok: false, code: cls.code, status: res.status, latencyMs, detail: cls.detail };
+      try {
+        if (spec.agent === 'dsh') {
+          const failure = await validateDshSseResponse(res);
+          if (failure) {
+            return {
+              ok: false,
+              ...failure,
+              status: res.status,
+              latencyMs: Date.now() - start,
+            };
           }
-        } catch {
+          return { ok: true, latencyMs: Date.now() - start };
+        }
+        const firstPayload = await readFirstSsePayload(res);
+        if (!firstPayload) {
           return {
             ok: false,
             code: 'WIRE_INCOMPATIBLE',
             status: res.status,
             latencyMs,
-            detail: 'first SSE data frame is not valid JSON',
+            detail: 'stream ended before the first SSE data frame',
           };
         }
+        if (firstPayload !== '[DONE]') {
+          let event: unknown;
+          try {
+            event = JSON.parse(firstPayload);
+          } catch {
+            return {
+              ok: false,
+              code: 'WIRE_INCOMPATIBLE',
+              status: res.status,
+              latencyMs,
+              detail: 'first SSE data frame is not valid JSON',
+            };
+          }
+          if (isPlainObject(event) && isPlainObject(event.error)) {
+            const cls = classifyStreamedError(event.error);
+            return { ok: false, code: cls.code, status: res.status, latencyMs, detail: cls.detail };
+          }
+        }
+        return { ok: true, latencyMs };
+      } catch (err) {
+        const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+        return {
+          ok: false,
+          code: cls.code,
+          status: res.status,
+          latencyMs: Date.now() - start,
+          detail: cls.detail,
+        };
       }
-      return { ok: true, latencyMs };
     }
     // Non-streaming probes do not need the response body; cancel it to release the connection.
     try {
@@ -333,10 +533,12 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
   );
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
-  const baseUrl = model.route?.baseUrl ?? routing.upstream;
-  const wireProtocol = model.route?.wireProtocol ?? routing.wireProtocol;
+  const baseUrl = agent === 'dsh' ? routing.upstream : (model.route?.baseUrl ?? routing.upstream);
+  const wireProtocol = agent === 'dsh'
+    ? 'openai-chat'
+    : (model.route?.wireProtocol ?? routing.wireProtocol);
   // Pi derives its inference path from wireProtocol and does not consume requestPath.
-  const requestPath = agent === 'pi'
+  const requestPath = agent === 'pi' || agent === 'dsh'
     ? undefined
     : model.route
       ? model.route.requestPath
@@ -372,7 +574,9 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
       headers: withoutCredentialHeaders(routing.headerOverride),
     };
   }
-  const apiKey = keyReader(providerId, agent);
+  const apiKey = agent === 'dsh'
+    ? readDshProviderApiKey(provider, keyReader)
+    : keyReader(providerId, agent);
   return {
     agent,
     baseUrl,
@@ -382,6 +586,14 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     // 误报连接失败（真实会话走 resolveSessionRoute 不受影响，探测结论会与真实会话相反）。
     wireProtocol,
     requestPath,
+    ...(agent === 'dsh'
+      ? {
+          authMethod: 'apiKey' as const,
+          ...(model.dshThinkingPolicy
+            ? { dshThinkingPolicy: model.dshThinkingPolicy }
+            : { dshReasoningEffort: model.dshReasoningEffort ?? 'high' }),
+        }
+      : {}),
     apiKey,
     // 与真实会话路由保持 legacy 兼容：safeStorage 已有 key 时清掉旧凭证头，由 apiKey
     // 重新注入；尚未迁移的 header-only 配置则原样保留，否则“测试连接”会无凭证误报失败。

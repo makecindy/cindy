@@ -168,9 +168,14 @@ export function setCustomProviderModelDshReasoningEffort(
   targetIndex: number,
   effort: DshReasoningEffort,
 ): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) =>
-    index === targetIndex ? { ...model, dshReasoningEffort: effort } : model,
-  );
+  return models.map((model, index) => {
+    if (index !== targetIndex) return model;
+    if (model.dshThinkingPolicy) return model;
+    if (model.dshReasoningEfforts?.length && !model.dshReasoningEfforts.includes(effort)) {
+      return model;
+    }
+    return { ...model, dshReasoningEffort: effort };
+  });
 }
 
 /**
@@ -191,6 +196,9 @@ export function customProviderModelConfigFromCatalogModel(
     | 'piApi'
     | 'route'
     | 'dshReasoningEffort'
+    | 'dshReasoningEfforts'
+    | 'dshThinkingPolicy'
+    | 'maxOutput'
   > &
     Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
@@ -208,6 +216,13 @@ export function customProviderModelConfigFromCatalogModel(
     ...(agent === 'dsh' && model.dshReasoningEffort
       ? { dshReasoningEffort: model.dshReasoningEffort }
       : {}),
+    ...(agent === 'dsh' && model.dshReasoningEfforts?.length
+      ? { dshReasoningEfforts: [...model.dshReasoningEfforts] }
+      : {}),
+    ...(agent === 'dsh' && model.dshThinkingPolicy
+      ? { dshThinkingPolicy: model.dshThinkingPolicy }
+      : {}),
+    ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
     ...(model.route ? { route: { ...model.route } } : {}),
     ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }

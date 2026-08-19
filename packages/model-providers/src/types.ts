@@ -33,6 +33,11 @@ export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
 /** DeepSeek Harness accepts these exact per-session thinking defaults. */
 export const DSH_REASONING_EFFORTS = ['off', 'low', 'high', 'max'] as const;
 export type DshReasoningEffort = (typeof DSH_REASONING_EFFORTS)[number];
+/** Conservative output cap for uncatalogued DSH models; the adapter's own 256K fallback is unsafe. */
+export const DEFAULT_DSH_MAX_OUTPUT = 32_768;
+/** Fixed provider thinking policies that do not expose a graded effort picker. */
+export const DSH_THINKING_POLICIES = ['always-on', 'always-off'] as const;
+export type DshThinkingPolicy = (typeof DSH_THINKING_POLICIES)[number];
 
 /**
  * PI models.json understands these four portable inference protocols. The
@@ -332,6 +337,13 @@ export interface CatalogModel {
    * catalog.ts 的跨来源 modelSignature 一致性校验。
    */
   dshReasoningEffort?: DshReasoningEffort;
+  /**
+   * DSH 设置页允许为该模型选择的推理强度。缺省表示沿用 adapter 的通用
+   * `off | low | high | max` 契约；预设可收窄为厂商明确支持的集合。
+   */
+  dshReasoningEfforts?: DshReasoningEffort[];
+  /** Provider-declared fixed Thinking behavior; fixed models do not expose a graded effort picker. */
+  dshThinkingPolicy?: DshThinkingPolicy;
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];
@@ -549,6 +561,12 @@ export interface ProviderRuntimeModelConfig {
   reasoningDefaultEffort?: PiReasoningEffort;
   /** DSH 选中该模型时使用的默认推理强度（含 `off`）。 */
   dshReasoningEffort?: DshReasoningEffort;
+  /** DSH 设置页允许选择的推理强度；缺省沿用 adapter 的通用集合。 */
+  dshReasoningEfforts?: DshReasoningEffort[];
+  /** 厂商声明的固定思考模式；固定模式不向用户展示分档选择。 */
+  dshThinkingPolicy?: DshThinkingPolicy;
+  /** 每次模型请求的输出 token 上限；DSH adapter 会将其写成 per-model maxTokens。 */
+  maxOutput?: number;
 }
 
 /**

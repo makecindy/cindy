@@ -104,6 +104,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     storeCustomProviderHeaders: vi.fn(() => true),
     removeCustomProviderHeaders: vi.fn(() => ({ success: true })),
     readSavedProviderRoute: vi.fn(() => null),
+    readSavedProviderApiKey: vi.fn(() => null),
     scanLocalCli: vi.fn(async () => []),
     setModelsDisabled: vi.fn(() => {}),
     setProviderDisabled: vi.fn(() => {}),
@@ -2253,6 +2254,28 @@ describe('provider:presets handler', () => {
 });
 
 describe('provider:test-connection handler', () => {
+  it('rejects an untrusted sender before issuing a credentialed connection probe', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn(() => {
+      throwIpcError('PERMISSION_DENIED', '此操作只能从 Cindy 主页面发起');
+    });
+    const deps = makeDeps({ assertTrustedSender });
+    registerProviderHandlers(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, {
+      kind: 'adhoc',
+      spec: {
+        agent: 'dsh',
+        baseUrl: 'https://attacker.example/v1',
+        modelId: 'k3',
+        authMethod: 'apiKey',
+        apiKey: 'credential-must-not-leave-main',
+      },
+    })).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(deps.testConnection).not.toHaveBeenCalled();
+  });
+
   it('forwards parsed adhoc input and returns the structured result', async () => {
     const harness = new IpcHarness();
     const testConnection = vi.fn(async () => ({
@@ -2317,6 +2340,68 @@ describe('provider:test-connection handler', () => {
     }));
   });
 
+  it('accepts a DSH probe and fixes it to the adapter Chat wire', async () => {
+    const harness = new IpcHarness();
+    const testConnection = vi.fn(async (_input: unknown) => ({ ok: true as const, latencyMs: 2 }));
+    registerProviderHandlers(harness, makeDeps({ testConnection }));
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, {
+      kind: 'adhoc',
+      spec: {
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1///',
+        modelId: 'k3',
+        authMethod: 'apiKey',
+        apiKey: 'kimi-key',
+        dshReasoningEffort: 'max',
+      },
+    })).resolves.toMatchObject({ ok: true });
+    expect(testConnection).toHaveBeenCalledWith({
+      kind: 'adhoc',
+      spec: {
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        modelId: 'k3',
+        authMethod: 'apiKey',
+        wireProtocol: 'openai-chat',
+        requestPath: undefined,
+        dshReasoningEffort: 'max',
+        apiKey: 'kimi-key',
+        headers: undefined,
+      },
+    });
+  });
+
+  it('preserves a fixed DSH thinking policy without inventing an effort tier', async () => {
+    const harness = new IpcHarness();
+    const testConnection = vi.fn(async (_input: unknown) => ({ ok: true as const, latencyMs: 2 }));
+    registerProviderHandlers(harness, makeDeps({ testConnection }));
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, {
+      kind: 'adhoc',
+      spec: {
+        agent: 'dsh',
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        modelId: 'kimi-for-coding',
+        authMethod: 'apiKey',
+        apiKey: 'kimi-key',
+        dshThinkingPolicy: 'always-on',
+        dshReasoningEffort: 'high',
+      },
+    })).resolves.toMatchObject({ ok: true });
+    expect(testConnection).toHaveBeenCalledWith({
+      kind: 'adhoc',
+      spec: expect.objectContaining({
+        agent: 'dsh',
+        dshThinkingPolicy: 'always-on',
+      }),
+    });
+    const forwarded = testConnection.mock.calls[0]?.[0] as {
+      spec: Record<string, unknown>;
+    };
+    expect(forwarded.spec).not.toHaveProperty('dshReasoningEffort');
+  });
+
   it('rejects remote no-auth adhoc probes before invoking the network dependency', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps();
@@ -2357,6 +2442,10 @@ describe('provider:test-connection handler', () => {
         },
       },
       { kind: 'saved', providerId: '', agent: 'codex' },
+      { kind: 'adhoc', spec: { agent: 'dsh', baseUrl: 'https://x.example', modelId: 'm', authMethod: 'none' } },
+      { kind: 'adhoc', spec: { agent: 'dsh', baseUrl: 'https://x.example', modelId: 'm', authMethod: 'apiKey', requestPath: '/custom' } },
+      { kind: 'adhoc', spec: { agent: 'dsh', baseUrl: 'https://x.example', modelId: 'm', authMethod: 'apiKey', dshReasoningEffort: 'medium' } },
+      { kind: 'adhoc', spec: { agent: 'dsh', baseUrl: 'https://x.example', modelId: 'm', authMethod: 'apiKey', dshThinkingPolicy: 'sometimes' } },
     ];
     for (const input of bad) {
       await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, input)).rejects.toThrow(/INVALID_PARAMS/);
@@ -2452,6 +2541,42 @@ describe('provider:models-fetch handler', () => {
     });
   });
 
+  it('accepts DSH model discovery, derives /models, and resolves a saved Main-only key', async () => {
+    const harness = new IpcHarness();
+    const fetchModels = vi.fn(async () => ({ ok: true as const, models: [] }));
+    const readSavedProviderApiKey = vi.fn(() => 'saved-kimi-key');
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels,
+      readSavedProviderRoute: vi.fn(() => ({
+        baseUrl: 'https://api.kimi.com/coding/v1///',
+        modelsUrl: 'https://api.kimi.com/legacy-models',
+      })),
+      readSavedProviderApiKey,
+      readCustomProviderHeadersForMutation: vi.fn(() => ({
+        authorization: 'must-not-forward-for-dsh',
+      })),
+    }));
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'dsh',
+      baseUrl: 'https://evil.example/v1',
+      authMethod: 'apiKey',
+      savedProviderId: 'kimi-code',
+    });
+
+    expect(readSavedProviderApiKey).toHaveBeenCalledWith('kimi-code', 'dsh');
+    expect(fetchModels).toHaveBeenCalledWith({
+      agent: 'dsh',
+      wireProtocol: 'openai-chat',
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      authMethod: 'apiKey',
+      modelsUrl: null,
+      apiKey: 'saved-kimi-key',
+      headers: undefined,
+      savedProviderId: 'kimi-code',
+    });
+  });
+
   it('rejects remote no-auth model discovery URLs before invoking fetch', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps();
@@ -2479,6 +2604,11 @@ describe('provider:models-fetch handler', () => {
       { agent: 'codex', baseUrl: '' },
       { agent: 'codex', baseUrl: 'https://x.example', modelsUrl: 'not-a-url' },
       { agent: 'codex', baseUrl: 'https://x.example', headers: { a: 1 } },
+      { agent: 'dsh', baseUrl: 'https://x.example', authMethod: 'none' },
+      { agent: 'dsh', baseUrl: 'https://x.example', authMethod: 'apiKey', modelsUrl: 'https://x.example/models' },
+      { agent: 'dsh', baseUrl: 'https://x.example', authMethod: 'apiKey', wireProtocol: 'openai-responses' },
+      { agent: 'dsh', baseUrl: 'https://x.example?bad=1', authMethod: 'apiKey' },
+      { agent: 'dsh', baseUrl: 'https://x.example#bad', authMethod: 'apiKey' },
     ];
     for (const input of bad) {
       await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, input)).rejects.toThrow(/INVALID_PARAMS/);

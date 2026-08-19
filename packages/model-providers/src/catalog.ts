@@ -12,7 +12,12 @@
 
 import { parseModelRegistry } from './modelAccessValidator.js';
 
-import { DSH_REASONING_EFFORTS, PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
+import {
+  DSH_REASONING_EFFORTS,
+  DSH_THINKING_POLICIES,
+  PI_MODEL_APIS,
+  PI_REASONING_EFFORTS,
+} from './types.js';
 import type {
   Catalog,
   Provider,
@@ -158,6 +163,44 @@ function validateModel(
     assert(
       agent === 'dsh' && isDshReasoningEffort(m.dshReasoningEffort),
       `model.dshReasoningEffort invalid for '${m.id}'`,
+    );
+  }
+  if (m.dshReasoningEfforts !== undefined) {
+    assert(
+      agent === 'dsh'
+      && Array.isArray(m.dshReasoningEfforts)
+      && m.dshReasoningEfforts.length > 0
+      && m.dshReasoningEfforts.every(isDshReasoningEffort)
+      && new Set(m.dshReasoningEfforts).size === m.dshReasoningEfforts.length,
+      `model.dshReasoningEfforts invalid for '${m.id}'`,
+    );
+    if (m.dshReasoningEffort !== undefined) {
+      assert(
+        m.dshReasoningEfforts.includes(m.dshReasoningEffort),
+        `model.dshReasoningEffort not listed in dshReasoningEfforts for '${m.id}'`,
+      );
+    }
+  }
+  if (m.dshThinkingPolicy !== undefined) {
+    assert(
+      agent === 'dsh'
+      && DSH_THINKING_POLICIES.includes(m.dshThinkingPolicy)
+      && m.dshReasoningEfforts === undefined,
+      `model.dshThinkingPolicy invalid for '${m.id}'`,
+    );
+    assert(
+      m.dshThinkingPolicy === 'always-off'
+        ? m.dshReasoningEffort === 'off'
+        : m.dshReasoningEffort !== 'off',
+      `model.dshThinkingPolicy conflicts with dshReasoningEffort for '${m.id}'`,
+    );
+  }
+  if (m.maxOutput !== undefined) {
+    assert(
+      typeof m.maxOutput === 'number'
+      && Number.isSafeInteger(m.maxOutput)
+      && m.maxOutput > 0,
+      `model.maxOutput invalid for '${m.id}'`,
     );
   }
   if (m.route !== undefined) {
@@ -498,6 +541,37 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (
         mm.dshReasoningEffort !== undefined &&
         (agent !== 'dsh' || !isDshReasoningEffort(mm.dshReasoningEffort))
+      ) return false;
+      if (mm.dshReasoningEfforts !== undefined) {
+        if (
+          agent !== 'dsh'
+          || !Array.isArray(mm.dshReasoningEfforts)
+          || mm.dshReasoningEfforts.length === 0
+          || mm.dshReasoningEfforts.some((effort) => !isDshReasoningEffort(effort))
+          || new Set(mm.dshReasoningEfforts).size !== mm.dshReasoningEfforts.length
+        ) return false;
+        if (
+          mm.dshReasoningEffort !== undefined
+          && !mm.dshReasoningEfforts.includes(mm.dshReasoningEffort)
+        ) return false;
+      }
+      if (mm.dshThinkingPolicy !== undefined) {
+        if (
+          agent !== 'dsh'
+          || !(DSH_THINKING_POLICIES as readonly unknown[]).includes(mm.dshThinkingPolicy)
+          || mm.dshReasoningEfforts !== undefined
+          || (mm.dshThinkingPolicy === 'always-off'
+            ? mm.dshReasoningEffort !== 'off'
+            : mm.dshReasoningEffort === 'off')
+        ) return false;
+      }
+      if (
+        mm.maxOutput !== undefined
+        && (
+          typeof mm.maxOutput !== 'number'
+          || !Number.isSafeInteger(mm.maxOutput)
+          || mm.maxOutput <= 0
+        )
       ) return false;
       if (
         mm.contextWindow !== undefined

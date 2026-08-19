@@ -265,7 +265,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     });
   });
 
-  it('Kimi Code(编程计划)按各 harness 的权威目录保留 contextWindow', () => {
+  it('Kimi Code(编程计划)按各 harness 的静态兜底保留 contextWindow', () => {
     const presets = BUNDLED_CATALOG.presets ?? [];
     const kimiCode = presets.find((p) => p.id === 'moonshot-kimi-code');
     expect(kimiCode).toBeDefined();

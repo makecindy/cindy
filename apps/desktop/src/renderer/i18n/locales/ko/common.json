@@ -1387,7 +1387,9 @@
           "modelSupportsReasoningHelp": "모델이 추론 강도를 허용할 때만 켜고 실제로 지원하는 모든 단계를 선택하세요. 저장 후 다음 Pi Agent 세션부터 적용됩니다.",
           "modelReasoningEfforts": "지원되는 추론 강도",
           "dshReasoningEffort": "기본 추론 강도",
-          "dshReasoningEffortHelp": "이 모델로 DSH를 시작할 때 적용됩니다. 끄기를 선택하면 DeepSeek 사고 과정을 비활성화합니다.",
+          "dshReasoningEffortHelp": "이 모델로 DSH를 시작할 때 적용됩니다. 선택 가능한 단계는 제공자와 모델에 따라 달라집니다.",
+          "dshThinkingPolicy": "사고 모드",
+          "dshThinkingPolicyHelp": "이 모델은 제공자가 사고 켜짐 또는 꺼짐을 고정하므로 선택할 수 있는 추론 강도 단계가 없습니다.",
           "addModel": "모델 추가",
           "headers": "요청 헤더(선택)",
           "headerNamePlaceholder": "Header-Name",
@@ -1424,6 +1426,10 @@
           "low": "낮음",
           "high": "높음",
           "max": "최대"
+        },
+        "dshThinkingPolicy": {
+          "always-on": "사고 항상 켜짐",
+          "always-off": "사고 항상 꺼짐"
         },
         "errors": {
           "nameRequired": "표시 이름을 입력하세요",

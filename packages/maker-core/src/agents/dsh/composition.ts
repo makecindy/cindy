@@ -7,11 +7,16 @@ const js = (expression: string): JsExpression => ({ expression });
 export function buildDshCordisConfig(options: DshCompositionOptions): DshCordisConfig {
   if (options.provider !== 'deepseek-official') throw new Error(`dsh only supports provider deepseek-official (got ${options.provider})`);
   if (options.apiKeyEnv !== 'DEEPSEEK_API_KEY') throw new Error('dsh deepseek adapter requires DEEPSEEK_API_KEY');
-  const reasoningEffort = options.reasoningEffort ?? 'max';
+  const reasoningEffort = options.thinkingPolicy ? undefined : (options.reasoningEffort ?? 'max');
+  const thinking = options.thinkingPolicy === 'always-on'
+    ? 'enabled'
+    : options.thinkingPolicy === 'always-off' || reasoningEffort === 'off'
+      ? 'disabled'
+      : 'enabled';
   const deepseekConfig = {
     ...(options.baseUrl?.trim() ? { baseURL: options.baseUrl.trim() } : {}),
-    thinking: reasoningEffort === 'off' ? 'disabled' : 'enabled',
-    reasoningEffort,
+    thinking,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(options.models?.length
       ? {
           models: options.models.map((model) => ({

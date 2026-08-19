@@ -4636,17 +4636,19 @@ interface ElectronAPI {
     /** 供应商「测试连接」—— 与真实会话同路由口径的最小探测请求（结构化结果，code 走 providerError.* i18n）。 */
     testProviderConnection: (
       input:
-        | { kind: 'saved'; providerId: string; agent: 'claude-code' | 'codex' | 'pi' }
+        | { kind: 'saved'; providerId: string; agent: 'claude-code' | 'codex' | 'pi' | 'dsh' }
         | {
             kind: 'adhoc';
             spec: {
-              agent: 'claude-code' | 'codex' | 'pi';
+              agent: 'claude-code' | 'codex' | 'pi' | 'dsh';
               baseUrl: string;
               modelId: string;
               authMethod: 'apiKey' | 'oauth' | 'none';
               wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
-              requestPath?: string;
-              apiKey?: string | null;
+            requestPath?: string;
+            dshReasoningEffort?: import('@cindy/model-providers').DshReasoningEffort;
+            dshThinkingPolicy?: import('@cindy/model-providers').DshThinkingPolicy;
+            apiKey?: string | null;
               headers?: Record<string, string>;
             };
           },
@@ -4659,7 +4661,7 @@ interface ElectronAPI {
     }>;
     /** 供应商「获取模型列表」—— 表单值透传，结构化结果（code 走 providerError.* i18n）。 */
     fetchProviderModels: (input: {
-      agent: 'claude-code' | 'codex' | 'pi';
+      agent: 'claude-code' | 'codex' | 'pi' | 'dsh';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
       wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
@@ -4670,7 +4672,14 @@ interface ElectronAPI {
       savedProviderId?: string;
     }) => Promise<{
       ok: boolean;
-      models?: { id: string; name: string; contextWindow?: number }[];
+      models?: {
+        id: string;
+        name: string;
+        contextWindow?: number;
+        dshReasoningEffort?: import('@cindy/model-providers').DshReasoningEffort;
+        dshReasoningEfforts?: import('@cindy/model-providers').DshReasoningEffort[];
+        dshThinkingPolicy?: import('@cindy/model-providers').DshThinkingPolicy;
+      }[];
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
