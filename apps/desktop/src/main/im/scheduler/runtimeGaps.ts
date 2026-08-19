@@ -8,27 +8,29 @@ import { compareSchedulerStrings } from './state';
 export class RuntimeGapSet {
   private readonly gaps = new Map<string, SchedulerRuntimeFrame>();
 
-  adopt(runtime: SchedulerRuntimeFrame): boolean {
-    if (runtime.state !== 'dirty') return false;
-    const existing = this.gaps.get(runtime.identity);
-    if (existing && existing.generation <= runtime.generation) return false;
-    this.gaps.set(runtime.identity, { ...runtime, state: 'dirty' });
-    this.trim();
-    return true;
+  private static key(
+    runtime: Pick<SchedulerRuntimeFrame, 'identity' | 'bindingGeneration' | 'generation'>,
+  ): string {
+    return `${runtime.identity}\u0000${runtime.bindingGeneration}\u0000${runtime.generation}`;
   }
 
-  resolve(generation: string): boolean {
-    let changed = false;
-    for (const [identity, runtime] of this.gaps) {
-      if (runtime.generation !== generation) continue;
-      this.gaps.delete(identity);
-      changed = true;
-    }
-    return changed;
+  adopt(runtime: SchedulerRuntimeFrame): boolean {
+    if (runtime.state !== 'dirty') return false;
+    const key = RuntimeGapSet.key(runtime);
+    if (this.gaps.has(key)) return false;
+    this.gaps.set(key, { ...runtime, state: 'dirty' });
+    this.trim();
+    return this.gaps.has(key);
+  }
+
+  resolve(
+    runtime: Pick<SchedulerRuntimeFrame, 'identity' | 'bindingGeneration' | 'generation'>,
+  ): boolean {
+    return this.gaps.delete(RuntimeGapSet.key(runtime));
   }
 
   get(identity: string): SchedulerRuntimeFrame | undefined {
-    const runtime = this.gaps.get(identity);
+    const runtime = this.values().find((candidate) => candidate.identity === identity);
     return runtime ? { ...runtime } : undefined;
   }
 
@@ -36,8 +38,9 @@ export class RuntimeGapSet {
     return [...this.gaps.values()]
       .sort(
         (left, right) =>
-          compareSchedulerStrings(left.generation, right.generation) ||
-          compareSchedulerStrings(left.identity, right.identity),
+          compareSchedulerStrings(left.identity, right.identity) ||
+          compareSchedulerStrings(left.bindingGeneration, right.bindingGeneration) ||
+          compareSchedulerStrings(left.generation, right.generation),
       )
       .map((runtime) => ({ ...runtime }));
   }
@@ -51,12 +54,18 @@ export class RuntimeGapSet {
   }
 
   clearIdentity(identity: string): boolean {
-    return this.gaps.delete(identity);
+    let changed = false;
+    for (const [key, runtime] of this.gaps) {
+      if (runtime.identity !== identity) continue;
+      this.gaps.delete(key);
+      changed = true;
+    }
+    return changed;
   }
 
   private trim(): void {
     const retained = this.values().slice(0, MAX_RUNTIME_GAPS);
     this.gaps.clear();
-    for (const runtime of retained) this.gaps.set(runtime.identity, runtime);
+    for (const runtime of retained) this.gaps.set(RuntimeGapSet.key(runtime), runtime);
   }
 }

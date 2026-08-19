@@ -155,14 +155,15 @@ function isRuntimeGapList(
 ): value is readonly SchedulerRuntimeFrame[] | undefined {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length > MAX_RUNTIME_GAPS) return false;
-  const identities = new Set<string>();
-  return value.every(
-    (runtime) =>
-      isSchedulerRuntimeFrame(runtime) &&
-      runtime.state === "dirty" &&
-      !identities.has(runtime.identity) &&
-      (identities.add(runtime.identity), true),
-  );
+  const generations = new Set<string>();
+  return value.every((runtime) => {
+    if (!isSchedulerRuntimeFrame(runtime) || runtime.state !== "dirty")
+      return false;
+    const key = `${runtime.identity}\u0000${runtime.bindingGeneration}\u0000${runtime.generation}`;
+    if (generations.has(key)) return false;
+    generations.add(key);
+    return true;
+  });
 }
 
 export function isImSchedulerFrame(value: unknown): value is ImSchedulerFrame {

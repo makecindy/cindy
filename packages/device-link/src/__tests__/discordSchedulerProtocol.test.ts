@@ -33,6 +33,47 @@ describe("Discord scheduler protocol", () => {
     ).toBe(true);
   });
 
+  it("accepts multiple unresolved generations for the same binding", () => {
+    expect(
+      isImSchedulerFrame({
+        kind: "advertisement",
+        sentAt: 1,
+        channels: [{ channel: "discord", identity, bindingGeneration }],
+        runtimeGaps: [
+          {
+            identity,
+            bindingGeneration,
+            generation: "a".repeat(32),
+            state: "dirty",
+          },
+          {
+            identity,
+            bindingGeneration,
+            generation: "b".repeat(32),
+            state: "dirty",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an exact duplicate unresolved generation", () => {
+    const runtime = {
+      identity,
+      bindingGeneration,
+      generation: "a".repeat(32),
+      state: "dirty",
+    };
+    expect(
+      isImSchedulerFrame({
+        kind: "advertisement",
+        sentAt: 1,
+        channels: [{ channel: "discord", identity, bindingGeneration }],
+        runtimeGaps: [runtime, runtime],
+      }),
+    ).toBe(false);
+  });
+
   it("rejects credentials, other channels, malformed ids, and invalid runtime state", () => {
     expect(
       isImSchedulerFrame({
