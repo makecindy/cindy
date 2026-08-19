@@ -1186,6 +1186,39 @@ function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
   return true;
 }
 
+/**
+ * 子 Agent launch 阶段失败的父会话可见投影：发出一个 failed 终态
+ * agent_task_update。kind 用 spawn 而非 terminal，是因为持久化层只允许 spawn
+ * 创建 durable run（progress/terminal 无权凭空建子任务），而 launch 失败往往
+ * 没有更早的 spawn 观测——这条是唯一权威观测，必须能建出可查询的 failed 记录。
+ */
+function emitSubagentLaunchFailure(
+  queue: EventQueue,
+  parentToolUseId: string,
+  options: { errorMessage: string; model?: string },
+): void {
+  queue.push({
+    type: 'agent_task_update',
+    data: {
+      provider: 'claude-code',
+      // launch 失败发生在 task_started 之前，没有真实 task_id；与
+      // extractSubagentToolResult 同口径回退到 parent tool_use id。
+      taskId: parentToolUseId,
+      parentToolUseId,
+      status: 'failed',
+      title: '子任务启动失败',
+      description: options.errorMessage,
+      ...(options.model ? { model: options.model } : {}),
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: parentToolUseId,
+        parentToolUseId,
+      },
+    },
+    source: 'claude-code',
+  });
+}
+
 function handleAssistant(
   msg: {
     message?: { content?: Array<Record<string, unknown>> };
@@ -1232,6 +1265,35 @@ function handleAssistant(
       .trim();
     const errorMessage = errorText || `SDK error: ${msg.error}`;
     const errorSignals = extractNonSecretErrorSignals(errorMessage);
+    const sidechainParentToolUseId =
+      typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
+        ? msg.parent_tool_use_id
+        : undefined;
+    // 子 Agent（sidechain）的 API-error envelope：launch 阶段失败（如显式指定当前
+    // 账号无权访问的模型 → 403 authentication_failed）发生在 task_started 之前，SDK
+    // 不会发出任何 task_id，现有 task_notification:failed 通道收不到它，父会话因此既
+    // 看不到失败任务、也没有终态通知（#2967）。这里把它规范化为父会话可见的 failed
+    // 任务。已有 taskId 的执行期失败由 task_notification:failed 收口，不重复上报。
+    if (sidechainParentToolUseId) {
+      let knownTaskId: string | undefined;
+      for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
+        if (candidateParentId !== sidechainParentToolUseId) continue;
+        knownTaskId = candidateTaskId;
+        break;
+      }
+      if (!knownTaskId) {
+        emitSubagentLaunchFailure(queue, sidechainParentToolUseId, {
+          errorMessage: redactSensitiveText(errorMessage),
+          model:
+            typeof assistantMeta.model === 'string' && assistantMeta.model
+              ? assistantMeta.model
+              : ctx.rt.streamModelByParentToolUseId.get(sidechainParentToolUseId),
+        });
+      }
+      // 侧链错误不落主 turn 的 pendingApiError：主 turn 收尾若恰好也 is_error，会把
+      // 子 Agent 的错误误报成主会话错误，污染错误归属。
+      return;
+    }
     ctx.turn.pendingApiError = {
       ...ctx.turn.pendingApiError,
       message: redactSensitiveText(errorMessage),

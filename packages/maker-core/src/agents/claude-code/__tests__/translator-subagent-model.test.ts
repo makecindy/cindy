@@ -1352,3 +1352,104 @@ describe('Claude Code translator subagent model attribution', () => {
     });
   });
 });
+
+describe('Claude Code sidechain launch failure projection', () => {
+  it('projects a pre-task sidechain error envelope as a failed parent-visible task', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'authentication_failed',
+        parent_tool_use_id: 'toolu_launch_fail',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'The requested model is not available for your account.' },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data).toMatchObject({
+      provider: 'claude-code',
+      taskId: 'toolu_launch_fail',
+      parentToolUseId: 'toolu_launch_fail',
+      status: 'failed',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'toolu_launch_fail',
+        parentToolUseId: 'toolu_launch_fail',
+      },
+    });
+    expect(taskUpdates[0].data.description).toContain('not available for your account');
+  });
+
+  it('does not leak a sidechain error into the main turn pendingApiError', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'authentication_failed',
+        parent_tool_use_id: 'toolu_launch_fail',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Model unavailable.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    await collect(queue);
+
+    expect(ctx.turn.pendingApiError).toBeNull();
+  });
+
+  it('does not re-emit a failed task when the parent already has a known task id', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    // 先有 task_started：登记 taskId → parentToolUseId 映射。
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_launch_fail',
+        task_type: 'local_agent',
+      },
+      queue,
+      ctx,
+    );
+    // 再遇 sidechain error envelope：已有 taskId，执行期失败由
+    // task_notification:failed 收口，不应再合成一条 failed 任务。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'server_error',
+        parent_tool_use_id: 'toolu_launch_fail',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Boom.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data.status).toBe('running');
+  });
+});
