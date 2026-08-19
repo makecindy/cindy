@@ -215,6 +215,43 @@ describe('Pi runtime capability parsing', () => {
     }
   });
 
+  it('returns an unknown manifest when a user Skill provenance scan has a transient I/O failure', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-runtime-provenance-scan-'));
+    const baseDir = path.join(root, 'pi-home');
+    fs.mkdirSync(path.join(baseDir, 'skills'), { recursive: true });
+    const opendir = vi.spyOn(fs.promises, 'opendir').mockRejectedValueOnce(
+      Object.assign(new Error('temporary I/O failure'), { code: 'EIO' }),
+    );
+    try {
+      await expect(capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: { source: 'auto', scope: 'user', baseDir },
+              }],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [baseDir] },
+      )).resolves.toMatchObject({
+        status: 'unknown',
+        commands: [],
+      });
+    } finally {
+      opendir.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('accepts duplicate names because Pi can expose an Extension command and Prompt together', () => {
     const extension = { ...command, name: 'hello', source: 'extension' };
     const prompt = { ...command, name: 'hello', source: 'prompt' };

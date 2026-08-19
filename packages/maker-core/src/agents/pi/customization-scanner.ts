@@ -566,6 +566,7 @@ async function readFolderSkillAsync(
   dependencies: PiCustomizationScanDeps,
   budget: PiCustomizationScanBudget,
   captureEntrypointIdentity?: (identity: PiRuntimeUserSkillFileIdentity) => void,
+  propagateReadError = false,
 ): Promise<AgentCustomization> {
   let description: string | undefined;
   let frontmatter: Record<string, unknown> | undefined;
@@ -582,6 +583,7 @@ async function readFolderSkillAsync(
     if (isScanFatal(error) || (source.scope === 'repo' && isUnsafeSkillFile(error))) {
       throw error;
     }
+    if (propagateReadError && !isUnsafeSkillFile(error)) throw error;
     parseError = error instanceof Error ? error.message : String(error);
   }
 
@@ -642,11 +644,16 @@ async function statFileIfPresent(
   candidate: string,
   dependencies: PiCustomizationScanDeps,
   budget: PiCustomizationScanBudget,
+  propagateUnexpectedError = false,
 ): Promise<boolean> {
   try {
     return (await awaitScanStep(() => dependencies.stat(candidate), budget)).isFile();
   } catch (error) {
     if (isScanFatal(error)) throw error;
+    const code = filesystemErrorCode(error);
+    if (propagateUnexpectedError && code !== 'ENOENT' && code !== 'ENOTDIR') {
+      throw error;
+    }
     return false;
   }
 }
@@ -752,9 +759,9 @@ export async function scanPiRuntimeUserSkillSources(
         const folder = path.join(source.dir, entry.name);
         const canonicalMd = path.join(folder, 'SKILL.md');
         let actualMd = canonicalMd;
-        if (!await statFileIfPresent(canonicalMd, dependencies, budget)) {
+        if (!await statFileIfPresent(canonicalMd, dependencies, budget, true)) {
           const lowerMd = path.join(folder, 'skill.md');
-          if (!await statFileIfPresent(lowerMd, dependencies, budget)) continue;
+          if (!await statFileIfPresent(lowerMd, dependencies, budget, true)) continue;
           actualMd = lowerMd;
         }
 
@@ -771,6 +778,7 @@ export async function scanPiRuntimeUserSkillSources(
           dependencies,
           budget,
           (identity) => { entrypointIdentity = identity; },
+          true,
         );
         const [entryAfter, targetAfter, canonicalAfter] = await Promise.all([
           awaitScanStep(() => fsp.lstat(folder, { bigint: true }), budget),
@@ -816,7 +824,9 @@ export async function scanPiRuntimeUserSkillSources(
       }
     } catch (error) {
       if (isScanFatal(error)) throw error;
-      // Catalog discovery is diagnostic; missing or unstable proof fails closed per Skill.
+      const code = filesystemErrorCode(error);
+      if (isUnsafeSkillFile(error) || code === 'ENOENT' || code === 'ENOTDIR') continue;
+      throw error;
     }
   }
   return sources;
