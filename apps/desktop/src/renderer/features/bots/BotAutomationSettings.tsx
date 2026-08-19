@@ -367,27 +367,6 @@ function AutomationAdvancedFields({
             className={INPUT_CLASS}
           />
         </label>
-        <label className={FIELD_CLASS}>
-          {t('bots.automations.budgetTokens')}
-          <input
-            inputMode="numeric"
-            value={policy.budgetTokens}
-            placeholder={t('bots.automations.unlimited')}
-            onChange={(event) => updatePolicy({ budgetTokens: event.target.value.replace(/\D/g, '') })}
-            className={INPUT_CLASS}
-          />
-        </label>
-        <label className={FIELD_CLASS}>
-          {t('bots.automations.maxDelegationDepth')}
-          <input
-            type="number"
-            min={1}
-            max={5}
-            value={policy.maxDelegationDepth}
-            onChange={(event) => updatePolicy({ maxDelegationDepth: Number(event.target.value) })}
-            className={INPUT_CLASS}
-          />
-        </label>
       </div>
       <label className={cn(FIELD_CLASS, 'mt-3')}>
         {t('bots.automations.delegateTargets')}
@@ -407,6 +386,48 @@ function AutomationAdvancedFields({
           <option value="all-active">{t('bots.automations.delegateAllActive')}</option>
         </select>
       </label>
+      {/*
+        Token 预算与最大协同深度**只有委派路径读它们**:runner 把它们放进
+        `plan.limits`,唯一消费方是 botDelegationService 的子任务准入与结算。
+        「可协作的伙伴」停在默认的「不允许调用其它伙伴」时,这条 Routine 永远不会
+        派活,这两个输入框于是完全惰性 —— 填了不生效、也没有任何地方会告诉用户。
+        两个能填、能存、却什么都不管的框就是假开关,所以它们跟着委派开关一起出现:
+        真的会派活时才摆出来,并就地说明它们管的是子任务、不是这条 Routine 自己。
+      */}
+      {policy.delegateTargetMode === 'none' ? null : (
+        <>
+          <p className="mt-3 text-11 leading-5 text-[var(--text-tertiary)]">
+            {t('bots.automations.delegateLimitsHint')}
+          </p>
+          <div className="mt-2 grid gap-3 md:grid-cols-2">
+            <label className={FIELD_CLASS}>
+              {t('bots.automations.budgetTokens')}
+              <input
+                inputMode="numeric"
+                value={policy.budgetTokens}
+                placeholder={t('bots.automations.unlimited')}
+                onChange={(event) =>
+                  updatePolicy({ budgetTokens: event.target.value.replace(/\D/g, '') })
+                }
+                className={INPUT_CLASS}
+              />
+            </label>
+            <label className={FIELD_CLASS}>
+              {t('bots.automations.maxDelegationDepth')}
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={policy.maxDelegationDepth}
+                onChange={(event) =>
+                  updatePolicy({ maxDelegationDepth: Number(event.target.value) })
+                }
+                className={INPUT_CLASS}
+              />
+            </label>
+          </div>
+        </>
+      )}
       {policy.delegateTargetMode === 'allowlist' ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {delegateBots.length === 0 ? (

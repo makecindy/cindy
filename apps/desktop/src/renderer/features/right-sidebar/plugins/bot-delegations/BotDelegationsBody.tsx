@@ -72,21 +72,27 @@ export function BotDelegationsBody({ state, ctx, active = true, shellVisible = t
     }
   }, [ctx.sessionId]);
 
+  /*
+    两个订阅都走可选链:这个面板在**分离侧栏窗口**里同样可达,而那个窗口是另一份
+    手写 preload 投影。通道齐全时行为不变;万一将来又漏配一条,这里降级成"列表还
+    在、只是不自动刷新",而不是在 effect 里抛 TypeError 把整个 tab 变成
+    TabBodyErrorBoundary 的空白页。集合一致性由
+    `preload/__tests__/sidebarWindowBotChannels.test.ts` 正面钉死,这层只是纵深。
+  */
   useEffect(() => {
     if (!visible) return;
     void load();
-    const off = window.electronAPI.maker.onBotDelegationChanged((payload, ownerStamp) => {
+    return window.electronAPI.maker?.onBotDelegationChanged?.((payload, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp) || payload.parentSessionId !== ctx.sessionId) return;
       void load();
     });
-    return off;
   }, [ctx.sessionId, load, visible]);
 
   useEffect(() => {
     if (!visible) return;
     const requestingBotId = rows[0]?.requestingBotId;
     if (!requestingBotId) return;
-    return window.electronAPI.maker.botDeliveries.onChanged((payload, ownerStamp) => {
+    return window.electronAPI.maker?.botDeliveries?.onChanged?.((payload, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp) || payload.botId !== requestingBotId) return;
       void load();
     });

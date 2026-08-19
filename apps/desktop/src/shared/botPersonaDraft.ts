@@ -39,8 +39,6 @@ export interface BotPersonaDraft {
   name: string;
   /** 一句话简介(落 profile.description)。 */
   description: string;
-  /** 「擅长 · X」标签。可以为空——空了就不显示,不编一个。 */
-  skill: string;
   /** 完整背景设定,落 identitySource 的背景正文段。 */
   identity: string;
   /**
@@ -89,7 +87,6 @@ export const BOT_PERSONA_ROLE_MAX_CHARS = 120;
 
 const MAX_NAME_CHARS = 24;
 const MAX_DESCRIPTION_CHARS = 60;
-const MAX_SKILL_CHARS = 16;
 const MAX_IDENTITY_CHARS = 1200;
 /** 开场白是一句话见面语,不是一段介绍。 */
 const MAX_GREETING_CHARS = 200;
@@ -120,7 +117,6 @@ export function buildBotPersonaPrompt(role: string, locale: string): {
     '{',
     '  "name": string,            // a short given name for the teammate, not a job title',
     '  "description": string,     // one short line describing what this teammate is for',
-    '  "skill": string,           // 2-6 characters/words naming what it is best at',
     '  "identity": string,        // 3-6 sentences of durable role, temperament and scope,',
     '                             // written as a brief addressed to the teammate itself',
     '  "greeting": string,        // one or two short first-person sentences this teammate',
@@ -217,7 +213,6 @@ export function parseBotPersonaDraft(raw: string): BotPersonaDraft | null {
   return {
     name,
     description: readLine(record.description, MAX_DESCRIPTION_CHARS),
-    skill: readLine(record.skill, MAX_SKILL_CHARS),
     identity,
     // 开场白是可选的:拿不到就由 renderer 回落到带名字的模板句。
     greeting: readBlock(record.greeting, MAX_GREETING_CHARS),

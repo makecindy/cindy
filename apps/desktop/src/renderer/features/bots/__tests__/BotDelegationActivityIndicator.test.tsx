@@ -251,4 +251,48 @@ describe('BotDelegationActivityIndicator', () => {
     unmount();
     expect(listeners).toHaveLength(0);
   });
+  /*
+    空头支票复核 2026-08-19:`listBotDelegations` 是**按伙伴**查的(服务端 WHERE 只有
+    requestingBotId),同一个伙伴在别的会话里发起的委派也会返回。而下面 onBotDelegationChanged
+    的推送守卫是**按会话**的 —— 两边口径不一致时,别的会话那条委派跑完了,本会话
+    收不到刷新,状态条就会一直转下去。读侧必须和推送侧一样只认本会话。
+  */
+  it('ignores delegations that belong to another session of the same Bot', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [
+        delegation('other', 'running', {
+          parentSessionId: 'some-other-session',
+          targetBotName: 'Elsewhere',
+        }),
+      ],
+    });
+
+    const { container } = render(<BotDelegationActivityIndicator sessionId={SESSION_ID} />);
+
+    await waitFor(() => expect(listBotDelegations).toHaveBeenCalled());
+    // 不属于本会话 —— 什么都不该画,更不该画一条永远停不下来的「正在委派」。
+    await waitFor(() => expect(container.querySelector('button')).toBeNull());
+  });
+
+  it('still shows delegations that do belong to this session', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [
+        delegation('mine', 'running', { targetBotName: 'Dash' }),
+        delegation('other', 'running', {
+          parentSessionId: 'some-other-session',
+          targetBotName: 'Elsewhere',
+        }),
+      ],
+    });
+
+    render(<BotDelegationActivityIndicator sessionId={SESSION_ID} />);
+
+    const button = await screen.findByRole('button');
+    expect(button.textContent).toContain('Dash');
+    expect(button.textContent).not.toContain('Elsewhere');
+    // 只剩一条 → 走单条文案,而不是 count=2 的多条文案。
+    expect(button.textContent).toContain('rightSidebar.botDelegations.activity.single');
+  });
 });

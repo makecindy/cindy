@@ -7,6 +7,7 @@ import type {
   BotCollaborationMeta,
   BotCollaborationRole,
 } from '../../../shared/botCollaboration';
+import { cn } from '@/lib/utils';
 import { readBotCollaborationMeta } from '../../../shared/botCollaboration';
 import type { BotDelegationView } from '../../../shared/botDelegation';
 import { makeBotArtifact, type BotArtifactItem } from '../../../shared/botArtifact';
@@ -39,6 +40,10 @@ export function formatBotCollaborationDuration(
 function terminalKey(status: BotDelegationView['status']): string {
   if (status === 'completed') return 'done';
   if (status === 'cancelled') return 'stopped';
+  // 超时和失败不是一回事：超时是「等到点了还没回来」，用户下一步多半是重发或改
+  // 拆分；混进「失败」里会让人去查一个并不存在的报错。后端本来就分得清,前台
+  // 别把它抹平。
+  if (status === 'timed-out') return 'timedOut';
   return 'failed';
 }
 
@@ -85,7 +90,7 @@ function CollaborationCardBody({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const profiles = useBotProfiles();
-  const row = useBotDelegation(sessionId ?? meta.parentSessionId, meta.delegationId);
+  const { row, resolved } = useBotDelegation(sessionId ?? meta.parentSessionId, meta.delegationId);
   const [expanded, setExpanded] = useState(false);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -305,9 +310,21 @@ function CollaborationCardBody({
     );
   }
 
+  /*
+    row 为空有两种含义，必须分开说：
+      - 还没拉到（resolved=false）→ 照常显示「正在开始」+ 呼吸点，这是真的在等；
+      - 拉完了却没有这一行（resolved=true）→ 列表请求失败，或这条委派已经掉出
+        listDelegations 的 100 行上限。此时我们**核实不了**它现在什么样，却又没有
+        任何按钮可以停止或查看（下面的操作区 `row ? … : null` 整块不渲染）。
+        以前这里一律回落到「正在开始」，结果就是一张永远在呼吸、永远停不掉的卡 ——
+        一个纯粹画出来的进行中状态。改成如实说「状态查不到了」，并且不再画呼吸点。
+  */
+  const unverifiable = resolved && !row;
   const statusLabel = row
     ? t(`bots.collab.status.${row.status}`, { name: to.name })
-    : t('bots.collab.status.queued', { name: to.name });
+    : unverifiable
+      ? t('bots.collab.status.unknown', { name: to.name })
+      : t('bots.collab.status.queued', { name: to.name });
   const startedAt = row?.createdAt ?? null;
 
   return (
@@ -321,7 +338,11 @@ function CollaborationCardBody({
       <div className="mt-2.5 flex items-center gap-2 border-t border-[var(--border-default)] pt-2.5">
         <span
           aria-hidden="true"
-          className="size-[7px] shrink-0 animate-pulse rounded-full bg-[var(--text-tertiary)] motion-reduce:animate-none"
+          className={cn(
+            'size-[7px] shrink-0 rounded-full bg-[var(--text-tertiary)]',
+            // 核实不了的卡不再"呼吸"——那颗动着的点本身就是一句"它还在跑"的断言。
+            !unverifiable && 'animate-pulse motion-reduce:animate-none',
+          )}
         />
         <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{statusLabel}</span>
         {startedAt !== null ? (

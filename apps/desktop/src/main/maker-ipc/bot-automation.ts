@@ -23,6 +23,7 @@ import {
   normalizeBotDurableNoteNamespace,
   parseBotAutomationExecutionPlan,
 } from '../../shared/botAutomation.js';
+import { normalizeBotAutomation } from '../../shared/botAutomationCapability.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -158,7 +159,22 @@ async function readBotAutomationPolicy(botId: string): Promise<{
     .limit(1);
   if (!version) throwIpcError('INTERNAL', 'Bot Profile version is unavailable');
   const config = parseConfig(version.capabilitiesJson);
-  if (config.automation !== true) {
+  /*
+    这里过去是对 automation 字段的裸比较,是 botAutomationCapability.ts
+    那条「所有折算口径都走 normalizeBotAutomation」里唯一漏掉的一处。
+
+    后果不是理论上的:自动化在 2026-08-19 定为标配、开关面已下线,但**存量** profile
+    的 capabilitiesJson 里仍然躺着 `"automation": false`。这些伙伴的设置页照常渲染
+    并启用「新建 Routine」按钮,点下去必然抛错,而错误文案还叫用户「先在 Bot Profile
+    里打开自动化」—— 那个开关已经不存在了,用户没有任何办法照做。一个点了就报错、
+    报错还指向不存在的控件的按钮,正是要清掉的空头支票。
+    (它此前只会在用户碰巧改了别的设置、autosave 顺带把归一后的 capabilities 写回去
+     之后才自愈;只点「新建」的用户永远卡死。)
+
+    归一后这一分支恒真,保留调用点是为了将来 automation 若恢复成真开关,改
+    normalizeBotAutomation 一处即可,不必再回来找这七个散落的判断。
+  */
+  if (!normalizeBotAutomation(config.automation)) {
     throwIpcError('INVALID_PARAMS', 'Enable automation in the Bot Profile first');
   }
   if (config.permissions !== 'trusted') {

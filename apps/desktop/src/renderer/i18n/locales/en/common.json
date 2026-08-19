@@ -5879,9 +5879,8 @@
       }
     },
     "portability": {
-      "title": "Import and export",
-      "description": "Export shareable behavior configuration without credentials, IM accounts, task history, memory, project paths, or runtime state. Imported external channels and automations stay disabled.",
-      "import": "Import teammate",
+      "title": "Export",
+      "description": "Export shareable behavior configuration without credentials, IM accounts, task history, memory, project paths, or runtime state. Importing a teammate lives in Settings › Teammates.",
       "export": "Export teammate configuration",
       "exporting": "Exporting…",
       "exported": "Teammate configuration exported.",
@@ -6125,7 +6124,8 @@
             "required": "Task needs a decision"
           }
         }
-      }
+      },
+      "archivedNote": "An archived teammate never picks up task activity. Restore them first to turn this back on."
     },
     "adapterBoundaryTitle": "Adapter boundary preserved",
     "adapterBoundaryDescription": "Telegram replies, Feishu cards, Slack threads and local delivery remain owned by their adapters. This screen only provides teammate identity and task projection.",
@@ -6220,9 +6220,9 @@
       "saving": "Saving…",
       "nextProfileVersion": "Next run uses Profile v{{version}}",
       "executionPolicy": "Run limits",
-      "executionPolicyDescription": "Every run of this routine stays inside these limits.",
+      "executionPolicyDescription": "The timeout aborts the run when it is reached.",
       "timeoutMinutes": "Maximum run time (minutes)",
-      "budgetTokens": "Token budget",
+      "budgetTokens": "Handoff token budget",
       "unlimited": "Unlimited",
       "maxDelegationDepth": "Maximum collaboration depth",
       "delegateTargets": "Teammates this routine may call",
@@ -6304,7 +6304,8 @@
           "name": "Fridays 17:00 · Weekly summary",
           "prompt": "Write a short summary of what got finished this week."
         }
-      }
+      },
+      "delegateLimitsHint": "These two only bound sub-tasks this routine hands to other teammates — they do not cap its own usage."
     },
     "permissionsLabel": "Permission mode",
     "permissionAsk": "Ask before acting",
@@ -6325,26 +6326,6 @@
     "channelConnected": "Online",
     "channelOffline": "Offline or unavailable",
     "channelConnectionRequired": "Connect a {{channel}} Bot in Settings before mounting this channel.",
-    "channelCapabilities": {
-      "native": "Full support",
-      "unsupported": "Not supported yet",
-      "degradedFallback": "This adapter uses a limited implementation",
-      "features": {
-        "directMessages": "direct messages",
-        "groups": "groups",
-        "threads": "topic lanes",
-        "replies": "quoted replies",
-        "cards": "interactive cards",
-        "reactions": "reactions",
-        "attachments": "attachments",
-        "groupHistory": "group history",
-        "durableDelivery": "durable delivery"
-      },
-      "details": {
-        "feishu-turn-context-only": "Fetches context from the current group or topic for each turn, but does not keep a cross-turn searchable teammate history. Without permission, it answers from the current message only and notifies the owner.",
-        "process-lifetime-delivery": "Retries safely only while Cindy Desktop is running. Delivery does not resume in the background after quit, crash, or power loss."
-      }
-    },
     "migration": {
       "title": "Migrate and mount channel",
       "description": "Cindy checks legacy IM tasks and active takeovers before atomically transferring this account to the teammate.",
@@ -6475,7 +6456,7 @@
       "customNameLabel": "Name",
       "customNamePlaceholder": "e.g. Juju",
       "customSkill": "Whatever you say",
-      "customSubtitle": "A name and a face. They bring the rest.",
+      "customSubtitle": "A name and a face — that is enough to get started.",
       "customTitle": "Shape your own teammate",
       "footerHint": "They will say hello as soon as they join. A messaging channel can be connected later in their own settings (one per teammate).",
       "goodAt": "Good at · {{skill}}",
@@ -6517,9 +6498,8 @@
       "title": "Teammates",
       "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
       "notifications": {
-        "banner": "New message banner",
-        "sound": "Sound",
-        "quietHours": "Quiet hours",
+        "title": "New message alerts",
+        "note": "New messages from a teammate show up as an unread mark in the teammate list on the left. No system banner, no sound.",
         "footnote": "A teammate like a \"coordinator\" keeps an eye on task activity by itself — that is a capability of theirs, not a setting here."
       },
       "portability": {
@@ -6645,7 +6625,6 @@
         "collab": "🤝 Teaming up with other teammates"
       },
       "connectAccount": "Connect an account",
-      "noConnectUi": "This channel cannot be connected from the app yet.",
       "imBlocked": "A teammate can only connect to one IM — disconnect {{channel}} first",
       "footnote": "Once connected there is nothing else to set up — they know how to use it."
     },
@@ -6677,14 +6656,16 @@
         "completed": "Done",
         "failed": "Failed",
         "cancelled": "Stopped",
-        "timed-out": "Timed out"
+        "timed-out": "Timed out",
+        "unknown": "Can't tell what {{name}} is up to"
       },
       "report": {
         "done": "{{name}} · {{duration}} · done",
         "failed": "{{name}} · {{duration}} · failed",
         "failedReason": "{{name}} · failed: {{reason}}",
         "stopped": "{{name}} · {{duration}} · stopped",
-        "delivered": "{{name}} · {{duration}} · delivered {{count}}"
+        "delivered": "{{name}} · {{duration}} · delivered {{count}}",
+        "timedOut": "{{name}} · {{duration}} · timed out"
       },
       "duration": {
         "seconds": "{{n}}s",

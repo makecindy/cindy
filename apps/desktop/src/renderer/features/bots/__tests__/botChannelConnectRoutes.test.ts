@@ -7,16 +7,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { MOUNTABLE_BOT_CHANNEL_KINDS } from '../botChannelChips';
-import {
-  botChannelConnectPath,
-  botChannelHasConnectUi,
-  parseImBotPersonalChannel,
-} from '../botChannelConnectRoutes';
+import { botChannelConnectPath, parseImBotPersonalChannel } from '../botChannelConnectRoutes';
 
 describe('渠道 → 连接入口', () => {
   it('能力墙上列出的每一个可挂载渠道都有真实入口', () => {
     for (const kind of MOUNTABLE_BOT_CHANNEL_KINDS) {
-      expect(botChannelHasConnectUi(kind), kind).toBe(true);
+      expect(botChannelConnectPath(kind), kind).not.toBeNull();
     }
   });
 
@@ -48,7 +44,6 @@ describe('渠道 → 连接入口', () => {
   it('没有界面入口的渠道如实返回 null,由调用方说真话而不是把人支走', () => {
     expect(botChannelConnectPath('local')).toBeNull();
     expect(botChannelConnectPath('x')).toBeNull();
-    expect(botChannelHasConnectUi('local')).toBe(false);
   });
 });
 

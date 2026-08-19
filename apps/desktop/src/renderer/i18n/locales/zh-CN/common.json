@@ -5877,9 +5877,8 @@
       }
     },
     "portability": {
-      "title": "导入与导出",
-      "description": "导出可分享的行为配置，不包含凭证、IM 账号、任务历史、记忆、项目路径或运行状态。导入的外部通道和自动化默认停用。",
-      "import": "导入伙伴",
+      "title": "导出",
+      "description": "导出可分享的行为配置，不包含凭证、IM 账号、任务历史、记忆、项目路径或运行状态。导入伙伴在设置 › 伙伴里。",
       "export": "导出伙伴配置",
       "exporting": "正在导出…",
       "exported": "伙伴配置已导出。",
@@ -6123,7 +6122,8 @@
             "required": "任务需要决策"
           }
         }
-      }
+      },
+      "archivedNote": "已归档的伙伴不接手任何任务动静。先恢复 TA，这里才能重新打开。"
     },
     "adapterBoundaryTitle": "保留消息层边界",
     "adapterBoundaryDescription": "Telegram 引用、飞书卡片、Slack thread 和本地投递仍由各自 adapter 负责。本页面只负责伙伴身份和任务投影。",
@@ -6218,9 +6218,9 @@
       "saving": "正在保存…",
       "nextProfileVersion": "下次运行使用 Profile v{{version}}",
       "executionPolicy": "运行上限",
-      "executionPolicyDescription": "这条 Routine 每次运行都不会超过这些上限。",
+      "executionPolicyDescription": "最长运行分钟数到点即中止本次运行。",
       "timeoutMinutes": "最长运行分钟数",
-      "budgetTokens": "Token 预算",
+      "budgetTokens": "协同 Token 预算",
       "unlimited": "不限制",
       "maxDelegationDepth": "最大协同深度",
       "delegateTargets": "可协作的伙伴",
@@ -6302,7 +6302,8 @@
           "name": "每周五 17:00 · 本周小结",
           "prompt": "写一份本周完成事项的简短小结。"
         }
-      }
+      },
+      "delegateLimitsHint": "下面两项只约束这条 Routine 派给其它伙伴的子任务，不封顶它自己的用量。"
     },
     "permissionsLabel": "权限模式",
     "permissionAsk": "操作前询问",
@@ -6323,26 +6324,6 @@
     "channelConnected": "在线",
     "channelOffline": "离线或连接不可用",
     "channelConnectionRequired": "请先在设置中连接 {{channel}} Bot，再挂载这个通道。",
-    "channelCapabilities": {
-      "native": "完整支持",
-      "unsupported": "暂不支持",
-      "degradedFallback": "这个适配器会使用受限实现",
-      "features": {
-        "directMessages": "私聊",
-        "groups": "群聊",
-        "threads": "话题分流",
-        "replies": "引用回复",
-        "cards": "交互卡片",
-        "reactions": "表情回应",
-        "attachments": "附件",
-        "groupHistory": "群历史",
-        "durableDelivery": "可靠投递"
-      },
-      "details": {
-        "feishu-turn-context-only": "每轮从当前群或话题拉取上下文，不写入可跨轮搜索的伙伴群历史库；无权限时只基于当前消息回答，并通知 owner。",
-        "process-lifetime-delivery": "仅在桌面进程存活时安全重试；退出、崩溃或断电后不会继续后台补投。"
-      }
-    },
     "migration": {
       "title": "迁移并挂载消息通道",
       "description": "Cindy 会先检查旧 IM 任务和现有接管关系，再原子切换到这个伙伴。",
@@ -6405,7 +6386,7 @@
       "pause": "暂停",
       "pausing": "正在暂停…",
       "resume": "恢复",
-      "resuming": "正在恢复…",
+      "resuming": "正在开启…",
       "archive": "归档",
       "archiving": "正在归档…",
       "status": {
@@ -6473,7 +6454,7 @@
       "customNameLabel": "叫什么",
       "customNamePlaceholder": "比如：阿橘",
       "customSkill": "你说了算",
-      "customSubtitle": "起个名字，挑张脸。剩下的 TA 自带。",
+      "customSubtitle": "起个名字，挑张脸，先让 TA 进来。",
       "customTitle": "捏一个自己的伙伴",
       "footerHint": "加入后 TA 会先跟你打个招呼。消息通道可以之后在 TA 的设置里连（每个伙伴一个）。",
       "goodAt": "擅长 · {{skill}}",
@@ -6515,9 +6496,8 @@
       "title": "伙伴",
       "description": "和伙伴有关的通用设置。单个伙伴的设置在 TA 自己的页面里。",
       "notifications": {
-        "banner": "新消息横幅",
-        "sound": "声音",
-        "quietHours": "勿扰时段",
+        "title": "新消息提醒",
+        "note": "伙伴的新消息会在左边的伙伴列表上标出未读，不弹系统横幅、也不响声音。",
         "footnote": "像「总控」这类伙伴会自己关注任务动静——那是 TA 的本事，不在这里设置。"
       },
       "portability": {
@@ -6643,7 +6623,6 @@
         "collab": "🤝 和伙伴协作"
       },
       "connectAccount": "连接账号",
-      "noConnectUi": "这个渠道暂不支持在界面里连接。",
       "imBlocked": "一个伙伴只能连一个 IM——先断开 {{channel}}",
       "footnote": "连上以后不用再设置什么——TA 自己知道怎么用。"
     },
@@ -6675,14 +6654,16 @@
         "completed": "已完成",
         "failed": "失败了",
         "cancelled": "已停止",
-        "timed-out": "已超时"
+        "timed-out": "已超时",
+        "unknown": "{{name}} 那边的状态查不到了"
       },
       "report": {
         "done": "{{name}} · 用时 {{duration}} · 完成",
         "failed": "{{name}} · 用时 {{duration}} · 失败",
         "failedReason": "{{name}} · 失败：{{reason}}",
         "stopped": "{{name}} · 用时 {{duration}} · 已停止",
-        "delivered": "{{name}} · 用时 {{duration}} · 交付 {{count}} 件"
+        "delivered": "{{name}} · 用时 {{duration}} · 交付 {{count}} 件",
+        "timedOut": "{{name}} · 用时 {{duration}} · 超时"
       },
       "duration": {
         "seconds": "{{n}} 秒",

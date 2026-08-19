@@ -10,7 +10,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../../mcp-integrations/codexBuiltinToolPolicy.js';
+import {
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+  isFrozenBuiltinPluginAllowed,
+} from '../../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCcRemoteHttpMcpServers } from '../cc-remote-mcp.js';
 
 function fakeBridge() {
@@ -567,5 +571,109 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(first.fingerprint).toBeDefined();
     expect(replacement.fingerprint).toBeDefined();
     expect(first.fingerprint).not.toBe(replacement.fingerprint);
+  });
+  /*
+    注入面不得宽于执行面 —— 冻结策略两键必须与调用期同判据。
+    ------------------------------------------------------------------
+    bridge 在调用期用 isFrozenBuiltinPluginAllowed(ctx.vendorOptions, pluginId)
+    (codexHttpBridge.ts) 判定,语义是「allowed 键存在时以 allowed 为准,否则才看
+    disabled」。而伙伴会话**会**写 allowed 键:maker-host/index.ts 在
+    botRuntimeSnapshot 存在时把伙伴配置的 toolset 白名单写进
+    CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,且不分 agentKind —— SSH 远端的
+    Claude Code 伙伴会话同样带着它。
+
+    这里过去只读 disabled 一键,于是「白名单里没有 collab、collab 又不在 disabled
+    列表里」时,注入侧放行、调用侧拒绝:远端 agent 看得见一整排协同工具,每次调用
+    都被拒。下面两个用例把注入侧与执行侧的判据钉在一起。
+  */
+  it('does not advertise collab when the Bot toolset allowlist omits it', async () => {
+    const { bridge, registered } = fakeBridge();
+    const vendorOptions = {
+      // 伙伴只勾了 memory —— collab 不在白名单里,但也不在 disabled 列表里。
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory'],
+    };
+    // 前提校验:调用期判据确实会拒绝 collab。
+    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'collab')).toBe(false);
+
+    const { servers, fingerprint } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-allowlist-no-collab',
+        workingDir: '/remote/repo',
+        vendorOptions,
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+
+    // 执行面会拒 → 注入面就不该通告。
+    expect(servers).toEqual({});
+    expect(fingerprint).toBe('disabled');
+    expect(registered.size).toBe(0);
+  });
+
+  it('still advertises collab when the allowlist contains it', async () => {
+    const { bridge } = fakeBridge();
+    const vendorOptions = {
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory', 'collab'],
+    };
+    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'collab')).toBe(true);
+
+    const { servers } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-allowlist-with-collab',
+        workingDir: '/remote/repo',
+        vendorOptions,
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+
+    expect(Object.keys(servers).sort()).toEqual(['cindy_orca', 'orca_worker_bridge']);
+  });
+
+  it('keeps the disabled-only behaviour byte-for-byte when no allowlist is present', async () => {
+    // allowed 键不存在 → 回落到 disabled 语义,行为与改动前逐字一致。
+    const { bridge } = fakeBridge();
+    const vendorOptions = { [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['browser'] };
+    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'collab')).toBe(true);
+
+    const { servers } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'plain-remote',
+        workingDir: '/remote/repo',
+        vendorOptions,
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+
+    expect(Object.keys(servers).sort()).toEqual(['cindy_orca', 'orca_worker_bridge']);
   });
 });

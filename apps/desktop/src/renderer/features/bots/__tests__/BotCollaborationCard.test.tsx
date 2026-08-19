@@ -347,4 +347,47 @@ describe('BotCollaborationCard', () => {
     expect(screen.getByText(/先别铺开，我只要三条。/)).toBeTruthy();
     expect(screen.queryByText('bots.collab.stop')).toBeNull();
   });
+  /*
+    空头支票复核 2026-08-19。委派行读不到时（列表请求失败，或这条委派已经掉出
+    listDelegations 的 100 行上限），卡片以前一律回落到「正在开始」+ 呼吸点，而
+    操作区又整块不渲染 —— 一张永远在跑、永远停不掉、也点不进去的卡。它画出来的
+    「进行中」没有任何东西背书。现在必须如实说状态查不到了，并且停止呼吸。
+  */
+  it('says the status is unverifiable instead of faking a forever-running card', async () => {
+    listBotDelegations.mockResolvedValue({ ok: false });
+    const { container } = render(
+      <BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />,
+    );
+
+    await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.unknown/)).toBeTruthy());
+    expect(screen.queryByText(/bots\.collab\.status\.queued/)).toBeNull();
+    // 没有背书的状态就不许有"还在跑"的动效。
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+    // 也不该假装给得出操作。
+    expect(screen.queryByText('bots.collab.stop')).toBeNull();
+    expect(screen.queryByText('bots.collab.nudge')).toBeNull();
+  });
+
+  it('keeps the optimistic running look while the first fetch is still in flight', async () => {
+    // 一直不 resolve —— 模拟「还没读到」，这与「读完了没有」必须区分开。
+    listBotDelegations.mockReturnValue(new Promise(() => {}));
+    const { container } = render(
+      <BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />,
+    );
+
+    expect(screen.getByText(/bots\.collab\.status\.queued/)).toBeTruthy();
+    expect(screen.queryByText(/bots\.collab\.status\.unknown/)).toBeNull();
+    expect(container.querySelector('.animate-pulse')).not.toBeNull();
+  });
+
+  it('reports a timed-out delegation as timed out, not as a failure', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [delegation('timed-out', { completedAt: Date.now() })],
+    });
+    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+
+    await waitFor(() => expect(screen.getByText(/bots\.collab\.report\.timedOut/)).toBeTruthy());
+    expect(screen.queryByText(/bots\.collab\.report\.failed/)).toBeNull();
+  });
 });

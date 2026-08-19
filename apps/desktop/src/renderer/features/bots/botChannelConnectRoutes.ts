@@ -57,8 +57,12 @@ const CONNECT_ROUTES: Record<MountableBotChannelKind, BotChannelConnectRoute> = 
 };
 
 /**
- * 该渠道在设置里的连接入口路径;没有界面入口的渠道返回 `null`
- * (调用方据此如实显示「暂不支持在界面里连接」,而不是把人支走)。
+ * 该渠道在设置里的连接入口路径;没有配路由的渠道返回 `null`,调用方据此**不渲染
+ * 按钮**(宁可没有入口,也不给一个点了没反应的入口)。
+ *
+ * 注意:能力墙上的占位行只从 `MOUNTABLE_BOT_CHANNEL_KINDS` 生成,而
+ * `CONNECT_ROUTES` 的类型正是 `Record<MountableBotChannelKind, …>` —— 对占位行
+ * 而言 `null` 是不可达的,这条返回值只服务于类型守卫与将来漏配路由的兜底。
  */
 export function botChannelConnectPath(kind: BotChannel): string | null {
   const route = (CONNECT_ROUTES as Record<string, BotChannelConnectRoute | undefined>)[kind];
@@ -66,11 +70,6 @@ export function botChannelConnectPath(kind: BotChannel): string | null {
   const params = new URLSearchParams({ tab: 'im-bot', imGroup: route.group });
   if (route.personalChannel) params.set('imChannel', route.personalChannel);
   return `/settings?${params.toString()}`;
-}
-
-/** 该渠道是否真的能在界面里连上。 */
-export function botChannelHasConnectUi(kind: BotChannel): boolean {
-  return botChannelConnectPath(kind) !== null;
 }
 
 /** `?imChannel=` 的解析(设置页消费)。未知值一律 `null`,不抛。 */

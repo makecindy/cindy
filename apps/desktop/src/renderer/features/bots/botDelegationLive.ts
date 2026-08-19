@@ -16,6 +16,14 @@ export function isActiveDelegationStatus(status: BotDelegationStatus): boolean {
 
 interface SessionEntry {
   rows: BotDelegationView[];
+  /**
+   * 首次拉取是否已经**落地**（成功或失败都算）。
+   *
+   * 「还没读到」和「读完了但没有这一行」是两回事：前者该继续显示进行中的样子，
+   * 后者说明这条委派我们根本核实不了（列表拉取失败、或落在 100 行上限之外）。
+   * 不区分的话，第二种情况会被当成第一种，卡片就永远停在带呼吸点的「正在开始」。
+   */
+  resolved: boolean;
   listeners: Set<() => void>;
   unsubscribe: (() => void) | null;
   loading: Promise<void> | null;
@@ -37,6 +45,7 @@ function ensureEntry(sessionId: string): SessionEntry {
   if (existing) return existing;
   const entry: SessionEntry = {
     rows: [],
+    resolved: false,
     listeners: new Set(),
     unsubscribe: null,
     loading: null,
@@ -59,11 +68,13 @@ async function reload(sessionId: string): Promise<void> {
     if (sessions.get(sessionId) !== entry) return;
     // 读不到就保持空：宁可少一张卡，也不要把无法核实的状态挂在对话里。
     entry.rows = result.ok ? result.delegations : [];
+    entry.resolved = true;
     emit(entry);
   } catch {
     if (!isDataOwnerGenerationCurrent(owner)) return;
     if (sessions.get(sessionId) !== entry) return;
     entry.rows = [];
+    entry.resolved = true;
     emit(entry);
   }
 }
@@ -86,27 +97,43 @@ function subscribe(sessionId: string, listener: () => void): () => void {
   };
 }
 
-/** 取本会话发起的某一个委派的实时行；还没读到或已不存在时返回 null。 */
+export interface BotDelegationLive {
+  /** 这一条委派的实时行；还没读到、或读完了但不存在时为 null。 */
+  row: BotDelegationView | null;
+  /**
+   * 本会话的委派列表是否已经拉过一次（成功或失败都算）。
+   *
+   * `resolved && row === null` 是一个**确定的**结论：这条委派我们核实不了。
+   * 调用方必须据此改口，不能继续画「正在进行」。
+   */
+  resolved: boolean;
+}
+
+/** 取本会话发起的某一个委派的实时行，附带「首次拉取是否已落地」。 */
 export function useBotDelegation(
   sessionId: string | null,
   delegationId: string,
-): BotDelegationView | null {
-  const [row, setRow] = useState<BotDelegationView | null>(null);
-  const read = useCallback(() => {
-    if (!sessionId) return null;
-    return sessions.get(sessionId)?.rows.find((item) => item.id === delegationId) ?? null;
+): BotDelegationLive {
+  const [live, setLive] = useState<BotDelegationLive>({ row: null, resolved: false });
+  const read = useCallback((): BotDelegationLive => {
+    if (!sessionId) return { row: null, resolved: false };
+    const entry = sessions.get(sessionId);
+    return {
+      row: entry?.rows.find((item) => item.id === delegationId) ?? null,
+      resolved: entry?.resolved ?? false,
+    };
   }, [delegationId, sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
-      setRow(null);
+      setLive({ row: null, resolved: false });
       return;
     }
-    setRow(read());
-    return subscribe(sessionId, () => setRow(read()));
+    setLive(read());
+    return subscribe(sessionId, () => setLive(read()));
   }, [read, sessionId]);
 
-  return row;
+  return live;
 }
 
 /** 测试用：清掉进程内缓存，避免用例之间互相看到对方的订阅。 */

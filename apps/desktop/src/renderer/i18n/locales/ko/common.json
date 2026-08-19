@@ -5877,9 +5877,8 @@
       }
     },
     "portability": {
-      "title": "가져오기 및 내보내기",
-      "description": "자격 증명, IM 계정, 작업 기록, 메모리, 프로젝트 경로 또는 실행 상태를 제외한 공유 가능한 동작 설정을 내보냅니다. 가져온 외부 채널과 자동화는 비활성 상태로 유지됩니다.",
-      "import": "동료 가져오기",
+      "title": "내보내기",
+      "description": "자격 증명, IM 계정, 작업 기록, 메모리, 프로젝트 경로 또는 실행 상태를 제외한 공유 가능한 동작 설정을 내보냅니다. 동료 가져오기는 설정 › 동료에 있습니다.",
       "export": "동료 설정 내보내기",
       "exporting": "내보내는 중…",
       "exported": "동료 설정을 내보냈습니다.",
@@ -6123,7 +6122,8 @@
             "required": "작업에 결정 필요"
           }
         }
-      }
+      },
+      "archivedNote": "보관된 동료는 작업 변화를 받지 않습니다. 다시 켜려면 먼저 복원하세요."
     },
     "adapterBoundaryTitle": "어댑터 경계 유지",
     "adapterBoundaryDescription": "Telegram 답글, Feishu 카드, Slack 스레드와 로컬 전달은 각 어댑터가 담당합니다. 이 화면은 동료 정체성과 작업 투영만 다룹니다.",
@@ -6218,9 +6218,9 @@
       "saving": "저장 중…",
       "nextProfileVersion": "다음 실행은 Profile v{{version}} 사용",
       "executionPolicy": "실행 한도",
-      "executionPolicyDescription": "이 Routine의 모든 실행은 이 한도 안에서 이루어집니다.",
+      "executionPolicyDescription": "최대 실행 시간에 도달하면 해당 실행이 중단됩니다.",
       "timeoutMinutes": "최대 실행 시간(분)",
-      "budgetTokens": "Token 예산",
+      "budgetTokens": "협업 Token 예산",
       "unlimited": "제한 없음",
       "maxDelegationDepth": "최대 협업 깊이",
       "delegateTargets": "협업 가능한 동료",
@@ -6302,7 +6302,8 @@
           "name": "매주 금요일 17:00 · 주간 요약",
           "prompt": "이번 주에 끝낸 일을 짧게 요약합니다."
         }
-      }
+      },
+      "delegateLimitsHint": "아래 두 항목은 이 Routine이 다른 동료에게 넘기는 하위 작업만 제한하며, 자신의 사용량에는 상한을 두지 않습니다."
     },
     "permissionsLabel": "권한 모드",
     "permissionAsk": "작업 전 확인",
@@ -6323,26 +6324,6 @@
     "channelConnected": "온라인",
     "channelOffline": "오프라인 또는 사용 불가",
     "channelConnectionRequired": "이 채널을 연결하기 전에 설정에서 {{channel}} Bot을 먼저 연결하세요.",
-    "channelCapabilities": {
-      "native": "완전 지원",
-      "unsupported": "아직 지원하지 않음",
-      "degradedFallback": "이 어댑터는 제한된 구현을 사용합니다",
-      "features": {
-        "directMessages": "다이렉트 메시지",
-        "groups": "그룹",
-        "threads": "토픽과 스레드",
-        "replies": "인용 답장",
-        "cards": "인터랙티브 카드",
-        "reactions": "리액션",
-        "attachments": "첨부 파일",
-        "groupHistory": "그룹 기록",
-        "durableDelivery": "내구성 있는 전송"
-      },
-      "details": {
-        "feishu-turn-context-only": "매 턴 현재 그룹이나 토픽에서 문맥을 가져오지만, 여러 턴에 걸쳐 검색할 수 있는 동료 기록에는 저장하지 않습니다. 권한이 없으면 현재 메시지만으로 답하고 owner에게 알립니다.",
-        "process-lifetime-delivery": "Cindy Desktop이 실행 중일 때만 안전하게 재시도합니다. 종료, 충돌 또는 전원 손실 뒤에는 백그라운드 전송이 재개되지 않습니다."
-      }
-    },
     "migration": {
       "title": "메시지 채널 이전 및 연결",
       "description": "Cindy가 기존 IM 작업과 인계 관계를 확인한 뒤 이 계정을 동료로 원자적으로 전환합니다.",
@@ -6473,7 +6454,7 @@
       "customNameLabel": "이름",
       "customNamePlaceholder": "예: 아주",
       "customSkill": "당신 마음대로",
-      "customSubtitle": "이름과 얼굴만 정하세요. 나머지는 본인이 가져옵니다.",
+      "customSubtitle": "이름과 얼굴만 정하면 일단 합류시킬 수 있어요.",
       "customTitle": "나만의 파트너 만들기",
       "footerHint": "합류하면 먼저 인사를 건넵니다. 메시지 채널은 나중에 각자의 설정에서 연결할 수 있어요(한 명당 하나).",
       "goodAt": "잘하는 것 · {{skill}}",
@@ -6515,9 +6496,8 @@
       "title": "파트너",
       "description": "파트너 전체에 적용되는 설정입니다. 개별 파트너 설정은 각자의 페이지에 있어요.",
       "notifications": {
-        "banner": "새 메시지 배너",
-        "sound": "소리",
-        "quietHours": "방해 금지 시간",
+        "title": "새 메시지 알림",
+        "note": "동료의 새 메시지는 왼쪽 동료 목록에 읽지 않음 표시로 나타납니다. 시스템 배너나 소리는 없습니다.",
         "footnote": "「총괄 조정자」 같은 동료는 스스로 작업 상황을 지켜봅니다 — 그건 그 친구의 능력이지 여기서 켜고 끄는 설정이 아니에요."
       },
       "portability": {
@@ -6643,7 +6623,6 @@
         "collab": "🤝 동료와 협업"
       },
       "connectAccount": "계정 연결",
-      "noConnectUi": "이 채널은 아직 앱 안에서 연결할 수 없어요.",
       "imBlocked": "한 팀원은 IM을 하나만 연결할 수 있어요 — 먼저 {{channel}} 연결을 끊어주세요",
       "footnote": "연결한 뒤에는 따로 설정할 게 없어요 — 쓰는 법은 스스로 압니다."
     },
@@ -6675,14 +6654,16 @@
         "completed": "완료",
         "failed": "실패",
         "cancelled": "중지됨",
-        "timed-out": "시간 초과"
+        "timed-out": "시간 초과",
+        "unknown": "{{name}} 쪽 상태를 확인할 수 없어요"
       },
       "report": {
         "done": "{{name}} · {{duration}} · 완료",
         "failed": "{{name}} · {{duration}} · 실패",
         "failedReason": "{{name}} · 실패: {{reason}}",
         "stopped": "{{name}} · {{duration}} · 중지",
-        "delivered": "{{name}} · {{duration}} · {{count}}건 전달"
+        "delivered": "{{name}} · {{duration}} · {{count}}건 전달",
+        "timedOut": "{{name}} · {{duration}} · 시간 초과"
       },
       "duration": {
         "seconds": "{{n}}초",

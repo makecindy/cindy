@@ -315,4 +315,39 @@ describe('BotAutomationSettings — create panel', () => {
     await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
     expect(api.update).not.toHaveBeenCalled();
   });
+  /*
+    空头支票复核 2026-08-19:Token 预算与最大协同深度只经 plan.limits 流向
+    botDelegationService 的子任务准入,**只有委派路径读它们**。「可协作的伙伴」
+    停在默认的「不允许调用其它伙伴」时,这条 Routine 永远不派活,两个输入框
+    完全惰性 —— 能填、能存、什么都不管。所以它们跟着委派开关一起出现。
+  */
+  it('hides the delegation-only limits while the routine may not hand work out', async () => {
+    renderSettings();
+    await screen.findByText('bots.automations.empty');
+    fireEvent.click(screen.getByRole('button', { name: /bots\.automations\.newRoutine/ }));
+    fireEvent.change(instructionField(), { target: { value: 'Summarise yesterday.' } });
+    fireEvent.click(screen.getByRole('button', { name: /bots\.automations\.advanced/ }));
+
+    // 默认 delegateTargetMode: 'none' —— 只该看到真正生效的超时。
+    expect(screen.getByText('bots.automations.timeoutMinutes')).toBeTruthy();
+    expect(screen.queryByText('bots.automations.budgetTokens')).toBeNull();
+    expect(screen.queryByText('bots.automations.maxDelegationDepth')).toBeNull();
+    expect(screen.queryByText('bots.automations.delegateLimitsHint')).toBeNull();
+  });
+
+  it('shows the delegation-only limits, with their real scope stated, once handoff is allowed', async () => {
+    renderSettings();
+    await screen.findByText('bots.automations.empty');
+    fireEvent.click(screen.getByRole('button', { name: /bots\.automations\.newRoutine/ }));
+    fireEvent.change(instructionField(), { target: { value: 'Summarise yesterday.' } });
+    fireEvent.click(screen.getByRole('button', { name: /bots\.automations\.advanced/ }));
+
+    const select = screen.getByDisplayValue('bots.automations.delegateNone');
+    fireEvent.change(select, { target: { value: 'all-active' } });
+
+    expect(screen.getByText('bots.automations.budgetTokens')).toBeTruthy();
+    expect(screen.getByText('bots.automations.maxDelegationDepth')).toBeTruthy();
+    // 必须就地说清它们管的是子任务，而不是这条 Routine 自己。
+    expect(screen.getByText('bots.automations.delegateLimitsHint')).toBeTruthy();
+  });
 });

@@ -46,7 +46,7 @@ export function BotGuestMessage({ guest, content, workingDir, sessionId }: Props
   // 发起方任务里，这条客座气泡就是「TA 交上来的东西」那一刻。产物挂在委派行上，
   // 挂到这条消息底下才是它自然的位置——否则用户得先展开协作卡才知道交了什么。
   // 目标伙伴主任务里的 guest-request（收到的请求）查不到这行，自然什么都不挂。
-  const row = useBotDelegation(sessionId ?? null, guest.delegationId);
+  const { row } = useBotDelegation(sessionId ?? null, guest.delegationId);
   const artifacts =
     row && row.outputArtifacts.length > 0
       ? row.outputArtifacts.map((artifact) =>

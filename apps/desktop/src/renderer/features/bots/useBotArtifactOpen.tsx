@@ -56,7 +56,29 @@ export function useBotArtifactOpen(): BotArtifactOpener {
           );
           return;
         }
-        await window.electronAPI.openMediaWithDefaultApp({ url: item.ref });
+        /*
+          协议引用类交付物交主进程按托管地址打开。这里**必须**接住失败:
+          openMediaWithDefaultApp 在几种日常情况下会 throw ——
+            - xdt-video:// / xdt-audio:// 等 classifyLightboxMediaUrl 不认的方案;
+            - xdt-file:// 指向非图片扩展名(交付的 pdf / xlsx / pptx 就是这一类);
+            - cindy-media:// 的 blob 已被回收(NOT_FOUND「文件不存在」)。
+          调用方全部是 `void openArtifact(...)`,renderer 又没有全局
+          unhandledrejection 兜底 —— 不接的话用户点「打开」就是**什么都不发生、
+          也没有任何提示**。与 item.path 分支(filePreview 内部 toast)对齐:
+          失败一律出 toast,不让按钮变成哑巴。
+        */
+        try {
+          await window.electronAPI.openMediaWithDefaultApp({ url: item.ref });
+        } catch (error) {
+          // 与 filePreview.shouldOpenTextLightbox 的失败口径一致:优先说人话的
+          // 具体原因(如「文件不存在」),拿不到再退到通用兜底文案。
+          const [{ toast }, { i18n }] = await Promise.all([
+            import('@/lib/toast'),
+            import('@/i18n'),
+          ]);
+          const detail = error instanceof Error ? error.message : '';
+          toast.error(detail || i18n.t('logic.errors.openFileFailed'));
+        }
         return;
       }
       const absPath = item.path;

@@ -56,8 +56,20 @@ export function BotDelegationActivityIndicator({ sessionId, maxWidth }: Props) {
       const result = await window.electronAPI.maker.listBotDelegations(sessionId);
       if (!isDataOwnerGenerationCurrent(owner)) return;
       // 读不到就不显示：宁可少一条环境提示，也不要把无法核实的「进行中」一直挂着。
+      //
+      // parentSessionId 这层过滤是必须的：`listBotDelegations` 是**按伙伴**查的
+      // （botDelegationService 的 WHERE 只有 requestingBotId，没有 parentSessionId），
+      // 所以同一个伙伴在别的会话（例如 IM 通道任务）里发起的委派也会一并返回。
+      // 不过滤的话，本会话顶上会挂一条「正在委派 X 处理…」，而下面 onBotDelegationChanged
+      // 的推送守卫又是**按会话**的（payload.parentSessionId !== sessionId 直接 return），
+      // 那条委派跑完后本会话永远收不到刷新 —— 转圈和计时会一直走到组件卸载为止。
+      // 两侧口径必须一致：读和推都只认本会话。
       setActiveRows(
-        result.ok ? result.delegations.filter((row) => ACTIVE_STATUSES.has(row.status)) : [],
+        result.ok
+          ? result.delegations.filter(
+              (row) => row.parentSessionId === sessionId && ACTIVE_STATUSES.has(row.status),
+            )
+          : [],
       );
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setActiveRows([]);

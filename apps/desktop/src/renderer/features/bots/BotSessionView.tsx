@@ -160,7 +160,11 @@ export function BotSessionView() {
     void deliverPendingBotWelcome(botId, sessionId, {
       listMessages: (id) => window.electronAPI.localDb.messages.list(id, { limit: 1 }),
       createMessage: (id, body) => window.electronAPI.localDb.messages.create(id, body),
-      translate: (key) => t(key),
+      // params 必须透传:`bots.welcome.generic` / `withRole` 里带 {{name}}、
+      // {{description}}。i18next 默认 skipOnVariables=true,缺变量时**原样保留**
+      // 占位符而不是报错,所以漏传的后果是伙伴张嘴第一句就是「嗨,我是{{name}}。」
+      // ——自己写的伙伴与部分 AI 生成伙伴 100% 命中。与下面 personaAck 同款签名。
+      translate: (key, params) => t(key, params),
     });
   }, [botId, sessionId, t, welcomeReady]);
 

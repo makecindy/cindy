@@ -10,7 +10,6 @@ import {
 const full = {
   name: '阿橘',
   description: '你的设计搭子',
-  skill: '视觉设计',
   identity: '你是阿橘，设计搭子。\n界面、配图、走查都归你。',
   greeting: '嗨，我是阿橘。配图和走查都可以丢给我。',
   style: 'lively',
@@ -30,8 +29,7 @@ describe('bot persona draft schema', () => {
     expect(draft).toMatchObject({
       name: '阿橘',
       description: '你的设计搭子',
-      skill: '视觉设计',
-      style: 'lively',
+          style: 'lively',
       proactivity: 'proactive',
       call: 'boss',
       avatarPreset: 'whitecat',

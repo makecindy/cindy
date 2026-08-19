@@ -11,10 +11,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { formatQuietHours, useBotPreferences } from './botPreferences';
 import { exportBotBundle, useBotProfiles } from './botStore';
 
 const CARD_CLASS = cn(
@@ -30,7 +28,6 @@ const ROW_HINT_CLASS =
 export function BotsGlobalSettingsSection() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { preferences, setPreference } = useBotPreferences();
   const bots = useBotProfiles();
   const activeBots = bots.filter((bot) => bot.status !== 'archived');
   const [busyBotId, setBusyBotId] = useState<string | null>(null);
@@ -63,29 +60,20 @@ export function BotsGlobalSettingsSection() {
         {t('bots.globalSettings.description')}
       </p>
 
-      <div className={cn(CARD_CLASS, 'flex flex-col gap-4')}>
-        <div className="flex items-center justify-between gap-3">
-          <p className={ROW_LABEL_CLASS}>{t('bots.globalSettings.notifications.banner')}</p>
-          <Switch
-            checked={preferences.banner}
-            onCheckedChange={(next) => setPreference('banner', next)}
-            aria-label={t('bots.globalSettings.notifications.banner')}
-          />
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <p className={ROW_LABEL_CLASS}>{t('bots.globalSettings.notifications.sound')}</p>
-          <Switch
-            checked={preferences.sound}
-            onCheckedChange={(next) => setPreference('sound', next)}
-            aria-label={t('bots.globalSettings.notifications.sound')}
-          />
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <p className={ROW_LABEL_CLASS}>{t('bots.globalSettings.notifications.quietHours')}</p>
-          <span className="text-12 text-[var(--settings-section-sublabel)] opacity-70">
-            {formatQuietHours(preferences.quietHours)}
-          </span>
-        </div>
+      {/*
+        新消息提醒 —— 只陈述现状,不摆开关。
+        伙伴的 canonical Session 不在 DESKTOP_VISIBLE_SESSION_SOURCES 里
+        (shared/sessionSource.ts),因此不经过 useSessionRunningStatus →
+        notificationShowSessionEvent 那条系统通知链;桌面横幅/声音/勿扰对伙伴
+        消息**根本不会触发**。之前这里摆了 banner / sound / quietHours 三个开关,
+        它们只写 localStorage、没有任何消费方 —— 三个纯装饰的假开关,已删除。
+        真实存在的提醒只有一种:侧栏伙伴行上的未读标记(useBotUnreadCounts),
+        所以这里如实写这一条。要真接系统通知,得先把伙伴会话接进那条链,
+        属于独立改动。
+      */}
+      <div className={cn(CARD_CLASS, 'flex flex-col gap-2')}>
+        <p className={ROW_LABEL_CLASS}>{t('bots.globalSettings.notifications.title')}</p>
+        <p className={ROW_HINT_CLASS}>{t('bots.globalSettings.notifications.note')}</p>
         <p className={ROW_HINT_CLASS}>{t('bots.globalSettings.notifications.footnote')}</p>
       </div>
 

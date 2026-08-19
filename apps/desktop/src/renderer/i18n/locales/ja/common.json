@@ -5877,9 +5877,8 @@
       }
     },
     "portability": {
-      "title": "インポートとエクスポート",
-      "description": "認証情報、IM アカウント、タスク履歴、メモリ、プロジェクトパス、実行状態を含まない共有可能な動作設定を書き出します。取り込んだ外部チャンネルと自動化は無効のままです。",
-      "import": "仲間をインポート",
+      "title": "エクスポート",
+      "description": "認証情報、IM アカウント、タスク履歴、メモリ、プロジェクトパス、実行状態を含まない共有可能な動作設定を書き出します。仲間の取り込みは 設定 › 仲間 にあります。",
       "export": "仲間設定をエクスポート",
       "exporting": "エクスポート中…",
       "exported": "仲間設定をエクスポートしました。",
@@ -6123,7 +6122,8 @@
             "required": "タスクに判断が必要です"
           }
         }
-      }
+      },
+      "archivedNote": "アーカイブ済みの仲間はタスクの動きを引き受けません。ここを再び有効にするには、まず復元してください。"
     },
     "adapterBoundaryTitle": "アダプター境界を維持",
     "adapterBoundaryDescription": "Telegram の返信、Feishu カード、Slack スレッド、ローカル配信は各アダプターが担当します。この画面は仲間の ID とタスク投影のみを扱います。",
@@ -6218,9 +6218,9 @@
       "saving": "保存中…",
       "nextProfileVersion": "次回は Profile v{{version}} を使用",
       "executionPolicy": "実行の上限",
-      "executionPolicyDescription": "この Routine の実行は、常にこの上限の範囲内で行われます。",
+      "executionPolicyDescription": "最長実行分数に達すると、その実行は中止されます。",
       "timeoutMinutes": "最大実行時間（分）",
-      "budgetTokens": "Token 予算",
+      "budgetTokens": "連携 Token 予算",
       "unlimited": "無制限",
       "maxDelegationDepth": "最大協力階層",
       "delegateTargets": "協力できる仲間",
@@ -6302,7 +6302,8 @@
           "name": "毎週金曜 17:00 · 今週のまとめ",
           "prompt": "今週終わったことを短くまとめる。"
         }
-      }
+      },
+      "delegateLimitsHint": "以下の 2 つは、この Routine が他の仲間に渡すサブタスクだけを制限し、自身の使用量には上限を設けません。"
     },
     "permissionsLabel": "権限モード",
     "permissionAsk": "実行前に確認",
@@ -6323,26 +6324,6 @@
     "channelConnected": "オンライン",
     "channelOffline": "オフラインまたは利用不可",
     "channelConnectionRequired": "このチャネルを追加する前に、設定で {{channel}} Bot を接続してください。",
-    "channelCapabilities": {
-      "native": "完全対応",
-      "unsupported": "未対応",
-      "degradedFallback": "このアダプターでは制限付きの実装を使用します",
-      "features": {
-        "directMessages": "ダイレクトメッセージ",
-        "groups": "グループ",
-        "threads": "トピックとスレッド",
-        "replies": "引用返信",
-        "cards": "インタラクティブカード",
-        "reactions": "リアクション",
-        "attachments": "添付ファイル",
-        "groupHistory": "グループ履歴",
-        "durableDelivery": "永続的な配信"
-      },
-      "details": {
-        "feishu-turn-context-only": "各ターンで現在のグループまたはトピックから文脈を取得しますが、ターンをまたいで検索できる仲間履歴には保存しません。権限がない場合は現在のメッセージだけで回答し、owner に通知します。",
-        "process-lifetime-delivery": "Cindy Desktop の実行中のみ安全に再試行します。終了、クラッシュ、電源断の後にバックグラウンド配信は再開しません。"
-      }
-    },
     "migration": {
       "title": "メッセージチャネルを移行して接続",
       "description": "Cindy は旧 IM タスクと既存の引き継ぎを確認してから、このアカウントを仲間にアトミックに切り替えます。",
@@ -6473,7 +6454,7 @@
       "customNameLabel": "名前",
       "customNamePlaceholder": "例：アジュ",
       "customSkill": "あなた次第",
-      "customSubtitle": "名前と顔だけ決めてください。あとは本人が持っています。",
+      "customSubtitle": "名前と顔だけ決めれば、まずは迎え入れられます。",
       "customTitle": "自分のパートナーをつくる",
       "footerHint": "迎え入れると、まず挨拶してくれます。メッセージチャネルは後からその子の設定でつなげます（1 人につき 1 つ）。",
       "goodAt": "得意 · {{skill}}",
@@ -6515,9 +6496,8 @@
       "title": "パートナー",
       "description": "パートナー全体に共通する設定です。個々のパートナーの設定は、その子のページにあります。",
       "notifications": {
-        "banner": "新着メッセージのバナー",
-        "sound": "サウンド",
-        "quietHours": "通知しない時間帯",
+        "title": "新着メッセージの知らせ方",
+        "note": "仲間からの新着は、左の仲間リストに未読マークとして出ます。システムのバナーや音は鳴りません。",
         "footnote": "「全体の司令塔」のような仲間は、自分でタスクの動きを見ています——それは本人の能力であって、ここの設定ではありません。"
       },
       "portability": {
@@ -6643,7 +6623,6 @@
         "collab": "🤝 仲間との連携"
       },
       "connectAccount": "アカウントを接続",
-      "noConnectUi": "このチャンネルはアプリ内から接続できません。",
       "imBlocked": "チームメイトが接続できるIMは1つだけです — 先に{{channel}}を切断してください",
       "footnote": "つないだ後は何も設定しなくて大丈夫です——使い方は自分で分かります。"
     },
@@ -6675,14 +6654,16 @@
         "completed": "完了",
         "failed": "失敗",
         "cancelled": "停止済み",
-        "timed-out": "タイムアウト"
+        "timed-out": "タイムアウト",
+        "unknown": "{{name}} の状況を確認できません"
       },
       "report": {
         "done": "{{name}} · {{duration}} · 完了",
         "failed": "{{name}} · {{duration}} · 失敗",
         "failedReason": "{{name}} · 失敗：{{reason}}",
         "stopped": "{{name}} · {{duration}} · 停止",
-        "delivered": "{{name}} · {{duration}} · {{count}} 件納品"
+        "delivered": "{{name}} · {{duration}} · {{count}} 件納品",
+        "timedOut": "{{name}} · {{duration}} · タイムアウト"
       },
       "duration": {
         "seconds": "{{n}} 秒",

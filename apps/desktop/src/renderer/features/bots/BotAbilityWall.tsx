@@ -11,12 +11,24 @@ import {
 import { botChannelConnectPath } from './botChannelConnectRoutes';
 import type { BotChannel, BotChannelConnection } from './botStore';
 
+/**
+ * 「自带」能力条目。
+ *
+ * 空头支票复核(2026-08-19):这五条都**没有**对应的 per-bot 开关,对任何伙伴都
+ * 成立,所以静态列出是如实陈述,不是硬编码的假徽标。
+ *   - writing / research / doing / collab —— 基座 Agent 能力,不由 profile 决定;
+ *     `permissions: 'ask'` 只是多问一句,不改变「能不能做」。
+ *   - schedule —— 曾经挂在 `capabilities.automation` 上,但产品裁决 2026-08-19
+ *     已把自动化定为标配:`shared/botAutomationCapability.ts` 的
+ *     `normalizeBotAutomation()` 在**所有**读取投影层无条件返回 `true`,开关面
+ *     也已下线。因此它同样恒成立,照常展示。
+ * 一旦将来 automation 恢复成真开关,这里要跟着重新按能力位过滤。
+ */
 const BUILTIN_ABILITY_KEYS = ['writing', 'research', 'doing', 'schedule', 'collab'] as const;
 
 /**
- * "TA 会的" —— 自带能力墙(纯陈述,无开关;permissions/automation 恒随模板默认,
- * 个体收紧挪到高级)+ 可以连上的通道列表(复用 toggleChannel/mountedChannelFor,
- * 单 IM 互斥用 applyImMutualExclusion 处理)。
+ * "TA 会的" —— 自带能力墙(纯陈述,无开关)+ 可以连上的通道列表
+ * (复用 toggleChannel/mountedChannelFor,单 IM 互斥用 applyImMutualExclusion 处理)。
  */
 export function BotAbilityWall({
   connections,
@@ -70,13 +82,18 @@ export function BotAbilityWall({
             还没有账号的渠道行。原来是死的置灰行 +「先在设置里连接 X 账号」——
             一句把用户支走、点下去什么都不发生的话。现在这一行**可点**,直接
             落到该渠道真实的连接界面(botChannelConnectRoutes 是唯一映射表)。
-            确实没有界面入口的渠道(connectPath === null)才如实说「暂不支持在
-            界面里连接」,而且照样不给一个点不动的按钮。
+
+            占位行只由 MOUNTABLE_BOT_CHANNEL_KINDS 生成,而 CONNECT_ROUTES 的类型
+            就是 `Record<MountableBotChannelKind, …>` —— 每个占位行都必有入口,
+            `connectPath === null` 结构上不可达。原先挂在这个分支上的
+            「暂不支持在界面里连接」提示因此一次都不会出现,已随
+            `bots.abilityWall.noConnectUi` 一并删除。这里保留 null 判断只作为
+            类型守卫:将来有人往 MOUNTABLE 里加渠道却忘了配路由时,宁可不给按钮,
+            也不给一个点了没反应的按钮。
           */
           const needsAccount = !chip.connection;
           const connectPath = needsAccount ? botChannelConnectPath(chip.kind) : null;
-          const connectable = needsAccount && connectPath !== null;
-          const rowDimmed = needsAccount ? !connectable : chip.disabled || blocked;
+          const rowDimmed = needsAccount ? false : chip.disabled || blocked;
           return (
             <div
               key={chip.id}
@@ -97,14 +114,9 @@ export function BotAbilityWall({
                     })}
                   </span>
                 ) : null}
-                {needsAccount && !connectable ? (
-                  <span className="mt-0.5 block text-10 leading-4 text-[var(--text-tertiary)]">
-                    {t('bots.abilityWall.noConnectUi')}
-                  </span>
-                ) : null}
               </span>
               {needsAccount ? (
-                connectable ? (
+                connectPath !== null ? (
                   <button
                     type="button"
                     onClick={() => onConnectAccount(chip.kind)}

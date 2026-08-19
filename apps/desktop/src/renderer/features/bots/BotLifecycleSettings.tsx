@@ -283,7 +283,13 @@ export function BotLifecycleSettings({
               </button>
               <button
                 type="button"
-                onClick={() => setArchiveOpen(true)}
+                onClick={() => {
+                  // 归档与删除共用同一个 worktreeDisposition state。不在开场时归零的话,
+                  // 「归档→选了回收→取消→改点删除」会让那个不可逆的对话框**预选**回收
+                  // 工作区——用户从没在删除这一屏上选过它。每次开场都回到 retain 默认。
+                  setWorktreeDisposition('retain');
+                  setArchiveOpen(true);
+                }}
                 disabled={actionBusy !== null}
                 className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
               >
@@ -295,6 +301,9 @@ export function BotLifecycleSettings({
             type="button"
             onClick={() => {
               setConfirmName('');
+              // 见上:删除对话框不继承归档那一轮选过的工作区处置。
+              setWorktreeDisposition('retain');
+              setKeepTaskHistory(true);
               setDeleteOpen(true);
             }}
             disabled={actionBusy !== null}
