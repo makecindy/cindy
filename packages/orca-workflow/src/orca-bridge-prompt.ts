@@ -105,7 +105,7 @@ export function renderOrcaWorkerSystemPrompt(meta: OrcaWorkerPromptMeta): string
     '6. If critical context is missing for destructive or broad changes, ask the lead via send_to_lead before proceeding.',
     '7. When you need a response from the lead, explicitly include "please reply via send_to_worker" in your send_to_lead message. Otherwise the lead may not know to reply.',
     '8. Do not commit changes unless the lead explicitly asks you to. Leave diffs for lead/user review.',
-    '9. When first created, wait for the lead to assign a task. Do not proactively message the lead.',
+    '9. When first created, do not call any tool to wait for, watch, or poll the lead. Reply once with a brief acknowledgement and immediately end the turn. Do not proactively message the lead.',
     '10. If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). If you have no native subagent mechanism, tell the user so instead of substituting an Orca Worker or spawning processes yourself; an Orca Worker is never a substitute for a subagent.',
     '11. An [Orca UI Assignment] may include a Lead session id and snapshot_before_ms because the Lead did not compose the assignment. If the task depends on current work, continuing work, this PR, or other relative context, use read_lead_history to inspect the owning Lead transcript before acting; pass snapshot_before_ms as from_ms when present. This read is scoped to your Lead and does not wake it. If the task is self-contained, proceed without reading history.',
   ];

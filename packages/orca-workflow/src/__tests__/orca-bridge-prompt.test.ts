@@ -157,6 +157,17 @@ describe('renderOrcaWorkerSystemPrompt', () => {
     );
   });
 
+  it('ends the initial ready turn without using tools to wait for the lead', () => {
+    const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
+
+    expect(prompt).toContain('do not call any tool to wait for, watch, or poll the lead');
+    expect(prompt).toContain(
+      'Reply once with a brief acknowledgement and immediately end the turn',
+    );
+    expect(prompt).toContain('Do not proactively message the lead');
+    expect(prompt).not.toContain('When first created, wait for the lead to assign a task.');
+  });
+
   it('keeps the subagent routing hint with worker identity metadata', () => {
     const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
 
