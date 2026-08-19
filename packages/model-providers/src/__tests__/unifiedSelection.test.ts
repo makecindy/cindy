@@ -671,6 +671,33 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'gpt-5.5', 'codex')).toBeNull();
     expect(resolveAgentCapability(providers, 'nope', 'gpt-5.5', 'codex')).toBeNull();
   });
+
+  it('efforts 防御性规范升序:任何来源的降序/乱序数组经统一选择路径吐升序(Grok 4.5 反轴回归)', () => {
+    // efforts 是外部输入(服务端目录 / 三家 discovery / 用户 override),而消费端(滑杆按
+    // 下标画轴、efforts[0]=最低 / at(-1)=最高)契约都是升序 —— capabilityOf 的这道排序是
+    // 「任一来源漏排就反轴」整类缺陷的单点防线,必须直接锁在共享路径上,不能只靠 xAI
+    // 解析层 / 目录合并层各自的测试(那两层删了排序,这里要能红)。fixture 刻意用非 xAI
+    // 的网关来源。
+    const p = view({
+      id: 'xd',
+      authStrategy: 'gateway-key',
+      models: {
+        'claude-code': [
+          m('desc-order', { efforts: ['high', 'medium', 'low'], defaultEffort: 'high' }),
+          m('shuffled', { efforts: ['xhigh', 'low', 'high'], defaultEffort: null }),
+        ],
+      },
+    });
+    const cap = (id: string) => resolveAgentCapability([p], 'xd', id, 'claude-code');
+    expect(cap('desc-order')?.efforts).toEqual(['low', 'medium', 'high']);
+    // 排序只动表示,不动语义:目录声明的合法默认档原样保留(低→高轴上 high 落在右端)。
+    expect(cap('desc-order')?.defaultEffort).toBe('high');
+    expect(cap('desc-order')?.defaultEffortSource).toBe('catalog');
+    expect(cap('shuffled')?.efforts).toEqual(['low', 'high', 'xhigh']);
+    // 默认档回落判据按集合走(不含 medium → none),与顺序无关。
+    expect(cap('shuffled')?.defaultEffort).toBeNull();
+    expect(cap('shuffled')?.defaultEffortSource).toBe('none');
+  });
 });
 
 // ── unifiedModelEntries ───────────────────────────────────────────────────────
@@ -692,6 +719,20 @@ describe('unifiedModelEntries', () => {
     expect(row.capabilities.pi?.wireModelId).toBe('chatgpt/gpt-5.6-luna');
     // 展示元数据取推荐引擎(codex root)那条。
     expect(row.displayName).toBe('GPT-5.6-Luna');
+  });
+
+  it('行能力的 efforts 同样规范升序(user provider 降序数组 —— capabilityOf 的第二个入口)', () => {
+    // capabilityOf 只有两个调用方:resolveAgentCapability(浮层实时能力)与本函数的行合成。
+    // 两条路径都必须直接锁住排序 —— 只锁一条,另一条把排序改错时不会被发现。
+    const byom = view({
+      id: 'custom:mine',
+      source: 'user',
+      models: { codex: [m('my-model', { efforts: ['high', 'low'], defaultEffort: 'low' })] },
+    });
+    const entries = unifiedModelEntries({ providers: [byom], isVisible: alwaysVisible });
+    const row = entries.find((entry) => entry.modelId === 'my-model');
+    expect(row?.capabilities.codex?.efforts).toEqual(['low', 'high']);
+    expect(row?.capabilities.codex?.defaultEffort).toBe('low');
   });
 
   it('每个候选都有 wire id,且 wire id 必在该引擎目录里真实存在', () => {
