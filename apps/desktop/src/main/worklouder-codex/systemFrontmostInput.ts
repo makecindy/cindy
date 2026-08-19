@@ -22,6 +22,20 @@ export type SystemFrontmostInputRunner = {
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 4_000;
 const HOLD_SCROLL_TICK_MS = 16;
+/** Windows wheel events are counted in 120-unit notches. */
+export const WINDOWS_WHEEL_DELTA = 120;
+
+export function accumulateScrollNotches(
+  remainder: number,
+  deltaY: number,
+  notch = WINDOWS_WHEEL_DELTA,
+): { remainder: number; deltaY: number } {
+  if (notch <= 0) return { remainder: 0, deltaY };
+  const total = remainder + deltaY;
+  const notches = total < 0 ? Math.ceil(total / notch) : Math.floor(total / notch);
+  const emitted = notches * notch;
+  return { remainder: total - emitted, deltaY: emitted };
+}
 
 export type SystemFrontmostScrollPump = {
   setSpeed(pxPerSecond: number): void;
@@ -104,12 +118,14 @@ async function postScrollFallback(deltaY: number): Promise<void> {
   }
 }
 
-function createIntervalScrollPump(
+export function createIntervalScrollPump(
   runner: SystemFrontmostInputRunner,
   now: () => number,
+  wheelNotch = process.platform === 'win32' ? WINDOWS_WHEEL_DELTA : 0,
 ): SystemFrontmostScrollPump {
   let speed = 0;
   let lastAt = 0;
+  let remainder = 0;
   let inFlight = false;
   let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -118,7 +134,12 @@ function createIntervalScrollPump(
     const at = now();
     const elapsedMs = lastAt === 0 ? HOLD_SCROLL_TICK_MS : Math.max(1, at - lastAt);
     lastAt = at;
-    const deltaY = Math.round((speed * Math.min(elapsedMs, 100)) / 1000);
+    let deltaY = Math.round((speed * Math.min(elapsedMs, 100)) / 1000);
+    if (wheelNotch > 0) {
+      const next = accumulateScrollNotches(remainder, deltaY, wheelNotch);
+      remainder = next.remainder;
+      deltaY = next.deltaY;
+    }
     if (deltaY === 0) return;
     inFlight = true;
     void runner
@@ -146,6 +167,7 @@ function createIntervalScrollPump(
     stop() {
       speed = 0;
       lastAt = 0;
+      remainder = 0;
       if (!timer) return;
       clearInterval(timer);
       timer = null;

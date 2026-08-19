@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { joystickScrollSpeed } from '../../../shared/workLouderCodexScroll.js';
 import {
+  WINDOWS_WHEEL_DELTA,
+  accumulateScrollNotches,
+  createIntervalScrollPump,
   createMacHoldScrollPump,
   createWorkLouderCodexSystemFrontmostInput,
 } from '../systemFrontmostInput.js';
@@ -78,5 +81,45 @@ describe('createWorkLouderCodexSystemFrontmostInput', () => {
     expect(child.kill).toHaveBeenCalledOnce();
     expect(child.stdin.write).toHaveBeenCalledWith('stop\n');
     expect(fallback.stop).toHaveBeenCalled();
+  });
+
+  it('keeps sub-notch Windows wheel remainders across ticks', () => {
+    let state = accumulateScrollNotches(0, 42);
+    expect(state).toEqual({ remainder: 42, deltaY: 0 });
+    state = accumulateScrollNotches(state.remainder, 42);
+    expect(state).toEqual({ remainder: 84, deltaY: 0 });
+    state = accumulateScrollNotches(state.remainder, 42);
+    expect(state).toEqual({ remainder: 6, deltaY: WINDOWS_WHEEL_DELTA });
+  });
+
+  it('posts a Windows wheel notch only after leftover pixels accumulate', async () => {
+    vi.useFakeTimers();
+    try {
+      const postScroll = vi.fn(async () => undefined);
+      let now = 1_000;
+      const pump = createIntervalScrollPump(
+        { postKey: vi.fn(async () => undefined), postScroll },
+        () => now,
+        WINDOWS_WHEEL_DELTA,
+      );
+
+      pump.setSpeed(2600);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(postScroll).not.toHaveBeenCalled();
+
+      now += 16;
+      await vi.advanceTimersByTimeAsync(16);
+      now += 16;
+      await vi.advanceTimersByTimeAsync(16);
+      expect(postScroll).toHaveBeenCalledWith(WINDOWS_WHEEL_DELTA);
+
+      pump.stop();
+      postScroll.mockClear();
+      pump.setSpeed(2600);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(postScroll).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
