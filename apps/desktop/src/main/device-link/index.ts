@@ -443,10 +443,12 @@ type DeviceLinkPushHandler = (sourceDeviceId: string, payload: unknown) => void;
 type DeviceLinkPresenceHandler = (snapshot: PresenceSnapshot) => void;
 type DeviceLinkOwnershipHandler = (owner: boolean) => void;
 type DeviceLinkStatusHandler = (status: DeviceLinkStatus) => void;
+type DeviceLinkRemoteRevocationHandler = (deviceId: string) => void;
 const deviceLinkPushHandlers = new Map<string, Set<DeviceLinkPushHandler>>();
 const deviceLinkPresenceHandlers = new Set<DeviceLinkPresenceHandler>();
 const deviceLinkOwnershipHandlers = new Set<DeviceLinkOwnershipHandler>();
 const deviceLinkStatusHandlers = new Set<DeviceLinkStatusHandler>();
+const deviceLinkRemoteRevocationHandlers = new Set<DeviceLinkRemoteRevocationHandler>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
 
 /**
@@ -838,6 +840,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         revokedByRemote.add(env.src);
         responsivenessTracker?.clearDevice(env.src);
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
+        for (const handler of deviceLinkRemoteRevocationHandlers) {
+          try {
+            handler(env.src);
+          } catch (error) {
+            log.warn('device-link remote revocation handler failed', error);
+          }
+        }
       }
       return;
     }
@@ -1711,7 +1720,11 @@ export function getSelfDeviceId(): string | null {
 
 /** IM scheduler uses push as a same-account, non-control data plane. */
 export function sendDeviceLinkPush(deviceId: string, channel: string, payload: unknown): boolean {
-  if (!client || !arbiter?.isOwner() || !presenceOnlineByDevice.get(deviceId)) return false;
+  // Presence is an incremental view and is not replayed to a newly connected
+  // Desktop. An absent row is therefore unknown, not offline; the IM scheduler
+  // may still have a fresh account-wide REST snapshot proving the target is
+  // online. Only an explicit offline row may suppress that best-effort send.
+  if (!client || !arbiter?.isOwner() || isPresenceExplicitlyOffline(deviceId)) return false;
   try {
     client.sendBestEffortPush(deviceId, channel, payload);
     return true;
@@ -1779,6 +1792,14 @@ export function onDeviceLinkOwnershipChanged(handler: DeviceLinkOwnershipHandler
 export function onDeviceLinkStatusChanged(handler: DeviceLinkStatusHandler): () => void {
   deviceLinkStatusHandlers.add(handler);
   return () => deviceLinkStatusHandlers.delete(handler);
+}
+
+/** Notify same-account schedulers when a peer has revoked this Desktop. */
+export function onDeviceLinkAccessRevokedByRemote(
+  handler: DeviceLinkRemoteRevocationHandler,
+): () => void {
+  deviceLinkRemoteRevocationHandlers.add(handler);
+  return () => deviceLinkRemoteRevocationHandlers.delete(handler);
 }
 
 /** 控制端:对目标设备远程 invoke 一个 allowlist 内的 channel。

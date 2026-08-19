@@ -19,6 +19,7 @@ const harness = vi.hoisted(() => ({
   }) => void) | null,
   ownershipHandler: null as ((owner: boolean) => void) | null,
   statusHandler: null as ((status: 'online' | 'offline') => void) | null,
+  remoteRevocationHandler: null as ((deviceId: string) => void) | null,
   revoked: new Set<string>(),
   hooks: null as {
     isTransportAllowed(identity?: string | null): boolean;
@@ -52,6 +53,12 @@ vi.mock('../../../device-link', () => ({
   onDeviceLinkStatusChanged: (handler: (status: 'online' | 'offline') => void) => {
     harness.statusHandler = handler;
     return () => { harness.statusHandler = null; };
+  },
+  onDeviceLinkAccessRevokedByRemote: (handler: (deviceId: string) => void) => {
+    harness.remoteRevocationHandler = handler;
+    return () => {
+      harness.remoteRevocationHandler = null;
+    };
   },
   sendDeviceLinkPush: harness.sendPush,
 }));
@@ -188,6 +195,7 @@ beforeEach(() => {
   harness.presenceHandler = null;
   harness.ownershipHandler = null;
   harness.statusHandler = null;
+  harness.remoteRevocationHandler = null;
   harness.revoked.clear();
   harness.hooks = null;
   harness.sendPush.mockReset();
@@ -268,6 +276,26 @@ describe('Discord scheduler manager', () => {
 
     await managerA.stop();
     await managerZ.stop();
+  });
+
+  it('probes and elects every Desktop from the REST snapshot without incremental presence', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [];
+    harness.fetchDeviceSnapshot.mockResolvedValue({
+      selfDeviceId: 'z',
+      peers: [{ deviceId: 'a', platform: 'darwin' }],
+    });
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await vi.waitFor(() => expect(latestProbeNonce('a')).toEqual(expect.any(String)));
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+
+    expect(discord.init).not.toHaveBeenCalled();
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+    await manager.stop();
   });
 
   it('stays fail-closed when the account device snapshot is unavailable', async () => {
@@ -1215,6 +1243,45 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('rejects a delayed advertisement reply from an older discovery nonce', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [
+      {
+        deviceId: 'a',
+        platform: 'darwin',
+        online: true,
+        lastSeenAt: Date.now(),
+      },
+    ];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    const oldNonce = latestProbeNonce('a');
+    confirmPeer('a', []);
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledOnce();
+
+    harness.hooks?.onConfigurationChanged?.();
+    const currentNonce = latestProbeNonce('a');
+    expect(currentNonce).not.toBe(oldNonce);
+    confirmPeer('a', []);
+    await finishDiscovery(manager);
+    const standbyCalls = discord.enterSchedulerStandby.mock.calls.length;
+
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: Date.now() + 60_000,
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      inReplyTo: oldNonce,
+    });
+    await manager.reconcile();
+
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledTimes(standbyCalls);
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(true);
+    await manager.stop();
+  });
+
   it('retires an active runtime even when the provider transport is already gone', async () => {
     harness.selfDeviceId = 'a';
     const discord = createDiscord();
@@ -1278,6 +1345,32 @@ describe('Discord scheduler manager', () => {
     await manager.reconcile();
 
     expect(discord.enterSchedulerStandby).not.toHaveBeenCalled();
+    await manager.stop();
+  });
+
+  it('closes local ingress immediately when an elected peer revokes this Desktop', async () => {
+    harness.selfDeviceId = 'a';
+    harness.peers = [
+      {
+        deviceId: 'z',
+        platform: 'darwin',
+        online: true,
+        lastSeenAt: Date.now(),
+      },
+    ];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('z', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledOnce();
+
+    harness.remoteRevocationHandler?.('z');
+    await manager.reconcile();
+
+    expect(discord.closeSchedulerIngress).toHaveBeenCalledOnce();
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
     await manager.stop();
   });
 

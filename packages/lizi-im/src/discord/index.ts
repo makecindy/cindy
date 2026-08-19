@@ -421,10 +421,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         // the REST client for already accepted work below.
         await this.gateway.closeIngress();
       }
-      // Normal remote handoff may leave the websocket transport alive so a
-      // reconnect can recover the captured outbound lease. The provider gate
-      // still rejects every new business event while the old accepted work
-      // drains; Ready/Resume must not promote that drain into ingress.
+      // A same-device ownership handoff closes the websocket before this
+      // drain. A normal remote handoff keeps the only live Gateway receiving,
+      // so DMs and buttons arriving while the next owner waits for our clean
+      // runtime are accepted into this same drain queue.
       await this.drainSchedulerHandoffWork();
       // Presence can change while an accepted Agent turn is draining. If the
       // remote winner disappeared and this Desktop owns ingress again, the
@@ -841,13 +841,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           /* swallow */
         }
       }
-      const close = this.schedulerHandoffDraining
-        ? this.gateway.closeIngress()
-        : this.gateway.destroy();
-      void close.catch((error) => {
-        const phase = this.schedulerHandoffDraining ? 'drain ingress close' : 'standby destroy';
-        this.log.warn(`discord scheduler ${phase} failed: ${String(error)}`);
-      });
+      if (!this.schedulerHandoffDraining) {
+        void this.gateway.destroy().catch((error) => {
+          this.log.warn(`discord scheduler standby destroy failed: ${String(error)}`);
+        });
+      }
       return;
     }
     const previous = this.status;
@@ -1151,7 +1149,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private async handleDmMessage(m: MessageLike): Promise<void> {
-    if (this.disposing || !this.schedulerTransportAllowed()) return;
+    if (this.disposing || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining))
+      return;
     const acceptedOwnerUserId = this.ownerUserId;
     if (m.author.id !== acceptedOwnerUserId) return;
 
@@ -1212,10 +1211,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     i: ButtonInteractionLike,
     acknowledged: Promise<void> = Promise.resolve(),
   ): Promise<void> {
-    if (
-      this.disposing
-      || !this.schedulerTransportAllowed()
-    ) {
+    if (this.disposing || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining)) {
       return Promise.resolve();
     }
     const acceptedContext = {

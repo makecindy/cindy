@@ -10,6 +10,7 @@ import {
   isDeviceRevoked,
   isDeviceLinkOwner,
   listOnlineDesktopDevices,
+  onDeviceLinkAccessRevokedByRemote,
   onDeviceLinkOwnershipChanged,
   onDeviceLinkPresenceChanged,
   onDeviceLinkPush,
@@ -63,6 +64,7 @@ export class ImSchedulerManager {
   private offPush: (() => void) | null = null;
   private offOwnership: (() => void) | null = null;
   private offStatus: (() => void) | null = null;
+  private offRemoteRevocation: (() => void) | null = null;
   private offDiscordStatus: (() => void) | null = null;
   private advertisementTimer: ReturnType<typeof setInterval> | null = null;
   private discoveryDeadline = 0;
@@ -172,6 +174,16 @@ export class ImSchedulerManager {
       }
       void this.reconcile();
     });
+    this.offRemoteRevocation = onDeviceLinkAccessRevokedByRemote((deviceId) => {
+      // The revoking peer has already removed this Desktop from its election.
+      // Drop our old confirmation and close ingress in the same turn so we do
+      // not remain active until the stale-peer timer expires.
+      this.removePeer(deviceId);
+      this.confirmedPeers.delete(deviceId);
+      this.pendingProbePeers.delete(deviceId);
+      this.closeSchedulerIngressImmediately('remote-access-revoked');
+      void this.reconcile();
+    });
     this.offPush = onDeviceLinkPush(IM_SCHEDULER_PUSH_CHANNEL, (source, payload) => {
       if (isDeviceRevoked(source)) {
         this.removePeer(source);
@@ -202,6 +214,12 @@ export class ImSchedulerManager {
         }
         this.advertise(source, payload.nonce);
         void this.reconcile();
+        return;
+      }
+      if (payload.inReplyTo && payload.inReplyTo !== this.discoveryNonce) {
+        // A reply is scoped to exactly one local discovery round. Wall-clock
+        // skew must never let a delayed reply from an older nonce overwrite
+        // state already confirmed for the current snapshot.
         return;
       }
       if (payload.inReplyTo === this.discoveryNonce) {
@@ -270,11 +288,13 @@ export class ImSchedulerManager {
     this.offPush?.();
     this.offOwnership?.();
     this.offStatus?.();
+    this.offRemoteRevocation?.();
     this.offDiscordStatus?.();
     this.offPresence = null;
     this.offPush = null;
     this.offOwnership = null;
     this.offStatus = null;
+    this.offRemoteRevocation = null;
     this.offDiscordStatus = null;
     this.deviceLinkReady = false;
 
@@ -418,13 +438,7 @@ export class ImSchedulerManager {
     channels: SchedulerAdvertisementFrame['channels'];
   }> | null {
     if (!this.authoritativeDesktopPeers) return null;
-    const schedulerPeers = this.listSchedulerPeers();
-    const schedulerPeersById = new Map(schedulerPeers.map((peer) => [peer.deviceId, peer]));
-    for (const [deviceId, platform] of this.authoritativeDesktopPeers) {
-      if (isDeviceRevoked(deviceId)) continue;
-      const peer = schedulerPeersById.get(deviceId);
-      if (!peer || peer.platform !== platform) return null;
-    }
+    const schedulerPeers = this.listElectionPeers();
     const devices = [{
       deviceId: self,
       online: true,
@@ -765,7 +779,7 @@ export class ImSchedulerManager {
   private hasRemoteCandidate(identity: string): boolean {
     const now = Date.now();
     this.dropStalePeers(now);
-    return this.listSchedulerPeers().some((peer) => {
+    return this.listElectionPeers().some((peer) => {
       if (!this.confirmedPeers.has(peer.deviceId)) return false;
       const advertisement = this.peers.get(peer.deviceId);
       return Boolean(
@@ -780,7 +794,7 @@ export class ImSchedulerManager {
 
   private hasRemoteActiveRuntime(identity: string): boolean {
     const now = Date.now();
-    return this.listSchedulerPeers().some((peer) => {
+    return this.listElectionPeers().some((peer) => {
       if (!this.confirmedPeers.has(peer.deviceId)) return false;
       const advertisement = this.peers.get(peer.deviceId);
       return Boolean(
@@ -836,7 +850,34 @@ export class ImSchedulerManager {
   }
 
   private listSchedulerPeers(): ReturnType<typeof listOnlineDesktopDevices> {
-    return listOnlineDesktopDevices().filter((peer) => {
+    const peersById = new Map(listOnlineDesktopDevices().map((peer) => [peer.deviceId, peer]));
+    for (const [deviceId, platform] of this.authoritativeDesktopPeers ?? []) {
+      peersById.set(deviceId, {
+        deviceId,
+        platform,
+        online: true,
+        lastSeenAt: this.peers.get(deviceId)?.lastSeenAt ?? Date.now(),
+      });
+    }
+    return this.filterRevokedPeers([...peersById.values()]);
+  }
+
+  private listElectionPeers(): ReturnType<typeof listOnlineDesktopDevices> {
+    const peers = this.authoritativeDesktopPeers
+      ? [...this.authoritativeDesktopPeers].map(([deviceId, platform]) => ({
+          deviceId,
+          platform,
+          online: true as const,
+          lastSeenAt: this.peers.get(deviceId)?.lastSeenAt ?? Date.now(),
+        }))
+      : listOnlineDesktopDevices();
+    return this.filterRevokedPeers(peers);
+  }
+
+  private filterRevokedPeers(
+    peers: ReturnType<typeof listOnlineDesktopDevices>,
+  ): ReturnType<typeof listOnlineDesktopDevices> {
+    return peers.filter((peer) => {
       if (!isDeviceRevoked(peer.deviceId)) return true;
       // Drop any previously confirmed advertisement while access is revoked.
       // If access is restored later, the peer must complete a fresh probe

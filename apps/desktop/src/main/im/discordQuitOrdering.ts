@@ -48,3 +48,29 @@ export async function closeLocalDbAfterDiscordShutdown(
   await discordShutdown.catch(() => undefined);
   await closeLocalDb();
 }
+
+/**
+ * Stop ingress first, then cancel account-scoped sessions before waiting for
+ * the scheduler's handoff drain. A draining turn may be waiting for a card
+ * click that can no longer arrive after transport disposal; session cleanup is
+ * what settles that turn and lets the scheduler publish its final runtime.
+ */
+export async function stopImBeforeFinishingSchedulerDrain(
+  prepareSchedulerStop: () => Promise<void>,
+  disposeImTransports: () => Promise<void>,
+  disposeOrchestratorSessions: () => Promise<void>,
+  finishSchedulerStop: () => Promise<void>,
+): Promise<void> {
+  let schedulerPrepared = false;
+  try {
+    await prepareSchedulerStop();
+    schedulerPrepared = true;
+    await disposeImTransports();
+  } finally {
+    try {
+      await disposeOrchestratorSessions();
+    } finally {
+      if (schedulerPrepared) await finishSchedulerStop();
+    }
+  }
+}

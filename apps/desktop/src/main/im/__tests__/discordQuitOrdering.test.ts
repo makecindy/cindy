@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   closeLocalDbAfterDiscordShutdown,
+  stopImBeforeFinishingSchedulerDrain,
   stopImAndDeviceLinkBeforeDbClient,
   stopImBeforeDeviceLink,
 } from '../discordQuitOrdering';
@@ -125,5 +126,57 @@ describe('closeLocalDbAfterDiscordShutdown', () => {
     );
 
     expect(closeLocalDb).toHaveBeenCalledOnce();
+  });
+});
+
+describe('stopImBeforeFinishingSchedulerDrain', () => {
+  it('cancels orchestrator sessions before waiting for a scheduler handoff drain', async () => {
+    const drain = deferred();
+    const order: string[] = [];
+
+    await stopImBeforeFinishingSchedulerDrain(
+      async () => {
+        order.push('scheduler:prepare');
+      },
+      async () => {
+        order.push('transport:dispose');
+      },
+      async () => {
+        order.push('sessions:dispose');
+        drain.resolve();
+      },
+      async () => {
+        order.push('scheduler:finish:start');
+        await drain.promise;
+        order.push('scheduler:finish:done');
+      },
+    );
+
+    expect(order).toEqual([
+      'scheduler:prepare',
+      'transport:dispose',
+      'sessions:dispose',
+      'scheduler:finish:start',
+      'scheduler:finish:done',
+    ]);
+  });
+
+  it('still cancels sessions and finishes the scheduler when transport disposal fails', async () => {
+    const disposeSessions = vi.fn(async () => undefined);
+    const finishScheduler = vi.fn(async () => undefined);
+
+    await expect(
+      stopImBeforeFinishingSchedulerDrain(
+        async () => undefined,
+        async () => {
+          throw new Error('transport dispose failed');
+        },
+        disposeSessions,
+        finishScheduler,
+      ),
+    ).rejects.toThrow('transport dispose failed');
+
+    expect(disposeSessions).toHaveBeenCalledOnce();
+    expect(finishScheduler).toHaveBeenCalledOnce();
   });
 });
