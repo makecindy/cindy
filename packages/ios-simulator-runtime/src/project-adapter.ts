@@ -96,6 +96,23 @@ function tail(value: string, maxBytes = 32 * 1024): string {
     : bytes.subarray(-maxBytes).toString("utf8");
 }
 
+/**
+ * Retry the resolved-file pin only for Xcode's "file missing / unusable"
+ * diagnostics. A compile or link failure that merely mentions Package.resolved
+ * must not trigger a second full build.
+ */
+function isMissingPackageResolvedDiagnostic(
+  result: IOSSimulatorCommandResult,
+): boolean {
+  const output = `${result.stdout}\n${result.stderr}`;
+  if (!/\bPackage\.resolved\b/i.test(output)) return false;
+  return (
+    /\b(missing|does not exist|couldn't be opened|could not be opened|unable to read|no such file)\b/i.test(
+      output,
+    ) || /unable to load the resolved file/i.test(output)
+  );
+}
+
 function commandLogTail(
   results: readonly IOSSimulatorCommandResult[],
   maxBytes = 32 * 1024,
@@ -530,14 +547,12 @@ export class IOSSimulatorProjectBuilder {
       },
     );
     await throwIfBuildCancelled(input.signal, resultBundlePath);
-    if (
-      build.exitCode !== 0 &&
-      /\bPackage\.resolved\b/i.test(`${build.stdout}\n${build.stderr}`)
-    ) {
-      // No locked Package.resolved yet (fresh SPM project), so the
-      // resolved-file pin cannot be honored. Retry once with a full resolve.
-      // The failed build may have written its .xcresult; -resultBundlePath
-      // requires a non-existent path, so remove it before retrying.
+    if (build.exitCode !== 0 && isMissingPackageResolvedDiagnostic(build)) {
+      // Only retry when Xcode says the resolved file is missing or unusable.
+      // A generic compile/link failure that happens to mention Package.resolved
+      // must not pay for a second full build. The failed build may have written
+      // its .xcresult; -resultBundlePath requires a non-existent path, so
+      // remove it before retrying.
       await rm(resultBundlePath, { recursive: true, force: true }).catch(
         () => undefined,
       );

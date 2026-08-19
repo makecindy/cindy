@@ -60,6 +60,7 @@ import {
   getIOSSimulatorMcpDeps,
   reconcilePersistedIOSSimulatorOwnership,
   pruneStaleIOSSimulatorBuildCaches,
+  touchIOSSimulatorBuildCacheLastUsed,
   type IOSSimulatorAppLifecycleAdapter,
   type IOSSimulatorMediaCaptureAdapter,
   type IOSSimulatorProjectBuilderAdapter,
@@ -95,6 +96,31 @@ describe('pruneStaleIOSSimulatorBuildCaches', () => {
         1_000,
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it('keeps a cache whose directory mtime is old when the last-used marker is fresh', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-cache-'));
+    try {
+      const used = path.join(root, 'used-key');
+      const idle = path.join(root, 'idle-key');
+      await mkdir(used);
+      await mkdir(idle);
+      const now = Date.now();
+      const staleTime = new Date(now - 8 * 24 * 60 * 60 * 1000);
+      await utimes(used, staleTime, staleTime);
+      await utimes(idle, staleTime, staleTime);
+      await touchIOSSimulatorBuildCacheLastUsed(used, () => now);
+      await utimes(used, staleTime, staleTime);
+      await pruneStaleIOSSimulatorBuildCaches(
+        [root],
+        7 * 24 * 60 * 60 * 1000,
+        () => now,
+      );
+      await expect(stat(used)).resolves.toBeTruthy();
+      await expect(stat(idle)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('keeps active (skipped) caches even when their mtime is stale', async () => {

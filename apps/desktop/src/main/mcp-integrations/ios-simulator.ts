@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { renameSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
-import { cp, mkdir, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { release as hostOsRelease } from 'node:os';
 import path from 'node:path';
 
@@ -120,14 +120,49 @@ const MAX_NATIVE_H264_VIEWER_FRAMES_PER_SECOND = 60;
 const MAX_INSTANCES_PER_SESSION = 4;
 const MAX_ARTIFACTS_PER_INSTANCE = 4;
 const IOS_SIMULATOR_BUILD_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const IOS_SIMULATOR_BUILD_CACHE_LAST_USED_FILE = '.cindy-last-used';
 
 /**
- * Reclaim stale per-worktree build caches (DerivedData + SPM checkouts).
- * A cache is stale when its directory mtime predates `maxAgeMs`. Because an
- * in-flight build does not keep its parent directory's mtime fresh, `isSkip`
- * must answer live (not from a snapshot) whether a key is actively used, so a
- * build admitted mid-sweep is never removed. Best-effort: a read/stat/rm
- * failure on one entry never blocks a build.
+ * Record the last time this cache key was admitted or finished a build.
+ * Xcode writes DerivedData/SPM descendants and does not refresh the cache-key
+ * directory mtime, so opportunistic 7-day reclaim must not use that mtime.
+ */
+export async function touchIOSSimulatorBuildCacheLastUsed(
+  cacheDir: string,
+  now: () => number = Date.now,
+): Promise<void> {
+  await mkdir(cacheDir, { recursive: true });
+  await writeFile(
+    path.join(cacheDir, IOS_SIMULATOR_BUILD_CACHE_LAST_USED_FILE),
+    `${now()}\n`,
+    'utf8',
+  );
+}
+
+async function readIOSSimulatorBuildCacheLastUsedMs(
+  cacheDir: string,
+): Promise<number | null> {
+  try {
+    const raw = await readFile(
+      path.join(cacheDir, IOS_SIMULATOR_BUILD_CACHE_LAST_USED_FILE),
+      'utf8',
+    );
+    const parsed = Number.parseInt(raw.trim(), 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Opportunistic cold-cache reclaim for per-worktree DerivedData + SPM
+ * checkouts. This is a 7-day unused TTL, not a disk quota: it cannot cap
+ * total size. Age comes from the explicit last-used marker, not the
+ * cache-key directory mtime. Because an in-flight build does not keep that
+ * parent mtime fresh, `isSkip` must answer live (not from a snapshot)
+ * whether a key is actively used, so a build admitted mid-sweep is never
+ * removed. Best-effort: a read/stat/rm failure on one entry never blocks a
+ * build.
  */
 export async function pruneStaleIOSSimulatorBuildCaches(
   roots: readonly string[],
@@ -149,13 +184,15 @@ export async function pruneStaleIOSSimulatorBuildCaches(
         .map(async (entry) => {
           const full = path.join(root, entry.name);
           try {
-            const info = await stat(full);
+            const lastUsedMs = await readIOSSimulatorBuildCacheLastUsedMs(full);
+            const info = lastUsedMs === null ? await stat(full) : null;
             // Re-check after the await: another build may have admitted this
-            // key while stat was in flight. The sync check-then-rm below is
-            // atomic (no yield), so a key admitted after this point cannot be
-            // removed under an active build.
+            // key while the marker/stat was in flight. The sync check-then-rm
+            // below is atomic (no yield), so a key admitted after this point
+            // cannot be removed under an active build.
             if (isSkip?.(entry.name)) return;
-            if (info.mtimeMs < deadline) {
+            const ageSourceMs = lastUsedMs ?? info?.mtimeMs;
+            if (ageSourceMs !== undefined && ageSourceMs < deadline) {
               // Atomically move the key aside before the (async, slow)
               // recursive delete. A build admitted during the delete then
               // recreates the key instead of racing the in-progress rm.
@@ -1508,7 +1545,8 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
   }
   /**
    * Cache keys that still have a live (uninstalled) artifact handle. The stale
-   * sweep must not remove these directories even when their mtime is old.
+   * sweep must not remove these directories even when their last-used marker
+   * is old.
    */
   function liveArtifactCacheKeys(): Set<string> {
     const keys = new Set<string>();
@@ -5709,9 +5747,13 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
             'spm',
             buildCacheKey,
           );
+          await Promise.all([
+            touchIOSSimulatorBuildCacheLastUsed(derivedDataPath),
+            touchIOSSimulatorBuildCacheLastUsed(clonedSourcePackagesDirPath),
+          ]).catch(() => undefined);
           // Reclaim long-idle per-worktree caches before building. The current
-          // cache is fresh, so it is never removed by this sweep. Failures are
-          // best-effort and must not block the build.
+          // cache is freshly marked, so it is never removed by this sweep.
+          // Failures are best-effort and must not block the build.
           await pruneStaleIOSSimulatorBuildCaches(
             [
               path.join(app.getPath('userData'), 'ios-simulator', 'projects'),
@@ -5857,6 +5899,10 @@ export function createIOSSimulatorHost(options: IOSSimulatorHostOptions = {}): I
               if (!artifactRegistered) void discardArtifactCopy(immutableAppPath);
             }
           } finally {
+            await Promise.all([
+              touchIOSSimulatorBuildCacheLastUsed(derivedDataPath),
+              touchIOSSimulatorBuildCacheLastUsed(clonedSourcePackagesDirPath),
+            ]).catch(() => undefined);
             activeBuildCacheKeys.delete(buildCacheKey);
             finishBuild(instance.instanceId, activeBuild);
           }

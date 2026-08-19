@@ -690,6 +690,95 @@ describe("IOSSimulatorProjectBuilder", () => {
     ).toBe(true);
   });
 
+  it("retries without the resolved-file pin only when Package.resolved is missing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    const workspace = path.join(root, "Example.xcworkspace");
+    const appPath = path.join(root, "derived", "Build", "Example.app");
+    await mkdir(workspace);
+    await mkdir(appPath, { recursive: true });
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args.includes("-list")) {
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("-showBuildSettings")) {
+          return {
+            stdout: JSON.stringify([
+              {
+                buildSettings: {
+                  ARCHS: "arm64",
+                  TARGET_BUILD_DIR: path.dirname(appPath),
+                  WRAPPER_NAME: "Example.app",
+                },
+              },
+            ]),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("-onlyUsePackageVersionsFromResolvedFile")) {
+          return {
+            stdout: "",
+            stderr:
+              "error: unable to load the resolved file: Package.resolved does not exist",
+            exitCode: 65,
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
+    await new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+      worktreeRoot: root,
+      derivedDataPath: path.join(root, "derived"),
+    });
+    const buildCalls = run.mock.calls.filter(([, args]) => args.includes("build"));
+    expect(buildCalls).toHaveLength(2);
+    expect(buildCalls[0]![1]).toContain("-onlyUsePackageVersionsFromResolvedFile");
+    expect(buildCalls[1]![1]).not.toContain(
+      "-onlyUsePackageVersionsFromResolvedFile",
+    );
+  });
+
+  it("does not retry when a compile failure only mentions Package.resolved", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    await mkdir(path.join(root, "Example.xcworkspace"));
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args.includes("-list")) {
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("build")) {
+          return {
+            stdout: "Compile Swift source files",
+            stderr:
+              "error: cannot find 'Resolved' in scope\nnote: see Package.resolved for locked versions",
+            exitCode: 65,
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
+    await expect(
+      new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+        worktreeRoot: root,
+        derivedDataPath: path.join(root, "derived"),
+      }),
+    ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
+    expect(run.mock.calls.filter(([, args]) => args.includes("build"))).toHaveLength(
+      1,
+    );
+  });
+
   it("pre-flights against the .app target when a scheme has multiple targets", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
     roots.push(root);
