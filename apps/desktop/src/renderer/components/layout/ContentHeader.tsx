@@ -93,8 +93,8 @@ export function ContentHeader({
   // 全屏态按钮回到 rail 内，也由 Sidebar 的既有洞覆盖。
   const needsRailChromeActionsHitHole = isMac && !isFullscreen && isSidebarRail;
 
-  // 设置页：Sidebar 隐藏且无折叠按钮占位 → header 退化为"隐形 chrome"
-  // （仅拖拽区 + Windows 窗口控制），不画下边框。
+  // 设置页：Sidebar 隐藏且无折叠按钮占位 → 不画下边框（用户决策 2026-06-11）。
+  // 返回 + 标题仍由 SettingsView 注入本 header，与聊天共用 46px 行高。
   const isInvisibleChrome = !sidebarVisible && !showCollapsedActions;
 
   // 空 header 隐藏（用户决策 2026-06-11）：技能中心 / 自动化 / 文件浏览 /

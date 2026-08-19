@@ -149,7 +149,14 @@ const OPENAI_PROVIDER: Provider = {
   // image_generation tool;用户另配 `openai-images` Platform key 时优先走 public
   // Images API。id 带 openai/ 前缀(跨供应商数据契约,防 first-wins 归属漂移);
   // 不声明 imageDefaults(xd 默认地位不动)。
-  imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }],
+  imageModels: [
+    {
+      id: 'openai/gpt-image-2',
+      name: 'GPT Image 2',
+      modalities: { input: ['text', 'image'], output: ['image'] },
+      officialDocs: 'https://platform.openai.com/docs/guides/image-generation',
+    },
+  ],
   routing: {
     codex: {
       upstream: 'https://chatgpt.com/backend-api/codex',

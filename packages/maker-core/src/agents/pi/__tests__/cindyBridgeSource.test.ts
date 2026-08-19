@@ -50,6 +50,65 @@ type ReviewSearchHelpers = {
   ) => Promise<string[]>;
 };
 
+function loadBashIsolationHelper(
+  pathImpl: typeof path,
+): (
+  env: Record<string, string | undefined>,
+  home: string | undefined,
+) => Record<string, string | undefined> {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function withoutPiSecrets');
+  const end = source.indexOf('function managedRipgrepPath');
+  if (start < 0 || end <= start) throw new Error('bash isolation helper was not found');
+  const executableSource = [
+    "const SECRET_ENV_NAMES = new Set(['PI_CODING_AGENT_DIR', 'CINDY_PI_PACKAGE_MANAGEMENT', 'CINDY_PI_BASH_PACKAGE_HOME']);",
+    source.slice(start, end),
+    '(globalThis as any).isolatedBashEnvironment = isolatedBashEnvironment;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = { path: pathImpl };
+  runInNewContext(compiled, context);
+  return context.isolatedBashEnvironment as (
+    env: Record<string, string | undefined>,
+    home: string | undefined,
+  ) => Record<string, string | undefined>;
+}
+
+function loadPiPackageMutationCommandHelper(): (input: unknown) => boolean {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const parserStart = source.indexOf('function readShellRedirectionTarget');
+  const parserEnd = source.indexOf('type BashPathCandidates');
+  const helperStart = source.indexOf('const PI_PACKAGE_MUTATION_SUBCOMMANDS');
+  const helperEnd = source.indexOf('function managedRipgrepPath');
+  const redirectionStart = source.indexOf('function bashLeadingRedirectionAt');
+  const redirectionEnd = source.indexOf('function bashAssignmentPrefixAt');
+  if (parserStart < 0 || parserEnd <= parserStart
+    || helperStart < 0 || helperEnd <= helperStart
+    || redirectionStart < 0 || redirectionEnd <= redirectionStart) {
+    throw new Error('Pi package mutation command helper was not found');
+  }
+  const executableSource = [
+    source.slice(parserStart, parserEnd),
+    source.slice(redirectionStart, redirectionEnd),
+    source.slice(helperStart, helperEnd),
+    '(globalThis as any).bashCommandMutatesPiPackages = bashCommandMutatesPiPackages;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {};
+  runInNewContext(compiled, context);
+  return context.bashCommandMutatesPiPackages as (input: unknown) => boolean;
+}
+
 function loadReviewSearchHelpers(
   workingDir: string,
   overrides: {
@@ -951,6 +1010,120 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on('tool_result'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("event.toolName !== 'bash'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
+  });
+
+  it('blocks Pi package mutations before bash while preserving ordinary commands', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('bashCommandMutatesPiPackages(nextParams)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME'",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('clean.PI_CODING_AGENT_DIR = bashPackageHome');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('delete clean.PI_PACKAGE_DIR');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      'delete process.env[PI_PACKAGE_MANAGEMENT_ENV]',
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('token: piPackageManagementToken');
+
+    const mutatesPiPackages = loadPiPackageMutationCommandHelper();
+    const commands = [
+      'pi install npm:context-mode',
+      "sh -c 'pi install npm:context-mode'",
+      'p=pi; "$p" install npm:context-mode',
+      '/opt/cindy/pi install npm:context-mode',
+      'C:/Cindy/pi.exe remove npm:context-mode',
+      'PI_CODING_AGENT_DIR=/tmp/elsewhere pi update npm:context-mode',
+      'env -u PI_CODING_AGENT_DIR pi install npm:context-mode',
+      'env PI_CODING_AGENT_DIR=/tmp/elsewhere /opt/cindy/pi update npm:context-mode',
+      'command -p pi remove npm:context-mode',
+      'exec -- /opt/cindy/pi install npm:context-mode',
+      'exec -a managed-pi /opt/cindy/pi update npm:context-mode',
+      'sudo -u root env -u PI_CODING_AGENT_DIR pi update npm:context-mode',
+      'sudo --user root /opt/cindy/pi remove npm:context-mode',
+      "bash -lc 'command pi remove npm:context-mode'",
+      "eval 'unset PI_CODING_AGENT_DIR; pi install npm:context-mode'",
+      "command eval 'pi update npm:context-mode'",
+      "builtin eval 'pi remove npm:context-mode'",
+      "exec eval 'pi install npm:context-mode'",
+      "env eval 'pi update npm:context-mode'",
+      "sudo env eval 'pi remove npm:context-mode'",
+      "bash -lc \"eval 'pi install npm:context-mode'\"",
+      "eval \"eval 'pi update npm:context-mode'\"",
+      "eval 'env -u PI_CODING_AGENT_DIR pi remove npm:context-mode'",
+      'eval "$DYNAMIC_COMMAND"',
+      'eval "$(printf pi) install npm:context-mode"',
+      "printf '%s\\0' '-u PI_CODING_AGENT_DIR pi install npm:context-mode' | xargs -0 env",
+      "printf '%s\\0' 'pi update npm:context-mode' | xargs -0 sh -c",
+      "printf '%s\\0' 'pi remove npm:context-mode' | parallel",
+      'find . -exec env -u PI_CODING_AGENT_DIR pi install npm:context-mode +',
+      '$(printf pi) install npm:context-mode',
+      'echo safe && pi install npm:context-mode',
+    ];
+    for (const command of commands) {
+      expect(mutatesPiPackages({ command }), command).toBe(true);
+      const isolate = loadBashIsolationHelper(path);
+      const env = isolate(
+        {
+          PI_CODING_AGENT_DIR: '/real/runtime-home',
+          PI_PACKAGE_DIR: '/cindy/managed-package-home',
+          CINDY_PI_PACKAGE_MANAGEMENT: 'secret',
+          COMMAND_CANARY: command,
+        },
+        '/isolated/bash-pi-home',
+      );
+      expect(env).toMatchObject({
+        PI_CODING_AGENT_DIR: '/isolated/bash-pi-home',
+        COMMAND_CANARY: command,
+      });
+      expect(env.PI_PACKAGE_DIR).toBeUndefined();
+      expect(env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain('/real/runtime-home');
+      expect(JSON.stringify(env)).not.toContain('/cindy/managed-package-home');
+    }
+
+    for (const command of [
+      'pi --version',
+      'pi help install',
+      'npm install context-mode',
+      'echo pi install npm:context-mode',
+      "printf '%s\\n' 'pi install npm:context-mode'",
+      "eval 'printf safe'",
+      "eval -- 'printf safe'",
+      "eval 'echo pi install npm:context-mode'",
+      "printf '%s\\0' safe | xargs -0 echo",
+      "printf '%s\\n' safe | parallel echo {}",
+      "find . -name '*.ts' -print",
+      'bash --version',
+      'source ./ordinary-script.sh',
+      '. ./ordinary-script.sh',
+      'command source ./ordinary-script.sh',
+      'builtin . ./ordinary-script.sh',
+      'bash ./ordinary-script.sh',
+      'cat ./pi',
+      'curl https://example.test/pi-install-notes',
+      'sudo whoami',
+      'ps aux',
+      'cat ~/.ssh/id_ed25519',
+      'rm -rf ./ordinary-worktree-directory',
+    ]) {
+      expect(mutatesPiPackages({ command }), command).toBe(false);
+    }
+    expect(mutatesPiPackages({})).toBe(false);
+    expect(mutatesPiPackages({ command: 42 })).toBe(false);
+
+    const isolateWindows = loadBashIsolationHelper(path.win32);
+    expect(
+      isolateWindows({ PI_CODING_AGENT_DIR: 'C:\\real' }, 'D:\\isolated').PI_CODING_AGENT_DIR,
+    ).toBe('D:\\isolated');
+    expect(() => isolateWindows({}, 'relative\\home')).toThrow(/unavailable/);
+  });
+
+  it('does not let Full Access bypass Cindy-managed extension confirmation', () => {
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "if (event.toolName === 'cindy_pi_extension') return;",
+    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
+      "if (permission.mode === 'bypassPermissions') return;",
+    );
   });
 
   it('checks the Review deny-by-default boundary before ordinary permission handling', () => {

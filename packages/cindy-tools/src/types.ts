@@ -277,7 +277,13 @@ export type CindyMediaCapability =
 /** 当前 Agent 专用的永久 media 工具与 Host 之间的稳定请求面。插件运行时代码不调用。 */
 export type CindyMediaToolRequest =
   | { action: 'list_models'; capability?: CindyMediaCapability }
-  | { action: 'prepare'; modelId: string; capability: CindyMediaCapability }
+  | {
+      action: 'prepare';
+      /** 精确执行来源；插件配置返回 providerId 时必须原样传入。 */
+      providerId?: string;
+      modelId: string;
+      capability: CindyMediaCapability;
+    }
   | { action: 'request'; invocationId: string; body: Record<string, unknown> }
   | { action: 'poll'; invocationId: string };
 

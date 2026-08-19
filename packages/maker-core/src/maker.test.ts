@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   mkdirSync,
   mkdtempSync,
+  promises as fsPromises,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -115,6 +116,35 @@ function createAgent(
     async dispose() {},
   } as unknown as BaseAgent;
 }
+
+describe('Maker Pi managed-package skill boundary', () => {
+  it('allows package skills only for previews and ordinary local Pi tasks', async () => {
+    const storage = createStorage();
+    const base = {
+      agentKind: 'pi' as const,
+      workDir: '/repo',
+      title: 'Pi',
+      model: 'm',
+    };
+    await storage.create({ id: 'local', ...base });
+    await storage.create({ id: 'review', ...base, reviewMode: true });
+    await storage.create({ id: 'remote', ...base, remoteHostId: 'ssh-host' });
+    const agent = createAgent(async () => {
+      throw new Error('not used');
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [] }));
+    const maker = new Maker({ agents: { pi: agent }, storage, logger: createLogger() });
+
+    await maker.listAgentSkills('pi', { workingDir: '/repo' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'local' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'review' });
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'remote' });
+
+    expect(vi.mocked(agent.listAgentSkills).mock.calls.map(([options]) => (
+      options.includeManagedPiPackages
+    ))).toEqual([true, true, false, false]);
+  });
+});
 
 function createHandle(args: {
   id: string;
@@ -1239,6 +1269,92 @@ describe('Maker session capabilities', () => {
 });
 
 describe('Maker Pi runtime skill status', () => {
+  it('keeps managed skills pinned to the active session launch snapshot', async () => {
+    const managedPath = '/managed/context-mode/SKILL.md';
+    const agent = createAgent(async (opts) => {
+      const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
+      handle.getRuntimeCapabilities = () => ({
+        sessionId: opts.sessionId,
+        capturedAt: '2026-08-16T00:00:00.000Z',
+        generation: 1,
+        status: 'loaded',
+        source: 'pi:get_commands',
+        commands: [],
+        managedPackageSkills: [
+          {
+            sourcePath: managedPath,
+            name: 'context-mode-old',
+            description: 'Launch-time name',
+            runtimeCommandName: 'skill:context-mode-old',
+          },
+          {
+            sourcePath: '/managed/unproven/SKILL.md',
+            name: 'unproven-at-launch',
+          },
+        ],
+      });
+      return handle;
+    }, 'pi');
+    agent.listAgentSkills = vi.fn(async () => ({
+      skills: [
+        {
+          kind: 'agent-skill' as const,
+          name: 'context-mode-renamed',
+          source: 'skill' as const,
+          scope: 'user' as const,
+          path: managedPath,
+          runtimeStatus: 'approved' as const,
+          runtimeCommandName: 'skill:context-mode-renamed',
+        },
+        {
+          kind: 'agent-skill' as const,
+          name: 'installed-after-start',
+          source: 'skill' as const,
+          scope: 'user' as const,
+          path: '/managed/new/SKILL.md',
+          runtimeStatus: 'approved' as const,
+          runtimeCommandName: 'skill:installed-after-start',
+        },
+      ],
+    }));
+    const maker = new Maker({
+      agents: { pi: agent },
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await maker.createSession({
+      id: 'managed-snapshot',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'm',
+    });
+
+    const active = await maker.listAgentSkills('pi', {
+      workingDir: '/repo',
+      sessionId: 'managed-snapshot',
+    });
+    const preview = await maker.listAgentSkills('pi', { workingDir: '/repo' });
+
+    expect(active.skills).toEqual([
+      expect.objectContaining({
+        name: 'context-mode-old',
+        path: managedPath,
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:context-mode-old',
+      }),
+      expect.objectContaining({
+        name: 'unproven-at-launch',
+        runtimeStatus: 'unknown',
+      }),
+    ]);
+    expect(active.skills.some((skill) => skill.name === 'installed-after-start')).toBe(false);
+    expect(preview.skills.map((skill) => skill.name)).toEqual([
+      'context-mode-renamed',
+      'installed-after-start',
+    ]);
+    expect(preview.skills.every((skill) => skill.runtimeStatus === 'approved')).toBe(true);
+  });
+
   it('fails partial project mappings closed without leaking them across live sessions', async () => {
     const agent = createAgent(async (opts) => {
       const handle = createHandle({ id: `pi-${opts.sessionId}`, agentKind: 'pi' });
@@ -1461,6 +1577,23 @@ describe('Maker Pi runtime skill status', () => {
       });
       expect(initial.skills[0]).toMatchObject({ runtimeStatus: 'loaded' });
 
+      const realRealpath = fsPromises.realpath.bind(fsPromises);
+      let delayed = false;
+      vi.spyOn(fsPromises, 'realpath').mockImplementation(async (...args) => {
+        if (!delayed) {
+          delayed = true;
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        return realRealpath(...args);
+      });
+      const slowFilesystem = await maker.listAgentSkills('pi', {
+        workingDir: repoRoot,
+        sessionId: 'source-snapshot',
+      });
+      expect(delayed).toBe(true);
+      expect(slowFilesystem.skills[0]).toMatchObject({ runtimeStatus: 'loaded' });
+      vi.restoreAllMocks();
+
       writeFileSync(path.join(sourcePath, 'assets', 'fixture.txt'), 'changed! asset\n');
       const changedAsset = await maker.listAgentSkills('pi', {
         workingDir: repoRoot,
@@ -1486,6 +1619,7 @@ describe('Maker Pi runtime skill status', () => {
       expect(replacedDirectory.skills[0]).toMatchObject({ runtimeStatus: 'discovered' });
       expect(replacedDirectory.errors?.[0]?.message).toContain('restart the session');
     } finally {
+      vi.restoreAllMocks();
       rmSync(root, { recursive: true, force: true });
     }
   });

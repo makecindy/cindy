@@ -191,6 +191,7 @@ import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions'
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
+import { formatRunningTokenCount } from './lib/runningTokenUsage';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -5049,10 +5050,9 @@ function RunningStatusBar({
   // code's CLI status line ticks. The hook re-anchors from the displayed value
   // on every target change, so rapid updates blend without snap-back.
   const animatedTokens = useAnimatedNumber(tokenUsage, 400);
-  const tokenText =
-    animatedTokens >= 1000
-      ? `${(animatedTokens / 1000).toFixed(1)}k tokens`
-      : `${animatedTokens} tokens`;
+  const tokenText = t('chat.messageActionBar.turnTokens', {
+    tokens: formatRunningTokenCount(animatedTokens, visible),
+  });
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个

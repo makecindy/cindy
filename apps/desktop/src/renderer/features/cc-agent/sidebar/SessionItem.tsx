@@ -93,7 +93,11 @@ import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
-import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import { useAgentIslandActivity } from '@/state/agentIslandActivity';
+import {
+  projectSidebarSessionActivity,
+  resolveSidebarRightStatus,
+} from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import {
@@ -392,32 +396,23 @@ export const SessionItem = memo(function SessionItem({
   // 通过 SessionAttentionUrgencyContext 由上游注入,避免误把失败的 automation 涂成 Completed。
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
+  const islandActivity = useAgentIslandActivity(session.id);
   // device-link 远程会话行:本地 attention/running 链路对被控端后台会话是盲区,状态改由
   // 被控端灵动岛 relay 的活动镜像驱动(remoteSessionActivityStore,按行精准订阅;本地
   // 会话恒 undefined 零开销)。镜像只保留活跃态与未读终态,映射与本地五档同一张色表。
   const remoteActivity = useRemoteSessionActivity(session.id);
-  const remoteRightStatus =
-    remoteActivity == null
-      ? null
-      : remoteActivity.phase === 'error'
-        ? ('error' as const)
-        : remoteActivity.phase === 'needs-interaction'
-          ? ('awaiting' as const)
-          : remoteActivity.phase === 'running'
-            ? ('running' as const)
-            : ('done' as const);
-  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
-  // 状态槽,图标颜色不会刷新。只并入 phase=running,与折叠 rail 的 remoteLampOf
-  // 以及本地 pending-prompt 口径一致:needs-interaction 继续由右侧 awaiting 表达。
-  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
-  const rightStatusKind =
-    remoteRightStatus ??
-    resolveSidebarRightStatus({
-      attentionKind,
-      isUrgentFromContext,
-      isRunning,
-      hasAttentionNotification,
-    });
+  const sessionActivity = projectSidebarSessionActivity({
+    sessionId: session.id,
+    title: session.title,
+    recordStatus: session.status,
+    liveActivity: remoteActivity ?? islandActivity,
+    attentionKind,
+    isUrgentFromContext,
+    isRunning,
+    hasAttentionNotification,
+  });
+  const leftIconRunning = sessionActivity.currentTurnActive === true;
+  const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const showRightStatus = rightStatusKind !== 'time';
   const remoteIconKind = session.deviceLinkDeviceId
     ? 'device-link'

@@ -18,6 +18,7 @@
 
 import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
+import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 
 export { leadingSlashInvocation };
 
@@ -32,8 +33,11 @@ export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_
 
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
-    && command.scope === 'repo'
-    && command.runtimeStatus === 'discovered';
+    && (
+      (command.scope === 'repo' && command.runtimeStatus === 'discovered')
+      || command.runtimeStatus === 'unknown'
+      || command.runtimeStatus === 'failed'
+    );
 }
 
 export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): boolean {
@@ -292,13 +296,23 @@ export function filterSlashCommands(
 export async function loadAllCommands(
   agentKind: AgentKind,
   workingDir: string | null | undefined,
-  opts?: { forceReload?: boolean; skipAgentSkills?: boolean; sessionId?: string },
+  opts?: {
+    forceReload?: boolean;
+    skipAgentSkills?: boolean;
+    sessionId?: string;
+    allowManagedPiPackagePreview?: boolean;
+    onPiRuntimeStatus?: (status: PiPackageCommandRuntimeStatus) => void;
+  },
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
   const api = window.electronAPI.maker;
   // 用 unknown[] 收口三源的不同原生形状(隧道返 unknown、本地返各自命令/技能类型),
   // 末尾统一 `as UnifiedCommand[]`(与改造前同款收口)。
-  type CmdRes = { success: boolean; commands?: unknown[] };
+  type CmdRes = {
+    success: boolean;
+    commands?: unknown[];
+    runtimeStatus?: PiPackageCommandRuntimeStatus;
+  };
   type SkillRes = { success: boolean; skills?: unknown[] };
 
   // device-link「以被控端为准」:agent-builtin / agent-skill 是被控端**该会话**的能力,远程时经隧道
@@ -307,8 +321,25 @@ export async function loadAllCommands(
   const desktopP: Promise<CmdRes> = api.listDesktopCommands().catch(() => ({ success: false }));
   const builtinP: Promise<CmdRes> = (
     deviceId
-      ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [agentKind]) as Promise<CmdRes>)
-      : api.listAgentCommands(agentKind)
+      ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [
+          agentKind,
+          ...(
+            opts?.sessionId || opts?.allowManagedPiPackagePreview !== undefined
+              ? [{
+                  ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+                  ...(opts?.allowManagedPiPackagePreview !== undefined
+                    ? { allowManagedPiPackagePreview: opts.allowManagedPiPackagePreview }
+                    : {}),
+                }]
+              : []
+          ),
+        ]) as Promise<CmdRes>)
+      : api.listAgentCommands(agentKind, {
+          ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+          ...(opts?.allowManagedPiPackagePreview !== undefined
+            ? { allowManagedPiPackagePreview: opts.allowManagedPiPackagePreview }
+            : {}),
+        })
   ).catch(() => ({ success: false }));
   const shouldLoadSkills = !opts?.skipAgentSkills;
   const skillParams = {
@@ -328,6 +359,9 @@ export async function loadAllCommands(
     : Promise.resolve({ success: true, skills: [] });
 
   const [desktopRes, builtinRes, skillRes] = await Promise.all([desktopP, builtinP, skillP]);
+  if (agentKind === 'pi' && builtinRes.runtimeStatus) {
+    opts?.onPiRuntimeStatus?.(builtinRes.runtimeStatus);
+  }
 
   const desktop = (desktopRes.success && desktopRes.commands ? desktopRes.commands : []) as UnifiedCommand[];
   const agentBuiltin = (builtinRes.success && builtinRes.commands ? builtinRes.commands : []) as UnifiedCommand[];
@@ -388,6 +422,8 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   const current = params.commands.find(
     (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
   );
+  const mayStillBeLoading = params.prepareRuntime !== undefined
+    || (current !== undefined && isSlashCommandUnavailable(current));
   const shouldPrepareRuntime = !current
     || current.kind === 'desktop'
     || isSlashCommandUnavailable(current);
@@ -401,13 +437,13 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   }
   let result = await reconcilePiRuntimeCommandForDispatch(params);
   for (const delayMs of retryDelaysMs) {
-    const shouldRetry = result.command !== undefined && (
-      isSlashCommandUnavailable(result.command)
-      || (
-        result.command.kind === 'desktop'
-        && hasShadowedUnavailableSkill(result.commands, params.commandName)
-      )
-    );
+    const shouldRetry = result.command === undefined
+      ? mayStillBeLoading
+      : isSlashCommandUnavailable(result.command)
+        || (
+          result.command.kind === 'desktop'
+          && hasShadowedUnavailableSkill(result.commands, params.commandName)
+        );
     if (!shouldRetry) return result;
     await sleep(delayMs);
     result = await reconcilePiRuntimeCommandForDispatch({

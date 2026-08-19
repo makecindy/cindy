@@ -19,6 +19,7 @@ export type {
   RoutingDescriptor,
   ModelCost,
   CatalogModel,
+  ProviderMediaModel,
   Provider,
   Catalog,
   CustomProviderConfig,
