@@ -194,52 +194,107 @@ export function probePartitionedWindowsPathKinds(
   candidates: readonly string[],
   networkDriveLetters: ReadonlySet<string>,
   probeBatch: (batch: readonly string[]) => ReadonlyMap<string, WindowsPathKind>,
+  probeNetworkBatches: (
+    batches: readonly (readonly string[])[],
+  ) => ReadonlyMap<string, WindowsPathKind> = (batches) => probeBatch(batches.flat()),
 ): Map<string, WindowsPathKind> {
   const { local, network } = partitionWindowsProbeCandidates(candidates, networkDriveLetters);
   const kinds = new Map<string, WindowsPathKind>();
-  const localBatches = new Map<string, string[]>();
-  for (const candidate of local) {
-    const root = normalizedWindowsPath(path.win32.parse(candidate).root);
-    const batch = localBatches.get(root);
-    if (batch) batch.push(candidate);
-    else localBatches.set(root, [candidate]);
-  }
-  for (const batch of [...localBatches.values(), network]) {
-    if (batch.length === 0) continue;
+  const batchesByRoot = (paths: readonly string[]): string[][] => {
+    const batches = new Map<string, string[]>();
+    for (const candidate of paths) {
+      const root = normalizedWindowsPath(path.win32.parse(candidate).root);
+      const batch = batches.get(root);
+      if (batch) batch.push(candidate);
+      else batches.set(root, [candidate]);
+    }
+    return [...batches.values()];
+  };
+  for (const batch of batchesByRoot(local)) {
     for (const [candidate, kind] of probeBatch(batch)) {
+      kinds.set(candidate, kind);
+    }
+  }
+  const networkBatches = batchesByRoot(network);
+  if (networkBatches.length > 0) {
+    for (const [candidate, kind] of probeNetworkBatches(networkBatches)) {
       kinds.set(candidate, kind);
     }
   }
   return kinds;
 }
 
-function defaultProbeWindowsPathKindsBatch(
+function defaultProbeWindowsPathKindBatches(
   powershell: string,
-  candidates: readonly string[],
+  batches: readonly (readonly string[])[],
 ): ReadonlyMap<string, WindowsPathKind> {
-  if (candidates.length === 0) return new Map();
-  const script = [
+  const nonEmptyBatches = batches.filter((batch) => batch.length > 0);
+  if (nonEmptyBatches.length === 0) return new Map();
+  const inputPrelude = [
     '$stdin = [Console]::OpenStandardInput()',
     '$memory = New-Object System.IO.MemoryStream',
     '$stdin.CopyTo($memory)',
     '$json = [Text.Encoding]::UTF8.GetString($memory.ToArray())',
-    '$paths = @($json | ConvertFrom-Json)',
+  ];
+  const probeLines = (outputLine: string): string[] => [
     'foreach ($candidate in $paths) {',
     '  try {',
     '    $item = Get-Item -LiteralPath ([string]$candidate) -Force -ErrorAction Stop',
     "    $kind = if ($item.PSIsContainer) { 'D' } else { 'F' }",
     '    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$candidate))',
-    '    [Console]::Out.WriteLine($kind + "`t" + $encoded)',
+    outputLine,
     '  } catch {}',
     '}',
+  ];
+  const script = nonEmptyBatches.length === 1 ? [
+    ...inputPrelude,
+    '$paths = @($json | ConvertFrom-Json)',
+    ...probeLines('    [Console]::Out.WriteLine($kind + "`t" + $encoded)'),
+  ].join('\n') : [
+    ...inputPrelude,
+    '$groups = @($json | ConvertFrom-Json)',
+    "$probeScript = @'",
+    'param([object[]]$paths)',
+    ...probeLines('    $kind + "`t" + $encoded'),
+    "'@",
+    '$operations = New-Object System.Collections.ArrayList',
+    'foreach ($group in $groups) {',
+    '  $shell = [PowerShell]::Create()',
+    '  [void]$shell.AddScript($probeScript)',
+    '  [void]$shell.AddArgument(@($group.paths))',
+    '  $async = $shell.BeginInvoke()',
+    '  [void]$operations.Add([PSCustomObject]@{ Shell = $shell; Async = $async })',
+    '}',
+    '$clock = [Diagnostics.Stopwatch]::StartNew()',
+    `$budgetMs = ${WINDOWS_PATH_PROBE_TIMEOUT_MS - 250}`,
+    'while ($operations.Count -gt 0 -and $clock.ElapsedMilliseconds -lt $budgetMs) {',
+    '  $completed = @($operations | Where-Object { $_.Async.IsCompleted })',
+    '  if ($completed.Count -eq 0) {',
+    '    Start-Sleep -Milliseconds 10',
+    '    continue',
+    '  }',
+    '  foreach ($operation in $completed) {',
+    '    try {',
+    '      foreach ($line in $operation.Shell.EndInvoke($operation.Async)) {',
+    '        [Console]::Out.WriteLine([string]$line)',
+    '      }',
+    '    } catch {} finally {',
+    '      $operation.Shell.Dispose()',
+    '      [void]$operations.Remove($operation)',
+    '    }',
+    '  }',
+    '}',
   ].join('\n');
+  const input = nonEmptyBatches.length === 1
+    ? nonEmptyBatches[0]
+    : nonEmptyBatches.map((paths) => ({ paths }));
   try {
     const output = execFileSync(
       powershell,
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
       {
         encoding: 'utf8',
-        input: Buffer.from(JSON.stringify(candidates), 'utf8'),
+        input: Buffer.from(JSON.stringify(input), 'utf8'),
         stdio: ['pipe', 'pipe', 'ignore'],
         timeout: WINDOWS_PATH_PROBE_TIMEOUT_MS,
         windowsHide: true,
@@ -247,10 +302,17 @@ function defaultProbeWindowsPathKindsBatch(
     );
     return decodeWindowsPathKindLines(output);
   } catch (error) {
-    // `execFileSync` attaches partial stdout to timeout errors. Keep records
-    // emitted before a disconnected share or mapped drive blocked this batch.
+    // The shared hard timeout stops any blocked runspaces. Keep records from
+    // other roots that completed before the coordinator was terminated.
     return decodeWindowsPathKindsFromProbeError(error);
   }
+}
+
+function defaultProbeWindowsPathKindsBatch(
+  powershell: string,
+  candidates: readonly string[],
+): ReadonlyMap<string, WindowsPathKind> {
+  return defaultProbeWindowsPathKindBatches(powershell, [candidates]);
 }
 
 /**
@@ -269,6 +331,7 @@ function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMa
     absoluteCandidates,
     defaultNetworkDriveLetters(powershell),
     (batch) => defaultProbeWindowsPathKindsBatch(powershell, batch),
+    (batches) => defaultProbeWindowsPathKindBatches(powershell, batches),
   );
 }
 

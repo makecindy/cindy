@@ -144,6 +144,25 @@ describe('Windows Git/PATH helpers', () => {
     ]);
   });
 
+  it('keeps a later network Git result when an earlier network root times out', () => {
+    const offlineGit = '\\\\offline-server\\Git\\cmd\\git.exe';
+    const mappedGit = 'Z:\\PortableGit\\cmd\\git.exe';
+    const networkBatches: string[][][] = [];
+
+    const kinds = probePartitionedWindowsPathKinds(
+      [offlineGit, mappedGit],
+      new Set(['Z']),
+      () => new Map(),
+      (batches) => {
+        networkBatches.push(batches.map((batch) => [...batch]));
+        return new Map([[mappedGit, 'file']]);
+      },
+    );
+
+    expect(networkBatches).toEqual([[[offlineGit], [mappedGit]]]);
+    expect(kinds).toEqual(new Map([[mappedGit, 'file']]));
+  });
+
   it('keeps a valid HKLM Git root after an earlier offline HKCU root', () => {
     const offlineRoot = '\\\\offline-server\\Git';
     const localRoot = 'C:\\Program Files\\Git';
