@@ -57,7 +57,11 @@ import {
 } from './authRefreshFailure';
 import { awaitWithStartupTimeout } from './authStartupGate';
 import { syncCanaryFlagAfterAuth } from './canaryFlagSync';
-import { maybeEnableXdOrgBetaDefault } from './xdOrgBetaDefault';
+import {
+  maybeEnableNonXdOrgBetaDefault,
+  maybeEnableXdOrgBetaDefault,
+  shouldAttemptOrgBetaDefault,
+} from './xdOrgBetaDefault';
 import { canRestoreAuthSessionForMembership } from './authRealmPolicy';
 import {
   createAuthBrowserAuthorizationSlot,
@@ -1417,6 +1421,11 @@ function scheduleCanaryFlagSync(input: {
     persistFlag: canaryFlagStore.sync,
   })
     .then((outcome) => {
+      scheduleNonXdOrgBetaDefault({
+        expectedAuthEpoch: input.expectedAuthEpoch,
+        expectedUserId: input.expectedUserId,
+        defaultEnableBeta: outcome.defaultEnableBeta,
+      });
       if (outcome.kind === 'synced') {
         log.info('canary feature flag synced: isCanary=%s', outcome.isCanary);
         // feature-flags 在登录态落地后异步返回；立即推送新快照，让 renderer
@@ -1495,6 +1504,56 @@ function scheduleXdOrgBetaDefault(input: {
     .catch((err) => {
       log.error('xd org beta channel default threw unexpectedly', err);
     });
+}
+
+/** feature-flags 返回后，仅为非 xd 组织补一次设备级 beta 默认值。 */
+function scheduleNonXdOrgBetaDefault(input: {
+  expectedAuthEpoch: number;
+  expectedUserId: string;
+  defaultEnableBeta?: boolean;
+}): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  const user = currentUser;
+  if (!user) return;
+  const request = {
+    expectedAuthEpoch: input.expectedAuthEpoch,
+    expectedUserId: input.expectedUserId,
+    user: {
+      membershipKind: user.membershipKind,
+      orgName: user.orgName,
+      orgSlug: decodeAccessTokenOrgSlug(accessToken),
+    },
+  } as const;
+  if (
+    shouldAttemptOrgBetaDefault({
+      user: request.user,
+      defaultEnableBeta: input.defaultEnableBeta,
+    }) !== 'flag-enable'
+  ) {
+    return;
+  }
+  void maybeEnableNonXdOrgBetaDefault(request, {
+    readCurrentAuthIdentity: () => ({
+      authEpoch: authStateEpoch,
+      userId: currentUser?.id ?? null,
+    }),
+    readChannelState: () => ({
+      enableBeta: readUpdateChannelSettings().enableBeta,
+      isCustomized: isEnableBetaUserCustomized(),
+    }),
+    probeBetaManifest,
+    enableBeta: () =>
+      enableUncustomizedBetaChannel(
+        () =>
+          authStateEpoch === input.expectedAuthEpoch && currentUser?.id === input.expectedUserId,
+      ),
+  })
+    .then((outcome) => {
+      if (outcome.kind === 'enabled') log.info('feature-flag beta channel default enabled');
+      else if (outcome.reason === 'stale-auth') log.debug('discarded stale non-xd beta default');
+      else log.debug('non-xd beta channel default skipped: reason=%s', outcome.reason);
+    })
+    .catch((err) => log.error('non-xd beta channel default threw unexpectedly', err));
 }
 
 /**
