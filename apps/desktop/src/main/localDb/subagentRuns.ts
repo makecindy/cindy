@@ -269,23 +269,46 @@ function activeDurableRun(): SQL {
 }
 
 /**
- * Row visibility against the `/clear` boundary.
+ * ## Subagent row visibility: the whole boundary table
  *
- * `/clear` ends the *message history*; it does not end background work. The
- * parent session takes an ordinary navigation close, so a durable PI Subagent's
- * detached runner deliberately keeps running — it keeps spending credentials,
- * calling tools and writing the workspace. Filtering its row out by `startedAt`
- * hid the entire Subagents tab along with the only stop entry the user has, and
- * PI Full Access has no OS sandbox underneath it.
+ * Four boundaries can hide a run, and they do *not* all mean the same thing.
+ * `/clear` and Rewind withdraw **conversation**; neither of them stops work.
+ * Both leave a durable PI Subagent's detached runner deliberately running — it
+ * keeps spending credentials, calling tools and writing the workspace — so
+ * hiding its row takes away the Subagents tab and the only stop entry the user
+ * has, over a process that PI Full Access runs with no OS sandbox underneath.
  *
- * So a still-active durable run is exempt from the boundary. The exemption ends
- * with the run: once it reaches a terminal state the row is archived behind the
- * clear boundary like any other history, which is what clearing history means.
- * The durable transcript stays on disk either way.
+ * | boundary                     | applies to        | live durable run | terminal run |
+ * | ---------------------------- | ----------------- | ---------------- | ------------ |
+ * | `/clear` (`sessions.clearedAt` vs `startedAt`) | row  | exempt | hidden |
+ * | Rewind (`subagentRuns.rewindAt`)               | row  | exempt | hidden |
+ * | parent `tool_use` rewound / absent             | parent msg | exempt | hidden |
+ * | parent `tool_use` before `clearedAt`           | parent msg | exempt | hidden |
+ * | deletion (`subagentRuns.deletedAt`)            | row  | **hidden** | hidden |
+ *
+ * The single rule behind the first four: *a run that is still doing work stays
+ * reachable; once it reaches a terminal state it is archived behind whichever
+ * boundary applies*, because at that point it is history and history is exactly
+ * what the user withdrew. The durable transcript stays on disk either way.
+ *
+ * Deletion is deliberately not on the exemption list — that path is real
+ * cleanup and owns stopping the child itself.
  */
 function clearBoundary(clearedAt: number | null): SQL[] {
   if (clearedAt === null) return [];
   return [or(gt(subagentRuns.startedAt, clearedAt), activeDurableRun())!];
+}
+
+/**
+ * Rewind's half of the table above; symmetric with {@link clearBoundary}.
+ *
+ * The rewind transaction stamps `rewind_at` on the run (by parent tool call, or
+ * by `started_at` for a parentless tail) in the same commit that stamps the
+ * messages. PI's rewind only re-cuts the parent session tree, so the detached
+ * runner survives it exactly as it survives `/clear`.
+ */
+function rewindBoundary(): SQL[] {
+  return [or(isNull(subagentRuns.rewindAt), activeDurableRun())!];
 }
 
 function initialCapabilities(update: AgentTaskUpdate): Readonly<SubagentCapabilities> {
@@ -452,7 +475,7 @@ async function matchingRow(
   const visibility = [
     eq(subagentRuns.sessionId, sessionId),
     eq(subagentRuns.provider, provider),
-    isNull(subagentRuns.rewindAt),
+    ...rewindBoundary(),
     isNull(subagentRuns.deletedAt),
     ...clearBoundary(clearedAt),
   ];
@@ -737,7 +760,7 @@ export async function persistSubagentTaskUpdate(
     .where(
       and(
         eq(subagentRuns.sessionId, sessionId),
-        isNull(subagentRuns.rewindAt),
+        ...rewindBoundary(),
         isNull(subagentRuns.deletedAt),
         ...clearBoundary(session.clearedAt),
       ),
@@ -788,7 +811,7 @@ export async function listVisibleSubagentObservationIdentities(
     .where(
       and(
         eq(subagentRuns.sessionId, sessionId),
-        isNull(subagentRuns.rewindAt),
+        ...rewindBoundary(),
         isNull(subagentRuns.deletedAt),
         ...clearBoundary(session.clearedAt),
       ),
@@ -868,11 +891,16 @@ function parentVisible(
   clearedAt: number | null,
 ): boolean {
   if (!row.parentToolUseId) return true;
+  // A live durable runner clears both halves of this check at once — see the
+  // boundary table on `clearBoundary`. Its launch tool call is by definition
+  // inside the range a rewind withdraws or a clear archives, so leaving either
+  // half in force here would hide the row again one step after the row-level
+  // exemption let it through.
+  if (isActiveDurableRow(row)) return true;
   const createdAt = parentCreatedAt.get(row.parentToolUseId);
-  // Rewound or absent: hidden regardless of what the run is doing.
+  // Rewound or absent: hidden regardless of which boundary got there first.
   if (createdAt === undefined) return false;
-  if (clearedAt === null || createdAt > clearedAt) return true;
-  return isActiveDurableRow(row);
+  return clearedAt === null || createdAt > clearedAt;
 }
 
 interface SubagentListCursor {
@@ -924,7 +952,7 @@ export async function listSubagentRuns(
   const pageSize = Math.min(MAX_LIST_PAGE_SIZE, Math.max(1, requestedLimit));
   const baseConditions = [
     eq(subagentRuns.sessionId, sessionId),
-    isNull(subagentRuns.rewindAt),
+    ...rewindBoundary(),
     isNull(subagentRuns.deletedAt),
     ...(options.provider ? [eq(subagentRuns.provider, options.provider)] : []),
   ];
@@ -1004,7 +1032,7 @@ async function resolveDetailRow(
   const visibility = [
     eq(subagentRuns.sessionId, sessionId),
     eq(subagentRuns.provider, provider),
-    isNull(subagentRuns.rewindAt),
+    ...rewindBoundary(),
     isNull(subagentRuns.deletedAt),
     ...clearBoundary(clearedAt),
   ];

@@ -807,8 +807,19 @@ describe('durable Subagent runs', () => {
     expect(first).toMatchObject({ created: true });
     rawDb.prepare('UPDATE messages SET rewind_at = 2500 WHERE id = ?').run('pi-tool-use');
     rawDb.prepare('UPDATE subagent_runs SET rewind_at = 2500 WHERE id = ?').run(first!.runId);
-    await expect(persistSubagentTaskUpdate('session-1', event)).resolves.toBeNull();
+
+    // A rewind withdraws the conversation, not the detached runner, so this
+    // still-running generation now reconciles in place rather than being
+    // refused (see the boundary table in subagentRuns.ts). What this test has
+    // always guarded is unchanged and is the part that matters here: every
+    // Fleet read must land on the *same* row instead of inserting a hidden
+    // duplicate, and the rewind stamp must survive the write.
+    await expect(persistSubagentTaskUpdate('session-1', event))
+      .resolves.toMatchObject({ runId: first!.runId, created: false });
     expect(rawDb.prepare('SELECT id FROM subagent_runs').all()).toHaveLength(1);
+    expect(
+      rawDb.prepare('SELECT rewind_at FROM subagent_runs WHERE id = ?').get(first!.runId),
+    ).toEqual({ rewind_at: 2500 });
   });
 
   it('does not recreate a diagnostic for a rewound PI parent tool call', async () => {
@@ -1241,6 +1252,130 @@ describe('durable Subagent runs', () => {
       }, { kind: 'spawn', providerRunIds: ['123e4567-e89b-42d3-a456-426614174010'] })))
         .resolves.toBeNull();
       expect(rawDb.prepare('SELECT id FROM subagent_runs').all()).toEqual([]);
+    });
+  });
+
+  // Rewind re-cuts the parent session tree; PI's rewind does not stop the
+  // detached runner. The commit stamps rewind_at on the messages *and* the run,
+  // so without an exemption the list, the detail view and the only stop entry
+  // all disappear while the child keeps spending credentials.
+  describe('a durable runner that outlives Rewind', () => {
+    const REWOUND_AT = 2500;
+
+    /** Launched at 1000, i.e. inside the branch the rewind withdraws. */
+    async function startDurableRun(): Promise<string> {
+      insertMessage('rw-tool-use', 'tool_use', '{}', 'rw-parent', 900);
+      const created = await persistSubagentTaskUpdate('session-1', observed({
+        provider: 'pi',
+        taskId: 'rw-parent',
+        parentToolUseId: 'rw-parent',
+        taskType: 'pi_subagent',
+        status: 'running',
+        title: 'Long background job',
+        createdAt: '1970-01-01T00:00:01.000Z',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }, { kind: 'spawn', providerRunIds: ['123e4567-e89b-42d3-a456-426614174011'] }));
+      expect(created).toMatchObject({ created: true });
+      return created!.runId;
+    }
+
+    /** What the rewind transaction writes: the messages and the run together. */
+    function rewind(runId: string, opts: { row?: boolean; parent?: boolean } = {}): void {
+      if (opts.parent !== false) {
+        rawDb.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?').run(REWOUND_AT, 'rw-tool-use');
+      }
+      if (opts.row !== false) {
+        rawDb.prepare('UPDATE subagent_runs SET rewind_at = ? WHERE id = ?').run(REWOUND_AT, runId);
+      }
+    }
+
+    function durableFrame(
+      status: 'running' | 'completed',
+      updatedAt: string,
+      extra: Record<string, unknown> = {},
+    ): Record<string, unknown> {
+      return observed({
+        provider: 'pi',
+        taskId: 'rw-parent',
+        parentToolUseId: 'rw-parent',
+        taskType: 'pi_subagent',
+        status,
+        createdAt: '1970-01-01T00:00:01.000Z',
+        updatedAt,
+        ...extra,
+      }, { kind: status === 'completed' ? 'terminal' : 'progress' });
+    }
+
+    it('stays listable and openable while it runs', async () => {
+      const runId = await startDurableRun();
+      rewind(runId);
+
+      expect((await listSubagentRuns('session-1'))?.runs.map((run) => run.id)).toEqual([runId]);
+      const detail = await getSubagentRunDetail('session-1', 'pi', runId);
+      expect(detail).toMatchObject({ status: 'running', title: 'Long background job' });
+      expect(detail?.capabilities.stop).toBe(true);
+    });
+
+    it('stays visible when only its parent message was rewound', async () => {
+      // The parent-visibility half on its own: the row carries no stamp, so
+      // this isolates it from the row-level rewindAt exemption.
+      const runId = await startDurableRun();
+      rewind(runId, { row: false });
+
+      expect((await listSubagentRuns('session-1'))?.runs.map((run) => run.id)).toEqual([runId]);
+      expect(await getSubagentRunDetail('session-1', 'pi', runId)).toMatchObject({
+        status: 'running',
+      });
+    });
+
+    it('keeps accepting status writes without clearing the rewind stamp', async () => {
+      const runId = await startDurableRun();
+      rewind(runId);
+
+      const progressed = await persistSubagentTaskUpdate(
+        'session-1',
+        durableFrame('running', '1970-01-01T00:00:04.000Z', { summary: 'still working' }),
+      );
+
+      expect(progressed).toMatchObject({ runId, created: false });
+      expect(await getSubagentRunDetail('session-1', 'pi', runId)).toMatchObject({
+        status: 'running',
+        summary: 'still working',
+      });
+      // The projection writes no visibility column, so the withdrawal survives
+      // and takes effect again the moment the run goes terminal.
+      expect(
+        rawDb.prepare('SELECT rewind_at FROM subagent_runs WHERE id = ?').get(runId),
+      ).toEqual({ rewind_at: REWOUND_AT });
+    });
+
+    it('archives itself behind the rewind boundary once it finishes', async () => {
+      const runId = await startDurableRun();
+      rewind(runId);
+
+      const finished = await persistSubagentTaskUpdate(
+        'session-1',
+        durableFrame('completed', '1970-01-01T00:00:05.000Z', { summary: 'done' }),
+      );
+
+      expect(finished).toMatchObject({ runId, created: false });
+      expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
+      expect(await getSubagentRunDetail('session-1', 'pi', runId)).toBeNull();
+      expect(
+        rawDb.prepare('SELECT status, rewind_at FROM subagent_runs WHERE id = ?').get(runId),
+      ).toEqual({ status: 'completed', rewind_at: REWOUND_AT });
+    });
+
+    it('does not exempt a durable run that had already finished before the rewind', async () => {
+      const runId = await startDurableRun();
+      await persistSubagentTaskUpdate(
+        'session-1',
+        durableFrame('completed', '1970-01-01T00:00:02.000Z', { summary: 'finished earlier' }),
+      );
+      rewind(runId);
+
+      expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
+      expect(await getSubagentRunDetail('session-1', 'pi', runId)).toBeNull();
     });
   });
 
