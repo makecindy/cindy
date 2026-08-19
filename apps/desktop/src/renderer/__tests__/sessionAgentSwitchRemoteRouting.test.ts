@@ -203,6 +203,48 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
     ).toBe('apply-intent');
   });
 
+  it('回归:deferred 登记的**自己的广播回声**推进了修订号 → 值仍匹配即照常登记意图', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // main 先广播 sessions:patched(带 intent)、后返回 invoke reply,push 处理必然先于 ack ——
+    // 只看修订号的话,每一次正常登记都会被自己的回声判成 stale,于是乐观呈现 / 草稿同步 / 收藏
+    // 锚点全不落,而 main 的 pendingSwitches 里意图还在,下一条消息照样切引擎
+    // (Chris 2026-08-19 实测「会话内换引擎整条链都不生效」的主根因)。
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        registeredIntentMatchesCurrent: true,
+        freshness: { ...fresh, intentRevNow: 9 },
+      }),
+    ).toBe('apply-intent');
+  });
+
+  it('deferred:修订号变且当前值**不是**本次登记的那一份 → 真被外部超车,丢弃', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        registeredIntentMatchesCurrent: false,
+        freshness: { ...fresh, intentRevNow: 9 },
+      }),
+    ).toBe('discard');
+  });
+
+  it('deferred:值匹配也压不过写序号守卫(用户又点了一次)', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // 值相等只回答「当前权威值是不是我要的那一份」;「用户已点选、新的切换还在途」由写序号
+    // 独立覆盖,两者不能互相顶替。
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        registeredIntentMatchesCurrent: true,
+        freshness: { ...fresh, writeSeqNow: 4, intentRevNow: 9 },
+      }),
+    ).toBe('discard');
+  });
+
   it('回归:已有跨引擎意图 → 选回当前引擎模型 → 清除回流先到,仍须走同引擎重选', async () => {
     const { resolveAgentSwitchAckAction } = await load();
     // 被控端处理同引擎 no-op 时会清 pending 意图并广播,回流推进修订号 —— 那是本次调用
@@ -277,6 +319,8 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
 
   it('外部权威更新抢先 → 写意图值的分支仍然丢弃(不回退 stale-ack 防护)', async () => {
     const { resolveAgentSwitchAckAction } = await load();
+    // 不传 registeredIntentMatchesCurrent = 调用方拿不到「当前值是不是本次登记那一份」的判据,
+    // 此时修订号变化一律 fail-closed(2026-08-19 新增的回声出口是 opt-in,不放宽这条默认)。
     const superseded = { ...fresh, intentRevNow: 9 };
     expect(
       resolveAgentSwitchAckAction({
@@ -945,8 +989,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
     const start = source.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('}, [', start));
-    // 取消确认 = false(现状,不变)。
-    expect(body).toContain('if (!(await confirmAgentBrowseSwitch())) return false;');
+    // 取消确认 = false(现状,不变)。**有意变更**(Chris 2026-08-19):确认门现在收目标
+    // 引擎 —— 「已确认过就不再问」的判据是「已有指向**该目标**的意图」,不传目标会让确认框
+    // 在任何残留意图之后永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
+    expect(body).toContain('if (!(await confirmAgentBrowseSwitch(targetAgent))) return false;');
     // 真实结果原样交出去;绝不再出现 fire-and-forget + 提前 true。
     expect(body).toContain('const applied = await performAgentSwitchRef.current(');
     expect(body).toContain('return applied;');
@@ -955,6 +1001,38 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 收藏锚点也挂在**真实结果**上(2026-08-17 review 第三轮 G4):取消 / 失败不记锚点。
     expect(body).toContain('if (applied) {');
     expect(body).toContain('setSessionFavoriteAnchor(');
+  });
+
+  it('ack 判定带上「当前权威值就是本次登记那一份」,意图期改选一律 await 并透传结果', () => {
+    // 1a:main 先广播 patched、后回 ack,push 必然先到并推走修订号 —— 缺这个判据,每一次
+    // 正常登记都被自己的回声判成 stale(乐观呈现 / 草稿同步 / 收藏锚点全不落,而 main 的
+    // 意图还在,下一条消息照样切引擎)。
+    expect(source).toContain('registeredIntentMatchesCurrent,');
+    expect(source).toContain('registeredIntent.target === targetAgentKind');
+    expect(source).toContain('registeredIntent.model === newModelId');
+    expect(source).toContain('registeredIntent.providerId === providerId');
+    // 1d:意图期改选模型 / 来源必须 await 并把结果交回去,不能 fire-and-forget 返回
+    // undefined 让上游读成「已应用」。
+    expect(source).not.toContain('void performAgentSwitch(');
+    expect(source).toContain('return await performAgentSwitch(intent.target, newModelId, null);');
+  });
+
+  /**
+   * Chris 2026-08-19 实测「面板原地刷新一下」的根因锁:切换事务一开始就把 disabled 拉高
+   * (agentSwitchInFlight),`(open || keepOpen) && !disabled` 会连保命锁一起压掉 —— 面板当场
+   * 收合,收尾时 setOpenWithoutAutoRefresh(true) 又把它弹回来。保命锁的意义就是「这段时间
+   * 别关」,disabled 不该有权否决它;in-flight 期间由 interactionDisabled 置灰即可。
+   */
+  it('ModelSelector 的保命锁不被 disabled 压穿(两个 popover 分支同一表达式)', () => {
+    const selectorSource = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/ModelSelector.tsx'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const matches =
+      selectorSource.match(/open=\{\(open && !disabled\) \|\| keepOpenForAgentConfirmation\}/g) ??
+      [];
+    expect(matches).toHaveLength(2);
+    expect(selectorSource).not.toContain('(open || keepOpenForAgentConfirmation) && !disabled');
   });
 });
 

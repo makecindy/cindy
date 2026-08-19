@@ -57,8 +57,19 @@
 ### 1.6 会话内(切换有损)
 
 - rail 顶部(★下)多一个**同引擎过滤**(图标=当前会话引擎),**默认选中**;该视图只显示 引擎匹配的收藏 + 同引擎模型;组标题旁 ⓘ 悬停说明(自绘即时 tooltip,原生 title 会被重渲染打断)。
+- **「同引擎」的判据是「生效引擎 = 当前引擎」,不只是「候选里有当前引擎」**(Chris 2026-08-19 裁决):
+  候选里有当前引擎、但**默认落点在别家**的行(主场明确在别处的行、用户把引擎 override 显式指到别家的行)
+  在该视图里**不显示**。裁决是「不显示」而不是「转换成当前引擎」——用户的设置摆明了没打算在本引擎用它,
+  要跨引擎就去「全部/供应商」视图显式选。理由:这类行此前会以**外引擎形态**混进「仅 Claude」视图,点下去还
+  弹跨引擎确认,与该视图「这里选什么都无损」的承诺直接冲突。
+  与 §2.1 pinnedEngine 规则(2026-08-14)的关系:pinned 例外**保持不变** —— 无主场的行本就落在当前引擎上,
+  自然通过这道过滤;**过滤口径与行落点必须保持同构**(实现上是同一份 `resolveUnifiedRowConfig` 结果,
+  见 `unifiedModelSelection.buildUnifiedListSections` 的注释)。收藏行同理:条目存的引擎掉出候选、解析回落到
+  别家时同样不显示。
 - 跨引擎:点「全部/供应商」显式切换,列表顶部一行警示「⚠ 跨引擎切换会重建上下文,有丢失风险」。
 - 切引擎执行仍走既有 `performAgentSwitch` 链路(确认弹窗、fastMode 不跨引擎带入等语义保留)。
+- **风险确认按目标引擎判重**(Chris 2026-08-19):「已确认过、不再重复弹」的条件是会话上已有**指向本次目标
+  引擎**的切换意图;换一个目标引擎是一次新的上下文重建风险,必须重新确认。
 
 ### 1.7 i18n / 主题
 
@@ -102,7 +113,7 @@
 - `resolveVerifiedContextWindow` 目前仅接 codex——本版为 cc/pi 补接 `AgentDeps`(实现清单 M6)。
 - efforts / defaultEffort / supportsFastMode:按 (provider, agent) 嵌套条目取,已是现状。
 
-### 2.3 新增存储(两个,均只存 override;renderer localStorage,按既有命名约定)
+### 2.3 新增存储(前两个只存 override;renderer localStorage,按既有命名约定)
 
 1. `xdt:modelEnginePrefs:v1:<dataOwnerId>` —— 每模型引擎 override:
    `{ "<providerId>:<modelId>": { agent: AgentKind } }`
@@ -111,6 +122,15 @@
 2. `xdt:modelFavorites:v1:<dataOwnerId>` —— 收藏配置副本:
    `{ uidSeq, items: [{ uid, providerId, modelId, agent, effort, fast }] }`
    - 深度/Fast 存**档位 key**(low/medium/...)不存显示文案(防语言串档,Maximum 混中文的教训)。
+3. `xdt:favoriteAnchorMemory:v1:<dataOwnerId>` —— **收藏锚点记忆**(「面板上哪一行打勾」),
+   Chris 2026-08-19 实测后从内存态改为持久化:
+   `{ drafts: { <cc|codex|pi>: { uid, wireModelId } }, sessions: [{ sessionId, uid, wireModelId, engine, providerId }] }`
+   - 草稿槽按引擎分(与 `lastByVendor` 同一分槽维度);会话槽按 sessionId,**LRU 上限 100**(队首=最近一次写)。
+   - 存的是**选中那一刻的快照**,消费方与当前 (模型/引擎/来源) 逐项比对后才打勾,对不上就回落模型行 —— 过期
+     锚点永远不会让面板勾一份已经不生效的配置。
+   - 仍**不是用户配置**:不落库、不进 device-link payload、写失败静默吞;丢了只是回落模型行。
+   - 草稿发送建会话时,仍有效且**有显式来源**的草稿锚点写进该 sessionId 的会话槽(跟随默认路由的会话
+     `providerId` 为 null,与显式来源的锚点永不相等,存了也打不上勾,故不延续)。
 - 深度/Fast 的每模型记忆**沿用** `providerModelMemory` `<agent>:*` 槽(不迁移不改形——它同时是 device-link wire 形状)。
 
 ### 2.4 选中态与会话创建
