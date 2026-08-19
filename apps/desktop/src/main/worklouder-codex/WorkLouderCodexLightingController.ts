@@ -68,6 +68,16 @@ export interface WorkLouderCodexLightingSink {
   setConnectionReasonHandler?(
     handler: ((reason: WorkLouderCodexConnectionReason) => void) | null,
   ): void;
+  setDeviceEnabled?(enabled: boolean): void;
+  setPresenceHandler?(
+    handler: ((
+      present: boolean,
+      identity?: {
+        deviceType: 'codex-micro' | 'creator-micro-2';
+        isUsbConnection: boolean;
+      },
+    ) => void) | null,
+  ): void;
   dispose(): Promise<void>;
 }
 
@@ -87,8 +97,9 @@ export class WorkLouderCodexLightingController {
   private slotRefreshInFlightVersion: number | null = null;
   private slotRefreshQueued = false;
   private settings: WorkLouderCodexSettings = createWorkLouderCodexDefaultSettings();
-  private connectionStatus: WorkLouderCodexConnectionStatus = 'connecting';
+  private connectionStatus: WorkLouderCodexConnectionStatus = 'disabled';
   private connectionReason: WorkLouderCodexConnectionReason = null;
+  private devicePresent: boolean | null = null;
   private device: WorkLouderCodexDeviceState = {
     ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
     inputMonitoringPermission: process.platform === 'darwin' ? 'unknown' : 'not-required',
@@ -127,7 +138,11 @@ export class WorkLouderCodexLightingController {
     this.sink.setConnectionStatusHandler((status) => this.handleConnectionStatus(status));
     this.sink.setConnectionReasonHandler?.((reason) => this.handleConnectionReason(reason));
     this.sink.setDeviceStateHandler?.((device) => this.handleDeviceState(device));
+    this.sink.setPresenceHandler?.((present, identity) =>
+      this.handleDevicePresence(present, identity),
+    );
     this.sink.setDeviceActivityHandler(() => this.handleDeviceActivity());
+    this.sink.setDeviceEnabled?.(this.settings.deviceEnabled);
     if (this.sink.setHidInputHandler) {
       this.sink.setAgentKeyPressHandler(null);
       this.sink.setHidInputHandler((event) => this.handleHidInput(event));
@@ -148,6 +163,7 @@ export class WorkLouderCodexLightingController {
     return {
       connectionStatus: this.connectionStatus,
       connectionReason: this.connectionReason,
+      devicePresent: this.devicePresent,
       device: { ...this.device },
       settings: cloneWorkLouderCodexSettings(this.settings),
       agentSlots: this.agentSlots.map((slot) => ({
@@ -175,6 +191,8 @@ export class WorkLouderCodexLightingController {
     this.pendingAgentKeyTap = null;
     this.lightingDimmed = false;
     this.clearWindowRevealTimer();
+    this.sink.setDeviceEnabled?.(settings.deviceEnabled);
+    if (!settings.deviceEnabled) this.connectionStatus = 'disabled';
     this.publishAgentSlots();
     const frame = this.updateLightingFrame();
     this.resetAutoDimTimer(frame);
@@ -298,6 +316,7 @@ export class WorkLouderCodexLightingController {
     this.sink.setHidInputHandler?.(null);
     this.sink.setJoystickInputHandler?.(null);
     this.sink.setDeviceStateHandler?.(null);
+    this.sink.setPresenceHandler?.(null);
     this.sink.setConnectionReasonHandler?.(null);
     this.sink.setDeviceActivityHandler(null);
     this.sink.setConnectionStatusHandler(null);
@@ -679,14 +698,22 @@ export class WorkLouderCodexLightingController {
   }
 
   private handleConnectionStatus(status: WorkLouderCodexConnectionStatus): void {
+    if (!this.settings.deviceEnabled && status !== 'disabled') return;
     if (status === this.connectionStatus) return;
     this.connectionStatus = status;
     if (status === 'connected') {
       this.connectionReason = null;
+      this.devicePresent = true;
       if (process.platform === 'darwin') {
         this.device = { ...this.device, inputMonitoringPermission: 'granted' };
       }
-    } else {
+    } else if (status === 'not-detected') {
+      this.devicePresent = false;
+      this.device = {
+        ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+        inputMonitoringPermission: this.device.inputMonitoringPermission,
+      };
+    } else if (status !== 'disabled') {
       // Keep the last permission answer; everything else is stale once the
       // board is gone and would sit next to "Not detected" as if it were live.
       this.device = {
@@ -708,6 +735,30 @@ export class WorkLouderCodexLightingController {
 
   private handleDeviceState(device: WorkLouderCodexDeviceState): void {
     this.device = { ...device };
+    if (device.deviceType) this.devicePresent = true;
+    this.emitState();
+  }
+
+  private handleDevicePresence(
+    present: boolean,
+    identity?: {
+      deviceType: 'codex-micro' | 'creator-micro-2';
+      isUsbConnection: boolean;
+    },
+  ): void {
+    this.devicePresent = present;
+    if (!present) {
+      this.device = {
+        ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+        inputMonitoringPermission: this.device.inputMonitoringPermission,
+      };
+    } else if (identity) {
+      this.device = {
+        ...this.device,
+        deviceType: identity.deviceType,
+        isUsbConnection: identity.isUsbConnection,
+      };
+    }
     this.emitState();
   }
 

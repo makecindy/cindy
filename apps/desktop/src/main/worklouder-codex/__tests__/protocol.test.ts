@@ -100,6 +100,25 @@ describe('Work Louder Agent key protocol', () => {
     expect(isWorkLouderCodexHostMessage({ kind: 'device-activity' })).toBe(false);
     expect(isWorkLouderCodexHostMessage(null)).toBe(false);
   });
+
+  it('accepts presence discovery with optional identity', () => {
+    expect(isWorkLouderCodexHostMessage({ kind: 'presence', present: false })).toBe(true);
+    expect(
+      isWorkLouderCodexHostMessage({
+        kind: 'presence',
+        present: true,
+        deviceType: 'codex-micro',
+        isUsbConnection: true,
+      }),
+    ).toBe(true);
+    expect(
+      isWorkLouderCodexHostMessage({
+        kind: 'presence',
+        present: true,
+        deviceType: 'keyboard',
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('Work Louder lighting settings', () => {

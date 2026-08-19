@@ -61,6 +61,33 @@ describe('WorkLouderCodexHostClient', () => {
     expect(child.postMessage).toHaveBeenCalledWith({ kind: 'apply', frame });
   });
 
+  it('releases the HID host when this instance turns the keyboard off', async () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    const status = vi.fn();
+    client.setConnectionStatusHandler(status);
+    client.setAgentKeyPressHandler(vi.fn());
+
+    client.setDeviceEnabled(false);
+
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'stop' });
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(status).toHaveBeenCalledWith('disabled');
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    client.probe();
+    expect(fork).toHaveBeenCalledTimes(2);
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'discover' });
+
+    client.setDeviceEnabled(true);
+    expect(fork).toHaveBeenCalledTimes(2);
+  });
+
   it('starts HID listening even when there is no lighting activity', () => {
     const child = new FakeChild();
     const fork = vi.fn(() => child);
@@ -94,6 +121,39 @@ describe('WorkLouderCodexHostClient', () => {
     client.probe();
 
     expect(child.postMessage).toHaveBeenLastCalledWith({ kind: 'probe' });
+  });
+
+  it('discovers presence without occupying HID when this instance is off', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    const presence = vi.fn();
+    const status = vi.fn();
+    client.setPresenceHandler(presence);
+    client.setConnectionStatusHandler(status);
+    client.setDeviceEnabled(false);
+    status.mockClear();
+    client.probe();
+
+    expect(fork).toHaveBeenCalledWith('/sdk');
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'discover' });
+    expect(child.postMessage).not.toHaveBeenCalledWith({ kind: 'listen' });
+
+    child.emit('message', {
+      kind: 'presence',
+      present: true,
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+    });
+    expect(presence).toHaveBeenCalledWith(true, {
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+    });
+    expect(status).not.toHaveBeenCalled();
   });
 
   it('asks the host to turn lighting off before shutdown', async () => {

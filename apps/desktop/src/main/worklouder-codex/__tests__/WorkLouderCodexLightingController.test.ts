@@ -76,7 +76,7 @@ describe('WorkLouderCodexLightingController', () => {
     ]);
     keyHandlerRef.current?.(1);
 
-    expect(activateSession).toHaveBeenCalledWith('waiting-session', false);
+    expect(activateSession).toHaveBeenCalledWith('waiting-session', true);
   });
 
   it('maps last-sent keys by the last user message, not sidebar order', async () => {
@@ -113,7 +113,7 @@ describe('WorkLouderCodexLightingController', () => {
 
     hidRef.current?.({ key: 'AG00', act: 1 });
 
-    expect(activateSession).toHaveBeenCalledWith('newer', false);
+    expect(activateSession).toHaveBeenCalledWith('newer', true);
   });
 
   it('uses the published assignment for the current press and refreshes only later presses', async () => {
@@ -151,7 +151,7 @@ describe('WorkLouderCodexLightingController', () => {
     sink.update.mockClear();
     keyHandlerRef.current?.(0);
 
-    expect(activateSession).toHaveBeenCalledWith('first', false);
+    expect(activateSession).toHaveBeenCalledWith('first', true);
     expect(loadSlotSessionIds).toHaveBeenCalledTimes(2);
     resolveRefresh?.(['second']);
     await vi.waitFor(() => expect(sink.update).toHaveBeenCalledTimes(1));
@@ -678,6 +678,7 @@ describe('WorkLouderCodexLightingController', () => {
       dispose: vi.fn(async () => undefined),
     };
     const controller = new WorkLouderCodexLightingController(sink, vi.fn());
+    controller.applySettings(settings({ deviceEnabled: true }));
     controller.start();
     sink.setDeviceStateHandler.mock.calls.at(-1)?.[0]?.({
       deviceType: 'codex-micro',
@@ -694,6 +695,40 @@ describe('WorkLouderCodexLightingController', () => {
     expect(controller.getState().device.deviceType).toBeNull();
     expect(controller.getState().device.batteryPercentage).toBeNull();
     expect(controller.getState().device.inputMonitoringPermission).toBe('granted');
+  });
+
+  it('keeps the instance disabled while still recording keyboard presence', () => {
+    const presenceRef: {
+      current: ((
+        present: boolean,
+        identity?: { deviceType: 'codex-micro' | 'creator-micro-2'; isUsbConnection: boolean },
+      ) => void) | null;
+    } = { current: null };
+    const statusRef: { current: ((status: 'connecting' | 'disabled') => void) | null } = {
+      current: null,
+    };
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn((handler: typeof statusRef.current) => {
+        statusRef.current = handler;
+      }),
+      setPresenceHandler: vi.fn((handler: typeof presenceRef.current) => {
+        presenceRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn());
+    controller.start();
+
+    statusRef.current?.('connecting');
+    presenceRef.current?.(true, { deviceType: 'codex-micro', isUsbConnection: true });
+
+    expect(controller.getState().connectionStatus).toBe('disabled');
+    expect(controller.getState().devicePresent).toBe(true);
+    expect(controller.getState().device.deviceType).toBe('codex-micro');
+    expect(controller.getState().device.isUsbConnection).toBe(true);
   });
 
   it('delegates shutdown so the host can turn the device off', async () => {

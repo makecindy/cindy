@@ -3512,16 +3512,24 @@
         },
         "connection": {
           "label": "接続",
+          "toggle": {
+            "label": "有効",
+            "aria": "この Cindy で Codex Micro を使う"
+          },
           "status": {
             "connecting": "接続中",
             "connected": "接続済み",
             "not-detected": "検出されていません",
+            "present": "接続済み",
+            "disabled": "無効",
             "error": "接続エラー",
             "unavailable": "SDK を利用できません"
           },
           "descriptions": {
             "connecting": "Cindy が Work Louder デバイスサービスを起動しています。",
             "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
+            "disabled": "有効にすると、Cindy がキー入力を待ち受け、ライトでタスクの状態を表示します。",
+            "present": "有効にすると、Cindy がキー入力を待ち受け、ライトでタスクの状態を表示します。",
             "not-detected": "データ通信対応の USB ケーブルで接続してください。ChatGPT がデバイスを使用している場合は終了してください。",
             "error": "Cindy はキーボードと通信できませんでした。自動的に再試行しています。",
             "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",

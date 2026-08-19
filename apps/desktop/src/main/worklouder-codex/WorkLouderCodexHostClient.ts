@@ -74,9 +74,20 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     null;
   private connectionStatusHandler: ((status: WorkLouderCodexConnectionStatus) => void) | null =
     null;
+  private presenceHandler:
+    | ((
+        present: boolean,
+        identity?: {
+          deviceType: 'codex-micro' | 'creator-micro-2';
+          isUsbConnection: boolean;
+        },
+      ) => void)
+    | null = null;
   private connectionStatus: WorkLouderCodexConnectionStatus = 'connecting';
   private connectionReason: WorkLouderCodexConnectionReason = null;
   private wantsHidInput = false;
+  private deviceEnabled = true;
+  private wantsPresence = false;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
 
@@ -106,11 +117,23 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     handler?.(this.connectionReason);
   }
 
+  setDeviceEnabled(enabled: boolean): void {
+    if (this.deviceEnabled === enabled) return;
+    this.deviceEnabled = enabled;
+    if (enabled) {
+      this.updateHidListeningIntent();
+      if (this.latestFrame) this.update(this.latestFrame);
+      return;
+    }
+    this.disconnectHost();
+  }
+
   private updateHidListeningIntent(): void {
     this.wantsHidInput =
-      this.agentKeyPressHandler !== null ||
-      this.hidInputHandler !== null ||
-      this.joystickInputHandler !== null;
+      this.deviceEnabled &&
+      (this.agentKeyPressHandler !== null ||
+        this.hidInputHandler !== null ||
+        this.joystickInputHandler !== null);
     if (this.wantsHidInput) this.requestHidListening();
   }
 
@@ -125,9 +148,22 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     handler?.(this.connectionStatus);
   }
 
+  setPresenceHandler(
+    handler: ((
+      present: boolean,
+      identity?: {
+        deviceType: 'codex-micro' | 'creator-micro-2';
+        isUsbConnection: boolean;
+      },
+    ) => void) | null,
+  ): void {
+    this.presenceHandler = handler;
+  }
+
   update(frame: WorkLouderCodexLightingFrame): void {
     if (this.disposed) return;
     this.latestFrame = frame;
+    if (!this.deviceEnabled) return;
     if (isWorkLouderCodexLightingFrameOff(frame) && this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
@@ -180,11 +216,14 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private ensureChild(): WorkLouderCodexChildLike | null {
+    if (!this.deviceEnabled && !this.wantsPresence) return null;
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
     if (!sdk) {
-      this.updateConnectionReason('sdk-unavailable');
-      this.updateConnectionStatus('unavailable');
+      if (this.deviceEnabled) {
+        this.updateConnectionReason('sdk-unavailable');
+        this.updateConnectionStatus('unavailable');
+      }
       if (!this.unavailableLogged) {
         this.unavailableLogged = true;
         this.deps.log.info('Codex Micro lighting unavailable: official Work Louder SDK not found');
@@ -194,7 +233,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     let child: WorkLouderCodexChildLike | null = null;
     try {
       this.updateConnectionReason(null);
-      this.updateConnectionStatus('connecting');
+      if (this.deviceEnabled) this.updateConnectionStatus('connecting');
       const startedChild = this.deps.fork(sdk.entry);
       child = startedChild;
       this.child = startedChild;
@@ -207,7 +246,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       });
       const initRequest: WorkLouderCodexHostRequest = { kind: 'init', sdkEntry: sdk.entry };
       startedChild.postMessage(initRequest);
-      this.startConnectWatchdog(startedChild);
+      if (this.deviceEnabled) this.startConnectWatchdog(startedChild);
       this.deps.log.info('Codex Micro lighting host started', { sdkSource: sdk.source });
       return startedChild;
     } catch (error) {
@@ -222,9 +261,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deps.log.warn('failed to start Codex Micro lighting host', {
         error: error instanceof Error ? error.message : String(error),
       });
-      this.updateConnectionReason('connection-failed');
-      this.updateConnectionStatus('error');
-      this.scheduleRestart();
+      if (this.deviceEnabled) {
+        this.updateConnectionReason('connection-failed');
+        this.updateConnectionStatus('error');
+        this.scheduleRestart();
+      }
       return null;
     }
   }
@@ -241,7 +282,12 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    * no such keyboard.
    */
   probe(): void {
-    if (this.disposed || !this.child) return;
+    if (this.disposed) return;
+    if (!this.deviceEnabled) {
+      this.discoverPresence();
+      return;
+    }
+    if (!this.child) return;
     try {
       const request: WorkLouderCodexHostRequest = { kind: 'probe' };
       this.child.postMessage(request);
@@ -302,6 +348,19 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deviceStateHandler?.(message.device);
       return;
     }
+    if (message.kind === 'presence') {
+      this.clearConnectWatchdog();
+      this.presenceHandler?.(
+        message.present,
+        message.present && message.deviceType
+          ? {
+              deviceType: message.deviceType,
+              isUsbConnection: message.isUsbConnection === true,
+            }
+          : undefined,
+      );
+      return;
+    }
     if (message.kind === 'activity') {
       this.deviceActivityHandler?.();
       return;
@@ -355,6 +414,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.completeDispose(child);
       return;
     }
+    if (!this.deviceEnabled) {
+      this.updateConnectionReason(null);
+      this.updateConnectionStatus('disabled');
+      return;
+    }
     if (recycled) {
       this.restartHost();
       return;
@@ -368,7 +432,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private restartHost(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.deviceEnabled) return;
     if (this.wantsHidInput) this.requestHidListening();
     if (this.latestFrame) this.update(this.latestFrame);
   }
@@ -376,6 +440,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private scheduleRestart(): void {
     if (
       this.restartTimer ||
+      !this.deviceEnabled ||
       (!this.latestFrame && !this.wantsHidInput) ||
       (this.latestFrame &&
         isWorkLouderCodexLightingFrameOff(this.latestFrame) &&
@@ -468,5 +533,46 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (reason === this.connectionReason) return;
     this.connectionReason = reason;
     this.connectionReasonHandler?.(reason);
+  }
+
+  private disconnectHost(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.clearConnectWatchdog();
+    this.clearStableConnection();
+    const child = this.child;
+    if (child) {
+      try {
+        child.postMessage({ kind: 'stop' } satisfies WorkLouderCodexHostRequest);
+      } catch {
+        // The host may already be gone; killing it is still enough to release HID.
+      }
+      try {
+        child.kill();
+      } catch {
+        // Teardown is best effort once the user has asked this instance to let go.
+      }
+      if (this.child === child) this.child = null;
+    }
+    this.lastStatus = null;
+    this.consecutiveCrashes = 0;
+    this.updateConnectionReason(null);
+    this.updateConnectionStatus('disabled');
+  }
+
+  private discoverPresence(): void {
+    this.wantsPresence = true;
+    const child = this.ensureChild();
+    if (!child) return;
+    try {
+      const request: WorkLouderCodexHostRequest = { kind: 'discover' };
+      child.postMessage(request);
+    } catch (error) {
+      this.deps.log.debug('failed to discover Work Louder presence', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

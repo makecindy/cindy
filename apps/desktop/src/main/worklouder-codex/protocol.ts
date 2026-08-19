@@ -56,6 +56,7 @@ export type WorkLouderCodexHostRequest =
   // talk to the device — this is that something, driven by whoever is
   // currently showing connection state.
   | { kind: 'probe' }
+  | { kind: 'discover' }
   | { kind: 'stop' };
 
 export type WorkLouderCodexHostMessage =
@@ -67,6 +68,12 @@ export type WorkLouderCodexHostMessage =
   /** Legacy utility-host message retained for older host fakes and upgrades. */
   | { kind: 'agent-key'; slot: number }
   | { kind: 'device'; device: WorkLouderCodexDeviceState }
+  | {
+      kind: 'presence';
+      present: boolean;
+      deviceType?: 'codex-micro' | 'creator-micro-2';
+      isUsbConnection?: boolean;
+    }
   | { kind: 'hid'; event: WorkLouderCodexHidEvent }
   | { kind: 'joystick'; event: WorkLouderCodexJoystickEvent }
   | { kind: 'activity' }
@@ -288,6 +295,18 @@ export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLoude
   }
   if (message.kind === 'device')
     return isWorkLouderCodexDeviceState((message as { device?: unknown }).device);
+  if (message.kind === 'presence') {
+    const present = (message as { present?: unknown }).present;
+    const deviceType = (message as { deviceType?: unknown }).deviceType;
+    const isUsbConnection = (message as { isUsbConnection?: unknown }).isUsbConnection;
+    return (
+      typeof present === 'boolean' &&
+      (deviceType === undefined ||
+        deviceType === 'codex-micro' ||
+        deviceType === 'creator-micro-2') &&
+      (isUsbConnection === undefined || typeof isUsbConnection === 'boolean')
+    );
+  }
   if (message.kind === 'state') {
     const validStatus =
       message.status === 'connected' ||

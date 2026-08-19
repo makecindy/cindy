@@ -163,6 +163,11 @@ export function releaseActiveGlobalVoiceInputShortcut(): void {
   windowsFunctionKeyShortcutListener.releaseActiveTrigger();
 }
 
+/** Drive the existing global overlay from hardware, using the same phases as the system shortcut. */
+export function triggerGlobalVoiceInputFromHardware(phase: GlobalVoiceInputShortcutPhase): void {
+  handleNativeGlobalShortcutPhase(phase);
+}
+
 type VoiceInputGlobalResult =
   | { ok: true }
   | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
@@ -3661,6 +3666,18 @@ async function runMacTextInsertionHelper(
       `Invalid helper response: ${error instanceof Error ? error.message : String(error)}. Stdout bytes: ${stdout.length}.`,
     );
   }
+}
+
+export async function runMacTextInsertionHelperCommand(
+  args: string[],
+  options?: { input?: string; timeoutMs?: number },
+): Promise<MacTextInsertionHelperResult> {
+  return runMacTextInsertionHelper(args, options);
+}
+
+export async function spawnMacTextInsertionHelper(args: string[]) {
+  const helperPath = await resolveMacTextInsertionHelperPath();
+  return spawn(helperPath, args, { stdio: ['pipe', 'ignore', 'pipe'] });
 }
 
 /** 取 stdout 的最后一行 JSON 作为命令结果（前面的行是流式进度事件）。 */

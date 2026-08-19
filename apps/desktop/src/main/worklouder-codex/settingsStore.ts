@@ -130,6 +130,8 @@ function normalize(raw: unknown): WorkLouderCodexSettings {
     lightingAutoDim: isWorkLouderCodexAutoDim(value.lightingAutoDim)
       ? value.lightingAutoDim
       : defaults.lightingAutoDim,
+    deviceEnabled:
+      typeof value.deviceEnabled === 'boolean' ? value.deviceEnabled : defaults.deviceEnabled,
     agentSource: normalizeWorkLouderCodexAgentSource(value.agentSource),
     customAgentKeys,
     singleTapAgentKeys:
@@ -166,8 +168,12 @@ export function writeWorkLouderCodexSettingsPatch(
 }
 
 export function resetWorkLouderCodexSettings(): WorkLouderCodexSettings {
+  const keepEnabled = store.read().deviceEnabled;
   const settings = store.reset();
   log.info('Work Louder Codex settings reset');
+  // Restore-defaults resets layout and lighting, but never turns the keyboard off
+  // after the user has already chosen to use it in this instance.
+  if (keepEnabled) return writeWorkLouderCodexSettingsPatch({ deviceEnabled: true });
   return settings;
 }
 

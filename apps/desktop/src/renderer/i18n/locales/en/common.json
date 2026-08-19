@@ -3486,16 +3486,24 @@
         },
         "connection": {
           "label": "Connection",
+          "toggle": {
+            "label": "Enable",
+            "aria": "Let this Cindy use Codex Micro"
+          },
           "status": {
             "connecting": "Connecting",
             "connected": "Connected",
             "not-detected": "Not detected",
+            "present": "Connected",
+            "disabled": "Off",
             "error": "Connection problem",
             "unavailable": "SDK unavailable"
           },
           "descriptions": {
             "connecting": "Cindy is starting the Work Louder device service.",
             "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+            "disabled": "When enabled, Cindy listens for key presses and shows task status with lighting.",
+            "present": "When enabled, Cindy listens for key presses and shows task status with lighting.",
             "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
             "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
             "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
