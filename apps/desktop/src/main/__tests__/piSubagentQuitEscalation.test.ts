@@ -87,8 +87,41 @@ describe('PI Subagent quit sweep', () => {
     expect(hook).toContain('killBudgetMs: 1_500');
     // Survivors of *this* pass are the ones nothing else will collect.
     expect(hook).toMatch(/piSubagentLog\.error/);
-    // The fence comes down here, whatever happened above.
-    expect(hook).toMatch(/\} finally \{[\s\S]*releaseQuitLaunchFence[\s\S]*release\?\.\(\)/);
+    // The fence comes down only once the parent is provably down. Asserted
+    // structurally rather than by matching a phrase: every release site in this
+    // hook must sit inside the settle guard, so rewriting the call shape cannot
+    // quietly restore an unconditional release.
+    const guard = hook.indexOf('if (makerShutdownSettled) {');
+    expect(guard).toBeGreaterThan(-1);
+    const guardEnd = hook.indexOf('} else {', guard);
+    expect(guardEnd).toBeGreaterThan(guard);
+    const releaseSites = [...hook.matchAll(/releaseQuitLaunchFence = null;/g)];
+    expect(releaseSites).toHaveLength(1);
+    expect(releaseSites[0]!.index!).toBeGreaterThan(guard);
+    expect(releaseSites[0]!.index!).toBeLessThan(guardEnd);
+    // The other branch has to say so, or a held fence looks like a silent hang.
+    expect(hook.slice(guardEnd)).toMatch(/piSubagentLog\.error/);
+  });
+
+  it('only calls the parent down when shutdownMaker actually finished', () => {
+    // `shutdownMaker` awaits `waitForTurnChangeSetActions()` before it ever
+    // reaches `maker.shutdown`, so a rejection can mean the Maker was never
+    // shut down and every parent Pi process is still alive. Treating a
+    // rejection as settled would lower the fence in exactly that case.
+    expect([...source.matchAll(/let makerShutdownSettled = false;/g)]).toHaveLength(1);
+    const start = source.indexOf("onQuit(\n  'shutdown-maker',");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const hook = source.slice(start, source.indexOf("  'async',\n);", start));
+    const awaited = hook.indexOf('await shutdownMaker();');
+    const marked = hook.indexOf('makerShutdownSettled = true;');
+    expect(awaited).toBeGreaterThan(-1);
+    expect(marked).toBeGreaterThan(awaited);
+    // No error handling around it: a `finally` (or a swallowing `catch`) would
+    // let a rejection through as settled, which is exactly the case this
+    // distinction exists to catch.
+    expect(hook).not.toContain('try {');
+    // And it is set exactly once, so no other path can claim the parent is down.
+    expect([...source.matchAll(/makerShutdownSettled = true;/g)]).toHaveLength(1);
     // Ordered ahead of the bridge and the SSH pool teardown.
     expect(start).toBeLessThan(source.indexOf("onQuit('pi-env'"));
     expect(start).toBeLessThan(source.indexOf("onQuit('remote-ssh-pool'"));

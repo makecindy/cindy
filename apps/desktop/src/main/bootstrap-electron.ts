@@ -7706,6 +7706,25 @@ onQuit(
  */
 let releaseQuitLaunchFence: (() => Promise<void>) | null = null;
 
+/**
+ * Did `shutdownMaker()` run all the way through?
+ *
+ * Only fulfilment counts, and the distinction is not pedantic: `shutdownMaker`
+ * awaits `waitForTurnChangeSetActions()` *before* it ever reaches
+ * `maker.shutdown({ reason: 'app-quit' })`, so a rejection can mean the Maker
+ * was never shut down at all and every parent Pi process is still running. On
+ * fulfilment that await completed, and `Maker.shutdown` in turn awaited every
+ * `Session.detach` — which for PI ends in `await proc.close()`. That is the
+ * proof the quit fence needs before it can be lowered.
+ *
+ * Residual, stated plainly: `shutdownMaker` swallows an error thrown *by*
+ * `maker.shutdown`, and `Maker.shutdown` collects per-session detach failures
+ * rather than throwing. So fulfilment does not prove every single Pi process
+ * exited — only that each was awaited and its failure logged. Those stragglers
+ * are what the final sweep is for, and what its error branch reports.
+ */
+let makerShutdownSettled = false;
+
 onQuit(
   'pi-subagent-runners',
   async () => {
@@ -7770,7 +7789,16 @@ onQuit(
   },
   'async',
 );
-onQuit('shutdown-maker', shutdownMaker, 'async');
+onQuit(
+  'shutdown-maker',
+  async () => {
+    // Not try/finally: a rejection here can predate `maker.shutdown` entirely
+    // (see `makerShutdownSettled`), so it must not read as "the parent is down".
+    await shutdownMaker();
+    makerShutdownSettled = true;
+  },
+  'async',
+);
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
@@ -7791,11 +7819,14 @@ onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
  * first sweep could not see: a run whose directory was published after that
  * sweep had already scanned.
  *
- * If the async phase *timed out* instead, `shutdown-maker` may still be in
- * flight and a Pi process may still be alive. That case is covered by the fence
- * rather than by this sweep: it is still up, so a launcher either refuses, or
- * had already published its run directory before it went up — in which case the
- * scan below sees it.
+ * That conclusiveness belongs to one branch only, and the release below is
+ * gated on it. If the async phase *timed out* instead, `shutdown-maker` may
+ * still be in flight and a Pi process may still be alive; this sweep still runs
+ * (a best-effort reclaim is worth having) but it proves nothing, so the fence is
+ * *not* lowered. In that branch the guarantee is the fence itself standing until
+ * the process exits — a launcher either refuses, or had already published its
+ * run directory before the fence went up, in which case the scan below sees
+ * it — with the next instance's stale sweep removing the leftover file.
  *
  * Registered ahead of `pi-env` and far ahead of `remote-ssh-pool`: it needs only
  * the local filesystem and local signals, and post-async is serial, so going
@@ -7825,15 +7856,32 @@ onQuit(
     } catch (err) {
       piSubagentLog.error('final PI Subagent quit sweep failed:', err);
     } finally {
-      // The fence has done its job. Leaving it standing would only matter if
-      // this process somehow survived the quit, and then it would refuse this
-      // instance's own durable launches for the rest of its life. A hard-killed
-      // process cannot reach this line; that leftover is collected by the next
-      // instance's stale sweep, which the recorded start identity makes safe
-      // even when the pid is recycled onto it.
-      const release = releaseQuitLaunchFence;
-      releaseQuitLaunchFence = null;
-      await release?.().catch(() => undefined);
+      // Lowering the fence is only safe once the parent is provably down. Read
+      // here rather than at the top of this disposer: the async phase may have
+      // been cut off by its budget while `shutdown-maker` kept running, and the
+      // sweep above just gave it more time to finish.
+      if (makerShutdownSettled) {
+        // Leaving it standing would only matter if this process somehow
+        // survived the quit, and then it would refuse this instance's own
+        // durable launches for the rest of its life. A hard-killed process
+        // cannot reach this line; that leftover is collected by the next
+        // instance's stale sweep, which the recorded start identity makes safe
+        // even when the pid is recycled onto it.
+        const release = releaseQuitLaunchFence;
+        releaseQuitLaunchFence = null;
+        await release?.().catch(() => undefined);
+      } else {
+        // The async phase timed out with `shutdown-maker` still in flight, or
+        // it threw before the Maker was shut down. Either way a hung parent Pi
+        // may still be alive, and nothing runs after this to collect what it
+        // could still launch — so the fence stays up until the process exits,
+        // and the next instance's stale sweep removes the file.
+        piSubagentLog.error(
+          'parent shutdown was not confirmed complete on quit — holding the PI Subagent '
+          + 'launch fence until this process exits so a still-live parent cannot start '
+          + 'a durable runner nothing is left to reclaim',
+        );
+      }
     }
   },
   'post-async',
