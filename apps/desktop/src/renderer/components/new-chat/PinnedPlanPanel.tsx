@@ -100,12 +100,12 @@ export function PinnedPlanPanel({
     insertion.sealed !== true &&
     planBelongsToLatestTurn &&
     (streaming || insertion.turnFailed === true);
-  const supersededCodexPlan = insertion?.source === 'codex' && !planBelongsToLatestTurn;
-  // 退场 = host 盖了终态章(权威),或后续 user turn 已取代这份 codex
+  const supersededPlan = !planBelongsToLatestTurn;
+  // 退场 = host 盖了终态章(权威),或后续 user turn 已取代这份
   // 计划(所有权边界),或计划自己勾完了(没有章的旧数据兜底)。
   const retired =
     Boolean(insertion) &&
-    (insertion?.sealed === true || supersededCodexPlan || (allDone && !codexPlanAlive));
+    (insertion?.sealed === true || supersededPlan || (allDone && !codexPlanAlive));
   const completedAtMs =
     insertion?.sealedAtMs ?? insertion?.updatedAtMs ?? Date.parse(insertion?.createdAt ?? '');
   // 章的时刻来自执行端时钟;device-link 被控场景下本机时钟可能与其偏差任意大。

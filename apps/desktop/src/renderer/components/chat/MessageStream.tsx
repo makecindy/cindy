@@ -1468,17 +1468,20 @@ export function buildRenderItems(
   const planInsertAt = findMessageTodoInsertions(messages, {
     taskHistoryMayBeIncomplete: opts?.historyWindowIncomplete === true,
   });
-  const latestPlanState = getLatestMessageTodoState(messages, {
-    taskHistoryMayBeIncomplete: opts?.historyWindowIncomplete === true,
-  });
   // findMessageTodoInsertions 负责完整历史时间线，不会自行裁掉分页窗口里的半截
-  // Task session。若最新事件正是那张未解析完整的卡，只在当前窗口暂不插入；等
-  // prepend 补齐标题/早期 TaskCreate 后，同一位置会重新生成完整清单。
-  if (
-    !latestPlanState.isResolved &&
-    latestPlanState.latestInsertionIndex === latestPlanState.latestPlanIndex
-  ) {
-    planInsertAt.delete(latestPlanState.latestInsertionIndex);
+  // Task session。不能只检查整窗「最新」计划：后面若已有可解析的新 session，
+  // 较早的半截 Task 卡仍会漏出来。逐个 Task insertion 用其前缀复核，等 prepend
+  // 补齐标题/早期 TaskCreate 后再由同一 stable key 插回。
+  if (opts?.historyWindowIncomplete === true) {
+    for (const [index, insertion] of planInsertAt) {
+      if (insertion.source !== 'task') continue;
+      const stateAtInsertion = getLatestMessageTodoState(messages.slice(0, index + 1), {
+        taskHistoryMayBeIncomplete: true,
+      });
+      if (!stateAtInsertion.isResolved || stateAtInsertion.latestInsertionIndex !== index) {
+        planInsertAt.delete(index);
+      }
+    }
   }
 
   const isOrcaCommunicationTool = (toolName: string): boolean => {

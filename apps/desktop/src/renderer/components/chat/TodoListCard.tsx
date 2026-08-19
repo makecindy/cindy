@@ -143,6 +143,8 @@ export function InlinePlanCard({
           className={cn(
             'flex w-full cursor-pointer select-none items-center gap-2 px-[14px] py-[10px]',
             'transition-opacity hover:opacity-80',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+            'focus-visible:ring-[var(--focus-ring)]',
           )}
         >
           {expanded ? (

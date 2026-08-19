@@ -231,6 +231,15 @@ describe('TodoListCard flyout interaction', () => {
 });
 
 describe('InlinePlanCard', () => {
+  it('shows the shared focus ring when the collapse control is keyboard-focused', () => {
+    render(<InlinePlanCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button');
+    expect(trigger.classList.contains('focus-visible:outline-none')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-2')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-[var(--focus-ring)]')).toBe(true);
+  });
+
   it('starts expanded and can collapse back to a compact summary', () => {
     const { container } = render(<InlinePlanCard todos={TODOS} animated={false} />);
 

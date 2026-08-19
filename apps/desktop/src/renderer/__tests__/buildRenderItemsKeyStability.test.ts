@@ -714,6 +714,31 @@ describe('buildRenderItems — key stability', () => {
     ).toEqual(['agent_plan']);
   });
 
+  it('filters an earlier partial Task card when a later plan session is resolved', () => {
+    const messages = [
+      mkTool('tc2', 'TaskCreate', { subject: 'Fix renderer' }),
+      mkResult('r-tc2', 'tu-tc2', 'Task #2 created successfully: Fix renderer'),
+      mkTool('tc3', 'TaskCreate', { subject: 'Run tests' }),
+      mkResult('r-tc3', 'tu-tc3', 'Task #3 created successfully: Run tests'),
+      mkUser('u2', 'Start a different plan'),
+      mkTool('plan2', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'in_progress' },
+          { step: 'Patch renderer', status: 'pending' },
+        ],
+      }),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0].key).toBe('todo-plan2');
+  });
+
   it('recovers an old plan anchor after prepend changes the session key', () => {
     const oldWindow = buildRenderItems([
       mkTool('plan2', 'update_plan', {

@@ -51,6 +51,59 @@ function planMessage(
   };
 }
 
+function legacyPlanMessages(source: 'todo' | 'task'): ChatMessage[] {
+  if (source === 'todo') {
+    return [
+      {
+        clientId: 'todo-1',
+        role: 'tool_use',
+        content: '',
+        toolName: 'TodoWrite',
+        toolUseId: 'todo:turn-1',
+        toolInput: {
+          todos: [
+            { content: 'Inspect renderer', status: 'in_progress' },
+            { content: 'Run tests', status: 'pending' },
+          ],
+        },
+        createdAt: new Date(T0).toISOString(),
+      },
+    ];
+  }
+  return [
+    {
+      clientId: 'task-1',
+      role: 'tool_use',
+      content: '',
+      toolName: 'TaskCreate',
+      toolUseId: 'create-1',
+      toolInput: { subject: 'Inspect renderer' },
+      createdAt: new Date(T0).toISOString(),
+    },
+    {
+      clientId: 'result-1',
+      role: 'tool_result',
+      content: 'Task #1 created successfully: Inspect renderer',
+      toolUseId: 'create-1',
+    },
+    {
+      clientId: 'task-2',
+      role: 'tool_use',
+      content: '',
+      toolName: 'TaskCreate',
+      toolUseId: 'create-2',
+      toolInput: { subject: 'Run tests' },
+      createdAt: new Date(T0 + 1_000).toISOString(),
+    },
+    {
+      clientId: 'result-2',
+      role: 'tool_result',
+      content: 'Task #2 created successfully: Run tests',
+      toolUseId: 'create-2',
+    },
+  ];
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(T0);
@@ -685,6 +738,37 @@ describe('PinnedPlanPanel terminal seal', () => {
 
     expect(screen.queryByTestId('plan-pill')).toBeNull();
   });
+
+  it.each(['todo', 'task'] as const)(
+    'retires an open legacy %s plan after a later real user turn supersedes it',
+    (source) => {
+      vi.setSystemTime(T0 + 60_000);
+
+      render(
+        <PinnedPlanPanel
+          sessionId={`${source}-open-then-new-turn`}
+          messages={[
+            ...legacyPlanMessages(source),
+            {
+              clientId: 'new-turn-user',
+              role: 'user',
+              content: 'Change direction',
+              createdAt: new Date(T0 + 30_000).toISOString(),
+              delivery: 'turn',
+            },
+          ]}
+          animated={false}
+          width={400}
+          inlinePlanVisibility={{
+            key: source === 'todo' ? 'todo-todo-1' : 'todo-task-1',
+            visible: false,
+          }}
+        />,
+      );
+
+      expect(screen.queryByTestId('plan-pill')).toBeNull();
+    },
+  );
 
   it('keeps an interrupted plan across synthetic continuation user rows', () => {
     const interrupted: ChatMessage = {
