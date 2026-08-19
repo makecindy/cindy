@@ -1,4 +1,5 @@
 import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -1114,6 +1115,78 @@ describe('PI durable subagent run store', () => {
 
       expect(hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid })).toBe(true);
       await release();
+    });
+
+    /**
+     * One process, several boundaries. An update reclaim the user quits out of,
+     * or an account teardown overlapping a quit, both raise the *same* fence
+     * file: per-host naming settled who owns it but not how two owners share it.
+     */
+    describe('overlapping boundaries in one process', () => {
+      it('keeps the fence up until the last holder releases it', async () => {
+        const agentHome = await makeRoot();
+        const releaseFirst = await acquirePiSubagentLaunchFence(agentHome);
+        const releaseSecond = await acquirePiSubagentLaunchFence(agentHome);
+
+        // Whichever finishes first used to delete the file outright, taking
+        // down the fence the other boundary was still relying on.
+        await releaseFirst();
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        expect(existsSync(piSubagentLaunchFencePath(agentHome, process.pid))).toBe(true);
+
+        await releaseSecond();
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        expect(existsSync(piSubagentLaunchFencePath(agentHome, process.pid))).toBe(false);
+      });
+
+      it('stays idempotent, so a double release cannot drop a live holder', async () => {
+        const agentHome = await makeRoot();
+        const releaseFirst = await acquirePiSubagentLaunchFence(agentHome);
+        const releaseSecond = await acquirePiSubagentLaunchFence(agentHome);
+
+        await releaseFirst();
+        await releaseFirst();
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+
+        await releaseSecond();
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+      });
+
+      it('refuses to delete a fence file it did not write', async () => {
+        // Defence in depth for what the counter cannot see: the payload was
+        // replaced after this holder acquired, so the file on disk belongs to
+        // someone else's lease and is not this release's to drop.
+        const agentHome = await makeRoot();
+        const release = await acquirePiSubagentLaunchFence(agentHome);
+        const file = piSubagentLaunchFencePath(agentHome, process.pid);
+        await writeFile(file, `${JSON.stringify({
+          version: 1,
+          hostPid: process.pid,
+          hostStartTimeSec: 1,
+          leaseId: 'someone-elses-lease',
+          createdAt: Date.now(),
+        })}\n`);
+
+        await release();
+
+        expect(existsSync(file)).toBe(true);
+        await rm(file, { force: true });
+      });
+
+      it('leaves no holder behind when the acquire itself fails', async () => {
+        const agentHome = await makeRoot();
+        const file = piSubagentLaunchFencePath(agentHome, process.pid);
+        // A directory where the fence file belongs: the write fails, and a
+        // counter incremented before it would have pinned the fence up for the
+        // rest of the process's life.
+        await mkdir(file, { recursive: true });
+        await expect(acquirePiSubagentLaunchFence(agentHome)).rejects.toThrow();
+        await rm(file, { recursive: true, force: true });
+
+        const release = await acquirePiSubagentLaunchFence(agentHome);
+        await release();
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+      });
     });
 
     /**

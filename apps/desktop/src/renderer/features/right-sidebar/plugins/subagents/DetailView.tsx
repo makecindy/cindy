@@ -258,6 +258,7 @@ function PiDurableDetailView({
   detail,
   loading,
   workdir,
+  allowPrivilegedLinks,
   stopping,
   transcript,
   transcriptLoading,
@@ -465,6 +466,7 @@ function PiDurableDetailView({
           {showAssignmentFallback ? (
             <UserMessage
               workingDir={workdir}
+              allowPrivilegedLinks={allowPrivilegedLinks}
               content={assignment}
               createdAt={new Date(detail.startedAt).toISOString()}
             />
@@ -474,6 +476,7 @@ function PiDurableDetailView({
             <ConversationStream
               items={conversation.items}
               workdir={workdir}
+              allowPrivilegedLinks={allowPrivilegedLinks}
               actionBarItemId={actionBarItemId}
             />
           ) : null}
@@ -484,6 +487,7 @@ function PiDurableDetailView({
           {showDurableResultFallback ? (
             <AssistantMessage
               workingDir={workdir}
+              allowPrivilegedLinks={allowPrivilegedLinks}
               content={visibleResult}
               createdAt={new Date(detail.updatedAt).toISOString()}
               agentKind="pi"

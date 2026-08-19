@@ -179,8 +179,31 @@ interface PiSubagentLaunchFence {
    * file because the pid is alive. Absent on fences written before this field.
    */
   hostStartTimeSec?: number;
+  /**
+   * Identifies the individual acquisition, not the host.
+   *
+   * Two boundaries in one process share a fence file (an update reclaim while
+   * the user quits; an account teardown overlapping a quit), and the counter in
+   * `launchFenceLeases` composes them. This field guards the case the counter
+   * cannot see: a release that runs against a *file* somebody else wrote —
+   * because the counter was lost with a reload, or because a second writer
+   * overwrote the payload. A release only deletes a file whose `leaseId` is its
+   * own. Absent on fences written before this field, which keep the old
+   * unconditional delete.
+   */
+  leaseId?: string;
   createdAt: number;
 }
+
+/**
+ * Live fence acquisitions in this process, keyed by fence file.
+ *
+ * Per-host isolation made the file unambiguous but not re-entrant: whichever
+ * boundary released first deleted the file, tearing down the fence the other
+ * one was still relying on to keep launchers out. Counting means the last
+ * holder is the one that lowers it.
+ */
+const launchFenceLeases = new Map<string, { leaseId: string; holders: number }>();
 
 function piSubagentRunsRoot(agentHome: string): string {
   return path.join(agentHome, 'runtime', 'pi-subagent-runs');
@@ -237,6 +260,7 @@ function parseLaunchFence(value: unknown): PiSubagentLaunchFence | null {
     ...(Number.isSafeInteger(raw.hostStartTimeSec) && (raw.hostStartTimeSec as number) > 0
       ? { hostStartTimeSec: raw.hostStartTimeSec as number }
       : {}),
+    ...(typeof raw.leaseId === 'string' && raw.leaseId ? { leaseId: raw.leaseId } : {}),
     createdAt: finiteNonNegative(raw.createdAt) ? raw.createdAt : 0,
   };
 }
@@ -278,22 +302,58 @@ export function isPiSubagentLaunchFenceActive(agentHome: string, hostPid: number
  * Raise the fence for this process. The returned release is idempotent and must
  * run on every path out of the relaunch, or this host's own next launch attempt
  * would be refused until it exits.
+ *
+ * Re-entrant across the boundaries that share this process. Two of them can be
+ * open at once — an update reclaim the user quits out of, an account teardown
+ * that overlaps a quit — and the fence must stay up until the last one is done.
+ * Two mechanisms, guarding different things:
+ *  - the in-process counter composes overlapping holders, so an early release
+ *    lowers nothing while another holder is still inside its window;
+ *  - the `leaseId` in the payload makes the delete conditional, so a release
+ *    can never remove a file it did not write. That is what covers the case the
+ *    counter cannot see at all — a second writer having replaced the payload,
+ *    or the counter itself having been lost.
+ * Neither replaces the stale sweep: a process killed outright leaves the file,
+ * and the next instance's start-identity check is what clears it.
  */
 export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<() => Promise<void>> {
   // Writes and deletes only this host's file, so a concurrent instance's fence
   // can neither be clobbered by this one nor removed by its cancellation.
   const file = piSubagentLaunchFencePath(agentHome);
+  const existing = launchFenceLeases.get(file);
+  const leaseId = existing?.leaseId ?? randomUUID();
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  // Every acquisition rewrites, including a nested one: the file may have been
+  // swept away underneath us, and rewriting with the *same* leaseId keeps the
+  // holders that are already counted able to release it.
   await writeAtomicJson(file, {
     version: 1,
     hostPid: process.pid,
     hostStartTimeSec: ownProcessStartTimeSec(),
+    leaseId,
     createdAt: Date.now(),
   } satisfies PiSubagentLaunchFence);
+  // Counted only after the write succeeded: a throw here leaves no holder
+  // behind, so a failed acquire cannot pin the fence up for the process's life.
+  launchFenceLeases.set(file, { leaseId, holders: (existing?.holders ?? 0) + 1 });
   let released = false;
   return async () => {
     if (released) return;
     released = true;
+    const lease = launchFenceLeases.get(file);
+    if (lease && lease.leaseId === leaseId) {
+      if (lease.holders > 1) {
+        // Another boundary is still inside its window; the fence stays up.
+        launchFenceLeases.set(file, { leaseId, holders: lease.holders - 1 });
+        return;
+      }
+      launchFenceLeases.delete(file);
+    }
+    const onDisk = readLaunchFence(file);
+    // Someone else's fence (a leaseId that is not ours) is not ours to drop.
+    // A pre-`leaseId` file has no owner to compare against and keeps the old
+    // unconditional delete, which is what an upgrade in place leaves behind.
+    if (onDisk?.leaseId !== undefined && onDisk.leaseId !== leaseId) return;
     await fs.rm(file, { force: true }).catch(() => undefined);
   };
 }

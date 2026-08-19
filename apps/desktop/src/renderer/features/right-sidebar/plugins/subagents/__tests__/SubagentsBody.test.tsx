@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -19,18 +21,38 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
+// The stubs record `allowPrivilegedLinks` so the remote boundary can be asserted
+// where it has to arrive. They default it to `true` exactly as the real
+// components do, so "not passed" is indistinguishable from "passed true" —
+// which is the failure being guarded against.
 vi.mock('@/components/chat/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content }: { content: string }) => (
-    <div data-testid="legacy-markdown-result">{content}</div>
+  MarkdownRenderer: ({ content, allowPrivilegedLinks = true }: {
+    content: string; allowPrivilegedLinks?: boolean;
+  }) => (
+    <div data-testid="legacy-markdown-result" data-privileged={String(allowPrivilegedLinks)}>
+      {content}
+    </div>
   ),
 }));
 
 vi.mock('@/components/chat/UserMessage', () => ({
-  UserMessage: ({ content }: { content: string }) => <div data-testid="session-user-message">{content}</div>,
+  UserMessage: ({ content, allowPrivilegedLinks = true }: {
+    content: string; allowPrivilegedLinks?: boolean;
+  }) => (
+    <div data-testid="session-user-message" data-privileged={String(allowPrivilegedLinks)}>
+      {content}
+    </div>
+  ),
 }));
 
 vi.mock('@/components/chat/AssistantMessage', () => ({
-  AssistantMessage: ({ content }: { content: string }) => <div data-testid="session-assistant-message">{content}</div>,
+  AssistantMessage: ({ content, allowPrivilegedLinks = true }: {
+    content: string; allowPrivilegedLinks?: boolean;
+  }) => (
+    <div data-testid="session-assistant-message" data-privileged={String(allowPrivilegedLinks)}>
+      {content}
+    </div>
+  ),
 }));
 
 import { SubagentsBody } from '../SubagentsBody';
@@ -185,6 +207,179 @@ describe('SubagentsBody', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('refreshes the transcript from the fallback poll, not just the detail', async () => {
+    // Same silence as the test above: the root Pi is gone, so nothing pushes.
+    // The poll refreshed the detail record only, which left the conversation
+    // frozen on the page read before the exit — every later tool call and reply
+    // the runner wrote was unreachable until the panel was remounted.
+    vi.useFakeTimers();
+    try {
+      const running = {
+        ...detail('working'),
+        status: 'running' as const,
+        capabilities: {
+          ...detail('working').capabilities,
+          viewFullTranscript: true,
+          viewReturnedResult: true,
+        },
+      };
+      currentDetail = running;
+      loadTranscript.mockResolvedValue({
+        supported: true,
+        entries: [entry({ id: 'entry-early', content: 'first generation answer' })],
+        tailCursor: 'cursor-1',
+      });
+      render(
+        <SubagentsBody
+          state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+          ctx={{
+            tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+            remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+            onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+          }}
+        />,
+      );
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('first generation answer')).toBeTruthy();
+
+      // The runner keeps working and finishes, with nobody to announce it.
+      currentDetail = { ...running, status: 'completed', returnedResult: 'second generation answer' };
+      loadTranscript.mockResolvedValue({
+        supported: true,
+        entries: [
+          entry({
+            id: 'entry-late-tool', role: 'tool', toolPhase: 'start',
+            toolName: 'read', content: 'read b.txt',
+          }),
+          entry({ id: 'entry-late', content: 'second generation answer' }),
+        ],
+        tailCursor: 'cursor-2',
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+
+      expect(screen.getByText('read b.txt')).toBeTruthy();
+      expect(screen.getByText('second generation answer')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('carries the remote boundary into the Pi conversation and its fallbacks', async () => {
+    // `allowPrivilegedLinks` is false for a device-link task, and the Pi detail
+    // renders through the same session components the main chat uses — which
+    // trust their content by default. Dropping the flag here let a remote
+    // transcript's `file:` target or Cindy deep link open a resource on the
+    // *control* machine, and made an @-chip resolve the remote author's path
+    // against this filesystem.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      description: 'the original assignment',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'durable result from the other machine',
+    };
+    deviceInvoke.mockImplementation((async (_deviceId: string, channel: string) => {
+      if (channel === 'local-db:subagent-runs:list') {
+        return { supported: true, runs: currentDetail ? [currentDetail] : [] };
+      }
+      if (channel === 'local-db:subagent-runs:detail') return { supported: true, run: currentDetail };
+      if (channel === 'local-db:subagent-runs:transcript') {
+        return {
+          supported: true,
+          entries: [entry({ id: 'entry-parent', role: 'parent', content: 'remote assignment' })],
+          tailCursor: 'cursor-remote',
+        };
+      }
+      return { supported: false, run: null, entries: [] };
+    }) as typeof defaultDeviceInvoke);
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/remote/workspace',
+          remoteHostId: null, deviceLinkDeviceId: 'device-1', patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // Both entry points: a transcript bubble, and the durable-result fallback.
+    expect(await screen.findByText('remote assignment')).toBeTruthy();
+    expect(await screen.findByText('durable result from the other machine')).toBeTruthy();
+    for (const node of [
+      ...screen.getAllByTestId('session-user-message'),
+      ...screen.getAllByTestId('session-assistant-message'),
+    ]) {
+      expect(node.getAttribute('data-privileged')).toBe('false');
+    }
+  });
+
+  it('leaves a local Pi task fully privileged', async () => {
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      returnedResult: 'local durable result',
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [entry({ id: 'entry-parent', role: 'parent', content: 'local assignment' })],
+      tailCursor: 'cursor-local',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('local assignment')).toBeTruthy();
+    expect(await screen.findByText('local durable result')).toBeTruthy();
+    for (const node of [
+      ...screen.getAllByTestId('session-user-message'),
+      ...screen.getAllByTestId('session-assistant-message'),
+    ]) {
+      expect(node.getAttribute('data-privileged')).toBe('true');
+    }
+  });
+
+  it('has the session bubbles honour the boundary they are handed', () => {
+    // The two tests above stop at the component seam, because the stubs replace
+    // exactly the components that would carry the flag further. Asserted on the
+    // source instead — same approach as `markdownTargetRendererContract` — so
+    // the panel's boundary cannot be silently dropped one level down.
+    const chatDir = path.resolve(__dirname, '../../../../../components/chat');
+    const assistant = readFileSync(path.join(chatDir, 'AssistantMessage.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    // Defaulting to true is what keeps every local caller unchanged, and is
+    // also what made the omission invisible.
+    expect(assistant).toContain('allowPrivilegedLinks = true');
+    // Both bodies: the streamed one and the settled one.
+    expect([...assistant.matchAll(/allowPrivilegedLinks=\{allowPrivilegedLinks\}/g)].length)
+      .toBeGreaterThanOrEqual(3);
+
+    const user = readFileSync(path.join(chatDir, 'UserMessage.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(user).toContain('allowPrivilegedLinks = true');
+    // A remote author's @-chip must not resolve against this filesystem: the
+    // click handler is withheld, which is the inert chip shape the component
+    // already uses for a collapsed long message.
+    expect(user).toContain('longMessageCollapsed || !allowPrivilegedLinks');
+    expect(user).toContain('allowPrivilegedLinks\n                                ? async (abs, name, chip)');
   });
 
   it('reloads the selected detail when a run change is pushed', async () => {

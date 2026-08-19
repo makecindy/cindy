@@ -274,6 +274,14 @@ function ScopedSubagentsBody({
       } finally {
         if (!cancelled) {
           setDetailRefreshVersion((version) => version + 1);
+          // The transcript needs the same bump. This poll exists precisely
+          // because the push channel went quiet — the root Pi exited, so the
+          // runner's later tool frames and replies arrive with nobody to
+          // announce them. Refreshing only the detail left the conversation
+          // frozen on the snapshot taken before the exit, and a stale
+          // assistant line in it went on suppressing the durable result the
+          // resumed generation had just produced.
+          setTranscriptRefreshVersion((version) => version + 1);
           armNextRound();
         }
       }

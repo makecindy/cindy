@@ -19,6 +19,14 @@ import { SubagentToolCard } from './SubagentToolCard';
 interface ConversationStreamProps {
   items: readonly SubagentConversationItem[];
   workdir: string;
+  /**
+   * False when this run belongs to another machine (device-link / SSH), where
+   * `workdir` is a remote path. The bubbles below are the same components the
+   * main session uses and default to trusting their content, so the boundary
+   * has to be carried in explicitly — the same contract the legacy detail view
+   * uses for its `MarkdownRenderer`.
+   */
+  allowPrivilegedLinks: boolean;
   /** Assistant item allowed to mount the hover action bar (the settled tail). */
   actionBarItemId?: string | null;
 }
@@ -32,6 +40,7 @@ function isoTime(occurredAt: number): string | undefined {
 export function ConversationStream({
   items,
   workdir,
+  allowPrivilegedLinks,
   actionBarItemId = null,
 }: ConversationStreamProps) {
   const { t } = useTranslation();
@@ -63,6 +72,7 @@ export function ConversationStream({
               ) : null}
               <UserMessage
                 workingDir={workdir}
+                allowPrivilegedLinks={allowPrivilegedLinks}
                 content={item.content}
                 createdAt={isoTime(item.occurredAt)}
               />
@@ -73,6 +83,7 @@ export function ConversationStream({
           <AssistantMessage
             key={item.id}
             workingDir={workdir}
+            allowPrivilegedLinks={allowPrivilegedLinks}
             content={item.content}
             createdAt={isoTime(item.occurredAt)}
             agentKind="pi"
