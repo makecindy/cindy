@@ -102,7 +102,6 @@ import {
 } from '@/session/MessageRenderer';
 import {
   bundledAssetToDataUri,
-  deleteConversationSharePngTemp,
   writeConversationSharePngTemp,
 } from '@/session/ConversationShareWebView';
 import {
@@ -6079,7 +6078,10 @@ export default function SessionScreen() {
           html: conversationShareHtml,
           width: windowDimensions.width,
         });
-        if (nativeBase64) return nativeBase64;
+        if (nativeBase64) {
+          console.info('[conversation-share] native webview export succeeded');
+          return nativeBase64;
+        }
       } catch (error) {
         console.warn('[conversation-share] native webview export failed; falling back to svg', error);
       }
@@ -6121,9 +6123,8 @@ export default function SessionScreen() {
       console.warn('[conversation-share] failed to generate or open share image', error);
       Alert.alert(t('session.screen.shareFailedTitle'), t('session.screen.shareImageFailed'));
     } finally {
-      if (localUri && Platform.OS !== 'android') {
-        await deleteConversationSharePngTemp(localUri);
-      }
+      // shareAsync 返回后，iOS 分享扩展仍可能继续读取该 URL。成功写入的文件留在
+      // cache 目录交给系统回收；写入失败的半成品由 writeConversationSharePngTemp 清理。
       if (shareOperationSeqRef.current === operationSeq) setConversationShareBusy(false);
     }
   }, [conversationShareBusy, exportConversationSharePng, selectedShareMessages.length, shareSelectionActive, shareSelectionRevision, t]);
