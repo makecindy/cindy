@@ -34,4 +34,10 @@ describe('conversationSearch source invariants', () => {
     expect(conversationSearchSource).toContain('applyWorkingDirFilter');
     expect(conversationSearchSource).toContain('normalizeWorkingDirForGrouping');
   });
+
+  it('scopes content retrieval to workingDir-filtered session ids', () => {
+    expect(conversationSearchSource).toContain(
+      'filters.sessionIds !== null || filters.workingDirs !== null',
+    );
+  });
 });

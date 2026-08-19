@@ -428,7 +428,19 @@ export function useConversationSearch({
       })
         .then((next) => {
           if (seq !== requestSeqRef.current) return;
-          setResponse(next);
+          // Hybrid only refreshes local. Remotes stay on the keyword page;
+          // merge the latest ref here so a slower local hybrid cannot wipe
+          // hits that arrived after this request started.
+          setResponse(mergeConversationSearchFanout([
+            next,
+            {
+              query: trimmed,
+              results: remoteResultsRef.current,
+              vectorUsed: false,
+              vectorSkipReason: null,
+              poolCapped: false,
+            },
+          ], SEARCH_LIMIT, sortBy));
           setStatus('done');
         })
         .catch(() => {
