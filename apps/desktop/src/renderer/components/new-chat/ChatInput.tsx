@@ -6230,9 +6230,20 @@ export function ChatInput({
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
+          //
+          // ★ 来源以**权威回声**为准(2026-08-19 review P1):本端传 null(跟随默认路由)而
+          // main 在登记时把它解析成了具体来源的场景里,`sessions:patched` 回声已把该来源
+          // 写进 store —— 这里再用原始 null 盖回去,renderer 与 main 的 pending intent 就
+          // 分叉了(选择器显示错误来源,意图期改选按错误路由走),而且回声已经到过,不会
+          // 再有第二次权威回流来纠正。所以 null 且回声已匹配时,采用回声里的来源;传了
+          // 具体来源时逐字用本端值(匹配判定已保证与权威一致)。回声未到(修订号未变的
+          // 常规路径)时仍写 null,稍后到达的权威回声会自然覆盖收敛。
+          const appliedProviderId =
+            providerId ??
+            (registeredIntentMatchesCurrent ? (registeredIntent?.providerId ?? null) : null);
           makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
             model: newModelId,
-            providerId,
+            providerId: appliedProviderId,
             effort: newEffort,
             fastMode: targetFast,
           });

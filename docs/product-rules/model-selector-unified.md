@@ -124,7 +124,7 @@
    - 深度/Fast 存**档位 key**(low/medium/...)不存显示文案(防语言串档,Maximum 混中文的教训)。
 3. `xdt:favoriteAnchorMemory:v1:<dataOwnerId>` —— **收藏锚点记忆**(「面板上哪一行打勾」),
    Chris 2026-08-19 实测后从内存态改为持久化:
-   `{ drafts: { <cc|codex|pi>: { uid, wireModelId } }, sessions: [{ sessionId, uid, wireModelId, engine, providerId }] }`
+   `{ drafts: { <cc|codex|pi>: { uid, wireModelId, providerId } }, sessions: [{ sessionId, uid, wireModelId, engine, providerId }] }`
    - 草稿槽按引擎分(与 `lastByVendor` 同一分槽维度);会话槽按 sessionId,**LRU 上限 100**(队首=最近一次写)。
    - 存的是**选中那一刻的快照**,消费方与当前 (模型/引擎/来源) 逐项比对后才打勾,对不上就回落模型行 —— 过期
      锚点永远不会让面板勾一份已经不生效的配置。

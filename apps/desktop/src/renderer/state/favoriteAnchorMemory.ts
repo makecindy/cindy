@@ -60,13 +60,19 @@ export interface DraftFavoriteAnchor {
   uid: string;
   /** 选中时写进草稿的 **wire model id**(≠ 收藏条目里的归一化行 id)。 */
   wireModelId: string;
+  /**
+   * 选中时写进草稿的**显式来源**(2026-08-19 review P1:来源也是锚点身份的一部分)。
+   * 同一 wire model 可来自多家供应商(收藏是**某一来源**那份配置的副本)——只比 wire id,
+   * device-link seed / 另一窗口把草稿从来源 A 切到同 wire model 的来源 B 后,旧锚点会继续
+   * 选中 A 的收藏并抑制 B 模型行的勾,之后编辑 / 删除的也是错误副本。面板行恒带显式来源,
+   * 所以这里恒为 string(与会话槽同口径)。
+   */
+  providerId: string;
 }
 
-/** 会话槽:多带 (引擎, 显式来源) 两维,消费方按它们逐项校验后才打勾。 */
+/** 会话槽:在草稿槽三维之上多带引擎维(草稿槽的引擎由槽键承担)。 */
 export interface SessionFavoriteAnchor extends DraftFavoriteAnchor {
   engine: ModelEngine;
-  /** 选中时的**显式**来源。跟随默认路由(null)的会话不写锚点,见 setSessionFavoriteAnchor。 */
-  providerId: string;
 }
 
 interface SessionSlot extends SessionFavoriteAnchor {
@@ -96,9 +102,12 @@ function nonEmptyString(value: unknown): value is string {
 
 function normalizeAnchor(raw: unknown): DraftFavoriteAnchor | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const item = raw as { uid?: unknown; wireModelId?: unknown };
+  const item = raw as { uid?: unknown; wireModelId?: unknown; providerId?: unknown };
   if (!nonEmptyString(item.uid) || !nonEmptyString(item.wireModelId)) return null;
-  return { uid: item.uid, wireModelId: item.wireModelId };
+  // 来源是锚点身份的一部分(见 DraftFavoriteAnchor.providerId):缺它的旧条目整条丢弃
+  // (= 回落模型行,安全方向;该字段与本 store 同一 PR 落地,不存在需要迁移的存量)。
+  if (!nonEmptyString(item.providerId)) return null;
+  return { uid: item.uid, wireModelId: item.wireModelId, providerId: item.providerId };
 }
 
 /**
@@ -124,17 +133,16 @@ function sanitize(raw: unknown): AnchorState {
     const seen = new Set<string>();
     for (const value of r.sessions) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
-      const item = value as { sessionId?: unknown; engine?: unknown; providerId?: unknown };
+      const item = value as { sessionId?: unknown; engine?: unknown };
+      // providerId 校验在 normalizeAnchor 里(草稿槽与会话槽同为锚点身份三元组)。
       const anchor = normalizeAnchor(value);
       if (!anchor) continue;
       if (!nonEmptyString(item.sessionId) || seen.has(item.sessionId)) continue;
       if (!isSelectableVendor(item.engine)) continue;
-      if (!nonEmptyString(item.providerId)) continue;
       seen.add(item.sessionId);
       state.sessions.push({
         sessionId: item.sessionId,
         engine: item.engine,
-        providerId: item.providerId,
         ...anchor,
       });
       // 落盘次序即 LRU 次序:超出上限的尾部直接不收(旧数据被手改成超长表时同样收敛)。
@@ -209,11 +217,19 @@ export function setDraftFavoriteAnchor(
       ? anchor === null
       : anchor !== null &&
         current.uid === anchor.uid &&
-        current.wireModelId === anchor.wireModelId;
+        current.wireModelId === anchor.wireModelId &&
+        current.providerId === anchor.providerId;
   if (same) return;
   const drafts = { ...state.drafts };
-  if (anchor) drafts[engine] = { uid: anchor.uid, wireModelId: anchor.wireModelId };
-  else delete drafts[engine];
+  if (anchor) {
+    drafts[engine] = {
+      uid: anchor.uid,
+      wireModelId: anchor.wireModelId,
+      providerId: anchor.providerId,
+    };
+  } else {
+    delete drafts[engine];
+  }
   persist({ ...state, drafts });
 }
 

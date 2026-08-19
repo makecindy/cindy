@@ -1011,6 +1011,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('registeredIntent.target === targetAgentKind');
     expect(source).toContain('registeredIntent.model === newModelId');
     expect(source).toContain('registeredIntent.providerId === providerId');
+    // providerId=null(跟随默认路由)时只认 target+model 的通配出口 —— main 可能把 null
+    // 解析成具体来源再登记(2026-08-19 review P1 的前半)。
+    expect(source).toContain('providerId === null ||');
+    // 通配放行后,apply-intent 必须**保留权威回声里的来源**,不得用原始 null 盖回去
+    // (2026-08-19 review P1 的后半:盖回去 = renderer 与 main 的 pending intent 分叉,
+    // 且回声已到过、不会再有第二次权威回流纠正)。
+    expect(source).toContain('const appliedProviderId =');
+    expect(source).toContain('registeredIntentMatchesCurrent ? (registeredIntent?.providerId ?? null) : null');
+    expect(source).toContain('providerId: appliedProviderId,');
     // 1d:意图期改选模型 / 来源必须 await 并把结果交回去,不能 fire-and-forget 返回
     // undefined 让上游读成「已应用」。
     expect(source).not.toContain('void performAgentSwitch(');

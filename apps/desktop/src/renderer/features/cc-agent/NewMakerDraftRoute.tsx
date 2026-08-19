@@ -2010,21 +2010,26 @@ export function NewMakerDraftRoute() {
     capabilityAgentKind,
   ]);
 
-  // 收藏锚点的失效兜底:选中一条收藏后,如果草稿的模型又被别的路径改掉(引擎不可用
-  // coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 —— 靠**派生**让它不亮:
-  // 比的是快照里的 wire id 与草稿当前的 wire id(不去查收藏条目 —— 它按归一化行 id 存,
-  // 与草稿的 wire id 天生可能不等,见 draftFavoriteAnchor 的说明)。引擎维度不必比:槽按
+  // 收藏锚点的失效兜底:选中一条收藏后,如果草稿的 (模型, 来源) 又被别的路径改掉(引擎
+  // 不可用 coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 —— 靠**派生**让
+  // 它不亮:比的是快照里的 (wire id, providerId) 与草稿当前值。wire id 不查收藏条目(它按
+  // 归一化行 id 存,与草稿的 wire id 天生可能不等,见 draftFavoriteAnchor 的说明);
+  // **来源必须比**(2026-08-19 review P1):同一 wire model 可来自多家供应商,只比 wire id,
+  // device-link seed / 另一窗口把草稿从来源 A 切到同 wire model 的来源 B 后,旧锚点会继续
+  // 勾着 A 的收藏并抑制 B 模型行的勾,之后编辑 / 删除的也是错误副本。引擎维度不必比:槽按
   // 引擎分,读到的本来就是当前引擎那一格。锚点指向的收藏被删 / 换账号后查无此条的情形,
   // 由面板侧 activeFavoriteUid 兜底。
   //
   // ★ 刻意**不做**「不符就把槽删掉」的清理 effect(2026-08-19 预审 P2-7):槽是持久化数据,
-  // 而 draftInitialModel 存在瞬态窗口 —— device-link 草稿在被控端 seed 到达前暂用本地
-  // chatPrefs 值,那一帧的失配会把用户真实的锚点**永久**删掉;两个窗口(本地草稿 × 远程
-  // 草稿)共用同一引擎槽时也会互删。派生「不符不亮」已保证不会勾错;显式选择(选普通模型
-  // 行 → handleUnifiedDraftSelect 写 null)仍会清槽。留下的休眠锚点只在模型改回那一刻
-  // 重新亮起 —— 那本来就是用户对该模型最后一次显式选中的副本,语义可接受。
+  // 而 draftInitialModel / chatInitialProviderId 存在瞬态窗口 —— device-link 草稿在被控端
+  // seed 到达前暂用本地 chatPrefs 值,那一帧的失配会把用户真实的锚点**永久**删掉;两个窗口
+  // (本地草稿 × 远程草稿)共用同一引擎槽时也会互删。派生「不符不亮」已保证不会勾错;
+  // 显式选择(选普通模型行 → handleUnifiedDraftSelect 写 null)仍会清槽。留下的休眠锚点
+  // 只在 (模型, 来源) 改回那一刻重新亮起 —— 那本来就是用户对该配置最后一次显式选中的副本。
   const selectedFavoriteUid =
-    draftFavoriteAnchor && draftFavoriteAnchor.wireModelId === draftInitialModel
+    draftFavoriteAnchor &&
+    draftFavoriteAnchor.wireModelId === draftInitialModel &&
+    draftFavoriteAnchor.providerId === chatInitialProviderId
       ? draftFavoriteAnchor.uid
       : null;
 
@@ -2050,7 +2055,9 @@ export function NewMakerDraftRoute() {
     ): void => {
       const anchor = draftFavoriteAnchorRef.current;
       if (!anchor || !providerId) return;
-      if (anchor.wireModelId !== model) return;
+      // (wire id, 来源) 都必须与**本次实际提交值**逐字相等(2026-08-19 review P1:来源也是
+      // 锚点身份 —— 提交前的校准 / 重路由把来源换掉时,收藏副本描述的已不是提交出去的那份)。
+      if (anchor.wireModelId !== model || anchor.providerId !== providerId) return;
       setSessionFavoriteAnchor(newSessionId, {
         uid: anchor.uid,
         wireModelId: anchor.wireModelId,
@@ -2680,7 +2687,12 @@ export function NewMakerDraftRoute() {
       setDraftFavoriteAnchor(
         normalizeDbAgentKind(selection.vendor),
         selection.favoriteUid
-          ? { uid: selection.favoriteUid, wireModelId: selection.modelId }
+          ? {
+              uid: selection.favoriteUid,
+              wireModelId: selection.modelId,
+              // 来源也是锚点身份(2026-08-19 review P1):同 wire model 换来源后旧锚点不得再亮。
+              providerId: selection.providerId,
+            }
           : null,
       );
       if (selection.vendor !== draft.vendor) switchVendor(selection.vendor, currentPrefs);

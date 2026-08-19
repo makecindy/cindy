@@ -1761,9 +1761,14 @@ describe('New Maker 草稿的 wire model id 口径', () => {
     expect(newMakerDraftRouteSource).toContain(
       'draftFavoriteAnchor.wireModelId === draftInitialModel',
     );
+    // 来源也是锚点身份(2026-08-19 review P1):同 wire model 跨来源不得误恢复。
+    expect(newMakerDraftRouteSource).toContain(
+      'draftFavoriteAnchor.providerId === chatInitialProviderId',
+    );
     expect(newMakerDraftRouteSource).not.toContain('favorite.modelId !== draftInitialModel');
-    // 快照在选中那一刻记下本次写进草稿的 wire id。
-    expect(newMakerDraftRouteSource).toContain('wireModelId: selection.modelId }');
+    // 快照在选中那一刻记下本次写进草稿的 (wire id, 来源)。
+    expect(newMakerDraftRouteSource).toContain('wireModelId: selection.modelId,');
+    expect(newMakerDraftRouteSource).toContain('providerId: selection.providerId,');
   });
 
   it('草稿锚点不做「不符即删槽」的清理 effect(持久化后瞬态失配会永久误删)', () => {

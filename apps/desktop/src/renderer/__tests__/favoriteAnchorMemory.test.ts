@@ -83,29 +83,30 @@ describe('favoriteAnchorMemory · 草稿槽', () => {
 
   it('按引擎分槽:cc 与 codex 各记各的,互不覆盖,且同步落盘 + 跨重启恢复', async () => {
     const m1 = await loadModule();
-    m1.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5' });
-    m1.setDraftFavoriteAnchor('codex', { uid: 'fav-2', wireModelId: 'codex/gpt-5.5' });
+    m1.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5', providerId: 'xd' });
+    m1.setDraftFavoriteAnchor('codex', { uid: 'fav-2', wireModelId: 'codex/gpt-5.5', providerId: 'xd' });
     // 同步写:调用返回时已落盘(热更 app.exit 强退不丢)。
     expect(JSON.parse(memStorage.getItem(m1.__STORAGE_KEY) ?? 'null')).toMatchObject({
       drafts: {
-        cc: { uid: 'fav-1', wireModelId: 'claude-opus-5' },
-        codex: { uid: 'fav-2', wireModelId: 'codex/gpt-5.5' },
+        cc: { uid: 'fav-1', wireModelId: 'claude-opus-5', providerId: 'xd' },
+        codex: { uid: 'fav-2', wireModelId: 'codex/gpt-5.5', providerId: 'xd' },
       },
     });
 
     vi.resetModules();
     const m2 = await loadModule();
-    expect(m2.getDraftFavoriteAnchor('cc')).toEqual({ uid: 'fav-1', wireModelId: 'claude-opus-5' });
+    expect(m2.getDraftFavoriteAnchor('cc')).toEqual({ uid: 'fav-1', wireModelId: 'claude-opus-5', providerId: 'xd' });
     expect(m2.getDraftFavoriteAnchor('codex')).toEqual({
       uid: 'fav-2',
       wireModelId: 'codex/gpt-5.5',
+      providerId: 'xd',
     });
   });
 
   it('写 null = 清该引擎的槽,不影响别的引擎', async () => {
     const m = await loadModule();
-    m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5' });
-    m.setDraftFavoriteAnchor('codex', { uid: 'fav-2', wireModelId: 'codex/gpt-5.5' });
+    m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5', providerId: 'xd' });
+    m.setDraftFavoriteAnchor('codex', { uid: 'fav-2', wireModelId: 'codex/gpt-5.5', providerId: 'xd' });
     m.setDraftFavoriteAnchor('cc', null);
     expect(m.getDraftFavoriteAnchor('cc')).toBeNull();
     expect(m.getDraftFavoriteAnchor('codex')?.uid).toBe('fav-2');
@@ -115,12 +116,21 @@ describe('favoriteAnchorMemory · 草稿槽', () => {
     const m = await loadModule();
     const seen = vi.fn();
     m.subscribeFavoriteAnchorMemory(seen);
-    m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5' });
+    m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5', providerId: 'xd' });
     expect(seen).toHaveBeenCalledTimes(1);
-    m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5' });
+    m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5', providerId: 'xd' });
     expect(seen).toHaveBeenCalledTimes(1);
     m.setDraftFavoriteAnchor('pi', null);
     expect(seen).toHaveBeenCalledTimes(1);
+    // 仅来源不同 = 另一份配置(2026-08-19 review P1:同 wire model 跨来源是两份副本),
+    // 不算「无变化」,必须落盘。
+    m.setDraftFavoriteAnchor('cc', {
+      uid: 'fav-1',
+      wireModelId: 'claude-opus-5',
+      providerId: 'anthropic',
+    });
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(m.getDraftFavoriteAnchor('cc')?.providerId).toBe('anthropic');
   });
 });
 
@@ -164,13 +174,13 @@ describe('favoriteAnchorMemory · 分区 / 跨窗口 / 健壮性', () => {
   it('dataOwnerId 分区隔离:换账号读不到上一个账号的锚点,切回来照旧', async () => {
     const m = await loadModule();
     m.setFavoriteAnchorMemoryOwner('owner-a');
-    m.setDraftFavoriteAnchor('cc', { uid: 'fav-a', wireModelId: 'model-a' });
+    m.setDraftFavoriteAnchor('cc', { uid: 'fav-a', wireModelId: 'model-a', providerId: 'xd' });
     m.setSessionFavoriteAnchor('s-1', { ...SESSION_ANCHOR });
 
     m.setFavoriteAnchorMemoryOwner('owner-b');
     expect(m.getDraftFavoriteAnchor('cc')).toBeNull();
     expect(m.getSessionFavoriteAnchor('s-1')).toBeNull();
-    m.setDraftFavoriteAnchor('cc', { uid: 'fav-b', wireModelId: 'model-b' });
+    m.setDraftFavoriteAnchor('cc', { uid: 'fav-b', wireModelId: 'model-b', providerId: 'xd' });
 
     m.setFavoriteAnchorMemoryOwner('owner-a');
     expect(m.getDraftFavoriteAnchor('cc')?.uid).toBe('fav-a');
@@ -192,8 +202,8 @@ describe('favoriteAnchorMemory · 分区 / 跨窗口 / 健壮性', () => {
     const seenByA = vi.fn();
     a.subscribeFavoriteAnchorMemory(seenByA);
     // B 窗口选了一条收藏 → A 窗口收到事件后重读,拿到的是真相而不是事件里的值。
-    b.setDraftFavoriteAnchor('cc', { uid: 'fav-7', wireModelId: 'claude-opus-5' });
-    expect(a.getDraftFavoriteAnchor('cc')).toEqual({ uid: 'fav-7', wireModelId: 'claude-opus-5' });
+    b.setDraftFavoriteAnchor('cc', { uid: 'fav-7', wireModelId: 'claude-opus-5', providerId: 'xd' });
+    expect(a.getDraftFavoriteAnchor('cc')).toEqual({ uid: 'fav-7', wireModelId: 'claude-opus-5', providerId: 'xd' });
     expect(seenByA).toHaveBeenCalled();
   });
 
@@ -203,10 +213,12 @@ describe('favoriteAnchorMemory · 分区 / 跨窗口 / 健壮性', () => {
       m0.__STORAGE_KEY,
       JSON.stringify({
         drafts: {
-          cc: { uid: 'fav-1', wireModelId: 'ok' },
+          cc: { uid: 'fav-1', wireModelId: 'ok', providerId: 'xd' },
           // 引擎不认识 → 整条丢;缺 wireModelId → 整条丢。
-          orca: { uid: 'fav-2', wireModelId: 'x' },
+          orca: { uid: 'fav-2', wireModelId: 'x', providerId: 'xd' },
           codex: { uid: 'fav-3' },
+          // 缺来源 → 整条丢(来源是锚点身份三元组之一,2026-08-19 review P1)。
+          pi: { uid: 'fav-5', wireModelId: 'ok' },
         },
         sessions: [
           { sessionId: 's-1', uid: 'fav-1', wireModelId: 'ok', engine: 'cc', providerId: 'xd' },
@@ -221,6 +233,7 @@ describe('favoriteAnchorMemory · 分区 / 跨窗口 / 健壮性', () => {
     const m = await loadModule();
     expect(m.getDraftFavoriteAnchor('cc')?.uid).toBe('fav-1');
     expect(m.getDraftFavoriteAnchor('codex')).toBeNull();
+    expect(m.getDraftFavoriteAnchor('pi')).toBeNull();
     expect(m.getSessionFavoriteAnchor('s-1')?.uid).toBe('fav-1');
     expect(m.getSessionFavoriteAnchor('s-2')).toBeNull();
     expect(m.getSessionFavoriteAnchor('s-3')).toBeNull();
@@ -237,7 +250,7 @@ describe('favoriteAnchorMemory · 分区 / 跨窗口 / 健壮性', () => {
       throw new Error('quota');
     });
     expect(() =>
-      m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5' }),
+      m.setDraftFavoriteAnchor('cc', { uid: 'fav-1', wireModelId: 'claude-opus-5', providerId: 'xd' }),
     ).not.toThrow();
     expect(m.getDraftFavoriteAnchor('cc')?.uid).toBe('fav-1');
   });
