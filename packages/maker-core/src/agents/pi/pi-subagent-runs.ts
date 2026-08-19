@@ -308,16 +308,47 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
  * only the Host ever parses it back.
  */
 export function piSubagentRuntimeOwnerId(hostPid: number, scopeId: string): string {
-  return `${hostPid}:${scopeId}`;
+  return `${hostPid}.${ownProcessStartTimeSec()}:${scopeId}`;
+}
+
+/** Wall-clock second this process started, in the form the owner id records. */
+function ownProcessStartTimeSec(): number {
+  return Math.round(Date.now() / 1000 - process.uptime());
+}
+
+export interface PiSubagentOwnerIdentity {
+  pid: number;
+  /** Absent on ids written before the start time was recorded. */
+  startTimeSec?: number;
+}
+
+/**
+ * Host process encoded by `piSubagentRuntimeOwnerId`, or null when the id
+ * carries none.
+ *
+ * Accepts both shapes: `<pid>:<scope>` (legacy) and `<pid>.<startSec>:<scope>`.
+ * The scope half is never parsed, so an id minted by a newer build stays a
+ * plain opaque string for the runner and the in-Pi extension — only the Host
+ * ever splits it, which is what makes the extra segment wire-compatible.
+ */
+export function piSubagentOwnerIdentity(
+  runtimeOwnerId: string | undefined,
+): PiSubagentOwnerIdentity | null {
+  if (typeof runtimeOwnerId !== 'string' || runtimeOwnerId.length === 0) return null;
+  const separator = runtimeOwnerId.indexOf(':');
+  if (separator <= 0) return null;
+  const host = runtimeOwnerId.slice(0, separator);
+  const dot = host.indexOf('.');
+  const pid = Number(dot < 0 ? host : host.slice(0, dot));
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  if (dot < 0) return { pid };
+  const startTimeSec = Number(host.slice(dot + 1));
+  return Number.isSafeInteger(startTimeSec) && startTimeSec > 0 ? { pid, startTimeSec } : { pid };
 }
 
 /** Host pid encoded by `piSubagentRuntimeOwnerId`, or null for a legacy/absent id. */
 export function piSubagentOwnerHostPid(runtimeOwnerId: string | undefined): number | null {
-  if (typeof runtimeOwnerId !== 'string' || runtimeOwnerId.length === 0) return null;
-  const separator = runtimeOwnerId.indexOf(':');
-  if (separator <= 0) return null;
-  const pid = Number(runtimeOwnerId.slice(0, separator));
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  return piSubagentOwnerIdentity(runtimeOwnerId)?.pid ?? null;
 }
 
 /**
@@ -347,13 +378,16 @@ export function piSubagentControlOwnership(
   status: PiSubagentRunStatus,
   hostPid: number,
 ): PiSubagentControlOwnership {
-  const ownerPid = piSubagentOwnerHostPid(status.runtimeOwnerId);
+  const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
   // Missing or legacy prefix-less owner id: cannot attribute, stay controllable.
-  if (ownerPid === null) return 'unattributable';
-  if (ownerPid === hostPid) return 'self';
+  if (identity === null) return 'unattributable';
+  // A pid equal to ours still has to prove it is *this* incarnation: after a
+  // crash and restart the OS can hand us the pid of the instance that left the
+  // run behind, and that run is an orphan, not ours.
+  if (identity.pid === hostPid && isOwnerInstanceAlive(identity)) return 'self';
   // Unknown liveness counts as live: refusing is recoverable (the user is told
   // which window owns it), silently steering someone else's run is not.
-  return isProcessAlive(ownerPid) === false ? 'orphaned' : 'foreign-live';
+  return isOwnerInstanceAlive(identity) ? 'foreign-live' : 'orphaned';
 }
 
 /**
@@ -401,11 +435,112 @@ export function canHostControlPiSubagentRun(
 }
 
 function isSweepableByHost(status: PiSubagentRunStatus | undefined, hostPid: number): boolean {
-  const ownerPid = piSubagentOwnerHostPid(status?.runtimeOwnerId);
-  if (ownerPid === null) return true;
-  if (ownerPid === hostPid) return true;
+  const identity = piSubagentOwnerIdentity(status?.runtimeOwnerId);
+  if (identity === null) return true;
+  if (identity.pid === hostPid) return true;
   // A dead owner process leaves an orphan runner that nobody will ever stop.
-  return isProcessAlive(ownerPid) === false;
+  // "Dead" includes a pid that is live but belongs to a *different* process
+  // than the one that minted the id (recycled pid).
+  return !isOwnerInstanceAlive(identity);
+}
+
+/**
+ * Elapsed-time text from `ps -o etime=` as seconds, or null when unparsable.
+ *
+ * `[[dd-]hh:]mm:ss` is the one format every ps agrees on — `etimes` (plain
+ * seconds) is a procps extension that macOS does not have.
+ */
+function parseElapsedSeconds(text: string): number | null {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+  const dash = trimmed.indexOf('-');
+  const days = dash > 0 ? Number(trimmed.slice(0, dash)) : 0;
+  const parts = (dash > 0 ? trimmed.slice(dash + 1) : trimmed).split(':').map(Number);
+  if (!Number.isFinite(days) || days < 0) return null;
+  if (parts.length < 2 || parts.length > 3 || parts.some((part) => !Number.isFinite(part) || part < 0)) {
+    return null;
+  }
+  const [hours, minutes, seconds] = parts.length === 3 ? parts : [0, parts[0]!, parts[1]!];
+  return days * 86_400 + hours! * 3_600 + minutes! * 60 + seconds!;
+}
+
+/** Start second of the live process at `pid`, or null when it cannot be read. */
+function probeProcessStartTimeSec(pid: number, now: number): number | null {
+  try {
+    if (process.platform === 'win32') {
+      const probe = spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `[int64](Get-Date (Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate -UFormat %s)`,
+        ],
+        { encoding: 'utf8', timeout: 5_000, windowsHide: true },
+      );
+      if (probe.error || probe.status !== 0) return null;
+      const seconds = Number((typeof probe.stdout === 'string' ? probe.stdout : '').trim());
+      return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
+    }
+    const probe = spawnSync('ps', ['-p', String(pid), '-o', 'etime='], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    if (probe.error || probe.status !== 0) return null;
+    const elapsed = parseElapsedSeconds(typeof probe.stdout === 'string' ? probe.stdout : '');
+    return elapsed === null ? null : Math.round(now / 1_000 - elapsed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Memo for the start-time probe: one sweep asks the same question once per run
+ * directory, and each miss is a `ps`/CIM spawn. The TTL keeps it honest — a pid
+ * that dies and is recycled inside 10s still resolves to the old answer, which
+ * only ever errs toward "still alive" (the conservative direction below).
+ */
+const PROCESS_START_PROBE_TTL_MS = 10_000;
+const PROCESS_START_PROBE_CACHE_MAX = 64;
+const processStartTimeCache = new Map<number, { at: number; startTimeSec: number | null }>();
+
+function readProcessStartTimeSec(pid: number): number | null {
+  const now = Date.now();
+  const cached = processStartTimeCache.get(pid);
+  if (cached && now - cached.at < PROCESS_START_PROBE_TTL_MS) return cached.startTimeSec;
+  const startTimeSec = probeProcessStartTimeSec(pid, now);
+  processStartTimeCache.set(pid, { at: now, startTimeSec });
+  if (processStartTimeCache.size > PROCESS_START_PROBE_CACHE_MAX) {
+    for (const [key, entry] of processStartTimeCache) {
+      if (now - entry.at >= PROCESS_START_PROBE_TTL_MS) processStartTimeCache.delete(key);
+    }
+  }
+  return startTimeSec;
+}
+
+/** `ps` rounds to the second and samples after we read the clock. */
+const OWNER_START_TIME_TOLERANCE_SEC = 5;
+
+/**
+ * Is the *instance* that minted this owner id still running?
+ *
+ * A pid alone cannot answer that. Pids are recycled, and a recycled one makes a
+ * crashed instance's orphan read as "owned by another live instance" — which
+ * the sweep then skips forever and the user cannot stop from the UI, while the
+ * runner spends the BYOM credentials it inherited until its run timeout.
+ * Comparing the recorded process start time settles it.
+ *
+ * Conservative in exactly one direction: anything we cannot disprove counts as
+ * alive (legacy id without a start time, unreadable probe). Killing a live
+ * instance's Subagent is unrecoverable; leaving an orphan is bounded by the run
+ * timeout and still reachable through the diagnostics path.
+ */
+function isOwnerInstanceAlive(identity: PiSubagentOwnerIdentity): boolean {
+  if (isProcessAlive(identity.pid) === false) return false;
+  if (identity.startTimeSec === undefined) return true;
+  const startTimeSec = identity.pid === process.pid
+    ? ownProcessStartTimeSec()
+    : readProcessStartTimeSec(identity.pid);
+  if (startTimeSec === null) return true;
+  return Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
 }
 
 function isProcessAlive(pid: number | undefined): boolean | null {
@@ -1093,6 +1228,12 @@ interface PiSubagentResumeClaim {
   version: 1;
   runtimeOwnerId?: string;
   hostPid: number;
+  /**
+   * Start second of the holder process. Same reason as the owner id carries
+   * one: a recycled pid would otherwise keep a dead holder's claim alive
+   * forever and wedge resume. Absent on claims written by older builds.
+   */
+  hostStartTimeSec?: number;
   claimedAt: number;
 }
 
@@ -1104,6 +1245,9 @@ function parseResumeClaim(value: unknown): PiSubagentResumeClaim | null {
     version: 1,
     ...(typeof raw.runtimeOwnerId === 'string' ? { runtimeOwnerId: raw.runtimeOwnerId } : {}),
     hostPid: raw.hostPid as number,
+    ...(Number.isSafeInteger(raw.hostStartTimeSec) && (raw.hostStartTimeSec as number) > 0
+      ? { hostStartTimeSec: raw.hostStartTimeSec as number }
+      : {}),
     claimedAt: finiteNonNegative(raw.claimedAt) ? raw.claimedAt : 0,
   };
 }
@@ -1140,6 +1284,7 @@ async function acquirePiSubagentResumeClaim(
     version: 1,
     ...(runtimeOwnerId ? { runtimeOwnerId } : {}),
     hostPid,
+    hostStartTimeSec: ownProcessStartTimeSec(),
     claimedAt: Date.now(),
   })}\n`;
   const release = async (): Promise<void> => {
@@ -1199,7 +1344,12 @@ async function acquirePiSubagentResumeClaim(
       if (code !== 'EEXIST') throw error;
     }
     const holder = await readSettledClaim();
-    if (holder && isProcessAlive(holder.hostPid) !== false) {
+    // Same judgement as run ownership: a live pid only proves a live holder
+    // when it is still the process that wrote the claim.
+    if (holder && isOwnerInstanceAlive({
+      pid: holder.hostPid,
+      ...(holder.hostStartTimeSec !== undefined ? { startTimeSec: holder.hostStartTimeSec } : {}),
+    })) {
       throw new PiSubagentResumeClaimedError(
         'Another running Cindy instance is already resuming this Subagent generation.',
       );

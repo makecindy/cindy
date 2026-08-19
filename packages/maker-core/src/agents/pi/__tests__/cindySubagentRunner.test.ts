@@ -657,6 +657,39 @@ describe('Cindy durable PI Subagent runner', () => {
       )).rejects.toThrow(/already resuming this Subagent generation/i);
     });
 
+    it('takes over a claim whose pid is live but belongs to another process', async () => {
+      // The pid is alive (it is our parent), but the claim says its holder
+      // started at the epoch — so the pid was recycled and the real holder is
+      // gone. Without the start time this reads as a live holder and resume is
+      // wedged forever. The preceding case pins the other half: a claim with no
+      // recorded start time stays conservative and is still refused.
+      const { fixture, first } = await resumableFixture();
+      const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
+      await writeFile(
+        claimPath,
+        `${JSON.stringify({
+          version: 1,
+          hostPid: process.ppid,
+          hostStartTimeSec: 1,
+          claimedAt: Date.now(),
+        })}\n`,
+        { mode: 0o600 },
+      );
+
+      const resumedRunId = await resumePiSubagentRun(
+        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
+      );
+      expect(typeof resumedRunId).toBe('string');
+      await waitFor(
+        async () => {
+          const runs = await listPiSubagentRuns(fixture.root);
+          return runs.find((run) => run.runId === resumedRunId && isPiSubagentTerminal(run.state)) ?? null;
+        },
+        undefined,
+        'the resumed generation to settle',
+      );
+    });
+
     it('takes over a claim left behind by a dead instance', async () => {
       const { fixture, first } = await resumableFixture();
       const claimPath = path.join(fixture.root, first.runId, 'resume.claim');

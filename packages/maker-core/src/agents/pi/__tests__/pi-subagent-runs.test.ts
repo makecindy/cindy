@@ -12,6 +12,8 @@ import {
   listPiSubagentRunDiagnostics,
   listPiSubagentRuns,
   piSubagentControlOwnership,
+  piSubagentOwnerHostPid,
+  piSubagentOwnerIdentity,
   piSubagentRunRoot,
   piSubagentRuntimeOwnerId,
   requestStopAllPiSubagentRunsSync,
@@ -185,6 +187,153 @@ describe('PI durable subagent run store', () => {
       action: string;
     };
     expect(control.action).toBe('stop');
+  });
+
+  /**
+   * A pid alone cannot say whether the owning *instance* is still running: the
+   * OS recycles pids, and a recycled one makes a crashed instance's orphan read
+   * as "owned by another live window". The sweep then skips it forever and the
+   * user cannot stop it from the UI, while the runner keeps spending the BYOM
+   * credentials it inherited. The owner id therefore carries the owner's
+   * process start time, and liveness compares it.
+   */
+  describe('owner instance identity', () => {
+    /** A synthetic pid, kept distinct per case so the probe memo cannot bleed. */
+    let nextOwnerPid = 900_001;
+    const restores: Array<() => void> = [];
+
+    /** Report `pid` as live to signal-0 probes; every other pid keeps the truth. */
+    function stubAliveOwner(pid: number): void {
+      const real = process.kill.bind(process);
+      const spy = vi.spyOn(process, 'kill').mockImplementation(
+        ((target: number, signal?: NodeJS.Signals | number) => (
+          signal === 0 && target === pid ? true : real(target, signal)
+        )) as typeof process.kill,
+      );
+      restores.push(() => spy.mockRestore());
+    }
+
+    /**
+     * Answer the start-time probe as if the process had been up `elapsedSec`,
+     * or fail the probe outright when null. `ps -o etime=` prints `mm:ss`.
+     */
+    function stubStartProbe(elapsedSec: number | null): void {
+      childProcess.spawnSync.mockImplementation((...args: unknown[]) => {
+        if (elapsedSec === null) return { status: 1, stdout: '' };
+        const minutes = Math.floor(elapsedSec / 60);
+        const seconds = String(elapsedSec % 60).padStart(2, '0');
+        return { status: 0, stdout: args[0] === 'ps' ? `${minutes}:${seconds}` : String(elapsedSec) };
+      });
+    }
+
+    /** Owner id as a *foreign* instance would have written it. */
+    function foreignOwnerId(pid: number, startTimeSec: number): string {
+      return `${pid}.${startTimeSec}:scope-foreign`;
+    }
+
+    const nowSec = (): number => Math.round(Date.now() / 1_000);
+    const run = (runtimeOwnerId: string): PiSubagentRunStatus =>
+      status('123e4567-e89b-42d3-a456-426614174090', { runtimeOwnerId });
+
+    afterEach(() => {
+      restores.splice(0).forEach((restore) => restore());
+      childProcess.spawnSync.mockReset();
+      childProcess.spawnSync.mockImplementation((..._args: unknown[]) => ({ status: 0, stdout: '' }));
+    });
+
+    it('round-trips the minted id and still parses the legacy two-part form', () => {
+      const identity = piSubagentOwnerIdentity(piSubagentRuntimeOwnerId(process.pid, 'scope-mine'));
+      expect(identity?.pid).toBe(process.pid);
+      expect(identity?.startTimeSec).toBeGreaterThan(0);
+      // Within a second or two of what the runtime reports for this process.
+      expect(Math.abs((identity?.startTimeSec ?? 0) - (nowSec() - Math.round(process.uptime()))))
+        .toBeLessThanOrEqual(2);
+      // Ids written before the start time existed keep working.
+      expect(piSubagentOwnerIdentity('4242:scope-legacy')).toEqual({ pid: 4242 });
+      expect(piSubagentOwnerHostPid('4242:scope-legacy')).toBe(4242);
+      expect(piSubagentOwnerHostPid(piSubagentRuntimeOwnerId(process.pid, 'x'))).toBe(process.pid);
+      expect(piSubagentOwnerIdentity('not-an-owner')).toBeNull();
+    });
+
+    it('treats a recycled pid as a dead owner, so the orphan stays reclaimable', async () => {
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      // The live process at that pid started long after the run was recorded.
+      stubStartProbe(30);
+      const owner = foreignOwnerId(ownerPid, nowSec() - 86_400);
+
+      expect(piSubagentControlOwnership(run(owner), process.pid)).toBe('orphaned');
+      expect(canHostControlPiSubagentRun(run(owner), process.pid)).toBe(true);
+
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      const runId = '123e4567-e89b-42d3-a456-426614174091';
+      await writeStatus(root, status(runId, { runtimeOwnerId: owner }));
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
+        .resolves.toBe(false);
+      await expect(readControls(root, runId)).resolves.toEqual([
+        expect.objectContaining({ action: 'stop' }),
+      ]);
+    });
+
+    it('never steals a run from an instance whose start time still matches', async () => {
+      const ownerPid = nextOwnerPid++;
+      const startTimeSec = nowSec() - 600;
+      stubAliveOwner(ownerPid);
+      stubStartProbe(600);
+      const owner = foreignOwnerId(ownerPid, startTimeSec);
+
+      expect(piSubagentControlOwnership(run(owner), process.pid)).toBe('foreign-live');
+      expect(canHostControlPiSubagentRun(run(owner), process.pid)).toBe(false);
+
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      const runId = '123e4567-e89b-42d3-a456-426614174092';
+      await writeStatus(root, status(runId, { runtimeOwnerId: owner }));
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
+        .resolves.toBe(true);
+      await expect(readdir(path.join(root, runId))).resolves.toEqual(['status.json']);
+    });
+
+    it('keeps a legacy id conservative: a live pid is still a live owner', () => {
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      // Would report a mismatch if anything asked — nothing may ask.
+      stubStartProbe(30);
+
+      expect(piSubagentControlOwnership(run(`${ownerPid}:scope-foreign`), process.pid))
+        .toBe('foreign-live');
+      expect(childProcess.spawnSync).not.toHaveBeenCalled();
+    });
+
+    it('stays conservative when the start time cannot be read', () => {
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      stubStartProbe(null);
+
+      expect(piSubagentControlOwnership(run(foreignOwnerId(ownerPid, nowSec() - 86_400)), process.pid))
+        .toBe('foreign-live');
+    });
+
+    it('probes a given owner pid once per sweep instead of once per run', async () => {
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      stubStartProbe(30);
+      const owner = foreignOwnerId(ownerPid, nowSec() - 86_400);
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      for (const suffix of ['a1', 'a2', 'a3']) {
+        await writeStatus(root, status(`123e4567-e89b-42d3-a456-4266141740${suffix}`, {
+          runtimeOwnerId: owner,
+        }));
+      }
+
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
+        .resolves.toBe(false);
+      // Three runs, several sweep passes — one spawn. Without the memo this is
+      // a `ps` per run per pass, which shows up as logout latency.
+      expect(childProcess.spawnSync).toHaveBeenCalledTimes(1);
+    });
   });
 
   /**
