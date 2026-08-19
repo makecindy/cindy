@@ -24,7 +24,7 @@
 
 import path from 'node:path';
 
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { messages, sessions } from '../localDb/schema';
@@ -241,7 +241,7 @@ export async function queryRecentToolUseContents(sessionId: string): Promise<str
     .select({ content: messages.content })
     .from(messages)
     .where(and(...conds))
-    .orderBy(desc(messages.createdAt))
+    .orderBy(desc(messages.createdAt), desc(sql<number>`"messages"."rowid"`))
     .limit(SCAN_LIMIT);
   return rows.map((r) => r.content);
 }

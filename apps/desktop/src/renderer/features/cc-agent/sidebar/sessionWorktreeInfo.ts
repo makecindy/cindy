@@ -26,8 +26,6 @@ export interface SessionWorktreeInfo {
 }
 
 const DETECT_CWD_CHANNEL = 'worktree:detect-cwd';
-/** 与顶栏 git 上下文同一节拍:focus 覆盖切走又回来,interval 覆盖一直盯着看。 */
-const WORKTREE_RERESOLVE_INTERVAL_MS = 60_000;
 
 export function resolveManagedWorktree(
   official: Pick<WorktreeMeta, 'path' | 'name' | 'branch'> | null,
@@ -83,6 +81,16 @@ export function formatWorktreeChipText(info: SessionWorktreeInfo): string {
   return info.name;
 }
 
+/** chip 文案、hover、打开目录共用这一条路径,避免显示 worktree 却打开主仓。远端仍用 session.workingDir。 */
+export function composerWorkingDirPath(opts: {
+  workingDir: string | null | undefined;
+  liveWorktree: SessionWorktreeInfo | null;
+  isRemote: boolean;
+}): string | null {
+  if (opts.isRemote) return opts.workingDir ?? null;
+  return opts.liveWorktree?.path ?? opts.workingDir ?? null;
+}
+
 export function useTaskInfoWorktree(
   session: Pick<
     Session,
@@ -105,24 +113,43 @@ export function useTaskInfoWorktree(
       return;
     }
     let cancelled = false;
-    const refresh = async () => {
+    let generation = 0;
+    let inflight: Promise<void> | null = null;
+    let queued = false;
+    const refreshOnce = async () => {
+      const gen = ++generation;
       if (officialPath) {
         const live = await probeIsInsideWorktree(officialPath, deviceId);
-        if (cancelled) return;
+        if (cancelled || gen !== generation) return;
         setOfficialStillLive(live);
         if (live) {
           setObserved(null);
           return;
         }
-      } else {
+      } else if (gen === generation) {
         setOfficialStillLive(false);
       }
       if (isRemote) {
-        if (!cancelled) setObserved(null);
+        if (!cancelled && gen === generation) setObserved(null);
         return;
       }
       const next = await discoverObservedWorktree(session.id);
-      if (!cancelled) setObserved(next);
+      if (!cancelled && gen === generation) setObserved(next);
+    };
+    const refresh = () => {
+      if (inflight) {
+        queued = true;
+        return inflight;
+      }
+      inflight = refreshOnce().finally(() => {
+        inflight = null;
+        if (cancelled) return;
+        if (queued) {
+          queued = false;
+          void refresh();
+        }
+      });
+      return inflight;
     };
     void refresh();
     const unsubscribe = window.electronAPI.onWorktreeChanged?.(() => {
@@ -132,14 +159,10 @@ export function useTaskInfoWorktree(
       void refresh();
     };
     window.addEventListener('focus', onFocus);
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, WORKTREE_RERESOLVE_INTERVAL_MS);
     return () => {
       cancelled = true;
       unsubscribe?.();
       window.removeEventListener('focus', onFocus);
-      window.clearInterval(timer);
     };
   }, [enabled, officialPath, deviceId, isRemote, session.id]);
 

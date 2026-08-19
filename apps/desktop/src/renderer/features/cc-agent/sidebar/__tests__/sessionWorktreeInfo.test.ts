@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  composerWorkingDirPath,
   formatWorktreeChipText,
   observedWorktreeFromTelemetry,
   pathBasename,
@@ -122,5 +123,29 @@ describe('sessionWorktreeInfo', () => {
         canReveal: false,
       }),
     ).toBe('cindy-my-task');
+  });
+
+  it('opens the displayed worktree path, not the session workingDir fallback', () => {
+    const observed = {
+      path: '/repo/.worktrees/dash-slug',
+      name: 'dash-slug',
+      branch: 'dash/slug',
+      source: 'observed' as const,
+      canReveal: false,
+    };
+    expect(
+      composerWorkingDirPath({
+        workingDir: '/repo',
+        liveWorktree: observed,
+        isRemote: false,
+      }),
+    ).toBe('/repo/.worktrees/dash-slug');
+    expect(
+      composerWorkingDirPath({
+        workingDir: '/remote/repo',
+        liveWorktree: observed,
+        isRemote: true,
+      }),
+    ).toBe('/remote/repo');
   });
 });

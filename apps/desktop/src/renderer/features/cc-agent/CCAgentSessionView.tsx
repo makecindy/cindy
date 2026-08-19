@@ -171,6 +171,7 @@ import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { useWorktreeCreation, worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import {
+  composerWorkingDirPath,
   formatWorktreeChipText,
   useTaskInfoWorktree,
 } from '@/features/cc-agent/sidebar/sessionWorktreeInfo';
@@ -1225,7 +1226,11 @@ export function CCAgentSessionView({
   // local only:remote session 的 chip 仅作展示,不响应点击(见下方 remoteHostId 早返 +
   // 渲染处的条件 onClick)。
   const handleOpenWorkingDir = useCallback(async () => {
-    const wd = session?.workingDir;
+    const wd = composerWorkingDirPath({
+      workingDir: session?.workingDir,
+      liveWorktree,
+      isRemote: Boolean(session?.remoteHostId),
+    });
     if (!wd) return;
     // remote session 的 workingDir 是远端主机上的路径,本机 openPath 只会打开错误的
     // 本地同名目录或直接报错。远端文件能力接入前,remote chip 不响应点击(仅作信息
@@ -1238,7 +1243,7 @@ export function CCAgentSessionView({
       log.error('[open workingDir]', err);
       toast.error(t('ccAgent.common.openFolderFailed'));
     }
-  }, [session?.workingDir, session?.remoteHostId, t]);
+  }, [session?.workingDir, session?.remoteHostId, liveWorktree, t]);
 
   const handleReturnToDispatcher = useCallback(() => {
     if (!ownsWindowRoute) {
@@ -3837,13 +3842,18 @@ export function CCAgentSessionView({
   //   - /clear 之后留在空 ChatView 已经在用,体验没问题,本来就跟"空 session"等价
   // 现在所有空消息流/有消息流都走同一套布局(全高 scroll container + sticky bottom
   // overlay),自然消除 view 翻转带来的 layout shift。
-  const workingDirLabel = !session?.workingDir
+  const composerDir = composerWorkingDirPath({
+    workingDir: session?.workingDir,
+    liveWorktree,
+    isRemote: Boolean(session?.remoteHostId),
+  });
+  const workingDirLabel = !composerDir
     ? '\u00A0'
-    : session.workspaceKind === 'dialogue'
-      ? `${t('ccAgent.layout.dialogueLabel')} ${basename(session.workingDir).slice(0, 8)}`
+    : session?.workspaceKind === 'dialogue'
+      ? `${t('ccAgent.layout.dialogueLabel')} ${basename(composerDir).slice(0, 8)}`
       : liveWorktree
         ? formatWorktreeChipText(liveWorktree)
-        : basename(session.workingDir);
+        : basename(composerDir);
   const workingDirChipContent = (
     <>
       <Monitor size={12} className="shrink-0 text-[var(--workingdir-icon)]" />
@@ -4661,17 +4671,17 @@ export function CCAgentSessionView({
                 ) : (
                   <Tip
                     text={
-                      session?.workingDir ? (
+                      composerDir ? (
                         session?.remoteHostId ? (
                           // 远端 session: Tip 顶部加一行 "Host: <alias>" 让用户在
                           // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
                           // SSH alias (HostConfig.id), 不需要额外 lookup。
                           <>
                             <div>Host: {session.remoteHostId}</div>
-                            <div>{session.workingDir}</div>
+                            <div>{composerDir}</div>
                           </>
                         ) : (
-                          session.workingDir
+                          composerDir
                         )
                       ) : null
                     }
