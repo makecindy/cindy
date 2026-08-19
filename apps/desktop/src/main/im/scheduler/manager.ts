@@ -1030,9 +1030,8 @@ export class ImSchedulerManager {
           this.beginDiscoveryGrace();
           return;
         }
-        const visiblePeers = snapshot.peers.filter((peer) => !isDeviceRevoked(peer.deviceId));
         this.authoritativeDesktopPeers = new Map(
-          visiblePeers.map((peer) => [peer.deviceId, peer.platform]),
+          snapshot.peers.map((peer) => [peer.deviceId, peer.platform]),
         );
         // The full account snapshot replaces the old fixed-delay assumption.
         // Once it includes this exact online Desktop, election may proceed as

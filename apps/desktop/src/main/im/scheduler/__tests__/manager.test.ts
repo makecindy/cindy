@@ -1348,6 +1348,39 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('re-probes a restored Desktop retained by the authoritative snapshot', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    harness.revoked.add('a');
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    await finishDiscovery(manager);
+    expect(discord.init).toHaveBeenCalledOnce();
+    expect(harness.sendPush.mock.calls.some(([target]) => target === 'a')).toBe(false);
+
+    harness.revoked.delete('a');
+    harness.sendPush.mockClear();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(harness.sendPush.mock.calls).toContainEqual([
+      'a',
+      expect.any(String),
+      expect.objectContaining({ kind: 'probe' }),
+    ]);
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await manager.reconcile();
+
+    expect(discord.enterSchedulerStandby).toHaveBeenCalledOnce();
+    await manager.stop();
+  });
+
   it('closes local ingress immediately when an elected peer revokes this Desktop', async () => {
     harness.selfDeviceId = 'a';
     harness.peers = [
