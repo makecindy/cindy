@@ -1370,6 +1370,113 @@ describe('Maker Pi runtime skill status', () => {
     }
   });
 
+  it('maps a pathful auto-loaded user Skill by its runtime entrypoint', async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-user-pathful-')));
+    const sourcePath = path.join(root, 'pi-home', 'skills', 'directory-name');
+    const entrypointPath = path.join(sourcePath, 'SKILL.md');
+    try {
+      mkdirSync(sourcePath, { recursive: true });
+      writeFileSync(entrypointPath, '---\nname: frontmatter-name\n---\n# User Skill\n');
+      let runtimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:frontmatter-name',
+                source: 'skill',
+                sourceInfo: {
+                  source: 'auto',
+                  scope: 'user',
+                  baseDir: path.join(root, 'pi-home'),
+                  path: entrypointPath,
+                },
+              }],
+            },
+          }),
+        },
+        { sessionId: 'user-pathful' },
+        1,
+        'ready',
+        { userSkillBaseDirs: [path.join(root, 'pi-home')] },
+      );
+      const agent = createAgent(async () => {
+        const handle = createHandle({ id: 'pi-user-pathful', agentKind: 'pi' });
+        handle.getRuntimeCapabilities = () => runtimeManifest;
+        return handle;
+      }, 'pi');
+      agent.listAgentSkills = vi.fn(async () => ({
+        skills: [{
+          kind: 'agent-skill' as const,
+          name: 'directory-name',
+          source: 'skill' as const,
+          scope: 'user' as const,
+          path: sourcePath,
+        }],
+      }));
+      const maker = new Maker({
+        agents: { pi: agent },
+        storage: createStorage(),
+        logger: createLogger(),
+      });
+      await maker.createSession({
+        id: 'user-pathful',
+        agentKind: 'pi',
+        workingDir: root,
+        model: 'm',
+      });
+
+      await expect(maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-pathful',
+      })).resolves.toMatchObject({
+        skills: [{
+          name: 'directory-name',
+          runtimeStatus: 'loaded',
+          runtimeCommandName: 'skill:frontmatter-name',
+        }],
+      });
+
+      runtimeManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [
+                ...runtimeManifest.commands,
+                {
+                  name: 'skill:frontmatter-name',
+                  source: 'skill',
+                  sourceInfo: {
+                    source: 'auto',
+                    scope: 'user',
+                    baseDir: path.join(root, 'pi-home'),
+                  },
+                },
+              ],
+            },
+          }),
+        },
+        { sessionId: 'user-pathful' },
+        2,
+        'ready',
+        { userSkillBaseDirs: [path.join(root, 'pi-home')] },
+      );
+      const ambiguous = await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-pathful',
+      });
+      expect(ambiguous.skills[0]).not.toHaveProperty('runtimeStatus');
+      expect(ambiguous.skills[0]).not.toHaveProperty('runtimeCommandName');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when runtime path canonicalization exceeds its deadline', async () => {
     const workingDir = '/hung/repo';
     const agent = createAgent(async () => createHandle({ id: 'pi-timeout', agentKind: 'pi' }), 'pi');

@@ -308,6 +308,43 @@ async function runtimeUserSkillMatchesSource(
   return runtimeSkillDir === selected;
 }
 
+async function runtimeManagedPackageSkillMatchesSource(
+  sourcePath: string,
+  command: PiRuntimeCapabilityManifest['commands'][number],
+  managedSkills: readonly NonNullable<PiRuntimeCapabilityManifest['managedPackageSkills']>[number][],
+  dependencies: PiSkillInvocationValidationDeps,
+  deadlineAtMs: number,
+): Promise<boolean> {
+  if (
+    command.source !== 'skill'
+    || command.sourceInfo.source !== 'local'
+    || (command.sourceInfo.scope !== 'temporary' && command.sourceInfo.scope !== 'project')
+  ) return false;
+  const selected = await canonicalLocalPath(sourcePath, dependencies, deadlineAtMs);
+  if (!selected) return false;
+  const matches = managedSkills.filter((skill) => skill.runtimeCommandName === command.name);
+  if (matches.length !== 1) return false;
+  const managedSource = await canonicalLocalPath(matches[0]!.sourcePath, dependencies, deadlineAtMs);
+  if (!managedSource || managedSource !== selected) return false;
+
+  const runtimePath = command.sourceInfo.path;
+  const runtimeBaseDir = command.sourceInfo.baseDir;
+  const runtimeFile = typeof runtimePath === 'string'
+    ? runtimePath.includes('\0')
+      ? null
+      : path.isAbsolute(runtimePath)
+        ? runtimePath
+        : typeof runtimeBaseDir === 'string' && path.isAbsolute(runtimeBaseDir)
+          ? path.resolve(runtimeBaseDir, runtimePath)
+          : null
+    : typeof runtimeBaseDir === 'string' && path.isAbsolute(runtimeBaseDir)
+      ? path.join(runtimeBaseDir, 'SKILL.md')
+      : null;
+  if (!runtimeFile) return false;
+  const runtime = await canonicalLocalPath(runtimeFile, dependencies, deadlineAtMs);
+  return runtime === selected;
+}
+
 /**
  * Revalidate renderer-provided Pi Skill routing against this exact runtime.
  * Discovery and persisted queue data are never sufficient authority.
@@ -362,11 +399,20 @@ export async function isCurrentPiSkillInvocation(
     if (
       command.name === invocation.runtimeCommandName
       && command.source === 'skill'
-      && await runtimeUserSkillMatchesSource(
-        invocationSourcePath,
-        command,
-        dependencies,
-        deadlineAtMs,
+      && (
+        await runtimeManagedPackageSkillMatchesSource(
+          invocationSourcePath,
+          command,
+          manifest.managedPackageSkills ?? [],
+          dependencies,
+          deadlineAtMs,
+        )
+        || await runtimeUserSkillMatchesSource(
+          invocationSourcePath,
+          command,
+          dependencies,
+          deadlineAtMs,
+        )
       )
     ) runtimeMatches += 1;
     if (runtimeMatches > 1) return false;

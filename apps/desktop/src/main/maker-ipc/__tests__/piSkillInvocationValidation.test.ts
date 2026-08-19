@@ -314,6 +314,71 @@ describe('Pi Skill invocation validation', () => {
     }
   });
 
+  it('accepts a managed-package Skill with temporary local runtime provenance', async () => {
+    const managedRoot = path.join(repoRoot, 'managed-package-runtime');
+    const managedSkill = path.join(managedRoot, 'skills', 'sample', 'SKILL.md');
+    const otherManagedSkill = path.join(managedRoot, 'skills', 'other', 'SKILL.md');
+    fs.mkdirSync(path.dirname(managedSkill), { recursive: true });
+    fs.mkdirSync(path.dirname(otherManagedSkill), { recursive: true });
+    fs.writeFileSync(managedSkill, '# managed package skill\n');
+    fs.writeFileSync(otherManagedSkill, '# different managed package skill\n');
+    try {
+      const managedItem = item({
+        name: 'managed-sample',
+        runtimeCommandName: 'skill:managed-sample',
+        scope: 'user',
+        sourcePath: managedSkill,
+      });
+      const managedSkillEntry = skills({
+        name: 'managed-sample',
+        runtimeCommandName: 'skill:managed-sample',
+        scope: 'user',
+        path: managedSkill,
+        runtimeStatus: 'loaded',
+      });
+      const managedManifest = manifest({
+        commands: [{
+          name: 'skill:managed-sample',
+          source: 'skill',
+          sourceInfo: {
+            scope: 'temporary',
+            source: 'local',
+            baseDir: path.dirname(managedSkill),
+            path: managedSkill,
+          },
+        }],
+        managedPackageSkills: [{
+          sourcePath: managedSkill,
+          name: 'managed-sample',
+          runtimeCommandName: 'skill:managed-sample',
+        }],
+      });
+
+      await expect(isCurrentPiSkillInvocation(
+        managedItem,
+        managedManifest,
+        managedSkillEntry,
+      )).resolves.toBe(true);
+
+      await expect(isCurrentPiSkillInvocation(
+        managedItem,
+        manifest({
+          ...managedManifest,
+          commands: [{
+            ...managedManifest.commands[0]!,
+            sourceInfo: {
+              ...managedManifest.commands[0]!.sourceInfo,
+              path: otherManagedSkill,
+            },
+          }],
+        }),
+        managedSkillEntry,
+      )).resolves.toBe(false);
+    } finally {
+      fs.rmSync(managedRoot, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed for a retargeted user Skill symlink when runtime provenance omits path', async () => {
     const userBaseDir = path.join(repoRoot, 'retargeted-user-skill', '.agents');
     const firstTarget = path.join(repoRoot, 'retargeted-user-skill-target-a');

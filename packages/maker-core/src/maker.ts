@@ -338,6 +338,49 @@ async function canonicalPiRuntimePath(value: string, deadlineAtMs: number): Prom
   }
 }
 
+async function pathfulUserSkillRuntimeCommandName(
+  command: PiRuntimeCapabilityManifest['commands'][number],
+  sourcePath: string,
+  deadlineAtMs: number,
+): Promise<string | null> {
+  const runtimePath = command.sourceInfo.path;
+  const baseDir = command.sourceInfo.baseDir;
+  if (
+    command.source !== 'skill'
+    || !/^skill:[^\s/\\\0]+$/.test(command.name)
+    || command.sourceInfo.scope !== 'user'
+    || command.sourceInfo.source !== 'auto'
+    || typeof runtimePath !== 'string'
+    || !path.isAbsolute(runtimePath)
+    || runtimePath.includes('\0')
+    || typeof baseDir !== 'string'
+    || !path.isAbsolute(baseDir)
+    || baseDir.includes('\0')
+  ) return null;
+  const resolvedRuntimePath = path.resolve(runtimePath);
+  const selectedEntry = path.resolve(sourcePath);
+  try {
+    const [canonicalRuntimePath, canonicalBaseDir, canonicalSelected] = await Promise.all([
+      awaitPiSkillCatalogStep(() => fs.realpath(resolvedRuntimePath), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.realpath(path.resolve(baseDir)), deadlineAtMs),
+      awaitPiSkillCatalogStep(() => fs.realpath(selectedEntry), deadlineAtMs),
+    ]);
+    const canonicalSource = path.basename(canonicalRuntimePath) === 'SKILL.md'
+      ? path.dirname(canonicalRuntimePath)
+      : canonicalRuntimePath;
+    const derivedFromBase = await awaitPiSkillCatalogStep(
+      () => fs.realpath(path.join(canonicalBaseDir, 'skills', path.basename(selectedEntry))),
+      deadlineAtMs,
+    );
+    return derivedFromBase === canonicalSelected && canonicalSource === canonicalSelected
+      ? command.name
+      : null;
+  } catch (error) {
+    if (isPiSkillCatalogTimeout(error)) throw error;
+    return null;
+  }
+}
+
 function runtimePathComparisonIdentity(value: unknown): PiProjectPathComparisonIdentity | null {
   if (!value || typeof value !== 'object') return null;
   const candidate = value as { platform?: unknown; windowsCaseComparison?: unknown };
@@ -414,6 +457,7 @@ async function mergePiRuntimeSkillStatuses(
   const loadedExplicitSkills = new Map<string, string>();
   const loadedLegacyProjectSkills = new Map<string, string>();
   const loadedUserSkills = new Map<string, string | null>();
+  const pathfulUserCommands: PiRuntimeCapabilityManifest['commands'][number][] = [];
   const changedProjectSkills = new Map<string, string>();
   const fingerprintBudget = {
     remainingEntries: PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET,
@@ -472,6 +516,14 @@ async function mergePiRuntimeSkillStatuses(
       );
       continue;
     }
+    if (
+      command.sourceInfo.scope === 'user'
+      && command.sourceInfo.source === 'auto'
+      && command.sourceInfo.path !== undefined
+    ) {
+      pathfulUserCommands.push(command);
+      continue;
+    }
     if (command.sourceInfo.scope === 'project' && typeof baseDir === 'string') {
       loadedLegacyProjectSkills.set(
         [skillName, await canonicalPiRuntimePath(baseDir, deadlineAtMs)].join('\0'),
@@ -496,6 +548,7 @@ async function mergePiRuntimeSkillStatuses(
     loadedExplicitSkills.size === 0
     && loadedLegacyProjectSkills.size === 0
     && loadedUserSkills.size === 0
+    && pathfulUserCommands.length === 0
     && changedProjectSkills.size === 0
   ) return sessionResult;
   const changedSkillErrors = [...changedProjectSkills.values()].map((skillPath) => ({
@@ -507,7 +560,25 @@ async function mergePiRuntimeSkillStatuses(
     let runtimeCommandName: string | undefined;
     if (skill.scope === 'user' && skill.path) {
       const canonicalSkillPath = await canonicalPiRuntimePath(skill.path, deadlineAtMs);
-      runtimeCommandName = loadedUserSkills.get(canonicalSkillPath) ?? undefined;
+      const pathlessCommandName = loadedUserSkills.get(canonicalSkillPath);
+      let userMatches = loadedUserSkills.has(canonicalSkillPath)
+        ? pathlessCommandName === null ? 2 : 1
+        : 0;
+      runtimeCommandName = pathlessCommandName ?? undefined;
+      for (const command of pathfulUserCommands) {
+        const candidate = await pathfulUserSkillRuntimeCommandName(
+          command,
+          skill.path,
+          deadlineAtMs,
+        );
+        if (!candidate) continue;
+        userMatches += 1;
+        runtimeCommandName = candidate;
+        if (userMatches > 1) {
+          runtimeCommandName = undefined;
+          break;
+        }
+      }
     } else if (skill.scope === 'repo' && skill.path) {
       const canonicalSkillPath = await canonicalPiRuntimePath(skill.path, deadlineAtMs);
       if (!changedProjectSkills.has(canonicalSkillPath)) {
