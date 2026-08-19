@@ -153,9 +153,28 @@ function createIntervalScrollPump(
   };
 }
 
-function createMacHoldScrollPump(fallback: SystemFrontmostScrollPump): SystemFrontmostScrollPump {
-  let child: ChildProcess | null = null;
+export type HoldScrollChild = Pick<ChildProcess, 'kill' | 'once'> & {
+  stdin?: Pick<NonNullable<ChildProcess['stdin']>, 'write' | 'end' | 'destroyed'> | null;
+};
+
+function discardHoldScrollChild(next: HoldScrollChild): void {
+  try {
+    next.stdin?.write('stop\n');
+    next.stdin?.end();
+  } catch {
+    // The helper may already have exited after the last wheel event.
+  }
+  next.kill();
+}
+
+export function createMacHoldScrollPump(
+  fallback: SystemFrontmostScrollPump,
+  spawn: () => Promise<HoldScrollChild> = () =>
+    spawnMacTextInsertionHelper(['--command', 'hold-scroll']),
+): SystemFrontmostScrollPump {
+  let child: HoldScrollChild | null = null;
   let starting = false;
+  let spawnGeneration = 0;
   let speed = 0;
 
   const writeSpeed = (): void => {
@@ -166,8 +185,13 @@ function createMacHoldScrollPump(fallback: SystemFrontmostScrollPump): SystemFro
   const start = (): void => {
     if (starting || child) return;
     starting = true;
-    void spawnMacTextInsertionHelper(['--command', 'hold-scroll'])
+    const generation = ++spawnGeneration;
+    void spawn()
       .then((next) => {
+        if (generation !== spawnGeneration) {
+          discardHoldScrollChild(next);
+          return;
+        }
         child = next;
         starting = false;
         next.once('exit', () => {
@@ -177,6 +201,7 @@ function createMacHoldScrollPump(fallback: SystemFrontmostScrollPump): SystemFro
         if (speed !== 0) fallback.stop();
       })
       .catch((error: unknown) => {
+        if (generation !== spawnGeneration) return;
         starting = false;
         log.warn('failed to start frontmost scroll helper', {
           error: error instanceof Error ? error.message : String(error),
@@ -196,18 +221,13 @@ function createMacHoldScrollPump(fallback: SystemFrontmostScrollPump): SystemFro
     },
     stop() {
       speed = 0;
+      spawnGeneration += 1;
+      starting = false;
       fallback.stop();
       if (child) {
-        try {
-          child.stdin?.write('stop\n');
-          child.stdin?.end();
-        } catch {
-          // The helper may already have exited after the last wheel event.
-        }
-        child.kill();
+        discardHoldScrollChild(child);
         child = null;
       }
-      starting = false;
     },
   };
 }
@@ -222,6 +242,7 @@ export function createWorkLouderCodexSystemFrontmostInput(deps?: {
   triggerVoice?: (phase: 'start' | 'tap' | 'end') => void;
   now?: () => number;
   createScrollPump?: (runner: SystemFrontmostInputRunner) => SystemFrontmostScrollPump;
+  spawnHoldScroll?: () => Promise<HoldScrollChild>;
 }) {
   const runner = deps?.runner ?? defaultRunner();
   const triggerVoice = deps?.triggerVoice ?? triggerGlobalVoiceInputFromHardware;
@@ -229,7 +250,9 @@ export function createWorkLouderCodexSystemFrontmostInput(deps?: {
   const fallbackPump = createIntervalScrollPump(runner, now);
   const scrollPump =
     deps?.createScrollPump?.(runner) ??
-    (process.platform === 'darwin' ? createMacHoldScrollPump(fallbackPump) : fallbackPump);
+    (process.platform === 'darwin'
+      ? createMacHoldScrollPump(fallbackPump, deps?.spawnHoldScroll)
+      : fallbackPump);
   let scrolling = false;
   let voicePressed = false;
 

@@ -129,4 +129,23 @@ describe('createWorkLouderCodexActiveWindowRouter', () => {
     expect(router.resolve({ type: 'scroll-stop' })).toBe(secondary);
     expect(router.resolve({ type: 'command', commandId: 'composer.submit' })).toBe(main);
   });
+
+  it('does not let a scroll-stop steal the in-flight voice window', () => {
+    const main = fakeWindow('main');
+    const secondary = fakeWindow('secondary');
+    let focused = secondary;
+    const router = createWorkLouderCodexActiveWindowRouter({
+      getFocusedWindow: () => focused,
+      getMainWindow: () => main,
+      isActionWindow: (win) => win?.id === 'main' || win?.id === 'secondary',
+    });
+
+    expect(router.resolve({ type: 'voice', phase: 'press' })).toBe(secondary);
+    expect(
+      router.resolve({ type: 'scroll', direction: 'down', intensity: 0.8 }),
+    ).toBe(secondary);
+    focused = main;
+    expect(router.resolve({ type: 'scroll-stop' })).toBe(secondary);
+    expect(router.resolve({ type: 'voice', phase: 'release' })).toBe(secondary);
+  });
 });

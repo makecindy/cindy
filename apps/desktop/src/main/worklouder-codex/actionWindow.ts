@@ -47,6 +47,14 @@ export function isSendableWorkLouderCodexWindow(
   );
 }
 
+type HeldGesture = 'voice' | 'scroll';
+
+function heldGestureFor(action: WorkLouderCodexRendererAction): HeldGesture | null {
+  if (action.type === 'voice') return 'voice';
+  if (action.type === 'scroll' || action.type === 'scroll-stop') return 'scroll';
+  return null;
+}
+
 function isHeldGestureStart(action: WorkLouderCodexRendererAction): boolean {
   return (action.type === 'voice' && action.phase === 'press') || action.type === 'scroll';
 }
@@ -58,6 +66,8 @@ function isHeldGestureEnd(action: WorkLouderCodexRendererAction): boolean {
 /**
  * Sticky held gestures stay on the window that received the press. A focus
  * change mid-hold must not split press and release across two composers.
+ * Voice and scroll keep independent slots so one finishing cannot steal the
+ * other's target.
  */
 export function createWorkLouderCodexActiveWindowRouter<
   TWindow extends WorkLouderCodexActionWindowLike,
@@ -66,8 +76,10 @@ export function createWorkLouderCodexActiveWindowRouter<
   getMainWindow: () => TWindow | null;
   isActionWindow: (win: TWindow | null | undefined) => boolean;
 }) {
-  let heldWindow: TWindow | null = null;
-  let heldOnSystemFrontmost = false;
+  const held = {
+    voice: { window: null as TWindow | null, onSystemFrontmost: false },
+    scroll: { window: null as TWindow | null, onSystemFrontmost: false },
+  };
 
   function isUsableActionWindow(win: TWindow | null | undefined): win is TWindow {
     return isSendableWorkLouderCodexWindow(win) && deps.isActionWindow(win);
@@ -85,9 +97,10 @@ export function createWorkLouderCodexActiveWindowRouter<
     })();
   }
 
-  function resolveHeldOrFocusedCindyWindow(): TWindow | null {
-    if (isUsableActionWindow(heldWindow)) return heldWindow;
-    heldWindow = null;
+  function resolveHeldOrFocusedCindyWindow(gesture: HeldGesture): TWindow | null {
+    const slot = held[gesture];
+    if (isUsableActionWindow(slot.window)) return slot.window;
+    slot.window = null;
     return resolveFocusedCindyWindow();
   }
 
@@ -100,29 +113,32 @@ export function createWorkLouderCodexActiveWindowRouter<
       }
 
       const stayOnCindy = target !== 'system-frontmost';
-      if (isHeldGestureStart(action)) {
-        if (heldOnSystemFrontmost) return null;
-        const win = stayOnCindy ? resolveActiveCindyWindow() : resolveHeldOrFocusedCindyWindow();
+      const gesture = heldGestureFor(action);
+      if (gesture && isHeldGestureStart(action)) {
+        const slot = held[gesture];
+        if (slot.onSystemFrontmost) return null;
+        const win = stayOnCindy ? resolveActiveCindyWindow() : resolveHeldOrFocusedCindyWindow(gesture);
         if (win) {
-          heldWindow = win;
-          heldOnSystemFrontmost = false;
+          slot.window = win;
+          slot.onSystemFrontmost = false;
           return win;
         }
         if (!stayOnCindy) {
-          heldOnSystemFrontmost = true;
-          heldWindow = null;
+          slot.onSystemFrontmost = true;
+          slot.window = null;
         }
         return null;
       }
-      if (isHeldGestureEnd(action)) {
-        if (heldOnSystemFrontmost) {
-          heldOnSystemFrontmost = false;
-          heldWindow = null;
+      if (gesture && isHeldGestureEnd(action)) {
+        const slot = held[gesture];
+        if (slot.onSystemFrontmost) {
+          slot.onSystemFrontmost = false;
+          slot.window = null;
           return null;
         }
-        const win = resolveHeldOrFocusedCindyWindow();
-        heldWindow = null;
-        heldOnSystemFrontmost = false;
+        const win = resolveHeldOrFocusedCindyWindow(gesture);
+        slot.window = null;
+        slot.onSystemFrontmost = false;
         return win;
       }
 
