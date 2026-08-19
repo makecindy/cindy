@@ -10,12 +10,15 @@ import {
 import { loginText } from '@/auth/loginMessages';
 import { Text } from '@/components/AppText';
 import { useTheme } from '@/theme';
-import { fontWeight, lineHeight, radius, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+
+/** 挑战总时限：网络半通或 iframe 卡死时转入弹窗内重试态。 */
+const CHALLENGE_TIMEOUT_MS = 120_000;
 
 /**
  * LoginCaptchaWebView — 登录人机验证模态层(global 邮箱发码前置闸)。
  *
- * incognito WebView 装载 auth-server 托管的 Turnstile 挑战页;导航白名单只放行
+ * 内嵌 WebView 装载 auth-server 托管的 Turnstile 挑战页;导航白名单只放行
  * 托管页同源与 Turnstile 挑战 iframe,其余一律拒。结果经 onResult 一次性回传:
  * token = 通过,null = 用户取消。加载失败/挑战页报错 → 卡片内重试态。
  * 遮罩与 Android 返回键语义对齐 LoginConsentDialog(遮罩不可点穿、返回 = 取消)。
@@ -46,6 +49,18 @@ export function LoginCaptchaWebView({
   // 此组件位于 MobileLoginHandoffStage 的 ThemeOverrideProvider 内，mode 是登录
   // 子树真正显示的主题（首次启动固定 light，之后才跟随系统）。
   const themedUrl = useMemo(() => withLoginCaptchaTheme(url, mode), [mode, url]);
+
+  // WebView 主文档成功不代表 Cloudflare iframe 一定能完成；为加载、挑战与回传
+  // 设置同桌面端一致的总时限。成功/取消会卸载组件，失败与重试会重跑 effect，
+  // cleanup 因而覆盖完成、重试和卸载三条清理路径。
+  useEffect(() => {
+    if (failed) return;
+    const timeoutTimer = setTimeout(() => {
+      setReady(false);
+      setFailed(true);
+    }, CHALLENGE_TIMEOUT_MS);
+    return () => clearTimeout(timeoutTimer);
+  }, [failed, generation, themedUrl]);
 
   const retry = () => {
     setReady(false);
@@ -100,7 +115,13 @@ export function LoginCaptchaWebView({
             <Pressable
               accessibilityRole="button"
               onPress={retry}
-              style={{ marginTop: 12, padding: 6 }}
+              style={{
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: spacing.md,
+                minHeight: 44,
+                minWidth: 44,
+              }}
               testID="login.captcha.retry"
             >
               <Text style={{ color: login.linkText, fontSize: typeScale.footnote }}>
@@ -155,7 +176,13 @@ export function LoginCaptchaWebView({
         <Pressable
           accessibilityRole="button"
           onPress={() => onResult(null)}
-          style={{ marginTop: 8, padding: 6 }}
+          style={{
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginTop: spacing.sm,
+            minHeight: 44,
+            minWidth: 44,
+          }}
           testID="login.captcha.cancel"
         >
           <Text style={{ color: login.secondaryText, fontSize: typeScale.footnote }}>

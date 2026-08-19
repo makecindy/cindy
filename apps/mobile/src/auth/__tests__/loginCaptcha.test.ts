@@ -223,6 +223,26 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
     expect(captchaWebViewSource).toContain('onRenderProcessGone={() => setFailed(true)}');
   });
 
+  it('captcha WebView 超时后进入重试态，并在完成、重试或卸载时清理计时器', () => {
+    expect(captchaWebViewSource).toContain('const CHALLENGE_TIMEOUT_MS = 120_000;');
+    expect(captchaWebViewSource).toContain('const timeoutTimer = setTimeout(() => {');
+    expect(captchaWebViewSource).toContain('return () => clearTimeout(timeoutTimer);');
+    expect(captchaWebViewSource).toContain('}, [failed, generation, themedUrl]);');
+  });
+
+  it('captcha 重试与取消动作都提供至少 44×44 的触控目标', () => {
+    for (const testId of ['login.captcha.retry', 'login.captcha.cancel']) {
+      const marker = `testID="${testId}"`;
+      const markerIndex = captchaWebViewSource.indexOf(marker);
+      const actionStart = captchaWebViewSource.lastIndexOf('<Pressable', markerIndex);
+      const actionSource = captchaWebViewSource.slice(actionStart, markerIndex);
+      expect(markerIndex).toBeGreaterThan(-1);
+      expect(actionStart).toBeGreaterThan(-1);
+      expect(actionSource).toContain('minHeight: 44');
+      expect(actionSource).toContain('minWidth: 44');
+    }
+  });
+
   it('captcha 打开时从 Android TalkBack 隐藏背景登录组与注销气泡', () => {
     expect(loginSource).toContain('const captchaChallengeOpen = auth.captchaChallenge !== null');
     expect(loginSource).toContain(
