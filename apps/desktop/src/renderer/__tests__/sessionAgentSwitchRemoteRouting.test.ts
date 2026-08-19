@@ -219,6 +219,26 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
     ).toBe('apply-intent');
   });
 
+  it('外部只改同一意图的 effort / Fast / 两者:身份仍匹配 → 照走 apply-intent(权威值经 note-skip 保留)', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // 身份判定刻意只比 target/model/provider,不比 effort/fastMode(main 会归一化后才投影)。
+    // 另一控制端在本次往返期间「只改 effort」「只改 Fast」「两者均改」时,调用方算出的
+    // registeredIntentMatchesCurrent 因此仍为 true —— 三种场景在 resolver 层同构:修订号已变
+    // + 值匹配 → apply-intent。外部新值不被本端旧值覆盖由 ChatInput 的 note-skip 保证
+    // (回声已匹配时不再 noteAgentSwitchIntent,store 保持权威快照;见同文件源码锁)。
+    for (const scenario of ['只改 effort', '只改 Fast', '两者均改']) {
+      expect(
+        resolveAgentSwitchAckAction({
+          deferred: true,
+          switched: false,
+          registeredIntentMatchesCurrent: true,
+          freshness: { ...fresh, intentRevNow: 9 },
+        }),
+        scenario,
+      ).toBe('apply-intent');
+    }
+  });
+
   it('deferred:修订号变且当前值**不是**本次登记的那一份 → 真被外部超车,丢弃', async () => {
     const { resolveAgentSwitchAckAction } = await load();
     expect(
@@ -1014,12 +1034,12 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // providerId=null(跟随默认路由)时只认 target+model 的通配出口 —— main 可能把 null
     // 解析成具体来源再登记(2026-08-19 review P1 的前半)。
     expect(source).toContain('providerId === null ||');
-    // 通配放行后,apply-intent 必须**保留权威回声里的来源**,不得用原始 null 盖回去
-    // (2026-08-19 review P1 的后半:盖回去 = renderer 与 main 的 pending intent 分叉,
-    // 且回声已到过、不会再有第二次权威回流纠正)。
-    expect(source).toContain('const appliedProviderId =');
-    expect(source).toContain('registeredIntentMatchesCurrent ? (registeredIntent?.providerId ?? null) : null');
-    expect(source).toContain('providerId: appliedProviderId,');
+    // ★ 回声已匹配时 apply-intent **整个跳过 note**(2026-08-19 两轮 P1 的合并收口):
+    // store 里已是权威快照,任何本端旧值(null providerId / 旧 newEffort / 旧 targetFast)
+    // 盖上去都会与被控端分叉 —— 覆盖「另一控制端只改 effort」「只改 Fast」「两者均改」
+    // 与「main 归一化本端登记」全部场景;回声已到过,不会再有第二次权威回流纠正。
+    expect(source).toContain('if (!registeredIntentMatchesCurrent) {');
+    expect(source).not.toContain('appliedProviderId');
     // 1d:意图期改选模型 / 来源必须 await 并把结果交回去,不能 fire-and-forget 返回
     // undefined 让上游读成「已应用」。
     expect(source).not.toContain('void performAgentSwitch(');

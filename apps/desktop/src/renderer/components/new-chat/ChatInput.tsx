@@ -6231,22 +6231,25 @@ export function ChatInput({
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
           //
-          // ★ 来源以**权威回声**为准(2026-08-19 review P1):本端传 null(跟随默认路由)而
-          // main 在登记时把它解析成了具体来源的场景里,`sessions:patched` 回声已把该来源
-          // 写进 store —— 这里再用原始 null 盖回去,renderer 与 main 的 pending intent 就
-          // 分叉了(选择器显示错误来源,意图期改选按错误路由走),而且回声已经到过,不会
-          // 再有第二次权威回流来纠正。所以 null 且回声已匹配时,采用回声里的来源;传了
-          // 具体来源时逐字用本端值(匹配判定已保证与权威一致)。回声未到(修订号未变的
-          // 常规路径)时仍写 null,稍后到达的权威回声会自然覆盖收敛。
-          const appliedProviderId =
-            providerId ??
-            (registeredIntentMatchesCurrent ? (registeredIntent?.providerId ?? null) : null);
-          makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
-            model: newModelId,
-            providerId: appliedProviderId,
-            effort: newEffort,
-            fastMode: targetFast,
-          });
+          // ★ 回声已匹配时**一个字段都不重写**(2026-08-19 review 两轮 P1 的合并收口):
+          // 走到值匹配出口 = `sessions:patched` 权威回声已先于 ack 落进 store,此刻 store 里
+          // 就是 main 的 pending intent 快照 —— 再用本端的旧值 note 一遍只可能把它改坏:
+          //   · providerId:本端传 null(跟随默认路由)而 main 解析成了具体来源 → null 盖掉
+          //     权威来源,意图期改选按错误路由走;
+          //   · effort / fastMode:另一控制端在本次往返期间只改了同一 intent 的档位 / Fast
+          //     (target/model/provider 不变,匹配判定刻意不比这两维)→ 本端旧
+          //     newEffort/targetFast 盖掉外部权威值,选择器与下一条消息实际采用的配置分叉;
+          //     本端自己的登记同理 —— main 可能按目标引擎归一化 effort 后才投影。
+          // 且回声已经到过,不会再有第二次权威回流来纠正。回声未到(修订号未变的常规路径)
+          // 才写本端解析值,稍后到达的权威回声会自然覆盖收敛。
+          if (!registeredIntentMatchesCurrent) {
+            makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
+              model: newModelId,
+              providerId,
+              effort: newEffort,
+              fastMode: targetFast,
+            });
+          }
           // 跨引擎点选也是用户显式选模:记到目标 vendor,下次用该引擎新建跟随这次选择。
           // 真切换可能推迟到下一条消息,但选择已经做出。
           syncSessionDraftModelPrefs(
