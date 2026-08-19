@@ -476,6 +476,31 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await vi.waitFor(() => expect(proxyDisposed).toBe(2), { timeout: 2_000 });
   });
 
+  it('does not release the lease on an empty scan while Pi can still launch', async () => {
+    // Navigating away exactly as a subagent tool starts: the supervisor's first
+    // scan runs before the extension has created the run directory. Treating
+    // that emptiness as "no durable runs" revoked the proxy token and stopped
+    // approval supervision, and the run that appeared a moment later had its
+    // model requests fail with nobody to answer its approvals. Pi's own exit is
+    // the only honest boundary.
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+
+    // Close with nothing on disk yet: the supervisor's first scan runs while Pi
+    // is still alive and sees an empty directory.
+    const runId = '123e4567-e89b-42d3-a456-4266141740c1';
+    await handle.close({ reason: 'navigation' });
+    // The launch that was already in flight inside Pi lands now — after that
+    // first scan. The old code had already revoked the token by this point.
+    writeDurableRunStatus(runId, 'running');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(proxyDisposed).toBe(0);
+
+    // And it is still supervised: settling it releases the lease as usual.
+    writeDurableRunStatus(runId, 'completed');
+    await vi.waitFor(() => expect(proxyDisposed).toBe(2), { timeout: 3_000 });
+  });
+
   it('keeps answering detached Subagent approvals after the parent handle closes', async () => {
     // Regression: close() used to clear the only timer that refreshed
     // pendingApproval *and* short-circuit the approval handler on `closed`,

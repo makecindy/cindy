@@ -1038,6 +1038,39 @@ describe('PI durable subagent run store', () => {
       return agentHome;
     }
 
+    it('refuses a resume while a run in the same task root is unreadable', async () => {
+      // The generation most likely to be briefly unreadable is the newest one —
+      // a sharing conflict on a status.json being rewritten is enough. Listing
+      // only parseable records showed just the previous, terminal generation and
+      // let a second runner start on the same PI session directories.
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      await writeStatus(root, status(runId, { state: 'completed' }));
+      const opaque = path.join(root, '123e4567-e89b-42d3-a456-4266141740c9');
+      await mkdir(opaque, { recursive: true });
+      await writeFile(path.join(opaque, 'status.json'), '{not-json');
+
+      await expect(resumePiSubagentRun(root, 'tool-1', 'continue', {
+        nodeExecutable: process.execPath,
+        runtimeOwnerId: 'owner-a',
+        permissionSnapshot: { mode: 'ask', readOnlyRoots: [] },
+      })).rejects.toThrow(/cannot be read right now/i);
+
+      // Once it reads again as a terminal record, resume is no longer blocked
+      // by it — the refusal is about not being able to tell, not about the run.
+      await writeFile(
+        path.join(opaque, 'status.json'),
+        `${JSON.stringify(status('123e4567-e89b-42d3-a456-4266141740c9', {
+          taskId: 'other-tool', state: 'completed',
+        }))}\n`,
+      );
+      await expect(resumePiSubagentRun(root, 'tool-1', 'continue', {
+        nodeExecutable: process.execPath,
+        runtimeOwnerId: 'owner-a',
+        permissionSnapshot: { mode: 'ask', readOnlyRoots: [] },
+      })).rejects.not.toThrow(/cannot be read right now/i);
+    });
+
     it('refuses a resume while this host holds the fence', async () => {
       const agentHome = await fenceHome(process.pid);
       const root = piSubagentRunRoot(agentHome, 'session-1');
@@ -1132,6 +1165,47 @@ describe('PI durable subagent run store', () => {
         await expect(readFile(piSubagentLaunchFencePath(agentHome, 4_194_303), 'utf8'))
           .rejects.toMatchObject({ code: 'ENOENT' });
         expect(isPiSubagentLaunchFenceActive(agentHome, otherHostPid)).toBe(true);
+      });
+
+      it('ignores and sweeps a fence its pid inherited from a previous life', async () => {
+        // A crash leaves the file behind and the OS hands the same pid to the
+        // next instance. Without a start time that instance's own fence check
+        // matches forever — every durable launch refused for its whole life,
+        // and the stale sweep keeps the file because the pid is alive.
+        const agentHome = await makeRoot();
+        await mkdir(path.dirname(piSubagentLaunchFencePath(agentHome)), { recursive: true });
+        await writeFile(
+          piSubagentLaunchFencePath(agentHome),
+          `${JSON.stringify({
+            version: 1,
+            hostPid: process.pid,
+            hostStartTimeSec: 1,
+            createdAt: Date.now(),
+          })}\n`,
+        );
+
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        await clearStalePiSubagentLaunchFence(agentHome);
+        await expect(readFile(piSubagentLaunchFencePath(agentHome), 'utf8'))
+          .rejects.toMatchObject({ code: 'ENOENT' });
+      });
+
+      it('still blocks on its own fence when the start time matches', async () => {
+        const agentHome = await makeRoot();
+        const release = await acquirePiSubagentLaunchFence(agentHome);
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        // And the sweep leaves a genuinely current fence alone.
+        await clearStalePiSubagentLaunchFence(agentHome);
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        await release();
+      });
+
+      it('keeps pid-only behaviour for a fence with no recorded start time', async () => {
+        const agentHome = await makeRoot();
+        await writeFenceFor(agentHome, process.pid);
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        await clearStalePiSubagentLaunchFence(agentHome);
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
       });
 
       it('still honours a fence written under the pre-per-host name', async () => {

@@ -2556,6 +2556,19 @@ export class PiAgent extends BaseAgent {
       return pending;
     };
     let closed = false;
+    /**
+     * Has the Pi process itself exited?
+     *
+     * The detached supervisor needs this to read an empty run directory
+     * correctly: while Pi is alive its injected extension can be part-way
+     * through `launchDurableRun`, so "no run directories yet" is not the same
+     * statement as "no durable runs". Navigating away exactly as a subagent tool
+     * starts used to release the proxy lease and stop approval supervision on
+     * that first empty scan, and the run that appeared a moment later had its
+     * model requests fail on a revoked token with nobody left to answer its
+     * approvals.
+     */
+    let piProcessExited = false;
     const piSubagentStatuses = new Map<string, PiSubagentRunStatus>();
     const piSubagentFingerprints = new Map<string, string>();
     const piSubagentApprovalRequests = new Set<string>();
@@ -3260,6 +3273,10 @@ export class PiAgent extends BaseAgent {
       };
       void (async () => {
         for (;;) {
+          // Sampled *before* the scan: a scan that started while Pi was alive
+          // cannot rule out a launch already in flight inside it, even if the
+          // process exits before the scan returns.
+          const scanFollowsExit = piProcessExited;
           const [directoryCount, statuses] = await Promise.all([
             countPiSubagentRunDirectories(subagentRunRoot),
             listPiSubagentRuns(subagentRunRoot),
@@ -3276,8 +3293,13 @@ export class PiAgent extends BaseAgent {
               for (const task of status.tasks) void resolvePiSubagentApproval(status, task);
             }
           }
+          // Pi's own exit is the lifecycle boundary. Until then a launch may be
+          // in flight inside it, and this scan cannot see it — the run
+          // directory is created by the extension, not by us. Once the process
+          // is gone nothing new can appear, so the same scan becomes conclusive.
           if (
             !active
+            && scanFollowsExit
             && (
               directoryCount === 0
               || allDirectoriesReadable
@@ -3540,6 +3562,7 @@ export class PiAgent extends BaseAgent {
           }
         },
         onExit: ({ code, signal }) => {
+          piProcessExited = true;
           clearPiSubagentRefreshTimer();
           void deferProxyDisposalForDetachedRuns();
           disposePiTranslateContext(ctx);
@@ -4879,6 +4902,10 @@ export class PiAgent extends BaseAgent {
         // Until then the still-live process may continue reading its isolated
         // config, permission policy, and subagent routing snapshot.
         await proc.close();
+        // Belt and braces for a transport that resolves `close()` without ever
+        // emitting `onExit`: the supervisor must not wait out its hard deadline
+        // holding a lease for a process that is already gone.
+        piProcessExited = true;
         if (!remote) {
           // 会话结束:清理隔离的 configHome 与 runtime 文件(onExit 幂等,二者先到先清)。
           cleanupConfigHome();

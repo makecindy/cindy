@@ -171,6 +171,14 @@ const PI_SUBAGENT_LAUNCH_FENCE_SUFFIX = '.json';
 interface PiSubagentLaunchFence {
   version: 1;
   hostPid: number;
+  /**
+   * Start second of the host that raised it. A pid alone cannot say "this fence
+   * is mine": a crash leaves the file behind, the OS hands the same pid to the
+   * next instance, and that instance then refuses *every* durable launch for
+   * its whole life — its own fence check matches, and the stale sweep keeps the
+   * file because the pid is alive. Absent on fences written before this field.
+   */
+  hostStartTimeSec?: number;
   createdAt: number;
 }
 
@@ -226,8 +234,22 @@ function parseLaunchFence(value: unknown): PiSubagentLaunchFence | null {
   return {
     version: 1,
     hostPid: raw.hostPid as number,
+    ...(Number.isSafeInteger(raw.hostStartTimeSec) && (raw.hostStartTimeSec as number) > 0
+      ? { hostStartTimeSec: raw.hostStartTimeSec as number }
+      : {}),
     createdAt: finiteNonNegative(raw.createdAt) ? raw.createdAt : 0,
   };
+}
+
+/**
+ * Was this fence raised by *this* incarnation of `hostPid`?
+ *
+ * A fence with no recorded start time keeps the historical pid-only answer —
+ * conservative, and the only thing an older writer left us to go on.
+ */
+function fenceMatchesOwnIncarnation(fence: PiSubagentLaunchFence): boolean {
+  if (fence.hostStartTimeSec === undefined) return true;
+  return Math.abs(ownProcessStartTimeSec() - fence.hostStartTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
 }
 
 /**
@@ -242,7 +264,12 @@ export function isPiSubagentLaunchFenceActive(agentHome: string, hostPid: number
   // The legacy shared name is still consulted for the upgrade window.
   for (const file of [piSubagentLaunchFencePath(agentHome, hostPid), legacyLaunchFencePath(agentHome)]) {
     const fence = readLaunchFence(file);
-    if (fence && fence.hostPid === hostPid && isProcessAlive(fence.hostPid) !== false) return true;
+    if (!fence || fence.hostPid !== hostPid) continue;
+    // Ours by pid, but possibly a previous life's: a fence that outlived a
+    // crash and had its pid recycled onto us would otherwise refuse every
+    // launch this process ever makes.
+    if (hostPid === process.pid && !fenceMatchesOwnIncarnation(fence)) continue;
+    if (isProcessAlive(fence.hostPid) !== false) return true;
   }
   return false;
 }
@@ -260,6 +287,7 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
   await writeAtomicJson(file, {
     version: 1,
     hostPid: process.pid,
+    hostStartTimeSec: ownProcessStartTimeSec(),
     createdAt: Date.now(),
   } satisfies PiSubagentLaunchFence);
   let released = false;
@@ -299,8 +327,18 @@ export async function clearStalePiSubagentLaunchFence(agentHome: string): Promis
       await fs.rm(file, { force: true }).catch(() => undefined);
       return;
     }
-    // A live owner is an instance genuinely mid-relaunch; leave it alone.
-    if (fence && isProcessAlive(fence.hostPid) !== false) return;
+    // A live owner is an instance genuinely mid-relaunch; leave it alone —
+    // unless the live process at that pid started at a different time than the
+    // fence records, which means the pid was recycled and this file is a
+    // previous life's leftover. An unreadable start time stays conservative.
+    if (fence && isProcessAlive(fence.hostPid) !== false) {
+      if (fence.hostStartTimeSec === undefined) return;
+      const startTimeSec = fence.hostPid === process.pid
+        ? ownProcessStartTimeSec()
+        : probeProcessStartTimeSec(fence.hostPid, Date.now());
+      if (startTimeSec === null) return;
+      if (Math.abs(startTimeSec - fence.hostStartTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC) return;
+    }
     await fs.rm(file, { force: true }).catch(() => undefined);
   }));
 }
@@ -1782,9 +1820,37 @@ async function resumeClaimedPiSubagentRun(
 ): Promise<string | null> {
   // Re-check under the claim: a racer may have won and already published a new
   // active generation between our listing and taking the claim.
-  const claimedRuns = await listPiSubagentRuns(root);
+  //
+  // Over the *directory* set, not `listPiSubagentRuns`, which hides records it
+  // cannot parse. The newest generation is exactly the one most likely to be
+  // briefly unreadable — a Windows sharing conflict on a status.json that is
+  // being rewritten is enough — and hiding it made this check see only the
+  // previous terminal generation and let a second runner start on the same PI
+  // session directories.
+  //
+  // Deliberately global rather than per task: an unreadable status carries no
+  // taskId, so it cannot be attributed, and "not attributable to my task" is
+  // exactly what we are unable to prove. Refusing the whole resume is the only
+  // conservative reading. Provably dead runs (stale) do not count, so a crashed
+  // generation does not wedge resume forever, and the diagnostics surface still
+  // shows the user what is unreadable.
+  const [claimedRuns, claimedIds, claimedDiagnostics] = await Promise.all([
+    listPiSubagentRuns(root),
+    listRunDirectoryIds(root),
+    listPiSubagentRunDiagnostics(root),
+  ]);
   if (claimedRuns.some((run) => run.taskId === source.taskId && !isPiSubagentTerminal(run.state))) {
     return null;
+  }
+  const claimedStale = new Set(
+    claimedDiagnostics.filter((diagnostic) => diagnostic.kind === 'stale').map((d) => d.runId),
+  );
+  const readable = new Set(claimedRuns.map((run) => run.runId));
+  const unreadable = claimedIds.filter((runId) => !readable.has(runId) && !claimedStale.has(runId));
+  if (unreadable.length > 0) {
+    throw new PiSubagentResumeClaimedError(
+      'This Subagent has a run whose state cannot be read right now, so resuming could start a second runner on the same session. Try again shortly.',
+    );
   }
   const sourceConfigValue = await readSmallJson(path.join(sourceDir, 'config.json'));
   if (!isResumeConfig(sourceConfigValue, source.runId)) {

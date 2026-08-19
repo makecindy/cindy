@@ -697,7 +697,11 @@ const LAUNCH_FENCE_SUFFIX = '.json';
 // leave a gap. Removable once no shipped build writes the shared name.
 const LEGACY_LAUNCH_FENCE_FILENAME = '.launch-fence.json';
 
-function fenceNamesLiveHost(file, hostPid) {
+// Same tolerance the Host uses: ps rounds to the second and samples after the
+// clock is read.
+const FENCE_START_TOLERANCE_SEC = 5;
+
+function fenceNamesLiveHost(file, hostPid, hostStartTimeSec) {
   let fence;
   try {
     fence = JSON.parse(readFileSync(file, 'utf8'));
@@ -705,6 +709,13 @@ function fenceNamesLiveHost(file, hostPid) {
     return false;
   }
   if (!fence || fence.version !== 1 || fence.hostPid !== hostPid) return false;
+  // A fence that outlived a host crash and had its pid recycled onto the host
+  // we belong to would otherwise block every launch for that host's whole life.
+  // Only compare when both sides recorded a start time; either side missing it
+  // falls back to the pid-only answer.
+  if (typeof fence.hostStartTimeSec === 'number' && hostStartTimeSec !== null) {
+    if (Math.abs(fence.hostStartTimeSec - hostStartTimeSec) > FENCE_START_TOLERANCE_SEC) return false;
+  }
   try {
     process.kill(hostPid, 0);
     return true;
@@ -716,16 +727,21 @@ function fenceNamesLiveHost(file, hostPid) {
 function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {
   const separator = runtimeOwnerId.indexOf(':');
   if (separator <= 0) return false;
-  // Owner ids are <pid>:<scope> or <pid>.<startSec>:<scope>; only the pid
-  // segment is read here, deliberately without importing the Host's parser.
+  // Owner ids are <pid>:<scope> or <pid>.<startSec>:<scope>. Both segments are
+  // read here, deliberately without importing the Host's parser.
   const host = runtimeOwnerId.slice(0, separator);
   const dot = host.indexOf('.');
   const hostPid = Number(dot < 0 ? host : host.slice(0, dot));
   if (!Number.isSafeInteger(hostPid) || hostPid <= 0) return false;
+  let hostStartTimeSec = null;
+  if (dot >= 0) {
+    const parsedStart = Number(host.slice(dot + 1));
+    if (Number.isSafeInteger(parsedStart) && parsedStart > 0) hostStartTimeSec = parsedStart;
+  }
   const fenceDir = dirname(runRoot);
   const owned = join(fenceDir, LAUNCH_FENCE_PREFIX + String(hostPid) + LAUNCH_FENCE_SUFFIX);
-  if (fenceNamesLiveHost(owned, hostPid)) return true;
-  return fenceNamesLiveHost(join(fenceDir, LEGACY_LAUNCH_FENCE_FILENAME), hostPid);
+  if (fenceNamesLiveHost(owned, hostPid, hostStartTimeSec)) return true;
+  return fenceNamesLiveHost(join(fenceDir, LEGACY_LAUNCH_FENCE_FILENAME), hostPid, hostStartTimeSec);
 }
 
 function launchDurableRun(binary, tasks, runtime, taskId, mode, context, displayTitle, interactiveOwner, timeoutMs) {
