@@ -74,6 +74,23 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('Both stay in your memory');
   });
 
+  /**
+   * 批次 ζ:「TA 学会的」列的是**真技能**,来源是伙伴自己调 `save_bot_skill`。
+   * 这条约定掉了,技能就永远长不出来 —— 判断「这次做法值不值得沉淀」是语言理解
+   * 问题,代码判不了(maker-core-and-agent-behavior.md §2 的分界)。
+   */
+  it('tells the Bot to distil a finished multi-step task into a real skill', () => {
+    const prompt = buildBotCapabilityContextPrompt();
+    expect(prompt).toContain('`save_bot_skill`');
+    // 先查再存 —— 否则同一件事会被反复学成好几条。
+    expect(prompt).toContain('`list_bot_skills`');
+    expect(prompt).toContain('save it again under the same name');
+    // 存的是步骤,不是这一次的结论。
+    expect(prompt).toContain('repeatable steps');
+    // 诚实标注生效时机:harness 的技能面在 spawn 时冻结。
+    expect(prompt).toContain('mounted from your next task onward');
+  });
+
   it('keeps the same affirmative delegation guidance beside the default and every preset SOUL', () => {
     const identities = [
       { name: 'Default Bot', identitySource: buildDefaultBotIdentity('Default Bot') },

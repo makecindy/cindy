@@ -64,6 +64,10 @@ import {
   registerBotDurableNoteTools,
   type BotDurableNoteCallbacks,
 } from './xdt-helper/bot_durable_notes.js';
+import {
+  registerBotSkillTools,
+  type BotSkillCallbacks,
+} from './xdt-helper/bot_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
@@ -257,6 +261,12 @@ export interface XdtHelperMcpDeps {
   /** Cindy Bot-only durable notepad. Host resolves Bot ownership from the caller Session. */
   botDurableNotes?: BotDurableNoteCallbacks;
   /**
+   * Cindy Bot-only skill shelf: the Bot turns a finished way of working into a
+   * real Skill file that the next task mounts. Host resolves Bot ownership from
+   * the caller Session, same as the durable notepad.
+   */
+  botSkills?: BotSkillCallbacks;
+  /**
    * 官方反馈 issue 提交回调(弹确认卡片 → 用户确认 → POST server)。host 注入后,
    * feedback 类工具 submit_github_issue 会被注册; 不注入则不出现在 list_tools 里。
    */
@@ -382,6 +392,12 @@ export function createXdtHelperMcpServer(
     registerBotDurableNoteTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       callbacks: deps.botDurableNotes,
+    });
+  }
+  if (deps.botSkills) {
+    registerBotSkillTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.botSkills,
     });
   }
 

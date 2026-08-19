@@ -7,6 +7,7 @@ import type { ChatMessage } from '@/hooks/useCCAgentChat';
 import {
   botGrowthNoteLabel,
   collectBotGrowthNotes,
+  parseBotSkillSaveToolUse,
   parseMemoryWriteToolUse,
   partitionBotMemoryRecords,
   summarizeBotGrowthEvents,
@@ -39,6 +40,18 @@ function memoryWrite(clientId: string, args: Record<string, unknown>): ChatMessa
     role: 'tool_use',
     toolName: MEMORY_TOOL,
     toolInput: writeInput(args),
+  });
+}
+
+/** 真技能沉淀走的是 cindy_helper 的 bots 类目,不是记忆那台 server。 */
+const HELPER_TOOL = 'mcp__cindy_helper__call_tool';
+
+function skillSave(clientId: string, args: Record<string, unknown>): ChatMessage {
+  return message({
+    clientId,
+    role: 'tool_use',
+    toolName: HELPER_TOOL,
+    toolInput: { name: 'save_bot_skill', args },
   });
 }
 
@@ -152,7 +165,68 @@ describe('summarizeBotGrowthEvents — 同轮合并', () => {
   });
 });
 
+describe('parseBotSkillSaveToolUse — 真技能沉淀的判定', () => {
+  it('认得当前真实形态:cindy_helper 二级分派下的 save_bot_skill', () => {
+    expect(
+      parseBotSkillSaveToolUse(HELPER_TOOL, {
+        name: 'save_bot_skill',
+        args: { name: 'weekly-report', description: '写周报', body: '步骤' },
+      }),
+    ).toEqual({ learned: true, title: 'weekly-report' });
+  });
+
+  it('技能恒计入「TA 学会的」,不看任何名字前缀', () => {
+    expect(
+      parseBotSkillSaveToolUse(HELPER_TOOL, {
+        name: 'save_bot_skill',
+        args: { name: 'no-prefix-here' },
+      })?.learned,
+    ).toBe(true);
+  });
+
+  it('同一台 server 上的别的操作一律不认', () => {
+    expect(
+      parseBotSkillSaveToolUse(HELPER_TOOL, { name: 'list_bot_skills', args: {} }),
+    ).toBeNull();
+    expect(parseBotSkillSaveToolUse(HELPER_TOOL, { name: 'set_bot_note', args: {} })).toBeNull();
+    expect(parseBotSkillSaveToolUse('Read', { file_path: '/a' })).toBeNull();
+  });
+
+  it('留一条直挂形态的后路,MCP 投影方式变了尾注也不至于静默消失', () => {
+    expect(
+      parseBotSkillSaveToolUse('mcp__whatever__save_bot_skill', { name: 'weekly-report' }),
+    ).toEqual({ learned: true, title: 'weekly-report' });
+  });
+});
+
 describe('collectBotGrowthNotes — 尾注挂在哪句话上', () => {
+  it('伙伴刚学会一个真技能时,尾注说的是「学会了」', () => {
+    const messages = [
+      user('u1'),
+      skillSave('t1', { name: 'weekly-report', description: '写周报', body: '步骤' }),
+      assistant('a-final'),
+    ];
+    expect(collectBotGrowthNotes(messages, new Set(['a-final'])).get('a-final')).toEqual({
+      count: 1,
+      title: 'weekly-report',
+      target: 'learned',
+    });
+  });
+
+  it('同一轮里既学了技能又记了一笔,按记忆合并(混合不谎称「全学会了」)', () => {
+    const messages = [
+      user('u1'),
+      skillSave('t1', { name: 'weekly-report' }),
+      memoryWrite('t2', { type: 'user', name: 'reply-style', title: '结论在前' }),
+      assistant('a-final'),
+    ];
+    expect(collectBotGrowthNotes(messages, new Set(['a-final'])).get('a-final')).toEqual({
+      count: 2,
+      title: null,
+      target: 'memory',
+    });
+  });
+
   it('挂在这一轮的收尾正文末尾,不挂中间过程句', () => {
     const messages = [
       user('u1'),

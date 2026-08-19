@@ -6036,6 +6036,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:bot-memory:seed', botId, entries),
     },
 
+    /**
+     * 单个伙伴自己沉淀的**真技能** ("TA 学会的" — 批次 ζ)。
+     * 落盘在 <userData>/bot-skills/<botId>/, 与记忆分片是两套存储; 写入只由伙伴
+     * 自己经 save_bot_skill 完成, 设置页只读 + 单条删除。
+     */
+    botSkill: {
+      list: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
+        ipcRenderer.invoke('maker:bot-skill:list', botId),
+      read: (
+        botId: string,
+        slug: string,
+      ): Promise<import('../shared/botSkill').BotSkillDetail | null> =>
+        ipcRenderer.invoke('maker:bot-skill:read', botId, slug),
+      delete: (botId: string, slug: string): Promise<{ ok: true; deleted: boolean }> =>
+        ipcRenderer.invoke('maker:bot-skill:delete', botId, slug),
+    },
+
     /** 一句话角色 → 伙伴草稿。失败带分类码, 由 renderer 翻成人话并保留「自己写」出路。 */
     generateBotPersona: (
       role: string,

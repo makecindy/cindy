@@ -132,6 +132,12 @@ export {
   type BotDurableNoteToolDeps,
 } from './bot_durable_notes.js';
 export {
+  registerBotSkillTools,
+  type BotSkillCallbacks,
+  type BotSkillSummaryWire,
+  type BotSkillToolDeps,
+} from './bot_skills.js';
+export {
   registerSubmitGithubIssueTool,
   type SubmitGithubIssueDeps,
   type SubmitGithubIssueHostResult,

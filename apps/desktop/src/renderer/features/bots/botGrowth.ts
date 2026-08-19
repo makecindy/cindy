@@ -36,6 +36,14 @@ const MEMORY_DISPATCH_TOOL_SUFFIX = 'cindy_memory__call_tool';
 /** 写入操作在二级分派里的操作名。 */
 const MEMORY_WRITE_OPERATION = 'memory_write';
 
+/**
+ * 真技能沉淀走的是另一台 server —— `cindy_helper` 的 `bots` 类目
+ * (与 list_bots / set_bot_note 同一处,见 lizi-mcps 的 xdt-helper/bot_skills.ts)。
+ */
+const HELPER_DISPATCH_TOOL_SUFFIX = 'cindy_helper__call_tool';
+/** 存技能操作在二级分派里的操作名。 */
+const SKILL_SAVE_OPERATION = 'save_bot_skill';
+
 /** 一次记忆写入在气泡尾注里的最小信息。 */
 export interface BotGrowthEvent {
   /** true = 走 `learned-` 约定的「本事」,false = 普通记忆。 */
@@ -118,6 +126,44 @@ export function parseMemoryWriteToolUse(
   return null;
 }
 
+/**
+ * 判定一条 `tool_use` 消息是不是「伙伴刚把一次做法沉淀成了真技能」。
+ *
+ * 与记忆写入同构:认二级分派(当前真实形态)与直挂两种形态。技能恒计入
+ * 「TA 学会的」—— 它本来就是那个列表的正主,不像记忆还要看 slug 前缀。
+ */
+export function parseBotSkillSaveToolUse(
+  toolName: string | undefined,
+  toolInput: unknown,
+): BotGrowthEvent | null {
+  const name = toolName?.trim();
+  if (!name) return null;
+  const input = asRecord(toolInput);
+  if (!input) return null;
+
+  if (name.endsWith(HELPER_DISPATCH_TOOL_SUFFIX)) {
+    if (readString(input, 'name') !== SKILL_SAVE_OPERATION) return null;
+    const args = asRecord(input.args);
+    return args ? { learned: true, title: readString(args, 'name') } : null;
+  }
+
+  if (name === SKILL_SAVE_OPERATION || name.endsWith(`__${SKILL_SAVE_OPERATION}`)) {
+    return { learned: true, title: readString(input, 'name') };
+  }
+
+  return null;
+}
+
+/** 一轮里两种成长动作(记一笔 / 学一手)的统一入口。判不出来返回 null。 */
+export function parseBotGrowthToolUse(
+  toolName: string | undefined,
+  toolInput: unknown,
+): BotGrowthEvent | null {
+  return (
+    parseMemoryWriteToolUse(toolName, toolInput) ?? parseBotSkillSaveToolUse(toolName, toolInput)
+  );
+}
+
 /** 同轮多条写入合并成一条尾注:全是本事才算「学会」,混合按记忆处理。 */
 export function summarizeBotGrowthEvents(events: readonly BotGrowthEvent[]): BotGrowthNote | null {
   if (events.length === 0) return null;
@@ -152,7 +198,7 @@ export function collectBotGrowthNotes(
       continue;
     }
     if (message.role === 'tool_use') {
-      const event = parseMemoryWriteToolUse(message.toolName, message.toolInput);
+      const event = parseBotGrowthToolUse(message.toolName, message.toolInput);
       if (event) pending.push(event);
       continue;
     }

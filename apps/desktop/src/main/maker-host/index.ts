@@ -51,6 +51,7 @@ import {
   type BotProfileRuntimeDeps,
   type BotProfileRuntimeSnapshot,
 } from '../maker-ipc/botProfileRuntime.js';
+import { collectBotOwnSkillMounts } from '../maker-ipc/botSkillService.js';
 import { prepareBotWorkspaceRuntime } from '../maker-ipc/botWorkspaceRuntime.js';
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
@@ -2126,6 +2127,8 @@ export function getMaker(): Maker {
           }),
         );
       },
+      // 伙伴自己沉淀的技能(本机 userData);remote 会话由 hydrate 侧跳过。
+      listOwnSkills: async ({ botId }) => collectBotOwnSkillMounts(botId),
       readMemoryIndex: async (scopeKey) =>
         (await makerMemoryManager.getStore(scopeKey)).getIndex(),
       // Bot 的 memory 能力位只能收窄到引擎现状 (见 BotProfileRuntimeDeps)。

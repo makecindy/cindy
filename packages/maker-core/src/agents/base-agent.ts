@@ -1282,10 +1282,36 @@ export interface BotRuntimeSkillEntry {
   scope?: string;
 }
 
+/** A Skill the Bot wrote for itself, stored in Cindy-owned per-Bot storage. */
+export interface BotRuntimeOwnSkillEntry {
+  name: string;
+  description?: string;
+  /** Absolute path to the Skill directory (the folder holding SKILL.md). */
+  path: string;
+}
+
 export interface BotRuntimeSkillPolicy {
   mode: 'inherit' | 'allowlist';
   configured: string[];
   catalog: BotRuntimeSkillEntry[];
+  /**
+   * Skills this Bot distilled from its own finished work.
+   *
+   * These are deliberately kept out of `catalog` / `configured`: the allowlist
+   * describes which of the *harness-discovered* Skills a user let this Bot keep,
+   * while these are Cindy-owned files the Bot authored itself. They are always
+   * mounted, they are never something the user's allowlist can accidentally
+   * switch off, and they must not participate in the runtime resource drift
+   * freeze — a Bot that just learned something has to stay able to resume its
+   * own task.
+   */
+  ownSkills?: BotRuntimeOwnSkillEntry[];
+  /**
+   * Directories to mount as Claude Code local plugins so the Skills above reach
+   * a harness that only toggles what it discovered by itself. Other harnesses
+   * take the per-Skill paths in `ownSkills` instead.
+   */
+  ownSkillPluginRoots?: string[];
 }
 
 export interface BotRuntimeMcpEntry {

@@ -48,6 +48,10 @@ import {
   setBotDurableNote,
 } from '../maker-ipc/botDurableNoteService.js';
 import {
+  listBotSkillsForSession,
+  saveBotSkillForSession,
+} from '../maker-ipc/botSkillService.js';
+import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
   setSessionsStatusInDb,
@@ -503,6 +507,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         get: getBotDurableNote,
         set: setBotDurableNote,
         delete: deleteBotDurableNote,
+      },
+      // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
+      botSkills: {
+        save: (params) => saveBotSkillForSession(params),
+        list: (params) => listBotSkillsForSession(params),
       },
       history: {
         resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {

@@ -41,12 +41,25 @@ function record(overrides: {
 }
 
 let records: unknown[] = [];
+let skills: unknown[] = [];
 const seed = vi.fn(async () => ({ written: 0, skipped: 0 }));
+const readSkill = vi.fn(async (_botId: string, slug: string) => ({
+  slug,
+  name: slug,
+  description: '',
+  updatedAt: new Date(NOW).toISOString(),
+  body: `steps for ${slug}`,
+}));
+const deleteSkill = vi.fn(async () => ({ ok: true as const, deleted: true }));
 
 beforeEach(() => {
   vi.setSystemTime(NOW);
   seed.mockClear();
+  readSkill.mockClear();
+  deleteSkill.mockClear();
   seed.mockImplementation(async () => ({ written: 0, skipped: 0 }));
+  deleteSkill.mockImplementation(async () => ({ ok: true as const, deleted: true }));
+  skills = [];
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     writable: true,
@@ -57,6 +70,11 @@ beforeEach(() => {
           delete: async () => {},
           clear: async () => {},
           seed,
+        },
+        botSkill: {
+          list: async () => skills,
+          read: readSkill,
+          delete: deleteSkill,
         },
       },
     },
@@ -127,6 +145,100 @@ describe('BotGrowthLists — 「TA 记得的」/「TA 学会的」', () => {
       expect(list.textContent).toContain('理由放后面');
     });
     expect(list.textContent).not.toContain('bots.artifacts.time.');
+  });
+});
+
+/*
+  批次 ζ:「TA 学会的」列的是**真技能**(伙伴自己调 save_bot_skill 存下的
+  SKILL.md,下一次会话会被 harness 真正挂载),不再只是 `learned-` 记忆分片的切片。
+  老的 `learned-` 分片一条不丢,但要以「笔记」的身份、和技能分开呈现。
+*/
+describe('BotGrowthLists — 「TA 学会的」列真技能', () => {
+  const skill = (name: string, description = '') => ({
+    slug: name,
+    name,
+    description,
+    updatedAt: new Date(NOW - 60_000).toISOString(),
+  });
+
+  it('lists the real skills the teammate distilled, with their hook and time', async () => {
+    records = [];
+    skills = [skill('weekly-report', '写周报的顺序')];
+    render(<BotGrowthLists botId="bot-1" highlight={null} />);
+
+    const list = await screen.findByTestId('bot-skill-list');
+    expect(list.textContent).toContain('weekly-report');
+    await waitFor(() => {
+      expect(list.textContent).toMatch(/写周报的顺序 · bots\.artifacts\.time\./);
+    });
+  });
+
+  it('opens the steps in place instead of dragging the user out of settings', async () => {
+    records = [];
+    skills = [skill('weekly-report')];
+    render(<BotGrowthLists botId="bot-1" highlight={null} />);
+
+    fireEvent.click(await screen.findByText('weekly-report'));
+
+    expect(await screen.findByText('steps for weekly-report')).toBeTruthy();
+    expect(readSkill).toHaveBeenCalledWith('bot-1', 'weekly-report');
+  });
+
+  it('deletes a skill behind a confirm and drops it from the list', async () => {
+    records = [];
+    skills = [skill('weekly-report')];
+    render(<BotGrowthLists botId="bot-1" highlight={null} />);
+
+    const button = await screen.findByLabelText(
+      'bots.learned.deleteAria:{"title":"weekly-report"}',
+    );
+    skills = [];
+    fireEvent.click(button);
+
+    await waitFor(() => expect(deleteSkill).toHaveBeenCalledWith('bot-1', 'weekly-report'));
+    await waitFor(() => expect(screen.queryByTestId('bot-skill-list')).toBeNull());
+  });
+
+  it('keeps the old learned- memory notes, told apart from real skills', async () => {
+    skills = [skill('weekly-report')];
+    records = [
+      record({
+        filename: 'reference_learned-shrink-email.md',
+        slug: 'learned-shrink-email',
+        title: '把长邮件缩成三行',
+        description: '',
+        updatedAt: new Date(NOW - 60_000).toISOString(),
+      }),
+    ];
+    render(<BotGrowthLists botId="bot-1" highlight={null} />);
+
+    // 两组各自成组:技能能挂载,笔记不能 —— 混在一起用户会以为每条都是本事。
+    expect((await screen.findByTestId('bot-skill-list')).textContent).toContain('weekly-report');
+    const notes = await screen.findByTestId('bot-learned-notes');
+    expect(notes.textContent).toContain('bots.learned.notesTitle');
+    expect(notes.textContent).toContain('把长邮件缩成三行');
+    expect(notes.textContent).not.toContain('weekly-report');
+    expect(screen.queryByText('bots.learned.empty')).toBeNull();
+  });
+
+  it('only says "nothing learned yet" when both groups are really empty', async () => {
+    records = [];
+    skills = [];
+    render(<BotGrowthLists botId="bot-1" highlight={null} />);
+
+    expect(await screen.findByText('bots.learned.empty')).toBeTruthy();
+  });
+
+  it('still renders on an older preload that has no skill bridge', async () => {
+    // 新 renderer 撞上旧 preload 时按「还没学会任何东西」处理,不整块报错。
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      writable: true,
+      value: { maker: { botMemory: { list: async () => [], delete: async () => {}, clear: async () => {}, seed } } },
+    });
+    render(<BotGrowthLists botId="bot-1" highlight={null} />);
+
+    expect(await screen.findByText('bots.learned.empty')).toBeTruthy();
   });
 });
 

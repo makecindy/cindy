@@ -108,6 +108,17 @@ export interface BotProfileRuntimeDeps {
    * 那个 server —— 典型的空头支票。缺省(未注入)按既有行为不收窄。
    */
   isMemoryEngineEnabled?: () => boolean;
+  /**
+   * 这个伙伴自己沉淀的技能(Cindy 自有 per-bot 存储,不是 harness 发现目录)。
+   *
+   * 它刻意**不**并进 `listSkills` 的目录:那份目录是「用户允许保留哪些既有
+   * Skill」的 allowlist 语料,而这些是伙伴自己写的文件,恒挂载、也不该被
+   * 用户的勾选误关掉。远端会话拿不到本机路径,由调用方自行不注入。
+   */
+  listOwnSkills?: (input: { botId: string }) => Promise<{
+    pluginRoot: string;
+    skills: { name: string; description: string; path: string }[];
+  }>;
   readSkillSource?: (input: {
     path: string;
     remoteHostId?: string;
@@ -245,6 +256,7 @@ export function buildBotCapabilityContextPrompt(): string {
     'Cindy Bot collaboration can discover other available Bots, hand off a bounded objective to one of them, receive the result back in this task, inspect ongoing or completed handoffs, and cancel a handoff that is still active.',
     'A Bot handoff is task delegation with a result return path. It does not rewrite another Bot\'s identity or make that Bot obey. If the user asks for obedience or control, explain this boundary and immediately offer the available delegation path instead of redirecting them to a separate team workflow.',
     'When you finish something and a reusable way of working came out of it — a habit worth keeping, not a fact about the user — record it in your own memory with a `learned-` name prefix (for example `learned-weekly-report-shape`). Everything else you remember keeps its ordinary name. Both stay in your memory; the prefix only tells the two apart when they are shown to the user.',
+    'After you finish a multi-step task of a kind you have not handled before, turn the way you did it into one of your own skills with `save_bot_skill`: write the repeatable steps, not this run\'s conclusions. Check `list_bot_skills` first — if you already have one for this kind of task, use it as your starting point and save it again under the same name when you find a better way. A saved skill is mounted from your next task onward, so do not expect to call it in this one.',
   ].join('\n');
 }
 
@@ -578,6 +590,31 @@ export async function hydrateBotProfileRuntime(
   if (deps.listSkills && skillCatalogAvailable) runtimeSkillMode = 'allowlist';
   const runtimeConfiguredSkills =
     skillMode === 'inherit' ? [...resolvedSkills] : [...configuredSkills];
+  /*
+    伙伴自己沉淀的技能。
+
+    读失败不降级整个会话:一个读不出来的技能架子不该让伙伴起不来,也不该把
+    「用户配的 Skill 有一条不可用」这种真降级信号稀释掉 —— 所以它既不进
+    unavailableSkills,也不参与 resolutionStatus。
+
+    同样不进下面 resolvedJson 的 `skillResources`(那是冻结漂移检查的口径):
+    伙伴在任务里刚学会一个技能,紧接着要能续跑同一个任务;把自己写的文件也
+    冻上,等于「一学会就再也 resume 不了」。
+  */
+  let ownSkills: { name: string; description: string; path: string }[] = [];
+  let ownSkillPluginRoot: string | null = null;
+  // SSH remote 会话的 harness 跑在远端文件系统上,本机 userData 里的技能目录
+  // 在那边不存在 —— 与其挂一串打不开的路径,不如这类会话直接不挂。
+  if (deps.listOwnSkills && !opts.remoteHostId) {
+    try {
+      const own = await deps.listOwnSkills({ botId: row.botId });
+      ownSkills = own.skills;
+      ownSkillPluginRoot = own.skills.length > 0 ? own.pluginRoot : null;
+    } catch {
+      ownSkills = [];
+      ownSkillPluginRoot = null;
+    }
+  }
   let mcpCatalog: BotMcpCatalogItem[] = [];
   let resolvedMcpServers: string[] = [];
   let unavailableMcpServers: string[] = [];
@@ -667,6 +704,16 @@ export async function hydrateBotProfileRuntime(
         ...(item.scope?.trim() ? { scope: item.scope.trim() } : {}),
         ...(item.contentSha256 ? { contentSha256: item.contentSha256 } : {}),
       })),
+      ...(ownSkills.length > 0
+        ? {
+            ownSkills: ownSkills.map((item) => ({
+              name: item.name,
+              ...(item.description ? { description: item.description } : {}),
+              path: item.path,
+            })),
+          }
+        : {}),
+      ...(ownSkillPluginRoot ? { ownSkillPluginRoots: [ownSkillPluginRoot] } : {}),
     },
     mcpPolicy: {
       mode: runtimeMcpMode,
@@ -740,6 +787,9 @@ export async function hydrateBotProfileRuntime(
       path: entry.path?.trim() || null,
       sha256: entry.contentSha256 ?? null,
     })),
+    // 刻意与 skillResources 分开:下面的漂移检查只认那三个 *Resources 键,
+    // 伙伴自己写的技能不该把「刚学会就 resume 不了」变成硬错误。
+    botOwnSkillResources: ownSkills.map((entry) => ({ name: entry.name, path: entry.path })),
     mcpResources: resolvedMcpServers.map((name) => {
       const entry = mcpCatalog.find((item) => item.name === name);
       return { name, generation: entry?.generation ?? null };

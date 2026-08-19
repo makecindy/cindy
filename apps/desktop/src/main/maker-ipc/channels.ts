@@ -346,6 +346,13 @@ export const MAKER_INVOKE = {
    * 用户改过的那条不会被第二次调用冲掉。
    */
   BOT_MEMORY_SEED: 'maker:bot-memory:seed',
+  // Per-bot 真技能 ("TA 学会的" — 批次 ζ)。落盘在 <userData>/bot-skills/<botId>/,
+  // 与记忆分片是两套东西:记忆答"我知道什么", 技能答"这类事我怎么做", 并且会在
+  // 下一次会话被 harness 真正挂载。全部只读 + 单条删除, 设置页不新增写入口 ——
+  // 技能由伙伴自己经 save_bot_skill 沉淀。
+  BOT_SKILL_LIST: 'maker:bot-skill:list',
+  BOT_SKILL_READ: 'maker:bot-skill:read',
+  BOT_SKILL_DELETE: 'maker:bot-skill:delete',
   /** 一句话角色 → 伙伴草稿(复用 title one-shot 通道,见 botPersonaGeneration.ts)。 */
   BOT_PERSONA_GENERATE: 'maker:bots:generate-persona',
   /**

@@ -4841,6 +4841,19 @@ interface ElectronAPI {
         entries: readonly import('../shared/botMemorySeed').BotMemorySeedEntry[],
       ) => Promise<import('../shared/botMemorySeed').BotMemorySeedResult>;
     };
+    /**
+     * 单个伙伴自己沉淀的**真技能**("TA 学会的" — 批次 ζ)。
+     * 与记忆分片是两套存储:记忆答「我知道什么」,技能答「这类事我怎么做」,并且
+     * 会在下一次会话被 harness 真正挂载。写入只由伙伴自己经 save_bot_skill 完成。
+     */
+    botSkill: {
+      list: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
+      read: (
+        botId: string,
+        slug: string,
+      ) => Promise<import('../shared/botSkill').BotSkillDetail | null>;
+      delete: (botId: string, slug: string) => Promise<{ ok: true; deleted: boolean }>;
+    };
     /** 一句话角色 → 伙伴草稿(失败带分类码,不静默)。 */
     generateBotPersona: (
       role: string,

@@ -3379,6 +3379,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 计划模式开启时 SDK 跑 plan; 读 mutable 值让 rewind/fork 重建拿到当前档而非创建时快照。
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
+      // Review 会话不带任何 Bot 身份/能力(与 botSkillPolicy 同口径)。
+      const botOwnSkillPluginRoots = reviewMode
+        ? []
+        : [...new Set(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots ?? [])];
       const query = sdkQuery({
         prompt: inputQueue as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -3387,6 +3391,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 附加只读引用目录 — 每 turn buildQuery 读最新 closure 值, setExtraDirs 改完
           // 下一 turn 立即生效 (turn-by-turn 装配)。空数组省略字段, 让 SDK 走默认。
           ...(mutableExtraDirs.length > 0 ? { additionalDirectories: mutableExtraDirs } : {}),
+          // Bot 自己沉淀的技能。cc 的 skillOverrides 只能开关它**自己发现到的**
+          // Skill(~/.claude/skills 与项目 .claude/skills),而这些技能躺在 Cindy
+          // 自有的 per-bot 目录里 —— 唯一不污染那两个共享目录(会串到别的伙伴和
+          // 普通任务)的挂载方式就是把 per-bot 根当本地 plugin 挂进来。
+          // 与 additionalDirectories 同理:路径是本机的,远端 cc-mgr 分支不透传。
+          ...(botOwnSkillPluginRoots.length > 0
+            ? { plugins: botOwnSkillPluginRoots.map((root) => ({ type: 'local' as const, path: root })) }
+            : {}),
           model: currentSdkModel,
           ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
           permissionMode: sdkStartPermissionMode,

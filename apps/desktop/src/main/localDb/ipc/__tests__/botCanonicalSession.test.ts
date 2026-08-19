@@ -1121,6 +1121,153 @@ describe('Bot canonical Session lifecycle', () => {
     })).rejects.toMatchObject({ code: 'BOT_RUNTIME_RESOURCE_DRIFT' });
   });
 
+  /*
+    「TA 学会的」闭环的挂载端:伙伴自己沉淀的技能必须在下一次会话真的被挂进去。
+
+    它们走独立的 ownSkills 通道,不进 catalog / configured —— allowlist 管的是
+    「用户允许这个伙伴保留哪些 harness 发现到的 Skill」,而这些是伙伴自己写的
+    文件,恒挂载,不该被用户的勾选误关掉。
+  */
+  it('mounts the Bot\'s own learned Skills into the next task', async () => {
+    await invoke('local-db:bots:update', {
+      id: 'bot-1',
+      capabilities: { skills: [], skillMode: 'inherit' },
+    });
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 2,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: created.session.id,
+      agentKind: 'pi',
+      workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue',
+      model: 'grok-4.5',
+      permissionMode: 'bypassPermissions',
+    };
+
+    await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [],
+      listOwnSkills: async ({ botId }) => ({
+        pluginRoot: `/userdata/bot-skills/${botId}`,
+        skills: [{
+          name: 'weekly-report',
+          description: 'How I put the weekly report together',
+          path: `/userdata/bot-skills/${botId}/skills/weekly-report`,
+        }],
+      }),
+    }, { persistSnapshot: false });
+
+    expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toEqual([
+      {
+        name: 'weekly-report',
+        description: 'How I put the weekly report together',
+        path: '/userdata/bot-skills/bot-1/skills/weekly-report',
+      },
+    ]);
+    // Claude Code 只会开关它自己发现到的 Skill,所以还要给它一个本地 plugin 根。
+    expect(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots).toEqual([
+      '/userdata/bot-skills/bot-1',
+    ]);
+    // 用户配的 Skill 那一栏不受影响。
+    expect(opts.botRuntimeProfile?.skillPolicy.catalog).toEqual([]);
+  });
+
+  it('does not mount local learned Skills into a remote Bot task', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: created.session.id,
+      agentKind: 'pi',
+      workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue',
+      model: 'grok-4.5',
+      permissionMode: 'bypassPermissions',
+      remoteHostId: 'box',
+    };
+
+    await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [],
+      listOwnSkills: async () => ({
+        pluginRoot: '/userdata/bot-skills/bot-1',
+        skills: [{ name: 'weekly-report', description: '', path: '/userdata/bot-skills/bot-1/skills/weekly-report' }],
+      }),
+    }, { persistSnapshot: false });
+
+    // 路径是本机的,远端 harness 打不开 —— 挂一串死路径比不挂更糟。
+    expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
+    expect(opts.botRuntimeProfile?.skillPolicy.ownSkillPluginRoots).toBeUndefined();
+  });
+
+  /*
+    伙伴在任务里刚学会一个技能,紧接着还得能续跑同一个任务。所以自有技能
+    不进 skillResources —— 那是冻结漂移检查的口径,进去就等于「一学会就
+    再也 resume 不了」。
+  */
+  it('lets a Bot resume its own task right after it learned something new', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    const makeOpts = (): MakerSessionCreateOpts => ({
+      id: created.session.id,
+      agentKind: 'pi',
+      workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue',
+      model: 'grok-4.5',
+      permissionMode: 'bypassPermissions',
+    });
+
+    const first = await hydrateBotProfileRuntime(makeOpts(), {
+      listSkills: async () => [],
+      listOwnSkills: async () => ({ pluginRoot: '/userdata/bot-skills/bot-1', skills: [] }),
+    });
+    await markBotProfileRuntimeApplied(first!);
+
+    const resumed = makeOpts();
+    await expect(hydrateBotProfileRuntime(resumed, {
+      listSkills: async () => [],
+      listOwnSkills: async () => ({
+        pluginRoot: '/userdata/bot-skills/bot-1',
+        skills: [{ name: 'weekly-report', description: '', path: '/userdata/bot-skills/bot-1/skills/weekly-report' }],
+      }),
+    })).resolves.toBeTruthy();
+    expect(resumed.botRuntimeProfile?.skillPolicy.ownSkills).toHaveLength(1);
+  });
+
+  it('keeps a Bot startable when its own skill shelf cannot be read', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1',
+      expectedCanonicalSessionId: null,
+      expectedProfileVersion: 1,
+    });
+    const opts: MakerSessionCreateOpts = {
+      id: created.session.id,
+      agentKind: 'pi',
+      workingDir: created.session.workingDir,
+      workspaceKind: 'dialogue',
+      model: 'grok-4.5',
+      permissionMode: 'bypassPermissions',
+    };
+
+    const snapshot = await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [],
+      listOwnSkills: async () => {
+        throw new Error('disk unavailable');
+      },
+    }, { persistSnapshot: false });
+
+    // 读不出自己的技能架子不是「用户配的 Skill 有一条不可用」,不该稀释降级信号。
+    expect(snapshot?.resolutionStatus).toBe('applied');
+    expect(snapshot?.unavailableSkills).toEqual([]);
+    expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
+  });
+
   it('removes a Skill from the native runtime catalog when its source cannot be fingerprinted', async () => {
     await invoke('local-db:bots:update', {
       id: 'bot-1',

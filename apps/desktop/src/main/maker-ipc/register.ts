@@ -331,6 +331,11 @@ import {
   readClaudeApiKey,
 } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
+import {
+  deleteBotSkillForBot,
+  listBotSkillsForBot,
+  readBotSkillForBot,
+} from './botSkillService.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -15227,6 +15232,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     log.info('bot-memory:seed', { botId, written, skipped: normalized.length - written });
     return { written, skipped: normalized.length - written };
+  });
+
+  /*
+    Per-bot 真技能(「TA 学会的」)。三个入口都是只读或删除 —— 设置页不提供
+    「手写一个技能」的写入口:这个列表回答的是「TA 自己长出了什么本事」,用户手写
+    进来的东西会让它变成另一个 Skill 管理器,与产品口径不符。
+
+    与记忆那一组不同,这里不需要 skipDisabledCheck 之类的开关判断:技能是独立的
+    文件存储,不经 makerMemory 引擎。
+  */
+  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_LIST, async (_e, botId: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    return listBotSkillsForBot(botId);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_READ, async (_e, botId: unknown, slug: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (typeof slug !== 'string' || !slug.trim()) {
+      throwIpcError('INVALID_PARAMS', 'slug required (string)');
+    }
+    return readBotSkillForBot(botId, slug);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_DELETE, async (_e, botId: unknown, slug: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (typeof slug !== 'string' || !slug.trim()) {
+      throwIpcError('INVALID_PARAMS', 'slug required (string)');
+    }
+    const deleted = await deleteBotSkillForBot(botId, slug);
+    log.info('bot-skill:delete', { botId, deleted });
+    return { ok: true as const, deleted };
   });
 
   /*

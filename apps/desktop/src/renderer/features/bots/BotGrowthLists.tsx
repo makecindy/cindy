@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -9,6 +9,7 @@ import { artifactTimeLabel } from './botArtifactPresentation';
 import { partitionBotMemoryRecords } from './botGrowth';
 import { isBotSeedMemorySlug } from './botTemplates';
 import type { BotMemorySeedEntry } from '../../../shared/botMemorySeed';
+import type { BotSkillDetail, BotSkillSummary } from '../../../shared/botSkill';
 import type { BotSettingsHighlightId } from './botSettingsNav';
 
 function readError(cause: unknown): string {
@@ -24,15 +25,22 @@ function parseUpdatedAt(value: string): number | null {
 /**
  * 设置页「TA 是谁」里并排的两个成长列表:「TA 记得的」与「TA 学会的」。
  *
- * 两个列表是**同一份**伙伴记忆分域的两个切片(见 botGrowth.partitionBotMemoryRecords):
- * `learned-` 前缀的分片是本事,其余是记忆。所以这里只拉一次
- * `window.electronAPI.maker.botMemory.list`,删除后两边同步刷新 —— 分两个组件各拉
- * 一次会出现"删了一条,另一个列表还是旧的"。
+ * ## 两个列表、三种东西
  *
- * 批次 β 已经把 list / delete / clear 三个 IPC 打通;本批只多用了一个幂等的 seed
- * 写入(见 shared/botMemorySeed.ts),没有新增存储与 schema。
- * scope key 与 workdir 记忆完全独立。`digest` 分片(Pi 压缩产生的系统内部摘要)两边
- * 都不展示,但不影响它继续被检索使用。
+ * 「TA 记得的」是伙伴记忆分域里除 `learned-` 之外的分片(见
+ * botGrowth.partitionBotMemoryRecords)。
+ *
+ * 「TA 学会的」列的是**真技能**(批次 ζ):伙伴自己调 `save_bot_skill` 存下的
+ * `SKILL.md`,下一次会话会被 harness 真正挂载。它们和记忆不在同一套存储里,所以
+ * 这里要拉两份数据。
+ *
+ * `learned-` 前缀的记忆分片(批次 ε 的做法)继续留在同一个区块的下半段,标成
+ * 「笔记」—— 它们是伙伴写给自己看的做法,不是可挂载的技能。老数据一条不丢,但
+ * 视觉上必须能一眼看出「这条是能用的本事,那条只是一段笔记」。
+ *
+ * 两份数据在同一个组件里拉,删除后一起刷新 —— 分两个组件各拉一次会出现
+ * 「删了一条,另一个列表还是旧的」。`digest` 分片(Pi 压缩产生的系统内部摘要)
+ * 两边都不展示,但不影响它继续被检索使用。
  */
 export function BotGrowthLists({
   botId,
@@ -68,8 +76,12 @@ export function BotGrowthLists({
     }
   };
   const [records, setRecords] = useState<MemoryRecord[] | null>(null);
+  const [skills, setSkills] = useState<BotSkillSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyFilename, setBusyFilename] = useState<string | null>(null);
+  const [busySkillSlug, setBusySkillSlug] = useState<string | null>(null);
+  const [openSkillSlug, setOpenSkillSlug] = useState<string | null>(null);
+  const [openSkill, setOpenSkill] = useState<BotSkillDetail | null>(null);
   const [clearing, setClearing] = useState(false);
   const [seeding, setSeeding] = useState(false);
 
@@ -82,9 +94,71 @@ export function BotGrowthLists({
     }
   }, [botId]);
 
+  /*
+    技能与记忆是两套存储,失败也要分开处理:记忆读不出来不该把技能列表一起变成
+    错误态。`botSkill` 桥在旧版 preload 上可能不存在(用户先起了新 renderer、
+    preload 还是旧的),此时按"还没学会任何东西"处理而不是整块报错。
+  */
+  const loadSkills = useCallback(async () => {
+    const bridge = window.electronAPI?.maker?.botSkill;
+    if (!bridge) {
+      setSkills([]);
+      return;
+    }
+    try {
+      setSkills(await bridge.list(botId));
+    } catch (cause) {
+      setSkills([]);
+      setError(readError(cause));
+    }
+  }, [botId]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadSkills();
+  }, [load, loadSkills]);
+
+  /** 展开一条技能看正文。再点一次收起;读失败就收起并把原因说出来。 */
+  const toggleSkill = async (slug: string) => {
+    if (openSkillSlug === slug) {
+      setOpenSkillSlug(null);
+      setOpenSkill(null);
+      return;
+    }
+    setOpenSkillSlug(slug);
+    setOpenSkill(null);
+    try {
+      setOpenSkill(await window.electronAPI.maker.botSkill.read(botId, slug));
+    } catch (cause) {
+      setOpenSkillSlug(null);
+      setError(readError(cause));
+    }
+  };
+
+  const deleteSkill = async (skill: BotSkillSummary) => {
+    const confirmed = await confirm({
+      title: t('bots.learned.deleteTitle'),
+      description: t('bots.learned.deleteDescription', { title: skill.name }),
+      confirmText: t('bots.learned.deleteConfirm'),
+      cancelText: t('commonUi.confirmDialog.cancel'),
+      confirmVariant: 'destructive',
+    });
+    if (!confirmed) return;
+    setBusySkillSlug(skill.slug);
+    setError(null);
+    try {
+      await window.electronAPI.maker.botSkill.delete(botId, skill.slug);
+      if (openSkillSlug === skill.slug) {
+        setOpenSkillSlug(null);
+        setOpenSkill(null);
+      }
+      await loadSkills();
+    } catch (cause) {
+      setError(readError(cause));
+    } finally {
+      setBusySkillSlug(null);
+    }
+  };
 
   const deleteOne = async (record: MemoryRecord) => {
     const confirmed = await confirm({
@@ -194,6 +268,60 @@ export function BotGrowthLists({
     );
   };
 
+  /**
+   * 一条真技能:名字 + 说明 · 相对时间,点开看正文,右侧删除。
+   *
+   * 展开用的是行内一段折叠正文而不是弹窗 —— 这个列表回答的是「TA 会点什么」,
+   * 想看细节的人不该被拽出设置页。
+   */
+  const renderSkillRow = (skill: BotSkillSummary) => {
+    const at = parseUpdatedAt(skill.updatedAt);
+    const metaLine = [skill.description.trim(), at !== null ? timeText(at) : '']
+      .filter((part) => part.length > 0)
+      .join(' · ');
+    const open = openSkillSlug === skill.slug;
+    return (
+      <li key={skill.slug} className="rounded-lg bg-[var(--surface-chip)]">
+        <div className="flex items-start justify-between gap-3 px-3 py-2">
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={() => void toggleSkill(skill.slug)}
+            className="flex min-w-0 flex-1 items-start gap-1.5 text-left"
+          >
+            {open ? (
+              <ChevronDown size={13} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
+            ) : (
+              <ChevronRight size={13} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
+            )}
+            <span className="min-w-0">
+              <span className="block truncate text-12 text-[var(--text-primary)]">{skill.name}</span>
+              {metaLine ? (
+                <span className="mt-0.5 block truncate text-11 text-[var(--text-tertiary)]">
+                  {metaLine}
+                </span>
+              ) : null}
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={busySkillSlug !== null}
+            aria-label={t('bots.learned.deleteAria', { title: skill.name })}
+            onClick={() => void deleteSkill(skill)}
+            className="shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-danger)] disabled:opacity-50"
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+        {open ? (
+          <p className="whitespace-pre-wrap break-words border-t border-[var(--border-default)] px-3 py-2 text-11 leading-4 text-[var(--text-secondary)]">
+            {openSkill?.slug === skill.slug ? openSkill.body : t('bots.learned.loadingBody')}
+          </p>
+        ) : null}
+      </li>
+    );
+  };
+
   // 高亮是"从尾注跳进来"的落点提示:加一圈焦点色描边,不改配色也不加阴影。
   const highlightRing = (id: BotSettingsHighlightId): string =>
     highlight === id ? ' rounded-xl ring-2 ring-[var(--focus-ring-soft)]' : '';
@@ -248,15 +376,33 @@ export function BotGrowthLists({
         className={`-m-1 mt-5 border-t border-[var(--border-default)] p-1 pt-4${highlightRing('learned')}`}
       >
         <p className="text-12 font-medium text-[var(--text-primary)]">{t('bots.learned.title')}</p>
-        {records === null ? null : learned.length === 0 ? (
+        {/*
+          两组都空才说「还没长出什么本事」。技能已经有了、只是没有笔记(反之亦然)
+          时说这句就是对着一个非空列表讲假话。
+        */}
+        {skills === null || records === null ? null : skills.length === 0 && learned.length === 0 ? (
           <p className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
             {t('bots.learned.empty')}
           </p>
-        ) : (
-          <ul className="mt-2 flex flex-col gap-1.5">
-            {learned.map((record) => renderRow(record, true))}
+        ) : null}
+        {skills && skills.length > 0 ? (
+          <ul data-testid="bot-skill-list" className="mt-2 flex flex-col gap-1.5">
+            {skills.map(renderSkillRow)}
           </ul>
-        )}
+        ) : null}
+        {/*
+          `learned-` 记忆分片是批次 ε 的做法:伙伴写给自己看的一段笔记,不会被
+          harness 挂载。老数据一条不丢,但必须和上面那组真技能分开标注 ——
+          不然用户会以为每一条都是「能用的本事」。
+        */}
+        {records && learned.length > 0 ? (
+          <div data-testid="bot-learned-notes" className="mt-3">
+            <p className="text-11 text-[var(--text-tertiary)]">{t('bots.learned.notesTitle')}</p>
+            <ul className="mt-1.5 flex flex-col gap-1.5">
+              {learned.map((record) => renderRow(record, true))}
+            </ul>
+          </div>
+        ) : null}
         <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
           {t('bots.learned.footnote')}
         </p>
