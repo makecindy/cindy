@@ -34,6 +34,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
 import {
   __testing,
   readWorkLouderCodexSettings,
+  resetWorkLouderCodexSettings,
   writeWorkLouderCodexSettingsPatch,
 } from '../settingsStore.js';
 
@@ -111,6 +112,35 @@ describe('Work Louder Codex settings store', () => {
     ).toEqual({
       lightingBrightness: 60,
       lightingAutoDim: '1-minute',
+      singleTapAgentKeys: false,
     });
+  });
+
+  it('keeps the keyboard enabled when restoring other defaults', () => {
+    electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklouder-settings-'));
+
+    writeWorkLouderCodexSettingsPatch({
+      deviceEnabled: true,
+      lightingBrightness: 40,
+    });
+    const next = resetWorkLouderCodexSettings();
+
+    expect(next).toEqual({
+      ...createWorkLouderCodexDefaultSettings(),
+      deviceEnabled: true,
+    });
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(
+            electronMock.userDataDir,
+            'owners',
+            'owner-a',
+            'worklouder-codex-settings.json',
+          ),
+          'utf-8',
+        ),
+      ),
+    ).toEqual({ deviceEnabled: true });
   });
 });

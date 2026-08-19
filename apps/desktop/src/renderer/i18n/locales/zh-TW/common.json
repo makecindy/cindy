@@ -3512,16 +3512,24 @@
         },
         "connection": {
           "label": "連線",
+          "toggle": {
+            "label": "啟用",
+            "aria": "讓這個 Cindy 占用 Codex Micro"
+          },
           "status": {
             "connecting": "正在連線",
             "connected": "已連線",
             "not-detected": "未偵測到",
+            "present": "已連線",
+            "disabled": "未啟用",
             "error": "連線異常",
             "unavailable": "SDK 無法使用"
           },
           "descriptions": {
             "connecting": "Cindy 正在啟動 Work Louder 裝置服務。",
             "connected": "USB 已連線，Cindy 正在監聽按鍵並同步任務燈效。",
+            "disabled": "啟用後，Cindy 會監聽按鍵，並用燈光顯示任務狀態。",
+            "present": "啟用後，Cindy 會監聽按鍵，並用燈光顯示任務狀態。",
             "not-detected": "請用支援資料傳輸的 USB 線連接鍵盤；如果 ChatGPT 正在占用裝置，請先關閉。",
             "error": "Cindy 暫時無法與鍵盤通訊，正在自動重試。",
             "unavailable": "找不到官方 Work Louder SDK。請保留支援 Codex Micro 的 ChatGPT 或 Codex 應用程式，重新啟動 Cindy 後再試。",

@@ -34,6 +34,8 @@ export interface XdOrgBetaDefaultRequest {
   user: XdOrgBetaUser;
 }
 
+export type OrgBetaDefaultDecision = 'xd-legacy' | 'flag-enable' | 'skip';
+
 export interface XdOrgBetaDefaultDeps {
   readCurrentAuthIdentity(): { authEpoch: number; userId: string | null };
   readChannelState(): XdOrgBetaChannelState;
@@ -46,11 +48,7 @@ export type XdOrgBetaDefaultOutcome =
   | {
       kind: 'skipped';
       reason:
-        | 'not-xd-org'
-        | 'already-enabled'
-        | 'user-customized'
-        | 'beta-unavailable'
-        | 'stale-auth';
+        'not-xd-org' | 'already-enabled' | 'user-customized' | 'beta-unavailable' | 'stale-auth';
     };
 
 /** 当前登录用户是否是 xd 组织。orgSlug 优先,旧 token 才回退显示名。 */
@@ -61,9 +59,23 @@ export function isXdOrgUser(user: XdOrgBetaUser | null | undefined): boolean {
   return name !== undefined && XD_ORG_NAME_FALLBACKS.has(name);
 }
 
+/** 先按 xd 身份判定，只有非 xd 才允许 feature flag 打开设备默认值。 */
+export function shouldAttemptOrgBetaDefault(input: {
+  user: XdOrgBetaUser | null | undefined;
+  defaultEnableBeta?: boolean;
+}): OrgBetaDefaultDecision {
+  if (isXdOrgUser(input.user)) return 'xd-legacy';
+  if (input.user?.membershipKind !== 'org' || input.defaultEnableBeta !== true) {
+    return 'skip';
+  }
+  return 'flag-enable';
+}
+
 function isCurrentAuth(request: XdOrgBetaDefaultRequest, deps: XdOrgBetaDefaultDeps): boolean {
   const current = deps.readCurrentAuthIdentity();
-  return current.authEpoch === request.expectedAuthEpoch && current.userId === request.expectedUserId;
+  return (
+    current.authEpoch === request.expectedAuthEpoch && current.userId === request.expectedUserId
+  );
 }
 
 /**
@@ -77,17 +89,31 @@ export async function maybeEnableXdOrgBetaDefault(
   if (!isXdOrgUser(request.user)) {
     return { kind: 'skipped', reason: 'not-xd-org' };
   }
+  return maybeEnableBetaDefaultForEligibleUser(request, deps);
+}
+
+/** 为非 xd 组织复用同一套设备默认写盘保护，仅由 feature flag 显式开启。 */
+export async function maybeEnableNonXdOrgBetaDefault(
+  request: XdOrgBetaDefaultRequest,
+  deps: XdOrgBetaDefaultDeps,
+): Promise<XdOrgBetaDefaultOutcome> {
+  if (isXdOrgUser(request.user)) {
+    return { kind: 'skipped', reason: 'not-xd-org' };
+  }
+  return maybeEnableBetaDefaultForEligibleUser(request, deps);
+}
+
+async function maybeEnableBetaDefaultForEligibleUser(
+  request: XdOrgBetaDefaultRequest,
+  deps: XdOrgBetaDefaultDeps,
+): Promise<XdOrgBetaDefaultOutcome> {
   if (!isCurrentAuth(request, deps)) {
     return { kind: 'skipped', reason: 'stale-auth' };
   }
 
   const state = deps.readChannelState();
-  if (state.enableBeta) {
-    return { kind: 'skipped', reason: 'already-enabled' };
-  }
-  if (state.isCustomized) {
-    return { kind: 'skipped', reason: 'user-customized' };
-  }
+  if (state.enableBeta) return { kind: 'skipped', reason: 'already-enabled' };
+  if (state.isCustomized) return { kind: 'skipped', reason: 'user-customized' };
 
   let available = false;
   try {
@@ -95,12 +121,8 @@ export async function maybeEnableXdOrgBetaDefault(
   } catch {
     return { kind: 'skipped', reason: 'beta-unavailable' };
   }
-  if (!available) {
-    return { kind: 'skipped', reason: 'beta-unavailable' };
-  }
-  if (!isCurrentAuth(request, deps)) {
-    return { kind: 'skipped', reason: 'stale-auth' };
-  }
+  if (!available) return { kind: 'skipped', reason: 'beta-unavailable' };
+  if (!isCurrentAuth(request, deps)) return { kind: 'skipped', reason: 'stale-auth' };
 
   const wrote = await deps.enableBeta();
   if (!wrote) {

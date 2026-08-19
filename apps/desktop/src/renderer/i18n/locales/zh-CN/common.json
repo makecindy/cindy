@@ -3485,16 +3485,24 @@
         },
         "connection": {
           "label": "连接",
+          "toggle": {
+            "label": "启用",
+            "aria": "让这个 Cindy 占用 Codex Micro"
+          },
           "status": {
             "connecting": "正在连接",
             "connected": "已连接",
             "not-detected": "未检测到",
+            "present": "已连接",
+            "disabled": "未启用",
             "error": "连接异常",
             "unavailable": "SDK 不可用"
           },
           "descriptions": {
             "connecting": "Cindy 正在启动 Work Louder 设备服务。",
             "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+            "disabled": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
+            "present": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
             "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
             "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
             "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",

@@ -265,6 +265,10 @@ export function setDeepLinkMainWindow(win: BrowserWindow | null): void {
   mainWindowRef = win;
 }
 
+export function getDeepLinkMainWindow(): BrowserWindow | null {
+  return mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
+}
+
 /**
  * 处理一条入站 URL。会内部解析、根据 mainWindow 状态选择直接发送 or 缓存。
  * 即使解析失败也只 log 不抛,避免污染调用方(open-url / second-instance / argv)。
