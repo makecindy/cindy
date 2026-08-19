@@ -275,6 +275,33 @@ describe('Windows Git/PATH helpers', () => {
     expect(result).toBe(`C:\\Windows;${cmd}`);
   });
 
+  it('validates PATH executables and install roots in one path-kind snapshot', () => {
+    const staleGit = 'Z:\\OldGit\\cmd\\git.exe';
+    const git = 'C:\\PortableGit\\cmd\\git.exe';
+    const cmd = 'C:\\PortableGit\\cmd';
+    const snapshots: string[][] = [];
+
+    const result = resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: 'C:\\Windows',
+      probes: {
+        readRegistryInstallPaths: () => [],
+        findGitExecutablesOnPath: () => [staleGit, git],
+        probePathKinds: (candidates) => {
+          snapshots.push([...candidates]);
+          return new Map([
+            [git, 'file'],
+            [cmd, 'directory'],
+          ]);
+        },
+      },
+    });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toEqual(expect.arrayContaining([staleGit, git, cmd]));
+    expect(result).toBe(`C:\\Windows;${cmd}`);
+  });
+
   it('keeps path records emitted before a bounded probe timeout', () => {
     const root = 'C:\\PortableGit';
     const cmd = `${root}\\cmd`;

@@ -341,9 +341,7 @@ export function findWindowsExecutablesOnPath(
 
 function defaultFindGitExecutablesOnPath(pathValue: string | undefined): readonly string[] {
   if (process.platform !== 'win32') return [];
-  const candidates = windowsExecutableCandidatesOnPath(pathValue, WINDOWS_GIT_EXECUTABLE);
-  const kinds = defaultProbeWindowsPathKinds(candidates);
-  return candidates.filter((candidate) => kinds.get(normalizedWindowsPath(candidate)) === 'file');
+  return windowsExecutableCandidatesOnPath(pathValue, WINDOWS_GIT_EXECUTABLE);
 }
 
 const defaultProbes: WindowsGitPathProbes = {
@@ -488,18 +486,24 @@ export function resolveWindowsGitPath({ platform = process.platform, existingPat
   const probes: WindowsGitPathProbes = { ...defaultProbes, ...overrides };
   const original = existingPath ?? '';
   const segments = original.split(';').filter((segment) => segment.trim() !== '');
-  const gitExecutables = probes.findGitExecutablesOnPath(existingPath);
-  const rootCandidates = uniqueWindowsPaths([
-    ...probes.readRegistryInstallPaths(),
-    ...gitExecutables.flatMap((gitPath) => gitInstallRootFromPath(gitPath) ?? []),
-  ]);
+  const registryRoots = probes.readRegistryInstallPaths();
+  const gitExecutableCandidates = probes.findGitExecutablesOnPath(existingPath);
+  const inferredRoots = gitExecutableCandidates.flatMap((gitPath) => gitInstallRootFromPath(gitPath) ?? []);
+  const potentialRoots = uniqueWindowsPaths([...registryRoots, ...inferredRoots]);
   const injectedFileProbes = overrides?.isDirectory !== undefined || overrides?.isFile !== undefined;
   const fileProbes: WindowsGitFileProbes = injectedFileProbes
     ? { isDirectory: probes.isDirectory, isFile: probes.isFile }
     : fileProbesFromPathKinds(probes.probePathKinds([
-      ...rootCandidates.flatMap(installRootProbeCandidates),
-      ...msysRootProbeCandidates(segments, rootCandidates),
+      ...gitExecutableCandidates,
+      ...potentialRoots.flatMap(installRootProbeCandidates),
+      ...msysRootProbeCandidates(segments, potentialRoots),
     ]));
+  const rootCandidates = uniqueWindowsPaths([
+    ...registryRoots,
+    ...gitExecutableCandidates
+      .filter(fileProbes.isFile)
+      .flatMap((gitPath) => gitInstallRootFromPath(gitPath) ?? []),
+  ]);
   const roots = rootCandidates.filter((root) => gitPathsForInstallRoot(root, fileProbes).length > 0);
   const added = roots.flatMap((root) => gitPathsForInstallRoot(root, fileProbes));
   if (added.length === 0) return original;
