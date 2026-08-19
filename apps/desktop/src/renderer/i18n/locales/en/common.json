@@ -4984,6 +4984,12 @@
       "title": "Disable \"{{name}}\"?",
       "body": "Closing this panel disables the plugin and pauses its capabilities. You can re-enable it anytime from Plugins in the sidebar.",
       "confirm": "Disable"
+    },
+    "externalLinkConfirm": {
+      "title": "Allow Cindy to open an external website?",
+      "message": "Allow Cindy to open an external website?",
+      "open": "Open Website",
+      "cancel": "Cancel"
     }
   },
   "ghostPanelWindow": {
@@ -6611,7 +6617,8 @@
       "outputFile": "Output: {{path}}"
     },
     "planPill": {
-      "step": "Step {{current}} of {{total}}"
+      "step": "Step {{current}} of {{total}}",
+      "dismiss": "Close Plan"
     },
     "forkOrigin": {
       "label": "Created from another session"

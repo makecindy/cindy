@@ -653,6 +653,38 @@ export function installBrowserGuestHandlers(
   });
 }
 
+interface GhostGuestNavigationHandlers {
+  preview: typeof handleGhostPreviewNavigation;
+  external: typeof handleGhostExternalLinkNavigation;
+}
+
+/**
+ * settingsHtml 与 panel 共用的 Ghost guest 导航接线。策略仍集中在
+ * previewGate / cindy-brain；这里仅保证普通 will-navigate 被主机接管，
+ * popup 路径继续一律拒绝，并把 did-attach 时的真实 hostContents 原样传入。
+ */
+export function installGhostGuestNavigationHandlers(
+  hostContents: WebContents,
+  guestContents: WebContents,
+  ghostId: string,
+  handlers: GhostGuestNavigationHandlers = {
+    preview: handleGhostPreviewNavigation,
+    external: handleGhostExternalLinkNavigation,
+  },
+): void {
+  guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  guestContents.on('will-navigate', (event, url) => {
+    const nav = classifyGhostPanelNavigation(url, ghostId);
+    if (nav === 'allow') return;
+    event.preventDefault();
+    if (nav === 'preview') {
+      handlers.preview(ghostId, url, hostContents, guestContents);
+    } else if (nav === 'external') {
+      handlers.external(ghostId, url, hostContents, guestContents);
+    }
+  });
+}
+
 export function installWebviewHardener(): void {
   app.on('web-contents-created', (_event, contents) => {
     // will-attach → did-attach 对同一个 guest 同步成对触发;用闭包变量把
@@ -693,18 +725,8 @@ export function installWebviewHardener(): void {
         // 意识面板零弹窗、零跳转:window.open 全拒,导航锁死在自己协议同源内。
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);
-        //   - https 外链 → 外链闸(身份卡声明过的控制台地址才放行)转系统浏览器。
-        guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-        guestContents.on('will-navigate', (event, url) => {
-          const nav = classifyGhostPanelNavigation(url, ghostId);
-          if (nav === 'allow') return;
-          event.preventDefault();
-          if (nav === 'preview') {
-            handleGhostPreviewNavigation(ghostId, url, contents, guestContents);
-          } else if (nav === 'external') {
-            handleGhostExternalLinkNavigation(ghostId, url, guestContents);
-          }
-        });
+        //   - https 外链 → 外链闸(声明/授信直开,其余二次确认)转系统浏览器。
+        installGhostGuestNavigationHandlers(contents, guestContents, ghostId);
         return;
       }
       installBrowserGuestHandlers(contents, guestContents);

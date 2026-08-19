@@ -7,8 +7,8 @@ import { TodoListCard } from '../TodoListCard';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, values: { current: number; total: number }) =>
-      `Step ${values.current} / ${values.total}`,
+    t: (key: string, values?: { current: number; total: number }) =>
+      key === 'chat.planPill.dismiss' ? 'Close Plan' : `Step ${values?.current} / ${values?.total}`,
   }),
 }));
 
@@ -152,6 +152,27 @@ describe('TodoListCard flyout interaction', () => {
 
     fireEvent.click(trigger, { detail: 0 });
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('offers an accessible close action with a keyboard-visible shared tooltip', async () => {
+    const onDismiss = vi.fn();
+    render(<TodoListCard todos={TODOS} animated={false} onDismiss={onDismiss} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    fireEvent.click(trigger);
+    const closeButton = screen.getByRole('button', { name: 'Close Plan' });
+
+    expect(closeButton.classList.contains('hover:bg-[var(--model-item-hover)]')).toBe(true);
+    expect(closeButton.classList.contains('hover:bg-[var(--surface-hover)]')).toBe(false);
+    expect(closeButton.classList.contains('focus-visible:outline-none')).toBe(true);
+    expect(closeButton.getAttribute('title')).toBeNull();
+
+    fireEvent.focus(closeButton);
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Close Plan');
+
+    fireEvent.click(closeButton);
+
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 
   it('keeps centering and entrance animation transforms on separate elements', () => {

@@ -44,6 +44,7 @@ import {
   RSB_BROWSER_POPUP_CHANNEL,
   applyGhostWebviewHardening,
   applyWebviewHardening,
+  installGhostGuestNavigationHandlers,
   installBrowserGuestHandlers,
   installDeferredPopupRouter,
   isGuestShortcutKeyDownType,
@@ -305,6 +306,74 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
     expect('allowpopups' in params).toBe(false);
     expect('disablewebsecurity' in params).toBe(false);
     expect('webpreferences' in params).toBe(false);
+  });
+});
+
+describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用导航链)', () => {
+  function makeHarness() {
+    let openHandler: (() => { action: 'deny' }) | null = null;
+    const guest = new EventEmitter() as EventEmitter & {
+      setWindowOpenHandler: ReturnType<typeof vi.fn>;
+    };
+    guest.setWindowOpenHandler = vi.fn((handler) => {
+      openHandler = handler;
+    });
+    const host = { id: 10 } as unknown as WebContents;
+    const preview = vi.fn();
+    const external = vi.fn();
+    installGhostGuestNavigationHandlers(host, guest as unknown as WebContents, 'xd-sites', {
+      preview,
+      external,
+    });
+    return { guest, host, preview, external, getOpenHandler: () => openHandler };
+  }
+
+  it('普通 HTTPS <a> 的 will-navigate 被拦下并带真实 host/guest 交给外链处理', () => {
+    const harness = makeHarness();
+    const event = { preventDefault: vi.fn() };
+
+    harness.guest.emit('will-navigate', event, 'https://workers.xd.team/workspace/published');
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.external).toHaveBeenCalledWith(
+      'xd-sites',
+      'https://workers.xd.team/workspace/published',
+      harness.host,
+      harness.guest,
+    );
+    expect(harness.preview).not.toHaveBeenCalled();
+  });
+
+  it('预览仍走既有处理，同 Ghost 协议普通页面仍允许原位导航', () => {
+    const harness = makeHarness();
+    const previewEvent = { preventDefault: vi.fn() };
+    const allowEvent = { preventDefault: vi.fn() };
+    const hash = 'a'.repeat(64);
+
+    harness.guest.emit('will-navigate', previewEvent, `cindy-ghost://xd-sites/preview/${hash}.png`);
+    harness.guest.emit('will-navigate', allowEvent, 'cindy-ghost://xd-sites/panel.html');
+
+    expect(previewEvent.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.preview).toHaveBeenCalledOnce();
+    expect(allowEvent.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('HTTP/自定义协议被静默拦下，不进入外链处理', () => {
+    const harness = makeHarness();
+    for (const url of ['http://workers.xd.team/', 'custom://workers.xd.team/']) {
+      const event = { preventDefault: vi.fn() };
+      harness.guest.emit('will-navigate', event, url);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    }
+    expect(harness.external).not.toHaveBeenCalled();
+  });
+
+  it('target=_blank / window.open 继续由 setWindowOpenHandler 一律 deny', () => {
+    const harness = makeHarness();
+
+    expect(harness.guest.setWindowOpenHandler).toHaveBeenCalledOnce();
+    expect(harness.getOpenHandler()?.()).toEqual({ action: 'deny' });
+    expect(harness.external).not.toHaveBeenCalled();
   });
 });
 
