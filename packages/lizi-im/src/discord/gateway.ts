@@ -276,6 +276,14 @@ class DiscordJsGateway implements DiscordGateway {
       // Logging should never make an EventEmitter error handler throw.
     }
 
+    // Events.Error and Events.ShardError can fire for transient issues (rate
+    // limits, momentary network hiccups) while the shard is still healthy and
+    // receiving events. Reporting `connecting` in that case incorrectly arms
+    // the scheduler's reconnect withdrawal timer and stalls ingress for up to
+    // 15s. Only surface `connecting` when the client is no longer usable, as
+    // tracked by discord.js itself. See GitHub issue #2971.
+    if (client.isReady()) return;
+
     try {
       this.ev.onStatus({ kind: 'connecting' });
     } catch {

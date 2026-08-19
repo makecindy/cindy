@@ -279,6 +279,31 @@ describe('discord gateway pure logic', () => {
     });
   });
 
+  it('does not flip a ready client to connecting for transient errors', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { gateway, statuses } = createGatewayHarness();
+
+    try {
+      await gateway.connect('token');
+      const client = discordMock.MockDiscordClient.instances[0];
+      emitReady(client, 'helper#0000');
+
+      statuses.length = 0;
+      expect(() => client.emit('error', new Error('rate limit hiccup'))).not.toThrow();
+      expect(() => client.emit('shardError', new Error('ws hiccup'), 2)).not.toThrow();
+
+      // A healthy, ready client should keep reporting connected for transient
+      // errors; only ShardDisconnect / ShardReconnecting / login failures may
+      // move the status off `connected`. See GitHub issue #2971.
+      expect(statuses).toEqual([]);
+      expect(warn).toHaveBeenCalledWith('[im:discord:gateway]', 'client error: rate limit hiccup');
+      expect(warn).toHaveBeenCalledWith('[im:discord:gateway]', 'shard error shard=2: ws hiccup');
+    } finally {
+      warn.mockRestore();
+      await gateway.destroy();
+    }
+  });
+
   it('does not throw from discord error handlers when status callbacks fail', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     let rejectStatus = false;
