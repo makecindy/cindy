@@ -802,9 +802,7 @@ export function CCAgentSessionView({
     Boolean(session),
     { observeTelemetry: true },
   );
-  const isRemoteWorktreeSession = Boolean(
-    session?.deviceLinkDeviceId || session?.remoteHostId,
-  );
+  const isRemoteWorktreeSession = Boolean(session?.deviceLinkDeviceId || session?.remoteHostId);
 
   // Fetch fresh session data from server whenever sessionId changes.
   useEffect(() => {
@@ -3850,13 +3848,13 @@ export function CCAgentSessionView({
     liveWorktree,
     isRemote: isRemoteWorktreeSession,
   });
-  const workingDirLabel = !composerDir
+  const workingDirLabel = !session?.workingDir
     ? '\u00A0'
-    : session?.workspaceKind === 'dialogue'
-      ? `${t('ccAgent.layout.dialogueLabel')} ${basename(composerDir).slice(0, 8)}`
+    : session.workspaceKind === 'dialogue'
+      ? `${t('ccAgent.layout.dialogueLabel')} ${basename(session.workingDir).slice(0, 8)}`
       : liveWorktree
         ? formatWorktreeChipText(liveWorktree)
-        : basename(composerDir);
+        : basename(composerDir ?? session.workingDir);
   const workingDirChipContent = (
     <>
       <Monitor size={12} className="shrink-0 text-[var(--workingdir-icon)]" />
