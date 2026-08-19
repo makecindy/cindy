@@ -127,6 +127,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
           lockedProjectKey: search.lockedProjectKey,
           visibleProjects,
           localPlatform: window.electronAPI.platform,
+          machineSelection: selectedMachineId,
         }))
     ) {
       search.reset();
@@ -148,6 +149,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     search.setProjectSelection(next.length > 0 ? next : 'all');
   }, [
     hiddenProjectKeys,
+    selectedMachineId,
     visibleProjects,
     search.clearLock,
     search.lockedProjectKey,

@@ -26,6 +26,7 @@ import {
   type MachineSelection,
 } from '@/features/device-link/selectedMachineStore';
 import {
+  normalizeProjectKey,
   projectKeyComparisonKey,
 } from '../../shared/projectKeys';
 import { normalizeWorkingDirForGrouping } from '../../shared/workingDir';
@@ -391,8 +392,15 @@ export function shouldReleaseConversationSearchLock(args: {
   lockedProjectKey: string | null;
   visibleProjects: readonly { projectKey: string }[];
   localPlatform: string;
+  machineSelection?: MachineSelection;
 }): boolean {
   if (!args.lockedProjectKey) return false;
+  if (
+    args.machineSelection != null &&
+    !lockMatchesMachineSelection(args.lockedProjectKey, args.machineSelection)
+  ) {
+    return true;
+  }
   // Catalogue still empty (first paint / index not loaded): keep the lock so
   // the project-menu fallback session ids / workingDir can apply.
   if (args.visibleProjects.length === 0) return false;
@@ -405,6 +413,29 @@ export function shouldReleaseConversationSearchLock(args: {
     const comparison = projectKeyComparisonKey(project.projectKey, args.localPlatform);
     return comparison != null && comparison === lockedComparison;
   });
+}
+
+function lockMatchesMachineSelection(
+  projectKey: string,
+  selection: MachineSelection,
+): boolean {
+  if (selection === MACHINE_ALL) return true;
+  const deviceId = deviceIdFromProjectKey(projectKey);
+  if (deviceId == null) return selection.includes(MACHINE_LOCAL);
+  return selection.includes(deviceId);
+}
+
+function deviceIdFromProjectKey(projectKey: string): string | null {
+  const normalized = normalizeProjectKey(projectKey);
+  if (normalized == null || !normalized.startsWith('device:')) return null;
+  const rest = normalized.slice('device:'.length);
+  const sep = rest.indexOf(':');
+  if (sep <= 0) return null;
+  try {
+    return decodeURIComponent(rest.slice(0, sep));
+  } catch {
+    return null;
+  }
 }
 
 export const LEGACY_REMOTE_SESSION_LIST_LIMIT = LEGACY_REMOTE_LIST_LIMIT;

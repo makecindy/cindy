@@ -230,8 +230,20 @@ describe('shouldReleaseConversationSearchLock', () => {
         lockedProjectKey: 'device:dev-a:/repo',
         visibleProjects: [],
         localPlatform: 'darwin',
+        machineSelection: ['dev-a'],
       }),
     ).toBe(false);
+  });
+
+  it('releases a lock when switching to a settled empty machine that does not own it', () => {
+    expect(
+      shouldReleaseConversationSearchLock({
+        lockedProjectKey: 'device:dev-a:/repo',
+        visibleProjects: [],
+        localPlatform: 'darwin',
+        machineSelection: ['dev-b'],
+      }),
+    ).toBe(true);
   });
 
   it('keeps a lock while the project is still visible', () => {

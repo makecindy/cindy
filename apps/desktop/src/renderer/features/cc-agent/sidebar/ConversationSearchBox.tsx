@@ -707,6 +707,7 @@ export function ConversationSearchBox({
           lockedProjectKey,
           visibleProjects: allKnownProjects,
           localPlatform: window.electronAPI.platform,
+          machineSelection,
         })
       ) {
         search.reset();
@@ -728,6 +729,7 @@ export function ConversationSearchBox({
   }, [
     allKnownProjects,
     hiddenProjectKeys,
+    machineSelection,
     search.clearLock,
     search.lockedProjectKey,
     search.projectSelection,
