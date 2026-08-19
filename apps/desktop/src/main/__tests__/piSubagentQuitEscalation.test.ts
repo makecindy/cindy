@@ -44,6 +44,27 @@ describe('PI Subagent quit sweep', () => {
     expect(hook).toContain('hostPid: process.pid');
   });
 
+  it('raises the launch fence before the sweep, and drops it on the way out', () => {
+    // This disposer and `shutdown-maker` are both `async`, so they run at the
+    // same time: a parent Pi process can still be alive here and can enter
+    // `launchDurableRun` while the sweep walks an empty directory. Scanning
+    // harder cannot close that — the run directory is created inside Pi, by an
+    // extension the Host never calls. Only the fence can, and it has to be up
+    // before the first scan for the ordering argument to hold.
+    const hook = quitHookSource();
+    const fence = hook.indexOf('acquirePiSubagentLaunchFence(agentHome)');
+    const sweep = hook.indexOf('stopAllPiSubagentRunsForExit(agentHome');
+    expect(fence).toBeGreaterThan(-1);
+    expect(sweep).toBeGreaterThan(fence);
+    // A fence we cannot raise must not hold up the quit: the sweep still runs.
+    const acquire = hook.slice(fence, sweep);
+    expect(acquire).toContain('catch');
+    expect(acquire).toMatch(/piSubagentLog\.warn/);
+    // And it comes down again, or a cancelled quit would leave this instance
+    // unable to start any durable run for the rest of its life.
+    expect(hook).toMatch(/\} finally \{[\s\S]*releaseLaunchFence\?\.\(\)/);
+  });
+
   it('leaves a stop budget that fits inside the bounded async quit phase', () => {
     // The kill confirmation is bounded but not free (~0.8s per surviving
     // runner), so the stop wait cannot also use the whole phase.

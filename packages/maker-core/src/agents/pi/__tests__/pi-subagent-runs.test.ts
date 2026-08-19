@@ -1233,6 +1233,27 @@ describe('PI durable subagent run store', () => {
       });
     });
 
+    it('blocks launches for as long as the quit sweep holds it, and no longer', async () => {
+      // Quit raises the same fence the relaunch does, around its sweep. While
+      // it is up this host may not start a durable run; the moment the disposer
+      // releases it — a cancelled quit — launches are allowed again, or the
+      // instance would be unable to start one for the rest of its life.
+      const agentHome = await makeRoot();
+      const release = await acquirePiSubagentLaunchFence(agentHome);
+      expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      await writeStatus(root, status(runId, { state: 'completed' }));
+      await expect(resumePiSubagentRun(root, 'tool-1', 'continue', {
+        nodeExecutable: process.execPath,
+        runtimeOwnerId: 'owner-a',
+        permissionSnapshot: { mode: 'ask', readOnlyRoots: [] },
+      })).rejects.toThrow(/restarting for an update/i);
+
+      await release();
+      expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+    });
+
     it('raises, releases, and cleans up after a departed owner', async () => {
       const agentHome = await makeRoot();
       const release = await acquirePiSubagentLaunchFence(agentHome);

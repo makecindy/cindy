@@ -318,6 +318,7 @@ import { readClaudeApiKey } from './maker-host/auth-adapters';
 import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
+  acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
   hasActivePiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
@@ -7698,32 +7699,68 @@ onQuit(
   'pi-subagent-runners',
   async () => {
     const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
-    // Budget arithmetic against the 6s async phase: 2.5s waiting for the stop
-    // mailbox, then at most 3s of escalation. The reclaims run concurrently and
-    // their identity probe is async, so that 3s is a ceiling for the whole set
-    // rather than a per-runner cost — the old serial shape multiplied ~0.8s of
-    // exit confirmation by the number of runners and could overrun the phase on
-    // its own. 2.5 + 3 leaves half a second of headroom; anything still
-    // unconfirmed when the budget expires is reported as unreclaimed, which is
-    // why the failure log below has to stay true.
-    const stopped = await stopAllPiSubagentRunsForExit(agentHome, 2_500, {
-      killBudgetMs: 3_000,
-      // Only our own children (plus unattributable / dead-owner orphans). A
-      // concurrent instance sharing this agent home keeps running.
-      hostPid: process.pid,
-      // Quit is the same credential problem as an account boundary: this
-      // process is about to disappear, and a runner that never consumed its
-      // mailbox keeps spending the BYOM credentials it inherited and keeps
-      // editing the workspace with nobody left to supervise it. Escalate to the
-      // identity-verified kill instead of logging and exiting.
-      killUnresponsiveRunners: true,
-    });
-    if (!stopped) {
-      piSubagentLog.error(
-        'PI Subagent runners survived stop and identity-verified kill on quit — '
-        + 'runners this app could not confirm as stopped are still running with their '
-        + 'inherited credentials',
-      );
+    // Close the door before scanning, exactly as the update relaunch does.
+    //
+    // This disposer and `shutdown-maker` are both `async`, so they run
+    // concurrently: a parent Pi process can still be alive here and can enter
+    // `launchDurableRun` while this sweep is walking an empty directory. The
+    // sweep would finish clean, the launcher would publish its run directory a
+    // moment later, and that detached runner would outlive the quit holding the
+    // credentials it inherited.
+    //
+    // The mutual exclusion is the same ordering argument as the relaunch, and
+    // needs no serialisation with `shutdown-maker`:
+    //
+    //   quit:     write fence  ->  scan
+    //   launcher: write runDir ->  read fence
+    //
+    // Opposite orders, so if the launcher reads no fence its run directory was
+    // already published and every scan here sees it (waited on, then escalated
+    // to a verified kill); if it reads the fence it refuses and rolls back.
+    let releaseLaunchFence: (() => Promise<void>) | null = null;
+    try {
+        releaseLaunchFence = await acquirePiSubagentLaunchFence(agentHome);
+      } catch (err) {
+        // A fence we cannot raise is not a reason to hold up the quit: without it
+        // we are exactly where we were before, and the sweep still runs.
+        piSubagentLog.warn('could not raise the Subagent launch fence before the quit sweep:', err);
+      }
+    try {
+      // Budget arithmetic against the 6s async phase: 2.5s waiting for the stop
+      // mailbox, then at most 3s of escalation. The reclaims run concurrently and
+      // their identity probe is async, so that 3s is a ceiling for the whole set
+      // rather than a per-runner cost — the old serial shape multiplied ~0.8s of
+      // exit confirmation by the number of runners and could overrun the phase on
+      // its own. 2.5 + 3 leaves half a second of headroom; anything still
+      // unconfirmed when the budget expires is reported as unreclaimed, which is
+      // why the failure log below has to stay true.
+      const stopped = await stopAllPiSubagentRunsForExit(agentHome, 2_500, {
+        killBudgetMs: 3_000,
+        // Only our own children (plus unattributable / dead-owner orphans). A
+        // concurrent instance sharing this agent home keeps running.
+        hostPid: process.pid,
+        // Quit is the same credential problem as an account boundary: this
+        // process is about to disappear, and a runner that never consumed its
+        // mailbox keeps spending the BYOM credentials it inherited and keeps
+        // editing the workspace with nobody left to supervise it. Escalate to the
+        // identity-verified kill instead of logging and exiting.
+        killUnresponsiveRunners: true,
+      });
+      if (!stopped) {
+        piSubagentLog.error(
+          'PI Subagent runners survived stop and identity-verified kill on quit — '
+          + 'runners this app could not confirm as stopped are still running with their '
+          + 'inherited credentials',
+        );
+      }
+    } finally {
+      // On the normal path the process exits moments from now and this never
+      // matters — the next instance's stale sweep would collect the file
+      // anyway, and the recorded start identity keeps a recycled pid from
+      // inheriting it. It matters when a quit is cancelled or fails: a fence
+      // left standing would refuse this instance's own durable launches for the
+      // rest of its life.
+      await releaseLaunchFence?.().catch(() => undefined);
     }
   },
   'async',
