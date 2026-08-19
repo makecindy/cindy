@@ -58,10 +58,17 @@ function OptionCard({
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
+      /*
+        选中用 --text-primary 描边,不是 --focus-ring。
+        --focus-ring(#417CDD)是键盘焦点的颜色:拿它当常驻的「选中」色,一是这一屏
+        成了整个伙伴界面里唯一的蓝,二是 Tab 到别的选项时焦点圈和选中框同色,
+        「我现在在哪一项」和「我选了哪一项」分不开。阵容页那排头像候选就是用
+        --text-primary 描边表示选中的,这里跟它对齐。
+      */
       className={cn(
         'flex w-full flex-col items-start gap-0.5 rounded-xl border px-3 py-2.5 text-left transition-colors',
         selected
-          ? 'border-[var(--focus-ring)] bg-[var(--surface-chip)]'
+          ? 'border-[var(--text-primary)] bg-[var(--surface-chip)]'
           : 'border-[var(--border-default)] hover:bg-[var(--surface-hover)]',
       )}
     >
@@ -137,9 +144,11 @@ export function BotPersonaWizard({
           </Dialog.Description>
 
           <div className="mt-4 flex flex-col gap-4">
+            {/* ①②③。这三个序号不是装饰:标题上写着「选三下就好」,序号是把那句
+                承诺变得看得见的唯一方式——不然三个 fieldset 读起来像三张要填的表。 */}
             <fieldset>
               <legend className="text-12 font-medium text-[var(--text-primary)]">
-                {t('bots.persona.stepStyle')}
+                {`① ${t('bots.persona.stepStyle')}`}
               </legend>
               <div className="mt-2 grid gap-2">
                 {PERSONA_STYLE_OPTIONS.map((option) => (
@@ -156,7 +165,7 @@ export function BotPersonaWizard({
 
             <fieldset>
               <legend className="text-12 font-medium text-[var(--text-primary)]">
-                {t('bots.persona.stepProactivity')}
+                {`② ${t('bots.persona.stepProactivity')}`}
               </legend>
               <div className="mt-2 grid gap-2">
                 {PERSONA_PROACTIVITY_OPTIONS.map((option) => (
@@ -173,7 +182,7 @@ export function BotPersonaWizard({
 
             <fieldset>
               <legend className="text-12 font-medium text-[var(--text-primary)]">
-                {t('bots.persona.stepCall')}
+                {`③ ${t('bots.persona.stepCall')}`}
               </legend>
               <div className="mt-2 grid gap-2">
                 {PERSONA_CALL_OPTIONS.map((option) => (

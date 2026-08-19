@@ -113,12 +113,9 @@ export function BotDelegationActivityIndicator({ sessionId, maxWidth }: Props) {
           // 两者同屏时不会看起来像同一个东西出现了两次。
           className="flex h-7 w-full items-center gap-2 rounded-full bg-[var(--surface-chip)] px-3 text-11 leading-none text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
-          <span
-            className="inline-flex shrink-0 animate-spin motion-reduce:animate-none"
-            // --status-info 是 Bot 面板在用的进行中语义色；它尚未进主题注册表，
-            // 回退到已注册的 --info-700（Light / Dark 两套值都有）保证双模式都可见。
-            style={{ color: 'var(--status-info, var(--info-700))' }}
-          >
+          {/* --status-info 已进主题注册表（alias 到 --info-700，Light / Dark 两套值都有），
+              不再需要消费点自带 fallback。 */}
+          <span className="inline-flex shrink-0 animate-spin text-[var(--status-info)] motion-reduce:animate-none">
             <LoaderCircle size={13} />
           </span>
           <span className="min-w-0 flex-1 truncate text-left">{label}</span>

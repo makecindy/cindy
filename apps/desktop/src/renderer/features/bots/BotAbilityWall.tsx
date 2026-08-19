@@ -55,6 +55,13 @@ export function BotAbilityWall({
           const channelName = botChannelDisplayName(chip.kind);
           const label = chip.accountLabel ? `${channelName} · ${chip.accountLabel}` : channelName;
           const blocked = Boolean(chip.blockedByImKind);
+          /*
+            「先断开 X」只有在这一行**本来就能连**的时候才是一句有用的话。
+            没有账号的占位行(Wecom / 微信…)和账号不可路由的行，断开 X 之后照样连
+            不上 —— 对它们说这句就是给了一个做了也没用的补救办法。互斥判定本身
+            (blockedByImKind)保持不变，只收窄这句提示的出现条件。
+          */
+          const showImBlockedHint = blocked && Boolean(chip.connection) && !chip.disabled;
           return (
             <div
               key={chip.id}
@@ -68,7 +75,7 @@ export function BotAbilityWall({
                   <MessageCircleMore size={13} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
                   {label}
                 </span>
-                {blocked && chip.blockedByImKind ? (
+                {showImBlockedHint && chip.blockedByImKind ? (
                   <span className="mt-0.5 block text-10 leading-4 text-[var(--text-tertiary)]">
                     {t('bots.abilityWall.imBlocked', {
                       channel: botChannelDisplayName(chip.blockedByImKind),
@@ -84,16 +91,22 @@ export function BotAbilityWall({
                 }}
                 className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
               >
+                {/* 「挂载 / 已挂载」是实现词,而且「已挂载」把一个动作说成了状态,
+                    用户看不出点下去会发生什么。定稿用的是「连接 / 断开」——两边都是
+                    这个按钮真会做的事。 */}
                 {chip.connection && channelBusyId === chip.connection.id
                   ? '…'
                   : chip.mounted
-                    ? t('bots.channelMounted')
-                    : t('bots.channelMount')}
+                    ? t('bots.channelDisconnect')
+                    : t('bots.channelConnect')}
               </button>
             </div>
           );
         })}
       </div>
+      <p className="mt-3 text-11 leading-4 text-[var(--text-tertiary)]">
+        {t('bots.abilityWall.footnote')}
+      </p>
     </div>
   );
 }

@@ -9539,7 +9539,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
   ipcMain.handle(
     MAKER_INVOKE.BOT_DELEGATION_INTERJECT,
-    async (event, parentSessionId: unknown, delegationId: unknown, text: unknown) => {
+    async (
+      event,
+      parentSessionId: unknown,
+      delegationId: unknown,
+      text: unknown,
+      idempotencyKey?: unknown,
+    ) => {
       assertTrustedAppRendererEvent(event);
       if (
         typeof parentSessionId !== 'string'
@@ -9552,9 +9558,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof text !== 'string' || text.trim().length === 0) {
         throwIpcError('INVALID_PARAMS', 'text required');
       }
+      if (
+        idempotencyKey !== undefined
+        && (typeof idempotencyKey !== 'string' || idempotencyKey.length === 0)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'idempotencyKey must be a non-empty string');
+      }
       // 归属（委派必须由这个父任务发起）、状态（只接受进行中）与幂等都在服务里做，
-      // 这里只挡住形状不对的调用。
-      return delegationForRestore.interjectDelegation(parentSessionId, delegationId, text);
+      // 这里只挡住形状不对的调用。幂等键由调用方（渲染进程一次插话一个 uuid）给，
+      // 双击 / 重挂载 / 网络重放落到同一个 clientId 上，只会催一次。
+      return delegationForRestore.interjectDelegation(
+        parentSessionId,
+        delegationId,
+        text,
+        idempotencyKey as string | undefined,
+      );
     },
   );
   ipcMain.handle(

@@ -91,6 +91,19 @@
       "note": "Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。"
     },
     {
+      "id": "teammate-schedule",
+      "status": "proposed",
+      "en": "Schedule",
+      "translations": {
+        "zh-CN": "日程",
+        "zh-TW": "日程",
+        "ja": "スケジュール",
+        "ko": "일정"
+      },
+      "checkCase": false,
+      "note": "伙伴设置页第四块「TA 的日程」——用户视角的名字。它指的是这个伙伴自己会跑的定时指令，实现层叫 automation / Routine。**面向用户一律用本词，不写「Routine」「自动化」**：「Routine」是英文实现词，中文界面里出现它等于要求用户先学一个词才能用这一块；「自动化」是能力名，不是一个可以被列出来、被开关、被立即运行的东西。代码标识（bot_automations 表、bots.automations.* i18n 命名空间、automation capability flag）与设置页「高级」里的技术细节不受本条约束，仍用 automation / Routine。先登记为 proposed：主路径文案刚从「伙伴自动化 / Routine」收敛到本词，等 UI 走查后再定 decided，届时再决定是否把「Routine」登记为中日韩的 forbidden 译法（现在不能登记——高级区与运行记录里的存量文案会被误伤）。"
+    },
+    {
       "id": "wechat",
       "status": "proposed",
       "en": "WeChat",

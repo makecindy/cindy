@@ -73,10 +73,15 @@ interface Props {
   onOpen: (item: BotArtifactItem) => void;
   /** 「在仓库中查看」。不传则不渲染该动作(仓库面板内部就不需要再跳自己)。 */
   onReveal?: ((item: BotArtifactItem) => void) | undefined;
+  /**
+   * 「由 {name} 交付」。只在这张卡挂在**别人**的气泡底下时给 —— 本轮自己产出的
+   * 文件不需要再说一遍是谁做的。
+   */
+  deliveredBy?: string | undefined;
   className?: string;
 }
 
-export function BotArtifactCard({ item, onOpen, onReveal, className }: Props) {
+export function BotArtifactCard({ item, onOpen, onReveal, deliveredBy, className }: Props) {
   const { t } = useTranslation();
   const timeText = useArtifactTimeText();
   const thumbnail = useArtifactThumbnail(item);
@@ -84,7 +89,12 @@ export function BotArtifactCard({ item, onOpen, onReveal, className }: Props) {
   const Icon = botArtifactIcon(item.category);
 
   const size = formatArtifactSize(item.sizeBytes);
-  const meta = [t(botArtifactCategoryKey(item.category)), size, timeText(item.createdAt)]
+  const meta = [
+    t(botArtifactCategoryKey(item.category)),
+    size,
+    timeText(item.createdAt),
+    deliveredBy ? t('bots.artifacts.deliveredBy', { name: deliveredBy }) : '',
+  ]
     .filter((part) => part.length > 0)
     .join(' · ');
 

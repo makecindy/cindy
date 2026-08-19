@@ -3609,7 +3609,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       entries: { name: string; kind: 'dir' | 'symlink'; path: string }[];
       parent: string | null;
     }> => ipcRenderer.invoke('fs:list-dir', { path }),
-    statPath: (path: string): Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }> =>
+    statPath: (
+      path: string,
+    ): Promise<{
+      kind: 'dir' | 'file' | 'missing';
+      resolvedPath: string;
+      mtimeMs?: number;
+      birthtimeMs?: number;
+      sizeBytes?: number;
+    }> =>
       ipcRenderer.invoke('fs:stat-path', { path }),
     mkdirP: (path: string): Promise<{ resolvedPath: string }> =>
       ipcRenderer.invoke('fs:mkdir-p', { path }),
@@ -5083,12 +5091,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       parentSessionId: string,
       delegationId: string,
       text: string,
+      idempotencyKey?: string,
     ): Promise<import('../shared/botCollaboration').BotDelegationInterjectResult> =>
       ipcRenderer.invoke(
         'maker:bot-delegation:interject',
         parentSessionId,
         delegationId,
         text,
+        idempotencyKey,
       ),
     onBotDelegationChanged: fanOutBotDelegationChanged,
     runBotLifecycleAction: (

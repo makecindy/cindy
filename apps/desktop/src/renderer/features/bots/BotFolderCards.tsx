@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FolderOpen, X } from 'lucide-react';
+import { FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { archiveBotProjectBinding, upsertBotProjectBinding, type BotProjectBinding } from './botStore';
@@ -81,14 +81,15 @@ export function BotFolderCards({
                   {binding.workingDir}
                 </span>
               </span>
+              {/* 文字按钮,不是卡片右上角的 ✕:那个位置离「关掉这张卡」太近,
+                  而这一下删的是绑定关系。 */}
               <button
                 type="button"
                 disabled={busy !== null}
                 onClick={() => void removeFolder(binding)}
-                aria-label={t('bots.folders.remove')}
-                className="shrink-0 rounded-lg p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-danger)] disabled:opacity-50"
+                className="shrink-0 rounded-lg px-1 text-11 text-[var(--text-tertiary)] hover:text-[var(--text-danger)] disabled:opacity-50"
               >
-                <X size={14} />
+                {t('bots.folders.remove')}
               </button>
             </div>
           ))}
@@ -103,6 +104,9 @@ export function BotFolderCards({
         <FolderOpen size={14} />
         {busy === 'add' ? t('bots.folders.adding') : t('bots.folders.addButton')}
       </button>
+      <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
+        {t('bots.folders.footnote')}
+      </p>
       {error ? <p className="mt-2 text-11 text-[var(--text-danger)]">{error}</p> : null}
     </div>
   );

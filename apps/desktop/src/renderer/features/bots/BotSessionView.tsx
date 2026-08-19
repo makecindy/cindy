@@ -8,6 +8,7 @@ import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import { markBotRead } from './botReadState';
 import type { BotChatIdentity } from './BotSessionContentHeader';
+import { deliverPendingBotPersonaAck } from './botPersonaAck';
 import { deliverPendingBotWelcome } from './botWelcome';
 
 type BotSessionGate =
@@ -160,6 +161,17 @@ export function BotSessionView() {
       listMessages: (id) => window.electronAPI.localDb.messages.list(id, { limit: 1 }),
       createMessage: (id, body) => window.electronAPI.localDb.messages.create(id, body),
       translate: (key) => t(key),
+    });
+  }, [botId, sessionId, t, welcomeReady]);
+
+  // 调完性格,TA 用新口气回一句。与打招呼同一条注入路径,区别只有一个:确认消息
+  // 本来就发生在一段已有的对话里,所以不看任务空不空,幂等全交给 clientId
+  // (见 botPersonaAck.ts)。
+  useEffect(() => {
+    if (!welcomeReady || !botId || !sessionId) return;
+    void deliverPendingBotPersonaAck(botId, sessionId, {
+      createMessage: (id, body) => window.electronAPI.localDb.messages.create(id, body),
+      translate: (key, params) => t(key, params),
     });
   }, [botId, sessionId, t, welcomeReady]);
 

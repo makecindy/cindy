@@ -37,6 +37,8 @@ export interface BotDelegationCallbacks {
     callerSessionId: string;
     delegationId: string;
     text: string;
+    /** 幂等键：同一个键重发只会催一次（服务端按 clientId 去重）。 */
+    idempotencyKey?: string;
   }): Promise<ControlResult<Record<string, unknown>, string>>;
 }
 
@@ -146,18 +148,21 @@ export function registerBotDelegationTools(
       '向一个仍在进行的委派补充一句话：催一下进度、追加条件、或者纠正方向。对方会在当前回合结束后读到，不会打断它正在做的事。',
       '只对 queued/running/waiting 的委派有效；已完成、失败或已取消的委派会明确报错——那时候应该发起新的委派，而不是往旧的里塞话。',
       '想让对方立刻停手用 cancel_bot_delegation；想知道现在做到哪了用 list_bot_delegations。',
+      '重试同一句话时带上同一个 idempotency_key，对方只会被催一次；不传则每次调用都是一次新的插话。',
     ].join('\n'),
     inputShape: {
       delegation_id: z.string().min(1).max(128),
       text: z.string().min(1).max(4_000),
+      idempotency_key: z.string().min(1).max(64).optional(),
     },
-    handler: async ({ delegation_id, text }) => {
+    handler: async ({ delegation_id, text, idempotency_key }) => {
       const sessionId = callerSessionId(deps);
       if (!sessionId) return missingSession();
       const result = await deps.callbacks.interjectDelegation({
         callerSessionId: sessionId,
         delegationId: delegation_id,
         text,
+        ...(idempotency_key ? { idempotencyKey: idempotency_key } : {}),
       });
       return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
     },

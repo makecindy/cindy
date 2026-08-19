@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   unread: {} as Record<string, number>,
   refreshBotProfiles: vi.fn(),
   registered: { node: null as ReactNode },
+  /** 灵动岛活动镜像:sessionId -> phase。侧栏据此显示「正在输入…」。 */
+  islandActivity: new Map<string, { sessionId: string; phase: string }>(),
+}));
+
+vi.mock('@/state/agentIslandActivity', () => ({
+  useAgentIslandActivityMap: () => mocks.islandActivity,
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -86,6 +92,7 @@ beforeEach(() => {
   mocks.unread = {};
   mocks.profiles = [];
   mocks.registered.node = null;
+  mocks.islandActivity = new Map();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     writable: true,
@@ -113,6 +120,74 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+describe('BotsSidebar 「正在输入…」', () => {
+  it('回合进行中时第二行让位给「正在输入…」', async () => {
+    mocks.profiles = [
+      bot({
+        id: 'bot-1',
+        name: 'PR steward',
+        lastMessagePreview: 'Two checks are still red on #2829',
+        lastMessageAt: Date.now(),
+      }),
+    ];
+    mocks.islandActivity = new Map([
+      ['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'running' }],
+    ]);
+    const view = await renderSidebar();
+
+    expect(view.container.textContent).toContain('bots.list.typing');
+    // 进行中时不再同时挂上一句说过什么 —— 这一行只回答「TA 现在怎么样」。
+    expect(view.container.textContent).not.toContain('Two checks are still red');
+  });
+
+  it('回合结束后落回最新消息预览,不留痕', async () => {
+    mocks.profiles = [
+      bot({
+        id: 'bot-1',
+        name: 'PR steward',
+        lastMessagePreview: 'Two checks are still red on #2829',
+        lastMessageAt: Date.now(),
+      }),
+    ];
+    // completed 不是 running:同一份镜像里的终态不该继续显示「正在输入…」。
+    mocks.islandActivity = new Map([
+      ['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'completed' }],
+    ]);
+    const view = await renderSidebar();
+
+    expect(view.container.textContent).not.toContain('bots.list.typing');
+    expect(view.container.textContent).toContain('Two checks are still red on #2829');
+  });
+
+  it('只认这个伙伴自己的主任务 —— 别人的会话在跑不该点亮这一行', async () => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward', description: 'Delivery steward' })];
+    mocks.islandActivity = new Map([
+      ['someone-else', { sessionId: 'someone-else', phase: 'running' }],
+    ]);
+    const view = await renderSidebar();
+
+    expect(view.container.textContent).not.toContain('bots.list.typing');
+    expect(view.container.textContent).toContain('Delivery steward');
+  });
+
+  it('是斜体三级色的过程说明,即使有未读也不跟着提到一级', async () => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.unread = { 'bot-1': 4 };
+    mocks.islandActivity = new Map([
+      ['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'running' }],
+    ]);
+    const view = await renderSidebar();
+
+    const line = [...view.container.querySelectorAll('span')].find(
+      (el) => el.textContent === 'bots.list.typing',
+    );
+    expect(line).toBeTruthy();
+    expect(line?.className).toContain('italic');
+    expect(line?.className).toContain('text-[var(--sidebar-list-muted)]');
+    expect(line?.className).not.toContain('font-medium');
+  });
 });
 
 describe('BotsSidebar rows', () => {
@@ -161,7 +236,7 @@ describe('BotsSidebar rows', () => {
     expect(screen.queryAllByLabelText('bots.trustedBadge.label')).toHaveLength(0);
   });
 
-  it('shows a health icon only for abnormal Bots', async () => {
+  it('carries no health icon column at all — a chat row answers "any new messages", nothing else', async () => {
     mocks.profiles = [
       bot({ id: 'bot-healthy', name: 'Healthy' }),
       bot({ id: 'bot-attention', name: 'Attention' }),
@@ -170,10 +245,49 @@ describe('BotsSidebar rows', () => {
 
     await renderSidebar();
 
-    await waitFor(() =>
-      expect(screen.getByLabelText('bots.lifecycle.healthStatus.attention')).toBeTruthy(),
+    // 一行右侧同时挂「未读数 + 待办点 + 状态图标」时三处右对齐元素互相抢注意力。
+    // 异常态另有出口:待办点(收件箱)与 TA 的设置页「健康与历史」。
+    await waitFor(() => expect(screen.getByText('Attention')).toBeTruthy());
+    for (const status of ['attention', 'recovering', 'paused', 'healthy']) {
+      expect(screen.queryByLabelText(`bots.lifecycle.healthStatus.${status}`)).toBeNull();
+    }
+  });
+
+  it('paints the unread badge and the todo dot with the registered IM-unread blue, not the inverse CTA', async () => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'Busy' })];
+    mocks.unread = { 'bot-1': 2 };
+    window.electronAPI.maker.botInbox.list = vi.fn(
+      async () => [{ id: 'i1', status: 'pending' }] as unknown as BotInboxItemView[],
     );
-    expect(screen.queryByLabelText('bots.lifecycle.healthStatus.healthy')).toBeNull();
+
+    await renderSidebar();
+
+    const badge = screen.getByLabelText('bots.list.unread:{"count":2}');
+    // 反相 CTA 白底药丸落在选中行的浅灰选中态上会和选中态抢焦点;未读在 IM 里
+    // 本来就有一个所有人都认得的颜色。token 登记见 DESIGN.md §10。
+    expect(badge.className).toContain('bg-[var(--bot-unread-bg)]');
+    expect(badge.className).toContain('text-[var(--bot-unread-fg)]');
+    expect(badge.className).not.toContain('accent-cta-bg');
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('bots.inbox.sidebarAttention:{"count":1}')).toBeTruthy(),
+    );
+    expect(
+      screen.getByLabelText('bots.inbox.sidebarAttention:{"count":1}').className,
+    ).toContain('bg-[var(--bot-unread-bg)]');
+  });
+
+  it('opens the roster page instead of a modal from every "add" affordance', async () => {
+    mocks.profiles = [];
+
+    await renderSidebar();
+
+    // 空态卡与小节头的「＋」都去主区阵容页;`?add=1` 那层模态已经没有了。
+    fireEvent.click(screen.getByText('bots.emptyTitle'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/roster');
+    mocks.navigate.mockClear();
+    fireEvent.click(screen.getByLabelText('bots.add'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/roster');
   });
 
   it('has no per-row gear and no section-header import: a row only opens the chat', async () => {

@@ -2922,6 +2922,8 @@ interface ElectronAPI {
       resolvedPath: string;
       mtimeMs?: number;
       birthtimeMs?: number;
+      /** 文件字节数;仅 kind==='file'。老被控端不返回时为 undefined。 */
+      sizeBytes?: number;
     }>;
     mkdirP: (path: string) => Promise<{ resolvedPath: string }>;
   };
@@ -4722,11 +4724,16 @@ interface ElectronAPI {
       parentSessionId: string,
       delegationId: string,
     ) => Promise<import('../shared/botDelegation').BotDelegationCancelResult>;
-    /** 向仍在进行的委派补一句话（催促 / 补充 / 修正）；归属与状态校验在主进程。 */
+    /**
+     * 向仍在进行的委派补一句话（催促 / 补充 / 修正）；归属与状态校验在主进程。
+     * `idempotencyKey` 是这条插话的幂等键：同一个键重发只会真的催一次，
+     * 双击、重挂载与网络重放不会给对方发两遍。
+     */
     interjectBotDelegation: (
       parentSessionId: string,
       delegationId: string,
       text: string,
+      idempotencyKey?: string,
     ) => Promise<import('../shared/botCollaboration').BotDelegationInterjectResult>;
     onBotDelegationChanged: (
       cb: (

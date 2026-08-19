@@ -5874,6 +5874,7 @@
     },
     "list": {
       "startChat": "Start the conversation",
+      "typing": "Typing…",
       "unread": "{{count}} unread messages"
     },
     "cancel": "Cancel",
@@ -5889,30 +5890,12 @@
     "sessionLoadFailedDescription": "The task link is valid, but Cindy could not read the teammate state. Retry or return to the teammate overview.",
     "sessionUnavailableTitle": "This teammate task is no longer available",
     "sessionUnavailableDescription": "It may have been renewed, archived, or removed from this teammate. Return to the teammate overview to open its current task.",
-    "settings": "Teammate settings",
+    "settings": "Settings",
     "settingsNav": {
       "title": "Settings sections"
     },
     "emptyTitle": "No teammates yet",
-    "emptyDescription": "Teammates add persistent identity, an event inbox, automations, and message Channels to a normal task.",
-    "emptyBenefits": {
-      "identity": {
-        "title": "Persistent identity",
-        "description": "Identity, user context, Skills, and memory stay isolated per teammate."
-      },
-      "events": {
-        "title": "Automatic task events",
-        "description": "Subscribed teammates receive durable events when other tasks finish, fail, or need a decision."
-      },
-      "automation": {
-        "title": "Automations and collaboration",
-        "description": "Schedules, teammate delegation, projects, and worktrees attach to the persistent teammate."
-      },
-      "channels": {
-        "title": "Mount Channels when needed",
-        "description": "Create a local teammate first, then connect Telegram, Feishu, Slack, and other surfaces."
-      }
-    },
+    "emptyDescription": "Pick one you click with, or shape your own.",
     "noDescription": "No description yet",
     "sessions": "tasks",
     "sessionsTitle": "Teammate tasks",
@@ -6202,7 +6185,7 @@
       "noteNamespace": "Notes space",
       "create": "Create routine",
       "creating": "Creating…",
-      "empty": "No routines yet. A routine is one instruction this teammate runs on its own.",
+      "empty": "No schedule yet. Tell them in one line what to do each day or week.",
       "loading": "Loading automation…",
       "refresh": "Refresh automation",
       "runNow": "Run now",
@@ -6318,8 +6301,6 @@
     "send": "Send message",
     "channelsTitle": "Message channels",
     "channelsDescription": "Mount Telegram, Feishu, Slack and other message surfaces without changing this teammate's identity or local chat.",
-    "channelMounted": "Mounted",
-    "channelMount": "Mount",
     "channelLocalOwned": "Local teammate primary surface",
     "channelLocalAdapter": "Local adapter",
     "channelServerRelay": "Server relay",
@@ -6484,7 +6465,8 @@
       "join": "Bring them in",
       "joined": "Already here",
       "subtitle": "Pick one you click with, or shape your own.",
-      "title": "Meet your teammates"
+      "title": "Meet your teammates",
+      "customAvatarLabel": "Pick a face"
     },
     "chat": {
       "composerPlaceholder": "Say something to {{name}}…",
@@ -6497,7 +6479,7 @@
         "banner": "New message banner",
         "sound": "Sound",
         "quietHours": "Quiet hours",
-        "footnote": "A coordinator keeps an eye on task activity by itself — that is a capability of theirs, not a setting here."
+        "footnote": "A teammate like a \"coordinator\" keeps an eye on task activity by itself — that is a capability of theirs, not a setting here."
       },
       "portability": {
         "importTitle": "Import a teammate",
@@ -6515,9 +6497,13 @@
       "can": "What they can do",
       "understand": "What they understand",
       "schedule": "Their schedule",
-      "advanced": "Advanced"
+      "advanced": "Advanced",
+      "whoDescription": "You don't have to write a personality — just pick a few things.",
+      "canDescription": "You don't have to switch these on — they come with them.",
+      "understandDescription": "Give them a folder and they understand your project.",
+      "scheduleDescription": "They get on with it on time, whether you're around or not."
     },
-    "advancedLinkLabel": "Advanced (model, technical details, export) ›",
+    "advancedLinkLabel": "Advanced (model, technical details, export)",
     "persona": {
       "title": "Adjust their personality",
       "description": "Three quick picks and they will change how they talk.",
@@ -6565,11 +6551,22 @@
       "summaryCallBoss": "calls you Boss",
       "summaryCallCustom": "calls you {{name}}",
       "rawToggle": "Advanced: write it yourself",
-      "rawPlaceholder": "Not recommended — the picks above are usually enough. If you really want to, write it here."
+      "rawPlaceholder": "Not recommended — the picks above are usually enough. If you really want to, write it here.",
+      "ack": {
+        "concise": "Got it. This is how I'll talk from now on.",
+        "conciseBoss": "Got it, boss. This is how I'll talk from now on.",
+        "conciseCalled": "Got it, {{call}}. This is how I'll talk from now on.",
+        "lively": "Got it! This is my voice from now on — you'll get used to it 😉",
+        "livelyBoss": "Got it, boss! This is my voice from now on — you'll get used to it 😉",
+        "livelyCalled": "Got it, {{call}}! This is my voice from now on — you'll get used to it 😉",
+        "steady": "Understood. From now on I'll talk to you this way: explain first, then act.",
+        "steadyBoss": "Understood, boss. From now on I'll talk to you this way: explain first, then act.",
+        "steadyCalled": "Understood, {{call}}. From now on I'll talk to you this way: explain first, then act."
+      }
     },
     "memoryList": {
       "title": "What they remember",
-      "empty": "They're still building up memories.",
+      "empty": "Nothing remembered yet — talk a bit more and it will come.",
       "clearAll": "Clear memory",
       "clearing": "Clearing…",
       "clearTitle": "Clear memory",
@@ -6578,11 +6575,13 @@
       "deleteTitle": "Delete this memory",
       "deleteDescription": "Delete \"{{title}}\"? This cannot be undone.",
       "deleteConfirm": "Delete",
-      "deleteAria": "Delete \"{{title}}\""
+      "deleteAria": "Delete \"{{title}}\"",
+      "footnote": "They jot things down here on their own, and you can delete any of it."
     },
     "learned": {
       "title": "What they've learned",
-      "empty": "They'll build up know-how from the things they do."
+      "empty": "No know-how yet — give them a few things to do.",
+      "footnote": "They pick up know-how from the things they do — the more you use them, the better they get."
     },
     "growth": {
       "rememberedOne": "Remembered: {{title}}",
@@ -6603,12 +6602,14 @@
         "schedule": "⏰ Working on a schedule",
         "collab": "🤝 Teaming up with other teammates"
       },
-      "imBlocked": "A teammate can only connect to one IM — disconnect {{channel}} first"
+      "imBlocked": "A teammate can only connect to one IM — disconnect {{channel}} first",
+      "footnote": "Once connected there is nothing else to set up — they know how to use it."
     },
     "folders": {
       "addButton": "+ Give them a folder",
       "adding": "Adding…",
-      "remove": "Remove"
+      "remove": "Remove",
+      "footnote": "They read what is in the folder on their own and use it right in the chat."
     },
     "advancedIdentity": {
       "title": "Description & background"
@@ -6636,7 +6637,13 @@
       "report": {
         "done": "{{name}} · {{duration}} · done",
         "failed": "{{name}} · {{duration}} · failed",
-        "stopped": "{{name}} · {{duration}} · stopped"
+        "stopped": "{{name}} · {{duration}} · stopped",
+        "delivered": "{{name}} · {{duration}} · delivered {{count}}"
+      },
+      "duration": {
+        "seconds": "{{n}}s",
+        "minutes": "{{n}} min",
+        "hoursMinutes": "{{h}} h {{m}} min"
       }
     },
     "artifacts": {
@@ -6661,7 +6668,18 @@
         "minutes": "{{n}} min ago",
         "hours": "{{n}} h ago",
         "days": "{{n}} d ago"
-      }
+      },
+      "subtitleNamed": "What {{name}} has made",
+      "deliveredBy": "delivered by {{name}}"
+    },
+    "channelConnect": "Connect",
+    "channelDisconnect": "Disconnect",
+    "joined": {
+      "today": "joined today",
+      "yesterday": "joined yesterday",
+      "days": "joined {{n}} days ago",
+      "months": "joined {{n}} months ago",
+      "years": "joined {{n}} years ago"
     }
   },
   "commonUi": {

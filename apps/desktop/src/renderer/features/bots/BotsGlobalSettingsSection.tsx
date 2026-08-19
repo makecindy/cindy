@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
-import { useBotPreferences } from './botPreferences';
+import { formatQuietHours, useBotPreferences } from './botPreferences';
 import { exportBotBundle, useBotProfiles } from './botStore';
 
 const CARD_CLASS = cn(
@@ -83,7 +83,7 @@ export function BotsGlobalSettingsSection() {
         <div className="flex items-center justify-between gap-3">
           <p className={ROW_LABEL_CLASS}>{t('bots.globalSettings.notifications.quietHours')}</p>
           <span className="text-12 text-[var(--settings-section-sublabel)] opacity-70">
-            {preferences.quietHours}
+            {formatQuietHours(preferences.quietHours)}
           </span>
         </div>
         <p className={ROW_HINT_CLASS}>{t('bots.globalSettings.notifications.footnote')}</p>

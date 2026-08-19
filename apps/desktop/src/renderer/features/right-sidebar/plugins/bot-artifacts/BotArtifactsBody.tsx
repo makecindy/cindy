@@ -32,6 +32,7 @@ import {
 } from '@/features/bots/botArtifactPresentation';
 import { useArtifactThumbnail, useArtifactTimeText } from '@/features/bots/BotArtifactCard';
 import { useBotArtifactOpen } from '@/features/bots/useBotArtifactOpen';
+import { useBotProfiles } from '@/features/bots/botStore';
 import type { BotArtifactCategory, BotArtifactItem } from '../../../../../shared/botArtifact';
 import type { TabKindHostContext } from '../../types';
 import type { BotArtifactsState } from './index';
@@ -164,6 +165,28 @@ export function BotArtifactsBody({ state, ctx, active = true, shellVisible = tru
   const counts = useMemo(() => countBotArtifactsByCategory(items), [items]);
   const shown = useMemo(() => filterBotArtifacts(items, filter), [items, filter]);
 
+  // 副标题带上是谁的仓库。右栏经常在多个伙伴之间切换,「TA 做出来的东西」里的「TA」
+  // 在那种时候指谁并不明确。认不出归属(极端竞态)才退回不带名字的说法。
+  const profiles = useBotProfiles();
+  const ownerName = useMemo(() => {
+    const owner = profiles.find(
+      (bot) =>
+        bot.canonicalSessionId === ctx.sessionId
+        || bot.sessions.some((session) => session.id === ctx.sessionId),
+    );
+    return owner?.name ?? null;
+  }, [ctx.sessionId, profiles]);
+
+  // 高亮是「刚才那一件在这儿」的一次性落点提示,不是常驻标记。与设置页成长尾注
+  // 高亮同一口径(2400ms)自己退掉——一直亮着它就从提示变成噪音了。
+  const focusArtifactId = state.focusArtifactId;
+  const { patchState } = ctx;
+  useEffect(() => {
+    if (!focusArtifactId) return;
+    const timer = window.setTimeout(() => patchState({ focusArtifactId: null }), 2_400);
+    return () => window.clearTimeout(timer);
+  }, [focusArtifactId, patchState]);
+
   const header = (
     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-4">
       <Package size={15} className="text-[var(--text-secondary)]" aria-hidden="true" />
@@ -225,7 +248,9 @@ export function BotArtifactsBody({ state, ctx, active = true, shellVisible = tru
     <div className="flex min-h-0 flex-1 flex-col">
       {header}
       <p className="px-4 pt-2.5 text-11 text-[var(--text-tertiary)]">
-        {t('bots.artifacts.subtitle')}
+        {ownerName
+          ? t('bots.artifacts.subtitleNamed', { name: ownerName })
+          : t('bots.artifacts.subtitle')}
       </p>
       <div className="flex flex-wrap gap-1.5 px-4 py-2.5">
         {BOT_ARTIFACT_FILTERS.map((candidate) => {

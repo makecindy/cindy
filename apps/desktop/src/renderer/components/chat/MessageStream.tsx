@@ -5876,6 +5876,7 @@ const MessageItem = memo(function MessageItem({
         guest={message.guestBot}
         content={message.content}
         workingDir={workingDir}
+        sessionId={sessionId}
       />
     );
   }

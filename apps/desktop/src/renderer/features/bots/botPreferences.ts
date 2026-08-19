@@ -31,6 +31,18 @@ export const DEFAULT_BOT_PREFERENCES: BotPreferences = {
   quietHours: '22:00-08:00',
 };
 
+/**
+ * 「22:00 – 08:00」。
+ *
+ * 存的仍然是机器形状 `HH:MM-HH:MM`（半角连字符，将来要解析的就是它）；给人看的那一
+ * 行用 en dash + 两侧空格 —— `22:00-08:00` 里的半角连字符在两个时间中间读起来像减号。
+ * 只做展示层转换，不动存储格式。
+ */
+export function formatQuietHours(value: string): string {
+  const match = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/.exec(value.trim());
+  return match ? `${match[1]} – ${match[2]}` : value;
+}
+
 export function readBotPreferences(): BotPreferences {
   if (typeof window === 'undefined') return { ...DEFAULT_BOT_PREFERENCES };
   try {

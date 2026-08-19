@@ -120,6 +120,14 @@ export function BotGrowthLists({
 
   const renderRow = (record: MemoryRecord, withTime: boolean) => {
     const at = withTime ? parseUpdatedAt(record.frontmatter.updatedAt) : null;
+    /*
+      描述是可空的（老分片、手写分片都可能没有 hook 那一行）。之前是
+      `{description}{' · ' + time}` 直接拼，描述为空时副行就成了「· 2 天前」——
+      一个没有左操作数的分隔点。这里改成只把**非空**的片段用 · 连起来。
+    */
+    const metaLine = [record.frontmatter.description.trim(), at !== null ? timeText(at) : '']
+      .filter((part) => part.length > 0)
+      .join(' · ');
     return (
       <li
         key={record.filename}
@@ -129,10 +137,11 @@ export function BotGrowthLists({
           <span className="block truncate text-12 text-[var(--text-primary)]">
             {record.frontmatter.title}
           </span>
-          <span className="mt-0.5 block truncate text-11 text-[var(--text-tertiary)]">
-            {record.frontmatter.description}
-            {at !== null ? ` · ${timeText(at)}` : ''}
-          </span>
+          {metaLine ? (
+            <span className="mt-0.5 block truncate text-11 text-[var(--text-tertiary)]">
+              {metaLine}
+            </span>
+          ) : null}
         </span>
         <button
           type="button"
@@ -179,6 +188,10 @@ export function BotGrowthLists({
             {memories.map((record) => renderRow(record, false))}
           </ul>
         )}
+        {/* 脚注回答的是「这些东西是谁放进来的、我能不能动」——列表本身答不了。 */}
+        <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
+          {t('bots.memoryList.footnote')}
+        </p>
       </div>
 
       {/* 「TA 学会的」与「TA 记得的」并列:记忆是你说过的,本事是 TA 做出来的。 */}
@@ -196,6 +209,9 @@ export function BotGrowthLists({
             {learned.map((record) => renderRow(record, true))}
           </ul>
         )}
+        <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
+          {t('bots.learned.footnote')}
+        </p>
       </div>
     </>
   );

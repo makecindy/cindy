@@ -106,7 +106,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
 }));
 
-vi.mock('../AddBotDialog', () => ({ AddBotDialog: () => null }));
+
 vi.mock('../BotAvatar', () => ({
   BotAvatar: () => <div data-testid="bot-avatar" />,
   BotAvatarPicker: () => <div data-testid="bot-avatar-picker" />,
@@ -189,6 +189,10 @@ vi.mock('@/state/newMakerDraft', () => ({
 }));
 
 import { BotSettings } from '../BotsHomeView';
+import {
+  peekPendingBotPersonaAck,
+  resetPendingBotPersonaAckForTests,
+} from '../botPersonaAck';
 
 function capabilities(overrides: Partial<BotCapabilities> = {}): BotCapabilities {
   return {
@@ -379,6 +383,46 @@ describe('Bot settings page structure', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.advancedLinkLabel' }));
     expect(screen.queryByRole('button', { name: 'bots.save' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.cancel' })).toBeNull();
+  });
+
+  it('says what each block is for, in one plain line under its title', () => {
+    renderSettings();
+
+    // 四个标题都是「TA 怎样怎样」;不说清楚这一块要用户做什么,人会以为四块都得填。
+    expect(screen.getByText('bots.settingsBlocks.whoDescription')).toBeTruthy();
+    expect(screen.getByText('bots.settingsBlocks.canDescription')).toBeTruthy();
+    expect(screen.getByText('bots.settingsBlocks.understandDescription')).toBeTruthy();
+  });
+
+  it('carries the memory / know-how footnotes so the lists explain themselves', async () => {
+    renderSettings();
+
+    expect(await screen.findByText('bots.memoryList.footnote')).toBeTruthy();
+    expect(screen.getByText('bots.learned.footnote')).toBeTruthy();
+    expect(screen.getByText('bots.abilityWall.footnote')).toBeTruthy();
+    expect(screen.getByText('bots.folders.footnote')).toBeTruthy();
+  });
+
+  it('answers "who is this and how long have they been around" right under the name', () => {
+    renderSettings({ createdAt: Date.now() });
+
+    // kicker 是「设置」——旁边就是伙伴名,再说一遍「伙伴」是冗余。
+    expect(screen.getByText('bots.settings')).toBeTruthy();
+    // 「{定位} · 今天加入」,口语相对时长,不是「加入 N 天」。
+    expect(screen.getByText('Delivery steward · bots.joined.today:{"n":0}')).toBeTruthy();
+  });
+
+  it('keeps the joined line honest when the teammate has been around a while', () => {
+    renderSettings({ createdAt: Date.now() - 3 * 24 * 60 * 60 * 1_000 });
+    expect(screen.getByText('Delivery steward · bots.joined.days:{"n":3}')).toBeTruthy();
+  });
+
+  it('drops "Local Bot" out of the identity card — it is a delivery detail, not who they are', () => {
+    renderSettings();
+    expect(screen.queryByText(/bots\.channelLabel/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'bots.advancedLinkLabel' }));
+    expect(screen.getByText(/bots\.channelLabel/)).toBeTruthy();
   });
 
   it('never marks the settings header, trusted or not', () => {
@@ -638,7 +682,11 @@ describe('TA 会的 — ability wall and single-IM mutual exclusion', () => {
       ] as never,
     });
 
-    const mountedButtons = await screen.findAllByRole('button', { name: 'bots.channelMounted' });
+    // 已连的行给的是「断开」——它是这个按钮真会做的事;「已挂载」既是实现词,
+    // 又把一个动作说成了状态,用户看不出点下去会发生什么。
+    const mountedButtons = await screen.findAllByRole('button', {
+      name: 'bots.channelDisconnect',
+    });
     expect(mountedButtons).toHaveLength(2);
     for (const button of mountedButtons) {
       expect((button as HTMLButtonElement).disabled).toBe(false);
@@ -778,6 +826,50 @@ describe('Bot settings autosave', () => {
       identitySource: expect.stringContaining('<!--persona:v1:'),
     });
     expect(screen.getByText('persona-summary-fixture')).toBeTruthy();
+  });
+
+  it('takes the user back to the conversation after saving a persona', async () => {
+    // 「调整性格」是从对话里点进来的。改完停在设置页,用户得自己再点一次返回
+    // 才听得到新口气 —— 保存即回对话。
+    const { onBack } = renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.persona.adjustButton' }));
+    fireEvent.click(screen.getByRole('button', { name: 'persona-wizard-save' }));
+    await advance(0);
+
+    expect(onBack).toHaveBeenCalledTimes(1);
+    // 回对话之前必须先把新性格存下去,而且存的是**新**值不是旧值。
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      identitySource: expect.stringContaining('"style":"lively"'),
+    });
+  });
+
+  it('parks a persona confirmation for the conversation to deliver', async () => {
+    resetPendingBotPersonaAckForTests();
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.persona.adjustButton' }));
+    fireEvent.click(screen.getByRole('button', { name: 'persona-wizard-save' }));
+    await advance(0);
+
+    expect(peekPendingBotPersonaAck('bot-1')).toMatchObject({
+      style: 'lively',
+      proactivity: 'proactive',
+      call: 'boss',
+    });
+  });
+
+  it('parks nothing when the wizard is saved without changing the persona', async () => {
+    resetPendingBotPersonaAckForTests();
+    // 已经就是向导那份选择了:再保存一次不该让 TA 又说一遍「以后就这么说话」。
+    renderSettings({
+      identitySource:
+        '<!--persona:v1:{"style":"lively","proactivity":"proactive","call":"boss"}-->\nzh\nen',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.persona.adjustButton' }));
+    fireEvent.click(screen.getByRole('button', { name: 'persona-wizard-save' }));
+    await advance(0);
+
+    expect(peekPendingBotPersonaAck('bot-1')).toBeNull();
+    // 但「回对话」照做 —— 用户点的是保存,不是取消。
   });
 
   it('sends nothing when the page is only opened, or when an edit is reverted', async () => {

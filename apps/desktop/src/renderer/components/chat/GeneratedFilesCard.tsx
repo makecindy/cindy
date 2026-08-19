@@ -187,29 +187,34 @@ const MAX_VISIBLE_FILES = 6;
  * 伙伴会话的产出:同一批文件换成交付物卡。存在性判定、时间窗过滤、远程复核
  * 全部沿用上面那套 —— 这里只换外观与动作,不换「哪些文件算本轮产出」的口径。
  *
- * 体积暂缺:`fsBrowse.statPath` 不返回 size,交付物卡的元信息因此只有「类型 ·
- * 时间」。宁可少一段,也不在聊天流里为一张卡再打一轮 IPC。
+ * 体积来自**上面那一轮已经做过的 stat**(存在性 + 时间窗校验那一轮),不为一张卡
+ * 再打一轮 IPC。远程会话与老被控端的 stat 不带 size,那时元信息退回「类型 · 时间」
+ * ——少一段,但不编。
  */
 function BotDeliverablesBlock({
   files,
+  sizeByPath,
   sessionId,
   createdAt,
 }: {
   files: readonly GeneratedFileRef[];
+  sizeByPath: ReadonlyMap<string, number>;
   sessionId: string;
   createdAt: number;
 }) {
   const { t } = useTranslation();
   const { openArtifact, artifactLightboxes } = useBotArtifactOpen();
-  const items = files.map((file) =>
-    makeBotArtifact({
+  const items = files.map((file) => {
+    const sizeBytes = sizeByPath.get(file.path);
+    return makeBotArtifact({
       source: 'generated',
       target: file.path,
       isRef: false,
       name: file.name,
       createdAt,
-    }),
-  );
+      ...(typeof sizeBytes === 'number' ? { sizeBytes } : {}),
+    });
+  });
   return (
     <div className="my-1 flex flex-col gap-1.5">
       <span className="text-12 text-[var(--text-secondary)]">{t('chat.generatedFiles.title')}</span>
@@ -253,6 +258,11 @@ export function GeneratedFilesCard({
   const [existing, setExisting] = useState<GeneratedFileRef[] | null>(
     remoteOrigin ? files.filter((f) => f.source === 'tool') : null,
   );
+  /**
+   * 本地 stat 顺手带回的字节数(path → size)。伙伴对话的交付物卡拿它补「体积」那
+   * 一段;远程分支不 stat 本机文件,留空即可。
+   */
+  const [sizeByPath, setSizeByPath] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
@@ -276,17 +286,22 @@ export function GeneratedFilesCard({
       };
     }
     void (async () => {
+      const sizes = new Map<string, number>();
       const checks = await Promise.all(
         files.map(async (f) => {
           try {
             const r = await window.electronAPI.fsBrowse.statPath(f.path);
+            if (typeof r.sizeBytes === 'number') sizes.set(f.path, r.sizeBytes);
             return isLocalGeneratedFileInTurn(f, r, turnStartMs, turnEndMs);
           } catch {
             return false;
           }
         }),
       );
-      if (!cancelled) setExisting(files.filter((_, idx) => checks[idx]));
+      if (!cancelled) {
+        setSizeByPath(sizes);
+        setExisting(files.filter((_, idx) => checks[idx]));
+      }
     })();
     return () => {
       cancelled = true;
@@ -299,6 +314,7 @@ export function GeneratedFilesCard({
     return (
       <BotDeliverablesBlock
         files={existing}
+        sizeByPath={sizeByPath}
         sessionId={botSessionId}
         createdAt={turnEndMs ?? turnStartMs ?? Date.now()}
       />

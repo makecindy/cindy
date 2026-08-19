@@ -5872,6 +5872,7 @@
     },
     "list": {
       "startChat": "会話を始める",
+      "typing": "入力中…",
       "unread": "{{count}} 件の未読メッセージ"
     },
     "cancel": "キャンセル",
@@ -5887,30 +5888,12 @@
     "sessionLoadFailedDescription": "タスクの関連付けは存在しますが、Cindy が仲間の状態を読み取れませんでした。再試行するか、仲間の概要に戻ってください。",
     "sessionUnavailableTitle": "この仲間タスクは利用できません",
     "sessionUnavailableDescription": "更新、アーカイブ、または仲間から削除された可能性があります。仲間の概要に戻って現在のタスクを開いてください。",
-    "settings": "仲間設定",
+    "settings": "設定",
     "settingsNav": {
       "title": "設定セクション"
     },
     "emptyTitle": "仲間はまだありません",
-    "emptyDescription": "仲間は通常のタスクに長期 ID、イベント受信箱、自動化、メッセージチャンネルを追加します。",
-    "emptyBenefits": {
-      "identity": {
-        "title": "長期 ID",
-        "description": "ID、ユーザー情報、Skills、メモリは仲間ごとに分離されます。"
-      },
-      "events": {
-        "title": "タスクイベントを自動受信",
-        "description": "他のタスクが完了、失敗、判断待ちになると購読中の仲間に永続イベントが届きます。"
-      },
-      "automation": {
-        "title": "自動化と連携",
-        "description": "スケジュール、仲間同士の委任、プロジェクト、worktree は長期的な仲間に紐づきます。"
-      },
-      "channels": {
-        "title": "必要な時にチャンネルを追加",
-        "description": "まずローカル仲間を作成し、その後 Telegram、Feishu、Slack などを接続します。"
-      }
-    },
+    "emptyDescription": "気の合う子を選ぶか、自分でつくってください。",
     "noDescription": "説明はありません",
     "sessions": "タスク",
     "sessionsTitle": "仲間タスク",
@@ -6200,7 +6183,7 @@
       "noteNamespace": "メモ領域",
       "create": "Routine を作成",
       "creating": "作成中…",
-      "empty": "Routine はまだありません。Routine は、この仲間が自分で実行する 1 つの指示です。",
+      "empty": "スケジュールはまだありません。毎日 / 毎週何をするか、一言で伝えてください。",
       "loading": "自動化を読み込み中…",
       "refresh": "自動化を更新",
       "runNow": "今すぐ実行",
@@ -6316,8 +6299,6 @@
     "send": "メッセージを送信",
     "channelsTitle": "メッセージチャネル",
     "channelsDescription": "仲間の身元やローカルチャットを変えずに、Telegram、Feishu、Slack などの入口を追加します。",
-    "channelMounted": "接続済み",
-    "channelMount": "追加",
     "channelLocalOwned": "ローカル仲間のメイン入口",
     "channelLocalAdapter": "ローカルアダプター",
     "channelServerRelay": "サーバー中継",
@@ -6482,7 +6463,8 @@
       "join": "迎え入れる",
       "joined": "参加済み",
       "subtitle": "気の合う子を選ぶか、自分でつくってください。",
-      "title": "パートナーに会う"
+      "title": "パートナーに会う",
+      "customAvatarLabel": "顔を選ぶ"
     },
     "chat": {
       "composerPlaceholder": "{{name}}に話しかける…",
@@ -6495,7 +6477,7 @@
         "banner": "新着メッセージのバナー",
         "sound": "サウンド",
         "quietHours": "通知しない時間帯",
-        "footnote": "全体の司令塔のようなパートナーは、自分でタスクの動きを見ています——それは本人の能力であって、ここの設定ではありません。"
+        "footnote": "「全体の司令塔」のような仲間は、自分でタスクの動きを見ています——それは本人の能力であって、ここの設定ではありません。"
       },
       "portability": {
         "importTitle": "パートナーをインポート",
@@ -6513,9 +6495,13 @@
       "can": "できること",
       "understand": "把握しているフォルダ",
       "schedule": "スケジュール",
-      "advanced": "詳細設定"
+      "advanced": "詳細設定",
+      "whoDescription": "性格を書く必要はありません——何回か選ぶだけです。",
+      "canDescription": "これらはオンにする必要はありません——生まれつきできます。",
+      "understandDescription": "フォルダを 1 つ渡せば、あなたのプロジェクトが分かります。",
+      "scheduleDescription": "時間になれば自分でやります。あなたがいなくても大丈夫です。"
     },
-    "advancedLinkLabel": "詳細設定(モデル・技術詳細・エクスポート) ›",
+    "advancedLinkLabel": "詳細設定（モデル・技術詳細・エクスポート）",
     "persona": {
       "title": "性格を調整",
       "description": "3つ選ぶだけで話し方が変わります。",
@@ -6563,11 +6549,22 @@
       "summaryCallBoss": "ボスと呼びます",
       "summaryCallCustom": "{{name}}と呼びます",
       "rawToggle": "詳細設定：自分で書く",
-      "rawPlaceholder": "非推奨 — 上の選択で十分です。どうしても書きたい場合はここに。"
+      "rawPlaceholder": "非推奨 — 上の選択で十分です。どうしても書きたい場合はここに。",
+      "ack": {
+        "concise": "了解。これからはこの話し方で。",
+        "conciseBoss": "了解です、ボス。これからはこの話し方で。",
+        "conciseCalled": "了解です、{{call}}。これからはこの話し方で。",
+        "lively": "りょーかい！これからはこの調子でいくね、すぐ慣れるよ 😉",
+        "livelyBoss": "りょーかい、ボス！これからはこの調子でいくね、すぐ慣れるよ 😉",
+        "livelyCalled": "りょーかい、{{call}}！これからはこの調子でいくね、すぐ慣れるよ 😉",
+        "steady": "承知しました。これからはこの話し方で、まず説明してから動きます。",
+        "steadyBoss": "承知しました、ボス。これからはこの話し方で、まず説明してから動きます。",
+        "steadyCalled": "承知しました、{{call}}。これからはこの話し方で、まず説明してから動きます。"
+      }
     },
     "memoryList": {
       "title": "覚えていること",
-      "empty": "記憶を少しずつ蓄積しています。",
+      "empty": "まだ何も覚えていません——もう少し話せば増えていきます。",
       "clearAll": "記憶を消去",
       "clearing": "消去中…",
       "clearTitle": "記憶を消去",
@@ -6576,11 +6573,13 @@
       "deleteTitle": "この記憶を削除",
       "deleteDescription": "「{{title}}」を削除しますか？元に戻せません。",
       "deleteConfirm": "削除",
-      "deleteAria": "「{{title}}」を削除"
+      "deleteAria": "「{{title}}」を削除",
+      "footnote": "自分でここに書きためていきます。いつでも削除できます。"
     },
     "learned": {
       "title": "学んだこと",
-      "empty": "これまでの作業から少しずつ得意なことを増やしていきます。"
+      "empty": "まだ得意なことはありません——いくつか任せてみてください。",
+      "footnote": "やった仕事から自分で得意を増やします。使うほど手際がよくなります。"
     },
     "growth": {
       "rememberedOne": "覚えました：{{title}}",
@@ -6601,12 +6600,14 @@
         "schedule": "⏰ スケジュール実行",
         "collab": "🤝 仲間との連携"
       },
-      "imBlocked": "チームメイトが接続できるIMは1つだけです — 先に{{channel}}を切断してください"
+      "imBlocked": "チームメイトが接続できるIMは1つだけです — 先に{{channel}}を切断してください",
+      "footnote": "つないだ後は何も設定しなくて大丈夫です——使い方は自分で分かります。"
     },
     "folders": {
       "addButton": "+ フォルダーを追加",
       "adding": "追加中…",
-      "remove": "削除"
+      "remove": "削除",
+      "footnote": "フォルダの中身を自分で読んで、会話でそのまま使います。"
     },
     "advancedIdentity": {
       "title": "説明と背景情報"
@@ -6634,7 +6635,13 @@
       "report": {
         "done": "{{name}} · {{duration}} · 完了",
         "failed": "{{name}} · {{duration}} · 失敗",
-        "stopped": "{{name}} · {{duration}} · 停止"
+        "stopped": "{{name}} · {{duration}} · 停止",
+        "delivered": "{{name}} · {{duration}} · {{count}} 件納品"
+      },
+      "duration": {
+        "seconds": "{{n}} 秒",
+        "minutes": "{{n}} 分",
+        "hoursMinutes": "{{h}} 時間 {{m}} 分"
       }
     },
     "artifacts": {
@@ -6659,7 +6666,18 @@
         "minutes": "{{n}} 分前",
         "hours": "{{n}} 時間前",
         "days": "{{n}} 日前"
-      }
+      },
+      "subtitleNamed": "{{name}} が作ったもの",
+      "deliveredBy": "{{name}} が納品"
+    },
+    "channelConnect": "接続",
+    "channelDisconnect": "切断",
+    "joined": {
+      "today": "今日加入",
+      "yesterday": "昨日加入",
+      "days": "{{n}} 日前に加入",
+      "months": "{{n}} か月前に加入",
+      "years": "{{n}} 年前に加入"
     }
   },
   "commonUi": {

@@ -17,13 +17,23 @@ import { BotAvatar } from './BotAvatar';
 import { isActiveDelegationStatus, useBotDelegation } from './botDelegationLive';
 import { useBotProfiles } from './botStore';
 
-/** 与右栏 Bot 协同 tab、输入框上方状态条同一档位（s / m / h m）。 */
-function formatDuration(startedAt: number, endedAt: number): string {
+/**
+ * 「用时」是说给人听的，不是给日志看的：中文界面里 `8s` 和「用时」并排是两套语言。
+ * 单位走 i18n，档位仍与右栏 Bot 协同 tab 一致（秒 / 分 / 时+分）。
+ */
+export function formatBotCollaborationDuration(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  startedAt: number,
+  endedAt: number,
+): string {
   const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1_000));
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return t('bots.collab.duration.seconds', { n: seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  if (minutes < 60) return t('bots.collab.duration.minutes', { n: minutes });
+  return t('bots.collab.duration.hoursMinutes', {
+    h: Math.floor(minutes / 60),
+    m: minutes % 60,
+  });
 }
 
 function terminalKey(status: BotDelegationView['status']): string {
@@ -83,6 +93,12 @@ function CollaborationCardBody({
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const inputRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * 插话的幂等键。它跟着「这一句话」走，不是跟着这次点击走：双击发送、失败后重试
+   * 都复用同一个 token，服务端按 clientId 去重，对方只会被真的催一次。改了正文就
+   * 换新 token —— 否则新的一句会被当成旧那句的重放而被静默吞掉。
+   */
+  const interjectionTokenRef = useRef<{ text: string; token: string } | null>(null);
   const { openArtifact, artifactLightboxes } = useBotArtifactOpen();
 
   const active = row ? isActiveDelegationStatus(row.status) : false;
@@ -151,11 +167,21 @@ function CollaborationCardBody({
 
   const submitInterjection = async (): Promise<void> => {
     const value = draft.trim();
-    if (!value || !sessionId) return;
+    if (!value || !sessionId || pending) return;
+    const cached = interjectionTokenRef.current;
+    const token =
+      cached && cached.text === value ? cached.token : globalThis.crypto.randomUUID();
+    interjectionTokenRef.current = { text: value, token };
     const ok = await runAction(async () =>
-      window.electronAPI.maker.interjectBotDelegation(sessionId, meta.delegationId, value),
+      window.electronAPI.maker.interjectBotDelegation(
+        sessionId,
+        meta.delegationId,
+        value,
+        token,
+      ),
     );
     if (ok) {
+      interjectionTokenRef.current = null;
       setDraft('');
       setComposing(false);
     }
@@ -171,7 +197,16 @@ function CollaborationCardBody({
 
   // 终态：收拢成一行战报，点开才看细节。
   if (row && !active) {
-    const elapsed = formatDuration(row.createdAt, row.completedAt ?? row.updatedAt);
+    const elapsed = formatBotCollaborationDuration(
+      t,
+      row.createdAt,
+      row.completedAt ?? row.updatedAt,
+    );
+    const deliveredCount = row.outputArtifacts.length;
+    // 定稿的战报一行是「本本 · 用时 8 秒 · 交付 1 份文档」——「完成」只说了事情结束了，
+    // 「交付 N 件」才说了它到底交出来什么。真有产物时用后者。
+    const reportKey =
+      row.status === 'completed' && deliveredCount > 0 ? 'delivered' : terminalKey(row.status);
     return (
       <div className="my-2 max-w-[440px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] text-12">
         <button
@@ -182,9 +217,10 @@ function CollaborationCardBody({
         >
           {heads}
           <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
-            {t(`bots.collab.report.${terminalKey(row.status)}`, {
+            {t(`bots.collab.report.${reportKey}`, {
               name: to.name,
               duration: elapsed,
+              count: deliveredCount,
             })}
           </span>
           {expanded ? (
@@ -195,6 +231,17 @@ function CollaborationCardBody({
         </button>
         {expanded ? (
           <div className="border-t border-[var(--border-default)] px-3.5 py-2.5">
+            {/*
+              展开区先给结论、再给当初的目标。战报一行只说「交了几件」，
+              「TA 到底得出了什么」的唯一落点就是这段 resultSummary —— 与右栏
+              Bot 协同 tab 同一段文本，不另造摘要。展开是用户主动动作，即使下方
+              还有客座气泡也照给：那是「再读一遍结论」，不是啰嗦。
+            */}
+            {row.resultSummary ? (
+              <p className="mb-2 whitespace-pre-wrap break-words text-[var(--text-primary)]">
+                {row.resultSummary}
+              </p>
+            ) : null}
             <p className="whitespace-pre-wrap break-words text-[var(--text-secondary)]">
               {meta.objective}
             </p>
@@ -268,7 +315,7 @@ function CollaborationCardBody({
         <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{statusLabel}</span>
         {startedAt !== null ? (
           <span className="shrink-0 tabular-nums text-11 text-[var(--text-tertiary)]">
-            {formatDuration(startedAt, now)}
+            {formatBotCollaborationDuration(t, startedAt, now)}
           </span>
         ) : null}
       </div>

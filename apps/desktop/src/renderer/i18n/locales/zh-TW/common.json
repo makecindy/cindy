@@ -5872,6 +5872,7 @@
     },
     "list": {
       "startChat": "開始對話",
+      "typing": "正在輸入…",
       "unread": "{{count}} 則未讀訊息"
     },
     "cancel": "取消",
@@ -5887,30 +5888,12 @@
     "sessionLoadFailedDescription": "任務關聯仍然存在，但 Cindy 暫時無法讀取夥伴狀態。你可以重試，或返回夥伴總覽。",
     "sessionUnavailableTitle": "這個夥伴任務已無法使用",
     "sessionUnavailableDescription": "它可能已經 Renew、封存，或不再屬於這個夥伴。請返回夥伴總覽開啟目前任務。",
-    "settings": "夥伴設定",
+    "settings": "設定",
     "settingsNav": {
       "title": "設定分組"
     },
     "emptyTitle": "尚未建立夥伴",
-    "emptyDescription": "夥伴比一般任務多一層長期身分、事件收件匣、自動化與訊息通道。",
-    "emptyBenefits": {
-      "identity": {
-        "title": "長期身分",
-        "description": "身分、使用者背景、Skills 與記憶依夥伴隔離，不會串到其他夥伴。"
-      },
-      "events": {
-        "title": "自動接收任務事件",
-        "description": "其他任務完成、失敗或等待決策時，訂閱夥伴會收到持久事件。"
-      },
-      "automation": {
-        "title": "自動化與協同",
-        "description": "排程、夥伴間委派、專案與 worktree 都連結到長期夥伴。"
-      },
-      "channels": {
-        "title": "依需要掛載訊息通道",
-        "description": "先建立本地夥伴，再連接 Telegram、飛書與 Slack 等入口。"
-      }
-    },
+    "emptyDescription": "挑一個合拍的，或者自己捏一個。",
     "noDescription": "尚無描述",
     "sessions": "個任務",
     "sessionsTitle": "夥伴任務",
@@ -6200,7 +6183,7 @@
       "noteNamespace": "執行筆記空間",
       "create": "建立 Routine",
       "creating": "正在建立…",
-      "empty": "還沒有 Routine。一條 Routine 就是一句讓這個夥伴自己去做的指令。",
+      "empty": "還沒有日程。一句話告訴 TA 每天 / 每週做什麼。",
       "loading": "正在讀取自動化…",
       "refresh": "重新整理自動化",
       "runNow": "立即執行",
@@ -6316,8 +6299,6 @@
     "send": "傳送訊息",
     "channelsTitle": "訊息通道",
     "channelsDescription": "在不改變夥伴身分與本地主任務的前提下，掛載 Telegram、飛書、Slack 等訊息入口。",
-    "channelMounted": "已掛載",
-    "channelMount": "掛載",
     "channelLocalOwned": "本機夥伴主入口",
     "channelLocalAdapter": "本機介面卡",
     "channelServerRelay": "伺服器轉送",
@@ -6482,7 +6463,8 @@
       "join": "讓 TA 加入",
       "joined": "已加入",
       "subtitle": "挑一個合拍的，或者自己捏一個。",
-      "title": "認識你的伙伴"
+      "title": "認識你的伙伴",
+      "customAvatarLabel": "挑張頭像"
     },
     "chat": {
       "composerPlaceholder": "跟{{name}}說點什麼…",
@@ -6495,7 +6477,7 @@
         "banner": "新訊息橫幅",
         "sound": "聲音",
         "quietHours": "勿擾時段",
-        "footnote": "像總控這類伙伴會自己關注任務動靜——那是 TA 的本事，不在這裡設定。"
+        "footnote": "像「總控」這類夥伴會自己關注任務動靜——那是 TA 的本事，不在這裡設定。"
       },
       "portability": {
         "importTitle": "匯入伙伴",
@@ -6513,9 +6495,13 @@
       "can": "TA 會的",
       "understand": "TA 懂的",
       "schedule": "TA 的日程",
-      "advanced": "進階"
+      "advanced": "進階",
+      "whoDescription": "性格不用你寫——選幾下就好。",
+      "canDescription": "這些不用你開——TA 生下來就會。",
+      "understandDescription": "給 TA 一個資料夾，TA 就懂你的專案。",
+      "scheduleDescription": "到點自己幹，不用你在。"
     },
-    "advancedLinkLabel": "進階(模型、技術細節、匯出)›",
+    "advancedLinkLabel": "進階（模型、技術細節、匯出）",
     "persona": {
       "title": "調整性格",
       "description": "選三下就好，TA 會照著改口氣。",
@@ -6563,11 +6549,22 @@
       "summaryCallBoss": "叫你老闆",
       "summaryCallCustom": "叫你{{name}}",
       "rawToggle": "進階：自己寫設定",
-      "rawPlaceholder": "不建議——上面選完就夠了。真要寫就寫在這。"
+      "rawPlaceholder": "不建議——上面選完就夠了。真要寫就寫在這。",
+      "ack": {
+        "concise": "好，以後就這麼說話。",
+        "conciseBoss": "好，老闆，以後就這麼說話。",
+        "conciseCalled": "好，{{call}}，以後就這麼說話。",
+        "lively": "收到～以後我就這個調調囉，你會習慣的 😉",
+        "livelyBoss": "收到～老闆，以後我就這個調調囉，你會習慣的 😉",
+        "livelyCalled": "收到～{{call}}，以後我就這個調調囉，你會習慣的 😉",
+        "steady": "明白了。之後我會照這個方式跟你說話，先講清楚，再動手。",
+        "steadyBoss": "明白了，老闆。之後我會照這個方式跟你說話，先講清楚，再動手。",
+        "steadyCalled": "明白了，{{call}}。之後我會照這個方式跟你說話，先講清楚，再動手。"
+      }
     },
     "memoryList": {
       "title": "TA 記得的",
-      "empty": "TA 的記憶正在累積中",
+      "empty": "還沒記住什麼——多聊幾句就有了。",
       "clearAll": "清空記憶",
       "clearing": "清空中…",
       "clearTitle": "清空記憶",
@@ -6576,11 +6573,13 @@
       "deleteTitle": "刪除這條記憶",
       "deleteDescription": "刪除「{{title}}」？刪除後無法恢復。",
       "deleteConfirm": "刪除",
-      "deleteAria": "刪除「{{title}}」"
+      "deleteAria": "刪除「{{title}}」",
+      "footnote": "TA 會自己往這裡記東西，你隨時可以刪。"
     },
     "learned": {
       "title": "TA 學會的",
-      "empty": "TA 會從做過的事裡自己長本事"
+      "empty": "還沒長出什麼本事——多讓 TA 做幾件事。",
+      "footnote": "TA 會從做過的事裡自己長本事，用得越多越順手。"
     },
     "growth": {
       "rememberedOne": "記住了：{{title}}",
@@ -6601,12 +6600,14 @@
         "schedule": "⏰ 定時幹活",
         "collab": "🤝 和夥伴協作"
       },
-      "imBlocked": "一個夥伴只能連一個 IM——先斷開{{channel}}"
+      "imBlocked": "一個夥伴只能連一個 IM——先斷開 {{channel}}",
+      "footnote": "連上以後不用再設定什麼——TA 自己知道怎麼用。"
     },
     "folders": {
       "addButton": "＋ 給 TA 一個資料夾",
       "adding": "新增中…",
-      "remove": "移除"
+      "remove": "移除",
+      "footnote": "TA 會自己讀資料夾裡的東西，對話時直接用。"
     },
     "advancedIdentity": {
       "title": "描述與背景"
@@ -6634,7 +6635,13 @@
       "report": {
         "done": "{{name}} · 用時 {{duration}} · 完成",
         "failed": "{{name}} · 用時 {{duration}} · 失敗",
-        "stopped": "{{name}} · 用時 {{duration}} · 已停止"
+        "stopped": "{{name}} · 用時 {{duration}} · 已停止",
+        "delivered": "{{name}} · 用時 {{duration}} · 交付 {{count}} 件"
+      },
+      "duration": {
+        "seconds": "{{n}} 秒",
+        "minutes": "{{n}} 分鐘",
+        "hoursMinutes": "{{h}} 小時 {{m}} 分"
       }
     },
     "artifacts": {
@@ -6659,7 +6666,18 @@
         "minutes": "{{n}} 分鐘前",
         "hours": "{{n}} 小時前",
         "days": "{{n}} 天前"
-      }
+      },
+      "subtitleNamed": "{{name}} 做出來的東西",
+      "deliveredBy": "由 {{name}} 交付"
+    },
+    "channelConnect": "連接",
+    "channelDisconnect": "中斷連接",
+    "joined": {
+      "today": "今天加入",
+      "yesterday": "昨天加入",
+      "days": "{{n}} 天前加入",
+      "months": "{{n}} 個月前加入",
+      "years": "{{n}} 年前加入"
     }
   },
   "commonUi": {

@@ -5872,6 +5872,7 @@
     },
     "list": {
       "startChat": "대화 시작하기",
+      "typing": "입력 중…",
       "unread": "읽지 않은 메시지 {{count}}개"
     },
     "cancel": "취소",
@@ -5887,30 +5888,12 @@
     "sessionLoadFailedDescription": "작업 연결은 남아 있지만 Cindy가 동료 상태를 읽지 못했습니다. 다시 시도하거나 동료 개요로 돌아가세요.",
     "sessionUnavailableTitle": "이 동료 작업은 더 이상 사용할 수 없습니다",
     "sessionUnavailableDescription": "갱신 또는 보관되었거나 이 동료에게서 제거되었을 수 있습니다. 동료 개요에서 현재 작업을 여세요.",
-    "settings": "동료 설정",
+    "settings": "설정",
     "settingsNav": {
       "title": "설정 섹션"
     },
     "emptyTitle": "아직 동료가 없습니다",
-    "emptyDescription": "동료는 일반 작업에 장기 정체성, 이벤트 수신함, 자동화와 메시지 채널을 더합니다.",
-    "emptyBenefits": {
-      "identity": {
-        "title": "장기 정체성",
-        "description": "정체성, 사용자 정보, Skills와 메모리는 동료별로 분리됩니다."
-      },
-      "events": {
-        "title": "작업 이벤트 자동 수신",
-        "description": "다른 작업이 완료, 실패 또는 결정 대기 상태가 되면 구독 동료에게 영구 이벤트가 전달됩니다."
-      },
-      "automation": {
-        "title": "자동화와 협업",
-        "description": "일정, 동료 간 위임, 프로젝트와 worktree가 장기 동료에 연결됩니다."
-      },
-      "channels": {
-        "title": "필요할 때 채널 연결",
-        "description": "먼저 로컬 동료를 만들고 Telegram, Feishu, Slack 등을 나중에 연결합니다."
-      }
-    },
+    "emptyDescription": "마음 맞는 친구를 고르거나, 직접 만들어 보세요.",
     "noDescription": "설명 없음",
     "sessions": "개 작업",
     "sessionsTitle": "동료 작업",
@@ -6200,7 +6183,7 @@
       "noteNamespace": "메모 공간",
       "create": "Routine 만들기",
       "creating": "만드는 중…",
-      "empty": "Routine이 없습니다. Routine은 이 동료가 스스로 수행하는 하나의 지시입니다.",
+      "empty": "아직 일정이 없습니다. 매일 / 매주 무엇을 할지 한마디로 알려 주세요.",
       "loading": "자동화 불러오는 중…",
       "refresh": "자동화 새로고침",
       "runNow": "지금 실행",
@@ -6316,8 +6299,6 @@
     "send": "메시지 보내기",
     "channelsTitle": "메시지 채널",
     "channelsDescription": "동료의 정체성과 로컬 채팅을 바꾸지 않고 Telegram, Feishu, Slack 등의 메시지 입구를 연결합니다.",
-    "channelMounted": "연결됨",
-    "channelMount": "연결",
     "channelLocalOwned": "로컬 동료 기본 진입점",
     "channelLocalAdapter": "로컬 어댑터",
     "channelServerRelay": "서버 릴레이",
@@ -6482,7 +6463,8 @@
       "join": "합류시키기",
       "joined": "이미 합류함",
       "subtitle": "마음 맞는 친구를 고르거나, 직접 만들어 보세요.",
-      "title": "파트너를 만나보세요"
+      "title": "파트너를 만나보세요",
+      "customAvatarLabel": "얼굴 고르기"
     },
     "chat": {
       "composerPlaceholder": "{{name}}에게 말 걸기…",
@@ -6495,7 +6477,7 @@
         "banner": "새 메시지 배너",
         "sound": "소리",
         "quietHours": "방해 금지 시간",
-        "footnote": "총괄 조정자 같은 파트너는 스스로 작업 상황을 지켜봅니다 — 그건 그 친구의 능력이지 여기서 켜고 끄는 설정이 아니에요."
+        "footnote": "「총괄 조정자」 같은 동료는 스스로 작업 상황을 지켜봅니다 — 그건 그 친구의 능력이지 여기서 켜고 끄는 설정이 아니에요."
       },
       "portability": {
         "importTitle": "파트너 가져오기",
@@ -6513,9 +6495,13 @@
       "can": "할 수 있는 일",
       "understand": "파악하고 있는 폴더",
       "schedule": "일정",
-      "advanced": "고급"
+      "advanced": "고급",
+      "whoDescription": "성격을 직접 쓸 필요 없어요 — 몇 번 고르기만 하면 됩니다.",
+      "canDescription": "켜지 않아도 돼요 — 태어날 때부터 할 줄 압니다.",
+      "understandDescription": "폴더 하나만 주면 당신의 프로젝트를 이해합니다.",
+      "scheduleDescription": "시간이 되면 알아서 합니다. 당신이 없어도 돼요."
     },
-    "advancedLinkLabel": "고급(모델, 상세 정보, 내보내기) ›",
+    "advancedLinkLabel": "고급（모델, 상세 정보, 내보내기）",
     "persona": {
       "title": "성격 조정",
       "description": "세 가지만 고르면 말투가 바뀝니다.",
@@ -6563,11 +6549,22 @@
       "summaryCallBoss": "사장님이라고 불러요",
       "summaryCallCustom": "{{name}}(이)라고 불러요",
       "rawToggle": "고급: 직접 작성",
-      "rawPlaceholder": "권장하지 않아요 — 위 선택만으로 충분합니다. 꼭 쓰고 싶다면 여기에."
+      "rawPlaceholder": "권장하지 않아요 — 위 선택만으로 충분합니다. 꼭 쓰고 싶다면 여기에.",
+      "ack": {
+        "concise": "알겠어요. 앞으로는 이렇게 말할게요.",
+        "conciseBoss": "알겠어요, 보스. 앞으로는 이렇게 말할게요.",
+        "conciseCalled": "알겠어요, {{call}}. 앞으로는 이렇게 말할게요.",
+        "lively": "오케이～ 앞으로는 이런 톤으로 갈게요, 금방 익숙해질 거예요 😉",
+        "livelyBoss": "오케이～ 보스, 앞으로는 이런 톤으로 갈게요, 금방 익숙해질 거예요 😉",
+        "livelyCalled": "오케이～ {{call}}, 앞으로는 이런 톤으로 갈게요, 금방 익숙해질 거예요 😉",
+        "steady": "알겠습니다. 앞으로는 이렇게 말할게요 — 먼저 설명하고, 그다음에 움직입니다.",
+        "steadyBoss": "알겠습니다, 보스. 앞으로는 이렇게 말할게요 — 먼저 설명하고, 그다음에 움직입니다.",
+        "steadyCalled": "알겠습니다, {{call}}. 앞으로는 이렇게 말할게요 — 먼저 설명하고, 그다음에 움직입니다."
+      }
     },
     "memoryList": {
       "title": "기억하고 있는 것",
-      "empty": "기억을 조금씩 쌓아가는 중이에요.",
+      "empty": "아직 기억한 게 없어요 — 조금 더 이야기하면 쌓입니다.",
       "clearAll": "기억 지우기",
       "clearing": "지우는 중…",
       "clearTitle": "기억 지우기",
@@ -6576,11 +6573,13 @@
       "deleteTitle": "이 기억 삭제",
       "deleteDescription": "\"{{title}}\"을(를) 삭제할까요? 되돌릴 수 없어요.",
       "deleteConfirm": "삭제",
-      "deleteAria": "\"{{title}}\" 삭제"
+      "deleteAria": "\"{{title}}\" 삭제",
+      "footnote": "스스로 여기에 적어 둡니다. 언제든 지울 수 있어요."
     },
     "learned": {
       "title": "배운 것",
-      "empty": "해온 일들에서 조금씩 실력을 쌓아갈 거예요."
+      "empty": "아직 익힌 게 없어요 — 몇 가지 맡겨 보세요.",
+      "footnote": "해온 일에서 스스로 실력을 쌓아요. 많이 쓸수록 손에 익습니다."
     },
     "growth": {
       "rememberedOne": "기억했어요: {{title}}",
@@ -6601,12 +6600,14 @@
         "schedule": "⏰ 예약 작업",
         "collab": "🤝 동료와 협업"
       },
-      "imBlocked": "한 팀원은 IM을 하나만 연결할 수 있어요 — 먼저 {{channel}} 연결을 끊어주세요"
+      "imBlocked": "한 팀원은 IM을 하나만 연결할 수 있어요 — 먼저 {{channel}} 연결을 끊어주세요",
+      "footnote": "연결한 뒤에는 따로 설정할 게 없어요 — 쓰는 법은 스스로 압니다."
     },
     "folders": {
       "addButton": "+ 폴더 추가하기",
       "adding": "추가하는 중…",
-      "remove": "제거"
+      "remove": "제거",
+      "footnote": "폴더 안의 내용을 스스로 읽고, 대화에서 바로 씁니다."
     },
     "advancedIdentity": {
       "title": "설명과 배경 정보"
@@ -6634,7 +6635,13 @@
       "report": {
         "done": "{{name}} · {{duration}} · 완료",
         "failed": "{{name}} · {{duration}} · 실패",
-        "stopped": "{{name}} · {{duration}} · 중지"
+        "stopped": "{{name}} · {{duration}} · 중지",
+        "delivered": "{{name}} · {{duration}} · {{count}}건 전달"
+      },
+      "duration": {
+        "seconds": "{{n}}초",
+        "minutes": "{{n}}분",
+        "hoursMinutes": "{{h}}시간 {{m}}분"
       }
     },
     "artifacts": {
@@ -6659,7 +6666,18 @@
         "minutes": "{{n}}분 전",
         "hours": "{{n}}시간 전",
         "days": "{{n}}일 전"
-      }
+      },
+      "subtitleNamed": "{{name}}이(가) 만든 것",
+      "deliveredBy": "{{name}} 전달"
+    },
+    "channelConnect": "연결",
+    "channelDisconnect": "연결 해제",
+    "joined": {
+      "today": "오늘 합류",
+      "yesterday": "어제 합류",
+      "days": "{{n}}일 전 합류",
+      "months": "{{n}}개월 전 합류",
+      "years": "{{n}}년 전 합류"
     }
   },
   "commonUi": {

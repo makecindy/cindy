@@ -851,11 +851,14 @@ export function BotAutomationSettings({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
+            {/* 主路径上这一块叫「TA 的日程」,不叫「伙伴自动化」——它跟「TA 是谁 /
+                TA 会的 / TA 懂的」是同一排的第四块,得说同一种话。「自动化」「Routine」
+                这类实现词留在高级里。 */}
             <CalendarClock size={16} />
-            {t('bots.automations.title')}
+            {t('bots.settingsBlocks.schedule')}
           </div>
           <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-            {t('bots.automations.description')}
+            {t('bots.settingsBlocks.scheduleDescription')}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">

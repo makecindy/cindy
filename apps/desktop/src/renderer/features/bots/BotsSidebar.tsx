@@ -1,18 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Archive,
-  Bot,
-  CircleAlert,
-  LoaderCircle,
-  PauseCircle,
-  Plus,
-} from 'lucide-react';
+import { Archive, Bot, Plus } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
-import type { BotHealthStatus } from '../../../shared/botLifecycle';
 import type { BotInboxItemView } from '../../../shared/botSessionEvents';
 import { BotAvatar } from './BotAvatar';
 import {
@@ -21,15 +14,19 @@ import {
   formatBotUnreadBadge,
 } from './botListDisplay';
 import { subscribeBotReadState } from './botReadState';
-import {
-  getBotHealth,
-  refreshBotProfiles,
-  useBotProfiles,
-  useBotUnreadCounts,
-} from './botStore';
+import { refreshBotProfiles, useBotProfiles, useBotUnreadCounts } from './botStore';
 
 /** Debounce for message-driven refreshes: one turn writes many rows. */
 const MESSAGE_REFRESH_DEBOUNCE_MS = 800;
+
+/**
+ * 未读药丸。用的是登记在 DESIGN.md §10 的窄作用域 token `--bot-unread-bg` /
+ * `--bot-unread-fg`（双模式同值 #417CDD + 白字），不是反相 CTA：白底药丸落在选中行
+ * 的浅灰选中态上会和选中态互相抢焦点，而「有新消息」在 IM 里本来就有一个所有人都
+ * 认得的颜色。这个 token 只服务伙伴列表的未读徽标与待办点，不外溢到别的地方。
+ */
+const UNREAD_BADGE_CLASS =
+  'flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-11 font-medium leading-none text-[var(--bot-unread-fg)]';
 
 function BotsSidebarContent() {
   const { t } = useTranslation();
@@ -40,27 +37,31 @@ function BotsSidebarContent() {
   const activeBots = bots.filter((bot) => bot.status !== 'archived');
   const archivedBots = bots.filter((bot) => bot.status === 'archived');
   const collapsed = useSidebarCollapsedState();
-  const [healthByBotId, setHealthByBotId] = useState<Record<string, BotHealthStatus>>({});
   const [attentionByBotId, setAttentionByBotId] = useState<Record<string, number>>({});
   const now = Date.now();
 
-  useEffect(() => {
-    let cancelled = false;
-    const visible = [...activeBots, ...archivedBots];
-    void Promise.allSettled(
-      visible.map(async (bot) => [bot.id, (await getBotHealth(bot.id)).status] as const),
-    ).then((results) => {
-      if (cancelled) return;
-      const next: Record<string, BotHealthStatus> = {};
-      for (const result of results) {
-        if (result.status === 'fulfilled') next[result.value[0]] = result.value[1];
-      }
-      setHealthByBotId(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [bots]);
+  /*
+    「正在输入…」的信号来源：灵动岛活动镜像(state/agentIslandActivity)。
+    **没有新增 IPC** —— 主进程本来就在广播这份 per-session 快照，任务列表的
+    SessionCard 用的也是它，这里只是多一个读者。
+
+    为什么选它而不是 makerChatStore 的全局 running 快照：
+     - 它是全量推送，主进程持有状态机，窗口在一次 turn 中途冷启动也补得回来；
+       makerChatStore 的分片要等该会话**下一个**事件到达才materialize，长工具
+       调用期间会是空的。
+     - 它与灵动岛开关无关，非 macOS 上服务也以 headless 方式跑着照常广播
+       (main/agent-island/service.ts 的 publish 两条分支都会 emit)。
+     - 依赖轻：只吃 shared 里的类型，不用把整个聊天 store 拖进侧栏。
+
+    刻意**不**挂 useSessionRunningStatus —— 那个 hook 还负责完成/出错角标与系统
+    通知的状态机，在这里再挂一份会把那些副作用发两遍。
+  */
+  const islandActivity = useAgentIslandActivityMap();
+  const isBotTyping = (canonicalSessionId: string | undefined): boolean =>
+    !!canonicalSessionId && islandActivity.get(canonicalSessionId)?.phase === 'running';
+
+  // 曾经这里还按 bot 逐个拉 `getBotHealth` 只为在行尾画一个状态图标。图标下线之后
+  // 这一轮 N 次 IPC 也一起下线——列表不再为一个不显示的东西查询。
 
   useEffect(() => {
     let cancelled = false;
@@ -157,7 +158,7 @@ function BotsSidebarContent() {
         </button>
         <button
           type="button"
-          onClick={() => navigate('/bots?add=1')}
+          onClick={() => navigate('/bots/roster')}
           className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover"
           aria-label={t('bots.add')}
         >
@@ -178,7 +179,7 @@ function BotsSidebarContent() {
             它一年用一次,不该常年占着这行最贵的位置。 */}
         <button
           type="button"
-          onClick={() => navigate('/bots?add=1')}
+          onClick={() => navigate('/bots/roster')}
           className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--sidebar-nav-text)]"
           aria-label={t('bots.add')}
         >
@@ -190,7 +191,7 @@ function BotsSidebarContent() {
         {activeBots.length === 0 && archivedBots.length === 0 ? (
           <button
             type="button"
-            onClick={() => navigate('/bots?add=1')}
+            onClick={() => navigate('/bots/roster')}
             className="mx-1 flex w-[calc(100%-8px)] flex-col items-start gap-1 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
           >
             <span className="font-medium text-[var(--text-primary)]">{t('bots.emptyTitle')}</span>
@@ -200,12 +201,18 @@ function BotsSidebarContent() {
           <div className="flex flex-col gap-1">
             {activeBots.map((bot) => {
               const selected = bot.id === botId;
-              const health = healthByBotId[bot.id];
               const attention = attentionByBotId[bot.id] ?? 0;
               const unread = unreadByBotId[bot.id] ?? 0;
               const subtitle = botListSubtitle(bot);
-              const subtitleText =
-                subtitle.kind === 'placeholder' ? t('bots.list.startChat') : subtitle.text;
+              // TA 正在回话时，第二行临时让位给「正在输入…」——聊天列表里这一行
+              // 回答的是「TA 现在怎么样」，进行中比上一句说过什么更要紧。回合一
+              // 结束就落回最新消息预览，不留痕。
+              const typing = isBotTyping(bot.canonicalSessionId);
+              const subtitleText = typing
+                ? t('bots.list.typing')
+                : subtitle.kind === 'placeholder'
+                  ? t('bots.list.startChat')
+                  : subtitle.text;
               const timestamp = formatBotListTimestamp(bot.lastMessageAt, now);
               // The selected pill is a light/dark gray fill, not an inverse one,
               // so muted text on it would sit at a far lower contrast than on
@@ -227,12 +234,14 @@ function BotsSidebarContent() {
                     onClick={() => navigate(`/bots/${bot.id}`)}
                     className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-3 py-2 text-left"
                   >
-                    <BotAvatar bot={bot} size="sm" />
+                    {/* 40px。28px 会让两行式行高塌成一行的观感——头像撑不住两行文字,
+                        整行读起来像一条被拉高的单行列表。 */}
+                    <BotAvatar bot={bot} size="md" />
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-2">
                         <span
                           className={cn(
-                            'min-w-0 flex-1 truncate text-13 leading-5',
+                            'min-w-0 flex-1 truncate text-14 leading-5',
                             unread > 0 ? 'font-medium' : 'font-normal',
                           )}
                           title={bot.name}
@@ -242,16 +251,25 @@ function BotsSidebarContent() {
                         {/* 产品裁决 2026-08-18:侧栏行不挂「放手做」⚠。伙伴列表是
                             聊天列表,不是权限看板;风险表达留在设置里的能力陈列。 */}
                         {timestamp ? (
-                          <span className={cn('shrink-0 text-10', mutedClass)}>
+                          <span className={cn('shrink-0 text-11', mutedClass)}>
                             {timestamp}
                           </span>
                         ) : null}
                       </span>
                       <span className="flex items-center gap-2">
+                        {/* 未读时不加 mutedClass:第二行跟着提到一级色,「有新消息」在
+                            一屏里靠亮度就能被扫到,不用先读数字。 */}
                         <span
                           className={cn(
-                            'min-w-0 flex-1 truncate text-11 leading-4',
-                            unread > 0 ? 'font-medium' : mutedClass,
+                            'min-w-0 flex-1 truncate text-12 leading-4',
+                            // 「正在输入…」是个过程说明,不是消息内容:斜体 + 三级色,
+                            // 哪怕这一行有未读也不跟着提到一级——否则一个瞬时状态
+                            // 会比真正的新消息还抢眼。
+                            typing
+                              ? cn('italic', mutedClass)
+                              : unread > 0
+                                ? 'font-medium'
+                                : mutedClass,
                           )}
                           title={subtitleText}
                         >
@@ -259,7 +277,7 @@ function BotsSidebarContent() {
                         </span>
                         {unread > 0 ? (
                           <span
-                            className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium leading-none text-[var(--accent-pure-cta-fg)]"
+                            className={UNREAD_BADGE_CLASS}
                             aria-label={t('bots.list.unread', { count: unread })}
                           >
                             {formatBotUnreadBadge(unread)}
@@ -277,37 +295,22 @@ function BotsSidebarContent() {
                     {attention > 0 ? (
                       unread > 0 ? (
                         <span
-                          className="h-1.5 w-1.5 rounded-full bg-[var(--accent-cta-bg)]"
+                          className="h-1.5 w-1.5 rounded-full bg-[var(--bot-unread-bg)]"
                           aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
                         />
                       ) : (
                         <span
-                          className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[var(--accent-cta-bg)] px-1 text-10 font-medium leading-none text-[var(--accent-pure-cta-fg)]"
+                          className={UNREAD_BADGE_CLASS}
                           aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
                         >
                           {formatBotUnreadBadge(attention)}
                         </span>
                       )
                     ) : null}
-                    {health === 'recovering' ? (
-                      <LoaderCircle
-                        size={13}
-                        className="shrink-0 animate-spin motion-reduce:animate-none text-[var(--text-secondary)]"
-                        aria-label={t('bots.lifecycle.healthStatus.recovering')}
-                      />
-                    ) : health === 'attention' ? (
-                      <CircleAlert
-                        size={13}
-                        className="shrink-0 text-[var(--text-danger)]"
-                        aria-label={t('bots.lifecycle.healthStatus.attention')}
-                      />
-                    ) : health === 'paused' ? (
-                      <PauseCircle
-                        size={13}
-                        className="shrink-0 text-[var(--text-tertiary)]"
-                        aria-label={t('bots.lifecycle.healthStatus.paused')}
-                      />
-                    ) : null}
+                    {/* 行内不再挂 health 图标(recovering / attention / paused)。一行
+                        右侧同时出现「未读数 + 待办点 + 状态图标」时,三处右对齐元素
+                        互相抢注意力,而这一行本来只该回答「有没有新消息」。异常态仍有
+                        出口:待办点(收件箱)与 TA 的设置页「健康与历史」。 */}
                     {/* 行内不再挂齿轮:进设置的入口收敛到对话顶栏(伙伴名字 / 头像,
                         以及顶栏右侧的齿轮)。一个功能一个入口。 */}
                   </span>

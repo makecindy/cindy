@@ -2,16 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowLeft,
-  BellRing,
   Bot,
   Check,
   ChevronDown,
   ChevronUp,
-  Clock3,
   Download,
   FolderGit2,
-  MessageCircleMore,
-  Plus,
   RefreshCcw,
   Settings2,
   Sparkles,
@@ -20,7 +16,6 @@ import {
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import * as sessionService from '@/lib/sessionService';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
@@ -49,7 +44,7 @@ import {
   type BotImMigrationRecord,
   type BotProfile,
 } from './botStore';
-import { AddBotDialog } from './AddBotDialog';
+import { BotRosterView } from './BotRosterView';
 import { BotAvatar, BotAvatarPicker } from './BotAvatar';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
 import { BotCapabilityChips } from './BotCapabilityChips';
@@ -64,6 +59,7 @@ import { BotFolderCards } from './BotFolderCards';
 import { BotGrowthLists } from './BotGrowthLists';
 import { BotPersonaWizard, personaSummaryText } from './BotPersonaWizard';
 import { extractPersonaFromIdentitySource } from './botPersona';
+import { rememberPendingBotPersonaAck } from './botPersonaAck';
 import {
   resolveBotSettingsAnchor,
   resolveBotSettingsHighlight,
@@ -78,6 +74,32 @@ const BOT_SETTINGS_HIGHLIGHT_MS = 2400;
 
 function channelLabel(channel: BotChannel): string {
   return channel === 'local' ? 'Local Bot' : channel[0].toUpperCase() + channel.slice(1);
+}
+
+/** 区块标题下那句白话（`block-d`）：一个档位、一个颜色，四块保持一致。 */
+const BLOCK_DESCRIPTION_CLASS = 'mt-1 text-12 leading-5 text-[var(--text-secondary)]';
+
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * 「今天加入 / 3 天前加入」。
+ *
+ * 口语相对时长，不是「加入 N 天」——这一行是给「TA 跟了我多久」一个人类回答，不是
+ * 一个计数。档位与 `bots.artifacts.time.*` 同一口径（刚刚 / N 天前 / …），只是这里
+ * 最细到天：一个伙伴是几分钟前加入的没有意义。拿不到 createdAt 就不显示，不编。
+ */
+export function botJoinedRelativeKey(
+  createdAt: number,
+  now: number,
+): { key: string; n: number } | null {
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return null;
+  const days = Math.floor((now - createdAt) / DAY_MS);
+  if (days <= 0) return { key: 'bots.joined.today', n: 0 };
+  if (days === 1) return { key: 'bots.joined.yesterday', n: 1 };
+  if (days < 30) return { key: 'bots.joined.days', n: days };
+  const months = Math.floor(days / 30);
+  if (months < 12) return { key: 'bots.joined.months', n: months };
+  return { key: 'bots.joined.years', n: Math.floor(days / 365) };
 }
 
 /** Exported for unit tests covering the settings nav / deep-link / tab-grouping behavior. */
@@ -140,6 +162,11 @@ export function BotSettings({
     anchorRefs.current[anchor]?.scrollIntoView({ block: 'start' });
   }, [anchor, advancedOpen]);
   const [personaOpen, setPersonaOpen] = useState(false);
+  /**
+   * 「刚存完性格，等着回对话」的标记。值用时间戳而不是 boolean：连着调两次性格
+   * 也各自能触发一次导航（boolean 会因为值没变而不重跑 effect）。
+   */
+  const [personaSavedAt, setPersonaSavedAt] = useState<number | null>(null);
   const [name, setName] = useState(bot.name);
   const [description, setDescription] = useState(bot.description);
   const [identitySource, setIdentitySource] = useState(bot.identitySource ?? '');
@@ -304,6 +331,21 @@ export function BotSettings({
     });
   };
 
+  /*
+    存完性格回对话。放在 effect 里跑，是为了让这一步发生在「新 identitySource 已经
+    进了 autosave 载荷 ref」之后 —— 在 onSave 里同步 flush 会保存到旧值。
+    handleBack 而不是直接 onBack：保存失败要留在页面，profile 需要重新应用时
+    那张确认框也不能被跳过。
+  */
+  useEffect(() => {
+    if (personaSavedAt === null) return;
+    setPersonaSavedAt(null);
+    handleBack();
+    // handleBack 每次渲染都是新函数，挂进依赖会让这个 effect 变成每渲染都跑；
+    // 触发条件只有 personaSavedAt 这一个。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personaSavedAt]);
+
   const renewAndApplyProfile = () => {
     setProfileApplyError(null);
     void onRenew().then((renewed) => {
@@ -437,6 +479,11 @@ export function BotSettings({
       setChannelBusy(null);
     }
   };
+  const joined = botJoinedRelativeKey(bot.createdAt, Date.now());
+  const headerMeta = [description.trim(), joined ? t(joined.key, { n: joined.n }) : '']
+    .filter(Boolean)
+    .join(' · ');
+
   if (bot.status === 'archived') {
     return (
       <main className="h-full overflow-y-auto bg-[var(--surface)] px-8 py-8" role="main">
@@ -469,7 +516,14 @@ export function BotSettings({
   }
   return (
     <main className="flex h-full flex-col overflow-hidden bg-[var(--surface)]" role="main">
+      {/*
+        页头与下面的卡片列必须共用同一条左边界。页头此前是整宽 px-8、卡片列是
+        mx-auto max-w-3xl —— 窗口一宽，「返回对话 / 头像 / 名字」贴在最左，卡片却
+        居中，两条左边界越拉越远，整页读起来像两栏不相干的东西拼在一起。这里给
+        页头套上与内容区同宽同居中的容器。
+      */}
       <div className="shrink-0 px-8 pb-5 pt-8">
+        <div className="mx-auto w-full max-w-3xl">
         <button
           type="button"
           onClick={handleBack}
@@ -512,6 +566,14 @@ export function BotSettings({
                 </span>
               ) : null}
             </div>
+            {/*
+              「{TA 的定位} · 今天加入」。这一行不解释功能,它回答的是「这是谁、跟了
+              我多久」——设置页顶上除了名字之外唯一该说的话。定位优先用用户自己写的
+              描述,没有就退回到这个伙伴擅长什么(描述是可空字段,不为它造一句)。
+            */}
+            {headerMeta ? (
+              <p className="mt-1 text-12 leading-5 text-[var(--text-tertiary)]">{headerMeta}</p>
+            ) : null}
             {autosave.status === 'error' ? (
               <p
                 className="mt-1 flex flex-wrap items-center gap-2 text-11 text-[var(--text-danger)]"
@@ -533,6 +595,7 @@ export function BotSettings({
             ) : null}
           </div>
         </header>
+        </div>
       </div>
 
       <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
@@ -548,6 +611,9 @@ export function BotSettings({
               <UserRound size={16} />
               {t('bots.settingsBlocks.who')}
             </div>
+            {/* 每块标题下面一句白话。四个区块的标题都是「TA 怎样怎样」,不说清楚这
+                一块要用户做什么,人会以为四块都得填一遍。 */}
+            <p className={BLOCK_DESCRIPTION_CLASS}>{t('bots.settingsBlocks.whoDescription')}</p>
             <div className="mt-4 flex items-center gap-3">
               <BotAvatarPicker
                 name={name}
@@ -570,9 +636,9 @@ export function BotSettings({
                   aria-label={t('bots.nameLabel')}
                   className="h-9 w-full rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
                 />
-                <p className="mt-1.5 text-11 text-[var(--text-tertiary)]">
-                  {t('bots.channelLabel')}: {channelLabel(bot.channel)}
-                </p>
+                {/* 「消息入口: Local Bot」下沉到高级。这张卡回答的是「TA 是谁」,
+                    而 Local Bot 是实现词——它说的是这个 Profile 挂在哪条投递链上,
+                    不是这个伙伴的身份。 */}
               </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--surface-chip)] px-3 py-2.5">
@@ -627,6 +693,7 @@ export function BotSettings({
               <Sparkles size={16} />
               {t('bots.settingsBlocks.can')}
             </div>
+            <p className={BLOCK_DESCRIPTION_CLASS}>{t('bots.settingsBlocks.canDescription')}</p>
             <div className="mt-4">
               <BotAbilityWall
                 connections={visibleChannelConnections}
@@ -651,6 +718,9 @@ export function BotSettings({
               <FolderGit2 size={16} />
               {t('bots.settingsBlocks.understand')}
             </div>
+            <p className={BLOCK_DESCRIPTION_CLASS}>
+              {t('bots.settingsBlocks.understandDescription')}
+            </p>
             <div className="mt-4">
               <BotFolderCards botId={bot.id} bindings={bot.projectBindings ?? []} />
             </div>
@@ -687,6 +757,8 @@ export function BotSettings({
               aria-expanded={advancedOpen}
               className="inline-flex items-center gap-1 text-12 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
+              {/* 一个方向指示就够。文案里原来还留着一个「›」,和这个 chevron 指的方向
+                  不一样,两个箭头打架。 */}
               {advancedOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               {t('bots.advancedLinkLabel')}
             </button>
@@ -698,6 +770,9 @@ export function BotSettings({
                     <Settings2 size={16} />
                     {t('bots.advancedIdentity.title')}
                   </div>
+                  <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+                    {t('bots.channelLabel')}: {channelLabel(bot.channel)}
+                  </p>
                   <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
                     {t('bots.descriptionLabel')}
                     <textarea
@@ -918,8 +993,23 @@ export function BotSettings({
         identitySource={identitySource}
         onOpenChange={setPersonaOpen}
         onSave={(next) => {
+          /*
+            调完性格要能立刻**听见**新口气，所以这里做两件事：
+            1) 人格真的变了才寄存一条确认消息(botPersonaAck，幂等靠 clientId)；
+            2) 回到 TA 的对话 —— 「调整性格」是从对话里点进来的，改完停在设置页
+               等于让用户自己再点一次返回才看得到效果。
+
+            导航**不能**在这里同步做：autosave 的载荷是每次渲染写进 ref 的，
+            此刻 setIdentitySource 还没提交，同步 flush 会把**旧的** identitySource
+            当成要保存的内容发出去 —— 性格白调了。改成置一个标记，等新草稿落进
+            ref 之后的那次渲染再走 handleBack。
+          */
+          const previous = extractPersonaFromIdentitySource(identitySource);
+          const parsed = extractPersonaFromIdentitySource(next);
           setIdentitySource(next);
           autosave.onEdit('instant');
+          if (parsed) rememberPendingBotPersonaAck(bot.id, previous, parsed);
+          setPersonaSavedAt(Date.now());
         }}
       />
 
@@ -1109,10 +1199,11 @@ export function BotsHomeView() {
   const creatingBotRef = useRef<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [createSessionError, setCreateSessionError] = useState<unknown>(null);
-  const [addOpen, setAddOpen] = useState(searchParams.get('add') === '1');
   const importingRef = useRef(false);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const selectedBot = useMemo(() => bots.find((bot) => bot.id === botId) ?? null, [botId, bots]);
+  // `?add=1` 是阵容还在弹模态那阵子的入口。阵容页面化之后它只剩兼容职责:
+  // 老书签、老深链一律送到 /bots/roster,不再在这里开一层浮层。
   const addRequested = searchParams.get('add') === '1';
   const settingsOpen = searchParams.get('settings') === '1';
 
@@ -1164,6 +1255,19 @@ export function BotsHomeView() {
   );
 
   useEffect(() => {
+    if (!addRequested) return;
+    navigate('/bots/roster', { replace: true });
+  }, [addRequested, navigate]);
+
+  useEffect(() => {
+    if (addRequested) return;
+    // 已经有伙伴，但 URL 指着一个不存在的（刚被删掉 / 手改过的链接）：回伙伴总览，
+    // 由下面那条重定向落到第一个伙伴。以前这里会停在一页空态，现在会停在 spinner
+    // ——两个都不是答案，直接把人送回有东西的地方。
+    if (botId && bots.length > 0 && !selectedBot) {
+      navigate('/bots', { replace: true });
+      return;
+    }
     if (!botId && bots[0]) {
       const target = bots.find((bot) => bot.status !== 'archived') ?? bots[0];
       const query = searchParams.toString();
@@ -1173,7 +1277,7 @@ export function BotsHomeView() {
           : query;
       navigate(`/bots/${target.id}${nextQuery ? `?${nextQuery}` : ''}`, { replace: true });
     }
-  }, [botId, bots, navigate, searchParams]);
+  }, [addRequested, botId, bots, navigate, searchParams, selectedBot]);
 
   // 顶栏注入区:选中伙伴时是「头像 + 名字」,点它进 TA 的设置(与对话顶栏同一入口
   // 语义);没有选中伙伴才退回功能名。
@@ -1199,10 +1303,6 @@ export function BotsHomeView() {
     [navigate, selectedBot, t],
   );
   useRegisterContentHeader(headerContent);
-
-  useEffect(() => {
-    if (searchParams.get('add') === '1') setAddOpen(true);
-  }, [searchParams]);
 
   useEffect(() => {
     if (searchParams.get('import') !== '1' || importingRef.current) return;
@@ -1236,7 +1336,7 @@ export function BotsHomeView() {
   useEffect(() => {
     if (
       !selectedBot ||
-      shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addOpen, addRequested })
+      shouldDeferCanonicalBotSessionNavigation({ settingsOpen, addRequested })
     )
       return;
     if (selectedBot.status !== 'active') {
@@ -1324,7 +1424,6 @@ export function BotsHomeView() {
       cancelled = true;
     };
   }, [
-    addOpen,
     addRequested,
     createCanonicalSession,
     selectedBot,
@@ -1333,86 +1432,24 @@ export function BotsHomeView() {
     navigate,
   ]);
 
-  const openAdd = () => {
-    setAddOpen(true);
-    setSearchParams((current) => {
-      current.set('add', '1');
-      return current;
-    });
-  };
-  const closeAdd = (open: boolean) => {
-    setAddOpen(open);
-    if (!open && searchParams.has('add'))
-      setSearchParams(
-        (current) => {
-          current.delete('add');
-          return current;
-        },
-        { replace: true },
-      );
-  };
-  const handleCreated = (bot: BotProfile) => navigate(`/bots/${bot.id}`);
-  // 「已经有伙伴文件？导入一个」——复用既有 ?import=1 流程,不另开一条导入路径。
-  const requestImport = useCallback(() => {
-    setSearchParams((current) => {
-      current.delete('add');
-      current.set('import', '1');
-      return current;
-    });
-  }, [setSearchParams]);
-
   if (!selectedBot) {
+    // 一个伙伴都没有 → 主区直接就是阵容页,没有中间那一层。
+    //
+    // 这里曾经是另一套「还没有伙伴」推销页:Bot 图标 + 四张功能卖点卡（长期身份 /
+    // 自动接收任务事件 / 自动化与协同 / 按需挂载消息通道）+ 一个「添加伙伴」按钮,
+    // 点了才弹出阵容模态。它用产品内部术语介绍一个本来靠「挑一个合拍的」就能懂的
+    // 东西,还把定稿最重要的第一印象藏在两层之后。整页删除,不做兼容。
+    if (bots.length === 0) return <BotRosterView notice={importNotice} />;
+    // 有伙伴但 URL 还没落到具体一个(上面的重定向正在路上):安静地等,不要闪一页
+    // 阵容再跳走。
     return (
-      <main
-        className="h-full overflow-y-auto bg-[var(--surface)] px-4 py-6 sm:px-8 sm:py-8"
-        role="main"
-      >
-        <div className="mx-auto flex max-w-3xl flex-col items-center py-10 text-center sm:py-20">
-          <Bot size={34} className="text-[var(--text-tertiary)]" />
-          <h1 className="mt-5 text-24 font-medium text-[var(--text-primary)]">
-            {t('bots.emptyTitle')}
-          </h1>
-          <p className="mt-2 max-w-md text-13 leading-6 text-[var(--text-secondary)]">
-            {t('bots.emptyDescription')}
-          </p>
-          <div className="mt-6 grid w-full gap-3 text-left sm:grid-cols-2">
-            {(
-              [
-                [Sparkles, 'identity'],
-                [BellRing, 'events'],
-                [Clock3, 'automation'],
-                [MessageCircleMore, 'channels'],
-              ] as const
-            ).map(([Icon, key]) => (
-              <div
-                key={String(key)}
-                className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4"
-              >
-                <Icon size={16} className="text-[var(--text-secondary)]" />
-                <p className="mt-3 text-13 font-medium text-[var(--text-primary)]">
-                  {t(`bots.emptyBenefits.${key}.title`)}
-                </p>
-                <p className="mt-1 text-11 leading-5 text-[var(--text-secondary)]">
-                  {t(`bots.emptyBenefits.${key}.description`)}
-                </p>
-              </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={openAdd}
-            className="mt-5 inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--accent-cta-bg)] px-3.5 text-12 font-medium text-[var(--accent-pure-cta-fg)] hover:opacity-90"
-          >
-            <Plus size={15} />
-            {t('bots.add')}
-          </button>
-        </div>
-        <AddBotDialog
-        open={addOpen}
-        onOpenChange={closeAdd}
-        onCreated={handleCreated}
-        onImport={requestImport}
-      />
+      <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
+        <Spinner
+          size={20}
+          className="text-[var(--text-tertiary)]"
+          role="status"
+          aria-label={t('ccAgent.common.loading')}
+        />
       </main>
     );
   }
@@ -1449,40 +1486,26 @@ export function BotsHomeView() {
             );
           }}
         />
-        <AddBotDialog
-        open={addOpen}
-        onOpenChange={closeAdd}
-        onCreated={handleCreated}
-        onImport={requestImport}
-      />
       </>
     );
   }
 
   return (
-    <>
-      <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
-        {importNotice || (createSessionError && !isCreatingSession) ? (
-          <p className="max-w-lg px-6 text-center text-13 text-[var(--text-secondary)]">
-            {importNotice ?? t('ccAgent.draft.createSessionFailed')}
-          </p>
-        ) : (
-          // Opening a Bot is a hand-off to its canonical chat, not a page of its
-          // own: show a quiet spinner instead of full-screen "loading" text.
-          <Spinner
-            size={20}
-            className="text-[var(--text-tertiary)]"
-            role="status"
-            aria-label={t('ccAgent.common.loading')}
-          />
-        )}
-      </main>
-      <AddBotDialog
-        open={addOpen}
-        onOpenChange={closeAdd}
-        onCreated={handleCreated}
-        onImport={requestImport}
-      />
-    </>
+    <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
+      {importNotice || (createSessionError && !isCreatingSession) ? (
+        <p className="max-w-lg px-6 text-center text-13 text-[var(--text-secondary)]">
+          {importNotice ?? t('ccAgent.draft.createSessionFailed')}
+        </p>
+      ) : (
+        // Opening a Bot is a hand-off to its canonical chat, not a page of its
+        // own: show a quiet spinner instead of full-screen "loading" text.
+        <Spinner
+          size={20}
+          className="text-[var(--text-tertiary)]"
+          role="status"
+          aria-label={t('ccAgent.common.loading')}
+        />
+      )}
+    </main>
   );
 }

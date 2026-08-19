@@ -160,11 +160,56 @@ describe('BotCollaborationCard', () => {
       fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
     });
 
-    expect(interjectBotDelegation).toHaveBeenCalledWith(SESSION_ID, DELEGATION_ID, '怎么样了？');
+    // 第 4 个参数是幂等键:重放 / 双击 / 重挂载都落到同一个 clientId 上,对方只被
+    // 真的催一次。值由 renderer 生成,只校验它存在且非空。
+    expect(interjectBotDelegation).toHaveBeenCalledTimes(1);
+    const [callerSessionId, delegationId, text, idempotencyKey] =
+      interjectBotDelegation.mock.calls[0] as [string, string, string, string];
+    expect([callerSessionId, delegationId, text]).toEqual([
+      SESSION_ID,
+      DELEGATION_ID,
+      '怎么样了？',
+    ]);
+    expect(typeof idempotencyKey).toBe('string');
+    expect(idempotencyKey.length).toBeGreaterThan(0);
     // 送出后收起输入层，避免同一句话被连点两次。
     await waitFor(() =>
       expect(screen.queryByPlaceholderText('bots.collab.nudgePlaceholder')).toBeNull(),
     );
+  });
+
+  it('reuses one idempotency key while the same nudge is being retried', async () => {
+    listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
+    interjectBotDelegation.mockResolvedValue({
+      ok: false as const,
+      errorCode: 'DISPATCH_FAILED',
+      message: 'nope',
+    });
+    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+    await waitFor(() => expect(screen.getByText('bots.collab.nudge')).toBeTruthy());
+    fireEvent.click(screen.getByText('bots.collab.nudge'));
+    const input = await screen.findByPlaceholderText('bots.collab.nudgePlaceholder');
+    fireEvent.change(input, { target: { value: '怎么样了？' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
+    });
+
+    // 同一句话重试,幂等键不变 —— 服务端按 clientId 去重,不会催两遍。
+    expect(interjectBotDelegation).toHaveBeenCalledTimes(2);
+    const first = interjectBotDelegation.mock.calls[0] as unknown[];
+    const second = interjectBotDelegation.mock.calls[1] as unknown[];
+    expect(second[3]).toBe(first[3]);
+
+    // 改了正文就必须换一个键,否则新的一句会被当成旧那句的重放而被静默吞掉。
+    fireEvent.change(input, { target: { value: '换个说法' } });
+    await act(async () => {
+      fireEvent.click(screen.getByText('bots.collab.nudgeSend'));
+    });
+    expect((interjectBotDelegation.mock.calls[2] as unknown[])[3]).not.toBe(first[3]);
   });
 
   it('stops the delegation through the existing cancel channel', async () => {
@@ -188,7 +233,10 @@ describe('BotCollaborationCard', () => {
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
     const report = await screen.findByText(/bots\.collab\.report\.done/);
-    expect(report.textContent).toContain('42s');
+    // 用时走 i18n 单位,不再是硬编码的 `42s` —— 中文界面里 `42s` 和「用时」并排
+    // 读起来是两套语言。
+    expect(report.textContent).toContain('bots.collab.duration.seconds:{\\"n\\":42}');
+    expect(report.textContent).not.toContain('42s');
     // 收拢后不再提供催 / 停：委派已经结束，按钮留着只会误导。
     expect(screen.queryByText('bots.collab.nudge')).toBeNull();
     expect(screen.queryByText('bots.collab.stop')).toBeNull();
@@ -213,7 +261,9 @@ describe('BotCollaborationCard', () => {
       ],
     });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    fireEvent.click(await screen.findByText(/bots\.collab\.report\.done/));
+    // 真交了东西的战报说的是「交付 N 件」,不是一句「完成」——后者没有回答
+    // 「TA 到底交出来什么」。
+    fireEvent.click(await screen.findByText(/bots\.collab\.report\.delivered/));
 
     const cards = screen.getAllByTestId('bot-artifact-card');
     expect(cards.map((card) => card.getAttribute('data-artifact-category'))).toEqual([
@@ -222,6 +272,30 @@ describe('BotCollaborationCard', () => {
     ]);
     // 原始协议地址不再直接示人。
     expect(screen.queryByText('cindy-media://blobs/hero.png')).toBeNull();
+  });
+
+  it('puts the result summary in the expanded report, above the original objective', async () => {
+    listBotDelegations.mockResolvedValue({
+      ok: true,
+      delegations: [
+        delegation('completed', {
+          completedAt: Date.now(),
+          resultSummary: '三条结论:先砍范围、再补测试、最后再谈发布日期。',
+        }),
+      ],
+    });
+    render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+    const report = await screen.findByText(/bots\.collab\.report\.done/);
+
+    // 折叠态只说结束了,结论要点开才看到 —— 但必须看得到:否则协作卡只留下
+    // 「当初想干什么」,用户拿不到结论就得跳去子任务。
+    expect(screen.queryByText(/三条结论/)).toBeNull();
+    fireEvent.click(report);
+    const summary = screen.getByText(/三条结论/);
+    const objective = screen.getByText('给伙伴协作做一版方案');
+    expect(summary).toBeTruthy();
+    // 先结论、后当初的目标。
+    expect(summary.compareDocumentPosition(objective) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('reports a stopped delegation as stopped, not as a failure', async () => {
