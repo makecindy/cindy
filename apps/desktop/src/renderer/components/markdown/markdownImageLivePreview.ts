@@ -25,6 +25,15 @@
  *        `</p>`
  *   `align="center"` on the <p> centers the rendered images; `width` /
  *   `height` attributes are applied (still capped at container width).
+ *   5. Obsidian wiki-link image embed, alone on its line:
+ *        `![[image.png]]`, `![[subfolder/image.png]]`, `![[image.png|300]]`,
+ *        `![[image.png|300x200]]`
+ *      The path may contain spaces and doesn't need angle brackets; `|300`
+ *      sets width (px), `|300x200` sets width x height. Plain `[[note]]`
+ *      (no leading `!`) is an Obsidian *note link*, not an image embed, and
+ *      is intentionally left as raw source — only `![[...]]` renders. A
+ *      non-numeric `|` suffix (Obsidian's alt-text alias form) is also left
+ *      as raw source; out of scope for this module.
  *
  *   Inline images mid-paragraph, images inside blockquotes / list items, and
  *   mixed image+text lines stay as raw source — replacing those needs inline
@@ -90,6 +99,13 @@ export const imageLocaleFacet = Facet.define<string, string>({
 // CommonMark (4+ would be an indented code block and must stay raw).
 const MD_IMAGE_LINE_RE =
   /^ {0,3}!\[([^\]]*)\]\(\s*(<[^<>]*>|[^)\s]+)(?:\s+("[^"]*"|'[^']*'))?\s*\)\s*$/;
+
+// Obsidian wiki-link image embed: path excludes `]` and `|` (so it stops at
+// the size suffix or the closing `]]`); size suffix is `|width` or
+// `|widthxheight`, digits only. A non-numeric `|` suffix (Obsidian's
+// alt-text alias) fails to match here and the line stays raw source.
+const WIKI_IMAGE_LINE_RE =
+  /^ {0,3}!\[\[([^\]|]+)(?:\|(\d+)(?:x(\d+))?)?\]\]\s*$/;
 
 // HTML forms. `[^>]*?` keeps attribute scanning inside the tag; an attr
 // value containing a literal `>` is out of scope (stays raw source).
@@ -254,6 +270,21 @@ function matchSingleLineImage(
         title: md[3] ? md[3].slice(1, -1) : '',
         width: null,
         height: null,
+      },
+      align: null,
+    };
+  }
+  const wiki = WIKI_IMAGE_LINE_RE.exec(text);
+  if (wiki) {
+    const rawSrc = wiki[1].trim();
+    if (!rawSrc) return null;
+    return {
+      spec: {
+        src: rawSrc,
+        alt: '',
+        title: '',
+        width: wiki[2] ? Number(wiki[2]) : null,
+        height: wiki[3] ? Number(wiki[3]) : null,
       },
       align: null,
     };
