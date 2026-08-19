@@ -194,6 +194,20 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
     );
   });
 
+  it('显示 captcha WebView 前先收起软键盘', () => {
+    const challengeBranch = authContextSource.slice(
+      authContextSource.indexOf('const runCaptchaChallenge'),
+      authContextSource.indexOf('const ensureCaptchaGate'),
+    );
+    expect(authContextSource).toContain(
+      "import { AppState, Keyboard, Linking } from 'react-native';",
+    );
+    expect(challengeBranch.indexOf('Keyboard.dismiss();')).toBeGreaterThan(-1);
+    expect(challengeBranch.indexOf('Keyboard.dismiss();')).toBeLessThan(
+      challengeBranch.indexOf('setCaptchaChallenge({ url });'),
+    );
+  });
+
   it('login.tsx 渲染 captcha WebView 模态并接回 resolveCaptchaChallenge', () => {
     expect(loginSource).toContain('auth.captchaChallenge');
     expect(loginSource).toContain('LoginCaptchaWebView');

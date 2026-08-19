@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState, Linking } from 'react-native';
+import { AppState, Keyboard, Linking } from 'react-native';
 import {
   AuthApiError,
   CAPTCHA_CHALLENGE_PAGE_PATH,
@@ -431,6 +431,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return new Promise<string | null>((resolve) => {
       // 单飞:dispatchLoginAction 本身串行,这里不会出现并发挑战。
       captchaResolveRef.current = resolve;
+      // 验证码浮层不是原生 Modal，也不做键盘避让；先收键盘，避免 iOS 小屏上
+      // 挑战内容与取消动作被仍聚焦的 identifier 输入框键盘遮挡。
+      Keyboard.dismiss();
       setCaptchaChallenge({ url });
     });
   }, []);
