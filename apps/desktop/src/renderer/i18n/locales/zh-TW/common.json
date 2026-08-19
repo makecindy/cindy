@@ -5732,6 +5732,13 @@
       "tokens": "{{value}} tokens",
       "toolUses_one": "{{count}} 次工具呼叫",
       "toolUses_other": "{{count}} 次工具呼叫",
+      "systemEvents": {
+        "stop-requested": "父任務要求停止。",
+        "control-requested": "父任務送出了一則控制要求。",
+        "transcript-truncated": "已達到記錄的儲存上限。",
+        "turn-ended": "Subagent 本輪已結束。",
+        "command-refused": "PI 拒絕了一則子任務命令。"
+      },
       "activityKinds": {
         "started": "已啟動",
         "progress": "進度",

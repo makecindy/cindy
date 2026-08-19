@@ -179,9 +179,30 @@ export function ActivityRow({ entry }: { entry: SubagentActivityEntry }) {
   );
 }
 
-/** One runtime-log line (stdout / stderr / truncation markers) verbatim. */
+/**
+ * Text for a system row.
+ *
+ * Lines the Host synthesised carry a `systemEvent` slug, and those are shown in
+ * the user's language — the durable transcript stores the English sentence once,
+ * at synthesis time, and is read back long afterwards by whatever UI locale the
+ * user picked. Runtime output (stdout / stderr / harness errors) has no slug and
+ * is shown verbatim, as does any record written before the slug existed.
+ */
+export function useSystemLogText(entry: SubagentTranscriptEntry): string {
+  const { t } = useTranslation();
+  const kind = entry.systemEvent?.kind;
+  if (!kind) return entry.content;
+  const key = `rightSidebar.subagents.systemEvents.${kind}`;
+  // An unknown slug (newer producer, older renderer bundle) falls back to the
+  // English sentence the entry still carries rather than showing a raw key.
+  const localized = t(key, { ...(entry.systemEvent?.params ?? {}), defaultValue: '' });
+  return localized || entry.content;
+}
+
+/** One system line: localized when Cindy wrote it, verbatim when it is output. */
 export function SystemLogRow({ entry }: { entry: SubagentTranscriptEntry }) {
   const time = formatClockTime(entry.occurredAt);
+  const text = useSystemLogText(entry);
   return (
     <div className="rounded-lg bg-[var(--msg-code-block-bg)] px-2.5 py-2">
       {time ? (
@@ -190,7 +211,7 @@ export function SystemLogRow({ entry }: { entry: SubagentTranscriptEntry }) {
         </div>
       ) : null}
       <p className="select-text whitespace-pre-wrap break-words font-mono text-11 leading-4 text-[var(--text-secondary)]">
-        {entry.content}
+        {text}
       </p>
     </div>
   );

@@ -5732,6 +5732,13 @@
       "tokens": "{{value}} tokens",
       "toolUses_one": "ツール呼び出し {{count}} 回",
       "toolUses_other": "ツール呼び出し {{count}} 回",
+      "systemEvents": {
+        "stop-requested": "親タスクから停止が要求されました。",
+        "control-requested": "親タスクから制御リクエストが送信されました。",
+        "transcript-truncated": "記録の保存上限に達しました。",
+        "turn-ended": "サブエージェントのターンが終了しました。",
+        "command-refused": "PI が子エージェントのコマンドを拒否しました。"
+      },
       "activityKinds": {
         "started": "開始",
         "progress": "進行",

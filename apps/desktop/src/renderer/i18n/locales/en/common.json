@@ -5707,6 +5707,13 @@
       "tokens": "{{value}} tokens",
       "toolUses_one": "{{count}} tool use",
       "toolUses_other": "{{count}} tool uses",
+      "systemEvents": {
+        "stop-requested": "A stop was requested from the parent task.",
+        "control-requested": "A control request was sent from the parent task.",
+        "transcript-truncated": "Transcript storage limit reached.",
+        "turn-ended": "Subagent turn ended.",
+        "command-refused": "PI rejected a child command."
+      },
       "activityKinds": {
         "started": "Started",
         "progress": "Progress",

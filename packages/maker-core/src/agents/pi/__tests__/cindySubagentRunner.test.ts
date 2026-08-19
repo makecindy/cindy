@@ -23,10 +23,16 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
  * Everything else here waits on an event; that case waits on I/O throughput,
  * and the suite default is a per-event budget. See the arithmetic at its call
  * site. The case carries a matching per-test override, since the file-level 60s
- * cannot contain a wait that is allowed to run for 90s.
+ * cannot contain a wait that is allowed to run for this long.
+ *
+ * Windows gets a much larger one because it is measurably slower, not because
+ * anything is wrong: the runner reported 366 of 512 receipts after 90s on the
+ * CI runner (~4/s), which puts the real completion around 126s. 240s is ~2x
+ * that measurement. The runner was healthy throughout — stderr empty, the
+ * control backlog fully drained — so this is throughput, not a wedge.
  */
-const CONTROL_BACKLOG_WAIT_MS = 90_000;
-const CONTROL_BACKLOG_TEST_TIMEOUT_MS = 120_000;
+const CONTROL_BACKLOG_WAIT_MS = process.platform === 'win32' ? 240_000 : 90_000;
+const CONTROL_BACKLOG_TEST_TIMEOUT_MS = process.platform === 'win32' ? 300_000 : 120_000;
 import {
   controlPiSubagentRuns,
   isPiSubagentTerminal,
@@ -1471,7 +1477,10 @@ describe('Cindy durable PI Subagent runner', () => {
     'refuses to signal when the recorded pid is no longer that runner',
     async () => {
       // The pid-reuse guard: a stale record pointing at an unrelated live
-      // process must never be signalled.
+      // process must never be signalled. The boundary still *completes* — the
+      // recorded runner is provably no longer at that pid, so there is nothing
+      // attributable left to reclaim, and reporting failure forever would wedge
+      // every logout behind a record that can never be satisfied.
       const fixture = await makeFixture({ hang: true, ignoreStopControl: true, runtimeOwnerId: 'owner-a' });
       await waitFor(
         async () => {
@@ -1494,9 +1503,11 @@ describe('Cindy durable PI Subagent runner', () => {
         await expect(stopForAccountBoundary(fixture.root, {
           runtimeOwnerId: 'owner-a',
           timeoutMs: 500,
-        })).resolves.toBe(false);
+        })).resolves.toBe(true);
 
-        // The bystander survived: identity did not match, so nothing was sent.
+        // The invariant that matters, and the one that must never move: the
+        // bystander survived, because identity did not match and nothing was
+        // sent to that pid.
         expect(() => process.kill(bystander.pid!, 0)).not.toThrow();
       } finally {
         bystander.kill('SIGKILL');

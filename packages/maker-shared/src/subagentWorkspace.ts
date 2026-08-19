@@ -133,6 +133,21 @@ export interface SubagentTranscriptEntry {
   /** True when the harness reported this tool call or entry as failed. */
   isError?: boolean;
   controlAction?: SubagentControlAction;
+  /**
+   * Structured stand-in for a `role: 'system'` line the Host synthesised itself
+   * (as opposed to runtime output it merely forwarded).
+   *
+   * `content` still carries the English sentence, so an older client — and any
+   * record written before this field existed — keeps rendering exactly as it
+   * did. A client that understands `kind` looks up its own localized string
+   * instead, which is the only way these lines can be anything but English in a
+   * durable transcript: the text is written once, at synthesis time, and read
+   * back long after by a UI in whatever language the user picked.
+   *
+   * `kind` is a stable slug. Never reuse one for a different sentence — add a
+   * new slug, exactly like adding a field here.
+   */
+  systemEvent?: { kind: string; params?: Record<string, string> };
 }
 
 export interface SubagentRunDetail extends SubagentRun {

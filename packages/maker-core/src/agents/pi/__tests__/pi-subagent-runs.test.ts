@@ -276,6 +276,51 @@ describe('PI durable subagent run store', () => {
       ]);
     });
 
+    it('drops a cached identity the moment the runner exits', async () => {
+      // The end-to-end guarantee: a run whose runner exits on its own must go
+      // stale on the very next read — not when the identity memo expires — so
+      // the boundary it was blocking completes. (The immediacy comes from the
+      // liveness check that runs ahead of the memo in `isPiSubagentRunStale`;
+      // the kill side of the same story is covered by the case below.)
+      const real = process.kill.bind(process);
+      let alive = true;
+      const spy = vi.spyOn(process, 'kill').mockImplementation(
+        ((pid: number, signal?: NodeJS.Signals | number) => {
+          if (pid !== runnerPid) return real(pid, signal);
+          if (signal === 0 && !alive) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+          return true;
+        }) as typeof process.kill,
+      );
+      restores.push(() => spy.mockRestore());
+      stubCommandLine(true);
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      await writeStatus(root, expired());
+
+      // Alive and verified: cached as "still the runner".
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([
+        expect.objectContaining({ state: 'running' }),
+      ]);
+      expect(childProcess.spawnSync).toHaveBeenCalledTimes(1);
+
+      // The runner exits well inside the memo's TTL.
+      alive = false;
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([]);
+      // Still no second probe — liveness alone settled it.
+      expect(childProcess.spawnSync).toHaveBeenCalledTimes(1);
+      // And the boundary completes instead of blocking on a finished run.
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+        .resolves.toBe(true);
+    });
+
+    it('reports a reclaim when the recorded pid now runs something else', async () => {
+      // Nothing of ours is left at that pid, and the replacement is not ours to
+      // signal — refusing forever would wedge every boundary behind it.
+      stubAliveRunner();
+      stubCommandLine(false);
+      await expect(killVerifiedPiSubagentRunner(expired())).resolves.toBe(true);
+    });
+
     it('never probes while the heartbeat is fresh', async () => {
       stubAliveRunner();
       stubCommandLine(false);
@@ -604,13 +649,24 @@ describe('PI durable subagent run store', () => {
      * Swallow the actual kills, and answer a liveness probe for the runner pid
      * the way the OS answers one for a zombie: still there. Other pids (owner
      * attribution, staleness) keep the real answer.
+     *
+     * `reapedByKill` models the ordinary outcome instead: the process is alive
+     * until a real signal reaches it, then ESRCH like any reaped process. The
+     * default (never reaped) is the zombie/stubborn case.
      */
-    function stubKill(): void {
+    function stubKill(options: { reapedByKill?: boolean } = {}): void {
       const real = process.kill.bind(process);
+      let reaped = false;
       const spy = vi.spyOn(process, 'kill').mockImplementation(
-        ((pid: number, signal?: NodeJS.Signals | number) => (
-          signal === 0 && Math.abs(pid) !== runnerPid ? real(pid, signal) : true
-        )) as typeof process.kill,
+        ((pid: number, signal?: NodeJS.Signals | number) => {
+          if (Math.abs(pid) !== runnerPid) return real(pid, signal);
+          if (signal === 0) {
+            if (!reaped) return true;
+            throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+          }
+          if (options.reapedByKill) reaped = true;
+          return true;
+        }) as typeof process.kill,
       );
       restores.push(() => spy.mockRestore());
     }
@@ -661,7 +717,8 @@ describe('PI durable subagent run store', () => {
 
     it('reports success when taskkill claims failure but the runner is actually gone', async () => {
       usePlatform('win32');
-      stubKill();
+      // taskkill reports failure, yet the process really is gone afterwards.
+      stubKill({ reapedByKill: true });
       // Only the pre-kill identity check sees it: on Windows a dead pid makes
       // the CIM query return nothing, exactly like a reaped POSIX process.
       stubProbes({ aliveProbes: 1, taskkill: { status: 1 } });
@@ -739,8 +796,8 @@ describe('PI durable subagent run store', () => {
 
       it('still reports success once every run is readable and reclaimed', async () => {
         usePlatform('linux');
-        stubKill();
-        // Verifiable once, then gone: a confirmed reclaim.
+        // Verifiable once, then reaped by the kill: a confirmed reclaim.
+        stubKill({ reapedByKill: true });
         stubProbes({ aliveProbes: 1 });
         const agentHome = await makeRoot();
         await writeStatus(
@@ -1010,6 +1067,45 @@ describe('PI durable subagent run store', () => {
     ]);
     expect(page.entries[0]?.content).not.toContain('[stop]');
     expect(page.entries[1]?.content).not.toContain('[follow_up]');
+  });
+
+  it('tags the system lines it writes itself, and only those', async () => {
+    // Synthesised copy cannot stay English in a durable record: it is written
+    // once and read back by a UI in whatever language the user picked. The
+    // English sentence stays in `content` so an older client is unaffected.
+    const root = await makeRoot();
+    const runId = '123e4567-e89b-42d3-a456-4266141740c0';
+    await writeStatus(root, status(runId));
+    const transcript = [
+      { type: 'cindy.subagent.control', at: 100, control: { action: 'stop' } },
+      { type: 'cindy.subagent.control', at: 105, control: { action: 'approval' } },
+      { type: 'cindy.subagent.transcript_truncated', at: 110 },
+      { type: 'cindy.subagent.child_event', at: 120, event: { type: 'agent_end' } },
+      { type: 'cindy.subagent.child_event', at: 130, event: { type: 'response', success: false } },
+      // Harness-supplied text is not ours to localize.
+      { type: 'cindy.subagent.child_event', at: 140, event: {
+        type: 'response', success: false, error: 'pi said no',
+      } },
+      { type: 'cindy.subagent.stdout', at: 150, line: 'raw runner noise' },
+    ].map((entry) => JSON.stringify(entry)).join('\n') + '\n';
+    await writeFile(path.join(root, runId, 'transcript.jsonl'), transcript);
+
+    const page = await readPiSubagentTranscriptPage(root, runId, { limit: 200 });
+    expect(page.entries.map((entry) => entry.systemEvent?.kind)).toEqual([
+      'stop-requested',
+      'control-requested',
+      'transcript-truncated',
+      'turn-ended',
+      'command-refused',
+      undefined,
+      undefined,
+    ]);
+    // Every tagged line keeps a readable English fallback for older clients.
+    for (const entry of page.entries) {
+      expect(entry.content.trim().length).toBeGreaterThan(0);
+    }
+    expect(page.entries[0]?.content).toBe('A stop was requested from the parent task.');
+    expect(page.entries[5]?.content).toBe('pi said no');
   });
 
   it('resumes a tail read from the EOF cursor and returns only appended entries', async () => {

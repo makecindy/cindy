@@ -240,6 +240,32 @@ export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boo
 }
 
 /**
+ * What is at `status.runnerPid` right now?
+ *
+ * - `gone` — no live process, or the pid now runs something else. Either way
+ *   the recorded runner is finished; a replacement process is not ours to touch.
+ * - `running` — the live process's command line still carries the generated
+ *   runner script, whose path contains the run's UUID directory.
+ * - `unverifiable` — the pid is live but the command line could not be read (or
+ *   the record predates `runnerScript`). Nothing may be concluded from it.
+ *
+ * Liveness is checked before the command line so a dead pid never costs a spawn
+ * and never depends on a probe that a dead process cannot answer.
+ */
+type PiSubagentRunnerPresence = 'gone' | 'running' | 'unverifiable';
+
+function classifyRunnerPresence(status: PiSubagentRunStatus): PiSubagentRunnerPresence {
+  const pid = status.runnerPid;
+  if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return 'gone';
+  if (isProcessAlive(pid!) === false) return 'gone';
+  const script = status.runnerScript;
+  if (typeof script !== 'string' || script.length === 0) return 'unverifiable';
+  const commandLine = readProcessCommandLine(pid!);
+  if (commandLine === null) return 'unverifiable';
+  return commandLine.includes(script) ? 'running' : 'gone';
+}
+
+/**
  * Account-boundary escalation: kill a runner that never consumed its stop
  * mailbox, but only after proving the pid is still that runner.
  *
@@ -257,7 +283,16 @@ export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boo
  * account's BYOM credentials still in use.
  */
 export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus): Promise<boolean> {
-  if (!verifyPiSubagentRunnerIdentity(status)) return false;
+  // "Cannot verify" is not one answer but three, and collapsing them into a
+  // failure is what let an already-finished runner block an account switch: the
+  // stale check had cached "still the runner", the runner then exited on its
+  // own, and this refused to report a reclaim for a process that no longer
+  // existed. Nothing to reclaim *is* a reclaim.
+  const presence = classifyRunnerPresence(status);
+  if (presence === 'gone') return true;
+  // Unverifiable and still live: we may not signal a pid we cannot prove is
+  // ours, and we may not claim it was reclaimed either.
+  if (presence === 'unverifiable') return false;
   const pid = status.runnerPid!;
   let signalled = false;
   try {
@@ -287,7 +322,10 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
   // query returns nothing) — one cross-platform judgement for "that runner is
   // no longer running". Each attempt costs a `ps`/CIM spawn, so keep it short.
   for (let attempt = 0; ; attempt += 1) {
-    if (!verifyPiSubagentRunnerIdentity(status)) return true;
+    // Same predicate as the entry check, and it must be a *positive* `gone`:
+    // after the signal, a probe that simply stopped answering is not proof the
+    // process died.
+    if (classifyRunnerPresence(status) === 'gone') return true;
     if (attempt >= KILL_CONFIRM_ATTEMPTS - 1) return false;
     await new Promise<void>((resolve) => setTimeout(resolve, KILL_CONFIRM_INTERVAL_MS));
   }
@@ -578,6 +616,16 @@ const runnerIdentityCache = new Map<string, { at: number; matches: boolean }>();
 function runnerIdentityStillMatches(status: PiSubagentRunStatus): boolean {
   const key = `${status.runnerPid}:${status.runnerScript}`;
   const now = Date.now();
+  // Liveness ahead of the memo, so a cached "still the runner" can never
+  // outlive the runner itself. Belt and braces today — the only caller,
+  // `isPiSubagentRunStale`, already refuses a dead pid before it gets here — but
+  // the memo must not be a trap for the next caller: a cached true that
+  // outlived its process is what makes a sweep count work that is already over.
+  // A signal-0 syscall, no spawn, and only on the expired-heartbeat path.
+  if (isProcessAlive(status.runnerPid) === false) {
+    runnerIdentityCache.set(key, { at: now, matches: false });
+    return false;
+  }
   const cached = runnerIdentityCache.get(key);
   if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.matches;
   const matches = verifyPiSubagentRunnerIdentity(status);
@@ -819,6 +867,10 @@ function transcriptEntry(
   let inputJson: string | undefined;
   let isError: boolean | undefined;
   let action: SubagentControlAction | undefined;
+  // Set whenever the sentence below is *ours*, not runtime output we forwarded.
+  // The English text stays in `content` for older clients; a current renderer
+  // localizes from this instead. See `SubagentTranscriptEntry.systemEvent`.
+  let systemEvent: SubagentTranscriptEntry['systemEvent'];
   // A finished tool call with an empty result must still be recorded, otherwise
   // its card can never leave the "running" state in the conversation.
   let allowEmptyContent = false;
@@ -834,9 +886,13 @@ function transcriptEntry(
       content = message;
     } else {
       role = 'system';
-      content = action === 'stop'
-        ? 'A stop was requested from the parent task.'
-        : 'A control request was sent from the parent task.';
+      if (action === 'stop') {
+        content = 'A stop was requested from the parent task.';
+        systemEvent = { kind: 'stop-requested' };
+      } else {
+        content = 'A control request was sent from the parent task.';
+        systemEvent = { kind: 'control-requested' };
+      }
     }
   } else if (record.type === 'cindy.subagent.stderr') {
     content = typeof record.text === 'string' ? record.text : '';
@@ -846,6 +902,7 @@ function transcriptEntry(
     content = typeof record.message === 'string' ? record.message : '';
   } else if (record.type === 'cindy.subagent.transcript_truncated') {
     content = 'Transcript storage limit reached.';
+    systemEvent = { kind: 'transcript-truncated' };
   } else if (record.type === 'cindy.subagent.child_event') {
     childId = typeof record.childId === 'string' ? record.childId : undefined;
     if (!record.event || typeof record.event !== 'object' || Array.isArray(record.event)) return null;
@@ -880,8 +937,16 @@ function transcriptEntry(
       }
     } else if (event.type === 'agent_end') {
       content = 'Subagent turn ended.';
+      systemEvent = { kind: 'turn-ended' };
     } else if (event.type === 'response' && event.success === false) {
-      content = typeof event.error === 'string' ? event.error : 'PI rejected a child command.';
+      // A harness-supplied reason is the harness's own text, not ours to
+      // localize; only the fallback sentence gets a slug.
+      if (typeof event.error === 'string' && event.error) {
+        content = event.error;
+      } else {
+        content = 'PI rejected a child command.';
+        systemEvent = { kind: 'command-refused' };
+      }
     } else {
       return null;
     }
@@ -902,6 +967,7 @@ function transcriptEntry(
     ...(inputJson ? { toolInputJson: inputJson } : {}),
     ...(isError === undefined ? {} : { isError }),
     ...(action ? { controlAction: action } : {}),
+    ...(systemEvent ? { systemEvent } : {}),
   };
 }
 
