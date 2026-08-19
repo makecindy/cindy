@@ -1421,18 +1421,24 @@ describe('Claude Code sidechain launch failure projection', () => {
     expect(ctx.turn.pendingApiError).toBeNull();
   });
 
-  it('projects a retryable sidechain error once the SDK retries are exhausted', async () => {
+  it('projects a retryable sidechain error once the SDK retries are exhausted (api_retry before envelope)', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
-    // 模拟 api_retry 已把 attempt/max_retries 暂存进 turn 级 pendingApiError，且
-    // attempt 已到上限：SDK 不会再补 task_id，此时必须投影失败终态（#2967 收口）。
-    ctx.turn.pendingApiError = {
-      message: 'SDK API request failed',
-      sdkError: 'rate_limit',
-      retryAttempt: 3,
-      maxRetries: 3,
-    };
-
+    // api_retry 先到且已耗尽（attempt === max_retries）：记下本 turn 已耗尽的 tag。
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+        retry_delay_ms: 100,
+      },
+      queue,
+      ctx,
+    );
+    // 终态 error envelope 随后到达：tag 已耗尽 → 投影失败终态（#2967 收口）。
     translateSdkMessage(
       {
         type: 'assistant',
@@ -1455,6 +1461,103 @@ describe('Claude Code sidechain launch failure projection', () => {
       taskId: 'toolu_retry_exhausted',
       parentToolUseId: 'toolu_retry_exhausted',
       status: 'failed',
+    });
+  });
+
+  it('projects a retryable sidechain error when api_retry exhausts after the envelope', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    // envelope 先到：记 open 等待，暂不投影。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retry_exhausted',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    // api_retry 耗尽随后到达：对 open 的同 tag sidechain 补发失败终态。
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+        retry_delay_ms: 100,
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data).toMatchObject({
+      taskId: 'toolu_retry_exhausted',
+      parentToolUseId: 'toolu_retry_exhausted',
+      status: 'failed',
+    });
+  });
+
+  it('does not project a retryable sidechain error while the SDK is still retrying (then self-heals)', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retryable',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited, retrying.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    // 仍在重试（attempt < max_retries），随后自愈产生真实 task_id：不得投影失败。
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+        retry_delay_ms: 100,
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'agent-self-healed',
+        tool_use_id: 'toolu_retryable',
+        task_type: 'local_agent',
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    // 只有 task_started 的 running 帧，没有 failed 投影。
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data).toMatchObject({
+      taskId: 'agent-self-healed',
+      status: 'running',
     });
   });
 
