@@ -400,4 +400,100 @@ describe('extractCommandOutputPathCandidates', () => {
       ),
     ).toEqual(['artifacts/result.html']);
   });
+
+  // 真机场景:PDF 是命令转换出来的,既没有文件工具记录,输出位置也不一定在命令
+  // 文本里字面出现。下面每条转换器语义都配一条「只读输入」的反例。
+  describe('converter and headless-browser write-out semantics', () => {
+    it('takes the Chromium --print-to-pdf / --screenshot switch value', () => {
+      expect(
+        extractCommandOutputPathCandidates(
+          'chrome --headless --print-to-pdf=/work/out/report.pdf file:///work/in.html',
+        ),
+      ).toEqual(['/work/out/report.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          'chromium --headless --print-to-pdf=out/report.pdf file:///work/in.html',
+        ),
+      ).toEqual(['out/report.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless ' +
+            '--screenshot="out/shot 1.png" --window-size=1200,800 file:///work/in.html',
+        ),
+      ).toEqual(['out/shot 1.png']);
+    });
+
+    it('does not invent a Chromium artifact from reads or the unsupported spaced form', () => {
+      expect(
+        extractCommandOutputPathCandidates('chrome --headless --dump-dom file:///work/in.html'),
+      ).toEqual([]);
+      // Chrome 开关只吃 `--switch=value`;空格形态里的路径是位置参数,不会被写出。
+      expect(
+        extractCommandOutputPathCandidates('chrome --headless --print-to-pdf out/report.pdf'),
+      ).toEqual([]);
+    });
+
+    it('derives the LibreOffice --convert-to artifact from the input name', () => {
+      expect(
+        extractCommandOutputPathCandidates(
+          'soffice --headless --convert-to pdf --outdir artifacts docs/plan.docx',
+        ),
+      ).toEqual(['artifacts/plan.pdf']);
+      expect(
+        extractCommandOutputPathCandidates('libreoffice --convert-to pdf docs/plan.docx'),
+      ).toEqual(['plan.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          '/usr/bin/soffice --headless --convert-to=pdf --outdir=/work/out /work/in/plan.pptx',
+        ),
+      ).toEqual(['/work/out/plan.pdf']);
+      // 带过滤器参数的目标格式:冒号前那一段才是扩展名。多输入各出一件。
+      expect(
+        extractCommandOutputPathCandidates(
+          'soffice --headless --convert-to csv:"Text - txt - csv (StarCalc)" --outdir out/ a.xlsx b.xlsx',
+        ),
+      ).toEqual(['out/a.csv', 'out/b.csv']);
+    });
+
+    it('stays silent when LibreOffice only opens or lists a file', () => {
+      expect(extractCommandOutputPathCandidates('soffice --headless docs/plan.docx')).toEqual([]);
+      expect(extractCommandOutputPathCandidates('libreoffice --version')).toEqual([]);
+    });
+
+    it('takes the trailing positional as the wkhtmltopdf / weasyprint artifact', () => {
+      expect(extractCommandOutputPathCandidates('wkhtmltopdf in.html out/report.pdf')).toEqual([
+        'out/report.pdf',
+      ]);
+      expect(
+        extractCommandOutputPathCandidates(
+          'wkhtmltopdf --margin-top 10mm --page-size A4 docs/in.html artifacts/report.pdf',
+        ),
+      ).toEqual(['artifacts/report.pdf']);
+      expect(
+        extractCommandOutputPathCandidates('weasyprint docs/in.html artifacts/report.pdf'),
+      ).toEqual(['artifacts/report.pdf']);
+    });
+
+    it('does not treat a lone wkhtmltopdf / weasyprint input as an artifact', () => {
+      expect(extractCommandOutputPathCandidates('wkhtmltopdf --version')).toEqual([]);
+      expect(extractCommandOutputPathCandidates('weasyprint docs/in.html')).toEqual([]);
+    });
+
+    it('keeps pandoc covered by the -o output option, including the unquoted relative form', () => {
+      expect(
+        extractCommandOutputPathCandidates('pandoc docs/plan.md -o artifacts/plan.pdf'),
+      ).toEqual(['artifacts/plan.pdf']);
+      expect(
+        extractCommandOutputPathCandidates(
+          'pandoc docs/plan.md --output=artifacts/plan.docx --standalone',
+        ),
+      ).toEqual(['artifacts/plan.docx']);
+      // 同一 gap 的另一半:未加引号的重定向目标。
+      expect(extractCommandOutputPathCandidates('node gen.js > out/result.json')).toEqual([
+        'out/result.json',
+      ]);
+      // 反例:pandoc 只读输入,没有 -o 就没有候选。
+      expect(extractCommandOutputPathCandidates('pandoc docs/plan.md --to=html')).toEqual([]);
+    });
+  });
 });

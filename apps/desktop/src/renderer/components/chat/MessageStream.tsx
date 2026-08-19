@@ -62,7 +62,7 @@ import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
-import { cn } from '@/lib/utils';
+import { basename, cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
@@ -1353,6 +1353,11 @@ export function buildRenderItems(
     turnChangeSets?: readonly TurnChangeSetSummary[];
     /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
+    /**
+     * 非空 = 这是一场跟伙伴的对话。工程 diff 卡(turn_changes)整张让位给交付物卡,
+     * 且 checkpoint 里的**新建**文件并入交付物候选。普通任务留空,行为逐字节不变。
+     */
+    botSessionId?: string | undefined;
   },
 ): {
   items: RenderItem[];
@@ -1542,7 +1547,14 @@ export function buildRenderItems(
     const changeSets = (opts?.turnChangeSets ?? []).filter(
       (changeSet) => changeSet.anchorClientId === anchorClientId,
     );
+    // 伙伴对话不是工程台:「已更改 N 个文件 +x −y / 撤销 / 审查」是任务视角的
+    // 工程 diff 卡,放进 IM 式对话里既看不懂也不该给。它整张让位给交付物卡
+    // (真机验收:用户只看到 diff 卡,交付物卡一次都没出现)。checkpoint 采集
+    // (main 侧)照旧,只是不在这条对话里渲染。
+    const isBotSession = Boolean(opts?.botSessionId);
     const exactPaths = new Set<string>();
+    /** changeSet 里**新建**的文件 → 交付物候选(结构化实锤,与文件工具新建同级)。 */
+    const changeSetCreated: GeneratedFileRef[] = [];
     const pathKey = (value: string): string => {
       const normalized = value.replace(/\\/g, '/');
       const windowsShape = /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\');
@@ -1550,19 +1562,28 @@ export function buildRenderItems(
     };
     for (const changeSet of changeSets) {
       for (const file of changeSet.files) {
-        exactPaths.add(pathKey(resolveToolFilePath(file.path, changeSet.cwd)));
+        const resolved = resolveToolFilePath(file.path, changeSet.cwd);
+        // 伙伴会话:新建的并进交付物候选、不再排它剔除;编辑 / 删除 / 改名仍然
+        // 排除 —— 改一个既有文件不是「做出来的东西」。
+        if (isBotSession && (file.status === 'added' || file.status === 'untracked')) {
+          changeSetCreated.push({ path: resolved, name: basename(resolved), source: 'tool' });
+        } else {
+          exactPaths.add(pathKey(resolved));
+        }
         if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
       }
     }
-    for (const changeSet of changeSets) {
-      // Zero-file entries have nothing the user can inspect or act on. Keep their
-      // diagnostic sidecars in Main, but do not add a warning-only chat card.
-      if (!hasReviewableTurnChanges(changeSet)) continue;
-      items.push({
-        type: 'turn_changes',
-        key: `turnchanges-${changeSet.id}`,
-        changeSet,
-      });
+    if (!isBotSession) {
+      for (const changeSet of changeSets) {
+        // Zero-file entries have nothing the user can inspect or act on. Keep their
+        // diagnostic sidecars in Main, but do not add a warning-only chat card.
+        if (!hasReviewableTurnChanges(changeSet)) continue;
+        items.push({
+          type: 'turn_changes',
+          key: `turnchanges-${changeSet.id}`,
+          changeSet,
+        });
+      }
     }
     // 子代理工具结果里的媒体产物(出图 / 视频 / 音频 / 模型)。这些工具行本身被隐藏,
     // 不进 tool_segment,所以段级的 pendingSegmentMedia 收不到它们;而 AgentTaskUpdate
@@ -1592,12 +1613,26 @@ export function buildRenderItems(
     }
 
     const workingDir = opts?.workingDir ?? '';
-    if (!workingDir || hi <= lo) return;
+    // changeSet 的路径按它自己的 cwd 解析,不依赖 workingDir;没有 workingDir 时
+    // 只是收不到 tool / command 候选,不该连 checkpoint 新建项也一起丢。
+    if ((!workingDir && changeSetCreated.length === 0) || hi <= lo) return;
     const slice = originalTurnSlice(lo, hi);
-    const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
+    const collected = (workingDir ? collectGeneratedFiles(slice, workingDir) : []).filter((file) => {
       const normalized = pathKey(file.path);
       return !exactPaths.has(normalized) || changeSets.length === 0;
     });
+    // changeSet 的新建项补进来(伙伴会话专有):Bash 写出来的产物常常没有文件工具
+    // 记录,命令启发式也不一定认得,checkpoint 是它唯一的结构化证据。
+    const generatedFiles = [...collected];
+    if (changeSetCreated.length > 0) {
+      const seen = new Set(collected.map((file) => pathKey(file.path)));
+      for (const file of changeSetCreated) {
+        const normalized = pathKey(file.path);
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        generatedFiles.push(file);
+      }
+    }
     if (generatedFiles.length === 0) return;
     let turnStartMs: number | null = null;
     for (const message of slice) {
@@ -3059,8 +3094,17 @@ export function MessageStream({
         historyWindowIncomplete: Boolean(hasMoreMessages),
         turnChangeSets,
         workingDir,
+        botSessionId: botArtifactSessionId,
       }),
-    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, turnChangeSets, workingDir],
+    [
+      messages,
+      taskUpdates,
+      ghostCardSnapshot,
+      hasMoreMessages,
+      turnChangeSets,
+      workingDir,
+      botArtifactSessionId,
+    ],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMessages),

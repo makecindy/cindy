@@ -4100,7 +4100,7 @@ export function CCAgentSessionView({
         // 伙伴对话不是用户经营的任务:它拿的是「跟谁说话 + 进 TA 的设置」,
         // 不是重命名/置顶/归档/导出那一套任务菜单。
         botChatIdentity ? (
-          <BotSessionContentHeaderRegistration bot={botChatIdentity} />
+          <BotSessionContentHeaderRegistration bot={botChatIdentity} sessionId={sessionId} />
         ) : (
           <SessionContentHeaderRegistration
             session={session}

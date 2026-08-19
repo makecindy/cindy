@@ -7,18 +7,20 @@
  *
  * 四型(判定见 shared/botArtifact.ts):
  *   - 图片:真缩略图(复用媒体协议地址,远程会话经 origin 改写);
- *   - 文档 / 表格 / 演示:图标块 + 标题行。**表格不做假的迷你预览** —— 真数据
- *     预览需要解析 xlsx/csv,超出本批范围,画一张编的小表是骗人;
- *   - 演示的页数在没有解析器的前提下拿不到,按定稿口径**省略**,不写占位。
+ *   - 表格:**真数据**迷你小表(定稿原型的 4 行 × 3 列)。只在本机会话 + csv/tsv 时
+ *     读文件头解析出来;xlsx 需要解析器、仓里没有依赖也不为此新增,远程会话读不到
+ *     本机文件 —— 这两种都回退图标。**绝不画一张编的小表**;
+ *   - 文档 / 演示:图标块 + 标题行。演示的页数在没有解析器的前提下拿不到,按定稿
+ *     口径**省略**,不写占位。
  * 其余类型走通用文件卡(同一套骨架,换图标)。
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useChatSessionFile } from '@/components/chat/ChatSessionFileContext';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
-import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
+import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { cn } from '@/lib/utils';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import type { BotArtifactItem } from '../../../shared/botArtifact';
@@ -27,6 +29,8 @@ import {
   botArtifactCategoryKey,
   botArtifactIcon,
   formatArtifactSize,
+  parseSheetPreview,
+  sheetPreviewDelimiter,
 } from './botArtifactPresentation';
 
 /**
@@ -68,6 +72,54 @@ export function useArtifactThumbnail(item: BotArtifactItem): string | null {
   );
 }
 
+/**
+ * 迷你预览只需要开头几行。走既有的 `peek-file-header`(main 侧 64KB 硬上限 +
+ * isPathAllowed 路径策略,只读),不新增 IPC、不给 renderer 新的文件读取面。
+ */
+const SHEET_PREVIEW_HEAD_BYTES = 16 * 1024;
+
+function decodeBase64Utf8(base64: string): string {
+  const binary = atob(base64);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  // 头部按字节截断,尾部可能落在一个多字节字符中间 → 非 fatal 解码,坏字节变
+  // 替换符;它落在被丢弃的尾行里,不会进预览。
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+/** 表格交付物的真实迷你预览;拿不到(非 csv/tsv、远程会话、读失败)返回 null。 */
+export function useSheetMiniPreview(item: BotArtifactItem): string[][] | null {
+  const fileCtx = useChatSessionFile();
+  const remote = isRemoteFileOrigin(fileCtx.origin);
+  const delimiter = item.category === 'sheet' ? sheetPreviewDelimiter(item.ext) : null;
+  const filePath = item.path;
+  const [rows, setRows] = useState<string[][] | null>(null);
+
+  useEffect(() => {
+    setRows(null);
+    if (!delimiter || !filePath || remote) return;
+    const peek = window.electronAPI?.peekFileHeader;
+    if (typeof peek !== 'function') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await peek({ filePath, bytes: SHEET_PREVIEW_HEAD_BYTES });
+        if (cancelled || !result.success || !result.data) return;
+        const parsed = parseSheetPreview(decodeBase64Utf8(result.data), delimiter, {
+          truncated: result.actualBytes < result.totalSize,
+        });
+        if (!cancelled && parsed.length > 0) setRows(parsed);
+      } catch {
+        // 预览是锦上添花:读不到就退回图标,不弹错、不留半张空表。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [delimiter, filePath, remote]);
+
+  return rows;
+}
+
 interface Props {
   item: BotArtifactItem;
   onOpen: (item: BotArtifactItem) => void;
@@ -85,6 +137,7 @@ export function BotArtifactCard({ item, onOpen, onReveal, deliveredBy, className
   const { t } = useTranslation();
   const timeText = useArtifactTimeText();
   const thumbnail = useArtifactThumbnail(item);
+  const sheetPreview = useSheetMiniPreview(item);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const Icon = botArtifactIcon(item.category);
 
@@ -120,6 +173,7 @@ export function BotArtifactCard({ item, onOpen, onReveal, deliveredBy, className
   );
 
   const showThumbnail = thumbnail !== null && !thumbnailFailed;
+  const showSheetPreview = !showThumbnail && sheetPreview !== null && sheetPreview.length > 0;
 
   return (
     <div
@@ -145,8 +199,35 @@ export function BotArtifactCard({ item, onOpen, onReveal, deliveredBy, className
           />
         </button>
       ) : null}
+      {showSheetPreview ? (
+        // 装饰性预览:同一份数据的权威入口是下面的「打开」,这里不做第二个可交互
+        // 落点(按钮里嵌表格既是无效 HTML,也会多出一个读屏噪音节点)。
+        <div
+          aria-hidden="true"
+          data-testid="bot-artifact-sheet-preview"
+          className="border-b border-[var(--border-default)] bg-[var(--surface-hover)] px-3 py-1.5"
+        >
+          {sheetPreview.map((cells, rowIndex) => (
+            <div
+              key={rowIndex}
+              className={cn(
+                'grid grid-cols-3 gap-2 py-[3px]',
+                rowIndex === 0
+                  ? 'border-b border-[var(--border-default)] text-[var(--text-secondary)]'
+                  : 'text-[var(--text-tertiary)]',
+              )}
+            >
+              {cells.map((cell, columnIndex) => (
+                <span key={columnIndex} className="truncate text-10">
+                  {cell}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="flex items-center gap-3 px-3 py-2.5">
-        {showThumbnail ? null : (
+        {showThumbnail || showSheetPreview ? null : (
           <span
             aria-hidden="true"
             className={cn(

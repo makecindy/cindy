@@ -6,6 +6,13 @@
  *   1. `bot_delegations.output_artifacts_json`,按 **targetBotId** 归属 —— 产物是
  *      被委派方做出来的,不是发起方。
  *   2. 伙伴名下 Session(canonical / route / history)里的 `tool_use` 新建文件。
+ *      **与对话里的交付物卡同源**,三条判据一条不少(否则会出现「对话里有卡、
+ *      仓库里没有」这种自相矛盾):
+ *        a. 文件工具的新建(Write / write / codex file_change add);
+ *        b. 命令文本里带明确写出语义的位置(shared/commandOutputPaths,与 renderer
+ *           共用同一份实现);
+ *        c. checkpoint(turn change set)记录的**新建**文件 —— 脚本产物常常既没有
+ *           文件工具记录、命令文本也认不出,这是它唯一的结构化证据。
  *   3. 同批 Session 消息里的文件附件(`content.files[]`)。
  *
  * 存在性门槛:有本机绝对路径的交付物在返回前 `stat` 一次,不存在 / 非普通文件的
@@ -31,6 +38,8 @@ import { botDelegations, botProfiles, botSessionLinks, messages, sessions } from
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { parseBotOutputArtifacts } from '../../../shared/botOutputArtifact.js';
+import { extractCommandOutputPathCandidates } from '../../../shared/commandOutputPaths.js';
+import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet.js';
 import {
   BOT_ARTIFACT_LIMIT,
   BOT_ARTIFACT_MESSAGE_SCAN_LIMIT,
@@ -45,6 +54,17 @@ const DELEGATION_SCAN_LIMIT = 300;
 
 /** 每返回 1 件就最多 stat 这么多候选,给存在性过滤留余量,同时封住磁盘开销。 */
 const STAT_CANDIDATE_FACTOR = 4;
+
+/**
+ * 读 checkpoint 索引的会话数上限。每个会话一次 sidecar 读 + 一次锚点查询,不能跟着
+ * 伙伴历史会话数线性涨;超出的老会话仍有 tool / command 两条来源兜底。
+ */
+const CHANGE_SET_SESSION_LIMIT = 40;
+
+/**
+ * 命令候选的时钟余量。与对话卡同一常量口径:消息落库时间与文件真正写盘的时间差。
+ */
+const COMMAND_CANDIDATE_SLACK_MS = 120_000;
 
 interface MessageRowLike {
   id: string;
@@ -79,6 +99,47 @@ export function createdPathsFromToolUseContent(content: Record<string, unknown>)
       .map((change) => change.path);
   }
   return [];
+}
+
+/**
+ * `tool_use` 消息 → 命令文本里带明确写出语义的产物候选(与对话卡同一份实现)。
+ * 这些只是启发式候选,还要过 mtime 下界复核,见 listBotArtifacts。
+ */
+export function commandOutputPathsFromToolUseContent(
+  content: Record<string, unknown>,
+): string[] {
+  const toolName = typeof content.toolName === 'string' ? content.toolName : '';
+  if (!toolName) return [];
+  const descriptor = describeToolUse(toolName, content.input ?? null);
+  if (descriptor.kind !== 'command' || !descriptor.command) return [];
+  return extractCommandOutputPathCandidates(descriptor.command);
+}
+
+/**
+ * `tool_use` 消息 → 本条**修改**过的文件路径。它们是编辑不是新建,命令文本里再
+ * 出现也不算产物(跑测试 / 构建命令引用刚编辑过的源码是高发误报)。与对话卡的
+ * editedKeys 同一条防线。
+ */
+export function editedPathsFromToolUseContent(content: Record<string, unknown>): string[] {
+  const toolName = typeof content.toolName === 'string' ? content.toolName : '';
+  if (!toolName) return [];
+  const descriptor = describeToolUse(toolName, content.input ?? null);
+  if (descriptor.kind === 'file') {
+    return descriptor.action === 'edit' && descriptor.filePath ? [descriptor.filePath] : [];
+  }
+  if (descriptor.kind === 'fileChange') {
+    return descriptor.changes
+      .filter((change) => change.action !== 'add' && change.path)
+      .map((change) => change.path);
+  }
+  return [];
+}
+
+/** checkpoint 里算「新建」的状态。改名 / 修改 / 删除都不是「做出来的东西」。 */
+export function createdPathsFromChangeSet(changeSet: TurnChangeSetSummary): string[] {
+  return changeSet.files
+    .filter((file) => file.status === 'added' || file.status === 'untracked')
+    .map((file) => resolveArtifactPath(file.path, changeSet.cwd || null));
 }
 
 /** 消息 `content.files[]`(FileRef:{ name, path, size?, sha256? })→ 附件条目原料。 */
@@ -147,14 +208,29 @@ export function mergeBotArtifacts(items: BotArtifactItem[]): BotArtifactItem[] {
   return [...byKey.values()].sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id));
 }
 
-/** 存在性过滤 + 用 stat 补齐体积。协议引用直接放行。 */
-async function keepExistingFiles(items: BotArtifactItem[]): Promise<BotArtifactItem[]> {
+/**
+ * 存在性过滤 + 用 stat 补齐体积。协议引用直接放行。
+ *
+ * `notBefore` 是命令候选专用的时间下界(id → 最早那条命令的执行时间 − 余量):
+ * 命令文本里出现路径 ≠ 命令创建了它,所以还要求文件的创建时间不早于命令。对话卡
+ * 有 turn 上界可用,仓库是全生命周期聚合、没有上界,这一点如实登记为更宽。
+ */
+async function keepExistingFiles(
+  items: BotArtifactItem[],
+  notBefore?: ReadonlyMap<string, number>,
+): Promise<BotArtifactItem[]> {
   const checked = await Promise.all(
     items.map(async (item) => {
       if (!item.path) return item;
       try {
         const stat = await fs.stat(item.path);
         if (!stat.isFile()) return null;
+        const floor = notBefore?.get(item.id);
+        if (typeof floor === 'number') {
+          // birthtime 优先(与对话卡同策);拿不到(部分 Linux FS)才回退 mtime。
+          const bornAt = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs;
+          if (!(bornAt >= floor)) return null;
+        }
         return item.sizeBytes === null ? { ...item, sizeBytes: stat.size } : item;
       } catch {
         return null;
@@ -168,6 +244,16 @@ export interface ListBotArtifactsInput {
   botId?: string;
   sessionId?: string;
   limit?: number;
+}
+
+/**
+ * checkpoint 读取口。注入而不是直接 import:turn-change-set/store 拖着 electron
+ * `app` / BrowserWindow / git-review / device-link 一整串主进程依赖,静态 import
+ * 会把它们全塞进这条纯数据投影的模块图(以及它的单测)。省略 = 不读 checkpoint,
+ * 仍有 tool / command 两条来源。
+ */
+export interface BotArtifactSources {
+  listTurnChangeSets?: (sessionId: string) => Promise<TurnChangeSetSummary[]>;
 }
 
 /**
@@ -199,6 +285,7 @@ async function resolveBotId(input: ListBotArtifactsInput): Promise<string> {
 
 export async function listBotArtifacts(
   input: ListBotArtifactsInput,
+  sources?: BotArtifactSources,
 ): Promise<BotArtifactProjection> {
   const botId = await resolveBotId(input);
   const limit = typeof input.limit === 'number' && Number.isFinite(input.limit)
@@ -221,9 +308,23 @@ export async function listBotArtifacts(
     .limit(DELEGATION_SCAN_LIMIT);
 
   const raw: BotArtifactItem[] = [];
+  /** 命令候选的时间下界(id → 最早那条命令的执行时刻 − 余量)。 */
+  const commandNotBefore = new Map<string, number>();
+  /** 有结构化证据(文件工具 / checkpoint / 附件 / 委派)的件:不受命令时间下界约束。 */
+  const structuralIds = new Set<string>();
+  const addCommandCandidate = (item: BotArtifactItem, commandAtMs: number): void => {
+    raw.push(item);
+    const floor = commandAtMs - COMMAND_CANDIDATE_SLACK_MS;
+    const current = commandNotBefore.get(item.id);
+    if (current === undefined || floor < current) commandNotBefore.set(item.id, floor);
+  };
+  const addStructural = (item: BotArtifactItem): void => {
+    raw.push(item);
+    structuralIds.add(item.id);
+  };
   for (const row of delegationRows) {
     for (const artifact of parseBotOutputArtifacts(row.outputArtifactsJson)) {
-      raw.push(
+      addStructural(
         makeBotArtifact({
           source: 'delegation',
           target: artifact.ref,
@@ -263,13 +364,26 @@ export async function listBotArtifacts(
       .orderBy(desc(messages.createdAt))
       .limit(BOT_ARTIFACT_MESSAGE_SCAN_LIMIT);
 
+    // 命令候选与「本轮被编辑过的文件」的对撞要跨整批消息判定,所以先把编辑集扫出来。
+    const editedTargets = new Set<string>();
+    for (const row of messageRows) {
+      if (row.role !== 'tool_use') continue;
+      const content = parseContent(row.content);
+      if (!content) continue;
+      const workingDir = workdirBySession.get(row.sessionId) ?? null;
+      for (const rawPath of editedPathsFromToolUseContent(content)) {
+        editedTargets.add(resolveArtifactPath(rawPath, workingDir));
+      }
+    }
+
+    const commandCandidates: Array<{ item: BotArtifactItem; at: number }> = [];
     for (const row of messageRows) {
       const content = parseContent(row.content);
       if (!content) continue;
       const workingDir = workdirBySession.get(row.sessionId) ?? null;
       if (row.role === 'tool_use') {
         for (const rawPath of createdPathsFromToolUseContent(content)) {
-          raw.push(
+          addStructural(
             makeBotArtifact({
               source: 'generated',
               target: resolveArtifactPath(rawPath, workingDir),
@@ -280,10 +394,25 @@ export async function listBotArtifacts(
             }),
           );
         }
+        for (const rawPath of commandOutputPathsFromToolUseContent(content)) {
+          const target = resolveArtifactPath(rawPath, workingDir);
+          if (editedTargets.has(target)) continue;
+          commandCandidates.push({
+            item: makeBotArtifact({
+              source: 'generated',
+              target,
+              isRef: false,
+              createdAt: row.createdAt,
+              sessionId: row.sessionId,
+              delegationId: null,
+            }),
+            at: row.createdAt,
+          });
+        }
         continue;
       }
       for (const file of attachmentRefsFromContent(content)) {
-        raw.push(
+        addStructural(
           makeBotArtifact({
             source: 'attachment',
             target: resolveArtifactPath(file.path, workingDir),
@@ -297,13 +426,53 @@ export async function listBotArtifacts(
         );
       }
     }
+    for (const candidate of commandCandidates) {
+      addCommandCandidate(candidate.item, candidate.at);
+    }
+
+    // ── 来源 2c:checkpoint 记录的新建文件。脚本产物常常两条来源都认不出,这是
+    // 它唯一的结构化证据 —— 少了它,对话里出得来的交付物卡在仓库里会消失。
+    const listChangeSets = sources?.listTurnChangeSets;
+    if (listChangeSets) {
+      const scanned = sessionIds.slice(0, CHANGE_SET_SESSION_LIMIT);
+      const perSession = await Promise.all(
+        scanned.map(async (sessionId) => {
+          try {
+            return await listChangeSets(sessionId);
+          } catch {
+            // sidecar 读不到不该让整张仓库空掉;其余来源照常。
+            return [] as TurnChangeSetSummary[];
+          }
+        }),
+      );
+      for (const changeSets of perSession) {
+        for (const changeSet of changeSets) {
+          for (const target of createdPathsFromChangeSet(changeSet)) {
+            if (editedTargets.has(target)) continue;
+            addStructural(
+              makeBotArtifact({
+                source: 'generated',
+                target,
+                isRef: false,
+                createdAt: changeSet.completedAt || changeSet.createdAt,
+                sessionId: changeSet.sessionId,
+                delegationId: null,
+              }),
+            );
+          }
+        }
+      }
+    }
   }
 
   const merged = mergeBotArtifacts(raw);
+  const commandOnlyNotBefore = new Map(
+    [...commandNotBefore].filter(([id]) => !structuralIds.has(id)),
+  );
   // stat 是这条链上唯一的磁盘开销,不能跟着历史长度线性增长。列表已按时间倒序,
   // 只核验够填满一屏上限的那批候选(留出被存在性过滤掉的余量)。
   const candidates = merged.slice(0, limit * STAT_CANDIDATE_FACTOR);
-  const existing = await keepExistingFiles(candidates);
+  const existing = await keepExistingFiles(candidates, commandOnlyNotBefore);
   return {
     botId,
     items: existing.slice(0, limit),
@@ -320,10 +489,20 @@ export function registerBotArtifactIpc(): void {
     const body = raw && typeof raw === 'object' && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)
       : {};
-    return listBotArtifacts({
-      ...(typeof body.botId === 'string' ? { botId: body.botId.slice(0, 128) } : {}),
-      ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId.slice(0, 128) } : {}),
-      ...(typeof body.limit === 'number' ? { limit: body.limit } : {}),
-    });
+    return listBotArtifacts(
+      {
+        ...(typeof body.botId === 'string' ? { botId: body.botId.slice(0, 128) } : {}),
+        ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId.slice(0, 128) } : {}),
+        ...(typeof body.limit === 'number' ? { limit: body.limit } : {}),
+      },
+      {
+        // 延迟 import:见 BotArtifactSources 的说明,静态引会把 turn-change-set/store
+        // 的一整串主进程依赖拖进这条纯数据投影。
+        listTurnChangeSets: async (sessionId) => {
+          const store = await import('../../turn-change-set/store.js');
+          return store.listTurnChangeSets(sessionId);
+        },
+      },
+    );
   });
 }

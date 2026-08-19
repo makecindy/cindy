@@ -2592,7 +2592,11 @@
       "removeAria": "Uninstall {{name}}",
       "showDetails": "Show details for {{name}}",
       "collapseDetails": "Hide details for {{name}}",
-      "rowStatus": { "compatible": "Compatible", "noticeCount": "{{count}} compatibility notices", "unmanageable": "Manage from Pi" },
+      "rowStatus": {
+        "compatible": "Compatible",
+        "noticeCount": "{{count}} compatibility notices",
+        "unmanageable": "Manage from Pi"
+      },
       "operationFailed": "The Pi extension operation failed. Check the source or network and try again.",
       "loading": "Loading Pi extensions…",
       "loadFailed": "Cindy couldn't load Pi extensions. Check the connection and try again.",
@@ -2610,8 +2614,19 @@
       "confirmUninstall": "Uninstall",
       "extensionDialogConfirm": "Confirm",
       "cancel": "Cancel",
-      "resources": { "extension": "Extension code", "skill": "Skill", "prompt": "Prompt template", "theme": "Theme" },
-      "status": { "supported": "Fully supported by Cindy", "extensionSupported": "No known Pi TUI dependency found", "partial": "Compatibility limits found", "unsupported": "Installed, but not loaded by Cindy", "unknown": "Compatibility check incomplete" },
+      "resources": {
+        "extension": "Extension code",
+        "skill": "Skill",
+        "prompt": "Prompt template",
+        "theme": "Theme"
+      },
+      "status": {
+        "supported": "Fully supported by Cindy",
+        "extensionSupported": "No known Pi TUI dependency found",
+        "partial": "Compatibility limits found",
+        "unsupported": "Installed, but not loaded by Cindy",
+        "unknown": "Compatibility check incomplete"
+      },
       "compatibility": {
         "supported": "Skills and prompt templates are fully supported. Extension source is inspected after install instead of being classified only by resource type.",
         "partial": "When Pi TUI APIs are detected, Cindy lists the specific limits. The extension can still be installed and you decide whether to keep it enabled.",
@@ -2647,8 +2662,20 @@
       "keepDisabled": "Keep disabled",
       "approveAndEnable": "Accept risk and enable",
       "done": "Done",
-      "warning": { "no-resources": "No Pi resources were found in this extension.", "inspection-failed": "The extension is configured, but its installed contents could not be inspected.", "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.", "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.", "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.", "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work." },
-      "success": { "install": "Pi extension installed. The current task is unchanged; start or restart a Pi task to use it.", "remove": "Pi extension removed. The current task keeps the old extension until it is closed.", "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.", "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it." }
+      "warning": {
+        "no-resources": "No Pi resources were found in this extension.",
+        "inspection-failed": "The extension is configured, but its installed contents could not be inspected.",
+        "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.",
+        "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.",
+        "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.",
+        "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work."
+      },
+      "success": {
+        "install": "Pi extension installed. The current task is unchanged; start or restart a Pi task to use it.",
+        "remove": "Pi extension removed. The current task keeps the old extension until it is closed.",
+        "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.",
+        "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it."
+      }
     },
     "computerUse": {
       "title": "Automation",
@@ -6689,6 +6716,12 @@
     "learned": {
       "title": "What they've learned",
       "empty": "No know-how yet — give them a few things to do.",
+      "notesTitle": "Notes they wrote for themselves",
+      "deleteTitle": "Delete this skill",
+      "deleteDescription": "Delete \"{{title}}\"? They will stop using it from the next task on.",
+      "deleteConfirm": "Delete",
+      "deleteAria": "Delete \"{{title}}\"",
+      "loadingBody": "Opening…",
       "footnote": "They pick up know-how from the things they do — the more you use them, the better they get."
     },
     "growth": {
@@ -6761,6 +6794,7 @@
     },
     "artifacts": {
       "open": "Open",
+      "openLibrary": "Open the deliverables library",
       "reveal": "View in library",
       "retry": "Retry",
       "subtitle": "What this teammate has made",

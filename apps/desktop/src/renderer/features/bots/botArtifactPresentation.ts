@@ -89,6 +89,94 @@ export function botArtifactMetaParts(
   return parts;
 }
 
+// ── 表格交付物的迷你预览 ──────────────────────────────────────────────────
+//
+// 定稿原型的 sheet 卡带一张 4 行小表。**数据必须是真的**:画一张编的小表是骗人。
+// 因此只在能真读到文件时出预览(本机会话 + csv/tsv,读文件头);xlsx 需要解析器,
+// 仓里没有依赖也不为此新增,一律回退图标。
+
+/** 预览规模:与定稿原型一致的 4 行 × 3 列。 */
+export const SHEET_PREVIEW_ROWS = 4;
+export const SHEET_PREVIEW_COLUMNS = 3;
+
+/** 单元格展示上限。截断由 CSS 做,这里只是防止超长单元格把 DOM 撑爆。 */
+const SHEET_PREVIEW_CELL_CHARS = 64;
+
+/** 可解析的分隔符;拿不到(xlsx / 未知扩展名)返回 null = 不出预览。 */
+export function sheetPreviewDelimiter(ext: string): string | null {
+  const normalized = ext.trim().toLowerCase();
+  if (normalized === 'csv') return ',';
+  if (normalized === 'tsv') return '\t';
+  return null;
+}
+
+/**
+ * 文件头文本 → 前 SHEET_PREVIEW_ROWS 行 × 前 SHEET_PREVIEW_COLUMNS 列。
+ *
+ * 按 RFC4180 处理双引号包裹(含 `""` 转义与字段内换行),否则带逗号的中文表头会
+ * 被切碎成假数据。`truncated` = 传进来的只是文件头:此时最后一条记录可能被截断在
+ * 半路,除非它已经被换行收尾,否则丢掉 —— 宁可少一行,也不显示半个值。
+ */
+export function parseSheetPreview(
+  text: string,
+  delimiter: string,
+  options?: { truncated?: boolean },
+): string[][] {
+  const source = text.replace(/^\uFEFF/, '');
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  let index = 0;
+  for (; index < source.length && rows.length < SHEET_PREVIEW_ROWS; index += 1) {
+    const char = source[index];
+    if (inQuotes) {
+      if (char !== '"') {
+        field += char;
+      } else if (source[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else {
+        inQuotes = false;
+      }
+      continue;
+    }
+    if (char === '"' && field === '') {
+      inQuotes = true;
+      continue;
+    }
+    if (char === delimiter) {
+      row.push(field);
+      field = '';
+      continue;
+    }
+    if (char === '\r') continue;
+    if (char === '\n') {
+      row.push(field);
+      field = '';
+      rows.push(row);
+      row = [];
+      continue;
+    }
+    field += char;
+  }
+  // 尾部没有换行收尾的那条记录:文件读全了就是完整的一行,只读了头就可能是半行。
+  const hasTrailingRecord = field.length > 0 || row.length > 0;
+  if (hasTrailingRecord && rows.length < SHEET_PREVIEW_ROWS && !options?.truncated) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows
+    .filter((cells) => cells.some((cell) => cell.trim().length > 0))
+    .map((cells) => {
+      const shown = cells
+        .slice(0, SHEET_PREVIEW_COLUMNS)
+        .map((cell) => cell.trim().slice(0, SHEET_PREVIEW_CELL_CHARS));
+      while (shown.length < SHEET_PREVIEW_COLUMNS) shown.push('');
+      return shown;
+    });
+}
+
 export function filterBotArtifacts(
   items: readonly BotArtifactItem[],
   filter: BotArtifactCategory | 'all',

@@ -434,6 +434,86 @@ describe('buildRenderItems — key stability', () => {
     expect(deduped).toHaveLength(0);
   });
 
+  // 真机验收:伙伴对话里只看到工程 diff 卡「已更改 1 个文件 +137 −0 撤销/审查」,
+  // 交付物卡一次都没出现。根因就在这里 —— changeSet 把本轮文件从产出候选里排它
+  // 剔除,再自己渲染成 turn_changes。伙伴会话的方向是反的。
+  describe('bot sessions hand the turn over to deliverables', () => {
+    const messages = [
+      mkUser('u1'),
+      mkTool('bash-1', 'Bash', { command: 'make report' }),
+      mkResult('bash-result', 'tu-bash-1'),
+      mkUser('u2'),
+    ];
+    const changeSet: TurnChangeSetSummary = {
+      id: 'cs-bot',
+      sessionId: 's1',
+      anchorClientId: 'u1',
+      provider: 'claude-code',
+      providerTurnId: null,
+      cwd: 'C:/work',
+      state: 'complete',
+      workspaceState: 'applied',
+      isReversible: true,
+      incompleteReasons: [],
+      createdAt: 1,
+      completedAt: 2,
+      files: [
+        {
+          id: 'turn-1:out/report.pdf',
+          path: 'out/report.pdf',
+          oldPath: null,
+          status: 'added',
+          additions: 137,
+          deletions: 0,
+        },
+        {
+          id: 'turn-1:src/main.ts',
+          path: 'src/main.ts',
+          oldPath: null,
+          status: 'modified',
+          additions: 3,
+          deletions: 1,
+        },
+      ],
+      fileCount: 2,
+      additions: 140,
+      deletions: 1,
+    };
+    const build = (botSessionId?: string) =>
+      buildRenderItems(messages, undefined, undefined, {
+        workingDir: 'C:/work',
+        turnChangeSets: [changeSet],
+        ...(botSessionId ? { botSessionId } : {}),
+      }).items;
+
+    it('drops the engineering diff card and promotes changeSet creates to deliverables', () => {
+      const items = build('sess-bot');
+      expect(items.filter((item) => item.type === 'turn_changes')).toEqual([]);
+      const generated = items.filter(
+        (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+          item.type === 'generated_files',
+      );
+      expect(generated).toHaveLength(1);
+      expect(generated[0]?.files.map((file) => file.name)).toEqual(['report.pdf']);
+      // checkpoint 的新建是结构化实锤,与文件工具新建同级(不降级成 command 候选)。
+      expect(generated[0]?.files[0]?.source).toBe('tool');
+    });
+
+    it('never turns an edited file into a deliverable', () => {
+      const generated = build('sess-bot').filter(
+        (item): item is Extract<RenderItem, { type: 'generated_files' }> =>
+          item.type === 'generated_files',
+      );
+      expect(generated[0]?.files.some((file) => file.name === 'main.ts')).toBe(false);
+    });
+
+    it('leaves ordinary tasks on the diff card, unchanged', () => {
+      const items = build();
+      expect(items.filter((item) => item.type === 'turn_changes')).toHaveLength(1);
+      expect(items.filter((item) => item.type === 'generated_files')).toEqual([]);
+    });
+  });
+
   it('streaming token append to an assistant message keeps the same item key', () => {
     const m1: ChatMessage = { ...mkAssistant('a1', 'partial'), isStreaming: true };
     const before = buildRenderItems([mkUser('u1'), m1]);

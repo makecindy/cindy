@@ -340,6 +340,131 @@ describe('bot artifact projection', () => {
     expect((await listBotArtifacts({ botId: 'bot-a' })).items).toHaveLength(0);
   });
 
+  // ── 与对话内交付物卡同源 ──────────────────────────────────────────────
+  //
+  // 真机症状是「对话里有卡、仓库里没有」。这一组锁住:命令产物与 checkpoint 新建
+  // 这两条来源在仓库侧同样成立,且各自的防误报门槛没有被绕过。
+  describe('parity with the in-chat deliverable card', () => {
+    // 命令里一律用**相对**路径:候选文本会过临时目录黑名单,而测试夹具本身就住在
+    // 系统临时目录里(Linux 上是 /tmp)。相对路径由 workingDir 解析,与真机同路。
+    it('picks up command-written artifacts the file tools never recorded', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      writeFile('artifacts/report.pdf');
+      addMessage(
+        'session-a',
+        'sh',
+        'tool_use',
+        {
+          toolName: 'Bash',
+          input: {
+            command: 'soffice --headless --convert-to pdf --outdir artifacts docs/report.docx',
+          },
+        },
+        // 文件已经写在磁盘上(mtime = now),命令时间取更早的一刻。
+        Date.now() - 60_000,
+      );
+
+      const result = await listBotArtifacts({ botId: 'bot-a' });
+      expect(result.items.map((item) => item.name)).toEqual(['report.pdf']);
+      expect(result.items[0]!.category).toBe('doc');
+      expect(result.items[0]!.path).toBe(path.join(tmpRoot, 'artifacts', 'report.pdf'));
+    });
+
+    it('drops a command candidate whose file predates the command', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      const stale = writeFile('artifacts/stale.pdf');
+      const long_ago = Date.now() - 400 * 24 * 3600 * 1000;
+      fs.utimesSync(stale, new Date(long_ago), new Date(long_ago));
+      addMessage(
+        'session-a',
+        'sh2',
+        'tool_use',
+        { toolName: 'Bash', input: { command: 'pandoc in.md -o artifacts/stale.pdf' } },
+        Date.now(),
+      );
+
+      expect((await listBotArtifacts({ botId: 'bot-a' })).items).toHaveLength(0);
+    });
+
+    it('never lets a command mention of an edited file become an artifact', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      const source = writeFile('src/main.ts');
+      addMessage(
+        'session-a',
+        'edit',
+        'tool_use',
+        { toolName: 'Edit', input: { file_path: source } },
+        Date.now() - 60_000,
+      );
+      addMessage(
+        'session-a',
+        'sh3',
+        'tool_use',
+        { toolName: 'Bash', input: { command: 'node build.js > src/main.ts' } },
+        Date.now() - 30_000,
+      );
+
+      expect((await listBotArtifacts({ botId: 'bot-a' })).items).toHaveLength(0);
+    });
+
+    it('adds checkpoint creates and still refuses checkpoint edits', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      const created = writeFile('checkpoint/made.pdf');
+      const touched = writeFile('checkpoint/edited.md');
+      const changeSet = {
+        id: 'cs-1',
+        sessionId: 'session-a',
+        anchorClientId: 'u1',
+        provider: 'claude-code' as const,
+        providerTurnId: null,
+        cwd: tmpRoot,
+        state: 'complete' as const,
+        workspaceState: 'applied' as const,
+        isReversible: true,
+        incompleteReasons: [],
+        createdAt: 400,
+        completedAt: 500,
+        files: [
+          { id: 'f1', path: created, oldPath: null, status: 'added' as const, additions: 1, deletions: 0 },
+          { id: 'f2', path: touched, oldPath: null, status: 'modified' as const, additions: 1, deletions: 1 },
+        ],
+        fileCount: 2,
+        additions: 2,
+        deletions: 1,
+      };
+
+      const result = await listBotArtifacts(
+        { botId: 'bot-a' },
+        { listTurnChangeSets: async () => [changeSet] },
+      );
+      expect(result.items.map((item) => item.name)).toEqual(['made.pdf']);
+      expect(result.items[0]!.source).toBe('generated');
+      expect(result.items[0]!.createdAt).toBe(500);
+    });
+
+    it('survives a checkpoint sidecar that cannot be read', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      const written = writeFile('checkpoint/from-tool.md');
+      addMessage(
+        'session-a',
+        'w',
+        'tool_use',
+        { toolName: 'Write', input: { file_path: written } },
+        10,
+      );
+
+      const result = await listBotArtifacts(
+        { botId: 'bot-a' },
+        {
+          listTurnChangeSets: async () => {
+            throw new Error('sidecar gone');
+          },
+        },
+      );
+      expect(result.items.map((item) => item.name)).toEqual(['from-tool.md']);
+    });
+  });
+
   it('rejects a request that names neither a teammate nor a task', async () => {
     registerBotArtifactIpc();
     const handler = h.handlers.get('local-db:bots:artifacts');

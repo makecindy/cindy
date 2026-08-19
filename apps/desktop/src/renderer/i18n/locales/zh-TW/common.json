@@ -6714,6 +6714,12 @@
     "learned": {
       "title": "TA 學會的",
       "empty": "還沒長出什麼本事——多讓 TA 做幾件事。",
+      "notesTitle": "TA 給自己記的做法",
+      "deleteTitle": "刪除這個技能",
+      "deleteDescription": "刪除「{{title}}」？從下一次任務起 TA 就不會再用它了。",
+      "deleteConfirm": "刪除",
+      "deleteAria": "刪除「{{title}}」",
+      "loadingBody": "開啟中…",
       "footnote": "TA 會從做過的事裡自己長本事，用得越多越順手。"
     },
     "growth": {
@@ -6786,6 +6792,7 @@
     },
     "artifacts": {
       "open": "開啟",
+      "openLibrary": "打開交付物倉庫",
       "reveal": "在倉庫中檢視",
       "retry": "重試",
       "subtitle": "TA 做出來的東西",
@@ -7625,10 +7632,10 @@
       "lastTool": "最近工具：{{tool}}",
       "outputFile": "輸出：{{path}}"
     },
-      "planPill": {
-        "step": "第 {{current}} / {{total}} 步",
-        "dismiss": "關閉計劃"
-      },
+    "planPill": {
+      "step": "第 {{current}} / {{total}} 步",
+      "dismiss": "關閉計劃"
+    },
     "forkOrigin": {
       "label": "基於原任務建立"
     },

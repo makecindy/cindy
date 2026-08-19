@@ -2591,7 +2591,11 @@
       "removeAria": "卸载 {{name}}",
       "showDetails": "展开 {{name}} 的详情",
       "collapseDetails": "收起 {{name}} 的详情",
-      "rowStatus": { "compatible": "兼容", "noticeCount": "{{count}} 项兼容提示", "unmanageable": "请在 Pi 中管理" },
+      "rowStatus": {
+        "compatible": "兼容",
+        "noticeCount": "{{count}} 项兼容提示",
+        "unmanageable": "请在 Pi 中管理"
+      },
       "operationFailed": "Pi 扩展操作失败，请检查来源或网络后重试。",
       "loading": "正在加载 Pi 扩展…",
       "loadFailed": "暂时无法读取 Pi 扩展，请检查连接后重试。",
@@ -2609,8 +2613,19 @@
       "confirmUninstall": "卸载",
       "extensionDialogConfirm": "确认",
       "cancel": "取消",
-      "resources": { "extension": "扩展代码", "skill": "技能", "prompt": "提示模板", "theme": "主题" },
-      "status": { "supported": "Cindy 完整支持", "extensionSupported": "未发现已知 Pi TUI 依赖", "partial": "发现兼容限制", "unsupported": "已安装，但不会在 Cindy 中加载", "unknown": "无法完成兼容检查" },
+      "resources": {
+        "extension": "扩展代码",
+        "skill": "技能",
+        "prompt": "提示模板",
+        "theme": "主题"
+      },
+      "status": {
+        "supported": "Cindy 完整支持",
+        "extensionSupported": "未发现已知 Pi TUI 依赖",
+        "partial": "发现兼容限制",
+        "unsupported": "已安装，但不会在 Cindy 中加载",
+        "unknown": "无法完成兼容检查"
+      },
       "compatibility": {
         "supported": "技能和提示模板完整支持；扩展会在安装后解析实际源码，不再只按资源类型猜测。",
         "partial": "检测到 Pi TUI API 时会列出具体限制；扩展仍可安装并由你决定是否继续启用。",
@@ -2646,8 +2661,20 @@
       "keepDisabled": "保持停用",
       "approveAndEnable": "了解风险并启用",
       "done": "完成",
-      "warning": { "no-resources": "这个扩展没有发现 Pi 资源。", "inspection-failed": "扩展已登记，但无法检查已安装内容。", "inspection-limit": "扩展内容超过安全检查上限，已保持停用。", "unsupported-filter": "这个扩展使用了 Cindy 暂时无法安全复现的 Pi 资源筛选配置，因此保持停用。", "unsafe-source": "这个扩展的旧来源包含凭证或私密 URL 参数。Cindy 已隐藏敏感部分、保持停用，并禁止在应用内更新或移除。", "lifecycle-scripts-disabled": "这个扩展声明了安装脚本，但 Cindy 为安全起见没有执行。依赖安装脚本生成文件的功能可能不可用。" },
-      "success": { "install": "Pi 扩展已安装。当前任务不会变化；新建或重启 Pi 任务后生效。", "remove": "Pi 扩展已移除。当前任务仍保留旧扩展，关闭后才会彻底卸载。", "update": "Pi 扩展已更新。当前任务仍使用旧版本；新建或重启后生效。", "set-enabled": "Pi 扩展启用状态已保存。当前任务不会变化；新建或重启后生效。" }
+      "warning": {
+        "no-resources": "这个扩展没有发现 Pi 资源。",
+        "inspection-failed": "扩展已登记，但无法检查已安装内容。",
+        "inspection-limit": "扩展内容超过安全检查上限，已保持停用。",
+        "unsupported-filter": "这个扩展使用了 Cindy 暂时无法安全复现的 Pi 资源筛选配置，因此保持停用。",
+        "unsafe-source": "这个扩展的旧来源包含凭证或私密 URL 参数。Cindy 已隐藏敏感部分、保持停用，并禁止在应用内更新或移除。",
+        "lifecycle-scripts-disabled": "这个扩展声明了安装脚本，但 Cindy 为安全起见没有执行。依赖安装脚本生成文件的功能可能不可用。"
+      },
+      "success": {
+        "install": "Pi 扩展已安装。当前任务不会变化；新建或重启 Pi 任务后生效。",
+        "remove": "Pi 扩展已移除。当前任务仍保留旧扩展，关闭后才会彻底卸载。",
+        "update": "Pi 扩展已更新。当前任务仍使用旧版本；新建或重启后生效。",
+        "set-enabled": "Pi 扩展启用状态已保存。当前任务不会变化；新建或重启后生效。"
+      }
     },
     "computerUse": {
       "title": "自动操作",
@@ -6687,6 +6714,12 @@
     "learned": {
       "title": "TA 学会的",
       "empty": "还没长出什么本事——多让 TA 做几件事。",
+      "notesTitle": "TA 给自己记的做法",
+      "deleteTitle": "删除这个技能",
+      "deleteDescription": "删除“{{title}}”？从下一次任务起 TA 就不会再用它了。",
+      "deleteConfirm": "删除",
+      "deleteAria": "删除“{{title}}”",
+      "loadingBody": "打开中…",
       "footnote": "TA 会从做过的事里自己长本事，用得越多越顺手。"
     },
     "growth": {
@@ -6759,6 +6792,7 @@
     },
     "artifacts": {
       "open": "打开",
+      "openLibrary": "打开交付物仓库",
       "reveal": "在仓库中查看",
       "retry": "重试",
       "subtitle": "TA 做出来的东西",

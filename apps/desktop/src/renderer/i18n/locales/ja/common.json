@@ -6714,6 +6714,12 @@
     "learned": {
       "title": "学んだこと",
       "empty": "まだ得意なことはありません——いくつか任せてみてください。",
+      "notesTitle": "自分用に書きとめたやり方",
+      "deleteTitle": "このスキルを削除",
+      "deleteDescription": "「{{title}}」を削除しますか？次のタスクからは使わなくなります。",
+      "deleteConfirm": "削除",
+      "deleteAria": "「{{title}}」を削除",
+      "loadingBody": "開いています…",
       "footnote": "やった仕事から自分で得意を増やします。使うほど手際がよくなります。"
     },
     "growth": {
@@ -6786,6 +6792,7 @@
     },
     "artifacts": {
       "open": "開く",
+      "openLibrary": "成果物ライブラリを開く",
       "reveal": "ライブラリで表示",
       "retry": "再試行",
       "subtitle": "このメンバーが作ったもの",

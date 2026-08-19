@@ -6714,6 +6714,12 @@
     "learned": {
       "title": "배운 것",
       "empty": "아직 익힌 게 없어요 — 몇 가지 맡겨 보세요.",
+      "notesTitle": "스스로 적어 둔 방법",
+      "deleteTitle": "이 스킬 삭제",
+      "deleteDescription": "\"{{title}}\"을(를) 삭제할까요? 다음 작업부터는 사용하지 않아요.",
+      "deleteConfirm": "삭제",
+      "deleteAria": "\"{{title}}\" 삭제",
+      "loadingBody": "여는 중…",
       "footnote": "해온 일에서 스스로 실력을 쌓아요. 많이 쓸수록 손에 익습니다."
     },
     "growth": {
@@ -6786,6 +6792,7 @@
     },
     "artifacts": {
       "open": "열기",
+      "openLibrary": "산출물 라이브러리 열기",
       "reveal": "보관함에서 보기",
       "retry": "다시 시도",
       "subtitle": "이 팀원이 만든 것",
