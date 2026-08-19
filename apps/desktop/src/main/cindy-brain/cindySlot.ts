@@ -136,6 +136,12 @@ export interface CindyImageCapabilities {
   maxEditImages?: number;
 }
 
+export interface CindyMediaOverrideSelection {
+  modelId: string;
+  providerId: string;
+  label?: string;
+}
+
 export interface CindySlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /** 当前账号作用域；跨 await 的媒体任务必须捕获并持续复核。 */
@@ -147,6 +153,7 @@ export interface CindySlotDeps {
   generateImage(params: {
     prompt: string;
     model: string;
+    providerId?: string;
     aspectRatio?: GhostImageAspectRatio;
   }): Promise<{ buffer: Uint8Array; mimeType: string }>;
   /** 主机统一图片通道·改图;源图以磁盘路径喂给网关(意识摸不到路径)。
@@ -154,6 +161,7 @@ export interface CindySlotDeps {
   editImage(params: {
     prompt: string;
     model: string;
+    providerId?: string;
     imagePaths: string[];
     aspectRatio?: GhostImageAspectRatio;
   }): Promise<{ buffer: Uint8Array; mimeType: string }>;
@@ -161,7 +169,7 @@ export interface CindySlotDeps {
    * 该图像型号的 provider 实际能力。缺席/查无 = 只执行通用 1–4 图粗筛；
    * provider 上限更低时，slot 在读源图与出网前给出型号级明确拒绝。
    */
-  imageCapabilities?(model: string): CindyImageCapabilities | null;
+  imageCapabilities?(model: string, providerId?: string): CindyImageCapabilities | null;
   /**
    * 主机统一视频通道·文生视频(art 视频 provider 层复用,submit→
    * 轮询→下载一条龙在注入实现里完成);返回视频字节与 mime,外加实际
@@ -169,7 +177,7 @@ export interface CindySlotDeps {
    * 分钟级才 resolve,在途名额在整个等待期占用。
    */
   generateVideo(
-    params: { prompt: string; model: string } & CindyVideoParams,
+    params: { prompt: string; model: string; providerId?: string } & CindyVideoParams,
   ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
   /**
    * 主机统一视频通道·参考图生视频(源图以磁盘路径注入)。`refMode` 决定这
@@ -181,6 +189,7 @@ export interface CindySlotDeps {
     params: {
       prompt: string;
       model: string;
+      providerId?: string;
       imagePaths: string[];
       refMode: GhostVideoRefMode;
     } & CindyVideoParams,
@@ -190,7 +199,7 @@ export interface CindySlotDeps {
    * 该型号 → null)。可选依赖:不注入 = 跳过按型号校验,只做协议层粗筛
    * (值仍会被 provider 层自己的校验拦下,只是话术不如这里友好)。
    */
-  videoCapabilities?(model: string): CindyVideoCapabilities | null;
+  videoCapabilities?(model: string, providerId?: string): CindyVideoCapabilities | null;
   /**
    * 指纹 → 磁盘路径,且仅当该媒体在此意识名下(出生或画廊,查账本);
    * 不属于它 / 查无此账 / 文件缺失一律 null(不区分,不给探测空间)。
@@ -204,6 +213,14 @@ export interface CindySlotDeps {
    * 白名单校验(型号可能已随主机演进下架)。
    */
   getOverride(ghostId: string, capability: string): string | null;
+  /**
+   * Provider-aware 媒体覆盖。新版 Host 偏好按 providerId + modelId 保存；存在时
+   * 必须贯穿能力校验与最终派发，不能降回裸 modelId 后走 first-wins。
+   */
+  getMediaOverride?(
+    ghostId: string,
+    capability: string,
+  ): CindyMediaOverrideSelection | null;
   /**
    * 当前图像能力配置——真身是 providers.json 运行时目录(与会话模型列表
    * 同一获取来源),每单现读跟随热更。models = 白名单与显示名;defaults =
@@ -830,6 +847,8 @@ export class GhostCindySlot {
     const defaults = cfg.defaults;
     const whitelist = new Set(cfg.models.map((m) => m.id));
     let model = defaults.standard;
+    let providerId: string | undefined;
+    let providerModelLabel: string | undefined;
     if (p.tier !== undefined) {
       if (typeof p.tier !== 'string' || !(GHOST_MODEL_TIERS as readonly string[]).includes(p.tier)) {
         return { ok: false, message: `未知档位(可用:${GHOST_MODEL_TIERS.join(' / ')})` };
@@ -837,13 +856,20 @@ export class GhostCindySlot {
       model = defaults[p.tier as GhostModelTier];
     }
     const capability = `${info.category}.${info.action}`;
-    const override = this.deps.getOverride(ghostId, capability);
-    if (override !== null) {
-      if (whitelist.has(override)) {
-        model = override;
-      } else {
-        // 钉的型号已随白名单演进下架:落回上面的档位/默认,不让老配置卡死能力。
-        this.deps.log?.warn('ghost cindy override no longer whitelisted, ignored', { ghostId, override });
+    const mediaOverride = this.deps.getMediaOverride?.(ghostId, capability) ?? null;
+    if (mediaOverride) {
+      model = mediaOverride.modelId;
+      providerId = mediaOverride.providerId;
+      providerModelLabel = mediaOverride.label;
+    } else {
+      const override = this.deps.getOverride(ghostId, capability);
+      if (override !== null) {
+        if (whitelist.has(override)) {
+          model = override;
+        } else {
+          // 钉的型号已随白名单演进下架:落回上面的档位/默认,不让老配置卡死能力。
+          this.deps.log?.warn('ghost cindy override no longer whitelisted, ignored', { ghostId, override });
+        }
       }
     }
     if (p.model !== undefined) {
@@ -855,6 +881,10 @@ export class GhostCindySlot {
           message: `不支持的模型(不在主机白名单内)。当前可用:${cfg.models.length > 0 ? cfg.models.map((m) => m.id).join(' / ') : '(暂无可用型号)'}`,
         };
       }
+      if (p.model !== model) {
+        providerId = undefined;
+        providerModelLabel = undefined;
+      }
       model = p.model;
     }
 
@@ -864,7 +894,7 @@ export class GhostCindySlot {
     // 明拒并列出该型号的可用值,不做最近似降级——静默改成别的档位会让意识
     // 以为自己的参数生效了。
     if (info.category === 'video' && presentVideoKeys.length > 0) {
-      const caps = this.deps.videoCapabilities?.(model) ?? null;
+      const caps = this.deps.videoCapabilities?.(model, providerId) ?? null;
       if (caps) {
         const unsupported = describeUnsupportedVideoParams(videoParams, caps);
         if (unsupported) {
@@ -897,7 +927,7 @@ export class GhostCindySlot {
     }
 
     if (kind === 'edit_image') {
-      const perModelMax = this.deps.imageCapabilities?.(model)?.maxEditImages;
+      const perModelMax = this.deps.imageCapabilities?.(model, providerId)?.maxEditImages;
       if (perModelMax !== undefined && hashes.length > perModelMax) {
         const label = cfg.models.find((m) => m.id === model)?.label ?? model;
         return {
@@ -912,7 +942,7 @@ export class GhostCindySlot {
     // 张数上限都不一样。不支持即明拒,不降级成另一种用法——降级会出一条
     // 用户没要的片子,还照样计费。
     if (kind === 'edit_video') {
-      const caps = this.deps.videoCapabilities?.(model) ?? null;
+      const caps = this.deps.videoCapabilities?.(model, providerId) ?? null;
       const perModelMax = caps?.maxImagesByRefMode?.[refMode];
       if (caps?.maxImagesByRefMode !== undefined) {
         const label = cfg.models.find((m) => m.id === model)?.label ?? model;
@@ -961,6 +991,7 @@ export class GhostCindySlot {
       this.deps.log?.info(`ghost cindy-request ${kind} start`, {
         ghostId,
         model,
+        ...(providerId ? { providerId } : {}),
         callId,
         ...(p.mode === 'submit' ? { mode: 'submit' } : {}),
       });
@@ -997,6 +1028,7 @@ export class GhostCindySlot {
           generated = await this.deps.editImage({
             prompt,
             model,
+            ...(providerId ? { providerId } : {}),
             imagePaths,
             ...(aspectRatio !== undefined ? { aspectRatio } : {}),
           });
@@ -1004,12 +1036,25 @@ export class GhostCindySlot {
           generated = await this.deps.generateImage({
             prompt,
             model,
+            ...(providerId ? { providerId } : {}),
             ...(aspectRatio !== undefined ? { aspectRatio } : {}),
           });
         } else if (kind === 'edit_video') {
-          generated = await this.deps.editVideo({ prompt, model, imagePaths, refMode, ...videoParams });
+          generated = await this.deps.editVideo({
+            prompt,
+            model,
+            ...(providerId ? { providerId } : {}),
+            imagePaths,
+            refMode,
+            ...videoParams,
+          });
         } else {
-          generated = await this.deps.generateVideo({ prompt, model, ...videoParams });
+          generated = await this.deps.generateVideo({
+            prompt,
+            model,
+            ...(providerId ? { providerId } : {}),
+            ...videoParams,
+          });
         }
         assertOwnerScopeCurrent();
 
@@ -1027,13 +1072,15 @@ export class GhostCindySlot {
         this.deps.log?.info(`ghost cindy-request ${kind} done`, {
           ghostId,
           model,
+          ...(providerId ? { providerId } : {}),
           callId,
           hash: saved.hash,
           bytes: generated.buffer.byteLength,
         });
         // 实际选型随结果回传(主机权威信息):意识交卷 note、会话里的 AI 与
         // 用户由此看得见"这单是谁画的"。
-        const modelLabel = cfg.models.find((m) => m.id === model)?.label ?? model;
+        const modelLabel =
+          providerModelLabel ?? cfg.models.find((m) => m.id === model)?.label ?? model;
         // 图片代办附带像素宽高(字节头解析,best-effort):意识供聊天卡片时
         // 据此精确声明卡高,首帧零跳动;解析不出就缺省,意识回退估计值。
         const dims =

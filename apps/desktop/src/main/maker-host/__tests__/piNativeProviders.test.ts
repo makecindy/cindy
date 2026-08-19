@@ -285,10 +285,16 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       maxTokens: 500_000,
       input: ['text', 'image'],
       reasoning: true,
+      thinkingLevelMap: {
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+      },
       compat: {
         supportsStore: false,
         supportsDeveloperRole: false,
-        supportsReasoningEffort: false,
+        supportsReasoningEffort: true,
       },
     });
     expect(env).toEqual({
@@ -436,7 +442,16 @@ describe('buildPiNativeProvidersFromConfigs', () => {
           'openai-codex',
           new Map([['gpt-5.6-sol', piBundledModel('gpt-5.6-sol', 'openai-codex-responses')]]),
         ],
-        ['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-responses')]])],
+        ['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-responses', {
+          thinkingLevelMap: {
+            minimal: null,
+            low: 'low',
+            medium: 'medium',
+            high: 'high',
+            xhigh: null,
+            max: null,
+          },
+        })]])],
       ]),
     );
 
@@ -636,8 +651,11 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       catalogAddition: true,
       cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
     });
-    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.api).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.api).toBe('openai-responses');
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.3')?.catalogAddition).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.3')?.api).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-build-0.1')?.catalogAddition).toBeUndefined();
   });
 
   it('does not mark SuperGrok models as catalog additions when the PI probe is unavailable', () => {
@@ -684,6 +702,47 @@ describe('buildPiNativeProvidersFromConfigs', () => {
 
     const xaiProvider = providers.find((provider) => provider.id === 'xai');
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.catalogAddition).toBeUndefined();
+  });
+
+  it('emits a Grok 4.6 inheritModels replacement so xhigh survives writeModelsJson', () => {
+    const { providers } = buildPiSubscriptionNativeProviders(
+      BUNDLED_CATALOG,
+      'http://127.0.0.1:4567/',
+      new Map([
+        [
+          'xai',
+          new Map([
+            [
+              'grok-4.6',
+              piBundledModel('grok-4.6', 'openai-completions', {
+                reasoning: true,
+                compat: {
+                  supportsStore: false,
+                  supportsDeveloperRole: false,
+                  supportsReasoningEffort: false,
+                },
+              }),
+            ],
+          ]),
+        ],
+      ]),
+    );
+    const grok = providers
+      .find((provider) => provider.id === 'xai')
+      ?.models.find((model) => model.wireId === 'grok-4.6' || model.id === 'grok-4.6');
+    expect(grok).toMatchObject({
+      api: 'openai-completions',
+      reasoning: true,
+      thinkingLevelMap: {
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+      },
+      compat: {
+        supportsReasoningEffort: true,
+      },
+    });
   });
 
   it('namespaces only colliding BYOM runtime ids and preserves their persisted source ids', () => {
@@ -892,7 +951,110 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         wireId: 'grok-daily',
         api: 'openai-responses',
       });
+      expect(providers.find((provider) => provider.id === 'xai')).toMatchObject({
+        apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
+        modelIdAliases: expect.objectContaining({
+          'xai/grok-daily': 'xai/grok-daily',
+          'grok-daily': 'xai/grok-daily',
+        }),
+      });
     }
+  });
+
+  it('keeps ChatGPT aliases pointed at namespaced spec ids, not bare wire ids', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const openai = catalog.providers.find((provider) => provider.id === 'openai')!;
+    openai.models.pi = [
+      {
+        id: 'chatgpt/gpt-5.7',
+        name: 'GPT-5.7',
+        contextWindow: 272_000,
+        efforts: [],
+        defaultEffort: null,
+        piApi: 'openai-responses',
+      },
+    ];
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map(),
+    ).providers.find((candidate) => candidate.id === 'openai-codex');
+    expect(provider?.modelIdAliases).toMatchObject({
+      'chatgpt/gpt-5.7': 'chatgpt/gpt-5.7',
+      'gpt-5.7': 'chatgpt/gpt-5.7',
+    });
+  });
+
+  it('writes pinned-Pi-missing Grok 4.6 as an openai-responses catalog addition', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
+    xai.models.pi = [
+      {
+        id: 'grok-4.6',
+        name: 'Grok 4.6',
+        contextWindow: 500_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: true,
+      },
+    ];
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      new Map([['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-responses')]])]]),
+      new Map([['xai', new Set(['grok-4.5'])]]),
+    ).providers.find((candidate) => candidate.id === 'xai');
+    expect(provider?.models).toEqual([
+      expect.objectContaining({
+        id: 'grok-4.6',
+        wireId: 'grok-4.6',
+        api: 'openai-responses',
+        catalogAddition: true,
+        reasoning: true,
+        thinkingLevelMap: expect.objectContaining({ xhigh: 'xhigh' }),
+        compat: expect.objectContaining({ supportsReasoningEffort: true }),
+      }),
+    ]);
+    expect(provider?.modelIdAliases).toMatchObject({
+      'grok-4.6': 'grok-4.6',
+      'xai/grok-4.6': 'grok-4.6',
+    });
+  });
+
+  it('does not rewrite bundled xAI protocols when the PI probe is unavailable', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
+    xai.models.pi = [
+      {
+        id: 'grok-4.3',
+        name: 'Grok 4.3',
+        contextWindow: 1_000_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: true,
+      },
+      {
+        id: 'grok-4.6',
+        name: 'Grok 4.6',
+        contextWindow: 500_000,
+        efforts: [],
+        defaultEffort: null,
+        supportsImageInput: true,
+      },
+    ];
+    const provider = buildPiSubscriptionNativeProviders(
+      catalog,
+      'http://127.0.0.1:4567/',
+      undefined,
+    ).providers.find((candidate) => candidate.id === 'xai');
+    const grok43 = provider?.models.find((model) => model.wireId === 'grok-4.3');
+    const grok46 = provider?.models.find((model) => model.wireId === 'grok-4.6');
+    expect(grok43?.id).toBe('grok-4.3');
+    expect(grok43?.catalogAddition).toBeUndefined();
+    expect(grok43?.api).toBeUndefined();
+    expect(grok46?.id).toBe('grok-4.6');
+    expect(grok46?.catalogAddition).toBeUndefined();
+    expect(grok46?.api).toBeUndefined();
   });
 
   it('keeps missing daily rows while respecting models returned by a partial PI probe', () => {

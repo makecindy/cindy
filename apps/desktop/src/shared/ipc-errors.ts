@@ -18,6 +18,8 @@ export type IpcErrorCode =
   // 分开:后者是"本会话在跑"的短时状态;混用会让「新建会话/切模型」场景弹出误导性的
   // "会话运行中"文案(实际是别的会话挡住了凭证切换)。
   | 'CREDENTIAL_SWITCH_BUSY'
+  // Pi 热切 SuperGrok 时 switch_session 未确认，任务已终止。
+  | 'PI_CATALOG_RELOAD_UNCONFIRMED'
   // 远端 Claude 路由 materialization 失败(remote-claude-route.ts):
   // 供应商凭证 mutation 窗口(稍后重试)/ 远端不可表达(换来源)/ 订阅未连接(连接 Claude.ai)。
   | 'REMOTE_PROVIDER_UPDATING'
@@ -134,6 +136,8 @@ export type IpcErrorCode =
   | 'DEVICE_BUSY'
   | 'AGENT_MUTATION_PAUSED'
   | 'MUTATION_CANCELLED'
+  | 'PI_PACKAGE_LIST_FAILED'
+  | 'PI_PACKAGE_MUTATION_FAILED'
   | 'LEASE_EXPIRED'
   | 'STALE_GENERATION'
   | 'STALE_UI_SNAPSHOT'
@@ -245,6 +249,8 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'APP_SHORTCUTS_WRITE_FAILED',
   'NO_ACTIVE_TURN',
   'SESSION_RUNNING',
+  'CREDENTIAL_SWITCH_BUSY',
+  'PI_CATALOG_RELOAD_UNCONFIRMED',
   'REMOTE_PROVIDER_UPDATING',
   'REMOTE_PROVIDER_UNSUPPORTED',
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
@@ -329,6 +335,8 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DEVICE_BUSY',
   'AGENT_MUTATION_PAUSED',
   'MUTATION_CANCELLED',
+  'PI_PACKAGE_LIST_FAILED',
+  'PI_PACKAGE_MUTATION_FAILED',
   'LEASE_EXPIRED',
   'STALE_GENERATION',
   'STALE_UI_SNAPSHOT',

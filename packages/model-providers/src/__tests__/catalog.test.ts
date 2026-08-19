@@ -148,8 +148,8 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       contextWindow: 500_000,
       maxOutput: 500_000,
       supportsImageInput: true,
-      efforts: [],
-      defaultEffort: null,
+      efforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultEffort: 'high',
     });
     expect(xai.models['claude-code']?.find((m) => m.id === 'xai/grok-4.6')).toMatchObject({
       contextWindow: 500_000,

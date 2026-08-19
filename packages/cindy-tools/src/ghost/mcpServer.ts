@@ -96,7 +96,7 @@ const D_MEDIA = [
   "如果插件需要消费最终结果，Agent 可在本工具成功后再调用插件声明的普通工具，并通过 ghost_call.attachments 显式交接；这不是生成请求的必经步骤。",
   "模型存在性来自当前账号的 Model Access model group；list_models 只投影同时满足 Gateway modalities、Guide operation 与当前客户端协议支持度的可执行模型。",
   "媒体生成必须由当前 Agent 通过本工具发起；插件面板和插件沙箱代码不得直接提交生成请求。",
-  "插件已返回用户配置的 model_id 时可直接用它和目标 capability 走 prepare → request；没有已配置 model_id 时，先用 list_models 查询可用媒体模型。prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
+  "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
   "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
@@ -508,6 +508,7 @@ export async function handleMedia(
   input: {
     action: "list_models" | "prepare" | "request" | "poll";
     capability?: CindyMediaCapability;
+    provider_id?: string;
     model_id?: string;
     invocation_id?: string;
     body?: Record<string, unknown>;
@@ -549,6 +550,7 @@ export async function handleMedia(
       }
       result = await deps.callMedia({
         action: "prepare",
+        ...(input.provider_id ? { providerId: input.provider_id } : {}),
         modelId: input.model_id,
         capability: input.capability,
       });
@@ -1152,6 +1154,11 @@ export function createCindyGhostsMcpServer(
         .max(256)
         .optional()
         .describe("prepare 时必填；使用插件返回的已配置 model_id，或来自本次 list_models"),
+      provider_id: z
+        .string()
+        .max(128)
+        .optional()
+        .describe("prepare 时可选；插件或 list_models 返回 provider_id 时必须原样传入，以区分同名模型的执行来源"),
       invocation_id: z
         .string()
         .max(128)

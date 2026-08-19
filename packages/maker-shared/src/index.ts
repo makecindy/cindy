@@ -34,6 +34,7 @@ export * from './scheduleForm.js';
 export * from './scheduleModel.js';
 export type * from './scheduleTypes.js';
 export * from './sessionActionStrip.js';
+export * from './sessionActivity.js';
 export * from './sessionControls.js';
 export * from './sessionIdentity.js';
 export * from './sessionList.js';

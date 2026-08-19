@@ -52,6 +52,30 @@ async function readSignature(buffer: Buffer): Promise<GhostSignatureDocument> {
 }
 
 describe('ghostSignature · 发布者签名', () => {
+  it('signing and review preserve safe Unix executable metadata', async () => {
+    const source = new JSZip();
+    source.file('ghost.json', JSON.stringify(MANIFEST), { unixPermissions: 0o100644 });
+    source.file('main.js', '// browser brain', { unixPermissions: 0o100755 });
+    source.file('linked-dir/', null, { dir: true, unixPermissions: 0o120777 });
+    const unsigned = await source.generateAsync({ type: 'nodebuffer', platform: 'UNIX' });
+    const publisher = crypto.generateKeyPairSync('ed25519');
+    const reviewer = crypto.generateKeyPairSync('ed25519');
+
+    const signed = await signGhostPackage(unsigned, {
+      publisherName: 'Publisher',
+      privateKey: publisher.privateKey,
+    });
+    const signedZip = await JSZip.loadAsync(signed);
+    expect(Number(signedZip.files['main.js'].unixPermissions) & 0o7777).toBe(0o755);
+    expect(Number(signedZip.files['linked-dir/'].unixPermissions) & 0o7777).toBe(0o755);
+
+    const reviewed = await reviewGhostPackage(signed, {
+      reviewerPrivateKey: reviewer.privateKey,
+    });
+    const reviewedZip = await JSZip.loadAsync(reviewed);
+    expect(Number(reviewedZip.files['main.js'].unixPermissions) & 0o7777).toBe(0o755);
+  });
+
   it('无签名可以安装，但明确标为未验证', async () => {
     const zip = await JSZip.loadAsync(await unsignedPackage());
     const result = await verifyGhostZipSignatures(zip, '', MANIFEST);
