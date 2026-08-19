@@ -135,6 +135,8 @@ export function attachMainOwnedInputBoundary(
  * `fromMobileClient` 是 coordinator 从队列项透传给 send 事务的内部字段;直连
  * `maker:send` 的 sendOpts 却来自 wire —— 不剥的话客户端自填一个就能让 agent 收到手机
  * 说明。直连路径的来源判据只能是 async context(invoke-context),不看 sendOpts。
+ * `turnPermissionPolicy` 同样只能由 Main 的 IM dispatcher 创建；Renderer/device-link
+ * 即使伪造相同字段形状，也不能把普通文本升级成已认证 IM 指令。
  *
  * 非对象输入原样返回(事务自己会按 `?? {}` 兜底)。
  */
@@ -147,7 +149,8 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     !('expectedTurnSession' in opts) &&
     !('expectedTurnGeneration' in opts) &&
     !('inputAbortSignal' in opts) &&
-    !('signal' in opts)
+    !('signal' in opts) &&
+    !('turnPermissionPolicy' in opts)
   ) {
     return sendOpts;
   }
@@ -158,6 +161,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     expectedTurnGeneration: _ignoredTurnGeneration,
     inputAbortSignal: _ignoredAbortSignal,
     signal: _ignoredSignal,
+    turnPermissionPolicy: _ignoredTurnPermissionPolicy,
     ...rest
   } = opts;
   return rest;

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useOutletContext, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
+import { ArrowLeft, ChevronRight, Puzzle } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
-import { SettingsContentHeaderRegistration } from './SettingsContentHeader';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
@@ -39,6 +40,7 @@ import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
 import { AgentResourceSection } from './AgentResourceSection';
+import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
@@ -57,6 +59,7 @@ interface SettingsOutletContext {
 }
 
 export function SettingsView() {
+  const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
@@ -88,6 +91,9 @@ export function SettingsView() {
     if (raw === 'agent-island' && !isMac) return 'general';
     return isSettingsTab(raw) ? raw : 'general';
   }, [canAccessBilling, isMac, rawTab]);
+  const piExtensionsPanelOpen =
+    activeTab === 'general' &&
+    (rawTab === 'pi-extensions' || searchParams.get('openPanel') === 'pi-extensions');
 
   useEffect(() => {
     if (rawTab !== 'billing' || canAccessBilling) return;
@@ -119,11 +125,11 @@ export function SettingsView() {
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     contentScrollRef.current?.scrollTo({ top: 0 });
-  }, [activeTab]);
+  }, [activeTab, piExtensionsPanelOpen]);
 
   const handleSelectTab = useCallback(
     (tab: SettingsTab) => {
-      if (tab === activeTab) return;
+      if (tab === activeTab && !piExtensionsPanelOpen) return;
       const next = new URLSearchParams(searchParams);
       next.delete('openPanel');
       next.delete('ghost');
@@ -143,8 +149,22 @@ export function SettingsView() {
       }
       setSearchParams(next, { replace: true });
     },
-    [activeTab, searchParams, setSearchParams],
+    [activeTab, piExtensionsPanelOpen, searchParams, setSearchParams],
   );
+
+  const handleOpenPiExtensions = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('tab');
+    next.set('openPanel', 'pi-extensions');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const handleClosePiExtensions = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('tab');
+    next.delete('openPanel');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (activeTab !== 'help') {
@@ -193,16 +213,32 @@ export function SettingsView() {
       role="main"
       aria-label={t('settings.title')}
     >
-      {/* 返回 + 标题注入 46px ContentHeader，与聊天标题栏同高，不再额外叠顶栏留白。 */}
-      <SettingsContentHeaderRegistration />
-      {/* Outer container — page itself does not scroll; columns own their scroll behavior. */}
+      {/* Outer container — page itself does not scroll; columns own their scroll behavior.
+          左侧保留原来的页头位置；右侧不再为页头预留 56px，贴着 46px 标题栏起排。 */}
       <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          className="flex h-full min-h-0 shrink-0 flex-col overflow-y-auto pl-6 pr-4"
+          className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
         >
+          {/* Back navigation — gap 10, pb 18, aligned with menu items via px-3 */}
+          <div className="flex items-center gap-2.5 px-3 pb-[18px]">
+            <Tip text={t('settings.back')} side="bottom">
+              <button
+                type="button"
+                onClick={() => navigate('/')}
+                aria-label={t('settings.back')}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-[color,background-color,transform] duration-150 hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)] active:scale-[0.98]"
+              >
+                <ArrowLeft size={20} />
+              </button>
+            </Tip>
+            <h1 className="text-24 font-medium leading-[1.1] text-[var(--settings-back-text)]">
+              {t('settings.title')}
+            </h1>
+          </div>
+
           <SettingsSidebarNav
             tabIds={visibleTabIds}
             activeTab={activeTab}
@@ -214,7 +250,7 @@ export function SettingsView() {
             Most tabs scroll as a page; Session Import and Plugins use a fixed-height
             workspace so only their inner lists scroll.
             right padding mirrors sidebar's 24px left inset.
-            顶栏已收进 ContentHeader，内容与左侧第一个导航项顶对齐。
+            右侧贴 46px 标题栏起排，不跟随左侧页头高度下移。
             scrollbar-gutter:stable —— 所有分区都预留同一滚动条槽位；即使
             Session Import 自身不滚动，也要保持与普通滚动页相同的内容宽度。 */}
         <div
@@ -229,7 +265,7 @@ export function SettingsView() {
           {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
               按 activeTab 条件卸载重挂,key 不额外丢状态;滚动容器在外层不重挂)。 */}
           <div
-            key={activeTab}
+            key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : 'root'}`}
             className={cn(
               'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
               activeTab === 'import' || activeTab === 'ghosts' ? 'h-full min-h-0' : 'pb-32',
@@ -242,99 +278,134 @@ export function SettingsView() {
                 id="settings-panel-general"
                 aria-labelledby="settings-tab-general"
               >
-                {/* Section — User Info (pb 18) */}
-                <section className="pb-[18px]" aria-label={t('settings.sections.user')}>
-                  <UserProfileCard />
-                </section>
+                {piExtensionsPanelOpen ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleClosePiExtensions}
+                      className="mb-5 inline-flex h-8 items-center gap-2 rounded-full px-2 text-13 font-medium text-[var(--settings-section-sublabel)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    >
+                      <ArrowLeft size={16} />
+                      {t('settings.piPackages.backToGeneral')}
+                    </button>
+                    <section className="pb-[18px]" aria-label={t('settings.piPackages.title')}>
+                      <PiPackagesSection />
+                    </section>
+                  </>
+                ) : (
+                  <>
+                    {/* Section — User Info (pb 18) */}
+                    <section className="pb-[18px]" aria-label={t('settings.sections.user')}>
+                      <UserProfileCard />
+                    </section>
 
-                {/* Section — Appearance (py 18) */}
-                <section className="py-[18px]" aria-label={t('settings.sections.appearance')}>
-                  <AppearanceSection />
-                </section>
+                    {/* Section — Appearance (py 18) */}
+                    <section className="py-[18px]" aria-label={t('settings.sections.appearance')}>
+                      <AppearanceSection />
+                    </section>
 
-                {/* Section — Language (py 18) */}
-                <section className="py-[18px]" aria-label={t('settings.sections.language')}>
-                  <LanguageSection />
-                </section>
+                    {/* Section — Language (py 18) */}
+                    <section className="py-[18px]" aria-label={t('settings.sections.language')}>
+                      <LanguageSection />
+                    </section>
 
-                {/* Section — Notifications (py 18) */}
-                <section
-                  id="settings-notifications"
-                  className="py-[18px]"
-                  aria-label={t('settings.sections.notifications')}
-                >
-                  <NotificationSection />
-                </section>
+                    {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单。 */}
+                    <section className="py-[18px]" aria-label={t('settings.piPackages.entryTitle')}>
+                      <button
+                        type="button"
+                        onClick={handleOpenPiExtensions}
+                        className="flex w-full items-center gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-5 py-4 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--settings-btn-secondary-border)] bg-[var(--surface)] text-[var(--settings-section-desc)]">
+                          <Puzzle size={18} />
+                        </span>
+                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                          <span className="text-14 font-medium leading-tight text-[var(--settings-section-title)]">
+                            {t('settings.piPackages.entryTitle')}
+                          </span>
+                          <span className="text-13 leading-tight text-[var(--settings-integration-subtitle)]">
+                            {t('settings.piPackages.entryDescription')}
+                          </span>
+                        </span>
+                        <ChevronRight size={18} className="shrink-0 text-[var(--text-tertiary)]" />
+                      </button>
+                    </section>
 
-                {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。
-                    单个伙伴的性格、记忆、能力与日程仍在 TA 自己的设置页里。 */}
-                <section
-                  id="settings-bots"
-                  className="py-[18px]"
-                  aria-label={t('settings.sections.bots')}
-                >
-                  <BotsGlobalSettingsSection />
-                </section>
+                    {/* Section — Notifications (py 18) */}
+                    <section
+                      id="settings-notifications"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.notifications')}
+                    >
+                      <NotificationSection />
+                    </section>
 
-                {/* Section — App Behavior(「应用行为」)
-                    「保持电脑唤醒」跨平台生效,故 section 常驻;其中
-                    「后台窗口首次左键点击仅激活不透传」仅 mac/win 有效,由
-                    WindowBehaviorSection 内部按平台隐藏该行。 */}
-                <section
-                  id="settings-window-behavior"
-                  className="py-[18px]"
-                  aria-label={t('settings.sections.windowBehavior')}
-                >
-                  <WindowBehaviorSection />
-                </section>
+                    {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。
+                        单个伙伴的性格、记忆、能力与日程仍在 TA 自己的设置页里。 */}
+                    <section
+                      id="settings-bots"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.bots')}
+                    >
+                      <BotsGlobalSettingsSection />
+                    </section>
 
-                {/* Section — Composer send shortcut (应用级、本地输入偏好)。 */}
-                <section
-                  id="settings-composer"
-                  className="py-[18px]"
-                  aria-label={t('settings.sections.composer')}
-                >
-                  <ComposerSendShortcutSection />
-                </section>
 
-                {/* Section — Experimental (py 18)
-                    内部按 EXPERIMENTAL_FEATURES 注册表渲染; admin-only 项对非 admin 用户
-                    自动跳过。如果当前没有任何可见 feature, ExperimentalSection 自身返回 null,
-                    section 容器仍占位 (空 padding) — 不显示空标题。 */}
-                <section
-                  id="settings-collaboration"
-                  className="py-[18px]"
-                  aria-label={t('settings.sections.collaboration')}
-                >
-                  <CollaborationSection />
-                </section>
+                    {/* Section — App Behavior(「应用行为」)
+                        「保持电脑唤醒」跨平台生效,故 section 常驻;其中
+                        「后台窗口首次左键点击仅激活不透传」仅 mac/win 有效,由
+                        WindowBehaviorSection 内部按平台隐藏该行。 */}
+                    <section
+                      id="settings-window-behavior"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.windowBehavior')}
+                    >
+                      <WindowBehaviorSection />
+                    </section>
 
-                {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。
-                    与 Collaboration(worker 上限)相邻:同属"agent 吃多少机器资源"的治理面。 */}
-                <section
-                  id="settings-agent-resource"
-                  className="py-[18px]"
-                  aria-label={t('settings.sections.agentResource')}
-                >
-                  <AgentResourceSection />
-                </section>
+                    {/* Section — Composer send shortcut (应用级、本地输入偏好)。 */}
+                    <section
+                      id="settings-composer"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.composer')}
+                    >
+                      <ComposerSendShortcutSection />
+                    </section>
 
-                {/* Section — Git safety savepoints (formal setting, not experimental). */}
-                <section className="py-[18px]" aria-label={t('settings.sections.gitSafety')}>
-                  <GitSafetySection />
-                </section>
+                    {/* Section — Collaboration. */}
+                    <section
+                      id="settings-collaboration"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.collaboration')}
+                    >
+                      <CollaborationSection />
+                    </section>
 
-                {/* Section — Experimental (py 18)
-                    内部按 EXPERIMENTAL_FEATURES 注册表渲染; 仅 admin 可见。
-                    如果当前没有任何可见 feature, ExperimentalSection 自身返回 null。 */}
-                <section className="py-[18px]" aria-label={t('settings.sections.experimental')}>
-                  <ExperimentalSection />
-                </section>
+                    {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}
+                    <section
+                      id="settings-agent-resource"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.agentResource')}
+                    >
+                      <AgentResourceSection />
+                    </section>
 
-                {/* Section — Logout (pt 18) */}
-                <section className="pt-[18px]" aria-label={t('settings.sections.logout')}>
-                  <LogoutSection />
-                </section>
+                    {/* Section — Git safety savepoints (formal setting, not experimental). */}
+                    <section className="py-[18px]" aria-label={t('settings.sections.gitSafety')}>
+                      <GitSafetySection />
+                    </section>
+
+                    {/* Section — Experimental (py 18). */}
+                    <section className="py-[18px]" aria-label={t('settings.sections.experimental')}>
+                      <ExperimentalSection />
+                    </section>
+
+                    {/* Section — Logout (pt 18) */}
+                    <section className="pt-[18px]" aria-label={t('settings.sections.logout')}>
+                      <LogoutSection />
+                    </section>
+                  </>
+                )}
               </div>
             )}
 

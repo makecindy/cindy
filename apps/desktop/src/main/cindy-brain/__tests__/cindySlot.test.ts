@@ -748,6 +748,25 @@ describe('目录空清单 = 能力暂不可用', () => {
 });
 
 describe('意识专属后端覆盖(解析表第②层)', () => {
+  it('新版 Provider-aware 覆盖保留精确来源到最终派发', async () => {
+    const { slot, generateImage } = makeSlot({
+      getMediaOverride: vi.fn(() => ({
+        modelId: 'gpt-image-2',
+        providerId: 'openai',
+        label: 'GPT Image 2',
+      })),
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: true, model: 'gpt-image-2', modelLabel: 'GPT Image 2' });
+    expect(generateImage).toHaveBeenCalledWith({
+      prompt: '一只猫',
+      model: 'gpt-image-2',
+      providerId: 'openai',
+    });
+  });
+
   it('覆盖压过档位;调用显式点名仍压过覆盖;下架型号的覆盖静默落回', async () => {
     const pinned = makeSlot({
       getOverride: vi.fn(() => 'gemini-3-pro-image') as unknown as CindySlotDeps['getOverride'],

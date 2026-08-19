@@ -1458,6 +1458,31 @@ describe('FORGE_GUIDE', () => {
     expect(FORGE_GUIDE).toContain('会在插件边界固定映射为 `en`');
   });
 
+  it('settingsHtml / panel 普通 HTTPS 外链契约与宿主安全闸一致', () => {
+    const settingsSection = FORGE_GUIDE.slice(
+      FORGE_GUIDE.indexOf('## 4.8 设置自绘(settingsHtml)+ 自定义参数存取(/kv)'),
+      FORGE_GUIDE.indexOf('## 4.9'),
+    );
+    for (const marker of [
+      '<a href="https://…">',
+      'network.secrets[].url',
+      'node.secretBindings[].url',
+      '逐字一致',
+      'xd.com',
+      'xd.cn',
+      'workers.xd.team',
+      '二次确认',
+      '非 HTTPS',
+      '用户名/密码',
+      'target="_blank"',
+      'window.open()',
+      '不支持',
+    ]) {
+      expect(settingsSection).toContain(marker);
+    }
+    expect(settingsSection).not.toContain('声明之外的任何外链点了没反应');
+  });
+
   it('分章体量守卫:每个 ## 章节须留在单次工具结果安全体量内(#890 分章投递的不变量)', () => {
     // 手册"随主机版本演进"持续增长;任一章越过单次 MCP 结果上限会静默复现 #890 于该章。
     // 上限取 32KB:当前最大章 ~22KB,余量 ~45%,越线即该拆小节。

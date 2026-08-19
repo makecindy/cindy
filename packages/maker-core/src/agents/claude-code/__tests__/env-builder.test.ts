@@ -73,17 +73,18 @@ describe('buildClaudeEnv', () => {
     expect(env.ANTHROPIC_API_KEY).toBe('key');
   });
 
-  it('evaluates function-form behaviorFlags with the spawn credentialMode and spawnMode', async () => {
+  it('evaluates function-form behaviorFlags with the spawn route context', async () => {
     const behaviorFlags = vi.fn(() => ({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0' }));
 
     const env = await buildClaudeEnv(
       createAuthAdapter(),
       { behaviorFlags },
-      { credentialMode: 'gateway-key' },
+      { credentialMode: 'gateway-key', sessionProviderId: 'xd' },
     );
 
     expect(behaviorFlags).toHaveBeenCalledWith({
       credentialMode: 'gateway-key',
+      sessionProviderId: 'xd',
       spawnMode: 'local',
     });
     expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
@@ -100,6 +101,7 @@ describe('buildClaudeEnv', () => {
 
     expect(behaviorFlags).toHaveBeenCalledWith({
       credentialMode: 'gateway-key',
+      sessionProviderId: undefined,
       spawnMode: 'remote',
     });
   });

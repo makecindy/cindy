@@ -82,6 +82,8 @@ export interface ListAgentSkillsOptions {
    */
   remoteHostId?: string;
   forceReload?: boolean;
+  /** Host-owned Pi boundary; renderer input must never set this directly. */
+  includeManagedPiPackages?: boolean;
 }
 
 export interface ListAgentSkillsResult {

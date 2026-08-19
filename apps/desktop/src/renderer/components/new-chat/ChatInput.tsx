@@ -239,6 +239,7 @@ import {
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
+import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import {
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   getAtDirectoryCompletionQuery,
@@ -4059,6 +4060,8 @@ export function ChatInput({
     status: 'loading',
     commands: EMPTY_SLASH_COMMANDS,
   });
+  const [piRuntimeCommandStatus, setPiRuntimeCommandStatus] =
+    useState<PiPackageCommandRuntimeStatus | null>(null);
   const slashCommandsReady = isSlashCommandRosterReady(
     slashCommandLoadState,
     slashCommandContextKey,
@@ -4095,7 +4098,15 @@ export function ChatInput({
       loadAllCommands(
         paletteAgentKind,
         workingDir,
-        { ...opts, skipAgentSkills: isRemoteSession, sessionId },
+        {
+          ...opts,
+          skipAgentSkills: isRemoteSession,
+          sessionId,
+          allowManagedPiPackagePreview: !isRemoteSession,
+          onPiRuntimeStatus: (status) => {
+            if (slashCommandLoadSeqRef.current === seq) setPiRuntimeCommandStatus(status);
+          },
+        },
         deviceLinkDeviceId ?? undefined,
       )
         .then((cmds) => {
@@ -4126,10 +4137,14 @@ export function ChatInput({
   );
   useEffect(() => {
     piRuntimeRetryRef.current = 0;
+    setPiRuntimeCommandStatus(null);
   }, [slashCommandContextKey]);
   useEffect(() => {
     reloadSlashCommands();
   }, [reloadSlashCommands]);
+  useEffect(() => window.electronAPI.maker.onPiPackagesChanged(() => {
+    reloadSlashCommands({ forceReload: true });
+  }), [reloadSlashCommands]);
   // Slash 指令与 $意识一致:doc 保持可逐字编辑的普通文本,完整命中当前 roster
   // 时才由 decoration 显示确认胶囊。异步 roster 刷新不进入 keystroke 热路径。
   useEffect(() => {
@@ -4518,7 +4533,9 @@ export function ChatInput({
       return;
     }
     if (paletteAgentKind !== 'pi' || !sessionId) return;
-    if (!hasUnavailableProjectSkillPreview(mergedCommands)) return;
+    const waitingForRuntimeCommands = piRuntimeCommandStatus === 'pending';
+    const waitingForProjectSkills = hasUnavailableProjectSkillPreview(mergedCommands);
+    if (!waitingForRuntimeCommands && !waitingForProjectSkills) return;
     const attempt = piRuntimeRetryRef.current;
     if (attempt >= PI_RUNTIME_SKILL_RETRY_DELAYS_MS.length) return;
     piRuntimeRetryRef.current = attempt + 1;
@@ -4526,7 +4543,14 @@ export function ChatInput({
       reloadSlashCommands({ forceReload: true });
     }, PI_RUNTIME_SKILL_RETRY_DELAYS_MS[attempt]);
     return () => window.clearTimeout(timer);
-  }, [mergedCommands, paletteAgentKind, reloadSlashCommands, sessionId, slashOpen]);
+  }, [
+    mergedCommands,
+    paletteAgentKind,
+    piRuntimeCommandStatus,
+    reloadSlashCommands,
+    sessionId,
+    slashOpen,
+  ]);
 
   // ── Panel → editor bridge for keyboard nav ─────────────────────────
   // The editor's `handleKeyDown` fires before React re-renders, so we need

@@ -1078,6 +1078,22 @@ interface GoalStatusPayload {
   lastReason: string | null;
 }
 
+type CindyMediaPreferenceOption = {
+  id: string;
+  label: string;
+  group: string;
+  providerId: string;
+  providerName: string;
+  modelId: string;
+  modelName: string;
+  routing?: import('@cindy/model-providers').Provider['routing'];
+};
+
+type CindyMediaPreferenceKind = {
+  options: CindyMediaPreferenceOption[];
+  defaultModel: CindyMediaPreferenceOption | null;
+};
+
 interface ElectronAPI {
   platform: string;
   osRelease: string;
@@ -1232,22 +1248,10 @@ interface ElectronAPI {
      */
     cindyPrefsSync: (id: string) => {
       overrides: Record<string, string>;
-      image: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
-      imageEdit: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
-      video: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
-      videoEdit: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
+      image: CindyMediaPreferenceKind;
+      imageEdit: CindyMediaPreferenceKind;
+      video: CindyMediaPreferenceKind;
+      videoEdit: CindyMediaPreferenceKind;
       /** 文本类(快问快答):选项是当前供应商目录的全部文本模型(cat: 编码钉值,
        *  带供应商/模型/徽标等结构化字段供富列表渲染);declaredModel = 身份卡声明
        *  的偏好模型(目录里解析得到才给,"跟随默认"行据此如实展示实际路由)。 */
@@ -5084,10 +5088,14 @@ interface ElectronAPI {
       attachments?: import('./lib/fileTypes').SerializedAttachedFile[];
     }) => Promise<{ ok: true; runId: string; reviewerSessionId: string }>;
 
-    listAgentCommands: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
+    listAgentCommands: (
+      agentKind: 'claude-code' | 'codex' | 'pi',
+      params?: { sessionId?: string; allowManagedPiPackagePreview?: boolean },
+    ) => Promise<{
       success: boolean;
       error?: string;
       commands?: Array<{ kind: 'agent-builtin'; name: string; description: string }>;
+      runtimeStatus?: import('../shared/piPackages').PiPackageCommandRuntimeStatus;
     }>;
 
     listAgentSkills: (
@@ -5113,6 +5121,14 @@ interface ElectronAPI {
         runtimeCommandName?: string;
       }>;
     }>;
+
+    listPiPackages: () => Promise<import('../shared/piPackages').PiPackageListResult>;
+
+    mutatePiPackage: (
+      request: import('../shared/piPackages').PiPackageMutationRequest,
+    ) => Promise<import('../shared/piPackages').PiPackageMutationResult>;
+
+    onPiPackagesChanged: (handler: () => void) => () => void;
 
     onDesktopCommandTriggered: (
       handler: (payload: {
