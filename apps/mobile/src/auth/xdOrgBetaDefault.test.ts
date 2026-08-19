@@ -51,6 +51,12 @@ describe('xd org beta default', () => {
       shouldAttemptOrgBetaDefault({ user: { ...XD_USER, orgSlug: 'other' } }),
     ).toBe('skip');
     expect(shouldAttemptOrgBetaDefault({ user: XD_USER })).toBe('xd-legacy');
+    expect(
+      shouldAttemptOrgBetaDefault({
+        user: { ...XD_USER, membershipKind: 'personal' },
+        defaultEnableBeta: true,
+      }),
+    ).toBe('skip');
   });
 
   it('非 xd 在 feature flag 允许时复用默认写盘路径', async () => {

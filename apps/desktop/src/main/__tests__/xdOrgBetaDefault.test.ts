@@ -108,6 +108,12 @@ describe('shouldAttemptOrgBetaDefault', () => {
       shouldAttemptOrgBetaDefault({ user: user({ orgSlug: 'other' }), defaultEnableBeta: true }),
     ).toBe('flag-enable');
     expect(shouldAttemptOrgBetaDefault({ user: user() })).toBe('xd-legacy');
+    expect(
+      shouldAttemptOrgBetaDefault({
+        user: user({ membershipKind: 'personal', orgSlug: 'xd' }),
+        defaultEnableBeta: true,
+      }),
+    ).toBe('skip');
   });
 });
 

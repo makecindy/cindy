@@ -49,7 +49,10 @@ export function shouldAttemptOrgBetaDefault(input: {
   defaultEnableBeta?: boolean;
 }): OrgBetaDefaultDecision {
   if (isXdOrgUser(input.user)) return 'xd-legacy';
-  return input.defaultEnableBeta === true ? 'flag-enable' : 'skip';
+  if (input.user?.membershipKind !== 'org' || input.defaultEnableBeta !== true) {
+    return 'skip';
+  }
+  return 'flag-enable';
 }
 
 function isCurrentAuth(
