@@ -1,8 +1,9 @@
 /**
  * Unit tests for the pure helpers of `markdownImageLivePreview`:
  *   - `findImageTargets(doc)` — scans for image-only blocks (markdown
- *     `![](...)` lines, HTML `<img>` lines, `<p>`-wrapped blocks), skipping
- *     fenced code so documentation samples never render as live images.
+ *     `![](...)` lines, HTML `<img>` lines, `<p>`-wrapped blocks, Obsidian
+ *     `![[...]]` wiki-link embeds), skipping fenced code so documentation
+ *     samples never render as live images.
  *   - `resolveImageSrcToUrl(src, baseDir)` — maps a raw markdown src to the
  *     URL the <img> actually loads (xdt-file:// for local paths).
  *
@@ -150,6 +151,23 @@ describe('findImageTargets — Obsidian wiki-link form', () => {
   it('does not render a wiki-link with a non-numeric size suffix', () => {
     const doc = docOf('![[image.png|alt text]]');
     expect(findImageTargets(doc)).toEqual([]);
+  });
+
+  it('does not render a wiki-link note embed (no image extension)', () => {
+    const doc = docOf('![[Project overview]]');
+    expect(findImageTargets(doc)).toEqual([]);
+  });
+
+  it('does not render a wiki-link PDF/non-image file embed', () => {
+    const doc = docOf('![[manual.pdf]]');
+    expect(findImageTargets(doc)).toEqual([]);
+  });
+
+  it('accepts a recognized image extension case-insensitively', () => {
+    const doc = docOf('![[photo.PNG]]');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].images[0].src).toBe('photo.PNG');
   });
 
   it('skips wiki-link image examples inside fenced code blocks', () => {

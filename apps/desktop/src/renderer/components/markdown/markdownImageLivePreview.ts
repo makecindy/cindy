@@ -33,7 +33,12 @@
  *      (no leading `!`) is an Obsidian *note link*, not an image embed, and
  *      is intentionally left as raw source — only `![[...]]` renders. A
  *      non-numeric `|` suffix (Obsidian's alt-text alias form) is also left
- *      as raw source; out of scope for this module.
+ *      as raw source; out of scope for this module. `![[...]]` is also
+ *      Obsidian's generic embed syntax for notes/PDFs/etc — the target is
+ *      only treated as an image (and thus rendered) when its extension is
+ *      one this app already recognizes as an image (`isLightboxImagePath`,
+ *      shared with the workdir file tree); anything else stays raw source
+ *      instead of being replaced by a broken-image card.
  *
  *   Inline images mid-paragraph, images inside blockquotes / list items, and
  *   mixed image+text lines stay as raw source — replacing those needs inline
@@ -71,6 +76,7 @@ import {
 } from '@codemirror/view';
 import i18n from 'i18next';
 
+import { isLightboxImagePath } from '@/features/cc-agent/workdir-browse/lib/imageExt';
 import { resolveLocalPath, toLocalFileUrl } from '@/lib/localPathResolver';
 
 // ─── Facets ─────────────────────────────────────────────────────────────────
@@ -100,10 +106,14 @@ export const imageLocaleFacet = Facet.define<string, string>({
 const MD_IMAGE_LINE_RE =
   /^ {0,3}!\[([^\]]*)\]\(\s*(<[^<>]*>|[^)\s]+)(?:\s+("[^"]*"|'[^']*'))?\s*\)\s*$/;
 
-// Obsidian wiki-link image embed: path excludes `]` and `|` (so it stops at
-// the size suffix or the closing `]]`); size suffix is `|width` or
-// `|widthxheight`, digits only. A non-numeric `|` suffix (Obsidian's
-// alt-text alias) fails to match here and the line stays raw source.
+// Obsidian wiki-link *embed* syntax (`![[target]]`) covers notes, PDFs and
+// images alike — this regex only isolates the target/size text; the caller
+// (matchSingleLineImage) still has to check the extension via
+// isLightboxImagePath before treating it as an image. Path excludes `]` and
+// `|` (so it stops at the size suffix or the closing `]]`); size suffix is
+// `|width` or `|widthxheight`, digits only. A non-numeric `|` suffix
+// (Obsidian's alt-text alias) fails to match here and the line stays raw
+// source.
 const WIKI_IMAGE_LINE_RE =
   /^ {0,3}!\[\[([^\]|]+)(?:\|(\d+)(?:x(\d+))?)?\]\]\s*$/;
 
@@ -277,7 +287,10 @@ function matchSingleLineImage(
   const wiki = WIKI_IMAGE_LINE_RE.exec(text);
   if (wiki) {
     const rawSrc = wiki[1].trim();
-    if (!rawSrc) return null;
+    // `![[...]]` is Obsidian's generic embed syntax (notes, PDFs, images);
+    // only render it here when the target is actually an image extension —
+    // otherwise a note/PDF embed would get replaced by a broken-image card.
+    if (!rawSrc || !isLightboxImagePath(rawSrc)) return null;
     return {
       spec: {
         src: rawSrc,
