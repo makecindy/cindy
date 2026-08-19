@@ -1155,6 +1155,56 @@ describe('PI durable subagent run store', () => {
         expect(isPiSubagentLaunchFenceActive(agentHome, otherHostPid)).toBe(true);
       });
 
+      it('collects a run that appeared after an earlier sweep already finished', async () => {
+        // The shape of quit's two passes: the first sweep runs while a parent Pi
+        // process may still be alive and can see an empty directory; the run it
+        // was about to launch lands afterwards. The second pass, which runs once
+        // that process is gone, is what collects it — and reports honestly when
+        // it cannot.
+        const agentHome = await makeRoot();
+        const root = piSubagentRunRoot(agentHome, 'session-1');
+
+        // First pass: nothing on disk, so it completes clean.
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, {
+          hostPid: process.pid,
+          killUnresponsiveRunners: true,
+        })).resolves.toBe(true);
+
+        // The launch that was already in flight publishes its directory now.
+        const lateRunId = '123e4567-e89b-42d3-a456-4266141740e7';
+        await writeStatus(root, status(lateRunId, {
+          state: 'queued',
+          runnerInstanceId: `launch-pending-${lateRunId}`,
+          runnerPid: undefined,
+          updatedAt: Date.now(),
+        }));
+
+        // The second pass sees it — the stop control it writes is the proof.
+        // (A launch-pending record carries no runner pid yet, so there is no
+        // process to confirm dead and the sweep can still answer true; what
+        // matters is that the run is no longer invisible.)
+        await stopAllPiSubagentRunsForExit(agentHome, 0, {
+          hostPid: process.pid,
+          killUnresponsiveRunners: true,
+        });
+        await expect(readControls(root, lateRunId)).resolves.toEqual([
+          expect.objectContaining({ action: 'stop' }),
+        ]);
+
+        // And once that record names a runner this host cannot verify, the
+        // second pass refuses to call the quit clean.
+        await writeStatus(root, status(lateRunId, {
+          state: 'running',
+          runnerPid: process.pid,
+          runnerScript: '/runs/never-matches.cjs',
+          updatedAt: Date.now(),
+        }));
+        await expect(stopAllPiSubagentRunsForExit(agentHome, 0, {
+          hostPid: process.pid,
+          killUnresponsiveRunners: true,
+        })).resolves.toBe(false);
+      });
+
       it('sweeps only the fences whose owner is gone', async () => {
         const agentHome = await makeRoot();
         await writeFenceFor(agentHome, 4_194_303);

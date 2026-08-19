@@ -44,7 +44,7 @@ describe('PI Subagent quit sweep', () => {
     expect(hook).toContain('hostPid: process.pid');
   });
 
-  it('raises the launch fence before the sweep, and drops it on the way out', () => {
+  it('raises the launch fence before the sweep and keeps holding it', () => {
     // This disposer and `shutdown-maker` are both `async`, so they run at the
     // same time: a parent Pi process can still be alive here and can enter
     // `launchDurableRun` while the sweep walks an empty directory. Scanning
@@ -60,9 +60,38 @@ describe('PI Subagent quit sweep', () => {
     const acquire = hook.slice(fence, sweep);
     expect(acquire).toContain('catch');
     expect(acquire).toMatch(/piSubagentLog\.warn/);
-    // And it comes down again, or a cancelled quit would leave this instance
-    // unable to start any durable run for the rest of its life.
-    expect(hook).toMatch(/\} finally \{[\s\S]*releaseLaunchFence\?\.\(\)/);
+    // Releasing it here would re-open durable launches for the rest of the
+    // quit, with no later sweep to collect whatever appeared. The handle goes
+    // to the post-async pass instead.
+    expect(hook).toContain('releaseQuitLaunchFence = await acquirePiSubagentLaunchFence');
+    // No teardown block of any shape here — the handle is handed on, and the
+    // release happens exactly once, in the post-async pass.
+    expect(hook).not.toContain('} finally {');
+    expect([...source.matchAll(/releaseQuitLaunchFence = null;/g)]).toHaveLength(1);
+    expect(hook).not.toContain('releaseQuitLaunchFence = null;');
+  });
+
+  it('finishes with a post-async sweep that is the one to drop the fence', () => {
+    // post-async only starts once the async phase settled or hit its budget, so
+    // it is the first point at which `shutdown-maker` — and with it every Pi
+    // process — is known to be finished.
+    const start = source.indexOf("onQuit(\n  'pi-subagent-final-sweep',");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = source.indexOf("  'post-async',\n);", start);
+    expect(end).toBeGreaterThan(start);
+    const hook = source.slice(start, end);
+    expect(hook).toContain('killUnresponsiveRunners: true');
+    expect(hook).toContain('hostPid: process.pid');
+    // Short budget: this phase races each disposer against the same 6s.
+    expect(hook).toMatch(/stopAllPiSubagentRunsForExit\(agentHome, 1_000,/);
+    expect(hook).toContain('killBudgetMs: 1_500');
+    // Survivors of *this* pass are the ones nothing else will collect.
+    expect(hook).toMatch(/piSubagentLog\.error/);
+    // The fence comes down here, whatever happened above.
+    expect(hook).toMatch(/\} finally \{[\s\S]*releaseQuitLaunchFence[\s\S]*release\?\.\(\)/);
+    // Ordered ahead of the bridge and the SSH pool teardown.
+    expect(start).toBeLessThan(source.indexOf("onQuit('pi-env'"));
+    expect(start).toBeLessThan(source.indexOf("onQuit('remote-ssh-pool'"));
   });
 
   it('leaves a stop budget that fits inside the bounded async quit phase', () => {

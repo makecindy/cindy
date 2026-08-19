@@ -7695,6 +7695,17 @@ onQuit(
 //                           codex 子进程之后, 这里并发跑最坏是 log noise。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
+/**
+ * Launch fence raised by the quit sweep, held across the whole async phase.
+ *
+ * Released by the post-async final sweep, not by the disposer that raises it:
+ * `pi-subagent-runners` and `shutdown-maker` run concurrently, so when the first
+ * sweep returns the parent Pi processes may still be alive. Dropping the fence
+ * there re-opened durable launches for the rest of the quit, and anything that
+ * appeared then had no later sweep to collect it.
+ */
+let releaseQuitLaunchFence: (() => Promise<void>) | null = null;
+
 onQuit(
   'pi-subagent-runners',
   async () => {
@@ -7717,15 +7728,14 @@ onQuit(
     // Opposite orders, so if the launcher reads no fence its run directory was
     // already published and every scan here sees it (waited on, then escalated
     // to a verified kill); if it reads the fence it refuses and rolls back.
-    let releaseLaunchFence: (() => Promise<void>) | null = null;
     try {
-        releaseLaunchFence = await acquirePiSubagentLaunchFence(agentHome);
-      } catch (err) {
-        // A fence we cannot raise is not a reason to hold up the quit: without it
-        // we are exactly where we were before, and the sweep still runs.
-        piSubagentLog.warn('could not raise the Subagent launch fence before the quit sweep:', err);
-      }
-    try {
+      releaseQuitLaunchFence = await acquirePiSubagentLaunchFence(agentHome);
+    } catch (err) {
+      // A fence we cannot raise is not a reason to hold up the quit: without it
+      // we are exactly where we were before, and the sweep still runs.
+      piSubagentLog.warn('could not raise the Subagent launch fence before the quit sweep:', err);
+    }
+    {
       // Budget arithmetic against the 6s async phase: 2.5s waiting for the stop
       // mailbox, then at most 3s of escalation. The reclaims run concurrently and
       // their identity probe is async, so that 3s is a ceiling for the whole set
@@ -7753,15 +7763,10 @@ onQuit(
           + 'inherited credentials',
         );
       }
-    } finally {
-      // On the normal path the process exits moments from now and this never
-      // matters — the next instance's stale sweep would collect the file
-      // anyway, and the recorded start identity keeps a recycled pid from
-      // inheriting it. It matters when a quit is cancelled or fails: a fence
-      // left standing would refuse this instance's own durable launches for the
-      // rest of its life.
-      await releaseLaunchFence?.().catch(() => undefined);
     }
+    // Deliberately no release here: the fence stays up until the post-async
+    // final sweep below, which is the first moment `shutdown-maker` is known to
+    // have finished.
   },
   'async',
 );
@@ -7775,6 +7780,64 @@ onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
 // Token)之前关闭, 产生「pi dispose session registration failed (non-fatal)」
 // 日志噪声。post-async 串行在 shutdown-maker(async)之后执行, 且注册顺序在
 // remote-ssh-pool 之前(两者同 post-async, 按注册序执行 —— bridge 先于 pool 关)。
+/**
+ * Conclusive second pass, after the async phase.
+ *
+ * `runQuitDisposers` only enters post-async once the async phase settled (or hit
+ * its budget), so by here `shutdown-maker` has finished and, with it, every
+ * `Session.detach` — which for PI is `handle.close()` ending in `await
+ * proc.close()`. No Pi process remains that could start a durable run, so this
+ * pass is conclusive in the ordinary case, and it collects exactly what the
+ * first sweep could not see: a run whose directory was published after that
+ * sweep had already scanned.
+ *
+ * If the async phase *timed out* instead, `shutdown-maker` may still be in
+ * flight and a Pi process may still be alive. That case is covered by the fence
+ * rather than by this sweep: it is still up, so a launcher either refuses, or
+ * had already published its run directory before it went up — in which case the
+ * scan below sees it.
+ *
+ * Registered ahead of `pi-env` and far ahead of `remote-ssh-pool`: it needs only
+ * the local filesystem and local signals, and post-async is serial, so going
+ * first keeps its budget clear of a disposer that times out. The pool teardown
+ * must stay last, for the reason documented at its own registration.
+ *
+ * Budget: 1s waiting for the stop mailbox plus a 1.5s ceiling on the escalation
+ * — ~2.5s against this phase's 6s per-disposer race. Most runners are already
+ * gone by now; what is left is the narrow window this pass exists to close.
+ */
+onQuit(
+  'pi-subagent-final-sweep',
+  async () => {
+    const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+    try {
+      const stopped = await stopAllPiSubagentRunsForExit(agentHome, 1_000, {
+        killBudgetMs: 1_500,
+        hostPid: process.pid,
+        killUnresponsiveRunners: true,
+      });
+      if (!stopped) {
+        piSubagentLog.error(
+          'PI Subagent runners appeared after the first quit sweep and could not be '
+          + 'confirmed stopped — they are still running with their inherited credentials',
+        );
+      }
+    } catch (err) {
+      piSubagentLog.error('final PI Subagent quit sweep failed:', err);
+    } finally {
+      // The fence has done its job. Leaving it standing would only matter if
+      // this process somehow survived the quit, and then it would refuse this
+      // instance's own durable launches for the rest of its life. A hard-killed
+      // process cannot reach this line; that leftover is collected by the next
+      // instance's stale sweep, which the recorded start identity makes safe
+      // even when the pid is recycled onto it.
+      const release = releaseQuitLaunchFence;
+      releaseQuitLaunchFence = null;
+      await release?.().catch(() => undefined);
+    }
+  },
+  'post-async',
+);
 onQuit('pi-env', () => shutdownPiEnvironment(), 'post-async');
 // embedding-host: abort 语义 —— 立刻让出 SQLite 写连接, 不等当前 tick (那批 job 保持
 // pending 下次续跑, 写事务同步原子无中断)。
