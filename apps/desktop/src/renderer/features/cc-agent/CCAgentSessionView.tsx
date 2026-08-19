@@ -167,6 +167,7 @@ import {
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
+import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';
 import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
@@ -870,15 +871,16 @@ export function CCAgentSessionView({
         (await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:subagent-runs:list', [
           { sessionId },
         ])) as SubagentRunsListResponse,
+      // The same predicate the panel uses, and deliberately not a local copy of
+      // it. This one used to drop `runId === null`, which is exactly the
+      // *whole-session invalidation* a `/clear` or a rewind past the Subagent's
+      // start emits: the records go away and nothing here noticed, so a task
+      // that switched to Claude Code or Codex kept declaring an entry whose
+      // runs no longer existed. `sessionId` is always a real id on that
+      // payload — only `runId` is nullable — so the scoping is unchanged.
       subscribeLocalChanges: (onChanged) =>
         window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
-          if (
-            !isDataOwnerPushCurrent(ownerStamp) ||
-            payload.runId === null ||
-            payload.sessionId !== sessionId
-          ) {
-            return;
-          }
+          if (!isCurrentSubagentRunsChange(payload, ownerStamp, sessionId)) return;
           onChanged();
         }),
       registerTab: () => openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY),

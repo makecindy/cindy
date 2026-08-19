@@ -7,6 +7,7 @@ import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-work
 
 import {
   REMOTE_SUBAGENT_DISCOVERY_POLL_MS,
+  REMOTE_SUBAGENT_PRESENCE_POLL_MS,
   startSubagentTabDiscovery,
 } from '../subagentTabDiscovery';
 
@@ -336,11 +337,13 @@ describe('startSubagentTabDiscovery', () => {
       dispose();
     });
 
-    it('still stops the remote poll after registering', async () => {
-      // The falling edge is worth a local change push; it is not worth a 5s
-      // device-link round for the rest of the session.
+    it('keeps a slow remote presence poll after registering, and sees the falling edge', async () => {
+      // A remote task has no change push at all, so stopping here left presence
+      // pinned true forever: a remote `/clear`, a rewind past the Subagent's
+      // start, or its deletion cleanup could never reach the controller, and the
+      // entry outlived its records until the session was unloaded.
       const h = harness();
-      h.listRemote.mockResolvedValue(runs(1));
+      h.listRemote.mockResolvedValueOnce(runs(1)).mockResolvedValue(EMPTY);
       const presence: boolean[] = [];
 
       const dispose = startSubagentTabDiscovery({
@@ -352,14 +355,56 @@ describe('startSubagentTabDiscovery', () => {
         registerTab: h.registerTab,
         isRequestOwnerCurrent: () => true,
         onPresenceChange: (present) => presence.push(present),
+        presencePollMs: 1_000,
       });
       await settle();
       expect(presence).toEqual([true]);
+      expect(h.registerTab).toHaveBeenCalledOnce();
 
-      await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_DISCOVERY_POLL_MS * 4);
+      // Discovery's own cadence no longer applies: the next read is on the
+      // slower presence one, and it reports the records going away.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settle();
+      expect(presence).toEqual([true, false]);
+
+      // And it keeps answering, so a later re-appearance is seen too.
+      h.listRemote.mockResolvedValue(runs(1));
+      await vi.advanceTimersByTimeAsync(1_000);
+      await settle();
+      expect(presence.at(-1)).toBe(true);
+      // Still one-shot where it counts.
+      expect(h.registerTab).toHaveBeenCalledOnce();
+      dispose();
+    });
+
+    it('polls presence more slowly than it polls for discovery', () => {
+      // Discovery decides whether a tab appears at all and a user is waiting on
+      // it; this only decides when a stale entry disappears, and nobody is.
+      expect(REMOTE_SUBAGENT_PRESENCE_POLL_MS).toBeGreaterThan(REMOTE_SUBAGENT_DISCOVERY_POLL_MS);
+    });
+
+    it('stops the remote presence poll on dispose', async () => {
+      const h = harness();
+      h.listRemote.mockResolvedValue(runs(1));
+
+      const dispose = startSubagentTabDiscovery({
+        sessionId: 's1',
+        deviceId: 'device-a',
+        listLocal: h.listLocal,
+        listRemote: h.listRemote,
+        subscribeLocalChanges: h.subscribeLocalChanges,
+        registerTab: h.registerTab,
+        isRequestOwnerCurrent: () => true,
+        onPresenceChange: () => undefined,
+        presencePollMs: 1_000,
+      });
       await settle();
       expect(h.listRemote).toHaveBeenCalledTimes(1);
+
       dispose();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settle();
+      expect(h.listRemote).toHaveBeenCalledTimes(1);
     });
 
     it('leaves the one-shot contract untouched without a presence consumer', async () => {
@@ -397,6 +442,26 @@ describe('startSubagentTabDiscovery', () => {
       path.resolve(__dirname, '../CCAgentSessionView.tsx'),
       'utf8',
     ).replace(/\r\n/g, '\n');
+
+    it('reads on a whole-session invalidation, not just a per-run change', () => {
+      // `/clear` and a rewind past the Subagent's start emit one push with
+      // `runId: null` — the records are gone. The subscriber dropped exactly
+      // that shape, so nothing re-read the list and a task that had switched
+      // to Claude Code or Codex kept declaring an entry for runs that no
+      // longer existed. `sessionId` is a real id on that payload; only `runId`
+      // is nullable, so the scoping is unchanged.
+      const subscribe = source.slice(
+        source.indexOf('subscribeLocalChanges: (onChanged) =>'),
+        source.indexOf('registerTab: () => openSubagentsTab('),
+      );
+      expect(subscribe).not.toContain('payload.runId === null');
+      // Shares the panel's predicate rather than keeping a second copy that can
+      // drift from it.
+      expect(subscribe).toContain('isCurrentSubagentRunsChange(payload, ownerStamp, sessionId)');
+      expect(source).toContain(
+        "import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';",
+      );
+    });
 
     it('lets discovery run for a task on any harness', () => {
       const effect = source.slice(

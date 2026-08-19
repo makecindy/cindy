@@ -5,14 +5,15 @@
  * panel itself owns every later read (local change pushes / its own 1s remote
  * poll). So this watcher stops as soon as it registers.
  *
- * `onPresenceChange` is the exception, and only for the local path. The tab's
- * *visibility* cannot be one-shot the way its registration is: a task that
- * started durable children under Pi and then switched to Claude Code / Codex
- * still owns them, so the entry has to stay — and once the records are gone
- * (parent deleted, cleanup finished) it has to go away again. Falling edges
- * therefore keep the local change subscription alive past registration. The
- * remote poll still stops: it is a 5s device-link round, and the panel's own
- * poll takes over the moment the tab exists.
+ * `onPresenceChange` is the exception. The tab's *visibility* cannot be one-shot
+ * the way its registration is: a task that started durable children under Pi and
+ * then switched to Claude Code / Codex still owns them, so the entry has to stay
+ * — and once the records are gone (`/clear`, a rewind past their start, parent
+ * deletion) it has to go away again. Falling edges therefore keep watching past
+ * registration: the local path keeps its change subscription, and the remote
+ * path — which has no change push at all — drops to a much slower poll rather
+ * than stopping. Without a presence consumer both stop at registration, exactly
+ * as before.
  *
  * Two data paths, one contract:
  *  - local task  → local DB read + `subagentRuns.onChanged` push.
@@ -27,6 +28,19 @@ import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-work
 
 /** Remote discovery cadence. Coarse on purpose — see the file docblock. */
 export const REMOTE_SUBAGENT_DISCOVERY_POLL_MS = 5_000;
+
+/**
+ * Remote cadence *after* the tab exists, when a presence consumer is listening.
+ *
+ * Four times slower than discovery, because the two answer different questions.
+ * Discovery decides whether a tab appears at all, and a user waiting on their
+ * first Subagent notices five seconds. This one only decides when an entry for
+ * records that no longer exist goes away — nobody is waiting on that, and the
+ * cost is one device-link round per visible, already-registered remote task. It
+ * is also the only thing that carries a remote `/clear` or rewind across: that
+ * boundary emits a local change push the controller never receives.
+ */
+export const REMOTE_SUBAGENT_PRESENCE_POLL_MS = 20_000;
 
 export interface SubagentTabDiscoveryOptions {
   readonly sessionId: string;
@@ -51,6 +65,8 @@ export interface SubagentTabDiscoveryOptions {
   /** Guard the response against an auth/data-owner boundary crossed mid-flight. */
   readonly isRequestOwnerCurrent: () => boolean;
   readonly pollMs?: number;
+  /** Overrides the post-registration remote cadence; tests use it. */
+  readonly presencePollMs?: number;
 }
 
 /**
@@ -67,6 +83,7 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     isRequestOwnerCurrent,
     onPresenceChange,
     pollMs = REMOTE_SUBAGENT_DISCOVERY_POLL_MS,
+    presencePollMs = REMOTE_SUBAGENT_PRESENCE_POLL_MS,
   } = options;
   const remote = typeof deviceId === 'string' && deviceId.length > 0;
 
@@ -103,11 +120,12 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     if (disposed) return;
     registered = true;
     // Registration reached its one-shot goal; the panel owns reads from here.
-    // The remote poll always stops — a 5s device-link round is not something to
-    // keep paying for once the panel is doing its own. The local subscription
-    // stays only for a presence consumer, which needs the falling edge.
-    stopPolling();
+    // A presence consumer keeps both watchers, because "should this entry still
+    // be offered" stays a live question — the remote one only drops to
+    // `presencePollMs`, since the panel's own faster poll never reports back
+    // here and a remote clear has no push to announce itself.
     if (onPresenceChange) return;
+    stopPolling();
     unsubscribe?.();
     unsubscribe = null;
   };
@@ -127,8 +145,9 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
   const runRemoteDiscovery = (): void => {
     poll = null;
     void discover().catch(() => undefined).finally(() => {
-      if (disposed || registered) return;
-      poll = setTimeout(runRemoteDiscovery, pollMs);
+      if (disposed) return;
+      if (registered && !onPresenceChange) return;
+      poll = setTimeout(runRemoteDiscovery, registered ? presencePollMs : pollMs);
     });
   };
 
