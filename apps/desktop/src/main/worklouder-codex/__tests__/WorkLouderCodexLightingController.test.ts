@@ -943,6 +943,40 @@ describe('WorkLouderCodexLightingController', () => {
     expect(sink.setDeviceEnabled).toHaveBeenLastCalledWith(false);
   });
 
+  it('releases held voice and scroll when the layout editor opens', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      setJoystickInputHandler: vi.fn((handler: typeof joystickRef.current) => {
+        joystickRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), undefined, dispatch);
+    controller.start();
+    await controller.resumeTaskSlots();
+    hidRef.current?.({ key: 'ACT10', act: 1 });
+    joystickRef.current?.({ angle: 0.25, distance: 1 });
+    dispatch.mockClear();
+
+    controller.setLayoutPreviewActive(true);
+
+    expect(dispatch).toHaveBeenCalledWith({ type: 'voice', phase: 'release' });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'scroll-stop' });
+  });
+
   it('does not fire a held stick action after the account resumes', async () => {
     const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
       current: null,

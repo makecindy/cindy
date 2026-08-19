@@ -188,6 +188,7 @@ export class WorkLouderCodexLightingController {
   }
 
   setLayoutPreviewActive(active: boolean): void {
+    if (active && !this.layoutPreviewActive) this.releaseHeldHardwareGestures();
     this.layoutPreviewActive = active;
     if (!active) this.pendingAgentKeyTap = null;
   }
@@ -198,10 +199,7 @@ export class WorkLouderCodexLightingController {
     this.pendingAgentKeyTap = null;
     this.lightingDimmed = false;
     this.clearWindowRevealTimer();
-    if (turningOff) {
-      this.stopJoystickScroll();
-      this.releaseHeldVoice();
-    }
+    if (turningOff) this.releaseHeldHardwareGestures();
     this.sink.setDeviceEnabled?.(settings.deviceEnabled);
     if (!settings.deviceEnabled) this.connectionStatus = 'disabled';
     this.publishAgentSlots();
@@ -296,7 +294,7 @@ export class WorkLouderCodexLightingController {
     this.clearEncoderLongPressTimer();
     this.encoderPressed = false;
     this.encoderLongPressed = false;
-    this.stopJoystickScroll();
+    this.releaseHeldHardwareGestures();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
     this.inputActionsEnabled = false;
@@ -308,7 +306,6 @@ export class WorkLouderCodexLightingController {
     this.pendingAgentKeyTap = null;
     this.joystickNeedsCenter = this.joystickDirection !== null;
     this.joystickDirection = null;
-    this.releaseHeldVoice();
     this.clearAutoDimTimer();
     this.clearWindowRevealTimer();
     this.lightingDimmed = false;
@@ -321,8 +318,7 @@ export class WorkLouderCodexLightingController {
     this.clearEncoderLongPressTimer();
     this.clearAutoDimTimer();
     this.clearWindowRevealTimer();
-    this.stopJoystickScroll();
-    this.releaseHeldVoice();
+    this.releaseHeldHardwareGestures();
     this.slotRefreshVersion += 1;
     this.taskSlotsEnabled = false;
     this.inputActionsEnabled = false;
@@ -572,6 +568,11 @@ export class WorkLouderCodexLightingController {
     const slot = this.commandSlotForKey(event.key);
     if (!slot) return;
     if (!isWorkLouderCodexMicrophoneKeycap(this.settings.layout.slots[slot].keycapId)) return;
+    this.releaseHeldVoice();
+  }
+
+  private releaseHeldHardwareGestures(): void {
+    this.stopJoystickScroll();
     this.releaseHeldVoice();
   }
 
