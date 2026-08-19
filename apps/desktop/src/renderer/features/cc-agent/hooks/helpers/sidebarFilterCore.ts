@@ -507,13 +507,15 @@ export function loadProjectOrder(): FilterProjectOrder {
   return 'activity';
 }
 
-export function persistProjectOrder(projectOrder: FilterProjectOrder): void {
+export function persistProjectOrder(projectOrder: FilterProjectOrder): boolean {
   const storage = safeStorage();
-  if (!storage) return;
+  if (!storage) return false;
   try {
     storage.setItem(PROJECT_ORDER_KEY, projectOrder);
+    return storage.getItem(PROJECT_ORDER_KEY) === projectOrder;
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist projectOrder:', err);
+    return false;
   }
 }
 
@@ -522,20 +524,22 @@ export function migrateLegacyManualSort(): void {
   const storage = safeStorage();
   if (!storage) return;
   let raw: string | null = null;
+  let existingProjectOrder: string | null = null;
   try {
     raw = storage.getItem(SORT_BY_KEY);
+    existingProjectOrder = storage.getItem(PROJECT_ORDER_KEY);
   } catch {
     return;
   }
   if (raw !== 'manual') return;
-  // 先写 projectOrder:若随后写 sortBy 失败,loadProjectOrder 仍能靠 leftover
-  // sortBy=manual 读成 custom,下次启动还会再试迁移。反过来先清 manual
-  // 会让后续启动以为用户选的是 activity,已有手动序不再生效。
-  try {
-    if (storage.getItem(PROJECT_ORDER_KEY) == null) persistProjectOrder('custom');
-  } catch {
-    persistProjectOrder('custom');
+  // 不变量:没把 projectOrder=custom 落到盘上之前,不得清掉 sortBy=manual。
+  // persistProjectOrder 失败会吞异常;若这时仍写 recency,下次启动既不会重试,
+  // leftover 映射也丢了,已有手动序会被当成 activity。
+  if (existingProjectOrder && PROJECT_ORDER_VALUES.has(existingProjectOrder)) {
+    persistSortBy('recency');
+    return;
   }
+  if (!persistProjectOrder('custom')) return;
   persistSortBy('recency');
 }
 

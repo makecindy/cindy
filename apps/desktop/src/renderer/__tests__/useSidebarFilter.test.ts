@@ -327,6 +327,23 @@ describe('migrateLegacyManualSort', () => {
     expect(loadProjectOrder()).toBe('custom');
     expect(loadSortBy()).toBe('recency');
   });
+
+  it('keeps sortBy=manual when projectOrder write fails so the next launch can retry', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = (key: string, value: string) => {
+      if (key === PROJECT_ORDER_KEY) throw new Error('quota');
+      originalSetItem(key, value);
+    };
+    try {
+      migrateLegacyManualSort();
+    } finally {
+      localStorage.setItem = originalSetItem;
+    }
+    expect(localStorage.getItem(SORT_BY_KEY)).toBe('manual');
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBeNull();
+    expect(loadProjectOrder()).toBe('custom');
+  });
 });
 
 describe('snapshotManualProjectOrder', () => {
