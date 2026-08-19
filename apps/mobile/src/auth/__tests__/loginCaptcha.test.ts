@@ -68,7 +68,7 @@ describe('withLoginCaptchaTheme(挑战页有效登录主题)', () => {
   });
 });
 
-describe('mobile captcha WebView 导航与消息来源边界', () => {
+describe('mobile captcha WebView 导航与消息契约边界', () => {
   const expected =
     'https://auth.example.com/captcha/turnstile?action=email_request_code&theme=dark';
 
@@ -96,13 +96,31 @@ describe('mobile captcha WebView 导航与消息来源边界', () => {
     ).toBe(false);
   });
 
-  it('Turnstile 仅作为 HTTPS 子 frame 放行', () => {
+  it('Turnstile 子 frame 放行 Cloudflare HTTPS 与其必需的本地空文档', () => {
     expect(
       isAllowedLoginCaptchaNavigation(
         { url: 'https://challenges.cloudflare.com/turnstile/widget', isTopFrame: false },
         expected,
       ),
     ).toBe(true);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'about:blank', isTopFrame: false },
+        expected,
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'about:srcdoc', isTopFrame: false },
+        expected,
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'about:config', isTopFrame: false },
+        expected,
+      ),
+    ).toBe(false);
     expect(
       isAllowedLoginCaptchaNavigation(
         { url: 'blob:https://challenges.cloudflare.com/opaque-id', isTopFrame: false },
@@ -117,7 +135,7 @@ describe('mobile captcha WebView 导航与消息来源边界', () => {
     ).toBe(false);
   });
 
-  it('消息源只接受预期托管顶层页，并允许 loopback HTTP 本地开发', () => {
+  it('托管顶层页只接受预期地址，并允许 loopback HTTP 本地开发', () => {
     expect(isAllowedLoginCaptchaPageUrl(expected, expected)).toBe(true);
     expect(
       isAllowedLoginCaptchaPageUrl('https://auth.example.com/captcha/other', expected),
@@ -182,12 +200,14 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
     expect(loginSource).toContain('auth.resolveCaptchaChallenge');
   });
 
-  it('captcha WebView 不让 originWhitelist 把挑战页交给外部浏览器', () => {
+  it('captcha WebView 限制导航但不把客户端消息来源当作认证边界', () => {
     expect(captchaWebViewSource).toContain("originWhitelist={['*']}");
     expect(captchaWebViewSource).toContain('setSupportMultipleWindows={false}');
     expect(captchaWebViewSource).toContain('isAllowedLoginCaptchaNavigation(request, themedUrl)');
+    expect(captchaWebViewSource).not.toContain('event.nativeEvent.url');
+    expect(captchaWebViewSource).not.toMatch(/^\s*incognito(?:\s|=)/m);
     expect(captchaWebViewSource).toContain(
-      'isAllowedLoginCaptchaPageUrl(event.nativeEvent.url, themedUrl)',
+      'parseCaptchaWebViewMessage(event.nativeEvent.data)',
     );
     expect(captchaWebViewSource).not.toContain('`${pageOrigin}/*`');
   });

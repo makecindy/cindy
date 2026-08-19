@@ -5,7 +5,6 @@ import { WebView } from 'react-native-webview';
 import { parseCaptchaWebViewMessage } from '@/auth/loginCaptchaMessage';
 import {
   isAllowedLoginCaptchaNavigation,
-  isAllowedLoginCaptchaPageUrl,
   withLoginCaptchaTheme,
 } from '@/auth/loginCaptchaUrl';
 import { loginText } from '@/auth/loginMessages';
@@ -113,7 +112,6 @@ export function LoginCaptchaWebView({
           <View style={{ height: 220, marginTop: 8, width: 308 }}>
             <WebView
               key={generation}
-              incognito
               source={{ uri: themedUrl }}
               // react-native-webview 会把 originWhitelist 未命中的 URL 主动交给
               // Linking.openURL。因此这里只负责让导航进入下方回调;真正的同源
@@ -126,8 +124,9 @@ export function LoginCaptchaWebView({
                 isAllowedLoginCaptchaNavigation(request, themedUrl)
               }
               onMessage={(event) => {
-                // 即使平台导航回调存在竞态，也只接收仍由预期托管顶层页发出的消息。
-                if (!isAllowedLoginCaptchaPageUrl(event.nativeEvent.url, themedUrl)) return;
+                // 客户端不是认证边界：Android WebMessageListener 只上报 source origin，
+                // 不保证带托管页 pathname。这里只校验 wire 契约；token 的真实性、action、
+                // hostname、时效与一次性均由 auth-server Siteverify 最终裁决。
                 const result = parseCaptchaWebViewMessage(event.nativeEvent.data);
                 if (!result) return;
                 if (result.ok) {

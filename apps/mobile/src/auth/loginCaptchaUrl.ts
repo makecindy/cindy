@@ -1,6 +1,7 @@
 import { CAPTCHA_CHALLENGE_PAGE_PATH } from '@cindy/auth-client';
 
 const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+const TURNSTILE_LOCAL_DOCUMENT_URLS = new Set(['about:blank', 'about:srcdoc']);
 
 function isHttpsOrLoopbackHttp(url: URL): boolean {
   const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
@@ -30,12 +31,16 @@ export function isAllowedLoginCaptchaPageUrl(rawUrl: string, expectedUrl: string
   );
 }
 
-/** Mobile WebView 导航闸：auth 托管页只能是顶层，Turnstile 只能是 HTTPS 子 frame。 */
+/**
+ * Mobile WebView 导航闸：auth 托管页只能是顶层；Turnstile 子 frame 放行其
+ * HTTPS origin，以及 Cloudflare WebView 集成明确依赖的 about:blank/srcdoc。
+ */
 export function isAllowedLoginCaptchaNavigation(
   request: { url: string; isTopFrame: boolean },
   expectedUrl: string,
 ): boolean {
   if (request.isTopFrame) return isAllowedLoginCaptchaPageUrl(request.url, expectedUrl);
+  if (TURNSTILE_LOCAL_DOCUMENT_URLS.has(request.url)) return true;
   try {
     const target = new URL(request.url);
     return target.protocol === 'https:' && target.origin === TURNSTILE_ORIGIN;
