@@ -9,6 +9,7 @@ import {
   normalizeBotSessionControlMode,
   type BotSessionControlMode,
 } from '../../shared/botSessionControl.js';
+import { normalizeBotAutomation } from '../../shared/botAutomationCapability.js';
 import { getDbClient } from '../localDb/client/current.js';
 import {
   botLifecycleEvents,
@@ -681,7 +682,7 @@ export async function hydrateBotProfileRuntime(
     skills: configuredSkills,
     memory: config.memory !== false,
     userContext: userContextSource.length > 0,
-    automation: config.automation === true,
+    automation: normalizeBotAutomation(config.automation),
     mcpMode,
     mcpServers: configuredMcpServers,
     toolsetMode,

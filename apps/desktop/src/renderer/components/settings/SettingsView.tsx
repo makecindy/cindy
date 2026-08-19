@@ -24,6 +24,7 @@ import { AgentIslandSection } from './AgentIslandSection';
 import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
+import { parseImBotPersonalChannel } from '@/features/bots/botChannelConnectRoutes';
 import { AboutSection } from './AboutSection';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
@@ -108,6 +109,10 @@ export function SettingsView() {
     activeTab === 'im-bot'
       ? (activeImBotGroup ?? (searchParams.get('tab') === 'feishu-bot' ? 'personal' : null))
       : null;
+  // ?imChannel=<渠道>:把「个人」分区里对应那张连接卡直接展开。伙伴能力墙上
+  // 「还没有 X 账号」的行就是走这条链过来的 —— 落到页面顶部等于没跳。
+  const imBotTargetChannel =
+    activeTab === 'im-bot' ? parseImBotPersonalChannel(searchParams.get('imChannel')) : null;
 
   // 切分区后外层滚动容器回顶:滚动偏移是容器的、不随内层 key 重挂归零,
   // 长页滚到底再切短页会停在中段(review 反馈)。瞬时回顶,不做平滑。
@@ -124,6 +129,7 @@ export function SettingsView() {
       next.delete('ghost');
       next.delete('panel');
       next.delete('imGroup');
+      next.delete('imChannel');
       next.delete('section');
       // providers 页深链参数(connect/wizard)与计费页深链参数(intent):切走 tab 即
       // 作废,防再切回来被误消费。
@@ -514,7 +520,10 @@ export function SettingsView() {
               <div role="tabpanel" id="settings-panel-im-bot" aria-labelledby="settings-tab-im-bot">
                 {/* 官方/个人纵向同页展示；imGroup 只保留深链定位语义。 */}
                 <section aria-label={t('settings.sections.imBot')}>
-                  <ImBotSection targetGroup={imBotTargetGroup} />
+                  <ImBotSection
+                    targetGroup={imBotTargetGroup}
+                    targetChannel={imBotTargetChannel}
+                  />
                 </section>
               </div>
             )}

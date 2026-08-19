@@ -94,16 +94,12 @@ function bot(): BotProfile {
   };
 }
 
-function renderSettings(
-  options: { enabled?: boolean; trusted?: boolean; onEnableAutomation?: () => void } = {},
-) {
+function renderSettings(options: { trusted?: boolean } = {}) {
   return render(
     <BotAutomationSettings
       bot={bot()}
-      enabled={options.enabled ?? true}
       trusted={options.trusted ?? true}
       onOpenTask={vi.fn()}
-      onEnableAutomation={options.onEnableAutomation ?? vi.fn()}
     />,
   );
 }
@@ -290,8 +286,8 @@ describe('BotAutomationSettings — create panel', () => {
     expect(screen.getByText('bots.automations.manualHint')).toBeTruthy();
   });
 
-  it('offers the create affordance even when Automation is not yet enabled — no precondition', async () => {
-    renderSettings({ enabled: false });
+  it('offers the create affordance with no "turn Automation on first" precondition', async () => {
+    renderSettings();
     await screen.findByText('bots.automations.empty');
     expect(screen.queryByText('bots.automations.enableFirst')).toBeNull();
     expect(screen.getByRole('button', { name: /bots\.automations\.newRoutine/ })).toBeTruthy();
@@ -303,9 +299,13 @@ describe('BotAutomationSettings — create panel', () => {
     expect(screen.queryByRole('button', { name: /bots\.automations\.newRoutine/ })).toBeNull();
   });
 
-  it('auto-enables Automation on first Routine creation, through the same create call', async () => {
-    const onEnableAutomation = vi.fn();
-    renderSettings({ enabled: false, onEnableAutomation });
+  /*
+    「定时干活」不再是可开关的能力(裁决 2026-08-19),所以建 Routine 也不再
+    需要回头把 capabilities.automation 翻开 —— 这个面板对 Profile 只读,建完
+    一条 Routine 只会发 create 这一次调用。
+  */
+  it('creates a Routine without any profile write-back', async () => {
+    renderSettings();
     await screen.findByText('bots.automations.empty');
 
     fireEvent.click(screen.getByRole('button', { name: /bots\.automations\.newRoutine/ }));
@@ -313,19 +313,6 @@ describe('BotAutomationSettings — create panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'bots.automations.create' }));
 
     await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
-    expect(onEnableAutomation).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not re-enable Automation on create when it is already enabled', async () => {
-    const onEnableAutomation = vi.fn();
-    renderSettings({ enabled: true, onEnableAutomation });
-    await screen.findByText('bots.automations.empty');
-
-    fireEvent.click(screen.getByRole('button', { name: /bots\.automations\.newRoutine/ }));
-    fireEvent.change(instructionField(), { target: { value: 'Summarise yesterday.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'bots.automations.create' }));
-
-    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
-    expect(onEnableAutomation).not.toHaveBeenCalled();
+    expect(api.update).not.toHaveBeenCalled();
   });
 });

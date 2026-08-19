@@ -233,7 +233,9 @@ describe('BotsSidebar rows', () => {
     await renderSidebar();
 
     // 产品裁决 2026-08-18:伙伴列表是聊天列表,不是权限看板。
-    expect(screen.queryAllByLabelText('bots.trustedBadge.label')).toHaveLength(0);
+    // 2026-08-19:BotTrustedBadge 与 bots.trustedBadge.* 已删除,所以改查 ⚠
+    // 图标本身 —— 按已不存在的 i18n key 断言等于没有守卫。
+    expect(document.querySelector('.lucide-triangle-alert')).toBeNull();
   });
 
   it('carries no health icon column at all — a chat row answers "any new messages", nothing else', async () => {

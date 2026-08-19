@@ -8,7 +8,8 @@ import {
   botChannelDisplayName,
   buildBotChannelChips,
 } from './botChannelChips';
-import type { BotChannelConnection } from './botStore';
+import { botChannelConnectPath } from './botChannelConnectRoutes';
+import type { BotChannel, BotChannelConnection } from './botStore';
 
 const BUILTIN_ABILITY_KEYS = ['writing', 'research', 'doing', 'schedule', 'collab'] as const;
 
@@ -22,11 +23,14 @@ export function BotAbilityWall({
   isChannelMounted,
   channelBusyId,
   onToggleChannel,
+  onConnectAccount,
 }: {
   connections: readonly BotChannelConnection[];
   isChannelMounted: (connection: BotChannelConnection) => boolean;
   channelBusyId: string | null;
   onToggleChannel: (connection: BotChannelConnection) => void;
+  /** 该渠道还没有账号时,原地拉起它真实的连接流程(跳到设置里对应那张卡)。 */
+  onConnectAccount: (kind: BotChannel) => void;
 }) {
   const { t } = useTranslation();
   const chips = applyImMutualExclusion(buildBotChannelChips(connections, isChannelMounted));
@@ -62,12 +66,23 @@ export function BotAbilityWall({
             (blockedByImKind)保持不变，只收窄这句提示的出现条件。
           */
           const showImBlockedHint = blocked && Boolean(chip.connection) && !chip.disabled;
+          /*
+            还没有账号的渠道行。原来是死的置灰行 +「先在设置里连接 X 账号」——
+            一句把用户支走、点下去什么都不发生的话。现在这一行**可点**,直接
+            落到该渠道真实的连接界面(botChannelConnectRoutes 是唯一映射表)。
+            确实没有界面入口的渠道(connectPath === null)才如实说「暂不支持在
+            界面里连接」,而且照样不给一个点不动的按钮。
+          */
+          const needsAccount = !chip.connection;
+          const connectPath = needsAccount ? botChannelConnectPath(chip.kind) : null;
+          const connectable = needsAccount && connectPath !== null;
+          const rowDimmed = needsAccount ? !connectable : chip.disabled || blocked;
           return (
             <div
               key={chip.id}
               className={cn(
                 'flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-2',
-                (chip.disabled || blocked) && 'opacity-60',
+                rowDimmed && 'opacity-60',
               )}
             >
               <span className="min-w-0">
@@ -82,24 +97,41 @@ export function BotAbilityWall({
                     })}
                   </span>
                 ) : null}
+                {needsAccount && !connectable ? (
+                  <span className="mt-0.5 block text-10 leading-4 text-[var(--text-tertiary)]">
+                    {t('bots.abilityWall.noConnectUi')}
+                  </span>
+                ) : null}
               </span>
-              <button
-                type="button"
-                disabled={chip.disabled || blocked || !chip.connection || channelBusyId !== null}
-                onClick={() => {
-                  if (chip.connection) onToggleChannel(chip.connection);
-                }}
-                className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
-              >
-                {/* 「挂载 / 已挂载」是实现词,而且「已挂载」把一个动作说成了状态,
-                    用户看不出点下去会发生什么。定稿用的是「连接 / 断开」——两边都是
-                    这个按钮真会做的事。 */}
-                {chip.connection && channelBusyId === chip.connection.id
-                  ? '…'
-                  : chip.mounted
-                    ? t('bots.channelDisconnect')
-                    : t('bots.channelConnect')}
-              </button>
+              {needsAccount ? (
+                connectable ? (
+                  <button
+                    type="button"
+                    onClick={() => onConnectAccount(chip.kind)}
+                    className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                  >
+                    {t('bots.abilityWall.connectAccount')}
+                  </button>
+                ) : null
+              ) : (
+                <button
+                  type="button"
+                  disabled={chip.disabled || blocked || channelBusyId !== null}
+                  onClick={() => {
+                    if (chip.connection) onToggleChannel(chip.connection);
+                  }}
+                  className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
+                >
+                  {/* 「挂载 / 已挂载」是实现词,而且「已挂载」把一个动作说成了状态,
+                      用户看不出点下去会发生什么。定稿用的是「连接 / 断开」——两边都是
+                      这个按钮真会做的事。 */}
+                  {chip.connection && channelBusyId === chip.connection.id
+                    ? '…'
+                    : chip.mounted
+                      ? t('bots.channelDisconnect')
+                      : t('bots.channelConnect')}
+                </button>
+              )}
             </div>
           );
         })}

@@ -506,19 +506,17 @@ interface ChatInputProps {
   onWorkingDirChange?: (dir: string | null) => void;
   /** When true, the input is disabled (e.g. during streaming). */
   disabled?: boolean;
-  /** Freeze model/provider/effort/permission controls for audit-only tasks. */
-  settingsLocked?: boolean;
   /**
-   * Drop the permission chip and the model selector from the toolbar entirely.
+   * Freeze model/provider/effort/permission controls for audit-only tasks.
    *
-   * Not the same thing as `settingsLocked`: locked means "you may look but not
-   * touch" (an audit task still has to show which engine produced the answer).
-   * Hidden means this conversation is not the place to configure a runtime at
-   * all — a Bot chat runs on its own Profile, and both controls already live in
-   * that teammate's Settings › Advanced. Keyboard cycling follows the chip:
-   * hiding it also removes Shift+Tab permission cycling for this composer.
+   * 这是**唯一**一个能改动运行时控件可用性的开关,而且只做「可看不可动」。
+   * 曾经还有一个 `hideRuntimeSelectors`,用来在伙伴对话里把权限 chip 与模型
+   * 选择器整个收掉;产品裁决 2026-08-19 撤销:①切伙伴时选择器区一闪一收,
+   * 露馅比"干净"更刺眼;②"这个伙伴用哪个模型"是刚需(查邮件用便宜的、
+   * 写代码用贵的)。「不暴露技术细节」改由**默认值**承载 —— 模板已经给了
+   * 合理的引擎/模型,用户不动它就永远看不见差别。
    */
-  hideRuntimeSelectors?: boolean;
+  settingsLocked?: boolean;
   /** When true, shows Stop button instead of Send button. */
   isStreaming?: boolean;
   /**
@@ -1042,7 +1040,6 @@ export function ChatInput({
   onWorkingDirChange,
   disabled,
   settingsLocked = false,
-  hideRuntimeSelectors = false,
   isStreaming = false,
   isAgentBusy,
   onStop,
@@ -1819,11 +1816,8 @@ export function ChatInput({
   // 与下拉菜单看到的顺序一致。vendorKey 未锁定时按 PermissionSelector 的
   // 默认取 cc。editorProps.handleKeyDown 是稳定闭包, 走 ref 取值。
   const permissionCycleOptions = useMemo(
-    () =>
-      settingsLocked || hideRuntimeSelectors
-        ? []
-        : (activeAgentCapabilities?.permissionModes ?? []),
-    [activeAgentCapabilities, hideRuntimeSelectors, settingsLocked],
+    () => (settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])),
+    [activeAgentCapabilities, settingsLocked],
   );
   const permissionCycleOptionsRef = useRef(permissionCycleOptions);
   permissionCycleOptionsRef.current = permissionCycleOptions;
@@ -8025,18 +8019,16 @@ export function ChatInput({
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
-                {hideRuntimeSelectors ? null : (
-                  <PermissionSelector
-                    permissionMode={activePermissionMode}
-                    onPermissionModeChange={handlePermissionModeChange}
-                    vendorKey={vendorKey}
-                    deviceId={deviceLinkDeviceId ?? undefined}
-                    disabled={composerEditorLocked || settingsLocked}
-                    dense={effectiveDenseToolbar}
-                    iconOnly={useUltraCompactToolbar}
-                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                  />
-                )}
+                <PermissionSelector
+                  permissionMode={activePermissionMode}
+                  onPermissionModeChange={handlePermissionModeChange}
+                  vendorKey={vendorKey}
+                  deviceId={deviceLinkDeviceId ?? undefined}
+                  disabled={composerEditorLocked || settingsLocked}
+                  dense={effectiveDenseToolbar}
+                  iconOnly={useUltraCompactToolbar}
+                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                />
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               <div
@@ -8058,13 +8050,9 @@ export function ChatInput({
                   ) : (
                     <>{middleToolbarSlot}</>
                   ))}
-                {/* 模型选择器:伙伴对话不显示(引擎跟 TA 的 Profile 走)。用 [hidden]
-                    而不是卸载 —— 控件内部持有模型记忆/供应商同步,收起入口不该顺手
-                    改掉这些状态;[hidden] 既不占位也不进无障碍树。 */}
-                <div
-                  className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}
-                  hidden={hideRuntimeSelectors}
-                >
+                {/* 模型选择器对每种会话一视同仁 —— 伙伴对话也要能就地换引擎/模型
+                    (裁决 2026-08-19),写回由调用方决定落到会话还是伙伴 Profile。 */}
+                <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
                   <ModelSelector
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去

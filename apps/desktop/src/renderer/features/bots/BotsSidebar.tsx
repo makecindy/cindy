@@ -26,7 +26,7 @@ const MESSAGE_REFRESH_DEBOUNCE_MS = 800;
  * 认得的颜色。这个 token 只服务伙伴列表的未读徽标与待办点，不外溢到别的地方。
  */
 const UNREAD_BADGE_CLASS =
-  'flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1 text-11 font-medium leading-none text-[var(--bot-unread-fg)]';
+  'flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[var(--bot-unread-bg)] px-1.5 text-11 font-medium leading-none text-[var(--bot-unread-fg)]';
 
 function BotsSidebarContent() {
   const { t } = useTranslation();
@@ -170,7 +170,8 @@ function BotsSidebarContent() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col px-3 pt-2">
-      <div className="flex items-center justify-between px-3 pb-2">
+      {/* 小节头与伙伴行的正文左边缘对齐:容器 12px + 行内 10px = 22px。 */}
+      <div className="flex items-center justify-between px-2.5 pb-2">
         <div className="flex items-center gap-2 text-12 font-medium text-[var(--sidebar-list-muted)]">
           <Bot size={14} />
           <span>{t('bots.title')}</span>
@@ -192,7 +193,9 @@ function BotsSidebarContent() {
           <button
             type="button"
             onClick={() => navigate('/bots/roster')}
-            className="mx-1 flex w-[calc(100%-8px)] flex-col items-start gap-1 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            // 定稿 `.side-empty{padding:12px 14px}`。原来的 `mx-1 w-[calc(100%-8px)]`
+            // 让空态卡比它下面的伙伴行窄 8px,两种状态切换时左边缘会跳。
+            className="flex w-full flex-col items-start gap-1 rounded-xl border border-dashed border-[var(--border-default)] px-3.5 py-3 text-left text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
           >
             <span className="font-medium text-[var(--text-primary)]">{t('bots.emptyTitle')}</span>
             <span>{t('bots.emptyDescription')}</span>
@@ -223,16 +226,21 @@ function BotsSidebarContent() {
                 <div
                   key={bot.id}
                   className={cn(
-                    'group relative flex w-full items-center gap-2 rounded-xl transition-colors',
+                    'group relative flex w-full items-center rounded-xl transition-colors',
                     selected
                       ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
                       : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover',
                   )}
                 >
+                  {/* 定稿原型 `.row-open{padding:8px 10px;gap:10px}`:整行只有这一个
+                      可点区域,左右内边距对称。行尾曾经还挂过一列齿轮/状态图标,
+                      它下线后 `pr-2` 的占位残留了下来 —— 右边比左边窄一截,
+                      单看不出问题,和左侧头像一比就是歪的。数值基线见
+                      __tests__/botsSidebarSpacing.test.ts。 */}
                   <button
                     type="button"
                     onClick={() => navigate(`/bots/${bot.id}`)}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-3 py-2 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left"
                   >
                     {/* 40px。28px 会让两行式行高塌成一行的观感——头像撑不住两行文字,
                         整行读起来像一条被拉高的单行列表。 */}
@@ -275,6 +283,13 @@ function BotsSidebarContent() {
                         >
                           {subtitleText}
                         </span>
+                        {/* Unread messages own the numeric badge (IM convention:
+                            the count answers "how much have I not seen"). A
+                            pending inbox todo is a second, weaker signal — when
+                            both are live it degrades to a dot so the row never
+                            shows two competing counts; its number stays in the
+                            label. 两者都长在第二行的右端(定稿 `.row-l2` 的
+                            justify-between 位),不再另开一列。 */}
                         {unread > 0 ? (
                           <span
                             className={UNREAD_BADGE_CLASS}
@@ -283,43 +298,36 @@ function BotsSidebarContent() {
                             {formatBotUnreadBadge(unread)}
                           </span>
                         ) : null}
+                        {attention > 0 ? (
+                          unread > 0 ? (
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]"
+                              aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
+                            />
+                          ) : (
+                            <span
+                              className={UNREAD_BADGE_CLASS}
+                              aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
+                            >
+                              {formatBotUnreadBadge(attention)}
+                            </span>
+                          )
+                        ) : null}
                       </span>
                     </span>
                   </button>
-                  <span className="flex shrink-0 items-center gap-1 pr-2">
-                    {/* Unread messages own the numeric badge (IM convention: the
-                        count answers "how much have I not seen"). A pending
-                        inbox todo is a second, weaker signal — when both are
-                        live it degrades to a dot so the row never shows two
-                        competing counts; its number stays in the label. */}
-                    {attention > 0 ? (
-                      unread > 0 ? (
-                        <span
-                          className="h-1.5 w-1.5 rounded-full bg-[var(--bot-unread-bg)]"
-                          aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
-                        />
-                      ) : (
-                        <span
-                          className={UNREAD_BADGE_CLASS}
-                          aria-label={t('bots.inbox.sidebarAttention', { count: attention })}
-                        >
-                          {formatBotUnreadBadge(attention)}
-                        </span>
-                      )
-                    ) : null}
-                    {/* 行内不再挂 health 图标(recovering / attention / paused)。一行
-                        右侧同时出现「未读数 + 待办点 + 状态图标」时,三处右对齐元素
-                        互相抢注意力,而这一行本来只该回答「有没有新消息」。异常态仍有
-                        出口:待办点(收件箱)与 TA 的设置页「健康与历史」。 */}
-                    {/* 行内不再挂齿轮:进设置的入口收敛到对话顶栏(伙伴名字 / 头像,
-                        以及顶栏右侧的齿轮)。一个功能一个入口。 */}
-                  </span>
+                  {/* 行内不再挂 health 图标(recovering / attention / paused)。一行
+                      右侧同时出现「未读数 + 待办点 + 状态图标」时,三处右对齐元素
+                      互相抢注意力,而这一行本来只该回答「有没有新消息」。异常态仍有
+                      出口:待办点(收件箱)与 TA 的设置页「健康与历史」。
+                      行内也不再挂齿轮:进设置的入口收敛到对话顶栏(伙伴名字 / 头像,
+                      以及顶栏右侧的齿轮)。一个功能一个入口。 */}
                 </div>
               );
             })}
             {archivedBots.length > 0 ? (
               <div className="mt-3 border-t border-[var(--border-default)] pt-3">
-                <div className="mb-1 flex items-center gap-2 px-3 text-10 font-medium text-[var(--sidebar-list-muted)]">
+                <div className="mb-1 flex items-center gap-2 px-2.5 text-10 font-medium text-[var(--sidebar-list-muted)]">
                   <Archive size={12} />
                   <span>{t('bots.lifecycle.archivedBots')}</span>
                 </div>
@@ -331,7 +339,7 @@ function BotsSidebarContent() {
                       key={bot.id}
                       onClick={() => navigate(`/bots/${bot.id}?settings=1`)}
                       className={cn(
-                        'group flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left transition-colors',
+                        'group flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors',
                         selected
                           ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
                           : 'text-[var(--sidebar-list-muted)] hover:bg-sidebar-item-hover',

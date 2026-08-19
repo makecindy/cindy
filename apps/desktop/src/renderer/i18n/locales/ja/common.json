@@ -6090,28 +6090,9 @@
     "userContextSourceDescription": "Hermes の USER.md に相当します。仲間のアイデンティティや書き込み可能な仲間 Memory と分けてバージョン管理し、実行ごとに読み取り専用で固定します。",
     "chooseAvatar": "アバター {{avatar}} を選択",
     "chooseAvatarColor": "アバターの色 {{color}} を選択",
-    "capabilityChips": {
-      "title": "この仲間ができること",
-      "description": "オンにすればすぐ使えます。裏側の接続はこちらで用意します。",
-      "act": {
-        "name": "自分で実行",
-        "effect": "一つずつ承認を求めずに、そのまま作業をやり切ります。"
-      },
-      "automation": {
-        "name": "決めた時間に作業",
-        "effect": "設定した時刻に自分で起きて、頼まなくても作業します。"
-      },
-      "channel": {
-        "effect": "あなたの {{channel}} のメッセージを読んで返信します。",
-        "connectHint": "先に設定で {{channel}} のアカウントを接続してください。"
-      }
-    },
-    "trustedBadge": {
-      "label": "自分で実行がオン：操作をそのまま実行できます。"
-    },
     "advancedCapabilities": {
-      "title": "機能チップの裏側にある技術設定",
-      "description": "harness、モデル、ツール、MCP サーバー、Skill、他タスクへの権限。普段の利用では触る必要はありません。"
+      "title": "これらの能力の裏側にある技術設定",
+      "description": "harness、モデル、ツール、MCP サーバー、Skill。普段の利用では触る必要はありません。"
     },
     "memoryRecovery": {
       "title": "この仲間の長期メモリは現在オフです",
@@ -6158,20 +6139,10 @@
     "memoryDescription": "この仲間専用の独立したメモリ領域を使用します。",
     "automationLabel": "自動化",
     "automationDescription": "この仲間をスケジュールに従って無人実行します。各実行では Profile、プロジェクト、worktree、配信先が固定されます。",
-    "sessionControl": {
-      "title": "他のタスクへのアクセス",
-      "description": "Cindy のタスク制御ツールが利用可能な場合に、この仲間が使用できる範囲を指定します。",
-      "none": "アクセスなし",
-      "observe": "閲覧",
-      "coordinate": "調整",
-      "noneDescription": "この仲間は他のタスクを確認または変更できません。",
-      "observeDescription": "タスクの状態、実行状況、履歴、キューを確認できますが、変更はできません。",
-      "coordinateDescription": "タスクの確認、作業依頼、進行中ターンへの指示、停止要求、自分が追加したキュー項目の管理ができます。各操作は制御面で引き続き検証されます。"
-    },
     "automations": {
       "title": "仲間の自動化",
       "description": "この仲間が自分で実行する Routine。スケジュール、または「今すぐ実行」で動きます。",
-      "trustedRequired": "無人実行は承認を待てません。「信頼された操作」を選択して保存してください。",
+      "trustedRequired": "無人実行では承認できる人がいません。まずこの仲間とのチャットで、入力欄の権限を「フルアクセス」に切り替えてから作成してください。",
       "name": "名前",
       "dailyTime": "毎日の実行時刻",
       "intervalMinutes": "間隔（分）",
@@ -6600,6 +6571,8 @@
         "schedule": "⏰ スケジュール実行",
         "collab": "🤝 仲間との連携"
       },
+      "connectAccount": "アカウントを接続",
+      "noConnectUi": "このチャンネルはアプリ内から接続できません。",
       "imBlocked": "チームメイトが接続できるIMは1つだけです — 先に{{channel}}を切断してください",
       "footnote": "つないだ後は何も設定しなくて大丈夫です——使い方は自分で分かります。"
     },

@@ -3,8 +3,11 @@
  *
  * Product ruling (Chris, 2026-08-18): "全部权限默认不开（莫名其妙）" — a teammate
  * that has to ask before every step is not a teammate. New teammates are created
- * hands-on ("动手做事" chip on) and the risk is expressed *after the fact* by the
- * ⚠ badge next to the name, not by an up-front gate.
+ * hands-on, and the level stays adjustable from the permission chip in that
+ * teammate's own chat — 裁决 2026-08-19:那是它唯一的控制点。
+ *
+ * 名字旁那颗 ⚠ 徽标(BotTrustedBadge)与判定函数 isBotTrusted() 已于 2026-08-19
+ * 删除:侧栏与设置页头部都不再挂它(2026-08-18 裁决),留着就是零引用的幽灵物。
  *
  * Kept in its own leaf module on purpose:
  *  - `botStore.ts` uses it for the create default, and
@@ -26,11 +29,4 @@ export const NEW_BOT_DEFAULT_PERMISSIONS: BotPermissionMode = 'trusted';
 /** Read an existing profile's permission mode; unknown values stay conservative. */
 export function normalizeBotPermissions(value: unknown): BotPermissionMode {
   return value === 'trusted' ? 'trusted' : 'ask';
-}
-
-/** Whether a teammate is allowed to act without asking first (drives the ⚠ badge). */
-export function isBotTrusted(
-  capabilities: { permissions?: unknown } | null | undefined,
-): boolean {
-  return normalizeBotPermissions(capabilities?.permissions) === 'trusted';
 }

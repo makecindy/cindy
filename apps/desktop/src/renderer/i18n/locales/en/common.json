@@ -6092,28 +6092,9 @@
     "userContextSourceDescription": "Hermes USER.md equivalent. It is versioned separately from teammate identity and writable teammate Memory, then frozen read-only for each runtime.",
     "chooseAvatar": "Choose avatar {{avatar}}",
     "chooseAvatarColor": "Choose avatar color {{color}}",
-    "capabilityChips": {
-      "title": "What this teammate can do",
-      "description": "Turn something on and it works right away — the wiring behind each one is handled for you.",
-      "act": {
-        "name": "Take action",
-        "effect": "It carries the work out itself instead of asking you to approve every step."
-      },
-      "automation": {
-        "name": "Work on a schedule",
-        "effect": "It wakes up at the times you set and does the job without being asked."
-      },
-      "channel": {
-        "effect": "It reads and replies to your {{channel}} messages.",
-        "connectHint": "Connect a {{channel}} account in Settings first."
-      }
-    },
-    "trustedBadge": {
-      "label": "Hands-on is on: it can run actions directly."
-    },
     "advancedCapabilities": {
-      "title": "Technical details behind the capability chips",
-      "description": "Harness, model, tools, MCP servers, skills and other-task access. Nothing here is needed for everyday use."
+      "title": "Technical details behind these abilities",
+      "description": "Harness, model, tools, MCP servers and skills. Nothing here is needed for everyday use."
     },
     "memoryRecovery": {
       "title": "Long-term memory is off for this teammate",
@@ -6160,20 +6141,10 @@
     "memoryDescription": "Uses a private memory namespace for this teammate.",
     "automationLabel": "Automation",
     "automationDescription": "Allow this teammate to run unattended on a schedule. Each run pins its Profile version, project, worktree, and delivery target.",
-    "sessionControl": {
-      "title": "Other task access",
-      "description": "Declare how this teammate may use Cindy's task control tools when they are available.",
-      "none": "No access",
-      "observe": "Observe",
-      "coordinate": "Coordinate",
-      "noneDescription": "This teammate cannot inspect or change other tasks.",
-      "observeDescription": "May inspect task status, runtime, history, and queues, but cannot change them.",
-      "coordinateDescription": "May inspect tasks, send work, steer or stop a turn, and manage only queue items it created. Every action is still checked by the control plane."
-    },
     "automations": {
       "title": "Teammate automation",
       "description": "Routines this teammate runs on its own — on a schedule, or when you press Run now.",
-      "trustedRequired": "Unattended runs cannot wait for approval. Select Trusted actions and save before creating automation.",
+      "trustedRequired": "An unattended run has nobody to approve it. Open your chat with this teammate, set the permission control in the composer to “Full access”, then come back and create one.",
       "name": "Name",
       "dailyTime": "Daily time",
       "intervalMinutes": "Interval in minutes",
@@ -6602,6 +6573,8 @@
         "schedule": "⏰ Working on a schedule",
         "collab": "🤝 Teaming up with other teammates"
       },
+      "connectAccount": "Connect an account",
+      "noConnectUi": "This channel cannot be connected from the app yet.",
       "imBlocked": "A teammate can only connect to one IM — disconnect {{channel}} first",
       "footnote": "Once connected there is nothing else to set up — they know how to use it."
     },

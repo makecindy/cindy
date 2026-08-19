@@ -31,8 +31,7 @@ describe('Bot 对话的判定条件', () => {
     expect(sessionView).toContain('botChatIdentity ? (\n        <BotAvatar bot={botChatIdentity}');
   });
 
-  it('输入框的权限 chip 与模型选择器只在 Bot 对话下收起', () => {
-    expect(sessionView).toContain('hideRuntimeSelectors={botChatIdentity !== null}');
+  it('伙伴对话只换占位符,不再动运行时控件', () => {
     expect(sessionView).toContain('botComposerPlaceholderKey(botChatIdentity.name)');
     // 普通任务仍走原来的占位符。
     expect(sessionView).toContain("t('ccAgent.layout.chatPlaceholder')");
@@ -61,18 +60,55 @@ describe('消息流的头像挂载', () => {
   });
 });
 
-describe('输入框收起运行时控件', () => {
-  it('权限 chip 直接不渲染,键盘轮切也一并撤掉', () => {
-    expect(chatInput).toContain('{hideRuntimeSelectors ? null : (\n                  <PermissionSelector');
-    expect(chatInput).toContain('settingsLocked || hideRuntimeSelectors');
+/**
+ * 裁决逆转 2026-08-19:伙伴对话**恢复**显示模型选择器与权限 chip。
+ *
+ * 收起它们的那版有两个实打实的问题:切伙伴时选择器区一闪一收(露馅),以及
+ * 「这个伙伴用哪个模型」本来就是刚需(查邮件用便宜的、写代码用贵的)。
+ * 「不暴露技术细节」改由默认值承载。这里锁住**不再有任何按会话类型隐藏控件的
+ * 分支** —— 一个 prop 删掉容易,悄悄加回来更容易。
+ */
+describe('输入框的运行时控件对所有会话一视同仁', () => {
+  it('ChatInput 里不再有 hideRuntimeSelectors 这条隐藏路径', () => {
+    // 注释里可以留下这段历史,JSX / 逻辑里不能再出现它。
+    const code = chatInput
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    expect(code).not.toContain('hideRuntimeSelectors');
+    expect(sessionView).not.toContain('hideRuntimeSelectors');
   });
 
-  it('模型选择器用 [hidden] 收起,不卸载它的模型记忆', () => {
-    expect(chatInput).toContain('hidden={hideRuntimeSelectors}');
+  it('权限 chip 与模型选择器都无条件渲染', () => {
+    expect(chatInput).toContain('<PermissionSelector\n                  permissionMode=');
+    expect(chatInput).toContain(
+      "className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>\n                  <ModelSelector",
+    );
   });
 
-  it('默认关闭:任何没传这个 prop 的调用点行为不变', () => {
-    expect(chatInput).toContain('hideRuntimeSelectors = false,');
+  it('键盘轮切只看 settingsLocked(审阅任务只读),不看会话类型', () => {
+    expect(chatInput).toContain(
+      '() => (settingsLocked ? [] : (activeAgentCapabilities?.permissionModes ?? [])),',
+    );
+  });
+});
+
+/**
+ * 恢复选择器带来的**必须**配套:伙伴主任务会在 Renew 时按 Profile 的
+ * capabilities 重建,输入框只写会话行的话,用户选的模型会在 Renew 后回跳。
+ */
+describe('伙伴对话的运行时选择回写 Profile', () => {
+  it('模型 / effort / 权限 / 供应商 / fast 五个入口都接上了回写', () => {
+    expect(sessionView).toContain('mirrorBotComposerRuntime({ model: newModelId })');
+    expect(sessionView).toContain('mirrorBotComposerRuntime({ effort: newEffort })');
+    expect(sessionView).toContain('mirrorBotComposerRuntime({ permissionMode: newMode })');
+    expect(sessionView).toContain('mirrorBotComposerRuntime({ providerId: newProviderId })');
+    expect(sessionView).toContain('mirrorBotComposerRuntime({ fastMode: next })');
+    expect(sessionView).toContain('onProviderDidChange={handleProviderDidChange}');
+    expect(sessionView).toContain('onFastModeChange={handleFastModeChange}');
+  });
+
+  it('普通任务一行都不写:没有伙伴身份就直接返回', () => {
+    expect(sessionView).toContain('const botId = botChatIdentityRef.current?.id;\n      if (!botId) return;');
   });
 });
 

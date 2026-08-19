@@ -117,17 +117,10 @@ vi.mock('../BotCapabilitySettings', () => ({
 vi.mock('../BotProjectSettings', () => ({
   BotProjectSettings: () => <div data-testid="bot-project-settings" />,
 }));
-// The mock still exercises the real onEnableAutomation wiring so the "no
-// automation precondition" contract stays covered at the integration level,
-// without dragging in BotAutomationSettings' own (separately tested) internals.
+// 日程区块整体嵌入,没有任何前置开关,所以这里只需要确认它**被挂上了**;
+// BotAutomationSettings 自己的内部行为另有单测。
 vi.mock('../BotAutomationSettings', () => ({
-  BotAutomationSettings: (props: { onEnableAutomation: () => void }) => (
-    <div data-testid="bot-automation-settings">
-      <button type="button" onClick={() => props.onEnableAutomation()}>
-        fixture-create-routine
-      </button>
-    </div>
-  ),
+  BotAutomationSettings: () => <div data-testid="bot-automation-settings" />,
 }));
 vi.mock('../BotRouteSettings', () => ({
   BotRouteSettings: () => <div data-testid="bot-route-settings" />,
@@ -426,13 +419,19 @@ describe('Bot settings page structure', () => {
   });
 
   it('never marks the settings header, trusted or not', () => {
-    // 产品裁决 2026-08-18:设置页头部不再挂 ⚠。伙伴不是需要被常年警告的对象。
+    /*
+      产品裁决 2026-08-18:设置页头部不再挂 ⚠。伙伴不是需要被常年警告的对象。
+      2026-08-19 起连 BotTrustedBadge 组件与 bots.trustedBadge.* 文案都删掉了
+      (零引用的幽灵物),所以这里不能再按那个 i18n key 断言 —— key 没了,断言
+      永远成立,等于失去守卫。改查 ⚠ 图标本身(lucide 的稳定类名),这样谁把
+      徽标以任何形式重新画回来都会红。
+    */
     renderSettings();
-    expect(screen.queryByRole('button', { name: 'bots.trustedBadge.label' })).toBeNull();
+    expect(document.querySelector('.lucide-triangle-alert')).toBeNull();
 
     cleanup();
     renderSettings({ capabilities: capabilities({ permissions: 'trusted' }) });
-    expect(screen.queryByRole('button', { name: 'bots.trustedBadge.label' })).toBeNull();
+    expect(document.querySelector('.lucide-triangle-alert')).toBeNull();
   });
 });
 
@@ -698,6 +697,43 @@ describe('TA 会的 — ability wall and single-IM mutual exclusion', () => {
     expect(within(feishuRow).queryByText(/bots\.abilityWall\.imBlocked/)).toBeNull();
     expect(within(telegramRow).queryByText(/bots\.abilityWall\.imBlocked/)).toBeNull();
   });
+
+  /*
+    裁决 2026-08-19:没有账号的渠道行不再是「置灰 + 先去设置里连」的死路。
+    它现在可点,直接落到该渠道**真实**的连接界面(设置 › IM 机器人 的对应
+    分区,个人分区还会把那张手风琴卡展开)。
+  */
+  it('takes an account-less channel row straight to that channel\'s real connect UI', async () => {
+    mocks.listBotChannelConnections.mockResolvedValue([]);
+    renderSettings();
+
+    // 占位行的标题只有渠道名(没有 ` · 账号`)。
+    const wecomRow = (await screen.findByText('Wecom')).closest('.min-w-0')!
+      .parentElement as HTMLElement;
+    const connectButton = within(wecomRow).getByRole('button', {
+      name: 'bots.abilityWall.connectAccount',
+    });
+    expect((connectButton as HTMLButtonElement).disabled).toBe(false);
+    // 「先在设置里连接 X 账号」那句死路话术连同它的 i18n key 一起没了;整个
+    // capabilityChips 命名空间的回归守卫在下面「一颗 Switch 都不剩」那条里。
+
+    fireEvent.click(connectButton);
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      '/settings?tab=im-bot&imGroup=personal&imChannel=wecom',
+    );
+  });
+
+  it('sends Slack to the Cindy relay group, not the personal one', async () => {
+    mocks.listBotChannelConnections.mockResolvedValue([]);
+    renderSettings();
+
+    const slackRow = (await screen.findByText('Slack')).closest('.min-w-0')!
+      .parentElement as HTMLElement;
+    fireEvent.click(
+      within(slackRow).getByRole('button', { name: 'bots.abilityWall.connectAccount' }),
+    );
+    expect(mocks.navigate).toHaveBeenCalledWith('/settings?tab=im-bot&imGroup=cindy');
+  });
 });
 
 describe('TA 懂的 — folder cards', () => {
@@ -731,26 +767,42 @@ describe('TA 懂的 — folder cards', () => {
 });
 
 describe('TA 的日程 — schedule embedded without an automation precondition', () => {
-  it('embeds automation settings directly even when automation is currently off', () => {
+  it('embeds automation settings directly, with no capability gate in front of it', () => {
     renderSettings({ capabilities: capabilities({ automation: false }) });
     expect(screen.getByTestId('bot-automation-settings')).toBeTruthy();
   });
 
-  it('flips capabilities.automation to true through the autosave pipeline when a Routine is created', async () => {
-    vi.useFakeTimers();
-    try {
-      renderSettings({ capabilities: capabilities({ automation: false }) });
-      fireEvent.click(screen.getByRole('button', { name: 'fixture-create-routine' }));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
-      expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
-        capabilities: expect.objectContaining({ automation: true }),
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+  /*
+    「它会做什么」那张芯片墙整块下线了(裁决 2026-08-19)。
+
+     - 「定时干活」:自动化是标配,chip 却常年显示「关」而 Routine 建了就会跑;
+     - 「动手做事」:和对话输入框里的权限 chip 是同一个 capabilities.permissions,
+       两个入口管一件事迟早再长出一对矛盾说法 —— 唯一控制点收敛到输入框;
+     - 渠道行:与「TA 会的 › 可以连上」重复,而且只有这份带踢皮球话术。
+
+    所以这条锁的是**整页展开后一颗 Switch 都不剩**:芯片墙如果被谁重新装回来,
+    不管装的是哪一颗,这里都会红。
+  */
+  it('has no capability switches left anywhere on the page, advanced included', () => {
+    renderSettings({ capabilities: capabilities({ automation: false, permissions: 'ask' }) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.advancedLinkLabel' }));
+    expect(screen.queryAllByRole('switch')).toHaveLength(0);
+    // 连 i18n key 都不该再被任何组件引用。
+    expect(screen.queryByText(/bots\.capabilityChips\./)).toBeNull();
+  });
+
+  /*
+    芯片墙拆掉时,它身上两条与开关无关的信息不能跟着消失 —— 它们讲的是
+    「Profile 版本 vs 正在跑的任务」,和 Renew 按钮同属一件事,所以搬到了
+    「任务生命周期」。
+  */
+  it('keeps the runtime-state pill and the "Renew to apply" note next to the Renew button', () => {
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.advancedLinkLabel' }));
+    const lifecycle = screen.getByText('bots.sessionLifecycleTitle').closest('section')!;
+    expect(within(lifecycle).getByText(/bots\.runtimeState\./)).toBeTruthy();
+    expect(within(lifecycle).getByText('bots.capabilitiesDeferred')).toBeTruthy();
+    expect(within(lifecycle).getByRole('button', { name: /bots\.renew/ })).toBeTruthy();
   });
 });
 

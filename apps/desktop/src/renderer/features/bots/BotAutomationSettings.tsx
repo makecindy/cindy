@@ -786,22 +786,12 @@ function AutomationRow({
 
 export function BotAutomationSettings({
   bot,
-  enabled,
   trusted,
   onOpenTask,
-  onEnableAutomation,
 }: {
   bot: BotProfile;
-  enabled: boolean;
   trusted: boolean;
   onOpenTask: (sessionId: string) => void;
-  /**
-   * Batch β: creating a Routine is no longer gated behind first turning
-   * Automation on in Capabilities — a first-time create silently flips it on
-   * through the profile autosave pipeline instead. Called once, right after a
-   * successful create, only when `enabled` was still `false` at that point.
-   */
-  onEnableAutomation: () => void;
 }) {
   const { t } = useTranslation();
   const bots = useBotProfiles();
@@ -810,9 +800,26 @@ export function BotAutomationSettings({
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AutomationFormValue | null>(null);
 
-  // Trusted is the one precondition that stays: unattended runs cannot pause
-  // for approval, so an "ask" teammate cannot create a Routine at all.
-  // Automation-enabled is no longer a precondition — see onEnableAutomation.
+  /*
+    Trusted is the one precondition that stays.
+
+    别把它和刚下线的那些假开关混为一谈 —— 判据是「这个门背后有没有真实约束,
+    以及用户有没有地方去开」:
+
+     - `capabilities.automation`(「定时干活」):没有真实约束(Routine 建了就跑),
+       开关却常年显示「关」→ 已归一为标配,开关删除。
+     - `capabilities.sessionControlMode`(「其它任务权限」):委派链路根本不查它,
+       默认值还写着「不可访问」→ 下拉删除。
+     - `capabilities.permissions`(这一条):**约束是真的** —— 无人值守跑的时候
+       没有人能回答 canUseTool 的授权卡,所以 'ask' 的伙伴跑不了 Routine。
+       同一条判定在另外两处也拦着,不是 UI 装饰:
+         · maker-ipc/bot-automation.ts(创建时 INVALID_PARAMS)
+         · scheduler-host/bot-automation-runner.ts(每次触发前)
+       而且它有真实控制点:和 TA 的对话里、输入框上的权限选择(选「完全访问」
+       即 bypassPermissions,经 botComposerRuntime 回写成 permissions:'trusted')。
+       `bots.automations.trustedRequired` 那句话就指向那里 —— 旧文案说的
+       「权限模式设为"信任操作"并保存」指的是已经删掉的设置页开关。
+  */
   const canCreate = trusted;
   const activeProjects = useMemo(
     () => (bot.projectBindings ?? []).filter((item) => item.status === 'active'),
@@ -903,7 +910,6 @@ export function BotAutomationSettings({
               botId: bot.id,
               ...submission,
             });
-            if (!enabled) onEnableAutomation();
             setDraft(null);
             await load();
           }}

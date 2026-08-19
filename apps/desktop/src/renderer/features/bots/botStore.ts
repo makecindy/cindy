@@ -15,6 +15,10 @@ import {
   type BotSessionControlMode,
 } from '../../../shared/botSessionControl';
 import {
+  BOT_AUTOMATION_DEFAULT,
+  normalizeBotAutomation,
+} from '../../../shared/botAutomationCapability';
+import {
   NEW_BOT_DEFAULT_PERMISSIONS,
   normalizeBotPermissions,
 } from './botCapabilityDefaults';
@@ -208,7 +212,9 @@ function defaultCapabilities(harness: BotCapabilities['harness'] = 'claude'): Bo
     mcpMode: 'inherit',
     mcpServers: [],
     memory: true,
-    automation: false,
+    // 定时干活是标配(裁决 2026-08-19);读取投影也统一归一,见
+    // shared/botAutomationCapability.ts。
+    automation: BOT_AUTOMATION_DEFAULT,
     // 新建伙伴默认放手做(产品裁决 2026-08-18)。**只作用于「新建」**:读取既有
     // profile 的两条路径都显式跑 normalizeBotPermissions,缺字段的历史数据仍落
     // 'ask',与 main 侧投影一致,不会因为默认值变了就把老伙伴悄悄升成信任。
@@ -289,6 +295,7 @@ function readProfiles(): BotProfile[] {
                 ? capabilities.effort
                 : defaults.effort,
             fastMode: capabilities.fastMode === true,
+            automation: normalizeBotAutomation(capabilities.automation),
             sessionControlMode: normalizeBotSessionControlMode(capabilities.sessionControlMode),
             permissions: normalizeBotPermissions(capabilities.permissions),
             skillMode: normalizeSkillMode(capabilities.skillMode, value.skills),
@@ -399,6 +406,7 @@ function normalizeDbProfile(value: unknown): BotProfile | null {
           ? rawCapabilities.effort
           : defaults.effort,
       fastMode: rawCapabilities?.fastMode === true,
+      automation: normalizeBotAutomation(rawCapabilities?.automation),
       sessionControlMode: normalizeBotSessionControlMode(rawCapabilities?.sessionControlMode),
       permissions: normalizeBotPermissions(rawCapabilities?.permissions),
       skillMode: normalizeSkillMode(item.capabilities?.skillMode, item.skills),

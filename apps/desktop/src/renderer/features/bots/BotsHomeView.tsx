@@ -47,7 +47,6 @@ import {
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar, BotAvatarPicker } from './BotAvatar';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
-import { BotCapabilityChips } from './BotCapabilityChips';
 import { BotProjectSettings } from './BotProjectSettings';
 import { BotAutomationSettings } from './BotAutomationSettings';
 import { shouldDeferCanonicalBotSessionNavigation } from './botNavigation';
@@ -55,6 +54,7 @@ import { BotRouteSettings } from './BotRouteSettings';
 import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotEventInboxSettings } from './BotEventInboxSettings';
 import { BotAbilityWall } from './BotAbilityWall';
+import { botChannelConnectPath } from './botChannelConnectRoutes';
 import { BotFolderCards } from './BotFolderCards';
 import { BotGrowthLists } from './BotGrowthLists';
 import { BotPersonaWizard, personaSummaryText } from './BotPersonaWizard';
@@ -700,6 +700,13 @@ export function BotSettings({
                 isChannelMounted={(connection) => Boolean(mountedChannelFor(connection))}
                 channelBusyId={channelBusy}
                 onToggleChannel={(connection) => void toggleChannel(connection)}
+                onConnectAccount={(kind) => {
+                  // 原地拉起该渠道真实的连接界面(设置 › IM 机器人 的对应分区/卡片)。
+                  // 连完回到这一页时,下面那条 listBotChannelConnections effect 会
+                  // 随 bot.id 重跑,行状态自然刷新。
+                  const path = botChannelConnectPath(kind);
+                  if (path) navigate(path);
+                }}
               />
             </div>
             {channelError ? (
@@ -726,8 +733,8 @@ export function BotSettings({
             </div>
           </section>
 
-          {/* "TA 的日程" — 整体嵌入,不再要求「先开自动化」;首次创建 Routine 通过
-              onEnableAutomation 走自动保存把 capabilities.automation 悄悄翻开。 */}
+          {/* "TA 的日程" — 整体嵌入。定时干活是标配(裁决 2026-08-19),这里不再
+              有任何「先开自动化」的前置,也不再需要建完 Routine 回头翻开关。 */}
           <div
             ref={(el) => {
               anchorRefs.current.schedule = el;
@@ -736,10 +743,8 @@ export function BotSettings({
           >
             <BotAutomationSettings
               bot={bot}
-              enabled={bot.capabilities.automation}
               trusted={bot.capabilities.permissions === 'trusted'}
               onOpenTask={onOpenSession}
-              onEnableAutomation={() => updateCapability('automation', true)}
             />
           </div>
 
@@ -884,26 +889,18 @@ export function BotSettings({
                   />
                 </section>
 
-                <BotCapabilityChips
-                  capabilities={capabilities}
-                  onCapabilitiesChange={applyCapabilities}
-                  connections={visibleChannelConnections}
-                  isChannelMounted={(connection) => Boolean(mountedChannelFor(connection))}
-                  channelBusyId={channelBusy}
-                  onToggleChannel={(connection) => void toggleChannel(connection)}
-                  headerAside={
-                    <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 text-[var(--text-secondary)]">
-                      {t(`bots.runtimeState.${runtimeState}`)}
-                    </span>
-                  }
-                >
-                  <p className="mt-4 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
-                    {t('bots.capabilitiesDeferred')}
-                  </p>
-                  {channelError ? (
-                    <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
-                  ) : null}
-                </BotCapabilityChips>
+                {/*
+                  这里曾经还有一张「它会做什么」芯片墙。产品裁决 2026-08-19 把它
+                  整块拆了:自动化与渠道各自归位之后,只剩「动手做事」一颗开关,
+                  而它与对话输入框里的权限 chip 是**同一个** capabilities.permissions
+                  的两个控制点 —— 两个入口管一件事,迟早又长出一对互相矛盾的说法。
+                  权限档位由每天说话的地方(输入框的权限 chip,已接通 Profile 回写)
+                  唯一负责;能力墙「自带」里的「🛠 动手做事」只陈述这项能力存在。
+
+                  芯片墙上那两条与开关无关的信息挪到了下面的「任务生命周期」——
+                  它们本来讲的就是「Profile 版本 vs 正在跑的任务」,和 Renew 按钮
+                  同属一件事。渠道错误也不再在这里重复,它已经长在「TA 会的」里。
+                */}
 
                 <BotRouteSettings bot={bot} onOpenTask={onOpenSession} />
 
@@ -911,24 +908,38 @@ export function BotSettings({
 
                 <BotEventInboxSettings bot={bot} />
 
-                <section className="flex items-center justify-between gap-4 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
-                  <div>
-                    <p className="text-13 font-medium text-[var(--text-primary)]">
-                      {t('bots.sessionLifecycleTitle')}
-                    </p>
-                    <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                      {t('bots.sessionLifecycleDescription')}
-                    </p>
+                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-13 font-medium text-[var(--text-primary)]">
+                          {t('bots.sessionLifecycleTitle')}
+                        </p>
+                        {/* 「当前跑着的任务用的是哪一版 Profile」——它回答的正是这颗
+                            Renew 按钮要不要按,所以贴着按钮放,而不是挂在别处。 */}
+                        <span className="rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-10 text-[var(--text-secondary)]">
+                          {t(`bots.runtimeState.${runtimeState}`)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+                        {t('bots.sessionLifecycleDescription')}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={renewAndApplyProfile}
+                      disabled={renewing}
+                      className="inline-flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                    >
+                      <RefreshCcw size={14} className={renewing ? 'animate-spin' : undefined} />
+                      {renewing ? t('bots.renewing') : t('bots.renew')}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={renewAndApplyProfile}
-                    disabled={renewing}
-                    className="inline-flex h-8 shrink-0 items-center gap-2 rounded-lg border border-[var(--border-default)] px-3 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
-                  >
-                    <RefreshCcw size={14} className={renewing ? 'animate-spin' : undefined} />
-                    {renewing ? t('bots.renewing') : t('bots.renew')}
-                  </button>
+                  {/* 「改了要 Renew 才生效」——这句解释的就是上面那颗状态药丸与这颗
+                      按钮之间的关系,原来却挂在一张只剩开关的芯片墙里。 */}
+                  <p className="mt-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2 text-11 leading-5 text-[var(--text-secondary)]">
+                    {t('bots.capabilitiesDeferred')}
+                  </p>
                 </section>
 
                 <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />

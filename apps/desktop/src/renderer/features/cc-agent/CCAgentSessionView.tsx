@@ -175,6 +175,11 @@ import {
   type BotChatIdentity,
 } from '@/features/bots/BotSessionContentHeader';
 import { botComposerPlaceholderKey } from '@/features/bots/botChatPresentation';
+import {
+  mergeBotComposerRuntime,
+  type BotComposerRuntimeSnapshot,
+} from '@/features/bots/botComposerRuntime';
+import { getBotProfiles, updateBotProfile } from '@/features/bots/botStore';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -805,6 +810,10 @@ export function CCAgentSessionView({
   // 只有 URL 说了不算 —— 那是导航投影,不是身份。
   const botChatIdentity: BotChatIdentity | null =
     botIdentity && session?.source === 'bot' ? botIdentity : null;
+  // 输入框控件的回调是稳定闭包(不能挂 botChatIdentity 依赖,否则每次身份对象换新
+  // 都要重建整条 handleModelDidChange 链)。走 ref 取当前身份。
+  const botChatIdentityRef = useRef<BotChatIdentity | null>(botChatIdentity);
+  botChatIdentityRef.current = botChatIdentity;
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
   const botAssistantAvatar = useMemo(
@@ -2515,12 +2524,36 @@ export function CCAgentSessionView({
     }
   }, []);
 
+  /*
+    伙伴对话的运行时选择要写回伙伴 Profile。
+
+    输入框的模型 / 权限控件本来只改**这条会话行**,而伙伴的主任务在 Renew 时按
+    Profile 的 capabilities 重建一条新会话 —— 不回写就会「改了不持久,Renew 后
+    回跳」。这里只在用户**显式**动过控件之后触发(不是跟着 session 快照跑),
+    否则会把尚未 Renew 的旧会话值倒灌回新 Profile。
+    等值时 mergeBotComposerRuntime 返回 null,不发 IPC,也就不会白顶版本号。
+  */
+  const mirrorBotComposerRuntime = useCallback(
+    (snapshot: BotComposerRuntimeSnapshot) => {
+      const botId = botChatIdentityRef.current?.id;
+      if (!botId) return;
+      const profile = getBotProfiles().find((item) => item.id === botId);
+      if (!profile) return;
+      const nextCapabilities = mergeBotComposerRuntime(profile.capabilities, snapshot);
+      if (!nextCapabilities) return;
+      // 失败只影响「下次 Renew 会回跳」,不该打断正在进行的对话。
+      void updateBotProfile(botId, { capabilities: nextCapabilities }).catch(() => {});
+    },
+    [],
+  );
+
   // F3: Model switch linkage — 切到不支持 Fast Mode 的模型时自动关闭。
   // Called AFTER server persist succeeds (ChatInput handles the server-first flow).
   // 是否支持来自 capabilities.hasFastMode + availableModels[].supportsFastMode, renderer 不再 startsWith 解析 id。
   const handleModelDidChange = useCallback(
     (newModelId: string) => {
       refreshServerSession();
+      mirrorBotComposerRuntime({ model: newModelId });
       // contextWindow 仍取被控端能力(非 per-provider 概念)。
       const m = getModelById(newModelId, remoteDeviceId);
       if (sessionId) {
@@ -2555,6 +2588,7 @@ export function CCAgentSessionView({
       session?.agentKind,
       resetFastMode,
       refreshServerSession,
+      mirrorBotComposerRuntime,
       t,
     ],
   );
@@ -2568,6 +2602,9 @@ export function CCAgentSessionView({
       // callback 自身也可能来自旧 render；必须对照最新 committed view 的当前 scope，
       // 不能只比较旧闭包里的 sessionId。
       if (!targetSessionId || !refreshSequence.isCurrentSession(targetSessionId)) return;
+      // 回写伙伴 Profile 放在这道 scope 守卫**之后**:别的会话飘来的 effort
+      // 不能落到当前这位伙伴头上。
+      mirrorBotComposerRuntime({ effort: newEffort });
       // 远程会话由被控端 sessions:patched 镜像收敛；优先信任操作开始时捕获的稳定
       // device scope，relay origin 短暂缺失时也不能创建会盖住 remote store 的本地快照。
       if (sourceRemoteDeviceId || getSessionDeviceId(targetSessionId)) return;
@@ -2588,12 +2625,31 @@ export function CCAgentSessionView({
         );
       }
     },
-    [sessionId],
+    [sessionId, mirrorBotComposerRuntime],
   );
 
-  const handlePermissionModeDidChange = useCallback(() => {
-    refreshServerSession();
-  }, [refreshServerSession]);
+  const handlePermissionModeDidChange = useCallback(
+    (newMode: PermissionMode) => {
+      refreshServerSession();
+      mirrorBotComposerRuntime({ permissionMode: newMode });
+    },
+    [refreshServerSession, mirrorBotComposerRuntime],
+  );
+
+  const handleProviderDidChange = useCallback(
+    (newProviderId: string | null) => {
+      mirrorBotComposerRuntime({ providerId: newProviderId });
+    },
+    [mirrorBotComposerRuntime],
+  );
+
+  const handleFastModeChange = useCallback(
+    (next: boolean) => {
+      setFastMode(next);
+      mirrorBotComposerRuntime({ fastMode: next });
+    },
+    [setFastMode, mirrorBotComposerRuntime],
+  );
 
   // ─── Extra reference dirs(中途增删) ──────────────────────────────────────
   // 双 IPC 协调,跟 setModel 同模式:
@@ -4635,7 +4691,7 @@ export function CCAgentSessionView({
                   planModeEnabled={planModeEnabled}
                   onPlanModeChange={setPlanMode}
                   fastMode={fastMode}
-                  onFastModeChange={setFastMode}
+                  onFastModeChange={handleFastModeChange}
                   onWorkingDirChange={handleWorkingDirChange}
                   isStreaming={isStreaming}
                   isAgentBusy={isAgentBusy}
@@ -4662,15 +4718,13 @@ export function CCAgentSessionView({
                         })
                       : t('ccAgent.layout.chatPlaceholder')
                   }
-                  // 伙伴对话的工具行只留输入本身:引擎跟 TA 的 Profile 走,
-                  // 权限与模型的入口在「设置 › 高级」,不在每天说话的地方。
-                  hideRuntimeSelectors={botChatIdentity !== null}
                   folderPickerOpen={folderPickerOpen}
                   onFolderPickerOpenChange={handleFolderPickerOpenChange}
                   showFolderPicker={false}
                   onModelDidChange={handleModelDidChange}
                   onEffortDidChange={handleEffortDidChange}
                   onPermissionModeDidChange={handlePermissionModeDidChange}
+                  onProviderDidChange={handleProviderDidChange}
                   attachmentState={attachmentState}
                   externalDragOver={isDragOver}
                   onComposerDropHandled={resetFullAreaDragState}

@@ -52,6 +52,7 @@ import type {
   BotDelegationCapabilitySnapshot,
   BotDelegationWorkspaceSnapshot,
 } from '../../shared/botDelegation.js';
+import { normalizeBotAutomation } from '../../shared/botAutomationCapability.js';
 import { collectBotOutputArtifacts } from '../../shared/botOutputArtifact.js';
 
 function parseObject(value: string | null | undefined): Record<string, unknown> {
@@ -133,7 +134,7 @@ function capabilitySnapshot(input: {
     toolsets,
     toolsetMode: configuredMode(config.toolsetMode, toolsets),
     memoryEnabled: config.memory !== false,
-    automationEnabled: config.automation === true,
+    automationEnabled: normalizeBotAutomation(config.automation),
   };
 }
 
@@ -624,7 +625,11 @@ export class BotAutomationScheduleRunner implements ScheduleRunner {
         .limit(1);
       if (!version) throw new Error('Bot automation Profile version is unavailable');
       const config = parseObject(version.capabilitiesJson);
-      if (config.automation !== true) {
+      // 「定时干活」已归一为标配(normalizeBotAutomation)。这一条曾经是真正的
+      // 硬门:存量 profile 里 automation=false 的伙伴,即使用户在日程页建好了
+      // Routine,到点也只会抛「automation is disabled」——开关下线后它就是一个
+      // 用户完全看不见、也无从打开的死锁。判定保留成一行,便于将来恢复真开关。
+      if (!normalizeBotAutomation(config.automation)) {
         throw new Error('Bot automation is disabled in the current Profile');
       }
       if (config.permissions !== 'trusted') {

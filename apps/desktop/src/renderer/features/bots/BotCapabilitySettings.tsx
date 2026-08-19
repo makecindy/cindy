@@ -449,34 +449,17 @@ export function BotCapabilitySettings({
 
       {/*
         长期记忆开关与「定时干活」勾选框不在这里了:记忆是伙伴的底层能力(恒开,
-        只在高级 tab 为历史关闭态留一个恢复入口),自动化则由能力芯片墙承担。
+        只在高级 tab 为历史关闭态留一个恢复入口),自动化是标配(不再是开关)。
         本面板只保留真正需要专家逐项挑选的技术细节。
+
+        「其它任务权限」(capabilities.sessionControlMode)的下拉也下线了 ——
+        产品裁决 2026-08-19:**协作是标配,不存在「不可被召唤的伙伴」**。那个
+        下拉的默认值写着「不可访问」,而真实的委派链路(botDelegationService)
+        从来不查它,用户看到的是一个与行为矛盾的假开关。
+        字段本身**保留不动**:它只驱动 buildBotSessionControlContext 往 system 段
+        写「你能不能主动去动别的任务」这段话(阿枢/本本靠它订阅并处理其它任务的
+        事件),存量伙伴的取值原样生效,不做迁移、不改语义。
       */}
-      <label className="flex flex-col gap-2 rounded-xl border border-[var(--border-default)] px-3 py-3 text-12 text-[var(--text-secondary)]">
-        <span>
-          <span className="block font-medium text-[var(--text-primary)]">
-            {t('bots.sessionControl.title')}
-          </span>
-          <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
-            {t('bots.sessionControl.description')}
-          </span>
-        </span>
-        <select
-          value={capabilities.sessionControlMode}
-          onChange={(event) => updateCapability(
-            'sessionControlMode',
-            event.target.value as BotCapabilities['sessionControlMode'],
-          )}
-          className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-        >
-          <option value="none">{t('bots.sessionControl.none')}</option>
-          <option value="observe">{t('bots.sessionControl.observe')}</option>
-          <option value="coordinate">{t('bots.sessionControl.coordinate')}</option>
-        </select>
-        <span className="text-11 leading-4 text-[var(--text-tertiary)]">
-          {t(`bots.sessionControl.${capabilities.sessionControlMode}Description`)}
-        </span>
-      </label>
     </div>
   );
 }

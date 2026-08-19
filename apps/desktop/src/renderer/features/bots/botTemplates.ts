@@ -3,6 +3,7 @@ import type { BotAvatarHue } from './BotAvatar';
 // by plain-Node tooling that cannot resolve the bundled portrait asset.
 import { CINDY_OFFICIAL_AVATAR, presetAvatarValue } from './botAvatarIdentity';
 import { NEW_BOT_DEFAULT_PERMISSIONS } from './botCapabilityDefaults';
+import { BOT_AUTOMATION_DEFAULT } from '../../../shared/botAutomationCapability';
 import type { BotCapabilities } from './botStore';
 
 /**
@@ -35,16 +36,25 @@ export interface BotTemplateDefinition {
   autoSubscribeToTaskEvents: boolean;
 }
 
+/*
+  `automation` 两档模板都写 `true` —— 定时干活是标配(裁决 2026-08-19),
+  开关面已下线,读取侧也统一由 normalizeBotAutomation 归一。
+
+  `sessionControlMode` 仍然分档,而且**刻意保留差异**:它不是「能不能被召唤」
+  (协作是标配,委派链路从不查它),而是「TA 主动去动别的任务的权限」。
+  阿枢 / 本本要订阅并处理其它任务的事件,所以是 coordinate;其余伙伴保持
+  none,不往 system 段塞用不上的任务控制说明。用户可见的那个下拉已经移除。
+*/
 const ASSISTANT_CAPABILITIES: Partial<BotCapabilities> = {
   harness: 'claude',
-  automation: false,
+  automation: BOT_AUTOMATION_DEFAULT,
   sessionControlMode: 'none',
   permissions: NEW_BOT_DEFAULT_PERMISSIONS,
 };
 
 const COORDINATOR_CAPABILITIES: Partial<BotCapabilities> = {
   harness: 'claude',
-  automation: true,
+  automation: BOT_AUTOMATION_DEFAULT,
   sessionControlMode: 'coordinate',
   permissions: NEW_BOT_DEFAULT_PERMISSIONS,
 };

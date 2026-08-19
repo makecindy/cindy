@@ -42,6 +42,7 @@ import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../ma
 import { botProfileContentChanged, mergeBotProfileCapabilities } from './botProfileVersioning.js';
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
 import { normalizeBotSessionControlMode } from '../../../shared/botSessionControl.js';
+import { normalizeBotAutomation } from '../../../shared/botAutomationCapability.js';
 import { BOT_WORKSPACE_POLICIES, type BotWorkspacePolicy } from '../../../shared/botWorkspace.js';
 import { projectIdentityKey } from '../../../shared/projectKeys.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
@@ -415,7 +416,7 @@ async function readProfile(
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
       memory: config.memory !== false,
-      automation: config.automation === true,
+      automation: normalizeBotAutomation(config.automation),
       permissions: config.permissions === 'trusted' ? 'trusted' : 'ask',
       sessionControlMode: normalizeBotSessionControlMode(config.sessionControlMode),
     },

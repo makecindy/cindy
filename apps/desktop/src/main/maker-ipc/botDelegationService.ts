@@ -50,6 +50,7 @@ import type {
   BotAutomationExecutionPlan,
 } from '../../shared/botAutomation.js';
 import { parseBotAutomationExecutionPlan } from '../../shared/botAutomation.js';
+import { normalizeBotAutomation } from '../../shared/botAutomationCapability.js';
 import {
   collectBotOutputArtifacts,
   parseBotOutputArtifacts,
@@ -321,7 +322,7 @@ function configuredCapabilitySnapshot(input: {
     toolsets,
     toolsetMode: configuredMode(config.toolsetMode, toolsets),
     memoryEnabled: config.memory !== false,
-    automationEnabled: config.automation === true,
+    automationEnabled: normalizeBotAutomation(config.automation),
   };
 }
 
@@ -2285,7 +2286,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         toolsets,
         toolsetMode: configuredMode(config.toolsetMode, toolsets),
         memoryEnabled: config.memory !== false,
-        automationEnabled: config.automation === true,
+        automationEnabled: normalizeBotAutomation(config.automation),
       },
       workspace: workspaceSnapshot(binding),
       access: {

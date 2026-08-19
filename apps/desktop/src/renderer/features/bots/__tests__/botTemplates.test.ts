@@ -46,17 +46,28 @@ describe('Bot roster templates', () => {
   it('keeps coordination powers with the two stewards only', () => {
     expect(getBotTemplate('ashu')).toMatchObject({
       autoSubscribeToTaskEvents: true,
-      capabilities: { automation: true, sessionControlMode: 'coordinate' },
+      capabilities: { sessionControlMode: 'coordinate' },
     });
     expect(getBotTemplate('butler')).toMatchObject({
       autoSubscribeToTaskEvents: true,
-      capabilities: { automation: true, sessionControlMode: 'coordinate' },
+      capabilities: { sessionControlMode: 'coordinate' },
     });
     for (const id of ['cindy', 'shiba', 'melody', 'star'] as const) {
       expect(getBotTemplate(id)).toMatchObject({
         autoSubscribeToTaskEvents: false,
-        capabilities: { automation: false, sessionControlMode: 'none' },
+        capabilities: { sessionControlMode: 'none' },
       });
+    }
+  });
+
+  /*
+    「定时干活」是标配(裁决 2026-08-19):模板不再分档,读取侧也统一归一。
+    这条一红就说明有人又把某个角色的自动化写回了 false —— 那个伙伴建好 Routine
+    到点也不会跑,而用户在界面上完全看不到原因(开关已经下线)。
+  */
+  it('ships every template with automation on — it is standard, not a per-role perk', () => {
+    for (const template of BOT_TEMPLATES) {
+      expect(template.capabilities.automation, template.id).toBe(true);
     }
   });
 

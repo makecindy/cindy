@@ -6090,28 +6090,9 @@
     "userContextSourceDescription": "对应 Hermes 的 USER.md。它与伙伴身份和可写的伙伴 Memory 分开保存，并随 Profile 版本冻结为只读快照。",
     "chooseAvatar": "选择头像 {{avatar}}",
     "chooseAvatarColor": "选择头像颜色 {{color}}",
-    "capabilityChips": {
-      "title": "它会做什么",
-      "description": "打开就能用，背后要接的东西由我们替你接好。",
-      "act": {
-        "name": "动手做事",
-        "effect": "它直接把事做完，不用你一步一步点同意。"
-      },
-      "automation": {
-        "name": "定时干活",
-        "effect": "到点自己醒来干活，不用你开口。"
-      },
-      "channel": {
-        "effect": "它能收发你的 {{channel}} 消息。",
-        "connectHint": "先在设置里连接 {{channel}} 账号。"
-      }
-    },
-    "trustedBadge": {
-      "label": "放手做已开启：它可以直接执行操作。"
-    },
     "advancedCapabilities": {
-      "title": "能力芯片背后的技术细节",
-      "description": "harness、模型、工具、MCP Server、Skill 与其它任务权限。日常使用不需要动这里。"
+      "title": "这些能力背后的技术细节",
+      "description": "harness、模型、工具、MCP Server 与 Skill。日常使用不需要动这里。"
     },
     "memoryRecovery": {
       "title": "这个伙伴的长期记忆当前是关的",
@@ -6158,20 +6139,10 @@
     "memoryDescription": "使用只属于这个伙伴的独立记忆空间。",
     "automationLabel": "自动化",
     "automationDescription": "允许这个伙伴在无人值守时按计划运行。每次运行会固定 Profile 版本、项目、worktree 和投递目标。",
-    "sessionControl": {
-      "title": "其它任务权限",
-      "description": "声明这个伙伴在任务控制工具可用时能够做什么。",
-      "none": "不可访问",
-      "observe": "只读观察",
-      "coordinate": "协调任务",
-      "noneDescription": "这个伙伴不能查看或改变其它任务。",
-      "observeDescription": "可以查看任务状态、运行信息、历史和队列，但不能进行修改。",
-      "coordinateDescription": "可以查看任务、派活、向运行中的任务插话、请求停止，并管理仅由本任务投递的队列消息；每次操作仍由控制面鉴权。"
-    },
     "automations": {
       "title": "伙伴自动化",
       "description": "这个伙伴自己会跑的 Routine——按时间表跑，或者你点「立即运行」时跑。",
-      "trustedRequired": "无人值守运行无法等待授权确认。请将权限模式设为“信任操作”并保存后再创建自动化。",
+      "trustedRequired": "无人值守跑的时候没人能点同意。先在和 TA 的对话里，把输入框的权限切成「完全访问」，再回来建。",
       "name": "名称",
       "dailyTime": "每天运行时间",
       "intervalMinutes": "间隔分钟数",
@@ -6600,6 +6571,8 @@
         "schedule": "⏰ 定时干活",
         "collab": "🤝 和伙伴协作"
       },
+      "connectAccount": "连接账号",
+      "noConnectUi": "这个渠道暂不支持在界面里连接。",
       "imBlocked": "一个伙伴只能连一个 IM——先断开 {{channel}}",
       "footnote": "连上以后不用再设置什么——TA 自己知道怎么用。"
     },

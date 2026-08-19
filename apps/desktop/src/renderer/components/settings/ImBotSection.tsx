@@ -38,6 +38,8 @@ import {
   showTelegramBot,
   type ImBotIdentity,
 } from './imBotVisibility';
+// 渠道 ↔ 深链参数的映射正本在伙伴侧(能力墙是它唯一的来源),这里只消费类型。
+import type { ImBotPersonalChannelId } from '@/features/bots/botChannelConnectRoutes';
 
 /** 「IM 机器人」页面分区 id(与 ?imGroup= 参数共用)。 */
 export type ImBotSettingsGroup = 'cindy' | 'personal';
@@ -72,16 +74,27 @@ function PersonalGroupContent({
   showDiscord,
   showLark,
   showTelegram,
+  targetChannel,
 }: {
   showDiscord: boolean;
   showLark: boolean;
   showTelegram: boolean;
+  /**
+   * `?imChannel=` 深链要展开的那张卡。伙伴能力墙上「还没有 X 账号」的行点下去
+   * 就走这条路 —— 直接把对应渠道的连接卡展开,而不是把人丢在页面顶部。
+   */
+  targetChannel: ImBotPersonalChannelId | null;
 }) {
-  const [expandedChannel, setExpandedChannel] = useState<
-    'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
-  >(null);
+  const [expandedChannel, setExpandedChannel] = useState<ImBotPersonalChannelId | null>(
+    targetChannel,
+  );
 
-  const toggle = (channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk') => {
+  // 深链值变化时重新展开(同一路由里换渠道也要跟上);用户手动折叠后不会被再弹开。
+  useEffect(() => {
+    if (targetChannel) setExpandedChannel(targetChannel);
+  }, [targetChannel]);
+
+  const toggle = (channel: ImBotPersonalChannelId) => {
     setExpandedChannel((current) => (current === channel ? null : channel));
   };
 
@@ -114,7 +127,13 @@ function PersonalGroupContent({
   );
 }
 
-export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup | null }) {
+export function ImBotSection({
+  targetGroup,
+  targetChannel = null,
+}: {
+  targetGroup: ImBotSettingsGroup | null;
+  targetChannel?: ImBotPersonalChannelId | null;
+}) {
   const { t } = useTranslation();
   const { mode, dataOwnerId, user } = useAuth();
   const identity: ImBotIdentity = {
@@ -195,6 +214,7 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
             showDiscord={discordVisible}
             showLark={larkVisible}
             showTelegram={telegramVisible}
+            targetChannel={targetChannel}
           />
         </section>
       </div>
