@@ -748,6 +748,25 @@ describe('目录空清单 = 能力暂不可用', () => {
 });
 
 describe('意识专属后端覆盖(解析表第②层)', () => {
+  it('新版 Provider-aware 覆盖保留精确来源到最终派发', async () => {
+    const { slot, generateImage } = makeSlot({
+      getMediaOverride: vi.fn(() => ({
+        modelId: 'gpt-image-2',
+        providerId: 'openai',
+        label: 'GPT Image 2',
+      })),
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: true, model: 'gpt-image-2', modelLabel: 'GPT Image 2' });
+    expect(generateImage).toHaveBeenCalledWith({
+      prompt: '一只猫',
+      model: 'gpt-image-2',
+      providerId: 'openai',
+    });
+  });
+
   it('覆盖压过档位;调用显式点名仍压过覆盖;下架型号的覆盖静默落回', async () => {
     const pinned = makeSlot({
       getOverride: vi.fn(() => 'gemini-3-pro-image') as unknown as CindySlotDeps['getOverride'],
@@ -1003,6 +1022,28 @@ describe('代办链路', () => {
       getOwnerScopeKey: () => ownerScopeKey,
       generateImage: vi.fn(async () => {
         ownerScopeKey = 'cloud:owner-b:2';
+        return { buffer: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
+      }),
+      saveGhostMedia,
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('生成期间 Ghost durable owner 变为 mismatch 时不保存产物', async () => {
+    // 模拟另一实例改写全局 durable Ghost projection owner:进程内 boundaryDepth
+    // 与 owner scope key 都不变,但 Ghost 专属边界(isOwnerBoundaryPending 已含
+    // durable owner 检查)在任务执行中变 pending,在途任务必须收口。
+    let boundaryPending = false;
+    const saveGhostMedia = vi.fn();
+    const { slot } = makeSlot({
+      isOwnerBoundaryPending: () => boundaryPending,
+      generateImage: vi.fn(async () => {
+        boundaryPending = true;
         return { buffer: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
       }),
       saveGhostMedia,

@@ -8,8 +8,8 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 
 **Turning it on:**
 
-- In any regular project or dialogue session, open the composer's **+** menu and choose **Collaboration mode**. You can also choose it before sending the first message of a new task. Claude Code and Codex can lead locally or over SSH; Pi can lead in local sessions.
-- Pick the first worker's agent (Claude Code, Codex, or Pi), and optionally its role / model / effort / an initial task. SSH remote leads currently use Claude Code or Codex workers. If you have not chosen a Worker permission before, the initial default is **Full access** — it is a selectable default, not a fixed mode. You can choose **Auto-review** instead. Once you create a Worker with either mode, Cindy remembers that choice for the next Worker instead of replacing it with the product default.
+- In any regular project or dialogue session, open the composer's **+** menu and choose **Collaboration mode**. You can also choose it before sending the first message of a new task. Claude Code, Codex, and Pi can lead locally or over SSH.
+- Pick the first worker's agent (Claude Code, Codex, or Pi), and optionally its role / model / effort / an initial task. If you have not chosen a Worker permission before, the initial default is **Full access** — it is a selectable default, not a fixed mode. You can choose **Auto-review** instead. Once you create a Worker with either mode, Cindy remembers that choice for the next Worker instead of replacing it with the product default.
 - Start. This creates the team plus that first worker.
 
 **Adding more workers:**
@@ -29,5 +29,5 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 
 **Notes:**
 
-- A local lead can be a Claude Code, Codex, or Pi **project or dialogue** session. On an SSH remote lead, the lead and workers currently use Claude Code or Codex; Pi sessions are local-only. Remote workers are spawned on the **same remote host**, and the collaboration MCP reaches the remote side over an SSH remote-forward to the local bridge (with a persistent bearer token). A worker can't start its own sub-collab (no nesting).
+- A lead can be a Claude Code, Codex, or Pi **project or dialogue** session, locally or over SSH. Remote workers are spawned on the **same remote host**, and the collaboration MCP reaches the remote side over an SSH remote-forward to the local bridge (with a persistent bearer token). A worker can't start its own sub-collab (no nesting).
 - A lead can have only **one active collaboration workflow** at a time. If you have two clients open on the same account (e.g. dev + release) and start collab on the same session in both, the second fails with "开启协同失败" because a workflow is already active — close one client or end the existing collab.

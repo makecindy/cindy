@@ -223,6 +223,10 @@ Apple Simulator 与 Cindy 内置查看器能力的用户可见名称。iOS 保�
 
 Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
 
+### Lead
+
+Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不译成 Leader / 主控 / 主导 / 队长。这里只钉大小写形态：首字母大写 Lead。存量文案里仍有小写 lead（如 lead session），先登记为 proposed，待与 Worker 一并固化。
+
 ### Black Cat
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。
@@ -295,6 +299,10 @@ dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值
 
 右栏「资源用量」面板(对标 Chromium 任务管理器,展示本机进程 CPU/内存并可终止 Agent 进程)。命名裁决:不可叫「任务管理器」——Session→任务 已 decided,「任务管理器」会被读成管理左侧任务列表;「监控/监视」有隐私负面语感判例(见 shortcut listener permission 条目),弃用。「用量」对齐已裁决的 Usage→用量。
 
+### Role name
+
+Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改变 Agent、模型、权限或能力。先登记为 proposed，避免「角色 / 名称 / Role」多套说法并存。
+
 ### Run records
 
 日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。
@@ -320,6 +328,10 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 ### Upload code
 
 客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。
+
+### Vision Bridge
+
+让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。
 
 ### Voice dictionary
 

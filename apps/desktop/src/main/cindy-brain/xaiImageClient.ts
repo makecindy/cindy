@@ -15,6 +15,7 @@ import type { ImageChannel, ImageChannelResult } from './imageChannelRegistry.js
 const XAI_API_BASE = 'https://api.x.ai/v1';
 const MAX_EDIT_SOURCES = 3;
 const MAX_IMAGE_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 interface XaiImageResponse {
   data?: Array<{
@@ -28,6 +29,7 @@ interface XaiImageResponse {
 export interface CreateXaiImageChannelOptions {
   hasOAuthLogin(): boolean;
   getAccessToken(): Promise<string>;
+  getCredentialGeneration(): number;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
   fetchImplementation?: typeof fetch;
@@ -69,10 +71,35 @@ function assertXaiImageUrl(raw: string): string {
   } catch {
     throw new Error('xAI 图像通道返回了不可信的图片地址');
   }
-  if (url.protocol !== 'https:' || !(url.hostname === 'x.ai' || url.hostname.endsWith('.x.ai'))) {
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    !(url.hostname === 'x.ai' || url.hostname.endsWith('.x.ai'))
+  ) {
     throw new Error('xAI 图像通道返回了不可信的图片地址');
   }
   return url.toString();
+}
+
+async function fetchXaiImageDownload(
+  doFetch: typeof fetch,
+  sourceUrl: string,
+  assertStillCurrent: () => void,
+): Promise<Response> {
+  assertStillCurrent();
+  const response = await doFetch(sourceUrl, { redirect: 'manual' });
+  assertStillCurrent();
+  if (!REDIRECT_STATUSES.has(response.status)) return response;
+
+  const location = response.headers.get('location');
+  await response.body?.cancel().catch(() => undefined);
+  assertStillCurrent();
+  if (!location) throw new Error('xAI 图片下载重定向缺少 Location');
+  const redirectUrl = assertXaiImageUrl(new URL(location, sourceUrl).toString());
+  const redirected = await doFetch(redirectUrl, { redirect: 'manual' });
+  assertStillCurrent();
+  return redirected;
 }
 
 function captureOwnerScope(opts: CreateXaiImageChannelOptions): string {
@@ -85,6 +112,17 @@ function captureOwnerScope(opts: CreateXaiImageChannelOptions): string {
 function assertOwnerScopeCurrent(opts: CreateXaiImageChannelOptions, expected: string): void {
   if (opts.isOwnerBoundaryPending() || opts.getOwnerScopeKey() !== expected) {
     throw new Error('xAI 图片请求期间账号已切换,请重试');
+  }
+}
+
+function assertRequestScopeCurrent(
+  opts: CreateXaiImageChannelOptions,
+  ownerScopeKey: string,
+  credentialGeneration: number,
+): void {
+  assertOwnerScopeCurrent(opts, ownerScopeKey);
+  if (opts.getCredentialGeneration() !== credentialGeneration) {
+    throw new Error('xAI 图片请求期间 SuperGrok 凭证已切换,请重试');
   }
 }
 
@@ -150,6 +188,10 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     // OAuth token 与源图都属于当前数据 owner。任务跨 await 后必须仍在同一稳定
     // owner scope，不能把 A 的 token 或图片派发进 B 的运行时。
     const ownerScopeKey = captureOwnerScope(opts);
+    const credentialGeneration = opts.getCredentialGeneration();
+    const assertStillCurrent = (): void =>
+      assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
+    assertStillCurrent();
     const [token, images] = await Promise.all([
       opts.getAccessToken(),
       Promise.all(paths.map(sourceImage)),
@@ -168,7 +210,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     }
 
     opts.beforeDispatch?.(params.model);
-    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    assertStillCurrent();
     const response = await doFetch(`${XAI_API_BASE}/images/${isEdit ? 'edits' : 'generations'}`, {
       method: 'POST',
       headers: {
@@ -179,7 +221,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
       body: JSON.stringify(body),
     });
     const responseText = await response.text();
-    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    assertStillCurrent();
     if (!response.ok) {
       if ((response.status === 401 || response.status === 403) && opts.onAuthRejected) {
         await opts
@@ -204,6 +246,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     const parsed = parseResponse(responseText);
     const first = parsed.data?.[0];
     if (first?.b64_json) {
+      assertStillCurrent();
       return {
         data: [{ b64_json: first.b64_json }],
         output_format: first.mime_type?.split('/')[1] ?? 'png',
@@ -211,18 +254,24 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     }
     if (first?.url) {
       // Imagine URLs are short-lived. Materialize immediately so the shared media
-      // pipeline receives stable bytes instead of persisting an expiring URL.
-      const imageResponse = await doFetch(assertXaiImageUrl(first.url), { redirect: 'manual' });
+      // pipeline receives stable bytes instead of persisting an expiring URL. The
+      // initial URL and at most one redirect must both remain trusted x.ai targets.
+      const imageResponse = await fetchXaiImageDownload(
+        doFetch,
+        assertXaiImageUrl(first.url),
+        assertStillCurrent,
+      );
       if (!imageResponse.ok) {
         throw new Error(`xAI 图片下载失败(HTTP ${imageResponse.status})`);
       }
       const bytes = await readBoundedImageResponse(
         imageResponse,
         maxImageDownloadBytes,
-        () => assertOwnerScopeCurrent(opts, ownerScopeKey),
+        assertStillCurrent,
       );
       const mime = sniffMediaMime(bytes);
       if (!mime?.startsWith('image/')) throw new Error('xAI 图片下载结果不是有效图片');
+      assertStillCurrent();
       return { data: [{ b64_json: bytes.toString('base64') }], output_format: mime.split('/')[1] };
     }
     throw new Error('xAI 图像通道未返回图片');

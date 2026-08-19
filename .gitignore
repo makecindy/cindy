@@ -35,6 +35,7 @@ apps/desktop/release/
 apps/desktop/resources/tools/
 # build-remote-bundles.mjs 会在 dev/package/build 前重新生成这些目录。
 apps/desktop/resources/cc-manager/
+apps/desktop/resources/pi-manager/
 apps/desktop/resources/anthropic-compat-proxy/
 apps/desktop/resources/remote-file-service/
 # Windows 打包时由 prePackage 现场 cargo build 生成并覆盖(forge.config.ts
@@ -145,6 +146,9 @@ CLAUDE.local.md
 # AGENTS.md / CLAUDE.md 等共享 agent 指令有意提交，不在忽略范围。
 # 若以后需要共享某个 agent 的项目配置，用 ! 规则逐项反向豁免。
 
+# GitHub 代码审查自动生成的产物（含会话级 review 数据），永不入仓。
+github-result-*.json
+
 # ── Cindy/XDMaker 开发者本地工作区 ───────────────────────────
 # local 模式的端点清单(restart:desktop:local 从 config/endpoint.json 生成,api/auth/device-link 指 localhost)
 config/endpoint.local.json
@@ -179,6 +183,10 @@ apps/mobile/e2e/visual-baselines/
 
 # worktree 回收豁免哨兵(会话工具生成,永不入仓)
 .worktree-keep
+
+# 会话工具临时产物(永不入仓)
+tmp/
+github-result-*.json
 
 # 内置插件种子已废弃(改走 plugin-store 安装);历史克隆含私有插件与凭证,永不入仓。
 apps/desktop/resources/builtin-ghosts/

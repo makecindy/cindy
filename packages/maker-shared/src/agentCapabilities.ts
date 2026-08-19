@@ -73,9 +73,8 @@ export interface MobileModelSwitchConfirmation {
 }
 
 /**
- * effort 档展示名词表(手机端简体中文,与桌面 i18n `effortLevels.*` 的 zh-CN 值对齐:
- * 低 / 中 / 高 / 超高 / 最高 / 极致)。手机无 i18n 体系,在 normalize 单点把 capabilities 的
- * 英文 displayName 换成中文,下游(列表行 / 模型选项 / trigger 药丸 / 会话设置)全部继承;
+ * 旧移动端兼容词表,与桌面 i18n `effortLevels.*` 的 zh-CN 值对齐。normalize 仍用它稳定
+ * capabilities 快照与旧消费者；模型选择器等用户可见入口再按当前语言覆盖已知档位。
  * 未知档 id 不在词表内 → 保留被控端给的 displayName 原文。
  */
 export const MOBILE_EFFORT_LABELS: Record<string, string> = {
@@ -87,6 +86,37 @@ export const MOBILE_EFFORT_LABELS: Record<string, string> = {
   max: '最高',
   ultra: '极致',
 };
+
+const ENGLISH_COMPACT_EFFORT_LABELS: Record<string, string> = {
+  auto: 'Aut',
+  balanced: 'Bal',
+  default: 'Def',
+  extrahigh: 'XHi',
+  high: 'Hi',
+  low: 'Lo',
+  max: 'Max',
+  maximum: 'Max',
+  medium: 'Mid',
+  minimal: 'Min',
+  none: 'Off',
+  off: 'Off',
+  standard: 'Std',
+  ultra: 'Ult',
+  xhigh: 'XHi',
+};
+
+/**
+ * Windows、macOS 与移动端模型选择器共用的英文 effort 短码。
+ * 仅已知标准档位缩写；未知档位保留下发的完整显示名（没有显示名时保留完整 id），
+ * 避免不同技术 id 被截成同一个不可区分的前三字符。
+ */
+export function compactEnglishEffortLabel(effort: string, displayName?: string): string {
+  const normalizedEffort = effort.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const standardLabel = ENGLISH_COMPACT_EFFORT_LABELS[normalizedEffort];
+  if (standardLabel) return standardLabel;
+
+  return displayName?.trim() || effort;
+}
 
 const FALLBACK_EFFORT_OPTIONS: MobileChoiceOption[] = [
   { id: 'low', label: MOBILE_EFFORT_LABELS.low },

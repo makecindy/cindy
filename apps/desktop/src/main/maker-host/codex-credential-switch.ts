@@ -6,8 +6,9 @@ import {
   type AgentKind,
 } from '@cindy/maker-core';
 
-import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
+import { claudeToolSearchMode } from './claude-behavior-flags.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
+import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
 
 export interface ShouldCloseSessionForCredentialSwitchInput {
   agentKind: AgentKind;
@@ -177,6 +178,16 @@ export function shouldCloseSessionForCredentialSwitch(
     providerId: nextProviderId,
     model: input.nextModel,
   });
+
+  // Tool Search 是 Claude 子进程的 spawn-time env。跨越上游 capability 边界时即使
+  // provider-oauth 凭证家族可复用，也必须重建本会话，不能把旧 flag 热切到新来源。
+  if (
+    input.agentKind === 'claude-code' &&
+    claudeToolSearchMode(currentProviderId, currentMode) !==
+      claudeToolSearchMode(nextProviderId, nextMode)
+  ) {
+    return true;
+  }
 
   // ── 远端压缩身份边界(codex, proxy-active)────────────────────────────────
   // oauth spawn 的订阅直连 thread 以 OpenAI 身份 provider 创建(codex 据此走

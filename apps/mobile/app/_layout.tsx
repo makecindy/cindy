@@ -61,7 +61,8 @@ import {
   markStartupOtaLaunchSuccess,
   useStartupOtaGate,
 } from '@/update/useStartupOtaGate';
-import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
+import { useUpdateChannelGate } from '@/update/useUpdateChannelGate';
+import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 import { useStartupEndpointGate } from '@/config/useStartupEndpointGate';
 import { IS_OTA_SELFHOST } from '@/config/env';
 import { getNewSessionCreationTask } from '@/session/newSessionCreation';
@@ -294,10 +295,10 @@ function PrecreatedWorktreeRecoveryBridge() {
   return null;
 }
 
-function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
+function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
   // 自建变体:启动即生效的 JS 热更门(冷启动 check→fetch→reload,本次启动就跑上最新 JS)。
   // 内部 gate 自建 + 非 dev + updates 可用,其余直接 ready=true 不阻塞。见 useStartupOtaGate。
-  const otaReady = useStartupOtaGate(isCanary);
+  const otaReady = useStartupOtaGate(channel);
   // handoff reporter:OTA 门就绪在本层上报(reload 期间保持 pending,readiness 不推进)
   const handoff = useLoginHandoff();
   const dispatchHandoff = handoff.dispatch;
@@ -306,10 +307,10 @@ function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
   }, [otaReady, dispatchHandoff]);
   // 符合整包分发策略的自建变体:启动时检查整包更新(runtimeVersion 变化 → 引导安装)。
   // TestFlight / 审核 / EAS 包为 no-op。JS 热更由上面的门 + expo-updates 处理,与此互补。
-  useBundleUpdatePrompt({ auto: true, isCanary });
+  useBundleUpdatePrompt({ auto: true, channel });
   // 自建变体:后台切回前台时静默补一次检查(OTA 静默 fetch 不 reload、整包仅强更提示)。
   // TestFlight 保留 OTA、跳过整包分支；非自建为 no-op。见 useResumeUpdateCheck。
-  useResumeUpdateCheck(isCanary);
+  useResumeUpdateCheck(channel);
   // 热更门未就绪(自建变体冷启动正在 check/fetch/reload)时不挂载业务树,避免闪旧 UI;
   // 期间根部常驻 splash 覆盖层在上面顶着,这里返回 null 即可。
   if (!otaReady) {
@@ -333,12 +334,12 @@ function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
  * 严格先于「检查更新」(本组件只在端点闸门 ready 后才挂载)。
  */
 function RootAfterEndpoints() {
-  // 更新检查早于 AuthProvider，必须先恢复上次登录同步到本机的 canary 快照。
-  // 未持久化/读取失败一律 stable；读取完成前不允许发任何 /manifest 或 /latest 请求。
-  const channel = useCanaryChannelGate(IS_OTA_SELFHOST);
+  // 更新检查早于 AuthProvider，必须先恢复上次登录同步到本机的 canary 快照 + 设备 beta 开关。
+  // 未持久化/读取失败一律 release；读取完成前不允许发任何 /manifest 或 /latest 请求。
+  const channelGate = useUpdateChannelGate(IS_OTA_SELFHOST);
   // 未就绪期间由根部常驻 splash 覆盖层顶着,不再各自渲染 splash 实例(避免交接闪帧)。
-  if (!channel.ready) return null;
-  return <RootAfterUpdateChannel isCanary={channel.isCanary} />;
+  if (!channelGate.ready) return null;
+  return <RootAfterUpdateChannel channel={channelGate.channel} />;
 }
 
 function RootLayout() {

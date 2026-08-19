@@ -46,6 +46,40 @@ describe('Codex app-server input', () => {
     ]);
   });
 
+  it('keeps the original Host-managed URI when a local image is projected to Codex', async () => {
+    const managedUrl = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const content: UserMessage['content'] = [
+      { type: 'image', path: '/tmp/context.png', mimeType: 'image/png' },
+      {
+        type: 'image',
+        path: '/tmp/original.png',
+        managedUrl,
+        mimeType: 'image/png',
+      },
+      { type: 'text', text: 'Edit this image' },
+    ];
+
+    const inputs = await toAppServerInput(content, '/tmp');
+
+    expect(inputs).toContainEqual({ type: 'localImage', path: '/tmp/context.png' });
+    expect(inputs).toContainEqual({ type: 'localImage', path: '/tmp/original.png' });
+    expect(inputs).toContainEqual({
+      type: 'text',
+      text: expect.stringContaining(JSON.stringify({ image: 2, uri: managedUrl })),
+    });
+  });
+
+  it('does not project arbitrary caller-provided URLs as Host attachment identities', async () => {
+    const inputs = await toAppServerInput([{
+      type: 'image',
+      path: '/tmp/original.png',
+      managedUrl: 'https://example.test/not-host-managed.png',
+      mimeType: 'image/png',
+    }]);
+
+    expect(inputs).toEqual([{ type: 'localImage', path: '/tmp/original.png' }]);
+  });
+
   it('keeps extracted document evidence, the PDF reference, and the image in one review turn', async () => {
     const content: UserMessage['content'] = [
       {

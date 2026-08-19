@@ -125,3 +125,43 @@ export function channelForceConfirmToolCall(toolName: string, input: unknown): b
   //    不透明写入 —— 保守地强制确认,而不是自动放行一次可能的删除。
   return isOpaqueWriteToolName(toolName);
 }
+
+/**
+ * 已知只读叶子名。群上下文把外人可控文本注入 owner 轮次时,只有这些
+ * 可以不经确认自动跑;Write / Edit / Bash / 发文件 / 浏览器 / 插件调用一律要确认。
+ * 词表按小写叶子比对,兼容 Claude `Read`、Pi `read`、MCP `mcp__x__list_tools`。
+ */
+const READ_ONLY_CHANNEL_TOOL_LEAVES = new Set([
+  'read',
+  'glob',
+  'grep',
+  'ls',
+  'notebookread',
+  'list_tools',
+]);
+
+function toolLeafName(toolName: string): string {
+  const normalized = toolName.toLowerCase();
+  const mcp = normalized.match(/^(?:mcp__)?(?:[\w.-]+(?:__|::))+([\w.-]+)$/);
+  if (mcp) return mcp[1];
+  const last = normalized.split(/[:/]/).pop();
+  return last || normalized;
+}
+
+export function isReadOnlyChannelToolName(toolName: string): boolean {
+  return READ_ONLY_CHANNEL_TOOL_LEAVES.has(toolLeafName(toolName));
+}
+
+/**
+ * 飞书群轮次用的更严策略:破坏性 / 不透明写沿用 channelForceConfirmToolCall,
+ * 此外凡不是只读叶子的工具(含包装内层)一律强制确认。
+ * 读/搜目录自由通过;改文件、跑命令、发本地文件、开浏览器必须主人点卡。
+ */
+export function channelForceConfirmMutatingToolCall(toolName: string, input: unknown): boolean {
+  if (channelForceConfirmToolCall(toolName, input)) return true;
+  const inners = [...unwrapInnerCalls(toolName, input)];
+  if (inners.length > 0) {
+    return inners.some((inner) => !isReadOnlyChannelToolName(inner.name));
+  }
+  return !isReadOnlyChannelToolName(toolName);
+}

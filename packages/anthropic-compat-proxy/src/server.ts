@@ -408,7 +408,12 @@ function isSafePathOverride(value: unknown): value is string {
 }
 
 function isPromiseLike<T>(value: unknown): value is PromiseLike<T> {
-  return typeof value === 'object' && value !== null && typeof (value as { then?: unknown }).then === 'function';
+  // 接受 object 与 function 两类 thenable（函数对象也可以合法带 .then，见 Promise/A+）。
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
 }
 
 /**
@@ -561,14 +566,18 @@ function respondRequestTooLarge(opts: {
  * 跑 transform 链。任一 transform 抛错 → 返回 null(走透传保命)。
  * 所有 transform 都返回 null → 也返回 null(透传)。
  * 至少一个 transform 改了 body → 返回最新的 body。
+ *
+ * async：transform 可返回 Promise（视觉桥等出网调用）。用 isPromiseLike 统一 await，
+ * 同步 transform 返回值原样通过。必须**顺序 await**（禁 Promise.all）——现有 transform
+ * 有强顺序依赖（repairToolExchangeAdjacency → dedupeDuplicateToolUseIds），并发会张冠李戴。
  */
-function runTransforms(
+async function runTransforms(
   rawBody: Buffer,
   contentType: string,
   transforms: RequestTransform[],
   ctx: RequestTransformCtx,
   logger: ProxyLogger,
-): Buffer | null {
+): Promise<Buffer | null> {
   if (transforms.length === 0) return null;
   if (!contentType.toLowerCase().startsWith('application/json')) return null;
 
@@ -584,7 +593,8 @@ function runTransforms(
   let mutated = false;
   for (const t of transforms) {
     try {
-      const next = t(current, ctx);
+      const raw = t(current, ctx);
+      const next = isPromiseLike<unknown | null>(raw) ? await raw : raw;
       if (next !== null && next !== undefined) {
         current = next;
         mutated = true;
@@ -988,12 +998,19 @@ function forward(
           const appliedRules: RecoveryRule[] = [rule];
           // 透明重试只有一次。若同一历史里同时存在多类已知坏 payload,在这一次 retry
           // 前把其它安全 strip 也顺手应用掉,避免第一类 400 恢复后立刻撞第二类 400。
-          for (const [extraIndex, extraRule] of activeRules.entries()) {
-            if (extraIndex === matchedIndex) continue;
-            const extraStripped = extraRule.strip(retryBody);
-            if (!extraStripped) continue;
-            retryBody = extraStripped;
-            appliedRules.push(extraRule);
+          // applyOnUnmatchedRetry === false 的规则只在自己 matches 时跑,不能叠到
+          // 别人的 400 上(xAI ModelInput 清洗会改写 OpenAI collab 历史)。
+          // allowExtraRules === false 的主匹配禁止整轮叠洗(ModelInput 422 叠
+          // encrypted-content 会删掉 xAI 本可回放的 reasoning blob)。
+          if (rule.allowExtraRules !== false) {
+            for (const [extraIndex, extraRule] of activeRules.entries()) {
+              if (extraIndex === matchedIndex) continue;
+              if (extraRule.applyOnUnmatchedRetry === false) continue;
+              const extraStripped = extraRule.strip(retryBody);
+              if (!extraStripped) continue;
+              retryBody = extraStripped;
+              appliedRules.push(extraRule);
+            }
           }
           logger.info?.(`◀ upstream ${status} [${rule.id}] → 透明重试 (strip + 重发)`, {
             reqId,
@@ -1703,6 +1720,13 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     if (opts.routingTransform && contentType.toLowerCase().startsWith('application/json')) {
       try {
         rawParsed = JSON.parse(rawBody.toString('utf8'));
+      } catch {
+        // Some native clients (notably PI's ChatGPT adapter) send compressed
+        // JSON while keeping content-type=application/json. Header/path based
+        // routing must still run; the selected local handler receives rawBody
+        // and can forward it byte-for-byte without parsing.
+      }
+      try {
         const maybeDecision = opts.routingTransform(rawParsed, requestCtx);
         decision = isPromiseLike<RoutingDecision | null>(maybeDecision)
           ? await maybeDecision
@@ -1756,7 +1780,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       ...requestCtx,
       upstreamBase: formatUpstreamBase(route.target),
     };
-    const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
+    const transformed = await runTransforms(rawBody, contentType, transforms, transformCtx, logger);
     const outBody = transformed ?? rawBody;
 
     let parsedForRewrite: unknown = rawParsed;

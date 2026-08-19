@@ -699,10 +699,15 @@ describe('automation-generated sessions', () => {
       new URL('../features/cc-agent/sidebar/AutomationSessionGroupItem.tsx', import.meta.url),
       'utf8',
     );
+    const entryListSource = readTextLf(
+      new URL('../features/cc-agent/sidebar/SessionEntryList.tsx', import.meta.url),
+      'utf8',
+    );
 
     expect(source).toContain('setFrozen(null)');
     // 轴 1:箭头切换的是持久化 disclosure(useAutomationGroupCollapsed),不是「显示全部」。
-    expect(source).toContain('useAutomationGroupCollapsed(group.id)');
+    expect(source).toContain('useAutomationGroupCollapsed(');
+    expect(source).toContain('group.legacyId');
     expect(source).toContain('toggleCollapsed()');
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
@@ -732,6 +737,13 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('onSessionClick(latestSession.id)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
+    // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。
+    expect(source).toContain('onMoveSession,');
+    expect(source).toContain('projectOptions,');
+    expect(source).toContain('matchIndices: matchMap?.get(session.id)');
+    expect(entryListSource).toContain('onMoveSession={onMoveSession}');
+    expect(entryListSource).toContain('projectOptions={projectOptions}');
+    expect(entryListSource).toContain('matchMap={matchMap}');
     expect(source).toContain('originActiveSessionId: activeSessionId ?? null');
     expect(source).toContain('hasBeenActive: false');
     expect(source).toContain('hasBeenActive: true');
@@ -758,8 +770,9 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('onClick={openLatestSession}');
     expect(source).not.toMatch(/role=\{latestSession \? 'button'/);
     expect(source).toContain("group.scheduleStatus === 'active'");
-    expect(source).toContain(
-      "scheduleId && !menuOpen && 'group-hover:opacity-0 group-focus-within/slot:opacity-0'",
+    // 用正则容忍 prettier 折行(条件在一行还是拆三行都算通过)。
+    expect(source).toMatch(
+      /scheduleId &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');
@@ -768,7 +781,9 @@ describe('automation-generated sessions', () => {
     // vendor 经 agentKindToVendor 归一(pi 会话显示 π,而非 Claude 脸);尺寸规则:cc=13,其余(codex/pi)=12。
     expect(source).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(source).toContain('vendor={agentKindToVendor(latestSession?.agentKind)}');
-    expect(source).toContain("size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}");
+    expect(source).toContain(
+      "size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}",
+    );
     // 所有自动任务统一 Timer；暂停只叠角标，主图标和 12px 槽位不替换。
     expect(source).toContain('<AutomationTimerIcon');
     expect(source).toContain('paused={isScheduleStopped}');
@@ -776,12 +791,16 @@ describe('automation-generated sessions', () => {
     expect(source).not.toContain('<Pause');
     // text 沿用 vendor → Timer → 标题的 6px 节奏；list 把 Timer 排到标题后，
     // 标题与普通列表任务落在同一列。
-    expect(source).toContain(
-      'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
-    );
+    expect(source).toContain('className="min-w-0 truncate text-left disabled:cursor-default"');
     expect(source).toContain('className="flex min-w-0 items-center gap-1.5"');
     expect(source).toContain("sessionVariant === 'list' && 'order-2'");
     expect(source).toContain('runningSessionIds,');
+    // 组头右侧的时间文字与普通任务行的信息槽(SessionInfoMeta)同款字体 / 色号,
+    // 含 tabular-nums(2026-08-12 用户裁决;C 期给普通行加等宽数字时组头漏跟)。
+    expect(source).toContain(
+      "'col-start-1 row-start-1 flex items-center gap-1 text-xs font-medium tabular-nums'",
+    );
+    expect(source).toContain("'text-sidebar-action-icon'");
   });
 
   it('auto-collapses an expanded automation group once focus leaves it and offers show-all', () => {

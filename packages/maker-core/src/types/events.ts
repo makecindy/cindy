@@ -217,10 +217,15 @@ export interface AskUserQuestionItem {
   multiSelect?: boolean;
 }
 
+type InteractionRequestBase = {
+  requestId: string;
+  /** Provider tool/item id that owns this interaction; distinct from transport request ids. */
+  toolUseId?: string;
+};
+
 export type InteractionRequest =
-  | {
+  | (InteractionRequestBase & {
       kind: 'permission';
-      requestId: string;
       toolName: string;
       input: Record<string, unknown>;
       title?: string;
@@ -228,18 +233,16 @@ export type InteractionRequest =
       description?: string;
       suggestions?: unknown[];
       metadata?: Record<string, unknown>;
-    }
-  | {
+    })
+  | (InteractionRequestBase & {
       kind: 'ask_user_question';
-      requestId: string;
       questions: AskUserQuestionItem[];
-    }
-  | {
+    })
+  | (InteractionRequestBase & {
       kind: 'plan_review';
-      requestId: string;
       plan: string;
       planFilePath?: string;
-    };
+    });
 
 export type InteractionDecision =
   | {
@@ -403,6 +406,12 @@ export interface ForkSdkSessionOptions {
   workingDir?: string;
   /** Codex only: fork from a rollout copy with reasoning response items removed. */
   stripEncryptedReasoning?: boolean;
+  /**
+   * 源 session 的 remoteHostId(fork 编排层从 DB 源 session 取, 透传给 agent)。
+   * Pi 用它做 fork 守卫判定 —— 不用 agent 实例级 lastRemoteHostId(并发会话
+   * 覆盖会误判, R4 竞态 #1)。
+   */
+  remoteHostId?: string | null;
 }
 
 export interface ForkSdkSessionResult {

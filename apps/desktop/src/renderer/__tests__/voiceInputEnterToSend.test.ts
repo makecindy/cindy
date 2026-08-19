@@ -63,7 +63,9 @@ describe('ChatInput voice input Enter-to-send contract', () => {
   });
 
   it('keeps finish-and-send enabled while listening before ASR draft arrives', () => {
-    expect(chatInputSource).toContain('!voiceInput.isListening && !canSend && !hasVoiceDraftText');
+    expect(chatInputSource).toContain(
+      '!voiceBusyOnCurrentComposer && !canSend && !hasVoiceDraftText',
+    );
   });
 
   it('routes Enter from the Tiptap editor through stop-and-send or stop-and-steer while listening', () => {
@@ -129,7 +131,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
       'const handleClickSend = useCallback(',
       'voiceInputStopAndSendRef.current = handleClickSend;',
     );
-    expect(handleClickSendBlock).toContain('voiceInput.isBusy');
+    expect(handleClickSendBlock).toContain('voiceBusyOnCurrentComposer');
     expect(handleClickSendBlock).toContain(
       'voiceInputStopAndSendPromiseRef.current = stopAndSend;',
     );
@@ -144,17 +146,100 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     const restoreEffectBlock = extractBetween(
       chatInputSource,
       'const pendingStopAndSend = voiceInputStopAndSendPromiseRef.current;',
-      "// storageKey actually changed — swap the editor's content.",
+      '// ── External draft writes for the CURRENT session',
     );
-    expect(restoreEffectBlock).toContain('await pendingStopAndSend;');
+    expect(restoreEffectBlock).toContain('wasBusyWithoutSend');
+    expect(restoreEffectBlock).toContain('mergeDetachedVoiceTextIntoDocument(');
     expect(restoreEffectBlock).toContain(
       'await voiceInputStopRef.current({ waitForRefinement: true });',
     );
-    expect(restoreEffectBlock).toContain('if (isCurrentTransition()) {');
-    expect(restoreEffectBlock).toContain('restoreNextDraft();');
+    expect(restoreEffectBlock).toContain('frozenVoiceSendRef.current = {');
+    expect(restoreEffectBlock).toContain('serialized: serializeEditorContent(editor)');
     expect(restoreEffectBlock).toContain('pendingStopAndSend || voiceInputBusyRef.current');
+    expect(restoreEffectBlock).not.toContain('deferRestoreForLiveListening');
+    expect(restoreEffectBlock).not.toContain('await pendingStopAndSend;');
+    expect(restoreEffectBlock.indexOf('restoreNextDraft()')).toBeLessThan(
+      restoreEffectBlock.indexOf('wasBusyWithoutSend && prevEditorKey'),
+    );
     expect(chatInputSource).toContain('}, [editor, storageKey]);');
     expect(chatInputSource).not.toContain('}, [editor, storageKey, voiceInput.isBusy]);');
+  });
+
+  it('still dispatches the pinned source send after a deferred restoreNextDraft switch', () => {
+    expect(chatInputSource).toContain("from './composerSendOwnership'");
+
+    const serializeGuard = extractBetween(
+      chatInputSource,
+      'await resolveSessionMessageReferencesForSend(editor);',
+      'serializedContent = serializeEditorContent(editor);',
+    );
+    expect(serializeGuard).toContain('editorOwnsSourceDraft({');
+    expect(serializeGuard).toContain('editorStorageKey: storageKeyForDraftRef.current');
+    expect(serializeGuard).not.toContain('latestStorageKeyRef.current !== sourceStorageKey');
+    expect(chatInputSource).toContain('frozenVoiceSendRef.current');
+    expect(chatInputSource).toContain('voiceInput.getLastRefinement()');
+    expect(chatInputSource).toContain('applyVoiceResultToSerializedText(');
+    expect(chatInputSource).toContain('armDetachedVoiceDraftPersist(');
+    expect(
+      chatInputSource.lastIndexOf('armDetachedVoiceDraftPersist('),
+    ).toBeLessThan(
+      chatInputSource.indexOf('const voiceInput = useVoiceInput('),
+    );
+    expect(chatInputSource).toContain(
+      'const persistKey = voiceOwnerStorageKeyRef.current ?? editorStorageKey;',
+    );
+    expect(chatInputSource).toContain('persistKey === editorStorageKey');
+    expect(chatInputSource).toContain("frozenVoiceSend.kind !== 'send'");
+    expect(chatInputSource).toContain(
+      'frozenVoiceSend = frozenVoiceSendRef.current;',
+    );
+    expect(chatInputSource).toContain('dispatchSendInFlightKeysRef');
+    expect(chatInputSource).toContain('lockCurrentComposer');
+    expect(chatInputSource).toContain('lockComposerForEffort');
+    const planCommandSendBlock = extractBetween(
+      chatInputSource,
+      'isPlanModeComposerCommandText(',
+      'const text = formatBrowserCommentsForSend(',
+    );
+    expect(planCommandSendBlock).toContain('const editorOwnsSource = editorOwnsSourceDraft({');
+    expect(planCommandSendBlock).toContain('if (editorOwnsSource) {');
+    expect(planCommandSendBlock).toContain('editor.commands.clearContent(true)');
+    expect(planCommandSendBlock.indexOf('if (editorOwnsSource) {')).toBeLessThan(
+      planCommandSendBlock.indexOf('editor.commands.clearContent(true)'),
+    );
+    expect(chatInputSource).toContain('resolveSourceOwnedComposerExtras({');
+    expect(chatInputSource).toContain('sourceAttachments:');
+    expect(chatInputSource).toContain('sourceComments:');
+
+    const effortSettleBlock = extractBetween(
+      chatInputSource,
+      'if (!runtimeSettled) {',
+      'result = await onSend(',
+    );
+    expect(effortSettleBlock).not.toContain(
+      'if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current))',
+    );
+    expect(effortSettleBlock).toContain('must not cancel that pinned send');
+
+    const clearBlock = extractBetween(
+      chatInputSource,
+      'const clearSentComposer = (options?: { preserveNewerContent?: boolean }) => {',
+      'const restoreOptimisticallyClearedComposer = (',
+    );
+    expect(clearBlock).toContain('const editorOwnsSource = editorOwnsSourceDraft({');
+    expect(clearBlock).toContain('if (!optimisticallyClearRemoteComposer) {');
+    expect(clearBlock).toContain('if (editorOwnsSource) {');
+    expect(clearBlock).toContain('editor.commands.clearContent(true)');
+    expect(clearBlock).toContain('if (sourceStorageKey) clearComposerDraft(sourceStorageKey);');
+    const deferredClearStart = clearBlock.indexOf('if (!optimisticallyClearRemoteComposer) {');
+    const deferredClearEnd = clearBlock.indexOf(
+      'if (!options?.preserveNewerContent || !sourceStorageKey)',
+      deferredClearStart,
+    );
+    const deferredClear = clearBlock.slice(deferredClearStart, deferredClearEnd);
+    expect(deferredClear).toContain('if (editorOwnsSource) {');
+    expect(deferredClear).toContain('editor.commands.clearContent(true)');
+    expect(deferredClear).not.toContain('clearFiles()');
   });
 
   it('keeps storageKey hydration and stop completion safe across switch races', () => {
@@ -169,7 +254,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     const restoreEffectBlock = extractBetween(
       chatInputSource,
       'const transitionSeq = storageKeyTransitionSeqRef.current + 1;',
-      "// storageKey actually changed — swap the editor's content.",
+      '// ── External draft writes for the CURRENT session',
     );
     expect(chatInputSource).toContain(
       'const latestStorageKeyRef = useRef<string | undefined>(storageKey);',
@@ -180,7 +265,12 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(restoreEffectBlock).toContain('!editor.isDestroyed');
     expect(restoreEffectBlock).toContain('latestStorageKeyRef.current === storageKey');
     expect(restoreEffectBlock).toContain('if (!isCurrentTransition()) return;');
-    expect(restoreEffectBlock).toContain('return () => {\n        cancelled = true;\n      };');
+    expect(restoreEffectBlock).toContain('restoreNextDraft();');
+    expect(restoreEffectBlock).toContain('setSendDispatchInFlight(false);');
+    expect(restoreEffectBlock).toContain('wasBusyWithoutSend');
+    expect(restoreEffectBlock.indexOf('restoreNextDraft();')).toBeLessThan(
+      restoreEffectBlock.indexOf('setSendDispatchInFlight(false);'),
+    );
 
     const waitForBusyCompletionBlock = extractBetween(
       voiceInputSource,

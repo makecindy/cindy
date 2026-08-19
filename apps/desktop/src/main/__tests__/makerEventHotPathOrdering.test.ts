@@ -412,10 +412,9 @@ describe('maker:event hot path ordering', () => {
     expect(epochCaptureIndex).toBeGreaterThanOrEqual(0);
     expect(currentEpochCheckIndex).toBeGreaterThan(epochCaptureIndex);
     expect(flushIndex).toBeGreaterThan(currentEpochCheckIndex);
-    expect(broadcastIndex).toBeGreaterThan(flushIndex);
-    expect(broadcastIndex).toBeGreaterThanOrEqual(0);
-    expect(pendingIndex).toBeGreaterThan(broadcastIndex);
-    expect(islandIndex).toBeGreaterThan(pendingIndex);
+    expect(pendingIndex).toBeGreaterThan(flushIndex);
+    expect(broadcastIndex).toBeGreaterThan(pendingIndex);
+    expect(islandIndex).toBeGreaterThan(broadcastIndex);
     expect(interactionListenerSource.slice(0, broadcastIndex)).not.toContain('handleInteractionRequest(');
     expect(source).toContain('Agent Island interaction update failed after maker interaction broadcast');
   });
@@ -790,7 +789,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('const isCustomProviderRoute =');
     expect(codexDoneSource).toContain('isUserProviderSession(session.id)');
     expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\('codex\/'\);/);
-    expect(codexDoneSource).toMatch(/&&\s*pricingModel\.startsWith\(XAI_MODEL_PREFIX\);/);
+    expect(codexDoneSource).toMatch(/&&\s*isExclusiveXaiModelId\(pricingModel\);/);
     expect(codexDoneSource).toContain('const hasGatewayKey = Boolean(readClaudeApiKey());');
     expect(codexDoneSource).toContain('const hasEffectiveGatewayRoute =');
     expect(codexDoneSource).toContain('!isCustomProviderRoute');
@@ -893,7 +892,7 @@ describe('maker:event hot path ordering', () => {
       "isClaudeSubscriptionSession && !m.money && isAnthropicModel(m.model)",
     );
     expect(claudeDoneSource).toContain(
-      "m.source === 'subscription' && isSubscriptionDirectModel(m.model)",
+      "m.source === 'subscription' && isSubscriptionDirectRoute(m.model)",
     );
     expect(claudeDoneSource).toMatch(
       /estimateClaudeSubscriptionTurnValue\(\s*perModel,\s*currentLedgerCurrency\(\),\s*pricing,\s*\)/,

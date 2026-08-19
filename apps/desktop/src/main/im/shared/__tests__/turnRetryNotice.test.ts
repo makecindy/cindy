@@ -218,6 +218,17 @@ describe('terminalErrorText', () => {
     expect(notice).not.toContain('Auto-review could not');
   });
 
+  it('确认卡没送到 → 渠道侧说明这次不是用户拒绝', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_CONFIRM_UNDELIVERED] Automatic review was unavailable, and the '
+        + 'confirmation request was not completed. This is not a user rejection.',
+      isTerminal: false,
+    });
+    expect(notice).toContain('这次拒绝不是你点的');
+    expect(notice).not.toContain('AUTO_REVIEW_CONFIRM_UNDELIVERED');
+    expect(notice).not.toContain('not a user rejection');
+  });
+
   it('其它带 bracket code 的非终止 error 仍保持静默', () => {
     // 只放开有明确渠道文案的那一条,不是所有 [CODE] 都外发。
     expect(turnRetryNotice({

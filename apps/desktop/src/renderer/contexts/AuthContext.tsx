@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { soleLoginMethod } from '@cindy/auth-client';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { clearWorkersCache } from '@/features/cc-agent/hooks/useWorkers';
@@ -34,9 +35,13 @@ import { bootstrapMemorySettingsFromMain, setMemorySettingsOwner } from '@/lib/m
 import { sessionsStore } from '@/lib/sessionsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
+import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
+import { setModelFavoritesOwner } from '@/state/modelFavorites';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
+import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
+import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
@@ -179,9 +184,16 @@ export function AuthProvider({
       activeDataOwnerIdRef.current = state.dataOwnerId;
       activeDataOwnerGenerationRef.current = state.ownerGeneration;
       setNewMakerDraftOwner(state.dataOwnerId);
+      // 统一模型选择器的两根新轴与 newMakerDraft 同待遇:同一处、同一个 dataOwnerId、
+      // 登出时同样传 null(state.dataOwnerId 在 signed-out 快照里就是 null,分区键退回
+      // 无后缀的默认槽)。漏接 = 多账号串号(providerModelMemory 的旧教训)。
+      setModelEnginePrefsOwner(state.dataOwnerId);
+      setModelFavoritesOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
+      setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
+      setModelVisibilityOwner(state.dataOwnerId, state.ownerGeneration, state.mode);
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
         void bootstrapMemorySettingsFromMain();
@@ -331,6 +343,26 @@ export function AuthProvider({
         setLoginState({ step: 'browser-redirect', label: action.label });
       }
       const result = await authServiceRef.current!.dispatchLoginAction(action);
+      // 没有真正选择时不停留 method-choice：唯一 SSO 改派 start-browser
+      //（确认窗立刻消失、露出等待态）；唯一邮箱验证码直接发码进输码页。
+      if (result.success && result.state.step === 'method-choice') {
+        const sole = soleLoginMethod(result.state.methods);
+        if (sole?.type === 'sso') {
+          return dispatchLoginAction({
+            type: 'start-browser',
+            kind: 'sso',
+            providerOrConnectionId: sole.connectionId,
+            label: sole.connectionName || sole.orgName,
+          });
+        }
+        if (sole?.type === 'email_code' && result.state.email) {
+          return dispatchLoginAction({
+            type: 'request-code',
+            kind: 'email',
+            identifier: result.state.email,
+          });
+        }
+      }
       setLoginState(result.state);
       return result;
     },
@@ -348,8 +380,14 @@ export function AuthProvider({
     publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
     activeDataOwnerIdRef.current = state.dataOwnerId;
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
+    // 统一模型选择器的两根轴与本地模式的其它 owner 分区同待遇(2026-08-17 review 第五轮 M5):
+    // 本地模式也是一次 dataOwnerId 切换,漏接这两个 setter 会让本地模式下的收藏 / 引擎 override
+    // 继续读写**上一个身份**的分区 —— 跨身份可见,还会把改动写进别人的账号。
+    setModelEnginePrefsOwner(state.dataOwnerId);
+    setModelFavoritesOwner(state.dataOwnerId);
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);
@@ -362,8 +400,12 @@ export function AuthProvider({
     publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);
     activeDataOwnerIdRef.current = state.dataOwnerId;
     activeDataOwnerGenerationRef.current = state.ownerGeneration;
+    // 退出本地模式同样是一次 owner 切换:两根轴必须一起跟过去(见 enterLocalMode 的注释)。
+    setModelEnginePrefsOwner(state.dataOwnerId);
+    setModelFavoritesOwner(state.dataOwnerId);
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
+    setDeferredUiAssignmentOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);

@@ -20,6 +20,7 @@ export type {
 
 export {
   installRemoteAgent,
+  PINNED_PI_VERSION,
   probeRemoteAgent,
   uninstallRemoteAgent,
   checkRemoteCodexAuth,
@@ -54,11 +55,34 @@ export {
 export type { FileServiceProbeResult } from './bootstrap/file-service-installer.js';
 
 export {
+  installPiManagerBundle,
+  probePiManager,
+  uninstallPiManager,
+  ensurePiManagerDaemon,
+  parsePiManagerProbeOutput,
+  tailDaemonLog,
+} from './bootstrap/pi-manager-installer.js';
+export type {
+  PiManagerProbeResult,
+  PiManagerInstallProgress,
+  PiManagerInstallEventCallback,
+} from './bootstrap/pi-manager-installer.js';
+
+// 轮 22:pi 独立化 —— 独立 bundled node 安装脚本(pi-manager 不需要 CC/CX
+// 先装 node)。与 bootstrap-script 的 ensure_node 同源语义, 幂等共享目录。
+export { BUNDLED_NODE_INSTALL_SH, BUNDLED_NODE_VERSION } from './bootstrap/bootstrap-script.js';
+
+export {
   REMOTE_CC_MGR_DIR,
   REMOTE_CC_MGR_BUNDLE_PATH,
   REMOTE_CC_MGR_SOCK_PATH,
   REMOTE_CC_MGR_LOG_PATH,
   REMOTE_CC_MGR_PID_PATH,
+  REMOTE_PI_MANAGER_DIR,
+  REMOTE_PI_MANAGER_BUNDLE_PATH,
+  REMOTE_PI_MANAGER_SOCK_PATH,
+  REMOTE_PI_MANAGER_LOG_PATH,
+  REMOTE_PI_MANAGER_PID_PATH,
   REMOTE_XDT_NODE_PATH,
   REMOTE_CLAUDE_SHIM_PATH,
   REMOTE_INSTALL_ROOT,
@@ -85,7 +109,13 @@ export {
   expandHome,
 } from './sshConfig.js';
 
-export { defaultAgentEndpoint, resolveAuth, KEY_FILE_NOT_FOUND_CODE } from './credentials.js';
+export {
+  defaultAgentEndpoint,
+  resolveAuth,
+  KEY_FILE_NOT_FOUND_CODE,
+  KEY_FILE_UNREADABLE_CODE,
+  PINNED_AGENT_FAILED_CODE,
+} from './credentials.js';
 export type { ResolvedAuth } from './credentials.js';
 
 export type {

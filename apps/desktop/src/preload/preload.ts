@@ -29,6 +29,23 @@ import {
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
 import {
+  WORKLOUDER_CODEX_ACTION_CHANNEL,
+  WORKLOUDER_CODEX_GET_STATE_CHANNEL,
+  WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
+  WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
+  WORKLOUDER_CODEX_PROBE_CHANNEL,
+  WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL,
+  WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL,
+  type WorkLouderCodexPublishedTask,
+  WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderCodexPreviewInput,
+  type WorkLouderCodexRendererAction,
+  type WorkLouderCodexSettingsPatch,
+  type WorkLouderCodexState,
+} from '../shared/workLouderCodex';
+import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
@@ -83,6 +100,10 @@ import type {
   SubagentModelSettingsState,
   SubagentModelSettingsWriteResult,
 } from '../shared/subagentModelSettings';
+import {
+  isModelVisibilityLegacyOwnerClaim,
+  type ModelVisibilityLegacyOwnerClaim,
+} from '../shared/modelVisibility';
 import type { VoiceInputAsrMode, VoiceInputProviderKind } from '../shared/voiceInputAsrProfiles';
 import type {
   VoiceInputRefinerProviderKind,
@@ -122,7 +143,9 @@ import type {
 import type {
   RsbWindowCommandRouteRequest,
   RsbWindowCommandRouteResult,
+  RsbWindowTabHandoff,
 } from '../shared/rightSidebarWindow';
+import { RSB_WINDOW_TAB_HANDOFF_CHANNEL } from '../shared/rightSidebarWindow';
 import {
   RSB_NATIVE_POPUP_CLAIM_CHANNEL,
   RSB_NATIVE_POPUP_CLOSE_CHANNEL,
@@ -154,6 +177,7 @@ import type {
   IOSSimulatorRouteStatusPush,
   IOSSimulatorLiveTouchRequest,
   IOSSimulatorMutationControlRequest,
+  IOSSimulatorRetryNativeRouteRequest,
   IOSSimulatorStatusRequest,
   IOSSimulatorToolRequest,
   IOSSimulatorToolResponse,
@@ -379,11 +403,13 @@ function createIpcFanOut(channel: string): FanOut {
 // Stage 2 C1: cc-agent:* push channel fanout 全部退役 (renderer 已切到 maker:event 等),
 // 老 7 个 fanOut + fanOutUserMessagePersisted 一起拿掉。
 const fanOutUpdateStatus = createIpcFanOut('update-status');
+const fanOutUpdateChannelSettings = createIpcFanOut('update-channel-settings');
 const fanOutOrcaWorkerChanged = createIpcFanOut('maker:orca:worker-changed');
 // 右侧栏独立子窗口(RSB window)状态 / 上下文 / 命令推送
 const fanOutRsbWindowStateChanged = createIpcFanOut('maker:rsb-window:state-changed');
 const fanOutRsbWindowContextChanged = createIpcFanOut('maker:rsb-window:context-changed');
 const fanOutRsbWindowCommand = createIpcFanOut('maker:rsb-window:command');
+const fanOutRsbWindowTabHandoff = createIpcFanOut(RSB_WINDOW_TAB_HANDOFF_CHANNEL);
 // 插件停靠面板独立窗口(ghost panel window)状态推送
 const fanOutGhostPanelWindowStateChanged = createIpcFanOut(
   'maker:ghost-panel-window:state-changed',
@@ -623,6 +649,7 @@ const fanOutIOSSimulatorRouteStatus = createIpcFanOut(IOS_SIMULATOR_ROUTE_STATUS
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
+const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
 const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed'); // Codex token
 const fanOutMakerUsageModelPricing = createIpcFanOut('usage:model-pricing-changed');
@@ -633,6 +660,7 @@ const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-chan
 const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
 const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
 const fanOutMakerUsageClaudeSubscription = createIpcFanOut('usage:claude-subscription-changed'); // Claude 订阅余量
+const fanOutMakerUsageXaiSubscription = createIpcFanOut('usage:xai-subscription-changed'); // SuperGrok 周用量
 // 跨 Agent 工作区互转 — 转换进度 push (per step)
 const fanOutCrossAgentStep = createIpcFanOut('maker:cross-agent:step');
 // Scheduler (Phase 4) — 4 个 SchedulerEvent 类型 ('fired'|'completed'|'failed'|'changed')
@@ -836,6 +864,22 @@ const appearanceSettingsInfo = ipcRenderer.sendSync(
   'appearance-settings:get-sync',
 ) as AppearanceSettings | null;
 
+type CindyMediaPreferenceOption = {
+  id: string;
+  label: string;
+  group: string;
+  providerId: string;
+  providerName: string;
+  modelId: string;
+  modelName: string;
+  routing?: import('@cindy/model-providers').Provider['routing'];
+};
+
+type CindyMediaPreferenceKind = {
+  options: CindyMediaPreferenceOption[];
+  defaultModel: CindyMediaPreferenceOption | null;
+};
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   osRelease: ipcRenderer.sendSync('get-os-release') as string,
@@ -1033,8 +1077,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:install', lizFilePath, opts),
     update: (
       lizFilePath: string,
-      opts: { expectedPackageSha256: string },
-    ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
+      opts: {
+        expectedPackageSha256: string;
+        expectedInstalledApproval: string;
+      },
+    ): Promise<{ ghost: unknown }> =>
+      ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
     cindyPrefsSync: (
       id: string,
     ): {
@@ -1043,14 +1091,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
        * 每类目一份下拉数据(能力键按类目取对应清单)。
        * options 为空或 defaultModel 为 null = 目录没给该类目模型,能力暂不可用。
        */
-      image: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
-      video: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
+      image: CindyMediaPreferenceKind;
+      imageEdit: CindyMediaPreferenceKind;
+      video: CindyMediaPreferenceKind;
+      videoEdit: CindyMediaPreferenceKind;
       /** 文本类(快问快答):选项是当前供应商目录的全部文本模型(cat: 编码钉值,
        *  带供应商/模型/徽标等结构化字段供富列表渲染);declaredModel = 身份卡声明
        *  的偏好模型;utilityProfiles = 存量轻量档位钉的展示名表(老钉值回显用)。 */
@@ -1103,6 +1147,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
       packageSha256: string;
       iconDataUrl?: string;
     }> => ipcRenderer.invoke('ghosts:inspect', lizFilePath),
+    /** 本地包第三条恢复路径:从已装目录读确认卡事实(零副作用)。 */
+    reapproveInspect: (id: string): Promise<{
+      manifest: unknown;
+      trust: unknown;
+      manifestSha256: string;
+      approvalProjectionSha256: string;
+      previouslyEnabled: boolean;
+      inspectTicket: string;
+    }> => ipcRenderer.invoke('ghosts:reapprove-inspect', id),
+    /** 确认卡点过同意后开 receipt;sha + 一次性票据绑定确认时的事实与 owner。 */
+    reapproveInstalled: (
+      id: string,
+      opts: {
+        enable: boolean;
+        expectedManifestSha256: string;
+        expectedApprovalProjectionSha256: string;
+        expectedInstalledApproval: string;
+        inspectTicket: string;
+      },
+    ): Promise<{ ghost: unknown }> =>
+      ipcRenderer.invoke('ghosts:reapprove-installed', id, opts),
     uninstall: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke('ghosts:uninstall', id),
     /** 详情页「导出 .cindy」:main 打包安装目录 → 系统保存对话框落盘。 */
     export: (
@@ -1489,6 +1554,45 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.send(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL),
   },
 
+  workLouderCodex: {
+    getState: (): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_GET_STATE_CHANNEL),
+    setSettings: (patch: WorkLouderCodexSettingsPatch): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, patch),
+    resetSettings: (): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL),
+    openInputMonitoringSettings: (): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL),
+    probe: (): Promise<WorkLouderCodexState> => ipcRenderer.invoke(WORKLOUDER_CODEX_PROBE_CHANNEL),
+    publishTasks: (tasks: WorkLouderCodexPublishedTask[]): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL, tasks),
+    setLayoutPreviewActive: (active: boolean): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL, active),
+    onStateChanged: (callback: (state: WorkLouderCodexState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WorkLouderCodexState): void => {
+        callback(state);
+      };
+      ipcRenderer.on(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+    },
+    onAction: (callback: (action: WorkLouderCodexRendererAction) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        action: WorkLouderCodexRendererAction,
+      ): void => callback(action);
+      ipcRenderer.on(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
+    },
+    onPreviewInput: (callback: (input: WorkLouderCodexPreviewInput) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        input: WorkLouderCodexPreviewInput,
+      ): void => callback(input);
+      ipcRenderer.on(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
+    },
+  },
+
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────
   // 「侧边栏在新窗口中显示」偏好 + 子窗口生命周期。状态机在 main
   // (right-sidebar-window/controller.ts),renderer 只 invoke + 订阅广播。
@@ -1505,8 +1609,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 写偏好;true 附带开窗,false 附带关窗。返回新 state。 */
     setDetached: (
       detached: boolean,
+      handoff?: RsbWindowTabHandoff,
     ): Promise<{ detached: boolean; lastOpen: boolean; open: boolean }> =>
-      ipcRenderer.invoke('maker:rsb-window:set-detached', detached),
+      ipcRenderer.invoke('maker:rsb-window:set-detached', detached, handoff),
     /** 子窗口 mount 时拉主窗上报的渲染上下文(main 缓存的最后一份)。 */
     getContext: (): Promise<{
       sessionId: string | null;
@@ -1531,6 +1636,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onStateChanged: fanOutRsbWindowStateChanged,
     onContextChanged: fanOutRsbWindowContextChanged,
     onCommand: fanOutRsbWindowCommand,
+    onTabHandoff: (cb: (handoff: RsbWindowTabHandoff) => void): (() => void) =>
+      fanOutRsbWindowTabHandoff((data) => cb(data as RsbWindowTabHandoff)),
   },
 
   // ── 插件停靠面板独立窗口(ghost panel window)──────────────────────────
@@ -2047,12 +2154,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── IM Binding (feishu /ctr 接管 → desktop session 路由) ──
   // 整体接管态由 main/im/binding.ts 维护; renderer 用这套 API 实时知道
   // 某个 sessionId 是否被某 IM 用户接管 (用来渲染 mask + 收回按钮)。
-  /** renderer 启动/cc prefs 变化时推送当前 cc vendor 偏好给 main，供接管新建 session 时使用 */
+  /**
+   * renderer 启动/cc prefs 变化时推送当前 cc vendor 偏好给 main，供接管新建 session
+   * 时使用。providerId 必须随模型一起推送：/ctr 新建会话靠它把路由钉在用户选择的
+   * 供应商上（缺省时隐式路由可能落到官方网关，而模型只在用户供应商存在 → 400）。
+   */
   syncDesktopCcPrefs: (prefs: {
     model: string;
     effort: string;
     permissionMode: string;
     fastMode: boolean;
+    providerId: string | null;
   }): void => ipcRenderer.send('desktop:cc-prefs-changed', prefs),
 
   /**
@@ -2198,6 +2310,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isCustomized?: boolean;
     defaultAutoRelaunchOnIdle?: boolean;
   }> => ipcRenderer.invoke('update-auto-settings-reset'),
+  // beta 测试渠道(设备级)开关
+  getUpdateChannelSettings: (): Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }> => ipcRenderer.invoke('update-channel-settings-get'),
+  setUpdateChannelSettings: (settings: {
+    enableBeta: boolean;
+  }): Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }> => ipcRenderer.invoke('update-channel-settings-set', settings),
+  resetUpdateChannelSettings: (): Promise<{
+    enableBeta: boolean;
+    isCustomized?: boolean;
+  }> => ipcRenderer.invoke('update-channel-settings-reset'),
+  relaunchForChannelChange: (): Promise<void> =>
+    ipcRenderer.invoke('update-channel-relaunch'),
+  probeBetaChannel: (): Promise<{ available: boolean }> =>
+    ipcRenderer.invoke('update-channel-probe-beta'),
   setUpdateRelaunchTheme: (theme: 'light' | 'dark'): void => {
     ipcRenderer.send('update-set-relaunch-theme', theme);
   },
@@ -2227,6 +2358,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(BILLING_INVOKE.CREATE_SUBSCRIPTION, payload),
     getCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION),
     cancelCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION),
+    resumeCurrentSubscription: () => ipcRenderer.invoke(BILLING_INVOKE.RESUME_CURRENT_SUBSCRIPTION),
     refreshSubscriptionPurchase: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.REFRESH_SUBSCRIPTION_PURCHASE, payload),
     quotePlanChange: (payload) => ipcRenderer.invoke(BILLING_INVOKE.QUOTE_PLAN_CHANGE, payload),
@@ -3665,6 +3797,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── App Update (F2/F4) ──
 
   onUpdateStatus: fanOutUpdateStatus,
+  onUpdateChannelSettings: fanOutUpdateChannelSettings,
 
   checkForUpdate: (): Promise<{
     result:
@@ -4056,13 +4189,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ccMgrForceUpgrade: (
       hostId: string,
       sessionId?: string,
+      agent: 'cc' | 'pi' = 'cc',
     ): Promise<{ ok: true; daemonReady: boolean }> =>
-      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-force-upgrade', { hostId, sessionId }),
+      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-force-upgrade', { hostId, sessionId, agent }),
     ccMgrListPendingUpgrades: (): Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string }>;
+      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
     }> => ipcRenderer.invoke('maker:remote-ssh:cc-mgr-list-pending-upgrades'),
-    ccMgrDismissPendingUpgrade: (hostId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-dismiss-pending-upgrade', { hostId }),
+    ccMgrDismissPendingUpgrade: (hostId: string, agent: 'cc' | 'pi' = 'cc'): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:remote-ssh:cc-mgr-dismiss-pending-upgrade', { hostId, agent }),
 
     // ── Codex auth sync (Phase B+) ────────────────────────────────────────
     // Two-step UX: check first (so renderer can build the right confirm
@@ -5063,10 +5197,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
      * 让 IM /model 在 main 侧复用同一套可见性过滤,与应用内模型列表逐模型一致。
-     * fire-and-forget(忽略返回),main 仅缓存于内存、不落盘。
+     * dataOwnerId + ownerGeneration 用于拒绝账号切换期间的迟到快照；main 仅缓存于内存、不落盘。
      */
-    syncModelVisibility: (map: Record<string, boolean>): Promise<void> =>
-      ipcRenderer.invoke('maker:model-visibility:sync', map),
+    syncModelVisibility: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      map: Record<string, boolean>,
+    ): Promise<void> =>
+      ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map),
+    claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
+      const value: unknown = ipcRenderer.sendSync(
+        'maker:model-visibility:legacy-owner-claim-sync',
+      );
+      return isModelVisibilityLegacyOwnerClaim(value)
+        ? value
+        : {
+            dataOwnerId: null,
+            ownerGeneration: 0,
+            canWriteOwnerScoped: false,
+            claimed: false,
+            claimedByOtherOwner: false,
+            canInitialize: false,
+          };
+    },
     /**
      * 「模型 / 供应商停用」override 写入(main 侧持久化真源 model-disable-store)。
      * 成功后 main 广播 PROVIDER_CHANGED,renderer 经 useProviders 快照刷新拿到
@@ -5164,11 +5317,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi',
+      params: { sessionId?: string; allowManagedPiPackagePreview?: boolean } = {},
     ): Promise<{
       success: boolean;
       error?: string;
       commands?: Array<{ kind: 'agent-builtin'; name: string; description: string }>;
-    }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind),
+      runtimeStatus?: import('../shared/piPackages').PiPackageCommandRuntimeStatus;
+    }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind, params),
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi',
@@ -5188,6 +5343,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         runtimeCommandName?: string;
       }>;
     }> => ipcRenderer.invoke('maker:list-agent-skills', agentKind, params),
+
+    listPiPackages: (): Promise<import('../shared/piPackages').PiPackageListResult> =>
+      ipcRenderer.invoke('maker:pi-packages:list'),
+
+    mutatePiPackage: (
+      request: import('../shared/piPackages').PiPackageMutationRequest,
+    ): Promise<import('../shared/piPackages').PiPackageMutationResult> =>
+      ipcRenderer.invoke('maker:pi-packages:mutate', request),
+
+    onPiPackagesChanged: fanOutMakerPiPackagesChanged,
 
     /**
      * 订阅 main 端 DesktopCommandRegistry execute 后广播的"做 UI 动作"信号。
@@ -5371,14 +5536,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
         providerId?: string | null;
         /** Worker 创建默认权限；缺省沿用当前偏好，显式值会更新偏好。 */
         workerPermissionMode?: 'auto' | 'bypassPermissions';
+        /** 新建 Lead 专用：等首条输入 accepted 且可查询后再派任务。 */
+        deferDelegateTask?: boolean;
       },
       // main handler 实际返回 teamId(见 enableOrcaInternal);此前类型写成 workflowId 是漂移。
     ): Promise<{
       teamId: string;
       workerSessionId: string;
       workerId: string;
+      dispatched: boolean;
       workerPermissionMode: 'auto' | 'bypassPermissions';
+      uiAssignmentSnapshotBeforeMs: number;
     }> => ipcRenderer.invoke('maker:session:enable-orca', leadSessionId, opts),
+
+    dispatchOrcaUiAssignment: (
+      leadSessionId: string,
+      workerSessionId: string,
+      initialTask: string,
+      snapshotBeforeMs: number,
+      waitForLeadHistory: boolean,
+    ): Promise<unknown> =>
+      ipcRenderer.invoke(
+        'maker:worker:dispatch-ui-assignment',
+        leadSessionId,
+        workerSessionId,
+        initialTask,
+        snapshotBeforeMs,
+        waitForLeadHistory,
+      ),
 
     /**
      * F-COLLAB: 关闭 lead session 的当前协同 workflow。
@@ -5720,6 +5905,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:subagent-model-settings:set', patch),
     subagentModelSettingsReset: (): Promise<SubagentModelSettingsWriteResult> =>
       ipcRenderer.invoke('maker:subagent-model-settings:reset'),
+
+    /**
+     * 视觉桥设置（两个清单：目标模型勾选 + 视觉后端主/备选）。
+     * 读写 <userData>/vision-bridge-settings.json（main 为真源）。
+     */
+    visionBridgeSettingsGet: (): Promise<VisionBridgeSettingsState> =>
+      ipcRenderer.invoke('maker:vision-bridge-settings:get'),
+    visionBridgeSettingsSet: (
+      patch: VisionBridgeSettingsPatch,
+    ): Promise<VisionBridgeSettingsState> =>
+      ipcRenderer.invoke('maker:vision-bridge-settings:set', patch),
+    visionBridgeSettingsReset: (): Promise<VisionBridgeSettingsState> =>
+      ipcRenderer.invoke('maker:vision-bridge-settings:reset'),
 
     // Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。
     // 并发上限即刻生效;优先级降档对在跑 agent 进程约 15s 内生效(watcher 轮询);
@@ -6063,6 +6261,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       isUserText?: boolean;
     }): Promise<{ applied: boolean; done: boolean }> =>
       ipcRenderer.invoke('maker:auto-title', request),
+    /** 输入框推荐提示词:turn 结束后预测用户下一步输入(turn 完成 → 调 IPC → 返回预测文本)。 */
+    predictNextPrompt: (request: {
+      sessionId: string;
+      agentKind: 'claude-code' | 'codex' | 'pi';
+      messages: Array<{ role: string; content: string }>;
+      workingDir?: string;
+      turnGen: number;
+    }): Promise<{ prompt: string | null }> =>
+      ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>
@@ -6163,6 +6370,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Claude 订阅账号余量 (5h/周/分模型窗口, cached-first, main 侧按需后台刷新)。 */
       getClaudeSubscription: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:claude-subscription'),
+      getXaiSubscription: (): Promise<unknown | null> =>
+        ipcRenderer.invoke('maker:usage:xai-subscription'),
       /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:model-pricing-v2'),
@@ -6186,6 +6395,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onXaiRateLimitChanged: fanOutMakerUsageXaiRateLimit,
       /** Claude 订阅余量推送 (端点后台刷新 / proxy 旁路 headers 更新时推送)。 */
       onClaudeSubscriptionChanged: fanOutMakerUsageClaudeSubscription,
+      onXaiSubscriptionChanged: fanOutMakerUsageXaiSubscription,
     },
 
     // ── Scheduler (Phase 4) ────────────────────────────────────────────────
@@ -6410,6 +6620,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         request: IOSSimulatorViewerVisibilityRequest,
       ): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
+      retryNativeRoute: (
+        request: IOSSimulatorRetryNativeRouteRequest,
+      ): Promise<IOSSimulatorToolResponse> =>
+        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
       latestFrame: (request: IOSSimulatorViewerRouteRequest): Promise<IOSSimulatorToolResponse> =>
         ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
       setStreamProfile: (

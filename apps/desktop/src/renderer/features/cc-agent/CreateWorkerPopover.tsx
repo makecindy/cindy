@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { TriangleAlert, X } from 'lucide-react';
+import { Info, TriangleAlert, X } from 'lucide-react';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import {
   connectedProvidersForAgent,
@@ -40,6 +40,7 @@ import {
 } from '@/state/workerCreationPrefs';
 import type { Effort } from '@/lib/userPreferences.types';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { Tip } from '@/components/ui/tooltip';
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
   ORCA_WORKER_PERMISSION_MODES,
@@ -662,8 +663,28 @@ export function CreateWorkerPopover({
         </div>
 
         <div className="mb-4">
-          <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-            {t('orca.createWorker.roleLabel')}
+          <div className="mb-2 flex items-center gap-1">
+            <span className="text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+              {t('orca.createWorker.roleLabel')}
+            </span>
+            <Tip
+              text={t('orca.createWorker.roleHint')}
+              side="top"
+              contentClassName="max-w-[280px] whitespace-normal break-words text-left"
+            >
+              <button
+                type="button"
+                className={cn(
+                  'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0',
+                  'text-[var(--text-tertiary)] outline-none transition-colors',
+                  'hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]',
+                  'focus:bg-[var(--surface-hover)] focus:text-[var(--text-secondary)]',
+                )}
+                aria-label={t('orca.createWorker.roleHintAria')}
+              >
+                <Info size={13} aria-hidden />
+              </button>
+            </Tip>
           </div>
           <div className="flex flex-wrap gap-2">
             {PREDEFINED_ROLES.map((r) => (

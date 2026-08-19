@@ -9,7 +9,10 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
+import {
+  isModelDisabled,
+  isProviderDisabled,
+} from '@cindy/model-providers';
 
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -23,6 +26,7 @@ import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw
 import { readCompactionPct } from './compaction-settings-store.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
+import { shouldKeepSubagentOverrideForParent } from './subagent-override-route.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
@@ -155,13 +159,13 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
   // 这样 AgentRuntimeConfig 接口(endpoint?: string)在结构类型上仍然成立 ——
   // 每次访问 runtimeConfig.endpoint 都会执行 endpointFn, 拿到当时最新的兼容模式状态。
   const config: AgentRuntimeConfig = {
-    // behaviorFlags 用函数形态:env-builder 在每次 spawn 时以该 spawn 的 credentialMode
-    // 调用 —— gateway-key spawn(显式 XD source / SSH remote)保持禁归因且不读钥匙串,
-    // 其余形态按**当时**的 Claude.ai 订阅连接态决定(判据与 proxy 同源)。会话中途
-    // 连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。
+    // behaviorFlags 用函数形态:env-builder 在每次 spawn 时传入凭证形态与来源。
+    // gateway-key spawn 保持禁归因且不读钥匙串;Tool Search 仅对 XD/Anthropic 开启。
+    // 会话中途连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。
     behaviorFlags: (ctx) => ({
       ...claudeBehaviorFlagsForSpawn({
         credentialMode: ctx.credentialMode,
+        providerId: ctx.sessionProviderId,
         oauthConnected: hasClaudeAiOAuth,
       }),
       // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
@@ -232,7 +236,6 @@ function resolveSubagentModelForRoute(
   const offering = getActiveCatalog().providers.filter((p) =>
     (p.models['claude-code'] ?? []).some((m) => m.id === saved),
   );
-  if (offering.length === 0) return saved; // 目录不认识 → 不新增拒绝面
   const copyDisabled = (id: string) =>
     isProviderDisabled(overrides, id) || isModelDisabled(overrides, id, saved);
   if (providerId !== undefined) {
@@ -247,10 +250,18 @@ function resolveSubagentModelForRoute(
       : implicitRouteId
         ? offering.find((p) => p.id === implicitRouteId)
         : undefined;
-    // 显式/映射来源不提供该模型(跨来源 subagent 覆写)或凭证形态未知:实际落点
-    // 不明,落到下方保守判。
-    if (routeProvider) return copyDisabled(routeProvider.id) ? undefined : saved;
+    return shouldKeepSubagentOverrideForParent({
+      saved,
+      providerId,
+      parentOffersSaved: !!routeProvider,
+      parentCopyDisabled: routeProvider ? copyDisabled(routeProvider.id) : false,
+      anyOffering: offering.length > 0,
+      allOfferingsDisabled: offering.length > 0 && offering.every((p) => copyDisabled(p.id)),
+    })
+      ? saved
+      : undefined;
   }
+  if (offering.length === 0) return saved;
   const allDisabled = offering.every((p) => copyDisabled(p.id));
   return allDisabled ? undefined : saved;
 }

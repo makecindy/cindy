@@ -9,6 +9,7 @@ import { ThemeProvider } from '@/hooks/useTheme';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { LocaleProvider } from '@/hooks/useLocale';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { AppShellCoverProvider, useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { LoginHandoffProvider } from '@/contexts/LoginHandoffContext';
 import { EnvCheckProvider, EnvCheckGuard } from '@/contexts/EnvCheckContext';
 import { WorktreeProvider } from '@/contexts/WorktreeContext';
@@ -71,10 +72,12 @@ import { router } from './router';
  */
 function LoginHandoffHost({ children }: { children: React.ReactNode }) {
   const { isInitializing, isAuthenticated, canEnterApp } = useAuth();
+  const { coverHeld } = useAppShellCover();
   return (
     <LoginHandoffProvider
       authResolved={!isInitializing}
       authenticated={isAuthenticated || canEnterApp}
+      coverHeld={coverHeld}
     >
       {/* 认证恢复后已登录(直进受保护路由、LoginPage 不挂载)时结束首启亮色门,
           避免 renderer localStorage 被清空但主进程仍持有会话时整个已登录会话
@@ -151,6 +154,9 @@ export function App() {
         effort: cc.effort,
         permissionMode: cc.permissionMode,
         fastMode: draft.fastModeByModel[cc.model] === true,
+        // /ctr 新建会话需要与模型配套的供应商路由；缺省会走隐式路由落到官方网关，
+        // 用户供应商专有的模型（如 deepseek-v4-pro）会被网关 400 拒绝。
+        providerId: cc.providerId ?? null,
       });
       // main 缓存两用途:① collab worker spawn 读 model/effort/fastMode;② device-link 远程
       // 草稿镜像读全量(model/effort/fast/permission/source)+「是否显式选过模型」。故
@@ -235,6 +241,10 @@ export function App() {
           const shouldPatchActiveModel = markModelChoice !== false || effort !== undefined;
           if (shouldPatchActiveModel) {
             patch(vendor, {
+              // markModelChoice=false 仍要写回当前活动模型:远程新建草稿
+              // pushActiveDraftPref、以及旧控制端换模都走这条 wire。丢掉 model
+              // 会让被控端 lastByVendor 停在旧模型。选模标记由 store 的
+              // preserving 路径单独守住,这里只负责同步当前活动值。
               model: modelId,
               providerId: providerId || null,
               ...(effort !== undefined ? { effort: effort as Effort } : {}),
@@ -323,8 +333,9 @@ export function App() {
           <ConfirmDialogProvider>
             <EnvCheckProvider>
               <AuthProvider>
-                <WorktreeProvider>
-                  <PrRefsProvider>
+                <AppShellCoverProvider>
+                  <WorktreeProvider>
+                    <PrRefsProvider>
                     <Tooltip.Provider>
                       {/* LoginHandoffProvider 包 SplashScreen + RouterProvider(Step 3b
                           WHAT2 宿主契约):Splash→登录/主界面衔接动画状态机。
@@ -359,8 +370,9 @@ export function App() {
                         <LegacyMigrationDialog />
                       )}
                     </Tooltip.Provider>
-                  </PrRefsProvider>
-                </WorktreeProvider>
+                    </PrRefsProvider>
+                  </WorktreeProvider>
+                </AppShellCoverProvider>
               </AuthProvider>
             </EnvCheckProvider>
           </ConfirmDialogProvider>

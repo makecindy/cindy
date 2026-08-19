@@ -123,6 +123,8 @@ export interface PluginMarketPackageReviewFacts {
   installedBaseline: string | null;
   /** 只用于让确认卡如实说明包来自官方还是用户添加的市场。 */
   sourceType: PluginMarketItemSource;
+  /** 与 permissionDiff 独立:完整权限卡也要能展示 OAuth 身份变化。 */
+  builtinOauthClientChanged?: boolean;
 }
 
 /** Main 在安装事务内请求当前窗口立即确认真实包权限；不暴露内部批准绑定。 */
@@ -134,11 +136,23 @@ export interface PluginMarketPackageReviewRequest {
   permissionDiff: GhostPermissionDiff | null;
   isUpdate: boolean;
   sourceType: PluginMarketItemSource;
+  /** 与 permissionDiff 独立:完整权限卡也要能展示 OAuth 身份变化。 */
+  builtinOauthClientChanged?: boolean;
 }
 
 export interface PluginMarketInstallOptions {
   /** 用户点击时看到的目标 release；Main 会在下载前重新核对。 */
   expectedReleaseId: string;
+  /** 安装前展示给用户的完整清单；Main 会与当前来源事实重新核对。 */
+  expectedManifest?: GhostManifest;
+  /** 仅用于自定义市场确认其本地真实 manifest 的扩权。 */
+  allowPermissionExpansion?: boolean;
+  /** 用户审阅目标权限时的已装权限基线。 */
+  reviewedBaseline?: string;
+  /**
+   * receipt 模型的并发护栏：receipt 派生 token。确认与落位之间批准状态若变化即拒绝。
+   */
+  expectedInstalledApproval?: string;
   /** 仅详情页上用户明确点击“替换”时为 true；更新和批量更新不得切换来源。 */
   allowSourceReplacement?: boolean;
 }

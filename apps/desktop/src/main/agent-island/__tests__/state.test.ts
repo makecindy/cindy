@@ -20,6 +20,7 @@ import {
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
   markAgentIslandSessionAttention,
+  requestAgentIslandManualCollapse,
   requestAgentIslandManualExpand,
   requestAgentIslandSessionFocus,
   setAgentIslandAppFocused,
@@ -242,6 +243,17 @@ describe('Agent Island display state', () => {
 
     expect(afterRunningUpdate.currentSessionId).toBe('done');
     expect(afterRunningUpdate.sessions.map((session) => session.sessionId)).toEqual(['done']);
+  });
+
+  it('keeps unread errors in the same waiting tier as needs-interaction, ahead of unread completions', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'done', title: 'Done' }, doneEvent(), 1_000);
+    applyAgentIslandEvent(state, { sessionId: 'err', title: 'Err' }, terminalErrorEvent('boom'), 1_100);
+    applyAgentIslandEvent(state, { sessionId: 'ask', title: 'Ask' }, statusEvent(true, 'Running'), 1_200);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_300);
+
+    const display = buildAgentIslandDisplayState(state, 1_400);
+    expect(display.sessions.map((session) => session.sessionId)).toEqual(['ask', 'err', 'done']);
   });
 
   it('builds a CodeIsland-style recent activity preview per session', () => {
@@ -827,10 +839,10 @@ describe('Agent Island display state', () => {
     ]);
   });
 
-  it('prioritizes interaction, terminal error, completion, then running sessions', () => {
+  it('prioritizes waiting (interaction and error), then unread completion, then running', () => {
     const state = createAgentIslandState();
-    // Deliberately create the lower-priority states later: phase priority must
-    // win before the sidebar-style prompt/fallback time is considered.
+    // Interaction and error share the waiting tier; later activity wins inside
+    // that tier. Completion and running stay below waiting even if newer.
     applyAgentIslandInteractionRequest(state, { sessionId: 'ask', title: 'Ask' }, permissionRequest('r1'), 1_000);
     applyAgentIslandEvent(state, { sessionId: 'error', title: 'Error' }, terminalErrorEvent('failed'), 1_100);
     applyAgentIslandEvent(state, { sessionId: 'completed', title: 'Completed' }, doneEvent(), 1_200);
@@ -838,6 +850,8 @@ describe('Agent Island display state', () => {
 
     const display = buildAgentIslandDisplayState(state, 1_400);
 
+    // Waiting 同档按活动时间:更新的 error 排在更早的 ask 前。当前面仍给挡路交互
+    // (权限 / 提问),那是岛上的展示面,不是第三套优先级。
     expect(display.currentSessionId).toBe('ask');
     expect(display.pillSnapshot).toMatchObject({
       priorityId: 'ask',
@@ -849,8 +863,8 @@ describe('Agent Island display state', () => {
     });
     expect(display.shadowVisible).toBe(true);
     expect(display.sessions.map((session) => session.sessionId)).toEqual([
-      'ask',
       'error',
+      'ask',
       'completed',
       'running',
     ]);
@@ -1396,6 +1410,50 @@ describe('Agent Island display state', () => {
     expect(display.notchStatus).toBe('expanded');
     expect(display.displayPolicy).toBe('manualExpanded');
     expect(display.displaySurface).toBe('sessionList');
+  });
+
+  it('collapses immediately when the compact island position is clicked while expanded', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Running'), 1_000);
+    expect(requestAgentIslandManualExpand(state)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 1_051).mode).toBe('expanded');
+
+    expect(requestAgentIslandManualCollapse(state, 1_100)).toBe(true);
+
+    const display = buildAgentIslandDisplayState(state, 1_101);
+    expect(display.mode).toBe('compact');
+    expect(display.notchStatus).toBe('peek');
+    expect(display.displayPolicy).toBe('peek');
+    expect(display.displaySurface).toBe('collapsed');
+  });
+
+  it('does not immediately re-expand from hover after a compact-position collapse', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Running'), 1_000);
+    setAgentIslandHovered(state, true, 1_050);
+    expect(requestAgentIslandManualExpand(state)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 1_100).mode).toBe('expanded');
+
+    setAgentIslandPointerZones(state, { menuBar: true, panel: false }, 1_100);
+    expect(requestAgentIslandManualCollapse(state, 1_110)).toBe(true);
+    setAgentIslandPointerZones(state, { menuBar: true, panel: false }, 1_120);
+
+    expect(buildAgentIslandDisplayState(state, 1_200).mode).toBe('compact');
+    expect(buildAgentIslandDisplayState(state, 2_000).mode).toBe('compact');
+
+    setAgentIslandHovered(state, false, 2_100);
+    setAgentIslandHovered(state, true, 2_500);
+    expect(buildAgentIslandDisplayState(state, 3_100).mode).toBe('expanded');
+  });
+
+  it('does not collapse from a compact-position click while the island is being dragged', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Running'), 1_000);
+    expect(requestAgentIslandManualExpand(state)).toBe(true);
+    expect(setAgentIslandLayoutDragActive(state, true)).toBe(true);
+
+    expect(requestAgentIslandManualCollapse(state, 1_200)).toBe(false);
+    expect(buildAgentIslandDisplayState(state, 1_201).mode).toBe('expanded');
   });
 
   it('does not expand from pending hover while the island is being dragged', () => {

@@ -35,6 +35,7 @@ export interface IssueConfirmPayload {
 }
 
 export interface PermissionReviewPresentation {
+  autoReviewUnavailable: boolean;
   canAlwaysAllow: boolean;
   code: string;
   description: string | null;
@@ -201,6 +202,7 @@ export function buildPermissionReviewPresentation(
   const canAlwaysAllow = sessionScopedPermissionSuggestions(request.suggestions).length > 0;
 
   return {
+    autoReviewUnavailable: permissionAutoReviewUnavailable(request),
     canAlwaysAllow,
     code: formatPermissionInput(toolName, input),
     description: permissionDescription(request),
@@ -787,6 +789,10 @@ export function permissionTitle(request: InteractionRequestLike): string {
 
 export function permissionDescription(request: InteractionRequestLike): string | null {
   return readString(request.description);
+}
+
+export function permissionAutoReviewUnavailable(request: InteractionRequestLike): boolean {
+  return isRecord(request.metadata) && request.metadata.autoReviewUnavailable === true;
 }
 
 export function permissionToolName(request: InteractionRequestLike): string {

@@ -94,6 +94,14 @@ describe('sessionsStore — 自动起名的即时标题预览', () => {
     expect(sessionsStore.findById(SESSION_ID)).toBeNull();
   });
 
+  it('预览先于 prependCreated 登记 → 插入第一帧就是用户原文', async () => {
+    list.mockResolvedValue([]);
+    await sessionsStore.ensureByFilter('active');
+    emitAutoTitlePreview(SESSION_ID, '帮我排查登录失败');
+    sessionsStore.prependCreated(session());
+    expect(currentTitle()).toBe('帮我排查登录失败');
+  });
+
   it('空标题不触发预览(emit 侧已挡掉)', async () => {
     await seed(session());
 

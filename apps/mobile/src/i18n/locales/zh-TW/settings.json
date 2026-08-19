@@ -37,6 +37,14 @@
     "checkFailedDetail": "檢查更新失敗：{{detail}}",
     "checkFailed": "檢查更新失敗，請稍後重試"
   },
+  "betaChannel": {
+    "title": "Beta 測試管道",
+    "description": "加入 Beta 測試管道，提前接收即將發布的客戶端更新。",
+    "restartHint": "Beta 測試管道需要重新啟動客戶端後才能生效，請重新啟動應用。",
+    "ok": "我知道了",
+    "saveFailed": "儲存 Beta 測試管道設定失敗",
+    "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。"
+  },
   "notifications": {
     "sectionTitle": "通知",
     "taskDone": "任務完成通知",

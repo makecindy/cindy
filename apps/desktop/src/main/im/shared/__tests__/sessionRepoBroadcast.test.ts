@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     insertConflict,
     insertValues: vi.fn(() => ({ onConflictDoUpdate: insertConflict })),
+    // createSession upsert 后回读持久化行;返回空数组时回落 prepared row
+    selectLimit: vi.fn<() => Promise<Array<{ title?: string | null }>>>(async () => []),
+    updateSet: vi.fn(),
+    updateWhere: vi.fn(async () => undefined),
     webContentsSend: vi.fn(),
     tapWindowBroadcast: vi.fn(),
   };
@@ -35,8 +39,11 @@ vi.mock('../../../localDb/client/current', () => ({
   getDbClient: () => ({
     drizzle: {
       insert: () => ({ values: mocks.insertValues }),
-      // createSession upsert 后回读持久化行;返回空数组时回落 prepared row
-      select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+      select: () => ({ from: () => ({ where: () => ({ limit: mocks.selectLimit }) }) }),
+      // resolveSessionTitle 标题回写链: update().set().where()
+      update: () => ({
+        set: mocks.updateSet.mockReturnValue({ where: mocks.updateWhere }),
+      }),
     },
   }),
 }));
@@ -110,5 +117,45 @@ describe('sessionRepo.createSession broadcast', () => {
     );
     expect(mocks.webContentsSend).not.toHaveBeenCalled();
     expect(mocks.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('resolveSessionTitle 解析出标题时回写行并广播 sessions:patched; null 不动', async () => {
+    const resolveSessionTitle = vi.fn<
+      (userId: string, scopeKey?: string) => Promise<string | null>
+    >(async () => '[飞书·群] 产品交流群');
+    const repo = createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, {
+      ...ns,
+      resolveSessionTitle,
+    });
+    await repo.createSession('bot', 'user', undefined, preparedRow);
+
+    expect(mocks.updateSet).toHaveBeenCalledWith({ title: '[飞书·群] 产品交流群' });
+    expect(mocks.updateWhere).toHaveBeenCalledTimes(1);
+    expect(mocks.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'slack-bot-user',
+      patch: { title: '[飞书·群] 产品交流群' },
+    });
+
+    resolveSessionTitle.mockResolvedValueOnce(null);
+    mocks.updateSet.mockClear();
+    await repo.createSession('bot', 'user', undefined, preparedRow);
+    expect(mocks.updateSet).not.toHaveBeenCalled();
+  });
+
+  it('resolveSessionTitle 只对新建行生效 — 复活行保留历史标题不回调解析器', async () => {
+    // upsert 前预检 select 返回已存在的行 → 复活路径, 不解析标题
+    // (oneshot 拼装过的话题名不能被渠道解析结果刷掉)。
+    mocks.selectLimit.mockResolvedValueOnce([{ title: '[飞书·群名·简介] abc123' }]);
+    const resolveSessionTitle = vi.fn<
+      (userId: string, scopeKey?: string) => Promise<string | null>
+    >(async () => '[飞书·群] 产品交流群');
+    const repo = createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, {
+      ...ns,
+      resolveSessionTitle,
+    });
+    mocks.updateSet.mockClear();
+    await repo.createSession('bot', 'user', undefined, preparedRow);
+    expect(resolveSessionTitle).not.toHaveBeenCalled();
+    expect(mocks.updateSet).not.toHaveBeenCalled();
   });
 });

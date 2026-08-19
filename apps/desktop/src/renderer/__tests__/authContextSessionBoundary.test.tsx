@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     reset: vi.fn(),
     getMe: vi.fn(async () => ({ role: 'user' })),
     clearWorkersCache: vi.fn(),
+    setModelVisibilityOwner: vi.fn(),
     invalidateProvidersSnapshot: vi.fn(),
     preloadLocalCatalogSnapshot: vi.fn(async () => undefined),
     confirm: vi.fn(async () => true),
@@ -56,6 +57,9 @@ vi.mock('@/lib/meService', () => ({ getMe: mocks.getMe }));
 vi.mock('@/features/cc-agent/hooks/useWorkers', () => ({
   clearWorkersCache: mocks.clearWorkersCache,
 }));
+vi.mock('@/state/modelVisibilityPrefs', () => ({
+  setModelVisibilityOwner: mocks.setModelVisibilityOwner,
+}));
 vi.mock('@/lib/providersSnapshotStore', () => ({
   invalidateProvidersSnapshot: mocks.invalidateProvidersSnapshot,
 }));
@@ -80,6 +84,16 @@ import {
   __testing as dataOwnerGenerationTesting,
   getDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import {
+  __resetForTest as resetEnginePrefs,
+  getModelEngineOverride,
+  setModelEngineOverride,
+} from '@/state/modelEnginePrefs';
+import {
+  __resetForTest as resetFavorites,
+  addModelFavorite,
+  listModelFavorites,
+} from '@/state/modelFavorites';
 
 function user(id: string) {
   return {
@@ -135,6 +149,7 @@ describe('AuthContext session cache boundaries', () => {
     mocks.reset.mockClear();
     mocks.getMe.mockClear();
     mocks.clearWorkersCache.mockClear();
+    mocks.setModelVisibilityOwner.mockClear();
     mocks.invalidateProvidersSnapshot.mockClear();
     mocks.preloadLocalCatalogSnapshot.mockClear();
     dataOwnerGenerationTesting.reset();
@@ -162,10 +177,12 @@ describe('AuthContext session cache boundaries', () => {
     await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));
     expect(mocks.reset).toHaveBeenCalledTimes(1);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.setModelVisibilityOwner).toHaveBeenLastCalledWith('account-a', 1, 'cloud');
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.setModelVisibilityOwner).toHaveBeenLastCalledWith('account-b', 1, 'cloud');
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
@@ -174,6 +191,7 @@ describe('AuthContext session cache boundaries', () => {
     act(() => mocks.emitAuth(authState(null)));
     expect(mocks.reset).toHaveBeenCalledTimes(3);
     expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(3);
+    expect(mocks.setModelVisibilityOwner).toHaveBeenLastCalledWith(null, 2, 'signed-out');
 
     await act(async () => {
       await view.result.current.logout();
@@ -355,6 +373,48 @@ describe('AuthContext session cache boundaries', () => {
 
     expect(view.result.current.mode).toBe('local');
     expect(view.result.current.loginState).toBeNull();
+  });
+
+  /**
+   * 本地模式也是一次 dataOwnerId 切换(2026-08-17 review 第五轮 M5)。enterLocalMode /
+   * exitLocalMode 此前只更新了 dataOwnerId 与另外几个 owner 分区 setter,漏掉统一模型选择器
+   * 新增的两根轴 —— 于是本地模式下读写的是**上一个身份**的收藏 / 引擎 override:跨身份可见,
+   * 还会把改动写进别人的账号。
+   */
+  it('repartitions unified-picker favorites and engine overrides across local mode', async () => {
+    resetFavorites();
+    resetEnginePrefs();
+    const view = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));
+    const cloudUid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex' });
+    setModelEngineOverride('xd', 'gpt-5.5', 'cc');
+    expect(cloudUid).not.toBe('');
+
+    await act(async () => {
+      await view.result.current.enterLocalMode();
+    });
+    // 本地模式是另一个分区:云端身份存的东西一条都不该露出来。
+    expect(listModelFavorites()).toHaveLength(0);
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+    const localUid = addModelFavorite({
+      providerId: 'anthropic',
+      modelId: 'claude-opus-5',
+      agent: 'cc',
+    });
+    setModelEngineOverride('anthropic', 'claude-opus-5', 'codex');
+    expect(listModelFavorites().map((item) => item.uid)).toEqual([localUid]);
+
+    mocks.service.exitLocalMode.mockResolvedValue(authState('account-a'));
+    await act(async () => {
+      await view.result.current.exitLocalMode();
+    });
+    // 退出本地模式:云端那一份原样回来,本地模式里写的东西留在本地分区。
+    expect(listModelFavorites().map((item) => item.uid)).toEqual([cloudUid]);
+    expect(getModelEngineOverride('xd', 'gpt-5.5')).toBe('cc');
+    expect(getModelEngineOverride('anthropic', 'claude-opus-5')).toBeUndefined();
+    resetFavorites();
+    resetEnginePrefs();
+    window.localStorage.clear();
   });
 
   it('consumes the restored account-deletion notice once', async () => {

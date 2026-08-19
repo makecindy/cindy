@@ -8,6 +8,8 @@ import {
   GHOST_SCHEME,
   ghostPartition,
   type GhostAppContextResult,
+  type GhostMediaModelsResult,
+  type GhostMediaModelType,
   type InstalledGhost,
 } from '../../../shared/ghost.js';
 import { GHOST_BOOT_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
@@ -130,6 +132,20 @@ let ghostAppContextProvider: (() => GhostAppContextResult) | null = null;
 
 export function setGhostAppContextProvider(provider: () => GhostAppContextResult): void {
   ghostAppContextProvider = provider;
+}
+
+/**
+ * 插件配置页的只读媒体模型目录提供器。面板没有 preload 桥，因此与
+ * `/app-context` 一样走自己的同源协议端点；实际目录与授权判定由 Host 注入。
+ */
+let ghostMediaModelsProvider:
+  | ((ghostId: string, type: GhostMediaModelType) => Promise<GhostMediaModelsResult>)
+  | null = null;
+
+export function setGhostMediaModelsProvider(
+  provider: (ghostId: string, type: GhostMediaModelType) => Promise<GhostMediaModelsResult>,
+): void {
+  ghostMediaModelsProvider = provider;
 }
 
 /**
@@ -282,6 +298,30 @@ function registerGhostProtocol(partition: string, ghost: InstalledGhost): void {
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
             'Cache-Control': 'no-cache',
+          },
+        });
+      }
+      // /media-models?type=image|video:插件自己的设置页 / 面板读取当前客户端可执行
+      // 模型及 Gateway modalities。兼容判定由 Host provider 完成；端点仍不发起生成，
+      // 也不返回凭证、endpoint、Guide 或内部判定细节。
+      if (url.pathname === '/media-models') {
+        if (request.method !== 'GET') return new Response(null, { status: 405 });
+        const keys = [...url.searchParams.keys()];
+        const types = url.searchParams.getAll('type');
+        if (keys.length !== 1 || keys[0] !== 'type' || types.length !== 1) {
+          return new Response(null, { status: 400 });
+        }
+        const type = types[0];
+        if (type !== 'image' && type !== 'video') {
+          return new Response(null, { status: 400 });
+        }
+        if (!ghostMediaModelsProvider) return new Response(null, { status: 503 });
+        const result = await ghostMediaModelsProvider(ghostId, type);
+        return new Response(JSON.stringify(result), {
+          status: result.ok ? 200 : result.errorCode === 'PERMISSION_DENIED' ? 403 : 503,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
           },
         });
       }

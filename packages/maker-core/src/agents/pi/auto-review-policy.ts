@@ -27,6 +27,11 @@ export interface PiAutoReviewContext {
   toolName: string;
   /** 工具入参(bridge 透传的原始对象)。 */
   input: Record<string, unknown>;
+  /**
+   * Bridge-followed real paths that matched the credential policy. `null` means
+   * the bridge evidence was present but malformed and must fail closed.
+   */
+  resolvedCredentialPaths?: readonly string[] | null;
   /** 会话工作区根:cwd,绝对路径(pi 无 extraDirs)。 */
   workspaceRoots: string[];
   /** 可读根:工作区 + Pi 附加只读引用目录。写操作仍只看 workspaceRoots。 */
@@ -85,6 +90,27 @@ function findCredentialLeaf(input: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
+function canonicalCredentialEvidenceAction(
+  resolvedCredentialPaths: readonly string[] | null | undefined,
+): ReviewableAction | undefined {
+  if (resolvedCredentialPaths === null) {
+    return {
+      kind: 'other',
+      description: 'Pi credential-read evidence was malformed.',
+      requireConsent: true,
+    };
+  }
+  const resolvedCredentialHit = findCredentialLeaf(resolvedCredentialPaths);
+  if ((resolvedCredentialPaths?.length ?? 0) > 0 && !resolvedCredentialHit) {
+    return {
+      kind: 'other',
+      description: 'Pi credential-read evidence did not match the Host policy.',
+      requireConsent: true,
+    };
+  }
+  return resolvedCredentialHit ? { kind: 'read', path: resolvedCredentialHit } : undefined;
+}
+
 /**
  * Auto-review 下对一个 pi 工具调用给出审查档位。仅在权限档为 `auto` 时调用
  * (见 pi/index.ts handleExtensionUiRequest 的 dispatcher)。纯映射,判定逻辑全在 core。
@@ -93,8 +119,13 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
   const { toolName, input } = ctx;
 
   if (READ_ONLY_TOOLS.has(toolName)) {
+    // Bridge follows symlinks in its process, so Host must include those canonical
+    // targets in the same credential decision. A malformed or policy-inconsistent
+    // evidence payload cannot fall back to the innocent-looking link path.
+    const evidenceAction = canonicalCredentialEvidenceAction(ctx.resolvedCredentialPaths);
+    if (evidenceAction) return evidenceAction;
     // 凭证特征可能落在任意字符串入参(grep 的 pattern、find 的表达式等),与 bridge
-    // 的 touchesCredentialPath 同口径递归扫全字段;命中的字符串作为 path 交 core 判必问。
+    // 的 touchesCredentialPath 同口径递归扫全字段。
     const credentialHit = findCredentialLeaf(input);
     return { kind: 'read', path: credentialHit ?? stringField(input, 'path') };
   }
@@ -102,6 +133,8 @@ export function normalizePiToolForAutoReview(ctx: PiAutoReviewContext): Reviewab
     return { kind: 'file-write', path: stringField(input, 'path') };
   }
   if (toolName === 'bash') {
+    const evidenceAction = canonicalCredentialEvidenceAction(ctx.resolvedCredentialPaths);
+    if (evidenceAction) return evidenceAction;
     return { kind: 'exec', command: stringField(input, 'command') ?? '' };
   }
   // MCP / 自定义 / 未知工具进入灰区，同时把完整工具名与入参交给轻量 reviewer。

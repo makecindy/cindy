@@ -67,8 +67,10 @@ export const TRANSPORT_MAX_RETRY_ATTEMPTS = 5;
  * 213 条 → 上限 8 条/趟）。它是**每趟**上限，不是窗口上限，不改变可靠交付语义:
  * 没发出去的消息仍在 pending 里，下一趟继续。
  *
- * **只作用于定时器驱动的趟次**:link 重建后的 replay 由收到对端 link-accept 触发，
- * 可达性刚被证明过，不受此限（见 client.replayPending）。
+ * **所有恢复发送共用这一预算**（定时重发、link 重建 replay、outbox / drain
+ * 经 sendPeerEnvelope 的首发）。对端刚 accept 只证明 inbound 到了，outbound
+ * 仍可能立刻 DEVICE_OFFLINE；再给 replay 无限额度会把同一批 pending 在反复
+ * open 之间倒很多遍。恢复态先按本预算探测，收到可靠 ACK 后再继续 drain。
  */
 export const TRANSPORT_RETRY_PASS_BUDGET = 8;
 /**

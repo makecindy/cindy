@@ -5,17 +5,22 @@
  * 可见性 override 走真实 modelVisibilityPrefs(localStorage 由 jsdom 提供,用例间重置)。
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildUnionRows,
   countModelsByAgent,
+  getHiddenAgents,
   isCapabilityRow,
   isRowDisabled,
   isRowDiverged,
   loadCollapsedMap,
 } from '@/components/settings/UnifiedModelList';
-import { __resetForTest, setModelVisibility } from '@/state/modelVisibilityPrefs';
+import {
+  __resetForTest,
+  setModelVisibility,
+  setModelVisibilityOwner,
+} from '@/state/modelVisibilityPrefs';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
@@ -36,6 +41,26 @@ const provider = {
   },
   connected: true,
 } as unknown as ProviderView;
+
+beforeEach(() => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      maker: {
+        claimLegacyModelVisibilityOwner: () => ({
+          dataOwnerId: 'test-owner',
+          ownerGeneration: 1,
+          canWriteOwnerScoped: true,
+          claimed: true,
+          claimedByOtherOwner: false,
+          canInitialize: true,
+        }),
+        syncModelVisibility: async () => undefined,
+      },
+    },
+  });
+  setModelVisibilityOwner('test-owner', 1, 'cloud');
+});
 
 afterEach(() => {
   __resetForTest();
@@ -121,6 +146,24 @@ describe('isRowDiverged', () => {
     const ccOnly = rows[1];
     setModelVisibility('claude-code', 'p1', 'cc-only', false);
     expect(isRowDiverged('p1', ccOnly)).toBe(false);
+  });
+
+  it('三 Agent 中两端隐藏时保留全部隐藏 Agent', () => {
+    const threeAgent = {
+      ...provider,
+      agents: ['claude-code', 'codex', 'pi'],
+      models: {
+        ...provider.models,
+        pi: [model('shared', 500_000)],
+      },
+    } as ProviderView;
+    const shared = buildUnionRows(threeAgent)[0];
+
+    setModelVisibility('claude-code', 'p1', 'shared', false);
+    setModelVisibility('codex', 'p1', 'shared', false);
+
+    expect(isRowDiverged('p1', shared)).toBe(true);
+    expect(getHiddenAgents('p1', shared)).toEqual(['claude-code', 'codex']);
   });
 });
 

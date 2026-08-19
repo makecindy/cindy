@@ -65,8 +65,10 @@ export const loginMethodSchema = z.discriminatedUnion("type", [
 export type LoginMethod = z.infer<typeof loginMethodSchema>;
 
 /**
- * 把企业 SSO discovery 结果映射成 LoginMethod 列表，复用 method-choice 步骤
- * 渲染连接选择（ssoRequired=false：入口本身即用户主动选 SSO，无需再提示强制）。
+ * 把企业 SSO discovery 结果映射成 LoginMethod 列表。
+ * 多连接时复用 method-choice 让用户选 IdP；唯一连接由
+ * `soleAutoStartSsoMethod` 判定后，UI 直接投影 browser-redirect
+ * （ssoRequired=false：入口本身即用户主动选 SSO，无需再提示强制）。
  */
 export function ssoOrgDiscoveryToMethods(
   discovery: SsoOrgDiscovery,
@@ -79,6 +81,28 @@ export function ssoOrgDiscoveryToMethods(
     connectionName: connection.connectionName,
     ssoRequired: false,
   }));
+}
+
+export type SsoLoginMethod = Extract<LoginMethod, { type: "sso" }>;
+
+/**
+ * method-choice 只在真正有选择时出现。探测结果只剩一种方式时，
+ * 调用方应直接发起它，不要再出「选择登录方式」。
+ *
+ * 覆盖：唯一 SSO；唯一邮箱验证码。不覆盖：SSO + 个人邮箱；多条 SSO。
+ */
+export function soleLoginMethod(
+  methods: readonly LoginMethod[],
+): LoginMethod | null {
+  return methods.length === 1 ? (methods[0] ?? null) : null;
+}
+
+/** 唯一 SSO、没有个人邮箱替补时，应直接打开该 SSO。 */
+export function soleAutoStartSsoMethod(
+  methods: readonly LoginMethod[],
+): SsoLoginMethod | null {
+  const sole = soleLoginMethod(methods);
+  return sole?.type === "sso" ? sole : null;
 }
 
 export const tokenPairSchema = z.object({

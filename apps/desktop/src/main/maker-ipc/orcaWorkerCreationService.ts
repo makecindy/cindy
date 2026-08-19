@@ -679,19 +679,13 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
     }
 
-    // Pi 尚无远程 runtime:PiAgent.startSession 对 remoteHostId 一律 NotSupportedError,
-    // 远端 ensure 又对 pi 跳过,SSH 远程 Lead + Pi worker 必然在 bootstrap 期被包成笼统
-    // INTERNAL —— 在 preflight 就以可操作信息拒绝(codex-connector 报)。lead 侧的
-    // capabilities 层已拒 Pi 远程会话,此闸补上 worker 创建(UI popover / MCP / 批量)路径。
-    if (lead.remoteHostId && params.agent === 'pi') {
-      return {
-        ok: false,
-        errorCode: 'INVALID_PARAMS',
-        message:
-          'Pi workers are not available for SSH remote leads: pi sessions are local-only for now — pick Claude Code or Codex for this worker',
-      };
-    }
-
+    // 轮 42:解除「SSH remote lead 禁 Pi worker」闸 —— 该闸写于 Pi SSH remote 能力
+    // 落地之前(前提「PiAgent.startSession 对 remoteHostId 一律 NotSupportedError」
+    // 已不成立, 现 remote pi 会话全链路可用)。worker 创建走通用 remote 路径:
+    // createWorkerInTeam 里 worker 继承 lead.remoteHostId(同远端主机 spawn, 共享远端
+    // workingDir), ensureRemoteReadyForSessionStart 对 pi 已支持 silent install +
+    // pi-manager 预上传, orca_worker_bridge 工具面经 SSH remote-forward 隧道注入。
+    // 与 CC/Codex remote worker 同构;此闸会让 remote pi lead 完全无法使用 pi worker。
     const defaults = deps.getWorkerDefaults(params.agent);
     const inheritedModelComesFromDefaults =
       params.model === undefined
@@ -739,9 +733,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     const explicitModelProviders = params.model !== undefined
       ? agentProviders.filter((provider) => provider.models.includes(resolvedConfig.model))
       : [];
-    const explicitModelProvider = explicitModelDefaultProviderId === null
-      ? undefined
-      : agentProviders.find((provider) => provider.id === explicitModelDefaultProviderId);
     const cachedProviderRouteIsStale = params.model === undefined
       && inheritedModelComesFromDefaults
       && defaults.providerId !== undefined
@@ -762,14 +753,16 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       : agentProviders.find((provider) => provider.id === inheritedDefaultProviderId);
     const resolved = {
       ...resolvedConfig,
-      // 仅显式指定 model 不等于显式选择来源：providerId=null 必须保留 spawn-aware 默认路由。
-      // 例外是该模型只有一个来源且它必须依赖 session provider store 注入自己的凭证。
+      // 仅显式指定 model 不等于显式选择来源：多来源模型仍保留 spawn-aware 默认路由。
+      // 但若当前只有一个可用来源,必须把该来源固化到 session。否则 preflight 虽会按
+      // 这个唯一来源校验通过,实际 spawn 却收到 providerId=null 并回落到 agent 原生认证
+      // 链路,形成「校验走 A、执行走 B」的分裂状态(如 XD 独有 DeepSeek 模型误走
+      // Codex ChatGPT OAuth)。来源取运行时 provider registry,不按模型名写死 provider id。
       providerId: explicitSourceId !== null
         ? explicitSourceId
         : params.model !== undefined
           && explicitModelProviders.length === 1
-          && explicitModelProvider?.requiresExplicitRoute
-          ? explicitModelProvider.id
+          ? explicitModelProviders[0]!.id
           : params.model !== undefined
             ? null
             : inheritedDefaultNeedsRouteResolution

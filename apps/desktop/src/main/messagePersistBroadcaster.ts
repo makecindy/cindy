@@ -40,12 +40,20 @@ import {
   updateMessageContent as updateDbMessageContent,
 } from './localDb/ipc/messages.js';
 import { getDbClient } from './localDb/client/current.js';
+import {
+  markCodexPlanInterrupted,
+  parseCodexPlanTerminal,
+  parseCodexPlanUpdate,
+  writeCodexPlanTerminal,
+  writeCodexPlanUpdate,
+} from './localDb/codexPlanState.js';
 import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
 import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
 
@@ -154,6 +162,7 @@ const lastAgentMetaBySession = new Map<string, AgentMeta>();
  * 若 turnStartedAt <= clearBoundary，该 error 行必须 cap 在 clear 边界之下，防止出现在清空后的新会话。
  * resetTurnPersistState / clearSessionPersistState 时清除。 */
 const _turnStartedAtBySession = new Map<string, number>();
+const _turnAttemptTokenBySession = new Map<string, number>();
 const _turnDedupIdBySession = new Map<string, string>();
 let _turnDedupSeq = 0;
 
@@ -167,10 +176,13 @@ const _savedTurnDedupIdForDeferred = new Map<string, string>();
  * 只在首次调用（Map 中无条目）时写入，忽略后续 isRunning:true 的覆盖，
  * 防止 Claude 工具进度 / Codex stage 等 mid-turn 进度事件在 /clear 之后
  * 用 post-clear 时间戳覆盖原始 pre-clear 起点，导致 /clear 竞态 cap 失效。 */
-export function noteTurnStarted(sessionId: string): void {
+export function noteTurnStarted(sessionId: string, turnAttemptToken?: number): void {
   if (!_turnStartedAtBySession.has(sessionId)) {
     const now = Date.now();
     _turnStartedAtBySession.set(sessionId, now);
+    if (typeof turnAttemptToken === 'number') {
+      _turnAttemptTokenBySession.set(sessionId, turnAttemptToken);
+    }
     _turnDedupIdBySession.set(sessionId, `${now}:${++_turnDedupSeq}`);
     // 新 turn 第一次记录时，旧的 deferred 保存值已无效，清掉防止 deferred IPC 用到旧 turn 的时刻。
     _savedTurnStartedAtForDeferred.delete(sessionId);
@@ -708,10 +720,32 @@ export function onToolUseEvent(
   agentMeta: AgentMeta | null,
   scope: 'turn' | 'background' = 'turn',
   backgroundTurnStartedAt?: number,
+  turnAttemptToken?: number,
 ): string | undefined {
   const createdAt = Date.now();
   const toolUseId = typeof data.toolUseId === 'string' ? data.toolUseId : '';
   const toolName = typeof data.toolName === 'string' ? data.toolName : '';
+
+  if (scope === 'turn' && getSessionDbAgentKind(sessionId) === 'codex') {
+    const planUpdate = parseCodexPlanUpdate(data);
+    const currentTurnAttemptToken = _turnAttemptTokenBySession.get(sessionId);
+    const turnStartedAt =
+      currentTurnAttemptToken !== undefined && currentTurnAttemptToken !== turnAttemptToken
+        ? undefined
+        : _turnStartedAtBySession.get(sessionId);
+    if (planUpdate && !backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)) {
+      const clearBoundaryAtEnqueue = clearBoundaryBySession.get(sessionId);
+      enqueueWrite(`codex_plan_state_update:${sessionId}:${planUpdate.turnId}`, () => {
+        if (
+          clearBoundaryBySession.get(sessionId) !== clearBoundaryAtEnqueue ||
+          backgroundTurnPredatesSessionClear(sessionId, turnStartedAt)
+        ) {
+          return Promise.resolve();
+        }
+        return writeCodexPlanUpdate(sessionId, planUpdate);
+      });
+    }
+  }
 
   if (scope === 'background') {
     if (backgroundTurnPredatesSessionClear(sessionId, backgroundTurnStartedAt)) {
@@ -804,6 +838,12 @@ export function persistCodexPlanOnDone(
     | null
     | undefined,
 ): boolean {
+  const planTerminal = parseCodexPlanTerminal(data);
+  if (planTerminal) {
+    enqueueWrite(`codex_plan_state_terminal:${sessionId}:${planTerminal.turnId}`, () =>
+      writeCodexPlanTerminal(sessionId, planTerminal),
+    );
+  }
   const turnId = typeof data?.raw?.id === 'string' ? data.raw.id : null;
   if (!turnId) return false;
 
@@ -883,6 +923,12 @@ export function persistCodexPlanOnTerminalError(sessionId: string, turnId?: stri
       ? planRow.input as Record<string, unknown>
       : null;
     if (!input || !Array.isArray(input.plan)) continue;
+    const ownedTurnId = toolUseId.startsWith('plan:') ? toolUseId.slice('plan:'.length) : '';
+    if (ownedTurnId) {
+      enqueueWrite(`codex_plan_state_error:${sessionId}:${ownedTurnId}`, () =>
+        markCodexPlanInterrupted(sessionId, ownedTurnId),
+      );
+    }
     enqueueWrite(`codex_plan_terminal_error:${sessionId}:${persistId}`, async (ownerScope) => {
       const updated = await updateDbMessageContent(sessionId, persistId, {
         toolUseId,
@@ -1369,6 +1415,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // clearCodexPlanRowsForSession(逻辑 turn 结束 / 会话清理)负责回收。
   lastAgentMetaBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
+  _turnAttemptTokenBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
   // turn 边界必须清 lastPersistedMsgBySession:within-turn 的重复 isFinal / result 兜底
   // 补推都在 done 之前已去重(translator fallback isFinal@translator.ts:897 早于 done@922,
@@ -1397,7 +1444,7 @@ export function onAssistantTextEvent(
   data: { text?: unknown; isFinal?: unknown; isFullText?: unknown },
   agentMeta: AgentMeta | null,
 ): string | undefined {
-  const text = typeof data.text === 'string' ? data.text : '';
+  const rawText = typeof data.text === 'string' ? data.text : '';
   const isFinal = data.isFinal === true;
   const isFullText = data.isFullText === true;
 
@@ -1410,37 +1457,38 @@ export function onAssistantTextEvent(
       // 消息中相邻 text block 互相覆盖。
       if (
         isFullText ||
-        (text.length > block.text.length && text.startsWith(block.text))
+        (rawText.length > block.text.length && rawText.startsWith(block.text))
       ) {
-        block.text = text;
+        block.text = rawText;
       }
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
     }
     // 非流式 isFinal burst(result 兜底补推也走这):无在飞 block,立即落库。
-    if (text) {
+    const visible = stripInternalWebCitations(rawText);
+    if (visible) {
       // DUP-SKIP(对齐 renderer 老 757-762):若紧邻的上一条已落库消息正是内容完全
       // 相同的 assistant(典型:重复 isFinal / block flush 后又来同内容补推),复用其
       // persistId、不再 create,把重复行挡在 main 落库层。中间夹过别的消息则 last.role
       // 不是 assistant,不会误删合法的相同文本回复。
       const last = lastPersistedMsgBySession.get(sessionId);
-      if (last && last.role === 'assistant' && last.text === text) {
+      if (last && last.role === 'assistant' && last.text === visible) {
         return last.persistId;
       }
       const persistId = createId();
-      enqueuePersistAssistant(sessionId, persistId, text, agentMeta, Date.now());
+      enqueuePersistAssistant(sessionId, persistId, visible, agentMeta, Date.now());
       return persistId;
     }
     return undefined;
   }
 
-  // delta
+  // delta: accumulate the raw snapshot; strip only the completed block.
   let block = assistantBlocks.get(sessionId);
   if (!block) {
-    block = { persistId: createId(), text, agentMeta, createdAt: Date.now() };
+    block = { persistId: createId(), text: rawText, agentMeta, createdAt: Date.now() };
     assistantBlocks.set(sessionId, block);
   } else {
-    block.text += text;
+    block.text += rawText;
     if (agentMeta) block.agentMeta = agentMeta;
   }
   return block.persistId;
@@ -1461,11 +1509,12 @@ export function flushAssistantBlock(
   const block = assistantBlocks.get(sessionId);
   if (!block) return;
   assistantBlocks.delete(sessionId);
-  if (!block.text) return;
+  const visible = stripInternalWebCitations(block.text);
+  if (!visible) return;
   // 三级兜底,对齐 renderer 老逻辑:本 block 自带 meta → 边界事件 meta(tool_use/done
   // 同属或携带这条 assistant 的 meta)→ 会话最近一次非空 meta(interaction 边界靠这级)。
   const meta = block.agentMeta ?? agentMetaFallback ?? lastAgentMetaBySession.get(sessionId) ?? null;
-  enqueuePersistAssistant(sessionId, block.persistId, block.text, meta, block.createdAt);
+  enqueuePersistAssistant(sessionId, block.persistId, visible, meta, block.createdAt);
 }
 
 /**
@@ -1687,6 +1736,7 @@ export function clearSessionPersistState(sessionId: string): void {
   lastAssistantTranscriptUuidBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
+  _turnAttemptTokenBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
   _savedTurnStartedAtForDeferred.delete(sessionId);
   _savedTurnDedupIdForDeferred.delete(sessionId);
