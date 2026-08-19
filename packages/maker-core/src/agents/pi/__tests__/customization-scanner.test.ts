@@ -92,31 +92,24 @@ describe('scanPiCustomizations', () => {
     const original = path.join(root, 'original');
     const open = vi.spyOn(fs.promises, 'open');
     const realOpen = open.getMockImplementation();
+    let replaced = false;
     open.mockImplementation(async (candidate, flags, mode) => {
-      const handle = realOpen
-        ? await realOpen(candidate, flags, mode)
-        : await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      if (!replaced && path.resolve(String(candidate)) === path.resolve(mdPath)) {
+        replaced = true;
+        fs.renameSync(skillDir, original);
+        fs.renameSync(replacement, skillDir);
+      }
+      return realOpen
+        ? realOpen(candidate, flags, mode)
+        : vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
           .then((actual) => actual.open(candidate, flags, mode));
-      if (path.resolve(String(candidate)) !== path.resolve(mdPath)) return handle;
-      const handleStat = handle.stat.bind(handle);
-      let bigintStats = 0;
-      Object.defineProperty(handle, 'stat', {
-        configurable: true,
-        value: async (options?: { bigint?: boolean }) => {
-          if (options?.bigint && ++bigintStats === 2) {
-            fs.renameSync(skillDir, original);
-            fs.renameSync(replacement, skillDir);
-          }
-          return handleStat(options as never);
-        },
-      });
-      return handle;
     });
     try {
       await expect(scanPiRuntimeUserSkillSources(
         [baseDir],
         Date.now() + 5_000,
       )).resolves.toEqual([]);
+      expect(replaced).toBe(true);
       expect(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8')).toContain('replacement');
     } finally {
       open.mockRestore();
