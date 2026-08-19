@@ -176,6 +176,10 @@ describe('buildConversationShareHtml 富内容导出', () => {
     );
     expect(sessionSource).toContain("localUri && Platform.OS !== 'android'");
     expect(sessionSource).toContain('<ConversationShareSvg');
+    expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
+    expect(sessionSource).toContain('nativeShareAssetsReady');
+    expect(sessionSource).toContain('falling back to svg');
+    expect(sessionSource).toContain('return svg.exportPng();');
   });
 
   it('使用 Mobile 获批的克制页脚尺寸', () => {
