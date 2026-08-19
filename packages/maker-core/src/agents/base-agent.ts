@@ -1524,6 +1524,15 @@ export interface AgentSessionHandle {
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /**
+   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
+   * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
+   * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层
+   * 回退为 0,消费方按「信号不可用 → 不收口」保守处理)。
+   */
+  countPendingWakeContinuations?(): number;
+
+  /**
    * Resolve the provider claim attached atomically to a specific `done` event.
    * Returns null when that event has no matching continuation boundary.
    */

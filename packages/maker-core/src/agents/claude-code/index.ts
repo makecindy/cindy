@@ -5691,6 +5691,22 @@ export class ClaudeCodeAgent extends BaseAgent {
         }));
       },
 
+      countPendingWakeContinuations() {
+        // 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+        // runningBackgroundTasks 在任务终态时立即出表(noteBackgroundTaskEvent),
+        // 因此 listBackgroundTasks() 的空快照**不能**证明后续没有 wake turn ——
+        // renderer 的唤醒桥接对账必须以本计数为权威依据(为 0 才允许收口),
+        // 而不是把「没有仍在运行的任务」当成「没有待启动的 continuation」。
+        // cancelled 不计(不会再有 wake turn 跟进);awaiting / active 都计
+        // (active 期间主 turn isRunning 本就为 true,双重保护)。
+        if (closed) return 0;
+        let n = 0;
+        for (const claim of continuationClaims.values()) {
+          if (claim.state === 'awaiting' || claim.state === 'active') n += 1;
+        }
+        return n;
+      },
+
       beginTurnContinuationWait(continuationId?: number) {
         if (continuationId === undefined) return null;
         return continuationClaims.get(continuationId)?.state ?? null;
