@@ -250,6 +250,24 @@ export function conversationSearchResultKey(item: ConversationSearchResultItem):
   return `${item.session.deviceLinkDeviceId ?? 'local'}:${item.session.id}`;
 }
 
+/** Remote hits from origin pages, before the merged display page is truncated. */
+export function remoteResultsFromFanoutPages(
+  pages: readonly ConversationSearchResponse[],
+): ConversationSearchResultItem[] {
+  const byKey = new Map<string, ConversationSearchResultItem>();
+  for (const page of pages) {
+    for (const item of page.results) {
+      if (!item.session.deviceLinkDeviceId) continue;
+      const key = conversationSearchResultKey(item);
+      const existing = byKey.get(key);
+      if (!existing || item.rankScore > existing.rankScore) {
+        byKey.set(key, item);
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
 export function mergeConversationSearchFanout(
   pages: readonly ConversationSearchResponse[],
   limit: number,

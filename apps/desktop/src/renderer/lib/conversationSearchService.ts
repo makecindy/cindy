@@ -11,6 +11,7 @@ import {
   LEGACY_REMOTE_SESSION_LIST_LIMIT,
   remoteIndexedSearchIgnoredWorkingDirs,
   mergeConversationSearchFanout,
+  remoteResultsFromFanoutPages,
   requestForOrigin,
   searchCachedSessionsByTitle,
   stampRemoteSearchResponse,
@@ -72,7 +73,15 @@ export async function searchConversationsAcrossOrigins(
   if (present.length === 0) {
     throw new ApiError('UNKNOWN', 0, 'conversation search failed');
   }
-  return mergeConversationSearchFanout(present, request.limit ?? 24, request.sortBy ?? 'relevance');
+  const merged = mergeConversationSearchFanout(
+    present,
+    request.limit ?? 24,
+    request.sortBy ?? 'relevance',
+  );
+  return {
+    ...merged,
+    remoteResults: remoteResultsFromFanoutPages(present),
+  };
 }
 
 async function searchOneOrigin(

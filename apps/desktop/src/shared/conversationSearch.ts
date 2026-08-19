@@ -115,4 +115,6 @@ export interface ConversationSearchResponse {
   vectorUsed: boolean;
   vectorSkipReason: string | null;
   poolCapped: boolean;
+  /** Controller fan-out only: remote hits before the merged page is truncated. */
+  remoteResults?: ConversationSearchResultItem[];
 }

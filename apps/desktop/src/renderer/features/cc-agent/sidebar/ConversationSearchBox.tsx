@@ -389,7 +389,7 @@ export function useConversationSearch({
       }, { origins: searchOrigins })
         .then((next) => {
           if (seq !== requestSeqRef.current) return;
-          const remoteResults = next.results.filter((item) => item.session.deviceLinkDeviceId);
+          const remoteResults = next.remoteResults ?? next.results.filter((item) => item.session.deviceLinkDeviceId);
           remoteResultsRef.current = remoteResults;
           if (semanticStartedSeqRef.current === seq) {
             setResponse((current) => mergeConversationSearchFanout([

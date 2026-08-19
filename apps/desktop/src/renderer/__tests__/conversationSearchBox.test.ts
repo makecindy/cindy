@@ -234,6 +234,7 @@ describe('ConversationSearchBox live search', () => {
     expect(mergeLateRemote).toBeGreaterThan(-1);
     expect(source).toContain('if (semanticStartedSeqRef.current === seq)');
     expect(source).toContain('results: remoteResultsRef.current');
+    expect(source).toContain('next.remoteResults');
   });
 
   it('restores a terminal state if the hybrid refresh fails first', () => {

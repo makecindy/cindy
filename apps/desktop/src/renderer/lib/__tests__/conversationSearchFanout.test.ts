@@ -8,6 +8,7 @@ import {
   filterResultsByWorkingDirs,
   remoteIndexedSearchIgnoredWorkingDirs,
   mergeConversationSearchFanout,
+  remoteResultsFromFanoutPages,
   requestForOrigin,
   resolveConversationSearchOrigins,
   searchCachedSessionsByTitle,
@@ -452,6 +453,38 @@ describe('searchConversationsAcrossOrigins', () => {
       'local-hit',
       'remote-hit',
     ]);
+  });
+
+  it('keeps remote hits for hybrid reuse after the merged page is truncated', async () => {
+    const locals = Array.from({ length: 24 }, (_, index) => result(`local-${index}`, 100 - index));
+    const page = await searchConversationsAcrossOrigins(
+      { ...request, limit: 24 },
+      {
+        origins: [
+          { kind: 'local', sessionIds: null },
+          {
+            kind: 'remote',
+            deviceId: 'dev-a',
+            deviceName: 'Studio',
+            connected: true,
+            sessionIds: null,
+          },
+        ],
+        searchLocal: async () => response(locals),
+        invokeRemote: async () => response([
+          result('remote-squeezed', 1, { deviceLinkDeviceId: 'dev-a' }),
+        ]),
+        listCachedRemoteSessions: () => [],
+      },
+    );
+    expect(page.results.map((item) => item.session.id)).not.toContain('remote-squeezed');
+    expect(page.remoteResults?.map((item) => item.session.id)).toEqual(['remote-squeezed']);
+    expect(
+      remoteResultsFromFanoutPages([
+        response(locals),
+        response([result('remote-squeezed', 1, { deviceLinkDeviceId: 'dev-a' })]),
+      ]).map((item) => item.session.id),
+    ).toEqual(['remote-squeezed']);
   });
 
   it('rejects a failed local hybrid instead of publishing an empty reuse page', async () => {
