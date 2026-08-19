@@ -388,6 +388,7 @@ export function filterResultsByRequestFilters(
     ...response,
     results: response.results.filter((item) => {
       if (!matchesWorkingDirSet(item.session.workingDir, allowedDirs)) return false;
+      if (isOrcaWorkerSession(item.session)) return false;
       if (!matchesStatus(item.session.status, status)) return false;
       if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
       if (activityCutoff !== null && sessionActivityMs(item.session) < activityCutoff) {

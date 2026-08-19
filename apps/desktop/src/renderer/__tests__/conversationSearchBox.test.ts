@@ -700,6 +700,7 @@ describe('ConversationSearchBox live search', () => {
     expect(contextSource).toContain('useRemoteProjectSessions');
     expect(contextSource).toContain('selectVisibleSessions');
     expect(contextSource).toContain('shouldReleaseConversationSearchLock');
+    expect(contextSource).toContain("requestRemoteSessionStatus(device.deviceId, 'archived')");
     expect(sidebarSource).toContain('useRemoteProjectSessions');
     expect(sidebarSource).toContain('workingDir: project.workingDir');
     expect(sidebarSource).toContain('deviceLinkDeviceId: project.deviceLinkDeviceId');

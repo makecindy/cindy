@@ -35,6 +35,10 @@ describe('conversationSearch source invariants', () => {
     expect(conversationSearchSource).toContain('normalizeWorkingDirForGrouping');
   });
 
+  it('excludes Orca workers from searchable sessions', () => {
+    expect(conversationSearchSource).toContain("ne(sessions.orcaRole, 'worker')");
+  });
+
   it('scopes content retrieval to workingDir-filtered session ids', () => {
     expect(conversationSearchSource).toContain(
       'filters.sessionIds !== null || filters.workingDirs !== null',

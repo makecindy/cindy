@@ -296,6 +296,7 @@ async function listSearchableSessions(filters: NormalizedConversationSearchFilte
   const statusCond = statusCondition(filters.status);
   const agentCond = filters.agentKind === 'all' ? undefined : eq(sessions.agentKind, filters.agentKind);
   const sessionIdsCond = filters.sessionIds ? inArray(sessions.id, filters.sessionIds) : undefined;
+  const workerCond = or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker'));
   const activityCutoff = cutoffForLastActivity(filters.lastActivity);
   // 兼容存量 DB 行：旧版 touchUserSendInDb 只写 user_send_at 不 bump updated_at，
   // 侧栏排序用 max(userSendAt, updatedAt)，这里也同步用 OR 避免漏掉这些行。
@@ -310,6 +311,7 @@ async function listSearchableSessions(filters: NormalizedConversationSearchFilte
       statusCond,
       agentCond,
       sessionIdsCond,
+      workerCond,
       activityCond,
     ))
     .orderBy(desc(sessions.updatedAt));

@@ -28,7 +28,10 @@ import { useNavigate } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
-import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import {
+  requestRemoteSessionStatus,
+  useRemoteProjectSessions,
+} from '@/features/device-link/remoteProjectsStore';
 import { selectVisibleSessions } from '@/features/device-link/selectedMachineStore';
 import {
   useEffectiveSelectedMachineId,
@@ -78,6 +81,14 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     () => searchDevicesFromSwitcher(switcherDevices),
     [switcherDevices],
   );
+  // Search status defaults to all. Pull archived remote buckets so a remote
+  // project that only has archived tasks still appears in the project filter.
+  useEffect(() => {
+    for (const device of searchDevices) {
+      if (!device.connected) continue;
+      requestRemoteSessionStatus(device.deviceId, 'archived');
+    }
+  }, [searchDevices]);
   const { aliases } = useProjectAliases();
   const { hiddenProjectKeys } = useHiddenProjects();
   const searchSessions = useMemo(
