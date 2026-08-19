@@ -792,6 +792,129 @@ describe('SubagentsBody', () => {
     expect(screen.queryByText('scout first generation')).toBeNull();
   });
 
+  it('keeps a chip selection pointed at the same child after that child is resumed', async () => {
+    // The selection holds the id of the generation the user clicked. A resume
+    // renames the child underneath it, so resolving on the current id alone
+    // returned undefined — which this view reads as "nothing selected" and, in
+    // a parallel run, put every sibling's transcript back on screen under a chip
+    // the user had picked precisely to narrow it.
+    const beforeResume = {
+      ...detail('unused'),
+      status: 'completed' as const,
+      capabilities: { ...detail('unused').capabilities, viewFullTranscript: true },
+      children: [
+        { id: 'run-1-1', role: 'scout', title: 'Scout', status: 'completed' as const },
+        { id: 'run-1-2', role: 'reviewer', title: 'Reviewer', status: 'completed' as const },
+      ],
+    };
+    currentDetail = beforeResume;
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', content: 'scout first generation' }),
+        entry({ id: 'e2', childId: 'run-1-2', content: 'reviewer first generation' }),
+        entry({ id: 'e3', childId: 'run-2-1', content: 'scout resumed' }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // The user narrows to one child while it is still on its first generation.
+    fireEvent.click(await screen.findByRole('button', { name: 'Scout' }));
+    expect(await screen.findByText('scout first generation')).toBeTruthy();
+    expect(screen.queryByText('reviewer first generation')).toBeNull();
+
+    // That child is resumed: same conversation, new id, old id kept as an alias.
+    currentDetail = {
+      ...beforeResume,
+      children: [
+        { id: 'run-2-1', identityAliases: ['run-1-1'], role: 'scout', title: 'Scout', status: 'completed' },
+        { id: 'run-1-2', role: 'reviewer', title: 'Reviewer', status: 'completed' },
+      ],
+    };
+    act(() => {
+      onChanged(
+        { sessionId: 'session-1', runId: 'run-1', created: false, firstForSession: false },
+        OWNER_STAMP,
+      );
+    });
+
+    // Still that child, both generations, and still no sibling.
+    expect(await screen.findByText('scout resumed')).toBeTruthy();
+    expect(screen.getByText('scout first generation')).toBeTruthy();
+    expect(screen.queryByText('reviewer first generation')).toBeNull();
+    // And the chip the user picked is still the lit one, so the narrowed view
+    // and the control it came from do not disagree.
+    expect(screen.getByRole('button', { name: 'Scout' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Reviewer' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('falls back to the sole child when the selected one is no longer listed', async () => {
+    // Resuming one child of a parallel run carries only that child forward, so
+    // the sibling the user had selected is gone from the next generation. An
+    // unresolvable selection must degrade to what no selection does — here, the
+    // one child there is — and not to "show everything", which would put the
+    // departed sibling's transcript back on screen.
+    const parallel = {
+      ...detail('unused'),
+      status: 'completed' as const,
+      capabilities: { ...detail('unused').capabilities, viewFullTranscript: true },
+      children: [
+        { id: 'run-1-1', role: 'scout', title: 'Scout', status: 'completed' as const },
+        { id: 'run-1-2', role: 'reviewer', title: 'Reviewer', status: 'completed' as const },
+      ],
+    };
+    currentDetail = parallel;
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', content: 'scout first generation' }),
+        entry({ id: 'e2', childId: 'run-1-2', content: 'reviewer first generation' }),
+        entry({ id: 'e3', childId: 'run-2-1', content: 'scout resumed alone' }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Reviewer' }));
+    expect(await screen.findByText('reviewer first generation')).toBeTruthy();
+
+    // Only the scout is resumed; the reviewer the user had selected is gone.
+    currentDetail = {
+      ...parallel,
+      children: [
+        { id: 'run-2-1', identityAliases: ['run-1-1'], role: 'scout', title: 'Scout', status: 'completed' },
+      ],
+    };
+    act(() => {
+      onChanged(
+        { sessionId: 'session-1', runId: 'run-1', created: false, firstForSession: false },
+        OWNER_STAMP,
+      );
+    });
+
+    expect(await screen.findByText('scout resumed alone')).toBeTruthy();
+    expect(screen.getByText('scout first generation')).toBeTruthy();
+    expect(screen.queryByText('reviewer first generation')).toBeNull();
+  });
+
   it('drops the waiting notice for a settled child while its siblings keep the run running', async () => {
     // A parallel run stays `running` until the last child settles. Keying the
     // waiting notice off the run status put a spinner under a child that had

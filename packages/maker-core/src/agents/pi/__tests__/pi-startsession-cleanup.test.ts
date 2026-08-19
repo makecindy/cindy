@@ -1143,6 +1143,71 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
+  it('does not acknowledge a turn-change capture that finished after the account boundary', async () => {
+    // The capture branch acknowledges without ever asking the user, so it looked
+    // like it had no window — but `beforeKnownFileWrite` snapshots the file, and
+    // that await is as long as the workspace is large. A switch inside it left
+    // the outgoing account's surface telling a child of the outgoing account to
+    // go ahead and write. Same write-side fence check as the ordinary path; same
+    // fail-closed meaning, which here is *parked*: no confirmed, and no deny.
+    const runId = '123e4567-e89b-42d3-a456-426614174097';
+    let openCapture!: () => void;
+    let releaseCapture!: () => void;
+    const captureStarted = new Promise<void>((resolve) => { openCapture = resolve; });
+    const captureGate = new Promise<void>((resolve) => { releaseCapture = resolve; });
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([{
+      version: 1,
+      runId,
+      taskId: 'tool-turn-change',
+      parentSessionId: 's1',
+      runtimeOwnerId: ownerId(),
+      runnerInstanceId: 'runner-turn-change',
+      state: 'running',
+      startedAt: 1,
+      updatedAt: 2,
+      tasks: [{
+        childId: `${runId}-1`,
+        sessionId: `${runId}-1`,
+        agent: 'worker',
+        status: 'running',
+        pendingApproval: {
+          id: 'capture-boundary',
+          method: 'confirm',
+          title: 'cindy:turn-change-capture',
+          // A known file write, so the long snapshot path is the one taken.
+          message: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }),
+        },
+      }],
+    }]);
+    const handle = await new PiAgent(buildDeps({
+      turnChangeCapture: {
+        beforeKnownFileWrite: vi.fn(async () => {
+          openCapture();
+          await captureGate;
+        }),
+        noteOpaqueWrite: vi.fn(),
+      },
+    })).startSession(opts());
+
+    await captureStarted;
+    // close() raises the fence before its first await, so it is up while the
+    // snapshot is still running.
+    const closing = handle.close({ reason: 'account-boundary' });
+    releaseCapture();
+    await closing;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // Scoped to this session's run root. A supervisor left running by an
+    // earlier case in this file polls the same module-level spy, and it reads
+    // the run above too — but through the agent home *it* was built with, which
+    // a fresh `mkdtemp` per test makes distinct.
+    const ownRunRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1');
+    expect(control.mock.calls.filter((call) => call[0] === ownRunRoot)).toEqual([]);
+  });
+
   it.each([
     ['allow', true],
     ['deny', false],

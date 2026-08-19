@@ -2821,6 +2821,19 @@ export class PiAgent extends BaseAgent {
             });
           }
         }
+        // Same write-side fence check as the ordinary approval path below, for
+        // the same reason and with more of a window: `beforeKnownFileWrite`
+        // snapshots the file and can take as long as the workspace is large, and
+        // the user can switch accounts inside that await. Acknowledging after
+        // that would let the outgoing account's surface tell a child of the
+        // outgoing account to go ahead and write. Fail closed, and closed here
+        // means *parked*, not denied — no `confirmed`, and no deny either: the
+        // request stays in the durable mailbox exactly as a lost approval
+        // surface leaves it, for whoever owns the runtime next.
+        if (accountBoundaryTeardown) {
+          piSubagentApprovalRequests.delete(key);
+          return;
+        }
         try {
           const controlled = await controlPiSubagentRuns(subagentRunRoot, status.taskId, 'approval', {
             childId: task.childId,

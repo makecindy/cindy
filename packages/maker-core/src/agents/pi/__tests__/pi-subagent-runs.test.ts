@@ -771,8 +771,12 @@ describe('PI durable subagent run store', () => {
      * until a real signal reaches it, then ESRCH like any reaped process. The
      * default (never reaped) is the zombie/stubborn case.
      */
+    let sentSignals: Array<NodeJS.Signals | number> = [];
+    const killSignals = (): Array<NodeJS.Signals | number> => sentSignals;
+
     function stubKill(options: { reapedByKill?: boolean } = {}): void {
       const real = process.kill.bind(process);
+      sentSignals = [];
       let reaped = false;
       const spy = vi.spyOn(process, 'kill').mockImplementation(
         ((pid: number, signal?: NodeJS.Signals | number) => {
@@ -781,6 +785,7 @@ describe('PI durable subagent run store', () => {
             if (!reaped) return true;
             throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
           }
+          sentSignals.push(signal ?? 'unknown');
           if (options.reapedByKill) reaped = true;
           return true;
         }) as typeof process.kill,
@@ -873,6 +878,63 @@ describe('PI durable subagent run store', () => {
 
       await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
         .resolves.toBe(false);
+    });
+
+    /**
+     * Parent deletion is the one caller that also removes the durable files, and
+     * it is the one with no upper bound on retrying: a runner that stays alive
+     * without ever turning its event loop back to the control mailbox never sees
+     * the stop, so every attempt re-posted the same message and timed out again.
+     * For a deleted task that is a child spending its credentials and editing
+     * its workspace forever, with the metadata never reclaimed.
+     */
+    describe('deleting a parent task whose runner ignores its mailbox', () => {
+      it('escalates to a verified kill and only then removes the files', async () => {
+        const root = await makeRoot();
+        usePlatform('linux');
+        // Alive until a real signal lands — the ordinary stubborn runner.
+        stubKill({ reapedByKill: true });
+        stubProbes({ aliveProbes: Number.MAX_SAFE_INTEGER });
+        await writeStatus(root, runner({ updatedAt: Date.now() }));
+
+        // Zero grace: the mailbox was posted and not consumed, which is the
+        // whole precondition. The escalation is what has to follow.
+        await expect(stopAndRemovePiSubagentRuns(root, 0)).resolves.toBe(true);
+
+        // The stop was still asked for first — the control file was written —
+        // and only the unconsumed mailbox escalated to a signal.
+        expect(killSignals()).toContain('SIGKILL');
+        expect(existsSync(root)).toBe(false);
+      });
+
+      it('leaves the metadata alone when the runner cannot be identified', async () => {
+        // No `runnerPid`/`runnerScript` to verify against: the header forbids
+        // signalling a pid we cannot prove is ours, and blindly deleting the
+        // record would drop the only trace of a child that may still be live.
+        const root = await makeRoot();
+        usePlatform('linux');
+        stubKill();
+        stubProbes({ aliveProbes: 0 });
+        await writeStatus(root, status(runId, { updatedAt: Date.now() }));
+
+        await expect(stopAndRemovePiSubagentRuns(root, 0)).resolves.toBe(false);
+
+        expect(existsSync(path.join(root, runId, 'status.json'))).toBe(true);
+        expect(killSignals()).toEqual([]);
+      });
+
+      it('still removes a root whose runs are all terminal without signalling anything', async () => {
+        const root = await makeRoot();
+        usePlatform('linux');
+        stubKill();
+        stubProbes({ aliveProbes: Number.MAX_SAFE_INTEGER });
+        await writeStatus(root, runner({ state: 'completed', updatedAt: Date.now() }));
+
+        await expect(stopAndRemovePiSubagentRuns(root, 0)).resolves.toBe(true);
+
+        expect(existsSync(root)).toBe(false);
+        expect(killSignals()).toEqual([]);
+      });
     });
 
     /**

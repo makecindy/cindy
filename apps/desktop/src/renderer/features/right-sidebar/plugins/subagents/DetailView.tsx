@@ -277,11 +277,22 @@ function PiDurableDetailView({
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const children = detail?.children ?? [];
   const hasMultipleChildren = children.length > 1;
-  const selectedChild = selectedChildId
-    ? children.find((child) => child.id === selectedChildId)
-    : hasMultipleChildren
-      ? undefined
-      : children[0];
+  // The selection survives a resume, which renames the child underneath it: the
+  // id held here is the generation the user clicked, and the detail now carries
+  // the next one. Resolving on the current id alone returned undefined, which
+  // this component reads as "no child selected" — so a parallel run went back to
+  // showing every sibling's transcript under a chip the user had picked to
+  // narrow it. Match the whole identity, not the latest label.
+  const resolvedChild = selectedChildId
+    ? children.find((child) => (
+      child.id === selectedChildId || child.identityAliases?.includes(selectedChildId) === true
+    ))
+    : undefined;
+  // A selection that resolves to nothing at all (an id from a run that is no
+  // longer listed) falls back to exactly what no selection does, rather than to
+  // "unfiltered": with one child that is still that child's own conversation,
+  // and with several it is the overview.
+  const selectedChild = resolvedChild ?? (hasMultipleChildren ? undefined : children[0]);
   // Every id this child has ever had. A resumed generation labels the same
   // conversation with a new `childId`, so matching on the current one alone
   // filtered the child's own earlier generations back out of the transcript the

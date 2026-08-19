@@ -2603,47 +2603,40 @@ export async function stopPiSubagentRunsForAccountBoundary(
  * Explicit parent deletion lifecycle: request stop for every UUID-contained
  * runner, wait for runner-owned process termination, then remove durable files.
  * A timeout never deletes live ownership metadata; callers may retry cleanup.
+ *
+ * The wait alone was not a lifecycle. A runner that is alive but never turns its
+ * event loop back to the control mailbox never sees the stop, so every attempt
+ * re-posted the same message, hit the same deadline and returned false — and the
+ * caller's backoff re-entered that identical loop forever. For a *deleted* task
+ * that is unbounded: the child keeps spending the task's inherited credentials
+ * and editing its workspace, and the durable metadata is never reclaimed.
+ *
+ * So this delegates to the same sweep the quit and account-boundary paths use,
+ * with the same escalation contract: ask, wait out the grace, then reclaim by
+ * identity-verified kill. Reusing it rather than growing a second escalation
+ * here is deliberate — the rules that matter (only runs attributable to this
+ * root, terminal and stale ones excluded, `unverifiable` never signalled and
+ * never reported as reclaimed) are stated once, in one place.
+ *
+ * Deletion is the one caller that also removes the files, and it may only do so
+ * on a `true`: `unverifiable` still returns false, so metadata belonging to a
+ * runner we could not identify is left for the next attempt rather than blindly
+ * dropped.
  */
 export async function stopAndRemovePiSubagentRuns(
   root: string,
   timeoutMs = 6_000,
 ): Promise<boolean> {
   const timeout = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? Math.floor(timeoutMs) : 6_000;
-  const deadline = Date.now() + timeout;
-  const requested = new Set<string>();
-  for (;;) {
-    const runIds = await listRunDirectoryIds(root);
-    if (runIds.length === 0) {
-      await fs.rm(root, { recursive: true, force: true });
-      return true;
-    }
-    const [listedStatuses, diagnostics] = await Promise.all([
-      listPiSubagentRuns(root),
-      listPiSubagentRunDiagnostics(root),
-    ]);
-    const statuses = new Map(listedStatuses.map((status) => [status.runId, status]));
-    const staleRunIds = new Set(
-      diagnostics.filter((diagnostic) => diagnostic.kind === 'stale').map((diagnostic) => diagnostic.runId),
-    );
-    const active = runIds.filter((runId) => {
-      if (staleRunIds.has(runId)) return false;
-      const status = statuses.get(runId);
-      return !status || !isPiSubagentTerminal(status.state);
-    });
-    if (active.length === 0) {
-      await fs.rm(root, { recursive: true, force: true });
-      return true;
-    }
-    await Promise.all(active.map(async (runId) => {
-      if (requested.has(runId)) return;
-      requested.add(runId);
-      try {
-        await writeRunControl(root, runId, 'stop');
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }));
-    if (Date.now() >= deadline) return false;
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
-  }
+  // The grace is that budget, measured from the first stop write. A live runner
+  // polls its mailbox every `CONTROL_POLL_MS` (200ms, `cindy-subagent-runner`),
+  // so 6s is thirty consumption cycles: long enough that "did not answer" means
+  // the loop is not coming back rather than that it was busy, and short enough
+  // that a deleted task's cleanup is not left waiting on it.
+  const reclaimed = await stopPiSubagentRunsUnderRoots([root], timeout, {
+    killUnresponsiveRunners: true,
+  });
+  if (!reclaimed) return false;
+  await fs.rm(root, { recursive: true, force: true });
+  return true;
 }
