@@ -3343,6 +3343,20 @@ export class PiAgent extends BaseAgent {
       };
       void (async () => {
         for (;;) {
+          // The boundary can be raised *after* this loop started: Pi crashes,
+          // onExit starts the supervisor, and the user then switches accounts.
+          // The teardown stops the old children, but a child killed a moment
+          // ago still has an unexpired heartbeat, so without this re-check the
+          // loop kept treating it as active — answering its approvals through
+          // the *outgoing* account's resolver, writing its control mailbox, and
+          // holding that account's proxy lease. Leave through the same release
+          // path as every other exit; reclaiming the children is the account
+          // boundary sweep's job, not a second kill from here.
+          if (accountBoundaryTeardown) {
+            settleInitialInspection();
+            settleLease();
+            return;
+          }
           // Sampled *before* the scan: a scan that started while Pi was alive
           // cannot rule out a launch already in flight inside it, even if the
           // process exits before the scan returns.

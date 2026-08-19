@@ -122,6 +122,15 @@ describe('PI Subagent quit sweep', () => {
     expect(hook).not.toContain('try {');
     // And it is set exactly once, so no other path can claim the parent is down.
     expect([...source.matchAll(/makerShutdownSettled = true;/g)]).toHaveLength(1);
+    // Fulfilment alone is not the proof it reads as: `Maker.shutdown` reports
+    // per-session detach failures rather than throwing, so it can resolve with
+    // a PI parent still alive and able to publish a durable run. That case must
+    // leave the fence up too, so the settle flag has to sit behind the report.
+    const guard = hook.indexOf('if (piSessionFailures > 0) {');
+    expect(guard).toBeGreaterThan(awaited);
+    expect(guard).toBeLessThan(marked);
+    expect(hook.slice(guard, marked)).toContain('return;');
+    expect(hook.slice(guard, marked)).toMatch(/piSubagentLog\.error/);
     // Ordered ahead of the bridge and the SSH pool teardown.
     expect(start).toBeLessThan(source.indexOf("onQuit('pi-env'"));
     expect(start).toBeLessThan(source.indexOf("onQuit('remote-ssh-pool'"));
@@ -187,8 +196,15 @@ describe('PI Subagent quit sweep', () => {
     // Before the shutdown, so it covers the shutdown *and* the sweep.
     expect(shutdown).toBeGreaterThan(raise);
     expect(sweep).toBeGreaterThan(shutdown);
-    // Failing to raise it must not block a logout.
-    expect(teardown.slice(raise, shutdown)).toMatch(/authBoundaryLog\.warn/);
+    // Failing to raise it aborts the handover instead of warning and carrying
+    // on. Quit and the update relaunch are allowed to continue fenceless — the
+    // process is about to disappear, or the operation is cancelled outright.
+    // Here the process keeps running and changes owner, so the window the fence
+    // closes is exactly the one still open. A logout can be retried.
+    const acquire = teardown.slice(raise, shutdown);
+    expect(acquire).not.toMatch(/authBoundaryLog\.warn/);
+    expect(acquire).toContain('throw new PiSubagentAccountBoundaryError(');
+    expect(acquire).toContain("'the PI Subagent launch fence could not be raised'");
     // Released on every path — unlike quit, this process keeps running and the
     // next owner has to be able to launch. A fence left up after a completed
     // handover, or after an aborted one, would refuse its own durable runs.
@@ -200,6 +216,43 @@ describe('PI Subagent quit sweep', () => {
     // The abort path throws from inside that try, so the same finally covers it.
     expect(teardown.indexOf('throw new PiSubagentAccountBoundaryError(reason);'))
       .toBeLessThan(finallyBlock);
+    // Including the acquisition failure. It has to be raised inside the try
+    // that the finally guards, or the throw skips `releaseEndedSuppression()`
+    // and leaks the process-global turn-ended suppression counter — every later
+    // owner's completion writes would be swallowed for the rest of this run.
+    const suppression = teardown.indexOf('const releaseEndedSuppression = beginSessionTurnEndedSuppression();');
+    const tryStart = teardown.indexOf('try {', suppression);
+    expect(suppression).toBeGreaterThan(-1);
+    expect(tryStart).toBeLessThan(raise);
+    expect(teardown.slice(tryStart, raise)).not.toContain('} catch');
+  });
+
+  it('treats a PI session that would not detach as a failed reclaim', () => {
+    // `Maker.shutdown` reports per-session detach failures instead of throwing,
+    // so it can resolve with a PI process still alive — and that process owns
+    // durable children holding BYOM credentials this account cannot revoke.
+    // Resolving is not the same statement as "nothing survived".
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+    );
+    const shutdown = teardown.indexOf("await maker.shutdown({ reason: 'account-boundary' })");
+    const collect = teardown.indexOf("(shutdownReport?.sessionFailures ?? [])");
+    const sweep = teardown.indexOf('const stopped = await stopAllPiSubagentRunsForExit(');
+    const abort = teardown.indexOf('if (piSessionFailures.length > 0) {');
+    expect(shutdown).toBeGreaterThan(-1);
+    // Collected before the sweep, acted on after it: the sweep is still worth
+    // running — best-effort reclaim has value — but it cannot make this go away.
+    expect(collect).toBeGreaterThan(shutdown);
+    expect(sweep).toBeGreaterThan(collect);
+    expect(abort).toBeGreaterThan(sweep);
+    expect(teardown.slice(collect, sweep)).toContain("failure.agentKind === 'pi'");
+    // And the abort lands before the handover steps, like the sweep verdict does.
+    expect(teardown.indexOf('resetMaker();', sweep)).toBeGreaterThan(abort);
+    // Only PI escalates: it is filtered out of the report rather than read as
+    // "something failed". Every other agent's children die with the parent, so
+    // their detach failures stay non-fatal exactly as before.
+    expect(teardown.slice(collect, sweep)).toContain('.filter(');
+    expect(teardown.slice(abort)).toContain('(non-fatal)');
   });
 
   it('keeps the account-boundary sweep on the same escalation contract', () => {

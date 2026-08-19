@@ -853,6 +853,45 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(resolver).not.toHaveBeenCalled();
   });
 
+  it('leaves the supervisor when the account boundary is raised after it started', async () => {
+    // The other ordering (boundary first, exit second) is covered above. This
+    // is the one the supervisor could not see: Pi crashes, onExit starts the
+    // supervisor, and only then does the user switch accounts. The teardown
+    // stops the children, but one killed a moment ago still has an unexpired
+    // heartbeat, so the loop kept reading it as active — and went on answering
+    // its approvals through the outgoing account's resolver while holding that
+    // account's proxy lease.
+    let approvalGeneration = 0;
+    vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockImplementation(async () => {
+      // A fresh approval id per poll: the supervisor's dedupe would otherwise
+      // hide a loop that is still very much running.
+      approvalGeneration += 1;
+      const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+      run.tasks[0]!.pendingApproval!.id = `approval-${approvalGeneration}`;
+      return [run];
+    });
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    // The risky case: the runner missed its stop deadline.
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(false);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+
+    knobs.onExit?.({ code: 1, signal: null });
+    await vi.waitFor(() => expect(resolver.mock.calls.length).toBeGreaterThan(0), { timeout: 2_000 });
+    const answeredBeforeBoundary = resolver.mock.calls.length;
+
+    await handle.close({ reason: 'account-boundary' });
+    // Long enough for several 250ms supervisor rounds.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    // The lease goes back to the outgoing account instead of riding the
+    // still-"active" run to the supervisor's 24h ceiling.
+    expect(proxyDisposed).toBe(2);
+    expect(resolver.mock.calls.length).toBe(answeredBeforeBoundary);
+  });
+
   it('fails closed to the account boundary when a teardown caller names no reason', async () => {
     const agent = new PiAgent(buildDeps());
     const handle = await agent.startSession(opts());

@@ -82,7 +82,7 @@ app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 // 如果在 sync 阶段 fire-and-forget, app.exit(0) 会在 kill 之前就把 Node 主进程掐掉,
 // Windows 上 codex app-server 子进程不会随父死 → 残留孤儿, 持有 binary 文件锁,
 // 用户下次启动时撞 EBUSY / 端口占用 (anthropic-compat-proxy 等)。
-async function shutdownMaker(): Promise<void> {
+async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
   // Do not terminate Main while one workspace patch command is settling.
   await waitForTurnChangeSetActions();
   // 退出前先把 onClose 重副作用(worktree stash/删除、临时附件清理)一刀切抑制掉:
@@ -96,13 +96,15 @@ async function shutdownMaker(): Promise<void> {
   } catch (err) {
     console.error('[main] lspPool.shutdown failed:', err);
   }
+  let piSessionFailures = 0;
   try {
     // splash 失败时 maker 未 init / getMakerCore() 抛错 —— 静默兜底, 没东西要清。
     const m = getMakerCore();
     // Process exit, not an ownership change: detached PI Subagent runners are
     // stopped by the dedicated `pi-subagent-runners` quit step above, and the
     // account's DB/credentials are not being handed to anyone else.
-    await m.shutdown({ reason: 'app-quit' });
+    const report = await m.shutdown({ reason: 'app-quit' });
+    piSessionFailures = report.sessionFailures.filter((f) => f.agentKind === 'pi').length;
   } catch (err) {
     // maker 未就绪 (getMakerCore 抛) 或 shutdown 自身抛 —— 都不能阻断退出。
     // 注意: getMakerCore 未就绪时抛的是 sync error, await m.shutdown() 也走这里。
@@ -112,6 +114,10 @@ async function shutdownMaker(): Promise<void> {
   // after maker.shutdown() has closed every session and emitted those writes.
   await waitForTurnChangeSetPersistence();
   WorktreePool.parkAll();
+  // Reported so the quit fence can tell "the parent is down" from "the parent
+  // was asked to go down". A PI session that failed to detach may still have a
+  // live process able to launch a durable runner.
+  return { piSessionFailures };
 }
 
 function readGitText(args: string[]): string | null {
@@ -1243,9 +1249,13 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
  * that block is deliberately non-fatal; this one must abort the handover.
  */
 class PiSubagentAccountBoundaryError extends Error {
-  constructor(reason: string, override readonly cause?: unknown) {
+  constructor(
+    reason: string,
+    override readonly cause?: unknown,
+    detail = 'PI Subagent runners could not be confirmed stopped',
+  ) {
     super(
-      `PI Subagent runners could not be confirmed stopped on ${reason}; `
+      `${detail} on ${reason}; `
       + 'account switch aborted so the outgoing account\'s credentials are not left in use',
     );
     this.name = 'PiSubagentAccountBoundaryError';
@@ -1404,7 +1414,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const releaseEndedSuppression = beginSessionTurnEndedSuppression();
   // Same fence, same ordering argument, as quit and the update relaunch: raised
   // before `maker.shutdown` so it covers the shutdown *and* the sweep below.
-  // `Maker.shutdown` collects per-session detach failures rather than throwing,
+  // `Maker.shutdown` reports per-session detach failures rather than throwing,
   // so a parent Pi can survive it — and a survivor could publish a fresh run
   // after the one-shot sweep had already scanned, handing the next owner a
   // runner holding the previous account's credentials.
@@ -1412,24 +1422,52 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // Unlike quit, this must come down on *every* path. An account boundary swaps
   // the owner inside a live process: a fence left standing would refuse the
   // incoming owner's own durable launches for the rest of this process's life.
+  // Raised inside the suppression `try` so that finally releases both.
   let releaseBoundaryLaunchFence: (() => Promise<void>) | null = null;
   try {
-    releaseBoundaryLaunchFence = await acquirePiSubagentLaunchFence(
-      path.join(app.getPath('userData'), 'pi-agent-home'),
-    );
-  } catch (err) {
-    // No worse than before the fence existed, and never a reason to block a
-    // logout: the sweep still runs.
-    authBoundaryLog.warn(`could not raise the Subagent launch fence on ${reason}:`, err);
-  }
-  try {
+    try {
+      releaseBoundaryLaunchFence = await acquirePiSubagentLaunchFence(
+        path.join(app.getPath('userData'), 'pi-agent-home'),
+      );
+    } catch (err) {
+      // Fail closed, unlike quit and the relaunch. Those two are allowed to
+      // continue without a fence because the process is about to disappear
+      // (quit) or the operation is cancelled outright (relaunch). Here the
+      // process keeps running and hands its runtime to a different owner, so
+      // the window the fence exists to close is precisely the one still open —
+      // degrading to "warn and continue" would silently reintroduce it. A
+      // logout that fails can be retried.
+      throw new PiSubagentAccountBoundaryError(
+        reason,
+        err,
+        'the PI Subagent launch fence could not be raised',
+      );
+    }
     try {
       const maker = getMakerIfReady();
       // Logout / account switch: the owner DbClient is disposed a few lines
       // below and the gateway credentials behind every proxy token are being
       // replaced. Adapters that keep parent-independent children alive across an
       // ordinary close (PI durable Subagents) must stop them here instead.
-      if (maker) await maker.shutdown({ reason: 'account-boundary' });
+      const shutdownReport = maker
+        ? await maker.shutdown({ reason: 'account-boundary' })
+        : undefined;
+      // A PI session whose detach threw may still have a live process, and that
+      // process owns durable children holding BYOM credentials this account
+      // cannot revoke. Recorded now, acted on after the sweep — the sweep is
+      // still worth running, but it cannot make this failure disappear.
+      //
+      // Only PI is escalated. Other agents' detach failures stay logged and
+      // non-fatal exactly as before: their children die with the parent, so a
+      // failed teardown does not leave revocation-proof credentials in use.
+      const piSessionFailures = (shutdownReport?.sessionFailures ?? [])
+        .filter((failure) => failure.agentKind === 'pi');
+      for (const failure of piSessionFailures) {
+        authBoundaryLog.error(
+          `PI session ${failure.sessionId} failed to detach on ${reason}:`,
+          failure.error,
+        );
+      }
       // maker.shutdown only reaches tasks that still have a live handle. A
       // detached PI Subagent whose parent task was closed earlier has no handle
       // left, but it is still holding a transferred proxy lease and still
@@ -1458,6 +1496,13 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
         throw new PiSubagentAccountBoundaryError(reason, err);
       });
       if (!stopped) throw new PiSubagentAccountBoundaryError(reason);
+      if (piSessionFailures.length > 0) {
+        throw new PiSubagentAccountBoundaryError(
+          reason,
+          piSessionFailures[0]?.error,
+          `${piSessionFailures.length} PI session(s) could not be torn down`,
+        );
+      }
       resetMaker();
     } catch (err) {
       // The abort above must not be laundered into "non-fatal": it is the one
@@ -7820,7 +7865,18 @@ onQuit(
   async () => {
     // Not try/finally: a rejection here can predate `maker.shutdown` entirely
     // (see `makerShutdownSettled`), so it must not read as "the parent is down".
-    await shutdownMaker();
+    const { piSessionFailures } = await shutdownMaker();
+    // Fulfilment alone was never quite the proof this claims to be: shutdown
+    // collects per-session detach failures instead of throwing, so a PI session
+    // could have been left with a live process. Now that it reports them, a
+    // failure means the parent is *not* confirmed down and the fence stays up.
+    if (piSessionFailures > 0) {
+      piSubagentLog.error(
+        `${piSessionFailures} PI session(s) failed to detach during quit — holding the `
+        + 'launch fence, since a surviving parent could still start a durable runner',
+      );
+      return;
+    }
     makerShutdownSettled = true;
   },
   'async',
