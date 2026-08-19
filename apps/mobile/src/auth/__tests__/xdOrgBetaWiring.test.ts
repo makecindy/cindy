@@ -9,16 +9,44 @@ const source = readFileSync(
 );
 
 describe('AuthContext xd org beta wiring', () => {
-  it('prepares device migration before restoring the session', () => {
-    const hasDevice = source.indexOf('await hasStoredDeviceId()');
+  it('shares beta migration before cold start or login uses a device id', () => {
+    const preparation = source.indexOf(
+      'const prepareBetaChannelForCurrentDevice = useCallback',
+    );
+    const hasDevice = source.indexOf('await hasStoredDeviceId()', preparation);
     const ensureDevice = source.indexOf('await ensureDeviceId()', hasDevice);
-    const prepareBeta = source.indexOf('await prepareBetaChannelForDevice(');
+    const prepareBeta = source.indexOf(
+      'await prepareBetaChannelForDevice(',
+      ensureDevice,
+    );
+    const coldStart = source.indexOf(
+      'const did = await prepareBetaChannelForCurrentDevice();',
+    );
+    const login = source.indexOf(
+      'await prepareBetaChannelForCurrentDevice()',
+      coldStart + 1,
+    );
     const readSession = source.indexOf('let storedSession = await readPersistedAuthSession()');
 
+    expect(preparation).toBeGreaterThan(-1);
     expect(hasDevice).toBeGreaterThan(-1);
     expect(ensureDevice).toBeGreaterThan(hasDevice);
     expect(prepareBeta).toBeGreaterThan(ensureDevice);
-    expect(readSession).toBeGreaterThan(prepareBeta);
+    expect(coldStart).toBeGreaterThan(preparation);
+    expect(login).toBeGreaterThan(coldStart);
+    expect(readSession).toBeGreaterThan(coldStart);
+  });
+
+  it('waits for device migration before trying the xd default', () => {
+    const schedule = source.indexOf('const scheduleXdOrgBetaDefault = useCallback');
+    const waitForPreparation = source.indexOf(
+      'await prepareBetaChannelForCurrentDevice();',
+      schedule,
+    );
+    const applyDefault = source.indexOf('await maybeEnableXdOrgBetaDefault(', schedule);
+
+    expect(waitForPreparation).toBeGreaterThan(schedule);
+    expect(applyDefault).toBeGreaterThan(waitForPreparation);
   });
 
   it('schedules the xd default after both login and refresh identity are applied', () => {

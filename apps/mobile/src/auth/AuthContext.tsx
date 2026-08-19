@@ -304,6 +304,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const accountDeletionReceiptMutationRef = useRef<Promise<void>>(
     Promise.resolve(),
   );
+  // OAuth deep link、常规登录和冷启动恢复可并发到达。第一次调用必须在创建
+  // device ID 前记录新旧设备状态；后续调用复用同一次 beta 偏好迁移。
+  const betaChannelPreparationRef = useRef<Promise<string> | null>(null);
 
   const suspendSessionRecoveryForLogin = useCallback(() => {
     if (sessionRecoverySuspendedRef.current) return;
@@ -336,6 +339,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const prepareBetaChannelForCurrentDevice = useCallback((): Promise<string> => {
+    const existing = betaChannelPreparationRef.current;
+    if (existing) return existing;
+    const run = (async () => {
+      const hadExistingDeviceId = await hasStoredDeviceId();
+      const did = await ensureDeviceId();
+      // beta 偏好存储异常不能拖垮认证启动；失败时 store 保持 migration hold，
+      // 只会保守地不自动开 beta。
+      await prepareBetaChannelForDevice({ hadExistingDeviceId }).catch(
+        () => undefined,
+      );
+      return did;
+    })();
+    betaChannelPreparationRef.current = run;
+    run.catch(() => {
+      if (betaChannelPreparationRef.current === run)
+        betaChannelPreparationRef.current = null;
+    });
+    return run;
+  }, []);
+
   /** 登录态落地后为 xd 组织尝试打开设备级 beta；不阻塞主界面。 */
   const scheduleXdOrgBetaDefault = useCallback(
     (token: string, expectedAuthGeneration: number) => {
@@ -343,34 +367,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentUser = userRef.current;
       if (!currentUser) return;
       const expectedUserId = currentUser.id;
-      void maybeEnableXdOrgBetaDefault(
-        {
-          expectedAuthGeneration,
-          expectedUserId,
-          user: {
-            membershipKind: currentUser.membershipKind,
-            orgSlug: decodeJwtOrgSlug(token),
-            orgName: currentUser.orgName,
+      void (async () => {
+        await prepareBetaChannelForCurrentDevice();
+        await maybeEnableXdOrgBetaDefault(
+          {
+            expectedAuthGeneration,
+            expectedUserId,
+            user: {
+              membershipKind: currentUser.membershipKind,
+              orgSlug: decodeJwtOrgSlug(token),
+              orgName: currentUser.orgName,
+            },
           },
-        },
-        {
-          readCurrentAuthIdentity: () => ({
-            authGeneration: authGenerationRef.current,
-            userId: userRef.current?.id ?? null,
-          }),
-          readChannelState: readBetaChannelState,
-          probeBetaManifest: () =>
-            probeBetaChannel(Platform.OS === 'android' ? 'android' : 'ios'),
-          enableBeta: () =>
-            enableUncustomizedBetaChannel(
-              () =>
-                authGenerationRef.current === expectedAuthGeneration &&
-                userRef.current?.id === expectedUserId,
-            ),
-        },
-      ).catch(() => undefined);
+          {
+            readCurrentAuthIdentity: () => ({
+              authGeneration: authGenerationRef.current,
+              userId: userRef.current?.id ?? null,
+            }),
+            readChannelState: readBetaChannelState,
+            probeBetaManifest: () =>
+              probeBetaChannel(Platform.OS === 'android' ? 'android' : 'ios'),
+            enableBeta: () =>
+              enableUncustomizedBetaChannel(
+                () =>
+                  authGenerationRef.current === expectedAuthGeneration &&
+                  userRef.current?.id === expectedUserId,
+              ),
+          },
+        );
+      })().catch(() => undefined);
     },
-    [],
+    [prepareBetaChannelForCurrentDevice],
   );
 
   const serializeRefreshTokenMutation = useCallback(
@@ -674,16 +701,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const run = async () => {
       setIsBusy(true);
       try {
-        const hadExistingDeviceId = await hasStoredDeviceId();
-        const did = await ensureDeviceId();
+        const did = await prepareBetaChannelForCurrentDevice();
         if (cancelled || sessionRecoverySuspendedRef.current) return;
         deviceIdRef.current = did;
         setDeviceId(did);
-        // beta 偏好存储异常不能拖垮认证启动；失败时 store 保持 migration hold，
-        // 只会保守地不自动开 beta。
-        await prepareBetaChannelForDevice({ hadExistingDeviceId }).catch(
-          () => undefined,
-        );
         // Old Feishu refresh tokens are not valid in auth-server. Purge them explicitly
         // instead of sending them to the new endpoint or restoring an unrelated profile.
         await Promise.all([
@@ -802,7 +823,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [prepareBetaChannelForCurrentDevice, refresh]);
 
   // 降级会话自愈:已安全发布的缓存用户，或因跨区清单失败而延迟发布的会话，
   // 都以退避节奏和回前台时机重试。
@@ -991,7 +1012,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setIsBusy(true);
         setAuthError(null);
         try {
-          const did = deviceIdRef.current ?? (await ensureDeviceId());
+          const did =
+            deviceIdRef.current ?? (await prepareBetaChannelForCurrentDevice());
           deviceIdRef.current = did;
           setDeviceId(did);
           const startsBuildRealmFlow =
@@ -1411,6 +1433,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       acceptOutcome,
       completeOAuthCallback,
+      prepareBetaChannelForCurrentDevice,
       suspendSessionRecoveryForLogin,
       updateLoginState,
     ],
