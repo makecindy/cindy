@@ -4831,7 +4831,16 @@ interface ElectronAPI {
       list: (botId: string) => Promise<import('@cindy/maker-core').MemoryRecord[]>;
       delete: (botId: string, filename: string) => Promise<{ ok: true }>;
       clear: (botId: string) => Promise<{ removedCount: number }>;
+      /** 「初始记忆」落地(模板自带 / AI 生成),按 slug 幂等。 */
+      seed: (
+        botId: string,
+        entries: readonly import('../shared/botMemorySeed').BotMemorySeedEntry[],
+      ) => Promise<import('../shared/botMemorySeed').BotMemorySeedResult>;
     };
+    /** 一句话角色 → 伙伴草稿(失败带分类码,不静默)。 */
+    generateBotPersona: (
+      role: string,
+    ) => Promise<import('../shared/botPersonaDraft').BotPersonaGenerateResult>;
     /** workflow 逐 agent 进度树(只读);读不到 / 解析失败返回 null → 回退 workflow 级卡片。 */
     getWorkflowProgress: (
       sessionId: string,

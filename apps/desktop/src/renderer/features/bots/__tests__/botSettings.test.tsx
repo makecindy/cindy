@@ -494,6 +494,69 @@ describe('TA 是谁 — persona summary and adjust wizard', () => {
   });
 });
 
+/*
+  第 9 条:选模板卡时那份完整的角色设定,在设置页要**看得到、改得动**。
+  在这之前它只存在于 identitySource 里,界面上一个字都不露。
+*/
+describe('TA 是谁 — 背景设定', () => {
+  const TEMPLATE_IDENTITY = '你是本本，项目管家。流程你来盯：评审、检查、交付。';
+
+  it('prints the template background in full, not just a personality summary', () => {
+    renderSettings({ identitySource: TEMPLATE_IDENTITY });
+    expect(screen.getByText('bots.background.title')).toBeTruthy();
+    expect(screen.getByTestId('bot-background-text').textContent).toBe(TEMPLATE_IDENTITY);
+  });
+
+  it('keeps the wizard block out of the visible background text', () => {
+    renderSettings({
+      identitySource: `${TEMPLATE_IDENTITY}\n\n<!--persona:v1:{"style":"concise","proactivity":"reactive","call":"name"}-->\nzh\nen`,
+    });
+    const shown = screen.getByTestId('bot-background-text').textContent ?? '';
+    expect(shown).toBe(TEMPLATE_IDENTITY);
+    expect(shown).not.toContain('persona:v1');
+  });
+
+  it('shows an honest empty state for a hand-made teammate with no background yet', () => {
+    renderSettings({ identitySource: '' });
+    expect(screen.getByText('bots.background.empty')).toBeTruthy();
+    expect(screen.queryByTestId('bot-background-text')).toBeNull();
+  });
+
+  it('opens a real editable textarea — the background is not read-only', () => {
+    renderSettings({ identitySource: TEMPLATE_IDENTITY });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.background.edit' }));
+
+    const textarea = screen.getByLabelText('bots.background.title') as HTMLTextAreaElement;
+    expect(textarea.value).toBe(TEMPLATE_IDENTITY);
+    expect(screen.getByRole('button', { name: 'bots.background.done' })).toBeTruthy();
+  });
+
+  /*
+    只读态显示的是 identitySource 的**投影**(向导段剥掉 + trim)。把那个投影直接
+    接到 textarea 的 value 上,用户敲的行尾空格和刚按下的回车会在下一帧被吃掉 ——
+    人根本换不了行。编辑时走独立缓冲,这条钉的就是它。
+  */
+  it('lets the user type a newline and a trailing space without them vanishing', () => {
+    renderSettings({ identitySource: TEMPLATE_IDENTITY });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.background.edit' }));
+
+    const textarea = screen.getByLabelText('bots.background.title') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: '你是本本。\n' } });
+    expect(textarea.value).toBe('你是本本。\n');
+    fireEvent.change(textarea, { target: { value: '你是本本。\n风险 ' } });
+    expect(textarea.value).toBe('你是本本。\n风险 ');
+  });
+
+  it('goes back to the read-only view when the user is done', () => {
+    renderSettings({ identitySource: TEMPLATE_IDENTITY });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.background.edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'bots.background.done' }));
+
+    expect(screen.queryByLabelText('bots.background.title')).toBeNull();
+    expect(screen.getByTestId('bot-background-text').textContent).toBe(TEMPLATE_IDENTITY);
+  });
+});
+
 describe('TA 记得的 — memory list', () => {
   it('renders the real, engine-backed memory list when capabilities.memory is on (the default)', async () => {
     emptyMemoryApi.list.mockResolvedValue([
@@ -878,6 +941,42 @@ describe('Bot settings autosave', () => {
       identitySource: expect.stringContaining('<!--persona:v1:'),
     });
     expect(screen.getByText('persona-summary-fixture')).toBeTruthy();
+  });
+
+  /*
+    背景正文走的是页面既有的 autosave 通道(和名字、头像同一条),而且**只**改
+    背景那一段 —— 向导那三档口气在同一份 identitySource 里,不能被顺手覆盖掉。
+  */
+  it('autosaves a background edit through the same channel as every other field', async () => {
+    renderSettings({ identitySource: '你是本本，项目管家。' });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.background.edit' }));
+    fireEvent.change(screen.getByLabelText('bots.background.title'), {
+      target: { value: '你是本本，只说结论。' },
+    });
+    await advance(1600);
+
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toMatchObject({
+      identitySource: '你是本本，只说结论。',
+    });
+  });
+
+  it('leaves the personality selection untouched when only the background changes', async () => {
+    renderSettings({
+      identitySource:
+        '你是本本，项目管家。\n\n<!--persona:v1:{"style":"steady","proactivity":"reportAll","call":"boss"}-->\nzh\nen',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.background.edit' }));
+    fireEvent.change(screen.getByLabelText('bots.background.title'), {
+      target: { value: '你是本本，只说结论。' },
+    });
+    await advance(1600);
+
+    const saved = mocks.updateBotProfile.mock.calls[0]?.[1] as { identitySource: string };
+    expect(saved.identitySource).toContain('你是本本，只说结论。');
+    expect(saved.identitySource).not.toContain('项目管家');
+    expect(saved.identitySource).toContain('"style":"steady"');
+    expect(saved.identitySource).toContain('"call":"boss"');
   });
 
   it('takes the user back to the conversation after saving a persona', async () => {

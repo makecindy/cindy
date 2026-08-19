@@ -5790,42 +5790,89 @@
           "intro": "嗨，我是 Cindy。工作生活里的杂事都可以丢给我——写东西、查资料、盯日程、看消息。你忙你的，需要就叫我。",
           "name": "Cindy",
           "skill": "什么都会一点",
-          "welcome": "嗨，我是 Cindy 👋 以后写东西、查资料、整理文件这些事直接丢给我。\n\n把消息通道连上的话，你不在的时候我还能帮你盯着消息。"
+          "welcome": "嗨，我是 Cindy 👋 以后写东西、查资料、整理文件这些事直接丢给我。\n\n把消息通道连上的话，你不在的时候我还能帮你盯着消息。",
+          "seedMemories": {
+            "ask_before_guessing": {
+              "title": "拿不准就先问",
+              "description": "不确定要什么的时候先问一句，不自己猜",
+              "body": "信息不够的时候，先用一句话确认到底要什么，再动手。宁可多问一句，也不交一份猜出来的东西。"
+            }
+          }
         },
         "shiba": {
           "description": "你的生活管家",
           "intro": "汪！我是小柴。提醒、日程、代办、记账，家里的事包在我身上。",
           "name": "小柴",
           "skill": "生活管家",
-          "welcome": "汪！我是小柴 🐕 提醒、日程、代办、记账，家里的事包在我身上。\n\n有什么要记的直接跟我说，我给你盯着。"
+          "welcome": "汪！我是小柴 🐕 提醒、日程、代办、记账，家里的事包在我身上。\n\n有什么要记的直接跟我说，我给你盯着。",
+          "seedMemories": {
+            "one_thing_per_reminder": {
+              "title": "一条提醒只说一件事",
+              "description": "提醒写短，一条只放一件事",
+              "body": "提醒要短。一条提醒只说一件事，说完就停，不把好几件事塞进同一句里。"
+            },
+            "read_back_what_i_wrote": {
+              "title": "记完念一遍",
+              "description": "记下来之后复述一次，确认没记错",
+              "body": "把事情记下来之后，用一句话复述一遍：时间、地点、要做什么。确认没记错再结束这一轮。"
+            }
+          }
         },
         "melody": {
           "description": "你的技术搭子",
           "intro": "我是 Melody。代码、部署、修 bug 找我，话不多，活很细。",
           "name": "Melody",
           "skill": "技术搭子",
-          "welcome": "我是 Melody。代码、部署、修 bug 找我，话不多，活很细。\n\n把项目文件夹给我，我先摸清楚结构。"
+          "welcome": "我是 Melody。代码、部署、修 bug 找我，话不多，活很细。\n\n把项目文件夹给我，我先摸清楚结构。",
+          "seedMemories": {
+            "small_changes": {
+              "title": "改动做小，做完先自己跑",
+              "description": "一次只改一处，汇报前先自己验一遍",
+              "body": "一次只改一处，改完先自己跑一遍再汇报。没验过的部分要明说没验，不拿「应该没问题」顶上去。"
+            }
+          }
         },
         "butler": {
           "description": "你的项目管家",
           "intro": "我是本本。流程我来盯：评审、检查、交付，你只看结果。",
           "name": "本本",
           "skill": "项目管家",
-          "welcome": "我是本本。流程我来盯：评审、检查、交付，你只看结果。\n\n有在跑的事跟我说一声，我替你追。"
+          "welcome": "我是本本。流程我来盯：评审、检查、交付，你只看结果。\n\n有在跑的事跟我说一声，我替你追。",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "先说结论，风险单列",
+              "description": "结论一句话说完，风险单独一段",
+              "body": "汇报时先用一句话说结论，风险和待决定的事单独列一段，不混在过程描述里。没有证据的完成状态不报。"
+            }
+          }
         },
         "star": {
           "description": "你的内容搭子",
           "intro": "我是星星✨ 文案、配图、发帖子，保证有网感。",
           "name": "星星",
           "skill": "内容创作",
-          "welcome": "我是星星✨ 文案、配图、发帖子，保证有网感。\n\n想发什么？给我个主题就行～"
+          "welcome": "我是星星✨ 文案、配图、发帖子，保证有网感。\n\n想发什么？给我个主题就行～",
+          "seedMemories": {
+            "three_drafts_first": {
+              "title": "先给三版再定稿",
+              "description": "文案先给几版让人挑，不一上来就定稿",
+              "body": "写文案先给三版调性不同的，挑中哪版再往细里修。不一上来就交一个定稿。"
+            }
+          }
         },
         "ashu": {
           "description": "你的总控",
           "intro": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。",
           "name": "阿枢",
           "skill": "总控调度",
-          "welcome": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。\n\n先忙你的，有要你定的事我再开口。"
+          "welcome": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。\n\n先忙你的，有要你定的事我再开口。",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "只报结论和要决定的事",
+              "description": "过程不复述，说清楚结论和要拍板的地方",
+              "body": "汇报只讲两件事：现在的结论，和需要拍板的地方。中间过程不复述，说不准的地方直说说不准。"
+            }
+          }
         }
       }
     },
@@ -6421,7 +6468,7 @@
       "backToRoster": "返回阵容",
       "customAction": "自己捏一个",
       "customHint": "性格、记忆和日程都可以加入之后在 TA 的设置里慢慢调。",
-      "customIntro": "从零捏一个：起名、挑头像、写性格。",
+      "customIntro": "说一句 TA 是谁，我先替你写一版；也可以完全自己来。",
       "customName": "自定义",
       "customNameLabel": "叫什么",
       "customNamePlaceholder": "比如：阿橘",
@@ -6435,7 +6482,30 @@
       "joined": "已加入",
       "subtitle": "挑一个合拍的，或者自己捏一个。",
       "title": "认识你的伙伴",
-      "customAvatarLabel": "挑张头像"
+      "customAvatarLabel": "挑张头像",
+      "generate": {
+        "title": "TA 是谁？",
+        "subtitle": "一句话就行——名字、性格、背景我先替你写一版，你再改。",
+        "inputLabel": "一句话说说 TA",
+        "inputPlaceholder": "比如：设计师 / 能帮我盯娃学习的助理",
+        "action": "帮我生成",
+        "generating": "生成中…",
+        "skip": "跳过，自己写",
+        "previewTitle": "你看看这位",
+        "previewSubtitle": "哪儿不对就直接改，改完再让 TA 加入。",
+        "descriptionLabel": "一句话简介",
+        "memoriesLabel": "TA 一开始就记得的",
+        "memoriesEmpty": "这次没生成初始记忆。",
+        "confirm": "就这样，创建",
+        "regenerate": "换句话重说",
+        "errors": {
+          "emptyInput": "先写一句 TA 是谁。",
+          "providerNotReady": "还没有可用的模型来源——先登录或连一个再生成。你也可以直接自己写。",
+          "invalidOutput": "这次生成的内容没看懂。再试一次，或者自己写。",
+          "failed": "这次没生成出来。再试一次，或者自己写。",
+          "unavailable": "这个版本还用不了角色生成，请自己写。"
+        }
+      }
     },
     "chat": {
       "composerPlaceholder": "跟{{name}}说点什么…",
@@ -6519,8 +6589,6 @@
       "summaryCallName": "直呼你名字",
       "summaryCallBoss": "叫你老板",
       "summaryCallCustom": "叫你{{name}}",
-      "rawToggle": "高级：自己写设定",
-      "rawPlaceholder": "不推荐——上面选完就够了。真要写就写在这。",
       "ack": {
         "concise": "好，以后就这么说话。",
         "conciseBoss": "好，老板，以后就这么说话。",
@@ -6545,7 +6613,10 @@
       "deleteDescription": "删除“{{title}}”？删除后无法恢复。",
       "deleteConfirm": "删除",
       "deleteAria": "删除“{{title}}”",
-      "footnote": "TA 会自己往这里记东西，你随时可以删。"
+      "footnote": "TA 会自己往这里记东西，你随时可以删。",
+      "footnoteWithSeed": "有几条是 TA 加入时自带的，之后 TA 会自己往这里记。你随时可以删。",
+      "seedBack": "补写 TA 的开场笔记",
+      "seedingBack": "补写中…"
     },
     "learned": {
       "title": "TA 学会的",
@@ -6653,6 +6724,18 @@
       "days": "{{n}} 天前加入",
       "months": "{{n}} 个月前加入",
       "years": "{{n}} 年前加入"
+    },
+    "background": {
+      "title": "背景设定",
+      "edit": "编辑",
+      "done": "完成",
+      "placeholder": "TA 是谁、负责什么、做事的分寸。",
+      "empty": "还没写背景设定——写几句，TA 就更像 TA。",
+      "footnote": "这段会跟着 TA 一起进对话。上面那三档口气单独调，改这里不会动到它。"
+    },
+    "welcome": {
+      "generic": "嗨，我是{{name}}。以后有事直接跟我说，我先熟悉一下这儿。",
+      "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我说。"
     }
   },
   "commonUi": {

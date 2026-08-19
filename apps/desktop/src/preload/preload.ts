@@ -6008,7 +6008,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:bot-memory:delete', botId, filename),
       clear: (botId: string): Promise<{ removedCount: number }> =>
         ipcRenderer.invoke('maker:bot-memory:clear', botId),
+      /**
+       * 「初始记忆」落地(模板自带 / AI 生成)。按 slug 幂等: 已存在的分片不覆盖,
+       * 所以重复调用、重装或重试都只补缺的那几条。
+       */
+      seed: (
+        botId: string,
+        entries: readonly import('../shared/botMemorySeed').BotMemorySeedEntry[],
+      ): Promise<import('../shared/botMemorySeed').BotMemorySeedResult> =>
+        ipcRenderer.invoke('maker:bot-memory:seed', botId, entries),
     },
+
+    /** 一句话角色 → 伙伴草稿。失败带分类码, 由 renderer 翻成人话并保留「自己写」出路。 */
+    generateBotPersona: (
+      role: string,
+    ): Promise<import('../shared/botPersonaDraft').BotPersonaGenerateResult> =>
+      ipcRenderer.invoke('maker:bots:generate-persona', role),
 
     /**
      * 启动期同步三个 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。

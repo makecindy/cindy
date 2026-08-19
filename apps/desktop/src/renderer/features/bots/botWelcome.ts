@@ -13,6 +13,14 @@
  *    stores no template id), so the create dialog parks the template's i18n key
  *    here and the canonical chat consumes it on first open. The parking lot is
  *    localStorage, so quitting between "created" and "opened" does not lose it.
+ *  - 阵容页脚注写着「加入后 TA 会先跟你打个招呼」,那是**对所有创建路径**的承诺,
+ *    不只是模板卡。所以寄存的东西从「一个 i18n key」放宽成三选一:
+ *      · `key`            —— 模板欢迎语,或通用开场句(手捏路径);
+ *      · `key` + `params` —— 通用开场句带上这个伙伴的名字 / 定位;
+ *      · `text`           —— 已经成句的整段话(AI 生成路径里模型现造的开场白),
+ *                            有它就直接用,不查目录。
+ *    旧版本只存 key 字符串,`readPending` 仍认那种形状 —— 升级前建好、升级后
+ *    才第一次打开的伙伴不能因此变哑。
  *
  * Idempotency has three independent guards, in order:
  *   1. no parked entry → nothing to deliver (normal steady state);
@@ -29,7 +37,38 @@ export function botWelcomeClientId(botId: string): string {
   return `bot-welcome:${botId}`;
 }
 
-type PendingWelcomeMap = Record<string, string>;
+/** 寄存的一条开场白。`text` 优先于 `key`。 */
+export interface PendingBotWelcome {
+  /** i18n key。`text` 缺席时用它(可带 `params` 插值)。 */
+  key: string;
+  /** `t(key, params)` 的插值,如伙伴的名字与一句话定位。 */
+  params?: Record<string, string>;
+  /** 已经成句的整段话;有它就不查目录。 */
+  text?: string;
+}
+
+type PendingWelcomeMap = Record<string, PendingBotWelcome>;
+
+/** 旧形状(裸 key 字符串)与新形状都要认;认不出来的一律丢掉,不写脏数据进对话。 */
+function normalizeEntry(value: unknown): PendingBotWelcome | null {
+  if (typeof value === 'string') return value ? { key: value } : null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const key = typeof record.key === 'string' ? record.key : '';
+  const text = typeof record.text === 'string' && record.text.trim() ? record.text.trim() : undefined;
+  if (!key && !text) return null;
+  const params: Record<string, string> = {};
+  if (record.params && typeof record.params === 'object' && !Array.isArray(record.params)) {
+    for (const [name, raw] of Object.entries(record.params as Record<string, unknown>)) {
+      if (typeof raw === 'string') params[name] = raw;
+    }
+  }
+  return {
+    key,
+    ...(Object.keys(params).length > 0 ? { params } : {}),
+    ...(text ? { text } : {}),
+  };
+}
 
 function readPending(): PendingWelcomeMap {
   if (typeof window === 'undefined') return {};
@@ -40,7 +79,8 @@ function readPending(): PendingWelcomeMap {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     const out: PendingWelcomeMap = {};
     for (const [botId, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === 'string' && value) out[botId] = value;
+      const entry = normalizeEntry(value);
+      if (entry) out[botId] = entry;
     }
     return out;
   } catch {
@@ -61,13 +101,28 @@ function writePending(next: PendingWelcomeMap): void {
   }
 }
 
-/** Called right after a Bot is created, with the template's welcome i18n key. */
-export function rememberPendingBotWelcome(botId: string, welcomeKey: string): void {
-  if (!botId || !welcomeKey) return;
-  writePending({ ...readPending(), [botId]: welcomeKey });
+/**
+ * Called right after a Bot is created. 接受模板那样的裸 i18n key,也接受
+ * 带插值 / 现成整句的完整条目。
+ */
+export function rememberPendingBotWelcome(
+  botId: string,
+  welcome: string | PendingBotWelcome,
+): void {
+  if (!botId) return;
+  const entry = normalizeEntry(welcome);
+  if (!entry) return;
+  writePending({ ...readPending(), [botId]: entry });
 }
 
+/** 只要 key(模板路径的既有读法)。现成整句的条目在这里返回 null。 */
 export function peekPendingBotWelcome(botId: string): string | null {
+  const entry = readPending()[botId];
+  return entry?.key ? entry.key : null;
+}
+
+/** 完整条目 —— 需要看插值或现成整句时用。 */
+export function peekPendingBotWelcomeEntry(botId: string): PendingBotWelcome | null {
   return readPending()[botId] ?? null;
 }
 
@@ -93,8 +148,8 @@ export interface DeliverBotWelcomeDeps {
   /** Existing rows in the canonical task; only "is it empty" matters. */
   listMessages: (sessionId: string) => Promise<unknown>;
   createMessage: (sessionId: string, body: BotWelcomeMessageBody) => Promise<unknown>;
-  /** Resolves the parked i18n key to the localized greeting. */
-  translate: (key: string) => string;
+  /** Resolves the parked i18n key (with optional interpolation) to the greeting. */
+  translate: (key: string, params?: Record<string, string>) => string;
 }
 
 /**
@@ -108,10 +163,13 @@ export async function deliverPendingBotWelcome(
   sessionId: string,
   deps: DeliverBotWelcomeDeps,
 ): Promise<boolean> {
-  const welcomeKey = peekPendingBotWelcome(botId);
-  if (!welcomeKey) return false;
-  const text = deps.translate(welcomeKey).trim();
-  if (!text || text === welcomeKey) {
+  const entry = peekPendingBotWelcomeEntry(botId);
+  if (!entry) return false;
+  // 现成整句(生成路径)不查目录;否则按 key + 插值取本地化文案。
+  const text = entry.text
+    ? entry.text.trim()
+    : deps.translate(entry.key, entry.params).trim();
+  if (!text || text === entry.key) {
     // A missing catalog entry must not persist the raw key into the chat.
     clearPendingBotWelcome(botId);
     return false;

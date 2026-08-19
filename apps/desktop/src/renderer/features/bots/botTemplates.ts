@@ -4,6 +4,7 @@ import type { BotAvatarHue } from './BotAvatar';
 import { CINDY_OFFICIAL_AVATAR, presetAvatarValue } from './botAvatarIdentity';
 import { NEW_BOT_DEFAULT_PERMISSIONS } from './botCapabilityDefaults';
 import { BOT_AUTOMATION_DEFAULT } from '../../../shared/botAutomationCapability';
+import type { BotMemorySeedEntry, BotMemorySeedType } from '../../../shared/botMemorySeed';
 import type { BotCapabilities } from './botStore';
 
 /**
@@ -14,6 +15,25 @@ import type { BotCapabilities } from './botStore';
 export type BotTemplateId = 'cindy' | 'shiba' | 'melody' | 'butler' | 'star' | 'ashu';
 /** Template cards shown in the create dialog: the roster + a blank one. */
 export type BotTemplateChoiceId = BotTemplateId | 'custom';
+
+/**
+ * 一条「初始记忆」的模板定义。
+ *
+ * 内容是**这个角色自己的开场笔记** —— 它怎么汇报、把改动做多小、先确认什么。
+ * 刻意**不写**任何关于主人的事(「主人喜欢被提醒喝水」这类):模板不认识用户,
+ * 把编出来的偏好写进「TA 记得的」等于让伙伴一上来就撒一个用户看得见的谎。
+ * 同一条边界在 `identitySource` 上已经成立(userContextSource 恒为空),这里沿用。
+ *
+ * 文案走 i18n(五语言),`slug` 是文件名兼幂等键,不进翻译。
+ */
+export interface BotTemplateSeedMemory {
+  /** `[a-z0-9-]`,同时是幂等键。 */
+  slug: string;
+  type: BotMemorySeedType;
+  titleKey: string;
+  descriptionKey: string;
+  bodyKey: string;
+}
 
 export interface BotTemplateDefinition {
   id: BotTemplateId;
@@ -34,6 +54,26 @@ export interface BotTemplateDefinition {
   identitySource: string;
   capabilities: Partial<BotCapabilities>;
   autoSubscribeToTaskEvents: boolean;
+  /**
+   * 加入时写进这个伙伴记忆空间的开场笔记(0-2 条)。落地走
+   * `window.electronAPI.maker.botMemory.seed`,按 slug 幂等,用户随后可以逐条删。
+   */
+  seedMemories: readonly BotTemplateSeedMemory[];
+}
+
+function seedMemory(
+  id: BotTemplateId,
+  slug: string,
+  type: BotMemorySeedType = 'reference',
+): BotTemplateSeedMemory {
+  const base = `${copyKey(id, 'seedMemories')}.${slug.replace(/-/g, '_')}`;
+  return {
+    slug,
+    type,
+    titleKey: `${base}.title`,
+    descriptionKey: `${base}.description`,
+    bodyKey: `${base}.body`,
+  };
 }
 
 /*
@@ -45,12 +85,18 @@ export interface BotTemplateDefinition {
   阿枢 / 本本要订阅并处理其它任务的事件,所以是 coordinate;其余伙伴保持
   none,不往 system 段塞用不上的任务控制说明。用户可见的那个下拉已经移除。
 */
-const ASSISTANT_CAPABILITIES: Partial<BotCapabilities> = {
+/**
+ * 普通伙伴的能力基线。导出是为了给「AI 角色生成」用:生成出来的伙伴不属于任何
+ * 模板,但它的能力配置不该另起一套 —— 和阵容里的普通助理一模一样就对了。
+ */
+export const ASSISTANT_BASELINE_CAPABILITIES: Partial<BotCapabilities> = {
   harness: 'claude',
   automation: BOT_AUTOMATION_DEFAULT,
   sessionControlMode: 'none',
   permissions: NEW_BOT_DEFAULT_PERMISSIONS,
 };
+
+const ASSISTANT_CAPABILITIES = ASSISTANT_BASELINE_CAPABILITIES;
 
 const COORDINATOR_CAPABILITIES: Partial<BotCapabilities> = {
   harness: 'claude',
@@ -92,6 +138,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     ].join('\n\n'),
     capabilities: ASSISTANT_CAPABILITIES,
     autoSubscribeToTaskEvents: false,
+    seedMemories: [seedMemory('cindy', 'ask-before-guessing')],
   },
   {
     id: 'shiba',
@@ -109,6 +156,10 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     ].join('\n\n'),
     capabilities: ASSISTANT_CAPABILITIES,
     autoSubscribeToTaskEvents: false,
+    seedMemories: [
+      seedMemory('shiba', 'one-thing-per-reminder'),
+      seedMemory('shiba', 'read-back-what-i-wrote'),
+    ],
   },
   {
     id: 'melody',
@@ -126,6 +177,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     ].join('\n\n'),
     capabilities: ASSISTANT_CAPABILITIES,
     autoSubscribeToTaskEvents: false,
+    seedMemories: [seedMemory('melody', 'small-changes')],
   },
   {
     id: 'butler',
@@ -144,6 +196,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     ].join('\n\n'),
     capabilities: COORDINATOR_CAPABILITIES,
     autoSubscribeToTaskEvents: true,
+    seedMemories: [seedMemory('butler', 'risks-said-separately')],
   },
   {
     id: 'star',
@@ -161,6 +214,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     ].join('\n\n'),
     capabilities: ASSISTANT_CAPABILITIES,
     autoSubscribeToTaskEvents: false,
+    seedMemories: [seedMemory('star', 'three-drafts-first')],
   },
   {
     id: 'ashu',
@@ -179,11 +233,70 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     ].join('\n\n'),
     capabilities: COORDINATOR_CAPABILITIES,
     autoSubscribeToTaskEvents: true,
+    seedMemories: [seedMemory('ashu', 'conclusion-first')],
   },
 ] as const;
 
 export function getBotTemplate(id: BotTemplateId): BotTemplateDefinition {
   return BOT_TEMPLATES.find((template) => template.id === id) ?? BOT_TEMPLATES[0];
+}
+
+/**
+ * AI 生成路径写下的初始记忆用的 slug(见 `botPersonaSeedEntries`)。
+ *
+ * 它和模板 slug 一起构成「这条分片是加入时自带的」的判据 —— 设置页的脚注要靠它
+ * 决定说哪一句:列表里一条自带的都没有时,说「有几条是 TA 加入时自带的」就是在
+ * 对着一个空列表撒谎。
+ */
+export const GENERATED_SEED_SLUG_PATTERN = /^start-[1-9]\d*$/;
+
+const TEMPLATE_SEED_SLUGS: ReadonlySet<string> = new Set(
+  BOT_TEMPLATES.flatMap((template) => template.seedMemories.map((seed) => seed.slug)),
+);
+
+/** 这条记忆分片是不是「加入时自带的」。用户后来自己攒的记忆一律 false。 */
+export function isBotSeedMemorySlug(slug: string): boolean {
+  const normalized = slug.trim().toLowerCase();
+  return TEMPLATE_SEED_SLUGS.has(normalized) || GENERATED_SEED_SLUG_PATTERN.test(normalized);
+}
+
+/**
+ * 按显示名反查模板。
+ *
+ * Bot Profile 不存模板 id —— 阵容页判断「这张卡已加入」用的也是同一个口径(名字)。
+ * 用途仅限「这个伙伴本该带哪几条开场笔记」,拿不准就返回 null,宁可不提供补写入口
+ * 也不给一个伙伴塞别人的笔记。用户把伙伴改了名之后这里查不到,补写入口随之消失 ——
+ * 那是可以接受的:它本来就是一条兜底路径,不是主功能。
+ */
+export function botTemplateForName(
+  name: string,
+  t: (key: string) => string,
+): BotTemplateDefinition | null {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return null;
+  return (
+    BOT_TEMPLATES.find((template) => t(template.nameKey).trim().toLowerCase() === normalized) ?? null
+  );
+}
+
+/**
+ * 把模板的初始记忆翻成可以直接落库的分片。
+ *
+ * 取 `t` 而不是 i18n 实例:这是一个纯函数,单测里传一个恒等 `t` 就能钉住形状,
+ * 不用起 i18next。翻不出内容(key 缺失时 i18next 会回吐 key 本身)照样写进去 ——
+ * 那种情况是翻译缺失的 bug,由 `pnpm check:i18n` 拦,不在运行期悄悄少写一条。
+ */
+export function botTemplateSeedEntries(
+  template: BotTemplateDefinition,
+  t: (key: string) => string,
+): BotMemorySeedEntry[] {
+  return template.seedMemories.map((seed) => ({
+    slug: seed.slug,
+    type: seed.type,
+    title: t(seed.titleKey),
+    description: t(seed.descriptionKey),
+    body: t(seed.bodyKey),
+  }));
 }
 
 /**

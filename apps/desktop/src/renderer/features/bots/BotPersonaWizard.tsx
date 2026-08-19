@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -80,8 +79,13 @@ function OptionCard({
 
 /**
  * 3 步人格引导("调整性格")。只管自己那段 marker 区间——decompile 失败或没有
- * marker 时退回默认选项,绝不代人删掉 marker 以外的手写文本;"高级:自己写设定"
- * 展开的是**整份** identitySource 原文,给想完全绕开向导的人一条路。
+ * marker 时退回默认选项,绝不代人删掉 marker 以外的手写文本。
+ *
+ * 曾经这里还折叠着一个「高级:自己写设定」,展开是**整份** identitySource 的
+ * textarea。它已经撤掉:那是当时唯一能碰到背景正文的入口,而它一次性覆盖整份
+ * 文本,连向导自己那段 marker 都可能被顺手删掉。现在背景正文在设置页「TA 是谁」
+ * 里有一等公民的「背景设定」子块(读写走 `readBotBackground` / `writeBotBackground`),
+ * 两段各有各的入口、谁也不覆盖谁,这个藏起来的逃生口就没有存在的理由了。
  */
 export function BotPersonaWizard({
   open,
@@ -99,8 +103,6 @@ export function BotPersonaWizard({
   const [proactivity, setProactivity] = useState<PersonaProactivity>(DEFAULT_SELECTION.proactivity);
   const [call, setCall] = useState<PersonaCallForm>(DEFAULT_SELECTION.call);
   const [customCall, setCustomCall] = useState('');
-  const [rawOpen, setRawOpen] = useState(false);
-  const [rawSource, setRawSource] = useState(identitySource);
 
   useEffect(() => {
     if (!open) return;
@@ -109,8 +111,6 @@ export function BotPersonaWizard({
     setProactivity(parsed.proactivity);
     setCall(parsed.call);
     setCustomCall(parsed.customCall ?? '');
-    setRawOpen(false);
-    setRawSource(identitySource);
   }, [open, identitySource]);
 
   const customCallInvalid = call === 'custom' && customCall.trim().length === 0;
@@ -121,11 +121,6 @@ export function BotPersonaWizard({
       : { style, proactivity, call };
 
   const handleSave = () => {
-    if (rawOpen) {
-      onSave(rawSource);
-      onOpenChange(false);
-      return;
-    }
     if (!selection) return;
     onSave(compilePersonaIntoIdentitySource(identitySource, selection));
     onOpenChange(false);
@@ -211,26 +206,6 @@ export function BotPersonaWizard({
               </p>
               <p className="mt-1 text-12 text-[var(--text-primary)]">{personaSummaryText(t, selection)}</p>
             </div>
-
-            <div>
-              <button
-                type="button"
-                onClick={() => setRawOpen((current) => !current)}
-                className="inline-flex items-center gap-1 text-11 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-              >
-                {rawOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                {t('bots.persona.rawToggle')}
-              </button>
-              {rawOpen ? (
-                <textarea
-                  value={rawSource}
-                  onChange={(event) => setRawSource(event.target.value)}
-                  placeholder={t('bots.persona.rawPlaceholder')}
-                  rows={5}
-                  className="mt-2 w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-                />
-              ) : null}
-            </div>
           </div>
 
           <div className="mt-5 flex justify-end gap-2">
@@ -243,7 +218,7 @@ export function BotPersonaWizard({
             </button>
             <button
               type="button"
-              disabled={!rawOpen && customCallInvalid}
+              disabled={customCallInvalid}
               onClick={handleSave}
               className="h-8 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-11 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"
             >

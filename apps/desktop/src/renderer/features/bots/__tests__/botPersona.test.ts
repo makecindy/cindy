@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   compilePersonaIntoIdentitySource,
+  extractPersonaBlockText,
   extractPersonaFromIdentitySource,
+  readBotBackground,
   removePersonaFromIdentitySource,
+  writeBotBackground,
   type PersonaSelection,
 } from '../botPersona';
 
@@ -92,5 +95,61 @@ describe('botPersona', () => {
   it('removePersonaFromIdentitySource is a no-op when there is no marker', () => {
     const plain = '你是本本，喜欢用列表说话。';
     expect(removePersonaFromIdentitySource(plain)).toBe(plain);
+  });
+});
+
+/*
+  分段管理:「调整性格」向导管 marker 段,设置页「背景设定」管其余正文。这一组
+  钉的是那条边界 —— 两个入口各写各的,谁也不能整体覆盖谁。回归到这里等于回到
+  「模板写进来的角色背景用户看不到也改不了」那个状态。
+*/
+describe('botPersona — 背景正文段与向导段共存', () => {
+  const templateIdentity =
+    '你是本本，项目管家。流程你来盯。\n\nYou are a persistent delivery steward in Cindy.';
+
+  it('shows a template teammate its full background before the wizard ever ran', () => {
+    expect(readBotBackground(templateIdentity)).toBe(templateIdentity);
+    expect(extractPersonaBlockText(templateIdentity)).toBeNull();
+  });
+
+  it('hides the wizard block from the background editor', () => {
+    const compiled = compilePersonaIntoIdentitySource(templateIdentity, BASE);
+    expect(readBotBackground(compiled)).toBe(templateIdentity);
+    expect(extractPersonaBlockText(compiled)).toContain('<!--persona:v1:');
+  });
+
+  it('rewrites only the background, leaving the wizard block byte-for-byte intact', () => {
+    const compiled = compilePersonaIntoIdentitySource(templateIdentity, BASE);
+    const block = extractPersonaBlockText(compiled);
+    const rewritten = writeBotBackground(compiled, '你是本本，只说结论。');
+
+    expect(readBotBackground(rewritten)).toBe('你是本本，只说结论。');
+    expect(rewritten).not.toContain('项目管家');
+    expect(extractPersonaBlockText(rewritten)).toBe(block);
+    expect(extractPersonaFromIdentitySource(rewritten)).toEqual(BASE);
+  });
+
+  it('lets the wizard run after the background was hand-edited, without eating the prose', () => {
+    const handEdited = writeBotBackground('', '你是阿橘，设计搭子。');
+    const compiled = compilePersonaIntoIdentitySource(handEdited, BASE);
+    expect(readBotBackground(compiled)).toBe('你是阿橘，设计搭子。');
+    expect(extractPersonaFromIdentitySource(compiled)).toEqual(BASE);
+  });
+
+  it('keeps the background editable down to empty without destroying the personality', () => {
+    const compiled = compilePersonaIntoIdentitySource(templateIdentity, BASE);
+    const cleared = writeBotBackground(compiled, '   ');
+    expect(readBotBackground(cleared)).toBe('');
+    expect(extractPersonaFromIdentitySource(cleared)).toEqual(BASE);
+  });
+
+  it('is stable across repeated edits — the two segments never swap order', () => {
+    let source = compilePersonaIntoIdentitySource(templateIdentity, BASE);
+    for (let i = 0; i < 3; i += 1) {
+      source = writeBotBackground(source, `第 ${i} 版背景。`);
+      source = compilePersonaIntoIdentitySource(source, BASE);
+    }
+    expect(source.match(/<!--persona:v1:/g)).toHaveLength(1);
+    expect(source.indexOf('第 2 版背景。')).toBeLessThan(source.indexOf('<!--persona:v1:'));
   });
 });

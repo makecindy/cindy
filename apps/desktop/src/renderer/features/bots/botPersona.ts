@@ -193,9 +193,9 @@ export function compilePersonaIntoIdentitySource(identitySource: string, selecti
 }
 
 /**
- * Removes the wizard's block entirely (used by the "自己写设定" escape hatch
- * when the user wants to take the field back over from scratch), leaving any
- * surrounding hand-written content intact.
+ * Removes the wizard's block entirely, leaving any surrounding hand-written
+ * content intact. This is also the read side of the "背景设定" editor — see
+ * {@link readBotBackground}.
  */
 export function removePersonaFromIdentitySource(identitySource: string): string {
   const existing = findMarkerBlock(identitySource);
@@ -203,4 +203,52 @@ export function removePersonaFromIdentitySource(identitySource: string): string 
   const before = identitySource.slice(0, existing.start).replace(/\s+$/, '');
   const after = identitySource.slice(existing.end).replace(/^\s+/, '');
   return [before, after].filter((part) => part.length > 0).join('\n\n');
+}
+
+/*
+  ── 分段管理:向导段 vs 背景正文段 ─────────────────────────────────────────
+
+  `identitySource` 是一份自由文本,但它其实住着**两个作者**:
+
+    1. 「调整性格」向导 —— 只写 marker 围起来的那一段(说话风格 / 主动程度 /
+       称呼)。它已经会原地替换自己那段,不碰别人的字。
+    2. 用户和模板 —— 剩下的全部,也就是这个伙伴到底是谁、负责什么。模板选卡时
+       写进来的那几行完整背景设定就在这一段里。
+
+  在这一批之前,第二段在界面上**根本没有入口**:设置页只显示向导编译出的人格
+  摘要,模板写进来的背景正文用户看不到也改不了,唯一能碰到它的地方是向导里那个
+  折叠起来的「高级:自己写设定」——它一次性覆盖**整份** identitySource,既藏得深
+  又容易连 marker 一起被删掉。
+
+  所以本批把第二段提到设置页「TA 是谁」里做成一等公民(「背景设定」子块),并把
+  向导里那个手写逃生口撤掉:两段各有各的编辑入口,谁也不会整体覆盖谁。下面这对
+  读 / 写函数就是这条边界的实现——读时剥掉向导段,写时把向导段原样接回去。
+*/
+
+/** 向导段的原文(含 marker 行与它后面的固定描述行);没有 marker 时返回 null。 */
+export function extractPersonaBlockText(identitySource: string): string | null {
+  const block = findMarkerBlock(identitySource);
+  if (!block) return null;
+  return identitySource.slice(block.start, block.end).replace(/\s+$/, '');
+}
+
+/**
+ * 背景正文段 = identitySource 去掉向导段之后剩下的全部。
+ *
+ * 从没开过向导的伙伴(含刚从模板建出来的)没有 marker,整份就是背景正文。
+ */
+export function readBotBackground(identitySource: string): string {
+  return removePersonaFromIdentitySource(identitySource).trim();
+}
+
+/**
+ * 用新的背景正文替换掉背景段,**原样保留**向导段。
+ *
+ * 拼接顺序固定为「背景正文 → 向导段」,与 `compilePersonaIntoIdentitySource` 首次
+ * 追加向导段时的落点一致(它把已有内容留在前面、把自己的块接在后面),所以来回
+ * 编辑两段不会让文本在两种顺序之间反复跳。
+ */
+export function writeBotBackground(identitySource: string, background: string): string {
+  const block = extractPersonaBlockText(identitySource);
+  return [background.trim(), block ?? ''].filter((part) => part.length > 0).join('\n\n');
 }

@@ -57,8 +57,13 @@ import { BotAbilityWall } from './BotAbilityWall';
 import { botChannelConnectPath } from './botChannelConnectRoutes';
 import { BotFolderCards } from './BotFolderCards';
 import { BotGrowthLists } from './BotGrowthLists';
+import { botTemplateForName, botTemplateSeedEntries } from './botTemplates';
 import { BotPersonaWizard, personaSummaryText } from './BotPersonaWizard';
-import { extractPersonaFromIdentitySource } from './botPersona';
+import {
+  extractPersonaFromIdentitySource,
+  readBotBackground,
+  writeBotBackground,
+} from './botPersona';
 import { rememberPendingBotPersonaAck } from './botPersonaAck';
 import {
   resolveBotSettingsAnchor,
@@ -163,6 +168,14 @@ export function BotSettings({
   }, [anchor, advancedOpen]);
   const [personaOpen, setPersonaOpen] = useState(false);
   /**
+   * 「背景设定」子块的编辑缓冲。`null` = 只读态(这块大多数时候是拿来**看**的)。
+   *
+   * 编辑时**不能**直接把 textarea 的 value 接到从 identitySource 投影出来的正文上:
+   * 那条投影会 trim,于是用户敲的行尾空格和刚按下的回车会在下一帧被吃掉,人根本
+   * 换不了行。缓冲区保留原字,写回 Profile 时才归一。
+   */
+  const [backgroundDraft, setBackgroundDraft] = useState<string | null>(null);
+  /**
    * 「刚存完性格，等着回对话」的标记。值用时间戳而不是 boolean：连着调两次性格
    * 也各自能触发一次导航（boolean 会因为值没变而不重跑 effect）。
    */
@@ -229,7 +242,28 @@ export function BotSettings({
     setAvatarColor(bot.avatarColor);
     setSelectedSkills(bot.skills);
     setCapabilities(bot.capabilities);
+    // 切到另一个伙伴时收回编辑态:上一位的 textarea 停在打开状态,会让人以为
+    // 自己正在改的是刚点开的这一位。
+    setBackgroundDraft(null);
   }, [bot]);
+
+  /*
+    背景正文段。identitySource 是权威,这里只是**投影**:向导那段 marker 被剥掉,
+    剩下的就是「TA 是谁」这块该给用户看的字。写回时 `writeBotBackground` 会把
+    marker 段原样接回去,所以在这里编辑不会碰掉性格设置。
+  */
+  const background = readBotBackground(identitySource);
+
+  /*
+    这个伙伴**本该**自带的开场笔记。只用于「加入那次没写进去」时的补写入口 ——
+    Profile 不存模板 id,所以按显示名反查(与阵容页判断「已加入」同一口径);查不到
+    就是空,记忆区不显示补写入口。AI 生成出来的伙伴不在此列:它那几条笔记是一次性
+    的草稿产物,创建之后已经无从复原,不能凭空造几条顶上。
+  */
+  const templateSeedEntries = useMemo(() => {
+    const template = botTemplateForName(bot.name, t);
+    return template ? botTemplateSeedEntries(template, t) : [];
+  }, [bot.name, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -654,12 +688,85 @@ export function BotSettings({
               </button>
             </div>
 
+            {/*
+              「背景设定」—— 这个伙伴到底是谁、负责什么的那段正文。
+
+              挑一张阵容卡时,卡上那段自我介绍背后其实还跟着一份完整的角色设定,
+              它一直被写进 identitySource,但在这之前**界面上没有任何地方能看到
+              它**:设置页只显示向导编译出来的一行人格摘要。用户于是既不知道自己
+              选来的伙伴脑子里装着什么,也没法改一个字。
+
+              这一块就是那段正文本身:默认只读(可滚动,长设定不撑爆页面),点「编辑」
+              进 textarea,走的是页面既有的 autosave 通道,跟名字、头像同一条路。
+              向导那三档口气**不在**这一块里 —— 它自己有 marker 段,两段互不覆盖
+              (见 botPersona.ts 的分段说明)。
+            */}
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-12 font-medium text-[var(--text-primary)]">
+                  {t('bots.background.title')}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (backgroundDraft === null) {
+                      setBackgroundDraft(background);
+                      return;
+                    }
+                    // 「完成」不是「保存」——自动保存已经在打字时跑过了;这里只是
+                    // 收回编辑态,顺手把可能还在防抖窗口里的最后一次改动落下去。
+                    setBackgroundDraft(null);
+                    void autosave.flush();
+                  }}
+                  className="h-8 shrink-0 rounded-lg border border-[var(--border-default)] px-3 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                >
+                  {backgroundDraft === null ? t('bots.background.edit') : t('bots.background.done')}
+                </button>
+              </div>
+              {backgroundDraft !== null ? (
+                <textarea
+                  value={backgroundDraft}
+                  autoFocus
+                  onChange={(event) => {
+                    setBackgroundDraft(event.target.value);
+                    setIdentitySource((current) =>
+                      writeBotBackground(current, event.target.value),
+                    );
+                    autosave.onEdit('text');
+                  }}
+                  onBlur={() => void autosave.flush()}
+                  placeholder={t('bots.background.placeholder')}
+                  aria-label={t('bots.background.title')}
+                  rows={8}
+                  className="mt-2 w-full resize-y rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-12 leading-5 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+                />
+              ) : background ? (
+                <p
+                  data-testid="bot-background-text"
+                  className="mt-2 max-h-52 overflow-y-auto whitespace-pre-wrap rounded-xl bg-[var(--surface-chip)] px-3 py-2.5 text-12 leading-5 text-[var(--text-secondary)]"
+                >
+                  {background}
+                </p>
+              ) : (
+                <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
+                  {t('bots.background.empty')}
+                </p>
+              )}
+              <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
+                {t('bots.background.footnote')}
+              </p>
+            </div>
+
             {/* "TA 记得的" + "TA 学会的" — memory=false 的历史伙伴留一条自己开回来的
                 路,恒开后走真实的 bot-memory 只读枚举 + 单删 + 清空。记忆关掉时两个
                 列表一起消失:没有记忆分域,伙伴也长不出本事。 */}
             <div className="mt-5 border-t border-[var(--border-default)] pt-4">
               {capabilities.memory ? (
-                <BotGrowthLists botId={bot.id} highlight={highlight} />
+                <BotGrowthLists
+                  botId={bot.id}
+                  highlight={highlight}
+                  seedEntries={templateSeedEntries}
+                />
               ) : (
                 <div className="flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-3">
                   <span className="min-w-0">

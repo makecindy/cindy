@@ -7,6 +7,8 @@ import type { MemoryRecord } from '@cindy/maker-core';
 
 import { artifactTimeLabel } from './botArtifactPresentation';
 import { partitionBotMemoryRecords } from './botGrowth';
+import { isBotSeedMemorySlug } from './botTemplates';
+import type { BotMemorySeedEntry } from '../../../shared/botMemorySeed';
 import type { BotSettingsHighlightId } from './botSettingsNav';
 
 function readError(cause: unknown): string {
@@ -27,17 +29,26 @@ function parseUpdatedAt(value: string): number | null {
  * `window.electronAPI.maker.botMemory.list`,删除后两边同步刷新 —— 分两个组件各拉
  * 一次会出现"删了一条,另一个列表还是旧的"。
  *
- * 批次 β 已经把 list / delete / clear 三个 IPC 打通,本批不新增任何存储与 schema。
+ * 批次 β 已经把 list / delete / clear 三个 IPC 打通;本批只多用了一个幂等的 seed
+ * 写入(见 shared/botMemorySeed.ts),没有新增存储与 schema。
  * scope key 与 workdir 记忆完全独立。`digest` 分片(Pi 压缩产生的系统内部摘要)两边
  * 都不展示,但不影响它继续被检索使用。
  */
 export function BotGrowthLists({
   botId,
   highlight,
+  seedEntries,
 }: {
   botId: string;
   /** 从消息气泡的成长尾注跳进来时,短暂高亮对应的那个列表。 */
   highlight?: BotSettingsHighlightId | null;
+  /**
+   * 这个伙伴**本该**自带的开场笔记(按名字反查到的模板;查不到就是空)。
+   *
+   * 它只有一个用途:加入时那次写入没成功(记忆引擎当时没起来 / IPC 失败)时,给
+   * 一条自己补回来的路。seed IPC 按 slug 幂等,所以重复点是安全的。
+   */
+  seedEntries?: readonly BotMemorySeedEntry[];
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -60,6 +71,7 @@ export function BotGrowthLists({
   const [error, setError] = useState<string | null>(null);
   const [busyFilename, setBusyFilename] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [seeding, setSeeding] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -116,7 +128,33 @@ export function BotGrowthLists({
     }
   };
 
+  const seedBack = async () => {
+    const seed = window.electronAPI?.maker?.botMemory?.seed;
+    if (!seed || !seedEntries || seedEntries.length === 0) return;
+    setSeeding(true);
+    setError(null);
+    try {
+      await seed(botId, seedEntries);
+      await load();
+    } catch (cause) {
+      setError(readError(cause));
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   const { memories, learned } = partitionBotMemoryRecords(records ?? []);
+  /*
+    「列表里真的有加入时自带的那几条吗」——脚注和补写入口都挂在这一个判据上。
+
+    之前脚注写死成「有几条是 TA 加入时自带的」,可写入失败、或用户把那几条删光之后
+    它就成了对着一个空列表说的假话。现在没有自带条目就退回中性那句。
+  */
+  const hasSeedMemory = (records ?? []).some((record) => isBotSeedMemorySlug(record.slug));
+  // 已经加载完、模板确实定义了开场笔记、但一条都没落地 —— 只有这三条同时成立才
+  // 提供补写入口。records 还没回来时不显示:那会在每次进设置页时闪一下。
+  const canSeedBack =
+    records !== null && !hasSeedMemory && (seedEntries?.length ?? 0) > 0;
 
   const renderRow = (record: MemoryRecord, withTime: boolean) => {
     const at = withTime ? parseUpdatedAt(record.frontmatter.updatedAt) : null;
@@ -190,8 +228,18 @@ export function BotGrowthLists({
         )}
         {/* 脚注回答的是「这些东西是谁放进来的、我能不能动」——列表本身答不了。 */}
         <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('bots.memoryList.footnote')}
+          {hasSeedMemory ? t('bots.memoryList.footnoteWithSeed') : t('bots.memoryList.footnote')}
         </p>
+        {canSeedBack ? (
+          <button
+            type="button"
+            disabled={seeding}
+            onClick={() => void seedBack()}
+            className="mt-1.5 rounded-lg text-11 text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)] disabled:opacity-50"
+          >
+            {seeding ? t('bots.memoryList.seedingBack') : t('bots.memoryList.seedBack')}
+          </button>
+        ) : null}
       </div>
 
       {/* 「TA 学会的」与「TA 记得的」并列:记忆是你说过的,本事是 TA 做出来的。 */}

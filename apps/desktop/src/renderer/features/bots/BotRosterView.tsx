@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { DEFAULT_CONTROL_BOT_EVENT_RULE } from '../../../shared/botSessionEvents';
-import { addBotProfileAndWait, useBotProfiles, type BotProfile } from './botStore';
+import type { BotMemorySeedEntry } from '../../../shared/botMemorySeed';
+import type { BotPersonaDraft } from '../../../shared/botPersonaDraft';
+import {
+  addBotProfileAndWait,
+  useBotProfiles,
+  type BotCapabilities,
+  type BotProfile,
+} from './botStore';
 import {
   BotAvatar,
   botAvatarAssignment,
@@ -18,10 +25,19 @@ import {
   type BotAvatarAssignment,
   type BotAvatarHue,
 } from './BotAvatar';
-import { rememberPendingBotWelcome } from './botWelcome';
+import { rememberPendingBotWelcome, type PendingBotWelcome } from './botWelcome';
+import {
+  botManualWelcome,
+  botPersonaCreateInput,
+  botPersonaGenerateErrorKey,
+  botPersonaSeedEntries,
+  botPersonaWelcome,
+  resolveDraftAvatar,
+} from './botPersonaGenerate';
 import {
   BOT_TEMPLATES,
   CUSTOM_BOT_TEMPLATE_ID,
+  botTemplateSeedEntries,
   type BotTemplateDefinition,
 } from './botTemplates';
 
@@ -44,11 +60,49 @@ interface BotRosterViewProps {
   notice?: string | null;
 }
 
+/**
+ * 「初始记忆」落地。写不进去不回滚伙伴 —— 人已经加入了,为了几条开场笔记把 TA
+ * 撤掉才是更坏的结果;设置页「TA 记得的」此时显示的是**真实的空**,不是假内容。
+ */
+async function seedBotMemories(botId: string, entries: readonly BotMemorySeedEntry[]) {
+  if (entries.length === 0) return;
+  const seed = window.electronAPI?.maker?.botMemory?.seed;
+  if (!seed) return;
+  try {
+    await seed(botId, entries);
+  } catch (cause) {
+    console.warn('[bots] seeding initial memories failed', botId, cause);
+  }
+}
+
 export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const bots = useBotProfiles();
   const [view, setView] = useState<'roster' | 'custom'>('roster');
+  /**
+   * 自定义路径的三步。
+   *
+   * `ask` 是**默认落点**:进「自己捏一个」先问一句「TA 是谁」,一句话就能换回一份
+   * 完整草稿。`manual` 是原来那张「名字 + 头像」的表,由「跳过,自己写」进入 ——
+   * 它一步没少,只是不再是唯一的路;生成不可用时永远还有它兜着。
+   */
+  const [customStep, setCustomStep] = useState<'ask' | 'preview' | 'manual'>('ask');
+  const [roleInput, setRoleInput] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<BotPersonaDraft | null>(null);
+  /**
+   * 预览卡上那张脸。单独存,不塞回草稿:草稿的 `avatarPreset` 只装得下「随包立绘
+   * 的 id」,而选择器同样允许挑 emoji + 底色 —— 硬塞回去会让用户选的 emoji 在
+   * 下一次渲染时被"认不出来"并悄悄换成哈希头像。
+   */
+  const [draftAvatar, setDraftAvatar] = useState<BotAvatarAssignment | null>(null);
+  /**
+   * 模型生成时用的那个名字。用户在预览卡上改了名之后,模型现造的那句开场白里念的
+   * 就是个不存在的名字了 —— 靠这个原值判定,改过就回落到带当前名字的模板句。
+   */
+  const [pristineDraftName, setPristineDraftName] = useState('');
   const [customName, setCustomName] = useState('');
   const [customAvatar, setCustomAvatar] = useState<BotAvatarAssignment>(() =>
     botAvatarAssignment(`${Date.now()}:${Math.random()}`),
@@ -60,6 +114,11 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
   useEffect(() => {
     if (view !== 'custom') return;
     setError(null);
+    setCustomStep('ask');
+    setGenerateError(null);
+    setDraft(null);
+    setDraftAvatar(null);
+    setPristineDraftName('');
   }, [view]);
 
   // "Already joined" is matched on the displayed name: a Bot profile stores no
@@ -104,12 +163,22 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
       avatar: string;
       avatarColor: BotAvatarHue | string;
       template: BotTemplateDefinition | null;
+      /** 模板之外的能力基线(AI 生成的伙伴用普通助理那一套)。 */
+      capabilities?: Partial<BotCapabilities>;
+      /** 加入即写进 TA 记忆空间的开场笔记。按 slug 幂等,失败不回滚伙伴。 */
+      seedEntries?: readonly BotMemorySeedEntry[];
+      /**
+       * 模板之外的开场白。阵容页脚注「加入后 TA 会先跟你打个招呼」是对**所有**
+       * 创建路径的承诺,所以手捏与生成两条路各自带一句,不能只有模板卡兑现。
+       */
+      welcome?: PendingBotWelcome;
     },
   ) => {
     if (creatingId) return;
     setCreatingId(id);
     setError(null);
     try {
+      const capabilities = input.template?.capabilities ?? input.capabilities;
       const bot = await addBotProfileAndWait({
         name: input.name,
         channel: 'local',
@@ -121,7 +190,7 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
         avatar: input.avatar,
         avatarColor: input.avatarColor,
         skills: [],
-        ...(input.template ? { capabilities: input.template.capabilities } : {}),
+        ...(capabilities ? { capabilities } : {}),
         ...(input.template?.autoSubscribeToTaskEvents
           ? {
               eventSubscription: {
@@ -134,7 +203,10 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
           : {}),
       });
       // Park the greeting; the canonical chat delivers it on first open.
-      if (input.template) rememberPendingBotWelcome(bot.id, input.template.welcomeKey);
+      const welcome = input.template ? input.template.welcomeKey : input.welcome;
+      if (welcome) rememberPendingBotWelcome(bot.id, welcome);
+      // 在跳进对话之前写完:用户从对话点进设置时,「TA 记得的」就已经有东西了。
+      await seedBotMemories(bot.id, input.seedEntries ?? []);
       handleCreated(bot);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('bots.createWizard.createFailed'));
@@ -154,8 +226,278 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
       avatar: customAvatar.emoji,
       avatarColor: customAvatar.hue,
       template: null,
+      welcome: botManualWelcome(name),
     });
   };
+
+  /**
+   * 「帮我生成」。
+   *
+   * 每一条失败路径都要说人话:通道不在(旧 preload / 远程镜像)、账号没连上、
+   * 模型答非所问 —— 分类各不相同,但共同点是**用户看得见发生了什么**,而且
+   * 「跳过,自己写」始终摆在旁边。静默失败(点了没反应)是这条链路最不能接受的结局。
+   */
+  const runGenerate = async (event: FormEvent) => {
+    event.preventDefault();
+    const role = roleInput.trim();
+    if (!role || generating) return;
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const generate = window.electronAPI?.maker?.generateBotPersona;
+      if (!generate) {
+        setGenerateError(t('bots.roster.generate.errors.unavailable'));
+        return;
+      }
+      const result = await generate(role);
+      if (!result.ok) {
+        setGenerateError(t(botPersonaGenerateErrorKey(result.code)));
+        return;
+      }
+      setDraft(result.draft);
+      setPristineDraftName(result.draft.name);
+      const suggested = resolveDraftAvatar(result.draft);
+      setDraftAvatar({ emoji: suggested.avatar, hue: suggested.hue });
+      setCustomStep('preview');
+    } catch (cause) {
+      setGenerateError(
+        cause instanceof Error ? cause.message : t('bots.roster.generate.errors.failed'),
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const createFromDraft = () => {
+    if (!draft) return;
+    const input = botPersonaCreateInput(draft);
+    if (!input.name) return;
+    void create('generated', {
+      name: input.name,
+      description: input.description,
+      identitySource: input.identitySource,
+      // 用户在预览卡上换过脸就用他挑的那张;没换过时 draftAvatar 就是建议值本身。
+      avatar: draftAvatar?.emoji ?? input.avatar,
+      avatarColor: draftAvatar?.hue ?? input.avatarColor,
+      template: null,
+      capabilities: input.capabilities,
+      seedEntries: botPersonaSeedEntries(draft),
+      welcome: botPersonaWelcome(draft, pristineDraftName),
+    });
+  };
+
+  if (view === 'custom' && customStep === 'ask') {
+    /*
+      第一步只问一句话。
+
+      「自己捏一个」原本上来就是一张空表:名字、头像,剩下的自己去设置里补。可
+      大多数人心里有的不是名字,是**用途**——「设计师」「能帮我盯娃学习的助理」。
+      所以这一屏把那句用途接下来,换回一份可以改的完整草稿;真想自己写的人,
+      「跳过,自己写」还在原地,一步没多。
+    */
+    return (
+      <main className="h-full overflow-y-auto bg-[var(--surface)]" role="main">
+        <form className="mx-auto max-w-[560px] px-6 py-10 sm:px-8" onSubmit={runGenerate}>
+          <h1 className="text-24 font-medium text-[var(--text-primary)]">
+            {t('bots.roster.generate.title')}
+          </h1>
+          <p className="mt-2 text-13 leading-6 text-[var(--text-secondary)]">
+            {t('bots.roster.generate.subtitle')}
+          </p>
+
+          <label className="mt-7 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+            {t('bots.roster.generate.inputLabel')}
+            <textarea
+              autoFocus
+              value={roleInput}
+              onChange={(event) => setRoleInput(event.target.value)}
+              placeholder={t('bots.roster.generate.inputPlaceholder')}
+              rows={3}
+              className="resize-y rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2.5 text-14 leading-6 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-placeholder)] focus:border-[var(--focus-ring)]"
+            />
+          </label>
+
+          {generateError ? (
+            <p className="mt-3 text-12 leading-5 text-[var(--text-danger)]" role="alert">
+              {generateError}
+            </p>
+          ) : null}
+
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              disabled={generating || roleInput.trim().length === 0}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+            >
+              {generating ? <Spinner size={14} /> : <Sparkles size={14} aria-hidden />}
+              {generating ? t('bots.roster.generate.generating') : t('bots.roster.generate.action')}
+            </button>
+            {/* 「自己写」永远可用 —— 它不是失败时才出现的补救,而是一条平级的路。 */}
+            <button
+              type="button"
+              onClick={() => setCustomStep('manual')}
+              className="rounded-lg text-12 text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)]"
+            >
+              {t('bots.roster.generate.skip')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('roster')}
+              className="h-9 rounded-full border border-[var(--border-default)] px-4 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            >
+              {t('bots.roster.backToRoster')}
+            </button>
+          </div>
+        </form>
+      </main>
+    );
+  }
+
+  if (view === 'custom' && customStep === 'preview' && draft) {
+    /*
+      预览卡 = 草稿本身,不是一张"确认页"。
+
+      名字、头像、简介、背景全文、每一条初始记忆都在这里就能改 / 删,改完才落库。
+      把生成结果直接创建出来再让用户去设置里翻着改,等于把返工推给用户。
+    */
+    const preview = draftAvatar ?? {
+      emoji: resolveDraftAvatar(draft).avatar,
+      hue: resolveDraftAvatar(draft).hue,
+    };
+    return (
+      <main className="h-full overflow-y-auto bg-[var(--surface)]" role="main">
+        <div className="mx-auto max-w-[560px] px-6 py-10 sm:px-8">
+          <h1 className="text-24 font-medium text-[var(--text-primary)]">
+            {t('bots.roster.generate.previewTitle')}
+          </h1>
+          <p className="mt-2 text-13 leading-6 text-[var(--text-secondary)]">
+            {t('bots.roster.generate.previewSubtitle')}
+          </p>
+
+          <div className="mt-7 flex flex-col gap-4 rounded-xl border border-[var(--border-default)] p-5">
+            <div className="flex items-center gap-3">
+              <BotAvatarPicker
+                name={draft.name}
+                avatar={preview.emoji}
+                avatarColor={preview.hue}
+                onChange={setDraftAvatar}
+              />
+              <div className="min-w-0 flex-1">
+                <input
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft((current) =>
+                      current ? { ...current, name: event.target.value } : current,
+                    )
+                  }
+                  aria-label={t('bots.roster.customNameLabel')}
+                  className="h-9 w-full rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:border-[var(--focus-ring)]"
+                />
+              </div>
+            </div>
+
+            <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+              {t('bots.roster.generate.descriptionLabel')}
+              <input
+                value={draft.description}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current ? { ...current, description: event.target.value } : current,
+                  )
+                }
+                className="h-9 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus:border-[var(--focus-ring)]"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
+              {t('bots.background.title')}
+              <textarea
+                value={draft.identity}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current ? { ...current, identity: event.target.value } : current,
+                  )
+                }
+                rows={7}
+                className="resize-y rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-12 leading-5 text-[var(--text-primary)] outline-none focus:border-[var(--focus-ring)]"
+              />
+            </label>
+
+            <div>
+              <p className="text-12 text-[var(--text-secondary)]">
+                {t('bots.roster.generate.memoriesLabel')}
+              </p>
+              {draft.memories.length === 0 ? (
+                <p className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
+                  {t('bots.roster.generate.memoriesEmpty')}
+                </p>
+              ) : (
+                <ul className="mt-2 flex flex-col gap-1.5">
+                  {draft.memories.map((memory, index) => (
+                    <li
+                      key={`${memory.title}:${index}`}
+                      className="flex items-start justify-between gap-3 rounded-lg bg-[var(--surface-chip)] px-3 py-2"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-12 text-[var(--text-primary)]">
+                          {memory.title}
+                        </span>
+                        <span className="mt-0.5 block truncate text-11 text-[var(--text-tertiary)]">
+                          {memory.description}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={t('bots.memoryList.deleteAria', { title: memory.title })}
+                        onClick={() =>
+                          setDraft((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  memories: current.memories.filter((_, i) => i !== index),
+                                }
+                              : current,
+                          )
+                        }
+                        className="shrink-0 rounded-lg p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-danger)]"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          {error ? (
+            <p className="mt-3 text-12 text-[var(--text-danger)]" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          <div className="mt-6 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={creatingId !== null || draft.name.trim().length === 0}
+              onClick={createFromDraft}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+            >
+              {creatingId !== null ? <Spinner size={14} /> : null}
+              {t('bots.roster.generate.confirm')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCustomStep('ask')}
+              className="h-9 rounded-full border border-[var(--border-default)] px-4 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            >
+              {t('bots.roster.generate.regenerate')}
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   if (view === 'custom') {
     const selectedPreset = parsePresetAvatarId(customAvatar.emoji);
@@ -335,6 +677,9 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
                       avatar: template.avatar,
                       avatarColor: template.avatarColor,
                       template,
+                      // 角色自带的开场笔记跟着人一起来 —— 卡上写着 TA 是谁,
+                      // 加进来之后「TA 记得的」就不该是一片空白。
+                      seedEntries: botTemplateSeedEntries(template, t),
                     })
                   }
                   className={cn(

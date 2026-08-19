@@ -340,6 +340,13 @@ export const MAKER_INVOKE = {
   BOT_MEMORY_DELETE: 'maker:bot-memory:delete',
   BOT_MEMORY_CLEAR: 'maker:bot-memory:clear',
   /**
+   * 「初始记忆」落地(模板自带的 / AI 生成的)。按 slug 幂等:已存在的分片不覆盖,
+   * 用户改过的那条不会被第二次调用冲掉。
+   */
+  BOT_MEMORY_SEED: 'maker:bot-memory:seed',
+  /** 一句话角色 → 伙伴草稿(复用 title one-shot 通道,见 botPersonaGeneration.ts)。 */
+  BOT_PERSONA_GENERATE: 'maker:bots:generate-persona',
+  /**
    * 启动期 renderer 同步 main 持久化的三个 memory 开关 (maker / claudeCode / codex)。
    * main 的 <userData>/memory-settings.json 是 source of truth, renderer localStorage
    * 只是 UI 即时态镜像 — 启动时拉一次 + 用户 toggle 时同步, 保证刷新/重启后 UI 跟实际对齐。

@@ -29,6 +29,14 @@ import type {
   UserMessage,
 } from '@cindy/maker-core';
 import { buildBotMemoryScopeKey } from '@cindy/maker-core';
+import {
+  normalizeBotMemorySeedEntries,
+  selectMissingBotMemorySeedEntries,
+} from '../../shared/botMemorySeed.js';
+import {
+  defaultBotPersonaGenerationDeps,
+  generateBotPersonaDraft,
+} from './botPersonaGeneration.js';
 import { storedCustomProviderId } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
@@ -14959,6 +14967,62 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log.info('bot-memory:clear', { botId });
     return maker.makerMemory.resetWorkdir(buildBotMemoryScopeKey(botId));
   });
+
+  /*
+    「初始记忆」落地。模板选卡与 AI 角色生成都走这一条 —— 一个伙伴刚加入时就该
+    有几条自己的开场笔记,而不是让「TA 记得的」空到用户以为这块坏了。
+
+    幂等以 **slug** 为准(见 shared/botMemorySeed.ts):重复调用、重装、重试都只补
+    缺的那几条,已经在库里的一律跳过。用户把某条改写成自己的说法之后,再触发一次
+    也不会被冲掉 —— 那是他的记忆,不是我们的默认值。
+
+    skipDisabledCheck 与 list/delete/clear 一致:全局 Maker Memory 开关的状态不该
+    决定「这个伙伴自带的东西有没有落地」,否则用户开回开关时看到的是一个空列表。
+  */
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_SEED, async (_e, botId: unknown, entries: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    const normalized = normalizeBotMemorySeedEntries(entries);
+    if (normalized.length === 0) return { written: 0, skipped: 0 };
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
+      skipDisabledCheck: true,
+    });
+    const existing = (await store.list()).map((record) => record.slug);
+    const missing = selectMissingBotMemorySeedEntries(normalized, existing);
+    let written = 0;
+    for (const entry of missing) {
+      try {
+        await store.write({
+          type: entry.type,
+          name: entry.slug,
+          title: entry.title,
+          description: entry.description,
+          body: entry.body,
+          mode: 'create',
+        });
+        written += 1;
+      } catch (cause) {
+        // 一条写不进去(撞名竞态 / size 硬上限)不该让其余几条跟着丢。
+        log.warn('bot-memory:seed entry failed', { botId, slug: entry.slug, error: String(cause) });
+      }
+    }
+    log.info('bot-memory:seed', { botId, written, skipped: normalized.length - written });
+    return { written, skipped: normalized.length - written };
+  });
+
+  /*
+    角色生成助手:一句话角色 → 一份可编辑的伙伴草稿。模型调用复用既有的一次性
+    通道(见 maker-ipc/botPersonaGeneration.ts 顶部对通道选型的说明),这里只做
+    入参把关与结果透传 —— 失败一律带分类码回 renderer,由它给一句人话 +「自己写」
+    出路,不静默。
+  */
+  ipcMain.handle(MAKER_INVOKE.BOT_PERSONA_GENERATE, async (_e, role: unknown) =>
+    generateBotPersonaDraft(role, defaultBotPersonaGenerationDeps()),
+  );
 
   // 占位：MetaAgent 入口
   ipcMain.handle(MAKER_INVOKE.RUN, () => {

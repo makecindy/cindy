@@ -128,3 +128,70 @@ describe('入伙即打招呼', () => {
     expect(peekPendingBotWelcome('bot-2')).toBe('welcome.two');
   });
 });
+
+/*
+  阵容页脚注「加入后 TA 会先跟你打个招呼」是对**所有**创建路径的承诺。模板伙伴
+  一直有自己的 welcome 文案,手捏与 AI 生成两条路要用同一条注入通道兑现:插值
+  (通用开场句 + 名字)或现成整句(模型现造的开场白)。
+*/
+describe('入伙即打招呼 — 插值与现成整句', () => {
+  it('寄存带插值的通用开场句,交付时把参数交给 t', async () => {
+    rememberPendingBotWelcome('bot-1', {
+      key: 'bots.welcome.generic',
+      params: { name: '阿橘' },
+    });
+    const translate = vi.fn((key: string, params?: Record<string, string>) =>
+      params ? `${key}|${JSON.stringify(params)}` : key,
+    );
+    const d = deps({ translate });
+
+    await expect(deliverPendingBotWelcome('bot-1', 'session-1', d)).resolves.toBe(true);
+    expect(translate).toHaveBeenCalledWith('bots.welcome.generic', { name: '阿橘' });
+    expect(d.createMessage.mock.calls[0][1].content).toBe(
+      'bots.welcome.generic|{"name":"阿橘"}',
+    );
+  });
+
+  it('现成整句直接落地,不查目录', async () => {
+    rememberPendingBotWelcome('bot-1', {
+      key: 'bots.welcome.withRole',
+      text: '  嗨，我是阿橘。配图和走查都可以丢给我。  ',
+    });
+    const translate = vi.fn(() => 'should not be used');
+    const d = deps({ translate });
+
+    await expect(deliverPendingBotWelcome('bot-1', 'session-1', d)).resolves.toBe(true);
+    expect(translate).not.toHaveBeenCalled();
+    expect(d.createMessage.mock.calls[0][1].content).toBe('嗨，我是阿橘。配图和走查都可以丢给我。');
+    // 幂等仍靠同一个 clientId,与模板路径完全一致。
+    expect(d.createMessage.mock.calls[0][1].clientId).toBe(botWelcomeClientId('bot-1'));
+  });
+
+  /*
+    升级前建好、升级后才第一次打开的伙伴,寄存的还是旧形状(裸 key 字符串)。
+    读不出来就等于那位伙伴永远不打招呼了。
+  */
+  it('仍然认旧版本寄存的裸 key 字符串', async () => {
+    window.localStorage.setItem(
+      'cindy.bots.pendingWelcome.v1',
+      JSON.stringify({ 'bot-legacy': 'bots.createWizard.templates.shiba.welcome' }),
+    );
+    expect(peekPendingBotWelcome('bot-legacy')).toBe(
+      'bots.createWizard.templates.shiba.welcome',
+    );
+    const d = deps();
+    await expect(deliverPendingBotWelcome('bot-legacy', 'session-1', d)).resolves.toBe(true);
+  });
+
+  it('丢掉形状不对的寄存,不把脏数据写进对话', async () => {
+    window.localStorage.setItem(
+      'cindy.bots.pendingWelcome.v1',
+      JSON.stringify({ 'bot-x': { params: { name: 'a' } }, 'bot-y': 42, 'bot-z': '' }),
+    );
+    for (const id of ['bot-x', 'bot-y', 'bot-z']) {
+      const d = deps();
+      await expect(deliverPendingBotWelcome(id, 'session-1', d)).resolves.toBe(false);
+      expect(d.createMessage).not.toHaveBeenCalled();
+    }
+  });
+});

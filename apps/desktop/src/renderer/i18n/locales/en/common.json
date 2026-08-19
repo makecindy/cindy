@@ -5792,42 +5792,89 @@
           "intro": "Hi, I'm Cindy. Hand me the odds and ends of work and life — writing, research, your calendar, your messages. You do your thing; call me when you need me.",
           "name": "Cindy",
           "skill": "A bit of everything",
-          "welcome": "Hi, I'm Cindy 👋 From now on, hand me the writing, the research and the file tidying.\n\nConnect a messaging channel and I can keep an eye on things while you are away."
+          "welcome": "Hi, I'm Cindy 👋 From now on, hand me the writing, the research and the file tidying.\n\nConnect a messaging channel and I can keep an eye on things while you are away.",
+          "seedMemories": {
+            "ask_before_guessing": {
+              "title": "Ask before guessing",
+              "description": "Confirm what is wanted instead of assuming",
+              "body": "When the request is thin, ask one short question to confirm what is actually wanted before starting. Better one extra question than a guessed-at result."
+            }
+          }
         },
         "shiba": {
           "description": "Your everyday helper",
           "intro": "Woof! I'm Xiaochai. Reminders, schedules, errands, expenses — leave the household side to me.",
           "name": "Xiaochai",
           "skill": "Everyday life",
-          "welcome": "Woof! I'm Xiaochai 🐕 Reminders, schedules, errands, expenses — leave the household side to me.\n\nJust tell me anything you need remembered and I will keep watch."
+          "welcome": "Woof! I'm Xiaochai 🐕 Reminders, schedules, errands, expenses — leave the household side to me.\n\nJust tell me anything you need remembered and I will keep watch.",
+          "seedMemories": {
+            "one_thing_per_reminder": {
+              "title": "One thing per reminder",
+              "description": "Keep reminders short — one item each",
+              "body": "Reminders stay short. One reminder carries one thing and then stops; never pack several errands into the same line."
+            },
+            "read_back_what_i_wrote": {
+              "title": "Read back what I wrote down",
+              "description": "Repeat the note once to confirm it landed right",
+              "body": "After writing something down, repeat it back in one line — when, where, what. Only close the turn once it is confirmed correct."
+            }
+          }
         },
         "melody": {
           "description": "Your engineering buddy",
           "intro": "I'm Melody. Code, deploys and bugs come to me. Few words, careful work.",
           "name": "Melody",
           "skill": "Engineering",
-          "welcome": "I'm Melody. Code, deploys and bugs come to me. Few words, careful work.\n\nPoint me at the project folder and I will learn my way around it first."
+          "welcome": "I'm Melody. Code, deploys and bugs come to me. Few words, careful work.\n\nPoint me at the project folder and I will learn my way around it first.",
+          "seedMemories": {
+            "small_changes": {
+              "title": "Small changes, verified first",
+              "description": "One change at a time, run it before reporting",
+              "body": "Change one thing at a time and run it myself before reporting. Whatever was not verified gets said out loud, never covered with \"should be fine\"."
+            }
+          }
         },
         "butler": {
           "description": "Your delivery steward",
           "intro": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.",
           "name": "Benben",
           "skill": "Delivery",
-          "welcome": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.\n\nTell me what is in flight and I will chase it for you."
+          "welcome": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.\n\nTell me what is in flight and I will chase it for you.",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "Conclusion first, risks on their own line",
+              "description": "One line for the outcome, a separate block for risks",
+              "body": "Lead every report with one line of conclusion. Risks and pending decisions go in their own block, never buried in the play-by-play. Never claim a finished state without evidence."
+            }
+          }
         },
         "star": {
           "description": "Your content buddy",
           "intro": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.",
           "name": "Xingxing",
           "skill": "Content",
-          "welcome": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.\n\nWhat do you want to publish? Just give me a topic."
+          "welcome": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.\n\nWhat do you want to publish? Just give me a topic.",
+          "seedMemories": {
+            "three_drafts_first": {
+              "title": "Three takes before a final",
+              "description": "Offer a few versions to pick from, never one finished take",
+              "body": "Copy comes in three takes with different tones. Whichever one gets picked is the one I polish. Never hand over a single finished draft up front."
+            }
+          }
         },
         "ashu": {
           "description": "Your coordinator",
           "intro": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.",
           "name": "Ashu",
           "skill": "Coordination",
-          "welcome": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.\n\nCarry on — I will speak up when something needs you."
+          "welcome": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.\n\nCarry on — I will speak up when something needs you.",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "Only the conclusion and the calls to make",
+              "description": "Skip the play-by-play; state the outcome and what needs deciding",
+              "body": "A report carries two things: where it stands now, and what needs a decision. No replay of the steps in between, and anything uncertain gets called uncertain."
+            }
+          }
         }
       }
     },
@@ -6423,7 +6470,7 @@
       "backToRoster": "Back to the roster",
       "customAction": "Shape your own",
       "customHint": "Personality, memory and schedules can all be tuned later in their own settings.",
-      "customIntro": "Start from scratch: a name, a face, a personality.",
+      "customIntro": "Say who they are in one line and I will draft it — or write the whole thing yourself.",
       "customName": "Custom",
       "customNameLabel": "Name",
       "customNamePlaceholder": "e.g. Juju",
@@ -6437,7 +6484,30 @@
       "joined": "Already here",
       "subtitle": "Pick one you click with, or shape your own.",
       "title": "Meet your teammates",
-      "customAvatarLabel": "Pick a face"
+      "customAvatarLabel": "Pick a face",
+      "generate": {
+        "title": "Who are they?",
+        "subtitle": "One line is enough — I will draft the name, personality and background, and you edit from there.",
+        "inputLabel": "Describe them in one line",
+        "inputPlaceholder": "e.g. a designer / someone to keep my kid on track with homework",
+        "action": "Draft one for me",
+        "generating": "Drafting…",
+        "skip": "Skip, I will write it",
+        "previewTitle": "Meet the draft",
+        "previewSubtitle": "Change anything that feels off, then bring them in.",
+        "descriptionLabel": "One-line summary",
+        "memoriesLabel": "What they already remember",
+        "memoriesEmpty": "No starting notes this time.",
+        "confirm": "Looks right, create",
+        "regenerate": "Say it differently",
+        "errors": {
+          "emptyInput": "Say who they are first.",
+          "providerNotReady": "No model source is connected yet — sign in or connect one, then try again. You can always write it yourself.",
+          "invalidOutput": "That draft came back unreadable. Try again, or write it yourself.",
+          "failed": "Nothing came back this time. Try again, or write it yourself.",
+          "unavailable": "This build cannot draft teammates yet. Please write it yourself."
+        }
+      }
     },
     "chat": {
       "composerPlaceholder": "Say something to {{name}}…",
@@ -6521,8 +6591,6 @@
       "summaryCallName": "uses your name",
       "summaryCallBoss": "calls you Boss",
       "summaryCallCustom": "calls you {{name}}",
-      "rawToggle": "Advanced: write it yourself",
-      "rawPlaceholder": "Not recommended — the picks above are usually enough. If you really want to, write it here.",
       "ack": {
         "concise": "Got it. This is how I'll talk from now on.",
         "conciseBoss": "Got it, boss. This is how I'll talk from now on.",
@@ -6547,7 +6615,10 @@
       "deleteDescription": "Delete \"{{title}}\"? This cannot be undone.",
       "deleteConfirm": "Delete",
       "deleteAria": "Delete \"{{title}}\"",
-      "footnote": "They jot things down here on their own, and you can delete any of it."
+      "footnote": "They jot things down here on their own, and you can delete any of it.",
+      "footnoteWithSeed": "A few came with them when they joined; after that they jot things down here on their own. You can delete any of it.",
+      "seedBack": "Write their starting notes back",
+      "seedingBack": "Writing…"
     },
     "learned": {
       "title": "What they've learned",
@@ -6655,6 +6726,18 @@
       "days": "joined {{n}} days ago",
       "months": "joined {{n}} months ago",
       "years": "joined {{n}} years ago"
+    },
+    "background": {
+      "title": "Background",
+      "edit": "Edit",
+      "done": "Done",
+      "placeholder": "Who they are, what they own, how far they go.",
+      "empty": "No background yet — a few lines make them feel like themselves.",
+      "footnote": "This travels with them into every conversation. The three personality steps above are kept separate, so editing here leaves them alone."
+    },
+    "welcome": {
+      "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
+      "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
     }
   },
   "commonUi": {
