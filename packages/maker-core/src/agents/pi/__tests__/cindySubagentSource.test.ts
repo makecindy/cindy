@@ -150,6 +150,27 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("runnerInstanceId: 'launch-pending-' + runId");
   });
 
+  it('checks the launch fence before staging or spawning a durable run', () => {
+    // The Host cannot prevent this spawn by scanning: it happens here, inside
+    // Pi, in an extension the Host never calls. The fence is the only way an
+    // update relaunch can guarantee no runner appears behind its back — and it
+    // has to be read before anything is written to the run directory.
+    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    expect(src).toContain("const LAUNCH_FENCE_FILENAME = '.launch-fence.json'");
+    const launch = src.indexOf('function launchDurableRun(');
+    const check = src.indexOf('if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {', launch);
+    const stage = src.indexOf('mkdirSync(runDir', launch);
+    const spawned = src.indexOf('spawn(nodeExecutable', launch);
+    expect(check).toBeGreaterThan(launch);
+    expect(stage).toBeGreaterThan(check);
+    expect(spawned).toBeGreaterThan(check);
+    // Only our own host's live fence counts: a fence from another instance
+    // sharing the agent home, or one left by a dead host, must not block.
+    const fn = src.slice(src.indexOf('function launchFenceBlocksSpawn('), launch);
+    expect(fn).toContain('fence.hostPid !== hostPid');
+    expect(fn).toContain('process.kill(hostPid, 0)');
+  });
+
   it('removes a partially staged durable run before reporting setup failure', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
       'rmSync(runDir, { recursive: true, force: true })',

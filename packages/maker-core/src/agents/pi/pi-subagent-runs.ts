@@ -135,6 +135,111 @@ export interface PiSubagentRunDiagnostic {
 
 export type PiSubagentControlAction = 'stop' | 'steer' | 'follow_up' | 'approval';
 
+/**
+ * Cross-process launch fence.
+ *
+ * An update relaunch has to guarantee that no durable runner appears between
+ * "the agent home is quiet" and `process.exit(0)`. Re-scanning cannot give that
+ * guarantee, because the spawn does not happen here: `launchDurableRun` runs
+ * inside the Pi process, in an injected extension the Host never calls. So the
+ * agreement is a file both sides can see.
+ *
+ * Protocol:
+ *  - The Host writes `{ version: 1, hostPid, createdAt }` into the shared runs
+ *    directory before its first reclaim pass, and removes it on every exit from
+ *    the relaunch — success or cancellation.
+ *  - A launcher refuses only when the fence names *its own* host and that pid is
+ *    alive. A fence from another instance sharing the agent home is ignored, and
+ *    a fence whose owner died is inert, so a crashed Host can never wedge
+ *    Subagent launches for anyone (including its own replacement).
+ *  - The reclaim loop still runs: the fence closes the window, the loop clears
+ *    whatever was already in flight when it closed.
+ */
+export const PI_SUBAGENT_LAUNCH_FENCE_FILENAME = '.launch-fence.json';
+
+interface PiSubagentLaunchFence {
+  version: 1;
+  hostPid: number;
+  createdAt: number;
+}
+
+function piSubagentRunsRoot(agentHome: string): string {
+  return path.join(agentHome, 'runtime', 'pi-subagent-runs');
+}
+
+export function piSubagentLaunchFencePath(agentHome: string): string {
+  return path.join(piSubagentRunsRoot(agentHome), PI_SUBAGENT_LAUNCH_FENCE_FILENAME);
+}
+
+function parseLaunchFence(value: unknown): PiSubagentLaunchFence | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.version !== 1) return null;
+  if (!Number.isSafeInteger(raw.hostPid) || (raw.hostPid as number) <= 0) return null;
+  return {
+    version: 1,
+    hostPid: raw.hostPid as number,
+    createdAt: finiteNonNegative(raw.createdAt) ? raw.createdAt : 0,
+  };
+}
+
+/**
+ * Does a fence currently forbid `hostPid` from starting new durable runs?
+ *
+ * Synchronous and cheap on purpose: it sits in front of a spawn, and both
+ * callers (the in-Pi extension and the Host's resume path) need an answer
+ * without an await budget. Unreadable or absent means "no fence".
+ */
+export function isPiSubagentLaunchFenceActive(agentHome: string, hostPid: number): boolean {
+  let fence: PiSubagentLaunchFence | null;
+  try {
+    fence = parseLaunchFence(JSON.parse(readFileSync(piSubagentLaunchFencePath(agentHome), 'utf8')));
+  } catch {
+    return false;
+  }
+  if (!fence || fence.hostPid !== hostPid) return false;
+  return isProcessAlive(fence.hostPid) !== false;
+}
+
+/**
+ * Raise the fence for this process. The returned release is idempotent and must
+ * run on every path out of the relaunch, or this host's own next launch attempt
+ * would be refused until it exits.
+ */
+export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<() => Promise<void>> {
+  const file = piSubagentLaunchFencePath(agentHome);
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await writeAtomicJson(file, {
+    version: 1,
+    hostPid: process.pid,
+    createdAt: Date.now(),
+  } satisfies PiSubagentLaunchFence);
+  let released = false;
+  return async () => {
+    if (released) return;
+    released = true;
+    await fs.rm(file, { force: true }).catch(() => undefined);
+  };
+}
+
+/**
+ * Drop a fence left behind by a process that is gone — the ordinary case after
+ * an update relaunch, where the fence was raised by the host we replaced. A
+ * fence owned by a live process (another instance mid-relaunch) is left alone.
+ */
+export async function clearStalePiSubagentLaunchFence(agentHome: string): Promise<void> {
+  const file = piSubagentLaunchFencePath(agentHome);
+  let fence: PiSubagentLaunchFence | null;
+  try {
+    fence = parseLaunchFence(JSON.parse(await fs.readFile(file, 'utf8')));
+  } catch {
+    return;
+  }
+  // A record we cannot attribute is as good as abandoned; so is a dead owner.
+  if (fence && isProcessAlive(fence.hostPid) !== false) return;
+  await fs.rm(file, { force: true }).catch(() => undefined);
+}
+
 interface TranscriptCursor {
   version: 1;
   runId: string;
@@ -522,14 +627,18 @@ export function canHostControlPiSubagentRun(
   return piSubagentControlOwnership(status, hostPid) !== 'foreign-live';
 }
 
-function isSweepableByHost(status: PiSubagentRunStatus | undefined, hostPid: number): boolean {
+function isSweepableByHost(
+  status: PiSubagentRunStatus | undefined,
+  hostPid: number,
+  memo?: ProcessStartTimeMemo,
+): boolean {
   const identity = piSubagentOwnerIdentity(status?.runtimeOwnerId);
   if (identity === null) return true;
   if (identity.pid === hostPid) return true;
   // A dead owner process leaves an orphan runner that nobody will ever stop.
   // "Dead" includes a pid that is live but belongs to a *different* process
   // than the one that minted the id (recycled pid).
-  return !isOwnerInstanceAlive(identity);
+  return !isOwnerInstanceAlive(identity, memo);
 }
 
 /**
@@ -581,26 +690,24 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
 }
 
 /**
- * Memo for the start-time probe: one sweep asks the same question once per run
- * directory, and each miss is a `ps`/CIM spawn. The TTL keeps it honest — a pid
- * that dies and is recycled inside 10s still resolves to the old answer, which
- * only ever errs toward "still alive" (the conservative direction below).
+ * Per-sweep memo for the start-time probe, passed down rather than held.
+ *
+ * The reason for memoising at all is that one sweep asks the same question once
+ * per run directory and each miss is a `ps`/CIM spawn — a scope that ends with
+ * the sweep covers exactly that. A process-wide cache with a TTL does not: a pid
+ * that dies and is recycled inside the TTL keeps answering with the *dead*
+ * owner's start time, which is precisely the value the recorded id was minted
+ * with, so the orphan reads as "another live instance" and is skipped. Time
+ * cannot detect reuse; only a fresh probe can, and a sweep-scoped memo is the
+ * largest window in which reuse is not observable anyway.
  */
-const PROCESS_START_PROBE_TTL_MS = 10_000;
-const PROCESS_START_PROBE_CACHE_MAX = 64;
-const processStartTimeCache = new Map<number, { at: number; startTimeSec: number | null }>();
+type ProcessStartTimeMemo = Map<number, number | null>;
 
-function readProcessStartTimeSec(pid: number): number | null {
-  const now = Date.now();
-  const cached = processStartTimeCache.get(pid);
-  if (cached && now - cached.at < PROCESS_START_PROBE_TTL_MS) return cached.startTimeSec;
-  const startTimeSec = probeProcessStartTimeSec(pid, now);
-  processStartTimeCache.set(pid, { at: now, startTimeSec });
-  if (processStartTimeCache.size > PROCESS_START_PROBE_CACHE_MAX) {
-    for (const [key, entry] of processStartTimeCache) {
-      if (now - entry.at >= PROCESS_START_PROBE_TTL_MS) processStartTimeCache.delete(key);
-    }
-  }
+function readProcessStartTimeSec(pid: number, memo?: ProcessStartTimeMemo): number | null {
+  const cached = memo?.get(pid);
+  if (cached !== undefined) return cached;
+  const startTimeSec = probeProcessStartTimeSec(pid, Date.now());
+  memo?.set(pid, startTimeSec);
   return startTimeSec;
 }
 
@@ -621,12 +728,15 @@ const OWNER_START_TIME_TOLERANCE_SEC = 5;
  * instance's Subagent is unrecoverable; leaving an orphan is bounded by the run
  * timeout and still reachable through the diagnostics path.
  */
-function isOwnerInstanceAlive(identity: PiSubagentOwnerIdentity): boolean {
+function isOwnerInstanceAlive(
+  identity: PiSubagentOwnerIdentity,
+  memo?: ProcessStartTimeMemo,
+): boolean {
   if (isProcessAlive(identity.pid) === false) return false;
   if (identity.startTimeSec === undefined) return true;
   const startTimeSec = identity.pid === process.pid
     ? ownProcessStartTimeSec()
-    : readProcessStartTimeSec(identity.pid);
+    : readProcessStartTimeSec(identity.pid, memo);
   if (startTimeSec === null) return true;
   return Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
 }
@@ -651,6 +761,7 @@ function isProcessAlive(pid: number | undefined): boolean | null {
  * panel polls the list once a second.
  */
 const RUNNER_IDENTITY_TTL_MS = 10_000;
+const RUNNER_IDENTITY_CACHE_MAX = 64;
 const runnerIdentityCache = new Map<string, { at: number; matches: boolean }>();
 
 function runnerIdentityStillMatches(status: PiSubagentRunStatus): boolean {
@@ -670,7 +781,7 @@ function runnerIdentityStillMatches(status: PiSubagentRunStatus): boolean {
   if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.matches;
   const matches = verifyPiSubagentRunnerIdentity(status);
   runnerIdentityCache.set(key, { at: now, matches });
-  if (runnerIdentityCache.size > PROCESS_START_PROBE_CACHE_MAX) {
+  if (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
     for (const [entryKey, entry] of runnerIdentityCache) {
       if (now - entry.at >= RUNNER_IDENTITY_TTL_MS) runnerIdentityCache.delete(entryKey);
     }
@@ -1793,6 +1904,12 @@ export async function resumePiSubagentRun(
   launch: PiSubagentResumeLaunch,
   childId?: string,
 ): Promise<string | null> {
+  // Resume is the Host's own way of putting a new runner on disk, so it obeys
+  // the same fence the in-Pi launcher does. `root` is the per-session run
+  // directory; the fence lives one level up, next to every session's runs.
+  if (isPiSubagentLaunchFenceActive(path.dirname(path.dirname(path.dirname(root))), process.pid)) {
+    throw new Error('Cindy is restarting for an update; retry this resume shortly.');
+  }
   return serializePiSubagentResume(root, () => resumePiSubagentRunUnlocked(
     root,
     taskId,
@@ -1947,6 +2064,7 @@ const DEFAULT_KILL_BUDGET_MS = 8_000;
 async function sweepableRunsUnderRoot(
   root: string,
   scope: PiSubagentSweepScope,
+  startTimeMemo?: ProcessStartTimeMemo,
 ): Promise<Array<{ runId: string; status: PiSubagentRunStatus | undefined }>> {
   const runIds = await listRunDirectoryIds(root);
   const [listedStatuses, diagnostics] = await Promise.all([
@@ -1968,7 +2086,7 @@ async function sweepableRunsUnderRoot(
     ) {
       continue;
     }
-    if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
+    if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid, startTimeMemo)) continue;
     sweepable.push({ runId, status });
   }
   return sweepable;
@@ -2000,9 +2118,12 @@ async function stopPiSubagentRunsUnderRoots(
   const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
   const requested = new Set<string>();
   for (;;) {
+    // One memo per pass, discarded with it: within a single pass a pid cannot
+    // meaningfully be recycled, and across passes we must see it if it was.
+    const startTimeMemo: ProcessStartTimeMemo = new Map();
     let activeCount = 0;
     for (const root of roots) {
-      for (const { runId } of await sweepableRunsUnderRoot(root, scope)) {
+      for (const { runId } of await sweepableRunsUnderRoot(root, scope, startTimeMemo)) {
         activeCount += 1;
         const key = `${root}:${runId}`;
         if (requested.has(key)) continue;
@@ -2025,7 +2146,7 @@ async function stopPiSubagentRunsUnderRoots(
       for (const root of roots) {
         // Re-derived, so a run whose directory vanished in the meantime is gone
         // from the set and counts as reclaimed.
-        const work = await sweepableRunsUnderRoot(root, scope);
+        const work = await sweepableRunsUnderRoot(root, scope, startTimeMemo);
         // In parallel: each reclaim is mostly waiting on its own process probe,
         // and serialising them multiplied the worst case by the number of
         // runners — enough to overrun a quit budget with only a few of them.

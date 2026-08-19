@@ -58,6 +58,28 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     expect(source).toContain('const SUBAGENT_RECLAIM_TOTAL_MS = 6_000;');
   });
 
+  it('raises a cross-process fence before the first sweep and drops it on refusal', () => {
+    // Re-scanning can only narrow the window; the spawn it must prevent happens
+    // inside the Pi process. The fence is what actually closes it.
+    const loop = source.slice(
+      source.indexOf('async function reclaimSubagentRunnersForRelaunch()'),
+      source.indexOf('async function executeRelaunch('),
+    );
+    const fence = loop.indexOf('acquirePiSubagentLaunchFence(agentHome)');
+    const firstSweep = loop.indexOf('reclaimSubagentRunnersOnce(agentHome)');
+    expect(fence).toBeGreaterThan(-1);
+    expect(firstSweep).toBeGreaterThan(fence);
+    // A fence we could not raise is a refusal, not a silent pass.
+    expect(loop).toContain('if (!releaseSubagentLaunchFence) return false;');
+    // Every non-exit path takes it down again, or this host could never launch
+    // a Subagent afterwards.
+    const wrapper = source.slice(
+      source.indexOf('async function executeRelaunch('),
+      source.indexOf('async function executeRelaunchUnguarded('),
+    );
+    expect(wrapper).toMatch(/finally \{[\s\S]*clearSubagentLaunchFence\(\)/);
+  });
+
   it('gates before the updater is spawned, because a later refusal is not one', () => {
     // The spawned updater polls our pid and SIGKILLs it; deciding not to exit
     // after that point does not keep this process alive.

@@ -152,6 +152,56 @@ describe('Subagent runs broadcast boundary', () => {
     expect(h.persistSubagentTaskUpdate).toHaveBeenCalledTimes(order.length);
   });
 
+  it('recovers the row after one transient unreadable status', async () => {
+    // A terminal record is reconciled, then the same generation becomes briefly
+    // unreadable — a Windows sharing conflict on status.json is enough — so the
+    // diagnostic path writes the row as failed. Each projection memoised its own
+    // fingerprint, so when the file became readable again the healthy write was
+    // skipped as "unchanged" and the row stayed failed forever.
+    registerSubagentRunsIpc();
+    const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+    const healthy = {
+      version: 1, runId: '123e4567-e89b-42d3-a456-4266141740aa', taskId: 'parent-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'completed',
+      context: 'fresh', title: 'Finished run', startedAt: 1_000, updatedAt: 2_000,
+      endedAt: 2_000,
+      tasks: [{
+        childId: 'child-1', sessionId: 'session-child', agent: 'worker',
+        status: 'completed', output: 'the answer',
+      }],
+    };
+
+    // 1. Reconciled as completed.
+    h.listPiSubagentRuns.mockResolvedValue([healthy]);
+    h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledWith(
+      'session-1', expect.objectContaining({ status: 'completed' }), 'pi', 2_000,
+    );
+
+    // 2. The same generation is momentarily unreadable.
+    h.persistSubagentTaskUpdate.mockClear();
+    h.listPiSubagentRuns.mockResolvedValue([]);
+    h.listPiSubagentRunDiagnostics.mockResolvedValue([{
+      kind: 'corrupt', runId: healthy.runId, taskId: 'parent-tool',
+      parentSessionId: 'session-1', title: 'Finished run',
+      startedAt: 1_000, updatedAt: 3_000, message: 'status is unreadable',
+    }]);
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledWith(
+      'session-1', expect.objectContaining({ taskType: 'pi_subagent_diagnostic' }), 'pi', 3_000,
+    );
+
+    // 3. It reads again — and the row must come back, not stay failed.
+    h.persistSubagentTaskUpdate.mockClear();
+    h.listPiSubagentRuns.mockResolvedValue([healthy]);
+    h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledWith(
+      'session-1', expect.objectContaining({ status: 'completed', taskId: 'parent-tool' }), 'pi', 2_000,
+    );
+  });
+
   it('prefers the newest generation when health and diagnostics disagree', async () => {
     // The healthy and unreadable sets are walked separately. Walking health
     // first and dropping any diagnostic for a task already seen showed last

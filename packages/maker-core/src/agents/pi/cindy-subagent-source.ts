@@ -123,7 +123,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const TOOL_NAME = 'subagent';
 const MARKER = '__cindySubagent';
@@ -682,6 +682,38 @@ async function waitForDurableRun(launched, signal, ctx, onStatus) {
   }
 }
 
+// Cross-process launch fence, written by the Host into the shared runs
+// directory while it is restarting for an update. It names the host pid it
+// belongs to; we only obey a fence that names *our* host and whose process is
+// still alive, so a fence from another instance sharing this agent home, or one
+// left by a host that died, never blocks anything. Host side and full protocol:
+// piSubagentLaunchFencePath in pi-subagent-runs.ts.
+const LAUNCH_FENCE_FILENAME = '.launch-fence.json';
+
+function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {
+  const separator = runtimeOwnerId.indexOf(':');
+  if (separator <= 0) return false;
+  // Owner ids are <pid>:<scope> or <pid>.<startSec>:<scope>; only the pid
+  // segment is read here, deliberately without importing the Host's parser.
+  const host = runtimeOwnerId.slice(0, separator);
+  const dot = host.indexOf('.');
+  const hostPid = Number(dot < 0 ? host : host.slice(0, dot));
+  if (!Number.isSafeInteger(hostPid) || hostPid <= 0) return false;
+  let fence;
+  try {
+    fence = JSON.parse(readFileSync(join(dirname(runRoot), LAUNCH_FENCE_FILENAME), 'utf8'));
+  } catch (err) {
+    return false;
+  }
+  if (!fence || fence.version !== 1 || fence.hostPid !== hostPid) return false;
+  try {
+    process.kill(hostPid, 0);
+    return true;
+  } catch (err) {
+    return !!err && err.code === 'EPERM';
+  }
+}
+
 function launchDurableRun(binary, tasks, runtime, taskId, mode, context, displayTitle, interactiveOwner, timeoutMs) {
   const runRoot = process.env[RUN_ROOT_ENV];
   const runnerFile = process.env[RUNNER_FILE_ENV];
@@ -692,6 +724,11 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
   const runtimeOwnerId = process.env[OWNER_ID_ENV];
   if (!runRoot || !runnerFile || !nodeExecutable || !configHome || !sourcePermissionFile || !parentSessionId || !runtimeOwnerId) {
     throw new Error('subagent: durable runner is unavailable for this session.');
+  }
+  // Before anything is staged or spawned: a run started now would outlive the
+  // restart with credentials nobody is left holding.
+  if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {
+    throw new Error('subagent: Cindy is restarting for an update; retry shortly.');
   }
   const permission = readPermissionSnapshot();
   const runId = randomUUID();

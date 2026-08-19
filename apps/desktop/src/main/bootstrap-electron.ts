@@ -318,6 +318,7 @@ import { readClaudeApiKey } from './maker-host/auth-adapters';
 import { outboundFetch } from './maker-host/outbound-fetch';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
+  clearStalePiSubagentLaunchFence,
   hasActivePiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
@@ -1495,6 +1496,15 @@ authManager.setAccountSwitchTeardown(async () => {
 });
 authManager.setAuthSessionTeardown(teardownAuthAccountBoundary);
 authManager.setProjectionRepairTeardown(teardownGhostProjectionBoundary);
+
+// A launch fence left by the host we just replaced (or by one that crashed
+// mid-relaunch) would otherwise refuse this instance's Subagent launches for as
+// long as the file sits there. Only fences whose owner is gone are dropped, so a
+// concurrent instance genuinely mid-relaunch keeps its own.
+void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agent-home'))
+  .catch((err: unknown) => {
+    piSubagentLog.warn('stale Subagent launch fence cleanup failed (non-fatal):', err);
+  });
 
 try {
   reapClaudeOrphansSync();

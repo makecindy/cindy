@@ -11,13 +11,18 @@ import {
   killVerifiedPiSubagentRunner,
   listPiSubagentRunDiagnostics,
   listPiSubagentRuns,
+  acquirePiSubagentLaunchFence,
+  clearStalePiSubagentLaunchFence,
+  isPiSubagentLaunchFenceActive,
   piSubagentControlOwnership,
+  piSubagentLaunchFencePath,
   piSubagentOwnerHostPid,
   piSubagentOwnerIdentity,
   piSubagentRunRoot,
   piSubagentRuntimeOwnerId,
   requestStopAllPiSubagentRunsSync,
   readPiSubagentTranscriptPage,
+  resumePiSubagentRun,
   stopAllPiSubagentRunsForExit,
   stopAndRemovePiSubagentRuns,
   stopPiSubagentRunsForAccountBoundary,
@@ -501,7 +506,7 @@ describe('PI durable subagent run store', () => {
         .toBe('foreign-live');
     });
 
-    it('probes a given owner pid once per sweep instead of once per run', async () => {
+    it('probes a given owner pid once per pass, not once per run', async () => {
       const ownerPid = nextOwnerPid++;
       stubAliveOwner(ownerPid);
       stubStartProbe(nowSec() - 30);
@@ -514,11 +519,44 @@ describe('PI durable subagent run store', () => {
         }));
       }
 
-      await expect(stopAllPiSubagentRunsForExit(agentHome, 150, { hostPid: process.pid }))
+      // A zero timeout is exactly one pass, so the count is unambiguous.
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { hostPid: process.pid }))
         .resolves.toBe(false);
-      // Three runs, several sweep passes — one spawn. Without the memo this is
-      // a `ps` per run per pass, which shows up as logout latency.
+      // Three runs, one owner pid, one spawn. Without the memo this is a `ps`
+      // per run per pass, which shows up as logout latency.
       expect(childProcess.spawnSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-probes on the next sweep, so a recycled pid cannot hide behind a memo', async () => {
+      // The memo is scoped to one pass on purpose. A process-wide cache with a
+      // TTL keeps answering with the dead owner's start time for as long as it
+      // lives — and that is the very value the recorded id was minted with, so
+      // the orphan reads as another live instance and is skipped. Time cannot
+      // detect reuse; only a fresh probe can.
+      const ownerPid = nextOwnerPid++;
+      stubAliveOwner(ownerPid);
+      const startTimeSec = nowSec() - 600;
+      stubStartProbe(startTimeSec);
+      const owner = foreignOwnerId(ownerPid, startTimeSec);
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      const runId = '123e4567-e89b-42d3-a456-4266141740d0';
+      await writeStatus(root, status(runId, { runtimeOwnerId: owner }));
+
+      // First sweep: the owner is genuinely alive, so its run is left alone.
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { hostPid: process.pid }))
+        .resolves.toBe(true);
+      expect(piSubagentControlOwnership(run(owner), process.pid)).toBe('foreign-live');
+
+      // The owner dies and its pid is handed to something else, well inside any
+      // TTL a cache would have used.
+      stubStartProbe(nowSec() - 5);
+      expect(piSubagentControlOwnership(run(owner), process.pid)).toBe('orphaned');
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { hostPid: process.pid }))
+        .resolves.toBe(false);
+      await expect(readControls(root, runId)).resolves.toEqual([
+        expect.objectContaining({ action: 'stop' }),
+      ]);
     });
   });
 
@@ -926,6 +964,67 @@ describe('PI durable subagent run store', () => {
         await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
           .resolves.toBe(true);
       });
+    });
+  });
+
+  /**
+   * The spawn that an update relaunch has to prevent happens inside the Pi
+   * process, in an injected extension the Host never calls — so the agreement
+   * between them is a file. See `piSubagentLaunchFencePath`.
+   */
+  describe('launch fence', () => {
+    const runId = '123e4567-e89b-42d3-a456-4266141740e0';
+
+    async function fenceHome(hostPid: number): Promise<string> {
+      const agentHome = await makeRoot();
+      await mkdir(path.dirname(piSubagentLaunchFencePath(agentHome)), { recursive: true });
+      await writeFile(
+        piSubagentLaunchFencePath(agentHome),
+        `${JSON.stringify({ version: 1, hostPid, createdAt: Date.now() })}\n`,
+      );
+      return agentHome;
+    }
+
+    it('refuses a resume while this host holds the fence', async () => {
+      const agentHome = await fenceHome(process.pid);
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      await writeStatus(root, status(runId, { state: 'completed' }));
+
+      expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+      await expect(resumePiSubagentRun(root, 'tool-1', 'continue', {
+        nodeExecutable: process.execPath,
+        runtimeOwnerId: 'owner-a',
+        permissionSnapshot: { mode: 'ask', readOnlyRoots: [] },
+      })).rejects.toThrow(/restarting for an update/i);
+    });
+
+    it('ignores a fence owned by another instance or by a dead process', async () => {
+      // 2^22 is above every OS pid_max, so this owner is provably gone.
+      const deadHome = await fenceHome(4_194_303);
+      expect(isPiSubagentLaunchFenceActive(deadHome, 4_194_303)).toBe(false);
+      // A live fence that names someone else must not block us either: the
+      // agent home is shared by dev, packaged and every --passive instance.
+      const foreignHome = await fenceHome(process.ppid);
+      expect(isPiSubagentLaunchFenceActive(foreignHome, process.pid)).toBe(false);
+    });
+
+    it('raises, releases, and cleans up after a departed owner', async () => {
+      const agentHome = await makeRoot();
+      const release = await acquirePiSubagentLaunchFence(agentHome);
+      expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+      // Idempotent: a cancelled relaunch may unwind more than once.
+      await release();
+      await release();
+      expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+
+      // Startup cleanup drops a dead owner's fence, keeps a live one.
+      const staleHome = await fenceHome(4_194_303);
+      await clearStalePiSubagentLaunchFence(staleHome);
+      await expect(readFile(piSubagentLaunchFencePath(staleHome), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+      const liveHome = await fenceHome(process.pid);
+      await clearStalePiSubagentLaunchFence(liveHome);
+      await expect(readFile(piSubagentLaunchFencePath(liveHome), 'utf8')).resolves.toContain('"version":1');
     });
   });
 

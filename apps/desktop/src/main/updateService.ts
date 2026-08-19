@@ -27,6 +27,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 
 import {
+  acquirePiSubagentLaunchFence,
   hasActivePiSubagentRunsSync,
   requestStopAllPiSubagentRunsSync,
   stopAllPiSubagentRunsForExit,
@@ -1397,6 +1398,19 @@ function executeUpdateMacOS(zipPath: string): void {
   forceQuit();
 }
 
+/**
+ * Live launch fence, held from the first reclaim pass until the process exits.
+ * Cleared on every cancellation path, so a refused relaunch cannot leave this
+ * host unable to start Subagents.
+ */
+let releaseSubagentLaunchFence: (() => Promise<void>) | null = null;
+
+async function clearSubagentLaunchFence(): Promise<void> {
+  const release = releaseSubagentLaunchFence;
+  releaseSubagentLaunchFence = null;
+  if (release) await release().catch(() => undefined);
+}
+
 /** Total ceiling for the reclaim, including every re-check round. */
 const SUBAGENT_RECLAIM_TOTAL_MS = 6_000;
 /** Rounds before we stop trying and cancel the relaunch instead. */
@@ -1442,6 +1456,16 @@ async function reclaimSubagentRunnersOnce(agentHome: string): Promise<boolean> {
  */
 async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
   const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+  // Close the door before the first sweep, not after the last one. The spawn
+  // that has to be prevented happens inside the Pi process, in an extension the
+  // Host never calls, so re-scanning can only ever narrow the window — the
+  // fence removes it. The loop below then clears whatever was already in flight
+  // when the door closed. Released by the caller on every exit path.
+  releaseSubagentLaunchFence = await acquirePiSubagentLaunchFence(agentHome).catch((err) => {
+    log.error('Could not raise the Subagent launch fence: %s', String(err));
+    return null;
+  });
+  if (!releaseSubagentLaunchFence) return false;
   const deadline = Date.now() + SUBAGENT_RECLAIM_TOTAL_MS;
   for (let round = 1; round <= SUBAGENT_RECLAIM_MAX_ROUNDS; round += 1) {
     if (!await reclaimSubagentRunnersOnce(agentHome)) return false;
@@ -1482,6 +1506,11 @@ async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
     } catch (cleanupErr) {
       log.error('executeRelaunch() failure cleanup also failed: %s', String(cleanupErr));
     }
+  } finally {
+    // Any return from here that is not `process.exit` means the relaunch did
+    // not happen, so the fence must come down — including the early returns
+    // inside the guarded body.
+    if (!isRelaunching) await clearSubagentLaunchFence();
   }
 }
 

@@ -66,6 +66,10 @@ const RECONCILE_FINGERPRINT_SESSION_LIMIT = 64;
 let reconcileFingerprintOwnerKey: string | null = null;
 const reconcileFingerprints = new Map<string, Map<string, string>>();
 
+/** The two projections of one task; a write under either invalidates the other. */
+const RUN_FINGERPRINT_PREFIX = 'run:';
+const DIAGNOSTIC_FINGERPRINT_PREFIX = 'diagnostic:';
+
 function reconcileFingerprintsFor(sessionId: string, ownerKey: string): Map<string, string> {
   if (reconcileFingerprintOwnerKey !== ownerKey) {
     reconcileFingerprintOwnerKey = ownerKey;
@@ -138,6 +142,18 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
     await enqueueProjectionWrite(`subagent_reconcile:${sessionId}:${key}`, () =>
       persistSubagentTaskUpdate(sessionId, update, 'pi', observedAt));
     fingerprints.set(key, fingerprint);
+    // Both keys project the *same row*, so whichever one just wrote has to
+    // clear the other's memo. Without that, one transient unreadable status —
+    // a Windows sharing conflict on an already reconciled terminal record is
+    // enough — writes the row as failed under the diagnostic key, and when the
+    // file becomes readable again the healthy key's fingerprint is unchanged,
+    // so its write is skipped and the row stays failed forever.
+    const counterpart = key.startsWith(RUN_FINGERPRINT_PREFIX)
+      ? `${DIAGNOSTIC_FINGERPRINT_PREFIX}${key.slice(RUN_FINGERPRINT_PREFIX.length)}`
+      : key.startsWith(DIAGNOSTIC_FINGERPRINT_PREFIX)
+        ? `${RUN_FINGERPRINT_PREFIX}${key.slice(DIAGNOSTIC_FINGERPRINT_PREFIX.length)}`
+        : null;
+    if (counterpart !== null) fingerprints.delete(counterpart);
   };
   // One logical task can have several durable generations after resume, and the
   // healthy and unreadable sets are walked separately. Pick per task by
@@ -181,7 +197,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
       : undefined;
     const models = new Set(status.tasks.map((task) => task.model).filter(Boolean));
     const thinking = new Set(status.tasks.map((task) => task.thinking).filter(Boolean));
-    await persistIfChanged(`run:${status.taskId}`, {
+    await persistIfChanged(`${RUN_FINGERPRINT_PREFIX}${status.taskId}`, {
       provider: 'pi',
       taskId: status.taskId,
       parentToolUseId: status.taskId,
@@ -224,7 +240,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
     // longer gets dropped just because health was walked first.
     if (seenTaskIds.has(diagnostic.taskId!) || seenDiagnosticTaskIds.has(diagnostic.taskId!)) continue;
     seenDiagnosticTaskIds.add(diagnostic.taskId!);
-    await persistIfChanged(`diagnostic:${diagnostic.taskId}`, {
+    await persistIfChanged(`${DIAGNOSTIC_FINGERPRINT_PREFIX}${diagnostic.taskId}`, {
       provider: 'pi',
       taskId: diagnostic.taskId,
       parentToolUseId: diagnostic.taskId,
