@@ -267,6 +267,26 @@ export function GhostTrustSummary({ trust }: { trust: GhostTrustInfo }) {
   );
 }
 
+export function GhostOauthClientChangedAlert({ className }: { className?: string }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      className={cn(
+        'flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2 text-13 leading-5 text-[var(--text-secondary)]',
+        className,
+      )}
+    >
+      <ShieldAlert
+        size={16}
+        className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
+        aria-hidden="true"
+      />
+      <span>{t('settings.ghosts.updateConfirm.oauthClientChanged')}</span>
+    </div>
+  );
+}
+
 export function GhostManualSummary({ count }: { count: number }) {
   const { t } = useTranslation();
   if (count <= 0) return null;
@@ -434,25 +454,11 @@ export function GhostUpdateReview({
   diff: GhostPermissionDiff;
   manualCount?: number;
 }) {
-  const { t } = useTranslation();
   return (
     <div>
       {trust && <GhostTrustSummary trust={trust} />}
       {diff.builtinOauthClientChanged ? (
-        <div
-          role="alert"
-          className={cn(
-            trust && 'mt-3',
-            'flex items-start gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2 text-13 leading-5 text-[var(--text-secondary)]',
-          )}
-        >
-          <ShieldAlert
-            size={16}
-            className="mt-0.5 shrink-0 text-[var(--warning-fg)]"
-            aria-hidden="true"
-          />
-          <span>{t('settings.ghosts.updateConfirm.oauthClientChanged')}</span>
-        </div>
+        <GhostOauthClientChangedAlert className={trust ? 'mt-3' : undefined} />
       ) : null}
       <GhostManualSummary count={manualCount} />
       <div

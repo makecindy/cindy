@@ -12,7 +12,8 @@
     "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again."
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again.",
+    "INTERNAL": "Operation failed. Please try again later."
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -472,6 +473,13 @@
         "label": "Session list style",
         "hint": "Display style for the main sidebar list (below Pinned): Text is a compact single row; List is a two-line row with a preview.",
         "aria": "Switch session list style"
+      },
+      "ghostPanelRestore": {
+        "label": "Plugin panel restore entry",
+        "hint": "Choose where minimized plugin panels can be restored.",
+        "aria": "Choose the plugin panel restore entry",
+        "bubble": "Floating bubble",
+        "sidebar": "Sidebar"
       },
       "layout": {
         "label": "Panel layout",
@@ -1306,7 +1314,14 @@
         "title": "xAI",
         "subtitle": "Grok models · SuperGrok subscription (direct)",
         "modelLabel": "Grok models",
-        "billingLabel": "SuperGrok subscription (direct)"
+        "billingLabel": "SuperGrok subscription (direct)",
+        "asset": {
+          "weeklyTitle": "Weekly limit",
+          "weeklyUsed": "{{percent}}% used",
+          "resetsAt": "Resets {{at}}",
+          "productLine": "{{product}} {{percent}}%",
+          "openUsage": "Open Grok usage"
+        }
       },
       "xd": {
         "title": "Cindy AI",
@@ -1399,6 +1414,16 @@
           "piChatHelp": "Pi connects directly to the provider's OpenAI-compatible Chat Completions API.",
           "piAnthropicHelp": "Pi connects directly to the provider's Anthropic Messages API."
         },
+        "modelProtocol": {
+          "label": "Model protocol",
+          "inherit": "Inherit default",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "Inherit uses the provider protocol above. Override only when this model needs a different protocol.",
+          "ariaLabel": "Model protocol for {{model}}"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
@@ -1437,7 +1462,8 @@
           "button": "Test connection",
           "testing": "Testing…",
           "ok": "Connected ({{ms}} ms)",
-          "needFields": "Fill in the base URL and at least one model ID first"
+          "needFields": "Fill in the base URL and at least one model ID first",
+          "unsupportedProtocol": "This model protocol is not supported by connection testing"
         },
         "fetch": {
           "button": "Fetch model list",
@@ -1568,6 +1594,7 @@
         "enableModel": "Enable This Model",
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
+        "visibilityWriteFailed": "Couldn't save the model visibility setting. Try again, or restart Cindy if the problem continues.",
         "disabledGroup": "Disabled",
         "enableAllModels": "Enable All",
         "priceOverride": {
@@ -2335,10 +2362,10 @@
     },
     "subagentModels": {
       "title": "Subagents",
-      "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
-      "unspecified": "Not specified (use default behavior)",
-      "hint": "Claude Code subagents only support choosing a model; reasoning effort follows Claude Code's native behavior. Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
-      "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
+      "description": "Choose the Subagent model for Claude Code and Codex.",
+      "unspecified": "Use default setting",
+      "hint": "Claude Code changes apply to new sessions. Codex changes apply automatically when it is idle.",
+      "codexV2ModelHint": "Claude Code uses the selected model as its default. All local Codex Subagents are locked to the selected model and reasoning effort.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {
         "title": "Codex subagent guardrails",
@@ -2364,13 +2391,13 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code automatically compacts context.",
+      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code only",
+        "badge": "Claude Code and Pi",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
-        "hint": "Automatically compacts when context usage reaches this percentage, equivalent to running /compact automatically. Changes take effect immediately and are checked after the next chat turn ends.",
-        "sliderAria": "Adjust Claude Code auto-compaction trigger threshold"
+        "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
+        "sliderAria": "Adjust auto-compaction trigger threshold"
       }
     },
     "personalization": {
@@ -2497,6 +2524,11 @@
         "description": "Shows a column of tick marks beside the chat, one per question: hover to preview the question and the start of its answer, click to jump back to that turn. Appears only when there are enough questions and the window is wide enough."
       },
       "toggleAria": "Toggle question navigation rail"
+    },
+    "promptRecommendation": {
+      "label": "Prompt recommendations in input",
+      "description": "After a reply finishes, the input shows a predicted follow-up prompt. Press Tab to fill it in.",
+      "toggleAria": "Toggle prompt recommendations"
     },
     "collaboration": {
       "loading": "Loading collaboration settings…",
@@ -3215,6 +3247,311 @@
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
       "editAria": "Change shortcut for {{name}}",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "Previous task",
+            "description": "Open the task above the current one in the sidebar"
+          },
+          "session.selectNext": {
+            "name": "Next task",
+            "description": "Open the task below the current one in the sidebar"
+          },
+          "toggleRightSidebar": {
+            "name": "Toggle right sidebar",
+            "description": "Show or hide the right sidebar"
+          },
+          "composer.toggleFastMode": {
+            "name": "Toggle Fast mode",
+            "description": "Turn Fast mode on or off in the current composer"
+          },
+          "approval.approve": {
+            "name": "Approve request",
+            "description": "Approve the active request"
+          },
+          "approval.decline": {
+            "name": "Decline request",
+            "description": "Decline the active request"
+          },
+          "forkTask": {
+            "name": "Continue in new task",
+            "description": "Create a new task from the current one"
+          },
+          "composer.submit": {
+            "name": "Send message",
+            "description": "Send the current composer message"
+          },
+          "feedback": {
+            "name": "Send feedback",
+            "description": "Send product feedback to the Cindy team"
+          },
+          "toggleTerminal": {
+            "name": "Open terminal",
+            "description": "Open the terminal panel"
+          },
+          "copyConversationMarkdown": {
+            "name": "Copy as Markdown",
+            "description": "Copy the current task as Markdown",
+            "copied": "Copied the task as Markdown",
+            "empty": "This task has nothing to copy yet",
+            "failed": "Could not copy the task"
+          },
+          "archiveTask": {
+            "name": "Archive task",
+            "description": "Archive the current task"
+          },
+          "newTask": {
+            "name": "New task",
+            "description": "Start a new task"
+          },
+          "openBrowserTab": {
+            "name": "Open browser tab",
+            "description": "Open a new browser tab"
+          },
+          "toggleTaskPin": {
+            "name": "Toggle pin",
+            "description": "Pin or unpin the current task"
+          },
+          "toggleReviewTab": {
+            "name": "Toggle review",
+            "description": "Show or hide review for the current task"
+          },
+          "composer.addPhotos": {
+            "name": "Add photos",
+            "description": "Add photos to the composer"
+          },
+          "settings": {
+            "name": "Settings",
+            "description": "Open Cindy settings"
+          },
+          "manageTasks": {
+            "name": "Manage scheduled tasks",
+            "description": "Create or manage scheduled tasks"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "Increase reasoning effort",
+            "description": "Raise the reasoning effort for the current composer"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "Decrease reasoning effort",
+            "description": "Lower the reasoning effort for the current composer"
+          },
+          "openFolder": {
+            "name": "Open folder",
+            "description": "Add a local project to Cindy"
+          },
+          "composer.addFiles": {
+            "name": "Attach files and folders",
+            "description": "Attach files and folders to the composer"
+          },
+          "openSkills": {
+            "name": "Go to skills",
+            "description": "Browse installed and recommended skills"
+          },
+          "composer.togglePlanMode": {
+            "name": "Toggle plan mode",
+            "description": "Turn plan mode on or off in the current composer"
+          },
+          "navigateForward": {
+            "name": "Forward",
+            "description": "Go forward in navigation history"
+          },
+          "toggleSidebar": {
+            "name": "Toggle sidebar",
+            "description": "Show or hide the sidebar"
+          },
+          "navigateBack": {
+            "name": "Back",
+            "description": "Go back in navigation history"
+          },
+          "composer.focus": {
+            "name": "Focus composer",
+            "description": "Move the cursor into the composer"
+          },
+          "conversation.scrollUp": {
+            "name": "Scroll up",
+            "description": "Scroll the conversation up"
+          },
+          "conversation.scrollDown": {
+            "name": "Scroll down",
+            "description": "Scroll the conversation down"
+          },
+          "conversation.scrollBottom": {
+            "name": "Jump to latest",
+            "description": "Scroll to the latest message"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
+        "openAria": "Open Work Louder Codex Micro settings",
+        "back": "Back to keyboard shortcuts",
+        "retry": "Try again",
+        "device": {
+          "title": "Device",
+          "firmware": "Firmware {{version}}",
+          "inputMonitoring": {
+            "label": "Input Monitoring",
+            "granted": "macOS allows Cindy to receive keyboard input.",
+            "denied": "macOS is blocking keyboard input. Allow Cindy in System Settings.",
+            "unknown": "Cindy has not checked the macOS Input Monitoring permission yet.",
+            "not-required": "Input Monitoring is not required on this platform.",
+            "open": "Open System Settings"
+          }
+        },
+        "errors": {
+          "load": "Failed to load Codex Micro settings",
+          "save": "Failed to save Codex Micro settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "error": "Connection problem",
+            "unavailable": "SDK unavailable"
+          },
+          "descriptions": {
+            "connecting": "Cindy is starting the Work Louder device service.",
+            "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+            "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
+            "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
+            "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+            "connection-timeout": "The Work Louder service did not respond in time. Cindy will retry automatically.",
+            "connection-failed": "The Work Louder service failed to start. Cindy will retry automatically.",
+            "permission-required": "macOS denied keyboard access. Allow Cindy in Input Monitoring, then try again.",
+            "sdk-unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy."
+          }
+        },
+        "lighting": {
+          "title": "Lighting",
+          "brightness": {
+            "label": "Brightness",
+            "description": "Adjust the overall brightness of the key, task, and ambient lighting.",
+            "aria": "Adjust Codex Micro lighting brightness"
+          },
+          "autoDim": {
+            "label": "Auto-dim",
+            "description": "Turn lighting off after inactivity and restore it when the keyboard is used or a task changes state.",
+            "aria": "Choose Codex Micro auto-dim delay",
+            "options": {
+              "off": "Off",
+              "30-seconds": "30 seconds",
+              "1-minute": "1 minute",
+              "3-minutes": "3 minutes",
+              "10-minutes": "10 minutes",
+              "30-minutes": "30 minutes",
+              "1-hour": "1 hour"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "What this agent key opens when the source is set to custom.",
+          "title": "Agent keys",
+          "source": {
+            "label": "Task order",
+            "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+            "descriptions": {
+              "sidebar": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+              "last-sent": "AG00–AG05 follow the six tasks you last sent a message in.",
+              "priority": "AG00–AG05 follow the first six priority tasks.",
+              "custom": "AG00–AG05 each open the task you assign."
+            },
+            "value": "Sidebar order",
+            "options": {
+              "sidebar": "Sidebar order",
+              "last-sent": "Recent tasks",
+              "priority": "Priority",
+              "custom": "Custom"
+            }
+          },
+          "singleTap": {
+            "label": "Focus Cindy with a single tap",
+            "description": "When enabled, one tap opens the task and brings Cindy forward. When disabled, one tap still switches tasks in the background; a second tap within 350 ms brings Cindy forward.",
+            "aria": "Focus Cindy with a single Agent-key tap"
+          },
+          "newTask": "New task",
+          "slot": "Recent {{position}}",
+          "slotAria": "AG{{slot}} opens recent task {{position}}"
+        },
+        "commandKeys": {
+          "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
+          "builtIn": "Use the keycap's built-in action",
+          "unmapped": "This keycap has no action"
+        },
+        "microphone": {
+          "title": "Microphone",
+          "separate": {
+            "label": "Use separate microphone keys",
+            "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
+          }
+        },
+        "analog": {
+          "title": "Joystick",
+          "description": "Choose the action for each joystick direction.",
+          "directions": {
+            "up": "Up",
+            "right": "Right",
+            "down": "Down",
+            "left": "Left"
+          }
+        },
+        "encoder": {
+          "title": "Encoder",
+          "mode": {
+            "label": "Encoder mode",
+            "description": "Choose what turning and pressing the encoder controls.",
+            "options": {
+              "session-switch": "Switch tasks",
+              "composer-navigation": "Navigate the composer",
+              "reasoning": "Reasoning effort",
+              "conversation-scroll": "Scroll the conversation",
+              "custom": "Custom"
+            }
+          },
+          "gestures": {
+            "left": "Turn left",
+            "right": "Turn right",
+            "click": "Press",
+            "longPress": "Long press"
+          },
+          "customDescription": "Choose the action for this encoder gesture."
+        },
+        "actions": {
+          "choose": "Choose an action",
+          "none": "No action",
+          "tasks": "Tasks",
+          "commands": "Commands",
+          "keycaps": "Keycaps",
+          "skills": "Skills"
+        },
+        "layout": {
+          "editor": {
+            "done": "Done",
+            "title": "Edit keycap",
+            "description": "Choose the keycap shown on this physical key.",
+            "searchPlaceholder": "Search keycaps",
+            "close": "Close keycap editor",
+            "cancel": "Cancel",
+            "save": "Save",
+            "assignedShortcut": "Assigned action",
+            "selectKeycap": "Select keycap {{keycap}}"
+          },
+          "keyboard": {
+            "indicator": "Status lights",
+            "title": "Layout",
+            "description": "Click a keycap to choose its label and built-in action.",
+            "analogStick": "Joystick",
+            "encoder": "Encoder"
+          },
+          "reset": {
+            "title": "Reset key layout",
+            "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",
+            "button": "Reset layout"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "Failed to save shortcut settings",
         "notBindable": "This key combination cannot be used",
@@ -3495,7 +3832,10 @@
             "copied": "Guide copied to clipboard.",
             "copyFailed": "Copy failed. Please try again."
           }
-        }
+        },
+        "conflict": "Unavailable",
+        "conflictAria": "{{name}} has a plugin identifier conflict",
+        "conflictDescription": "This plugin identifier is already in use and cannot be installed right now"
       },
       "reapproval": {
         "badge": "Permission review needed",
@@ -4365,11 +4705,19 @@
       "second": "s"
     },
     "openProxyUsage": "Open the full usage dashboard in your browser",
-    "openXaiUsage": "Open your xAI account page",
+    "openXaiUsage": "Open Grok usage page",
     "xai": {
       "requestsLine": "Rate limit (requests): {{remaining}}/{{limit}} left",
       "tokensLine": "Rate limit (tokens): {{remaining}}/{{limit}} left",
-      "noQuotaDetail": "xAI doesn't expose subscription quota details; only the estimated value is shown"
+      "noQuotaDetail": "SuperGrok weekly usage is unavailable; only the estimated value is shown",
+      "weeklyLabel": "Weekly",
+      "windowSegment": "{{label}} {{remaining}} left",
+      "windowLine": "{{label}} {{remaining}} left ({{used}} used)",
+      "planLine": "Plan {{plan}}",
+      "resetAt": "Resets {{at}}",
+      "productLine": "{{product}} {{percent}}",
+      "extraCreditsLine": "Extra credits {{amount}}",
+      "accountWeeklyHint": "Account weekly usage, not this session's quota"
     },
     "dailyLimitLabel": "Today {{spend}}/{{limit}}",
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
@@ -4509,7 +4857,7 @@
   "titleBar": {
     "menu": "Menu",
     "minimize": "Minimize",
-    "maximize": "Maximize",
+    "maximizeOrRestore": "Maximize or Restore Window",
     "close": "Close",
     "menuItems": {
       "settings": "Settings",
@@ -4538,6 +4886,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "Toggle sidebar",
+    "collapseSidebar": "Collapse Sidebar",
+    "expandSidebar": "Expand Sidebar",
     "collapsePanel": "Collapse",
     "expandPanel": "Expand"
   },
@@ -4545,7 +4895,7 @@
     "maximizeAria": "Maximize panel",
     "restoreAria": "Restore panel size",
     "detachAria": "Open in a new window",
-    "minimizeAria": "Minimize to floating bubble",
+    "minimizeAria": "Minimize panel",
     "closeAria": "Close panel and disable plugin"
   },
   "ghostPanel": {
@@ -4563,6 +4913,11 @@
     "restoreAria": "Restore {{name}} panel",
     "stackExpandAria": "{{count}} plugin panels minimized. Click to expand",
     "stackCollapseAria": "Collapse the plugin panel list"
+  },
+  "ghostPanelRestore": {
+    "single": "Restore {{name}}",
+    "multiple": "Minimized plugin panels",
+    "multipleAria": "{{count}} plugin panels minimized. Choose a panel to restore"
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
@@ -4662,19 +5017,25 @@
       },
       "refresh": "Refresh",
       "checking": "Checking",
-      "accessRequiredTitle": "Authorize This Session",
-      "accessRequiredDescription": "This panel is not authorized to access the simulator for this session. Confirm access in the system dialog.",
-      "allowTaskAccess": "Allow Session Access",
+      "accessRequiredTitle": "Allow Session Control",
+      "accessRequiredDescription": "Status viewing may remain available, but tapping, typing, and other controls require authorization for this session. Confirm in the system dialog.",
+      "allowTaskAccess": "Allow Session Control",
       "requestingAccess": "Requesting Access…",
       "accessDialogTitle": "Allow iOS Simulator Control?",
       "accessDialogMessage": "Allow this Cindy window to view and control the iOS Simulator for “{{task}}”?",
-      "accessDialogDetail": "This permission applies only to this session and is revoked when you switch sessions.",
+      "accessDialogDetail": "This permission applies only to this session. Switching away retains viewing access but pauses control; allow control again after you return.",
       "accessDialogAllow": "Allow Simulator Control",
       "accessDialogCancel": "Cancel",
       "accessDialogUntitledTask": "Untitled Session",
       "readyTitle": "Simulator environment ready",
       "unavailableTitle": "Simulator unavailable",
-      "connectionError": "Cindy could not inspect the local simulator environment. Try again.",
+      "connectionError": "Cindy could not connect to the iOS Simulator Host. Try again.",
+      "pluginNotInstalled": "The iOS Simulator plugin is not installed in this Cindy instance. Install and enable it from the Plugin Marketplace, then try again.",
+      "pluginDisabled": "The iOS Simulator plugin is installed in this Cindy instance but disabled. Enable it on the Plugins page, then try again.",
+      "pluginDisabledForProject": "The iOS Simulator plugin is disabled for this working directory. Enable it in the project plugin settings, then try again.",
+      "pluginSessionUnavailable": "The plugin is installed and enabled, but this Cindy instance temporarily cannot use the shared plugin capability. Another Cindy instance or an account switch may be using it; refresh shortly.",
+      "pluginStateChanging": "Cindy is switching account or plugin state. Refresh shortly.",
+      "statusInternalError": "Cindy encountered an internal error while reading iOS Simulator status. Try again.",
       "remoteUnsupported": "iOS Simulator is available only to local macOS sessions, not SSH or remote sessions.",
       "sessionUnavailable": "This Cindy session is no longer available.",
       "setupTitle": "Setup checklist",
@@ -4741,6 +5102,8 @@
       "rotateDevice": "Rotate Device",
       "lockScreen": "Lock Screen",
       "unlockScreen": "Unlock Screen",
+      "controlsUnavailable": "Simulator controls are temporarily unavailable",
+      "enterTextBeforeSending": "Enter text before sending",
       "agentBusyTitle": "Agent Using This Device",
       "agentBusyDescription": "Manual input is paused until the current Agent action finishes.",
       "takeControl": "Take Control",
@@ -4772,6 +5135,13 @@
           "reconnecting": "Reconnecting…",
           "unavailable": "Unavailable"
         }
+      },
+      "nativeRecovery": {
+        "available": "Native acceleration is unavailable. WDA stays active while you try again.",
+        "action": "Restore Native",
+        "recovering": "Restoring Native acceleration. The current WDA view and controls stay active.",
+        "recoveringAction": "Restoring Native…",
+        "failed": "Native acceleration could not be restored. WDA is still active; try again later."
       },
       "stream": {
         "idle": "Idle",
@@ -4810,19 +5180,24 @@
       "urlPlaceholder": "Enter URL or search",
       "goBack": "Back",
       "goForward": "Forward",
+      "goBackUnavailable": "No previous page",
+      "goForwardUnavailable": "No next page",
       "reload": "Reload",
       "stop": "Stop loading",
       "screenshot": "Screenshot",
       "screenshotCopied": "Screenshot copied to clipboard",
       "screenshotFailed": "Screenshot failed",
       "comment": "Comment on the page",
+      "exitCommentMode": "Exit comment mode",
       "commentModeHint": "Click an element or Shift-drag an area · Cmd/Ctrl-click to add instantly · Esc to exit",
       "commentPlaceholder": "Describe the change you want here…",
       "commentSubmit": "Add comment",
       "commentCancel": "Cancel",
       "commentAdded": "Comment added to the chat input",
       "commentFailed": "Failed to add comment",
-      "styleTweaks": "Style tweaks",
+      "styleTweaksExpand": "Show style controls",
+      "styleTweaksCollapse": "Hide style controls",
+      "styleTweaksSubmitting": "Submitting comment…",
       "styleReset": "Reset",
       "styleTextLabel": "Text",
       "moreTools": "More",
@@ -5218,6 +5593,7 @@
       "completed": "Completed",
       "empty": "No background tasks in this session yet",
       "stop": "Stop",
+      "stopping": "Stopping…",
       "back": "Back",
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
@@ -5595,7 +5971,8 @@
         "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
-        "subscriptionEstimate": "Value estimate, not an actual bill"
+        "subscriptionEstimate": "Value estimate, not an actual bill",
+        "discountedVsStandard": "Discounted · {{percent}}% off standard"
       },
       "trigger": {
         "placeholder": "Select model",
@@ -5650,6 +6027,28 @@
       },
       "agentSwitch": {
         "hint": "Pick the model to use after switching to {{agent}}"
+      },
+      "unified": {
+        "railFavorites": "Favorites",
+        "railAll": "All",
+        "favoritesGroup": "Favorites",
+        "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
+        "layoutBadge": "Try style B",
+        "layoutClassic": "Back to style A",
+        "layoutTryUnified": "Try the new picker",
+        "layoutOriginal": "Back to old picker",
+        "addFavorite": "Save to favorites",
+        "removeFavorite": "Remove from favorites",
+        "favoriteConfig": "Saved setup",
+        "recommended": "Recommended",
+        "recommendedConfig": "Recommended setup",
+        "customized": "Customized",
+        "reset": "Reset to recommended",
+        "fastTip": "Fast · priority speed · uses more quota",
+        "effortEndFast": "Faster",
+        "effortEndSmart": "Smarter",
+        "railSameEngine": "{{agent}} only",
+        "crossEngineWarning": "Switching engines rebuilds context and may lose content"
       }
     },
     "permissionSelector": {
@@ -6207,6 +6606,10 @@
       "retry": "Retry",
       "continueAfterReset": "Continue After Reset",
       "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
+      "codexOrganizationUsageLimitWithReset": "The connected Codex account is managed by your organization and has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
+      "codexOrganizationUsageLimit": "The connected Codex account is managed by your organization and has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
+      "codexUsageLimitWithReset": "The connected Codex account has reached its usage limit. Usage is expected to reset at {{resetAt}}.",
+      "codexUsageLimit": "The connected Codex account has reached its usage limit. Wait for the limit to reset, or switch to another available account before retrying.",
       "gatewayQuotaExhausted": "Your Cindy AI balance is used up. Add funds to continue.",
       "viewBalance": "View balance",
       "viewBalanceTitle": "Open Usage & Billing to check your balance and add funds",
@@ -7053,6 +7456,7 @@
       "scopeLocalSessions": "This device’s sessions",
       "dialogues": "Chat",
       "newDialogue": "New session",
+      "creationInProgress": "Creation is already in progress",
       "dialoguesToggleExpand": "Expand Chat",
       "dialoguesToggleCollapse": "Collapse Chat",
       "loadingDialogues": "Loading…",
@@ -7172,6 +7576,8 @@
         "hiddenCount": "{{count}} hidden",
         "stopped": "Stopped",
         "aria": "{{title}} automation sessions, {{count}} runs, {{attention}} pending",
+        "expand": "Expand {{title}} runs",
+        "collapse": "Collapse {{title}} runs",
         "menu": {
           "runNow": "Run now",
           "more": "More actions",
@@ -7241,6 +7647,7 @@
         "delete": "Delete selected sessions",
         "clear": "Clear selection",
         "archiveNone": "No selected sessions can be archived",
+        "actionInProgress": "Another action is already in progress",
         "skipRunning": "{{count}} running",
         "skipAttached": "{{count}} remotely controlled",
         "skipNotActive": "{{count}} not active",
@@ -8063,6 +8470,12 @@
       }
     },
     "builtinTemplates": {
+      "schedule": {
+        "daily": "Daily at {{time}}",
+        "weekdays": "Weekdays at {{time}}",
+        "weekly": "{{weekday}} at {{time}}",
+        "monthly": "Monthly on day {{day}} at {{time}}"
+      },
       "categories": {
         "dev-automation": "Development automation",
         "info-radar": "Information radar",
@@ -8342,7 +8755,7 @@
   },
   "issueAgent": {
     "command": {
-      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
+      "instruction": "I'd like to file feedback for {{appName}}. Help me turn it into a complete, clear GitHub issue: confirm whether it is a bug or feature request, and ask only for missing or ambiguous details. Summarize or generalize user-provided quotes and examples by default instead of copying information that could identify a person, conversation, or business context. For bugs, collect the symptoms, reproduction steps, expected and actual behavior, frequency, attempted fixes, and—only with my consent—redacted diagnostic summaries; never include passwords, tokens, email addresses, personal paths, or unrelated files. For feature requests, clarify the use case, current pain point, and desired outcome. Once the information is sufficient, submit it with the submit_github_issue tool via cindy_helper call_tool (category=feedback; you can run list_tools first to check the parameters; a confirmation card will be shown to me before submitting). No GitHub plugin or account setup is required: Cindy's official bot is the default, and a working GitHub account appears only as an optional identity in the confirmation card. After creation, tell me the issue number and link, explain that Cindy is open source, and offer to help me reproduce, fix, test, or extend it from source. If the submission fails, tell me the reason honestly.{{details}}",
       "detailsPrefix": "\nMy initial description: {{details}}"
     },
     "confirm": {
@@ -8351,7 +8764,8 @@
       "typeFeature": "Feature",
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
-      "privacyHint": "Common secrets, personal paths, and email addresses are redacted when detected. Review the public content before submitting.",
+      "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+      "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
       "submissionMethodLabel": "Submission Identity",
       "identityGithubUser": "My GitHub account @{{login}}",
       "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",

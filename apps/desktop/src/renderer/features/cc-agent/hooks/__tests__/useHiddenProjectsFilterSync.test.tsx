@@ -86,16 +86,19 @@ describe('hidden-project filter synchronization', () => {
     });
     expect(firstWindow.result.current.projects).toEqual([PROJECT_B]);
     expect(secondWindow.result.current.projects).toEqual([PROJECT_B]);
+  });
+
+  it('keeps project restore scoped to the renderer that requested it', () => {
+    window.localStorage.setItem(PROJECTS_KEY, JSON.stringify([PROJECT_B]));
+    const restoringWindow = renderHook(() => useSyncedSidebarFilter());
+    const otherWindow = renderHook(() => useSyncedSidebarFilter());
 
     act(() => {
-      for (const listener of hiddenProjectsListeners) listener([], OWNER_STAMP);
-    });
-    act(() => {
-      firstWindow.result.current.ensureProjectIncluded(PROJECT_A);
+      restoringWindow.result.current.ensureProjectIncluded(PROJECT_A);
     });
 
-    expect(firstWindow.result.current.projects).toEqual([PROJECT_B, PROJECT_A]);
-    expect(secondWindow.result.current.projects).toEqual([PROJECT_B]);
+    expect(restoringWindow.result.current.projects).toEqual([PROJECT_B, PROJECT_A]);
+    expect(otherWindow.result.current.projects).toEqual([PROJECT_B]);
     expect(JSON.parse(window.localStorage.getItem(OWNER_PROJECTS_KEY) ?? 'null')).toEqual([
       PROJECT_B,
       PROJECT_A,

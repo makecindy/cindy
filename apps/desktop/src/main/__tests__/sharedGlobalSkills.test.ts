@@ -105,7 +105,7 @@ describe('prepareSharedGlobalSkillLinks', () => {
     expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'shared-only'), sharedSkill)).toBe(true);
   });
 
-  it('links existing Codex skills into Claude without creating a shared duplicate', async () => {
+  it('links existing Codex skills into Claude and the shared skills root', async () => {
     const root = await makeTmpDir();
     const homeDir = path.join(root, 'home');
     const paths = sharedGlobalSkillsPaths(homeDir);
@@ -117,9 +117,112 @@ describe('prepareSharedGlobalSkillLinks', () => {
     expect(secondResult.changed).toBe(false);
     expect(secondResult.warnings).toEqual([]);
     expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'codex-only'), codexSkill)).toBe(true);
-    await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'codex-only'))).rejects.toMatchObject({
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'codex-only'), codexSkill)).toBe(true);
+  });
+
+  it('stops before the Codex-to-shared write when the owner changes after Claude fanout', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    await writeSkill(paths.codexSkillsDir, 'codex-owner-change');
+
+    let ownerStable = true;
+    const realSymlink = fs.symlink;
+    const symlinkSpy = vi.spyOn(fs, 'symlink').mockImplementation(async (...args) => {
+      await realSymlink(...args);
+      ownerStable = false;
+    });
+    try {
+      await expect(
+        prepareSharedGlobalSkillLinks({
+          homeDir,
+          assertOwnerStable: () => {
+            if (!ownerStable) throw new Error('owner changed');
+          },
+        }),
+      ).rejects.toThrow('owner changed');
+    } finally {
+      symlinkSpy.mockRestore();
+    }
+
+    expect(await sameRealPath(
+      path.join(paths.claudeSkillsDir, 'codex-owner-change'),
+      path.join(paths.codexSkillsDir, 'codex-owner-change'),
+    )).toBe(true);
+    await expect(
+      fs.lstat(path.join(paths.sharedSkillsDir, 'codex-owner-change')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not overwrite a conflicting shared skill directory with a Codex skill', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'duplicate');
+    const codexSkill = await writeSkill(paths.codexSkillsDir, 'duplicate');
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.warnings.some((warning) => warning.includes('duplicate'))).toBe(true);
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'duplicate'), sharedSkill)).toBe(true);
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'duplicate'), codexSkill)).toBe(false);
+  });
+
+  it('does not overwrite a user-owned shared symlink with a Codex skill', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const codexSkill = await writeSkill(paths.codexSkillsDir, 'user-link');
+    const externalSkill = await writeSkill(path.join(root, 'external-skills'), 'user-link');
+    const sharedLink = path.join(paths.sharedSkillsDir, 'user-link');
+    await fs.mkdir(paths.sharedSkillsDir, { recursive: true });
+    await fs.symlink(externalSkill, sharedLink, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.warnings.some((warning) => warning.includes('user-link'))).toBe(true);
+    expect(await sameRealPath(sharedLink, externalSkill)).toBe(true);
+    expect(await sameRealPath(sharedLink, codexSkill)).toBe(false);
+  });
+
+  it('cleans up shared and Claude links after a Codex source skill is removed', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const codexSkill = await writeSkill(paths.codexSkillsDir, 'removed-codex-skill');
+
+    await prepareSharedGlobalSkillLinks({ homeDir });
+    expect(await sameRealPath(path.join(paths.sharedSkillsDir, 'removed-codex-skill'), codexSkill)).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'removed-codex-skill'), codexSkill)).toBe(true);
+
+    await fs.rm(codexSkill, { recursive: true, force: true });
+    const result = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(result.changed).toBe(true);
+    await expect(fs.lstat(path.join(paths.sharedSkillsDir, 'removed-codex-skill'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+    await expect(fs.lstat(path.join(paths.claudeSkillsDir, 'removed-codex-skill'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('filters Codex links that already point into the shared root', async () => {
+    const root = await makeTmpDir();
+    const homeDir = path.join(root, 'home');
+    const paths = sharedGlobalSkillsPaths(homeDir);
+    const sharedSkill = await writeSkill(paths.sharedSkillsDir, 'shared-backlink');
+    const codexLink = path.join(paths.codexSkillsDir, 'shared-backlink');
+    await fs.mkdir(paths.codexSkillsDir, { recursive: true });
+    await fs.symlink(sharedSkill, codexLink, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await prepareSharedGlobalSkillLinks({ homeDir });
+    const secondResult = await prepareSharedGlobalSkillLinks({ homeDir });
+
+    expect(secondResult.changed).toBe(false);
+    expect(secondResult.warnings).toEqual([]);
+    expect(await sameRealPath(codexLink, sharedSkill)).toBe(true);
+    expect(await sameRealPath(path.join(paths.claudeSkillsDir, 'shared-backlink'), sharedSkill)).toBe(true);
   });
 
   it('does not overwrite conflicting real skill directories', async () => {

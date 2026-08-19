@@ -180,8 +180,10 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
       每个真实模型(chatgpt/、xai/、glm、deepseek、kimi…)仍建议在 release candidate 上
       anthropic-compat 下至少跑一轮**带工具调用**的回合,逐个确认 thinking 格式 / tool
       streaming / redacted thinking 正确；这是额度/账号发布 smoke，不再是功能缺口。
-- [x] **compaction**:启动显式开启 auto-compaction；手动 compact、boundary/usage 翻译、
-      compaction digest 写入与缓存命中均有测试。长上下文压力仍属于 RC soak。
+- [x] **compaction**:启动显式开启原生 auto-compaction；host 另按与 Claude Code 共用的
+      百分比阈值在 turn 结束或 setModel 窗口变化后调 compact RPC（默认 75%），原生
+      `window - reserve` 仍作顶满抢救。手动 compact、boundary/usage 翻译、compaction
+      digest 写入与缓存命中均有测试。长上下文压力仍属于 RC soak。
 - [x] **无人值守**:scheduler 对 `agentKind=pi` 使用 Pi 默认模型与
       `bypassPermissions` 的契约测试已补；Pi bridge 的 auto allow/deny 也用真二进制覆盖。
 - [x] **resume 边界**:已用 Pi v0.82.1 真二进制创建 JSONL，再由 v0.83.0 恢复；

@@ -39,6 +39,8 @@ export {
   socialProviderSchema,
   ssoOrgConnectionSchema,
   ssoOrgDiscoverySchema,
+  soleAutoStartSsoMethod,
+  soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   tokenPairSchema,
 } from "./types.js";
@@ -60,6 +62,7 @@ export type {
   LoginOutcome,
   ProviderConfig,
   SocialProvider,
+  SsoLoginMethod,
   SsoOrgConnection,
   SsoOrgDiscovery,
   SsoVerificationChannel,

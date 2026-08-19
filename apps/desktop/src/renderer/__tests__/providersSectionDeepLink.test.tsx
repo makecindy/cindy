@@ -15,7 +15,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { wizardSpy, providersState, codexAuthState, codexAuthActions, toastError } = vi.hoisted(
+const {
+  wizardSpy,
+  providersState,
+  codexAuthState,
+  codexAuthActions,
+  toastError,
+  setModelVisibilitiesSpy,
+} = vi.hoisted(
   () => ({
     wizardSpy: vi.fn(),
     providersState: { providers: [] as unknown[], order: [] as string[] },
@@ -31,6 +38,7 @@ const { wizardSpy, providersState, codexAuthState, codexAuthActions, toastError 
       logout: vi.fn(async () => undefined),
     },
     toastError: vi.fn(),
+    setModelVisibilitiesSpy: vi.fn(() => true),
   }),
 );
 
@@ -93,7 +101,7 @@ vi.mock('@/lib/providerSubtitle', () => ({
 
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   isModelEnabled: () => true,
-  setManyVisibility: vi.fn(),
+  setModelVisibilities: setModelVisibilitiesSpy,
   setModelVisibility: vi.fn(),
   useModelVisibilityVersion: () => 0,
 }));
@@ -298,6 +306,53 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(screen.queryByTestId('wizard-stub')).not.toBeNull());
     expect(wizardSpy).toHaveBeenCalledWith(undefined);
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+  });
+
+  it('统一模型开关跨 agent 一次提交，失败时提示用户', async () => {
+    providersState.providers = [
+      makeProvider('dual', {
+        name: 'Dual',
+        connected: true,
+        agents: ['claude-code', 'codex'],
+        models: {
+          'claude-code': [
+            {
+              id: 'shared',
+              name: 'Shared',
+              contextWindow: 200_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+          codex: [
+            {
+              id: 'shared',
+              name: 'Shared',
+              contextWindow: 272_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      }),
+    ];
+    setModelVisibilitiesSpy.mockReturnValueOnce(false);
+    renderAt('?tab=providers');
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'Shared' }));
+
+    expect(setModelVisibilitiesSpy).toHaveBeenCalledOnce();
+    expect(setModelVisibilitiesSpy).toHaveBeenCalledWith(
+      'dual',
+      [
+        { agent: 'claude-code', modelId: 'shared' },
+        { agent: 'codex', modelId: 'shared' },
+      ],
+      false,
+    );
+    expect(toastError).toHaveBeenCalledWith(
+      'settings.providers.models.visibilityWriteFailed',
+    );
   });
 
   it('authorization-code 自定义供应商登录期间卸载时取消本视图拥有的授权', async () => {

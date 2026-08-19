@@ -13,6 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Tip } from '@/components/ui/tooltip';
 
 export function MenuButton() {
   const { t } = useTranslation();
@@ -21,21 +22,23 @@ export function MenuButton() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        {/* 尺寸与 ChromeActions 的折叠按钮同规格(h-7 / 图标 15 / rounded-md),
-            与折叠态标题行图标(「…」h-7 / 15)视觉重量一致。 */}
-        <button
-          className={cn(
-            'flex items-center justify-center',
-            'h-7 w-7 rounded-md',
-            'text-titlebar-icon',
-            'transition-colors',
-            'hover:bg-titlebar-button-hover',
-            'focus-visible:outline-none',
-          )}
-          aria-label={t('titleBar.menu')}
-        >
-          <Menu size={15} />
-        </button>
+        <Tip text={t('titleBar.menu')} side="bottom">
+          {/* 尺寸与 ChromeActions 的折叠按钮同规格(h-7 / 图标 15 / rounded-md),
+              与折叠态标题行图标(「…」h-7 / 15)视觉重量一致。 */}
+          <button
+            className={cn(
+              'flex items-center justify-center',
+              'h-7 w-7 rounded-md',
+              'text-titlebar-icon',
+              'transition-colors',
+              'hover:bg-titlebar-button-hover',
+              'focus-visible:outline-none',
+            )}
+            aria-label={t('titleBar.menu')}
+          >
+            <Menu size={15} />
+          </button>
+        </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"

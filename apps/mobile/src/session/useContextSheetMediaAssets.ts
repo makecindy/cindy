@@ -68,14 +68,16 @@ async function fetchAssets(kind: ContextSheetMediaKind, first: number): Promise<
 }
 
 /**
- * 页面挂载时静默预取(打开面板即刻出图)。只在照片权限已授予时拉取——
- * 绝不在预取时机弹权限框,首次授权仍由面板打开触发;失败静默,面板打开时照常加载。
+ * 页面挂载时静默预取(打开面板即刻出图)。只在照片权限已授予、且 iOS 不是受限访问时拉取——
+ * iOS 受限访问虽然 granted=true,首次读取资产仍可能触发系统自动提醒;预取绝不能打断用户。
+ * 首次授权和受限资产读取仍由用户打开面板后触发;失败静默,面板打开时照常加载。
  */
 export async function prefetchContextSheetMediaAssets(kind: ContextSheetMediaKind = 'recent'): Promise<void> {
   if (Platform.OS === 'web' || assetsCache.has(kind)) return;
   try {
     const permission = await MediaLibrary.getPermissionsAsync(false, ['photo']);
     if (!permission.granted) return;
+    if (Platform.OS === 'ios' && permission.accessPrivileges === 'limited') return;
     const assets = await fetchAssets(kind, DEFAULT_FIRST[kind]);
     if (assets) assetsCache.set(kind, assets);
   } catch {

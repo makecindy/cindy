@@ -75,6 +75,8 @@ export interface IOSSimulatorPublicRouteStatus {
   instanceId: string;
   generation: number;
   updatedAt: string;
+  /** Optional for compatibility with older Host builds; missing fails closed. */
+  nativeRecoveryAvailable?: boolean;
   stream: {
     adapter: IOSSimulatorPublicRouteAdapter;
     encoding: 'h264' | 'jpeg' | null;
@@ -101,6 +103,8 @@ export type IOSSimulatorSessionStatus =
       instances: IOSSimulatorPublicInstance[];
       deviceGrants: IOSSimulatorDeviceGrant[];
       mutationStates: IOSSimulatorMutationState[];
+      /** Optional for compatibility with older Main processes. */
+      controlAccess?: 'active' | 'paused';
       /** Optional for compatibility with older Host builds. */
       resource?: IOSSimulatorPublicResourceStatus;
       /** Optional for compatibility with older detached/sidebar renderers. */
@@ -181,6 +185,11 @@ export interface IOSSimulatorViewerVisibilityRequest extends IOSSimulatorViewerR
   preferredEncoding?: 'jpeg' | 'h264';
   /** Renderer decoder failed after a native stream was selected. */
   fallbackReason?: 'native-decoder-fallback';
+}
+
+export interface IOSSimulatorRetryNativeRouteRequest extends IOSSimulatorViewerRouteRequest {
+  /** Exact viewer effect lifetime that is allowed to re-arm Native acceleration. */
+  viewerToken: string;
 }
 
 export type IOSSimulatorNativeH264StreamProfileRequest = Pick<

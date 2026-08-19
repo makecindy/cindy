@@ -289,19 +289,32 @@ describe('Pi provider-aware model routing', () => {
             id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
             baseUrl: 'http://127.0.0.1:9988', inheritModels: true,
             apiKeyEnvVar: 'CINDY_PI_OPENAI_PROXY_KEY',
-            models: [{
-              id: 'chatgpt/gpt-cindy-daily-test',
-              wireId: 'gpt-cindy-daily-test',
-              catalogAddition: true,
-              contextWindow: 272_000,
-              maxTokens: 32_000,
-            }],
+            models: [
+              {
+                id: 'chatgpt/gpt-5.6-sol',
+                wireId: 'gpt-5.6-sol',
+                api: 'openai-codex-responses',
+                contextWindow: 1_000_000,
+                maxTokens: 128_000,
+              },
+              {
+                id: 'chatgpt/gpt-cindy-daily-test',
+                wireId: 'gpt-cindy-daily-test',
+                catalogAddition: true,
+                contextWindow: 272_000,
+                maxTokens: 32_000,
+              },
+            ],
           },
           {
             id: 'xai', sourceProviderId: 'xai', name: 'xAI',
             baseUrl: 'http://127.0.0.1:9988/v1', inheritModels: true,
             models: [
               { id: 'xai/grok-4.5', wireId: 'grok-4.5' },
+              {
+                id: 'grok-4.6', wireId: 'grok-4.6', catalogAddition: true,
+                contextWindow: 500_000, maxTokens: 500_000,
+              },
               {
                 id: 'xai/grok-4.20', wireId: 'grok-4.20', api: 'openai-responses',
                 contextWindow: 1_000_000, maxTokens: 64_000,
@@ -334,11 +347,22 @@ describe('Pi provider-aware model routing', () => {
     expect(models.providers.anthropic?.models).toBeUndefined();
     expect(models.providers['openai-codex']).not.toHaveProperty('api');
     expect(models.providers['openai-codex']?.models).toEqual([
+      expect.objectContaining({
+        id: 'gpt-5.6-sol',
+        api: 'openai-codex-responses',
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      }),
       expect.objectContaining({ id: 'gpt-cindy-daily-test' }),
     ]);
-    expect(models.providers['openai-codex']?.models?.[0]).not.toHaveProperty('api');
+    expect(models.providers['openai-codex']?.models?.[1]).not.toHaveProperty('api');
     expect(models.providers.xai).not.toHaveProperty('api');
     expect(models.providers.xai?.models).toEqual([
+      expect.objectContaining({
+        id: 'grok-4.6',
+        contextWindow: 500_000,
+        maxTokens: 500_000,
+      }),
       expect.objectContaining({
         id: 'grok-4.20',
         api: 'openai-responses',
@@ -346,6 +370,7 @@ describe('Pi provider-aware model routing', () => {
         compat: { supportsStrictTools: true },
       }),
     ]);
+    expect(models.providers.xai?.models?.[0]).not.toHaveProperty('api');
     expect(JSON.parse(readFileSync(path.join(configHome, 'settings.json'), 'utf8')))
       .toEqual({ transport: 'sse' });
     expect(JSON.parse(readFileSync(runtimeFileOf('subagent', 'native-subscription-routing'), 'utf8')))
@@ -557,6 +582,202 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('does not reissue set_model when the live session is already on the requested SuperGrok route', async () => {
+    captured.requestHandler = async (command) => {
+      if (command.type === 'set_model') {
+        return { success: false, error: 'Model "grok-4.6" not found for provider "xai"' };
+      }
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          baseUrl: 'http://127.0.0.1:9',
+          api: 'anthropic-messages',
+          models: [{ id: 'grok-4.6' }],
+        }],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-same-route',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    });
+    captured.requests.length = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
+    await handle.close();
+  });
+
+  it('rebuilds a missing subagent snapshot on same-route SuperGrok setModel without RPC', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          baseUrl: 'http://127.0.0.1:9',
+          api: 'anthropic-messages',
+          models: [{ id: 'grok-4.6' }],
+        }],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-snapshot-retry',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    });
+    const snapshotPath = runtimeFileOf('subagent', 'grok-46-snapshot-retry');
+    rmSync(snapshotPath, { force: true });
+    captured.requests.length = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
+    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
+      model: 'grok-4.6',
+      provider: 'xai',
+    });
+    await handle.close();
+  });
+
+  it('clears a stuck pending subagent snapshot on same-route SuperGrok setModel', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'SuperGrok', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 500_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          baseUrl: 'http://127.0.0.1:9',
+          api: 'anthropic-messages',
+          models: [{ id: 'grok-4.6' }],
+        }],
+        env: {},
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'grok-46-pending-clear',
+      workingDir: cwd,
+      model: 'grok-4.6',
+      providerId: 'xai',
+    });
+    const snapshotPath = runtimeFileOf('subagent', 'grok-46-pending-clear');
+    writeFileSync(snapshotPath, JSON.stringify({
+      model: 'grok-4.6',
+      provider: 'xai',
+      pending: true,
+    }) + '\n');
+    captured.requests.length = 0;
+    await expect(handle.setModel!('grok-4.6', { providerId: 'xai' })).resolves.toBeUndefined();
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
+    expect(JSON.parse(readFileSync(snapshotPath, 'utf8'))).toEqual({
+      model: 'grok-4.6',
+      provider: 'xai',
+    });
+    await handle.close();
+  });
+
+  it('rejects a same-route gateway heartbeat when the live session wire protocol is stale', async () => {
+    let gatewayApi: 'anthropic-messages' | 'openai-responses' = 'anthropic-messages';
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [{
+          id: 'shared-model',
+          displayName: 'Shared',
+          contextWindow: 128_000,
+          efforts: [],
+          defaultEffort: null,
+        }],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelApi: () => gatewayApi,
+    });
+    const handle = await agent.startSession({
+      sessionId: 'gateway-same-route-stale',
+      workingDir: cwd,
+      model: 'shared-model',
+      providerId: 'xd',
+    });
+    gatewayApi = 'openai-responses';
+    captured.requests.length = 0;
+    await expect(handle.setModel!('shared-model', { providerId: 'xd' })).rejects.toThrow(
+      /restart the Pi session to change provider wire protocol/,
+    );
+    expect(captured.requests.filter((request) => request.type === 'set_model')).toEqual([]);
+    await handle.close();
+  });
+
   it('applies each native provider alias during provider-less compatibility routing', async () => {
     const provider = (id: string, aliases?: Record<string, string>) => ({
       id,
@@ -728,6 +949,64 @@ describe('Pi provider-aware model routing', () => {
     }));
     expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
       .toEqual(['--model', 'xai/grok-retired']);
+    await handle.close();
+  });
+
+  it('restores a retired OpenAI context profile through its native subscription provider', async () => {
+    const resolver = vi.fn(async () => ({
+      providers: [{
+        id: 'openai-codex',
+        sourceProviderId: 'openai',
+        name: 'OpenAI (ChatGPT)',
+        baseUrl: 'http://127.0.0.1:9',
+        inheritModels: true,
+        models: [{
+          id: 'chatgpt/gpt-5.6-sol[1m]',
+          wireId: 'gpt-5.6-sol[1m]',
+          catalogAddition: true,
+        }],
+      }],
+      env: {},
+    }));
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'ChatGPT', authSource: 'oauth' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: { availableModels: [] },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: resolver,
+      resolvePiRuntimeModelDescriptor: () => ({
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        displayName: 'GPT-5.6-Sol (1M · Higher usage)',
+        contextWindow: 1_000_000,
+        efforts: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+        defaultEffort: 'medium',
+      }),
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'historical-openai-profile-resume',
+      resumeSessionId: 'pi-sdk-session-openai-profile',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      providerId: 'openai',
+    });
+
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'openai',
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      resumeSessionId: 'pi-sdk-session-openai-profile',
+    }));
+    expect(captured.args.slice(captured.args.indexOf('--provider'), captured.args.indexOf('--provider') + 2))
+      .toEqual(['--provider', 'openai-codex']);
+    expect(captured.args.slice(captured.args.indexOf('--model'), captured.args.indexOf('--model') + 2))
+      .toEqual(['--model', 'gpt-5.6-sol[1m]']);
     await handle.close();
   });
 
@@ -909,7 +1188,7 @@ describe('Pi provider-aware model routing', () => {
       }>;
     };
     expect(models.providers.cindy?.models.find((model) => model.id === 'byom-only-model'))
-      .toMatchObject({ api: 'anthropic-messages' });
+      .toBeUndefined();
     expect(models.providers['my-local']?.models.find((model) => model.id === 'byom-only-model'))
       .toMatchObject({ id: 'byom-only-model' });
     await handle.close();
@@ -1386,7 +1665,11 @@ describe('Pi provider-aware model routing', () => {
     );
     const imageMessage = {
       type: 'user' as const,
-      content: [{ type: 'image' as const, path: imagePath }],
+      content: [{
+        type: 'image' as const,
+        path: imagePath,
+        managedUrl: 'xdt-image://pi-managed/screenshot.png',
+      }],
     };
     const mixedMessage = {
       type: 'user' as const,
@@ -1435,6 +1718,20 @@ describe('Pi provider-aware model routing', () => {
     await handle.send(imageMessage);
     expect(captured.requests).toContainEqual(expect.objectContaining({
       type: 'prompt',
+      message: expect.stringContaining(JSON.stringify({
+        image: 1,
+        uri: 'xdt-image://pi-managed/screenshot.png',
+      })),
+      images: [expect.objectContaining({ type: 'image', mimeType: 'image/png' })],
+    }));
+    captured.requests.length = 0;
+    await handle.steer!(imageMessage);
+    expect(captured.requests).toContainEqual(expect.objectContaining({
+      type: 'steer',
+      message: expect.stringContaining(JSON.stringify({
+        image: 1,
+        uri: 'xdt-image://pi-managed/screenshot.png',
+      })),
       images: [expect.objectContaining({ type: 'image', mimeType: 'image/png' })],
     }));
 
@@ -1931,6 +2228,93 @@ describe('Pi provider-aware model routing', () => {
     })).rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
     // 未走到 spawn(transport 从未创建)。
     expect(captured.args).toEqual([]);
+  });
+
+  it('rejects a local-only OpenAI context profile before resolving or spawning remote Pi', async () => {
+    const resolver = vi.fn(async () => ({ providers: [], env: {} }));
+    const transport = vi.fn(async () => {
+      throw new Error('remote transport must not be created');
+    });
+    const agent = new PiAgent({
+      ...byomDeps(resolver, [
+        {
+          id: 'chatgpt/gpt-5.6-sol[1m]',
+          displayName: 'GPT-5.6-Sol 1M',
+          contextWindow: 1_000_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ]),
+      getRemotePiTransport: transport,
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'remote-openai-context-profile',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-5.6-sol[1m]',
+      providerId: 'openai',
+      remoteHostId: 'remote-host',
+    })).rejects.toThrow(/\[REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE\]/);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(captured.args).toEqual([]);
+  });
+
+  it('rejects switching a running remote Pi session to a local-only OpenAI context profile', async () => {
+    const remoteStub: import('../transport.js').PiTransport = {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 4321,
+      isClosed: () => false,
+      remoteBinaryPath: '/remote/pi',
+      killRemoteSession: async () => {},
+    };
+    const base = byomDeps(async () => ({ providers: [], env: {} }), [
+      {
+        id: 'gateway-model',
+        displayName: 'Gateway model',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+      {
+        id: 'chatgpt/gpt-5.6-sol[1m]',
+        displayName: 'GPT-5.6-Sol 1M',
+        contextWindow: 1_000_000,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ]);
+    const agent = new PiAgent({
+      ...base,
+      runtimeConfig: { ...base.runtimeConfig, remoteEndpoint: 'https://gateway.example.test' },
+      resolveRemotePiBinaryPath: async () => '/remote/pi',
+      getRemotePiTransport: async () => remoteStub,
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async () => {},
+        stat: async () => ({ isFile: true }),
+        rm: async () => {},
+        listDir: async () => [],
+      }),
+    });
+    const handle = await agent.startSession({
+      sessionId: 'remote-gateway-context-profile-switch',
+      workingDir: cwd,
+      model: 'gateway-model',
+      providerId: 'xd',
+      remoteHostId: 'remote-host',
+    });
+
+    captured.requests.length = 0;
+    await expect(handle.setModel!('chatgpt/gpt-5.6-sol[1m]', { providerId: 'openai' }))
+      .rejects.toThrow(/\[REMOTE_PI_CONTEXT_PROFILE_UNAVAILABLE\]/);
+    expect(handle.model).toBe('gateway-model');
+    expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: 'set_model' }));
+    await handle.close();
   });
 
   it('allows an explicitly forwarded remote xAI provider and keeps proxy auth in the remote env', async () => {

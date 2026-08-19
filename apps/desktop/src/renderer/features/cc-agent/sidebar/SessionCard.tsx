@@ -88,6 +88,7 @@ import {
 } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import {
@@ -580,17 +581,18 @@ export function SessionCard({
         activeForeground={isActive}
       />
     ) : showAutomationTimer ? (
-      <button
-        type="button"
-        className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
-        aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-        title={t('ccAgent.sidebar.automationGenerated')}
-        onClick={(e) => void handleAutomationIconClick(e)}
-        onKeyDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-      >
-        <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
-      </button>
+      <Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}>
+        <button
+          type="button"
+          className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
+          aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
+          onClick={(e) => void handleAutomationIconClick(e)}
+          onKeyDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
+        </button>
+      </Tip>
     ) : null;
 
   // list 变体标题前缀:状态图标 + 自动化徽章 + 间隔(保持 main 既有行为不变)。
@@ -1362,33 +1364,35 @@ function CardAction({
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(e);
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      className={cn(
-        variant === 'list'
-          ? cn(
-              'shrink-0 size-5 flex items-center justify-center rounded-md',
-              'focus:outline-none',
-              isActive
-                ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-                : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
-            )
-          : cn(
-              'flex size-6 items-center justify-center rounded-[7px]',
-              'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
-              'border border-sidebar-border',
-              'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
-            ),
-      )}
-    >
-      {children}
-    </button>
+    <Tip text={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick(e);
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className={cn(
+          variant === 'list'
+            ? cn(
+                'shrink-0 size-5 flex items-center justify-center rounded-md',
+                'focus:outline-none',
+                isActive
+                  ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+                  : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+              )
+            : cn(
+                'flex size-6 items-center justify-center rounded-[7px]',
+                'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
+                'border border-sidebar-border',
+                'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+              ),
+        )}
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }

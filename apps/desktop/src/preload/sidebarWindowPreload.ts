@@ -548,6 +548,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:ios-simulator:set-mutation-control', request),
       setViewerVisibility: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:ios-simulator:set-viewer-visibility', request),
+      retryNativeRoute: (request: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('maker:ios-simulator:retry-native-route', request),
       latestFrame: (request: unknown): Promise<unknown> =>
         ipcRenderer.invoke('maker:ios-simulator:latest-frame', request),
       setStreamProfile: (request: unknown): Promise<unknown> =>

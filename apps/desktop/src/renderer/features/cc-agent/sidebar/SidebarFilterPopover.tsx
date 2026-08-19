@@ -65,7 +65,10 @@ import type {
   FilterVendor,
   UseSidebarFilterReturn,
 } from '../hooks/useSidebarFilter';
-import { DIALOGUE_FILTER_KEY } from '../hooks/helpers/sidebarFilterCore';
+import {
+  DIALOGUE_FILTER_KEY,
+  projectFilterIncludes,
+} from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
 import {
   MENU_CONTENT_CLASS,
@@ -332,6 +335,7 @@ export function SidebarFilterPopover({
   onOpenChange,
 }: SidebarFilterPopoverProps) {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
   // 受控光标模式 = 调用方传了 contextMenuPos 这个 prop(值为 null 表示"当前关闭",
   // 仍算受控);段头按钮模式则完全不传。用 !== undefined 而非真值判断。
   const isContextMode = contextMenuPos !== undefined;
@@ -587,7 +591,9 @@ export function SidebarFilterPopover({
                 </DropdownMenuItem>
                 {allKnownProjects.map((project) => {
                   const selected =
-                    projects === 'all' || (projectsAsSet?.has(project.projectKey) ?? false);
+                    projects === 'all' ||
+                    (projectsAsSet != null &&
+                      projectFilterIncludes(projectsAsSet, project.projectKey, localPlatform));
                   const remoteIdentity = getRemoteProjectMachineIdentity(project);
                   return (
                     <DropdownMenuItem

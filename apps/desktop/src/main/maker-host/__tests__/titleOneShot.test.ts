@@ -425,6 +425,70 @@ describe('generateTitleViaProviderResult — 手动重命名失败语义', () =>
 
 });
 
+describe('generateTitleViaProviderResult — beforeDispatch 派发紧前复查', () => {
+  it('beforeDispatch 返回 true → 照常派发,并收到 (sessionId, agentKind)', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '标题' }] },
+    }));
+    const beforeDispatch = vi.fn(async () => true);
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-bd', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+        beforeDispatch,
+      },
+    );
+
+    expect(result).toEqual({ status: 'ok', title: '标题' });
+    // 复查发生在凭证到手、请求发出的紧前,并收到本次 one-shot 的解析口径。
+    expect(beforeDispatch).toHaveBeenCalledWith({ sessionId: 's-bd', agentKind: 'claude-code', providerId: 'anthropic' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('beforeDispatch 返回 false → 派发紧前中止,不发付费请求', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-bd-fail', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+        beforeDispatch: async () => false,
+      },
+    );
+
+    expect(result).toEqual({ status: 'failed' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('未注入 beforeDispatch(标题场景)→ 不复查,行为不变', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '标题' }] },
+    }));
+
+    const result = await generateTitleViaProviderResult(
+      { sessionId: 's-no-bd', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+      },
+    );
+
+    expect(result).toEqual({ status: 'ok', title: '标题' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── buildTitleTarget(锁定 catalog titleModel 配置)────────────────────────
 
 describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
@@ -605,6 +669,7 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
     expect(body.model).toBe('claude-haiku-4-5-20251001'); // 经 toSdkModelString 还原
     expect(body.messages).toEqual([{ role: 'user', content: '为这条消息起标题：编译报错' }]);
     expect(body.system).toBeUndefined(); // 不注入身份段
+    expect(body.thinking).toEqual({ type: 'disabled' });
   });
   it('先验证完整响应再按旧契约截到 40 个 Unicode 字符', async () => {
     const longTitle = '标题'.repeat(30);
@@ -773,7 +838,39 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
         model: 'deepseek/deepseek-v4-flash',
         max_tokens: 32,
         thinking: { type: 'disabled' },
+        reasoning_effort: 'low',
       });
+    } finally {
+      setXdGatewayModels([]);
+    }
+  });
+  it('网关模型未下发 efforts 时不传 reasoning_effort', async () => {
+    setXdGatewayModels([
+      xdGatewayModel('codex/gpt-5.6-luna', 'chat', { efforts: [], defaultEffort: null }),
+    ]);
+    try {
+      const fetchImpl = fakeFetch(() => ({
+        json: { choices: [{ message: { content: '下一步改超时' } }] },
+      }));
+      await generateTitleViaProvider(
+        { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
+        {
+          fetchImpl,
+          readSessionProviderId: async () => 'xd',
+          listConnectedProviders: async () => [providerStub('xd')],
+          readGatewayKey: () => 'gk-1',
+        },
+      );
+      const [, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+        string,
+        { body: string },
+      ];
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        model: 'codex/gpt-5.6-luna',
+        thinking: { type: 'disabled' },
+      });
+      expect(body).not.toHaveProperty('reasoning_effort');
     } finally {
       setXdGatewayModels([]);
     }

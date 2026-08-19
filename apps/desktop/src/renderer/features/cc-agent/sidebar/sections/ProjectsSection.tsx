@@ -58,6 +58,7 @@ import {
 import {
   advanceViewedPriorityHold,
   buildMainListEntries,
+  getMainListEntrySessions,
   holdViewedPriorityRank,
   splitEntriesByDevice,
   type MainListDeviceSection,
@@ -74,8 +75,9 @@ import {
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { SectionCollapse } from '../SectionCollapse';
-import { SessionEntryList } from '../SessionEntryList';
+import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
+import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
 import type { SessionClickHandler } from '../SessionItem';
 import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
 import type { UseSidebarFilterReturn } from '../../hooks/useSidebarFilter';
@@ -87,11 +89,12 @@ import type {
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
+import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
 
 /** 设备段折叠/对话组折叠共用的段 key:本机段 'local',远程段用 deviceId。 */
 const deviceSectionKey = (deviceId: string | null) => deviceId ?? 'local';
 
-// 优先级排序的「看的时候钉住、离开后再落到已看过最前」是模块生命周期内的展示态,
+// 优先级排序的「看的时候钉住;只有从完成未读切走才置顶」是模块生命周期内的展示态,
 // 不落盘。放模块级而不是组件 ref:ProjectsSection 重挂(含 React Strict Mode
 // 双挂)不能丢掉正在看的档位,否则看的过程中会跳到其余档。
 export const viewedPriorityHold: ViewedPriorityHoldState = {
@@ -153,7 +156,7 @@ export interface ProjectsSectionProps {
   activeSessionId?: string;
   /**
    * 当前注视中的任务(files 路由下 activeSessionId 为空,回落到被浏览文件所属任务)。
-   * 优先级排序用它钉住打开时的档位,离开后再落到已看过最前。
+   * 优先级排序用它钉住打开时的档位;只有从完成未读切走才置顶。
    */
   viewedSessionId?: string;
   runningSessionIds: ReadonlySet<string>;
@@ -318,6 +321,19 @@ export function ProjectsSection({
   const attentionKinds = useSessionAttentionKinds();
   const urgentSet = useSessionAttentionUrgencySet();
   const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const collapsedAttentionToneFor = useCallback(
+    (sessions: readonly Session[]) =>
+      resolveCollapsedProjectAttentionTone({
+        sessions,
+        runningSessionIds,
+        notifications,
+        attentionKinds,
+        urgentSessionIds: urgentSet,
+        remotePhaseOf: (sessionId) => getRemoteSessionActivity(sessionId)?.phase,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
+    [runningSessionIds, notifications, attentionKinds, urgentSet, remoteActivityRevision],
+  );
   // 正在看的任务 id:files 路由下回落到被浏览文件所属任务。
   const viewedIdForSort = viewedSessionId ?? activeSessionId;
   const priorityContext = useMemo(() => {
@@ -404,6 +420,8 @@ export function ProjectsSection({
         sortBy: filter.sortBy,
         manualProjectOrder: filter.manualProjectOrder,
         priorityContext,
+        notifications,
+        scheduleSessionIndex,
       }),
     [
       projects,
@@ -416,21 +434,15 @@ export function ProjectsSection({
       filter.sortBy,
       filter.manualProjectOrder,
       priorityContext,
+      notifications,
+      scheduleSessionIndex,
     ],
   );
 
   // 顶层条目折叠:最多显示 N 条,超出收起 + 「显示全部 N 项」。与会话同一套
   // 规则(getSessionListCollapseView):始终保留"有需关注会话"的条目、以及包含当前会话的
   // 条目;任何排序/筛选下都生效。
-  const entrySessions = useCallback(
-    (entry: MainListEntry): readonly Session[] =>
-      entry.kind === 'project'
-        ? entry.project.sessions
-        : entry.kind === 'dialogue-group'
-          ? entry.sessions
-          : [entry.session],
-    [],
-  );
+  const entrySessions = getMainListEntrySessions;
   // 折叠视图共用一份参数:非设备分组 = 全列表一份;设备分组 = 每段各一份(见
   // deviceSections)。attention 豁免用 priorityContext.attentionSessionIds——与
   // 排序同一口径(含远程活动镜像),远程 waiting/unread 的条目不能被折进
@@ -516,8 +528,8 @@ export function ProjectsSection({
   // 「展开/收起所有分组」按钮(E 期):
   //   单层(仅组层或仅设备层)→ 收起所有 ↔ 展开所有;
   //   双层(设备 + 组层同时存在)→ 循环:收组层 → 收设备层 → 全部展开。
-  // 组层 = 项目行 + 「对话」组行(用户裁决:对话组与项目分组同一套批量折叠),
-  // 项目侧复用 ProjectNode 折叠状态(collapsed / onCollapseAll / onExpandAll)。
+  // 组层 = 项目行 + 自动任务组 + 「对话」组行。项目侧复用 ProjectNode 折叠状态,
+  // 自动任务组复用 owner-scoped 持久化状态,对话组沿用本地显示偏好。
   const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session');
   // 当前可见的对话组 key:设备分组下 = 各含对话组条目的设备段;否则单一组。
   // 「收起/展开所有分组」只作用于这些可见 key,不动其它模式下的记忆。
@@ -534,14 +546,46 @@ export function ProjectsSection({
   const allDialogueGroupsCollapsed =
     visibleDialogueGroupKeys.length === 0 ||
     visibleDialogueGroupKeys.every((key) => collapsedDialogueGroups.has(key));
+  const visibleAutomationGroupKeys = useMemo(
+    () =>
+      mixedEntries
+        .filter(
+          (entry): entry is Extract<MainListEntry, { kind: 'automation-group' }> =>
+            entry.kind === 'automation-group',
+        )
+        .map((entry) => entry.group.id),
+    [mixedEntries],
+  );
+  const legacyAutomationGroupKeys = useMemo(
+    () =>
+      new Map(
+        mixedEntries.flatMap((entry) =>
+          entry.kind === 'automation-group' && entry.group.legacyId
+            ? [[entry.group.id, entry.group.legacyId] as const]
+            : [],
+        ),
+      ),
+    [mixedEntries],
+  );
+  const [
+    allAutomationGroupsCollapsed,
+    setAllAutomationGroupsCollapsed,
+    isAutomationGroupCollapsed,
+    setAutomationGroupCollapsed,
+  ] = useAutomationGroupsCollapsed(
+    visibleAutomationGroupKeys,
+    filter.groupBy,
+    legacyAutomationGroupKeys,
+  );
   // 组层是否收齐必须看**当前范围**有没有项目行。allKnownProjects 是全机器宇宙,
   // 单机范围下本机只有对话组、远端仍有项目时 length>0;isAllCollapsed 却来自
   // 当前范围的 activeWorkingDirs,此时为空并恒为 false,foldState 会卡在
   // collapse-groups。有可见项目行才并上 isAllCollapsed。
   const hasVisibleProjectGroups = mixedEntries.some((entry) => entry.kind === 'project');
-  const allGroupsCollapsed = hasVisibleProjectGroups
-    ? isAllCollapsed && allDialogueGroupsCollapsed
-    : allDialogueGroupsCollapsed;
+  const allGroupsCollapsed =
+    (!hasVisibleProjectGroups || isAllCollapsed) &&
+    allDialogueGroupsCollapsed &&
+    allAutomationGroupsCollapsed;
   const hasDeviceLayer = deviceGroupingActive && deviceSections.length > 0;
   const allDevicesCollapsed =
     hasDeviceLayer &&
@@ -556,6 +600,7 @@ export function ProjectsSection({
     if (foldState === 'collapse-groups') {
       onCollapseAll();
       setDialogueCollapsed(visibleDialogueGroupKeys, true);
+      setAllAutomationGroupsCollapsed(true);
       return;
     }
     if (foldState === 'collapse-devices') {
@@ -564,10 +609,11 @@ export function ProjectsSection({
       );
       return;
     }
-    // expand-all:全部层级展开(设备段 + 项目行 + 对话组)。
+    // expand-all:全部层级展开(设备段 + 项目行 + 自动任务组 + 对话组)。
     setCollapsedDevices(new Set());
     onExpandAll();
     setDialogueCollapsed(visibleDialogueGroupKeys, false);
+    setAllAutomationGroupsCollapsed(false);
   }, [
     foldState,
     deviceSections,
@@ -575,6 +621,7 @@ export function ProjectsSection({
     onCollapseAll,
     onExpandAll,
     setDialogueCollapsed,
+    setAllAutomationGroupsCollapsed,
   ]);
   const foldLabel =
     foldState === 'collapse-groups'
@@ -617,6 +664,9 @@ export function ProjectsSection({
       project={project}
       statusFilter={filter.status}
       isCollapsed={collapsed.has(project.projectKey)}
+      collapsedAttentionTone={
+        collapsed.has(project.projectKey) ? collapsedAttentionToneFor(project.sessions) : null
+      }
       parentSectionCollapsed={false}
       activeSessionId={activeSessionId}
       runningSessionIds={runningSessionIds}
@@ -650,8 +700,8 @@ export function ProjectsSection({
     />
   );
 
-  // 散排对话行 / 「对话」组行。散排行带来源标签(hover);对话组行 = 可折叠的
-  // 分组头 + 组内会话(折叠上限与对话段旧口径一致)。dialogueGroupKey 标识
+  // 散排任务行 / 自动任务组 / 「对话」组行。散排行与自动任务组带来源标签(hover);
+  // 对话组行 = 可折叠的分组头 + 组内会话(折叠上限与对话段旧口径一致)。dialogueGroupKey 标识
   // 该组属于哪个段(设备段 key / 单一列表 DIALOGUE_GROUP_ALL_KEY),折叠独立。
   // dialogueDeviceTarget:按设备分组时该段的设备(null = 本机段),组头新建即落在
   // 这台设备上;不分组时传 undefined,由上层按当前机器作用域推断。
@@ -660,16 +710,15 @@ export function ProjectsSection({
     dialogueGroupKey: string,
     dialogueDeviceTarget?: DialogueDeviceTarget | null,
   ): ReactNode => {
-    if (entry.kind === 'session') {
+    if (entry.kind === 'session' || entry.kind === 'automation-group') {
       return (
-        <SessionEntryList
-          key={entry.session.id}
-          sessions={[entry.session]}
+        <SessionEntryRows
+          key={entry.kind === 'session' ? entry.session.id : `automation-group:${entry.group.id}`}
+          entries={[entry]}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}
           attachedSessionIds={attachedSessionIds}
           notifications={notifications}
-          scheduleSessionIndex={scheduleSessionIndex}
           selectedSessionIds={selectedSessionIds}
           onSessionClick={onSessionClick}
           onAction={onAction}
@@ -678,6 +727,8 @@ export function ProjectsSection({
           onMoveSession={onMoveSession}
           projectOptions={projectOptions}
           onScheduleAction={onScheduleAction}
+          automationGroupCollapsed={isAutomationGroupCollapsed}
+          onAutomationGroupCollapsedChange={setAutomationGroupCollapsed}
           sourceLabelMap={dialogueSourceLabelMap}
           sessionVariant={mainSessionVariant}
           // 混排下每条散排对话各是一个单条列表,若都补顶线,会与上一行的底线叠成
@@ -809,7 +860,7 @@ export function ProjectsSection({
               const sectionCollapsed = collapsedDevices.has(key);
               return (
                 <div key={key} className="flex flex-col gap-1">
-                  {/* 设备分组头:可折叠,在线状态点(绿/灰)+ 名称 + 条数。 */}
+                  {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
                   <button
                     type="button"
                     onClick={() => toggleDeviceSection(key)}
@@ -831,13 +882,12 @@ export function ProjectsSection({
                     )}
                     <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
                     <span className="min-w-0 truncate text-xs font-medium">{name}</span>
-                    <span
-                      aria-hidden
-                      className={cn(
-                        'size-1.5 shrink-0 rounded-full',
-                        online ? 'bg-[var(--card-status-done)]' : 'bg-[var(--text-tertiary)]',
-                      )}
-                    />
+                    {!online && (
+                      <span
+                        aria-hidden
+                        className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                      />
+                    )}
                     {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
                           (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
                           段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}

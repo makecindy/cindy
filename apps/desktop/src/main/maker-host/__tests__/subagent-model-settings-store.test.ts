@@ -277,8 +277,8 @@ describe('subagent model settings store', () => {
 
   it('codexSpawnConfigChanged tracks spawn-affecting keys only', () => {
     const base = withDefaults();
-    // codexProviderId 是纯客户端展示维度,claude* 走 env 通道:都不触发重启。
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexProviderId: 'openai' }))).toBe(false);
+    // Provider 决定 runtime 模型改写与子线程路由，因此变化必须重启；claude* 仍走 env 通道。
+    expect(codexSpawnConfigChanged(base, withDefaults({ codexProviderId: 'openai' }))).toBe(true);
     expect(codexSpawnConfigChanged(base, withDefaults({ claudeCode: 'claude-opus-5' }))).toBe(false);
     expect(codexSpawnConfigChanged(base, withDefaults({ codex: 'gpt-5.6-terra' }))).toBe(true);
     expect(codexSpawnConfigChanged(base, withDefaults({ codexEffort: 'low' }))).toBe(true);

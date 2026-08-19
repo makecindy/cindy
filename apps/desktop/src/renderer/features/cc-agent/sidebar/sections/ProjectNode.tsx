@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,6 +58,7 @@ import { RemoteProjectIcon } from '../RemoteProjectIcon';
 import { isDeviceLinkWriteBlocked } from '../../lib/remoteSessionWriteGuard';
 import { projectBulkArchiveActionForStatus } from '../../lib/projectBulkArchiveAction';
 import { getRemoteProjectMachineIdentity } from '../../lib/remoteProjectIdentity';
+import type { CollapsedProjectAttentionTone } from '../projectCollapsedAttention';
 
 const log = createLogger('ProjectNode');
 
@@ -69,6 +71,8 @@ export interface ProjectNodeProps {
   /** 当前会话状态筛选，决定项目菜单是批量归档还是批量恢复。 */
   statusFilter: FilterStatus;
   isCollapsed: boolean;
+  /** 折叠时汇总子任务的红/绿状态点；展开态由子任务行各自展示。 */
+  collapsedAttentionTone?: CollapsedProjectAttentionTone | null;
   /** 父级 Projects 段整体收起时,也要让项目内「显示全部」在动画后复位。 */
   parentSectionCollapsed: boolean;
   activeSessionId?: string;
@@ -123,6 +127,7 @@ export function ProjectNode({
   sessionVariant = 'text',
   statusFilter,
   isCollapsed,
+  collapsedAttentionTone = null,
   parentSectionCollapsed,
   activeSessionId,
   runningSessionIds,
@@ -342,6 +347,9 @@ export function ProjectNode({
             // (2026-08-12 用户裁决,与会话行的标题 + 远程图标同款)。
             <span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>
           )}
+          {!isEditingName && isCollapsed && collapsedAttentionTone ? (
+            <AttentionDot size={6} tone={collapsedAttentionTone} className="shrink-0" />
+          ) : null}
           {!isEditingName && isDeviceLink ? (
             <Tip text={remoteIdentity?.displayLabel ?? project.deviceLinkDeviceId ?? ''}>
               <RemoteProjectIcon

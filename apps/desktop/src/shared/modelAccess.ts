@@ -94,7 +94,7 @@ export interface ModelAccessAgentOverride {
   defaultEffort?: string | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
-  /** v3 runtime transport; required by the contract for every listed Agent. */
+  /** v3/v4 runtime transport; required by the contract for every listed Agent. */
   wireProtocol?: 'anthropic-messages' | 'openai-responses';
 }
 
@@ -218,6 +218,6 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
  * remain a runtime-parser concern.
  */
 export interface ModelAccessModelsResponse {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   models: ModelAccessGatewayModel[];
 }
