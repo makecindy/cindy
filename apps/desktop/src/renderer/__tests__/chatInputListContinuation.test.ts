@@ -9,6 +9,7 @@ const chatInputSource = readFileSync(
 
 /**
  * ChatInput 列表接续接线契约:
+ * - Tab / Shift+Tab 在结构化列表内调整层级，无法调整时保留原有快捷键或焦点导航;
  * - Shift/Alt+Enter 优先处理结构化列表，再兼容旧纯文本列表;
  * - 普通 Enter 不由列表接续拦截,发送或原生换行由共享快捷键 resolver 决定;
  * - 守住 IME composition 边界。
@@ -18,8 +19,26 @@ describe('ChatInput list continuation wiring contract', () => {
   it('imports both structured-list commands and the legacy plain-text fallback', () => {
     expect(chatInputSource).toContain('handleStructuredListBackspace');
     expect(chatInputSource).toContain('handleStructuredListBreak');
+    expect(chatInputSource).toContain('handleStructuredListIndent');
     expect(chatInputSource).toContain('applyListBackspace');
     expect(chatInputSource).toContain('applyListContinuation');
+  });
+
+  it('tries structured-list indentation before the permission shortcut', () => {
+    const block = extractBetween(
+      chatInputSource,
+      '// Tab / Shift+Tab — indent or outdent structured list items.',
+      '// ESC — back out of the topmost thing the user is interacting with.',
+    );
+    expect(block).toContain("event.key === 'Tab'");
+    expect(block).toContain('!event.metaKey');
+    expect(block).toContain('!event.ctrlKey');
+    expect(block).toContain('!event.altKey');
+    expect(block).toContain('!event.isComposing');
+    expect(block).toContain('handleStructuredListIndent(view, event.shiftKey)');
+    expect(block.indexOf('handleStructuredListIndent(view, event.shiftKey)')).toBeLessThan(
+      block.indexOf("getAppShortcutCombos('cycle-permission-mode')"),
+    );
   });
 
   it('tries structured and legacy continuation on Shift/Alt+Enter', () => {

@@ -15,8 +15,10 @@ import {
   ComposerOrderedList,
   handleStructuredListBackspace,
   handleStructuredListBreak,
+  handleStructuredListIndent,
   isTopLevelBlockSelection,
   isTrailingEmptyTopLevelParagraph,
+  orderedListMarkerStyleAtDepth,
   promoteTrailingPlainListParagraph,
 } from '@/components/new-chat/ComposerListNodes';
 import {
@@ -124,6 +126,63 @@ function selectDocumentEnd(editor: Editor): void {
   editor.view.dispatch(editor.state.tr.setSelection(TextSelection.atEnd(editor.state.doc)));
 }
 
+function selectText(editor: Editor, text: string): void {
+  let position: number | null = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (position === null && node.isText && node.text === text) position = pos + node.nodeSize;
+  });
+  if (position === null) throw new Error(`Text not found in editor: ${text}`);
+  editor.commands.setTextSelection(position);
+}
+
+function textBounds(editor: Editor, text: string): { from: number; to: number } {
+  let bounds: { from: number; to: number } | null = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (bounds === null && node.isText && node.text === text) {
+      bounds = { from: pos, to: pos + node.nodeSize };
+    }
+  });
+  if (bounds === null) throw new Error(`Text not found in editor: ${text}`);
+  return bounds;
+}
+
+type TestListKind = 'bulletList' | 'orderedList';
+
+function nestedListDocument(
+  kinds: TestListKind[],
+  orderedMarker: '.' | ')' | '、' = '.',
+): Record<string, unknown> {
+  let nested: Record<string, unknown> | undefined;
+  for (let index = kinds.length - 1; index >= 0; index -= 1) {
+    const kind = kinds[index];
+    nested = {
+      type: kind,
+      ...(kind === 'orderedList'
+        ? { attrs: { start: 1, marker: orderedMarker } }
+        : {}),
+      content: [
+        {
+          type: 'listItem',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: `level ${index + 1}` }],
+            },
+            ...(nested ? [nested] : []),
+          ],
+        },
+      ],
+    };
+  }
+  return { type: 'doc', content: nested ? [nested] : [{ type: 'paragraph' }] };
+}
+
+function renderedOrderedListStyles(editor: Editor): Array<string | null> {
+  return Array.from(editor.view.dom.querySelectorAll('ol')).map((list) =>
+    list.getAttribute('data-list-marker-style'),
+  );
+}
+
 afterEach(() => {
   for (const editor of editors.splice(0)) editor.destroy();
 });
@@ -220,7 +279,8 @@ describe('composer structured list input rules', () => {
 
     const list = editor.view.dom.querySelector('ol');
     expect(list?.getAttribute('data-marker')).toBe('、');
-    expect(list?.getAttribute('data-marker-digits')).toBe('1');
+    expect(list?.getAttribute('data-marker-width-chars')).toBe('1');
+    expect(list?.getAttribute('style')).toContain('--composer-list-padding: 1.5em;');
 
     const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
     const baseListRule = css.match(
@@ -236,12 +296,197 @@ describe('composer structured list input rules', () => {
     expect(cjkMarkerRule).toContain('--composer-list-marker-extra: 0.7em;');
   });
 
-  it('reserves enough marker width for long ordered-list numbers', () => {
+  it('reserves enough marker width for long decimal ordinals', () => {
     const editor = makeEditor();
 
     typeThroughInputRules(editor, '123456. ');
 
-    expect(editor.view.dom.querySelector('ol')?.getAttribute('data-marker-digits')).toBe('6');
+    const list = editor.view.dom.querySelector('ol');
+    expect(list?.getAttribute('data-marker-width-chars')).toBe('6');
+    expect(list?.getAttribute('style')).toContain('--composer-list-padding: 4.6em;');
+  });
+
+  it.each(['.', ')', '、'] as const)(
+    'budgets the full aa%s marker at the alphabetic level',
+    (marker) => {
+      const editor = makeEditor({
+        type: 'doc',
+        content: [
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  { type: 'paragraph', content: [{ type: 'text', text: 'parent' }] },
+                  {
+                    type: 'orderedList',
+                    attrs: { start: 27, marker },
+                    content: [
+                      {
+                        type: 'listItem',
+                        content: [
+                          { type: 'paragraph', content: [{ type: 'text', text: 'child' }] },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      const list = editor.view.dom.querySelector('ol');
+
+      expect(list?.getAttribute('data-list-marker-style')).toBe('lower-alpha');
+      expect(list?.getAttribute('data-marker-width-chars')).toBe('2');
+      expect(list?.getAttribute('style')).toContain('--composer-list-padding: 2.2em;');
+      expect(list?.getAttribute('data-marker') ?? '.').toBe(marker);
+    },
+  );
+
+  it.each(['.', ')', '、'] as const)(
+    'budgets the full lxxxviii%s marker at the roman level',
+    (marker) => {
+      const editor = makeEditor({
+        type: 'doc',
+        content: [
+          {
+            type: 'bulletList',
+            content: [
+              {
+                type: 'listItem',
+                content: [
+                  { type: 'paragraph', content: [{ type: 'text', text: 'level 1' }] },
+                  {
+                    type: 'bulletList',
+                    content: [
+                      {
+                        type: 'listItem',
+                        content: [
+                          { type: 'paragraph', content: [{ type: 'text', text: 'level 2' }] },
+                          {
+                            type: 'orderedList',
+                            attrs: { start: 88, marker },
+                            content: [
+                              {
+                                type: 'listItem',
+                                content: [
+                                  {
+                                    type: 'paragraph',
+                                    content: [{ type: 'text', text: 'level 3' }],
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      const list = editor.view.dom.querySelector('ol');
+
+      expect(list?.getAttribute('data-list-marker-style')).toBe('lower-roman');
+      expect(list?.getAttribute('data-marker-width-chars')).toBe('8');
+      expect(list?.getAttribute('style')).toContain('--composer-list-padding: 5.8em;');
+      expect(list?.getAttribute('data-marker') ?? '.').toBe(marker);
+    },
+  );
+
+  it('renders arbitrary ordered-list depths with a repeating three-level marker cycle', () => {
+    const editor = makeEditor(
+      nestedListDocument(Array.from({ length: 7 }, () => 'orderedList')),
+    );
+
+    expect(renderedOrderedListStyles(editor)).toEqual([
+      'decimal',
+      'lower-alpha',
+      'lower-roman',
+      'decimal',
+      'lower-alpha',
+      'lower-roman',
+      'decimal',
+    ]);
+    expect(orderedListMarkerStyleAtDepth(700)).toBe('decimal');
+    expect(orderedListMarkerStyleAtDepth(701)).toBe('lower-alpha');
+    expect(orderedListMarkerStyleAtDepth(702)).toBe('lower-roman');
+  });
+
+  it('counts mixed bullet and ordered ancestors toward ordered-list depth', () => {
+    const editor = makeEditor(
+      nestedListDocument(['bulletList', 'orderedList', 'bulletList', 'orderedList']),
+    );
+
+    expect(renderedOrderedListStyles(editor)).toEqual(['lower-alpha', 'decimal']);
+  });
+
+  it('recomputes marker styles when restored content replaces the document', () => {
+    const editor = makeEditor();
+
+    editor.commands.setContent(
+      nestedListDocument(Array.from({ length: 7 }, () => 'orderedList')),
+    );
+
+    expect(renderedOrderedListStyles(editor)).toEqual([
+      'decimal',
+      'lower-alpha',
+      'lower-roman',
+      'decimal',
+      'lower-alpha',
+      'lower-roman',
+      'decimal',
+    ]);
+  });
+
+  it.each(['.', ')', '、'] as const)(
+    'keeps %s punctuation while cycling the rendered counter style',
+    (marker) => {
+      const editor = makeEditor(
+        nestedListDocument(['orderedList', 'orderedList', 'orderedList', 'orderedList'], marker),
+      );
+      const lists = Array.from(editor.view.dom.querySelectorAll('ol'));
+
+      expect(renderedOrderedListStyles(editor)).toEqual([
+        'decimal',
+        'lower-alpha',
+        'lower-roman',
+        'decimal',
+      ]);
+      expect(lists.map((list) => list.getAttribute('data-marker') ?? '.')).toEqual([
+        marker,
+        marker,
+        marker,
+        marker,
+      ]);
+    },
+  );
+
+  it('maps marker attributes to the three reusable CSS counter styles', () => {
+    const css = readFileSync(resolve(__dirname, '..', 'styles', 'globals.css'), 'utf8');
+    const compactCss = css.replace(/\s+/g, ' ');
+
+    expect(compactCss).toContain(
+      '[data-chat-input-root] .ProseMirror ol { list-style-type: decimal;',
+    );
+    expect(compactCss).toContain(
+      "ol[data-list-marker-style='lower-alpha'] { list-style-type: lower-alpha;",
+    );
+    expect(compactCss).toContain(
+      "ol[data-list-marker-style='lower-roman'] { list-style-type: lower-roman;",
+    );
+    expect(compactCss).toContain(
+      "ol[data-list-marker-style='lower-alpha'][data-marker=')'] > li::marker { content: counter(list-item, lower-alpha) ') ';",
+    );
+    expect(compactCss).toContain(
+      "ol[data-list-marker-style='lower-roman'][data-marker='、'] > li::marker { content: counter(list-item, lower-roman) '、';",
+    );
   });
 
   it.each([
@@ -378,6 +623,247 @@ describe('composer structured list input rules', () => {
 });
 
 describe('composer structured list keyboard commands', () => {
+  it('indents and outdents a list item under its previous sibling', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: ['parent', 'child'].map((text) => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+          })),
+        },
+      ],
+    });
+    selectText(editor, 'child');
+
+    expect(handleStructuredListIndent(editor.view)).toBe(true);
+    expect(serializeEditorContent(editor).text).toBe('- parent\n  - child');
+    expect(handleStructuredListIndent(editor.view, true)).toBe(true);
+    expect(serializeEditorContent(editor).text).toBe('- parent\n- child');
+  });
+
+  it('outdents a top-level item into a paragraph', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: ['first', 'second'].map((text) => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+          })),
+        },
+      ],
+    });
+    selectText(editor, 'second');
+
+    expect(handleStructuredListIndent(editor.view, true)).toBe(true);
+    expect(editor.state.doc.firstChild?.type.name).toBe('bulletList');
+    expect(editor.state.doc.lastChild?.type.name).toBe('paragraph');
+    expect(serializeEditorContent(editor).text).toBe('- first\nsecond');
+  });
+
+  it('indents and outdents a continuous multi-item selection', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: ['parent', 'child one', 'child two'].map((text) => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+          })),
+        },
+      ],
+    });
+    const first = textBounds(editor, 'child one');
+    const second = textBounds(editor, 'child two');
+    editor.commands.setTextSelection({ from: first.from, to: second.to });
+
+    expect(handleStructuredListIndent(editor.view)).toBe(true);
+    expect(serializeEditorContent(editor).text).toBe('- parent\n  - child one\n  - child two');
+    expect(handleStructuredListIndent(editor.view, true)).toBe(true);
+    expect(serializeEditorContent(editor).text).toBe('- parent\n- child one\n- child two');
+  });
+
+  it('updates ordered marker styles immediately for a multi-item indent and outdent', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'orderedList',
+          attrs: { start: 1, marker: '.' },
+          content: ['parent', 'child one', 'child two'].map((text) => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+          })),
+        },
+      ],
+    });
+    const first = textBounds(editor, 'child one');
+    const second = textBounds(editor, 'child two');
+    editor.commands.setTextSelection({ from: first.from, to: second.to });
+
+    expect(renderedOrderedListStyles(editor)).toEqual(['decimal']);
+    expect(handleStructuredListIndent(editor.view)).toBe(true);
+    expect(renderedOrderedListStyles(editor)).toEqual(['decimal', 'lower-alpha']);
+    expect(handleStructuredListIndent(editor.view, true)).toBe(true);
+    expect(renderedOrderedListStyles(editor)).toEqual(['decimal']);
+  });
+
+  it('cycles from roman back to decimal when Tab creates a fourth-level list', () => {
+    const levelThreeWithSiblings: Record<string, unknown> = {
+      type: 'orderedList',
+      attrs: { start: 1, marker: '.' },
+      content: [
+        {
+          type: 'listItem',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'level 1' }] },
+            {
+              type: 'orderedList',
+              attrs: { start: 1, marker: '.' },
+              content: [
+                {
+                  type: 'listItem',
+                  content: [
+                    { type: 'paragraph', content: [{ type: 'text', text: 'level 2' }] },
+                    {
+                      type: 'orderedList',
+                      attrs: { start: 1, marker: '.' },
+                      content: ['level 3 parent', 'level 4 candidate'].map((text) => ({
+                        type: 'listItem',
+                        content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+                      })),
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const editor = makeEditor({ type: 'doc', content: [levelThreeWithSiblings] });
+    selectText(editor, 'level 4 candidate');
+
+    expect(renderedOrderedListStyles(editor)).toEqual([
+      'decimal',
+      'lower-alpha',
+      'lower-roman',
+    ]);
+    expect(handleStructuredListIndent(editor.view)).toBe(true);
+    expect(renderedOrderedListStyles(editor)).toEqual([
+      'decimal',
+      'lower-alpha',
+      'lower-roman',
+      'decimal',
+    ]);
+    expect(handleStructuredListIndent(editor.view, true)).toBe(true);
+    expect(renderedOrderedListStyles(editor)).toEqual([
+      'decimal',
+      'lower-alpha',
+      'lower-roman',
+    ]);
+  });
+
+  it('recomputes a large ordinal width when indentation changes its counter style', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'parent' }] }],
+            },
+            {
+              type: 'listItem',
+              content: [
+                { type: 'paragraph', content: [{ type: 'text', text: 'movable branch' }] },
+                {
+                  type: 'orderedList',
+                  attrs: { start: 88, marker: ')' },
+                  content: [
+                    {
+                      type: 'listItem',
+                      content: [
+                        { type: 'paragraph', content: [{ type: 'text', text: 'large ordinal' }] },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    selectText(editor, 'movable branch');
+
+    let lists = Array.from(editor.view.dom.querySelectorAll('ol'));
+    expect(lists).toHaveLength(1);
+    expect(lists[0].getAttribute('data-list-marker-style')).toBe('lower-alpha');
+    expect(lists[0].getAttribute('data-marker-width-chars')).toBe('2');
+    expect(lists[0].getAttribute('style')).toContain('--composer-list-padding: 2.2em;');
+
+    expect(handleStructuredListIndent(editor.view)).toBe(true);
+    lists = Array.from(editor.view.dom.querySelectorAll('ol'));
+    expect(lists).toHaveLength(1);
+    expect(lists[0].getAttribute('data-list-marker-style')).toBe('lower-roman');
+    expect(lists[0].getAttribute('data-marker-width-chars')).toBe('8');
+    expect(lists[0].getAttribute('style')).toContain('--composer-list-padding: 5.8em;');
+
+    expect(handleStructuredListIndent(editor.view, true)).toBe(true);
+    lists = Array.from(editor.view.dom.querySelectorAll('ol'));
+    expect(lists).toHaveLength(1);
+    expect(lists[0].getAttribute('data-list-marker-style')).toBe('lower-alpha');
+    expect(lists[0].getAttribute('data-marker-width-chars')).toBe('2');
+    expect(lists[0].getAttribute('style')).toContain('--composer-list-padding: 2.2em;');
+  });
+
+  it('preserves inline atoms while indenting a list item', () => {
+    const editor = makeEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: [
+            { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'parent' }] }] },
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [
+                { type: 'text', text: 'child ' },
+                { type: 'mentionChip', attrs: { label: 'file.ts', path: 'file.ts' } },
+              ] }],
+            },
+          ],
+        },
+      ],
+    });
+    selectText(editor, 'child ');
+
+    expect(handleStructuredListIndent(editor.view)).toBe(true);
+    const nestedParagraph = editor.state.doc.firstChild?.firstChild?.lastChild?.firstChild?.firstChild;
+    expect(nestedParagraph?.child(1).type.name).toBe('mentionChip');
+    expect(nestedParagraph?.child(1).attrs).toMatchObject({ label: 'file.ts', path: 'file.ts' });
+  });
+
+  it('leaves Tab available outside lists and when the first item cannot indent', () => {
+    const paragraphEditor = makeEditor({ type: 'doc', content: [{ type: 'paragraph' }] });
+    selectDocumentEnd(paragraphEditor);
+    expect(handleStructuredListIndent(paragraphEditor.view)).toBe(false);
+
+    const listEditor = makeEditor({ type: 'doc', content: [{
+      type: 'bulletList',
+      content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }],
+    }] });
+    selectDocumentEnd(listEditor);
+    expect(handleStructuredListIndent(listEditor.view)).toBe(false);
+  });
   it('splits a non-empty item and exits from the empty continuation item', () => {
     const editor = makeEditor({
       type: 'doc',
@@ -857,6 +1343,61 @@ describe('composer live plain-list promotion', () => {
 });
 
 describe('composer structured list serialization', () => {
+  it('keeps three-level ordered-list Markdown numeric', () => {
+    const item = (text: string, nested?: Record<string, unknown>) => ({
+      type: 'listItem',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text }] },
+        ...(nested ? [nested] : []),
+      ],
+    });
+    const list = (content: Record<string, unknown>[]) => ({
+      type: 'orderedList',
+      attrs: { start: 1, marker: '.' },
+      content,
+    });
+    const editor = makeEditor({
+      type: 'doc',
+      content: [list([item('one', list([item('two', list([item('three')]))]))])],
+    });
+
+    expect(serializeEditorContent(editor).text).toBe('1. one\n   1. two\n      1. three');
+  });
+
+  it('keeps fourth- through sixth-level ordered-list Markdown numeric', () => {
+    const editor = makeEditor(
+      nestedListDocument(Array.from({ length: 6 }, () => 'orderedList')),
+    );
+
+    expect(serializeEditorContent(editor).text).toBe(
+      '1. level 1\n' +
+        '   1. level 2\n' +
+        '      1. level 3\n' +
+        '         1. level 4\n' +
+        '            1. level 5\n' +
+        '               1. level 6',
+    );
+  });
+
+  it.each(['.', ')', '、'] as const)(
+    'keeps nested %s Markdown markers numeric at every visual style',
+    (marker) => {
+      const editor = makeEditor(
+        nestedListDocument(Array.from({ length: 4 }, () => 'orderedList'), marker),
+      );
+      const lines = serializeEditorContent(editor).text.split('\n');
+
+      expect(lines).toHaveLength(4);
+      expect(lines.map((line) => line.trimStart().startsWith(`1${marker}`))).toEqual([
+        true,
+        true,
+        true,
+        true,
+      ]);
+      expect(lines.join('\n')).not.toMatch(/(?:^|\n)\s*[a-z]+[.)、]/i);
+    },
+  );
+
   it('uses the full parent marker width for nested list indentation', () => {
     const editor = makeEditor({
       type: 'doc',

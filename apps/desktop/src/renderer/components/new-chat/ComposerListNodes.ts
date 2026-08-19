@@ -8,9 +8,9 @@
  */
 import { InputRule, Node, mergeAttributes, wrappingInputRule, type NodeConfig } from '@tiptap/core';
 import { Fragment, type Node as PMNode, type NodeType } from '@tiptap/pm/model';
-import { liftListItem, splitListItem } from '@tiptap/pm/schema-list';
-import { Selection, TextSelection } from '@tiptap/pm/state';
-import type { EditorView } from '@tiptap/pm/view';
+import { liftListItem, sinkListItem, splitListItem } from '@tiptap/pm/schema-list';
+import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
+import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 
 const BULLET_MARKER_RE = /^([-+*•])([ \t]+)$/;
 const ORDERED_MARKER_RE = /^([1-9]\d{0,8})([.)])([ \t]+)$/;
@@ -23,6 +23,122 @@ interface OrderedListAttrs {
   start: number;
   marker: OrderedMarker;
   separator: string;
+}
+
+export type OrderedListMarkerStyle = 'decimal' | 'lower-alpha' | 'lower-roman';
+
+interface OrderedListMarkerDecorationState {
+  decorations: DecorationSet;
+}
+
+const ORDERED_LIST_MARKER_PLUGIN_KEY = new PluginKey<OrderedListMarkerDecorationState>(
+  'composerOrderedListMarkerDecoration',
+);
+
+export function orderedListMarkerStyleAtDepth(depth: number): OrderedListMarkerStyle {
+  const cycleIndex = ((depth - 1) % 3 + 3) % 3;
+  return cycleIndex === 0 ? 'decimal' : cycleIndex === 1 ? 'lower-alpha' : 'lower-roman';
+}
+
+function lowerAlphaOrdinal(value: number): string {
+  if (!Number.isSafeInteger(value) || value < 1) return String(value);
+  let remaining = value;
+  let result = '';
+  while (remaining > 0) {
+    remaining -= 1;
+    result = String.fromCharCode(97 + (remaining % 26)) + result;
+    remaining = Math.floor(remaining / 26);
+  }
+  return result;
+}
+
+const ROMAN_ORDINAL_PARTS: ReadonlyArray<readonly [number, string]> = [
+  [1000, 'm'],
+  [900, 'cm'],
+  [500, 'd'],
+  [400, 'cd'],
+  [100, 'c'],
+  [90, 'xc'],
+  [50, 'l'],
+  [40, 'xl'],
+  [10, 'x'],
+  [9, 'ix'],
+  [5, 'v'],
+  [4, 'iv'],
+  [1, 'i'],
+];
+
+function lowerRomanOrdinal(value: number): string {
+  // CSS's predefined lower-roman counter style falls back to decimal outside
+  // its 1..3999 range.
+  if (!Number.isSafeInteger(value) || value < 1 || value > 3999) return String(value);
+  let remaining = value;
+  let result = '';
+  for (const [amount, glyphs] of ROMAN_ORDINAL_PARTS) {
+    while (remaining >= amount) {
+      result += glyphs;
+      remaining -= amount;
+    }
+  }
+  return result;
+}
+
+function orderedListMarkerText(value: number, style: OrderedListMarkerStyle): string {
+  if (style === 'lower-alpha') return lowerAlphaOrdinal(value);
+  if (style === 'lower-roman') return lowerRomanOrdinal(value);
+  return String(value);
+}
+
+function orderedListMarkerWidth(node: PMNode, style: OrderedListMarkerStyle): {
+  characters: number;
+  paddingEm: number;
+} {
+  const start = Number(node.attrs.start);
+  let characters = 1;
+  if (Number.isSafeInteger(start) && start > 0) {
+    for (let index = 0; index < node.childCount; index += 1) {
+      characters = Math.max(
+        characters,
+        orderedListMarkerText(start + index, style).length,
+      );
+    }
+  }
+  return {
+    characters,
+    paddingEm: characters === 1 ? 1.5 : Number((1 + characters * 0.6).toFixed(2)),
+  };
+}
+
+/**
+ * Decorate every ordered list from its full list ancestry. Bullet and ordered
+ * ancestors both count, while the three-value attribute keeps CSS independent
+ * from the maximum nesting depth.
+ */
+export function buildOrderedListMarkerDecorations(doc: PMNode): DecorationSet {
+  const decorations: Decoration[] = [];
+
+  const visit = (parent: PMNode, contentStart: number, ancestorListDepth: number): void => {
+    parent.forEach((child, offset) => {
+      const childPos = contentStart + offset;
+      const isList = child.type.name === 'bulletList' || child.type.name === 'orderedList';
+      const listDepth = ancestorListDepth + (isList ? 1 : 0);
+      if (child.type.name === 'orderedList') {
+        const markerStyle = orderedListMarkerStyleAtDepth(listDepth);
+        const markerWidth = orderedListMarkerWidth(child, markerStyle);
+        decorations.push(
+          Decoration.node(childPos, childPos + child.nodeSize, {
+            'data-list-marker-style': markerStyle,
+            'data-marker-width-chars': String(markerWidth.characters),
+            style: `--composer-list-padding:${markerWidth.paddingEm}em;`,
+          }),
+        );
+      }
+      if (child.childCount > 0) visit(child, childPos + 1, listDepth);
+    });
+  };
+
+  visit(doc, 0, 0);
+  return DecorationSet.create(doc, decorations);
 }
 
 interface SelectedTaskPrefix {
@@ -186,7 +302,6 @@ function fenceAwareWrappingInputRule(
 
 const listItemConfig: NodeConfig = {
   name: 'listItem',
-  group: 'block',
   content: 'paragraph block*',
   defining: true,
   parseHTML() {
@@ -307,17 +422,29 @@ export const ComposerOrderedList = Node.create({
   parseHTML() {
     return [{ tag: 'ol' }];
   },
-  renderHTML({ node, HTMLAttributes }) {
-    const start = Number(node.attrs.start);
-    const lastItem = start + Math.max(node.childCount - 1, 0);
-    const markerDigits =
-      Number.isInteger(start) && start > 0 && Number.isInteger(lastItem)
-        ? String(lastItem).length
-        : 1;
+  renderHTML({ HTMLAttributes }) {
+    return ['ol', mergeAttributes(HTMLAttributes), 0];
+  },
+  addProseMirrorPlugins() {
     return [
-      'ol',
-      mergeAttributes(HTMLAttributes, { 'data-marker-digits': String(markerDigits) }),
-      0,
+      new Plugin<OrderedListMarkerDecorationState>({
+        key: ORDERED_LIST_MARKER_PLUGIN_KEY,
+        state: {
+          init(_config, state) {
+            return { decorations: buildOrderedListMarkerDecorations(state.doc) };
+          },
+          apply(transaction, previous) {
+            return transaction.docChanged
+              ? { decorations: buildOrderedListMarkerDecorations(transaction.doc) }
+              : previous;
+          },
+        },
+        props: {
+          decorations(state) {
+            return this.getState(state)?.decorations ?? DecorationSet.empty;
+          },
+        },
+      }),
     ];
   },
   addInputRules() {
@@ -485,6 +612,20 @@ export function handleStructuredListBackspace(view: EditorView): boolean {
   }
   if (taskPrefix) return clearTaskPrefixAndLift(view, itemDepth, taskPrefix);
   return liftEmptyStructuredListItem(view, itemType);
+}
+
+/**
+ * Indent or outdent the selected structured list item(s).
+ *
+ * The schema-list commands already preserve mixed inline content and multi-item
+ * selections. Returning false outside a list keeps Tab available for normal
+ * focus navigation and other composer shortcuts.
+ */
+export function handleStructuredListIndent(view: EditorView, outdent = false): boolean {
+  const itemType = view.state.schema.nodes.listItem;
+  if (!itemType || selectedListItemDepth(view) === null) return false;
+  const command = outdent ? liftListItem(itemType) : sinkListItem(itemType);
+  return command(view.state, view.dispatch);
 }
 
 /**

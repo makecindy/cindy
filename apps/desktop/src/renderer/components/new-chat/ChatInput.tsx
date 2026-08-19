@@ -39,6 +39,7 @@ import {
   ComposerOrderedList,
   handleStructuredListBackspace,
   handleStructuredListBreak,
+  handleStructuredListIndent,
   hasTrailingPlainListParagraph,
   isTopLevelBlockSelection,
   isTrailingEmptyTopLevelParagraph,
@@ -2381,6 +2382,25 @@ export function ChatInput({
           !event.repeat &&
           !event.isComposing &&
           acceptPromptRecommendationRef.current()
+        ) {
+          event.preventDefault();
+          return true;
+        }
+
+        // Tab / Shift+Tab — indent or outdent structured list items. Only
+        // consume the key when the schema command can actually move the
+        // selected item(s), so ordinary text keeps native focus navigation.
+        // If Shift+Tab cannot outdent, it falls through to the configured
+        // cycle-permission-mode shortcut below.
+        if (
+          event.key === 'Tab' &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.repeat &&
+          !event.isComposing &&
+          !composerMutationLockedRef.current &&
+          handleStructuredListIndent(view, event.shiftKey)
         ) {
           event.preventDefault();
           return true;
