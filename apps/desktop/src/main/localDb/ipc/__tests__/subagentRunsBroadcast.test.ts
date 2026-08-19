@@ -303,6 +303,52 @@ describe('Subagent runs broadcast boundary', () => {
     });
   });
 
+  it('retries a projection the parent had not become visible for yet', async () => {
+    // A fast run reaches a terminal state before its parent tool_use has left
+    // the durable-write FIFO, so `persistSubagentTaskUpdate` refuses with null —
+    // no row written. Memoising that refusal was permanent for exactly the
+    // records it hurt most: a terminal status never changes again, so its
+    // fingerprint never changes either and every later reconciliation skipped
+    // the write. The Subagent stayed out of the sidebar until the process-level
+    // cache was evicted.
+    registerSubagentRunsIpc();
+    const list = h.ipcHandlers.get('local-db:subagent-runs:list')!;
+    const finished = {
+      version: 1, runId: '123e4567-e89b-42d3-a456-4266141740bb', taskId: 'fast-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'completed',
+      context: 'fresh', title: 'Fast run', startedAt: 1_000, updatedAt: 2_000,
+      endedAt: 2_000,
+      tasks: [{
+        childId: 'child-1', sessionId: 'session-child', agent: 'worker',
+        status: 'completed', output: 'the answer',
+      }],
+    };
+    h.listPiSubagentRuns.mockResolvedValue([finished]);
+    h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
+
+    // 1. Parent not visible yet: refused, nothing written.
+    h.persistSubagentTaskUpdate.mockResolvedValue(null);
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalled();
+
+    // 2. Parent is visible now, and the run's state is byte-identical — which
+    // is the whole problem: only a memo of the refusal could suppress this.
+    h.persistSubagentTaskUpdate.mockClear();
+    h.persistSubagentTaskUpdate.mockResolvedValue({
+      runId: 'row-1', created: true, firstForSession: true,
+    });
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).toHaveBeenCalledWith(
+      'session-1', expect.objectContaining({ status: 'completed', taskId: 'fast-tool' }), 'pi', 2_000,
+    );
+
+    // 3. And the memo still does its job once a row exists: no repeat write for
+    // an unchanged record.
+    h.persistSubagentTaskUpdate.mockClear();
+    await list({}, { sessionId: 'session-1' });
+    expect(h.persistSubagentTaskUpdate).not.toHaveBeenCalled();
+  });
+
   it('recovers the row after one transient unreadable status', async () => {
     // A terminal record is reconciled, then the same generation becomes briefly
     // unreadable — a Windows sharing conflict on status.json is enough — so the
@@ -322,7 +368,11 @@ describe('Subagent runs broadcast boundary', () => {
       }],
     };
 
-    // 1. Reconciled as completed.
+    // 1. Reconciled as completed. A real result, because only a written row
+    // earns the memo whose staleness this case is about.
+    h.persistSubagentTaskUpdate.mockResolvedValue({
+      runId: 'row-1', created: true, firstForSession: true,
+    });
     h.listPiSubagentRuns.mockResolvedValue([healthy]);
     h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
     await list({}, { sessionId: 'session-1' });
@@ -427,6 +477,11 @@ describe('Subagent runs broadcast boundary', () => {
       }],
     };
     h.listPiSubagentRuns.mockResolvedValue([status]);
+    // A memo is only earned by a projection that actually wrote a row; the
+    // suite's default mock refuses (null), which is now correctly retried.
+    h.persistSubagentTaskUpdate.mockResolvedValue({
+      runId: 'row-1', created: true, firstForSession: true,
+    });
 
     await list({}, { sessionId: 'session-1' });
     expect(h.persistSubagentTaskUpdate).toHaveBeenCalledOnce();

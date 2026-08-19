@@ -141,15 +141,32 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
   ): Promise<void> => {
     const fingerprint = reconcileFingerprint(update, observedAt);
     if (fingerprints.get(key) === fingerprint) return;
-    await enqueueProjectionWrite(`subagent_reconcile:${sessionId}:${key}`, () =>
+    const written = await enqueueProjectionWrite(`subagent_reconcile:${sessionId}:${key}`, () =>
       persistSubagentTaskUpdate(sessionId, update, 'pi', observedAt));
+    // Only a write earns a memo. `persistSubagentTaskUpdate` returns null from
+    // every guard that runs *before* it touches the database — most importantly
+    // "the parent tool_use is not visible yet", which a fast run hits routinely:
+    // the child reaches a terminal state before the parent's own durable write
+    // has left the FIFO. Memoising that refusal was permanent for exactly the
+    // records it hurt most: a terminal status never changes again, so its
+    // fingerprint never changes either, and every later reconciliation skipped
+    // the write. The Subagent stayed invisible in the sidebar until the
+    // process-level cache was evicted. Leaving both the memo and the
+    // counterpart untouched makes the next read retry, and the ordering window
+    // closes itself.
+    //
+    // A throw is already handled by the await above sitting before this line —
+    // an enqueued write that fails never records a fingerprint either.
+    if (written === null) return;
     fingerprints.set(key, fingerprint);
     // Both keys project the *same row*, so whichever one just wrote has to
     // clear the other's memo. Without that, one transient unreadable status —
     // a Windows sharing conflict on an already reconciled terminal record is
     // enough — writes the row as failed under the diagnostic key, and when the
     // file becomes readable again the healthy key's fingerprint is unchanged,
-    // so its write is skipped and the row stays failed forever.
+    // so its write is skipped and the row stays failed forever. Reached only
+    // after a real write, so a refused projection cannot invalidate the other
+    // key's memo either — nothing changed on the row for it to disagree with.
     const counterpart = key.startsWith(RUN_FINGERPRINT_PREFIX)
       ? `${DIAGNOSTIC_FINGERPRINT_PREFIX}${key.slice(RUN_FINGERPRINT_PREFIX.length)}`
       : key.startsWith(DIAGNOSTIC_FINGERPRINT_PREFIX)
