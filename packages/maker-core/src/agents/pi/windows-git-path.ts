@@ -137,19 +137,88 @@ export function decodeWindowsPathKindsFromProbeError(error: unknown): Map<string
   return new Map();
 }
 
+function isWindowsUncPath(candidate: string): boolean {
+  if (!candidate.startsWith('\\\\') && !candidate.startsWith('//')) return false;
+  // Device paths (`\\?\` and `\\.\`) are not network shares.
+  return !/^\\\\[?.]\\/.test(candidate);
+}
+
 /**
- * Resolve a batch of filesystem metadata in one native subprocess with one
- * total timeout. A disconnected UNC share or mapped drive can therefore delay
- * each best-effort batch only up to the bounded probe, never an unbounded
- * `statSync` call in Cindy's process.
+ * Keep network candidates in a separate native probe: an offline UNC share or
+ * mapped network drive must not consume the timeout for local Git paths.
  */
-function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMap<string, WindowsPathKind> {
-  if (process.platform !== 'win32') return new Map();
-  const powershell = windowsPowerShellPath();
-  if (!powershell) return new Map();
-  const absoluteCandidates = uniqueWindowsPaths(candidates)
-    .filter(isFullyQualifiedWindowsPath);
-  if (absoluteCandidates.length === 0) return new Map();
+export function partitionWindowsProbeCandidates(
+  candidates: readonly string[],
+  networkDriveLetters: ReadonlySet<string>,
+): { local: string[]; network: string[] } {
+  const normalizedNetworkDriveLetters = new Set(
+    [...networkDriveLetters].map((letter) => letter.trim().toUpperCase()),
+  );
+  const local: string[] = [];
+  const network: string[] = [];
+  for (const candidate of candidates) {
+    const driveLetter = candidate.match(/^([A-Za-z]):/)?.[1]?.toUpperCase();
+    (isWindowsUncPath(candidate)
+      || (driveLetter !== undefined && normalizedNetworkDriveLetters.has(driveLetter))
+      ? network
+      : local).push(candidate);
+  }
+  return { local, network };
+}
+
+function defaultNetworkDriveLetters(powershell: string): ReadonlySet<string> {
+  const script = [
+    'try {',
+    '  [System.IO.DriveInfo]::GetDrives() |',
+    '    Where-Object { $_.DriveType -eq [System.IO.DriveType]::Network } |',
+    '    ForEach-Object { [Console]::Out.WriteLine($_.Name.Substring(0, 1)) }',
+    '} catch {}',
+  ].join('\n');
+  try {
+    const output = execFileSync(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: WINDOWS_PATH_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    return new Set(output.split(/\r?\n/)
+      .map((line) => line.trim().toUpperCase())
+      .filter((line) => /^[A-Z]$/.test(line)));
+  } catch {
+    // A failed classification probe must not prevent local-path discovery.
+    return new Set();
+  }
+}
+
+export function probePartitionedWindowsPathKinds(
+  candidates: readonly string[],
+  networkDriveLetters: ReadonlySet<string>,
+  probeBatch: (batch: readonly string[]) => ReadonlyMap<string, WindowsPathKind>,
+): Map<string, WindowsPathKind> {
+  const { local, network } = partitionWindowsProbeCandidates(candidates, networkDriveLetters);
+  const kinds = new Map<string, WindowsPathKind>();
+  for (const partition of [local, network]) {
+    const batches = new Map<string, string[]>();
+    for (const candidate of partition) {
+      const root = normalizedWindowsPath(path.win32.parse(candidate).root);
+      const batch = batches.get(root);
+      if (batch) batch.push(candidate);
+      else batches.set(root, [candidate]);
+    }
+    for (const batch of batches.values()) {
+      for (const [candidate, kind] of probeBatch(batch)) {
+        kinds.set(candidate, kind);
+      }
+    }
+  }
+  return kinds;
+}
+
+function defaultProbeWindowsPathKindsBatch(
+  powershell: string,
+  candidates: readonly string[],
+): ReadonlyMap<string, WindowsPathKind> {
+  if (candidates.length === 0) return new Map();
   const script = [
     '$stdin = [Console]::OpenStandardInput()',
     '$memory = New-Object System.IO.MemoryStream',
@@ -171,7 +240,7 @@ function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMa
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
       {
         encoding: 'utf8',
-        input: Buffer.from(JSON.stringify(absoluteCandidates), 'utf8'),
+        input: Buffer.from(JSON.stringify(candidates), 'utf8'),
         stdio: ['pipe', 'pipe', 'ignore'],
         timeout: WINDOWS_PATH_PROBE_TIMEOUT_MS,
         windowsHide: true,
@@ -180,13 +249,28 @@ function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMa
     return decodeWindowsPathKindLines(output);
   } catch (error) {
     // `execFileSync` attaches partial stdout to timeout errors. Keep records
-    // emitted before a disconnected UNC/mapped-drive candidate blocked the
-    // batch; discarding them would also discard already-probed local Git paths.
-    const partialKinds = decodeWindowsPathKindsFromProbeError(error);
-    if (partialKinds.size > 0) return partialKinds;
-    // Filesystem discovery is best-effort. PATH resolution must remain fail-open.
-    return new Map();
+    // emitted before a disconnected share or mapped drive blocked this batch.
+    return decodeWindowsPathKindsFromProbeError(error);
   }
+}
+
+/**
+ * Resolve local and network filesystem metadata in separate bounded native
+ * subprocesses. A disconnected UNC share or mapped drive can never delay
+ * local Git discovery, and can delay its own best-effort batch only up to the
+ * configured timeout.
+ */
+function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMap<string, WindowsPathKind> {
+  if (process.platform !== 'win32') return new Map();
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return new Map();
+  const absoluteCandidates = uniqueWindowsPaths(candidates).filter(isFullyQualifiedWindowsPath);
+  if (absoluteCandidates.length === 0) return new Map();
+  return probePartitionedWindowsPathKinds(
+    absoluteCandidates,
+    defaultNetworkDriveLetters(powershell),
+    (batch) => defaultProbeWindowsPathKindsBatch(powershell, batch),
+  );
 }
 
 function isFullyQualifiedWindowsPath(candidate: string): boolean {

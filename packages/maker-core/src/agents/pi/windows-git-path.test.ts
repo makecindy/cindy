@@ -7,6 +7,8 @@ import {
   findWindowsExecutablesOnPath,
   gitInstallRootFromPath,
   gitPathsForInstallRoot,
+  partitionWindowsProbeCandidates,
+  probePartitionedWindowsPathKinds,
   resolveWindowsGitPath,
   translateMsysPathSegment,
   WINDOWS_GIT_REGISTRY_KEYS,
@@ -44,6 +46,113 @@ describe('Windows Git/PATH helpers', () => {
     const installPath = 'C:\\Users\\测试用户\\Git';
     const encoded = Buffer.from(installPath, 'utf16le').toString('base64');
     expect(decodeWindowsRegistryBase64Lines(`${encoded}\r\nnot-base64\r\n`)).toEqual([installPath]);
+  });
+
+  it('isolates UNC candidates and keeps device paths local', () => {
+    expect(partitionWindowsProbeCandidates([
+      '\\\\offline-server\\Git\\cmd',
+      'C:\\PortableGit\\cmd',
+      '\\\\?\\C:\\PortableGit\\cmd',
+      '//offline-server/Git/bin',
+    ], new Set())).toEqual({
+      local: ['C:\\PortableGit\\cmd', '\\\\?\\C:\\PortableGit\\cmd'],
+      network: ['\\\\offline-server\\Git\\cmd', '//offline-server/Git/bin'],
+    });
+  });
+
+  it('isolates mapped network drives from local Git paths', () => {
+    expect(partitionWindowsProbeCandidates([
+      'Z:\\Git\\cmd\\git.exe',
+      'C:\\PortableGit\\cmd',
+    ], new Set(['z']))).toEqual({
+      local: ['C:\\PortableGit\\cmd'],
+      network: ['Z:\\Git\\cmd\\git.exe'],
+    });
+  });
+
+  it('keeps a later PortableGit PATH result when an earlier UNC candidate fails', () => {
+    const offlineGit = '\\\\offline-server\\Git\\cmd\\git.exe';
+    const localCmd = 'C:\\PortableGit\\cmd';
+    const localGit = `${localCmd}\\git.exe`;
+    const batches: string[][] = [];
+
+    const kinds = probePartitionedWindowsPathKinds(
+      [offlineGit, localCmd, localGit],
+      new Set(),
+      (batch) => {
+        batches.push([...batch]);
+        if (batch.includes(offlineGit)) return new Map();
+        return new Map([
+          [localCmd, 'directory'],
+          [localGit, 'file'],
+        ]);
+      },
+    );
+
+    expect(batches).toEqual([[localCmd, localGit], [offlineGit]]);
+    expect(kinds).toEqual(new Map([
+      [localCmd, 'directory'],
+      [localGit, 'file'],
+    ]));
+  });
+
+  it('isolates an unclassified mapped drive from another local drive', () => {
+    const offlineMappedGit = 'Z:\\Git\\cmd\\git.exe';
+    const localCmd = 'C:\\PortableGit\\cmd';
+    const localGit = `${localCmd}\\git.exe`;
+    const batches: string[][] = [];
+
+    const kinds = probePartitionedWindowsPathKinds(
+      [offlineMappedGit, localCmd, localGit],
+      new Set(),
+      (batch) => {
+        batches.push([...batch]);
+        if (batch.includes(offlineMappedGit)) return new Map();
+        return new Map([
+          [localCmd, 'directory'],
+          [localGit, 'file'],
+        ]);
+      },
+    );
+
+    expect(batches).toEqual([[offlineMappedGit], [localCmd, localGit]]);
+    expect(kinds).toEqual(new Map([
+      [localCmd, 'directory'],
+      [localGit, 'file'],
+    ]));
+  });
+
+  it('keeps a valid HKLM Git root after an earlier offline HKCU root', () => {
+    const offlineRoot = '\\\\offline-server\\Git';
+    const localRoot = 'C:\\Program Files\\Git';
+    const localCmd = `${localRoot}\\cmd`;
+    const localGit = `${localCmd}\\git.exe`;
+    const batches: string[][] = [];
+
+    const result = resolveWindowsGitPath({
+      platform: 'win32',
+      existingPath: 'C:\\Windows',
+      probes: {
+        readRegistryInstallPaths: () => [offlineRoot, localRoot],
+        findGitExecutablesOnPath: () => [],
+        probePathKinds: (candidates) => probePartitionedWindowsPathKinds(
+          candidates,
+          new Set(),
+          (batch) => {
+            batches.push([...batch]);
+            if (batch.some((candidate) => candidate.startsWith(offlineRoot))) return new Map();
+            return new Map([
+              [localCmd, 'directory'],
+              [localGit, 'file'],
+            ]);
+          },
+        ),
+      },
+    });
+
+    expect(batches[0]).toContain(localGit);
+    expect(batches.at(-1)?.every((candidate) => candidate.startsWith(offlineRoot))).toBe(true);
+    expect(result).toBe(`C:\\Windows;${localCmd}`);
   });
 
   it('finds git.exe in Unicode PATH segments without searching the current directory', () => {
