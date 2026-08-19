@@ -209,6 +209,25 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
+  it('SuperGrok discovery 下发降序档位时目录吐规范升序(Grok 4.5 滑轴反向回归)', () => {
+    // 降序数组此前只有 Grok 4.6 经 mergeKnownXaiEfforts 顺带归一,其余条目原样透传 ——
+    // 滑杆按下标画轴,4.5 的轴整条反向(Chris 2026-08-19 实测)。合并层现在对所有 xAI
+    // 条目统一 canonicalEffortOrder;本用例模拟旧降序磁盘缓存直进合并层的形态。
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXaiDiscoveredModels([
+      { id: 'xai/grok-4.5', efforts: ['high', 'medium', 'low'], defaultEffort: 'high' },
+    ]);
+    const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
+    expect(xai?.models['claude-code']?.find((model) => model.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.5')).toMatchObject({
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+  });
+
   it('keeps an in-list SuperGrok discovery default for non-Grok-4.6 models', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([
