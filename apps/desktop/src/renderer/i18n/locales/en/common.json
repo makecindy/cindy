@@ -6561,7 +6561,16 @@
   "chat": {
     "sessionLoading": "Loading task",
     "askUserQuestion": {
-      "skippedAnswer": "Skipped"
+      "skippedAnswer": "Skipped",
+      "pendingTitle": "Question pending",
+      "restoreAriaLabel": "Restore question prompt",
+      "minimizeAriaLabel": "Minimize question prompt",
+      "back": "Back",
+      "skip": "Skip",
+      "next": "Next",
+      "submit": "Submit",
+      "customAnswer": "Type something else…",
+      "answerPlaceholder": "Type your answer…"
     },
     "planReviewBubble": {
       "title": "Plan review",

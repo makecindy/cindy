@@ -6559,7 +6559,16 @@
   "chat": {
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
-      "skippedAnswer": "已跳过"
+      "skippedAnswer": "已跳过",
+      "pendingTitle": "等待回答",
+      "restoreAriaLabel": "展开问题卡片",
+      "minimizeAriaLabel": "收起问题卡片",
+      "back": "返回",
+      "skip": "跳过",
+      "next": "下一题",
+      "submit": "提交",
+      "customAnswer": "输入其他回答…",
+      "answerPlaceholder": "请输入回答…"
     },
     "planReviewBubble": {
       "title": "计划审阅",
