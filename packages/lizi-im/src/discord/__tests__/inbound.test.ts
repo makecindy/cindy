@@ -693,22 +693,16 @@ describe('DiscordIM inbound pipeline', () => {
     await handoff;
 
     expect(gateway.destroy).toHaveBeenCalledOnce();
-    expect(received).toHaveLength(2);
-    expect(received).toEqual(expect.arrayContaining([
+    expect(received).toEqual([
       expect.objectContaining({
         buttonId: 'control:start',
         messageId: 'dm-1|msg-button',
         payload: { source: 'accepted' },
       }),
-      expect.objectContaining({
-        buttonId: 'control:start',
-        messageId: 'dm-1|msg-late',
-        payload: { source: 'late' },
-      }),
-    ]));
+    ]);
   });
 
-  it('keeps DMs received during a normal handoff in the drain queue', async () => {
+  it('rejects new DMs during a normal handoff and drains only already accepted DMs', async () => {
     const gateway = makeGateway();
     const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
     const im = new DiscordIM(makeHost({
@@ -749,7 +743,7 @@ describe('DiscordIM inbound pipeline', () => {
     releaseFirst.resolve();
     await handoff;
 
-    expect(received).toEqual(['dm-1|msg-before-drain', 'dm-1|msg-during-drain']);
+    expect(received).toEqual(['dm-1|msg-before-drain']);
     expect(gateway.closeIngress).not.toHaveBeenCalled();
   });
 
@@ -832,6 +826,9 @@ describe('DiscordIM inbound pipeline', () => {
       channelId: 'dm-1',
       message: { id: 'msg-finish' },
     });
+    await flushMicrotasks();
+    expect(channel.send).not.toHaveBeenCalled();
+    releaseTask.resolve(undefined);
     await handoff;
 
     expect(channel.send).toHaveBeenCalledWith('final response');
@@ -867,7 +864,6 @@ describe('DiscordIM inbound pipeline', () => {
 
     await im.init();
     await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
-
     gateway.emitStatus({ kind: 'connecting' });
     transportAllowed = false;
     const handoff = im.enterSchedulerStandby();
@@ -875,6 +871,7 @@ describe('DiscordIM inbound pipeline', () => {
 
     gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
     await flushMicrotasks();
+    await gateway.emitDm(message({ id: 'msg-after-resume', content: 'must not enter' }));
 
     expect(gateway.closeIngress).toHaveBeenCalledOnce();
     expect(gateway.destroy).not.toHaveBeenCalled();
@@ -884,6 +881,7 @@ describe('DiscordIM inbound pipeline', () => {
     await handoff;
 
     expect(channel.send).toHaveBeenCalledWith('final response after reconnect');
+    expect(channel.send).toHaveBeenCalledOnce();
     expect(gateway.destroy).toHaveBeenCalledOnce();
   });
 
