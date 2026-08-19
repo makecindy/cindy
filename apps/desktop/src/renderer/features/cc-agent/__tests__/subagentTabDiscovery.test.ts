@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
@@ -219,6 +222,212 @@ describe('startSubagentTabDiscovery', () => {
     // One-shot: the change subscription is released after registration.
     expect(h.unsubscribe).toHaveBeenCalled();
     dispose();
+  });
+
+  /**
+   * The entry used to be decided by the parent's *current* harness. Switching a
+   * Pi task to Claude Code or Codex leaves its detached runners going — they
+   * hold credentials and write the workspace — while the tab that monitors them
+   * and offers the per-child stop vanished. Ownership is what the disk says, so
+   * discovery is what answers it, and the answer has to keep being answered:
+   * once cleanup removes the records the entry must go away again.
+   */
+  describe('durable-run presence for the sidebar entry', () => {
+    it('reports a task that owns runs, whatever harness it is on now', async () => {
+      const h = harness();
+      h.listLocal.mockResolvedValue(runs(1));
+      const presence: boolean[] = [];
+
+      const dispose = startSubagentTabDiscovery({
+        sessionId: 's1',
+        deviceId: null,
+        listLocal: h.listLocal,
+        listRemote: h.listRemote,
+        subscribeLocalChanges: h.subscribeLocalChanges,
+        registerTab: h.registerTab,
+        isRequestOwnerCurrent: () => true,
+        onPresenceChange: (present) => presence.push(present),
+      });
+      await settle();
+
+      expect(presence).toEqual([true]);
+      expect(h.registerTab).toHaveBeenCalledOnce();
+      dispose();
+    });
+
+    it('reports no presence for a task with no Pi runs, and opens nothing', async () => {
+      // The gate is widened to every task, so this is what keeps it from
+      // becoming an entry on every Claude Code and Codex session.
+      const h = harness();
+      h.listLocal.mockResolvedValue(EMPTY);
+      const presence: boolean[] = [];
+
+      const dispose = startSubagentTabDiscovery({
+        sessionId: 's1',
+        deviceId: null,
+        listLocal: h.listLocal,
+        listRemote: h.listRemote,
+        subscribeLocalChanges: h.subscribeLocalChanges,
+        registerTab: h.registerTab,
+        isRequestOwnerCurrent: () => true,
+        onPresenceChange: (present) => presence.push(present),
+      });
+      await settle();
+
+      expect(presence).toEqual([false]);
+      expect(h.registerTab).not.toHaveBeenCalled();
+      dispose();
+    });
+
+    it('falls back once the records are gone', async () => {
+      // Cleanup after the parent task was deleted. The tab must stop being
+      // declared available rather than lingering as a dead entry.
+      const h = harness();
+      h.listLocal.mockResolvedValueOnce(runs(1)).mockResolvedValue(EMPTY);
+      const presence: boolean[] = [];
+
+      const dispose = startSubagentTabDiscovery({
+        sessionId: 's1',
+        deviceId: null,
+        listLocal: h.listLocal,
+        listRemote: h.listRemote,
+        subscribeLocalChanges: h.subscribeLocalChanges,
+        registerTab: h.registerTab,
+        isRequestOwnerCurrent: () => true,
+        onPresenceChange: (present) => presence.push(present),
+      });
+      await settle();
+      expect(presence).toEqual([true]);
+
+      // The subscription outlives registration for a presence consumer.
+      expect(h.unsubscribe).not.toHaveBeenCalled();
+      h.emitLocalChange();
+      await settle();
+
+      expect(presence).toEqual([true, false]);
+      // Still one-shot where it counts: no second tab registration.
+      expect(h.registerTab).toHaveBeenCalledOnce();
+      dispose();
+    });
+
+    it('keeps terminal runs counted, exactly as a Pi task shows them', async () => {
+      // Terminal rows are still rows: a Pi task keeps its tab for reviewing
+      // them, and a task that moved off Pi has to behave the same.
+      const h = harness();
+      h.listLocal.mockResolvedValue(runs(1));
+      const presence: boolean[] = [];
+
+      const dispose = startSubagentTabDiscovery({
+        sessionId: 's1',
+        deviceId: null,
+        listLocal: h.listLocal,
+        listRemote: h.listRemote,
+        subscribeLocalChanges: h.subscribeLocalChanges,
+        registerTab: h.registerTab,
+        isRequestOwnerCurrent: () => true,
+        onPresenceChange: (present) => presence.push(present),
+      });
+      await settle();
+      h.emitLocalChange();
+      await settle();
+
+      expect(presence).toEqual([true, true]);
+      expect(h.registerTab).toHaveBeenCalledOnce();
+      dispose();
+    });
+
+    it('still stops the remote poll after registering', async () => {
+      // The falling edge is worth a local change push; it is not worth a 5s
+      // device-link round for the rest of the session.
+      const h = harness();
+      h.listRemote.mockResolvedValue(runs(1));
+      const presence: boolean[] = [];
+
+      const dispose = startSubagentTabDiscovery({
+        sessionId: 's1',
+        deviceId: 'device-a',
+        listLocal: h.listLocal,
+        listRemote: h.listRemote,
+        subscribeLocalChanges: h.subscribeLocalChanges,
+        registerTab: h.registerTab,
+        isRequestOwnerCurrent: () => true,
+        onPresenceChange: (present) => presence.push(present),
+      });
+      await settle();
+      expect(presence).toEqual([true]);
+
+      await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_DISCOVERY_POLL_MS * 4);
+      await settle();
+      expect(h.listRemote).toHaveBeenCalledTimes(1);
+      dispose();
+    });
+
+    it('leaves the one-shot contract untouched without a presence consumer', async () => {
+      const h = harness();
+      h.listLocal.mockResolvedValue(runs(1));
+
+      const dispose = startSubagentTabDiscovery({
+        sessionId: 's1',
+        deviceId: null,
+        listLocal: h.listLocal,
+        listRemote: h.listRemote,
+        subscribeLocalChanges: h.subscribeLocalChanges,
+        registerTab: h.registerTab,
+        isRequestOwnerCurrent: () => true,
+      });
+      await settle();
+
+      expect(h.unsubscribe).toHaveBeenCalled();
+      h.emitLocalChange();
+      await settle();
+      expect(h.listLocal).toHaveBeenCalledTimes(1);
+      dispose();
+    });
+  });
+
+  /**
+   * The module above is where the decision lives; this is the wiring that feeds
+   * it. `CCAgentSessionView` is far too heavy to mount here (it pulls in the
+   * whole session runtime), so the two invariants that were wrong are checked
+   * on its source — the same approach `orcaWorkflowRoute.test.ts` uses for that
+   * component's private contracts.
+   */
+  describe('CCAgentSessionView wiring', () => {
+    const source = readFileSync(
+      path.resolve(__dirname, '../CCAgentSessionView.tsx'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+
+    it('lets discovery run for a task on any harness', () => {
+      const effect = source.slice(
+        source.indexOf('return startSubagentTabDiscovery({') - 900,
+        source.indexOf('return startSubagentTabDiscovery({'),
+      );
+      // The gate that hid a Pi task's live children the moment it switched to
+      // Claude Code or Codex. Ownership is decided by the list, not the harness.
+      expect(effect).toContain('if (!ownsWindowRoute || !viewVisible || !sessionId) return;');
+      expect(effect).not.toContain("session?.agentKind !== 'pi'");
+      // And the effect no longer re-runs on a harness switch, because it no
+      // longer reads one.
+      const deps = source.slice(source.indexOf('return startSubagentTabDiscovery({'));
+      const depsLine = deps.slice(0, deps.indexOf('\n\n'));
+      expect(depsLine).toContain('}, [ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);');
+      expect(depsLine).toContain('onPresenceChange:');
+    });
+
+    it('declares the entry available for a Pi task or for one that owns runs', () => {
+      expect(source).toContain(
+        'session ? session.agentKind === \'pi\' || durablePiRunsPresent : undefined',
+      );
+      // Unresolved session still reads as "not known yet" rather than
+      // "unavailable" — the shell distinguishes the two.
+      expect(source).not.toContain("subagentsAvailable={session ? session.agentKind === 'pi' : undefined}");
+      // Presence is keyed by the session it was observed for, so navigating to
+      // another task cannot inherit the previous one's answer.
+      expect(source).toContain(
+        "const durablePiRunsPresent = Boolean(sessionId) && sessionOwningDurablePiRuns === sessionId;",
+      );
+    });
   });
 
   it('drops a response that crossed a data-owner boundary', async () => {

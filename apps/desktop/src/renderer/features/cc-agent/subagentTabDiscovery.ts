@@ -5,6 +5,15 @@
  * panel itself owns every later read (local change pushes / its own 1s remote
  * poll). So this watcher stops as soon as it registers.
  *
+ * `onPresenceChange` is the exception, and only for the local path. The tab's
+ * *visibility* cannot be one-shot the way its registration is: a task that
+ * started durable children under Pi and then switched to Claude Code / Codex
+ * still owns them, so the entry has to stay — and once the records are gone
+ * (parent deleted, cleanup finished) it has to go away again. Falling edges
+ * therefore keep the local change subscription alive past registration. The
+ * remote poll still stops: it is a 5s device-link round, and the panel's own
+ * poll takes over the moment the tab exists.
+ *
  * Two data paths, one contract:
  *  - local task  → local DB read + `subagentRuns.onChanged` push.
  *  - remote task → the durable truth lives on the data-owning device, so the
@@ -31,6 +40,14 @@ export interface SubagentTabDiscoveryOptions {
   readonly subscribeLocalChanges: (onChanged: () => void) => () => void;
   /** Idempotent tab registration. */
   readonly registerTab: () => Promise<void>;
+  /**
+   * Called after every completed read with "this task has durable Pi runs".
+   *
+   * Supplying it keeps the local subscription running past registration, so the
+   * caller sees the falling edge too. Omit it and this behaves exactly as it
+   * did: register once, then stop watching entirely.
+   */
+  readonly onPresenceChange?: (present: boolean) => void;
   /** Guard the response against an auth/data-owner boundary crossed mid-flight. */
   readonly isRequestOwnerCurrent: () => boolean;
   readonly pollMs?: number;
@@ -48,6 +65,7 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     subscribeLocalChanges,
     registerTab,
     isRequestOwnerCurrent,
+    onPresenceChange,
     pollMs = REMOTE_SUBAGENT_DISCOVERY_POLL_MS,
   } = options;
   const remote = typeof deviceId === 'string' && deviceId.length > 0;
@@ -64,7 +82,10 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
   };
 
   const discover = async (): Promise<void> => {
-    if (disposed || registered || !sessionId) return;
+    // `registered` no longer ends the work when a presence consumer is
+    // listening: the tab exists, but whether it should still be *offered* is a
+    // live question until the records are gone.
+    if (disposed || !sessionId || (registered && !onPresenceChange)) return;
     const response = remote ? await listRemote(deviceId as string) : await listLocal();
     if (disposed || !isRequestOwnerCurrent()) return;
     // `unsupported` is the honest answer from a device that has no durable
@@ -75,12 +96,18 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     // switched to Pi but only has Claude Code / Codex history in the store. The
     // remote read is already narrowed to Pi on the Main side; this is the local
     // path catching up, filtered here so the IPC contract stays unchanged.
-    if (!response.supported || !response.runs.some((run) => run.provider === 'pi')) return;
+    const present = response.supported && response.runs.some((run) => run.provider === 'pi');
+    onPresenceChange?.(present);
+    if (!present || registered) return;
     await registerTab();
     if (disposed) return;
     registered = true;
     // Registration reached its one-shot goal; the panel owns reads from here.
+    // The remote poll always stops — a 5s device-link round is not something to
+    // keep paying for once the panel is doing its own. The local subscription
+    // stays only for a presence consumer, which needs the falling edge.
     stopPolling();
+    if (onPresenceChange) return;
     unsubscribe?.();
     unsubscribe = null;
   };

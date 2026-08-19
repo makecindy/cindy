@@ -814,9 +814,29 @@ export function CCAgentSessionView({
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
 
-  // A Pi task that has Subagents owns one durable Subagent tab. Both on history
+  /**
+   * Does this task own durable Pi Subagent runs?
+   *
+   * The entry used to be decided by the parent's *current* harness, which is
+   * not what owns the children. Switching a Pi task to Claude Code or Codex
+   * leaves its detached runners going — they hold credentials and write the
+   * workspace, and `stopAgentTaskHandler` keeps a path to stop them — while the
+   * sidebar tab that monitors them and offers the per-child stop disappeared
+   * the moment the harness changed.
+   */
+  const [sessionOwningDurablePiRuns, setSessionOwningDurablePiRuns] = useState<string | null>(null);
+  // Keyed by the session it was observed for, so navigating to another task
+  // cannot inherit the previous one's answer while its own read is still out.
+  const durablePiRunsPresent = Boolean(sessionId) && sessionOwningDurablePiRuns === sessionId;
+
+  // A task that has Subagents owns one durable Subagent tab. Both on history
   // mount and on the first live child we only ensure the tab exists — never
   // stealing OS focus, replacing an already-active tab, or opening the sidebar.
+  //
+  // Not gated on `agentKind`: discovery decides by what is actually on disk. It
+  // registers nothing for a task with no Pi runs, so widening the gate costs a
+  // non-Pi task one list read (plus a session-filtered change subscription) and
+  // opens no tab.
   //
   // The durable truth lives on the data-owning device, so a device-link task
   // must discover through `deviceLink.invoke`: the controller's own DB has no
@@ -824,7 +844,7 @@ export function CCAgentSessionView({
   // unregistered forever even though the panel itself already reads remotely.
   // This effect sits below `remoteDeviceId` because it depends on it.
   useEffect(() => {
-    if (!ownsWindowRoute || !viewVisible || !sessionId || session?.agentKind !== 'pi') return;
+    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
     const requestOwner = getDataOwnerGeneration();
     return startSubagentTabDiscovery({
       sessionId,
@@ -847,8 +867,9 @@ export function CCAgentSessionView({
         }),
       registerTab: () => openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY),
       isRequestOwnerCurrent: () => isDataOwnerGenerationCurrent(requestOwner),
+      onPresenceChange: (present) => setSessionOwningDurablePiRuns(present ? sessionId : null),
     });
-  }, [ownsWindowRoute, remoteDeviceId, session?.agentKind, sessionId, viewVisible]);
+  }, [ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);
 
   // device-link 远程会话:重 topic 订阅(含 WS 重连 / 被控端回在线时重建)+ 消息对账触发
   // (重连 / presence / turn 结束 / 窗口聚焦 / 手动)。修「控制端丢消息」—— 以被控端为准重新同步。
@@ -3954,7 +3975,15 @@ export function CCAgentSessionView({
       {ownsRoute && sessionId && setRightSidebarSessionId && (
         <RightSidebarSessionIdRegistration
           sessionId={sessionId}
-          subagentsAvailable={session ? session.agentKind === 'pi' : undefined}
+          // A Pi task always offers the tab, as before. A task that is no
+          // longer on Pi keeps offering it for exactly as long as its durable
+          // runs exist — terminal ones included, matching what a Pi task shows
+          // — and stops once cleanup has removed them. `undefined` while the
+          // session is unresolved stays untouched: the shell reads that as
+          // "not known yet", not as "unavailable".
+          subagentsAvailable={
+            session ? session.agentKind === 'pi' || durablePiRunsPresent : undefined
+          }
           initialCollapsed={shouldFirstFrameRevealOrcaWorkers ? false : undefined}
           writeInitialCollapsedRecord={shouldFirstFrameRevealOrcaWorkers}
           declare={setRightSidebarSessionId}
