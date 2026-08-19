@@ -222,6 +222,33 @@ describe('Pi approved project resource assembly', () => {
     expect(result.diagnostic.reason).toBe('approved-skill-path-unavailable');
   });
 
+  it('limits concurrent launch path probes when the shared deadline expires', async () => {
+    const workingDir = '/repo-a/packages/app';
+    const skills = Array.from(
+      { length: 32 },
+      (_, index) => `${workingDir}/.pi/skills/skill-${index}`,
+    );
+    const skillPaths = new Set(skills);
+    const blockedProbe = vi.fn(() => new Promise<never>(() => {}));
+    const stat = vi.fn((candidate: string) => skillPaths.has(candidate)
+      ? blockedProbe()
+      : available.stat(candidate));
+
+    const result = await assembleApprovedPiProjectResources(
+      inputFor(workingDir, approved(workingDir, 'rev-bounded-launch-probes'), skills),
+      workingDir,
+      {
+        ...available,
+        stat,
+        deadlineMs: 10,
+      },
+    );
+
+    expect(blockedProbe).toHaveBeenCalledTimes(4);
+    expect(result.skillPaths).toEqual([]);
+    expect(result.diagnostic.reason).toBe('approved-skill-path-unavailable');
+  });
+
   it('bounds nearest Git root resolution before snapshot staging begins', async () => {
     const workingDir = '/repo-a/packages/app';
     const blockedGitRoot = vi.fn(() => new Promise<string | null>(() => {}));
@@ -264,6 +291,49 @@ describe('Pi approved project resource assembly', () => {
     expect(blockedProbe).toHaveBeenCalledOnce();
     expect(result.skillPaths).toEqual([]);
     expect(result.diagnostic.reason).toBe('approved-skill-path-unavailable');
+  });
+
+  it('fails closed when the approved Git marker becomes unreadable before launch', async () => {
+    const workingDir = '/repo-a';
+    const repoMarker = `${workingDir}/.git`;
+    const stat = vi.fn(async (candidate: string) => {
+      if (candidate === repoMarker) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      return available.stat(candidate);
+    });
+    const result = await assembleApprovedPiProjectResources(
+      inputFor(workingDir, approved(workingDir, 'rev-unreadable-git-marker')),
+      workingDir,
+      {
+        stat,
+        realpath: available.realpath,
+      },
+    );
+
+    expect(stat).toHaveBeenCalledWith(repoMarker);
+    expect(result.skillPaths).toEqual([]);
+    expect(result.diagnostic.reason).toBe('approved-repo-root-changed');
+  });
+
+  it('fails closed when the approved Git marker is not a file or directory', async () => {
+    const workingDir = '/repo-a';
+    const repoMarker = `${workingDir}/.git`;
+    const stat = vi.fn(async (candidate: string) => candidate === repoMarker
+      ? { isDirectory: () => false, isFile: () => false }
+      : available.stat(candidate));
+    const result = await assembleApprovedPiProjectResources(
+      inputFor(workingDir, approved(workingDir, 'rev-invalid-git-marker')),
+      workingDir,
+      {
+        stat,
+        realpath: available.realpath,
+      },
+    );
+
+    expect(stat).toHaveBeenCalledWith(repoMarker);
+    expect(result.skillPaths).toEqual([]);
+    expect(result.diagnostic.reason).toBe('approved-repo-root-changed');
   });
 
   it('diagnoses canonical evidence changes without partially loading the remaining skill', async () => {

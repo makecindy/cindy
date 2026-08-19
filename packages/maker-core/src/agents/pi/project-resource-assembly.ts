@@ -48,6 +48,8 @@ export interface PiProjectResourceAssemblySnapshot {
 
 type PiPathStat = { isDirectory(): boolean; isFile(): boolean };
 
+const PI_PROJECT_SKILL_PATH_VALIDATION_CONCURRENCY = 4;
+
 const unavailableDiagnostic = (
   reason: string,
 ): PiProjectResourceAssemblyDiagnostic => Object.freeze({
@@ -81,11 +83,12 @@ async function findNearestGitRoot(
     try {
       const marker = await stat(pathApi.join(current, '.git'));
       if (marker.isDirectory() || marker.isFile()) return current;
+      return null;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      // Match project discovery: an unreadable marker is a conservative
-      // boundary, while a genuinely absent marker permits walking upward.
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') return current;
+      // Match host admission resolution: only a genuinely absent marker permits
+      // walking upward; an unreadable marker cannot prove a Git boundary.
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
     }
     const parent = pathApi.dirname(current);
     if (parent === current) return null;
@@ -126,36 +129,54 @@ async function validateSkillPathsImmediatelyBeforeLaunch(
       deadlineAtMs,
       'approved skill assembly deadline expired',
     );
+    const validateSkillPath = async ({
+      discoveredPath,
+      canonicalPath: skillPath,
+    }: (typeof skillEvidence)[number]) => {
+      const [stats, resolvedPath, resolvedDiscoveredPath] = await Promise.all([
+        boundedStat(skillPath),
+        boundedRealpath(skillPath),
+        boundedRealpath(discoveredPath),
+      ]);
+      if (!stats.isDirectory()) return { skillPath, stats, resolvedPath };
+      const skillFile = pathApi.join(skillPath, 'SKILL.md');
+      return {
+        skillPath,
+        stats,
+        resolvedPath,
+        resolvedDiscoveredPath,
+        skillFileStats: await boundedStat(skillFile),
+        resolvedSkillFile: await boundedRealpath(skillFile),
+      };
+    };
+    const validateSkillPaths = async () => {
+      const entries: Awaited<ReturnType<typeof validateSkillPath>>[] = [];
+      for (
+        let index = 0;
+        index < skillEvidence.length;
+        index += PI_PROJECT_SKILL_PATH_VALIDATION_CONCURRENCY
+      ) {
+        entries.push(...await Promise.all(
+          skillEvidence
+            .slice(index, index + PI_PROJECT_SKILL_PATH_VALIDATION_CONCURRENCY)
+            .map(validateSkillPath),
+        ));
+      }
+      return entries;
+    };
     const resolvedRequestedWorkingDir = await boundedRealpath(requestedWorkingDir);
-    const [resolvedWorkingDir, resolvedRepoRoot, currentRepoRoot, entries] =
+    const [resolvedWorkingDir, resolvedRepoRoot, currentRepoRoot] =
       await Promise.all([
         boundedRealpath(identity.workingDir),
         boundedRealpath(canonicalRepoRoot),
         awaitDeadlineStep(
           // Bound the resolver as one operation. Passing the raw stat preserves
-          // its existing unreadable-marker semantics without letting an inner
-          // timeout be mistaken for a valid conservative Git boundary.
+          // its filesystem error semantics without letting an inner timeout be
+          // mistaken for a valid Git boundary.
           () => resolveNearestGitRoot(resolvedRequestedWorkingDir, stat, pathApi),
           deadlineAtMs,
           'approved skill assembly deadline expired',
         ),
-        Promise.all(skillEvidence.map(async ({ discoveredPath, canonicalPath: skillPath }) => {
-          const [stats, resolvedPath, resolvedDiscoveredPath] = await Promise.all([
-            boundedStat(skillPath),
-            boundedRealpath(skillPath),
-            boundedRealpath(discoveredPath),
-          ]);
-          if (!stats.isDirectory()) return { skillPath, stats, resolvedPath };
-          const skillFile = pathApi.join(skillPath, 'SKILL.md');
-          return {
-            skillPath,
-            stats,
-            resolvedPath,
-            resolvedDiscoveredPath,
-            skillFileStats: await boundedStat(skillFile),
-            resolvedSkillFile: await boundedRealpath(skillFile),
-          };
-        })),
       ]);
     if (
       !piCanonicalPathsEqual(identity, canonicalWorkingDir, resolvedWorkingDir)
@@ -168,6 +189,7 @@ async function validateSkillPathsImmediatelyBeforeLaunch(
       !currentRepoRoot
       || !piCanonicalPathsEqual(identity, canonicalRepoRoot, currentRepoRoot)
     ) return 'repo-mismatch';
+    const entries = await validateSkillPaths();
     if (entries.some(({ stats, skillFileStats }) =>
       !stats.isDirectory() || !skillFileStats?.isFile())) return 'unavailable';
     return entries.every(({
