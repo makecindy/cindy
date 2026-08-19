@@ -23,24 +23,25 @@ const sessionCardSource = readFileSync(
 //   - moreActions:SessionItem 行内 ··· 按钮的 aria-label(header 用自己的
 //     ccAgent.sessionHeader.moreActions)
 //   - *Done / *Failed / *Blocked / *Unsupported / *Nothing:动作的 toast 反馈文案
-//     (header 的 move/compact/export handler 内联在组件里,非菜单项)
+//     (header 的 move/export handler 内联在组件里,非菜单项)
 const NON_MENU_KEY_PATTERN = /(?:Done|Failed|Blocked|Unsupported|Nothing)$/;
 const NON_MENU_KEYS = new Set(['moreActions']);
 
-// 头部专属菜单项:只对「当前打开的 live 会话」有意义(据 capability 门控,如 pi 原生
-// 导出 HTML / 手动压缩),侧栏右键菜单作用于任意列表会话、无对应能力,故不要求同步。
-// 连同各自的进行中/成功态反馈文案一并排除。
-const HEADER_ONLY_KEYS = new Set([
-  'exportHtml', 'exportHtmlSuccess',
-  'compact', 'compacting', 'compactSuccess', 'compactSuccessWithTokens',
-  'sessionBranches',
-]);
+// Pi 专属入口暂不进 overflow 菜单(任务分支 / 导出 HTML / 压缩上下文)。压缩仍走
+// 对话区 context ring;分支树与 HTML 导出保留后端能力。用精确 label 调用守卫,
+// 避免 compactSuccess 这类 toast key 被前缀误伤。
+const HIDDEN_PI_MENU_LABELS = [
+  "t('ccAgent.sidebar.sessionMenu.sessionBranches')",
+  "t('ccAgent.sidebar.sessionMenu.exportHtml')",
+  "t('ccAgent.sidebar.sessionMenu.compact')",
+  "t('ccAgent.sidebar.sessionMenu.compacting')",
+] as const;
 
 function collectSessionMenuKeys(source: string): Set<string> {
   const keys = new Set<string>();
   for (const match of source.matchAll(/ccAgent\.sidebar\.sessionMenu\.(\w+)/g)) {
     const key = match[1];
-    if (NON_MENU_KEYS.has(key) || HEADER_ONLY_KEYS.has(key) || NON_MENU_KEY_PATTERN.test(key)) continue;
+    if (NON_MENU_KEYS.has(key) || NON_MENU_KEY_PATTERN.test(key)) continue;
     keys.add(key);
   }
   return keys;
@@ -53,6 +54,14 @@ describe('session menu parity across header and sidebar variants', () => {
     const cardKeys = collectSessionMenuKeys(sessionCardSource);
     expect([...headerKeys].sort()).toEqual([...sidebarKeys].sort());
     expect([...headerKeys].sort()).toEqual([...cardKeys].sort());
+  });
+
+  it('keeps Pi-only extras out of header and sidebar overflow menus', () => {
+    for (const source of [headerSource, sessionItemSource, sessionCardSource]) {
+      for (const label of HIDDEN_PI_MENU_LABELS) {
+        expect(source).not.toContain(label);
+      }
+    }
   });
 
   it('reuses the shared submenu / export dialog / menu style modules', () => {
