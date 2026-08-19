@@ -90,7 +90,12 @@ vi.mock('node:child_process', () => childProcess);
  * test has to be able to *delete* a file — a read-only directory would block
  * that too, and the test would be measuring the environment.
  */
-const fsKnobs = vi.hoisted(() => ({ failWriteFileOnce: false }));
+const fsKnobs = vi.hoisted(() => ({
+  failWriteFileOnce: false,
+  /** Suspends the next `rm`, so a deletion can be held open across other work. */
+  holdRmOnce: null as null | Promise<void>,
+  onRmHeld: null as null | (() => void),
+}));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const writeFile: typeof actual.writeFile = async (...args) => {
@@ -100,7 +105,16 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return actual.writeFile(...args);
   };
-  return { ...actual, default: { ...actual, writeFile }, writeFile };
+  const rm: typeof actual.rm = async (...args) => {
+    const gate = fsKnobs.holdRmOnce;
+    if (gate) {
+      fsKnobs.holdRmOnce = null;
+      fsKnobs.onRmHeld?.();
+      await gate;
+    }
+    return actual.rm(...args);
+  };
+  return { ...actual, default: { ...actual, writeFile, rm }, writeFile, rm };
 });
 
 const roots: string[] = [];
@@ -148,6 +162,11 @@ async function readControls(root: string, runId: string): Promise<Array<Record<s
 }
 
 afterEach(async () => {
+  // Disarm the fs injections, so an assertion that failed mid-scenario cannot
+  // leave the next case holding a suspended unlink.
+  fsKnobs.failWriteFileOnce = false;
+  fsKnobs.holdRmOnce = null;
+  fsKnobs.onRmHeld = null;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -1364,6 +1383,79 @@ describe('PI durable subagent run store', () => {
           expect(existsSync(file)).toBe(false);
         },
       );
+
+      /**
+       * Removing a fence is read-then-delete, and the delete is an await. The
+       * read saw our own lease; by the time the `rm` ran, a new boundary could
+       * have published its own file into the same path — and the delete then
+       * took *that* fence down while its holder was counted and believed itself
+       * fenced. The launcher inside Pi reads the file, finds nothing, and
+       * spawns: a parent Pi survives the boundary's final sweep holding the
+       * credentials it inherited.
+       *
+       * These hold the unlink open across the new publish, which is the whole
+       * window, and check the terminal invariant: a counted holder implies a
+       * file on disk.
+       */
+      describe('a release that overlaps the next acquire', () => {
+        async function heldRelease(agentHome: string): Promise<{
+          releasing: Promise<void>;
+          rmHeld: Promise<void>;
+          letRmRun: () => void;
+        }> {
+          const release = await acquirePiSubagentLaunchFence(agentHome);
+          let openHeld!: () => void;
+          let letRmRun!: () => void;
+          const rmHeld = new Promise<void>((resolve) => { openHeld = resolve; });
+          fsKnobs.onRmHeld = openHeld;
+          fsKnobs.holdRmOnce = new Promise<void>((resolve) => { letRmRun = resolve; });
+          return { releasing: release(), rmHeld, letRmRun };
+        }
+
+        it('does not delete the fence the next boundary published', async () => {
+          const agentHome = await makeRoot();
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          const held = await heldRelease(agentHome);
+          await held.rmHeld;
+
+          // The next boundary starts while the unlink is suspended. Its
+          // reservation is synchronous — that part is deliberately not
+          // serialised — so the Map already counts a holder here.
+          const acquiringNext = acquirePiSubagentLaunchFence(agentHome);
+          // Long enough for an unserialised publish to land inside the window.
+          await new Promise((resolve) => { setTimeout(resolve, 150); });
+          held.letRmRun();
+          const releaseNext = await acquiringNext;
+          await held.releasing;
+
+          expect(existsSync(file)).toBe(true);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+
+          await releaseNext();
+          expect(existsSync(file)).toBe(false);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        });
+
+        it('leaves nothing behind when the overlapping acquire fails instead', async () => {
+          // Same window, rollback variant: the failing acquire is the last
+          // holder, so its removal is queued too and the terminal state is
+          // "no holder, no file" rather than a fence nobody owns.
+          const agentHome = await makeRoot();
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          const held = await heldRelease(agentHome);
+          await held.rmHeld;
+
+          fsKnobs.failWriteFileOnce = true;
+          const acquiringNext = acquirePiSubagentLaunchFence(agentHome);
+          await new Promise((resolve) => { setTimeout(resolve, 150); });
+          held.letRmRun();
+          await expect(acquiringNext).rejects.toThrow(/EPERM/);
+          await held.releasing;
+
+          expect(existsSync(file)).toBe(false);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        });
+      });
 
       it('takes the file down when the failing acquire was the last holder', async () => {
         // The reservation is taken before the write, so the *last* holder can be

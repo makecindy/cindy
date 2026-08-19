@@ -205,6 +205,41 @@ interface PiSubagentLaunchFence {
  */
 const launchFenceLeases = new Map<string, { leaseId: string; holders: number }>();
 
+/**
+ * Serialises every *disk* operation on a given fence file within this process.
+ *
+ * Removing a fence is read-then-delete, and the delete is an await: the read
+ * saw our own lease, and by the time the `rm` ran a new boundary could have
+ * published its own file into the same path. The delete then took the *new*
+ * fence down while its holder was counted and believed itself fenced — the
+ * launcher inside Pi reads the file, finds nothing, and spawns.
+ *
+ * There is no POSIX "unlink only if the content still matches", and
+ * rename-out/check/rename-back has a replay race of its own, so the read and
+ * the delete are made indivisible the only way available in one process: every
+ * publish and every removal queues behind the last one on the same path.
+ *
+ * This is only about the file. The in-memory reservation is still taken
+ * synchronously before the first await — that is what makes two boundaries
+ * starting in the same tick compose, and it is deliberately untouched here.
+ */
+const launchFenceDiskChain = new Map<string, Promise<void>>();
+
+/** Run `work` after every disk operation already queued for `file`. */
+function queueLaunchFenceDiskWork<T>(file: string, work: () => Promise<T>): Promise<T> {
+  const previous = launchFenceDiskChain.get(file) ?? Promise.resolve();
+  // Both arms run `work`: a link that failed is still a link that finished, and
+  // its error belongs to the caller that queued it, not to whoever comes next.
+  const result = previous.then(work, work);
+  const link = result.then(() => undefined, () => undefined);
+  launchFenceDiskChain.set(file, link);
+  void link.then(() => {
+    // Only the tail clears the entry, or a late link would drop a newer one.
+    if (launchFenceDiskChain.get(file) === link) launchFenceDiskChain.delete(file);
+  });
+  return result;
+}
+
 function piSubagentRunsRoot(agentHome: string): string {
   return path.join(agentHome, 'runtime', 'pi-subagent-runs');
 }
@@ -310,6 +345,13 @@ function fenceMatchesOwnIncarnation(fence: PiSubagentLaunchFence): boolean {
  * Synchronous and cheap on purpose: it sits in front of a spawn, and both
  * callers (the in-Pi extension and the Host's resume path) need an answer
  * without an await budget. Unreadable or absent means "no fence".
+ *
+ * Readers stay outside the per-file serialisation chain. What that chain
+ * guarantees is the *settled* state — a counted holder implies a file on disk
+ * once its publish has run — and a reader that lands before a publish or after
+ * the last release is seeing a window that genuinely has no fence in it.
+ * Queueing readers behind pending writes would not remove that window, only
+ * move it, and would put an await in front of a spawn decision.
  */
 export function isPiSubagentLaunchFenceActive(agentHome: string, hostPid: number): boolean {
   // Named lookup, no directory scan: only this host's own fence can block it.
@@ -394,20 +436,22 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
       return;
     }
     launchFenceLeases.delete(file);
-    await removeOwnedLaunchFenceFile(file, leaseId);
+    await queueLaunchFenceDiskWork(file, () => removeOwnedLaunchFenceFile(file, leaseId));
   };
   try {
-    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    // Every acquisition rewrites, including a nested one: the file may have
-    // been swept away underneath us, and rewriting with the *same* leaseId
-    // keeps the holders that are already counted able to release it.
-    await writeAtomicJson(file, {
-      version: 1,
-      hostPid: process.pid,
-      hostStartTimeSec: ownProcessStartTimeSec(),
-      leaseId,
-      createdAt: Date.now(),
-    } satisfies PiSubagentLaunchFence);
+    await queueLaunchFenceDiskWork(file, async () => {
+      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      // Every acquisition rewrites, including a nested one: the file may have
+      // been swept away underneath us, and rewriting with the *same* leaseId
+      // keeps the holders that are already counted able to release it.
+      await writeAtomicJson(file, {
+        version: 1,
+        hostPid: process.pid,
+        hostStartTimeSec: ownProcessStartTimeSec(),
+        leaseId,
+        createdAt: Date.now(),
+      } satisfies PiSubagentLaunchFence);
+    });
   } catch (error) {
     // Balance the reservation before the caller ever hears about the failure,
     // or a failed acquire would pin the fence up for the process's life. A
@@ -429,7 +473,7 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
       }
       launchFenceLeases.delete(file);
     }
-    await removeOwnedLaunchFenceFile(file, leaseId);
+    await queueLaunchFenceDiskWork(file, () => removeOwnedLaunchFenceFile(file, leaseId));
   };
 }
 
@@ -440,6 +484,9 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
  * never drift: someone else's fence (a `leaseId` that is not ours) is not ours
  * to drop, and a pre-`leaseId` file has no owner to compare against and keeps
  * the old unconditional delete, which is what an upgrade in place leaves.
+ *
+ * Always called through `queueLaunchFenceDiskWork`, which is what makes the
+ * read and the delete indivisible against a concurrent publish.
  */
 async function removeOwnedLaunchFenceFile(file: string, leaseId: string): Promise<void> {
   const onDisk = readLaunchFence(file);
@@ -451,6 +498,11 @@ async function removeOwnedLaunchFenceFile(file: string, leaseId: string): Promis
  * Drop a fence left behind by a process that is gone — the ordinary case after
  * an update relaunch, where the fence was raised by the host we replaced. A
  * fence owned by a live process (another instance mid-relaunch) is left alone.
+ *
+ * Deliberately outside the per-file serialisation chain: it cannot reach a file
+ * this process publishes. Our own per-pid fence names a live pid whose start
+ * time matches, which is the case this returns early on, and the legacy shared
+ * name is only ever read here — no build still writes it.
  */
 export async function clearStalePiSubagentLaunchFence(agentHome: string): Promise<void> {
   const runsRoot = piSubagentRunsRoot(agentHome);
