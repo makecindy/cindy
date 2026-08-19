@@ -121,7 +121,7 @@ export const ui = {
       multi: {
         title: '❓ 需要你确认几件事',
         multiSelectHint: '（可多选）',
-        submitLabel: '提交',
+        submitLabel: '提交答案',
         selectedMark: '✓ ',
       },
     },

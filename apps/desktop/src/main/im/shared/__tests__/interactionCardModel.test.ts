@@ -202,7 +202,7 @@ describe('composeInteractionModel — v1 规则', () => {
     });
   });
 
-  it('needsAskMultiCard: 多题或含多选才走打勾卡', () => {
+  it('needsAskMultiCard: 多题或含多选才走打勾卡, 含无选项问题时降级', () => {
     expect(needsAskMultiCard(ASK_MULTI)).toBe(true); // 多题 + 多选
     expect(needsAskMultiCard(ASK_NO_OPTIONS)).toBe(false); // 单题非多选
     expect(
@@ -214,6 +214,17 @@ describe('composeInteractionModel — v1 规则', () => {
     ).toBe(true); // 单题但多选
     expect(
       needsAskMultiCard({ kind: 'ask_user_question', requestId: 'r', questions: [] }),
+    ).toBe(false);
+    // 含无选项问题时降级为逐问单卡(自由文本无法在打勾卡里回填)
+    expect(
+      needsAskMultiCard({
+        kind: 'ask_user_question',
+        requestId: 'r',
+        questions: [
+          { question: '选一个', options: [{ label: 'A' }] },
+          { question: '备注?' },
+        ],
+      }),
     ).toBe(false);
   });
 
@@ -461,7 +472,7 @@ describe('多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道, 目前�
     expect(off.label).toBe('1·Vue');
   });
 
-  it('无选项的问题在打勾卡里只给文字提示, 不出按钮', () => {
+  it('无选项的问题在打勾卡里静默跳过, 不出按钮也不出提示', () => {
     const spec = feishuCards.buildAskMultiCard({
       requestId: 'r',
       questions: [
@@ -471,9 +482,9 @@ describe('多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道, 目前�
       selections: new Map(),
     });
     const optionButtons = spec.buttons.filter((b) => b.id === 'ask:multi');
-    // 只有第一问有选项按钮(1 枚), 自由问答不出按钮、正文给提示
+    // 只有第一问有选项按钮(1 枚), 无选项问题被防御性跳过
     expect(optionButtons).toHaveLength(1);
     expect(optionButtons[0].label).toBe('1·A');
-    expect(spec.body).toContain(ui.cards.ask.noOptionsHint);
+    expect(spec.body).not.toContain(ui.cards.ask.noOptionsHint);
   });
 });

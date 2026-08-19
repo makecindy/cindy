@@ -114,6 +114,19 @@ export function createCardActionHandler(
   const log = createLogger(`im:${channel}:card`);
   const threadUi = ui.thread;
 
+  // Per-request patch serializer: prevents concurrent updateInteractiveCard calls
+  // from racing (fast toggles or toggle-then-submit) and overwriting each other.
+  const askPatchChain = new Map<string, Promise<void>>();
+  function enqueueAskPatch(requestId: string, fn: () => Promise<void>): Promise<void> {
+    const prev = askPatchChain.get(requestId) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    askPatchChain.set(requestId, next);
+    next.finally(() => {
+      if (askPatchChain.get(requestId) === next) askPatchChain.delete(requestId);
+    });
+    return next;
+  }
+
   function requireThreadUi() {
     if (!threadUi)
       throw new Error(`${channel} thread UI is required for thread-scoped control cards`);
@@ -1350,19 +1363,20 @@ export function createCardActionHandler(
     }
     entry.askSelections.set(qi, selected);
     log.info(`ask:multi toggle q=${qi} o=${oi} multiSelect=${question.multiSelect === true}`);
-    try {
-      await im.updateInteractiveCard(
-        event.messageId,
-        cards.buildAskMultiCard({
-          requestId,
-          questions: entry.askQuestions,
-          selections: entry.askSelections,
-        }),
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`ask:multi card patch failed (non-fatal): ${msg}`);
-    }
+    const questions = entry.askQuestions;
+    const selections = entry.askSelections;
+    await enqueueAskPatch(requestId, async () => {
+      if (!lookupPending(requestId)) return;
+      try {
+        await im.updateInteractiveCard(
+          event.messageId,
+          cards.buildAskMultiCard({ requestId, questions, selections }),
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`ask:multi card patch failed (non-fatal): ${msg}`);
+      }
+    });
   }
 
   // ── press → decision ──────────────────────────────────────────────────────

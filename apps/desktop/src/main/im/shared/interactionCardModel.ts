@@ -371,9 +371,14 @@ export function composeInteractionModel(req: InteractionRequest): InteractionMod
  * ask 是否需要多题/多选打勾卡: 一次问了多道题, 或任一题是多选。
  * 打勾卡依赖渠道的卡片原地更新能力, 由渲染侧按自己的 ui 文案包
  * (ui.cards.ask.multi)是否提供来决定真正启用; 本函数只做语义判定。
+ *
+ * 前提: 所有问题都必须有至少一个预设选项 — 没有选项的自由文本问题无法在
+ * 打勾卡里提供输入路径, 混入后会被静默跳过。含无选项问题时降级为逐问单卡。
  */
 export function needsAskMultiCard(
   req: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
 ): boolean {
+  const allHaveOptions = req.questions.every((q) => (q.options?.length ?? 0) > 0);
+  if (!allHaveOptions) return false;
   return req.questions.length > 1 || req.questions.some((q) => q.multiSelect === true);
 }

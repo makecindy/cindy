@@ -164,8 +164,7 @@ export function createCardBuilders(
       }
       const options = (question.options ?? []).slice(0, MAX_OPTIONS);
       if (options.length === 0) {
-        // 自由问答在打勾卡里给不了输入框: 提示走文字回复, 提交时该问按未答处理
-        bodyLines.push(ui.cards.ask.noOptionsHint);
+        // needsAskMultiCard 已排除含无选项问题的请求; 此处仅为防御性兜底
         return;
       }
       const selected = args.selections.get(qi);
