@@ -20,185 +20,111 @@ export function capAppend(current: string, chunk: string, cap: number): string {
  * 连孙子一起——只 kill shell 会漏成后台孤儿)。失败静默(进程可能已退出)。
  *
  * ⚠️ taskkill 是异步 fire-and-forget,调用方**不能**假设 close 一定跟上——
- * kill 后必须自备"强制 settle"计时兜底(两处调用方都有)。**该计时不能与本函数
- * 并行起跑**:必须等 `onSettled` 回调触发(= 本函数已经把能试的手段都试完,包括
- * win32 下的重试与后代兜底)才去武装那个计时器,否则计时器在杀干净这套流程还没
- * 跑完时就已经开始倒数,大概率在收敛动作真正生效前就强制结束(Greptile 二次
- * review 发现:原实现杀完直接子进程就调 onSettled,后台异步的后代枚举/收敛
- * 完全不被等待)。
+ * kill 后必须自备"强制 settle"计时兜底。安全敏感的严格模式不使用
+ * taskkill:Windows 没有可从纯 Node/TypeScript 原子绑定整棵后代树的接口,因此只
+ * 通过 ChildProcess 持有的原始进程句柄终止直接子进程,并故意不触发 onSettled,
+ * 让调用方的共享锁保持 fail closed,直到应用重启或未来接入启动时 Job Object。
  */
 const WIN32_TASKKILL_MAX_ATTEMPTS = 3;
 const WIN32_TASKKILL_RETRY_DELAY_MS = 150;
 
-/**
- * 最后一层兜底,尽力而为:枚举 pid 的**直接子进程**,对每个单独发
- * `taskkill /T /F`——每个子进程自己的 /T 会级联杀掉它自己的后代,不需要我们
- * 自己递归遍历整棵树。用 PowerShell(`Get-CimInstance`)而非 wmic 枚举:wmic.exe
- * 在新版 Windows(11 24H2+ 默认镜像)已被移除,PowerShell 是官方替代、仍是受
- * 支持核心组件。失败(PowerShell 不可用/超时/无输出)静默跳过——不引入新的
- * 失败模式,退化到"只杀直接子进程"这条已有行为,不会比现状更差。
- *
- * `onSettled` 在**这层兜底也跑完**(不论枚举成功与否、每个子进程 taskkill 是否
- * 成功)后才调用——调用方据此才武装强制 settle 计时器,保证不会在这层还在跑
- * 的时候就抢跑。⚠️ 反过来这层自己也不能无界等:PowerShell/CIM 查询卡死(从不
- * close/error)会让 onSettled 永远不触发,原本"强制 settle 防 fire() 挂死"的
- * 保护就在更深一层失效(codex review 四次发现)。看门狗按**阶段**武装而不是
- * 全链路共用一个 deadline:查询阶段 3s,查询返回、后代 taskkill 已发起后**重新
- * 武装** 3s——否则查询用掉大半窗口时,已在途的后代终止会被同一个 deadline 无条件
- * 掐断、绕过 remaining 计数提前 settle,调用方随即放锁,下一轮触发可能与残留
- * 脚本并发写(Greptile 五次 review 发现)。两段各自有界,总上界 6s,不回到无界等。
- */
-const DESCENDANT_REAP_TIMEOUT_MS = 3_000;
+export interface KillProcessTreeOptions {
+  /**
+   * Security-sensitive stores must not send taskkill to a reusable numeric PID.
+   * Strict mode terminates only the original ChildProcess handle and deliberately
+   * withholds onSettled because pure Node cannot prove every descendant is gone.
+   * The default keeps the generic, best-effort cleanup behavior.
+   */
+  requireWindowsIdentityBoundTermination?: boolean;
+}
 
-function reapWindowsDescendantsBestEffort(pid: number, onSettled?: () => void): void {
-  let finished = false;
-  let query: ChildProcess | undefined;
-  let watchdog: ReturnType<typeof setTimeout> | undefined;
-  function finish(): void {
-    if (finished) return;
-    finished = true;
-    if (watchdog) clearTimeout(watchdog);
-    onSettled?.();
-  }
-  const armWatchdog = (onExpire?: () => void): void => {
-    if (watchdog) clearTimeout(watchdog);
-    watchdog = setTimeout(() => {
-      onExpire?.();
-      finish();
-    }, DESCENDANT_REAP_TIMEOUT_MS);
-    watchdog.unref?.();
-  };
-  // 阶段一:枚举查询。到点强杀查询进程并结算。
-  armWatchdog(() => {
-    try {
-      query?.kill();
-    } catch {
-      /* 已经没了 */
-    }
-  });
+function childExited(child: ChildProcess): boolean {
+  return typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
+}
+
+function killDirectChild(child: ChildProcess): void {
   try {
-    query = spawn(
-      'powershell',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`,
-      ],
-      { windowsHide: true },
-    );
-    let output = '';
-    query.stdout?.on('data', (chunk: Buffer) => {
-      output += chunk.toString('utf8');
-    });
-    query.on('close', (code) => {
-      if (finished) return; // 阶段一看门狗已结算(查询被强杀后的 close 回声)
-      if (code !== 0) {
-        finish();
-        return;
-      }
-      const childPids = output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => /^\d+$/.test(line));
-      if (childPids.length === 0) {
-        finish();
-        return;
-      }
-      // 阶段二:后代终止。重新武装完整窗口——taskkill 正常几十 ms 内退出,超过
-      // 3s 本身就是病态;到点只停止等待(taskkill.exe 自己会退出,不需要强杀)。
-      armWatchdog();
-      let remaining = childPids.length;
-      const onDescendantDone = (): void => {
-        remaining -= 1;
-        if (remaining <= 0) finish();
-      };
-      for (const childPid of childPids) {
-        try {
-          const killer = spawn('taskkill', ['/pid', childPid, '/T', '/F'], { windowsHide: true });
-          killer.on('exit', onDescendantDone);
-          killer.on('error', onDescendantDone);
-        } catch {
-          onDescendantDone();
-        }
-      }
-    });
-    query.on('error', finish);
+    child.kill('SIGKILL');
   } catch {
-    finish();
+    /* 进程已退出 */
   }
 }
 
-/**
- * 对同一 pid 重试 taskkill(有限次数、短延迟),再回落 child.kill + 后代兜底
- * ——重试覆盖真实高发的瞬态失败(kill 与进程自然退出竞速、进程表短暂繁忙)。
- * `onSettled` 在整条链路(重试 + 必要时的后代兜底)都跑完后才调用一次。
- */
-function killWindowsTree(pid: number, child: ChildProcess, attempt: number, onSettled?: () => void): void {
-  // pid 复用防线(codex review 五次发现):这条重试/兜底链的每一步动手前都先确认
-  // 原进程还没退出——taskkill 失败到 150ms 后重试之间,子进程完全可能已自然退出
-  // (typical:timeout/abort 与自然退出竞速),此时这个 pid 随时会被 OS 发给无关
-  // 进程,继续 taskkill / 按 ppid 枚举都可能误杀。检测到已退出就地收束(调
-  // onSettled),接受"可能留孤儿"的降级——与后代兜底"尽力而为"的既有语义一致,
-  // 比误杀无关进程安全。exitCode/signalCode 由 Node 在进程终止时置位,是不碰
-  // OS 进程表的第一方信号。
-  const childExited = (): boolean =>
-    typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
-  if (childExited()) {
+/** 普通调用方使用有限 taskkill 重试；父进程退出后绝不再按其 PID 查杀后代。 */
+function killWindowsTreeBestEffort(
+  pid: number,
+  child: ChildProcess,
+  attempt: number,
+  onSettled?: () => void,
+): void {
+  if (childExited(child)) {
     onSettled?.();
     return;
   }
-  const fallbackKill = (): void => {
-    if (childExited()) {
-      onSettled?.();
-      return;
-    }
-    try {
-      child.kill('SIGKILL');
-    } catch {
-      /* 进程已退出 */
-    }
-    reapWindowsDescendantsBestEffort(pid, onSettled);
-  };
   try {
     const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+    let attemptFinished = false;
     const onFailure = (): void => {
-      if (childExited()) {
+      if (attemptFinished) return;
+      attemptFinished = true;
+      if (childExited(child)) {
         onSettled?.();
         return;
       }
       if (attempt < WIN32_TASKKILL_MAX_ATTEMPTS) {
         setTimeout(
-          () => killWindowsTree(pid, child, attempt + 1, onSettled),
+          () => killWindowsTreeBestEffort(pid, child, attempt + 1, onSettled),
           WIN32_TASKKILL_RETRY_DELAY_MS,
         ).unref?.();
       } else {
-        fallbackKill();
+        killDirectChild(child);
+        onSettled?.();
       }
     };
     killer.on('exit', (code) => {
-      if (code !== 0) onFailure();
-      else onSettled?.();
+      if (code !== 0) {
+        onFailure();
+        return;
+      }
+      if (attemptFinished) return;
+      attemptFinished = true;
+      onSettled?.();
     });
     killer.on('error', onFailure);
   } catch {
-    fallbackKill();
+    killDirectChild(child);
+    onSettled?.();
   }
 }
 
 /**
- * @param onSettled 可选:本函数已经把这个 pid 能试的杀法都试完(win32 下含重试
- *   与后代兜底枚举)时调用一次。调用方应该**只在这个回调里**武装"强制 settle"
+ * Windows 的 ChildProcess 持有原始进程句柄，kill 不会命中复用后的同号 PID。
+ * 纯 Node 没有启动时 Job Object，也无法原子证明整棵后代树都归属该句柄；安全
+ * 敏感调用方因此只终止直接子进程且永不回调 settled，让共享锁保持 fail closed。
+ */
+function killWindowsIdentityBoundFailClosed(child: ChildProcess): void {
+  if (!childExited(child)) killDirectChild(child);
+}
+
+/**
+ * @param onSettled 可选:本函数已经完成安全的树杀与必要确认时调用一次。调用方
+ *   应该**只在这个回调里**武装"强制 settle"
  *   计时器,不要在调用 killProcessTree 后立即武装——否则计时器和收敛动作并行
- *   赛跑,大概率在真正收敛前就抢跑判定超时(Greptile review)。
+ *   赛跑,大概率在真正收敛前就抢跑判定超时。Windows 严格模式故意不回调,
+ *   因为没有 Job Object 时无法安全证明后代树已静止。
  */
 export function killProcessTree(
   pid: number | undefined,
   child: ChildProcess,
   onSettled?: () => void,
+  options: KillProcessTreeOptions = {},
 ): void {
   if (process.platform === 'win32' && pid) {
-    killWindowsTree(pid, child, 1, onSettled);
+    if (options.requireWindowsIdentityBoundTermination) {
+      killWindowsIdentityBoundFailClosed(child);
+    } else {
+      killWindowsTreeBestEffort(pid, child, 1, onSettled);
+    }
     return;
   }
   if (process.platform !== 'win32' && pid) {

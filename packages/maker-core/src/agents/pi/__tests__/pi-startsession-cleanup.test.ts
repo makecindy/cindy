@@ -669,7 +669,19 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       'rev-approved-only',
       [skillPath],
     ));
-    const agent = new PiAgent(buildDeps({ resolvePiProjectTrustInput }));
+    const packageExtension = path.join(agentHome, 'managed-packages', 'extension.ts');
+    const packageSkill = path.join(agentHome, 'managed-packages', 'skill-one');
+    const packagePrompt = path.join(agentHome, 'managed-packages', 'prompt-one.md');
+    const resolvePiManagedPackageResources = vi.fn(async () => ({
+      extensions: [packageExtension],
+      skills: [{ path: packageSkill, name: 'package-skill' }],
+      promptTemplates: [packagePrompt],
+      packageRoots: [path.dirname(packageExtension)],
+    }));
+    const agent = new PiAgent(buildDeps({
+      resolvePiProjectTrustInput,
+      resolvePiManagedPackageResources,
+    }));
     const [approvedHandle, reviewHandle] = await Promise.all([
       agent.startSession({ sessionId: 'approved', workingDir: cwd, model: 'm' }),
       agent.startSession({
@@ -693,19 +705,29 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     );
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--skill')).toEqual([
       stagedSkillPath(approvedHome, 0, skillPath),
+      packageSkill,
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--skill')).toEqual([]);
     expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--extension')).toEqual([
       path.posix.join(approvedHome, 'extensions', 'cindy-bridge.ts'),
       path.posix.join(approvedHome, 'extensions', 'cindy-subagent.ts'),
+      packageExtension,
     ]);
     expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--extension')).toEqual([
       path.posix.join(reviewHome, 'extensions', 'cindy-bridge.ts'),
     ]);
+    expect(repeatedArgValues(knobs.spawnedArgs[approvedIndex]!, '--prompt-template')).toEqual([
+      packagePrompt,
+    ]);
+    expect(repeatedArgValues(knobs.spawnedArgs[reviewIndex]!, '--prompt-template')).toEqual([]);
     expect(resolvePiProjectTrustInput).toHaveBeenCalledOnce();
     expect(resolvePiProjectTrustInput).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'approved',
     }));
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledOnce();
+    expect(resolvePiManagedPackageResources).toHaveBeenCalledWith({
+      snapshotRoot: path.join(approvedHome, 'managed-packages'),
+    });
     await vi.waitFor(() => {
       expect(approvedHandle.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
         status: 'approved', approvalRevision: 'rev-approved-only', requestedSkillCount: 1,

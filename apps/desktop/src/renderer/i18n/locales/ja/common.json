@@ -107,6 +107,7 @@
       "remote": "リモートマシン",
       "devices": "デバイス連携",
       "builtinTools": "ツール",
+      "piExtensions": "Pi 拡張機能",
       "computerUse": "自動操作",
       "help": "ヘルプ",
       "about": "情報",
@@ -2567,6 +2568,112 @@
       },
       "capThreads": "ツールチェーンの並列度を制限",
       "capThreadsHint": "VITEST_MAX_FORKS や MAKEFLAGS などの環境変数を注入し、1 つのテストやビルドが全 CPU コアを占有しないようにします。自分で設定した同名の変数は上書きされません。"
+    },
+    "piPackages": {
+      "title": "Pi 拡張機能",
+      "entryTitle": "Pi 拡張機能の設定",
+      "entryDescription": "Cindy の Pi 拡張機能をインストール、有効化、アンインストール",
+      "backToGeneral": "一般に戻る",
+      "description": "拡張機能はこのデバイスの Cindy にインストールされます。このデバイス上の通常 Pi で実行されるタスクなら、端末本体、スマートフォン、ほかの接続済みクライアントのどこから開始しても利用できます。Review では読み込みません。",
+      "installSectionTitle": "拡張機能をインストール",
+      "installSectionDescription": "pi.dev ページのインストール元を貼り付けるか、npm パッケージ名、Git URL、ローカルの絶対パスを入力します。",
+      "installedSectionTitle": "インストール済み",
+      "sourcePlaceholder": "npm パッケージ、Git URL、ローカルの絶対パス",
+      "inspectionHint": "インストール後に Cindy がリソースと互換性を確認します。実行可能な拡張コードは、信頼できる配布元だと確認して有効にするまで無効のままです。",
+      "install": "インストール",
+      "update": "更新",
+      "remove": "アンインストール",
+      "empty": "Cindy の Pi にはまだ拡張機能がありません。",
+      "piUnavailable": "Cindy の Pi が未インストールのため、拡張機能を管理できません。",
+      "toggleAria": "{{name}} を有効または無効にする",
+      "updateAria": "{{name}} を更新",
+      "removeAria": "{{name}} をアンインストール",
+      "showDetails": "{{name}} の詳細を表示",
+      "collapseDetails": "{{name}} の詳細を閉じる",
+      "rowStatus": {
+        "compatible": "互換",
+        "noticeCount": "互換性の注意 {{count}} 件",
+        "unmanageable": "Pi で管理"
+      },
+      "operationFailed": "Pi 拡張機能の操作に失敗しました。ソースまたはネットワークを確認してください。",
+      "loading": "Pi 拡張機能を読み込んでいます…",
+      "loadFailed": "Pi 拡張機能を読み込めませんでした。接続を確認して再試行してください。",
+      "retry": "再試行",
+      "operationInProgress": "{{name}} を処理しています…",
+      "confirmTitle": "サードパーティの Pi 拡張機能をインストールしますか？",
+      "confirmDescription": "{{source}} には第三者コードが含まれる場合があります。インストールと更新では npm ライフサイクルスクリプトを実行しません。実行可能な拡張コードが見つかった場合は、検査結果を確認して明示的に有効にするまで無効のままです。",
+      "confirmInstall": "リスクを理解してインストール",
+      "updateConfirmTitle": "サードパーティ製 Pi 拡張機能を更新しますか？",
+      "updateConfirmDescription": "{{source}} は新しいサードパーティ版をダウンロードし、インストール済みコードを置き換えます。更新時に npm ライフサイクルスクリプトは実行されず、実行可能な拡張コードは再承認するまで動作しません。",
+      "confirmUpdate": "リスクを理解して更新",
+      "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
+      "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
+      "confirmUninstall": "アンインストール",
+      "extensionDialogConfirm": "確認",
+      "cancel": "キャンセル",
+      "relativePathUnsupported": "設定からローカル拡張機能を入れる場合は絶対パスを使ってください。./extension のような相対パスは Pi タスクからインストールできます。",
+      "resources": {
+        "extension": "拡張コード",
+        "skill": "スキル",
+        "prompt": "プロンプトテンプレート",
+        "theme": "テーマ"
+      },
+      "status": {
+        "supported": "Cindy で完全対応",
+        "extensionSupported": "既知の Pi TUI 依存は見つかりませんでした",
+        "partial": "互換性の制限を検出",
+        "unsupported": "インストール済みですが Cindy では読み込みません",
+        "unknown": "互換性チェックを完了できません"
+      },
+      "compatibility": {
+        "supported": "スキルとプロンプトテンプレートは完全対応です。拡張コードはインストール後に実際のソースを解析し、リソース種別だけでは判定しません。",
+        "partial": "Pi TUI API を検出すると具体的な制限を表示します。拡張機能はそのままインストールでき、有効のまま使うか選べます。",
+        "unsupported": "テーマ：拡張機能内には保持されますが、Cindy は Pi の TUI テーマを使用しません。"
+      },
+      "issues": {
+        "interactive-dialogs": "選択、確認、入力、複数行編集は Cindy の選択カードで表示されます。タイマー付きのダイアログだけはキャンセルされます。",
+        "notifications": "Pi の通知は Pi TUI のトーストではなく、Cindy のタスクのメッセージ履歴に追加されます。",
+        "status-display": "Pi の作業表示とステータスバーは表示されません。",
+        "widgets": "Pi のエディターウィジェットは表示されません。",
+        "terminal-title": "ターミナルウィンドウのタイトル変更は反映されません。",
+        "editor-integration": "Pi ターミナルエディターの読み書き、貼り付け、カスタムエディターは利用できません。",
+        "tui-layout": "Pi のヘッダー、フッター、ツールパネルのレイアウト変更は利用できません。",
+        "custom-ui": "カスタム Pi TUI 画面は利用できません。",
+        "theme-control": "Pi TUI テーマの取得や切り替えは利用できません。",
+        "terminal-input": "ターミナルのキー入力監視は Cindy の RPC 画面では利用できません。",
+        "tui-rendering": "ショートカットや独自のメッセージ、Markdown、エントリ描画は Pi TUI 向けで、Cindy には表示されません。",
+        "cli-flags": "拡張機能が登録する Pi コマンドライン引数は Cindy の固定起動設定では指定できません。",
+        "analysis-incomplete": "到達可能なローカルソースをすべて確認できなかったため、ほかにも制限がある可能性があります。"
+      },
+      "detectedApis": "検出した Pi API：{{apis}}",
+      "runtimeRequirementTitle": "Pi バージョン要件",
+      "runtimeMismatch": "{{packageName}} には Pi {{range}} が必要ですが、Cindy は現在 {{currentVersion}} を使用しています。",
+      "runtimeLegacyPackage": "{{packageName}} は Pi の旧ランタイム名前空間です。これを基にした拡張機能は、現在の Cindy Pi で読み込めない可能性があります。",
+      "runtimeUnknown": "{{packageName}} には Pi {{range}} が必要ですが、現在の Cindy の Pi バージョンが要件を満たすか確認できませんでした。",
+      "compatibilityNoticeTitle": "互換性の確認結果",
+      "compatibilityNoticeDescription": "{{name}} のインストールまたは更新が完了しました。Cindy の検査結果を以下に表示します。有効状態は拡張機能一覧で確認でき、変更は新規または再起動した Pi タスクにだけ反映されます。",
+      "extensionApprovalTitle": "実行可能な拡張機能を有効にしますか？",
+      "extensionApprovalDescription": "有効にすると第三者の拡張機能は Pi と同じプロセスで動作し、モデルや API の認証情報を含む Pi が参照できるファイルと環境変数を読み取れます。Cindy は現在このアクセスを分離できません。完全に信頼するソースだけを有効にしてください。",
+      "parserDisclaimer": "これは静的な互換性チェックであり、セキュリティ監査ではありません。任意の第三者コードの完全な互換性を保証できません。",
+      "disableAfterInstall": "この拡張機能を無効にする",
+      "keepEnabled": "有効のまま使う",
+      "keepDisabled": "無効のままにする",
+      "approveAndEnable": "リスクを理解して有効にする",
+      "done": "完了",
+      "warning": {
+        "no-resources": "この拡張機能には Pi リソースが見つかりません。",
+        "inspection-failed": "拡張機能は登録されていますが、内容を確認できません。",
+        "inspection-limit": "拡張機能が安全な検査上限を超えたため、無効のままです。",
+        "unsupported-filter": "この拡張機能は Cindy がまだ安全に再現できない Pi リソースフィルターを使用しているため、無効のままです。",
+        "unsafe-source": "保存済みの配布元に認証情報または非公開の URL パラメーターが含まれています。Cindy は機密部分を隠して無効のままにし、アプリ内での更新と削除を禁止しました。",
+        "lifecycle-scripts-disabled": "この拡張機能にはインストールスクリプトがありますが、安全のため Cindy は実行していません。生成ファイルに依存する機能は動作しない可能性があります。"
+      },
+      "success": {
+        "install": "Pi 拡張機能をインストールしました。現在のタスクは変わりません。Pi タスクを新規作成または再起動すると有効になります。",
+        "remove": "Pi 拡張機能を削除しました。現在のタスクは閉じるまで古い拡張機能を保持します。",
+        "update": "Pi 拡張機能を更新しました。現在のタスクは古いバージョンを保持します。新規作成または再起動後に反映されます。",
+        "set-enabled": "Pi 拡張機能の状態を保存しました。現在のタスクは変わりません。新規作成または再起動後に反映されます。"
+      }
     },
     "computerUse": {
       "title": "自動操作",
@@ -6098,7 +6205,7 @@
           },
           "bypassPermissions": {
             "label": "フルアクセス",
-            "description": "すべてのツールを確認なしで実行します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+            "description": "通常のツールは確認なしで実行しますが、Pi 拡張のインストール、更新、アンインストールには引き続き確認が必要です。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
           }
         }
       }

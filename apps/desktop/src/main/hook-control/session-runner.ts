@@ -33,10 +33,12 @@ import path from 'node:path';
 
 import { app, BrowserWindow } from 'electron';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
   PermissionMode,
+  TurnPermissionOrigin,
   UserContentBlock,
   UserMessage,
 } from '@cindy/maker-core';
@@ -112,6 +114,27 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+
+type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
+
+function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
+  switch (value) {
+    case 'telegram':
+      // `source.im=telegram` identifies the official server-backed hook here,
+      // not the authenticated personal-bot adapter. Keep managed package
+      // mutations on the Desktop confirmation path.
+      return { kind: 'hook', source: value };
+    case 'feishu':
+    case 'discord':
+    case 'slack':
+    case 'wechat':
+    case 'dingtalk':
+    case 'wecom':
+      return { kind: 'im', channel: value as MainOwnedImChannel };
+    default:
+      return value ? { kind: 'hook', source: value } : null;
+  }
+}
 
 /**
  * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
@@ -1072,9 +1095,23 @@ export function createMakerHookSessionRunner(deps: {
         const outgoingMessage: UserMessage = planReconcileNote
           ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
           : withHandoff;
+        const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          ...(trustedChannelOrigin
+            ? {
+                [MAIN_OWNED_SEND_CONTEXT]: {
+                  origin: trustedChannelOrigin,
+                  // Slack/X thread prompts may already contain Main-owned
+                  // context decoration. The server-provided userText is the
+                  // clean channel message used for deterministic managed Pi
+                  // package commands; only older servers that omit the field
+                  // fall back to the decorated prompt.
+                  rawChannelText: req.source?.userText ?? req.prompt,
+                },
+              }
+            : {}),
           afterTurnReserved: () => {
             // 只取 lease, 不动权限档(用户配的就是最终档)。取在预约之后:
             // 忙的 Desktop 轮次已在 send 预约阶段被拒, 轮到这里就是本轮的世界。

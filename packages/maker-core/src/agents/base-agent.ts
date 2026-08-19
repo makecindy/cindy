@@ -428,6 +428,33 @@ export interface TurnChangeCaptureHooks {
   }): void;
 }
 
+export interface PiManagedPackageMutationRequest {
+  action: 'install' | 'update' | 'remove';
+  source: string;
+  /** Host-trusted evidence. This value is never accepted from Renderer or model input. */
+  authorization:
+    | 'local-desktop-command'
+    | 'authenticated-im-command'
+    | 'confirmed-tool-call';
+}
+
+/** Main-owned native confirmation was dismissed before any package mutation began. */
+export class PiManagedPackageMutationCancelledError extends Error {
+  readonly code = 'PI_PACKAGE_MUTATION_CANCELLED';
+
+  constructor() {
+    super('Pi extension mutation cancelled');
+    this.name = 'PiManagedPackageMutationCancelledError';
+  }
+}
+
+export interface PiExtensionUiStrings {
+  confirm: string;
+  cancel: string;
+  mutationFailed: string;
+  mutationSuccess: Record<PiManagedPackageMutationRequest['action'], string>;
+}
+
 export interface AgentDeps {
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
@@ -463,6 +490,33 @@ export interface AgentDeps {
    * 其它 agent 不消费此字段。
    */
   resolvePiAgentHome?: (remoteHostId?: string | null) => string | undefined;
+
+  /**
+   * Pi-only: Cindy-owned packages explicitly enabled for a new runtime on this device.
+   * The host owns package installation, compatibility inspection, persistence,
+   * and path confinement. Device-link remote control still executes on this host
+   * and therefore uses these resources. SSH remoteHostId and Review runtimes do not.
+   */
+  resolvePiManagedPackageResources?: (options?: { snapshotRoot: string }) => Promise<{
+    extensions: string[];
+    skills: Array<{ path: string; name: string; description?: string }>;
+    promptTemplates: string[];
+    packageRoots: string[];
+  }>;
+
+  /**
+   * Pi-only: mutate Cindy's host-owned Pi extension store. This is deliberately
+   * separate from the Pi CLI so chat requests cannot fall through to the
+   * user's ~/.pi directory or bypass Cindy's inspection/approval state.
+   */
+  mutatePiManagedPackage?: (request: PiManagedPackageMutationRequest) => Promise<unknown>;
+
+  /**
+   * Pi-only: host-localized copy for extension dialogs and deterministic
+   * mutation receipts. The same strings flow through Desktop and attached IM
+   * interaction surfaces, so maker-core never hard-codes one UI language.
+   */
+  getPiExtensionUiStrings?: () => PiExtensionUiStrings;
 
   /**
    * Pi-only: resolve the immutable Cindy project-approval input for one new
@@ -1331,10 +1385,25 @@ export interface StartSessionOptions {
 }
 
 /**
+ * Main-only send metadata. Symbol keys cannot cross Electron/device-link
+ * structured-clone boundaries, so Renderer-controlled send options cannot mint
+ * this proof. Main dispatchers attach it only after authenticating the source.
+ */
+export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
+
+export interface MainOwnedSendContext {
+  readonly origin: TurnPermissionOrigin;
+  /** Main-authenticated user text before channel/persona/context decoration. */
+  readonly rawChannelText?: string;
+}
+
+/**
  * Session.send / handle.send 的可选附加项。
  * 缺省 / 不识别字段必须安全忽略。
  */
 export interface SendOptions {
+  /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
+  readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**
    * 当前 session 的展示 title (renderer / IPC 层在调 send 前查到的最新值)。
    * 仅用于在 SDK ▷ token usage 等诊断日志里多一行可读上下文,

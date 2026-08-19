@@ -2583,6 +2583,89 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('executes only runtime-confirmed commands from enabled Cindy-managed Pi packages', async () => {
+    const packageRoot = path.join(agentHome, 'managed-package');
+    const extensionPath = path.join(packageRoot, 'extensions', 'index.ts');
+    mkdirSync(path.dirname(extensionPath), { recursive: true });
+    writeFileSync(extensionPath, '// managed extension');
+    let releaseCommandCatalog!: () => void;
+    const commandCatalogGate = new Promise<void>((resolve) => {
+      releaseCommandCatalog = resolve;
+    });
+    captured.requestHandler = async (command) => {
+      if (command.type === 'get_state') {
+        return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 } } };
+      }
+      if (command.type === 'get_commands') {
+        await commandCatalogGate;
+        return {
+          type: 'response',
+          command: 'get_commands',
+          success: true,
+          data: {
+            commands: [
+              {
+                name: 'managed-run',
+                description: 'Managed package command',
+                source: 'extension',
+                sourceInfo: { path: extensionPath, source: 'extension' },
+              },
+              {
+                name: 'user-run',
+                description: 'Unmanaged user command',
+                source: 'extension',
+                sourceInfo: { path: '/private/user/.pi/extensions/index.ts', source: 'extension' },
+              },
+            ],
+          },
+        };
+      }
+      return { success: true, data: {} };
+    };
+    const deps = byomDeps(async () => ({ providers: [], env: {} }));
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [extensionPath],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [packageRoot],
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-command',
+      workingDir: cwd,
+      model: 'local-model',
+      extraDirs: ['/refs/project-docs'],
+    });
+    captured.requests.length = 0;
+    const firstSend = handle.send({ type: 'user', content: '/managed-run now' });
+    await Promise.resolve();
+    expect(captured.requests.some((request) => request.type === 'prompt')).toBe(false);
+    releaseCommandCatalog();
+    await firstSend;
+    const manifest = await new Promise<ReturnType<NonNullable<typeof handle.getRuntimeCapabilities>>>((resolve) => {
+      const current = handle.getRuntimeCapabilities?.();
+      if (current?.status === 'loaded') {
+        resolve(current);
+        return;
+      }
+      let unsubscribe: (() => void) | undefined;
+      unsubscribe = handle.onRuntimeCapabilitiesChange?.((next) => {
+        if (next?.status !== 'loaded') return;
+        unsubscribe?.();
+        resolve(next);
+      });
+    });
+    expect(manifest?.managedPackageCommandNames).toEqual(['managed-run']);
+    const managed = captured.requests.find((request) => request.type === 'prompt');
+    expect(managed?.message).toBe('/managed-run now');
+
+    captured.requests.length = 0;
+    await handle.send({ type: 'user', content: '/user-run now' });
+    const unmanaged = captured.requests.find((request) => request.type === 'prompt');
+    expect(String(unmanaged?.message)).not.toMatch(/^\/user-run/);
+    expect(String(unmanaged?.message)).toContain('/user-run now');
+    await handle.close();
+  });
+
   it('routes a null providerId to the gateway even when a BYOM offers the same model', async () => {
     // null = 显式清除来源(session-provider-store 语义);Main 在恢复/setModel 时传它。绝不能
     // 按模型自动挑同名 BYOM,否则默认路由的会话把提示词发往用户未选的 BYOM 端点(codex review P1)。
@@ -3034,6 +3117,7 @@ describe('Pi provider-aware model routing', () => {
         };
       },
       derivePiProxySessionToken,
+      mutatePiManagedPackage: vi.fn(async () => ({ changed: true })),
       resolveRemotePiBinaryPath: async () => '/remote/pi',
       getRemotePiFileOps: () => ({
         mkdirp: async () => {},
@@ -3065,6 +3149,7 @@ describe('Pi provider-aware model routing', () => {
       expect.arrayContaining(['CINDY_PI_API_KEY', 'CINDY_PI_XAI_PROXY_API_KEY']),
     );
     expect(transportOptions?.env.CINDY_PI_SESSION_TOKEN).toBe(registeredToken);
+    expect(transportOptions?.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
     const firstToken = registeredToken;
     const firstSpawnEnv = { ...transportOptions?.env };
 

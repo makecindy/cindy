@@ -343,6 +343,16 @@ describe('stripMainOnlySendOpts(直连路径消毒)', () => {
     });
   });
 
+  it('剥掉 Renderer/device-link 自报的 IM permission policy', () => {
+    expect(stripMainOnlySendOpts({
+      messageUuid: 'u',
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'telegram' },
+        confirmationSurface: 'channel',
+      },
+    })).toEqual({ messageUuid: 'u' });
+  });
+
   it('其它字段原样保留', () => {
     const opts = { messageUuid: 'u', userName: 'n', origin: { kind: 'scheduler' } };
     expect(stripMainOnlySendOpts(opts)).toEqual(opts);

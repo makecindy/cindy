@@ -107,6 +107,7 @@
       "remote": "원격 머신",
       "devices": "기기 연동",
       "builtinTools": "도구",
+      "piExtensions": "Pi 확장",
       "computerUse": "자동 조작",
       "help": "도움말",
       "about": "정보",
@@ -2567,6 +2568,112 @@
       },
       "capThreads": "툴체인 병렬 처리 제한",
       "capThreadsHint": "VITEST_MAX_FORKS, MAKEFLAGS 등의 환경 변수를 주입하여 단일 테스트나 빌드 명령이 모든 CPU 코어를 점유하지 않도록 합니다. 직접 설정한 동일한 변수는 덮어쓰지 않습니다."
+    },
+    "piPackages": {
+      "title": "Pi 확장",
+      "entryTitle": "Pi 확장 설정",
+      "entryDescription": "Cindy의 Pi 확장을 설치, 활성화 또는 제거",
+      "backToGeneral": "일반으로 돌아가기",
+      "description": "확장은 이 기기의 Cindy에 설치됩니다. 이 기기의 일반 Pi에서 실행되는 작업이라면 기기 자체, 휴대전화 또는 다른 연결된 클라이언트 어디에서 시작해도 사용할 수 있습니다. Review에서는 불러오지 않습니다.",
+      "installSectionTitle": "확장 설치",
+      "installSectionDescription": "pi.dev 페이지의 설치 소스를 붙여넣거나 npm 패키지명, Git URL, 로컬 절대 경로를 입력하세요.",
+      "installedSectionTitle": "설치됨",
+      "sourcePlaceholder": "npm 패키지, Git URL 또는 로컬 절대 경로",
+      "inspectionHint": "설치 후 Cindy가 리소스와 호환성을 확인합니다. 실행 가능한 확장 코드는 신뢰할 수 있는 소스인지 확인하고 활성화할 때까지 비활성 상태로 유지됩니다.",
+      "install": "설치",
+      "update": "업데이트",
+      "remove": "제거",
+      "empty": "Cindy의 Pi에 설치된 확장이 아직 없습니다.",
+      "piUnavailable": "Cindy의 Pi가 설치되지 않아 확장을 관리할 수 없습니다.",
+      "toggleAria": "{{name}} 활성화 또는 비활성화",
+      "updateAria": "{{name}} 업데이트",
+      "removeAria": "{{name}} 제거",
+      "showDetails": "{{name}} 세부 정보 펼치기",
+      "collapseDetails": "{{name}} 세부 정보 접기",
+      "rowStatus": {
+        "compatible": "호환됨",
+        "noticeCount": "호환성 안내 {{count}}개",
+        "unmanageable": "Pi에서 관리"
+      },
+      "operationFailed": "Pi 확장 작업에 실패했습니다. 소스나 네트워크를 확인하고 다시 시도하세요.",
+      "loading": "Pi 확장을 불러오는 중…",
+      "loadFailed": "Pi 확장을 불러오지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.",
+      "retry": "다시 시도",
+      "operationInProgress": "{{name}} 처리 중…",
+      "confirmTitle": "타사 Pi 확장을 설치할까요?",
+      "confirmDescription": "{{source}}에는 타사 코드가 포함될 수 있습니다. 설치와 업데이트는 npm 수명 주기 스크립트를 실행하지 않습니다. 실행 가능한 확장 코드가 발견되면 검사 결과를 확인하고 명시적으로 활성화할 때까지 비활성 상태로 유지됩니다.",
+      "confirmInstall": "위험을 이해하고 설치",
+      "updateConfirmTitle": "서드파티 Pi 확장 프로그램을 업데이트할까요?",
+      "updateConfirmDescription": "{{source}}의 새 서드파티 버전을 내려받아 설치된 코드를 교체합니다. 업데이트는 npm 수명 주기 스크립트를 실행하지 않으며, 실행 가능한 확장 코드는 다시 승인하기 전까지 실행되지 않습니다.",
+      "confirmUpdate": "위험을 이해하고 업데이트",
+      "uninstallTitle": "Pi 확장을 제거할까요?",
+      "uninstallDescription": "{{name}}을(를) 이 기기에서 제거합니다. 이미 열려 있는 Pi 작업은 닫을 때까지 이전 확장을 유지합니다.",
+      "confirmUninstall": "제거",
+      "extensionDialogConfirm": "확인",
+      "cancel": "취소",
+      "relativePathUnsupported": "설정에서 로컬 확장을 설치할 때는 절대 경로를 사용하세요. ./extension 같은 상대 경로는 Pi 작업에서 설치할 수 있습니다.",
+      "resources": {
+        "extension": "확장 코드",
+        "skill": "스킬",
+        "prompt": "프롬프트 템플릿",
+        "theme": "테마"
+      },
+      "status": {
+        "supported": "Cindy에서 완전 지원",
+        "extensionSupported": "알려진 Pi TUI 의존성을 찾지 못함",
+        "partial": "호환성 제한 발견",
+        "unsupported": "설치되지만 Cindy에서 불러오지 않음",
+        "unknown": "호환성 검사를 완료하지 못함"
+      },
+      "compatibility": {
+        "supported": "스킬과 프롬프트 템플릿은 완전 지원됩니다. 확장 코드는 설치 후 실제 소스를 분석하며 리소스 유형만으로 판단하지 않습니다.",
+        "partial": "Pi TUI API가 감지되면 구체적인 제한을 표시합니다. 확장은 계속 설치할 수 있고 활성화 상태를 직접 선택할 수 있습니다.",
+        "unsupported": "테마: 확장에는 유지되지만 Cindy는 Pi TUI 테마를 사용하지 않습니다."
+      },
+      "issues": {
+        "interactive-dialogs": "선택, 확인, 입력 및 여러 줄 편집은 Cindy 선택 카드로 표시됩니다. 타이머가 설정된 대화상자만 취소됩니다.",
+        "notifications": "Pi 알림은 Pi TUI 토스트 대신 Cindy 작업 메시지 기록에 추가됩니다.",
+        "status-display": "Pi 작업 표시와 상태 표시줄 내용은 표시되지 않습니다.",
+        "widgets": "Pi 편집기 위젯은 표시되지 않습니다.",
+        "terminal-title": "터미널 창 제목 변경은 적용되지 않습니다.",
+        "editor-integration": "Pi 터미널 편집기의 읽기, 쓰기, 붙여넣기 또는 사용자 지정 편집기 구성요소를 사용할 수 없습니다.",
+        "tui-layout": "Pi 헤더, 푸터 및 도구 패널 레이아웃 변경을 사용할 수 없습니다.",
+        "custom-ui": "사용자 지정 Pi TUI 화면을 사용할 수 없습니다.",
+        "theme-control": "Pi TUI 테마 조회 또는 전환을 사용할 수 없습니다.",
+        "terminal-input": "터미널 키 입력 감시는 Cindy RPC 화면에서 사용할 수 없습니다.",
+        "tui-rendering": "바로가기와 사용자 지정 메시지, Markdown, 항목 렌더러는 Pi TUI 전용이며 Cindy에는 표시되지 않습니다.",
+        "cli-flags": "확장 기능이 등록한 Pi 명령줄 플래그는 Cindy의 고정 시작 설정에서 지정할 수 없습니다.",
+        "analysis-incomplete": "도달 가능한 로컬 소스를 모두 검사하지 못해 다른 제한이 있을 수 있습니다."
+      },
+      "detectedApis": "감지된 Pi API: {{apis}}",
+      "runtimeRequirementTitle": "Pi 버전 요구 사항",
+      "runtimeMismatch": "{{packageName}}에는 Pi {{range}}가 필요하지만 Cindy는 현재 {{currentVersion}}를 사용합니다.",
+      "runtimeLegacyPackage": "{{packageName}}은 Pi의 이전 런타임 네임스페이스입니다. 이를 기반으로 만든 확장 기능은 현재 Cindy Pi에서 로드되지 않을 수 있습니다.",
+      "runtimeUnknown": "{{packageName}}에는 Pi {{range}}가 필요하지만 현재 Cindy의 Pi 버전이 요구 사항을 충족하는지 확인할 수 없습니다.",
+      "compatibilityNoticeTitle": "호환성 검사 결과",
+      "compatibilityNoticeDescription": "{{name}} 설치 또는 업데이트가 완료되었습니다. Cindy 검사 결과는 아래와 같습니다. 현재 활성 상태는 확장 목록에 표시되며 변경은 새로 만들거나 다시 시작한 Pi 작업에만 적용됩니다.",
+      "extensionApprovalTitle": "실행 가능한 확장 기능을 활성화할까요?",
+      "extensionApprovalDescription": "활성화하면 타사 확장 기능이 Pi와 같은 프로세스에서 실행되며 모델 또는 API 자격 증명을 포함해 Pi가 접근할 수 있는 파일과 환경 변수를 읽을 수 있습니다. Cindy는 현재 이 접근을 격리할 수 없습니다. 완전히 신뢰하는 소스만 활성화하세요.",
+      "parserDisclaimer": "이 정적 호환성 검사는 보안 감사가 아니며 임의의 타사 코드가 완전히 호환됨을 보장하지 않습니다.",
+      "disableAfterInstall": "이 확장 비활성화",
+      "keepEnabled": "계속 활성화",
+      "keepDisabled": "비활성 상태 유지",
+      "approveAndEnable": "위험을 이해하고 활성화",
+      "done": "완료",
+      "warning": {
+        "no-resources": "이 확장에서 Pi 리소스를 찾지 못했습니다.",
+        "inspection-failed": "확장은 등록되었지만 설치 내용을 확인할 수 없습니다.",
+        "inspection-limit": "확장이 안전 검사 한도를 초과하여 비활성 상태로 유지됩니다.",
+        "unsupported-filter": "이 확장은 Cindy가 아직 안전하게 재현할 수 없는 Pi 리소스 필터를 사용하므로 비활성 상태로 유지됩니다.",
+        "unsafe-source": "저장된 확장 소스에 자격 증명 또는 비공개 URL 매개변수가 포함되어 있습니다. Cindy는 민감한 부분을 숨기고 비활성 상태로 유지하며 앱 내 업데이트와 제거를 차단했습니다.",
+        "lifecycle-scripts-disabled": "이 확장은 설치 스크립트를 선언하지만 Cindy는 안전을 위해 실행하지 않았습니다. 생성 파일에 의존하는 기능은 작동하지 않을 수 있습니다."
+      },
+      "success": {
+        "install": "Pi 확장을 설치했습니다. 현재 작업은 바뀌지 않으며 새로 만들거나 다시 시작한 Pi 작업부터 적용됩니다.",
+        "remove": "Pi 확장을 제거했습니다. 현재 작업은 닫을 때까지 이전 확장을 유지합니다.",
+        "update": "Pi 확장을 업데이트했습니다. 현재 작업은 이전 버전을 유지하며 새로 만들거나 다시 시작한 뒤 적용됩니다.",
+        "set-enabled": "Pi 확장 상태를 저장했습니다. 현재 작업은 바뀌지 않으며 새로 만들거나 다시 시작한 뒤 적용됩니다."
+      }
     },
     "computerUse": {
       "title": "자동 조작",
@@ -6098,7 +6205,7 @@
           },
           "bypassPermissions": {
             "label": "전체 접근",
-            "description": "모든 도구를 확인 없이 실행합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
+            "description": "일반 도구는 확인 없이 실행하지만 Pi 확장 설치, 업데이트 또는 제거에는 계속 확인이 필요합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
           }
         }
       }

@@ -169,6 +169,8 @@ export const MAKER_INVOKE = {
   EXECUTE_DESKTOP_COMMAND: 'maker:execute-desktop-command',
   LIST_AGENT_COMMANDS: 'maker:list-agent-commands',
   LIST_AGENT_SKILLS: 'maker:list-agent-skills',
+  PI_PACKAGES_LIST: 'maker:pi-packages:list',
+  PI_PACKAGES_MUTATE: 'maker:pi-packages:mutate',
   SCAN_AT_RESOURCES: 'maker:scan-at-resources',
   /**
    * "agent 自己认识的本地 customization 全集"。
@@ -799,6 +801,8 @@ export const MAKER_PUSH = {
    * 无 payload；收到即重拉 listCustomMcpServers。
    */
   MCP_CHANGED: 'maker:mcp:changed',
+  /** Cindy-owned Pi extension roster changed; renderer refetches settings and slash previews. */
+  PI_PACKAGES_CHANGED: 'maker:pi-packages:changed',
   /**
    * 自定义供应商上游错误的结构化广播(payload = ProviderUpstreamErrorEvent:
    * { agent, providerId, code, retryable, status, detail?, errorType?, reqId? })。

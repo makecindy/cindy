@@ -107,6 +107,7 @@
       "remote": "遠端機器",
       "devices": "裝置互聯",
       "builtinTools": "工具",
+      "piExtensions": "Pi 擴充功能",
       "computerUse": "自動操作",
       "help": "幫助",
       "about": "關於",
@@ -2567,6 +2568,112 @@
       },
       "capThreads": "限制工具鏈並行度",
       "capThreadsHint": "注入 VITEST_MAX_FORKS、MAKEFLAGS 等環境變數，防止單條測試或構建命令佔滿全部 CPU 核心；你自己設定過的同名變數不會被覆蓋。"
+    },
+    "piPackages": {
+      "title": "Pi 擴充功能",
+      "entryTitle": "Pi 擴充功能設定",
+      "entryDescription": "安裝、啟用或解除安裝 Cindy 的 Pi 擴充功能",
+      "backToGeneral": "返回一般",
+      "description": "擴充功能安裝在這台裝置的 Cindy 中。無論任務由本機、手機或其他已連線用戶端發起，只要由這台裝置的普通 Pi 執行都會生效；Review 不載入。",
+      "installSectionTitle": "安裝擴充功能",
+      "installSectionDescription": "貼上 pi.dev 頁面提供的安裝來源，或輸入 npm 套件名稱、Git 位址、本機絕對路徑。",
+      "installedSectionTitle": "已安裝",
+      "sourcePlaceholder": "npm 套件名稱、Git 位址或本機絕對路徑",
+      "inspectionHint": "安裝後 Cindy 會檢查資源與相容性。可執行的擴充程式碼預設保持停用，確認來源可信後再啟用。",
+      "install": "安裝",
+      "update": "更新",
+      "remove": "解除安裝",
+      "empty": "還沒有替 Cindy 的 Pi 安裝擴充功能。",
+      "piUnavailable": "Cindy 的 Pi 尚未安裝，暫時不能管理擴充功能。",
+      "toggleAria": "啟用或停用 {{name}}",
+      "updateAria": "更新 {{name}}",
+      "removeAria": "解除安裝 {{name}}",
+      "showDetails": "展開 {{name}} 的詳細資料",
+      "collapseDetails": "收起 {{name}} 的詳細資料",
+      "rowStatus": {
+        "compatible": "相容",
+        "noticeCount": "{{count}} 項相容提示",
+        "unmanageable": "請在 Pi 中管理"
+      },
+      "operationFailed": "Pi 擴充功能操作失敗，請檢查來源或網路後重試。",
+      "loading": "正在載入 Pi 擴充功能…",
+      "loadFailed": "暫時無法讀取 Pi 擴充功能，請檢查連線後重試。",
+      "retry": "重試",
+      "operationInProgress": "正在處理 {{name}}…",
+      "confirmTitle": "安裝第三方 Pi 擴充功能？",
+      "confirmDescription": "{{source}} 可能包含第三方程式碼。安裝與更新不會執行 npm 生命週期腳本；若發現可執行的擴充程式碼，會先保持停用，等你看完檢查結果後再明確啟用。",
+      "confirmInstall": "了解風險並安裝",
+      "updateConfirmTitle": "更新第三方 Pi 擴充功能？",
+      "updateConfirmDescription": "{{source}} 會下載第三方新版本並取代已安裝程式碼。更新不會執行 npm 生命週期指令碼；可執行擴充功能程式碼必須重新確認後才能執行。",
+      "confirmUpdate": "了解風險並更新",
+      "uninstallTitle": "解除安裝 Pi 擴充功能？",
+      "uninstallDescription": "將從這台裝置移除 {{name}}。目前已開啟的 Pi 任務仍會保留舊擴充功能，關閉後才會徹底卸載。",
+      "confirmUninstall": "解除安裝",
+      "extensionDialogConfirm": "確認",
+      "cancel": "取消",
+      "relativePathUnsupported": "在設定中安裝本機擴充功能時請使用絕對路徑；./extension 這類相對路徑可在 Pi 任務中安裝。",
+      "resources": {
+        "extension": "擴充程式碼",
+        "skill": "技能",
+        "prompt": "提示範本",
+        "theme": "主題"
+      },
+      "status": {
+        "supported": "Cindy 完整支援",
+        "extensionSupported": "未發現已知 Pi TUI 依賴",
+        "partial": "發現相容限制",
+        "unsupported": "已安裝，但不會在 Cindy 中載入",
+        "unknown": "無法完成相容檢查"
+      },
+      "compatibility": {
+        "supported": "技能和提示範本完整支援；擴充程式碼會在安裝後解析實際原始碼，不再只按資源類型推測。",
+        "partial": "偵測到 Pi TUI API 時會列出具體限制；擴充功能仍可安裝並由你決定是否繼續啟用。",
+        "unsupported": "主題：會保留在擴充功能中，但 Cindy 不使用 Pi 的 TUI 主題。"
+      },
+      "issues": {
+        "interactive-dialogs": "選擇、確認、輸入與多行編輯會顯示為 Cindy 選擇卡；只有設定計時的對話框會取消。",
+        "notifications": "Pi 通知會寫入 Cindy 任務訊息流，不會顯示為 Pi TUI 浮層提示。",
+        "status-display": "Pi 的工作提示和狀態列內容不會顯示。",
+        "widgets": "Pi 的編輯器掛件不會顯示。",
+        "terminal-title": "修改終端視窗標題不會生效。",
+        "editor-integration": "Pi 終端編輯器的讀寫、貼上或自訂編輯器元件不可用。",
+        "tui-layout": "Pi 的頁首、底欄和工具面板配置不可用。",
+        "custom-ui": "自訂 Pi TUI 介面不可用。",
+        "theme-control": "Pi TUI 主題的讀取或切換不可用。",
+        "terminal-input": "終端按鍵輸入監聽在 Cindy 的 RPC 介面中不可用。",
+        "tui-rendering": "快捷鍵或自訂訊息、Markdown、項目渲染只適用於 Pi TUI，Cindy 不會顯示。",
+        "cli-flags": "擴充功能註冊的 Pi 命令列參數無法在 Cindy 的固定啟動設定中指定。",
+        "analysis-incomplete": "未能檢查完所有可達的本機原始碼，可能還有其他相容限制。"
+      },
+      "detectedApis": "偵測到的 Pi API：{{apis}}",
+      "runtimeRequirementTitle": "Pi 版本需求",
+      "runtimeMismatch": "{{packageName}} 需要 Pi {{range}}，Cindy 目前使用的是 {{currentVersion}}。",
+      "runtimeLegacyPackage": "{{packageName}} 屬於 Pi 的舊版執行階段命名空間；以它建置的擴充功能可能無法在 Cindy 目前的 Pi 中載入。",
+      "runtimeUnknown": "{{packageName}} 需要 Pi {{range}}，但 Cindy 無法判斷目前的 Pi 版本是否符合需求。",
+      "compatibilityNoticeTitle": "相容性檢查結果",
+      "compatibilityNoticeDescription": "{{name}} 已完成安裝或更新。以下是 Cindy 的檢查結果；目前啟用狀態會顯示在擴充功能清單中，修改只影響新建或重新啟動後的 Pi 任務。",
+      "extensionApprovalTitle": "啟用可執行的擴充功能？",
+      "extensionApprovalDescription": "啟用後，第三方擴充功能會與 Pi 在同一程序中執行，可以讀取 Pi 能存取的檔案與環境變數，包括模型或 API 憑證。Cindy 目前無法隔離這些存取；只有完全信任來源時才啟用。",
+      "parserDisclaimer": "這是靜態相容檢查，不是安全稽核，也無法證明任意第三方程式碼完全相容。",
+      "disableAfterInstall": "停用這個擴充功能",
+      "keepEnabled": "仍然啟用",
+      "keepDisabled": "保持停用",
+      "approveAndEnable": "了解風險並啟用",
+      "done": "完成",
+      "warning": {
+        "no-resources": "這個擴充功能沒有發現 Pi 資源。",
+        "inspection-failed": "擴充功能已登記，但無法檢查已安裝內容。",
+        "inspection-limit": "擴充功能內容超過安全檢查上限，已保持停用。",
+        "unsupported-filter": "這個擴充功能使用了 Cindy 暫時無法安全重現的 Pi 資源篩選設定，因此保持停用。",
+        "unsafe-source": "這個擴充功能的舊來源包含憑證或私密 URL 參數。Cindy 已隱藏敏感部分、保持停用，並禁止在應用程式內更新或移除。",
+        "lifecycle-scripts-disabled": "這個擴充功能宣告了安裝指令碼，但 Cindy 為了安全並未執行。依賴安裝指令碼產生檔案的功能可能無法使用。"
+      },
+      "success": {
+        "install": "Pi 擴充功能已安裝。目前任務不會改變；新建或重新啟動 Pi 任務後生效。",
+        "remove": "Pi 擴充功能已移除。目前任務仍保留舊擴充功能，關閉後才會徹底卸載。",
+        "update": "Pi 擴充功能已更新。目前任務仍使用舊版本；新建或重新啟動後生效。",
+        "set-enabled": "Pi 擴充功能啟用狀態已儲存。目前任務不會改變；新建或重新啟動後生效。"
+      }
     },
     "computerUse": {
       "title": "自動操作",
@@ -6098,7 +6205,7 @@
           },
           "bypassPermissions": {
             "label": "完全訪問",
-            "description": "所有工具無需詢問直接執行。風險最高，只適合可信任務。"
+            "description": "常規工具無需詢問直接執行；安裝、更新或解除安裝 Pi 擴展仍需確認。風險最高，只適合可信任務。"
           }
         }
       }

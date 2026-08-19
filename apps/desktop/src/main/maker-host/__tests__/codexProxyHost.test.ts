@@ -2953,6 +2953,113 @@ describe('codex proxy host', () => {
     setCustomProviders([]);
   });
 
+  it('drops Responses-native search tools before forwarding an ordinary Chat bridge turn', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'qwen-chat-provider',
+        name: 'Qwen Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'qwen3.8-max', name: 'Qwen 3.8 Max' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'chat-provider-key');
+    host.registerComposed('session-qwen-chat', 'thread-qwen-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-qwen-chat', 'qwen-chat-provider');
+
+    const parsedBody = {
+      model: 'qwen3.8-max',
+      tools: [{ type: 'function', name: 'shell' }, { type: 'web_search' }],
+      input: [{ role: 'user', content: 'hello' }],
+    };
+    const ctx = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-qwen-chat' } };
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(parsedBody, ctx));
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    if (!decision?.localHandler) throw new Error('expected Chat bridge local handler');
+
+    const res = {} as never;
+    await decision.localHandler({ rawBody: Buffer.from(JSON.stringify(parsedBody)), parsedBody, ctx, res });
+    const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+      | { handle: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(bridge?.handle).toHaveBeenCalledWith({
+      parsedBody: {
+        ...parsedBody,
+        instructions: 'PRODUCT_PROMPT',
+        tools: [{ type: 'function', name: 'shell' }],
+      },
+      res,
+    });
+
+    clearSessionProvider('session-qwen-chat');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
+  });
+
+  it('resets a removed search tool choice for Gemini Chat bridge turns', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'gemini-chat-provider',
+        name: 'Gemini Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'gemini-chat-key');
+    host.registerComposed('session-gemini-chat', 'thread-gemini-chat', 'PRODUCT_PROMPT');
+    setSessionProvider('session-gemini-chat', 'gemini-chat-provider');
+
+    const parsedBody = {
+      model: 'gemini-2.5-pro',
+      tools: [{ type: 'function', name: 'shell' }, { type: 'web_search' }],
+      tool_choice: { type: 'web_search' },
+      parallel_tool_calls: true,
+      input: [{ role: 'user', content: 'hello' }],
+    };
+    const ctx = { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-gemini-chat' } };
+    const decision = await Promise.resolve(host.createModelRoutingTransform()(parsedBody, ctx));
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    if (!decision?.localHandler) throw new Error('expected Gemini Chat bridge local handler');
+
+    const res = {} as never;
+    await decision.localHandler({ rawBody: Buffer.from(JSON.stringify(parsedBody)), parsedBody, ctx, res });
+    const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+      | { handle: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(bridge?.handle).toHaveBeenCalledWith({
+      parsedBody: {
+        ...parsedBody,
+        instructions: 'PRODUCT_PROMPT',
+        tools: [{ type: 'function', name: 'shell' }],
+        tool_choice: 'auto',
+      },
+      res,
+    });
+
+    clearSessionProvider('session-gemini-chat');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
+  });
+
   it('passes the parent session model into a Guardian request handled by the Anthropic bridge', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');

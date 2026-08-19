@@ -1924,10 +1924,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
               'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
-              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH',
-              'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
+              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH CINDY_PI_BASH_PACKAGE_HOME',
+              'CINDY_PI_PERMISSION_FILE PI_PACKAGE_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
-              'done; printf "PI_ENV_CLEAN\\n"',
+              'done; printf "PI_BASH_HOME:%s\\nPI_ENV_CLEAN\\n" "$PI_CODING_AGENT_DIR"',
             ].join(' '),
           }),
           anthropicStreamBody('env isolation finished'),
@@ -1947,6 +1947,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           ?.flatMap((message) => message.content ?? [])
           .find((block) => block.type === 'tool_result')?.content ?? '';
         expect(toolResult).toContain('PI_ENV_CLEAN');
+        expect(toolResult).toMatch(/PI_BASH_HOME:.*[/\\]bash-package-home/);
         expect(toolResult).not.toContain('PI_ENV_LEAK:');
         expect(toolResult).not.toContain('test-key-123');
         expect(toolResult).not.toContain('remote-mcp-secret-canary');

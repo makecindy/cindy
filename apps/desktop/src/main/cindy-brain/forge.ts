@@ -2264,20 +2264,23 @@ const result = await (await fetch('/media-models?type=image')).json();
 //   models:[{
 //     id,
 //     name,
+//     providerId,
 //     modalities:{ input:['text','image'], output:['image'] }
 //   }],
-//   defaultModelId:string|null
+//   defaultModelId:string|null,
+//   defaultProviderId:string|null
 // }
 \`\`\`
 
-\`type\` 只接受 \`image\` / \`video\`。Host 按 Gateway \`mode\` 切大类，并结合插件在
-\`cindy.image/video\` 声明的动作、Gateway \`modalities\`、Guide operation 与当前客户端
+\`type\` 只接受 \`image\` / \`video\`。Host 按模型 \`mode\` 切大类，并结合插件在
+\`cindy.image/video\` 声明的动作、模型 \`modalities\`、Guide operation 与当前客户端
 协议支持度，只返回当前真正可执行的模型。单个模型的 Guide 缺失、损坏或版本过新只隔离
 该模型，不拖垮整个目录。
 
-响应仍只把 Gateway \`architecture\` 已归一化后的 \`modalities.input/output\` 原样交给插件，
+响应只把已归一化的 \`modalities.input/output\` 与来源 \`providerId\` 交给插件，
 不下发 Guide、endpoint、凭证或 Host 内部兼容判定。插件可把用户选择的模型 id 存进自己的
-\`/kv\`，再通过工具结果或插件说明交给当前 Agent；付费请求前 Core 会再次校验。
+\`/kv\`，但必须同时保存 \`providerId\`，并把这对精确选择交给当前 Agent；同一个模型 id
+可由多个 Provider 提供，不能按 id 去重或自行改换来源。付费请求前 Core 会再次校验。
 
 插件与 Agent 不需要新的媒体协议，继续使用现有工具调用链：
 

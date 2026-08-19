@@ -420,6 +420,15 @@ export interface CatalogModel {
   disabled?: boolean;
 }
 
+/** Provider 自己执行的媒体模型；modalities 是能力判断的唯一依据。 */
+export interface ProviderMediaModel {
+  id: string;
+  name: string;
+  modalities?: { input: string[]; output: string[] };
+  officialDocs?: string;
+  disabled?: boolean;
+}
+
 /** 供应商定义。 */
 export interface Provider {
   /** 'anthropic' | 'openai' | 'xd' | 未来自定义 id。 */
@@ -460,7 +469,7 @@ export interface Provider {
    * `disabled` 是视图层字段(与 CatalogModel.disabled 同语义):buildRegistry 按用户
    * 停用 override 烘焙,设置页据此渲染专属媒体条目的停用状态;目录数据本身不携带。
    */
-  imageModels?: { id: string; name: string; disabled?: boolean }[];
+  imageModels?: ProviderMediaModel[];
   /**
    * 图像能力的默认选型(与 imageModels 配套;值必须是 imageModels 里的 id):
    * - standard:未指定任何偏好时的默认模型(意识 cindy 槽"默认"档的真身);
@@ -475,7 +484,7 @@ export interface Provider {
    * 消费方为意识 cindy 槽(白名单 + 详情页下拉)。可选,additions-only。
    * `disabled` 同 imageModels:视图层停用标志,buildRegistry 烘焙。
    */
-  videoModels?: { id: string; name: string; disabled?: boolean }[];
+  videoModels?: ProviderMediaModel[];
   /**
    * 视频能力的默认选型(与 videoModels 配套;值必须是 videoModels 里的 id;
    * 语义同 imageDefaults:standard 必填,draft/best 缺省回落 standard)。
