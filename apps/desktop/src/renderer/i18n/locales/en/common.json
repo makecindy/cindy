@@ -6565,8 +6565,7 @@
       "submit": "Submit",
       "customAnswer": "Type something else…",
       "answerPlaceholder": "Type your answer…",
-      "updateAndNext": "Update & Next",
-      "updateAndSubmit": "Update & Submit"
+      "updateAndNext": "Update & Next"
     },
     "planReviewBubble": {
       "title": "Plan review",

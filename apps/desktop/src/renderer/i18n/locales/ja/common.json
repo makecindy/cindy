@@ -6590,8 +6590,7 @@
       "submit": "送信",
       "customAnswer": "別の回答を入力…",
       "answerPlaceholder": "回答を入力…",
-      "updateAndNext": "更新して次へ",
-      "updateAndSubmit": "更新して送信"
+      "updateAndNext": "更新して次へ"
     },
     "planReviewBubble": {
       "title": "計画レビュー",

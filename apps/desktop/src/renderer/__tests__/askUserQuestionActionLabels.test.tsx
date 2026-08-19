@@ -66,7 +66,7 @@ describe('AskUserQuestionPrompt action labels', () => {
     ).toBe(false);
   });
 
-  it('uses Update & Submit for a custom answer on the final question', () => {
+  it('uses Submit for a custom answer on the final question without a footer duplicate', () => {
     const onAnswer = vi.fn();
     const view = renderAskUser(
       {
@@ -80,25 +80,66 @@ describe('AskUserQuestionPrompt action labels', () => {
     fireEvent.change(view.getByPlaceholderText('Type your answer…'), {
       target: { value: 'Updated answer' },
     });
-    fireEvent.click(view.getByRole('button', { name: 'Update & Submit' }));
+    expect(view.getAllByRole('button', { name: 'Submit' })).toHaveLength(1);
+    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
 
     expect(onAnswer).toHaveBeenCalledWith('req-submit', {
       'Final question': 'Updated answer',
     });
   });
 
+  it('does not show an inert footer Submit for an unanswered final single-select question', () => {
+    const view = renderAskUser({
+      requestId: 'req-final-unanswered',
+      questions: [{ question: 'Final question', options: [{ label: 'A' }] }],
+    });
+
+    expect(view.queryByRole('button', { name: 'Submit' })).toBeNull();
+  });
+
+  it('keeps the footer Submit for a final multi-select question', () => {
+    const onAnswer = vi.fn();
+    const view = renderAskUser(
+      {
+        requestId: 'req-final-multi-select',
+        questions: [
+          {
+            question: 'Final multi-select question',
+            multiSelect: true,
+            options: [{ label: 'A' }, { label: 'B' }],
+          },
+        ],
+      },
+      onAnswer,
+    );
+
+    const submit = view.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.click(view.getByText('A'));
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    expect(onAnswer).toHaveBeenCalledWith('req-final-multi-select', {
+      'Final multi-select question': '["A"]',
+    });
+  });
+
   it('provides localized prompt copy in every supported locale', () => {
     const expected = {
-      en: ['Update & Next', 'Update & Submit'],
-      'zh-CN': ['更新并继续', '更新并提交'],
-      'zh-TW': ['更新並繼續', '更新並提交'],
-      ja: ['更新して次へ', '更新して送信'],
-      ko: ['수정 후 다음', '수정 후 제출'],
+      en: ['Next', 'Submit'],
+      'zh-CN': ['下一题', '提交'],
+      'zh-TW': ['下一題', '提交'],
+      ja: ['次へ', '送信'],
+      ko: ['다음', '제출'],
     } as const;
 
     for (const [locale, labels] of Object.entries(expected)) {
-      expect(i18n.t('chat.askUserQuestion.updateAndNext', { lng: locale })).toBe(labels[0]);
-      expect(i18n.t('chat.askUserQuestion.updateAndSubmit', { lng: locale })).toBe(labels[1]);
+      expect(i18n.t('chat.askUserQuestion.next', { lng: locale })).toBe(labels[0]);
+      expect(i18n.t('chat.askUserQuestion.submit', { lng: locale })).toBe(labels[1]);
+      expect(i18n.t('chat.askUserQuestion.updateAndNext', { lng: locale })).not.toBe(
+        'chat.askUserQuestion.updateAndNext',
+      );
       expect(i18n.t('chat.askUserQuestion.customAnswer', { lng: locale })).not.toBe(
         'chat.askUserQuestion.customAnswer',
       );

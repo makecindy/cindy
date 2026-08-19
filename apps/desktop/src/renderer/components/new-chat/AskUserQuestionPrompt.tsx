@@ -21,6 +21,7 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ArrowRight } from 'lucide-react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { useAutoResize } from '@/hooks/useAutoResize';
@@ -223,7 +224,7 @@ export function AskUserQuestionPrompt({
       'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
     );
     const showNext =
-      isMultiSelect || (existingAnswer !== undefined && !isMultiSelect) || isLastQuestion;
+      isMultiSelect || (!isLastQuestion && existingAnswer !== undefined && !isMultiSelect);
     const nextDisabled = isMultiSelect
       ? selectedLabels.size === 0 && !customInput.trim()
       : existingAnswer === undefined;
@@ -485,8 +486,7 @@ export function AskUserQuestionPrompt({
           </button>
 
           {(isMultiSelect ||
-            (existingAnswer !== undefined && !isMultiSelect) ||
-            isLastQuestion) && (
+            (!isLastQuestion && existingAnswer !== undefined && !isMultiSelect)) && (
             <button
               type="button"
               onClick={() => {
@@ -684,17 +684,25 @@ export function AskUserQuestionPrompt({
                     type="button"
                     onClick={handleCustomSubmit}
                     disabled={!customInput.trim()}
+                    aria-label={
+                      isLastQuestion ? undefined : t('chat.askUserQuestion.updateAndNext')
+                    }
+                    title={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
                     className={cn(
-                      'self-end shrink-0 rounded-[9999px] px-[16px] py-[6px]',
-                      'text-13 font-medium',
+                      'self-end shrink-0 rounded-[9999px] text-13 font-medium',
+                      isLastQuestion
+                        ? 'px-[16px] py-[6px]'
+                        : 'flex h-8 w-8 items-center justify-center',
                       customInput.trim()
                         ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
                         : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
                     )}
                   >
-                    {isLastQuestion
-                      ? t('chat.askUserQuestion.updateAndSubmit')
-                      : t('chat.askUserQuestion.updateAndNext')}
+                    {isLastQuestion ? (
+                      t('chat.askUserQuestion.submit')
+                    ) : (
+                      <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
+                    )}
                   </button>
                 )}
               </div>
@@ -752,16 +760,23 @@ export function AskUserQuestionPrompt({
               type="button"
               onClick={() => customInput.trim() && advance(customInput.trim())}
               disabled={!customInput.trim()}
+              aria-label={
+                isLastQuestion ? undefined : t('chat.askUserQuestion.updateAndNext')
+              }
+              title={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
               className={cn(
-                'h-10 rounded-[9999px] px-4 text-14 font-medium transition-colors',
+                'h-10 rounded-[9999px] text-14 font-medium transition-colors',
+                isLastQuestion ? 'px-4' : 'flex w-10 items-center justify-center',
                 customInput.trim()
                   ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
                   : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
               )}
             >
-              {isLastQuestion
-                ? t('chat.askUserQuestion.updateAndSubmit')
-                : t('chat.askUserQuestion.updateAndNext')}
+              {isLastQuestion ? (
+                t('chat.askUserQuestion.submit')
+              ) : (
+                <ArrowRight size={17} strokeWidth={2} aria-hidden="true" />
+              )}
             </button>
           </div>
         )}
