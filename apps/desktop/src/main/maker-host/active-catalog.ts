@@ -217,6 +217,17 @@ let lastPlanWarnings: ModelPlaneWarning[] = [];
 type Effort = CatalogModel['efforts'][number];
 const EFFORT_RANK: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
+/**
+ * 档位集合 → **规范升序**数组(低 → 高)。x.ai discovery 的 payload 是降序,而下游
+ * (滑杆按下标画轴、`efforts[0]`=最低 / `efforts.at(-1)`=最高的全部取值点)契约都是
+ * 升序 —— 此前只有 Grok 4.6 经 mergeKnownXaiEfforts 顺带归一,其余条目原样透传,
+ * Grok 4.5 的滑杆整条轴反向(Chris 2026-08-19 实测)。所有 xAI 条目统一过这一道。
+ */
+function canonicalEffortOrder(list: readonly Effort[] | undefined): Effort[] {
+  const seen = new Set<Effort>(list ?? []);
+  return EFFORT_RANK.filter((effort) => seen.has(effort));
+}
+
 /** Union discovery with the known official ladder so an incomplete SuperGrok payload cannot hide xhigh.
  * Official source (2026-08-16): https://docs.x.ai/developers/model-capabilities/text/reasoning
  * Grok 4.6 = low | medium | high (default) | xhigh. */
@@ -224,8 +235,7 @@ function mergeKnownXaiEfforts(
   discovered: readonly Effort[] | undefined,
   baseline: readonly Effort[] | undefined,
 ): Effort[] {
-  const seen = new Set<Effort>([...(discovered ?? []), ...(baseline ?? [])]);
-  return EFFORT_RANK.filter((effort) => seen.has(effort));
+  return canonicalEffortOrder([...(discovered ?? []), ...(baseline ?? [])]);
 }
 
 function isOfficialGrok46Id(modelId: string): boolean {
@@ -242,6 +252,9 @@ function pickXaiDefaultEffort(
   }
   if (efforts.length === 0) return null;
   if (fallback === 'official-high' && efforts.includes('high')) return 'high';
+  // efforts 已规范升序(canonicalEffortOrder):'official-high' 的兜底 = 最高档;
+  // 'first' 的兜底 = 最低档 —— 没有任何来源声明默认时保守起步,这条路仅在
+  // discovery / registry / catalog 三处默认全缺时才会走到(实测 payload 都带 default)。
   return fallback === 'official-high'
     ? (efforts[efforts.length - 1] ?? null)
     : (efforts[0] ?? null);
@@ -255,11 +268,14 @@ function resolveXaiAccountCapabilities(
   catalogDefault: Effort | null | undefined,
 ): { efforts: Effort[]; defaultEffort: Effort | null } {
   const isGrok46 = isOfficialGrok46Id(entry.id);
+  // 非 4.6 仍「以 discovery 为准」(不与官方梯子并集),但**顺序必须归一**:discovery 层
+  // 已排过一道(model-discovery/xai.ts canonicalEffortOrder),这里再兜一次是防御 ——
+  // efforts 是外部输入(payload / 磁盘缓存 / registry 静态值),任何一路漏排都会让滑杆反向。
   const efforts = isGrok46
     ? mergeKnownXaiEfforts(entry.efforts, baselineEfforts)
     : entry.efforts !== undefined
-      ? [...entry.efforts]
-      : [...(baselineEfforts ?? [])];
+      ? canonicalEffortOrder(entry.efforts)
+      : canonicalEffortOrder(baselineEfforts);
   const defaultEffort = isGrok46
     ? pickXaiDefaultEffort(
         efforts,
