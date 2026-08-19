@@ -257,6 +257,15 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
     }
   });
 
+  it('captcha 卡片和挑战内容在窄屏内按安全边距收缩', () => {
+    expect(captchaWebViewSource).toContain('paddingHorizontal: spacing.lg');
+    expect(captchaWebViewSource).toContain('maxWidth: 340');
+    expect(captchaWebViewSource).toContain("width: '100%'");
+    expect(captchaWebViewSource.match(/alignSelf: 'stretch'/g)).toHaveLength(2);
+    expect(captchaWebViewSource).not.toContain('width: 340');
+    expect(captchaWebViewSource).not.toContain('width: 308');
+  });
+
   it('captcha 打开时从 Android TalkBack 隐藏背景登录组与注销气泡', () => {
     expect(loginSource).toContain('const captchaChallengeOpen = auth.captchaChallenge !== null');
     expect(loginSource).toContain(

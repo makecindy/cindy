@@ -77,6 +77,7 @@ export function LoginCaptchaWebView({
           alignItems: 'center',
           backgroundColor: login.consentOverlay,
           justifyContent: 'center',
+          paddingHorizontal: spacing.lg,
           zIndex: 100,
         },
       ]}
@@ -92,7 +93,8 @@ export function LoginCaptchaWebView({
           paddingBottom: 12,
           paddingHorizontal: 16,
           paddingTop: 16,
-          width: 340,
+          maxWidth: 340,
+          width: '100%',
         }}
       >
         <Text
@@ -107,7 +109,12 @@ export function LoginCaptchaWebView({
         </Text>
         {failed ? (
           <View
-            style={{ alignItems: 'center', height: 220, justifyContent: 'center', width: 308 }}
+            style={{
+              alignItems: 'center',
+              alignSelf: 'stretch',
+              height: 220,
+              justifyContent: 'center',
+            }}
           >
             <Text style={{ color: login.loginError, fontSize: typeScale.footnote, textAlign: 'center' }}>
               {loginText('captchaFailed')}
@@ -130,7 +137,7 @@ export function LoginCaptchaWebView({
             </Pressable>
           </View>
         ) : (
-          <View style={{ height: 220, marginTop: 8, width: 308 }}>
+          <View style={{ alignSelf: 'stretch', height: 220, marginTop: 8 }}>
             <WebView
               key={generation}
               source={{ uri: themedUrl }}
