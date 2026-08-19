@@ -183,8 +183,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
     expect(sessionSource).toContain('nativeShareAssetsReady');
     expect(sessionSource).toContain('falling back to svg');
-    expect(sessionSource).toContain('OTA webview export failed; falling back to svg');
-    expect(sessionSource).toContain('<ConversationShareWebView');
+    expect(sessionSource).not.toContain('OTA webview export failed; falling back to svg');
     expect(sessionSource).toContain('return svg.exportPng();');
   });
 

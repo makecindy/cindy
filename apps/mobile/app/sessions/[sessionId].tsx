@@ -102,10 +102,8 @@ import {
 } from '@/session/MessageRenderer';
 import {
   bundledAssetToDataUri,
-  ConversationShareWebView,
   deleteConversationSharePngTemp,
   writeConversationSharePngTemp,
-  type ConversationShareWebViewHandle,
 } from '@/session/ConversationShareWebView';
 import {
   ConversationShareSvg,
@@ -999,7 +997,6 @@ export default function SessionScreen() {
     draftRef.current = nextDraft;
   }
   const conversationShareSvgRef = useRef<ConversationShareSvgHandle | null>(null);
-  const conversationShareWebViewRef = useRef<ConversationShareWebViewHandle | null>(null);
   const topOverlayRef = useRef<View>(null);
   const bottomOverlayRef = useRef<View>(null);
   const visibleShareableMessageIdsReaderRef = useRef<(
@@ -6087,14 +6084,6 @@ export default function SessionScreen() {
         console.warn('[conversation-share] native webview export failed; falling back to svg', error);
       }
     }
-    const webView = conversationShareWebViewRef.current;
-    if (webView) {
-      try {
-        return await webView.exportPng();
-      } catch (error) {
-        console.warn('[conversation-share] OTA webview export failed; falling back to svg', error);
-      }
-    }
     const svg = conversationShareSvgRef.current;
     if (!svg) throw new Error('conversation share svg renderer is unavailable');
     return svg.exportPng();
@@ -9672,13 +9661,6 @@ export default function SessionScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
-      {shareSelectionActive && selectedShareMessages.length > 0 ? (
-        <ConversationShareWebView
-          html={conversationShareHtml}
-          key={conversationShareHtml}
-          ref={conversationShareWebViewRef}
-        />
-      ) : null}
       {shareSelectionActive && selectedShareMessages.length > 0 ? (
         <ConversationShareSvg
           allShareableIds={allShareableIds}
