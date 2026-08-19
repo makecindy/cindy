@@ -367,8 +367,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(sessionViewSource).toContain(
       'declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });',
     );
+    // The declaration is multi-line since the Subagents entry also follows
+    // durable Pi runs (a task switched off Pi keeps the tab while its runs
+    // exist), so the attribute and its expression are pinned separately.
+    expect(sessionViewSource).toContain('subagentsAvailable={');
     expect(sessionViewSource).toContain(
-      "subagentsAvailable={session ? session.agentKind === 'pi' : undefined}",
+      "session ? session.agentKind === 'pi' || durablePiRunsPresent : undefined",
     );
     expect(mainLayoutSource).toContain('const declareRightSidebarSessionId = useCallback');
     expect(mainLayoutSource).toContain('const nextCollapsed = hasInitialCollapsed');
