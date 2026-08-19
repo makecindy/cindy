@@ -342,6 +342,14 @@ Worker defaults 中单独缓存的 `providerId` 不约束从 Lead / 硬编码默
 或不提供该模型时，创建边界可回退搜索当前已连接来源，但最终仍必须得到精确路由或唯一
 managed 规范候选，否则在 reservation / bootstrap 前拒绝。
 
+Worker 创建边界一旦解析出实际来源，就必须把该 `providerId` 写入 Worker session；不能因为
+来源属于官方订阅或 managed 默认路由而重新清成 `null`。显式来源优先；未显式选择时，同
+agent 且提供目标模型的 Lead 来源优先，其次使用有效 Worker defaults 来源，再按同一份当前
+provider routing snapshot 解析默认来源。Lead 已绑定的同模型来源当前不可用时必须在
+reservation / bootstrap 前明确拒绝，不能静默改走 Cindy AI 或其它凭证家族；旧的 model-only
+defaults 则按当前 snapshot 解析并保存实际来源。这样 Claude Code 的 Anthropic 来源会稳定得到
+`oauth-bearer`，显式 Cindy AI / 自定义 Provider 仍保持各自路由。
+
 #### 7. Prompt / tool / MCP 注册路径必须评估 maker-core 四指标（状态：不变量）
 
 任何改动落在 prompt 拼接、tool/MCP 暴露、translator、event loop、model 映射、usage/token 计量路径时，都必须评估缓存率、性能/返回速度、返回内容准确性，并按 [`maker-core-and-agent-behavior.md`](maker-core-and-agent-behavior.md) §3 给出实测证据。尤其不要把 per-turn 易变内容塞进稳定 system/developer 前缀，不要在会话中途随意增删/重排 tool 定义。

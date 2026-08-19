@@ -356,6 +356,78 @@ describe('统一面板 · 会话内形态', () => {
     expect(triple?.getAttribute('title')).toContain('Codex');
   });
 
+  /**
+   * Chris 2026-08-19 裁决:同引擎视图只显示**生效引擎 = 当前引擎**的行。
+   * xd 的 GPT-5.5 候选里有 cc,但 gpt 家族主场在 codex(§2.1:主场在别处的行不跟随
+   * pinnedEngine)—— 它在 cc 会话的「仅 Claude」视图里此前会以 **Codex 形态**出现,点下去
+   * 还触发跨引擎切换确认,与该视图「选什么都无损」的承诺冲突。裁决是不显示,不是转换。
+   */
+  it('同引擎视图不显示「候选含当前引擎、但落点在别家」的行', () => {
+    renderPanel({
+      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    const list = screen.getByRole('listbox');
+    expect(within(list).getByText('Opus 5')).toBeTruthy();
+    expect(within(list).queryByText('GPT-5.5')).toBeNull();
+    // 切到「全部」仍然找得到它(跨引擎是显式入口,不是把行藏死)。
+    act(() => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    expect(within(screen.getByRole('listbox')).getByText('GPT-5.5')).toBeTruthy();
+  });
+
+  /**
+   * Chris 2026-08-19 实测「一次打开内切 rail,面板弹开一些,感觉有点怪」:面板是 `w-max`
+   * 且 morph 宿主 stickyWidth 只进不退,默认停在**最窄**的同引擎视图,切「全部」时二次撑宽。
+   * 定宽 sizer = 打开第一帧就渲染一份不可见的全量视图供量宽。
+   */
+  it('非全量视图挂一份不可见的定宽 sizer(全量视图不挂)', async () => {
+    const { container } = renderPanel({
+      sessionEngineFilter,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    const sizer = container.querySelector('[data-width-sizer]');
+    expect(sizer).toBeTruthy();
+    // 量的是**全量视图**:同引擎视图里看不到的 Opus 5 也在 sizer 里。
+    expect(sizer?.textContent).toContain('Opus 5');
+    expect(sizer?.textContent).toContain('GPT-5.5');
+    // 不可见、零高度、不进 listbox、不带选中标记(自动对齐永远不会挑中它)。
+    expect(sizer?.getAttribute('aria-hidden')).toBe('true');
+    expect(sizer?.className).toContain('invisible');
+    expect(sizer?.className).toContain('h-0');
+    // ★ 纵向 padding 一点不能带(2026-08-19 预审 P1-2):border-box 下 h-0 只钳内容盒,
+    // p-2/pb-3 会让 sizer 实占 20px,把「切视图宽度抖」换成「切视图高度抖」。
+    expect(sizer?.className).toContain('px-2');
+    expect(sizer?.className).not.toContain('p-2 ');
+    expect(sizer?.className).not.toContain('pb-3');
+    expect(sizer?.className).not.toContain('py-');
+    expect(screen.getByRole('listbox').contains(sizer)).toBe(false);
+    expect(sizer?.querySelector('[data-model-selected="true"]')).toBeNull();
+
+    // 已经是全量视图 → 不必再量自己一遍。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    expect(container.querySelector('[data-width-sizer]')).toBeNull();
+  });
+
+  it('跨引擎警示行不参与撑宽(w-0 min-w-full)', async () => {
+    renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    const warning = screen
+      .getByRole('listbox')
+      .querySelector('[data-cross-engine-warning]') as HTMLElement;
+    // truncate 只管画的时候截断;max-content 布局算的是全文宽度,不压住它整行文案会成为
+    // 面板里最宽的内容(Chris 2026-08-19「切到全部又弹开一截」)。
+    expect(warning.className).toContain('w-0');
+    expect(warning.className).toContain('min-w-full');
+  });
+
   it('显式切到「全部」后出现有损警示,且能看到跨引擎模型', async () => {
     renderPanel({ sessionEngineFilter, currentProviderId: 'xd', modelId: 'gpt-5.5' });
     await act(async () => {
@@ -645,6 +717,10 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       vendorKey: 'cc',
+      // 选中的收藏 = 草稿正在跑它的副本:live 深度/Fast 必须与副本一致,否则锚点按
+      // 「副本 ≠ live」回落(2026-08-19 review P2 的完整配置校验)。
+      effort: 'low',
+      fastMode: true,
     });
     await act(async () => {
       fireEvent.click(favoriteStar());
@@ -1274,6 +1350,9 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       vendorKey: 'codex',
+      // 副本无显式档 → 解析成 codex 目录默认 high;live 深度须与之一致,锚点才成立
+      // (2026-08-19 review P2 的完整配置校验)。
+      effort: 'high',
       onEffortChange: vi.fn(),
       onFastModeChange,
     });
@@ -1889,7 +1968,10 @@ describe('统一面板 · 新会话选中直通', () => {
     const { unmount } = render(
       React.createElement(ModelSelectorContent, {
         modelId: 'gpt-5.5',
-        effort: 'medium',
+        // 选中的收藏 = 草稿正在跑它的副本(2026-08-19 review P2 的完整配置校验):
+        // 引擎对齐副本(vendorKey codex),深度对齐副本解析值(无显式档 → codex 目录默认 high)。
+        vendorKey: 'codex',
+        effort: 'high',
         onModelChange: vi.fn(),
         onEffortChange: vi.fn(),
         currentProviderId: 'xd',

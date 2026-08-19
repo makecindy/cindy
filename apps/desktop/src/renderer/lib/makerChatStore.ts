@@ -3269,6 +3269,7 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
+  clearWakeBridgeReconcileTimer(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
   pendingLocalRetryIntents.delete(sessionId);
@@ -3551,6 +3552,49 @@ function setState(
   // messages:created 的侧栏时间戳与 chat state 保持原有先后：先通知消息，再 patch 列表。
   flushPendingMessageCreatedPatch(sessionId);
   if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
+}
+
+/**
+ * 唤醒桥接对账(见 pendingTaskWake 字段注释):桥接在「wake 任务终态 → wake turn
+ * 启动」的窗口里撑住 running 快照,但上游 CLI 在「后台子 agent 于主 turn 运行中完成」
+ * 的时机会把 task-notification 当 mid-turn 附件消费掉,续跑 turn 永远不会来 —— 桥接
+ * 便在主 turn Done 之后无限期等待,sidebar 永久转圈。桥接挂起(计数 > 0 且会话非
+ * running)时起表:宽限期内 isTurnStart 照常消费计数(isRunning 翻 true 即解除);
+ * 超时仍未启动则清空桥接,让 running 快照收敛为事实 —— 任务卡早已显示终态,不丢信息。
+ */
+export const WAKE_BRIDGE_RECONCILE_MS = 60_000;
+const wakeBridgeReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearWakeBridgeReconcileTimer(sessionId: string): void {
+  const timer = wakeBridgeReconcileTimers.get(sessionId);
+  if (!timer) return;
+  clearTimeout(timer);
+  wakeBridgeReconcileTimers.delete(sessionId);
+}
+
+function scheduleWakeBridgeReconciliation(sessionId: string): void {
+  const state = sessions.get(sessionId);
+  if (!state || state.pendingTaskWake <= 0 || state.agentStatus.isRunning) {
+    clearWakeBridgeReconcileTimer(sessionId);
+    return;
+  }
+  // 已在计时:保持首次挂起时刻的截止线,后续无关事件不刷新窗口。
+  if (wakeBridgeReconcileTimers.has(sessionId)) return;
+  const timer = setTimeout(() => {
+    wakeBridgeReconcileTimers.delete(sessionId);
+    // slice 可能已被 clearSession / LRU 逐出;setState 会重建 slice,先探测再动。
+    if (!sessions.has(sessionId)) return;
+    setState(sessionId, (s) => {
+      if (s.pendingTaskWake <= 0 || s.agentStatus.isRunning) return s;
+      return {
+        ...s,
+        pendingTaskWake: 0,
+        pendingTaskWakeDuringTurn: 0,
+        pendingTaskWakeStarted: false,
+      };
+    });
+  }, WAKE_BRIDGE_RECONCILE_MS);
+  wakeBridgeReconcileTimers.set(sessionId, timer);
 }
 
 function notify(sessionId: string): void {
@@ -6120,6 +6164,7 @@ function dispatchStreamEventPayload(
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
   setState(sessionId, (s) => handleStreamEvent(s, streamEvent), { deferNotification });
+  scheduleWakeBridgeReconciliation(sessionId);
 }
 
 function clearTextDeltaFlushTimer(): void {
@@ -6505,6 +6550,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
       }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
+      scheduleWakeBridgeReconciliation(sessionId);
       return;
     }
 
@@ -14441,6 +14487,7 @@ export const makerChatStore = {
   __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void => {
     supersedeInputProjectionOnTerminalEvent(sessionId, event);
     setState(sessionId, (s) => handleStreamEvent(s, event));
+    scheduleWakeBridgeReconciliation(sessionId);
   },
   /** Exposed for tests only: 把 status update 打进真实 store。 */
   __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
@@ -14448,6 +14495,7 @@ export const makerChatStore = {
       supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
     }
     setState(sessionId, (s) => handleStatusUpdate(s, update));
+    scheduleWakeBridgeReconciliation(sessionId);
   },
   /** Exposed for tests only. */
   __hydratePersistedMessageForTest: hydratePersistedMessage,

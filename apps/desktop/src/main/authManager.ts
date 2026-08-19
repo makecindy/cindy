@@ -57,7 +57,11 @@ import {
 } from './authRefreshFailure';
 import { awaitWithStartupTimeout } from './authStartupGate';
 import { syncCanaryFlagAfterAuth } from './canaryFlagSync';
-import { maybeEnableXdOrgBetaDefault } from './xdOrgBetaDefault';
+import {
+  maybeEnableNonXdOrgBetaDefault,
+  maybeEnableXdOrgBetaDefault,
+  shouldAttemptOrgBetaDefault,
+} from './xdOrgBetaDefault';
 import { canRestoreAuthSessionForMembership } from './authRealmPolicy';
 import {
   createAuthBrowserAuthorizationSlot,
@@ -95,6 +99,7 @@ import {
   type DesktopLoginAction,
   type DesktopLoginActionResult,
 } from '../shared/authIpc';
+import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -1416,6 +1421,11 @@ function scheduleCanaryFlagSync(input: {
     persistFlag: canaryFlagStore.sync,
   })
     .then((outcome) => {
+      scheduleNonXdOrgBetaDefault({
+        expectedAuthEpoch: input.expectedAuthEpoch,
+        expectedUserId: input.expectedUserId,
+        defaultEnableBeta: outcome.defaultEnableBeta,
+      });
       if (outcome.kind === 'synced') {
         log.info('canary feature flag synced: isCanary=%s', outcome.isCanary);
         // feature-flags 在登录态落地后异步返回；立即推送新快照，让 renderer
@@ -1494,6 +1504,56 @@ function scheduleXdOrgBetaDefault(input: {
     .catch((err) => {
       log.error('xd org beta channel default threw unexpectedly', err);
     });
+}
+
+/** feature-flags 返回后，仅为非 xd 组织补一次设备级 beta 默认值。 */
+function scheduleNonXdOrgBetaDefault(input: {
+  expectedAuthEpoch: number;
+  expectedUserId: string;
+  defaultEnableBeta?: boolean;
+}): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  const user = currentUser;
+  if (!user) return;
+  const request = {
+    expectedAuthEpoch: input.expectedAuthEpoch,
+    expectedUserId: input.expectedUserId,
+    user: {
+      membershipKind: user.membershipKind,
+      orgName: user.orgName,
+      orgSlug: decodeAccessTokenOrgSlug(accessToken),
+    },
+  } as const;
+  if (
+    shouldAttemptOrgBetaDefault({
+      user: request.user,
+      defaultEnableBeta: input.defaultEnableBeta,
+    }) !== 'flag-enable'
+  ) {
+    return;
+  }
+  void maybeEnableNonXdOrgBetaDefault(request, {
+    readCurrentAuthIdentity: () => ({
+      authEpoch: authStateEpoch,
+      userId: currentUser?.id ?? null,
+    }),
+    readChannelState: () => ({
+      enableBeta: readUpdateChannelSettings().enableBeta,
+      isCustomized: isEnableBetaUserCustomized(),
+    }),
+    probeBetaManifest,
+    enableBeta: () =>
+      enableUncustomizedBetaChannel(
+        () =>
+          authStateEpoch === input.expectedAuthEpoch && currentUser?.id === input.expectedUserId,
+      ),
+  })
+    .then((outcome) => {
+      if (outcome.kind === 'enabled') log.info('feature-flag beta channel default enabled');
+      else if (outcome.reason === 'stale-auth') log.debug('discarded stale non-xd beta default');
+      else log.debug('non-xd beta channel default skipped: reason=%s', outcome.reason);
+    })
+    .catch((err) => log.error('non-xd beta channel default threw unexpectedly', err));
 }
 
 /**
@@ -1960,6 +2020,15 @@ export function getAccessToken(): string | null {
 /** 当前已认证会话的数据区域；主进程长连接据此识别同账号的跨区切换。 */
 export function getActiveAuthRealm(): AuthRegion {
   return activeAuthRealm;
+}
+
+/**
+ * 登录页人机验证托管挑战页地址(不含 query)。邮箱发码固定走构建区域的 auth
+ * 部署(与 runLoginAction 的 startsBuildRealmFlow 口径一致),不看 activeAuthRealm。
+ * 惰性求值:端点清单可能在 app.ready 后被远程 manifest 回填,不得固化。
+ */
+export function getLoginCaptchaChallengeUrl(): string {
+  return authServerUrl(AUTH_REGION) + LOGIN_CAPTCHA_PAGE_PATH;
 }
 
 /** SkillHub v0.2.1: 返回当前登录用户 id（cuid），未登录时返回 null */
@@ -2989,7 +3058,9 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       if (action.kind === 'phone' && !providerConfig?.phone) {
         throw new AuthApiError('PHONE_LOGIN_DISABLED', 400, 'Phone login is disabled');
       }
-      await client.requestCode(action.kind, action.identifier);
+      await client.requestCode(action.kind, action.identifier, {
+        captchaToken: action.captchaToken,
+      });
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'code-requested',
         kind: action.kind,

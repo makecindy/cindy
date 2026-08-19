@@ -16,13 +16,14 @@
  * 完全没有 project / 未分类 / 对话时仍渲染范围标题行(2026-08-13 第 4 轮
  * review P1:段头恒在),列表树不画。
  *
- * 拖拽：sortBy === 'manual' 时由 SortableList (SortableJS) 接管整行拖拽；
- *   其它排序模式 disabled。落定后通过 filter.setManualProjectOrder 写回。
- *   原先的手写 PointerEvents + 1px 落点指示线已下线，统一由 SortableJS 的
- *   ghost / chosen / drag class 提供视觉。
+ * 拖拽：projectOrder === 'custom' 且按项目分组时由 SortableList 接管。只从
+ *   项目标题行 (`data-project-header`) 起手；子任务区 `data-no-drag`，标题行内
+ *   按钮走 filter。不要把 handle 自己写进 filter，否则整行没有可拖热区。
+ *   任务排序 (sortBy) 仍作用于组内任务与项目之后的散排对话。落定后写回
+ *   manualProjectOrder。
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -51,6 +52,7 @@ import {
 import {
   normalizeManualProjectOrder,
   mergeVisibleReorder,
+  snapshotManualProjectOrder,
   loadDialogueGroupCollapsedKeys,
   persistDialogueGroupCollapsedKeys,
   DIALOGUE_GROUP_ALL_KEY,
@@ -90,6 +92,13 @@ import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
+
+/** 手动排序只从项目标题行起手。点击折叠仍走标题行；SortableJS 的
+ *  fallbackTolerance + ignoreNextClick 把点击和拖拽分开。 */
+const MANUAL_PROJECT_SORT_HANDLE = '[data-project-header]';
+
+/** 标题行里的按钮、以及子任务区,都不能当成"拖整个项目"的起点。 */
+const MANUAL_PROJECT_SORT_FILTER = 'button, input, textarea, select, a, [data-no-drag]';
 
 /** 设备段折叠/对话组折叠共用的段 key:本机段 'local',远程段用 deviceId。 */
 const deviceSectionKey = (deviceId: string | null) => deviceId ?? 'local';
@@ -259,10 +268,10 @@ export function ProjectsSection({
   // 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。独立于置顶段的三态设置。
   const { mode: mainViewMode } = useSidebarMainViewMode();
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
-  // 拖拽只在 Project 分组下才有意义；sortBy 不强制要 'manual'——用户随手拖一下
-  // 我们就在 onReorder 里自动切到 manual 并持久化，避免"默认 recency 排序下永远拖不动"
-  // 的反直觉体验。
-  const projectDragEnabled = filter.groupBy === 'project';
+  // SortableList 只在自定义项目顺序且按项目分组时挂载。
+  // 折叠溢出且未点「显示全部」时禁用，避免只重排可见前缀。
+  const customProjectOrder = filter.groupBy === 'project' && filter.projectOrder === 'custom';
+  const projectDragEnabled = customProjectOrder;
   const projectKeysForOrderBaseline = allProjectKeysForOrder;
   // 段级收起已随「全部任务 = 范围下拉」取消(2026-08-13 用户定稿):标题的点击
   // 语义让给机器范围切换;「想要紧凑」由右侧「收起所有分组」承接。
@@ -289,11 +298,6 @@ export function ProjectsSection({
       );
       const merged = mergeVisibleReorder(fullOrder, visibleNewOrder);
       filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
-      // 用户随手一拖即表达"我要手动排序"的意图；如果当前不是 manual，自动切过去
-      // 并持久化，让拖拽结果立刻生效，不需要用户先去 Filter Popover 切换排序模式。
-      if (filter.sortBy !== 'manual') {
-        filter.setSortBy('manual');
-      }
     },
     [filter, projectKeysForOrderBaseline],
   );
@@ -390,10 +394,7 @@ export function ProjectsSection({
 
   // E 期「按设备分组」:有远程设备连接 + 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
-  // manual 一并排除(2026-08-13 复核 P1):manual 与设备分组不叠加是渲染层
-  // 定稿,但此前生效判定没跟着排除——机器标签被藏、批量折叠键按逐设备派生、
-  // 折叠状态机进入 collapse-devices 却没有可见效果,全是"派生态以为在设备
-  // 分组、渲染实际是单段"的错位。生效判定必须与实际渲染模式同一份。
+  // 自定义项目顺序可以和设备分组叠加:每段内项目行按全局序的子集排,段内可拖。
   // 范围收窄到单台机器时同样退场(2026-08-13 用户定稿):只有一台无段可切,
   // 唯一的段头还会和范围标题重复报同一个设备名;整理菜单的选项行同步隐藏
   // (deviceGroupingAvailable),偏好照旧不改写、范围放宽自动恢复。
@@ -401,8 +402,7 @@ export function ProjectsSection({
   const selectedMachineId = useEffectiveSelectedMachineId();
   const singleMachineScope = selectedMachineId !== MACHINE_ALL && selectedMachineId.length === 1;
   const deviceGroupingAvailable = hasRemoteDevices && !singleMachineScope;
-  const deviceGroupingActive =
-    deviceGroupingAvailable && filter.groupDevice && filter.sortBy !== 'manual';
+  const deviceGroupingActive = deviceGroupingAvailable && filter.groupDevice;
   // F-PJ-10：未分类区在 projects 为具体多选状态时不渲染（spec 验收第 14 条）
   const unclassifiedHidden = filter.projects !== 'all';
 
@@ -418,6 +418,7 @@ export function ProjectsSection({
         groupBy: filter.groupBy,
         groupDialogue: filter.groupDialogue,
         sortBy: filter.sortBy,
+        projectOrder: filter.projectOrder,
         manualProjectOrder: filter.manualProjectOrder,
         priorityContext,
         notifications,
@@ -432,6 +433,7 @@ export function ProjectsSection({
       filter.groupBy,
       filter.groupDialogue,
       filter.sortBy,
+      filter.projectOrder,
       filter.manualProjectOrder,
       priorityContext,
       notifications,
@@ -474,6 +476,37 @@ export function ProjectsSection({
     )
     .map((entry) => entry.project);
 
+  // 第一次切到手动时,必须用切换前的视觉序(recency / priority 混排结果),
+  // 不能在 custom+空序重算后再采集——那时项目行已按上游入参序排好,优先级视觉会丢。
+  // 可见子集还要 merge 回全量 baseline,避免隐藏项目被甩到末尾。
+  const preCustomVisualKeysRef = useRef<string[]>([]);
+  if (filter.projectOrder !== 'custom') {
+    preCustomVisualKeysRef.current = mixedEntries
+      .filter(
+        (entry): entry is Extract<MainListEntry, { kind: 'project' }> => entry.kind === 'project',
+      )
+      .map((entry) => entry.project.projectKey);
+  }
+  const prevProjectOrderRef = useRef(filter.projectOrder);
+  useEffect(() => {
+    const previous = prevProjectOrderRef.current;
+    prevProjectOrderRef.current = filter.projectOrder;
+    if (
+      previous === 'custom' ||
+      filter.projectOrder !== 'custom' ||
+      filter.groupBy !== 'project' ||
+      filter.manualProjectOrder.length > 0
+    ) {
+      return;
+    }
+    const keys = preCustomVisualKeysRef.current;
+    if (keys.length === 0) return;
+    filter.setManualProjectOrder(
+      snapshotManualProjectOrder(keys, projectKeysForOrderBaseline),
+      projectKeysForOrderBaseline,
+    );
+  }, [filter, projectKeysForOrderBaseline]);
+
   const deviceSections = useMemo<MainListDeviceSection[]>(() => {
     if (!deviceGroupingActive) return [{ deviceId: null, entries: [...visibleMixedEntries] }];
     // 设备分组:对**全量**条目先切段,折叠上限在渲染时每段独立应用(2026-08-13
@@ -481,6 +514,7 @@ export function ProjectsSection({
     // 看起来像"这台设备没有任务"——设备是最外层层级,折叠只能发生在段内)。
     return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {
       sortBy: filter.sortBy,
+      projectOrder: filter.projectOrder,
       manualProjectOrder: filter.manualProjectOrder,
       priorityContext,
     });
@@ -490,6 +524,7 @@ export function ProjectsSection({
     mixedEntries,
     remoteDeviceIndex,
     filter.sortBy,
+    filter.projectOrder,
     filter.manualProjectOrder,
     priorityContext,
   ]);
@@ -823,14 +858,12 @@ export function ProjectsSection({
           />
         ) : null}
         {/* 混排渲染(D / E 期):
-              - manual 排序:模型保证项目行连续在前 → 项目段整体走 SortableList 可拖,
-                其后是散排对话 / 对话组。折叠+溢出时禁用拖拽(PR #246 review 同款),
-                点「显示全部」展开为完整列表后再拖。设备分组与 manual 不叠加
-                (manual 下按单段渲染,拖拽语义保持简单)。
-              - 其它排序:按 deviceSections 切段(设备分组开启时),段内项目行与
-                散排对话按排序口径交错,不可拖(拖动意图请先切「手动排序」;旧
-                「随手一拖自动切 manual」在交错列表上会产生歧义落点,D 期收窄)。 */}
-        {filter.sortBy === 'manual' ? (
+              - 自定义项目顺序:模型保证项目行连续在前 → 项目段走 SortableList,
+                其后是散排对话 / 对话组。折叠+溢出时禁用拖拽,点「显示全部」后再拖。
+                可与设备分组叠加:每段各自拖本段项目。
+              - 按最近活动:按 deviceSections 切段(设备分组开启时),段内项目行与
+                散排对话按任务排序口径交错,项目行不可拖。 */}
+        {customProjectOrder && !deviceGroupingActive ? (
           <>
             <SortableList
               items={visibleProjectNodes}
@@ -838,7 +871,8 @@ export function ProjectsSection({
               onReorder={handleReorder}
               disabled={!projectDragEnabled || (projectsOverflow && !showAllProjects)}
               reducedMotion={reducedMotion}
-              filter="button, input, textarea, select, a, [data-no-drag], [data-project-header]"
+              handle={MANUAL_PROJECT_SORT_HANDLE}
+              filter={MANUAL_PROJECT_SORT_FILTER}
               className="flex flex-col gap-1"
               renderItem={(project) => renderProjectNode(project)}
             />
@@ -906,19 +940,46 @@ export function ProjectsSection({
                           section.entries,
                           expandedDeviceSections.has(key),
                         );
+                        const sectionDialogueTarget = section.deviceId
+                          ? { deviceId: section.deviceId, deviceName: name }
+                          : null;
+                        const sectionProjects = sectionView.visibleEntries
+                          .filter(
+                            (entry): entry is Extract<MainListEntry, { kind: 'project' }> =>
+                              entry.kind === 'project',
+                          )
+                          .map((entry) => entry.project);
                         return (
                           <>
-                            {sectionView.visibleEntries.map((entry) =>
-                              entry.kind === 'project'
-                                ? renderProjectNode(entry.project)
-                                : // 本机段 → null(强制本机);远程段 → 该设备。
-                                  renderNonProjectEntry(
-                                    entry,
-                                    key,
-                                    section.deviceId
-                                      ? { deviceId: section.deviceId, deviceName: name }
-                                      : null,
-                                  ),
+                            {customProjectOrder ? (
+                              <>
+                                <SortableList
+                                  items={sectionProjects}
+                                  getId={getProjectId}
+                                  onReorder={handleReorder}
+                                  disabled={
+                                    !projectDragEnabled ||
+                                    (sectionView.isOverflowing &&
+                                      !expandedDeviceSections.has(key))
+                                  }
+                                  reducedMotion={reducedMotion}
+                                  handle={MANUAL_PROJECT_SORT_HANDLE}
+                                  filter={MANUAL_PROJECT_SORT_FILTER}
+                                  className="flex flex-col gap-1"
+                                  renderItem={(project) => renderProjectNode(project)}
+                                />
+                                {sectionView.visibleEntries
+                                  .filter((entry) => entry.kind !== 'project')
+                                  .map((entry) =>
+                                    renderNonProjectEntry(entry, key, sectionDialogueTarget),
+                                  )}
+                              </>
+                            ) : (
+                              sectionView.visibleEntries.map((entry) =>
+                                entry.kind === 'project'
+                                  ? renderProjectNode(entry.project)
+                                  : renderNonProjectEntry(entry, key, sectionDialogueTarget),
+                              )
                             )}
                             {sectionView.isOverflowing && (
                               <ShowAllEntriesButton
@@ -946,8 +1007,7 @@ export function ProjectsSection({
             )}
           </div>
         )}
-        {/* 全局「显示全部」只属于单段路径(manual / 未按设备分组——manual 已在
-              deviceGroupingActive 定义里排除);设备分组下折叠与 footer 都在段内。 */}
+        {/* 全局「显示全部」只属于未按设备分组的单段路径;设备分组下折叠与 footer 都在段内。 */}
         {!deviceGroupingActive && projectsOverflow && (
           <ShowAllEntriesButton count={projectsTotal} onClick={() => setShowAllProjects(true)} />
         )}

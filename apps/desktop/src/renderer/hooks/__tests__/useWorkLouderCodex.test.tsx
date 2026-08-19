@@ -17,6 +17,7 @@ function state(
   return {
     connectionStatus,
     connectionReason: null,
+    devicePresent: connectionStatus === 'connected' ? true : null,
     device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
     settings: {
       ...createWorkLouderCodexDefaultSettings(),

@@ -62,6 +62,32 @@ describe('xAI account model discovery', () => {
     ]);
   });
 
+  it('降序 payload 归一为规范升序(Grok 4.5 滑轴反向回归,Chris 2026-08-19)', () => {
+    // x.ai /v1/models 实测下发降序(['high','medium','low']);消费端(滑杆按下标画轴、
+    // efforts[0]=最低 / at(-1)=最高)契约都是升序,原序透传会让整条轴反向。
+    // declaredDefault 缺席于列表时的追加分支同样必须重排,不能 push 在尾部。
+    expect(
+      parseXaiAccountModels({
+        data: [
+          {
+            model: 'grok-4.5',
+            reasoningEfforts: ['high', 'medium', 'low'],
+            reasoningEffort: 'high',
+          },
+          {
+            model: 'grok-4.6',
+            reasoningEfforts: ['xhigh', 'high', 'medium'],
+            reasoningEffort: 'low',
+          },
+        ],
+      }),
+    ).toEqual([
+      { id: 'xai/grok-4.5', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+      // declaredDefault('low') 不在列表里 → 追加后仍是规范升序。
+      { id: 'xai/grok-4.6', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'low' },
+    ]);
+  });
+
   it('persists a successful empty table and reloads it as an authoritative LKG', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-xai-models-'));
     tempDirs.push(dir);

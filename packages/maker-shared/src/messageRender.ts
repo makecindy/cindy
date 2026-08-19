@@ -618,10 +618,12 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     // 普通 user turn 也是所有权边界:用户开了新话题,旧的未完成计划不得把新计划
     // 吞成"续期"(历史病 §3.1.2/3.1.3——串号后新计划复用旧 key、Task 状态跨
     // turn 拼接)。task source 例外:显式指向已有任务的操作(TaskUpdate/TaskGet
-    // 带已知 id)仍是同一份清单的合法续写。
+    // 带已知 id)仍是同一份清单的合法续写,但不能因此把 session 的所有权锚点
+    // 搬进新 turn:后续 TaskCreate 仍应另起清单,否则一个长期未完成项会把跨阶段
+    // 新任务持续吸进来,最终出现几十步历史与陈旧 active 项混在一张卡里。
     const crossesUserBoundary =
       Boolean(previous)
-      && lastUserIndex > (previous?.lastIndex ?? -1)
+      && lastUserIndex > (previous?.userBoundaryIndex ?? -1)
       && !(source === 'task' && taskToolTargetsExistingTask(message, resultText, taskState));
     const startsNewSession =
       !previous

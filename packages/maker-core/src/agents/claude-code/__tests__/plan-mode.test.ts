@@ -710,6 +710,37 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('passes the local session provider into spawn-time behavior flags', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(fakeQuery);
+    const behaviorFlags = vi.fn((ctx: { sessionProviderId?: string | null }) => ({
+      ENABLE_TOOL_SEARCH: ctx.sessionProviderId === 'openrouter-custom' ? 'false' : 'auto',
+    }));
+    const agent = new ClaudeCodeAgent(createDeps({ runtimeConfig: { behaviorFlags } }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-local-custom-provider',
+      model: 'x-ai/grok-4.6',
+      providerId: 'openrouter-custom',
+      workingDir,
+      permissionMode: 'auto',
+    });
+
+    const env = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.env as
+      | Record<string, string>
+      | undefined;
+    expect(env?.ENABLE_TOOL_SEARCH).toBe('false');
+    expect(behaviorFlags).toHaveBeenCalledWith({
+      credentialMode: 'provider-oauth',
+      sessionProviderId: 'openrouter-custom',
+      spawnMode: 'local',
+    });
+    await handle.close();
+  });
+
   it('overrides remote cc-manager env with a host-materialized Claude route', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -728,9 +759,12 @@ describe('ClaudeCodeAgent plan mode', () => {
         ANTHROPIC_CUSTOM_HEADERS: 'authorization: Bearer k-route\nx-tenant: acme',
       },
     }));
+    const behaviorFlags = vi.fn((ctx: { sessionProviderId?: string | null }) => ({
+      ENABLE_TOOL_SEARCH: ctx.sessionProviderId === 'custom-provider' ? 'false' : 'auto',
+    }));
     const agent = new ClaudeCodeAgent(createDeps({
       // Empty gateway endpoint would fail the old remote gateway guard; routed sessions must not depend on it.
-      runtimeConfig: { remoteEndpoint: '' },
+      runtimeConfig: { remoteEndpoint: '', behaviorFlags },
       remoteCcQueryFactory,
       resolveRemoteClaudeRoute,
     }));
@@ -753,6 +787,12 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(env?.ANTHROPIC_API_KEY).toBe('k-route');
     expect(env?.ANTHROPIC_CUSTOM_HEADERS).toBe('authorization: Bearer k-route\nx-tenant: acme');
     expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env?.ENABLE_TOOL_SEARCH).toBe('false');
+    expect(behaviorFlags).toHaveBeenCalledWith({
+      credentialMode: 'provider-oauth',
+      sessionProviderId: 'custom-provider',
+      spawnMode: 'remote',
+    });
     await handle.close();
   });
 

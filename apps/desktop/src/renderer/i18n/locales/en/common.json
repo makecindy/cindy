@@ -3486,16 +3486,24 @@
         },
         "connection": {
           "label": "Connection",
+          "toggle": {
+            "label": "Enable",
+            "aria": "Let this Cindy use Codex Micro"
+          },
           "status": {
             "connecting": "Connecting",
             "connected": "Connected",
             "not-detected": "Not detected",
+            "present": "Connected",
+            "disabled": "Off",
             "error": "Connection problem",
             "unavailable": "SDK unavailable"
           },
           "descriptions": {
             "connecting": "Cindy is starting the Work Louder device service.",
             "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+            "disabled": "When enabled, Cindy listens for key presses and shows task status with lighting.",
+            "present": "When enabled, Cindy listens for key presses and shows task status with lighting.",
             "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
             "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
             "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
@@ -3776,7 +3784,7 @@
         "updateTo": "Update to v{{version}}",
         "updateAria": "Update {{name}} to v{{version}}",
         "createWithCindy": "Create with Cindy",
-        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, panel inside the Plugins page, chat card, or no UI), a $ command word, launch mode, network access, and whether a settings page is needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
+        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum chapter 2 for the slot overview, plus the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, panel inside the Plugins page, chat card, or no UI), a $ command word, launch mode, background abilities (event listening, in-app toast notifications, unread badges, confirmation dialogs), network access, whether a settings page is needed, whether a bundled Node process should do heavy lifting, and whether image/video media abilities are needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
         "filterAll": "All",
         "filtersAria": "Filter plugins by source",
         "origin": {
@@ -4708,6 +4716,13 @@
       "cn": "CN",
       "dev": "Dev"
     },
+    "captcha": {
+      "title": "Security check",
+      "loading": "Loading security check…",
+      "failed": "Failed to load the security check.",
+      "retry": "Retry",
+      "cancel": "Cancel"
+    },
     "errors": {
       "fallback": "Sign-in failed. Please try again.",
       "AUTH_SERVICE_UNAVAILABLE": "The sign-in service is temporarily unavailable.",
@@ -4718,6 +4733,9 @@
       "INVALID_CODE": "The verification code is incorrect or expired.",
       "CODE_ATTEMPTS_EXCEEDED": "Too many incorrect attempts. Request a new code.",
       "RATE_LIMITED": "Too many attempts. Please wait and try again.",
+      "CAPTCHA_REQUIRED": "Please complete the security check first.",
+      "CAPTCHA_INVALID": "Security check failed. Please try again.",
+      "CAPTCHA_UNAVAILABLE": "The security check is temporarily unavailable. Please try again later.",
       "SSO_LOGIN_REQUIRED": "This organization requires SSO sign-in.",
       "ORG_SSO_NOT_FOUND": "Company not found, or it has no SSO connection enabled",
       "ORG_REALM_AMBIGUOUS": "This enterprise identifier exists in both regions. Contact your administrator.",
@@ -4984,6 +5002,12 @@
       "title": "Disable \"{{name}}\"?",
       "body": "Closing this panel disables the plugin and pauses its capabilities. You can re-enable it anytime from Plugins in the sidebar.",
       "confirm": "Disable"
+    },
+    "externalLinkConfirm": {
+      "title": "Allow Cindy to open an external website?",
+      "message": "Allow Cindy to open an external website?",
+      "open": "Open Website",
+      "cancel": "Cancel"
     }
   },
   "ghostPanelWindow": {
@@ -6614,7 +6638,16 @@
   "chat": {
     "sessionLoading": "Loading task",
     "askUserQuestion": {
-      "skippedAnswer": "Skipped"
+      "skippedAnswer": "Skipped",
+      "pendingTitle": "Question pending",
+      "restoreAriaLabel": "Restore question prompt",
+      "minimizeAriaLabel": "Minimize question prompt",
+      "back": "Back",
+      "skip": "Skip",
+      "next": "Next",
+      "submit": "Submit",
+      "customAnswer": "Type something else…",
+      "answerPlaceholder": "Type your answer…"
     },
     "planReviewBubble": {
       "title": "Plan review",
@@ -6672,7 +6705,8 @@
       "outputFile": "Output: {{path}}"
     },
     "planPill": {
-      "step": "Step {{current}} of {{total}}"
+      "step": "Step {{current}} of {{total}}",
+      "dismiss": "Close Plan"
     },
     "forkOrigin": {
       "label": "Created from another session"
@@ -7669,6 +7703,15 @@
       "filterLastActivityHeading": "Last activity",
       "filterGroupByHeading": "Group by",
       "filterSortByHeading": "Sort by",
+      "filterTaskSortHeading": "Session sort",
+      "filterProjectOrderHeading": "Project order",
+      "filterProjectOrder": {
+        "activity": "By recent activity",
+        "custom": "Manual"
+      },
+      "filterProjectOrderTip": {
+        "custom": "Drag project rows with the mouse to reorder. Sessions inside still follow the sort above."
+      },
       "filterProjectsHeading": "Projects",
       "filterAllProjects": "All projects",
       "filterHeading": "Filters",
@@ -7682,6 +7725,8 @@
       "taskInfo": {
         "time": "Time",
         "pr": "PR status",
+        "worktree": "worktree",
+        "openWorktree": "Open worktree folder",
         "tokens": "Tokens",
         "cost": "Cost"
       },
@@ -7894,7 +7939,7 @@
         "syncCodexAlreadyLinked": "Codex sessions for this project are already linked",
         "syncCodexNone": "No Codex sessions found for this project",
         "syncCodexFailed": "Codex sync failed: {{error}}",
-        "search": "Search sessions"
+        "search": "Search sessions in this project"
       },
       "deepLink": {
         "copied": "Deep link copied",

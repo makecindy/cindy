@@ -56,6 +56,7 @@ export type WorkLouderCodexHostRequest =
   // talk to the device — this is that something, driven by whoever is
   // currently showing connection state.
   | { kind: 'probe' }
+  | { kind: 'discover' }
   | { kind: 'stop' };
 
 export type WorkLouderCodexHostMessage =
@@ -67,6 +68,12 @@ export type WorkLouderCodexHostMessage =
   /** Legacy utility-host message retained for older host fakes and upgrades. */
   | { kind: 'agent-key'; slot: number }
   | { kind: 'device'; device: WorkLouderCodexDeviceState }
+  | {
+      kind: 'presence';
+      present: boolean;
+      deviceType?: 'codex-micro' | 'creator-micro-2';
+      isUsbConnection?: boolean;
+    }
   | { kind: 'hid'; event: WorkLouderCodexHidEvent }
   | { kind: 'joystick'; event: WorkLouderCodexJoystickEvent }
   | { kind: 'activity' }
@@ -140,6 +147,53 @@ export function selectWorkLouderCodexSlotActivity(
   activity: readonly WorkLouderCodexSessionActivity[],
 ): WorkLouderCodexSessionActivity[] {
   return activity.filter(isLightingVisibleActivity).slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT);
+}
+
+/**
+ * Copy worker lighting onto the lead task key.
+ *
+ * Agent keys and LEDs are assigned to the lead session. Orca workers are
+ * separate sessions, so a team that is still working would otherwise look idle
+ * as soon as the lead turn finished.
+ */
+export function foldOrcaWorkerActivityOntoLeads(
+  activity: readonly WorkLouderCodexSessionActivity[],
+  workersByLead: Readonly<Record<string, readonly string[]>>,
+): WorkLouderCodexSessionActivity[] {
+  const byId = new Map(activity.map((item) => [item.sessionId, item]));
+  let changed = false;
+  const next = [...activity];
+  for (const [leadId, workerIds] of Object.entries(workersByLead)) {
+    if (workerIds.length === 0) continue;
+    let best = lightingActivityOrNull(byId.get(leadId));
+    for (const workerId of workerIds) {
+      const worker = lightingActivityOrNull(byId.get(workerId));
+      if (!worker) continue;
+      if (!best || lightingActivityRank(worker) > lightingActivityRank(best)) {
+        best = { ...worker, sessionId: leadId };
+      }
+    }
+    if (!best) continue;
+    const existingIndex = next.findIndex((item) => item.sessionId === leadId);
+    if (existingIndex === -1) {
+      next.push(best);
+      changed = true;
+    } else if (lightingActivityRank(best) > lightingActivityRank(next[existingIndex]!)) {
+      next[existingIndex] = best;
+      changed = true;
+    }
+  }
+  return changed ? next : activity as WorkLouderCodexSessionActivity[];
+}
+
+function lightingActivityOrNull(
+  item: WorkLouderCodexSessionActivity | undefined,
+): WorkLouderCodexSessionActivity | null {
+  return item && isLightingVisibleActivity(item) ? item : null;
+}
+
+function lightingActivityRank(item: WorkLouderCodexSessionActivity): number {
+  return (PHASE_PRIORITY[item.phase] ?? 0) + (item.attention ? 0.1 : 0);
 }
 
 /** Aligns activity LEDs with an explicit six-task key assignment when one is available. */
@@ -288,6 +342,18 @@ export function isWorkLouderCodexHostMessage(value: unknown): value is WorkLoude
   }
   if (message.kind === 'device')
     return isWorkLouderCodexDeviceState((message as { device?: unknown }).device);
+  if (message.kind === 'presence') {
+    const present = (message as { present?: unknown }).present;
+    const deviceType = (message as { deviceType?: unknown }).deviceType;
+    const isUsbConnection = (message as { isUsbConnection?: unknown }).isUsbConnection;
+    return (
+      typeof present === 'boolean' &&
+      (deviceType === undefined ||
+        deviceType === 'codex-micro' ||
+        deviceType === 'creator-micro-2') &&
+      (isUsbConnection === undefined || typeof isUsbConnection === 'boolean')
+    );
+  }
   if (message.kind === 'state') {
     const validStatus =
       message.status === 'connected' ||

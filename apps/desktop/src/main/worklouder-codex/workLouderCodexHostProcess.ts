@@ -76,6 +76,7 @@ let latestFrame: WorkLouderCodexLightingFrame | null = null;
 let applyPending = false;
 let listenPending = false;
 let probePending = false;
+let discoverPending = false;
 let hidListeningRequested = false;
 let applying = false;
 let applyTask: Promise<void> | null = null;
@@ -102,6 +103,8 @@ if (parentPort) {
       requestApply();
     } else if (request?.kind === 'probe') {
       requestProbe();
+    } else if (request?.kind === 'discover') {
+      requestDiscover();
     } else if (request?.kind === 'stop') {
       void stop();
     }
@@ -161,6 +164,12 @@ function requestProbe(): void {
   kickQueue();
 }
 
+function requestDiscover(): void {
+  if (stopping) return;
+  discoverPending = true;
+  kickQueue();
+}
+
 function kickQueue(): void {
   if (applying) return;
   const task = drainApplyQueue();
@@ -174,8 +183,12 @@ function kickQueue(): void {
 async function drainApplyQueue(): Promise<void> {
   applying = true;
   try {
-    while ((applyPending || listenPending || probePending) && !stopping) {
+    while ((applyPending || listenPending || probePending || discoverPending) && !stopping) {
       // Drop a stale handle before lighting or HID reuse it.
+      if (discoverPending) {
+        discoverPending = false;
+        discoverPresence();
+      }
       if (probePending) {
         probePending = false;
         await probeConnection();
@@ -283,6 +296,47 @@ async function probeConnection(): Promise<void> {
   }
 }
 
+function discoverPresence(): void {
+  try {
+    const candidate = findCandidates()[0];
+    if (!candidate) {
+      post({ kind: 'presence', present: false });
+      return;
+    }
+    post({
+      kind: 'presence',
+      present: true,
+      deviceType: candidate.deviceType,
+      isUsbConnection: candidate.device.isUsbConnection === true,
+    });
+  } catch (error) {
+    hostLog('debug', `presence discovery failed: ${safeErrorMessage(error)}`);
+    post({ kind: 'presence', present: false });
+  }
+}
+
+function findCandidates(): Array<{
+  device: WorkLouderDevice;
+  deviceType: 'codex-micro' | 'creator-micro-2';
+}> {
+  const loaded = loadSdk();
+  const discovery = new loaded.WLDeviceDiscovery(sdkLogger);
+  return [
+    ...discovery.findWLDevices([loaded.DeviceType.CodexMicro]).map((device) => ({
+      device,
+      deviceType: 'codex-micro' as const,
+    })),
+    ...(loaded.DeviceType.CreatorMicroV2 === undefined
+      ? []
+      : discovery.findWLDevices([loaded.DeviceType.CreatorMicroV2]).map((device) => ({
+          device,
+          deviceType: 'creator-micro-2' as const,
+        }))),
+  ].toSorted(
+    (left, right) => Number(right.device.isUsbConnection) - Number(left.device.isUsbConnection),
+  );
+}
+
 async function listenForAgentKeys(): Promise<void> {
   try {
     const deviceApi = await ensureConnected();
@@ -327,24 +381,9 @@ function safeErrorMessage(error: unknown): string {
 async function ensureConnected(): Promise<WorkLouderApi | null> {
   if (api && transportFaulted) await disconnect();
   if (api) return api;
-  const loaded = loadSdk();
-  const discovery = new loaded.WLDeviceDiscovery(sdkLogger);
-  const candidates = [
-    ...discovery.findWLDevices([loaded.DeviceType.CodexMicro]).map((device) => ({
-      device,
-      deviceType: 'codex-micro' as const,
-    })),
-    ...(loaded.DeviceType.CreatorMicroV2 === undefined
-      ? []
-      : discovery.findWLDevices([loaded.DeviceType.CreatorMicroV2]).map((device) => ({
-          device,
-          deviceType: 'creator-micro-2' as const,
-        }))),
-  ].toSorted(
-    (left, right) => Number(right.device.isUsbConnection) - Number(left.device.isUsbConnection),
-  );
-  const candidate = candidates[0];
+  const candidate = findCandidates()[0];
   if (!candidate) return null;
+  const loaded = loadSdk();
   const nextComm = new loaded.WLDeviceCommImpl(sdkLogger);
   if (!(await nextComm.connect(candidate.device))) return null;
   comm = nextComm;
@@ -491,6 +530,7 @@ async function stop(): Promise<void> {
   stopping = true;
   listenPending = false;
   probePending = false;
+  discoverPending = false;
   hidListeningRequested = false;
   clearRetry();
   try {

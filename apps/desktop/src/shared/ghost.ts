@@ -6055,7 +6055,7 @@ export type GhostMediaCapability = (typeof GHOST_MEDIA_CAPABILITIES)[number];
 
 /** 插件读取自身某项 Cindy 媒体能力当前实际选型的只读结果。 */
 export type GhostCindyPreferenceResult =
-  | { ok: true; capability: GhostMediaCapability; modelId: string }
+  | { ok: true; capability: GhostMediaCapability; modelId: string; providerId: string }
   | {
       ok: false;
       errorCode: 'INVALID_REQUEST' | 'PERMISSION_DENIED' | 'NOT_AVAILABLE';
@@ -6074,10 +6074,13 @@ export type GhostMediaModelsResult =
       models: Array<{
         id: string;
         name: string;
+        /** 同名模型可由多个来源提供；与 id 一起构成精确选择。 */
+        providerId: string;
         /** Gateway architecture 的归一化投影；缺省表示上游未声明，插件不得猜测。 */
         modalities?: { input: string[]; output: string[] };
       }>;
       defaultModelId: string | null;
+      defaultProviderId: string | null;
     }
   | {
       ok: false;

@@ -631,7 +631,7 @@ export function MainLayout() {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => {
       if (payload.type === 'session') {
         navigateToSession(payload.id, payload.messageClientId);
@@ -656,7 +656,14 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'settings') {
-        navigate(`/settings?tab=${payload.tab}`);
+        // connect 透传给 ProvidersSection 已有的 ?connect=<providerId> 消费逻辑
+        // (可指向内置 provider 或 preset;providers 就绪后一次性消费、消费即从
+        // URL 摘除),与「连接供应商」引导卡的 navigate 形态保持一致。
+        const connect =
+          payload.tab === 'providers' && payload.connect
+            ? `&connect=${encodeURIComponent(payload.connect)}`
+            : '';
+        navigate(`/settings?tab=${payload.tab}${connect}`);
       }
     },
     [navigate, navigateToSession, openShareImport],
@@ -1357,8 +1364,8 @@ export function MainLayout() {
     //     折叠按钮（见 Sidebar.tsx）。
     //   - 右侧 <main> 第一行是 ContentHeader Shell：窗口拖拽区 + Windows 窗口
     //     控制按钮 + 折叠态快捷按钮回流；中部由路由视图注入（会话标题等）。
-    //   - 设置页：Sidebar 隐藏不变；ContentHeader 仍是 46px 顶栏（返回 + 标题
-    //     由 SettingsView 注入），无折叠按钮，不画下边框。
+    //   - 设置页：Sidebar 隐藏不变，ContentHeader 退化为"隐形 chrome"（无折叠
+    //     按钮，仅拖拽区 + Windows 窗口控制 + mac 红绿灯让位）。
     // sidebar-card-mode: rail 态(拖到最窄 64px)在 slot provider 上与 collapsed 同义
     // (都表达"窄布局"),Sidebar 另收 isRail 区分"完全隐藏 vs 窄轨"。
     // peek 可见期强制展开语义:抽屉里要呈现完整展开列表(ExpandedView)。

@@ -3512,16 +3512,24 @@
         },
         "connection": {
           "label": "연결",
+          "toggle": {
+            "label": "사용",
+            "aria": "이 Cindy에서 Codex Micro 사용"
+          },
           "status": {
             "connecting": "연결 중",
             "connected": "연결됨",
             "not-detected": "감지되지 않음",
+            "present": "연결됨",
+            "disabled": "사용 안 함",
             "error": "연결 문제",
             "unavailable": "SDK 사용 불가"
           },
           "descriptions": {
             "connecting": "Cindy가 Work Louder 장치 서비스를 시작하고 있습니다.",
             "connected": "USB가 연결되었습니다. Cindy가 키 입력을 수신하고 작업 조명을 동기화합니다.",
+            "disabled": "켜면 Cindy가 키 입력을 수신하고 조명으로 작업 상태를 표시합니다.",
+            "present": "켜면 Cindy가 키 입력을 수신하고 조명으로 작업 상태를 표시합니다.",
             "not-detected": "데이터 전송을 지원하는 USB 케이블로 연결하세요. ChatGPT가 장치를 사용 중이면 종료하세요.",
             "error": "Cindy가 키보드와 통신하지 못해 자동으로 다시 시도하고 있습니다.",
             "unavailable": "공식 Work Louder SDK를 찾지 못했습니다. Codex Micro를 지원하는 ChatGPT 또는 Codex 앱을 유지한 뒤 Cindy를 다시 시작하세요.",
@@ -3802,7 +3810,7 @@
         "updateTo": "v{{version}}(으)로 업데이트",
         "updateAria": "{{name}}을(를) v{{version}}(으)로 업데이트",
         "createWithCindy": "Cindy로 만들기",
-        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 샌드박스 금지선과 패키징 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 플러그인 페이지 내 패널 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 네트워크 사용 여부, 설정 페이지 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 플러그인을 패키징하고 설치해 주세요.",
+        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 슬롯 총람이 담긴 2장, 샌드박스 금지선, 패키징 세 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 플러그인 페이지 내 패널 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 백그라운드 능력: 이벤트 수신 · 앱 내 토스트 알림 · 읽지 않음 배지 · 확인 대화상자, 네트워크 사용 여부, 설정 페이지 필요 여부, Node 프로세스 동반 여부, 이미지·동영상 등 미디어 능력 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 플러그인을 패키징하고 설치해 주세요.",
         "filterAll": "전체",
         "filtersAria": "출처별 플러그인 필터",
         "origin": {
@@ -4733,6 +4741,13 @@
       "cn": "CN",
       "dev": "Dev"
     },
+    "captcha": {
+      "title": "보안 확인",
+      "loading": "보안 확인을 불러오는 중…",
+      "failed": "보안 확인을 불러오지 못했습니다.",
+      "retry": "다시 시도",
+      "cancel": "취소"
+    },
     "errors": {
       "fallback": "로그인에 실패했습니다. 다시 시도하세요.",
       "AUTH_SERVICE_UNAVAILABLE": "로그인 서비스를 일시적으로 사용할 수 없습니다.",
@@ -4743,6 +4758,9 @@
       "INVALID_CODE": "인증 코드가 잘못되었거나 만료되었습니다.",
       "CODE_ATTEMPTS_EXCEEDED": "시도 횟수를 초과했습니다. 새 코드를 요청하세요.",
       "RATE_LIMITED": "시도가 너무 많습니다. 잠시 후 다시 시도하세요.",
+      "CAPTCHA_REQUIRED": "먼저 보안 확인을 완료하세요.",
+      "CAPTCHA_INVALID": "보안 확인에 실패했습니다. 다시 시도하세요.",
+      "CAPTCHA_UNAVAILABLE": "보안 확인 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도하세요.",
       "SSO_LOGIN_REQUIRED": "이 조직은 SSO 로그인이 필요합니다.",
       "ORG_SSO_NOT_FOUND": "해당 기업을 찾을 수 없거나 SSO 로그인이 활성화되어 있지 않습니다",
       "ORG_REALM_AMBIGUOUS": "이 기업 식별자가 두 지역에 모두 존재합니다. 관리자에게 문의하세요.",
@@ -5009,6 +5027,12 @@
       "title": "\"{{name}}\" 플러그인을 비활성화할까요?",
       "body": "이 패널을 닫으면 플러그인이 비활성화되고 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
       "confirm": "비활성화"
+    },
+    "externalLinkConfirm": {
+      "title": "Cindy에서 외부 웹사이트를 열까요?",
+      "message": "Cindy에서 외부 웹사이트를 열까요?",
+      "open": "웹사이트 열기",
+      "cancel": "취소"
     }
   },
   "ghostPanelWindow": {
@@ -6639,7 +6663,16 @@
   "chat": {
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
-      "skippedAnswer": "건너뜀"
+      "skippedAnswer": "건너뜀",
+      "pendingTitle": "답변 대기 중",
+      "restoreAriaLabel": "질문 카드 펼치기",
+      "minimizeAriaLabel": "질문 카드 접기",
+      "back": "뒤로",
+      "skip": "건너뛰기",
+      "next": "다음",
+      "submit": "제출",
+      "customAnswer": "다른 답변 입력…",
+      "answerPlaceholder": "답변을 입력하세요…"
     },
     "planReviewBubble": {
       "title": "계획 검토",
@@ -6697,7 +6730,8 @@
       "outputFile": "출력: {{path}}"
     },
     "planPill": {
-      "step": "{{current}} / {{total}}단계"
+      "step": "{{current}} / {{total}}단계",
+      "dismiss": "계획 닫기"
     },
     "forkOrigin": {
       "label": "원래 세션에서 생성됨"
@@ -7684,6 +7718,15 @@
       "filterLastActivityHeading": "최근 활동",
       "filterGroupByHeading": "그룹",
       "filterSortByHeading": "정렬",
+      "filterTaskSortHeading": "세션 정렬",
+      "filterProjectOrderHeading": "프로젝트 순서",
+      "filterProjectOrder": {
+        "activity": "최근 활동순",
+        "custom": "수동"
+      },
+      "filterProjectOrderTip": {
+        "custom": "마우스로 프로젝트 행을 끌어 순서를 바꿉니다. 안의 세션은 위 정렬을 따릅니다."
+      },
       "filterProjectsHeading": "프로젝트",
       "filterAllProjects": "모든 프로젝트",
       "filterHeading": "필터",
@@ -7697,6 +7740,8 @@
       "taskInfo": {
         "time": "시간",
         "pr": "PR 상태",
+        "worktree": "worktree",
+        "openWorktree": "worktree 폴더 열기",
         "tokens": "토큰",
         "cost": "비용"
       },
@@ -7909,7 +7954,7 @@
         "openInExplorer": "파일 관리자에서 열기",
         "newInDirectory": "이 디렉터리에서 새 세션",
         "copyDeepLink": "딥 링크 복사",
-        "search": "세션 검색"
+        "search": "이 프로젝트에서 세션 검색"
       },
       "deepLink": {
         "copied": "딥 링크가 복사되었습니다",

@@ -1354,7 +1354,7 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
 写一个意识。**流程:先取手册目录 → 按 §0 用提问卡片和用户对齐设计 → 按需用 section
-读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
+读透相关章(动手前至少读完 §2 卡槽总览、"沙箱红线"与"打包与测试"三章) → 在工作目录写源码文件 →
 ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
@@ -1415,6 +1415,17 @@ my-ghost/
 ├── panel.js
 └── settings.html ← 自定义设置区(声明了 settingsHtml 时必须,见 §4.8)
 \`\`\`
+
+想看**真实完整范例**,浏览官方插件源码仓
+\`github.com/makecindy/cindy-official-plugins\`:仓库根下每个**含 ghost.json 的
+一级目录**(cindy-art、cindy-github、cindy-web-search……)都是一个已上架插件的
+全部源码,各槽(卡槽/
+面板/网络/设置页)都有现成写法可对照;\`.tests\`、\`docs\` 等无 ghost.json 的
+目录是仓库自身的基础设施,不是插件。需要理解宿主侧能力实现(某个槽的代发
+细节、校验器行为)时可参考主仓 \`github.com/makecindy/cindy\`(插件基座在
+\`apps/desktop/src/main/cindy-brain/\`),但**API 契约一律以本手册为准**——
+线上 main 分支可能领先或落后用户当前安装的主机版本,照 main 写码可能装进
+旧版就不工作。
 
 ## 2. ghost.json 身份卡
 
@@ -2264,20 +2275,23 @@ const result = await (await fetch('/media-models?type=image')).json();
 //   models:[{
 //     id,
 //     name,
+//     providerId,
 //     modalities:{ input:['text','image'], output:['image'] }
 //   }],
-//   defaultModelId:string|null
+//   defaultModelId:string|null,
+//   defaultProviderId:string|null
 // }
 \`\`\`
 
-\`type\` 只接受 \`image\` / \`video\`。Host 按 Gateway \`mode\` 切大类，并结合插件在
-\`cindy.image/video\` 声明的动作、Gateway \`modalities\`、Guide operation 与当前客户端
+\`type\` 只接受 \`image\` / \`video\`。Host 按模型 \`mode\` 切大类，并结合插件在
+\`cindy.image/video\` 声明的动作、模型 \`modalities\`、Guide operation 与当前客户端
 协议支持度，只返回当前真正可执行的模型。单个模型的 Guide 缺失、损坏或版本过新只隔离
 该模型，不拖垮整个目录。
 
-响应仍只把 Gateway \`architecture\` 已归一化后的 \`modalities.input/output\` 原样交给插件，
+响应只把已归一化的 \`modalities.input/output\` 与来源 \`providerId\` 交给插件，
 不下发 Guide、endpoint、凭证或 Host 内部兼容判定。插件可把用户选择的模型 id 存进自己的
-\`/kv\`，再通过工具结果或插件说明交给当前 Agent；付费请求前 Core 会再次校验。
+\`/kv\`，但必须同时保存 \`providerId\`，并把这对精确选择交给当前 Agent；同一个模型 id
+可由多个 Provider 提供，不能按 id 去重或自行改换来源。付费请求前 Core 会再次校验。
 
 插件与 Agent 不需要新的媒体协议，继续使用现有工具调用链：
 
@@ -3058,15 +3072,21 @@ tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任�
 settingsHeight(此时主机不注入上述响应式规则,超出部分由你的页面内部滚动)。
 意识沉睡时设置区不渲染(显示沉睡提示),唤醒后可用。
 
-**外链(前往控制台)**:设置区/面板里可以放 \`<a href="https://…">\` 链接,但
-只有 **href 与身份卡 \`network.secrets[].url\` 声明逐字一致**的地址会被主机放行
-——点击时主机拦下导航、转系统浏览器打开(沙箱页自身永远不离开自己协议)。
-声明之外的任何外链点了没反应(主机静默拦下),脚本自动跳转也无效(须用户
-真点击且页面持有焦点,同一意识 1s 内至多放行一次)。href 直接从身份卡声明里
-**原样复制**——浏览器会把导航地址归一化(域名转小写、根路径补尾斜杠),声明
-写成非规范形态会导致比对永远失配、链接点了没反应,所以声明本身也用规范形态
-(小写域名、根路径带 \`/\`)。典型用法:输入行下方放一条
-\`<a class="console-link" href="…">前往控制台获取 ↗</a>\`,方便用户一键去申请 key。
+**外链(前往控制台)**:设置区/面板里可以放普通同页
+\`<a href="https://…">\`。主机会拦下导航并交给系统默认浏览器,沙箱页自身永远
+不离开 \`cindy-ghost://\`。合法地址按以下顺序处理:
+
+1. href 与身份卡既有 \`network.secrets[].url\` 或 \`node.secretBindings[].url\`
+   **逐字一致**时直接打开(保持存量插件兼容);href 最好从声明原样复制;
+2. URL 解析后的主机是 \`xd.com\` / \`xd.cn\` 根域或任意层级子域,或精确
+   \`workers.xd.team\`,直接打开;
+3. 其它合法 HTTPS 地址会显示完整规范化 URL,由用户二次确认后才打开。
+
+非 HTTPS、畸形 URL、内嵌用户名/密码的地址一律拒绝。只支持普通同页链接:
+\`target="_blank"\` 与 \`window.open()\` 不支持。页面必须持有焦点,同一意识
+1s 内至多处理一次外链尝试,且同一意识同时最多一个确认框。典型用法:输入行
+下方放一条 \`<a class="console-link" href="…">前往控制台获取 ↗</a>\`,方便用户
+一键去申请 key。
 
 **自定义参数持久化(/kv)**:每段意识有一份主机代管的 JSON 参数(单意识一份,
 互相隔离),设置页 / 面板 / 电子脑同源共用,读写都走 \`fetch('/kv')\`:
@@ -4104,7 +4124,8 @@ const opened = await cindy.iosSimulator.request({
 
 ### 8.1 发布到官方插件仓的额外门禁
 
-要提交到官方插件仓 \`makecindy/cindy-official-plugins\` 的插件,除本手册的打包/装入
+官方插件仓:\`github.com/makecindy/cindy-official-plugins\`(公开,合入即自动上架
+插件市场)。要提交到该仓的插件,除本手册的打包/装入
 校验外还有仓级 CI 硬门禁,过不了整次发布被拦:
 
 - **四语言 locale 缺一不可**:\`locales\` 必须**恰好**包含 \`zh-CN\` / \`en\` / \`ja\` /

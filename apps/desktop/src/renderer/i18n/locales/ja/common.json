@@ -3512,16 +3512,24 @@
         },
         "connection": {
           "label": "接続",
+          "toggle": {
+            "label": "有効",
+            "aria": "この Cindy で Codex Micro を使う"
+          },
           "status": {
             "connecting": "接続中",
             "connected": "接続済み",
             "not-detected": "検出されていません",
+            "present": "接続済み",
+            "disabled": "無効",
             "error": "接続エラー",
             "unavailable": "SDK を利用できません"
           },
           "descriptions": {
             "connecting": "Cindy が Work Louder デバイスサービスを起動しています。",
             "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
+            "disabled": "有効にすると、Cindy がキー入力を待ち受け、ライトでタスクの状態を表示します。",
+            "present": "有効にすると、Cindy がキー入力を待ち受け、ライトでタスクの状態を表示します。",
             "not-detected": "データ通信対応の USB ケーブルで接続してください。ChatGPT がデバイスを使用している場合は終了してください。",
             "error": "Cindy はキーボードと通信できませんでした。自動的に再試行しています。",
             "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
@@ -3802,7 +3810,7 @@
         "updateTo": "v{{version}} に更新",
         "updateAria": "{{name}} を v{{version}} に更新",
         "createWithCindy": "Cindy で作成",
-        "createPrompt": "Cindy プラグインを作成したいです。まず ghost_forge_guide を呼び出してハンドブックの目次を取得し、最初に第 0 章「設計のすり合わせ」を読み、その後 section パラメータで関連する章（少なくともサンドボックスの禁止事項とパッケージ化の章）を読み込んでから着手してください。すぐに実装を始めないでください。質問から始めてください：選択肢付きの質問カードを優先し、1 枚のカードでは 1 つの重要な判断に絞り、あなたのおすすめを明示した上で、私が気づきにくい設計オプション（UI 形態：ドッキングパネル / プラグインページ内のパネル / チャットカード / UI なし、$ 呼び出しコマンド、起動モード、ネットワーク接続の要否、設定ページの要否など）を積極的に提示して選ばせてください。解決する課題、対象ユーザー、操作フロー、必要なツールと接続、権限の境界、受け入れ条件を段階的に確認してください。設計を確認した後、仕様に沿って実装と検証を行い、最後に ghost_forge_pack を呼び出してプラグインをパッケージ化し、インストールしてください。",
+        "createPrompt": "Cindy プラグインを作成したいです。まず ghost_forge_guide を呼び出してハンドブックの目次を取得し、最初に第 0 章「設計のすり合わせ」を読み、その後 section パラメータで関連する章（少なくともスロット一覧を含む第 2 章、サンドボックスの禁止事項、パッケージ化の 3 章）を読み込んでから着手してください。すぐに実装を始めないでください。質問から始めてください：選択肢付きの質問カードを優先し、1 枚のカードでは 1 つの重要な判断に絞り、あなたのおすすめを明示した上で、私が気づきにくい設計オプション（UI 形態：ドッキングパネル / プラグインページ内のパネル / チャットカード / UI なし、$ 呼び出しコマンド、起動モード、バックグラウンド能力：イベント傍受・アプリ内トースト通知・未読バッジ・確認ダイアログ、ネットワーク接続の要否、設定ページの要否、Node プロセス同梱での重い処理の要否、画像・動画などのメディア能力の要否など）を積極的に提示して選ばせてください。解決する課題、対象ユーザー、操作フロー、必要なツールと接続、権限の境界、受け入れ条件を段階的に確認してください。設計を確認した後、仕様に沿って実装と検証を行い、最後に ghost_forge_pack を呼び出してプラグインをパッケージ化し、インストールしてください。",
         "filterAll": "すべて",
         "filtersAria": "提供元でプラグインを絞り込む",
         "origin": {
@@ -4733,6 +4741,13 @@
       "cn": "CN",
       "dev": "Dev"
     },
+    "captcha": {
+      "title": "セキュリティチェック",
+      "loading": "セキュリティチェックを読み込んでいます…",
+      "failed": "セキュリティチェックを読み込めませんでした。",
+      "retry": "再試行",
+      "cancel": "キャンセル"
+    },
     "errors": {
       "fallback": "ログインに失敗しました。再試行してください。",
       "AUTH_SERVICE_UNAVAILABLE": "ログインサービスは一時的に利用できません。",
@@ -4743,6 +4758,9 @@
       "INVALID_CODE": "認証コードが間違っているか期限切れです。",
       "CODE_ATTEMPTS_EXCEEDED": "試行回数を超えました。新しいコードを取得してください。",
       "RATE_LIMITED": "試行が多すぎます。少し待ってから再試行してください。",
+      "CAPTCHA_REQUIRED": "先にセキュリティチェックを完了してください。",
+      "CAPTCHA_INVALID": "セキュリティチェックに失敗しました。もう一度お試しください。",
+      "CAPTCHA_UNAVAILABLE": "セキュリティチェックは一時的に利用できません。しばらくしてから再試行してください。",
       "SSO_LOGIN_REQUIRED": "この組織は SSO ログインが必要です。",
       "ORG_SSO_NOT_FOUND": "該当する企業が見つからないか、SSO サインインが有効になっていません",
       "ORG_REALM_AMBIGUOUS": "この企業識別子は両方の地域に存在します。管理者にお問い合わせください。",
@@ -5009,6 +5027,12 @@
       "title": "「{{name}}」を無効にしますか？",
       "body": "このパネルを閉じるとプラグインが無効になり、機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
       "confirm": "無効にする"
+    },
+    "externalLinkConfirm": {
+      "title": "Cindy で外部ウェブサイトを開きますか？",
+      "message": "Cindy で外部ウェブサイトを開きますか？",
+      "open": "ウェブサイトを開く",
+      "cancel": "キャンセル"
     }
   },
   "ghostPanelWindow": {
@@ -6639,7 +6663,16 @@
   "chat": {
     "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
-      "skippedAnswer": "スキップ済み"
+      "skippedAnswer": "スキップ済み",
+      "pendingTitle": "回答待ち",
+      "restoreAriaLabel": "質問カードを展開",
+      "minimizeAriaLabel": "質問カードを折りたたむ",
+      "back": "戻る",
+      "skip": "スキップ",
+      "next": "次へ",
+      "submit": "送信",
+      "customAnswer": "別の回答を入力…",
+      "answerPlaceholder": "回答を入力…"
     },
     "planReviewBubble": {
       "title": "計画レビュー",
@@ -6697,7 +6730,8 @@
       "outputFile": "出力: {{path}}"
     },
     "planPill": {
-      "step": "ステップ {{current}} / {{total}}"
+      "step": "ステップ {{current}} / {{total}}",
+      "dismiss": "計画を閉じる"
     },
     "forkOrigin": {
       "label": "元のセッションから作成"
@@ -7684,6 +7718,15 @@
       "filterLastActivityHeading": "最終アクティビティ",
       "filterGroupByHeading": "グループ",
       "filterSortByHeading": "並び替え",
+      "filterTaskSortHeading": "セッション順",
+      "filterProjectOrderHeading": "プロジェクト順",
+      "filterProjectOrder": {
+        "activity": "最近のアクティビティ順",
+        "custom": "手動"
+      },
+      "filterProjectOrderTip": {
+        "custom": "マウスでプロジェクト行をドラッグして並び替え。中のセッションは上の並び替えに従う"
+      },
       "filterProjectsHeading": "プロジェクト",
       "filterAllProjects": "すべてのプロジェクト",
       "filterHeading": "フィルター",
@@ -7697,6 +7740,8 @@
       "taskInfo": {
         "time": "時間",
         "pr": "PR ステータス",
+        "worktree": "worktree",
+        "openWorktree": "worktree フォルダーを開く",
         "tokens": "トークン",
         "cost": "コスト"
       },
@@ -7909,7 +7954,7 @@
         "openInExplorer": "ファイルマネージャーで開く",
         "newInDirectory": "このディレクトリで新規セッション",
         "copyDeepLink": "ディープリンクをコピー",
-        "search": "セッションを検索"
+        "search": "このプロジェクト内のセッションを検索"
       },
       "deepLink": {
         "copied": "ディープリンクをコピーしました",

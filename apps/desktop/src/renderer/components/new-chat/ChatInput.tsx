@@ -128,6 +128,7 @@ import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteS
 
 import {
   confirmAgentSwitchRisk,
+  isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
@@ -309,6 +310,11 @@ import {
   setProviderModelFast,
 } from '@/state/providerModelMemory';
 import { useModelPickerLayout } from '@/state/modelPickerLayout';
+import {
+  setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
+  useSessionFavoriteAnchor,
+  type SessionFavoriteAnchor,
+} from '@/state/favoriteAnchorMemory';
 import {
   getDraft,
   patchVendorPrefs,
@@ -1668,29 +1674,33 @@ export function ChatInput({
   /**
    * 会话内经统一面板选中的**收藏锚点**(model-selector-unified §1.5,2026-08-17 review 第三轮 G4)。
    *
-   * ★ 刻意只是**渲染进程内存态**:重启 / 刷新 / 换个窗口即忘。它是「面板上哪一行该打勾」的
-   * UI 选中提示,**不是用户数据** —— 本轮非目标明确写了不动 sessions 表 schema、不回填存量,
-   * 所以它既不落库,也不进 device-link payload。忘掉的代价只是重开面板时选中态落回模型行,
-   * 与「从没选过收藏」等价,不会让任何配置出错。
+   * 它曾经刻意只是**渲染进程内存态**(重启 / 刷新 / 换会话即忘),理由是「只是 UI 选中提示,
+   * 忘掉等价于从没选过收藏」。Chris 2026-08-19 实测推翻了这条取舍:收藏区置顶、模型行在下面,
+   * 锚点一忘,面板就回落到模型行打勾并把列表滚到那一行 —— 用户看到的是「我明明选了收藏第 3
+   * 个,打开选单默认焦点永远在下面不在收藏」。所以改成按 sessionId 持久化到
+   * `favoriteAnchorMemory`(renderer localStorage,按 owner 分区、LRU 100 条),换会话 / 重启后
+   * 仍勾在那一条上。**仍不是用户数据**:不落库、不进 device-link payload,丢了只回落模型行。
    *
-   * 草稿的同名状态在 NewMakerDraftRoute(经 `selectedFavoriteUid` prop 传进来),两者不共用:
-   * 草稿的锚点跟着草稿走,会话的锚点跟着会话走。
+   * 读走 `useSessionFavoriteAnchor`(useSyncExternalStore)而不是本地 state:锚点的真相在 store,
+   * 再挂一份组件态就要为「换会话 / 跨窗口写入 / 换账号分区」各补一条同步,那正是内存态时代
+   * 的三个 effect。写走 `setSessionFavoriteAnchorMemory`,同步落盘。
+   *
+   * 草稿的同名锚点在 NewMakerDraftRoute(经 `selectedFavoriteUid` prop 传进来),两者不共用:
+   * 草稿的锚点按 vendor 分槽、跟着草稿走,会话的锚点按 sessionId 分槽、跟着会话走。
    */
-  const [sessionFavoriteAnchor, setSessionFavoriteAnchor] = useState<{
-    uid: string;
-    /** 选中时会话落下的 wire model id(≠ 收藏条目里的归一化行 id,见草稿侧同名快照的说明)。 */
-    wireModelId: string;
-    engine: 'cc' | 'codex' | 'pi';
-    /** 选中时的显式来源 —— 来源也是锚点身份的一部分:同 wire id 同引擎、仅来源不同是两份
-     *  配置。别的窗口 / 外部 patch 把会话来源从 A 切到 B 后,缺这一维会让面板继续在 A 的
-     *  收藏上打勾,编辑/删除它还会误回落到 A 的默认(2026-08-17 review)。 */
-    providerId: string;
-  } | null>(null);
-  // 换会话 = 换一份「当前选了什么」:上一条会话的锚点绝不能跟过去(新会话恰好同模型同引擎时
-  // 会在一条不相干的收藏上打勾)。
-  useEffect(() => {
-    setSessionFavoriteAnchor(null);
-  }, [sessionId]);
+  const sessionFavoriteAnchor = useSessionFavoriteAnchor(sessionId ?? null);
+  const setSessionFavoriteAnchor = useCallback(
+    (next: SessionFavoriteAnchor | null): void => {
+      // ★ 绑**发起这次选择时的** sessionId(闭包捕获的那一份),不是 currentSessionIdRef。
+      // 跨引擎选中要等一整条切换事务,收尾时用户可能已经切走会话:读 ref 会把这条锚点记到
+      // **新**会话头上(那条会话根本没选过这份收藏,面板会凭空打勾)。锚点描述的是「发起
+      // 选择的那条会话选了哪一条收藏」,写回它永远正确;它是否**过期**由显示端的派生校验
+      // (effectiveSelectedFavoriteUid 比 wire id / 来源 / 引擎)兜住,不需要靠写入时机去防。
+      if (!sessionId) return;
+      setSessionFavoriteAnchorMemory(sessionId, next);
+    },
+    [sessionId],
+  );
 
   // 乐观切换解除:props(被控端 echo 回流的 mirror)追上目标三元组即交回 props;否则 5s 兜底解除
   // (被控端把 effort 降级等导致永不相等时,避免 selector 永久置灰)。
@@ -6044,10 +6054,30 @@ export function ChatInput({
     ) => void | boolean | Promise<void | boolean>;
   }>({ byProvider: () => {}, byModel: () => {} });
   const confirmAgentBrowseSwitch = useCallback(
-    () =>
+    (targetAgent: 'claude-code' | 'codex' | 'pi' | null) =>
       confirmAgentSwitchRisk({
-        // 意图存在 = 用户进入目标浏览态时已经确认过；改选与撤销均不重复弹。
-        hasSwitchIntent: !!sessionId && !!makerChatStore.getAgentSwitchIntent(sessionId),
+        // 两条「不必再问」的出口(任一成立即放行):
+        //
+        // 1. **同目标意图已存在** = 用户进入这个目标的浏览态时已经确认过;后续在同一目标里
+        //    改选模型 / 来源 / 深度 / Fast 都不重复弹。
+        //    判据必须带上目标(Chris 2026-08-19 实测):此前只判「有没有意图」,会话上挂着
+        //    **任何**残留意图之后确认框就永久静默 —— 先切 Codex(意图挂上)再去选 Pi 的
+        //    模型,一声不吭就改道了另一个引擎,而那是一次全新的上下文重建风险。
+        //
+        // 2. **目标就是会话真实引擎** = 用户在撤销、要回家。这一路在 main 侧是 same-engine
+        //    no-op(清掉 pending 意图 + 按普通 SET_MODEL 应用),不重建上下文、零风险,弹
+        //    「切换会重建上下文」纯属吓人。真源必须用 `runtimeAgentKind`(session / runtime
+        //    元数据确认的**事实**),**绝不能**用 vendorKey / composerEngineMarkVendor —— 那两个
+        //    在意图期会跟着意图翻到目标引擎,于是「回原引擎」反而被判成跨引擎、而「继续切到
+        //    意图目标」被判成同引擎,两边都反了。身份未加载(null)时不走这条出口,回落到
+        //    出口 1 或照常弹框。
+        //
+        // 目标解析不出来(理论上不会,防御历史 vendor 值)时按「没确认过」处理,宁可多问一次。
+        hasSwitchIntent:
+          !!sessionId &&
+          !!targetAgent &&
+          (makerChatStore.getAgentSwitchIntent(sessionId)?.target === targetAgent ||
+            (runtimeAgentKind != null && runtimeAgentKind === targetAgent)),
         confirm: confirmDialog,
         copy: {
           title: t('newChat.chatInput.agentSwitch.confirmation.title'),
@@ -6057,7 +6087,7 @@ export function ChatInput({
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
       }),
-    [sessionId, confirmDialog, t],
+    [sessionId, runtimeAgentKind, confirmDialog, t],
   );
   const performAgentSwitch = useCallback(
     async (
@@ -6070,11 +6100,15 @@ export function ChatInput({
         fastMode?: boolean;
       },
     ): Promise<boolean> => {
-      // ★ 返回值 = **这次切换到底登记成功了没有**(2026-08-17 review)。此前本函数只返回
-      // void,调用方(统一面板的跨引擎链路)拿不到结果,只能在「确认框过了」这一刻就返回
+      // ★ 返回值 = **本端请求的完整配置真的落到会话上了没有**(2026-08-17 review 确立
+      // 「登记成功才 true」;2026-08-19 review P2 再收紧一档)。此前本函数只返回 void,
+      // 调用方(统一面板的跨引擎链路)拿不到结果,只能在「确认框过了」这一刻就返回
       // true —— 面板据此做的清理动作(恢复推荐清 override / 删收藏)会在事务其实失败或
       // 被拒时照样执行,把用户原来的配置抹掉。凡是「没把这次选择落到会话上」的出口一律
-      // 返 false,只有真正登记 / 应用了才返 true。
+      // 返 false;登记成功但**权威回声显示 effort / Fast 已被别处改动**(见 apply-intent
+      // 分支末尾的 isAgentSwitchEchoConfigConsistent)同样返 false —— 三元组落了不等于
+      // 这份完整配置落了,调用方挂在 true 上的持久化收尾(清 override / 提交・删除收藏
+      // 编辑 / 写收藏锚点)一律不做。只有完整配置原样成为权威意图 / 已应用才返 true。
       if (!sessionId) return false;
       // 发送的引用水合 / 预检也可能 await。以同步登记的 session 级发送 token 为准，
       // 防止「先点发送、后选引擎」被异步准备反转成先登记切换再 maker:send。
@@ -6159,11 +6193,33 @@ export function ChatInput({
         // 丢弃即可——被控端每次意图变更都会广播,权威值随 push 收敛。
         // 注意两类守卫作用域不同(见 resolveAgentSwitchAckAction):同引擎 no-op 的清除
         // 回流本就由本次调用引起,不能拿修订号变化把自己判成 stale。
+        //
+        // deferred 分支同理:main **先广播 sessions:patched(带 agentSwitchIntent)、后返回
+        // invoke reply**,push 处理必然先于 ack 到达并把修订号推走 —— 单看修订号,每一次正常
+        // 登记都会被自己的回声判成 stale(Chris 2026-08-19 实测「会话内换引擎整条链都不生效,
+        // 但下一条消息还是切了」的主根因)。所以额外交出「此刻的权威值是不是逐字就是本次登记
+        // 的那一份」:相等 = 变化来自本次登记的回声,应用它不会覆盖任何更新的外部选择。
+        // 只比 target / model / providerId —— effort / fastMode 可能被 main 按目标引擎归一化后
+        // 才投影(见 projectPendingAgentSwitchIntent),比它们会把合法回声误判成不匹配。
+        //
+        // providerId 还要再让一步:本端传 `null` 的语义是**「我没指定来源,跟随默认路由」**
+        // (flat 退化行 / 意图期改选模型的分支),而 main 完全可以在登记时把它解析成一个
+        // 具体来源再投影回来。此时严格相等会把每一次 null 调用都判成「被外部超车」,等于
+        // 在那条路径上原样退回本次要修的 bug。所以:传了具体来源就必须逐字相等;传 null 时
+        // 只认 target + model —— main 解析出什么来源,都是我这一份意图。
+        // 「用户又点了一次」仍由写序号守卫独立覆盖,不靠这一维。
+        const registeredIntent = makerChatStore.getAgentSwitchIntent(sourceSessionId);
+        const registeredIntentMatchesCurrent =
+          registeredIntent !== null &&
+          registeredIntent.target === targetAgentKind &&
+          registeredIntent.model === newModelId &&
+          (providerId === null || registeredIntent.providerId === providerId);
         const ackAction = resolveAgentSwitchAckAction({
           deferred: result.deferred === true,
           switched: result.switched,
           sameEngineRevision: result.sameEngineRevision,
           sameEngineSuperseded: result.sameEngineSuperseded,
+          registeredIntentMatchesCurrent,
           freshness: {
             cancelled: false,
             writeSeqAtStart: writeSeq,
@@ -6179,20 +6235,48 @@ export function ChatInput({
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
-          makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
-            model: newModelId,
-            providerId,
-            effort: newEffort,
-            fastMode: targetFast,
-          });
+          //
+          // ★ 回声已匹配时**一个字段都不重写**(2026-08-19 review 两轮 P1 的合并收口):
+          // 走到值匹配出口 = `sessions:patched` 权威回声已先于 ack 落进 store,此刻 store 里
+          // 就是 main 的 pending intent 快照 —— 再用本端的旧值 note 一遍只可能把它改坏:
+          //   · providerId:本端传 null(跟随默认路由)而 main 解析成了具体来源 → null 盖掉
+          //     权威来源,意图期改选按错误路由走;
+          //   · effort / fastMode:另一控制端在本次往返期间只改了同一 intent 的档位 / Fast
+          //     (target/model/provider 不变,匹配判定刻意不比这两维)→ 本端旧
+          //     newEffort/targetFast 盖掉外部权威值,选择器与下一条消息实际采用的配置分叉;
+          //     本端自己的登记同理 —— main 可能按目标引擎归一化 effort 后才投影。
+          // 且回声已经到过,不会再有第二次权威回流来纠正。回声未到(修订号未变的常规路径)
+          // 才写本端解析值,稍后到达的权威回声会自然覆盖收敛。
+          if (!registeredIntentMatchesCurrent) {
+            makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
+              model: newModelId,
+              providerId,
+              effort: newEffort,
+              fastMode: targetFast,
+            });
+          }
           // 跨引擎点选也是用户显式选模:记到目标 vendor,下次用该引擎新建跟随这次选择。
           // 真切换可能推迟到下一条消息,但选择已经做出。
+          //
+          // ★ 偏好同步与上面的 note-skip 同族(2026-08-19 review P2):回声已匹配时,写进
+          // newMakerDraft / providerModelMemory / 远端 apply-new-maker-draft-pref 的也必须是
+          // **权威快照里的值** —— 拿本端旧 newEffort / targetFast / providerId 去同步,另一
+          // 控制端只改 effort / Fast(或 main 归一化 / 解析来源)的场景里,下一次新建任务会
+          // 采用过期偏好,还会把权威值从偏好面盖掉。权威快照缺某字段(如不可调模型没有
+          // effort)时该维**不写**,而不是回落本端旧值 —— 写一个 main 都没有的档同样是分叉。
+          const authoritative = registeredIntentMatchesCurrent ? registeredIntent : null;
+          const syncedEffort = authoritative ? authoritative.effort : newEffort;
+          const syncedFast = authoritative ? authoritative.fastMode : targetFast;
+          const syncedProviderId = authoritative ? authoritative.providerId : providerId;
           syncSessionDraftModelPrefs(
             newModelId,
-            { effort: newEffort, fast: targetFast },
             {
-              activeProviderId: providerId,
-              memoryProviderId: providerId,
+              ...(syncedEffort ? { effort: syncedEffort } : {}),
+              ...(syncedFast !== undefined ? { fast: syncedFast } : {}),
+            },
+            {
+              activeProviderId: syncedProviderId,
+              memoryProviderId: syncedProviderId,
               remoteDeviceId: deviceLinkDeviceId ?? undefined,
               agentKind: targetAgentKind,
               markModelChoice: true,
@@ -6212,8 +6296,20 @@ export function ChatInput({
               { duration: 4000 },
             );
           }
-          // 意图已登记 = 这次选择真的落到会话上了(真切换在下一条消息执行)。
-          return true;
+          // ★ 完整配置权威性(2026-08-19 review P2 的最后一环):三元组回声匹配放行的是
+          // 「这份变化来自本次登记」,但 effort / Fast 刻意不进匹配判据 —— 于是另一控制端
+          // 在往返期间只改同一意图的档位 / Fast 时,走到这里的仍是「登记成功」。上面的
+          // note-skip 与权威快照同步已保证**展示与偏好**不被本端旧值污染;这里再保证
+          // **返回值**不撒谎:权威 effort / Fast 与本端这次请求不一致 = 本端的完整配置
+          // 并没有成为会话将要采用的配置,按「未完整应用」返 false,调用方挂在成功上的
+          // 持久化收尾(统一面板 onApplied 的清 override / 提交・删除收藏编辑,以及
+          // onCrossEngineSelect 的收藏锚点写入)一律不做 —— 旧锚点由派生校验自然失效,
+          // 不会出现「面板勾着一条配置早已不同的收藏」。
+          return isAgentSwitchEchoConfigConsistent({
+            authoritative,
+            requestedEffort: newEffort,
+            requestedFastMode: targetFast,
+          });
         }
         if (ackAction === 'same-engine-reselect') {
           // 同引擎 no-op = 用户选回当前引擎:撤销展示意图(幂等,被控端可能已清并回流),
@@ -6339,7 +6435,8 @@ export function ChatInput({
         favoriteUid?: string | null;
       }): Promise<boolean> => {
         // 取消 = 什么都不改;返回 false 让选择器留在原地(用户还能挑别的行)。
-        if (!(await confirmAgentBrowseSwitch())) return false;
+        // 目标显式传给确认门:同一目标不重复弹,换目标要重新确认(见 confirmAgentBrowseSwitch)。
+        if (!(await confirmAgentBrowseSwitch(targetAgent))) return false;
         // ★ 必须 await 并**透传事务的真实结果**(2026-08-17 review)。此前这里 fire-and-forget
         // 之后立即 return true —— 那个 true 只表示「确认框过了」,不表示切换登记成功。
         // 面板侧把「成功才做」的清理(恢复推荐清 override / 删除选中收藏)挂在这个提前
@@ -6365,6 +6462,10 @@ export function ChatInput({
         // 收藏锚点只在事务**真成功**后才记(G4):确认框被取消 / 登记失败时这次选择根本没
         // 发生,记下来会让面板在一条没被采用的收藏上打勾。选普通模型行 → favoriteUid 为
         // null → 顺带把上一条锚点清掉。
+        // 「真成功」自 2026-08-19 review P2 起含**完整配置一致**:登记成功但权威回声里的
+        // effort / Fast 已被另一控制端改走时 applied 为 false —— 锚点不写(那份收藏副本
+        // 不再是会话将要采用的配置),旧锚点因 model / 引擎已变而被派生校验自然判失效,
+        // 面板不会勾住任何一条配置对不上的收藏。
         if (applied) {
           setSessionFavoriteAnchor(
             favoriteUid
@@ -6388,6 +6489,9 @@ export function ChatInput({
     remoteHostId,
     sessionAgentSwitchSupported,
     confirmAgentBrowseSwitch,
+    // 锚点写入绑的是**这一份闭包里的** sessionId(见 setSessionFavoriteAnchor):它随会话
+    // 变化换新引用,必须进依赖,否则事务收尾会用上一条会话的 setter 写错分槽。
+    setSessionFavoriteAnchor,
   ]);
 
   // composer pill 尾部引擎小标的取值(model-selector-unified §1.1,Chris 2026-08-12 裁决:
@@ -6538,8 +6642,10 @@ export function ChatInput({
         makerChatStore.getAgentSwitchIntent(sessionId)
       ) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitch(intent.target, newModelId, null);
-        return;
+        // ★ await 并**透传真实结果**(Chris 2026-08-19):此前是 fire-and-forget + `return`,
+        // 返回 undefined 被上游读成「已应用」——意图期内改选模型时,登记失败 / 被超车的
+        // 那一路会被当成成功,后续持久化照跑,而会话上的意图其实一个字没变。
+        return await performAgentSwitch(intent.target, newModelId, null);
       }
       let rollbackModelAfterPersistFailure: { model: string; seq: number } | null = null;
       const committedActiveEffort =
@@ -7051,8 +7157,13 @@ export function ChatInput({
         makerChatStore.getAgentSwitchIntent(sessionId)
       ) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
-        void performAgentSwitch(intent.target, reconciledModelId ?? intent.model, newProviderId);
-        return;
+        // 同 performModelChange:await 并透传真实结果,别把「意图重登记失败」当成已应用
+        // (Chris 2026-08-19)。
+        return await performAgentSwitch(
+          intent.target,
+          reconciledModelId ?? intent.model,
+          newProviderId,
+        );
       }
       let rollbackProviderAfterPersistFailure: {
         model: string;
@@ -8118,7 +8229,10 @@ export function ChatInput({
                       sessionAgentSwitchSupported
                         ? {
                             currentVendor: vendorKey,
-                            confirmBrowseSwitch: confirmAgentBrowseSwitch,
+                            // 两步分段的目标是 vendor 口径,确认门按 AgentKind 判(与意图
+                            // 记录同形),在边界上转一次 —— 见 confirmAgentBrowseSwitch。
+                            confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi') =>
+                              confirmAgentBrowseSwitch(vendorKeyToAgentKind(targetVendor)),
                             onSwitch: performAgentSwitch,
                           }
                         : undefined

@@ -3485,16 +3485,24 @@
         },
         "connection": {
           "label": "连接",
+          "toggle": {
+            "label": "启用",
+            "aria": "让这个 Cindy 占用 Codex Micro"
+          },
           "status": {
             "connecting": "正在连接",
             "connected": "已连接",
             "not-detected": "未检测到",
+            "present": "已连接",
+            "disabled": "未启用",
             "error": "连接异常",
             "unavailable": "SDK 不可用"
           },
           "descriptions": {
             "connecting": "Cindy 正在启动 Work Louder 设备服务。",
             "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+            "disabled": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
+            "present": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
             "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
             "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
             "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
@@ -3775,7 +3783,7 @@
         "updateTo": "更新到 v{{version}}",
         "updateAria": "将 {{name}} 更新到 v{{version}}",
         "createWithCindy": "使用 Cindy 创建",
-        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，先读第 0 章「设计对齐」，再用 section 参数读透相关章节（动手前至少读完沙箱红线与打包流程两章），不要直接开始实现。先从提问开始：优先用带选项的提问卡片，每张卡片聚焦一个关键决策并标注你的推荐项，把我可能不知道的设计选项主动摆出来让我选——比如界面形态（停靠面板、插件页内面板、对话卡片还是无界面）、$ 点名词、启动模式、是否联网、是否需要设置页；并逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
+        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，先读第 0 章「设计对齐」，再用 section 参数读透相关章节（动手前至少读完第 2 章卡槽总览、沙箱红线与打包流程三章），不要直接开始实现。先从提问开始：优先用带选项的提问卡片，每张卡片聚焦一个关键决策并标注你的推荐项，把我可能不知道的设计选项主动摆出来让我选——比如界面形态（停靠面板、插件页内面板、对话卡片还是无界面）、$ 点名词、启动模式、后台能力（旁听事件、应用内轻提示、未读角标、确认弹窗）、是否联网、是否需要设置页、要不要随包 Node 进程跑重活、要不要图片视频等媒体能力；并逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
         "filterAll": "全部",
         "filtersAria": "按来源筛选插件",
         "origin": {
@@ -4706,6 +4714,13 @@
       "cn": "CN",
       "dev": "Dev"
     },
+    "captcha": {
+      "title": "安全验证",
+      "loading": "正在加载安全验证…",
+      "failed": "安全验证加载失败",
+      "retry": "重试",
+      "cancel": "取消"
+    },
     "errors": {
       "fallback": "登录失败，请稍后重试",
       "AUTH_SERVICE_UNAVAILABLE": "登录服务暂不可用",
@@ -4716,6 +4731,9 @@
       "INVALID_CODE": "验证码错误或已过期",
       "CODE_ATTEMPTS_EXCEEDED": "验证码错误次数过多，请重新获取",
       "RATE_LIMITED": "操作过于频繁，请稍后再试",
+      "CAPTCHA_REQUIRED": "请先完成安全验证",
+      "CAPTCHA_INVALID": "安全验证未通过，请重试",
+      "CAPTCHA_UNAVAILABLE": "安全验证服务暂不可用，请稍后再试",
       "SSO_LOGIN_REQUIRED": "该邮箱所属企业要求通过 SSO 登录",
       "ORG_SSO_NOT_FOUND": "未找到该企业，或该企业未启用 SSO 登录",
       "ORG_REALM_AMBIGUOUS": "该企业标识同时存在于两个区域，请联系企业管理员处理",
@@ -4982,6 +5000,12 @@
       "title": "停用「{{name}}」？",
       "body": "关闭这个面板会停用插件并暂停其能力。你可以随时在侧边栏「插件」中重新启用。",
       "confirm": "停用"
+    },
+    "externalLinkConfirm": {
+      "title": "是否要 Cindy 打开外部网站",
+      "message": "是否要 Cindy 打开外部网站",
+      "open": "打开网站",
+      "cancel": "取消"
     }
   },
   "ghostPanelWindow": {
@@ -6612,7 +6636,16 @@
   "chat": {
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
-      "skippedAnswer": "已跳过"
+      "skippedAnswer": "已跳过",
+      "pendingTitle": "等待回答",
+      "restoreAriaLabel": "展开问题卡片",
+      "minimizeAriaLabel": "收起问题卡片",
+      "back": "返回",
+      "skip": "跳过",
+      "next": "下一题",
+      "submit": "提交",
+      "customAnswer": "输入其他回答…",
+      "answerPlaceholder": "请输入回答…"
     },
     "planReviewBubble": {
       "title": "计划审阅",
@@ -6670,7 +6703,8 @@
       "outputFile": "输出：{{path}}"
     },
     "planPill": {
-      "step": "第 {{current}} / {{total}} 步"
+      "step": "第 {{current}} / {{total}} 步",
+      "dismiss": "关闭计划"
     },
     "forkOrigin": {
       "label": "基于原任务创建"
@@ -7657,6 +7691,15 @@
       "filterLastActivityHeading": "最近活跃",
       "filterGroupByHeading": "分组",
       "filterSortByHeading": "排序",
+      "filterTaskSortHeading": "任务排序",
+      "filterProjectOrderHeading": "项目顺序",
+      "filterProjectOrder": {
+        "activity": "按最近活动",
+        "custom": "手动"
+      },
+      "filterProjectOrderTip": {
+        "custom": "用鼠标拖动项目行调整顺序，组内任务仍按上面的排序"
+      },
       "filterProjectsHeading": "项目",
       "filterAllProjects": "所有项目",
       "filterHeading": "筛选",
@@ -7670,6 +7713,8 @@
       "taskInfo": {
         "time": "时间",
         "pr": "PR 状态",
+        "worktree": "worktree",
+        "openWorktree": "打开 worktree 文件夹",
         "tokens": "Token",
         "cost": "费用"
       },
@@ -7882,7 +7927,7 @@
         "syncCodexAlreadyLinked": "此项目的 Codex 任务已经链接过了",
         "syncCodexNone": "没有找到此项目的 Codex 任务",
         "syncCodexFailed": "Codex 同步失败：{{error}}",
-        "search": "搜索任务"
+        "search": "在项目内搜索任务"
       },
       "deepLink": {
         "copied": "已复制深度链接",
