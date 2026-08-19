@@ -4463,6 +4463,16 @@ export function NewMakerDraftRoute() {
             nowIso: new Date().toISOString(),
             logTag: 'draft goal',
           });
+          // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。远端 Goal
+          // 与远端普通发送同口径:锚点是**控制端的 UI 态**,按对端会话 id 记在本机 renderer
+          // localStorage,不进任何 payload;model / providerId 用 createArgs 里**实际提交**的值
+          // (经被控端目录校准,与 draftInitialModel 可能不同)。
+          carryDraftFavoriteAnchorToSession(
+            remoteSessionId,
+            persistedAgentKind,
+            createArgs.model,
+            createArgs.providerId ?? null,
+          );
           // setGoal 不在这里发:重 topic session:<id> 订阅要等 CCAgentSessionView
           // mount 才建立,在 /cc-agent/new 就起 goal 首轮会让 maker:event/status 推送
           // 掉在订阅建立前的窗口里(Codex review #548)。与首条消息同款交接 ——

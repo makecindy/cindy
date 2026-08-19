@@ -1774,19 +1774,25 @@ describe('New Maker 草稿的 wire model id 口径', () => {
     );
   });
 
-  it('五条建会话成功路径都把草稿锚点延续到会话槽,且用各分支实际提交的 model/providerId', () => {
+  it('六条建会话成功路径都把草稿锚点延续到会话槽,且用各分支实际提交的 model/providerId', () => {
     // carryDraftFavoriteAnchorToSession(Chris 2026-08-19):草稿选了收藏、发送建会话后,
-    // 会话面板必须还勾在那一条上。调用点 = SSH / device-link 远程 / 普通发送 / 新建目标 /
-    // goal 分支,共 5 处;少一处 = 那条路建出来的会话锚点丢失。
+    // 会话面板必须还勾在那一条上。调用点 = SSH / device-link 远程发送 / 本地发送 /
+    // 新建目标(本地) / Goal(本地) / **Goal(device-link 远端)**,共 6 处;
+    // 少一处 = 那条路建出来的会话锚点丢失(远端 Goal 正是 review 抓到的遗漏)。
     const carryCalls =
       newMakerDraftRouteSource.match(/carryDraftFavoriteAnchorToSession\(/g) ?? [];
-    // 恰好 5 处调用(定义是 `= useCallback(`,不带同名左括号,不计入)。
-    expect(carryCalls.length).toBe(5);
+    // 恰好 6 处调用(定义是 `= useCallback(`,不带同名左括号,不计入)。
+    expect(carryCalls.length).toBe(6);
     // SSH 分支用 ssh 侧解析的提交值(≠ draftInitialModel)。
     expect(newMakerDraftRouteSource).toContain(
       'carryDraftFavoriteAnchorToSession(newSession.id, draftVendor, sshModel, sshProviderId)',
     );
-    // device-link 远程分支用 createArgs 里实际提交的 model(被控端目录校准后的值)。
-    expect(newMakerDraftRouteSource).toContain('createArgs.model,');
+    // 两条 device-link 远程分支(发送 / Goal)都用 createArgs 里实际提交的 model
+    // (被控端目录校准后的值),各自出现在 remoteSessionId 之后。
+    expect(
+      (newMakerDraftRouteSource.match(
+        /carryDraftFavoriteAnchorToSession\(\s*remoteSessionId,\s*persistedAgentKind,\s*createArgs\.model,/g,
+      ) ?? []).length,
+    ).toBe(2);
   });
 });
