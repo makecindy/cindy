@@ -354,6 +354,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     if (message.kind === 'presence') {
       this.clearConnectWatchdog();
+      this.armStableConnection();
       this.presenceHandler?.(
         message.present,
         message.present && message.deviceType
@@ -422,7 +423,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (!this.deviceEnabled) {
       this.updateConnectionReason(null);
       this.updateConnectionStatus('disabled');
-      if (this.wantsPresence) this.discoverPresence();
+      if (this.wantsPresence) this.scheduleRestart();
       return;
     }
     if (recycled) {
@@ -444,16 +445,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private scheduleRestart(): void {
-    if (
-      this.restartTimer ||
-      !this.deviceEnabled ||
-      (!this.latestFrame && !this.wantsHidInput) ||
-      (this.latestFrame &&
-        isWorkLouderCodexLightingFrameOff(this.latestFrame) &&
-        !this.wantsHidInput)
-    ) {
-      return;
-    }
+    if (this.restartTimer || !this.shouldRestartHost()) return;
     this.consecutiveCrashes += 1;
     if (this.consecutiveCrashes > 5) {
       this.deps.log.error('Codex Micro lighting host repeatedly crashed; disabled until restart');
@@ -462,12 +454,24 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     const delayMs = Math.min(10_000, 500 * 2 ** (this.consecutiveCrashes - 1));
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
-      const frame = this.latestFrame;
-      if (this.disposed) return;
+      if (this.disposed || !this.shouldRestartHost()) return;
+      if (!this.deviceEnabled) {
+        this.discoverPresence();
+        return;
+      }
       if (this.wantsHidInput) this.requestHidListening();
-      if (frame) this.update(frame);
+      if (this.latestFrame) this.update(this.latestFrame);
     }, delayMs);
     this.restartTimer.unref?.();
+  }
+
+  private shouldRestartHost(): boolean {
+    if (this.disposed) return false;
+    if (!this.deviceEnabled) return this.wantsPresence;
+    return (
+      this.wantsHidInput ||
+      Boolean(this.latestFrame && !isWorkLouderCodexLightingFrameOff(this.latestFrame))
+    );
   }
 
   private startConnectWatchdog(child: WorkLouderCodexChildLike): void {

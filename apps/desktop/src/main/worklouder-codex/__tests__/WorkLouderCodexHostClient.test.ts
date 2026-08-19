@@ -207,6 +207,39 @@ describe('WorkLouderCodexHostClient', () => {
     expect(status).not.toHaveBeenCalled();
   });
 
+  it('backs off presence-only host crashes instead of forking in a loop', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const fork = vi.fn(() => child);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setDeviceEnabled(false);
+      client.probe();
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      child.emit('exit', 1);
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+
+      for (let crash = 0; crash < 5; crash += 1) {
+        child.emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      const forksAfterBudget = fork.mock.calls.length;
+      child.emit('exit', 1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fork).toHaveBeenCalledTimes(forksAfterBudget);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('asks the host to turn lighting off before shutdown', async () => {
     const child = new FakeChild();
     const client = new WorkLouderCodexHostClient({
