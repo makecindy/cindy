@@ -705,6 +705,93 @@ describe('SubagentsBody', () => {
     expect(screen.queryByText('Runtime findings')).toBeNull();
   });
 
+  it('keeps a resumed child\'s earlier generations in its conversation', async () => {
+    // A resume mints a fresh `childId` for the task it carries over, and the
+    // detail auto-selects that new child. Filtering the transcript on the new
+    // id alone threw away the generations the Host had just read across — the
+    // original assignment, its reply and its tool cards — leaving the default
+    // view of a resumed run showing only the follow-up.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: { ...detail('unused').capabilities, viewFullTranscript: true },
+      children: [{
+        id: 'run-2-1',
+        identityAliases: ['run-1-1'],
+        role: 'scout',
+        status: 'completed',
+      }],
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', role: 'parent', content: 'the original assignment' }),
+        entry({ id: 'e2', childId: 'run-1-1', content: 'the first generation reply' }),
+        entry({ id: 'e3', childId: 'run-2-1', role: 'parent', content: 'the follow-up' }),
+        entry({ id: 'e4', childId: 'run-2-1', content: 'the resumed reply' }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('the resumed reply')).toBeTruthy();
+    expect(screen.getByText('the original assignment')).toBeTruthy();
+    expect(screen.getByText('the first generation reply')).toBeTruthy();
+    expect(screen.getByText('the follow-up')).toBeTruthy();
+  });
+
+  it('keeps two resumed siblings from picking up each other\'s generations', async () => {
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: { ...detail('unused').capabilities, viewFullTranscript: true },
+      children: [
+        { id: 'run-2-1', identityAliases: ['run-1-1'], role: 'scout', title: 'Scout', status: 'completed' },
+        { id: 'run-2-2', identityAliases: ['run-1-2'], role: 'reviewer', title: 'Reviewer', status: 'completed' },
+      ],
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', content: 'scout first generation' }),
+        entry({ id: 'e2', childId: 'run-1-2', content: 'reviewer first generation' }),
+        entry({ id: 'e3', childId: 'run-2-1', content: 'scout resumed' }),
+        entry({ id: 'e4', childId: 'run-2-2', content: 'reviewer resumed' }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Scout' }));
+    expect(await screen.findByText('scout first generation')).toBeTruthy();
+    expect(screen.getByText('scout resumed')).toBeTruthy();
+    expect(screen.queryByText('reviewer first generation')).toBeNull();
+    expect(screen.queryByText('reviewer resumed')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewer' }));
+    expect(await screen.findByText('reviewer first generation')).toBeTruthy();
+    expect(screen.getByText('reviewer resumed')).toBeTruthy();
+    expect(screen.queryByText('scout first generation')).toBeNull();
+  });
+
   it('drops the waiting notice for a settled child while its siblings keep the run running', async () => {
     // A parallel run stays `running` until the last child settles. Keying the
     // waiting notice off the run status put a spinner under a child that had

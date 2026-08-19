@@ -381,16 +381,40 @@ export function registerSubagentRunsIpc(
     let projectedRun = run;
     if (run && provider === 'pi') {
       const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
-      const status = (await listPiSubagentRuns(piSubagentRunRoot(agentHome, sessionId))).find(
-        (candidate) => candidate.runId === run.id
-          || candidate.taskId === run.logicalAgentId
-          || run.providerRunIds.includes(candidate.runId),
+      const statuses = await listPiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
+      const belongsToRun = (candidate: { runId: string; taskId: string }): boolean => (
+        candidate.runId === run.id
+        || candidate.taskId === run.logicalAgentId
+        || run.providerRunIds.includes(candidate.runId)
       );
+      const status = statuses.find(belongsToRun);
       if (status) {
+        // One logical child, one id per generation: a resume mints
+        // `<newRunId>-<n>` for every task it carries over. What it does *not*
+        // change is the PI session the task is resumed on — `sessionDir` and
+        // `sessionId` are deliberately left pointing at the previous
+        // generation — so the session is the stable identity, and grouping by
+        // it recovers the whole chain. Position cannot: resuming a single child
+        // of a parallel run re-indexes it to 1.
+        const idsBySession = new Map<string, string[]>();
+        for (const candidate of statuses) {
+          if (!belongsToRun(candidate)) continue;
+          for (const task of candidate.tasks) {
+            if (!task.sessionId) continue;
+            const ids = idsBySession.get(task.sessionId) ?? [];
+            if (!ids.includes(task.childId)) ids.push(task.childId);
+            idsBySession.set(task.sessionId, ids);
+          }
+        }
         projectedRun = {
           ...run,
           children: status.tasks.map((task) => ({
             id: task.childId,
+            ...(() => {
+              const aliases = (idsBySession.get(task.sessionId) ?? [])
+                .filter((id) => id !== task.childId);
+              return aliases.length > 0 ? { identityAliases: aliases } : {};
+            })(),
             role: task.agent,
             title: task.title,
             task: task.task,

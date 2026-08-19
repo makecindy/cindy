@@ -152,6 +152,86 @@ describe('Subagent runs broadcast boundary', () => {
     expect(h.persistSubagentTaskUpdate).toHaveBeenCalledTimes(order.length);
   });
 
+  it('groups a resumed child with its earlier generations by PI session', async () => {
+    // A resume mints `<newRunId>-<n>` for every task it carries over, so one
+    // logical child is labelled with a different id per generation and the
+    // panel filtered its own history back out of the aggregated transcript.
+    // The PI session is the one thing resume deliberately keeps — `sessionDir`
+    // and `sessionId` still point at the previous generation — so that is what
+    // the chain is recovered from. Order position cannot be used: resuming a
+    // single child of a parallel run re-indexes it to 1.
+    registerSubagentRunsIpc();
+    const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+    h.getSubagentRunDetail.mockResolvedValue({
+      id: 'run-2',
+      logicalAgentId: 'parent-tool',
+      provider: 'pi',
+      status: 'completed',
+      providerRunIds: [
+        '123e4567-e89b-42d3-a456-426614174080',
+        '123e4567-e89b-42d3-a456-426614174081',
+      ],
+      capabilities: { viewFullTranscript: true },
+    });
+    const generation = (runId: string, childSuffix: string) => ({
+      version: 1, runId, taskId: 'parent-tool', parentSessionId: 'session-1',
+      runnerInstanceId: `runner-${childSuffix}`, state: 'completed',
+      startedAt: 1_000, updatedAt: 2_000,
+      tasks: [
+        { childId: `${runId}-1`, sessionId: 'pi-session-scout', agent: 'scout', status: 'completed' },
+        { childId: `${runId}-2`, sessionId: 'pi-session-reviewer', agent: 'reviewer', status: 'completed' },
+      ],
+    });
+    // Newest first, the order the detail projection already picks from.
+    h.listPiSubagentRuns.mockResolvedValue([
+      generation('123e4567-e89b-42d3-a456-426614174081', 'b'),
+      generation('123e4567-e89b-42d3-a456-426614174080', 'a'),
+    ]);
+
+    const response = await detail({}, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+    }) as { run: { children: Array<{ id: string; identityAliases?: string[] }> } };
+
+    expect(response.run.children.map((child) => ({
+      id: child.id, identityAliases: child.identityAliases,
+    }))).toEqual([
+      {
+        id: '123e4567-e89b-42d3-a456-426614174081-1',
+        identityAliases: ['123e4567-e89b-42d3-a456-426614174080-1'],
+      },
+      {
+        id: '123e4567-e89b-42d3-a456-426614174081-2',
+        identityAliases: ['123e4567-e89b-42d3-a456-426614174080-2'],
+      },
+    ]);
+  });
+
+  it('leaves a child that has only ever had one id without aliases', async () => {
+    registerSubagentRunsIpc();
+    const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+    h.getSubagentRunDetail.mockResolvedValue({
+      id: 'run-1',
+      logicalAgentId: 'parent-tool',
+      provider: 'pi',
+      status: 'completed',
+      providerRunIds: ['123e4567-e89b-42d3-a456-426614174082'],
+      capabilities: { viewFullTranscript: true },
+    });
+    h.listPiSubagentRuns.mockResolvedValue([{
+      version: 1, runId: '123e4567-e89b-42d3-a456-426614174082', taskId: 'parent-tool',
+      parentSessionId: 'session-1', runnerInstanceId: 'runner-1', state: 'completed',
+      startedAt: 1_000, updatedAt: 2_000,
+      tasks: [{ childId: 'only-child', sessionId: 'pi-session-1', agent: 'scout', status: 'completed' }],
+    }]);
+
+    const response = await detail({}, {
+      sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+    }) as { run: { children: Array<{ id: string; identityAliases?: string[] }> } };
+
+    expect(response.run.children).toHaveLength(1);
+    expect(response.run.children[0]!.identityAliases).toBeUndefined();
+  });
+
   /**
    * `resume` only works while the parent task is a loaded PI session — the
    * control handler resolves `maker.getSession(sessionId)` and refuses

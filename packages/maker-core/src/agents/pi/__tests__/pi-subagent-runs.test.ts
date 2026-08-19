@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1122,6 +1122,72 @@ describe('PI durable subagent run store', () => {
      * or an account teardown overlapping a quit, both raise the *same* fence
      * file: per-host naming settled who owns it but not how two owners share it.
      */
+    describe('a fence that cannot be read', () => {
+      it('blocks the resume path instead of reading as no fence', async () => {
+        // Collapsing "absent" and "unreadable" is what let a Windows sharing
+        // conflict — the Host rewriting the file — read as "nothing is fencing
+        // me", after the boundary sweep had already run.
+        const agentHome = await makeRoot();
+        const file = piSubagentLaunchFencePath(agentHome, process.pid);
+        await mkdir(file, { recursive: true });
+        try {
+          // A directory where the file belongs: readFileSync fails, and not
+          // with ENOENT.
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        } finally {
+          await rm(file, { recursive: true, force: true });
+        }
+        // And a genuinely absent one still lets a launch through.
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+      });
+
+      it('blocks on content that exists but does not parse', async () => {
+        const agentHome = await makeRoot();
+        const file = piSubagentLaunchFencePath(agentHome, process.pid);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, '{"version":1,');
+
+        expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+        await rm(file, { force: true });
+      });
+
+      it.skipIf(process.platform === 'win32' || (process.getuid?.() ?? 0) === 0)(
+        'will not sweep away a fence it could not read',
+        async () => {
+          // The launch check now obeys an unreadable fence, so deleting one on a
+          // transient read error would open the window its owner is holding shut.
+          // Unreadable as a *file* on purpose: a directory in its place would
+          // survive the old unconditional `rm` too (no `recursive`), and prove
+          // nothing about the branch this pins.
+          const agentHome = await makeRoot();
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          await mkdir(path.dirname(file), { recursive: true });
+          await writeFile(file, JSON.stringify({ version: 1, hostPid: 4_194_303, createdAt: 1 }));
+          await chmod(file, 0o000);
+
+          await clearStalePiSubagentLaunchFence(agentHome);
+
+          expect(existsSync(file)).toBe(true);
+          await chmod(file, 0o600);
+          await rm(file, { force: true });
+        },
+      );
+
+      it('still sweeps away debris that is readable and malformed', async () => {
+        // The one case that must go: nothing atomic publishes unparseable
+        // content, so it names no owner — and leaving it would now block this
+        // host's durable launches for good.
+        const agentHome = await makeRoot();
+        const file = piSubagentLaunchFencePath(agentHome, process.pid);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, 'not json at all');
+
+        await clearStalePiSubagentLaunchFence(agentHome);
+
+        expect(existsSync(file)).toBe(false);
+      });
+    });
+
     describe('overlapping boundaries in one process', () => {
       it('keeps the fence up until the last holder releases it', async () => {
         const agentHome = await makeRoot();

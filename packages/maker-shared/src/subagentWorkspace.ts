@@ -58,6 +58,18 @@ export interface SubagentRunUsage {
 
 export interface SubagentChildRun {
   id: string;
+  /**
+   * The same logical child's ids in this run's earlier generations, newest
+   * first, excluding `id` itself.
+   *
+   * A resume starts a new run directory and mints a fresh `childId` for every
+   * task it carries over, so the transcript — which is read across generations
+   * — labels one continuous child conversation with several ids. The only thing
+   * a resumed task keeps is its PI session, so that is what the Host groups by.
+   * Absent for a child that has only ever had one id, and for any Host that
+   * predates this field; a reader must fall back to matching `id` alone.
+   */
+  identityAliases?: string[];
   role: string;
   title?: string;
   task?: string;

@@ -701,12 +701,33 @@ const LEGACY_LAUNCH_FENCE_FILENAME = '.launch-fence.json';
 // clock is read.
 const FENCE_START_TOLERANCE_SEC = 5;
 
+function hostProcessIsAlive(hostPid) {
+  try {
+    process.kill(hostPid, 0);
+    return true;
+  } catch (err) {
+    return !!err && err.code === 'EPERM';
+  }
+}
+
 function fenceNamesLiveHost(file, hostPid, hostStartTimeSec) {
   let fence;
   try {
     fence = JSON.parse(readFileSync(file, 'utf8'));
   } catch (err) {
-    return false;
+    // Only a genuinely absent file means "no fence". Every other failure —
+    // a Windows sharing conflict while the Host rewrites it, a permission
+    // error, or content that does not parse because we caught it mid-write —
+    // means the fence is temporarily unverifiable, and the window it exists to
+    // close is exactly the one we would spawn into. Fail closed instead: this
+    // is a transient condition and the caller is told to retry.
+    //
+    // Applied to the legacy shared name too, even though its file name cannot
+    // prove it is ours. Being unable to read it is precisely being unable to
+    // rule that out, and refusing costs a retry during another instance's
+    // update, while allowing costs a runner that survives the boundary sweep.
+    if (err && err.code === 'ENOENT') return false;
+    return hostProcessIsAlive(hostPid);
   }
   if (!fence || fence.version !== 1 || fence.hostPid !== hostPid) return false;
   // A fence that outlived a host crash and had its pid recycled onto the host
@@ -716,12 +737,7 @@ function fenceNamesLiveHost(file, hostPid, hostStartTimeSec) {
   if (typeof fence.hostStartTimeSec === 'number' && hostStartTimeSec !== null) {
     if (Math.abs(fence.hostStartTimeSec - hostStartTimeSec) > FENCE_START_TOLERANCE_SEC) return false;
   }
-  try {
-    process.kill(hostPid, 0);
-    return true;
-  } catch (err) {
-    return !!err && err.code === 'EPERM';
-  }
+  return hostProcessIsAlive(hostPid);
 }
 
 function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {

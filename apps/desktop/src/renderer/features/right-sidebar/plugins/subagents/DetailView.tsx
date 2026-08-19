@@ -282,11 +282,22 @@ function PiDurableDetailView({
     : hasMultipleChildren
       ? undefined
       : children[0];
-  const visibleTranscript = useMemo(
+  // Every id this child has ever had. A resumed generation labels the same
+  // conversation with a new `childId`, so matching on the current one alone
+  // filtered the child's own earlier generations back out of the transcript the
+  // Host had just gone to the trouble of reading across all of them — and a
+  // resumed run auto-selects that child, so it was the default view.
+  const selectedChildIds = useMemo(
     () => (selectedChild
-      ? transcript.filter((entry) => !entry.childId || entry.childId === selectedChild.id)
+      ? new Set([selectedChild.id, ...(selectedChild.identityAliases ?? [])])
+      : null),
+    [selectedChild],
+  );
+  const visibleTranscript = useMemo(
+    () => (selectedChildIds
+      ? transcript.filter((entry) => !entry.childId || selectedChildIds.has(entry.childId))
       : transcript),
-    [selectedChild, transcript],
+    [selectedChildIds, transcript],
   );
   const conversation = useMemo(
     () => buildSubagentConversation(visibleTranscript),

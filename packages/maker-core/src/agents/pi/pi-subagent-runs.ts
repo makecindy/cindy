@@ -242,11 +242,39 @@ function legacyLaunchFencePath(agentHome: string): string {
 }
 
 function readLaunchFence(file: string): PiSubagentLaunchFence | null {
+  return readLaunchFenceFile(file).fence ?? null;
+}
+
+/**
+ * Read a fence, keeping "there is no such file" apart from "I could not read
+ * it".
+ *
+ * Collapsing the two is what let a transient failure read as "no fence": a
+ * Windows sharing conflict while the Host rewrites the file, a permission
+ * error, or content that does not parse. Callers that gate a launch have to
+ * treat the second case as a fence, because being unable to verify the fence is
+ * exactly the window it exists to close.
+ */
+function readLaunchFenceFile(
+  file: string,
+): { unreadable: boolean; fence?: PiSubagentLaunchFence } {
+  let raw: string;
   try {
-    return parseLaunchFence(JSON.parse(readFileSync(file, 'utf8')));
-  } catch {
-    return null;
+    raw = readFileSync(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { unreadable: false };
+    return { unreadable: true };
   }
+  let fence: PiSubagentLaunchFence | null;
+  try {
+    fence = parseLaunchFence(JSON.parse(raw));
+  } catch {
+    // Readable but not JSON. Nothing atomic could have published that, so it is
+    // debris — but it is debris sitting at a path a launcher obeys, so treat it
+    // as a fence here and let the stale sweep be the one to remove it.
+    return { unreadable: true };
+  }
+  return fence ? { unreadable: false, fence } : { unreadable: true };
 }
 
 function parseLaunchFence(value: unknown): PiSubagentLaunchFence | null {
@@ -287,7 +315,17 @@ export function isPiSubagentLaunchFenceActive(agentHome: string, hostPid: number
   // Named lookup, no directory scan: only this host's own fence can block it.
   // The legacy shared name is still consulted for the upgrade window.
   for (const file of [piSubagentLaunchFencePath(agentHome, hostPid), legacyLaunchFencePath(agentHome)]) {
-    const fence = readLaunchFence(file);
+    const read = readLaunchFenceFile(file);
+    if (read.unreadable) {
+      // Fail closed, matching the in-Pi launcher. The owned path's *name*
+      // already proves whose fence it is, so no content is needed to know it
+      // would bind us; the legacy shared name cannot prove it, and not being
+      // able to read it is not being able to rule out that it is ours. Both
+      // conditions are transient, so the cost is a retry.
+      if (isProcessAlive(hostPid) !== false) return true;
+      continue;
+    }
+    const fence = read.fence;
     if (!fence || fence.hostPid !== hostPid) continue;
     // Ours by pid, but possibly a previous life's: a fence that outlived a
     // crash and had its pid recycled onto us would otherwise refuse every
@@ -378,12 +416,25 @@ export async function clearStalePiSubagentLaunchFence(agentHome: string): Promis
   ));
   await Promise.all(fences.map(async (entry) => {
     const file = path.join(runsRoot, entry);
+    let content: string;
+    try {
+      content = await fs.readFile(file, 'utf8');
+    } catch (error) {
+      // ENOENT: somebody else already cleared it, nothing to do. Anything else
+      // is a transient read failure, and a fence we cannot read is one we must
+      // not delete either — a launcher now obeys it, so removing it on a
+      // sharing conflict would open the window the owner is still holding shut.
+      // The next sweep tries again.
+      return;
+    }
     let fence: PiSubagentLaunchFence | null;
     try {
-      fence = parseLaunchFence(JSON.parse(await fs.readFile(file, 'utf8')));
+      fence = parseLaunchFence(JSON.parse(content));
     } catch {
-      // Unreadable or malformed: nothing owns it, so nothing is lost by
-      // removing it — and leaving it would be a permanent no-op file.
+      // Readable and malformed. No atomic writer publishes that, so it names no
+      // owner — and it is the one case that must still be removed: the launch
+      // check now treats an unparseable file as a fence, so leaving it would
+      // block this host's durable launches for good.
       await fs.rm(file, { force: true }).catch(() => undefined);
       return;
     }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
 import ts from 'typescript';
 
 import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
@@ -187,9 +188,56 @@ describe('cindy-subagent extension source', () => {
     expect(src.slice(check, spawned)).toContain('rmSync(runDir, { recursive: true, force: true })');
     // Only our own host's live fence counts: a fence from another instance
     // sharing the agent home, or one left by a dead host, must not block.
-    const fn = src.slice(src.indexOf('function fenceNamesLiveHost('), launch);
+    const fn = src.slice(src.indexOf('function hostProcessIsAlive('), launch);
     expect(fn).toContain('fence.hostPid !== hostPid');
     expect(fn).toContain('process.kill(hostPid, 0)');
+  });
+
+  it('refuses to spawn while the fence is there but unreadable', () => {
+    // The gate is evaluated from the shipped text rather than asserted on it:
+    // what matters is the answer it gives, and the answer used to be "no fence"
+    // for *every* failure — a Windows sharing conflict while the Host rewrites
+    // the file, a permission error, or content caught mid-write. The launcher
+    // then spawned straight through the window the fence exists to close, after
+    // the boundary sweep had already run.
+    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    const body = src.slice(
+      src.indexOf("const LAUNCH_FENCE_PREFIX = '.launch-fence-'"),
+      src.indexOf('function launchDurableRun('),
+    );
+    const gateFor = (read: (file: string) => string): (root: string, owner: string) => boolean => (
+      new Function(
+        'readFileSync', 'join', 'dirname',
+        `${body}\nreturn launchFenceBlocksSpawn;`,
+      ) as (
+        read: (file: string) => string,
+        join: typeof path.join,
+        dirname: typeof path.dirname,
+      ) => (root: string, owner: string) => boolean
+    )(read, path.join, path.dirname);
+    const runRoot = path.join('/agent-home', 'runtime', 'pi-subagent-runs', 'session-1');
+    const owner = `${process.pid}:session-1`;
+
+    const enoent = (): never => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    };
+    // A file that is genuinely not there still means "no fence".
+    expect(gateFor(enoent)(runRoot, owner)).toBe(false);
+
+    for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+      expect(gateFor(() => {
+        throw Object.assign(new Error(code), { code });
+      })(runRoot, owner)).toBe(true);
+    }
+    // Readable but not parseable is the half-written window itself.
+    expect(gateFor(() => '{"version":1,')(runRoot, owner)).toBe(true);
+    // Only our own host's live fence still counts when it *can* be read.
+    expect(gateFor(() => JSON.stringify({
+      version: 1, hostPid: process.pid, createdAt: 1,
+    }))(runRoot, owner)).toBe(true);
+    expect(gateFor(() => JSON.stringify({
+      version: 1, hostPid: 999_999, createdAt: 1,
+    }))(runRoot, owner)).toBe(false);
   });
 
   it('removes a partially staged durable run before reporting setup failure', () => {
