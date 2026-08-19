@@ -499,7 +499,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private armStableConnection(): void {
-    this.clearStableConnection();
+    if (this.stableConnectionTimer) return;
     this.stableConnectionTimer = setTimeout(() => {
       this.stableConnectionTimer = null;
       this.consecutiveCrashes = 0;

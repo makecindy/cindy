@@ -57,6 +57,10 @@ import {
   resolveNativeVoiceActivation,
   type NativeVoiceActivationSource,
 } from './nativeVoiceActivation.js';
+import {
+  assertHelperCommandSucceeded,
+  waitForSpawnedProcess,
+} from './macHelperProcess.js';
 
 const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
@@ -3673,12 +3677,21 @@ export async function runMacTextInsertionHelperCommand(
   args: string[],
   options?: { input?: string; timeoutMs?: number },
 ): Promise<MacTextInsertionHelperResult> {
-  return runMacTextInsertionHelper(args, options);
+  const result = await runMacTextInsertionHelper(args, options);
+  assertHelperCommandSucceeded(result);
+  return result;
 }
 
 export async function spawnMacTextInsertionHelper(args: string[]) {
   const helperPath = await resolveMacTextInsertionHelperPath();
-  return spawn(helperPath, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+  return waitForSpawnedProcess(
+    spawn(helperPath, args, { stdio: ['pipe', 'ignore', 'pipe'] }),
+    (error) => {
+      log.warn('macOS text insertion helper failed after spawn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 /** 取 stdout 的最后一行 JSON 作为命令结果（前面的行是流式进度事件）。 */

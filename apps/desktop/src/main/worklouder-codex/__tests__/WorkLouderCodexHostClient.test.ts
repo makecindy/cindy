@@ -240,6 +240,42 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
+  it('does not let repeated presence probes postpone the crash-budget reset', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const fork = vi.fn(() => child);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+        stableConnectionMs: 30,
+      });
+      client.setDeviceEnabled(false);
+      client.probe();
+
+      for (let crash = 0; crash < 5; crash += 1) {
+        child.emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      expect(fork.mock.calls.length).toBeGreaterThan(1);
+
+      child.emit('message', { kind: 'presence', present: true, deviceType: 'codex-micro' });
+      await vi.advanceTimersByTimeAsync(10);
+      child.emit('message', { kind: 'presence', present: true, deviceType: 'codex-micro' });
+      await vi.advanceTimersByTimeAsync(10);
+      child.emit('message', { kind: 'presence', present: true, deviceType: 'codex-micro' });
+      await vi.advanceTimersByTimeAsync(30);
+
+      const forksBefore = fork.mock.calls.length;
+      child.emit('exit', 1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(forksBefore + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('asks the host to turn lighting off before shutdown', async () => {
     const child = new FakeChild();
     const client = new WorkLouderCodexHostClient({
