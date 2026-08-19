@@ -1,7 +1,6 @@
 import {
   Animated,
   Easing,
-  Platform,
   StyleSheet,
   View,
   type GestureResponderHandlers,
@@ -32,6 +31,23 @@ import {
   COMPOSER_TEXT_PADDING_BOTTOM,
   COMPOSER_TEXT_PADDING_TOP,
 } from '@/session/composerTextPlatformMetrics';
+import {
+  MOBILE_COMPOSER_CONTROL_SIZE,
+  MOBILE_COMPOSER_TOOL_GAP,
+  MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
+  resolveMobileComposerVoiceButtonAnchorStyle,
+  type MobileComposerVoiceButtonPlacement,
+} from '@/session/composerVoiceButtonAnchor';
+
+export {
+  MOBILE_COMPOSER_CONTROL_SIZE,
+  MOBILE_COMPOSER_TOOL_GAP,
+  MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
+  MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
+  resolveMobileComposerVoiceButtonAnchorStyle,
+  resolveMobileComposerVoiceButtonPlacement,
+  type MobileComposerVoiceButtonPlacement,
+} from '@/session/composerVoiceButtonAnchor';
 
 /**
  * Composer 草稿文本的排版档。正本在 `composerTextMetrics`——原生输入框、WebView 富文本
@@ -50,8 +66,6 @@ export const MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT = COMPOSER_SINGLE_LINE_HEI
 export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;
 export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIGHT * MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES)
   + (MOBILE_COMPOSER_INPUT_VERTICAL_PADDING * 2);
-export const MOBILE_COMPOSER_CONTROL_SIZE = 34;
-export const MOBILE_COMPOSER_TOOL_GAP = 6;
 /**
  * 触控目标下限(mobile-design-guide「主操作命中区 ≥ 44×44」,iOS HIG 同值)。
  * 语音听写期间「点输入区停止听写」的命中层用它撑起 inputFrame(见 inputFrameMinHeight)。
@@ -59,29 +73,6 @@ export const MOBILE_COMPOSER_TOOL_GAP = 6;
 export const MOBILE_COMPOSER_MIN_TOUCH_TARGET = 44;
 const isExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-/** 语音按钮 absolute 锚点距 composer 内容区右缘的距离(voiceButtonAnchor.right);
- * 消息列表的「跳到底部」浮标按同一常量推导麦克风所在列,保持两者圆心同列。 */
-export const MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT = spacing.md;
-
-export interface MobileComposerVoiceButtonPlacement {
-  floating: boolean;
-  inline: boolean;
-}
-
-/**
- * 语音按钮的位置分配：行尾有发送 / 创建 / 停止等 trailing 按钮时向左让位
- * （floating）、否则贴行尾（inline）。判定看「是否有 trailing 按钮」而非
- * 「是否有文字」——附件-only（无文字但发送按钮可见）时同样需要让位。
- * 听写中按钮不隐藏——对齐桌面版设计，同一颗按钮录音中变为「停止录音」形态。
- */
-export function resolveMobileComposerVoiceButtonPlacement(input: {
-  hasTrailingAction: boolean;
-}): MobileComposerVoiceButtonPlacement {
-  return {
-    floating: input.hasTrailingAction,
-    inline: !input.hasTrailingAction,
-  };
-}
 
 export interface MobileComposerInputRowProps {
   accessibilityHint?: string;
@@ -104,9 +95,10 @@ export interface MobileComposerInputRowProps {
   editable?: boolean;
   /**
    * 语音按钮 render。语音按钮是简洁态与卡片态都存在的常驻控件，
-   * 由组件用 absolute 锚点渲染为同一实例：简洁态贴输入行右侧、
-   * 卡片态落在底部工具排右二（工具排里放 ComposerToolbarVoiceSlot 占位），
-   * 两态切换时 LayoutAnimation 对同一实例的位置做平滑插值，不闪不跳。
+   * 由组件用一份完整 absolute 样式渲染为同一实例：简洁态贴输入行右侧、
+   * 卡片态落在底部工具排右二（工具排里放 ComposerToolbarVoiceSlot 占位）。
+   * 定位走 resolveMobileComposerVoiceButtonAnchorStyle，两态都写全 top /
+   * bottom / transform，避免 RN 合并残留把麦克风停在卡片中部。
    */
   floatingVoiceButton?: (style: StyleProp<ViewStyle>) => ReactNode;
   floatingVoiceButtonStyle?: StyleProp<ViewStyle>;
@@ -331,9 +323,10 @@ export function MobileComposerInputRow({
       ) : null}
       {voicePlacement?.inline || voicePlacement?.floating
         ? floatingVoiceButton?.([
-          styles.voiceButtonAnchor,
-          voicePlacement.floating && styles.voiceButtonAnchorWithTrailing,
-          cardLayout && styles.voiceButtonAnchorCard,
+          resolveMobileComposerVoiceButtonAnchorStyle({
+            cardLayout,
+            floating: voicePlacement.floating,
+          }),
           floatingVoiceButtonStyle,
         ])
         : null}
@@ -534,7 +527,7 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   // （grabber 横条距顶约 8pt、距输入内容约 14pt，参考 Cursor 移动端）。
   rowCard: {
     borderRadius: radius.control,
-    paddingBottom: 8,
+    paddingBottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
     paddingTop: 26,
   },
   // 水平输入行：简洁态装 [输入][发送]，card 态只剩全宽输入区；
@@ -606,26 +599,6 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingBottom: COMPOSER_TEXT_GEOMETRIC_PADDING_BOTTOM,
     paddingTop: COMPOSER_TEXT_GEOMETRIC_PADDING_TOP,
     textAlignVertical: 'center',
-  },
-  // 语音按钮的 absolute 锚点：简洁态贴输入行右侧垂直居中；
-  // 有发送按钮时向左让位；卡片态下沉到底部工具排的占位上。
-  voiceButtonAnchor: {
-    // 收起态按行垂直居中,与 34pt 加号 / 文字共中线;
-    // 不再钉在底部,避免行高变化后麦克风掉下去。
-    bottom: undefined,
-    position: 'absolute',
-    right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
-    top: '50%',
-    transform: [{ translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2 }],
-    zIndex: 2,
-  },
-  voiceButtonAnchorWithTrailing: {
-    right: spacing.md + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP,
-  },
-  voiceButtonAnchorCard: {
-    bottom: 8,
-    top: undefined,
-    transform: [],
   },
   // 外层横跨全行但 box-none 穿透触摸，只有中间的窄命中条接手势，
   // 避免与左右两侧按钮的 hitSlop 抢触摸。
