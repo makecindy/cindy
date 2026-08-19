@@ -1417,9 +1417,11 @@ my-ghost/
 \`\`\`
 
 想看**真实完整范例**,浏览官方插件源码仓
-\`github.com/makecindy/cindy-official-plugins\`:每个一级目录(cindy-art、
-cindy-github、cindy-web-search……)都是一个已上架插件的全部源码,各槽(卡槽/
-面板/网络/设置页)都有现成写法可对照。需要理解宿主侧能力实现(某个槽的代发
+\`github.com/makecindy/cindy-official-plugins\`:仓库根下每个**含 ghost.json 的
+一级目录**(cindy-art、cindy-github、cindy-web-search……)都是一个已上架插件的
+全部源码,各槽(卡槽/
+面板/网络/设置页)都有现成写法可对照;\`.tests\`、\`docs\` 等无 ghost.json 的
+目录是仓库自身的基础设施,不是插件。需要理解宿主侧能力实现(某个槽的代发
 细节、校验器行为)时可参考主仓 \`github.com/makecindy/cindy\`(插件基座在
 \`apps/desktop/src/main/cindy-brain/\`),但**API 契约一律以本手册为准**——
 线上 main 分支可能领先或落后用户当前安装的主机版本,照 main 写码可能装进

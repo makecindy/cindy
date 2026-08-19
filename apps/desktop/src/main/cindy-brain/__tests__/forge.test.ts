@@ -1673,6 +1673,10 @@ describe('FORGE_GUIDE', () => {
       // 主仓地址(插件基座,apps/desktop/src/main/cindy-brain/),并写死边界
       // ——API 契约一律以手册为准,main 分支可能与用户安装版本不一致。
       'github.com/makecindy/cindy-official-plugins',
+      // 范例判据是"含 ghost.json 的一级目录",不是"每个一级目录"——
+      // 仓库根还有 .tests/docs 等基础设施目录(PR #3023 review)。
+      '每个**含 ghost.json 的',
+      '不是插件',
       'apps/desktop/src/main/cindy-brain/',
       'API 契约一律以本手册为准',
       'github.com/makecindy/cindy',
