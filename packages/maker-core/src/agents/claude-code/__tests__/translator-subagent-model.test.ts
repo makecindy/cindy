@@ -1390,6 +1390,35 @@ describe('Claude Code sidechain launch failure projection', () => {
       },
     });
     expect(taskUpdates[0].data.description).toContain('not available for your account');
+    // 标题不下发：由渲染层按 locale 生成，避免 maker-core 输出单语言文案。
+    expect(taskUpdates[0].data).not.toHaveProperty('title');
+  });
+
+  it('does not project a retryable sidechain error before the SDK retries', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    // rate_limit / server_error / unknown 是 SDK 自己退避重试的 tag；SDK 仍可能
+    // 自愈并发出 task_started，所以这里不得提前锁死成 failed。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retryable',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited, retrying.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(0);
+    expect(ctx.turn.pendingApiError).toBeNull();
   });
 
   it('does not leak a sidechain error into the main turn pendingApiError', async () => {

@@ -1187,10 +1187,20 @@ function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
 }
 
 /**
+ * SDK 自己会退避重试的 API-error tag（见 shared/overload-error.ts：Claude Code
+ * SDK 对 529/rate_limit 自带 api_retry）。这类 sidechain envelope 之后仍可能
+ * 自愈并发出 task_started，立即投影 failed 会把「可能自愈」的启动锁死成失败。
+ */
+const RETRYABLE_SDK_ERROR_TAGS = new Set(['rate_limit', 'server_error', 'unknown']);
+
+/**
  * 子 Agent launch 阶段失败的父会话可见投影：发出一个 failed 终态
  * agent_task_update。kind 用 spawn 而非 terminal，是因为持久化层只允许 spawn
  * 创建 durable run（progress/terminal 无权凭空建子任务），而 launch 失败往往
  * 没有更早的 spawn 观测——这条是唯一权威观测，必须能建出可查询的 failed 记录。
+ *
+ * 不发 title：标题由渲染层 AgentTaskCard 按 locale 从结构化失败状态生成
+ * （chat.agentTask.emptyTitle + status.failed），maker-core 不下发单语言文案。
  */
 function emitSubagentLaunchFailure(
   queue: EventQueue,
@@ -1206,7 +1216,6 @@ function emitSubagentLaunchFailure(
       taskId: parentToolUseId,
       parentToolUseId,
       status: 'failed',
-      title: '子任务启动失败',
       description: options.errorMessage,
       ...(options.model ? { model: options.model } : {}),
       subagentObservation: {
@@ -1274,6 +1283,8 @@ function handleAssistant(
     // 不会发出任何 task_id，现有 task_notification:failed 通道收不到它，父会话因此既
     // 看不到失败任务、也没有终态通知（#2967）。这里把它规范化为父会话可见的 failed
     // 任务。已有 taskId 的执行期失败由 task_notification:failed 收口，不重复上报。
+    // 可重试的 tag（rate_limit / server_error / unknown）SDK 会自己退避重试并可能
+    // 自愈，立即投影 failed 会把自愈任务锁死成失败，所以只对非重试类 tag 投影。
     if (sidechainParentToolUseId) {
       let knownTaskId: string | undefined;
       for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
@@ -1281,7 +1292,7 @@ function handleAssistant(
         knownTaskId = candidateTaskId;
         break;
       }
-      if (!knownTaskId) {
+      if (!knownTaskId && !RETRYABLE_SDK_ERROR_TAGS.has(msg.error ?? '')) {
         emitSubagentLaunchFailure(queue, sidechainParentToolUseId, {
           errorMessage: redactSensitiveText(errorMessage),
           model:
