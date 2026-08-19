@@ -102,6 +102,8 @@ import {
 } from '@/session/MessageRenderer';
 import {
   bundledAssetToDataUri,
+  cleanupConversationSharePngTemps,
+  deleteConversationSharePngTemp,
   writeConversationSharePngTemp,
 } from '@/session/ConversationShareWebView';
 import {
@@ -6104,8 +6106,12 @@ export default function SessionScreen() {
       && shareSelectionActiveRef.current
       && shareSelectionRevisionRef.current === operationSelectionRevision;
     let localUri: string | null = null;
+    let shareCompleted = false;
     setConversationShareBusy(true);
     try {
+      // 成功分享的 PNG 要保留给系统扩展读取；回收更早的产物，限制 cache
+      // 目录增长，并不触碰本次尚未生成的文件。
+      await cleanupConversationSharePngTemps();
       if (!isShareOperationActive()) return;
       const base64 = await exportConversationSharePng();
       if (!isShareOperationActive()) return;
@@ -6116,6 +6122,7 @@ export default function SessionScreen() {
       if (!isShareOperationActive()) return;
       await sharing.shareAsync(localUri, { mimeType: 'image/png' });
       if (!isShareOperationActive()) return;
+      shareCompleted = true;
       setShareSelectionTriggeredByScreenshot(false);
       shareSelectionStore.exit();
     } catch (error) {
@@ -6124,7 +6131,8 @@ export default function SessionScreen() {
       Alert.alert(t('session.screen.shareFailedTitle'), t('session.screen.shareImageFailed'));
     } finally {
       // shareAsync 返回后，iOS 分享扩展仍可能继续读取该 URL。成功写入的文件留在
-      // cache 目录交给系统回收；写入失败的半成品由 writeConversationSharePngTemp 清理。
+      // cache 目录交给下一次有界清理；失败、取消或中途失活则立即删除当前产物。
+      if (!shareCompleted && localUri) await deleteConversationSharePngTemp(localUri);
       if (shareOperationSeqRef.current === operationSeq) setConversationShareBusy(false);
     }
   }, [conversationShareBusy, exportConversationSharePng, selectedShareMessages.length, shareSelectionActive, shareSelectionRevision, t]);

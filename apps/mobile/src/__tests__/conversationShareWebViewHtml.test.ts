@@ -185,8 +185,15 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(webViewSource).toContain(
       'await deleteConversationSharePngTemp(file.uri);',
     );
-    expect(sessionSource).not.toContain('deleteConversationSharePngTemp');
-    expect(sessionSource).toContain('cache 目录交给系统回收');
+    expect(webViewSource).toContain('SHARE_PNG_RETAIN_COUNT = 3');
+    expect(webViewSource).toContain('SHARE_PNG_CLEANUP_BATCH = 8');
+    expect(webViewSource).toContain(
+      'files.slice(SHARE_PNG_RETAIN_COUNT, SHARE_PNG_RETAIN_COUNT + SHARE_PNG_CLEANUP_BATCH)',
+    );
+    expect(sessionSource).toContain('deleteConversationSharePngTemp');
+    expect(sessionSource).toContain('cleanupConversationSharePngTemps');
+    expect(sessionSource).toContain('cache 目录交给下一次有界清理');
+    expect(sessionSource).toContain('if (!shareCompleted && localUri)');
     expect(sessionSource).toContain('<ConversationShareSvg');
     expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
     expect(sessionSource).toContain('nativeShareAssetsReady');
