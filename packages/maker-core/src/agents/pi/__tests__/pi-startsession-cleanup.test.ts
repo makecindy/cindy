@@ -500,6 +500,77 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(boundaryStop).toBeGreaterThan(firstAwait);
   });
 
+  /**
+   * A parent that dies between publishing the `queued` status and spawning the
+   * runner leaves a record with no `runnerPid`. That is not a lease held to the
+   * supervisor's 24h ceiling, and this pins why:
+   *
+   *  - `classifyRunnerPresenceSync` answers `gone` for a missing/invalid pid
+   *    (`pi-subagent-runs.ts`), so once the 15s heartbeat window lapses
+   *    `isPiSubagentRunStale` is true;
+   *  - `listPiSubagentRuns` drops stale records, so the supervisor's `active`
+   *    is false;
+   *  - its release also needs one of `directoryCount === 0` /
+   *    `allDirectoriesReadable` / past `unreadableDirectoryDeadline`. The first
+   *    two are false while the orphan directory sits there unreadable, but the
+   *    deadline is only 2s after the supervisor starts — so the release lands on
+   *    the first poll after staleness, not at the hard ceiling.
+   *
+   * Exposure is therefore bounded by the heartbeat window plus one 250ms poll.
+   */
+  it('releases the lease for a queued orphan once its heartbeat lapses', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    // Published `queued`, never spawned, and last touched longer ago than the
+    // heartbeat window — exactly what a parent dying mid-launch leaves behind.
+    const runId = '123e4567-e89b-42d3-a456-4266141740f5';
+    const runDir = path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1', runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'status.json'), `${JSON.stringify({
+      version: 1,
+      runId,
+      taskId: 'tool-orphan',
+      parentSessionId: 's1',
+      runtimeOwnerId: ownerId(),
+      runnerInstanceId: `launch-pending-${runId}`,
+      state: 'queued',
+      startedAt: Date.now() - 60_000,
+      updatedAt: Date.now() - 60_000,
+      tasks: [{ childId: `${runId}-1`, sessionId: `${runId}-1`, agent: 'scout', status: 'queued' }],
+    })}\n`);
+
+    await handle.close({ reason: 'navigation' });
+    // Not held: no runner pid means nothing to supervise, and the record is
+    // already past its heartbeat window.
+    await vi.waitFor(() => expect(proxyDisposed).toBe(2), { timeout: 3_000 });
+  });
+
+  it('keeps the lease while a queued record is still within its heartbeat window', async () => {
+    // The complement, so the case above cannot be "satisfied" by releasing on
+    // any queued record: a launch published moments ago may still be spawning.
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession(opts());
+    const runId = '123e4567-e89b-42d3-a456-4266141740f6';
+    const runDir = path.join(agentHome, 'runtime', 'pi-subagent-runs', 's1', runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'status.json'), `${JSON.stringify({
+      version: 1,
+      runId,
+      taskId: 'tool-fresh',
+      parentSessionId: 's1',
+      runtimeOwnerId: ownerId(),
+      runnerInstanceId: `launch-pending-${runId}`,
+      state: 'queued',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      tasks: [{ childId: `${runId}-1`, sessionId: `${runId}-1`, agent: 'scout', status: 'queued' }],
+    })}\n`);
+
+    await handle.close({ reason: 'navigation' });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(proxyDisposed).toBe(0);
+  });
+
   it('projects a diagnostic when a run dies without publishing a terminal status', async () => {
     // The panel refreshes off change pushes. Dropping the run from the in-memory
     // map without emitting one left the row reading `running` for good — the

@@ -53,6 +53,18 @@ type LoadState = 'idle' | 'loading' | 'ready' | 'unsupported' | 'error';
 /** Remote polling cadence; each tick is fenced behind the previous round. */
 const REMOTE_POLL_INTERVAL_MS = 1_000;
 
+/**
+ * Local fallback cadence, only while something is unfinished.
+ *
+ * The local view is push-driven, and the push dies with the root Pi process:
+ * `onExit` ends the event queue, so a detached run that finishes *after* its
+ * parent exited emits no `agent_task_update` and no change push. The row then
+ * reads `running` until the panel is remounted. Deliberately much slower than
+ * the remote cadence — this is a backstop for a window that only opens after the
+ * parent is gone, not a substitute for the push.
+ */
+const LOCAL_UNFINISHED_POLL_INTERVAL_MS = 4_000;
+
 /** Host clamps the page size; 200 is its maximum. */
 const TRANSCRIPT_PAGE_SIZE = 200;
 /**
@@ -231,6 +243,47 @@ function ScopedSubagentsBody({
       unsubscribe();
     };
   }, [ctx.sessionId, loadRuns, remoteDevice, visible]);
+
+  /**
+   * Anything still open in the local list. `queued` is projected as `running`
+   * by the time it reaches here, so the terminal set is the whole vocabulary.
+   */
+  const hasUnfinishedLocalRun = useMemo(
+    () => !remoteDevice && runs.some((run) => (
+      run.status !== 'completed' && run.status !== 'failed' && run.status !== 'stopped'
+    )),
+    [remoteDevice, runs],
+  );
+
+  useEffect(() => {
+    if (!visible || !hasUnfinishedLocalRun) return;
+    // Chained, single-flight, and it stops arming as soon as the list has
+    // nothing unfinished left (this effect simply tears down). The local list
+    // read reconciles durable status on the Host side, so a round settles the
+    // database row and the view together.
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const armNextRound = (): void => {
+      if (cancelled) return;
+      timer = setTimeout(() => void runRound(), LOCAL_UNFINISHED_POLL_INTERVAL_MS);
+    };
+    const runRound = async (): Promise<void> => {
+      if (cancelled) return;
+      try {
+        await loadRuns();
+      } finally {
+        if (!cancelled) {
+          setDetailRefreshVersion((version) => version + 1);
+          armNextRound();
+        }
+      }
+    };
+    armNextRound();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [hasUnfinishedLocalRun, loadRuns, visible]);
 
   useEffect(() => {
     if (

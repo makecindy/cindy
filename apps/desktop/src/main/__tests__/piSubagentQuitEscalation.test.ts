@@ -171,6 +171,37 @@ describe('PI Subagent quit sweep', () => {
     expect(teardown.indexOf('lifecycleDbClientManager.dispose(reason)', sweep)).toBeGreaterThan(sweep);
   });
 
+  it('fences durable launches across the whole account boundary, and always lowers it', () => {
+    // `Maker.shutdown` collects per-session detach failures instead of throwing,
+    // so a parent Pi can outlive it — and a survivor could publish a fresh run
+    // after the one-shot sweep had already scanned, handing the incoming owner a
+    // runner holding the previous account's credentials. Same fence, same
+    // ordering argument, as quit and the update relaunch.
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+    );
+    const raise = teardown.indexOf('acquirePiSubagentLaunchFence(');
+    const shutdown = teardown.indexOf("maker.shutdown({ reason: 'account-boundary' })");
+    const sweep = teardown.indexOf('stopAllPiSubagentRunsForExit(');
+    expect(raise).toBeGreaterThan(-1);
+    // Before the shutdown, so it covers the shutdown *and* the sweep.
+    expect(shutdown).toBeGreaterThan(raise);
+    expect(sweep).toBeGreaterThan(shutdown);
+    // Failing to raise it must not block a logout.
+    expect(teardown.slice(raise, shutdown)).toMatch(/authBoundaryLog\.warn/);
+    // Released on every path — unlike quit, this process keeps running and the
+    // next owner has to be able to launch. A fence left up after a completed
+    // handover, or after an aborted one, would refuse its own durable runs.
+    const release = teardown.indexOf('releaseBoundaryLaunchFence = null;');
+    expect(release).toBeGreaterThan(sweep);
+    const finallyBlock = teardown.lastIndexOf('} finally {', release);
+    expect(finallyBlock).toBeGreaterThan(-1);
+    expect(finallyBlock).toBeLessThan(release);
+    // The abort path throws from inside that try, so the same finally covers it.
+    expect(teardown.indexOf('throw new PiSubagentAccountBoundaryError(reason);'))
+      .toBeLessThan(finallyBlock);
+  });
+
   it('keeps the account-boundary sweep on the same escalation contract', () => {
     // Two entry points, one rule: the app going away and the account going away
     // are both "this runtime's children must not outlive it".

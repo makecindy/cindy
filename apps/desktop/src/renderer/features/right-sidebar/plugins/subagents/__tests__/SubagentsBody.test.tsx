@@ -151,6 +151,42 @@ describe('SubagentsBody', () => {
     Reflect.deleteProperty(window, 'electronAPI');
   });
 
+  it('polls a local run to completion when no change push ever arrives', async () => {
+    // The local view is push-driven, and the push dies with the root Pi
+    // process: `onExit` ends its event queue, so a detached run that finishes
+    // afterwards emits no `agent_task_update` and no change push. The row sat at
+    // `running` until the panel was remounted.
+    vi.useFakeTimers();
+    try {
+      currentDetail = { ...detail('still working'), status: 'running' };
+      render(
+        <SubagentsBody
+          state={{ selectedRunId: null, selectedProvider: null }}
+          ctx={{
+            tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+            remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+            onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+          }}
+        />,
+      );
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const readsAfterMount = list.mock.calls.length;
+      expect(readsAfterMount).toBeGreaterThan(0);
+
+      // The run finishes with nobody left to announce it.
+      currentDetail = { ...detail('done'), status: 'completed' };
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(list.mock.calls.length).toBeGreaterThan(readsAfterMount);
+
+      // And once nothing is unfinished the polling stops: no further reads.
+      const readsAfterSettle = list.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(list.mock.calls.length).toBe(readsAfterSettle);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reloads the selected detail when a run change is pushed', async () => {
     render(
       <SubagentsBody

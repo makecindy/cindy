@@ -1402,6 +1402,26 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // 自然完成的 turn 照常收尾。释放放 finally:抑制器是进程级计数,泄漏一次就把
   // 后续 owner 的正常收尾写全部吞掉,中断横幅会在每个正常完成的任务上误弹。
   const releaseEndedSuppression = beginSessionTurnEndedSuppression();
+  // Same fence, same ordering argument, as quit and the update relaunch: raised
+  // before `maker.shutdown` so it covers the shutdown *and* the sweep below.
+  // `Maker.shutdown` collects per-session detach failures rather than throwing,
+  // so a parent Pi can survive it — and a survivor could publish a fresh run
+  // after the one-shot sweep had already scanned, handing the next owner a
+  // runner holding the previous account's credentials.
+  //
+  // Unlike quit, this must come down on *every* path. An account boundary swaps
+  // the owner inside a live process: a fence left standing would refuse the
+  // incoming owner's own durable launches for the rest of this process's life.
+  let releaseBoundaryLaunchFence: (() => Promise<void>) | null = null;
+  try {
+    releaseBoundaryLaunchFence = await acquirePiSubagentLaunchFence(
+      path.join(app.getPath('userData'), 'pi-agent-home'),
+    );
+  } catch (err) {
+    // No worse than before the fence existed, and never a reason to block a
+    // logout: the sweep still runs.
+    authBoundaryLog.warn(`could not raise the Subagent launch fence on ${reason}:`, err);
+  }
   try {
     try {
       const maker = getMakerIfReady();
@@ -1463,6 +1483,12 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     releaseEndedSuppression();
+    // Both outcomes release it: the handover completed (the incoming owner must
+    // be able to launch), or it was aborted (this owner stays and must be able
+    // to launch). Either way the window this fence covers is over.
+    const releaseFence = releaseBoundaryLaunchFence;
+    releaseBoundaryLaunchFence = null;
+    await releaseFence?.().catch(() => undefined);
   }
   // device-link 单持有者仲裁:必须在 dispose DbClient **之前**释放持有权行
   // (dispose 同步 clearCurrentDbClient,之后 store 不可用,只能等 15s+ 心跳
