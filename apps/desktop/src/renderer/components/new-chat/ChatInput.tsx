@@ -6252,12 +6252,26 @@ export function ChatInput({
           }
           // 跨引擎点选也是用户显式选模:记到目标 vendor,下次用该引擎新建跟随这次选择。
           // 真切换可能推迟到下一条消息,但选择已经做出。
+          //
+          // ★ 偏好同步与上面的 note-skip 同族(2026-08-19 review P2):回声已匹配时,写进
+          // newMakerDraft / providerModelMemory / 远端 apply-new-maker-draft-pref 的也必须是
+          // **权威快照里的值** —— 拿本端旧 newEffort / targetFast / providerId 去同步,另一
+          // 控制端只改 effort / Fast(或 main 归一化 / 解析来源)的场景里,下一次新建任务会
+          // 采用过期偏好,还会把权威值从偏好面盖掉。权威快照缺某字段(如不可调模型没有
+          // effort)时该维**不写**,而不是回落本端旧值 —— 写一个 main 都没有的档同样是分叉。
+          const authoritative = registeredIntentMatchesCurrent ? registeredIntent : null;
+          const syncedEffort = authoritative ? authoritative.effort : newEffort;
+          const syncedFast = authoritative ? authoritative.fastMode : targetFast;
+          const syncedProviderId = authoritative ? authoritative.providerId : providerId;
           syncSessionDraftModelPrefs(
             newModelId,
-            { effort: newEffort, fast: targetFast },
             {
-              activeProviderId: providerId,
-              memoryProviderId: providerId,
+              ...(syncedEffort ? { effort: syncedEffort } : {}),
+              ...(syncedFast !== undefined ? { fast: syncedFast } : {}),
+            },
+            {
+              activeProviderId: syncedProviderId,
+              memoryProviderId: syncedProviderId,
               remoteDeviceId: deviceLinkDeviceId ?? undefined,
               agentKind: targetAgentKind,
               markModelChoice: true,

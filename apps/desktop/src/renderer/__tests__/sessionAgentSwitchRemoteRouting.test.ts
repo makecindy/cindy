@@ -1040,6 +1040,19 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 与「main 归一化本端登记」全部场景;回声已到过,不会再有第二次权威回流纠正。
     expect(source).toContain('if (!registeredIntentMatchesCurrent) {');
     expect(source).not.toContain('appliedProviderId');
+    // ★ 偏好同步同族(2026-08-19 review P2):回声已匹配时 syncSessionDraftModelPrefs 也必须
+    // 用权威快照的 effort/fastMode/providerId —— 覆盖 effort-only / Fast-only / 两者均改 /
+    // provider 归一化四种场景;权威快照缺某字段时该维不写,不回落本端旧值。
+    expect(source).toContain('const authoritative = registeredIntentMatchesCurrent ? registeredIntent : null;');
+    expect(source).toContain('const syncedEffort = authoritative ? authoritative.effort : newEffort;');
+    expect(source).toContain('const syncedFast = authoritative ? authoritative.fastMode : targetFast;');
+    expect(source).toContain(
+      'const syncedProviderId = authoritative ? authoritative.providerId : providerId;',
+    );
+    expect(source).toContain('activeProviderId: syncedProviderId,');
+    expect(source).toContain('memoryProviderId: syncedProviderId,');
+    // (立即切换 apply-switched 分支仍可用本端值 —— 它以修订号未变为前提,没有已消费的
+    // 权威回声,不在本锁范围内。)
     // 1d:意图期改选模型 / 来源必须 await 并把结果交回去,不能 fire-and-forget 返回
     // undefined 让上游读成「已应用」。
     expect(source).not.toContain('void performAgentSwitch(');
