@@ -37,7 +37,6 @@ export interface ConversationSearchFanoutDeps {
   searchLocal: (request: ConversationSearchRequest) => Promise<ConversationSearchResponse>;
   invokeRemote: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
   listCachedRemoteSessions: (deviceId: string) => Session[];
-  pinSessionOrigin: (deviceId: string, sessionId: string) => void;
 }
 
 export async function searchConversationsAcrossOrigins(
@@ -92,7 +91,6 @@ async function searchOneOrigin(
       searchCachedSessionsByTitle(deps.listCachedRemoteSessions(origin.deviceId), originRequest),
       origin,
       originRequest,
-      deps.pinSessionOrigin,
     );
   }
 
@@ -103,17 +101,15 @@ async function searchOneOrigin(
         await searchRemoteLegacyByTitle(origin.deviceId, originRequest, deps),
         origin,
         originRequest,
-        deps.pinSessionOrigin,
       );
     }
-    return finalizeRemoteResponse(response, origin, originRequest, deps.pinSessionOrigin);
+    return finalizeRemoteResponse(response, origin, originRequest);
   } catch (error) {
     if (isDeviceLinkNotConnected(error)) {
       return finalizeRemoteResponse(
         searchCachedSessionsByTitle(deps.listCachedRemoteSessions(origin.deviceId), originRequest),
         origin,
         originRequest,
-        deps.pinSessionOrigin,
       );
     }
     if (isChannelNotAllowed(error)) {
@@ -121,14 +117,12 @@ async function searchOneOrigin(
         await searchRemoteLegacyByTitle(origin.deviceId, originRequest, deps),
         origin,
         originRequest,
-        deps.pinSessionOrigin,
       );
     }
     return finalizeRemoteResponse(
       searchCachedSessionsByTitle(deps.listCachedRemoteSessions(origin.deviceId), originRequest),
       origin,
       originRequest,
-      deps.pinSessionOrigin,
     );
   }
 }
@@ -174,19 +168,14 @@ function finalizeRemoteResponse(
   response: ConversationSearchResponse,
   origin: Extract<ConversationSearchOrigin, { kind: 'remote' }>,
   originRequest: ConversationSearchRequest,
-  pinSessionOrigin: ConversationSearchFanoutDeps['pinSessionOrigin'],
 ): ConversationSearchResponse {
-  const stamped = filterResultsByRequestFilters(
+  return filterResultsByRequestFilters(
     stampRemoteSearchResponse(response, {
       deviceId: origin.deviceId,
       deviceName: origin.deviceName,
     }),
     originRequest,
   );
-  for (const item of stamped.results) {
-    pinSessionOrigin(origin.deviceId, item.session.id);
-  }
-  return stamped;
 }
 
 function isChannelNotAllowed(error: unknown): boolean {
@@ -223,8 +212,5 @@ export function searchConversations(
       remoteProjectsStore
         .getMergedRemoteSessions()
         .filter((session) => session.deviceLinkDeviceId === deviceId),
-    pinSessionOrigin: (deviceId, sessionId) => {
-      remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
-    },
   });
 }

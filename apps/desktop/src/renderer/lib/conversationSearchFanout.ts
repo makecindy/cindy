@@ -45,7 +45,7 @@ export function searchDevicesFromSwitcher(
     .map((device) => ({
       deviceId: device.deviceId,
       deviceName: device.name,
-      connected: device.status === 'connected',
+      connected: device.status === 'connected' || device.status === 'connecting',
     }));
 }
 

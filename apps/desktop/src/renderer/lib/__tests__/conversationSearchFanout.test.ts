@@ -207,7 +207,7 @@ describe('resolveConversationSearchOrigins', () => {
         kind: 'remote',
         deviceId: 'dev-connecting',
         deviceName: 'New Box',
-        connected: false,
+        connected: true,
         sessionIds: null,
       },
     ]);
@@ -310,7 +310,6 @@ describe('searchConversationsAcrossOrigins', () => {
       if (deviceId === 'dev-b') throw new Error('[DEVICE_LINK_NOT_CONNECTED] closed');
       return response([result('remote-hit', 50)]);
     });
-    const pinSessionOrigin = vi.fn();
     const page = await searchConversationsAcrossOrigins(request, {
       origins: [
         { kind: 'local', sessionIds: null },
@@ -339,7 +338,6 @@ describe('searchConversationsAcrossOrigins', () => {
           deviceLinkDeviceName: 'Laptop',
         }),
       ],
-      pinSessionOrigin,
     });
 
     expect(invokeRemote).toHaveBeenCalledWith('dev-a', 'local-db:conversations:search', [
@@ -350,8 +348,6 @@ describe('searchConversationsAcrossOrigins', () => {
       'local-hit',
       'remote-hit',
     ]);
-    expect(pinSessionOrigin).toHaveBeenCalledWith('dev-a', 'remote-hit');
-    expect(pinSessionOrigin).toHaveBeenCalledWith('dev-b', 'cached-hit');
   });
 
   it('falls back to sessions:list when the search channel is missing', async () => {
@@ -361,7 +357,6 @@ describe('searchConversationsAcrossOrigins', () => {
       }
       return [session({ id: 'legacy', title: 'Needle legacy', deviceLinkDeviceId: 'dev-a' })];
     });
-    const pinSessionOrigin = vi.fn();
     const page = await searchConversationsAcrossOrigins(request, {
       origins: [
         {
@@ -375,14 +370,12 @@ describe('searchConversationsAcrossOrigins', () => {
       searchLocal: async () => emptyConversationSearchResponse('needle'),
       invokeRemote,
       listCachedRemoteSessions: () => [],
-      pinSessionOrigin,
     });
     expect(invokeRemote).toHaveBeenNthCalledWith(2, 'dev-a', 'local-db:sessions:list', [
       100,
       'all',
     ]);
     expect(page.results.map((item) => item.session.id)).toEqual(['legacy']);
-    expect(pinSessionOrigin).toHaveBeenCalledWith('dev-a', 'legacy');
   });
 
   it('falls back to sessions:list when the indexed page ignored workingDirs', async () => {
@@ -406,7 +399,6 @@ describe('searchConversationsAcrossOrigins', () => {
       searchLocal: async () => emptyConversationSearchResponse('needle'),
       invokeRemote,
       listCachedRemoteSessions: () => [],
-      pinSessionOrigin: vi.fn(),
     });
     expect(invokeRemote).toHaveBeenCalledWith('dev-a', 'local-db:sessions:list', [100, 'all']);
     expect(page.results.map((item) => item.session.id)).toEqual(['legacy']);
@@ -431,7 +423,6 @@ describe('searchConversationsAcrossOrigins', () => {
         searchLocal: async () => response([result('local-hit', 20)]),
         invokeRemote,
         listCachedRemoteSessions: () => [],
-        pinSessionOrigin: vi.fn(),
       },
     );
     expect(invokeRemote).not.toHaveBeenCalled();
@@ -447,7 +438,6 @@ describe('searchConversationsAcrossOrigins', () => {
       searchLocal: async () => response([result('local-hit', 1)]),
       invokeRemote: vi.fn(),
       listCachedRemoteSessions: () => [],
-      pinSessionOrigin: vi.fn(),
     });
     expect(page.results).toEqual([]);
   });
