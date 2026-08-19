@@ -3,7 +3,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { parseCaptchaWebViewMessage } from '@/auth/loginCaptchaMessage';
-import { withLoginCaptchaTheme } from '@/auth/loginCaptchaUrl';
+import {
+  isAllowedLoginCaptchaNavigation,
+  isAllowedLoginCaptchaPageUrl,
+  withLoginCaptchaTheme,
+} from '@/auth/loginCaptchaUrl';
 
 /**
  * 登录人机验证(captcha)移动端测试:
@@ -64,6 +68,75 @@ describe('withLoginCaptchaTheme(挑战页有效登录主题)', () => {
   });
 });
 
+describe('mobile captcha WebView 导航与消息来源边界', () => {
+  const expected =
+    'https://auth.example.com/captcha/turnstile?action=email_request_code&theme=dark';
+
+  it('顶层只允许预期协议、origin 与精确托管路径', () => {
+    expect(
+      isAllowedLoginCaptchaNavigation({ url: expected, isTopFrame: true }, expected),
+    ).toBe(true);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'https://auth.example.com/captcha/other', isTopFrame: true },
+        expected,
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'blob:https://auth.example.com/opaque-id', isTopFrame: true },
+        expected,
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'https://challenges.cloudflare.com/widget', isTopFrame: true },
+        expected,
+      ),
+    ).toBe(false);
+  });
+
+  it('Turnstile 仅作为 HTTPS 子 frame 放行', () => {
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'https://challenges.cloudflare.com/turnstile/widget', isTopFrame: false },
+        expected,
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'blob:https://challenges.cloudflare.com/opaque-id', isTopFrame: false },
+        expected,
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedLoginCaptchaNavigation(
+        { url: 'https://evil.example.com/widget', isTopFrame: false },
+        expected,
+      ),
+    ).toBe(false);
+  });
+
+  it('消息源只接受预期托管顶层页，并允许 loopback HTTP 本地开发', () => {
+    expect(isAllowedLoginCaptchaPageUrl(expected, expected)).toBe(true);
+    expect(
+      isAllowedLoginCaptchaPageUrl('https://auth.example.com/captcha/other', expected),
+    ).toBe(false);
+    expect(
+      isAllowedLoginCaptchaPageUrl(
+        'http://localhost:3344/captcha/turnstile',
+        'http://localhost:3344/captcha/turnstile?action=email_request_code',
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedLoginCaptchaPageUrl(
+        'http://auth.example.com/captcha/turnstile',
+        'http://auth.example.com/captcha/turnstile',
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('AuthContext captcha 闸接线(静态源码断言)', () => {
   const authContextSource = readFileSync(
     resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
@@ -112,8 +185,9 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
   it('captcha WebView 不让 originWhitelist 把挑战页交给外部浏览器', () => {
     expect(captchaWebViewSource).toContain("originWhitelist={['*']}");
     expect(captchaWebViewSource).toContain('setSupportMultipleWindows={false}');
+    expect(captchaWebViewSource).toContain('isAllowedLoginCaptchaNavigation(request, themedUrl)');
     expect(captchaWebViewSource).toContain(
-      'target.origin === pageOrigin || target.origin === TURNSTILE_ORIGIN',
+      'isAllowedLoginCaptchaPageUrl(event.nativeEvent.url, themedUrl)',
     );
     expect(captchaWebViewSource).not.toContain('`${pageOrigin}/*`');
   });

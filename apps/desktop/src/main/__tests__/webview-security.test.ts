@@ -32,7 +32,11 @@ vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
 }));
 
-import { BROWSER_PARTITION, LOGIN_CAPTCHA_PARTITION } from '../../shared/webviewPartition';
+import {
+  BROWSER_PARTITION,
+  LOGIN_CAPTCHA_CANCEL_HASH,
+  LOGIN_CAPTCHA_PARTITION,
+} from '../../shared/webviewPartition';
 import { getEffectiveAppShortcuts, type AppShortcutId } from '../../shared/appShortcuts';
 import {
   BLANK_POPUP_WINDOW_WEB_PREFERENCES,
@@ -442,8 +446,10 @@ describe('installLoginCaptchaGuestHandlers(captcha guest 导航闸)', () => {
     setLoginCaptchaOriginResolver(() => ['https://auth.example.com']);
     const guest = new EventEmitter() as EventEmitter & {
       setWindowOpenHandler: ReturnType<typeof vi.fn>;
+      executeJavaScript: ReturnType<typeof vi.fn>;
     };
     guest.setWindowOpenHandler = vi.fn();
+    guest.executeJavaScript = vi.fn(async () => undefined);
 
     installLoginCaptchaGuestHandlers(guest as unknown as WebContents);
 
@@ -463,6 +469,14 @@ describe('installLoginCaptchaGuestHandlers(captcha guest 导航闸)', () => {
       guest.emit(eventName, blocked, 'https://evil.example.com/captcha/turnstile');
       expect(blocked.preventDefault).toHaveBeenCalledTimes(1);
     }
+
+    const escapeEvent = { preventDefault: vi.fn() };
+    guest.emit('before-input-event', escapeEvent, { type: 'keyDown', key: 'Escape' });
+    expect(escapeEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(guest.executeJavaScript).toHaveBeenCalledWith(
+      `location.hash = ${JSON.stringify(LOGIN_CAPTCHA_CANCEL_HASH)}`,
+      true,
+    );
   });
 });
 

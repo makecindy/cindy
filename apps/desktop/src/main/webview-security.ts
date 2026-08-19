@@ -28,6 +28,7 @@ import { app, session, type BrowserWindow, type Session, type WebContents } from
 
 import {
   BROWSER_PARTITION,
+  LOGIN_CAPTCHA_CANCEL_HASH,
   LOGIN_CAPTCHA_PAGE_PATH,
   LOGIN_CAPTCHA_PARTITION,
 } from '../shared/webviewPartition';
@@ -269,6 +270,15 @@ export function installLoginCaptchaGuestHandlers(guestContents: WebContents): vo
   };
   guestContents.on('will-navigate', guardTopLevelNavigation);
   guestContents.on('will-redirect', guardTopLevelNavigation);
+  // guest 获得焦点后键盘事件不会冒泡到宿主 Renderer。Main 只拦 Esc，并通过
+  // 静态 location.hash 复用既有无日志回传通道，让模态层仍可被键盘取消。
+  guestContents.on('before-input-event', (event, input) => {
+    if (!isGuestShortcutKeyDownType(input.type) || input.key !== 'Escape') return;
+    event.preventDefault();
+    void guestContents
+      .executeJavaScript(`location.hash = ${JSON.stringify(LOGIN_CAPTCHA_CANCEL_HASH)}`, true)
+      .catch(() => undefined);
+  });
 }
 
 /** Renderer 接收 popup 路由消息的 IPC channel。main → renderer。 */

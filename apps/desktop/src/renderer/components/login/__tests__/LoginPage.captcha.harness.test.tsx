@@ -193,6 +193,35 @@ describe('LoginPage captcha 前置闸(providers 主动触发)', () => {
     );
   });
 
+  it('挑战打开时聚焦主要 WebView 交互，而不是默认聚焦取消', async () => {
+    const { identifier, verification } = await statesFor('providers:email-captcha');
+    const { rerender } = mount(identifier);
+    setState(rerender, verification);
+
+    fireEvent.click(screen.getByText('login.resendCode'));
+    await screen.findByTestId('login-captcha-overlay');
+
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('WEBVIEW'));
+    expect(document.activeElement).not.toBe(screen.getByTestId('login-captcha-cancel'));
+
+    fireEvent.click(screen.getByTestId('login-captcha-cancel'));
+  });
+
+  it('guest 内 Esc 的固定取消 hash 会关闭挑战且不派发发码', async () => {
+    const { identifier, verification } = await statesFor('providers:email-captcha');
+    const { rerender } = mount(identifier);
+    setState(rerender, verification);
+
+    fireEvent.click(screen.getByText('login.resendCode'));
+    await screen.findByTestId('login-captcha-overlay');
+    await emitCaptchaResult('cindy-captcha=err.cancelled');
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('login-captcha-overlay')).toBeNull(),
+    );
+    expect(loginHook.value.dispatchWithResult).not.toHaveBeenCalled();
+  });
+
   it('取消挑战 = 不派发、overlay 关闭、无错误注入', async () => {
     const { identifier, verification } = await statesFor('providers:email-captcha');
     const { rerender } = mount(identifier);

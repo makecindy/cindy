@@ -3,14 +3,15 @@ import { ActivityIndicator, BackHandler, Pressable, StyleSheet, View } from 'rea
 import { WebView } from 'react-native-webview';
 
 import { parseCaptchaWebViewMessage } from '@/auth/loginCaptchaMessage';
-import { withLoginCaptchaTheme } from '@/auth/loginCaptchaUrl';
+import {
+  isAllowedLoginCaptchaNavigation,
+  isAllowedLoginCaptchaPageUrl,
+  withLoginCaptchaTheme,
+} from '@/auth/loginCaptchaUrl';
 import { loginText } from '@/auth/loginMessages';
 import { Text } from '@/components/AppText';
 import { useTheme } from '@/theme';
 import { fontWeight, lineHeight, radius, typeScale } from '@/theme/tokens';
-
-/** Turnstile 挑战 iframe 的固定来源(托管页 CSP 同源放行)。 */
-const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
 
 /**
  * LoginCaptchaWebView — 登录人机验证模态层(global 邮箱发码前置闸)。
@@ -46,14 +47,6 @@ export function LoginCaptchaWebView({
   // 此组件位于 MobileLoginHandoffStage 的 ThemeOverrideProvider 内，mode 是登录
   // 子树真正显示的主题（首次启动固定 light，之后才跟随系统）。
   const themedUrl = useMemo(() => withLoginCaptchaTheme(url, mode), [mode, url]);
-
-  const pageOrigin = useMemo(() => {
-    try {
-      return new URL(themedUrl).origin;
-    } catch {
-      return null;
-    }
-  }, [themedUrl]);
 
   const retry = () => {
     setReady(false);
@@ -129,15 +122,12 @@ export function LoginCaptchaWebView({
               // Android 的 window.open/target=_blank 默认走 onCreateWindow，可能
               // 绕过导航回调并唤起外部浏览器；禁用多窗口后统一落回本 WebView 闸。
               setSupportMultipleWindows={false}
-              onShouldStartLoadWithRequest={(request) => {
-                try {
-                  const target = new URL(request.url);
-                  return target.origin === pageOrigin || target.origin === TURNSTILE_ORIGIN;
-                } catch {
-                  return false;
-                }
-              }}
+              onShouldStartLoadWithRequest={(request) =>
+                isAllowedLoginCaptchaNavigation(request, themedUrl)
+              }
               onMessage={(event) => {
+                // 即使平台导航回调存在竞态，也只接收仍由预期托管顶层页发出的消息。
+                if (!isAllowedLoginCaptchaPageUrl(event.nativeEvent.url, themedUrl)) return;
                 const result = parseCaptchaWebViewMessage(event.nativeEvent.data);
                 if (!result) return;
                 if (result.ok) {

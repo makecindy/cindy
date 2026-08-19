@@ -26,6 +26,11 @@ export const BROWSER_PARTITION = 'persist:xdmaker-browser-app';
  */
 export const LOGIN_CAPTCHA_PARTITION = 'login-captcha';
 
+/** guest 获得焦点时，Main 用这个静态 hash 把 Esc 取消意图送回宿主 Renderer。 */
+export const LOGIN_CAPTCHA_CANCEL_RESULT_CODE = 'cancelled';
+export const LOGIN_CAPTCHA_CANCEL_HASH =
+  `#cindy-captcha=err.${LOGIN_CAPTCHA_CANCEL_RESULT_CODE}`;
+
 import { CAPTCHA_CHALLENGE_PAGE_PATH } from '@cindy/auth-client';
 
 /**

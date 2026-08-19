@@ -1,3 +1,49 @@
+import { CAPTCHA_CHALLENGE_PAGE_PATH } from '@cindy/auth-client';
+
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+
+function isHttpsOrLoopbackHttp(url: URL): boolean {
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  return url.protocol === 'https:' || (url.protocol === 'http:' && loopback);
+}
+
+/**
+ * 托管挑战页的顶层文档边界：协议必须为 HTTPS（本地开发仅放行 loopback HTTP），
+ * origin 与共享挑战路径都必须和预期地址一致。显式检查 protocol，避免 blob URL
+ * 继承 auth origin 后绕过只比较 origin 的判定。
+ */
+export function isAllowedLoginCaptchaPageUrl(rawUrl: string, expectedUrl: string): boolean {
+  let target: URL;
+  let expected: URL;
+  try {
+    target = new URL(rawUrl);
+    expected = new URL(expectedUrl);
+  } catch {
+    return false;
+  }
+  if (!isHttpsOrLoopbackHttp(target) || !isHttpsOrLoopbackHttp(expected)) return false;
+  return (
+    target.protocol === expected.protocol &&
+    target.origin === expected.origin &&
+    target.pathname === CAPTCHA_CHALLENGE_PAGE_PATH &&
+    expected.pathname === CAPTCHA_CHALLENGE_PAGE_PATH
+  );
+}
+
+/** Mobile WebView 导航闸：auth 托管页只能是顶层，Turnstile 只能是 HTTPS 子 frame。 */
+export function isAllowedLoginCaptchaNavigation(
+  request: { url: string; isTopFrame: boolean },
+  expectedUrl: string,
+): boolean {
+  if (request.isTopFrame) return isAllowedLoginCaptchaPageUrl(request.url, expectedUrl);
+  try {
+    const target = new URL(request.url);
+    return target.protocol === 'https:' && target.origin === TURNSTILE_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 将登录子树最终生效的 light/dark 模式写入托管挑战页 URL。
  *

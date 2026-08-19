@@ -5,7 +5,10 @@ import type { WebviewTag } from 'electron';
 import { createLogger } from '@/lib/logger';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 
-import { LOGIN_CAPTCHA_PARTITION } from '../../../shared/webviewPartition';
+import {
+  LOGIN_CAPTCHA_CANCEL_RESULT_CODE,
+  LOGIN_CAPTCHA_PARTITION,
+} from '../../../shared/webviewPartition';
 import { LOGIN_COLORS } from './loginDesignTokens';
 
 const log = createLogger('LoginCaptchaOverlay');
@@ -84,7 +87,7 @@ export function LoginCaptchaOverlay({
   const [generation, setGeneration] = useState(0);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const retryRef = useRef<HTMLButtonElement | null>(null);
   // onResult 进 ref:webview 生命周期 effect 不因回调身份变化重挂载 guest。
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
@@ -101,10 +104,11 @@ export function LoginCaptchaOverlay({
   challengeTarget.searchParams.set('lang', i18n.language);
   const challengeUrl = challengeTarget.toString();
 
-  // 模态语义对齐 LoginConsentDialog:焦点入取消钮、背景兄弟节点 inert、关闭归还焦点。
+  // 模态语义对齐 LoginConsentDialog:背景兄弟节点 inert、关闭归还焦点。
+  // 初始焦点由 webview 挂载 effect 交给挑战主交互，绝不默认落在取消动作；
+  // guest 内的 Esc 由 Main 转成固定 hash 回传，仍可可靠取消。
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    cancelRef.current?.focus();
     const rootEl = containerRef.current;
     const inerted: HTMLElement[] = [];
     if (rootEl?.parentElement) {
@@ -121,6 +125,11 @@ export function LoginCaptchaOverlay({
     };
   }, []);
 
+  // 挑战失败后，WebView 已卸载；此时重试是弹层内的主要动作。
+  useEffect(() => {
+    if (failed) retryRef.current?.focus();
+  }, [failed]);
+
   useEffect(() => {
     if (failed) return;
     const host = hostRef.current;
@@ -128,6 +137,7 @@ export function LoginCaptchaOverlay({
     const webview = document.createElement('webview') as WebviewTag;
     webview.setAttribute('partition', LOGIN_CAPTCHA_PARTITION);
     webview.setAttribute('src', challengeUrl);
+    webview.setAttribute('tabindex', '0');
     webview.setAttribute(
       'style',
       'display:flex;width:100%;height:100%;opacity:0;transition:opacity 0.12s ease;',
@@ -139,6 +149,7 @@ export function LoginCaptchaOverlay({
     const onDomReady = () => {
       if (disposed) return;
       webview.style.opacity = '1';
+      webview.focus();
       setReady(true);
     };
     const onInPageNavigate = (event: Electron.DidNavigateInPageEvent) => {
@@ -147,6 +158,10 @@ export function LoginCaptchaOverlay({
       if (!result) return;
       if (result.status === 'ok') {
         settle(result.token);
+        return;
+      }
+      if (result.code === LOGIN_CAPTCHA_CANCEL_RESULT_CODE) {
+        settle(null);
         return;
       }
       // 挑战页侧 error-callback / expired-callback:转重试态,码只进日志。
@@ -166,6 +181,7 @@ export function LoginCaptchaOverlay({
     webview.addEventListener('render-process-gone', onGone);
     webview.addEventListener('did-fail-load', onFailLoad);
     host.appendChild(webview);
+    webview.focus();
     return () => {
       disposed = true;
       clearTimeout(timeoutTimer);
@@ -232,6 +248,7 @@ export function LoginCaptchaOverlay({
             </p>
             <button
               type="button"
+              ref={retryRef}
               data-testid="login-captcha-retry"
               onClick={retry}
               className="font-medium transition-opacity hover:opacity-80"
@@ -257,7 +274,6 @@ export function LoginCaptchaOverlay({
         )}
         <button
           type="button"
-          ref={cancelRef}
           data-testid="login-captcha-cancel"
           onClick={() => settle(null)}
           className="font-medium transition-opacity hover:opacity-80"
