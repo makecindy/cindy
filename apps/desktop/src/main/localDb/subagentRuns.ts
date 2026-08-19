@@ -17,7 +17,7 @@ import {
   subagentSpawnResultIndicatesRunning,
   type AgentTaskUpdate,
 } from '@cindy/maker-shared/agent-task';
-import { and, desc, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 
 import { getDbClient } from './client/current.js';
 import { messages, sessions, subagentRunAliases, subagentRuns } from './schema.js';
@@ -233,8 +233,59 @@ function mergeUnique(
   return out.size <= max ? [...out] : [...out].slice(-max);
 }
 
+const TERMINAL_SUBAGENT_STATUSES: readonly SubagentRunStatus[] = [
+  'completed',
+  'failed',
+  'stopped',
+];
+
 function terminal(status: SubagentRunStatus): boolean {
-  return status === 'completed' || status === 'failed' || status === 'stopped';
+  return TERMINAL_SUBAGENT_STATUSES.includes(status);
+}
+
+/**
+ * Is this row a Cindy-owned detached runner that is still working?
+ *
+ * `stop` is the one capability only `PI_DURABLE_SUBAGENT_CAPABILITIES` carries,
+ * so it reads exactly as "a process outside the parent's turn is running and
+ * the user must be able to reach it". A synchronous PI child, a Claude `Agent`
+ * or a Codex spawn dies with the turn that started it and never advertises it.
+ */
+function isActiveDurableRow(row: Pick<SubagentRunRow, 'status' | 'capabilities'>): boolean {
+  return !terminal(row.status) && parseCapabilities(row.capabilities).stop;
+}
+
+/** SQL half of {@link isActiveDurableRow}; the two must stay in step. */
+function activeDurableRun(): SQL {
+  return and(
+    notInArray(subagentRuns.status, [...TERMINAL_SUBAGENT_STATUSES]),
+    // `capabilities` is only ever written here via JSON.stringify and defaults
+    // to '{}', but json_extract *throws* on malformed JSON and that would take
+    // the whole Subagents list down with it — so read it the same fail-closed
+    // way `parseCapabilities` does.
+    sql`(json_valid(${subagentRuns.capabilities}) = 1
+      AND json_extract(${subagentRuns.capabilities}, '$.stop') IS 1)`,
+  )!;
+}
+
+/**
+ * Row visibility against the `/clear` boundary.
+ *
+ * `/clear` ends the *message history*; it does not end background work. The
+ * parent session takes an ordinary navigation close, so a durable PI Subagent's
+ * detached runner deliberately keeps running — it keeps spending credentials,
+ * calling tools and writing the workspace. Filtering its row out by `startedAt`
+ * hid the entire Subagents tab along with the only stop entry the user has, and
+ * PI Full Access has no OS sandbox underneath it.
+ *
+ * So a still-active durable run is exempt from the boundary. The exemption ends
+ * with the run: once it reaches a terminal state the row is archived behind the
+ * clear boundary like any other history, which is what clearing history means.
+ * The durable transcript stays on disk either way.
+ */
+function clearBoundary(clearedAt: number | null): SQL[] {
+  if (clearedAt === null) return [];
+  return [or(gt(subagentRuns.startedAt, clearedAt), activeDurableRun())!];
 }
 
 function initialCapabilities(update: AgentTaskUpdate): Readonly<SubagentCapabilities> {
@@ -403,7 +454,7 @@ async function matchingRow(
     eq(subagentRuns.provider, provider),
     isNull(subagentRuns.rewindAt),
     isNull(subagentRuns.deletedAt),
-    ...(clearedAt !== null ? [gt(subagentRuns.startedAt, clearedAt)] : []),
+    ...clearBoundary(clearedAt),
   ];
   const [indexed] = await db
     .select({ run: subagentRuns })
@@ -514,11 +565,6 @@ export async function persistSubagentTaskUpdate(
   // Remote/device-link sessions are not owned by this database. PR1 fails
   // closed instead of accidentally attaching their events to the controller.
   if (!session || session.status === 'deleted') return null;
-  if (
-    session.clearedAt !== null
-    && update.createdAt
-    && finiteTime(update.createdAt, Number.MAX_SAFE_INTEGER) <= session.clearedAt
-  ) return null;
 
   const incomingIdentityAliases = mergeUnique(
     [],
@@ -538,6 +584,21 @@ export async function persistSubagentTaskUpdate(
     MAX_INDEXED_ALIAS_COUNT,
   );
   const existing = await matchingRow(sessionId, update.provider, lookupAliases, session.clearedAt);
+  // An observation older than the clear boundary belongs to history the user
+  // just dismissed: it must not rebuild a cleared row, and must not reopen one
+  // that already finished. Runs are the exception, not events — a durable
+  // runner that survived the clear is still emitting, and *every* frame it
+  // sends from here on is stamped with its original pre-clear `createdAt`. Left
+  // unqualified this guard froze exactly the row the user needs to watch: the
+  // reconciler could no longer advance its status, so it could never reach a
+  // terminal state on screen either. Scoped to an already-existing, still-active
+  // durable row, so it still refuses to *create* anything from stale history.
+  if (
+    session.clearedAt !== null
+    && update.createdAt
+    && finiteTime(update.createdAt, Number.MAX_SAFE_INTEGER) <= session.clearedAt
+    && !(existing && isActiveDurableRow(existing))
+  ) return null;
   // A progress/terminal event is never authority to invent a child or attach a
   // control call's receiver ids to an arbitrary existing run.
   if (!existing && observation.kind !== 'spawn') return null;
@@ -678,7 +739,7 @@ export async function persistSubagentTaskUpdate(
         eq(subagentRuns.sessionId, sessionId),
         isNull(subagentRuns.rewindAt),
         isNull(subagentRuns.deletedAt),
-        ...(session.clearedAt !== null ? [gt(subagentRuns.startedAt, session.clearedAt)] : []),
+        ...clearBoundary(session.clearedAt),
       ),
     )
     .limit(1);
@@ -729,7 +790,7 @@ export async function listVisibleSubagentObservationIdentities(
         eq(subagentRuns.sessionId, sessionId),
         isNull(subagentRuns.rewindAt),
         isNull(subagentRuns.deletedAt),
-        ...(session.clearedAt !== null ? [gt(subagentRuns.startedAt, session.clearedAt)] : []),
+        ...clearBoundary(session.clearedAt),
       ),
     );
   return rows.map((row) => ({
@@ -746,14 +807,28 @@ export async function listVisibleSubagentObservationIdentities(
   }));
 }
 
-async function visibleParentToolUseIds(
+/**
+ * Newest non-rewound `tool_use` row per candidate id.
+ *
+ * The `/clear` bound used to sit in this query next to the rewind bound. It is
+ * lifted out so callers can apply the two halves separately: a rewound launch
+ * message hides its run unconditionally, while the clear boundary is waived for
+ * a still-running durable runner (see {@link clearBoundary}). Without that
+ * split, exempting the run's `startedAt` achieved nothing — its launch tool call
+ * is by definition older than the clear it survived, so this filter dropped the
+ * row again one step later.
+ *
+ * Keeping only the newest occurrence is equivalent to the old set membership:
+ * an id was visible iff *any* of its rows cleared the bound, which is exactly
+ * the maximum clearing it.
+ */
+async function parentToolUseCreatedAt(
   sessionId: string,
   candidates: string[],
-  clearedAt: number | null,
-): Promise<Set<string>> {
-  if (candidates.length === 0) return new Set();
+): Promise<Map<string, number>> {
+  if (candidates.length === 0) return new Map();
   const rows = await getDbClient()
-    .drizzle.select({ toolUseId: messages.toolUseId })
+    .drizzle.select({ toolUseId: messages.toolUseId, createdAt: messages.createdAt })
     .from(messages)
     .where(
       and(
@@ -761,10 +836,43 @@ async function visibleParentToolUseIds(
         eq(messages.role, 'tool_use'),
         inArray(messages.toolUseId, candidates),
         isNull(messages.rewindAt),
-        ...(clearedAt !== null ? [gt(messages.createdAt, clearedAt)] : []),
       ),
     );
-  return new Set(rows.flatMap((row) => (row.toolUseId ? [row.toolUseId] : [])));
+  const newest = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.toolUseId) continue;
+    const current = newest.get(row.toolUseId);
+    if (current === undefined || row.createdAt > current) newest.set(row.toolUseId, row.createdAt);
+  }
+  return newest;
+}
+
+/** Both halves applied — the visibility a row without a live runner gets. */
+async function visibleParentToolUseIds(
+  sessionId: string,
+  candidates: string[],
+  clearedAt: number | null,
+): Promise<Set<string>> {
+  const newest = await parentToolUseCreatedAt(sessionId, candidates);
+  const visible = new Set<string>();
+  for (const [toolUseId, createdAt] of newest) {
+    if (clearedAt === null || createdAt > clearedAt) visible.add(toolUseId);
+  }
+  return visible;
+}
+
+/** Is this row's launch tool call still visible to the reader? */
+function parentVisible(
+  row: SubagentRunRow,
+  parentCreatedAt: ReadonlyMap<string, number>,
+  clearedAt: number | null,
+): boolean {
+  if (!row.parentToolUseId) return true;
+  const createdAt = parentCreatedAt.get(row.parentToolUseId);
+  // Rewound or absent: hidden regardless of what the run is doing.
+  if (createdAt === undefined) return false;
+  if (clearedAt === null || createdAt > clearedAt) return true;
+  return isActiveDurableRow(row);
 }
 
 interface SubagentListCursor {
@@ -820,9 +928,7 @@ export async function listSubagentRuns(
     isNull(subagentRuns.deletedAt),
     ...(options.provider ? [eq(subagentRuns.provider, options.provider)] : []),
   ];
-  if (session.clearedAt !== null) {
-    baseConditions.push(gt(subagentRuns.startedAt, session.clearedAt));
-  }
+  baseConditions.push(...clearBoundary(session.clearedAt));
   const visibleRows: SubagentRunRow[] = [];
   let scanCursor = cursor;
   let exhausted = false;
@@ -849,15 +955,9 @@ export async function listSubagentRuns(
       .limit(pageSize + 1);
     if (batch.length === 0) break;
     const parentIds = batch.flatMap((row) => (row.parentToolUseId ? [row.parentToolUseId] : []));
-    const visibleToolUseIds = await visibleParentToolUseIds(
-      sessionId,
-      parentIds,
-      session.clearedAt,
-    );
+    const parentCreatedAt = await parentToolUseCreatedAt(sessionId, parentIds);
     visibleRows.push(
-      ...batch.filter(
-        (row) => !row.parentToolUseId || visibleToolUseIds.has(row.parentToolUseId),
-      ),
+      ...batch.filter((row) => parentVisible(row, parentCreatedAt, session.clearedAt)),
     );
     const lastScanned = batch[batch.length - 1];
     scanCursor = { startedAt: lastScanned.startedAt, id: lastScanned.id };
@@ -906,7 +1006,7 @@ async function resolveDetailRow(
     eq(subagentRuns.provider, provider),
     isNull(subagentRuns.rewindAt),
     isNull(subagentRuns.deletedAt),
-    ...(clearedAt !== null ? [gt(subagentRuns.startedAt, clearedAt)] : []),
+    ...clearBoundary(clearedAt),
   ];
   const [direct] = await db
     .select()
@@ -944,12 +1044,8 @@ export async function getSubagentRunDetail(
   const row = await resolveDetailRow(sessionId, provider, normalizedIdentifier, session.clearedAt);
   if (!row) return null;
   if (row.parentToolUseId) {
-    const visibleToolUseIds = await visibleParentToolUseIds(
-      sessionId,
-      [row.parentToolUseId],
-      session.clearedAt,
-    );
-    if (!visibleToolUseIds.has(row.parentToolUseId)) return null;
+    const parentCreatedAt = await parentToolUseCreatedAt(sessionId, [row.parentToolUseId]);
+    if (!parentVisible(row, parentCreatedAt, session.clearedAt)) return null;
   }
 
   const run = rowToRun(row, session.remoteHostId === null);

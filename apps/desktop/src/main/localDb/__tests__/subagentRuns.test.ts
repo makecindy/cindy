@@ -1117,6 +1117,133 @@ describe('durable Subagent runs', () => {
     expect(first?.nextCursor).toBeUndefined();
   });
 
+  // `/clear` closes the message history but takes an ordinary navigation close,
+  // so a durable PI runner deliberately keeps running behind it. Hiding its row
+  // took the Subagents tab — and the only stop entry — away from a process that
+  // was still spending credentials and writing the workspace.
+  describe('a durable runner that outlives /clear', () => {
+    const CLEARED_AT = 1500;
+
+    function clear(): void {
+      rawDb.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(CLEARED_AT, 'session-1');
+    }
+
+    /** Launched at 1000, i.e. entirely inside the history the clear removes. */
+    async function startDurableRun(): Promise<string> {
+      insertMessage('durable-tool-use', 'tool_use', '{}', 'durable-parent', 900);
+      const created = await persistSubagentTaskUpdate('session-1', observed({
+        provider: 'pi',
+        taskId: 'durable-parent',
+        parentToolUseId: 'durable-parent',
+        taskType: 'pi_subagent',
+        status: 'running',
+        title: 'Long background job',
+        createdAt: '1970-01-01T00:00:01.000Z',
+        updatedAt: '1970-01-01T00:00:01.000Z',
+      }, { kind: 'spawn', providerRunIds: ['123e4567-e89b-42d3-a456-426614174009'] }));
+      expect(created).toMatchObject({ created: true });
+      return created!.runId;
+    }
+
+    /** Reconciliation restates the run's original, pre-clear `createdAt`. */
+    function durableFrame(
+      status: 'running' | 'completed',
+      updatedAt: string,
+      extra: Record<string, unknown> = {},
+    ): Record<string, unknown> {
+      return observed({
+        provider: 'pi',
+        taskId: 'durable-parent',
+        parentToolUseId: 'durable-parent',
+        taskType: 'pi_subagent',
+        status,
+        createdAt: '1970-01-01T00:00:01.000Z',
+        updatedAt,
+        ...extra,
+      }, { kind: status === 'completed' ? 'terminal' : 'progress' });
+    }
+
+    it('stays listable and openable while it runs', async () => {
+      const runId = await startDurableRun();
+      clear();
+
+      // Both halves of the boundary have to give way: the row's own `startedAt`
+      // and the launch tool call it hangs off, which is older still.
+      expect((await listSubagentRuns('session-1'))?.runs.map((run) => run.id)).toEqual([runId]);
+      const detail = await getSubagentRunDetail('session-1', 'pi', runId);
+      expect(detail).toMatchObject({ status: 'running', title: 'Long background job' });
+      // The stop entry the user needs is carried on the row itself.
+      expect(detail?.capabilities.stop).toBe(true);
+    });
+
+    it('keeps accepting status writes so it can still reach a terminal state', async () => {
+      const runId = await startDurableRun();
+      clear();
+
+      const progressed = await persistSubagentTaskUpdate(
+        'session-1',
+        durableFrame('running', '1970-01-01T00:00:04.000Z', { summary: 'still working' }),
+      );
+
+      expect(progressed).toMatchObject({ runId, created: false });
+      expect(await getSubagentRunDetail('session-1', 'pi', runId)).toMatchObject({
+        status: 'running',
+        summary: 'still working',
+      });
+    });
+
+    it('archives itself behind the clear boundary once it finishes', async () => {
+      const runId = await startDurableRun();
+      clear();
+
+      const finished = await persistSubagentTaskUpdate(
+        'session-1',
+        durableFrame('completed', '1970-01-01T00:00:05.000Z', { summary: 'done' }),
+      );
+
+      // Deliberate: the exemption is for live work, not for reading history back.
+      // The durable transcript stays on disk, and the audit row is untouched.
+      expect(finished).toMatchObject({ runId, created: false });
+      expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
+      expect(await getSubagentRunDetail('session-1', 'pi', runId)).toBeNull();
+      expect(
+        rawDb.prepare('SELECT status FROM subagent_runs WHERE id = ?').get(runId),
+      ).toEqual({ status: 'completed' });
+    });
+
+    it('does not exempt a durable run that had already finished before the clear', async () => {
+      const runId = await startDurableRun();
+      await persistSubagentTaskUpdate(
+        'session-1',
+        durableFrame('completed', '1970-01-01T00:00:02.000Z', { summary: 'finished earlier' }),
+      );
+      clear();
+
+      expect((await listSubagentRuns('session-1'))?.runs).toEqual([]);
+      expect(await getSubagentRunDetail('session-1', 'pi', runId)).toBeNull();
+    });
+
+    it('never rebuilds a cleared row from a stale pre-clear spawn observation', async () => {
+      // Parent tool call is post-clear, so only the event's own age can stop it:
+      // the exemption is for updating a row that exists and is alive, never for
+      // creating one out of history the user dismissed.
+      insertMessage('orphan-tool-use', 'tool_use', '{}', 'orphan-parent', 2000);
+      clear();
+
+      await expect(persistSubagentTaskUpdate('session-1', observed({
+        provider: 'pi',
+        taskId: 'orphan-parent',
+        parentToolUseId: 'orphan-parent',
+        taskType: 'pi_subagent',
+        status: 'running',
+        createdAt: '1970-01-01T00:00:01.000Z',
+        updatedAt: '1970-01-01T00:00:02.000Z',
+      }, { kind: 'spawn', providerRunIds: ['123e4567-e89b-42d3-a456-426614174010'] })))
+        .resolves.toBeNull();
+      expect(rawDb.prepare('SELECT id FROM subagent_runs').all()).toEqual([]);
+    });
+  });
+
   function insertMessage(
     id: string,
     role: 'tool_use' | 'tool_result',
