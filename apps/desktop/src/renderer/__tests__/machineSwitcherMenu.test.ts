@@ -244,10 +244,11 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     }
   });
 
-  it('关项目分组时 hook 把 manual 回落到 recency', () => {
+  it('项目顺序与任务排序拆开,关分组不再改写 sortBy', () => {
     const hookSource = read('features', 'cc-agent', 'hooks', 'useSidebarFilter.ts');
-    expect(hookSource).toContain('nextSortByAfterGroupByChange');
-    expect(hookSource).toContain('const nextSort = nextSortByAfterGroupByChange(next, current)');
+    expect(hookSource).not.toContain('nextSortByAfterGroupByChange');
+    expect(hookSource).toContain('setProjectOrder');
+    expect(hookSource).toContain('migrateLegacyManualSort');
   });
 
   it('列表行也接收来源标签(平铺时项目会话不再丢项目名)', () => {
@@ -290,9 +291,11 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(filterSource).not.toMatch(
       /onSelect=\{\(\) => setMainViewMode\(option\.value\)\}\s*\n\s*keepOpen/,
     );
-    expect(filterSource).toContain("checked={groupDevice && sortBy !== 'manual'}");
-    expect(filterSource).toContain("disabled={sortBy === 'manual'}");
-    expect(filterSource).toContain("t('ccAgent.sidebar.filterGroupByDeviceManualTip')");
+    expect(filterSource).not.toMatch(
+      /onSelect=\{\(\) => setProjectOrder\(option\.value\)\}\s*\n\s*keepOpen/,
+    );
+    expect(filterSource).toContain('checked={groupDevice}');
+    expect(filterSource).not.toContain("disabled={sortBy === 'manual'}");
   });
 
   // 2026-08-13 用户裁决:「优先级」光看标签猜不出排序依据,需要 hover 说明。

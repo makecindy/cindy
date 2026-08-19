@@ -1722,13 +1722,19 @@ function ExpandedView({
         },
       ];
     });
-    return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
+    return sortProjectsForSidebar(
+      projects,
+      filter.sortBy,
+      filter.manualProjectOrder,
+      filter.projectOrder,
+    );
   }, [
     visibleProjects,
     pinnedProjectKeys,
     vendorPredicate,
     filter.sortBy,
     filter.manualProjectOrder,
+    filter.projectOrder,
   ]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
@@ -1746,8 +1752,13 @@ function ExpandedView({
         },
       ];
     });
-    return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
-  }, [visibleProjects, vendorPredicate, filter.sortBy, filter.manualProjectOrder]);
+    return sortProjectsForSidebar(
+      projects,
+      filter.sortBy,
+      filter.manualProjectOrder,
+      filter.projectOrder,
+    );
+  }, [visibleProjects, vendorPredicate, filter.sortBy, filter.manualProjectOrder, filter.projectOrder]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter

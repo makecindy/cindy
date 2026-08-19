@@ -7639,6 +7639,15 @@
       "filterLastActivityHeading": "최근 활동",
       "filterGroupByHeading": "그룹",
       "filterSortByHeading": "정렬",
+      "filterTaskSortHeading": "작업 정렬",
+      "filterProjectOrderHeading": "프로젝트 순서",
+      "filterProjectOrder": {
+        "activity": "최근 활동순",
+        "custom": "수동"
+      },
+      "filterProjectOrderTip": {
+        "custom": "마우스로 프로젝트 행을 끌어 순서를 바꿉니다. 안의 작업은 위 정렬을 따릅니다."
+      },
       "filterProjectsHeading": "프로젝트",
       "filterAllProjects": "모든 프로젝트",
       "filterHeading": "필터",

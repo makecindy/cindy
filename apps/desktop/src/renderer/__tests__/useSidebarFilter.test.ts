@@ -20,6 +20,7 @@ import {
   GROUP_BY_KEY,
   LAST_ACTIVITY_KEY,
   SORT_BY_KEY,
+  PROJECT_ORDER_KEY,
   TASK_INFO_KEY,
   MANUAL_PROJECT_ORDER_KEY,
   DIALOGUE_GROUP_COLLAPSED_KEY,
@@ -38,13 +39,15 @@ import {
   persistGroupBy,
   persistLastActivity,
   persistSortBy,
+  persistProjectOrder,
   persistTaskInfoFields,
   nextTaskInfoAfterToggle,
   persistManualProjectOrder,
   DIALOGUE_FILTER_KEY,
   nextProjectsAfterToggle,
-  nextSortByAfterGroupByChange,
   includeProjectInFilter,
+  loadProjectOrder,
+  migrateLegacyManualSort,
   projectFilterIncludes,
   removeProjectsFromFilter,
   gcProjectsAgainstActive,
@@ -246,8 +249,6 @@ describe('loadSortBy', () => {
   it('returns persisted sort modes', () => {
     localStorage.setItem(SORT_BY_KEY, 'priority');
     expect(loadSortBy()).toBe('priority');
-    localStorage.setItem(SORT_BY_KEY, 'manual');
-    expect(loadSortBy()).toBe('manual');
     localStorage.setItem(SORT_BY_KEY, 'recency');
     expect(loadSortBy()).toBe('recency');
   });
@@ -276,12 +277,47 @@ describe('loadSortBy', () => {
   });
 });
 
-describe('nextSortByAfterGroupByChange', () => {
-  it('flat + manual 回落到 recency;其它组合保持', () => {
-    expect(nextSortByAfterGroupByChange('flat', 'manual')).toBe('recency');
-    expect(nextSortByAfterGroupByChange('flat', 'priority')).toBe('priority');
-    expect(nextSortByAfterGroupByChange('flat', 'recency')).toBe('recency');
-    expect(nextSortByAfterGroupByChange('project', 'manual')).toBe('manual');
+describe('loadProjectOrder', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it("defaults to 'activity' when storage is empty", () => {
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('returns persisted project order', () => {
+    persistProjectOrder('custom');
+    expect(loadProjectOrder()).toBe('custom');
+    persistProjectOrder('activity');
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it("maps leftover sortBy=manual to custom when projectOrder is unset", () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    expect(loadProjectOrder()).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+  });
+});
+
+describe('migrateLegacyManualSort', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('rewrites sortBy=manual to recency + custom project order', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    migrateLegacyManualSort();
+    expect(localStorage.getItem(SORT_BY_KEY)).toBe('recency');
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+    expect(loadProjectOrder()).toBe('custom');
+  });
+
+  it('does not overwrite an explicit projectOrder', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    persistProjectOrder('activity');
+    migrateLegacyManualSort();
+    expect(loadSortBy()).toBe('recency');
+    expect(loadProjectOrder()).toBe('activity');
   });
 });
 
@@ -423,8 +459,6 @@ describe('persist round-trip', () => {
   it('persistSortBy → loadSortBy returns the same value', () => {
     persistSortBy('priority');
     expect(loadSortBy()).toBe('priority');
-    persistSortBy('manual');
-    expect(loadSortBy()).toBe('manual');
     persistSortBy('recency');
     expect(loadSortBy()).toBe('recency');
   });

@@ -7612,6 +7612,15 @@
       "filterLastActivityHeading": "最近活跃",
       "filterGroupByHeading": "分组",
       "filterSortByHeading": "排序",
+      "filterTaskSortHeading": "任务排序",
+      "filterProjectOrderHeading": "项目顺序",
+      "filterProjectOrder": {
+        "activity": "按最近活动",
+        "custom": "手动"
+      },
+      "filterProjectOrderTip": {
+        "custom": "用鼠标拖动项目行调整顺序，组内任务仍按上面的排序"
+      },
       "filterProjectsHeading": "项目",
       "filterAllProjects": "所有项目",
       "filterHeading": "筛选",

@@ -7639,6 +7639,15 @@
       "filterLastActivityHeading": "最近活躍",
       "filterGroupByHeading": "分組",
       "filterSortByHeading": "排序",
+      "filterTaskSortHeading": "任務排序",
+      "filterProjectOrderHeading": "專案順序",
+      "filterProjectOrder": {
+        "activity": "依最近活動",
+        "custom": "手動"
+      },
+      "filterProjectOrderTip": {
+        "custom": "用滑鼠拖動專案列調整順序，組內任務仍按上面的排序"
+      },
       "filterProjectsHeading": "專案",
       "filterAllProjects": "所有專案",
       "filterHeading": "篩選",
