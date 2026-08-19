@@ -36,6 +36,14 @@ describe('normalizeDmMessage', () => {
     });
   });
 
+  it('returns null when channel id is missing so the transport suppresses it', async () => {
+    const event = await normalizeDmMessage(
+      message({ content: 'hello', channelId: '' }),
+      { contextId: 'app-1', mediaDir: tempDir(), download: vi.fn() },
+    );
+    expect(event).toBeNull();
+  });
+
   it('downloads image attachments into the media dir', async () => {
     const mediaDir = tempDir();
     const download = vi.fn(async (_url: string, dest: string) => {
