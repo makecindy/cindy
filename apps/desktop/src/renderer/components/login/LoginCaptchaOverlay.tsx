@@ -251,7 +251,7 @@ export function LoginCaptchaOverlay({
               ref={retryRef}
               data-testid="login-captcha-retry"
               onClick={retry}
-              className="font-medium transition-opacity hover:opacity-80"
+              className="font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
               style={{ fontSize: 13, color: LOGIN_COLORS.linkText }}
             >
               {t('login.captcha.retry')}
@@ -276,7 +276,7 @@ export function LoginCaptchaOverlay({
           type="button"
           data-testid="login-captcha-cancel"
           onClick={() => settle(null)}
-          className="font-medium transition-opacity hover:opacity-80"
+          className="font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
           style={{ fontSize: 13, marginTop: 12, color: LOGIN_COLORS.secondaryText }}
         >
           {t('login.captcha.cancel')}

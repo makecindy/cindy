@@ -207,6 +207,23 @@ describe('LoginPage captcha 前置闸(providers 主动触发)', () => {
     fireEvent.click(screen.getByTestId('login-captcha-cancel'));
   });
 
+  it('取消与失败后的重试操作都有键盘可见焦点样式', async () => {
+    const { identifier, verification } = await statesFor('providers:email-captcha');
+    const { rerender } = mount(identifier);
+    setState(rerender, verification);
+
+    fireEvent.click(screen.getByText('login.resendCode'));
+    await screen.findByTestId('login-captcha-overlay');
+    const cancel = screen.getByTestId('login-captcha-cancel');
+    expect(cancel.classList.contains('focus-visible:ring-2')).toBe(true);
+    expect(cancel.classList.contains('focus-visible:ring-[var(--focus-ring-soft)]')).toBe(true);
+
+    await emitCaptchaResult('cindy-captcha=err.expired');
+    const retry = await screen.findByTestId('login-captcha-retry');
+    expect(retry.classList.contains('focus-visible:ring-2')).toBe(true);
+    expect(retry.classList.contains('focus-visible:ring-[var(--focus-ring-soft)]')).toBe(true);
+  });
+
   it('guest 内 Esc 的固定取消 hash 会关闭挑战且不派发发码', async () => {
     const { identifier, verification } = await statesFor('providers:email-captcha');
     const { rerender } = mount(identifier);
