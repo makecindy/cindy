@@ -90,7 +90,7 @@ export interface HookTurnObserverDeps {
   progressBodyMode?: ProgressBodyMode;
   /** done 时跳过尾沿节流并先发最新进度；仅官方 Telegram 车道启用。 */
   flushProgressOnDone?: boolean;
-  /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
+  /** tool_result 全文旁路(出站媒体收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
   /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle。 */
   onTurnTerminal?: () => void;

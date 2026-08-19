@@ -91,6 +91,7 @@ import {
 } from '../maker-host/session-provider-store.js';
 
 import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
+import { resolveSafe as resolveXdtVideo } from '../videoCacheStore.js';
 import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
@@ -273,7 +274,7 @@ function broadcastSessionCreated(sessionId: string): void {
  * 从 tool_result 全文抽出可外发的 xdt-image URL —— 与 IM turnRunner 的
  * extractRenderableXdtImageUrls 同语义精简副本(含 `_xdt_render_image: false`
  * sentinel: read_by_url 读文档注图但不希望刷屏的场景必须尊重, 否则"总结这篇
- * 文档"会往 Slack 刷一堆插图)。视频本期不外发, 直接忽略。
+ * 文档"会往 Slack 刷一堆插图)。视频不受图片渲染 sentinel 影响。
  */
 /** 双协议:老 xdt-image(历史/未迁移工具)+ 新 cindy-media(媒体总仓,mivo /
  *  art 等生成图迁移后均为此形态)。与 IM turnRunner 同判据——只认老协议会让
@@ -301,8 +302,9 @@ function awaitingInteractionNotice(kind: string): string {
   return AWAITING_INTERACTION_NOTICE[kind] ?? AWAITING_INTERACTION_FALLBACK;
 }
 
-/** 兜底账本条目是否图片(hook 本期只外发图片):cindy-media 地址按扩展名判。 */
+/** 兜底账本条目的媒体类型：cindy-media 地址按扩展名判。 */
 const PRODUCED_IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
+const PRODUCED_VIDEO_EXT_RE = /\.(mp4|mov|webm)$/i;
 
 /** 导出仅供单测(纯函数,不碰 electron)。 */
 export function extractToolResultImageUrls(toolResultText: string): string[] {
@@ -342,6 +344,44 @@ export function extractToolResultImageUrls(toolResultText: string): string[] {
   return Array.from(new Set(urls));
 }
 
+function isRenderableVideoUrl(u: string): boolean {
+  return u.startsWith('xdt-video://') || u.startsWith('cindy-media://');
+}
+
+/** 导出仅供单测：从工具结果与主机媒体账本提取可外发视频。 */
+export function extractToolResultVideoUrls(toolResultText: string): string[] {
+  if (!toolResultText.includes('xdt_video_url') && !toolResultText.includes('xdt_media_produced')) {
+    return [];
+  }
+  let parsed: {
+    xdt_video_url?: unknown;
+    xdt_video_urls?: unknown;
+    xdt_media_produced?: unknown;
+  };
+  try {
+    parsed = JSON.parse(toolResultText);
+  } catch {
+    return [];
+  }
+  const urls: string[] = [];
+  if (typeof parsed.xdt_video_url === 'string' && isRenderableVideoUrl(parsed.xdt_video_url)) {
+    urls.push(parsed.xdt_video_url);
+  }
+  if (Array.isArray(parsed.xdt_video_urls)) {
+    for (const u of parsed.xdt_video_urls) {
+      if (typeof u === 'string' && isRenderableVideoUrl(u)) urls.push(u);
+    }
+  }
+  if (Array.isArray(parsed.xdt_media_produced)) {
+    for (const u of parsed.xdt_media_produced) {
+      if (typeof u === 'string' && isRenderableVideoUrl(u) && PRODUCED_VIDEO_EXT_RE.test(u)) {
+        urls.push(u);
+      }
+    }
+  }
+  return Array.from(new Set(urls));
+}
+
 /** 按协议解出图片 absPath(与 IM turnRunner 同语义)。 */
 function resolveRenderableImageUrl(url: string): { absPath: string } {
   return url.startsWith('cindy-media://') ? resolveCindyMediaUrl(url) : resolveXdtImage(url);
@@ -353,18 +393,31 @@ function resolveRenderableImageUrl(url: string): { absPath: string } {
  * art image_generate 等工具按设计不在文本里嵌 xdt-image markdown, 渠道侧能拿到
  * 图的唯一通路是从 tool_result JSON 里接走 URL。解析失败只 warn, 不拖垮 turn。
  */
-function collectOutboundImages(
+function collectOutboundMedia(
   fullText: string,
-  sink: string[],
+  imageSink: string[],
+  videoSink: string[],
   log: { warn(msg: string): void },
 ): void {
   for (const url of extractToolResultImageUrls(fullText)) {
     try {
       const { absPath } = resolveRenderableImageUrl(url);
-      sink.push(absPath);
+      imageSink.push(absPath);
     } catch (err) {
       log.warn(
         `hook resolve tool_result image failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  for (const url of extractToolResultVideoUrls(fullText)) {
+    try {
+      const { absPath } = url.startsWith('cindy-media://')
+        ? resolveCindyMediaUrl(url)
+        : resolveXdtVideo(url);
+      videoSink.push(absPath);
+    } catch (err) {
+      log.warn(
+        `hook resolve tool_result video failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -422,6 +475,7 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
 async function collectOutboundForFinalText(
   texts: HookTurnTexts,
   extraImageAbsPaths: string[],
+  extraVideoAbsPaths: string[],
   allowedFileRoots: string[],
   log: { warn(msg: string): void },
 ): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments'] }> {
@@ -430,13 +484,18 @@ async function collectOutboundForFinalText(
   // never forward private Web citation delimiters to an external channel.
   const publicText = stripInternalWebCitations(texts.publicText);
   const wholeTurn = stripInternalWebCitations(texts.wholeTurn);
-  if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
+  if (
+    !hasOutboundRefs(wholeTurn) &&
+    extraImageAbsPaths.length === 0 &&
+    extraVideoAbsPaths.length === 0
+  ) {
     return { finalText: publicText };
   }
   try {
     const collected = await collectOutboundAttachments(publicText, extraImageAbsPaths, {
       resolveImageUrl: resolveRenderableImageUrl,
       allowedFileRoots,
+      extraVideoAbsPaths,
       ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       log,
     });
@@ -831,8 +890,9 @@ export function createMakerHookSessionRunner(deps: {
       // 同一份实现(后台任务延迟定格、silent-stop 守卫、非终态 error 的重试
       // 提示、isFinal 的文本累积形态), 刻意不复制第二份: 这些细节改一处漏一处
       // 就会让"续跑接回渠道"那条路径静默落后于本路径。
-      // tool_result 旁路收集的出站图片 absPath(收口时随 turn.end 附件外发)
+      // tool_result 旁路收集的出站媒体 absPath(收口时随 turn.end 附件外发)
       const extraImageAbsPaths: string[] = [];
+      const extraVideoAbsPaths: string[] = [];
       const useTelegramProgressParity = req.source?.im === 'telegram';
       const observer = observeHookTurn(session, {
         // Telegram 对齐个人 bot：过程消息累积展示整轮正文，done 先冲刷最后一帧。
@@ -841,7 +901,8 @@ export function createMakerHookSessionRunner(deps: {
         ...(useTelegramProgressParity
           ? { progressBodyMode: 'whole' as const, flushProgressOnDone: true }
           : {}),
-        onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
+        onToolResult: (fullText) =>
+          collectOutboundMedia(fullText, extraImageAbsPaths, extraVideoAbsPaths, log),
         onSilentStopSettled,
         log,
       });
@@ -1233,6 +1294,7 @@ export function createMakerHookSessionRunner(deps: {
       const collected = await collectOutboundForFinalText(
         turnTextsFor(observer),
         extraImageAbsPaths,
+        extraVideoAbsPaths,
         [workingDir],
         log,
       );
@@ -1294,6 +1356,7 @@ function beginContinuationWatch(
   }
   const startedAt = Date.now();
   const extraImageAbsPaths: string[] = [];
+  const extraVideoAbsPaths: string[] = [];
   let claimed = false;
   let settled = false;
   const useTelegramProgressParity = req.source?.im === 'telegram';
@@ -1306,7 +1369,8 @@ function beginContinuationWatch(
     ...(useTelegramProgressParity
       ? { progressBodyMode: 'whole' as const, flushProgressOnDone: true }
       : {}),
-    onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
+    onToolResult: (fullText) =>
+      collectOutboundMedia(fullText, extraImageAbsPaths, extraVideoAbsPaths, log),
     onSilentStopSettled,
     log,
   });
@@ -1346,6 +1410,7 @@ function beginContinuationWatch(
       const collected = await collectOutboundForFinalText(
         turnTextsFor(observer),
         extraImageAbsPaths,
+        extraVideoAbsPaths,
         [session.workDir],
         log,
       );

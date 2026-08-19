@@ -18,6 +18,10 @@
  * 跨模块调用顺序。
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AgentEvent, Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -148,6 +152,9 @@ vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
   },
 }));
 vi.mock('../../imageCacheStore.js', () => ({
+  resolveSafe: vi.fn(),
+}));
+vi.mock('../../videoCacheStore.js', () => ({
   resolveSafe: vi.fn(),
 }));
 // cindy-media:入站图片写入媒体总仓,mock 记调用。
@@ -316,17 +323,29 @@ vi.mock('../../maker-host/index.js', () => ({
   withRehydrateCloseSuppressed: h.withRehydrateCloseSuppressed,
 }));
 
-import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
+import {
+  createMakerHookSessionRunner,
+  extractToolResultImageUrls,
+  extractToolResultVideoUrls,
+} from '../session-runner.js';
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
+import { resolveSafe as resolveXdtVideo } from '../../videoCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 
 /** 喂给 agent 的文本 = 用户原话 + 渠道说明(教模型用 xdt-file 回传文件)。 */
 const HELLO_WITH_NOTE = `hello\n\n${SLACK_HOOK_PROMPT_NOTE}`;
+
+function createTempVideo(): { absPath: string; cleanup(): void } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-outbound-video-'));
+  const absPath = path.join(dir, 'result.mp4');
+  fs.writeFileSync(absPath, 'video-bytes');
+  return { absPath, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
 
 function catalogModel(id: string, name = id): CatalogModel {
   return {
@@ -1651,6 +1670,48 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
+  it('tool_result 的托管视频随普通 hook turn 的终稿附件回流', async () => {
+    const video = createTempVideo();
+    try {
+      cindyMock.resolveSafe.mockReturnValueOnce({
+        absPath: video.absPath,
+        mimeType: 'video/mp4',
+        hash: 'f'.repeat(64),
+      });
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-video'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(baseReq({ source: { im: 'telegram', userText: '生成视频' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'tool_result_full',
+        data: {
+          fullText: JSON.stringify({
+            xdt_video_urls: [`cindy-media://blobs/${'f'.repeat(64)}.mp4`],
+          }),
+        },
+      });
+      cb({ type: 'text', data: { text: '视频已生成。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      await expect(pending).resolves.toMatchObject({
+        status: 'ok',
+        attachments: [
+          expect.objectContaining({
+            name: 'result.mp4',
+            mimeType: 'video/mp4',
+            dataBase64: Buffer.from('video-bytes').toString('base64'),
+          }),
+        ],
+      });
+    } finally {
+      video.cleanup();
+    }
+  });
+
   it('X: 正式正文为空时回退整轮正文, 不发空回帖', async () => {
     vi.useFakeTimers();
     try {
@@ -2909,6 +2970,26 @@ describe('extractToolResultImageUrls 的兜底账本回落(xdt_media_produced)',
   });
 });
 
+describe('extractToolResultVideoUrls', () => {
+  const VIDEO = `cindy-media://blobs/${'f'.repeat(64)}.mp4`;
+  const LEGACY = 'xdt-video://legacy.mov';
+  const IMAGE = `cindy-media://blobs/${'e'.repeat(64)}.png`;
+
+  it('从 xdt_video_urls 与主机媒体账本接走视频并去重', () => {
+    const text = JSON.stringify({ xdt_video_urls: [VIDEO], xdt_media_produced: [VIDEO] });
+    expect(extractToolResultVideoUrls(text)).toEqual([VIDEO]);
+  });
+
+  it('过滤非视频账本项、非法协议与畸形 JSON', () => {
+    const text = JSON.stringify({
+      xdt_video_urls: [VIDEO, LEGACY, 'https://example.test/video.mp4', 42],
+      xdt_media_produced: [IMAGE, LEGACY],
+    });
+    expect(extractToolResultVideoUrls(text)).toEqual([VIDEO, LEGACY]);
+    expect(extractToolResultVideoUrls('{not-json')).toEqual([]);
+  });
+});
+
 describe('watchContinuation: 观察桌面端续跑并回流', () => {
   /** 不自动 done 的 fake session(测试手动驱动事件流)。 */
   function makeManualSession(id: string) {
@@ -2933,7 +3014,12 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
 
   function watchReq(overrides?: Partial<Record<string, unknown>>) {
     const events: string[] = [];
-    const ends: Array<{ status: string; finalText: string; errorMessage: string | null }> = [];
+    const ends: Array<{
+      status: string;
+      finalText: string;
+      errorMessage: string | null;
+      attachments?: Array<{ name: string; mimeType: string; dataBase64: string }>;
+    }> = [];
     const req = {
       sessionId: 'sess-live',
       workingDir: 'D:/repo',
@@ -3037,6 +3123,41 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     // 终稿不以已流增量开头 -> 接在后面(而不是把「接着干」丢掉)。
     expect(ends[0]?.finalText).toBe('接着干完成了。');
     expect(ends[0]?.errorMessage).toBeNull();
+  });
+
+  it('tool_result 的旧协议视频随 continuation 终稿附件回流', async () => {
+    const video = createTempVideo();
+    try {
+      vi.mocked(resolveXdtVideo).mockReturnValueOnce({
+        absPath: video.absPath,
+        mimeType: 'video/mp4',
+      });
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const runner = createMakerHookSessionRunner({ log });
+      const { req, ends } = watchReq();
+      runner.watchContinuation!(req as never);
+
+      const cb = h.eventCbs.get('sess-live')!;
+      cb({
+        type: 'tool_result_full',
+        data: { fullText: JSON.stringify({ xdt_video_urls: ['xdt-video://legacy.mp4'] }) },
+      });
+      cb({ type: 'text', data: { text: '续跑视频已生成。', isFinal: true } });
+      cb({ type: 'done', data: null });
+      await flush();
+
+      await vi.waitFor(() => {
+        expect(ends[0]?.attachments).toEqual([
+          expect.objectContaining({
+            name: 'result.mp4',
+            mimeType: 'video/mp4',
+            dataBase64: Buffer.from('video-bytes').toString('base64'),
+          }),
+        ]);
+      });
+    } finally {
+      video.cleanup();
+    }
   });
 
   it('续跑轮同样吃到多消息累积语义: 两条 claude 消息都在, 不只剩最后一条', async () => {
