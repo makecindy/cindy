@@ -197,9 +197,26 @@ describe('findLiveLinkedWorktree', () => {
         toolUse('exec', { command: 'git status', cwd: '/Users/x/main' }),
         toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' }),
       ],
-      isInsideWorktree: async (dir) => dir === path.resolve('/Users/x/wt-a'),
+      resolveLinkedWorktreeRoot: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? path.resolve('/Users/x/wt-a') : null,
       probeGitDir: async (dir) =>
         dir === path.resolve('/Users/x/wt-a') ? branchHead('feat/a') : branchHead('main'),
+    });
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-a'),
+      branch: 'feat/a',
+    });
+  });
+
+  it('canonicalizes a nested telemetry cwd to the worktree root', async () => {
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a/src' }),
+      ],
+      resolveLinkedWorktreeRoot: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a/src') ? path.resolve('/Users/x/wt-a') : null,
+      probeGitDir: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? branchHead('feat/a') : null,
     });
     expect(res).toEqual({
       workdir: path.resolve('/Users/x/wt-a'),
@@ -212,7 +229,7 @@ describe('findLiveLinkedWorktree', () => {
       recentToolUseContents: async () => [
         toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-gone' }),
       ],
-      isInsideWorktree: async () => false,
+      resolveLinkedWorktreeRoot: async () => null,
       probeGitDir: async () => null,
     });
     expect(res).toBeNull();

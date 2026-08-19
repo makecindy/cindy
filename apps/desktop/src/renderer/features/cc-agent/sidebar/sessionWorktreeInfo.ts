@@ -110,8 +110,8 @@ export function useTaskInfoWorktree(
   const observeTelemetry = Boolean(opts?.observeTelemetry);
 
   useEffect(() => {
+    setObserved(null);
     if (!enabled || isRemote || !observeTelemetry) {
-      setObserved(null);
       setOfficialStillLive(!isRemote);
       return;
     }

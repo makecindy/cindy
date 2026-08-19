@@ -126,7 +126,8 @@ const MAX_UNIQUE_TELEMETRY_DIRS = 20;
 
 export interface FindLiveLinkedWorktreeDeps {
   recentToolUseContents: (sessionId: string) => Promise<string[]>;
-  isInsideWorktree: (dir: string) => Promise<boolean>;
+  /** 若 dir 在 linked worktree 内,返回该 worktree 的 repo root(`rev-parse --show-toplevel`)。 */
+  resolveLinkedWorktreeRoot: (dir: string) => Promise<string | null>;
   probeGitDir: (dir: string) => Promise<GitHeadInfo | null>;
 }
 
@@ -165,10 +166,11 @@ export async function findLiveLinkedWorktree(
 ): Promise<{ workdir: string; branch: string | null } | null> {
   const contents = await deps.recentToolUseContents(sessionId);
   for (const dir of collectUniqueTelemetryDirs(contents)) {
-    if (!(await deps.isInsideWorktree(dir))) continue;
-    const head = await deps.probeGitDir(dir);
+    const root = await deps.resolveLinkedWorktreeRoot(dir);
+    if (!root) continue;
+    const head = await deps.probeGitDir(root);
     return {
-      workdir: dir,
+      workdir: root,
       branch: head?.kind === 'branch' ? head.branch : null,
     };
   }
@@ -349,11 +351,13 @@ export async function findLiveLinkedWorktreeLive(
           return [];
         }
       },
-      isInsideWorktree: async (dir) => {
+      resolveLinkedWorktreeRoot: async (dir) => {
         try {
-          return Boolean((await detectCwd(dir)).isInsideWorktree);
+          const detected = await detectCwd(dir);
+          if (!detected.isInsideWorktree) return null;
+          return detected.repoRoot ?? path.resolve(dir);
         } catch {
-          return false;
+          return null;
         }
       },
       probeGitDir: (dir) => readGitHead(dir),
