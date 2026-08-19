@@ -1,14 +1,27 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
 import { PinnedPlanPanel } from '../PinnedPlanPanel';
 
 vi.mock('@/components/chat/TodoListCard', () => ({
-  TodoListCard: ({ todos }: { todos: Array<{ content: string }> }) => (
-    <div data-testid="plan-pill">{todos.map((todo) => todo.content).join(',')}</div>
+  TodoListCard: ({
+    todos,
+    onDismiss,
+  }: {
+    todos: Array<{ content: string }>;
+    onDismiss?: () => void;
+  }) => (
+    <div>
+      <div data-testid="plan-pill">{todos.map((todo) => todo.content).join(',')}</div>
+      {onDismiss && (
+        <button type="button" onClick={onDismiss}>
+          Dismiss Plan
+        </button>
+      )}
+    </div>
   ),
 }));
 
@@ -145,6 +158,53 @@ describe('PinnedPlanPanel completed plan lifetime', () => {
     );
 
     act(() => vi.advanceTimersByTime(10_000));
+    expect(screen.queryByTestId('plan-pill')).not.toBeNull();
+  });
+
+  it('keeps the current plan snapshot hidden after the user dismisses it', () => {
+    const running = planMessage('in_progress');
+    const view = render(
+      <PinnedPlanPanel sessionId="manual-dismiss" messages={[running]} animated width={400} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Plan' }));
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="manual-dismiss"
+        messages={[
+          running,
+          {
+            clientId: 'unrelated-answer',
+            role: 'assistant',
+            content: 'Unrelated response',
+          },
+        ]}
+        animated={false}
+        width={400}
+      />,
+    );
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('shows a dismissed plan again when the agent reports a newer snapshot', () => {
+    const running = planMessage('in_progress');
+    const view = render(
+      <PinnedPlanPanel sessionId="dismiss-update" messages={[running]} animated width={400} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Plan' }));
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="dismiss-update"
+        messages={[planMessage('completed', T0, T0 + 1_000)]}
+        animated={false}
+        width={400}
+      />,
+    );
     expect(screen.queryByTestId('plan-pill')).not.toBeNull();
   });
 

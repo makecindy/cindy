@@ -223,6 +223,7 @@ export function PendingSendBubble({
           accessibilityRole="button"
           accessibilityState={{ expanded: selected, disabled: !interactive }}
           disabled={!interactive}
+          hitSlop={{ left: iconSize.xl + spacing.sm }}
           onPress={() => actions.onSelect(selected ? null : item.clientId)}
           style={({ pressed }) => [
             styles.bubble,
@@ -446,7 +447,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
     justifyContent: 'center',
-    minHeight: 36,
+    minHeight: 44,
     paddingHorizontal: spacing.md,
   },
   actionPillCta: { backgroundColor: colors.cta, borderColor: colors.cta },
