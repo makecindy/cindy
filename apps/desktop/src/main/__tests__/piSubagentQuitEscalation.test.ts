@@ -252,6 +252,49 @@ describe('PI Subagent quit sweep', () => {
     expect(teardown.indexOf('lifecycleDbClientManager.dispose(reason)', sweep)).toBeGreaterThan(sweep);
   });
 
+  it('replaces the shut-down Maker when it aborts the handover with nothing attached', () => {
+    // `Maker.shutdown` sets `shutdownStarted` on entry and never clears it, so
+    // after it runs every `createSession` is refused. Completing the handover
+    // replaces the instance; aborting it used to rethrow straight past
+    // `resetMaker()`, leaving the user on the old account unable to start a
+    // task until the app restarted.
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+    );
+    const handler = teardown.slice(teardown.indexOf('if (err instanceof PiSubagentAccountBoundaryError) {'));
+    const reset = handler.indexOf('if (shutdownRan && retainedPiSessions === 0) resetMaker();');
+    const rethrow = handler.indexOf('throw err;');
+    expect(reset).toBeGreaterThan(-1);
+    // Before the rethrow, or it never runs.
+    expect(rethrow).toBeGreaterThan(reset);
+
+    // Marked before the await, because entry is what poisons the singleton.
+    const shutdownCall = teardown.indexOf("await maker.shutdown({ reason: 'account-boundary' })");
+    expect(teardown.indexOf('if (maker) shutdownRan = true;')).toBeLessThan(shutdownCall);
+    // And it starts false, so the fence-acquisition throw — which happens
+    // before the Maker is touched at all — cannot reset a healthy instance.
+    expect(teardown).toContain('let shutdownRan = false;');
+    expect(teardown.indexOf('let shutdownRan = false;'))
+      .toBeGreaterThan(teardown.indexOf('the PI Subagent launch fence could not be raised'));
+  });
+
+  it('keeps the Maker when a session it still holds failed to detach', () => {
+    // `Session.detach` leaves a failed session in `error`, not `closed`, so the
+    // Maker keeps its status listener and its active-session slot on purpose
+    // and a later `shutdown()` retries it. Discarding the instance there would
+    // orphan a live PI process still spending the outgoing account's
+    // credentials — the one case where staying poisoned is the lesser harm.
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+    );
+    const assign = teardown.indexOf('retainedPiSessions = piSessionFailures.length;');
+    const abort = teardown.indexOf('if (piSessionFailures.length > 0) {');
+    expect(assign).toBeGreaterThan(-1);
+    // Recorded before the branch that throws on it, so the handler can read it.
+    expect(abort).toBeGreaterThan(assign);
+    expect(teardown).toContain('let retainedPiSessions = 0;');
+  });
+
   it('fences durable launches across the whole account boundary, and always lowers it', () => {
     // `Maker.shutdown` collects per-session detach failures instead of throwing,
     // so a parent Pi can outlive it — and a survivor could publish a fresh run

@@ -1443,12 +1443,24 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
         'the PI Subagent launch fence could not be raised',
       );
     }
+    // Did the Maker singleton get poisoned, and is it still holding anything?
+    //
+    // `Maker.shutdown` sets `shutdownStarted` on entry and never clears it, so
+    // once it has run every later `createSession` is refused with "Maker is
+    // shutting down". That is fine when the handover completes — the Maker is
+    // replaced — but an aborted handover leaves the user on the old account
+    // with a singleton that can no longer start a task until the app restarts.
+    let shutdownRan = false;
+    let retainedPiSessions = 0;
     try {
       const maker = getMakerIfReady();
       // Logout / account switch: the owner DbClient is disposed a few lines
       // below and the gateway credentials behind every proxy token are being
       // replaced. Adapters that keep parent-independent children alive across an
       // ordinary close (PI durable Subagents) must stop them here instead.
+      // Marked before the await: `shutdownStarted` is set on entry, so the
+      // singleton is poisoned even if this rejects.
+      if (maker) shutdownRan = true;
       const shutdownReport = maker
         ? await maker.shutdown({ reason: 'account-boundary' })
         : undefined;
@@ -1462,6 +1474,13 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       // failed teardown does not leave revocation-proof credentials in use.
       const piSessionFailures = (shutdownReport?.sessionFailures ?? [])
         .filter((failure) => failure.agentKind === 'pi');
+      // A session whose detach failed is *kept*: `Session.detach` leaves it in
+      // `error`, not `closed`, so the Maker keeps its status listener and its
+      // active-session slot deliberately, and a later `shutdown()` retries it.
+      // That makes this Maker the only remaining supervision surface for a PI
+      // process that may still be alive — which decides whether the abort path
+      // below may discard it.
+      retainedPiSessions = piSessionFailures.length;
       for (const failure of piSessionFailures) {
         authBoundaryLog.error(
           `PI session ${failure.sessionId} failed to detach on ${reason}:`,
@@ -1509,6 +1528,22 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       // failure in this block that has to stop the handover.
       if (err instanceof PiSubagentAccountBoundaryError) {
         authBoundaryLog.error(`${err.message} (cause:`, err.cause, ')');
+        // The handover is aborted and the user stays on the old account — with
+        // a Maker that has already been shut down and now refuses every new
+        // task. Replace it, exactly as the non-fatal path below does, so the
+        // account the user is still on remains usable and a retried logout
+        // starts from a clean instance.
+        //
+        // Only when nothing is still attached to it. Survivors of a *sweep*
+        // failure are detached runners: their ownership lives in durable files,
+        // their pid, and the `runtimeOwnerId` stamped into their status — none
+        // of it on this object, and the retried logout sweeps the whole agent
+        // home again. A session whose *detach* failed is the opposite: the
+        // Maker is holding its handle on purpose so the next `shutdown()` can
+        // retry it, and discarding the instance would orphan a live PI process
+        // still spending this account's credentials. Staying poisoned is the
+        // lesser harm there, and the log above is what says so.
+        if (shutdownRan && retainedPiSessions === 0) resetMaker();
         throw err;
       }
       authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
