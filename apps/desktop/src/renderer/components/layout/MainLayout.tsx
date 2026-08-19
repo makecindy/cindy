@@ -626,7 +626,7 @@ export function MainLayout() {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => {
       if (payload.type === 'session') {
         navigateToSession(payload.id, payload.messageClientId);
@@ -651,7 +651,14 @@ export function MainLayout() {
         return;
       }
       if (payload.type === 'settings') {
-        navigate(`/settings?tab=${payload.tab}`);
+        // connect 透传给 ProvidersSection 已有的 ?connect=<providerId> 消费逻辑
+        // (可指向内置 provider 或 preset;providers 就绪后一次性消费、消费即从
+        // URL 摘除),与「连接供应商」引导卡的 navigate 形态保持一致。
+        const connect =
+          payload.tab === 'providers' && payload.connect
+            ? `&connect=${encodeURIComponent(payload.connect)}`
+            : '';
+        navigate(`/settings?tab=${payload.tab}${connect}`);
       }
     },
     [navigate, navigateToSession, openShareImport],

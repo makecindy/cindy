@@ -43,6 +43,21 @@ beforeEach(() => {
   });
 });
 
+describe('local-db:conversations:search — workingDirs 透传', () => {
+  it('keeps filters.workingDirs so project search is not widened to all sessions', async () => {
+    await handler()(null, {
+      query: 'needle',
+      filters: { workingDirs: ['/repo-remote'] },
+    });
+
+    expect(h.searchConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ workingDirs: ['/repo-remote'] }),
+      }),
+    );
+  });
+});
+
 describe('local-db:conversations:search — unnamedLabel 透传', () => {
   it('把 renderer 的已解析文案原样带给 searchConversations', async () => {
     await handler()(null, { query: 'needle', unnamedLabel: '未命名任务' });

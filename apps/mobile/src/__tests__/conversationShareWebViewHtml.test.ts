@@ -149,7 +149,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(html).toContain(`alt="${i18n.t('message.renderer.imageFallbackTitle')}"`);
   });
 
-  it('限制原生与降级 renderer 的完整源尺寸，并清理一次性 PNG', () => {
+  it('限制原生与降级 renderer 的完整源尺寸，并安全保留已分享 PNG', () => {
     const nativeSource = readFileSync(
       resolve(
         process.cwd(),
@@ -164,9 +164,20 @@ describe('buildConversationShareHtml 富内容导出', () => {
     const sessionSource = readFileSync(
       resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(nativeSource).toContain('conversationShareMaxSourcePixels');
+    expect(nativeSource).toContain('UIWindow(windowScene: windowScene)');
+    expect(nativeSource).toContain('hostingWindow.rootViewController = viewController');
+    expect(nativeSource).toContain('hostingWindow?.isHidden = true');
+    expect(nativeSource).toContain('no active window scene');
+    expect(nativeSource).toContain('UIWindow.Level.normal.rawValue + 1');
+    expect(nativeSource).toContain('hostingWindow.alpha = 0.01');
+    expect(nativeSource).toContain('waitForWebContentPaint(webView)');
+    expect(nativeSource).toContain('requestAnimationFrame(resolve)');
+    expect(nativeSource).toContain('merged.hasVisibleVariation');
+    expect(nativeSource).toContain('Conversation share PNG is blank.');
+    expect(nativeSource).toContain('format.scale = 1');
     expect(nativeSource).toContain(
       'captureWidth * captureHeight <= conversationShareMaxSourcePixels',
     );
@@ -174,8 +185,34 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(webViewSource).toContain(
       'await deleteConversationSharePngTemp(file.uri);',
     );
-    expect(sessionSource).toContain("localUri && Platform.OS !== 'android'");
+    expect(webViewSource).toContain('SHARE_PNG_RETAIN_COUNT = 3');
+    expect(webViewSource).toContain('SHARE_PNG_CLEANUP_BATCH = 8');
+    expect(webViewSource).toContain(
+      'files.slice(SHARE_PNG_RETAIN_COUNT, SHARE_PNG_RETAIN_COUNT + SHARE_PNG_CLEANUP_BATCH)',
+    );
+    expect(sessionSource).toContain('deleteConversationSharePngTemp');
+    expect(sessionSource).toContain('cleanupConversationSharePngTemps');
+    expect(sessionSource).toContain('cache 目录交给下一次有界清理');
+    expect(sessionSource).toContain('if (!shareCompleted && localUri)');
     expect(sessionSource).toContain('<ConversationShareSvg');
+    expect(sessionSource).toContain(
+      "nativeConversationShareAvailable = Platform.OS === 'ios'",
+    );
+    expect(sessionSource).toContain(
+      'if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;',
+    );
+    expect(sessionSource).toContain(
+      '!nativeConversationShareAvailable\n      || !shareSelectionActive',
+    );
+    expect(sessionSource).toContain(
+      'nativeConversationShareAvailable\n      && shareCharacterSrc',
+    );
+    expect(sessionSource).toContain('renderConversationShareHtmlToPng({');
+    expect(sessionSource).toContain('nativeShareAssetsReady');
+    expect(sessionSource).toContain('native webview export succeeded');
+    expect(sessionSource).toContain('falling back to svg');
+    expect(sessionSource).not.toContain('OTA webview export failed; falling back to svg');
+    expect(sessionSource).toContain('return svg.exportPng();');
   });
 
   it('使用 Mobile 获批的克制页脚尺寸', () => {

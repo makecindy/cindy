@@ -61,6 +61,7 @@ import {
   type ProviderView,
 } from './registry.js';
 import { deriveModelList } from './modelList.js';
+import { effortRank } from './effortResolution.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, groupOf, isBudgetModel } from './classification.js';
 import type { AgentKind, CatalogModel, Effort, Provider } from './types.js';
 
@@ -440,7 +441,11 @@ function capabilityOf(
   return {
     agent,
     wireModelId: model.id,
-    efforts: model.efforts,
+    // 防御性规范升序(Chris 2026-08-19 实测:xAI discovery 下发降序,只有 Grok 4.6 被
+    // 特判归一,4.5 的滑杆整条轴反向)。efforts 是外部输入(服务端目录 / 三家 discovery /
+    // 用户 local override),而滑杆与行三元组按数组下标画轴 —— 数据侧已在 xAI 链路归一,
+    // 这里对**所有来源**再兜一道,单点成本换掉整类「某条来源漏排就反轴」的缺陷。
+    efforts: [...model.efforts].sort((a, b) => effortRank(a) - effortRank(b)),
     ...resolveDefaultEffort(model),
     // 按目录里真实那条 id 查 Fast,避免归一命中后误报 false。
     supportsFastMode: modelSupportsFastMode(provider, model.id, agent),

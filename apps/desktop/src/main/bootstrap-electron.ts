@@ -193,6 +193,7 @@ import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
   installWebviewHardener,
+  setLoginCaptchaOriginResolver,
   setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   setRsbPopupOpenerResolver,
@@ -752,6 +753,7 @@ import {
 import { isBrowserOpenablePath } from '../shared/browserOpenableExts.js';
 import {
   getClientEndpoint,
+  getClientEndpointForRealm,
   initClientEndpoints,
   registerClientEndpointsIpc,
 } from './clientEndpointsService.js';
@@ -1480,6 +1482,21 @@ if (!app.isPackaged) {
 // ready 前注册也有效,内部缓冲到 fire 时才投递,确保主窗 / 任何 webContents
 // 首次 attach webview 都走 hardener。详见 webview-security.ts。
 installWebviewHardener();
+
+// 登录 captcha webview 的 auth origin 白名单:hardener 附加/导航闸据此校验
+// 挑战页地址。惰性解析(attach 时刻取当前端点清单),两 realm 都收——
+// 邮箱发码固定走构建区域,但清单在 dev/远程回填形态下地址可能变化。
+setLoginCaptchaOriginResolver(() => {
+  const origins = new Set<string>();
+  for (const realm of ['cn', 'global'] as const) {
+    try {
+      origins.add(new URL(getClientEndpointForRealm(realm, 'authApiBaseUrl')).origin);
+    } catch {
+      // 该 realm 清单不可用(启动早期/异常)时不加入 —— fail-closed。
+    }
+  }
+  return [...origins];
+});
 
 // ── RSB browser bridge (browser-backend Phase 2) ────────────────────────
 // Renderer → main 桥,把 RSB `<webview>` 注册到 main 端 TabRegistry,future
@@ -4533,6 +4550,13 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('auth:dispatch-login-action', async (_event, action: unknown) => {
     return authManager.dispatchLoginAction(action);
+  });
+
+  // 登录 captcha 托管挑战页地址(不含 query)。只返回按构建区域拼出的公开 URL,
+  // 无副作用、不含凭证;renderer 的 LoginCaptchaOverlay 用它装载 webview。
+  ipcMain.handle('auth:get-captcha-challenge-url', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.getLoginCaptchaChallengeUrl();
   });
 
   ipcMain.handle('auth:logout', async () => {

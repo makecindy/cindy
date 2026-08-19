@@ -3,11 +3,11 @@
  * ---------------------------------------------------------------------------
  * 菜单分四段语义（侧边栏重设计,docs/product-rules/sidebar-redesign-plan.md §3）：
  *   - 分组：独立复选——按项目分组 / 按设备分组(仅远程连接时出现)/ 对话归为一组
- *   - 排序：Sort by（recency / time / priority;project 分组下另有 manual;
- *     alphabetic 已删除）
+ *   - 排序：任务排序（recency / priority）+ 按项目分组时的项目顺序
+ *     （activity / custom）
  *   - 筛选：一级只占一行，右侧显示摘要（「无」/「N 项生效」），展开二级子菜单
  *     承载 Status / Project / Agent / Last activity 四维度 + 重置筛选
- *   - 显示：主列表形态(文字/列表)+ 任务信息复选(time / pr / tokens / cost)
+ *   - 显示：主列表形态(文字/列表)+ 任务信息复选(time / pr / worktree / tokens / cost)
  *
  * 入口仍复用 sliders-horizontal 图标；内容为行式菜单 + 子菜单。
  *
@@ -32,6 +32,7 @@ import {
   Coins,
   Filter,
   Folder,
+  Folders,
   GitPullRequest,
   Globe,
   Info,
@@ -60,6 +61,7 @@ import { getRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
 import type {
   FilterGroupBy,
   FilterLastActivity,
+  FilterProjectOrder,
   FilterSortBy,
   FilterStatus,
   FilterVendor,
@@ -89,7 +91,7 @@ type Option<T extends string> = {
   /**
    * hover 说明(2026-08-13 用户裁决)。只给「光看标签猜不出排序依据」的选项——
    * 「优先级」不说清按什么排,用户无从判断它和「按时间排序」的差别;
-   * 「按时间排序」「手动排序」名字自解释,不加提示避免菜单变成说明书。
+   * 「按时间排序」名字自解释,不加提示避免菜单变成说明书。
    */
   tipKey?: string;
 };
@@ -114,8 +116,8 @@ const LAST_ACTIVITY_OPTIONS: ReadonlyArray<Option<FilterLastActivity>> = [
   { value: 'all', labelKey: 'ccAgent.sidebar.filterLastActivity.all' },
 ];
 
-/** 「最早优先」(旧 time)2026-08-12 用户裁决删除;时间排序只保留最近活动在前一档。 */
-const FLAT_SORT_BY_OPTIONS: ReadonlyArray<Option<FilterSortBy>> = [
+/** 「最早优先」(旧 time)与旧「手动排序」都已从任务排序里拿掉。 */
+const SORT_BY_OPTIONS: ReadonlyArray<Option<FilterSortBy>> = [
   { value: 'recency', labelKey: 'ccAgent.sidebar.filterSortBy.recency' },
   {
     value: 'priority',
@@ -124,21 +126,26 @@ const FLAT_SORT_BY_OPTIONS: ReadonlyArray<Option<FilterSortBy>> = [
   },
 ];
 
-/** manual(手动排序)只管项目行(设计文档 §9.3 收窄),平铺模式下无意义不展示。 */
-const PROJECT_SORT_BY_OPTIONS: ReadonlyArray<Option<FilterSortBy>> = [
-  ...FLAT_SORT_BY_OPTIONS,
-  { value: 'manual', labelKey: 'ccAgent.sidebar.filterSortBy.manual' },
+const PROJECT_ORDER_OPTIONS: ReadonlyArray<Option<FilterProjectOrder>> = [
+  { value: 'activity', labelKey: 'ccAgent.sidebar.filterProjectOrder.activity' },
+  {
+    value: 'custom',
+    labelKey: 'ccAgent.sidebar.filterProjectOrder.custom',
+    tipKey: 'ccAgent.sidebar.filterProjectOrderTip.custom',
+  },
 ];
 
 /**
- * 本表的顺序 = 菜单里四个复选项的排列顺序(固定)。列表行的**渲染顺序**另算:
+ * 本表的顺序 = 菜单里复选项的排列顺序(固定)。列表行的**渲染顺序**另算:
  * 按用户勾选先后(2026-08-12 用户裁决),见 SessionInfoMeta。
  * 图标对应各自的数据类型:时间=Clock(Timer 已被自动任务独占,不复用避免撞义)、
- * PR=GitPullRequest(与顶栏 / 侧栏徽标未知态同一个字形)、token=Coins、费用=Wallet。
+ * PR=GitPullRequest、worktree=Folders(独立工作副本,不跟 PR 的 git 分叉抢形)、
+ * token=Coins、费用=Wallet。
  */
 const TASK_INFO_OPTIONS: ReadonlyArray<Option<TaskInfoField>> = [
   { value: 'time', labelKey: 'ccAgent.sidebar.taskInfo.time', Icon: Clock },
   { value: 'pr', labelKey: 'ccAgent.sidebar.taskInfo.pr', Icon: GitPullRequest },
+  { value: 'worktree', labelKey: 'ccAgent.sidebar.taskInfo.worktree', Icon: Folders },
   { value: 'tokens', labelKey: 'ccAgent.sidebar.taskInfo.tokens', Icon: Coins },
   { value: 'cost', labelKey: 'ccAgent.sidebar.taskInfo.cost', Icon: Wallet },
 ];
@@ -351,6 +358,7 @@ export function SidebarFilterPopover({
     groupDialogue,
     groupDevice,
     sortBy,
+    projectOrder,
     setStatus,
     toggleProject,
     setProjectsAll,
@@ -360,6 +368,7 @@ export function SidebarFilterPopover({
     setGroupDialogue,
     setGroupDevice,
     setSortBy,
+    setProjectOrder,
     resetContentFilters,
   } = filter;
 
@@ -377,11 +386,7 @@ export function SidebarFilterPopover({
       ? 'ccAgent.sidebar.filterGroupBy.project'
       : 'ccAgent.sidebar.filterGroupBy.flat',
   );
-  const sortByOptions = groupBy === 'project' ? PROJECT_SORT_BY_OPTIONS : FLAT_SORT_BY_OPTIONS;
-  const effectiveSortBy = sortByOptions.some((option) => option.value === sortBy)
-    ? sortBy
-    : 'recency';
-  const sortByValue = optionLabel(sortByOptions, effectiveSortBy, t);
+  const sortByValue = optionLabel(SORT_BY_OPTIONS, sortBy, t);
   const projectValue =
     projects === 'all'
       ? t('ccAgent.sidebar.filterAllText')
@@ -498,11 +503,7 @@ export function SidebarFilterPopover({
           {hasRemoteDevices && (
             <CheckMenuItem
               label={t('ccAgent.sidebar.filterGroupBy.device')}
-              checked={groupDevice && sortBy !== 'manual'}
-              disabled={sortBy === 'manual'}
-              tip={
-                sortBy === 'manual' ? t('ccAgent.sidebar.filterGroupByDeviceManualTip') : undefined
-              }
+              checked={groupDevice}
               onToggle={() => setGroupDevice(!groupDevice)}
             />
           )}
@@ -516,17 +517,35 @@ export function SidebarFilterPopover({
 
           {/* ── 排序 ── */}
           <div className="px-2 py-1.5 text-xs font-medium text-[var(--cmd-palette-item-meta)]">
-            {t('ccAgent.sidebar.filterSortByHeading')}
+            {t('ccAgent.sidebar.filterTaskSortHeading')}
           </div>
-          {sortByOptions.map((option) => (
+          {SORT_BY_OPTIONS.map((option) => (
             <SelectMenuItem
               key={option.value}
               label={t(option.labelKey)}
-              selected={effectiveSortBy === option.value}
+              selected={sortBy === option.value}
               onSelect={() => setSortBy(option.value)}
               tip={option.tipKey ? t(option.tipKey) : undefined}
             />
           ))}
+
+          {groupBy === 'project' ? (
+            <>
+              <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
+              <div className="px-2 py-1.5 text-xs font-medium text-[var(--cmd-palette-item-meta)]">
+                {t('ccAgent.sidebar.filterProjectOrderHeading')}
+              </div>
+              {PROJECT_ORDER_OPTIONS.map((option) => (
+                <SelectMenuItem
+                  key={option.value}
+                  label={t(option.labelKey)}
+                  selected={projectOrder === option.value}
+                  onSelect={() => setProjectOrder(option.value)}
+                  tip={option.tipKey ? t(option.tipKey) : undefined}
+                />
+              ))}
+            </>
+          ) : null}
 
           <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
 

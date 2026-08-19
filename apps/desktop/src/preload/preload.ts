@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
+import { isDeepLinkProviderConnectId } from '../shared/deepLinkSchemes';
 import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
@@ -64,9 +65,7 @@ import {
   type TerminateAgentProcessRequest,
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
-import {
-  RESOURCE_USAGE_WINDOW_OPEN_CHANNEL,
-} from '../shared/resourceUsageWindow';
+import { RESOURCE_USAGE_WINDOW_OPEN_CHANNEL } from '../shared/resourceUsageWindow';
 import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
@@ -1081,8 +1080,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedPackageSha256: string;
         expectedInstalledApproval: string;
       },
-    ): Promise<{ ghost: unknown }> =>
-      ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
+    ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
     cindyPrefsSync: (
       id: string,
     ): {
@@ -1148,7 +1146,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       iconDataUrl?: string;
     }> => ipcRenderer.invoke('ghosts:inspect', lizFilePath),
     /** 本地包第三条恢复路径:从已装目录读确认卡事实(零副作用)。 */
-    reapproveInspect: (id: string): Promise<{
+    reapproveInspect: (
+      id: string,
+    ): Promise<{
       manifest: unknown;
       trust: unknown;
       manifestSha256: string;
@@ -1166,8 +1166,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedInstalledApproval: string;
         inspectTicket: string;
       },
-    ): Promise<{ ghost: unknown }> =>
-      ipcRenderer.invoke('ghosts:reapprove-installed', id, opts),
+    ): Promise<{ ghost: unknown }> => ipcRenderer.invoke('ghosts:reapprove-installed', id, opts),
     uninstall: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke('ghosts:uninstall', id),
     /** 详情页「导出 .cindy」:main 打包安装目录 → 系统保存对话框落盘。 */
     export: (
@@ -1768,6 +1767,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:get-login-state'),
   authDispatchLoginAction: (action: DesktopLoginAction): Promise<DesktopLoginActionResult> =>
     ipcRenderer.invoke('auth:dispatch-login-action', action),
+  // 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。
+  authGetCaptchaChallengeUrl: (): Promise<string> =>
+    ipcRenderer.invoke('auth:get-captcha-challenge-url'),
   authLogout: (): Promise<void> => ipcRenderer.invoke('auth:logout'),
   authEnterLocal: () => ipcRenderer.invoke('auth:enter-local'),
   authExitLocal: () => ipcRenderer.invoke('auth:exit-local'),
@@ -2325,8 +2327,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     enableBeta: boolean;
     isCustomized?: boolean;
   }> => ipcRenderer.invoke('update-channel-settings-reset'),
-  relaunchForChannelChange: (): Promise<void> =>
-    ipcRenderer.invoke('update-channel-relaunch'),
+  relaunchForChannelChange: (): Promise<void> => ipcRenderer.invoke('update-channel-relaunch'),
   probeBetaChannel: (): Promise<{ available: boolean }> =>
     ipcRenderer.invoke('update-channel-probe-beta'),
   setUpdateRelaunchTheme: (theme: 'light' | 'dark'): void => {
@@ -3335,6 +3336,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   //   - { type: 'project', workingDir }    : 聚焦已有 project 节点
   //   - { type: 'new-session', workingDir }: 新建对话且预填 workingDir (右键 "通过 Cindy 打开")
   //   - { type: 'share-import', filePath } : 打开 .cshare/.xdtshare 会话导入向导
+  //   - { type: 'settings', tab, connect? }: 打开设置页 (connect 为可选 provider / preset id,
+  //     来自 cindy://settings/providers?connect=<providerId> 深链, per-type 白名单再校验)
   onDeepLinkNavigate: (
     callback: (
       payload:
@@ -3342,7 +3345,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => void,
   ): (() => void) =>
     fanOutDeepLinkNavigate((payload) => {
@@ -3353,6 +3356,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         workingDir?: unknown;
         filePath?: unknown;
         tab?: unknown;
+        connect?: unknown;
         messageClientId?: unknown;
       };
       if (p.type === 'session' && typeof p.id === 'string' && p.id.length > 0) {
@@ -3364,7 +3368,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
             : {}),
         });
       } else if (p.type === 'settings' && (p.tab === 'voice-input' || p.tab === 'providers')) {
-        callback({ type: 'settings', tab: p.tab });
+        // connect 只对 providers 页有意义;主进程已做 id 白名单,这里按纵深防御
+        // 原样复用同一规则。字段存在但不合法时丢弃整个 payload,不降级成半执行。
+        if (
+          p.connect !== undefined
+          && (p.tab !== 'providers' || !isDeepLinkProviderConnectId(p.connect))
+        ) return;
+        callback({
+          type: 'settings',
+          tab: p.tab,
+          ...(p.tab === 'providers' && p.connect !== undefined ? { connect: p.connect } : {}),
+        });
       } else if (
         p.type === 'project' &&
         typeof p.workingDir === 'string' &&
@@ -3394,7 +3408,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
     | null
   > => ipcRenderer.invoke('deep-link:take-pending'),
 
@@ -4193,9 +4207,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ ok: true; daemonReady: boolean }> =>
       ipcRenderer.invoke('maker:remote-ssh:cc-mgr-force-upgrade', { hostId, sessionId, agent }),
     ccMgrListPendingUpgrades: (): Promise<{
-      pending: Array<{ hostId: string; currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' }>;
+      pending: Array<{
+        hostId: string;
+        currentVersion: string;
+        availableVersion: string;
+        agent: 'cc' | 'pi';
+      }>;
     }> => ipcRenderer.invoke('maker:remote-ssh:cc-mgr-list-pending-upgrades'),
-    ccMgrDismissPendingUpgrade: (hostId: string, agent: 'cc' | 'pi' = 'cc'): Promise<{ ok: true }> =>
+    ccMgrDismissPendingUpgrade: (
+      hostId: string,
+      agent: 'cc' | 'pi' = 'cc',
+    ): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:remote-ssh:cc-mgr-dismiss-pending-upgrade', { hostId, agent }),
 
     // ── Codex auth sync (Phase B+) ────────────────────────────────────────
@@ -4435,6 +4457,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       worktreePath: string | null;
       remoteHostId?: string | null;
     }): Promise<unknown> => ipcRenderer.invoke('git-context:get-for-session', input),
+    /** 本机:任务遥测里仍活着的 linked worktree。远程/未找到返回 null。 */
+    findLinkedWorktree: (input: { sessionId: string }): Promise<unknown> =>
+      ipcRenderer.invoke('git-context:find-linked-worktree', input),
     /** 开始监听该 workdir 的 HEAD 变化(refcount;变化经 onChanged 推送)。 */
     watch: (workdir: string): Promise<void> => ipcRenderer.invoke('git-context:watch', workdir),
     unwatch: (workdir: string): Promise<void> => ipcRenderer.invoke('git-context:unwatch', workdir),
@@ -5206,9 +5231,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<void> =>
       ipcRenderer.invoke('maker:model-visibility:sync', dataOwnerId, ownerGeneration, map),
     claimLegacyModelVisibilityOwner: (): ModelVisibilityLegacyOwnerClaim => {
-      const value: unknown = ipcRenderer.sendSync(
-        'maker:model-visibility:legacy-owner-claim-sync',
-      );
+      const value: unknown = ipcRenderer.sendSync('maker:model-visibility:legacy-owner-claim-sync');
       return isModelVisibilityLegacyOwnerClaim(value)
         ? value
         : {
@@ -6268,8 +6291,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;
-    }): Promise<{ prompt: string | null }> =>
-      ipcRenderer.invoke('maker:predict-prompt', request),
+    }): Promise<{ prompt: string | null }> => ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>

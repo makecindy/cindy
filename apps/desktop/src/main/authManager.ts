@@ -95,6 +95,7 @@ import {
   type DesktopLoginAction,
   type DesktopLoginActionResult,
 } from '../shared/authIpc';
+import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
   activeOwnerScopeKey,
   beginAppSessionBoundary,
@@ -1962,6 +1963,15 @@ export function getActiveAuthRealm(): AuthRegion {
   return activeAuthRealm;
 }
 
+/**
+ * 登录页人机验证托管挑战页地址(不含 query)。邮箱发码固定走构建区域的 auth
+ * 部署(与 runLoginAction 的 startsBuildRealmFlow 口径一致),不看 activeAuthRealm。
+ * 惰性求值:端点清单可能在 app.ready 后被远程 manifest 回填,不得固化。
+ */
+export function getLoginCaptchaChallengeUrl(): string {
+  return authServerUrl(AUTH_REGION) + LOGIN_CAPTCHA_PAGE_PATH;
+}
+
 /** SkillHub v0.2.1: 返回当前登录用户 id（cuid），未登录时返回 null */
 export function getCurrentUserId(): string | null {
   return currentUser?.id ?? null;
@@ -2989,7 +2999,9 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       if (action.kind === 'phone' && !providerConfig?.phone) {
         throw new AuthApiError('PHONE_LOGIN_DISABLED', 400, 'Phone login is disabled');
       }
-      await client.requestCode(action.kind, action.identifier);
+      await client.requestCode(action.kind, action.identifier, {
+        captchaToken: action.captchaToken,
+      });
       loginFlowState = reduceAuthFlow(loginFlowState, {
         type: 'code-requested',
         kind: action.kind,

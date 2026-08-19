@@ -2001,6 +2001,8 @@ interface ElectronAPI {
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
+  /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */
+  authGetCaptchaChallengeUrl: () => Promise<string>;
   authLogout: () => Promise<void>;
   authEnterLocal: () => Promise<AuthStateChangePayload>;
   authExitLocal: () => Promise<AuthStateChangePayload>;
@@ -2731,7 +2733,7 @@ interface ElectronAPI {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => void,
   ) => () => void;
 
@@ -2746,7 +2748,7 @@ interface ElectronAPI {
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
     | null
   >;
 
@@ -3964,6 +3966,10 @@ interface ElectronAPI {
       worktreePath: string | null;
       remoteHostId?: string | null;
     }) => Promise<import('@/lib/gitContext.types').SessionGitDirResult>;
+    findLinkedWorktree: (input: { sessionId: string }) => Promise<{
+      workdir: string;
+      branch: string | null;
+    } | null>;
     watch: (workdir: string) => Promise<void>;
     unwatch: (workdir: string) => Promise<void>;
     listPrRefs: (sessionId: string) => Promise<import('@/lib/gitContext.types').SessionPrRef[]>;

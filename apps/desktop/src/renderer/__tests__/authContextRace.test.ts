@@ -121,6 +121,19 @@ describe('AuthContext auth-state races', () => {
     expect(projectWaiting).toBeGreaterThan(-1);
     expect(autoStart).toBeGreaterThan(projectWaiting);
   });
+
+  it('gates the sole-email auto request-code behind the login captcha gate', () => {
+    // 唯一邮箱自动发码链不经过 LoginPage 的 dispatchRequestCode 闸;这里必须
+    // 先问 loginCaptchaGate(global 开启 captcha 后,不过闸会不带 token 发码
+    // 直接吃 400),取消(null)则停在 method-choice 不发码。
+    expect(source).toContain("from '@/lib/loginCaptchaGate'");
+    const gateAt = source.indexOf('getLoginEmailCaptchaGate()');
+    const autoRequestAt = source.indexOf("type: 'request-code'");
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(gateAt).toBeLessThan(autoRequestAt);
+    expect(source).toContain('if (captchaToken === null)');
+    expect(source).toContain('captchaToken,');
+  });
 });
 
 describe('data-owner live push fencing', () => {

@@ -228,7 +228,7 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
 // rehypeKatex 必须排在 rehypeHighlight 之前:remark-math 产出的 hast 是
 // `<code class="language-math ...">`,先让 katex 消费掉,否则 highlight 会往
 // 里面塞 hljs span 破坏纯文本结构。strict:'ignore' 静默非致命 LaTeX 告警;
-// errorColor 走语义豁免 error token,解析失败的公式以错误色显示原文。
+// 解析失败的公式回落为正文色原文,避免模型格式错误把普通聊天染成错误红。
 // rehypeMathBlockMarker 紧随 rehypeKatex:把裸 `<span class="katex-display">`
 // 包进 `<div data-math-block>`,让下方 div 渲染器能挂「复制为图片」工具栏
 // (components 映射只认 tagName,认不了 class)。
@@ -237,7 +237,7 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
 // 打 data-fenced-code 供下方 code 渲染器按结构(而非语言标注)分派。
 const REHYPE_PLUGINS: PluggableList = [
   rehypeSlug,
-  [rehypeKatex, { strict: 'ignore', errorColor: 'var(--error-fg)' }],
+  [rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }],
   rehypeMathBlockMarker,
   rehypeHighlight,
   rehypeFencedCodeMarker,

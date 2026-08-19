@@ -5,6 +5,8 @@
  * 解析主 + 历史 scheme 都认——存量消息里的 xdt-maker:// 老链接不能死):
  *   cindy://session/<sessionId>             —— sessionId 直接是 string id
  *   cindy://project/<urlencoded-workingDir> —— workingDir 全路径 URL-encoded
+ *   cindy://settings/providers[?connect=<providerId>] —— 打开设置「模型供应商」页,
+ *     可选 connect 直达指定内置渠道或预设的接入流程(白名单校验,见 parseDeepLink)
  *
  * 命令行参数形态 (右键菜单 / 命令行):
  *   --open-folder <absolute-path>   或   --open-folder=<absolute-path>
@@ -32,9 +34,9 @@
  *     不会因为登录流程跳过而丢失"点击右键打开"这个意图。
  *
  * dev 模式说明:
- *   非 packaged 模式下系统协议 / 右键菜单注册不会生效 (操作系统识别的是已安装的
- *   .app/.exe,不是临时跑的 Electron 解释器)。本模块的解析 / 派发逻辑可以单测,
- *   但端到端 "点链接 / 右键唤起" 必须打 release 包验证。
+ *   setAsDefaultProtocolClient 可把 scheme 临时注册到 Electron 解释器,因此能在 dev
+ *   实例运行期间验证系统 URL 唤起;但协议归属受最后注册的正式版 / dev 实例影响,
+ *   发布前仍需用 packaged build 做最终跨平台验证。
  */
 
 import { app, BrowserWindow } from 'electron';
@@ -44,6 +46,7 @@ import {
   DEEP_LINK_PRIMARY_SCHEME,
   DEEP_LINK_SCHEMES,
   DEEP_LINK_URL_PREFIX,
+  isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
 
@@ -69,11 +72,13 @@ export type DeepLinkPayload =
   | { type: 'new-session'; workingDir: string }
   | { type: 'share-import'; filePath: string }
   /**
-   * 主进程内部发起的设置页导航。它不由自定义 URL 解析产生；复用现有的
-   * main-window focus + renderer dispatch 通道，供全局浮层等独立窗口把用户
-   * 带回主窗口的准确设置页。
+   * 设置页导航。两个来源:
+   *   1. 主进程内部发起(全局浮层等独立窗口把用户带回主窗口的准确设置页);
+   *   2. cindy://settings/providers[?connect=<providerId>] 深链(外部工具一键拉起
+   *      供应商接入流程)。URL 域只开放 tab=providers;connect 是可选的内置
+   *      provider / preset id,经白名单校验后透传给 renderer 已有的消费逻辑。
    */
-  | { type: 'settings'; tab: 'voice-input' | 'providers' }
+  | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
   /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
@@ -122,6 +127,44 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (type === 'focus') {
     // value 只作来源标记 (如 google-auth),解析后不参与行为分发。
     return { type: 'focus' };
+  }
+  if (type === 'settings') {
+    // URL 域只开放精确的 providers 路径(尾随 `/` 可忽略);不能沿用上方对其它
+    // payload 的“首段即值”语义,否则 settings/providers/anything 也会被接收。
+    const rawSettingsPath = rawValue.replace(/[?#].*$/, '').replace(/\/+$/, '');
+    if (rawSettingsPath !== 'providers' || decoded !== 'providers') return null;
+    // connect 是可选 provider / preset id;深链是不可信输入,值必须过共享白名单,
+    // 不合法就整条拒绝,避免 main/preload 规则漂移。
+    const connect = parseSettingsConnectParam(rawValue);
+    if (connect === INVALID_CONNECT) return null;
+    return connect
+      ? { type: 'settings', tab: 'providers', connect }
+      : { type: 'settings', tab: 'providers' };
+  }
+  return null;
+}
+
+/** 区分"没带 connect"(null)与"带了但非法"(INVALID_CONNECT → 整条深链拒绝)。 */
+const INVALID_CONNECT = Symbol('invalid-connect');
+
+function parseSettingsConnectParam(rawValue: string): string | null | typeof INVALID_CONNECT {
+  const hashIdx = rawValue.indexOf('#');
+  const noHash = hashIdx >= 0 ? rawValue.slice(0, hashIdx) : rawValue;
+  const queryIdx = noHash.indexOf('?');
+  if (queryIdx < 0) return null;
+  const query = noHash.slice(queryIdx + 1);
+  for (const pair of query.split('&')) {
+    const eqIdx = pair.indexOf('=');
+    if (eqIdx <= 0 || pair.slice(0, eqIdx) !== 'connect') continue;
+    const rawParam = pair.slice(eqIdx + 1);
+    if (!rawParam) return INVALID_CONNECT;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawParam);
+    } catch {
+      return INVALID_CONNECT;
+    }
+    return isDeepLinkProviderConnectId(decoded) ? decoded : INVALID_CONNECT;
   }
   return null;
 }

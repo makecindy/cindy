@@ -3802,7 +3802,7 @@
         "updateTo": "更新到 v{{version}}",
         "updateAria": "將 {{name}} 更新到 v{{version}}",
         "createWithCindy": "使用 Cindy 建立",
-        "createPrompt": "我要建立一個 Cindy 插件。請先呼叫 ghost_forge_guide 獲取手冊目錄，先讀第 0 章「設計對齊」，再用 section 引數讀透相關章節（動手前至少讀完沙箱紅線與打包流程兩章），不要直接開始實現。先從提問開始：優先用帶選項的提問卡片，每張卡片聚焦一個關鍵決策並標註你的推薦項，把我可能不知道的設計選項主動擺出來讓我選——比如介面形態（停靠面板、插件頁內面板、對話卡片還是無介面）、$ 點名詞、啟動模式、是否聯網、是否需要設定頁；並逐步確認插件要解決的問題、目標使用者、互動流程、所需工具與連線、權限邊界和驗收標準。設計確認後，再按規範實現並自檢；最後呼叫 ghost_forge_pack 打包並安裝插件。",
+        "createPrompt": "我要建立一個 Cindy 插件。請先呼叫 ghost_forge_guide 獲取手冊目錄，先讀第 0 章「設計對齊」，再用 section 引數讀透相關章節（動手前至少讀完第 2 章卡槽總覽、沙箱紅線與打包流程三章），不要直接開始實現。先從提問開始：優先用帶選項的提問卡片，每張卡片聚焦一個關鍵決策並標註你的推薦項，把我可能不知道的設計選項主動擺出來讓我選——比如介面形態（停靠面板、插件頁內面板、對話卡片還是無介面）、$ 點名詞、啟動模式、後台能力（旁聽事件、應用內輕提示、未讀角標、確認彈窗）、是否聯網、是否需要設定頁、要不要隨包 Node 行程跑重活、要不要圖片影片等媒體能力；並逐步確認插件要解決的問題、目標使用者、互動流程、所需工具與連線、權限邊界和驗收標準。設計確認後，再按規範實現並自檢；最後呼叫 ghost_forge_pack 打包並安裝插件。",
         "filterAll": "全部",
         "filtersAria": "按來源篩選插件",
         "origin": {
@@ -4733,6 +4733,13 @@
       "cn": "CN",
       "dev": "Dev"
     },
+    "captcha": {
+      "title": "安全驗證",
+      "loading": "正在載入安全驗證…",
+      "failed": "安全驗證載入失敗",
+      "retry": "重試",
+      "cancel": "取消"
+    },
     "errors": {
       "fallback": "登入失敗，請稍後重試",
       "AUTH_SERVICE_UNAVAILABLE": "登入服務暫不可用",
@@ -4743,6 +4750,9 @@
       "INVALID_CODE": "驗證碼錯誤或已過期",
       "CODE_ATTEMPTS_EXCEEDED": "驗證碼錯誤次數過多，請重新獲取",
       "RATE_LIMITED": "操作過於頻繁，請稍後再試",
+      "CAPTCHA_REQUIRED": "請先完成安全驗證",
+      "CAPTCHA_INVALID": "安全驗證未通過，請重試",
+      "CAPTCHA_UNAVAILABLE": "安全驗證服務暫時無法使用，請稍後再試",
       "SSO_LOGIN_REQUIRED": "該電子郵件所屬企業要求透過 SSO 登入",
       "ORG_SSO_NOT_FOUND": "未找到該企業，或該企業未啟用 SSO 登入",
       "ORG_REALM_AMBIGUOUS": "該企業標識同時存在於兩個區域，請聯絡企業管理員處理",
@@ -7639,6 +7649,15 @@
       "filterLastActivityHeading": "最近活躍",
       "filterGroupByHeading": "分組",
       "filterSortByHeading": "排序",
+      "filterTaskSortHeading": "任務排序",
+      "filterProjectOrderHeading": "專案順序",
+      "filterProjectOrder": {
+        "activity": "依最近活動",
+        "custom": "手動"
+      },
+      "filterProjectOrderTip": {
+        "custom": "用滑鼠拖動專案列調整順序，組內任務仍按上面的排序"
+      },
       "filterProjectsHeading": "專案",
       "filterAllProjects": "所有專案",
       "filterHeading": "篩選",
@@ -7652,6 +7671,8 @@
       "taskInfo": {
         "time": "時間",
         "pr": "PR 狀態",
+        "worktree": "worktree",
+        "openWorktree": "開啟 worktree 資料夾",
         "tokens": "Token",
         "cost": "費用"
       },
@@ -7864,7 +7885,7 @@
         "syncCodexAlreadyLinked": "此專案的 Codex 任務已經連結過了",
         "syncCodexNone": "沒有找到此專案的 Codex 任務",
         "syncCodexFailed": "Codex 同步失敗：{{error}}",
-        "search": "搜尋任務"
+        "search": "在專案內搜尋任務"
       },
       "deepLink": {
         "copied": "已複製深度連結",
