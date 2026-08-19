@@ -4893,10 +4893,14 @@ interface ElectronAPI {
       attachments?: import('./lib/fileTypes').SerializedAttachedFile[];
     }) => Promise<{ ok: true; runId: string; reviewerSessionId: string }>;
 
-    listAgentCommands: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
+    listAgentCommands: (
+      agentKind: 'claude-code' | 'codex' | 'pi',
+      params?: { sessionId?: string; allowManagedPiPackagePreview?: boolean },
+    ) => Promise<{
       success: boolean;
       error?: string;
       commands?: Array<{ kind: 'agent-builtin'; name: string; description: string }>;
+      runtimeStatus?: import('../shared/piPackages').PiPackageCommandRuntimeStatus;
     }>;
 
     listAgentSkills: (
@@ -4917,6 +4921,14 @@ interface ElectronAPI {
         runtimeCommandName?: string;
       }>;
     }>;
+
+    listPiPackages: () => Promise<import('../shared/piPackages').PiPackageListResult>;
+
+    mutatePiPackage: (
+      request: import('../shared/piPackages').PiPackageMutationRequest,
+    ) => Promise<import('../shared/piPackages').PiPackageMutationResult>;
+
+    onPiPackagesChanged: (handler: () => void) => () => void;
 
     onDesktopCommandTriggered: (
       handler: (payload: {

@@ -54,6 +54,7 @@ import type {
 } from '@cindy/model-providers';
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
+import { t } from '../i18n.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
@@ -86,6 +87,8 @@ import {
   resolveXdPiGatewayWireProtocol,
 } from './active-catalog.js';
 import { resolvePiRuntimeModelDescriptor } from './catalog-to-descriptors.js';
+import { resolveManagedPiPackageResources } from './pi-package-store.js';
+import { mutateAuthorizedPiManagedPackage } from './pi-managed-package-mutation.js';
 
 const log = createLogger('pi-host');
 
@@ -1594,6 +1597,18 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
       if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
       return path.join(app.getPath('userData'), 'pi-agent-home');
     },
+    resolvePiManagedPackageResources: resolveManagedPiPackageResources,
+    mutatePiManagedPackage: mutateAuthorizedPiManagedPackage,
+    getPiExtensionUiStrings: () => ({
+      confirm: t('settings.piPackages.extensionDialogConfirm'),
+      cancel: t('settings.piPackages.cancel'),
+      mutationFailed: t('settings.piPackages.operationFailed'),
+      mutationSuccess: {
+        install: t('settings.piPackages.success.install'),
+        update: t('settings.piPackages.success.update'),
+        remove: t('settings.piPackages.success.remove'),
+      },
+    }),
     preparePiExtraSpawnConfig: async (providers, ctx) => {
       const extra = await getPiExtraSpawnConfig(providers, opts.logger, ctx);
       if (!extra?.mcpBridge || extra.mcpBridge.servers.length === 0) return extra;

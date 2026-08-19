@@ -3231,7 +3231,12 @@ export default function SessionScreen() {
     pendingSkillSelectionRef.current = null;
     const seq = ++slashLoadSeqRef.current;
     const agentKind = agentKindForSession(currentSession);
-    const paletteCacheKey = buildComposerPaletteCacheKey(deviceId, agentKind, currentSession.workingDir ?? '');
+    const paletteCacheKey = buildComposerPaletteCacheKey(
+      deviceId,
+      agentKind,
+      currentSession.workingDir ?? '',
+      currentSession.id,
+    );
     const cachedCommands = readSlashCommandCache(paletteCacheKey);
     if (cachedCommands) {
       // 任意年龄的缓存先画(重开面板不闪 spinner),后台静默刷新覆盖(规则 7)。
@@ -3246,10 +3251,11 @@ export default function SessionScreen() {
     void withTransientRemoteRetry(async () => {
       await openLink(deviceId);
       const [builtins, skills, desktop] = await Promise.all([
-        maker.listAgentCommands(agentKind),
+        maker.listAgentCommands(agentKind, { sessionId: currentSession.id }),
         maker.listAgentSkills(agentKind, {
           ...(currentSession.workingDir ? { workingDir: currentSession.workingDir } : {}),
           forceReload: false,
+          sessionId: currentSession.id,
         }),
         // desktop 命令是 additive 展示(白名单分流不依赖此清单,清单只参与同名 skill
         // 让行仲裁,见 desktopSlashCommands):拉取失败(含老被控端无此通道)静默降级

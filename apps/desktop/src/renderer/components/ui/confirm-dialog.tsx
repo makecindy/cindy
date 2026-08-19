@@ -248,7 +248,10 @@ export function ConfirmDialog({
                 )}
               >
                 {loading ? (
-                  <Spinner size={14} />
+                  <>
+                    <Spinner size={14} />
+                    <span className="sr-only">{resolvedConfirmText}</span>
+                  </>
                 ) : (
                   <>
                     {confirmIcon && (

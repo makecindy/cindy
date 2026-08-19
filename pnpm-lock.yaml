@@ -49,6 +49,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@babel/parser':
+        specifier: ^7.29.7
+        version: 7.29.7
       '@cindy/anthropic-compat-proxy':
         specifier: workspace:*
         version: link:../../packages/anthropic-compat-proxy
@@ -361,6 +364,9 @@ importers:
       pdfjs-dist:
         specifier: ^5.7.284
         version: 5.7.284
+      picomatch:
+        specifier: ^4.0.5
+        version: 4.0.5
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -397,6 +403,9 @@ importers:
       remark-math:
         specifier: ^6.0.0
         version: 6.0.0
+      semver:
+        specifier: ^7.8.5
+        version: 7.8.5
       sharp:
         specifier: ^0.35.0
         version: 0.35.3(@types/node@25.9.5)

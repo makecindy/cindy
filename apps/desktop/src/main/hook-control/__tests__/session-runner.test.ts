@@ -98,6 +98,7 @@ vi.mock('@cindy/maker-core', async (importOriginal) => {
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
+    MAIN_OWNED_SEND_CONTEXT: actual.MAIN_OWNED_SEND_CONTEXT,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
     parseTerminalRateLimitRetryProgress: actual.parseTerminalRateLimitRetryProgress,
@@ -316,6 +317,7 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
@@ -704,7 +706,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(createCalls[0][1].content).toBe('hello');
   });
 
-  it('Telegram 新会话使用 provider-aware 标记、提示和持久化来源', async () => {
+  it('官方 Telegram 新会话保留 provider 标记并把包命令留给 Desktop 确认', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
@@ -724,7 +726,51 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(session.send.mock.calls[0][0]).toMatchObject({
       content: `hello\n\n${buildHookPromptNote('telegram')}`,
     });
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'telegram' },
+      rawChannelText: 'hello',
+    });
     expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', 'telegram');
+  });
+
+  it.each([
+    ['slack', { kind: 'im', channel: 'slack' }],
+    ['telegram', { kind: 'hook', source: 'telegram' }],
+    ['x', { kind: 'hook', source: 'x' }],
+  ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
+    const runner = createMakerHookSessionRunner({ log });
+    const rawCommand = 'pi install npm:context-mode';
+    const decoratedPrompt = [
+      '<thread_context>',
+      '[@alice] previous discussion',
+      '</thread_context>',
+      '',
+      rawCommand,
+    ].join('\n');
+    const outcome = await runner.run(baseReq({
+      prompt: decoratedPrompt,
+      source: { im, userText: rawCommand },
+    }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: expectedOrigin,
+      rawChannelText: rawCommand,
+    });
+    expect(session.send.mock.calls[0][0]).toMatchObject({
+      content: `${decoratedPrompt}\n\n${buildHookPromptNote(im)}`,
+    });
+  });
+
+  it('旧服务端缺少 source.userText 时才回退 prompt', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({ source: { im: 'x' } }));
+    expect(outcome.status).toBe('ok');
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
+      origin: { kind: 'hook', source: 'x' },
+      rawChannelText: 'hello',
+    });
   });
 
   it('replacement 读取旧任务历史交接给 Agent，落库仍只保存当前 Slack 原话', async () => {

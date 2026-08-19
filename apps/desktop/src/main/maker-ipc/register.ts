@@ -522,6 +522,23 @@ import {
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
+import {
+  mergePiPackageCommands,
+  shouldListPiPackageCommands,
+  type PiPackageMutationRequest,
+} from '../../shared/piPackages.js';
+import {
+  capturePiPackageEnableIdentity,
+  listManagedPiPromptCommands,
+  listPiPackages,
+  mutatePiPackage,
+  onPiPackagesChanged,
+} from '../maker-host/pi-package-store.js';
+import {
+  issuePiPackageMutationGrant,
+  piPackageMutationNeedsGrant,
+} from '../maker-host/pi-package-mutation-grant.js';
+import { escapePiPackageNativeDialogText } from '../maker-host/pi-package-native-dialog.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   triggerClaudeSubscriptionUsageRefresh,
@@ -536,7 +553,11 @@ import {
   recordModelTurnUsage,
   recordTurnSpend,
 } from '../usageBroadcaster.js';
-import { throwIpcError } from '../utils/ipcValidate.js';
+import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import {
+  runPiPackageListIpcBoundary,
+  runPiPackageMutationIpcBoundary,
+} from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
@@ -830,6 +851,14 @@ import {
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
 import { ProductTurnUsageTargetTracker, ProductTurnWallClockTracker } from './turnWallClock.js';
 import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
+import {
+  assertAgentCommandListIpcCaller,
+  toAgentCommandListFailure,
+} from './agentCommandListIpcBoundary.js';
+import {
+  assertAgentSkillListIpcCaller,
+  toAgentSkillListFailure,
+} from './agentSkillListIpcBoundary.js';
 import {
   captureDataOwnerBroadcastScope,
   tapWindowBroadcast,
@@ -5337,6 +5366,8 @@ export interface RegisterMakerIpcOptions {
   onProviderModelAutoRefreshConfigured(): void;
 }
 
+let disposePiPackagesChangedBroadcast: (() => void) | null = null;
+
 /**
  * Register before the first BrowserWindow: modelVisibilityPrefs mirrors its initial snapshot as
  * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
@@ -5363,6 +5394,14 @@ export function registerModelVisibilitySyncIpc(): void {
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
   log.info('registering maker:* IPC handlers');
+  disposePiPackagesChangedBroadcast?.();
+  disposePiPackagesChangedBroadcast = onPiPackagesChanged(() => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        win.webContents.send(MAKER_PUSH.PI_PACKAGES_CHANGED);
+      }
+    }
+  });
   getAgentIslandService()?.setPermissionResolver(resolvePendingPermissionFromAgentIsland);
   sessionTurnActivityTracker.setTurnKeepaliveChangeListener(
     options.onAnySessionTurnKeepaliveChange ?? null,
@@ -6222,21 +6261,92 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await getDesktopCommandRegistry().execute(name, c);
   });
 
-  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, (_e, agentKind: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, async (event, agentKind: unknown, rawParams?: unknown) => {
+    assertAgentCommandListIpcCaller(event, {
+      isDeviceLinkInvoke,
+      assertTrustedSender: (sourceEvent) =>
+        assertTrustedAppRendererEvent(
+          sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
+        ),
+    });
     try {
-      return { success: true, commands: maker.listAgentCommands(requireAgentKind(agentKind)) };
+      const kind = requireAgentKind(agentKind);
+      const params = rawParams === undefined ? {} : requireObject(rawParams);
+      if (params.sessionId !== undefined && typeof params.sessionId !== 'string') {
+        throwIpcError('INVALID_PARAMS', 'sessionId must be a string');
+      }
+      if (
+        params.allowManagedPiPackagePreview !== undefined
+        && typeof params.allowManagedPiPackagePreview !== 'boolean'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'allowManagedPiPackagePreview must be a boolean');
+      }
+      const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
+        ? params.sessionId.trim()
+        : undefined;
+      const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
+      const builtins = maker.listAgentCommands(kind);
+      const mayListPackageCommands = shouldListPiPackageCommands(
+        kind,
+        sessionId !== undefined,
+        sessionMeta,
+        params.allowManagedPiPackagePreview !== false,
+      );
+      let packageCommands: Array<{ name: string; description: string }> = [];
+      let runtimeStatus: import('../../shared/piPackages.js').PiPackageCommandRuntimeStatus | undefined;
+      if (mayListPackageCommands && sessionId) {
+        const manifest = maker.getSessionRuntimeCapabilities(sessionId);
+        runtimeStatus = manifest?.status === 'loaded'
+          ? 'loaded'
+          : manifest?.status === 'failed'
+            ? 'failed'
+            : manifest?.status === 'unknown'
+              ? 'unknown'
+              : 'pending';
+        const managedNames = new Set(manifest?.managedPackageCommandNames ?? []);
+        if (manifest?.status === 'loaded') {
+          packageCommands = manifest.commands.flatMap((command) => (
+            managedNames.has(command.name) && !command.name.startsWith('skill:')
+              ? [{
+                  name: command.name,
+                  description: command.description ?? `Pi extension command: ${command.name}`,
+                }]
+              : []
+          ));
+        } else if (!manifest) {
+          // An empty local Pi task may have a persisted session row before its
+          // process starts. Keep inspected Prompt templates visible; send waits
+          // for this task's get_commands catalog before allowing execution.
+          packageCommands = await listManagedPiPromptCommands();
+        }
+      } else if (mayListPackageCommands) {
+        // Before a task exists, only prompt templates are statically knowable.
+        // Extension commands appear after that exact Pi runtime confirms them.
+        packageCommands = await listManagedPiPromptCommands();
+      }
+      const commands = mergePiPackageCommands(kind, builtins, packageCommands);
+      return { success: true, commands, ...(runtimeStatus ? { runtimeStatus } : {}) };
     } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-        commands: [],
-      };
+      return toAgentCommandListFailure(err, {
+        reportError: (error) => {
+          log.warn('Agent command list failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      });
     }
   });
 
   ipcMain.handle(
     MAKER_INVOKE.LIST_AGENT_SKILLS,
-    async (_e, agentKind: unknown, params: unknown) => {
+    async (event, agentKind: unknown, params: unknown) => {
+      assertAgentSkillListIpcCaller(event, {
+        isDeviceLinkInvoke,
+        assertTrustedSender: (sourceEvent) =>
+          assertTrustedAppRendererEvent(
+            sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
+          ),
+      });
       try {
         const kind = requireAgentKind(agentKind);
         const skillParams = (params ?? {}) as {
@@ -6259,14 +6369,119 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const result = await maker.listAgentSkills(kind, skillParams);
         return { success: true, ...result };
       } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-          skills: [],
-        };
+        return toAgentSkillListFailure(err, {
+          reportError: (error) => {
+            log.warn('Agent skill list failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
       }
     },
   );
+
+  ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_LIST, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return runPiPackageListIpcBoundary(
+      () => listPiPackages(),
+      t('settings.piPackages.loadFailed'),
+      (error) => {
+        log.warn('Pi extension list failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+  });
+
+  ipcMain.handle(MAKER_INVOKE.PI_PACKAGES_MUTATE, async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const payload = requireObject(raw);
+    const action = requireEnum(
+      payload.action,
+      ['install', 'remove', 'update', 'set-enabled'] as const,
+      'action',
+    );
+    if (typeof payload.source !== 'string' || payload.source.length > 2_048) {
+      throwIpcError('INVALID_PARAMS', 'invalid Pi extension source');
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'confirmed')) {
+      throwIpcError('INVALID_PARAMS', 'Renderer confirmation is not accepted');
+    }
+    if (payload.enabled !== undefined && typeof payload.enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+    }
+    const request: PiPackageMutationRequest = {
+      action,
+      source: payload.source,
+      ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
+    };
+    return runPiPackageMutationIpcBoundary(async () => {
+      if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
+
+      const enableIdentity = request.action === 'set-enabled' && request.enabled === true
+        ? await capturePiPackageEnableIdentity(request.source)
+        : undefined;
+      const grantBinding = enableIdentity
+        ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
+        : undefined;
+
+      const source = escapePiPackageNativeDialogText(request.source);
+      const copy =
+        request.action === 'set-enabled'
+          ? {
+              title: t('settings.piPackages.extensionApprovalTitle'),
+              message: enableIdentity?.displayLabel ?? '',
+              detail: t('settings.piPackages.extensionApprovalDescription'),
+              confirm: t('settings.piPackages.approveAndEnable'),
+            }
+          : request.action === 'remove'
+            ? {
+                title: t('settings.piPackages.uninstallTitle'),
+                message: t('settings.piPackages.uninstallTitle'),
+                detail: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
+                confirm: t('settings.piPackages.confirmUninstall'),
+              }
+            : request.action === 'update'
+              ? {
+                  title: t('settings.piPackages.updateConfirmTitle'),
+                  message: t('settings.piPackages.updateConfirmTitle'),
+                  detail: t('settings.piPackages.updateConfirmDescription').replace(
+                    '{{source}}',
+                    source,
+                  ),
+                  confirm: t('settings.piPackages.confirmUpdate'),
+                }
+              : {
+                  title: t('settings.piPackages.confirmTitle'),
+                  message: t('settings.piPackages.confirmTitle'),
+                  detail: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
+                  confirm: t('settings.piPackages.confirmInstall'),
+                };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const options = {
+        type: 'warning' as const,
+        title: copy.title,
+        message: copy.message,
+        detail: copy.detail,
+        buttons: [copy.confirm, t('settings.piPackages.cancel')],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      };
+      const decision = owner
+        ? await dialog.showMessageBox(owner, options)
+        : await dialog.showMessageBox(options);
+      if (decision.response !== 0) {
+        throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+      }
+      return mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding));
+    }, t('settings.piPackages.operationFailed'), (error) => {
+      log.warn('Pi extension mutation failed', {
+        action: request.action,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  });
 
   ipcMain.handle(
     MAKER_INVOKE.SCAN_AT_RESOURCES,
