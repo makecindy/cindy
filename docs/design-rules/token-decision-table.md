@@ -192,7 +192,7 @@ export const loginColors = {
 | **页底** | **`#F2F2ED`** | surface / titlebar / panel | 0 |
 | 柔和 hover | `#F0F0EB` | surface-hover-soft | −1.7% |
 | 通用 hover/chip | `#EEEEE9` | surface-hover / chip | −3.3% |
-| 侧栏 | `#EEEEE9` @ 90% 玻璃 | 独立面(玻璃遮盖度用户调参) | −3.3% |
+| 侧栏 | `#EEEEE9` @ 85% 玻璃 | 独立面(玻璃遮盖度用户调参) | −3.3% |
 | 下拉行 hover | `#EFEFEA` | model-item-hover(锚定弹层面板 −11.9%) | — |
 | 菜单 hover | `#E8E8E3` | settings-menu-bg-hover | −8.1% |
 | 边框 | `#E4E4DF` | border-default(冷 `#DCDFE3` 转暖) | −11.2% |

@@ -69,6 +69,7 @@ export function claimLegacyModelVisibilityOwner(): ModelVisibilityLegacyOwnerCla
   ) {
     return {
       ...stamp,
+      canWriteOwnerScoped: false,
       claimed: false,
       claimedByOtherOwner: false,
       canInitialize: false,
@@ -110,6 +111,7 @@ export function claimLegacyModelVisibilityOwner(): ModelVisibilityLegacyOwnerCla
   const claimed = state.kind === 'valid' && state.marker.ownerKey === ownerKey;
   return {
     ...stamp,
+    canWriteOwnerScoped: true,
     claimed,
     claimedByOtherOwner: state.kind === 'valid' && !claimed,
     canInitialize:

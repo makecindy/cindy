@@ -5,16 +5,17 @@
  * Popover: WORKERS header + worker rows + Create new worker 行。
  */
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, type ReactNode, type WheelEvent } from 'react';
-import { useTranslation } from 'react-i18next';
 import {
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  X,
-  EllipsisVertical,
-} from 'lucide-react';
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  type ReactNode,
+  type WheelEvent,
+} from 'react';
+import { useTranslation } from 'react-i18next';
+import { Check, ChevronDown, ChevronUp, Plus, X, EllipsisVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppShortcutDisplay } from '@/hooks/useAppShortcut';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -22,10 +23,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { WorkerInfo } from './hooks/useWorkers';
 import { shouldShowWorkerLabel } from './workerLabel';
-import {
-  clearWorkerAttention,
-  useWorkerAttentionSnapshot,
-} from './lib/workerAttentionStore';
+import { clearWorkerAttention, useWorkerAttentionSnapshot } from './lib/workerAttentionStore';
 
 // Strip provider prefix: 'deepseek/deepseek-v4-pro' → 'deepseek-v4-pro'.
 // 通用代理网关返回的 model id 经常带 'provider/model' 形式, UI 里只显末段更清爽.
@@ -34,36 +32,33 @@ function simplifyModelName(model: string): string {
   return slash >= 0 ? model.slice(slash + 1) : model;
 }
 
-// Effort 文字 → 5-bar 视觉编码 (跟主 pill 的 Codex effort 表达对齐).
-// minimal/low/medium/high/max 对应填 1/2/3/4/5 个柱.
-const EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'max'] as const;
-function effortFillCount(effort: string | null): number {
-  const idx = EFFORT_LEVELS.indexOf((effort ?? 'medium') as (typeof EFFORT_LEVELS)[number]);
-  return idx >= 0 ? idx + 1 : 3;
+// 各模型档位集合不同,信号条没有稳定含义。已知档才写词表里的短文案,
+// 未知值不显示,也不再默默掉回 medium。
+const WORKER_EFFORT_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+function workerEffortLabel(t: (key: string) => string, effort: string | null): string | null {
+  if (!effort || !WORKER_EFFORT_LEVELS.has(effort)) return null;
+  return t(`effortLevels.${effort}`);
 }
 
-function EffortBars({ effort }: { effort: string | null }) {
-  const fill = effortFillCount(effort);
+function WorkerModelLine({
+  model,
+  effort,
+}: {
+  model: string;
+  effort: string | null;
+}) {
+  const { t } = useTranslation();
+  const effortLabel = workerEffortLabel(t, effort);
+  // 列表选中行是浅色 chip 底,不能套深色药丸上的 --surface-on-card,
+  // 日间会糊成看不清。副行一律走次级字色。
+  // 菜单有 overflow-x-hidden,整行 nowrap 会把后加的档位裁掉;
+  // 模型名可截,档位词短、必须留在可见区。右侧给 archive / ERR 留空。
   return (
-    <span
-      className="inline-flex items-end"
-      style={{ gap: 1.5, height: 8 }}
-      aria-label={`effort ${effort ?? 'medium'}`}
-    >
-      {[0, 1, 2, 3, 4].map((i) => (
-        <span
-          key={i}
-          style={{
-            display: 'inline-block',
-            width: 2,
-            height: 4 + i,
-            borderRadius: 1,
-            backgroundColor: i < fill ? 'var(--text-secondary)' : 'var(--text-tertiary)',
-            opacity: i < fill ? 1 : 0.35,
-          }}
-        />
-      ))}
-    </span>
+    <div className="mt-0.5 mr-7 ml-[26px] flex min-w-0 items-baseline gap-1.5 text-12 leading-snug text-[var(--text-secondary)]">
+      <span className="min-w-0 truncate">{simplifyModelName(model)}</span>
+      {effortLabel ? <span className="shrink-0">· {effortLabel}</span> : null}
+    </div>
   );
 }
 
@@ -243,12 +238,7 @@ function WorkerSummary({
 }) {
   return (
     <>
-      <div
-        className={cn(
-          'flex items-center gap-2 leading-snug',
-          compact ? 'text-11' : 'text-13',
-        )}
-      >
+      <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
         <WorkerAvatar
           agent={worker.agent}
           status={worker.status}
@@ -287,10 +277,7 @@ function WorkerSummary({
         )}
       </div>
       {!compact && (
-        <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-11 leading-snug text-[var(--text-tertiary)]">
-          <span>{simplifyModelName(worker.model)}</span>
-          <EffortBars effort={worker.effort} />
-        </div>
+        <WorkerModelLine model={worker.model} effort={worker.effort} />
       )}
     </>
   );
@@ -351,9 +338,9 @@ function useAnchorMenuMaxHeight(
   anchorRef: { current: HTMLElement | null },
   open: boolean,
 ): { maxHeight: number; placeAbove: boolean } | undefined {
-  const [placement, setPlacement] = useState<{ maxHeight: number; placeAbove: boolean } | undefined>(
-    undefined,
-  );
+  const [placement, setPlacement] = useState<
+    { maxHeight: number; placeAbove: boolean } | undefined
+  >(undefined);
   useLayoutEffect(() => {
     if (!open) return;
     const update = () => {
@@ -378,13 +365,9 @@ function useAnchorMenuMaxHeight(
     window.addEventListener('resize', update);
     // 侧栏经拖拽分割线（pointermove）调整宽度时不会触发 window.resize；用 ResizeObserver
     // 监听裁剪祖先容器尺寸变化，菜单打开期间及时重算边界，避免菜单超出当前侧栏被裁掉。
-    const clipContainer = anchorRef.current
-      ? findClippingContainer(anchorRef.current)
-      : null;
+    const clipContainer = anchorRef.current ? findClippingContainer(anchorRef.current) : null;
     const resizeObserver =
-      typeof ResizeObserver !== 'undefined' && clipContainer
-        ? new ResizeObserver(update)
-        : null;
+      typeof ResizeObserver !== 'undefined' && clipContainer ? new ResizeObserver(update) : null;
     if (resizeObserver && clipContainer) resizeObserver.observe(clipContainer);
     return () => {
       window.removeEventListener('resize', update);
@@ -411,23 +394,17 @@ function useAnchorMenuMaxWidth(
       const el = anchorRef.current;
       if (!el) return;
       const anchor = el.getBoundingClientRect();
-      const bounds =
-        findClippingBounds(el) ?? { left: 0, right: window.innerWidth };
-      const available =
-        align === 'left' ? bounds.right - anchor.left : anchor.right - bounds.left;
+      const bounds = findClippingBounds(el) ?? { left: 0, right: window.innerWidth };
+      const available = align === 'left' ? bounds.right - anchor.left : anchor.right - bounds.left;
       setMaxWidth(Math.max(0, available));
     };
     update();
     window.addEventListener('resize', update);
     // 侧栏经拖拽分割线（pointermove）调整宽度时不会触发 window.resize；用 ResizeObserver
     // 监听裁剪祖先容器尺寸变化，菜单打开期间及时重算边界，避免菜单超出当前侧栏被裁掉。
-    const clipContainer = anchorRef.current
-      ? findClippingContainer(anchorRef.current)
-      : null;
+    const clipContainer = anchorRef.current ? findClippingContainer(anchorRef.current) : null;
     const resizeObserver =
-      typeof ResizeObserver !== 'undefined' && clipContainer
-        ? new ResizeObserver(update)
-        : null;
+      typeof ResizeObserver !== 'undefined' && clipContainer ? new ResizeObserver(update) : null;
     if (resizeObserver && clipContainer) resizeObserver.observe(clipContainer);
     return () => {
       window.removeEventListener('resize', update);
@@ -545,12 +522,7 @@ function WorkerLayoutMenu({
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      <Tip
-        text={t('orca.rolePill.layoutMenuLabel')}
-        side="bottom"
-        delay={250}
-        disabled={open}
-      >
+      <Tip text={t('orca.rolePill.layoutMenuLabel')} side="bottom" delay={250} disabled={open}>
         <button
           type="button"
           aria-label={t('orca.rolePill.layoutMenuLabel')}
@@ -631,10 +603,7 @@ function WorkerLayoutMenu({
                             </>
                           )}
                         </div>
-                        <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-11 leading-snug text-[var(--text-tertiary)]">
-                          <span>{simplifyModelName(w.model)}</span>
-                          <EffortBars effort={w.effort} />
-                        </div>
+                        <WorkerModelLine model={w.model} effort={w.effort} />
                       </button>
                       {/* hover archive ✕ */}
                       <button
@@ -778,7 +747,8 @@ function WorkerTabsList({
   const [scrollState, setScrollState] = useState({ left: false, right: false });
   const attention = useWorkerAttentionSnapshot();
   const requestArchiveWorker = useRequestArchiveWorker(onArchiveWorker);
-  const focusedWorkerId = selectedWorkerId ?? workers.find((worker) => worker.focused)?.workerId ?? null;
+  const focusedWorkerId =
+    selectedWorkerId ?? workers.find((worker) => worker.focused)?.workerId ?? null;
 
   useLayoutEffect(() => {
     if (!clearAttentionWhenVisible) return;
@@ -1143,7 +1113,7 @@ export function RolePillDropdown({
     <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
       {/* ── Trigger: 单 chip [avatar 含 status + role + caret].
             model / effort 不在这里展示 — focused worker 的 model 在输入框那边自然
-            可见, dropdown 列表里 worker rows 第二行还展示简化 model + effort bars
+            可见, dropdown 列表里 worker rows 第二行还展示简化 model + 档位文字
             供切换时对比, 这里只用 role 标识 "当前活跃的 worker". ── */}
       <button
         ref={triggerRef}
@@ -1250,12 +1220,9 @@ export function RolePillDropdown({
                         </>
                       )}
                     </div>
-                    {/* 副行: 简化 model 名 (去 provider 前缀) + effort bars.
-                        Claude / Codex 都显 (两种 agent 都有 reasoning effort 概念). */}
-                    <div className="mt-0.5 ml-[26px] flex items-center gap-1.5 text-11 leading-snug text-[var(--text-tertiary)]">
-                      <span>{simplifyModelName(w.model)}</span>
-                      <EffortBars effort={w.effort} />
-                    </div>
+                    {/* 副行: 简化 model 名 (去 provider 前缀) + 档位文字.
+                        各模型档位集合不同,不用信号条假装同一把尺子. */}
+                    <WorkerModelLine model={w.model} effort={w.effort} />
                   </button>
                   {/* hover archive ✕ */}
                   <button

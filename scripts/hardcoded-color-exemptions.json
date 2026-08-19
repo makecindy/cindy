@@ -35,6 +35,16 @@
   "owner": "D2"
  },
  {
+  "glob": "docs/design-rules/DESIGN.md",
+  "reason": "设计规范正本即色值权威(§15.16 色阶/用户调参记录),文档示例不是组件硬编码",
+  "owner": "D2"
+ },
+ {
+  "glob": "docs/design-rules/token-decision-table.md",
+  "reason": "token 决策表即色值权威(§9 面阶梯),文档示例不是组件硬编码",
+  "owner": "D2"
+ },
+ {
   "glob": "apps/desktop/src/renderer/themes/__tests__/cindyCodeBlockContrast.test.ts",
   "reason": "D2-6 hljs 落档:hljs 主题色数据(LIGHT/DARK)+注释引用 default/CINDY 色",
   "owner": "D2"
@@ -213,5 +223,15 @@
   "glob": "apps/desktop/native/agent-island/macos-agent-island-helper.swift",
   "reason": "原生 helper 注释里引用的角色素材固有色 hex(便于与设计素材对照);渲染值本身是 Color(red:green:blue:),不经过 renderer token 体系",
   "owner": "agent-island"
+ },
+ {
+  "glob": "apps/desktop/src/renderer/components/settings/WorkLouderCodexKeyboardLayout.tsx",
+  "reason": "Codex Micro 设置页复刻实体键盘的固有色(透白任务帽/深灰命令帽/摇杆座),不是界面语义色;走 surface token 会在 dark mode 反相",
+  "owner": "worklouder-codex"
+ },
+ {
+  "glob": "apps/desktop/src/main/worklouder-codex/protocol.ts",
+  "reason": "Codex Micro 灯效协议注释对照品牌红(#DF0C27/#A61629);运行色走数字通道,不是 UI 硬编码",
+  "owner": "worklouder-codex"
  }
 ]

@@ -1202,6 +1202,14 @@ async function rebuildSessionSnapshot(
   };
   const projectionEpochAtRequestStart =
     remoteSessionStore.captureInputProjectionAuthorityEpoch(sessionId);
+  const messageDetailEnteredAtRequestStart =
+    remoteSessionStore.hasSessionMessageDetailEntered(sessionId);
+  const messageAuthorityAtRequestStart = messageDetailEnteredAtRequestStart
+    ? remoteSessionStore.captureSessionMessageAuthority(sessionId)
+    : null;
+  const unenteredMessageAuthorityAtRequestStart = messageDetailEnteredAtRequestStart
+    ? null
+    : remoteSessionStore.captureUnenteredSessionMessageAuthority(sessionId);
   // 四路快照独立拉取、独立落库:断连补齐窗口本就脆弱,一个子请求失败不应拖垮
   // 其余(旧实现共用一个 catch,任一失败三份快照全丢)。goal 覆盖断连窗口内
   // 丢失的 maker:goal:status-changed push;model-pref / turn-cost 无对应查询通道,
@@ -1237,9 +1245,27 @@ async function rebuildSessionSnapshot(
     // moreBeyondWindow:这一页上沿之外服务端还有历史(满 80 条,或被 device-link 裁过行)。为真时
     // store 不保留早于本页的缓存段 —— 断连期间漏收的 push 可能正落在两段之间,保留就在窗口里
     // 留下孤岛,而漏收的量不大时两侧时间差很小、时间阈值的空洞检测发现不了(#1222)。
-    remoteSessionStore.setLatestMessageWindow(sessionId, history.value, {
+    const windowOptions = {
       moreBeyondWindow: hasMoreOlderMessages(history.value, RECONNECT_MESSAGE_WINDOW_LIMIT),
-    });
+    };
+    if (messageAuthorityAtRequestStart) {
+      remoteSessionStore.setLatestMessageWindow(sessionId, history.value, {
+        ...windowOptions,
+        authority: messageAuthorityAtRequestStart,
+      });
+    } else if (
+      unenteredMessageAuthorityAtRequestStart
+      && remoteSessionStore.canCommitUnenteredSessionMessageWindow(
+        unenteredMessageAuthorityAtRequestStart,
+        deviceId,
+      )
+    ) {
+      // 从未打开过的 regular 仍承担首页/全局消息镜像；但请求飞行期间只要发生过
+      // enter / leave / forget / clear，生命周期 fence 就会失效，旧重连响应不得越过
+      // 新生命周期。Store 同时校验 regular retention 与物理设备归属，避免旧设备响应
+      // 写回新 shard。
+      remoteSessionStore.setLatestMessageWindow(sessionId, history.value, windowOptions);
+    }
   }
   if (pending.status === 'fulfilled' && Array.isArray(pending.value)) {
     remoteSessionStore.setPendingInteractions(sessionId, pending.value, { finalizeStreaming: true });

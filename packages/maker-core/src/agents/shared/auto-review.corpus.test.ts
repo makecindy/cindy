@@ -26,8 +26,8 @@ const opts = { cwd: '/repo', platform: 'darwin' as const };
 describe('语料回归 — 修复源 1:引号内 | 是数据不是管道', () => {
   it('grep/rg 的 alternation pattern → auto-approve(改前被切碎落灰区)', () => {
     for (const c of [
-      'grep -Rni "readSystemContacts\\|writeSystemContacts" /repo/apps/desktop/src',
-      `grep -RniE "智能通讯录|推广|用法|联系人|contacts" apps packages --exclude-dir=node_modules --include='*.tsx'`,
+      'grep -Rni "readSystemContacts\\|writeSystemContacts" /repo/apps/desktop/src --include="[b]ook.ts"',
+      `grep -RniE "智能通讯录|推广|用法|联系人|contacts" apps packages --exclude-dir=node_modules --include='[b]ook.tsx'`,
       `rg -n "系统通讯录|智能通讯录|system contacts" . --glob '!node_modules'`,
       `rg -n "NODE_OPTIONS|max-old-space-size|typecheck" .github/workflows`,
       'grep -n "provider\\|chatId\\|threadId" apps/desktop/src/main/im/shared/router.ts',
@@ -51,7 +51,7 @@ describe('语料回归 — 修复源 2:cd 区内目录 && 只读命令', () => {
       'cd /repo && git diff --check',
       'cd /repo/packages/maker-core && ls -la src',
       'cd /repo/.cindy-worktrees/feature-x && git diff upstream/main...HEAD --stat',
-      'cd /repo && grep -rn "classifyShellCommand" packages --include="*.ts" | head -20',
+      'cd /repo && grep -rn "classifyShellCommand" packages --include="[b]ook.ts" | head -20',
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
     }
@@ -299,7 +299,9 @@ describe('review 第三轮 — token/option 解析族', () => {
     expect(classifyShellCommand(
       'git diff --name-only | grep -E "\\.env|\\.pem|credential|secret"', roots, opts,
     )).toBe('auto-approve');
-    expect(classifyShellCommand('grep -Rni "foo|bar" src', roots, opts)).toBe('auto-approve');
+    expect(classifyShellCommand(
+      'grep -Rni "foo|bar" src --include="[b]ook.ts"', roots, opts,
+    )).toBe('auto-approve');
   });
 
   it('[P2] 表外解释器选项 fail-closed:值不会被当成脚本文件', () => {
@@ -340,8 +342,10 @@ describe('review 第四轮 — 分类器入口族', () => {
     // 命令替换会真的读凭证;变量展开会把令牌摊到命令行 —— 两类都不是纯数据。
     expect(classifyShellCommand('grep "$(cat ~/.aws/credentials)" file', roots, opts)).toBe('prompt-each-time');
     expect(classifyShellCommand('grep "$GITHUB_TOKEN" file', roots, opts)).toBe('prompt-each-time');
-    // 静态模式仍照常剥离,两个方向都不回退。
-    expect(classifyShellCommand('grep -Rni "foo|bar" src', roots, opts)).toBe('auto-approve');
+    // 静态模式仍照常剥离,两个方向都不回退；递归范围限制为固定的普通文件 selector。
+    expect(classifyShellCommand(
+      'grep -Rni "foo|bar" src --include="[b]ook.ts"', roots, opts,
+    )).toBe('auto-approve');
     expect(classifyShellCommand(
       'git diff --name-only | grep -E "\\.env|\\.pem|credential|secret"', roots, opts,
     )).toBe('auto-approve');
@@ -404,8 +408,10 @@ describe('review 第五轮 — 选项值与动态执行', () => {
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('prompt-each-time');
     }
-    // 真正的搜索模式仍照常剥离。
-    expect(classifyShellCommand('grep -Rni "foo|bar" src', roots, opts)).toBe('auto-approve');
+    // 真正的搜索模式仍照常剥离；递归范围限制为固定的普通文件 selector。
+    expect(classifyShellCommand(
+      'grep -Rni "foo|bar" src --include="[b]ook.ts"', roots, opts,
+    )).toBe('auto-approve');
     expect(classifyShellCommand(
       'git diff --name-only | grep -E "\\.env|\\.pem|credential|secret"', roots, opts,
     )).toBe('auto-approve');
@@ -732,7 +738,7 @@ describe('语料回归 — 凭证 flag 只在命令位才算(反向边界)', () 
     for (const c of [
       'echo --show-token',
       'echo "用法: --show-token"',
-      'grep -rn -- --show-token src',
+      'grep -n -- --show-token src/file.ts',
     ]) {
       expect(classifyShellCommand(c, roots, opts), c).toBe('auto-approve');
     }
@@ -819,7 +825,7 @@ describe('语料回归 — 命中率下限(总量护栏)', () => {
       'git branch --show-current',
       'ls -la',
       'cat package.json',
-      'grep -rn "TODO" src | head -20',
+      'grep -rn "TODO" src --include="[b]ook.ts" | head -20',
       'rg -n "foo|bar" src',
       'sed -n 1,120p src/index.ts',
       'gh pr view 1 --json state',

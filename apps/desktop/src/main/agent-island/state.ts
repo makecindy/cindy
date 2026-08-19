@@ -404,6 +404,22 @@ export function requestAgentIslandManualExpand(state: AgentIslandState, displayI
   return changed;
 }
 
+export function requestAgentIslandManualCollapse(state: AgentIslandState, now: number): boolean {
+  if (state.layoutDragActive) return false;
+  const changed = state.hoverExpanded
+    || state.hoverIntentAt !== null
+    || state.collapseAt !== null
+    || state.protectedDismissPending;
+  state.hoverIntentAt = null;
+  state.hoverExpanded = false;
+  state.collapseAt = null;
+  state.protectedDismissPending = false;
+  state.hoverCooldownUntil = now + AGENT_ISLAND_HOVER_SHORT_COOLDOWN_MS;
+  // Keep current pointer-zone flags. Hover expand only re-arms after leave+re-enter,
+  // so clicking the original compact position does not immediately pop the island open again.
+  return changed;
+}
+
 export function applyAgentIslandMetadata(
   state: AgentIslandState,
   meta: AgentIslandSessionMeta,

@@ -20,6 +20,7 @@ import {
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
   markAgentIslandSessionAttention,
+  requestAgentIslandManualCollapse,
   requestAgentIslandManualExpand,
   requestAgentIslandSessionFocus,
   setAgentIslandAppFocused,
@@ -1409,6 +1410,50 @@ describe('Agent Island display state', () => {
     expect(display.notchStatus).toBe('expanded');
     expect(display.displayPolicy).toBe('manualExpanded');
     expect(display.displaySurface).toBe('sessionList');
+  });
+
+  it('collapses immediately when the compact island position is clicked while expanded', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Running'), 1_000);
+    expect(requestAgentIslandManualExpand(state)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 1_051).mode).toBe('expanded');
+
+    expect(requestAgentIslandManualCollapse(state, 1_100)).toBe(true);
+
+    const display = buildAgentIslandDisplayState(state, 1_101);
+    expect(display.mode).toBe('compact');
+    expect(display.notchStatus).toBe('peek');
+    expect(display.displayPolicy).toBe('peek');
+    expect(display.displaySurface).toBe('collapsed');
+  });
+
+  it('does not immediately re-expand from hover after a compact-position collapse', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Running'), 1_000);
+    setAgentIslandHovered(state, true, 1_050);
+    expect(requestAgentIslandManualExpand(state)).toBe(true);
+    expect(buildAgentIslandDisplayState(state, 1_100).mode).toBe('expanded');
+
+    setAgentIslandPointerZones(state, { menuBar: true, panel: false }, 1_100);
+    expect(requestAgentIslandManualCollapse(state, 1_110)).toBe(true);
+    setAgentIslandPointerZones(state, { menuBar: true, panel: false }, 1_120);
+
+    expect(buildAgentIslandDisplayState(state, 1_200).mode).toBe('compact');
+    expect(buildAgentIslandDisplayState(state, 2_000).mode).toBe('compact');
+
+    setAgentIslandHovered(state, false, 2_100);
+    setAgentIslandHovered(state, true, 2_500);
+    expect(buildAgentIslandDisplayState(state, 3_100).mode).toBe('expanded');
+  });
+
+  it('does not collapse from a compact-position click while the island is being dragged', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running' }, statusEvent(true, 'Running'), 1_000);
+    expect(requestAgentIslandManualExpand(state)).toBe(true);
+    expect(setAgentIslandLayoutDragActive(state, true)).toBe(true);
+
+    expect(requestAgentIslandManualCollapse(state, 1_200)).toBe(false);
+    expect(buildAgentIslandDisplayState(state, 1_201).mode).toBe('expanded');
   });
 
   it('does not expand from pending hover while the island is being dragged', () => {

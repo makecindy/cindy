@@ -21,8 +21,13 @@
 import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
+import { zstdCompress, zstdDecompress } from 'node:zlib';
 
-import type { LocalRequestHandler } from '@cindy/anthropic-compat-proxy';
+import {
+  sanitizeXaiModelInputBody,
+  type LocalRequestHandler,
+} from '@cindy/anthropic-compat-proxy';
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 
 import { createMakerLogger } from './logger-adapter.js';
@@ -38,6 +43,9 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+
+const zstdCompressAsync = promisify(zstdCompress);
+const zstdDecompressAsync = promisify(zstdDecompress);
 
 const log = createMakerLogger('cc-bridge');
 
@@ -288,8 +296,8 @@ function xaiProviderConfig(): BridgeProviderConfig {
     buildHeaders: async () => ({
       authorization: `Bearer ${await getGrokAccessToken()}`,
     }),
-    // api.x.ai 无 ChatGPT 那种订阅窗口端点;尽力抓响应头 x-ratelimit-* 给底部 chip 展示,
-    // 拿不到(上游不返头)则 renderer 诚实降级为仅价值估算。
+    // 周用量走 cli-chat-proxy billing,不在这条推理链上。这里只尽力抓 x-ratelimit-*
+    // 作为 RPM/TPM 瞬时值;拿不到不影响账号周用量 chip。
     onRateLimit: (info) => recordXaiRateLimitSnapshot(info),
     // 上游判定 OAuth 凭证失效时收口本地登录态。缺这一步的话:token 被服务端提前作废后
     // 本地 expires_at 仍未到期 → 永不刷新 → 每次请求都 403,而「设置 → 模型供应商」还
@@ -411,6 +419,49 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Pi 用独立 `[1m]` 模型项承载上下文/压缩策略；ChatGPT 上游仍只接受官方裸 model id。 */
+function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> | null {
+  if (!isPlainRecord(body) || typeof body.model !== 'string' || !body.model.endsWith('[1m]')) {
+    return null;
+  }
+  return { ...body, model: body.model.slice(0, -'[1m]'.length) };
+}
+
+async function rewriteOpenaiContextProfileRequest(
+  rawBody: Buffer,
+  parsedBody: unknown,
+  contentEncoding: string | undefined,
+): Promise<{ body: Buffer; contentEncoding: string | undefined } | null> {
+  const parsedProfile = withOpenaiContextProfileModel(parsedBody);
+  if (parsedProfile) {
+    return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
+  }
+  if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
+  try {
+    // Near-1M-token payloads are large enough to stall Electron main. Node's async
+    // zstd APIs move compression work to the libuv worker pool.
+    const decodedBody = await zstdDecompressAsync(rawBody);
+    const decoded = JSON.parse(decodedBody.toString('utf8')) as unknown;
+    const compressedProfile = withOpenaiContextProfileModel(decoded);
+    if (!compressedProfile) return null;
+    return {
+      body: await zstdCompressAsync(Buffer.from(JSON.stringify(compressedProfile))),
+      contentEncoding,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(rawBody.toString('utf8'));
+    return isPlainRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * PI already emits xAI-native payloads, so this path bypasses the Messages →
  * Responses bridge that normally supplies xAI's model-gated server tools.
@@ -520,10 +571,25 @@ export function getPiNativeSubscriptionHandler(
       headers.accept = ctx.headers.accept ?? 'text/event-stream';
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
-      if (providerId === 'xai') {
-        const withServerTools = withNativeXaiServerSideTools(parsedBody);
-        if (withServerTools) {
-          outboundBody = Buffer.from(JSON.stringify(withServerTools));
+      if (providerId === 'openai') {
+        const rewritten = await rewriteOpenaiContextProfileRequest(
+          rawBody,
+          parsedBody,
+          contentEncoding,
+        );
+        if (rewritten) {
+          outboundBody = rewritten.body;
+          contentEncoding = rewritten.contentEncoding;
+        }
+      } else if (providerId === 'xai') {
+        const parsed = isPlainRecord(parsedBody)
+          ? parsedBody
+          : parseJsonRecord(rawBody);
+        const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
+        const current = sanitized ?? parsed;
+        const withServerTools = current ? withNativeXaiServerSideTools(current) : null;
+        if (sanitized || withServerTools) {
+          outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
           // The proxy parsed a plain JSON request. After reserializing it the
           // original content encoding, if any, no longer describes the bytes.
           contentEncoding = undefined;

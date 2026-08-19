@@ -11,15 +11,17 @@ import type { CredentialsSync } from './credentialsSync.js';
 
 /** Bound the shared single-flight so a black-hole connection cannot block later refreshes. */
 export const XD_MODELS_SYNC_TIMEOUT_MS = 20_000;
-export const XD_MODELS_SYNC_PATH = '/api/model-access/models?schemaVersion=3' as const;
+export const XD_MODELS_SYNC_PATH =
+  `/api/model-access/models?schemaVersion=${MODEL_ACCESS_CATALOG_SCHEMA_VERSION}` as const;
 
 export type ModelsSyncPayloadParseResult =
   { ok: true; models: ModelAccessGatewayModel[] } | { ok: false; error: string };
 
 /**
  * Validate the actual `/models` wire envelope before it can replace the last-known-good snapshot.
- * The client-owned parser is the version boundary: it accepts the frozen v1 and current v2
- * contracts, and rejects unknown versions or fields instead of partially interpreting them.
+ * The client-owned parser is the version boundary: it can validate every published contract,
+ * but Desktop sync only accepts the current v4 response instead of partially interpreting an
+ * older or unknown version.
  */
 export function parseModelsSyncPayload(value: unknown): ModelsSyncPayloadParseResult {
   const parsed = parseListModelsResponse(value);

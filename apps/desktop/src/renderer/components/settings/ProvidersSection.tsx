@@ -71,6 +71,14 @@ import {
 import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
+import {
+  requestXaiSubscriptionRefresh,
+  useXaiSubscriptionUsage,
+} from '@/hooks/useXaiSubscriptionUsage';
+import {
+  formatXaiProductLabel,
+  isXaiWeeklyUsageCurrent,
+} from '../../../shared/xaiSubscriptionUsage';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
@@ -770,6 +778,89 @@ function ImageApiKeyRow({
 // xAI —— OAuth(SuperGrok 订阅),复用 maker.xaiOAuth*。
 // ---------------------------------------------------------------------------
 
+function formatXaiResetLabel(resetsAt: number | null | undefined, locale: string): string | null {
+  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  try {
+    return new Date(resetsAt * 1000).toLocaleString(locale, {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return null;
+  }
+}
+
+function XaiAssetModule({ connected }: { connected: boolean }) {
+  const { t, i18n } = useTranslation();
+  const usage = useXaiSubscriptionUsage(connected);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!connected) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [connected]);
+  useEffect(() => {
+    if (!connected) return;
+    if (isXaiWeeklyUsageCurrent(usage, nowMs)) return;
+    requestXaiSubscriptionRefresh();
+  }, [connected, usage, nowMs]);
+  if (!connected || !usage) return null;
+  const hasWeekly = isXaiWeeklyUsageCurrent(usage, nowMs);
+  if (!usage.planLabel && !hasWeekly) return null;
+  const resetLabel = formatXaiResetLabel(usage.resetsAt, i18n.resolvedLanguage ?? i18n.language);
+  return (
+    <div
+      className="flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5"
+      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+    >
+      <div className="min-w-0">
+        <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
+          {usage.planLabel ?? t('settings.providers.xai.asset.weeklyTitle')}
+        </p>
+        {hasWeekly && (
+          <p
+            className="mt-1.5 text-20 font-medium leading-[1.3] tracking-[-0.02em] tabular-nums"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            {t('settings.providers.xai.asset.weeklyUsed', {
+              percent: Math.round(usage.creditUsagePercent ?? 0),
+            })}
+          </p>
+        )}
+        {hasWeekly && resetLabel && (
+          <p className="mt-1 text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
+            {t('settings.providers.xai.asset.resetsAt', { at: resetLabel })}
+          </p>
+        )}
+        {hasWeekly && (usage.productUsage ?? []).map((product) => (
+          <p
+            key={product.product}
+            className="mt-1 text-12 leading-tight tabular-nums"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            {t('settings.providers.xai.asset.productLine', {
+              product: formatXaiProductLabel(product.product),
+              percent: Math.round(product.usagePercent),
+            })}
+          </p>
+        ))}
+      </div>
+      <div className="flex shrink-0 items-center pt-3.5">
+        <button
+          type="button"
+          onClick={() => void window.electronAPI.openExternal('https://grok.com')}
+          className="text-13 transition-colors hover:text-[var(--text-primary)]"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          {t('settings.providers.xai.asset.openUsage')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
@@ -850,6 +941,7 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
       })}
       trailing={trailing}
       provider={provider}
+      assetModule={<XaiAssetModule connected={connected} />}
     />
   );
 }

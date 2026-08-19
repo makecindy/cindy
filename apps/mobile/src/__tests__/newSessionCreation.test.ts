@@ -173,6 +173,7 @@ describe('newSessionCreation pipeline', () => {
     const row = remoteSessionStore.getSessions().find((s) => s.id === 's1');
     expect(row?.pendingLocalCreation).toBe(true);
     expect(row?.workingDir).toBe('/repo');
+    expect(row?.title).toBe('hello world');
     const projection = remoteSessionStore.getInputProjection('s1');
     expect(projection.pendingQueue).toHaveLength(1);
     expect(projection.pendingQueue[0]?.text).toBe('hello world');
@@ -196,6 +197,15 @@ describe('newSessionCreation pipeline', () => {
     // fresh getSession 失败(makeMaker 默认抛 NOT_FOUND)时权威覆盖没发生,管线
     // 收口前必须主动清 pendingLocalCreation 禁发标(codex P2)。
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.pendingLocalCreation).toBe(false);
+    // 入队成功只解禁,标题预览要等到权威标题离开哨兵才让位。
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      sessionFromCreateResult({ sessionId: 's2' }, { ...DRAFT, firstMessage: '' }),
+    ]);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.title).toBe('hello world');
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      { ...sessionFromCreateResult({ sessionId: 's2' }, DRAFT), title: '登录失败排查' },
+    ]);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.title).toBe('登录失败排查');
   });
 
   it('首条消息 enqueue 前应用手机控制端准备的可信引用快照', async () => {
@@ -518,6 +528,7 @@ describe('newSessionCreation pipeline', () => {
     // 禁发标同步清除:用户要用 composer 重发回填草稿,不能被 pendingLocalCreation
     // 卡到 load 成功才解禁(codex P2)。
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's5')?.pendingLocalCreation).toBe(false);
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's5')?.title).toBe('New Maker');
   });
 
   it('enqueue 回执丢失但队列里已有该 clientId → 按成功收敛,不打扰用户', async () => {

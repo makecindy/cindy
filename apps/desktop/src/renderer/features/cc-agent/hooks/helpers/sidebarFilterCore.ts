@@ -176,14 +176,21 @@ export function persistProjects(p: FilterProjects, ownerId: string | null): void
  * 返回值如果与 prev 引用相同（语义上无变化），调用方可短路不写 storage。
  * 实际上本函数总是返回新对象（除非语义无变化才返回 prev）。
  */
-export function nextProjectsAfterToggle(prev: FilterProjects, workingDir: string): FilterProjects {
+export function nextProjectsAfterToggle(
+  prev: FilterProjects,
+  workingDir: string,
+  localPlatform = 'linux',
+): FilterProjects {
   const projectKey = normalizeFilterEntry(workingDir);
   if (!projectKey) return prev;
   if (prev === 'all') {
     return [projectKey];
   }
-  const normalizedPrev = normalizeFilterProjectList(prev);
-  const idx = normalizedPrev.indexOf(projectKey);
+  // Persisted filters may contain multiple Windows spellings of the same local path from
+  // pre-comparison-key versions. Collapse them to one logical identity before toggling so a
+  // single click removes the whole selected project rather than one stale spelling at a time.
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
+  const idx = findProjectFilterIndex(normalizedPrev, projectKey, localPlatform);
   if (idx >= 0) {
     if (normalizedPrev.length === 1) {
       return 'all';
@@ -199,15 +206,35 @@ export function nextProjectsAfterToggle(prev: FilterProjects, workingDir: string
  * `'all'` already includes every project. Array filters append only when the
  * project is missing, unlike the user-facing toggle action.
  */
-export function includeProjectInFilter(prev: FilterProjects, workingDir: string): FilterProjects {
+export function includeProjectInFilter(
+  prev: FilterProjects,
+  workingDir: string,
+  localPlatform = 'linux',
+): FilterProjects {
   if (prev === 'all') return prev;
   const projectKey = normalizeFilterEntry(workingDir);
   if (!projectKey) return prev;
-  const normalizedPrev = normalizeFilterProjectList(prev);
-  if (normalizedPrev.includes(projectKey)) {
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
+  if (findProjectFilterIndex(normalizedPrev, projectKey, localPlatform) >= 0) {
     return arraysEqual(normalizedPrev, prev) ? prev : normalizedPrev;
   }
   return normalizedPrev.concat(projectKey);
+}
+
+/** Match a rendered project against the persisted Project filter identity. */
+export function projectFilterIncludes(
+  projects: ReadonlySet<string>,
+  projectKey: string,
+  localPlatform: string,
+): boolean {
+  if (projectKey === DIALOGUE_FILTER_KEY) return projects.has(DIALOGUE_FILTER_KEY);
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (comparisonKey == null) return false;
+  for (const candidate of projects) {
+    if (candidate === DIALOGUE_FILTER_KEY) continue;
+    if (projectKeyComparisonKey(candidate, localPlatform) === comparisonKey) return true;
+  }
+  return false;
 }
 
 /**
@@ -229,7 +256,7 @@ export function removeProjectsFromFilter(
       .filter((projectKey): projectKey is string => projectKey != null),
   );
   if (hiddenComparisonKeys.size === 0) return prev;
-  const normalizedPrev = normalizeFilterProjectList(prev);
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
   const filtered = normalizedPrev.filter((projectKey) => {
     if (projectKey === DIALOGUE_FILTER_KEY) return true;
     const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
@@ -750,13 +777,20 @@ export function mergeVisibleReorder(
 export function gcProjectsAgainstActive(
   prev: FilterProjects,
   activeWorkingDirs: readonly string[],
+  localPlatform = 'linux',
 ): FilterProjects {
   if (prev === 'all') return prev;
-  const activeSet = new Set(normalizeProjectKeyList(activeWorkingDirs));
-  const normalizedPrev = normalizeFilterProjectList(prev);
-  const filtered = normalizedPrev.filter(
-    (wd) => wd === DIALOGUE_FILTER_KEY || activeSet.has(wd),
+  const activeComparisonKeys = new Set(
+    normalizeProjectKeyList(activeWorkingDirs)
+      .map((projectKey) => projectKeyComparisonKey(projectKey, localPlatform))
+      .filter((projectKey): projectKey is string => projectKey != null),
   );
+  const normalizedPrev = normalizeFilterProjectList(prev, localPlatform);
+  const filtered = normalizedPrev.filter((projectKey) => {
+    if (projectKey === DIALOGUE_FILTER_KEY) return true;
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+    return comparisonKey != null && activeComparisonKeys.has(comparisonKey);
+  });
   if (filtered.length === 0) return 'all';
   if (filtered.length === normalizedPrev.length && arraysEqual(normalizedPrev, prev)) return prev;
   if (filtered.length === normalizedPrev.length) return normalizedPrev;
@@ -769,13 +803,20 @@ function normalizeFilterEntry(raw: unknown): string | null {
   return normalizeProjectKey(raw);
 }
 
-function normalizeFilterProjectList(values: readonly unknown[]): string[] {
+function normalizeFilterProjectList(
+  values: readonly unknown[],
+  localPlatform?: string,
+): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = normalizeFilterEntry(value);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const identity = localPlatform == null
+      ? key
+      : (projectFilterEntryIdentity(key, localPlatform) ?? key);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     out.push(key);
   }
   return out;
@@ -791,6 +832,24 @@ function normalizeProjectKeyList(values: readonly unknown[]): string[] {
     out.push(key);
   }
   return out;
+}
+
+function findProjectFilterIndex(
+  projectKeys: readonly string[],
+  projectKey: string,
+  localPlatform: string,
+): number {
+  const identity = projectFilterEntryIdentity(projectKey, localPlatform);
+  if (identity == null) return -1;
+  return projectKeys.findIndex(
+    (candidate) => projectFilterEntryIdentity(candidate, localPlatform) === identity,
+  );
+}
+
+/** Logical identity used by every single-project filter operation. */
+function projectFilterEntryIdentity(projectKey: string, localPlatform: string): string | null {
+  if (projectKey === DIALOGUE_FILTER_KEY) return DIALOGUE_FILTER_KEY;
+  return projectKeyComparisonKey(projectKey, localPlatform);
 }
 
 function arraysEqual(a: readonly string[], b: readonly unknown[]): boolean {

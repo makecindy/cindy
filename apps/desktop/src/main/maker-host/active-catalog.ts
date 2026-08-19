@@ -15,7 +15,7 @@
  * 所有消费方统一读 `getActiveCatalog()`,而非各自 import `BUNDLED_CATALOG`:
  *   - maker availableModels 派生(maker-host/index.ts)
  *   - 统一路由器(provider-route.ts)
- *   - 会话标题模型(title-one-shot.ts)
+ *   - 会话标题模型(provider-one-shot.ts)
  *   - 供应商注册表(provider-service.ts,经 createDesktopProviderService 注入)
  *
  * 「启动 await 一次、之后全同步读」是关键:`getActiveCatalog()` 同步返回,消费方(含路由
@@ -46,6 +46,7 @@ import { projectUnverifiedCatalogFallbackForBuildRegion } from './provider-acces
 import {
   applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
+  applyLocalOverridesToRootModel,
   hasLocalAddition,
   EMPTY_MODEL_CATALOG_OVERRIDES,
   resolveLocalBridgeExclusions,
@@ -54,6 +55,7 @@ import {
 import {
   applyRegistryConsumerOverlay,
   applyRootRegistryPlan,
+  consumerPlanKey,
   planRegistryRoots,
   toChatgptBridgeModel,
   rootPlanKey,
@@ -215,7 +217,11 @@ let lastPlanWarnings: ModelPlaneWarning[] = [];
 type Effort = CatalogModel['efforts'][number];
 
 function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
-  return model.agents ? [...model.agents] : [];
+  return (model.agents ?? []).filter((agent) => {
+    if (agent !== 'pi') return true;
+    const wireProtocol = model.perAgent?.pi?.wireProtocol;
+    return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses';
+  });
 }
 
 /**
@@ -223,16 +229,18 @@ function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
  *
  * Pi provider 始终叫 `cindy`；这里只读取 v3 服务端给该模型的 transport，供
  * models.json 写入模型级 `api`。三态语义：非 XD Pi 模型返回 undefined；XD Pi 模型
- * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回 Responses。
+ * 缺失或协议非法返回 null，由 maker-core fail closed；有效配置返回服务端声明值。
  */
 export function resolveXdPiGatewayWireProtocol(
   modelId: string,
-): Extract<ProviderWireProtocol, 'openai-responses'> | null | undefined {
+): Extract<ProviderWireProtocol, 'anthropic-messages' | 'openai-responses'> | null | undefined {
   const normalized = modelId.replace(/\[1m\]$/, '');
   const gatewayModel = xdGatewayModels.find((model) => model.id === normalized);
   if (!gatewayModel?.agents?.includes('pi')) return undefined;
   const wireProtocol = gatewayModel.perAgent?.pi?.wireProtocol;
-  return wireProtocol === 'openai-responses' ? wireProtocol : null;
+  return wireProtocol === 'anthropic-messages' || wireProtocol === 'openai-responses'
+    ? wireProtocol
+    : null;
 }
 
 /** 派生 XD 中「仅 claude-code 面（投影给 Claude）、无 codex 原生」的模型 id 集合。 */
@@ -375,6 +383,7 @@ function projectCodexModelsToBridges(
   p: Provider,
   claudeExcluded: ReadonlySet<string> = new Set(),
   prepareClaudeModel: (model: CatalogModel) => CatalogModel = (model) => model,
+  preparePiModel: (model: CatalogModel) => CatalogModel = (model) => model,
 ): Provider {
   const codex = p.models.codex ?? [];
   const canonical = new Map(codex.map((model) => [model.id, model]));
@@ -398,7 +407,12 @@ function projectCodexModelsToBridges(
     claudeSource.map((model) => toChatgptBridgeModel(prepareClaudeModel(model))),
     true,
   );
-  return augmentModels(withClaude, 'pi', codex.map(toChatgptBridgeModel), true);
+  return augmentModels(
+    withClaude,
+    'pi',
+    codex.map((model) => toChatgptBridgeModel(preparePiModel(model))),
+    true,
+  );
 }
 
 /** 静态段被淘汰的供应商：先清空 providers.models，再由 discovery + Registry/local root 装配。 */
@@ -672,8 +686,8 @@ function projectXaiPiModel(provider: Provider, model: CatalogModel): CatalogMode
       ? { contextWindowVerified: model.contextWindowVerified }
       : {}),
     ...(model.maxOutput !== undefined ? { maxOutput: model.maxOutput } : {}),
-    efforts: model.efforts,
-    defaultEffort: model.defaultEffort,
+    // Official Pi effort maps stay authoritative, including explicit empty lists.
+    // CC/Codex root efforts must not leak into the Pi projection.
     status: model.status,
     defaultEnabled: model.defaultEnabled,
   };
@@ -746,8 +760,7 @@ function computeMerged(): Catalog {
         )
       : projectUnverifiedCatalogFallbackForBuildRegion(BUNDLED_CATALOG, CURRENT_CINDY_REGION);
   const catalogXd = b.providers.find((provider) => provider.id === 'xd');
-  const xdShell =
-    catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
+  const xdShell = catalogXd ?? fallbackXdCatalog.providers.find((provider) => provider.id === 'xd');
   const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
   const remoteXdIndex = b.providers.findIndex((provider) => provider.id === 'xd');
   const providerSources = b.providers.filter((provider) => provider.id !== 'xd');
@@ -828,12 +841,61 @@ function computeMerged(): Catalog {
           localOverrides,
           plan.warnings,
         );
-      const projected = projectCodexModelsToBridges(withRoot, excluded, prepareClaudeModel);
+      const preparePiModel = (model: CatalogModel): CatalogModel =>
+        applyLocalOverridesToRootModel(
+          'openai',
+          'codex',
+          applyRegistryConsumerOverlay(model, 'openai', 'pi', model.id, plan),
+          localOverrides,
+          plan.warnings,
+        );
+      const projected = projectCodexModelsToBridges(
+        withRoot,
+        excluded,
+        prepareClaudeModel,
+        preparePiModel,
+      );
+      const appendConsumerAdditions = (
+        agent: 'claude-code' | 'pi',
+        models: CatalogModel[],
+      ): CatalogModel[] => {
+        const additions = (plan.consumerAdditions.get(consumerPlanKey('openai', agent)) ?? []).map(
+          (model) =>
+            toChatgptBridgeModel(
+              agent === 'pi'
+                ? applyLocalOverridesToRootModel(
+                    'openai',
+                    'codex',
+                    model,
+                    localOverrides,
+                    plan.warnings,
+                  )
+                : applyLocalConsumerOverrides(
+                    'openai',
+                    'claude-code',
+                    model.id,
+                    model,
+                    localOverrides,
+                    plan.warnings,
+                  ),
+            ),
+        );
+        if (additions.length === 0) return models;
+        const seen = new Set(models.map((model) => model.id));
+        return [...models, ...additions.filter((model) => !seen.has(model.id))];
+      };
       return {
         ...projected,
         models: {
           ...projected.models,
-          pi: applyPiApiAnnotations('openai', projected.models.pi ?? []),
+          'claude-code': appendConsumerAdditions(
+            'claude-code',
+            projected.models['claude-code'] ?? [],
+          ),
+          pi: applyPiApiAnnotations(
+            'openai',
+            appendConsumerAdditions('pi', projected.models.pi ?? []),
+          ),
         },
       };
     }
@@ -984,6 +1046,9 @@ function computeMerged(): Catalog {
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
           ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
+          // Pi 的协议是 Model Access 按模型下发的权威路由元数据。重建 CatalogModel 时
+          // 必须一并投影，否则模型虽然保留在 Pi tab，统一路由器却会因协议缺失而 fail closed。
+          ...(agent === 'pi' && ov.wireProtocol ? { piApi: ov.wireProtocol } : {}),
         };
         models[agent]!.push(merged);
       }
@@ -1160,6 +1225,11 @@ export function setLocalCatalogOverrides(overrides: ModelCatalogOverrides): void
   markChanged();
 }
 
+/** 当前 active-catalog 使用的已清洗本地最终层快照。 */
+export function getLocalCatalogOverridesSnapshot(): ModelCatalogOverrides {
+  return localOverrides;
+}
+
 /** 最近一次合并的 registry 实体化告警(单 route 隔离;刷新路径读走打日志/计数)。 */
 export function getModelPlaneWarnings(): readonly ModelPlaneWarning[] {
   return lastPlanWarnings;
@@ -1249,6 +1319,11 @@ export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
   xdGatewayModels = [...models];
   xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
+}
+
+/** 同步读取最近一次完整 `/models` 快照，供 sendSync 配置面只读投影。 */
+export function getXdGatewayModels(): readonly XdGatewayModelInfo[] {
+  return xdGatewayModels;
 }
 
 /** 返回当前 active catalog 的单调递增修订号。 */

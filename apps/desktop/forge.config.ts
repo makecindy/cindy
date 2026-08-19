@@ -1534,6 +1534,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/worklouder-codex/workLouderCodexHostProcess.ts',
+          config: 'vite.preload.config.ts',
+          // 私有 Work Louder SDK + node-hid 只在独立 utilityProcess 内加载；
+          // SDK 缺失或原生崩溃都不能影响 Electron main。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/workdir-probe-host/workdirProbeHostProcess.ts',
           config: 'vite.preload.config.ts',
           // UNC/SMB stat 不可取消；独立 utility process 超时后可直接终止，

@@ -371,6 +371,13 @@ function installFakeHost(
     codexBrowserUseVersion?: string;
     codexBrowserMcpToolAvailable?: boolean;
     remoteCompactionProviderId?: string;
+    subagentModelFallback?: string;
+    subagentRoute?: {
+      providerId: string;
+      catalogModel: string;
+      reasoningEffort: import('./app-server/protocol.js').ReasoningEffort | null;
+    };
+    openAiWebSocketsEnabled?: boolean;
     userAgent?: string;
     codexHome?: string;
     buildSessionMcpConfig?: (sessionInstanceId?: string) => Record<string, unknown>;
@@ -441,6 +448,9 @@ function installFakeHost(
   const getSessionMcpConfig = vi.fn((sessionInstanceId?: string) =>
     opts.buildSessionMcpConfig?.(sessionInstanceId) ?? {},
   );
+  const getSubagentModelFallback = vi.fn(() => opts.subagentModelFallback);
+  const getSubagentRoute = vi.fn(() => opts.subagentRoute);
+  const getOpenAiWebSocketsEnabled = vi.fn(() => opts.openAiWebSocketsEnabled !== false);
   const host = {
     ensureStarted,
     // startSession 的 initialize 直调走限时变体 (codex R13 P1): fake 里
@@ -455,6 +465,9 @@ function installFakeHost(
     waitForMcpTool,
     getRemoteCompactionProviderId,
     getSessionMcpConfig,
+    getSubagentModelFallback,
+    getSubagentRoute,
+    getOpenAiWebSocketsEnabled,
     getConnectionId: () => 'test-connection',
     getThreadHandlers: () => threadHandlers,
     // 0.145 不给 spawn 子线程发 thread/started,session 层改为从 spawn item 主动
@@ -3639,7 +3652,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('grandchild-thread-id');
   });
 
-  it('keeps thread/start developerInstructions on the websocket provider and skips proxy registration', async () => {
+  it('keeps thread/start developerInstructions on the websocket provider and registers child route context', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
@@ -3651,6 +3664,12 @@ describe('CodexAgent.startSession developerInstructions', () => {
     const host = installFakeHost(agent, undefined, {
       codexProxyActive: true,
       remoteCompactionProviderId: 'cindy_openai',
+      subagentModelFallback: 'codex/gpt-5.6-terra',
+      subagentRoute: {
+        providerId: 'xd',
+        catalogModel: 'codex/gpt-5.6-terra',
+        reasoningEffort: 'high',
+      },
     });
 
     const handle = await agent.startSession({
@@ -3669,10 +3688,67 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
     expect(params.developerInstructions).toContain('GHOST ROSTER PROMPT');
     expect(params.developerInstructions).toContain('USER PROMPT');
-    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(registerCodexSystemPromptForThread).toHaveBeenCalledWith({
+      sessionId: 'session-websocket-start',
+      threadId: 'start-thread-id',
+      text: expect.stringContaining('HOST PRODUCT PROMPT'),
+      subagentRoute: {
+        providerId: 'xd',
+        catalogModel: 'codex/gpt-5.6-terra',
+        reasoningEffort: 'high',
+      },
+    });
     expect(handle.codexProductPromptDelivery).toEqual({
       threadId: 'start-thread-id',
       historyHasProductPrompt: true,
+    });
+    await handle.close();
+  });
+
+  it('uses HTTP prompt injection when OpenAI WebSocket is disabled for subagent routing', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+      openAiWebSocketsEnabled: false,
+      subagentRoute: {
+        providerId: 'xd',
+        catalogModel: 'codex/gpt-5.6-terra',
+        reasoningEffort: 'high',
+      },
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-http-for-subagent-route',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      userPrompt: 'USER PROMPT',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      developerInstructions?: string;
+      modelProvider?: string;
+    };
+
+    expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.developerInstructions).toBeUndefined();
+    expect(registerCodexSystemPromptForThread).toHaveBeenCalledWith({
+      sessionId: 'session-http-for-subagent-route',
+      threadId: 'start-thread-id',
+      text: expect.stringContaining('HOST PRODUCT PROMPT'),
+      subagentRoute: {
+        providerId: 'xd',
+        catalogModel: 'codex/gpt-5.6-terra',
+        reasoningEffort: 'high',
+      },
+    });
+    expect(handle.codexProductPromptDelivery).toEqual({
+      threadId: 'start-thread-id',
+      historyHasProductPrompt: false,
     });
     await handle.close();
   });
@@ -3723,7 +3799,11 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(resumeParams.developerInstructions).toBe(startParams.developerInstructions);
     expect(resumeParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
     expect(resumeParams.developerInstructions).toContain('USER PROMPT');
-    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(registerCodexSystemPromptForThread).toHaveBeenCalledWith({
+      sessionId: 'session-websocket-daemon-recovery',
+      threadId: 'start-thread-id',
+      text: expect.stringContaining('HOST PRODUCT PROMPT'),
+    });
     await handle.close();
   });
 
@@ -3811,7 +3891,11 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(params.modelProvider).toBe('cindy_openai');
     expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
     expect(params.developerInstructions).toContain('USER PROMPT');
-    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(registerCodexSystemPromptForThread).toHaveBeenCalledWith({
+      sessionId: 'session-websocket-resume',
+      threadId: 'resume-thread-id',
+      text: expect.stringContaining('HOST PRODUCT PROMPT'),
+    });
     expect(handle.codexProductPromptDelivery).toEqual({
       threadId: 'resume-thread-id',
       historyHasProductPrompt: true,
@@ -3847,7 +3931,11 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(params.modelProvider).toBe('cindy_openai');
     expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
     expect(params.developerInstructions).toContain('USER PROMPT');
-    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(registerCodexSystemPromptForThread).toHaveBeenCalledWith({
+      sessionId: 'session-websocket-resume-existing-prompt',
+      threadId: 'resume-thread-id',
+      text: expect.stringContaining('HOST PRODUCT PROMPT'),
+    });
     expect(handle.codexProductPromptDelivery).toEqual({
       threadId: 'resume-thread-id',
       historyHasProductPrompt: true,
@@ -5931,6 +6019,37 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     await xaiHandle.close();
+    await agent.dispose();
+  });
+
+  it('restarts a provider OAuth host with the credential mode required by locked routing', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => ({
+      extraArgs: [],
+      extraEnv: {},
+      codexProxyActive: true,
+      ...(ctx.credentialMode === 'provider-oauth'
+        ? { requiredSpawnCredentialMode: 'oauth-bearer' as const }
+        : {}),
+    }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-provider-oauth-locked-openai',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    expect(createdTransports).toHaveLength(1);
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(1, [], {
+      remoteHostId: undefined,
+      credentialMode: 'provider-oauth',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+    });
+    await handle.close();
     await agent.dispose();
   });
 
@@ -19059,7 +19178,7 @@ describe('CodexAgent turn lifecycle', () => {
     });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'agent_task_update',
-      data: { taskId: 'collab-normal', status: 'running' },
+      data: { taskId: 'collab-normal', status: 'completed' },
     });
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'status',
@@ -19175,6 +19294,81 @@ describe('CodexAgent turn lifecycle', () => {
       reconstructedToolUse.backgroundTurnStartedAt,
       reconstructedToolUse.backgroundTurnStartedAt,
     ]);
+
+    await handle.close();
+  });
+
+  it('REPRO: keeps a completed-only spawn running while its agentsStates are active', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-completed-only-running-collab',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers!.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent' },
+    });
+    handlers!.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-parent', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status' });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+
+    handlers!.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-parent',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'collab-completed-only-running',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread'],
+        prompt: 'continue after the spawn tool returns',
+        agentsStates: { 'child-thread': { status: 'running' } },
+      },
+    } as never);
+
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_use',
+      turnScope: 'background',
+      data: { toolUseId: 'collab-completed-only-running' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result_full',
+      turnScope: 'background',
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'tool_result',
+      turnScope: 'background',
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-completed-only-running', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-completed-only-running', status: 'running' },
+    });
+
+    handlers!.descendantNotification?.('child-thread', 'turn/completed', {
+      threadId: 'child-thread',
+      turn: { id: 'child-turn', status: 'completed' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'agent_task_update',
+      turnScope: 'background',
+      data: { taskId: 'collab-completed-only-running', status: 'completed' },
+    });
 
     await handle.close();
   });
@@ -22534,6 +22728,84 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  it('projects the locked V1 proxy route instead of the inherited parent model', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, {
+      subagentModelFallback: 'z-ai/glm-5.2',
+      subagentRoute: {
+        providerId: 'xd',
+        catalogModel: 'z-ai/glm-5.2',
+        reasoningEffort: 'max',
+      },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-locked-v1',
+      model: 'deepseek/deepseek-v4-pro',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-locked-v1' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-locked-v1',
+      item: {
+        id: 'spawn-locked-v1',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-locked-v1'],
+        status: 'inProgress',
+        model: 'deepseek/deepseek-v4-pro',
+        reasoningEffort: 'high',
+        agentsStates: [],
+      },
+    });
+    handlers.descendantThreadStarted({
+      thread: {
+        id: 'child-locked-v1',
+        parentThreadId: 'start-thread-id',
+        model: 'deepseek/deepseek-v4-pro',
+      },
+    });
+    handlers.descendantNotification('child-locked-v1', 'turn/completed', {
+      threadId: 'child-locked-v1',
+      turn: { id: 'child-turn-locked-v1', status: 'completed' },
+    });
+
+    await vi.waitFor(() => {
+      const updates = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as {
+          taskId?: string;
+          model?: string | null;
+          reasoningEffort?: string;
+          status?: string;
+        })
+        .filter((update) => update.taskId === 'spawn-locked-v1');
+      expect(updates.length).toBeGreaterThan(0);
+      expect(updates[0]).toMatchObject({
+        model: 'z-ai/glm-5.2',
+        reasoningEffort: 'max',
+        status: 'running',
+      });
+      expect(updates.at(-1)).toMatchObject({
+        model: 'z-ai/glm-5.2',
+        status: 'completed',
+      });
+      expect(updates.some((update) => update.model === 'deepseek/deepseek-v4-pro')).toBe(false);
+    });
+
+    await handle.close();
+  });
+
   it('forwards root and descendant Codex diffs into one merged turn capture event', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -23114,6 +23386,17 @@ describe('CodexAgent context window reporting', () => {
       },
     });
     expect(host.registerDescendantLineage).toHaveBeenCalledWith('child-thread-v2', 'start-thread-id');
+    await vi.waitFor(() => {
+      const spawned = events
+        .filter((event) => event.type === 'agent_task_update')
+        .map((event) => event.data as { taskId?: string; status?: string; model?: string })
+        .filter((update) => update.taskId === 'spawn-v2-1');
+      // 未配置个性化子模型时，Codex 按协议继承本 turn 的父模型；卡片应冻结并显示它。
+      // 模型直接合并进 translator 原有帧，不得为显示模型额外插入第二条 running update。
+      expect(spawned).toEqual([
+        expect.objectContaining({ status: 'running', model: 'gpt-5.4' }),
+      ]);
+    });
 
     // 子线程全程只有 item / tokenUsage / turn 通知(0.145 真实形状),没有 thread/started。
     handlers.descendantNotification('child-thread-v2', 'item/completed', {
@@ -23149,13 +23432,19 @@ describe('CodexAgent context window reporting', () => {
     await vi.waitFor(() => {
       const updates = events
         .filter((e) => e.type === 'agent_task_update')
-        .map((e) => e.data as { taskId?: string; status?: string; usage?: { totalTokens?: number; toolUses?: number } })
+        .map((e) => e.data as {
+          taskId?: string;
+          status?: string;
+          model?: string;
+          usage?: { totalTokens?: number; toolUses?: number };
+        })
         .filter((u) => u.taskId === 'spawn-v2-1');
       const last = updates.at(-1);
       // 子线程 + 孙线程全部收口 → 卡片终态 completed,并带聚合用量。
       expect(last?.status).toBe('completed');
       expect(last?.usage?.toolUses).toBe(1);
       expect(last?.usage?.totalTokens).toBe(1_000);
+      expect(last?.model).toBe('gpt-5.4');
     });
 
     await handle.close();

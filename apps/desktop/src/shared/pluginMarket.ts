@@ -123,6 +123,8 @@ export interface PluginMarketPackageReviewFacts {
   installedBaseline: string | null;
   /** 只用于让确认卡如实说明包来自官方还是用户添加的市场。 */
   sourceType: PluginMarketItemSource;
+  /** 与 permissionDiff 独立:完整权限卡也要能展示 OAuth 身份变化。 */
+  builtinOauthClientChanged?: boolean;
 }
 
 /** Main 在安装事务内请求当前窗口立即确认真实包权限；不暴露内部批准绑定。 */
@@ -134,6 +136,8 @@ export interface PluginMarketPackageReviewRequest {
   permissionDiff: GhostPermissionDiff | null;
   isUpdate: boolean;
   sourceType: PluginMarketItemSource;
+  /** 与 permissionDiff 独立:完整权限卡也要能展示 OAuth 身份变化。 */
+  builtinOauthClientChanged?: boolean;
 }
 
 export interface PluginMarketInstallOptions {

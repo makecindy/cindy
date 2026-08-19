@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const platform = vi.hoisted(() => ({ os: 'android' }));
 const mediaLibrary = vi.hoisted(() => ({
+  getAlbumAsync: vi.fn(),
   getAssetInfoAsync: vi.fn(),
+  getAssetsAsync: vi.fn(),
+  getPermissionsAsync: vi.fn(),
 }));
 const imageManipulator = vi.hoisted(() => ({
   manipulate: vi.fn(),
@@ -13,7 +16,10 @@ vi.mock('react-native', () => ({
   Platform: { get OS() { return platform.os; } },
 }));
 vi.mock('expo-media-library/legacy', () => ({
+  getAlbumAsync: mediaLibrary.getAlbumAsync,
   getAssetInfoAsync: mediaLibrary.getAssetInfoAsync,
+  getAssetsAsync: mediaLibrary.getAssetsAsync,
+  getPermissionsAsync: mediaLibrary.getPermissionsAsync,
   MediaType: { photo: 'photo' },
   SortBy: { creationTime: 'creationTime' },
 }));
@@ -26,6 +32,7 @@ vi.mock('@/i18n', () => ({
 }));
 
 import {
+  prefetchContextSheetMediaAssets,
   resolveContextSheetMediaAssetForUpload,
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
@@ -41,13 +48,47 @@ function asset(overrides: Partial<ContextSheetMediaAsset> = {}): ContextSheetMed
   };
 }
 
-describe('resolveContextSheetMediaAssetForUpload', () => {
-  beforeEach(() => {
-    platform.os = 'android';
-    mediaLibrary.getAssetInfoAsync.mockReset();
-    imageManipulator.manipulate.mockReset();
+beforeEach(() => {
+  platform.os = 'android';
+  mediaLibrary.getAlbumAsync.mockReset();
+  mediaLibrary.getAssetInfoAsync.mockReset();
+  mediaLibrary.getAssetsAsync.mockReset();
+  mediaLibrary.getPermissionsAsync.mockReset();
+  imageManipulator.manipulate.mockReset();
+});
+
+describe('prefetchContextSheetMediaAssets', () => {
+  it('iOS 受限照片权限不在页面预取时读取资产,避免每次冷启动弹系统提醒', async () => {
+    platform.os = 'ios';
+    mediaLibrary.getPermissionsAsync.mockResolvedValue({
+      accessPrivileges: 'limited',
+      granted: true,
+    });
+
+    await prefetchContextSheetMediaAssets('recent');
+
+    expect(mediaLibrary.getPermissionsAsync).toHaveBeenCalledWith(false, ['photo']);
+    expect(mediaLibrary.getAssetsAsync).not.toHaveBeenCalled();
   });
 
+  it('iOS 完全照片权限仍可静默预取资产', async () => {
+    platform.os = 'ios';
+    mediaLibrary.getPermissionsAsync.mockResolvedValue({
+      accessPrivileges: 'all',
+      granted: true,
+    });
+    mediaLibrary.getAssetsAsync.mockResolvedValue({ assets: [] });
+
+    await prefetchContextSheetMediaAssets('screenshots');
+
+    expect(mediaLibrary.getAssetsAsync).toHaveBeenCalledWith(expect.objectContaining({
+      first: 60,
+      mediaSubtypes: ['screenshot'],
+    }));
+  });
+});
+
+describe('resolveContextSheetMediaAssetForUpload', () => {
   it('Android 缺少媒体位置权限时回退列表 URI 与尺寸,继续图片上传解析', async () => {
     mediaLibrary.getAssetInfoAsync.mockRejectedValue(Object.assign(
       new Error('Unable to load asset'),

@@ -16,6 +16,31 @@ function sourceBetween(startNeedle: string, endNeedle: string): string {
 }
 
 describe('Pi session-tree lazy resume provider route', () => {
+  it('refreshes shared global skills before Pi discovery', () => {
+    const listSkills = sourceBetween(
+      'MAKER_INVOKE.LIST_AGENT_SKILLS',
+      'MAKER_INVOKE.SCAN_AT_RESOURCES',
+    );
+    const listCustomizations = sourceBetween(
+      'MAKER_INVOKE.LIST_CUSTOMIZATIONS',
+      '// ── Session 生命周期',
+    );
+
+    expect(listSkills).toContain('const kind = requireAgentKind(agentKind);');
+    expect(listSkills).toContain('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();');
+    expect(
+      listSkills.indexOf('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();'),
+    ).toBeLessThan(listSkills.indexOf('maker.listAgentSkills(kind, skillParams)'));
+
+    expect(listCustomizations).toContain("else if (agentKind === 'pi') {");
+    expect(listCustomizations).toContain(
+      'await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();',
+    );
+    expect(
+      listCustomizations.indexOf('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();'),
+    ).toBeLessThan(listCustomizations.indexOf('maker.listCustomizations(opts)'));
+  });
+
   it('preserves the persisted providerId null/undefined distinction', () => {
     const lazyResume = sourceBetween(
       'async function getOrResumeSessionTreeSession',

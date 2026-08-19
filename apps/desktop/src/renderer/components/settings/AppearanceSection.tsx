@@ -29,6 +29,10 @@ import {
   type SidebarMainViewMode,
   type SidebarViewMode,
 } from '@/hooks/useSidebarCardMode';
+import {
+  useGhostPanelRestoreMode,
+  type GhostPanelRestoreMode,
+} from '@/hooks/useGhostPanelRestoreMode';
 import { getThemeFamilies, resolveFamilyVariant, type ThemeFamily } from '@/themes/families';
 import { buildCopyFromTheme, onLocalThemesChange, refreshLocalThemes } from '@/themes/local-themes';
 import { toast } from '@/lib/toast';
@@ -317,6 +321,8 @@ export function AppearanceSection() {
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
+  const { mode: ghostPanelRestoreMode, setMode: setGhostPanelRestoreMode } =
+    useGhostPanelRestoreMode();
   const { t } = useTranslation();
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
@@ -890,6 +896,49 @@ export function AppearanceSection() {
                 )}
               >
                 {t(opt.labelKey)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p
+              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
+              style={{ letterSpacing: '0.12px' }}
+            >
+              {t('settings.appearance.ghostPanelRestore.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.appearance.ghostPanelRestore.hint')}
+            </p>
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label={t('settings.appearance.ghostPanelRestore.aria')}
+            className="flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
+          >
+            {(
+              [
+                { value: 'bubble', labelKey: 'settings.appearance.ghostPanelRestore.bubble' },
+                { value: 'sidebar', labelKey: 'settings.appearance.ghostPanelRestore.sidebar' },
+              ] as Array<{ value: GhostPanelRestoreMode; labelKey: string }>
+            ).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={ghostPanelRestoreMode === option.value}
+                onClick={() => setGhostPanelRestoreMode(option.value)}
+                className={cn(
+                  'rounded-full px-2.5 py-1 text-xs transition-colors',
+                  ghostPanelRestoreMode === option.value
+                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
+                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                )}
+              >
+                {t(option.labelKey)}
               </button>
             ))}
           </div>

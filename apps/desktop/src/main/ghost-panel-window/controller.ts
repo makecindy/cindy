@@ -339,7 +339,7 @@ export class GhostPanelWindowsController {
     });
     win.on('minimize', () => {
       if (slot.destroyingWindow || this.disposed) return;
-      // 原生标题栏（macOS 黄灯）与系统级最小化入口也必须复用 Ghost 气泡语义。
+      // 原生标题栏（macOS 黄灯）与系统级最小化入口也必须复用插件面板最小化语义。
       // 先恢复，避免在 renderer 完成 setDetached(false) 前短暂留在 Dock/任务栏。
       if (win.isMinimized()) win.restore();
       this.deps.sendToWindow(win, GHOST_PANEL_WINDOW_MINIMIZE_REQUESTED_CHANNEL, undefined);

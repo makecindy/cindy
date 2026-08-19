@@ -26,9 +26,11 @@ interface TemplateCardProps {
 }
 
 export function TemplateCard({ template, selected = false, onSelect }: TemplateCardProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const Icon = iconForTemplate(template.id);
-  const scheduleText = template.cronExpr ? cronToHuman(template.cronExpr) : '';
+  const scheduleText = template.cronExpr
+    ? cronToHuman(template.cronExpr, t, i18n.resolvedLanguage ?? i18n.language)
+    : '';
   // user/project 模板的 capabilities 不受包词表约束：Object.hasOwn（而不是 in）挡住
   // 'toString' 这类原型链 key，Set 去重避免重复项撞 React key。
   const capabilities = [...new Set(template.capabilities ?? [])].filter(

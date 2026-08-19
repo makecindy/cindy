@@ -526,6 +526,35 @@ function httpUrl(v: unknown): URL | null {
   return new URL(v as string);
 }
 
+function normalizedEndpointUrl(value: unknown): string | null {
+  const url = httpUrl(value);
+  if (!url) return null;
+  url.hash = '';
+  url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+  return url.toString();
+}
+
+/**
+ * Compatibility for catalog data generated before explicit Pi wireProtocol was shipped.
+ * Those entries copied the exact Claude/Anthropic endpoint into runtimes.pi. Equality with the
+ * Claude runtime is the authority here; a different Pi URL remains unconfigured and fail-closed.
+ */
+function isLegacyAnthropicPiRuntime(
+  preset: ProviderPreset,
+  agent: AgentKind,
+  runtime: NonNullable<ProviderPreset['runtimes'][AgentKind]>,
+): boolean {
+  if (agent !== 'pi' || runtime.wireProtocol !== undefined) return false;
+  const claudeRuntime = preset.runtimes['claude-code'];
+  if (
+    !claudeRuntime ||
+    (claudeRuntime.wireProtocol !== undefined &&
+      claudeRuntime.wireProtocol !== 'anthropic-messages')
+  ) return false;
+  const piEndpoint = normalizedEndpointUrl(runtime.baseUrl);
+  return piEndpoint !== null && piEndpoint === normalizedEndpointUrl(claudeRuntime.baseUrl);
+}
+
 /**
  * runtime.modelsUrl 非法（非 http(s) URL）时剥掉该字段、保留预设本体——OSS 推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
@@ -535,6 +564,10 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
   const runtimes: ProviderPreset['runtimes'] = {};
   for (const [agent, rt] of Object.entries(p.runtimes) as [AgentKind, ProviderPreset['runtimes'][AgentKind] & object][]) {
     let next = rt;
+    if (isLegacyAnthropicPiRuntime(p, agent, next)) {
+      next = { ...next, wireProtocol: 'anthropic-messages' };
+      changed = true;
+    }
     const models = next.models.map((model) => {
       if (model.route === undefined || isValidModelRoute(agent, next.baseUrl, model.route)) {
         return model;
