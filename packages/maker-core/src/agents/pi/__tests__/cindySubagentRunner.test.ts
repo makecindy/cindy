@@ -195,6 +195,15 @@ async function makeFixture(options: {
    * process launch. Bounded — see `waitForPidCount` in the generated child.
    */
   gateFinishOnPidCount?: number;
+  /**
+   * Occupy `result.json` with a directory before the runner starts.
+   *
+   * Renaming a file onto an existing directory fails persistently (EISDIR /
+   * ENOTDIR, or EPERM on Windows after the transient retries), which is the
+   * portable way to make the result artifact unwritable without touching
+   * permissions or mocking fs.
+   */
+  poisonResultPath?: boolean;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -405,6 +414,9 @@ process.stdin.on('end', () => {
     // launch throws mid-flight, after sibling lanes have already spawned.
     await writeFile(poisonedSessionDir, 'not a directory\n', { mode: 0o600 });
   }
+  // Before the spawn, so the artifact is already unwritable on the run's very
+  // first terminal write — no race with a fast child.
+  if (options.poisonResultPath) await mkdir(path.join(runDir, 'result.json'), { recursive: true });
   const child = spawn(process.execPath, [runnerFile, configPath], {
     cwd: root,
     env: {
@@ -446,6 +458,50 @@ afterEach(async () => {
 });
 
 describe('Cindy durable PI Subagent runner', () => {
+  /**
+   * result.json is an attachment, not the verdict. Nothing in the product reads
+   * it back; status.json is what the Host converges on. So a failure to write it
+   * must not be able to change what the run reports — the old code let the throw
+   * from the success path land in the failure handler, which rewrote the state
+   * to `failed` and republished, and a throw from the failure handler escaped it
+   * entirely so the terminal status was never published at all.
+   */
+  describe('result artifact failures', () => {
+    it('publishes the real terminal state when the result artifact cannot be written', async () => {
+      const fixture = await makeFixture({ poisonResultPath: true });
+
+      const completed = await waitFor(
+        async () => {
+          const [run] = await listPiSubagentRuns(fixture.root);
+          return run?.state === 'completed' ? run : null;
+        },
+        undefined,
+        'the run to publish completed despite the unwritable result artifact',
+      );
+      expect(completed.tasks[0]).toMatchObject({ status: 'completed', output: 'fixture result' });
+      // Never advertise an artifact that is not there.
+      expect(completed.resultPath).toBeUndefined();
+      await waitFor(
+        async () => (/result artifact write failed/.test(fixture.stderr()) ? true : null),
+        undefined,
+        'the runner to report the artifact failure on stderr',
+      );
+    });
+
+    it('still advertises the artifact on the normal path', async () => {
+      const fixture = await makeFixture();
+      const completed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'completed' ? run : null;
+      });
+      expect(completed.resultPath).toBe(path.join(fixture.runDir, 'result.json'));
+      expect(JSON.parse(await readFile(completed.resultPath!, 'utf8'))).toMatchObject({
+        state: 'completed',
+      });
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+  });
+
   it('uses unique exact child session ids and persists terminal output/usage', async () => {
     const fixture = await makeFixture({ tasks: 2 });
     const completed = await waitFor(async () => {

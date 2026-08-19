@@ -280,7 +280,8 @@ describe('cindy-subagent extension source', () => {
     expect(flush).toBeGreaterThan(-1);
     const body = runner.slice(flush, runner.indexOf('function flushTerminalStatus()', flush));
     expect(body).toMatch(/try \{\s*atomicWriteJson\(statusPath, statusPayload\(\)\);\s*\} catch/);
-    expect(runner).toContain('atomicWriteJson(resultPath, terminalResultPayload(state.state));');
+    // 终态记录走 flushTerminalStatus 的重试预算;result.json 是附件,见下一条用例。
+    expect(runner).toContain('writeResultArtifact(terminalResultPayload(state.state));');
   });
 
   it('retries the terminal status write instead of dropping it on the floor', () => {
@@ -306,6 +307,32 @@ describe('cindy-subagent extension source', () => {
       const interimFlush = tail.indexOf('flushStatusNow();');
       expect(terminalFlush).toBeGreaterThan(-1);
       expect(interimFlush === -1 || terminalFlush < interimFlush).toBe(true);
+    }
+  });
+
+  it('keeps the result artifact from deciding the terminal state', () => {
+    // result.json 没有生产读取方,status.json 才是终态真值。附件写一旦能抛,就会:
+    // 成功路径的 throw 掉进 .catch → state 被改写成 failed 并二次发布(假失败);
+    // .catch 里的 throw 直接逃逸 → flushTerminalStatus 永不执行(停在非终态)。
+    const runner = CINDY_SUBAGENT_RUNNER_SOURCE;
+    const helper = runner.indexOf('function writeResultArtifact(payload)');
+    expect(helper).toBeGreaterThan(-1);
+    const body = runner.slice(helper, runner.indexOf('\n  }\n', helper));
+    expect(body).toMatch(/try \{\s*atomicWriteJson\(resultPath, payload\);\s*state\.resultWritten = true;\s*\} catch/);
+    expect(body).toContain("fail('result artifact write failed");
+    // 附件写只能走这个不抛的封装 —— 直调 atomicWriteJson(resultPath, …) 就是把洞放回去。
+    expect([...runner.matchAll(/atomicWriteJson\(resultPath/g)]).toHaveLength(1);
+    // status 不得指向一个没写成的文件。
+    expect(runner).toContain('resultPath: state.resultWritten ? resultPath : undefined,');
+    // 每个终态位点的顺序:先钉死真实 state.state → 写附件 → 发布终态 status。
+    for (const site of runner.matchAll(/state\.terminal = true;/g)) {
+      const tail = runner.slice(site.index ?? 0);
+      const stateAssigned = tail.indexOf('state.state = ');
+      const artifact = tail.indexOf('writeResultArtifact(');
+      const publish = tail.indexOf('flushTerminalStatus();');
+      expect(stateAssigned).toBeGreaterThan(-1);
+      expect(artifact).toBeGreaterThan(stateAssigned);
+      expect(publish).toBeGreaterThan(artifact);
     }
   });
 

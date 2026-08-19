@@ -296,6 +296,7 @@ function main() {
     timeoutTimer: undefined,
     parentWatchdogTimer: undefined,
     terminal: false,
+    resultWritten: false,
   };
 
   function statusPayload() {
@@ -332,7 +333,7 @@ function main() {
       totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
       usage: usage,
       transcriptPath: transcriptPath,
-      resultPath: state.terminal ? resultPath : undefined,
+      resultPath: state.resultWritten ? resultPath : undefined,
       tasks: tasks.map(function (task) {
         return {
           childId: task.childId,
@@ -399,6 +400,22 @@ function main() {
         }
         sleepSync(TERMINAL_STATUS_RETRY_MS);
       }
+    }
+  }
+
+  // result.json is a best-effort *attachment*, not the terminal record: nothing
+  // in the product reads it back, while status.json is what the Host converges
+  // on. So its write must never decide the run's outcome — letting it throw once
+  // turned a completed run into a published failure (the throw from the success
+  // path landed in the failure handler, which rewrote state and republished),
+  // and letting it throw from the failure path skipped the terminal status
+  // publish entirely.
+  function writeResultArtifact(payload) {
+    try {
+      atomicWriteJson(resultPath, payload);
+      state.resultWritten = true;
+    } catch (error) {
+      fail('result artifact write failed, status.json still authoritative: ' + String(error));
     }
   }
 
@@ -1002,7 +1019,7 @@ function main() {
     if (!state.terminal) {
       state.terminal = true;
       state.state = 'stopped';
-      atomicWriteJson(resultPath, terminalResultPayload('stopped', {
+      writeResultArtifact(terminalResultPayload('stopped', {
         error: 'Runner stopped by ' + signalName + '.',
       }));
       flushTerminalStatus();
@@ -1025,7 +1042,7 @@ function main() {
         : tasks.some(function (task) { return task.status === 'stopped'; })
           ? 'stopped'
           : 'completed';
-    atomicWriteJson(resultPath, terminalResultPayload(state.state));
+    writeResultArtifact(terminalResultPayload(state.state));
     flushTerminalStatus();
   }).catch(function (error) {
     // A parallel lane can reject (session dir staging, spawn) after sibling
@@ -1037,7 +1054,7 @@ function main() {
     clearRunnerTimers();
     state.terminal = true;
     state.state = 'failed';
-    atomicWriteJson(resultPath, terminalResultPayload('failed', { error: String(error) }));
+    writeResultArtifact(terminalResultPayload('failed', { error: String(error) }));
     flushTerminalStatus();
     fail(String(error));
   });

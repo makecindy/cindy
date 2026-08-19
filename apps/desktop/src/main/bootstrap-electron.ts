@@ -7652,13 +7652,29 @@ onQuit(
   'pi-subagent-runners',
   async () => {
     const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
-    // Only our own children (plus unattributable / dead-owner orphans). A
-    // concurrent instance sharing this agent home keeps running.
-    const stopped = await stopAllPiSubagentRunsForExit(agentHome, undefined, {
+    // Budget arithmetic against the 6s async phase: 2.5s waiting for the stop
+    // mailbox, then a verified kill per surviving runner whose exit
+    // confirmation costs up to ~0.8s (5 identity probes x 200ms), run one after
+    // another. 2.5s + 4 runners still lands under 6s; past that the phase's own
+    // timeout cuts us off, which is why the failure log below has to stay true
+    // rather than assume the escalation finished.
+    const stopped = await stopAllPiSubagentRunsForExit(agentHome, 2_500, {
+      // Only our own children (plus unattributable / dead-owner orphans). A
+      // concurrent instance sharing this agent home keeps running.
       hostPid: process.pid,
+      // Quit is the same credential problem as an account boundary: this
+      // process is about to disappear, and a runner that never consumed its
+      // mailbox keeps spending the BYOM credentials it inherited and keeps
+      // editing the workspace with nobody left to supervise it. Escalate to the
+      // identity-verified kill instead of logging and exiting.
+      killUnresponsiveRunners: true,
     });
     if (!stopped) {
-      piSubagentLog.warn('PI Subagent runners did not all acknowledge stop before exit timeout');
+      piSubagentLog.error(
+        'PI Subagent runners survived stop and identity-verified kill on quit — '
+        + 'runners this app could not confirm as stopped are still running with their '
+        + 'inherited credentials',
+      );
     }
   },
   'async',
