@@ -1354,7 +1354,7 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
 写一个意识。**流程:先取手册目录 → 按 §0 用提问卡片和用户对齐设计 → 按需用 section
-读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
+读透相关章(动手前至少读完 §2 卡槽总览、"沙箱红线"与"打包与测试"三章) → 在工作目录写源码文件 →
 ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
@@ -1415,6 +1415,17 @@ my-ghost/
 ├── panel.js
 └── settings.html ← 自定义设置区(声明了 settingsHtml 时必须,见 §4.8)
 \`\`\`
+
+想看**真实完整范例**,浏览官方插件源码仓
+\`github.com/makecindy/cindy-official-plugins\`:仓库根下每个**含 ghost.json 的
+一级目录**(cindy-art、cindy-github、cindy-web-search……)都是一个已上架插件的
+全部源码,各槽(卡槽/
+面板/网络/设置页)都有现成写法可对照;\`.tests\`、\`docs\` 等无 ghost.json 的
+目录是仓库自身的基础设施,不是插件。需要理解宿主侧能力实现(某个槽的代发
+细节、校验器行为)时可参考主仓 \`github.com/makecindy/cindy\`(插件基座在
+\`apps/desktop/src/main/cindy-brain/\`),但**API 契约一律以本手册为准**——
+线上 main 分支可能领先或落后用户当前安装的主机版本,照 main 写码可能装进
+旧版就不工作。
 
 ## 2. ghost.json 身份卡
 
@@ -4113,7 +4124,8 @@ const opened = await cindy.iosSimulator.request({
 
 ### 8.1 发布到官方插件仓的额外门禁
 
-要提交到官方插件仓 \`makecindy/cindy-official-plugins\` 的插件,除本手册的打包/装入
+官方插件仓:\`github.com/makecindy/cindy-official-plugins\`(公开,合入即自动上架
+插件市场)。要提交到该仓的插件,除本手册的打包/装入
 校验外还有仓级 CI 硬门禁,过不了整次发布被拦:
 
 - **四语言 locale 缺一不可**:\`locales\` 必须**恰好**包含 \`zh-CN\` / \`en\` / \`ja\` /

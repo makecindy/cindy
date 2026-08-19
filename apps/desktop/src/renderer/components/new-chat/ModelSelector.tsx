@@ -2687,6 +2687,7 @@ function ModelSelectorContentView({
         </div>
         <UnifiedModelPanel
           providers={providers}
+          providerOrder={deviceId ? undefined : localProviders.providerOrder}
           {...(unifiedAgents ? { agents: unifiedAgents } : {})}
           scope={unifiedScope}
           isVisible={unifiedIsVisible}

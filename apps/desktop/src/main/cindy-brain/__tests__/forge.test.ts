@@ -1328,8 +1328,16 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
-  it('documents installed-directory isolation and the structured refusal', () => {
-    expect(FORGE_GUIDE).toContain('已安装插件目录');
+  it('开场白必读口径与 createPrompt 一致:三章且卡槽总览带真实章号', () => {
+    // 聊天里直接说"帮我做个插件"的路径只看到手册,看不到 createPrompt;
+    // 两处必读口径分叉会让不同入口的 agent 走出不同的阅读深度。
+    // "卡槽总览"必须带章号(§2):章节匹配只认章号或标题子串,agent 照抄
+    // 文案字样调 section 会取章失败(PR #3023 review)。
+    expect(FORGE_GUIDE).toContain('至少读完 §2 卡槽总览、"沙箱红线"与"打包与测试"三章');
+    expect(FORGE_GUIDE).not.toContain('至少读完"沙箱红线"与"打包与测试"两章');
+  });
+
+  it('documents installed-directory isolation and the structured refusal', () => {    expect(FORGE_GUIDE).toContain('已安装插件目录');
     expect(FORGE_GUIDE).toContain('SOURCE_IS_INSTALLED_PLUGIN');
     // 脚手架侧的同一禁区也要写进手册,否则 agent 会先把骨架建进安装目录再撞墙。
     expect(FORGE_GUIDE).toContain('也不能落在已安装插件目录或 Host 状态目录内');
@@ -1686,6 +1694,17 @@ describe('FORGE_GUIDE', () => {
       '发布到官方插件仓的额外门禁',
       'makecindy/cindy-official-plugins',
       '四语言 locale 缺一不可',
+      // 2026-08-19 范例与源码指引:§1 补官方插件仓 URL(真实完整范例)与
+      // 主仓地址(插件基座,apps/desktop/src/main/cindy-brain/),并写死边界
+      // ——API 契约一律以手册为准,main 分支可能与用户安装版本不一致。
+      'github.com/makecindy/cindy-official-plugins',
+      // 范例判据是"含 ghost.json 的一级目录",不是"每个一级目录"——
+      // 仓库根还有 .tests/docs 等基础设施目录(PR #3023 review)。
+      '每个**含 ghost.json 的',
+      '不是插件',
+      'apps/desktop/src/main/cindy-brain/',
+      'API 契约一律以本手册为准',
+      'github.com/makecindy/cindy',
       // 2026-07-29 寄存通道(#784):§2 的 media 类目 + §4.0.1 章节,
       // 以及 §6 沙箱红线里"改图只认名下媒体"的口径更新。
       "kind: 'deposit_media'",

@@ -109,6 +109,11 @@ export interface UnifiedSelectedRow {
 
 export interface UnifiedModelPanelProps {
   providers: readonly ProviderView[];
+  /**
+   * 供应商分组的显示顺序(设置 → 模型供应商的拖动序);缺省 = 目录首见序。
+   * device-link 会话不传:被控端顺序由远端快照决定,不套控制端本地偏好。
+   */
+  providerOrder?: readonly string[];
   /** 参与联合的引擎;调用方给了 vendorKey 时收窄,缺省 = 三个引擎全参与。 */
   agents?: readonly AgentKind[];
   /** 来源解析口径:已建会话 'session'(含停用拷贝),其余 'draft'。 */
@@ -260,6 +265,7 @@ export interface UnifiedModelPanelProps {
  */
 export function UnifiedModelPanel({
   providers,
+  providerOrder,
   agents,
   scope,
   isVisible,
@@ -379,8 +385,8 @@ export function UnifiedModelPanel({
   );
 
   const railItems = useMemo(
-    () => buildUnifiedRail(entries, sessionAgent),
-    [entries, sessionAgent],
+    () => buildUnifiedRail(entries, sessionAgent, providerOrder),
+    [entries, sessionAgent, providerOrder],
   );
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
@@ -548,8 +554,9 @@ export function UnifiedModelPanel({
         query,
         rail: effectiveRail,
         effectiveEngineOf,
+        providerOrder,
       }),
-    [entries, favorites, query, effectiveRail, effectiveEngineOf],
+    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder],
   );
 
   // 列表变化时把选中行对齐到**可视区中部**(Chris 2026-08-19 实测反馈,详见
@@ -953,9 +960,10 @@ export function UnifiedModelPanel({
             query: '',
             rail: RAIL_ALL,
             effectiveEngineOf,
+            providerOrder,
           })
         : [],
-    [widthSizerActive, entries, favorites, effectiveEngineOf],
+    [widthSizerActive, entries, favorites, effectiveEngineOf, providerOrder],
   );
 
   // badge 样式:滚动中的「继承目录题头」—— 覆盖层常驻列表视口顶部,显示当前滚过的
