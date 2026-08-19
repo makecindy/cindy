@@ -52,6 +52,7 @@ import {
 import {
   normalizeManualProjectOrder,
   mergeVisibleReorder,
+  snapshotManualProjectOrder,
   loadDialogueGroupCollapsedKeys,
   persistDialogueGroupCollapsedKeys,
   DIALOGUE_GROUP_ALL_KEY,
@@ -475,14 +476,17 @@ export function ProjectsSection({
     )
     .map((entry) => entry.project);
 
-  // 第一次切到自定义时,把当前可见项目序写进持久顺序,避免空序被 normalize 成
-  // 入参数组序(和用户刚看到的时间/优先级序对不上)。已有自定义序则保留。
-  const visualProjectKeysRef = useRef<string[]>([]);
-  visualProjectKeysRef.current = mixedEntries
-    .filter(
-      (entry): entry is Extract<MainListEntry, { kind: 'project' }> => entry.kind === 'project',
-    )
-    .map((entry) => entry.project.projectKey);
+  // 第一次切到手动时,必须用切换前的视觉序(recency / priority 混排结果),
+  // 不能在 custom+空序重算后再采集——那时项目行已按上游入参序排好,优先级视觉会丢。
+  // 可见子集还要 merge 回全量 baseline,避免隐藏项目被甩到末尾。
+  const preCustomVisualKeysRef = useRef<string[]>([]);
+  if (filter.projectOrder !== 'custom') {
+    preCustomVisualKeysRef.current = mixedEntries
+      .filter(
+        (entry): entry is Extract<MainListEntry, { kind: 'project' }> => entry.kind === 'project',
+      )
+      .map((entry) => entry.project.projectKey);
+  }
   const prevProjectOrderRef = useRef(filter.projectOrder);
   useEffect(() => {
     const previous = prevProjectOrderRef.current;
@@ -495,9 +499,12 @@ export function ProjectsSection({
     ) {
       return;
     }
-    const keys = visualProjectKeysRef.current;
+    const keys = preCustomVisualKeysRef.current;
     if (keys.length === 0) return;
-    filter.setManualProjectOrder(keys, projectKeysForOrderBaseline);
+    filter.setManualProjectOrder(
+      snapshotManualProjectOrder(keys, projectKeysForOrderBaseline),
+      projectKeysForOrderBaseline,
+    );
   }, [filter, projectKeysForOrderBaseline]);
 
   const deviceSections = useMemo<MainListDeviceSection[]>(() => {

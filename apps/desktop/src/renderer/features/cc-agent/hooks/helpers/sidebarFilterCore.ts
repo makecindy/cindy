@@ -528,12 +528,15 @@ export function migrateLegacyManualSort(): void {
     return;
   }
   if (raw !== 'manual') return;
-  persistSortBy('recency');
+  // 先写 projectOrder:若随后写 sortBy 失败,loadProjectOrder 仍能靠 leftover
+  // sortBy=manual 读成 custom,下次启动还会再试迁移。反过来先清 manual
+  // 会让后续启动以为用户选的是 activity,已有手动序不再生效。
   try {
     if (storage.getItem(PROJECT_ORDER_KEY) == null) persistProjectOrder('custom');
   } catch {
     persistProjectOrder('custom');
   }
+  persistSortBy('recency');
 }
 
 /* ============================== taskInfo load/persist ============================== */
@@ -808,6 +811,18 @@ export function mergeVisibleReorder(
   // visibleNewOrder 里不在 currentFullOrder 的新置顶 id(刚 pin)→ 追加末尾。
   for (const id of queue) result.push(id);
   return result;
+}
+
+/**
+ * 第一次切到手动项目顺序:用切换前的可见视觉序填回全量 baseline 的可见槽位。
+ * 隐藏项(其它机器 / 筛选)原位保留,不能把可见子集当成完整序再把其余甩到末尾。
+ */
+export function snapshotManualProjectOrder(
+  visualVisibleKeys: readonly string[],
+  baselineKeys: readonly string[],
+): string[] {
+  const fullOrder = normalizeManualProjectOrder([], baselineKeys);
+  return mergeVisibleReorder(fullOrder, visualVisibleKeys);
 }
 
 /**

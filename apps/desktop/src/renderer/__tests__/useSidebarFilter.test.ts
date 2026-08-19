@@ -55,6 +55,7 @@ import {
   moveManualProjectOrder,
   normalizeManualPinnedOrder,
   mergeVisibleReorder,
+  snapshotManualProjectOrder,
   type FilterProjects,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
 import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
@@ -318,6 +319,25 @@ describe('migrateLegacyManualSort', () => {
     migrateLegacyManualSort();
     expect(loadSortBy()).toBe('recency');
     expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('still maps leftover sortBy=manual if only projectOrder was written', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    persistProjectOrder('custom');
+    expect(loadProjectOrder()).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+  });
+});
+
+describe('snapshotManualProjectOrder', () => {
+  it('merges the pre-switch visual order into the full baseline without moving hidden keys', () => {
+    expect(
+      snapshotManualProjectOrder(['local:b', 'local:a'], ['local:a', 'local:hidden', 'local:b']),
+    ).toEqual(['local:b', 'local:hidden', 'local:a']);
+  });
+
+  it('falls back to the baseline when there is no visual snapshot', () => {
+    expect(snapshotManualProjectOrder([], ['local:a', 'local:b'])).toEqual(['local:a', 'local:b']);
   });
 });
 

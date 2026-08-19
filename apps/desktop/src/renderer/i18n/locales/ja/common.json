@@ -7639,14 +7639,14 @@
       "filterLastActivityHeading": "最終アクティビティ",
       "filterGroupByHeading": "グループ",
       "filterSortByHeading": "並び替え",
-      "filterTaskSortHeading": "タスク順",
+      "filterTaskSortHeading": "セッション順",
       "filterProjectOrderHeading": "プロジェクト順",
       "filterProjectOrder": {
         "activity": "最近のアクティビティ順",
         "custom": "手動"
       },
       "filterProjectOrderTip": {
-        "custom": "マウスでプロジェクト行をドラッグして並び替え。中のタスクは上の並び替えに従う"
+        "custom": "マウスでプロジェクト行をドラッグして並び替え。中のセッションは上の並び替えに従う"
       },
       "filterProjectsHeading": "プロジェクト",
       "filterAllProjects": "すべてのプロジェクト",
