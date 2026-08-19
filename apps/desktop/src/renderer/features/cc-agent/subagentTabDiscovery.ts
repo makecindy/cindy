@@ -54,12 +54,12 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
 
   let disposed = false;
   let registered = false;
-  let poll: ReturnType<typeof setInterval> | null = null;
+  let poll: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe: (() => void) | null = null;
 
   const stopPolling = (): void => {
     if (poll === null) return;
-    clearInterval(poll);
+    clearTimeout(poll);
     poll = null;
   };
 
@@ -89,11 +89,26 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     void discover().catch(() => undefined);
   };
 
-  runDiscovery();
+  /**
+   * Chained, not `setInterval`: the next remote round is only armed once this
+   * one settled. A device-link invoke defaults to a 30s timeout, so a fixed 5s
+   * interval stacks ~6 in-flight reads against an unreachable device and
+   * starves the reliable-transport queue the user's controls share. A rejected
+   * round still re-arms — the link coming back is exactly what this poll is
+   * waiting for.
+   */
+  const runRemoteDiscovery = (): void => {
+    poll = null;
+    void discover().catch(() => undefined).finally(() => {
+      if (disposed || registered) return;
+      poll = setTimeout(runRemoteDiscovery, pollMs);
+    });
+  };
 
   if (remote) {
-    poll = setInterval(runDiscovery, pollMs);
+    runRemoteDiscovery();
   } else {
+    runDiscovery();
     unsubscribe = subscribeLocalChanges(runDiscovery);
   }
 

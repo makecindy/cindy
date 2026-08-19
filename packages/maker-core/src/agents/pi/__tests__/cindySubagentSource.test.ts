@@ -274,14 +274,39 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toMatch(
       /function writePrivateJson\(file, value\) \{[\s\S]*?for \(let attempt = 0; ; attempt\+\+\) \{\s*try \{\s*renameSync\(tmp, file\);/,
     );
-    // 定时器回调必须吞掉重试后仍失败的错误,交给下一个 tick;终态 result.json 的写入
-    // 不在此列(它有自己的抛出语义)。
+    // 定时器回调必须吞掉重试后仍失败的错误,交给下一个 tick。
     const runner = CINDY_SUBAGENT_RUNNER_SOURCE;
     const flush = runner.indexOf('function flushStatusNow()');
     expect(flush).toBeGreaterThan(-1);
-    const body = runner.slice(flush, runner.indexOf('function scheduleStatus()', flush));
+    const body = runner.slice(flush, runner.indexOf('function flushTerminalStatus()', flush));
     expect(body).toMatch(/try \{\s*atomicWriteJson\(statusPath, statusPayload\(\)\);\s*\} catch/);
     expect(runner).toContain('atomicWriteJson(resultPath, terminalResultPayload(state.state));');
+  });
+
+  it('retries the terminal status write instead of dropping it on the floor', () => {
+    // 终态那次写不能走 flushStatusNow 的「吞错 + scheduleStatus」:scheduleStatus 在
+    // state.terminal 时直接 return,失败即永久丢弃,而 status.json 是唯一有生产读取方的
+    // 终态记录(result.json 当前无人消费)—— 丢了就只能等它老化成 stale diagnostic。
+    const runner = CINDY_SUBAGENT_RUNNER_SOURCE;
+    const terminal = runner.indexOf('function flushTerminalStatus()');
+    expect(terminal).toBeGreaterThan(-1);
+    const body = runner.slice(terminal, runner.indexOf('\n  }\n', terminal));
+    // 自己的重试循环 + 预算耗尽后只记一行日志(不 crash、不静默)。
+    expect(body).toMatch(/for \(let attempt = 0; ; attempt \+= 1\) \{\s*try \{\s*atomicWriteJson\(statusPath, statusPayload\(\)\);/);
+    expect(body).toContain('attempt >= TERMINAL_STATUS_ATTEMPTS - 1');
+    expect(body).toContain('sleepSync(TERMINAL_STATUS_RETRY_MS)');
+    expect(body).toContain("fail('terminal status write failed after retries: '");
+    expect(runner).toContain('const TERMINAL_STATUS_ATTEMPTS = 20;');
+    // 每个把 run 推向终态的位点都必须用它 —— 回退成 flushStatusNow 是静默丢终态。
+    const terminalSites = [...runner.matchAll(/state\.terminal = true;/g)];
+    expect(terminalSites.length).toBeGreaterThanOrEqual(3);
+    for (const site of terminalSites) {
+      const tail = runner.slice(site.index ?? 0);
+      const terminalFlush = tail.indexOf('flushTerminalStatus();');
+      const interimFlush = tail.indexOf('flushStatusNow();');
+      expect(terminalFlush).toBeGreaterThan(-1);
+      expect(interimFlush === -1 || terminalFlush < interimFlush).toBe(true);
+    }
   });
 
   it('escalates to its own handle when taskkill reports failure', () => {

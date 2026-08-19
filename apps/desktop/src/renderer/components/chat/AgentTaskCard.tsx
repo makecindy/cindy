@@ -505,7 +505,7 @@ export function AgentTaskCard({
             aria-label={t('chat.agentTask.openInPanel')}
             data-agent-task-open-subagents="true"
             className={cn(
-              'mt-[2px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px]',
+              'mt-[2px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
               'text-[var(--text-secondary)] hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)]',
               'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             )}
@@ -555,7 +555,7 @@ export function AgentTaskCard({
                       type="button"
                       aria-expanded={piResultExpanded}
                       onClick={() => setPiResultExpanded((current) => !current)}
-                      className="mb-1 rounded-[4px] text-12 text-[var(--accent-fg)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      className="mb-1 rounded-full text-12 text-[var(--accent-fg)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       {t(piResultExpanded
                         ? 'chat.agentTask.hideFullResult'

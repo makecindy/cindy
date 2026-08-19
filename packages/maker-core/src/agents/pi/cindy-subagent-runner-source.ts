@@ -52,6 +52,10 @@ const SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const RENAME_RETRY_ATTEMPTS = 10;
 const RENAME_RETRY_STEP_MS = 25;
 const RENAME_RETRY_MAX_MS = 100;
+// Terminal status has no next tick to fall back on, so it gets its own, wider
+// budget (~5s of sleeps on top of each write's own rename retries).
+const TERMINAL_STATUS_ATTEMPTS = 20;
+const TERMINAL_STATUS_RETRY_MS = 250;
 
 function fail(message) {
   try { process.stderr.write('[cindy-subagent-runner] ' + message + '\n'); } catch (_) {}
@@ -358,10 +362,9 @@ function main() {
     };
   }
 
-  // Publishing status is best effort. It runs from timers, so an escaping error
-  // takes down the whole runner (and orphans its children) over a snapshot the
-  // next tick would rewrite anyway. The terminal record the Host converges on is
-  // result.json, whose own call sites keep throwing.
+  // Publishing an *interim* status is best effort. It runs from timers, so an
+  // escaping error takes down the whole runner (and orphans its children) over a
+  // snapshot the next tick rewrites anyway.
   function flushStatusNow() {
     if (state.statusTimer) {
       clearTimeout(state.statusTimer);
@@ -371,6 +374,31 @@ function main() {
       atomicWriteJson(statusPath, statusPayload());
     } catch (_) {
       scheduleStatus();
+    }
+  }
+
+  // The terminal status is the opposite case and must not reuse the path above:
+  // scheduleStatus() refuses to re-arm once terminal, so a swallowed failure
+  // there is a permanent loss, and status.json is the only record the product
+  // reads back (nothing consumes result.json today) — the run would keep reading
+  // as running until it aged into a stale diagnostic. Retry on a wider budget
+  // instead; the runner is on its way out, so blocking here costs nothing.
+  function flushTerminalStatus() {
+    if (state.statusTimer) {
+      clearTimeout(state.statusTimer);
+      state.statusTimer = undefined;
+    }
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        atomicWriteJson(statusPath, statusPayload());
+        return;
+      } catch (error) {
+        if (attempt >= TERMINAL_STATUS_ATTEMPTS - 1) {
+          fail('terminal status write failed after retries: ' + String(error));
+          return;
+        }
+        sleepSync(TERMINAL_STATUS_RETRY_MS);
+      }
     }
   }
 
@@ -977,7 +1005,7 @@ function main() {
       atomicWriteJson(resultPath, terminalResultPayload('stopped', {
         error: 'Runner stopped by ' + signalName + '.',
       }));
-      flushStatusNow();
+      flushTerminalStatus();
     }
     process.exit(0);
   }
@@ -998,7 +1026,7 @@ function main() {
           ? 'stopped'
           : 'completed';
     atomicWriteJson(resultPath, terminalResultPayload(state.state));
-    flushStatusNow();
+    flushTerminalStatus();
   }).catch(function (error) {
     // A parallel lane can reject (session dir staging, spawn) after sibling
     // lanes already launched. Publishing failed first would tell the Host the
@@ -1010,7 +1038,7 @@ function main() {
     state.terminal = true;
     state.state = 'failed';
     atomicWriteJson(resultPath, terminalResultPayload('failed', { error: String(error) }));
-    flushStatusNow();
+    flushTerminalStatus();
     fail(String(error));
   });
 }

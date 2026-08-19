@@ -531,9 +531,12 @@ function managementResult(params) {
   }
   const statuses = durableStatuses();
   if (action === 'guide') {
+    // 只列这个工具真能做的动作:白名单里没有 resume,终态分支还会直接报 already
+    // terminal,宣称支持等于让模型反复撞一堵墙。继续跑一个已结束的 run 是 UI 能力。
     return 'PI Subagent supports built-in and inline custom roles, fresh/fork context, foreground or durable async runs, '
       + 'parallel fan-out, result-fed chains, dependency workflows, model/thinking overrides, linked-worktree enforcement, transcript, stop, steer, '
-      + 'follow-up, resume, and Cindy approval forwarding. For recurring missions, use Cindy Scheduler to schedule a '
+      + 'follow-up, and Cindy approval forwarding. Resuming a finished run is done from the Cindy sidebar UI, not via this tool. '
+      + 'For recurring missions, use Cindy Scheduler to schedule a '
       + 'parent task whose prompt invokes subagent with the desired workflow.';
   }
   if (action === 'doctor') {

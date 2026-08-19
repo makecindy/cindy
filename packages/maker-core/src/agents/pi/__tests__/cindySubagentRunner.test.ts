@@ -48,6 +48,30 @@ function sharedRunnerFile(): Promise<string> {
   return sharedRunnerFilePromise;
 }
 
+/**
+ * Read the fake child's command log, or null while it does not exist yet.
+ *
+ * `commands.jsonl` is created by the fake pi *after* it starts, which on Windows
+ * trails the runner publishing `state === 'running'` by a whole spawn (2-4s).
+ * `waitFor` does not catch read errors, so the first poll threw ENOENT and took
+ * the case down instead of polling again. This is a fixture race, not a product
+ * contract: nothing in production writes or reads this file.
+ */
+async function readCommandsIfPresent(
+  file: string,
+): Promise<Array<{ type?: string; message?: string }> | null> {
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  return trimmed.split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+}
+
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-runner-'));
   roots.push(root);
@@ -372,7 +396,15 @@ process.stdin.on('end', () => {
 
 afterEach(async () => {
   activeFixtures.splice(0);
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, {
+    recursive: true,
+    force: true,
+    // Windows: a runner or fake child that has not fully exited still holds its
+    // cwd and open handles, so the first rmdir comes back EBUSY/EPERM. Node's
+    // own retry loop is the standard remedy, and this is teardown only.
+    maxRetries: 10,
+    retryDelay: 100,
+  })));
 });
 
 describe('Cindy durable PI Subagent runner', () => {
@@ -902,9 +934,8 @@ describe('Cindy durable PI Subagent runner', () => {
       message: 'still deliver this',
     })).resolves.toBe(1);
     await waitFor(async () => {
-      const commands = (await readFile(fixture.commandsFile, 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
-      return commands.some((command) => command.type === 'steer' && command.message === 'still deliver this')
+      const commands = await readCommandsIfPresent(fixture.commandsFile);
+      return commands?.some((command) => command.type === 'steer' && command.message === 'still deliver this')
         ? true
         : null;
     });
@@ -942,8 +973,7 @@ describe('Cindy durable PI Subagent runner', () => {
       childId: running.tasks[0]?.childId,
       message: 'continue from the completed result',
     })).resolves.toBe(1);
-    const commands = (await readFile(fixture.commandsFile, 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'steer', message: 'late correction' }));
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'follow_up', message: 'continue from the completed result',
@@ -977,9 +1007,8 @@ describe('Cindy durable PI Subagent runner', () => {
       requestedAt: Date.now(),
     })}\n`, { mode: 0o600 });
     await waitFor(async () => {
-      const commands = (await readFile(fixture.commandsFile, 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
-      return commands.some((command) => command.type === 'steer' && command.message === 'legacy direction once')
+      const commands = await readCommandsIfPresent(fixture.commandsFile);
+      return commands?.some((command) => command.type === 'steer' && command.message === 'legacy direction once')
         ? true
         : null;
     });
@@ -1013,8 +1042,7 @@ describe('Cindy durable PI Subagent runner', () => {
       'the retained control receipts to settle at the 512 bound',
     );
 
-    const commands = (await readFile(fixture.commandsFile, 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
+    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
     expect(commands.filter((command) => (
       command.type === 'steer' && command.message === 'legacy direction once'
     ))).toHaveLength(1);
@@ -1316,9 +1344,8 @@ describe('Cindy durable PI Subagent runner', () => {
     // different events; wait for the one the assertions below actually read.
     const commands = await waitFor(
       async () => {
-        const parsed = (await readFile(fixture.commandsFile, 'utf8'))
-          .trim().split('\n').map((line) => JSON.parse(line) as { type?: string; message?: string });
-        return parsed.some((command) => command.type === 'steer' && command.message === 'queued direction')
+        const parsed = await readCommandsIfPresent(fixture.commandsFile);
+        return parsed?.some((command) => command.type === 'steer' && command.message === 'queued direction')
           ? parsed
           : null;
       },

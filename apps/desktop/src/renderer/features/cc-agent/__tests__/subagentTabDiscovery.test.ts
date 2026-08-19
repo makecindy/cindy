@@ -239,6 +239,69 @@ describe('startSubagentTabDiscovery', () => {
     dispose();
   });
 
+  /**
+   * A device-link invoke defaults to a 30s timeout, so a fixed 5s interval could
+   * keep ~6 reads in flight against an unreachable device — all of them queued
+   * on the same reliable transport the user's stop/steer controls use.
+   */
+  it('does not start a second remote read while the first is still in flight', async () => {
+    const h = harness();
+    let release!: (value: SubagentRunsListResponse) => void;
+    h.listRemote.mockImplementation(() => new Promise<SubagentRunsListResponse>((resolve) => {
+      release = resolve;
+    }));
+
+    const dispose = startSubagentTabDiscovery({
+      sessionId: 's1',
+      deviceId: 'device-a',
+      listLocal: h.listLocal,
+      listRemote: h.listRemote,
+      subscribeLocalChanges: h.subscribeLocalChanges,
+      registerTab: h.registerTab,
+      isRequestOwnerCurrent: () => true,
+    });
+    await settle();
+    expect(h.listRemote).toHaveBeenCalledTimes(1);
+
+    // Several cadences pass while the first read is still pending.
+    await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_DISCOVERY_POLL_MS * 5);
+    await settle();
+    expect(h.listRemote).toHaveBeenCalledTimes(1);
+
+    // Only after it settles does the next round get armed.
+    release?.(EMPTY);
+    await settle();
+    expect(h.listRemote).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_DISCOVERY_POLL_MS);
+    await settle();
+    expect(h.listRemote).toHaveBeenCalledTimes(2);
+    dispose();
+  });
+
+  it('keeps polling after a failed remote read', async () => {
+    // A dropped link is exactly what this poll is waiting to recover from, so a
+    // rejection must re-arm the chain rather than end it.
+    const h = harness();
+    h.listRemote.mockRejectedValueOnce(new Error('link down')).mockResolvedValue(EMPTY);
+
+    const dispose = startSubagentTabDiscovery({
+      sessionId: 's1',
+      deviceId: 'device-a',
+      listLocal: h.listLocal,
+      listRemote: h.listRemote,
+      subscribeLocalChanges: h.subscribeLocalChanges,
+      registerTab: h.registerTab,
+      isRequestOwnerCurrent: () => true,
+    });
+    await settle();
+    expect(h.listRemote).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_DISCOVERY_POLL_MS);
+    await settle();
+    expect(h.listRemote).toHaveBeenCalledTimes(2);
+    dispose();
+  });
+
   it('stops polling and swallows read failures after dispose', async () => {
     const h = harness();
     h.listRemote.mockRejectedValue(new Error('link down'));
