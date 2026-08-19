@@ -313,6 +313,8 @@ const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
   codex: 'gpt-5.4-mini',
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
   pi: 'claude-haiku-4-5',
+  // kimi-code oneShot 同样未实现;占位走 Kimi 官方 coding 模型。
+  'kimi-code': 'kimi-for-coding',
 };
 
 /**

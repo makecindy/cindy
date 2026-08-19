@@ -30,7 +30,7 @@ export type UnifiedEngine = SelectableVendor;
 
 /** vendor → AgentKind(查目录 / 能力 / 记忆时用)。 */
 export function agentKindOfEngine(engine: UnifiedEngine): AgentKind {
-  return engine === 'cc' ? 'claude-code' : engine === 'codex' ? 'codex' : 'pi';
+  return engine === 'cc' ? 'claude-code' : engine === 'codex' ? 'codex' : engine === 'kimi' ? 'kimi-code' : 'pi';
 }
 
 /** AgentKind → vendor(落 store / draft 时用)。未知值回落 cc,与既有 sanitize 方向一致。 */

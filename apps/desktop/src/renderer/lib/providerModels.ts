@@ -212,6 +212,7 @@ export function selectVisibleModels(params: {
   deviceCcModels: ModelDescriptor[];
   deviceCodexModels: ModelDescriptor[];
   devicePiModels?: ModelDescriptor[];
+  deviceKimiModels?: ModelDescriptor[];
   /**
    * SSH 远程会话(remoteHostId)传 true:订阅直连模型(chatgpt/ / xai/)不再被过滤,
    * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
@@ -255,12 +256,14 @@ export function selectVisibleModels(params: {
       model.id.startsWith('chatgpt/') &&
       model.id.endsWith('[1m]')
     ));
+  const kimi = pass(deviceId ? (params.deviceKimiModels ?? []) : deriveModelsFromProviders(providers, 'kimi-code'));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   if (agentKind === 'pi') return pi;
+  if (agentKind === 'kimi-code') return kimi;
   const merged = [...cc];
   const seen = new Set(merged.map((m) => m.id));
-  for (const list of [codex, pi]) {
+  for (const list of [codex, pi, kimi]) {
     for (const m of list) {
       if (seen.has(m.id)) continue;
       seen.add(m.id);

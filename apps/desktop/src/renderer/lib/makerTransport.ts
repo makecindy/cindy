@@ -213,7 +213,7 @@ export function makerApiForDevice(deviceId: string): RoutableMaker {
 /** Mutation 前按明确 deviceId 重新读取被控端能力，避免复用可能过期的 renderer cache。 */
 export function agentCapabilitiesForDevice(
   deviceId: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code',
 ): Promise<{
   supportsOrcaWorkerPermissionMode?: boolean;
   supportsDeferredOrcaUiAssignment?: boolean;

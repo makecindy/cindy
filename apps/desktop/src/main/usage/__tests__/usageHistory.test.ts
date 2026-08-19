@@ -169,7 +169,7 @@ function subscriptionQuote(
 
 function modelRow(
   day: string,
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code',
   model: string,
   money: RegionalMoney,
   tokens: {

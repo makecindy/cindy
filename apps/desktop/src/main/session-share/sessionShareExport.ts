@@ -424,7 +424,8 @@ async function collectOrcaWorkerSources(
     if (
       workerSession.agentKind !== 'cc' &&
       workerSession.agentKind !== 'codex' &&
-      workerSession.agentKind !== 'pi'
+      workerSession.agentKind !== 'pi' &&
+      workerSession.agentKind !== 'kimi'
     ) {
       throw codedError(
         'SHARE_EXPORT_FAILED',
@@ -460,7 +461,7 @@ export async function exportSessionShare(
       'orca worker sessions cannot be exported directly; export the lead session',
     );
   }
-  if (session.agentKind !== 'cc' && session.agentKind !== 'codex' && session.agentKind !== 'pi') {
+  if (session.agentKind !== 'cc' && session.agentKind !== 'codex' && session.agentKind !== 'pi' && session.agentKind !== 'kimi') {
     throw codedError('PRECONDITION_FAILED', `unsupported agentKind: ${session.agentKind}`);
   }
 
@@ -657,7 +658,7 @@ export async function exportSessionShare(
         teamStatus: orcaSources.teamStatus,
         workers: workerSources.map((w, i): XdtshareOrcaWorkerManifest => ({
           index: i,
-          agentKind: w.session.agentKind as 'cc' | 'codex' | 'pi',
+          agentKind: w.session.agentKind as 'cc' | 'codex' | 'pi' | 'kimi',
           title: w.session.title,
           role: w.record.role,
           label: w.record.label,
@@ -679,7 +680,7 @@ export async function exportSessionShare(
     appVersion: safeAppVersion(),
     platform: process.platform,
     exportedAt: new Date().toISOString(),
-    agentKind: session.agentKind as 'cc' | 'codex' | 'pi',
+    agentKind: session.agentKind as 'cc' | 'codex' | 'pi' | 'kimi',
     title: session.title,
     workspaceKind: session.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     originalWorkingDir: session.workingDir,

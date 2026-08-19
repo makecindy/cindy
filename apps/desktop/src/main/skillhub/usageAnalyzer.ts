@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
-export type SkillUsageAgentKind = 'claude-code' | 'codex' | 'pi';
+export type SkillUsageAgentKind = 'claude-code' | 'codex' | 'pi' | 'kimi-code';
 
 export type SkillUsageExposureSource =
   | 'claude_skill_tool'

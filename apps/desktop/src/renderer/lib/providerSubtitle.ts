@@ -4,6 +4,7 @@ const AGENT_DISPLAY_LABELS: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  'kimi-code': 'Kimi Code',
 };
 
 export function providerAgentSupportLabel(provider?: Pick<ProviderView, 'agents'> | null): string {

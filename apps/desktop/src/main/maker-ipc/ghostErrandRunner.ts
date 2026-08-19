@@ -58,7 +58,7 @@ export interface GhostErrandRunnerDeps {
   createSession(params: {
     ghostId: string;
     title: string | null;
-    agentKind?: 'cc' | 'codex' | 'pi';
+    agentKind?: 'cc' | 'codex' | 'pi' | 'kimi';
     model?: string;
     effort?: string;
     fastMode?: boolean;
@@ -69,7 +69,7 @@ export interface GhostErrandRunnerDeps {
   /** 该插件的展示名(errand 会话默认标题用)。 */
   getGhostName(ghostId: string): string | null;
   /** 缺省选型来源:New Maker 草稿偏好快照(与 Orca worker 同源)。 */
-  getDraftDefaults(vendor: 'claude-code' | 'codex' | 'pi'): {
+  getDraftDefaults(vendor: 'claude-code' | 'codex' | 'pi' | 'kimi-code'): {
     model?: string;
     effort?: string;
     fastMode?: boolean;

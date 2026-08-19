@@ -630,7 +630,7 @@ interface ChatInputProps {
    * M35: Vendor lock — when provided, ModelSelector only shows models
    * belonging to this vendor ('cc' for Claude, 'codex' for OpenAI Codex).
    */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'kimi';
   /**
    * Optional override for the composerDraftStore key used to persist editor
    * content (and via attachmentState, attachments) across mount/unmount.
@@ -740,7 +740,7 @@ interface ChatInputProps {
    * `lastByVendor.model` 并原样进 createSession,写错就是首条请求路由到一个不存在的模型。
    */
   onUnifiedDraftSelect?: (selection: {
-    vendor: 'cc' | 'codex' | 'pi';
+    vendor: 'cc' | 'codex' | 'pi' | 'kimi';
     providerId: string;
     /** 选中引擎的 **wire model id**。 */
     modelId: string;
@@ -763,10 +763,11 @@ function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' {
   return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi' | 'kimi'): AgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'kimi') return 'kimi-code';
   return null;
 }
 
@@ -1624,7 +1625,7 @@ export function ChatInput({
   // (localStorage,按 agent 分槽、sanitize 恒有种子值)。默认模型/档位偏好已全量本地化,
   // 不再依赖服务端 UserPreferences(登录态失效/离线时模型与档位选择必须照常工作)。
   const localVendorDefaults =
-    getDraft().lastByVendor[vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : 'cc'];
+    getDraft().lastByVendor[vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : vendorKey === 'kimi' ? 'kimi' : 'cc'];
   // session-agent-switch 意图制:意图期内 chip / 选择器显示用户选择的目标
   // (model/effort/provider/fast),props(镜像 DB)仍是旧引擎值——真切换在下一条
   // 消息发送时刻 apply,patched 回流后意图清除、显示交回 props。意图存放在
@@ -1680,7 +1681,7 @@ export function ChatInput({
     uid: string;
     /** 选中时会话落下的 wire model id(≠ 收藏条目里的归一化行 id,见草稿侧同名快照的说明)。 */
     wireModelId: string;
-    engine: 'cc' | 'codex' | 'pi';
+    engine: 'cc' | 'codex' | 'pi' | 'kimi';
     /** 选中时的显式来源 —— 来源也是锚点身份的一部分:同 wire id 同引擎、仅来源不同是两份
      *  配置。别的窗口 / 外部 patch 把会话来源从 A 切到 B 后,缺这一维会让面板继续在 A 的
      *  收藏上打勾,编辑/删除它还会误回落到 A 的默认(2026-08-17 review)。 */
@@ -1713,6 +1714,7 @@ export function ChatInput({
   const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId ?? undefined);
   const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId ?? undefined);
   const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId ?? undefined);
+  const kimiCaps = useAgentCapabilities('kimi-code', deviceLinkDeviceId ?? undefined);
   const activeAgentCapabilities =
     agentKind === 'codex'
       ? codexCaps.capabilities
@@ -1858,6 +1860,7 @@ export function ChatInput({
     cc: ccCaps,
     codex: codexCaps,
     pi: piCaps,
+    kimi: kimiCaps,
     providers: remoteProviders,
   });
   const providersLoading = deviceLinkDeviceId
@@ -6061,7 +6064,7 @@ export function ChatInput({
   );
   const performAgentSwitch = useCallback(
     async (
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code',
       newModelId: string,
       providerId: string | null = null,
       // 意图期内的档位/Fast 改动经此显式覆盖(用户手选优先于记忆/默认解析)。
@@ -6479,7 +6482,7 @@ export function ChatInput({
       /** 选中引擎的 **wire model id** —— 唯一可发送、可当记忆键的那个 id。 */
       modelId: string;
       effort?: Effort;
-      engine: 'cc' | 'codex' | 'pi';
+      engine: 'cc' | 'codex' | 'pi' | 'kimi';
       fast: boolean;
       favoriteUid: string | null;
       /** 行的归一化 id(面板行身份)。草稿层不消费,更不作为发送 id。 */

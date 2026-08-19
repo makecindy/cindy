@@ -102,7 +102,7 @@ function sweepExpiredDrafts(): void {
 
 export interface SharePreview {
   title: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'kimi';
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -460,7 +460,7 @@ export async function commitShareImport(
     if (plan.manifest.agentKind === 'pi') registerPiTargets(plan.bundledTranscripts ?? []);
   }
   const resolveActiveSdkSessionId = (
-    agentKind: 'cc' | 'codex' | 'pi',
+    agentKind: 'cc' | 'codex' | 'pi' | 'kimi',
     portableId: string | null,
   ): string | null =>
     agentKind === 'pi'
@@ -696,7 +696,7 @@ export async function commitShareImport(
 
     // 会话级还原描述:lead + 全部 Worker 走同一套转录/rollout 落位流程。
     const restorePlans: Array<{
-      agentKind: 'cc' | 'codex' | 'pi';
+      agentKind: 'cc' | 'codex' | 'pi' | 'kimi';
       prefix: string;
       title: string;
       bundled: BundledTranscript[];
@@ -818,7 +818,7 @@ export async function commitShareImport(
     const rewriteRules = urlMap.size > 0 ? { urlMap } : {};
     const toDbMessages = (
       rows: BundleMessageRow[],
-      agentKind: 'cc' | 'codex' | 'pi',
+      agentKind: 'cc' | 'codex' | 'pi' | 'kimi',
     ): SessionImportShareMessageRow[] =>
       rows.map((m) => ({
         id: randomUUID(),
@@ -1266,10 +1266,11 @@ const PERMISSION_MODES = new Set([
 ]);
 
 /** draftPrefs 缺省(旧调用方 / 测试)时按 agentKind 兜底的模型。 */
-const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
+const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi' | 'kimi', string> = {
   cc: 'claude-sonnet-4-6',
   codex: 'gpt-5.4',
   pi: 'gpt-5.4',
+  kimi: 'kimi-for-coding',
 };
 
 /**
@@ -1287,7 +1288,7 @@ const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
  */
 function buildSessionRow(params: {
   newId: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'kimi';
   title: string;
   workspaceKind: string;
   orcaRole: 'lead' | 'worker' | null;

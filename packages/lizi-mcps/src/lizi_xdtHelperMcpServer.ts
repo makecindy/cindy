@@ -271,7 +271,7 @@ export interface XdtHelperMcpDeps {
  * 字段惰性创建, 工具 handler 闭包捕获这些值。
  */
 export interface XdtHelperMcpSessionCtx {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   workingDir: string;
   getSessionContext?: () => import('./types.js').LiziMcpSessionContext | undefined;
   sessionId?: string;

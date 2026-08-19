@@ -9,7 +9,7 @@ import type {
 import type { MobileAgentCapabilities } from './agentCapabilities';
 import type { RemoteSession } from './types';
 
-export type MobileSessionAgentKind = 'claude-code' | 'codex' | 'pi';
+export type MobileSessionAgentKind = 'claude-code' | 'codex' | 'pi' | 'kimi-code';
 
 /** 将不可信 device-link payload 收窄为公开 intent；非法值按“无意图”处理。 */
 export function normalizeSessionAgentSwitchIntent(
@@ -21,6 +21,7 @@ export function normalizeSessionAgentSwitchIntent(
     item.targetAgentKind !== 'claude-code'
     && item.targetAgentKind !== 'codex'
     && item.targetAgentKind !== 'pi'
+    && item.targetAgentKind !== 'kimi-code'
   ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失(undefined)按 null 处理,与桌面 projectPendingAgentSwitchIntent 的
@@ -58,13 +59,13 @@ export function supportsMobileSessionAgentSwitch(
 }
 
 export function mobileAgentLabel(agentKind: MobileSessionAgentKind): string {
-  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
+  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : agentKind === 'kimi-code' ? 'Kimi Code' : 'Claude Code';
 }
 
 export function mobileAgentLabelFromUnknown(agentKind: unknown): string {
-  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
+  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : agentKind === 'kimi-code' ? 'Kimi Code' : 'Claude Code';
 }
 
-export function mobileAgentVendor(agentKind: MobileSessionAgentKind): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'claude-code' ? 'cc' : agentKind;
+export function mobileAgentVendor(agentKind: MobileSessionAgentKind): 'cc' | 'codex' | 'pi' | 'kimi' {
+  return agentKind === 'claude-code' ? 'cc' : agentKind === 'kimi-code' ? 'kimi' : agentKind;
 }

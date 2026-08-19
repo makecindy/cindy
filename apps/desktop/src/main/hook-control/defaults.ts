@@ -37,24 +37,24 @@ import type { Effort } from '@cindy/maker-core';
 /** 依赖注入面: IM 默认值 + 各 agent 当前可用模型清单。 */
 export interface HookDefaultsDeps {
   readDefaults: () => {
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
     agents: Record<
-      'claude-code' | 'codex' | 'pi',
+      'claude-code' | 'codex' | 'pi' | 'kimi-code',
       { providerId: string | null; model: string; effort: string }
     >;
   };
-  getModels: (agentKind: 'claude-code' | 'codex' | 'pi') => Array<{
+  getModels: (agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code') => Array<{
     id: string;
     efforts: readonly string[];
     defaultEffort: string | null;
   }>;
   /** 该 agent 支持的权限档 id 清单(capabilities.permissionModes)。 */
-  getPermissionModes: (agentKind: 'claude-code' | 'codex' | 'pi') => readonly string[];
+  getPermissionModes: (agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code') => readonly string[];
   log: { warn(msg: string): void };
 }
 
 export interface ResolvedHookSessionConfig {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model: string;
   effort: Effort | undefined;
   permissionMode: string;
@@ -66,6 +66,11 @@ export interface ResolvedHookSessionConfig {
   providerId: string | null;
 }
 
+// Hook 派发的 agent 准入白名单:不含 kimi-code——其 runtime 尚未注册(Phase 2),
+// 接受会撞 requireAgent 抛错,中断无人值守任务;UI 入口已隐藏,存量 / 外部下发的
+// kimi-code override 在此静默回退全局默认(安全降级)。Phase 2 注册后恢复并同步
+// renderer 侧 hookWorkspacePrefsLogic 的 KnownAgent(该处保留 kimi-code 仅用于
+// 渲染存量配置,不开放新选)。
 const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
 
 /**
@@ -83,11 +88,15 @@ export function resolveHookSessionConfig(
 ): ResolvedHookSessionConfig {
   const defaults = deps.readDefaults();
 
-  // 1. agent: 显式合法值 > 草稿默认
+  // 1. agent: 显式合法值 > 草稿默认(草稿默认同样需过准入白名单——IM 全局默认
+  // 可能已被持久化为尚未注册的 kimi-code,未经校验采用会撞 requireAgent 中断派发;
+  // 回退系统默认并留日志,而不是静默换掉连个说法都没有)。
   const agentKind: 'claude-code' | 'codex' | 'pi' =
     overrides.agentKind !== null && AGENT_KINDS.has(overrides.agentKind)
       ? (overrides.agentKind as 'claude-code' | 'codex' | 'pi')
-      : defaults.agentKind;
+      : AGENT_KINDS.has(defaults.agentKind)
+        ? (defaults.agentKind as 'claude-code' | 'codex' | 'pi')
+        : 'claude-code'; // 系统出厂默认(IM_DEFAULT_SETTINGS.agentKind),避免跨层 import
 
   const models = deps.getModels(agentKind);
   const findModel = (id: string) => models.find((m) => m.id === id);

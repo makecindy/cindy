@@ -22,7 +22,7 @@ export interface SendToWorkerDeps {
   }) => Promise<
     ControlResult<
       {
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
         wakeKind: 'resumed' | 'already-active' | 'queued';
         targetTitle: string | null;
         targetLastUserSendAt: string | null;

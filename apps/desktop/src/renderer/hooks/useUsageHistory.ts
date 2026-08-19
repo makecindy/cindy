@@ -31,7 +31,7 @@ import {
 } from '../../shared/regionalMoney';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -44,7 +44,7 @@ export interface UsageHistoryModel {
 /** 每日 × 模型明细 — 右栏堆叠柱状图分段。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;

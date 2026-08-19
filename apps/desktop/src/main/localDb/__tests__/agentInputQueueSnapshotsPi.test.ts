@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { isRestorableQueuedMessage } from '../agentInputQueueSnapshots.js';
 
-function queued(agentKind: 'claude-code' | 'codex' | 'pi') {
+function queued(agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code') {
   return {
     clientId: 'client-1',
     text: 'continue',

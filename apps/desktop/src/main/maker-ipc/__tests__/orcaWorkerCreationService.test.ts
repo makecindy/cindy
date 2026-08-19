@@ -22,7 +22,7 @@ const WORKER_SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
 describe('buildNoProviderMessage (pi first-class)', () => {
   const snap = (name: string): OrcaWorkerProviderSnapshot => ({ name }) as OrcaWorkerProviderSnapshot;
   it('names Pi (not Claude Code) when pi has no connected provider', () => {
-    const msg = buildNoProviderMessage('pi', { 'claude-code': [], codex: [], pi: [] });
+    const msg = buildNoProviderMessage('pi', { 'claude-code': [], codex: [], pi: [], 'kimi-code': [] });
     expect(msg).toContain('Pi 当前没有可用的模型供应商');
     expect(msg).not.toContain('Claude Code 当前没有');
   });
@@ -31,6 +31,7 @@ describe('buildNoProviderMessage (pi first-class)', () => {
       'claude-code': [],
       codex: [],
       pi: [snap('Cindy AI')],
+      'kimi-code': [],
     });
     expect(msg).toContain('Pi(已连接:Cindy AI)');
   });
@@ -59,6 +60,7 @@ function providerRoutingContext(
     'claude-code': partial['claude-code'] ?? [],
     codex: partial.codex ?? [],
     pi: partial.pi ?? [],
+    'kimi-code': partial['kimi-code'] ?? [],
   };
   return {
     availability,
@@ -1604,6 +1606,7 @@ describe('OrcaWorkerCreationService', () => {
         { id: 'xd', name: 'XD Gateway', models: ['gpt-5.4'] },
       ],
       pi: [],
+      'kimi-code': [],
     } satisfies Record<AgentKind, OrcaWorkerProviderSnapshot[]>;
     const { deps, service } = createDeps({
       getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.5', providerId: 'custom-codex' })),
@@ -1912,6 +1915,7 @@ describe('buildNoProviderMessage', () => {
       'claude-code': [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
       pi: [],
       codex: [],
+      'kimi-code': [],
     });
     expect(msg).toContain('Codex 当前没有可用的模型供应商');
     expect(msg).toContain('改用');
@@ -1919,7 +1923,7 @@ describe('buildNoProviderMessage', () => {
   });
 
   it('omits the agent suggestion when no agent has a connected provider', () => {
-    const msg = buildNoProviderMessage('claude-code', { 'claude-code': [], codex: [], pi: [] });
+    const msg = buildNoProviderMessage('claude-code', { 'claude-code': [], codex: [], pi: [], 'kimi-code': [] });
     expect(msg).toContain('Claude Code 当前没有可用的模型供应商');
     expect(msg).toContain('设置 → 模型供应商');
     expect(msg).not.toContain('改用');

@@ -20,11 +20,11 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useAvailableAgents');
 
-type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi';
+type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi' | 'kimi-code';
 
 /** runtime agent id → NewMaker vendor(其余保持同名)。 */
 function toVendor(agent: RuntimeAgentKind): MakerVendor {
-  return agent === 'claude-code' ? 'cc' : agent;
+  return agent === 'claude-code' ? 'cc' : agent === 'kimi-code' ? 'kimi' : agent;
 }
 
 interface MakerApiShape {

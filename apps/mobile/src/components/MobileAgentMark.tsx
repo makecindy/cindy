@@ -14,7 +14,7 @@ import {
 } from './vendorIconPaths';
 
 export interface MobileAgentMarkProps {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   color: string;
   size?: number;
 }

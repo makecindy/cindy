@@ -54,7 +54,7 @@ export interface RemoteSession {
   activeTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'kimi';
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
   agentSwitchIntent?: MobileSessionAgentSwitchIntent | null;
   source?: string;
@@ -174,7 +174,7 @@ export interface QueuedRemoteMessage {
   sessionReferencesRequireTrustedSnapshot?: boolean;
   userName?: string;
   createOpts: {
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
     workingDir: string;
     model: string;
     effort?: string;

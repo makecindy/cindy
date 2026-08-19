@@ -395,8 +395,8 @@ function draftEnableOrcaOptions(
   providersReady: boolean,
   deferDelegateTask = false,
 ) {
-  const preferredAgent: 'claude-code' | 'codex' | 'pi' =
-    collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
+  const preferredAgent: 'claude-code' | 'codex' | 'pi' | 'kimi-code' =
+    collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : collab.worker === 'kimi' ? 'kimi-code' : 'claude-code';
   // Worker 类型也是**设备作用域**的(codex review P2):在只连了 Codex 的设备 A 选了 Codex
   // Worker,切到只连 Claude 的设备 B 时,workerConfig 虽然被清了,collab.worker 仍是 codex,
   // 透传过去必撞被控端的 NO_PROVIDER_FOR_AGENT 预检,协同又静默降级成单会话。
@@ -404,9 +404,13 @@ function draftEnableOrcaOptions(
   // 没有已连接供应商、而另一个有,就改用另一个;两个都没有则原样透传,由 main 的精确
   // preflight 报可操作错误(不在这里编一个同样跑不起来的值)。
   // 仅在目录就绪时收窄,理由同下方 providerId:未就绪的空快照会误判成"都没有"。
-  const workerAgent: 'claude-code' | 'codex' | 'pi' = (() => {
+  const workerAgent: 'claude-code' | 'codex' | 'pi' | 'kimi-code' = (() => {
     if (!providersReady) return preferredAgent;
     if (connectedProvidersForAgent(providers, preferredAgent).length > 0) return preferredAgent;
+    // 显式选择的 kimi-code 不做跨 agent 收窄:Phase 1 没有任何供应商声明支持它,
+    // 恒为空是预期状态——静默换成其他 agent 会把任务发给用户未选择的引擎并绕过
+    // Kimi 的 NO_PROVIDER_FOR_AGENT preflight(与 MCP create_worker 路径同口径)。
+    if (preferredAgent === 'kimi-code') return preferredAgent;
     const fallback = (['claude-code', 'codex', 'pi'] as const).find(
       (agent) =>
         agent !== preferredAgent && connectedProvidersForAgent(providers, agent).length > 0,
@@ -702,8 +706,8 @@ export function NewMakerDraftRoute() {
     vendor: MakerVendor;
   } | null>(null);
   const selectedFavoriteUid = selectedFavoriteAnchor?.uid ?? null;
-  const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
-  const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
+  const persistedAgentKind: 'cc' | 'codex' | 'pi' | 'kimi' = normalizeDbAgentKind(draft.vendor);
+  const authVendor: 'cc' | 'codex' | 'pi' | 'kimi' = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
 
   // 品牌区跟随当前主题；icon / logo 的固定布局统一由 ThemeBrandLockup 负责。
@@ -855,7 +859,7 @@ export function NewMakerDraftRoute() {
   );
   const hiddenSwitcherVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
-    return (['cc', 'codex', 'pi'] as const).filter((vendor) => !availableVendors.has(vendor));
+    return (['cc', 'codex', 'pi', 'kimi'] as const).filter((vendor) => !availableVendors.has(vendor));
   }, [availableAgentsLoaded, availableVendors]);
   /**
    * 「这份草稿要建到对端设备上」—— 只看 deviceId,**不再要求 workingDir**(#807)。
@@ -2218,7 +2222,7 @@ export function NewMakerDraftRoute() {
   const handleRemoteProjectAdded = useCallback(
     async (target: RemoteProjectTarget) => {
       // vendor 由外层 VendorSegmentedSwitcher (draft.vendor) 单一决策 —— dialog 不再让用户选。
-      const draftVendor: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
+      const draftVendor: 'cc' | 'codex' | 'pi' | 'kimi' = normalizeDbAgentKind(draft.vendor);
 
       if (target.kind === 'device-link') {
         // device-link:**不**像 SSH 立即建会话(会在被控端留空会话)。改为把当前草稿指向该被控
@@ -3653,7 +3657,7 @@ export function NewMakerDraftRoute() {
           // agent 启动时看到的工作区已是迁移后的状态。fail-soft：检测错误只 warn，不阻塞 send。
           try {
             const wd = effectiveWorkingDir;
-            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
+            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi' && persistedAgentKind !== 'kimi') {
               const r = await crossAgentConvertService.detect(
                 wd,
                 persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
@@ -3732,7 +3736,7 @@ export function NewMakerDraftRoute() {
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
             makerChatStore.setSessionRuntime(newSession.id, {
-              agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
+              agentKind: dbToMakerAgentKind(persistedAgentKind),
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
             });
@@ -3872,7 +3876,7 @@ export function NewMakerDraftRoute() {
                 }
 
                 const dispatchedMessage = await rewritePiSkillMessageForSend({
-                  agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
+                  agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind === 'kimi' ? 'kimi-code' : persistedAgentKind,
                   message,
                   workingDir: newDir,
                   sessionId: newSession.id,
@@ -5220,7 +5224,7 @@ export function NewMakerDraftRoute() {
           onCreate={(form: CreateWorkerForm) => {
             patchCollab({
               enabled: true,
-              worker: form.agent === 'codex' ? 'codex' : form.agent === 'pi' ? 'pi' : 'cc',
+              worker: form.agent === 'codex' ? 'codex' : form.agent === 'pi' ? 'pi' : form.agent === 'kimi-code' ? 'kimi' : 'cc',
               workerConfig: {
                 role: form.role,
                 model: form.model,

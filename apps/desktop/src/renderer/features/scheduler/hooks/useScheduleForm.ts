@@ -85,6 +85,7 @@ function defaultScheduleFormPrefs(): ScheduleFormPrefs {
       'claude-code': EMPTY_AGENT_PREFS,
       codex: EMPTY_AGENT_PREFS,
       pi: EMPTY_AGENT_PREFS,
+      'kimi-code': EMPTY_AGENT_PREFS,
     },
   };
 }
@@ -95,7 +96,7 @@ function loadScheduleFormPrefs(): ScheduleFormPrefs {
     const raw = window.localStorage.getItem(SCHEDULE_FORM_PREFS_KEY);
     if (!raw) return defaultScheduleFormPrefs();
     const parsed = JSON.parse(raw) as Partial<ScheduleFormPrefs>;
-    const agentKind = parsed.agentKind === 'codex' ? 'codex' : parsed.agentKind === 'pi' ? 'pi' : 'claude-code';
+    const agentKind = parsed.agentKind === 'codex' ? 'codex' : parsed.agentKind === 'pi' ? 'pi' : parsed.agentKind === 'kimi-code' ? 'kimi-code' : 'claude-code';
     const workingDir = typeof parsed.workingDir === 'string' ? parsed.workingDir : '';
     const workspaceKind = normalizePrefsWorkspaceKind(parsed.workspaceKind, workingDir);
     return {
@@ -107,6 +108,7 @@ function loadScheduleFormPrefs(): ScheduleFormPrefs {
         'claude-code': sanitizeAgentPrefs(parsed.lastByAgent?.['claude-code']),
         codex: sanitizeAgentPrefs(parsed.lastByAgent?.codex),
         pi: sanitizeAgentPrefs(parsed.lastByAgent?.pi),
+        'kimi-code': sanitizeAgentPrefs(parsed.lastByAgent?.['kimi-code']),
       },
     };
   } catch {
@@ -168,7 +170,7 @@ export function schedulerFallbackModel(agentKind: ScheduleFormState['agentKind']
 export function getScheduleDefaultModel(agentKind: ScheduleFormState['agentKind']): string {
   const prefs = getScheduleAgentPrefs(agentKind);
   if (prefs.model.trim()) return prefs.model;
-  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc');
+  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : agentKind === 'kimi-code' ? 'kimi' : 'cc');
   if (chatLast.trim()) return chatLast;
   return schedulerFallbackModel(agentKind);
 }

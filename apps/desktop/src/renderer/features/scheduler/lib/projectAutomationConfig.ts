@@ -14,7 +14,7 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
-  agentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind?: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model?: string;
   /** 显式来源(供应商)id;省略 = 使用该 Agent 的原生默认来源。 */
   providerId?: string;

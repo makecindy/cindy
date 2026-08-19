@@ -217,7 +217,7 @@ function chipGhost(
   };
 }
 
-type TestAgentKind = 'claude-code' | 'codex' | 'pi';
+type TestAgentKind = 'claude-code' | 'codex' | 'pi' | 'kimi-code';
 
 function makeDeps(
   agentKind: TestAgentKind = 'claude-code',

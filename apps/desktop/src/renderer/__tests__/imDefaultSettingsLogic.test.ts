@@ -51,6 +51,7 @@ describe('im default settings logic', () => {
         effort: 'high',
       },
       pi: IM_DEFAULT_SETTINGS.agents.pi,
+      'kimi-code': IM_DEFAULT_SETTINGS.agents['kimi-code'],
     });
   });
 });

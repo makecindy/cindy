@@ -73,7 +73,7 @@ function registryEffortMetadata(
   modelId: string,
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  if (agent === 'pi' || !registry) return undefined;
+  if (agent === 'pi' || agent === 'kimi-code' || !registry) return undefined;
 
   const candidates = new Set([modelId]);
   if (modelId.startsWith('chatgpt/')) {

@@ -77,7 +77,7 @@ export interface UsageHistoryDay {
 }
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -92,7 +92,7 @@ export interface UsageHistoryModel {
 /** 每日 × 模型的一行明细 — 右栏堆叠柱状图的分段数据。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -369,7 +369,7 @@ export function piSubscriptionUsageModelKey(model: string): string {
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 function getSubscriptionValuePriceFor(
-  agentKind: 'claude-code' | 'codex' | 'pi',
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code',
   model: string,
   pricing: ModelPricingMap | null,
   at?: string | Date,
@@ -606,7 +606,7 @@ export async function readUsageHistoryWith(
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
     isSubscriptionUsageModel(r.model) &&
     !getSubscriptionValuePriceFor(
-      r.agentKind === 'codex' ? 'codex' : r.agentKind === 'pi' ? 'pi' : 'claude-code',
+      r.agentKind === 'codex' ? 'codex' : r.agentKind === 'pi' ? 'pi' : r.agentKind === 'kimi-code' ? 'kimi-code' : 'claude-code',
       displayModelName(r.model),
       pricing,
       r.day,
@@ -627,7 +627,7 @@ export async function readUsageHistoryWith(
     if (row.day === todayKey) todayTokens += rowTokens;
   }
   for (const row of modelRows) {
-    const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+    const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : row.agentKind === 'kimi-code' ? 'kimi-code' : 'claude-code';
     // claude 订阅行同样带 #billing= 后缀, 展示名统一剥后缀; key 保留原始 model
     // (api / subscription 两个计费维度分行聚合)。
     const model = displayModelName(row.model);

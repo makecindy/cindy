@@ -351,6 +351,7 @@ function selectWorkerModel(params: {
     ?? (input.agent === lead.agentKind ? lead.model
         : input.agent === 'codex' ? 'gpt-5.5'
         : input.agent === 'pi' ? 'claude-sonnet-4-6'
+        : input.agent === 'kimi-code' ? 'kimi-for-coding'
         : 'claude-sonnet-4-6');
 }
 
@@ -521,7 +522,7 @@ export function budgetModelRequiresApiKeyMessage(model: string): string {
 
 /** agent 的人类可读名,用于 preflight 失败信息。 */
 function agentDisplayName(agent: AgentKind): string {
-  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code';
+  return agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : agent === 'kimi-code' ? 'Kimi Code' : 'Claude Code';
 }
 
 /**
@@ -543,7 +544,7 @@ export function buildNoProviderMessage(
   availability: Record<AgentKind, OrcaWorkerProviderSnapshot[]>,
 ): string {
   const base = `${agentDisplayName(agent)} 当前没有可用的模型供应商(provider)。请在「设置 → 模型供应商」连接一个支持 ${agentDisplayName(agent)} 的供应商后重试`;
-  const others = (['claude-code', 'codex', 'pi'] as AgentKind[]).filter(
+  const others = (['claude-code', 'codex', 'pi', 'kimi-code'] as AgentKind[]).filter(
     (a) => a !== agent && (availability[a]?.length ?? 0) > 0,
   );
   if (others.length === 0) return `${base}。`;
@@ -626,6 +627,19 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         limit: limitSnapshot(settings.workerHardLimit, activeCount),
       };
     }
+    const providerRouting = await deps.getProviderRoutingContext();
+    const providerAvailability = providerRouting.availability;
+    const agentProviders = providerAvailability[params.agent] ?? [];
+    // 无 provider 的快速失败必须先于 capabilities 读取:未注册的 agent(如运行时尚未
+    // 接入的 kimi-code)在 getAvailableModels 里会撞 requireAgent 抛错,先把更可操作的
+    // NO_PROVIDER_FOR_AGENT 返回给调用方(review 四轮 P1)。
+    if (agentProviders.length === 0) {
+      return {
+        ok: false,
+        errorCode: 'NO_PROVIDER_FOR_AGENT',
+        message: buildNoProviderMessage(params.agent, providerAvailability),
+      };
+    }
     const availableModels = deps.getAvailableModels(params.agent);
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
     // 提供该模型」;空串/null/undefined 一律按未显式处理(与 IPC 边界同口径,service 作为
@@ -634,9 +648,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       typeof params.providerId === 'string' && params.providerId.trim().length > 0
         ? params.providerId.trim()
         : null;
-    const providerRouting = await deps.getProviderRoutingContext();
-    const providerAvailability = providerRouting.availability;
-    const agentProviders = providerAvailability[params.agent] ?? [];
     const explicitModelResolution = params.model !== undefined
       ? resolveWorkerModelId({
           agent: params.agent,
@@ -662,15 +673,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         ok: false,
         errorCode: 'INVALID_PARAMS',
         message: `model "${explicitModelResolution.model}" not available for ${params.agent}. valid: ${validModels.join(', ')}`,
-      };
-    }
-
-    // 先保留无 provider 的快速失败；精确的 provider + model 校验要等 Lead/defaults 解析完成。
-    if (agentProviders.length === 0) {
-      return {
-        ok: false,
-        errorCode: 'NO_PROVIDER_FOR_AGENT',
-        message: buildNoProviderMessage(params.agent, providerAvailability),
       };
     }
 

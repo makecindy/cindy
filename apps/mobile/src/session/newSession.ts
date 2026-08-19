@@ -12,7 +12,7 @@ import { effectiveSourceIdForModel } from '@cindy/model-providers/registry';
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
-export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi';
+export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi' | 'kimi-code';
 export type NewSessionWorkspaceKind = 'project' | 'dialogue';
 
 export const NEW_SESSION_AGENT_OPTIONS: readonly { kind: NewSessionAgentKind; label: string }[] = [
@@ -154,6 +154,7 @@ const DEFAULT_MODELS: Record<NewSessionAgentKind, string> = {
   'claude-code': 'claude-sonnet-4-6',
   codex: 'gpt-5.4',
   pi: 'gpt-5.4',
+  'kimi-code': 'kimi-for-coding',
 };
 
 /** 新建交互式会话的权限种子默认；三个 agent 都保留 Auto-review。 */
@@ -325,7 +326,7 @@ type NewSessionDefaultModel = {
   id: string;
   efforts: readonly string[];
   defaultEffort: string | null;
-  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: readonly ('claude-code' | 'codex' | 'pi' | 'kimi-code')[];
 };
 
 function isNewSessionDefaultForAgent(
@@ -624,7 +625,9 @@ export function pickMostRecentSessionRuntime(
     if (options.deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== options.deviceId) continue;
     const agentKind: NewSessionAgentKind = session.agentKind === 'codex' || session.agentKind === 'pi'
       ? session.agentKind
-      : 'claude-code';
+      : session.agentKind === 'kimi'
+        ? 'kimi-code'
+        : 'claude-code';
     if (options.agentKind && agentKind !== options.agentKind) continue;
     const activityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
     if (!best || activityAt.localeCompare(best.activityAt) > 0) {
@@ -891,7 +894,7 @@ export function sessionFromCreateResult(
     permissionMode: fallback.permissionMode,
     fastMode: fallback.fastMode,
     status: 'active',
-    agentKind: fallback.agentKind === 'claude-code' ? 'cc' : fallback.agentKind,
+    agentKind: fallback.agentKind === 'claude-code' ? 'cc' : fallback.agentKind === 'kimi-code' ? 'kimi' : fallback.agentKind,
     userSendAt: iso,
     createdAt: iso,
     updatedAt: iso,

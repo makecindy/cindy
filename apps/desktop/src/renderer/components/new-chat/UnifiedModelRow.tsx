@@ -40,6 +40,7 @@ const ENGINE_BADGE_TINT: Record<UnifiedEngine, string> = {
   cc: 'var(--engine-badge-cc)',
   codex: 'var(--engine-badge-codex)',
   pi: 'var(--engine-badge-pi)',
+  kimi: 'var(--engine-badge-kimi)',
 };
 
 /**

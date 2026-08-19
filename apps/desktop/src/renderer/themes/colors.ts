@@ -1111,6 +1111,10 @@ registerColor('engine-badge-pi', {
   light: '#a78bfa',
   dark: '#a78bfa',
 }, 'Pi 引擎徽标色 — 自选紫,上游无官方品牌色(light/dark 同值)');
+registerColor('engine-badge-kimi', {
+  light: '#38bdf8',
+  dark: '#38bdf8',
+}, 'Kimi Code 引擎徽标色 — 占位青蓝(与 cc 橙 / codex 蓝 / pi 紫区分),上游无官方品牌色规范,待设计裁决(light/dark 同值)');
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',

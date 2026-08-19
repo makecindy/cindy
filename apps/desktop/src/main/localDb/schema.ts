@@ -417,7 +417,7 @@ export const subagentRuns = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi', 'kimi-code'] }).notNull(),
     logicalAgentId: text('logical_agent_id').notNull(),
     parentToolUseId: text('parent_tool_use_id'),
     /** JSON string[] containing task/tool aliases observed for this logical child. */
@@ -482,7 +482,7 @@ export const subagentRunAliases = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi', 'kimi-code'] }).notNull(),
     alias: text('alias').notNull(),
     runId: text('run_id')
       .notNull()
@@ -831,7 +831,7 @@ export const schedules = sqliteTable(
      * 引擎 fireOne 优先用 intervalMs 算 nextFireAt；旧 cron 数据 0015 migration 自动回填。
      */
     intervalMs: integer('interval_ms'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'kimi-code'] }).notNull(),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,
@@ -950,7 +950,7 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'kimi-code'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1215,7 +1215,7 @@ export const dailyModelUsage = sqliteTable(
   {
     /** 本地时区 YYYY-MM-DD 字符串 (localDayKey)。 */
     day: text('day').notNull(),
-    /** 'claude-code' | 'codex' | 'pi' — 网关模型 id 可能跨 agent 撞名, 需区分。 */
+    /** 'claude-code' | 'codex' | 'pi' | 'kimi-code' — 网关模型 id 可能跨 agent 撞名, 需区分。 */
     agentKind: text('agent_kind').notNull(),
     /** SDK 模型 id; 拿不到时兜底 'unknown'。 */
     model: text('model').notNull(),
@@ -1248,7 +1248,7 @@ export const skillUsageSources = sqliteTable(
     rawFilePath: text('raw_file_path').primaryKey(),
     /** 当前源文件最后一次用哪个解析器版本扫描。用于 analyzer 升级时渐进重建。 */
     analyzerVersion: text('analyzer_version').notNull().default('6'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'kimi-code'] }).notNull(),
     sessionId: text('session_id').notNull(),
     sdkSessionId: text('sdk_session_id').notNull(),
     mtimeMs: integer('mtime_ms').notNull().default(0),
@@ -1278,7 +1278,7 @@ export const skillUsageExposures = sqliteTable(
     rawLineNo: integer('raw_line_no').notNull(),
     sessionId: text('session_id').notNull(),
     sdkSessionId: text('sdk_session_id').notNull(),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'kimi-code'] }).notNull(),
     skillName: text('skill_name').notNull(),
     skillPath: text('skill_path'),
     /** 规范 SKILL.md 文档 hash；拿不到规范文档时为 NULL，不参与版本聚合。 */

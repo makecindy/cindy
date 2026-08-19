@@ -241,7 +241,7 @@ interface BundleOverrides {
   /** 覆盖 session.json snapshot 字段(导出方会话配置不进导入行的语义测试)。 */
   session?: Record<string, unknown>;
   omitTranscript?: boolean;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'kimi';
   /** 伪造 media-map 里 image entry 的 filename 字段(路径穿越攻击面测试)。 */
   imageFilenameOverride?: string;
   /** 额外加一条不同 old host 的图片 URL(fork 祖先链多 host 测试)。 */

@@ -24,20 +24,20 @@ export type Readiness = 'ready' | 'unauthenticated' | 'binary-missing' | 'loadin
  * 两种不同的恢复路径，不能把 Pi 的缺包状态伪装成未授权。
  */
 export function readinessFromBinaryStatus(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'kimi',
   binaryReady: boolean,
 ): Readiness | null {
   return vendorKey !== 'cc' && !binaryReady ? 'binary-missing' : null;
 }
 
-export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
+export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi' | 'kimi'): {
   readiness: Readiness;
   revalidate: (opts?: { includeSuspended?: boolean }) => Promise<Readiness>;
 } {
   const [readiness, setReadiness] = useState<Readiness>('loading');
 
   const revalidate = useCallback(async (opts?: { includeSuspended?: boolean }): Promise<Readiness> => {
-    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex';
+    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : vendorKey === 'kimi' ? 'kimi-code' : 'codex';
 
     // 轴 2(codex / pi,正交于来源):本地二进制是运行时前提,缺了连发都发不了 → 优先返回
     // binary-missing。binary 状态走 maker:agent:status(其 authReady 是 codex OAuth 专属,已被

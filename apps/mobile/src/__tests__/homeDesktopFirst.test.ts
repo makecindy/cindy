@@ -163,7 +163,7 @@ describe('mobile home desktop-first surface', () => {
     expect(desktopVendorIconSource).toContain("vendor === 'codex' ? (");
     expect(desktopVendorIconSource).toContain('<CodexMark size={size} />');
     expect(desktopVendorIconSource).toContain('<ClaudeMark size={size} />');
-    expect(desktopVendorIconSource).toContain("export type VendorIconKind = 'cc' | 'codex' | 'pi'");
+    expect(desktopVendorIconSource).toContain("export type VendorIconKind = 'cc' | 'codex' | 'pi' | 'kimi'");
     expect(desktopVendorIconSource).toContain('vendor: VendorIconKind;');
     expect(desktopVendorIconSource).toContain('session-status-breathing');
     expect(vendorIconSource).not.toContain('XD_SYMBOL_PATHS');

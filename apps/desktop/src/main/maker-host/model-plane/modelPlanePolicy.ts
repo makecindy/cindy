@@ -113,6 +113,9 @@ export function isRegistryTombstoneForConsumer(
   if (agent === 'pi') {
     return piRegistryMatch(registry, providerId, modelId)?.entry.status === 'retired';
   }
+  // Kimi Code 的模型与供应商由 Kimi CLI 侧自管(~/.kimi-code),不消费 Cindy
+  // registry 目录, tombstone 判定对其无意义。
+  if (agent === 'kimi-code') return false;
   const registryAgent =
     policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent) ? agent : null;
   if (!registryAgent) return false;

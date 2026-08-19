@@ -23,7 +23,7 @@ import {
 } from '../active-catalog.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
-function xdModels(agent: 'claude-code' | 'codex' | 'pi') {
+function xdModels(agent: 'claude-code' | 'codex' | 'pi' | 'kimi-code') {
   const xd = getActiveCatalog().providers.find((p) => p.id === 'xd');
   return xd?.models[agent] ?? [];
 }

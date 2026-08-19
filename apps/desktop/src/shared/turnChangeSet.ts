@@ -2,7 +2,7 @@ import type { DiffChangeKind, FileDiff } from './gitReviewWire';
 
 export const TURN_CHANGE_SET_MAX_DIFF_BYTES = 12 * 1024 * 1024;
 
-export type TurnChangeProvider = 'codex' | 'claude-code' | 'pi';
+export type TurnChangeProvider = 'codex' | 'claude-code' | 'pi' | 'kimi-code';
 export type TurnChangeSetState = 'complete' | 'partial';
 export type TurnChangeWorkspaceState = 'applied' | 'undone';
 export type TurnChangeAction = 'undo' | 'reapply';

@@ -638,7 +638,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const codexRef = codexModels;
     const piRef = piModels;
     const target = {
-      getCapabilities(agent: 'claude-code' | 'codex' | 'pi') {
+      getCapabilities(agent: 'claude-code' | 'codex' | 'pi' | 'kimi-code') {
         if (agent === 'pi') return { availableModels: piModels };
         return { availableModels: agent === 'claude-code' ? claudeModels : codexModels };
       },

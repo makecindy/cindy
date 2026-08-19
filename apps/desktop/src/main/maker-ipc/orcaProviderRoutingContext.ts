@@ -52,7 +52,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
             modelRegistry,
             provider.id,
             model.id,
-            agent === 'pi' ? undefined : agent,
+            agent === 'pi' || agent === 'kimi-code' ? undefined : agent,
           );
           return matched ? [[model.id, matched.entry.id]] : [];
         }),
@@ -82,6 +82,7 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
       'claude-code': availabilityFor('claude-code'),
       codex: availabilityFor('codex'),
       pi: availabilityFor('pi'),
+      'kimi-code': availabilityFor('kimi-code'),
     },
     resolveDefaultProviderIdForModel: (agent, model) =>
       effectiveSourceIdForModel(views, null, model, agent),

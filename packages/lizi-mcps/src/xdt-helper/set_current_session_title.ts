@@ -16,7 +16,7 @@ export type SetCurrentSessionTitleResult = ControlResult<
 export interface SetCurrentSessionTitleDeps {
   getSessionContext: () => {
     sessionId?: string;
-    agentKind: 'claude-code' | 'codex' | 'pi';
+    agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code';
     workingDir: string;
   };
   setCurrentSessionTitle(params: {
