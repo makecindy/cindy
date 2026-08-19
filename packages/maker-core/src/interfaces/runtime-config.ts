@@ -10,9 +10,11 @@
 import type { SubagentModelDiagnostic } from '../agents/claude-code/subagent-model-default.js';
 import type { AgentCredentialMode } from './auth-adapter.js';
 
-/** 函数形态 behaviorFlags 的入参:本次 spawn 的凭证形态(undefined = 未显式指定,走 adapter fallback)。 */
+/** 函数形态 behaviorFlags 的入参:本次 spawn 的凭证形态、来源与执行位置。 */
 export interface BehaviorFlagsContext {
   credentialMode?: AgentCredentialMode;
+  /** 本次 spawn 的会话来源。null/undefined = 隐式默认路由。 */
+  sessionProviderId?: string | null;
   /**
    * 本次 spawn 落在哪台机器:'local' = 本机子进程,'remote' = 远端 daemon。
    * host 据此决定"只对本机有意义"的 flag(如按本机核数算的工具链限核 env)
@@ -47,12 +49,13 @@ export interface AgentRuntimeConfig {
 
   /**
    * 业务行为 flag。Agent 内部决定哪些 key 有意义。
-   * Claude 当前用到：CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS
+   * Claude 当前用到：CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS、
+   * CLAUDE_CODE_ATTRIBUTION_HEADER、ENABLE_TOOL_SEARCH
    *
-   * 函数形态:flag 需要按本次 spawn 的凭证形态分叉时用(env-builder 在组装 env 时
-   * 以 spawn 的 credentialMode 调用)。典型:CLAUDE_CODE_ATTRIBUTION_HEADER 只对
-   * gateway-key spawn 禁用——oauth 侧禁用会让订阅直连的 Auto 分类器子请求被上游
-   * 429(desktop issue #758)。静态对象形态语义不变。
+   * 函数形态:flag 需要按本次 spawn 的凭证形态或来源分叉时用(env-builder 在组装 env
+   * 时传入 route context)。典型:CLAUDE_CODE_ATTRIBUTION_HEADER 只对 gateway-key
+   * spawn 禁用(issue #758);ENABLE_TOOL_SEARCH 只对确认兼容 deferred tools 的来源
+   * 开启(issue #2929)。静态对象形态语义不变。
    */
   behaviorFlags?: Record<string, string> | ((ctx: BehaviorFlagsContext) => Record<string, string>);
 

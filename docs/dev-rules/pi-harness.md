@@ -199,13 +199,13 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
 
 > 续做指南(每项怎么接着做 + file:line 锚点 + 坑)见 `docs/dev-rules/pi-remaining-work.md`。
 
-- ✅ **HTML 导出**(已交付):`export_html` RPC 全链路,会话头部菜单「导出为 HTML」,
-  仅当前打开的本地 pi 会话可见。见 `Capabilities.sessionHtmlExport` /
+- ✅ **HTML 导出**(已交付):`export_html` RPC 全链路仍在。会话头部 overflow 菜单入口暂隐
+  (Pi 专属项先不进 `···`)。见 `Capabilities.sessionHtmlExport` /
   `Session.exportSessionHtml` / `MAKER_INVOKE.EXPORT_SESSION_HTML`。
-- ✅ **手动压缩**(已交付):`compact` RPC 全链路,会话头部菜单「压缩上下文」,gate 同
-  HTML 导出、回合运行中禁用。良性「nothing to compact / too small」→ `noop`(不报失败)。
+- ✅ **手动压缩**(已交付):`compact` RPC 全链路仍在。头部 overflow 菜单入口暂隐;对话区
+  context ring 仍可点按压缩。良性「nothing to compact / too small」→ `noop`(不报失败)。
   见 `Capabilities.manualCompact` / `Session.compactSession` / `MAKER_INVOKE.COMPACT_SESSION`。
-  注:pi 斜杠转义后用户无法手输 `/compact`,此菜单是 pi 会话手动压缩的唯一入口。
+  注:pi 斜杠转义后用户无法手输 `/compact`,context ring 是当前 Pi 会话手动压缩入口。
 - ✅ **subagent 接 pi 轻量引擎**(已交付):Orca worker 可选 `pi` 引擎。核心链路(MCP
   schema / worker 创建服务 / 默认模型 claude-sonnet-4-6 / PiAgent 注册)本已按 AgentKind
   接通;本次补齐 UI(CreateWorkerPopover / composer「+」菜单协同项 / draft 映射)、两个
@@ -221,7 +221,8 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
   链路:CustomProviderDialog pi tab(+ api 选择器)→ custom-provider-store(pi runtime)→
   user-provider 派生 → pi-host `resolvePiNativeProviders` → PiAgent writeModelsJson 原生块 +
   provider 感知 setModel。真二进制测试证明直连原生端点、网关零请求。
-- ✅ **统一会话树**(已交付):会话头部「会话分支」把 Cindy 原有 session fork 与当前 Pi
-  append-only entry tree 嵌在同一棵树中。支持原生分支切换、可选分支摘要、选中 user entry
-  回填原 prompt、SQLite 可见时间线原子重投影与上下文 usage 恢复;device-link / mobile
-  transport contract 同步开放。切换不回滚工作区文件。
+- ✅ **统一会话树**(已交付):Cindy session fork 与 Pi append-only entry tree 的后端/
+  对话框实现仍在。头部 overflow「任务分支」只在存在 Cindy 分叉家族时显示,不再单凭
+  `agentKind=pi` 露出。支持原生分支切换、可选分支摘要、选中 user entry 回填原 prompt、
+  SQLite 可见时间线原子重投影与上下文 usage 恢复;device-link / mobile transport
+  contract 同步开放。切换不回滚工作区文件。

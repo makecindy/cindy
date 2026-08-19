@@ -199,8 +199,8 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
       authContextSource.indexOf('const runCaptchaChallenge'),
       authContextSource.indexOf('const ensureCaptchaGate'),
     );
-    expect(authContextSource).toContain(
-      "import { AppState, Keyboard, Linking } from 'react-native';",
+    expect(authContextSource).toMatch(
+      /import \{[^}]*\bKeyboard\b[^}]*\} from 'react-native';/,
     );
     expect(challengeBranch.indexOf('Keyboard.dismiss();')).toBeGreaterThan(-1);
     expect(challengeBranch.indexOf('Keyboard.dismiss();')).toBeLessThan(

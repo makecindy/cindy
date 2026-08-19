@@ -76,7 +76,12 @@ vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: (sessionId: string) => sessionId.startsWith('remote-'),
 }));
 
-import { EMPTY_SESSION_STATE, handleStreamEvent, makerChatStore } from '@/lib/makerChatStore';
+import {
+  EMPTY_SESSION_STATE,
+  handleStreamEvent,
+  makerChatStore,
+  WAKE_BRIDGE_RECONCILE_MS,
+} from '@/lib/makerChatStore';
 import type { SessionChatState } from '@/lib/makerChatStore';
 
 describe('makerChatStore agent task updates', () => {
@@ -583,6 +588,76 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
       await flushStopTransition();
       expect(makerChatStore.getRunningSnapshot().has(sid)).toBe(false);
     } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('唤醒桥接超时对账:wake turn 永不启动时清桥接收口,不再永久转圈', async () => {
+    // 2026-08-18 事故形态:后台子 agent 在主 turn 运行中完成,上游 CLI 把
+    // task-notification 当 mid-turn 附件消费 —— 主轮 Done 后桥接(pendingTaskWake)
+    // 死等一个永远不会来的 isRunning:true,sidebar 永久转圈。修复:桥接挂起时起
+    // 对账定时器,宽限期内无 wake turn 启动即清空桥接,让 running 快照收敛为事实
+    // (任务卡早已显示终态,不丢信息)。
+    const sid = `wake-reconcile-${Math.random().toString(36).slice(2, 8)}`;
+    vi.useFakeTimers();
+    try {
+      // turn start + 子任务启动 + 主 turn 内终态 → 桥接置位 + 跨主 turn 标记
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_agent' });
+      applyTask(sid, { taskId: 't1', status: 'completed' });
+      expect(makerChatStore.getSnapshot(sid).pendingTaskWake).toBe(1);
+
+      // 主轮 Done:桥接按设计跨过 Done 存活,等待 wake turn —— 此刻起对账表
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, false, 'Done'));
+      const afterMainDone = makerChatStore.getSnapshot(sid);
+      expect(afterMainDone.pendingTaskWake).toBe(1);
+      expect(afterMainDone.pendingTaskWakeDuringTurn).toBe(0);
+      expect(makerChatStore.getRunningSnapshot().get(sid)?.isRunning).toBe(true);
+
+      // 宽限期内(差 1ms):桥接必须仍在,不得提前收口
+      await vi.advanceTimersByTimeAsync(WAKE_BRIDGE_RECONCILE_MS - 1);
+      expect(makerChatStore.getSnapshot(sid).pendingTaskWake).toBe(1);
+      expect(makerChatStore.getRunningSnapshot().get(sid)?.isRunning).toBe(true);
+
+      // 越过宽限且无 wake turn 启动 → 桥接清空,running 快照收敛
+      await vi.advanceTimersByTimeAsync(2_000);
+      const afterReconcile = makerChatStore.getSnapshot(sid);
+      expect(afterReconcile.pendingTaskWake).toBe(0);
+      expect(afterReconcile.pendingTaskWakeDuringTurn).toBe(0);
+      expect(afterReconcile.pendingTaskWakeStarted).toBe(false);
+      expect(makerChatStore.getRunningSnapshot().get(sid)?.isRunning ?? false).toBe(false);
+    } finally {
+      // 恢复真实时钟前先冲掉 fake 定时器:getRunningSnapshot 的 transition 清理是
+      // setTimeout(0) + 模块级 _stopTransitionClearScheduled 标志,不冲掉会把标志
+      // 留在 true,泄漏到后续真实时钟用例(transition 永不清除)。
+      await vi.advanceTimersByTimeAsync(10).catch(() => undefined);
+      vi.useRealTimers();
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('唤醒桥接超时对账:宽限期内 wake turn 启动 → 定时器解除,不误伤健康路径', async () => {
+    const sid = `wake-reconcile-ok-${Math.random().toString(36).slice(2, 8)}`;
+    vi.useFakeTimers();
+    try {
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_agent' });
+      applyTask(sid, { taskId: 't1', status: 'completed' });
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, false, 'Done'));
+      expect(makerChatStore.getSnapshot(sid).pendingTaskWake).toBe(1);
+
+      // 宽限期内 wake turn 启动(isRunning:true)→ 桥接正常消费、定时器解除
+      await vi.advanceTimersByTimeAsync(5_000);
+      makerChatStore.__applyStatusUpdateForTest(sid, statusUpdate(sid, true));
+      expect(makerChatStore.getSnapshot(sid).pendingTaskWake).toBe(0);
+
+      // 再快进远超宽限:不得出现「事后清算」打断仍在跑的 wake turn
+      await vi.advanceTimersByTimeAsync(WAKE_BRIDGE_RECONCILE_MS * 2);
+      expect(makerChatStore.getSnapshot(sid).pendingTaskWake).toBe(0);
+      expect(makerChatStore.getRunningSnapshot().get(sid)?.isRunning).toBe(true);
+    } finally {
+      await vi.advanceTimersByTimeAsync(10).catch(() => undefined);
+      vi.useRealTimers();
       makerChatStore.purgeSession(sid);
     }
   });
