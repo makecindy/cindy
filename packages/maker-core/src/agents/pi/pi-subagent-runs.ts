@@ -28,6 +28,13 @@ const MAX_TOOL_INPUT_CHARS = 4 * 1024;
 /** One-line tool summary budget: the key argument, not the whole record. */
 const MAX_TOOL_SUMMARY_ARG_CHARS = 120;
 const STALE_HEARTBEAT_MS = 15_000;
+/** Exit-confirmation budget after a kill signal; each attempt spawns a probe. */
+const KILL_CONFIRM_ATTEMPTS = 5;
+const KILL_CONFIRM_INTERVAL_MS = 200;
+/** Windows share-violation retry budget for replacing a concurrently read file. */
+const RENAME_RETRY_ATTEMPTS = 10;
+const RENAME_RETRY_STEP_MS = 25;
+const RENAME_RETRY_MAX_MS = 100;
 let controlWriteSequence = 0;
 
 export function piSubagentRunRoot(agentHome: string, sessionId: string): string {
@@ -243,28 +250,46 @@ export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boo
  *
  * The runner is spawned detached, so it leads its own process group; killing
  * the group reaps the Pi children it owns too.
+ *
+ * Success is *exit confirmation*, never "the signal was sent": `taskkill` fails
+ * by exit status rather than by throwing, and a caller that reports reclaimed
+ * runners it never reclaimed lets an account switch proceed with the outgoing
+ * account's BYOM credentials still in use.
  */
-export function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus): boolean {
+export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus): Promise<boolean> {
   if (!verifyPiSubagentRunnerIdentity(status)) return false;
   const pid = status.runnerPid!;
+  let signalled = false;
   try {
     if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      const killed = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
         windowsHide: true,
         stdio: 'ignore',
         timeout: 5_000,
       });
-      return true;
+      signalled = !killed.error && killed.status === 0;
+    } else {
+      process.kill(-pid, 'SIGKILL');
+      signalled = true;
     }
-    process.kill(-pid, 'SIGKILL');
-    return true;
-  } catch {
-    try {
-      process.kill(pid, 'SIGKILL');
-      return true;
-    } catch {
-      return false;
-    }
+  } catch { /* fall through to the single-process attempt */ }
+  if (!signalled) {
+    // The tree kill can fail on a permission or timing race while the runner
+    // itself is still reachable — and it also "fails" when the process is
+    // already gone. Neither is a verdict, so try the narrower signal and let
+    // the confirmation loop decide.
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone, or unreachable */ }
+  }
+  // Confirm by re-verifying identity rather than `kill(pid, 0)`: a zombie still
+  // "exists" for `kill(pid, 0)` and would be reported as unreclaimed forever,
+  // while its command line no longer carries the runner script. The same
+  // predicate also covers a recycled pid and, on Windows, a dead pid (the CIM
+  // query returns nothing) — one cross-platform judgement for "that runner is
+  // no longer running". Each attempt costs a `ps`/CIM spawn, so keep it short.
+  for (let attempt = 0; ; attempt += 1) {
+    if (!verifyPiSubagentRunnerIdentity(status)) return true;
+    if (attempt >= KILL_CONFIRM_ATTEMPTS - 1) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, KILL_CONFIRM_INTERVAL_MS));
   }
 }
 
@@ -783,7 +808,23 @@ async function writeAtomicJson(file: string, value: unknown): Promise<void> {
   const temp = `${file}.tmp-${process.pid}-${randomUUID()}`;
   await fs.writeFile(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   try {
-    await fs.rename(temp, file);
+    // Windows cannot replace a file another process has open: a runner reading
+    // permission.json (or an AV scanner) turns this into a transient
+    // EPERM/EACCES/EBUSY rather than a durable failure, so retry briefly.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fs.rename(temp, file);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        const transient = code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+        if (!transient || attempt >= RENAME_RETRY_ATTEMPTS - 1) throw error;
+        await new Promise<void>((resolve) => setTimeout(
+          resolve,
+          Math.min(RENAME_RETRY_STEP_MS * (attempt + 1), RENAME_RETRY_MAX_MS),
+        ));
+      }
+    }
     await fs.chmod(file, 0o600).catch(() => undefined);
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => undefined);
@@ -1585,7 +1626,7 @@ async function stopPiSubagentRunsUnderRoots(
             && status.runtimeOwnerId !== scope.runtimeOwnerId
           ) continue;
           if (scope.hostPid !== undefined && !isSweepableByHost(status, scope.hostPid)) continue;
-          if (!killVerifiedPiSubagentRunner(status)) killedAll = false;
+          if (!await killVerifiedPiSubagentRunner(status)) killedAll = false;
         }
       }
       return killedAll;

@@ -167,6 +167,11 @@ const TASK_TIMEOUT_MS = 10 * 60 * 1000;
 const STOP_GRACE_MS = 5000;
 // 放弃等待后,给 runner 处理 SIGTERM(杀 children + 写终态)的时间,之后 SIGKILL。
 const RUNNER_TERMINATE_GRACE_MS = 2000;
+// Windows 没有「替换正被别人打开的文件」这回事:host 正在读 status.json 时 rename 会以
+// EPERM/EACCES/EBUSY 失败。共享冲突是毫秒级瞬时的,有界重试即可。
+const RENAME_RETRY_ATTEMPTS = 10;
+const RENAME_RETRY_STEP_MS = 25;
+const RENAME_RETRY_MAX_MS = 100;
 
 // tools 同时是 --tools 白名单。只读角色永不拿写工具；worker/custom-write 的 Ask/Auto
 // 审批通过 child RPC → durable runner → Cindy 审批 UI 往返，未获明确 allow 就 fail-closed。
@@ -428,10 +433,30 @@ function toolsForTask(task, permission) {
   return WRITE_TOOLS;
 }
 
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (err) { /* unsupported */ }
+}
+
 function writePrivateJson(file, value) {
   const tmp = file + '.tmp-' + process.pid + '-' + randomUUID();
   writeFileSync(tmp, JSON.stringify(value) + '\n', { mode: 0o600 });
-  renameSync(tmp, file);
+  // Replacing status.json races the Host reading it; on Windows that surfaces as
+  // a transient EPERM / EACCES / EBUSY sharing violation rather than a lost
+  // write, so retry briefly before giving the failure to the caller.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(tmp, file);
+      break;
+    } catch (err) {
+      const code = err && err.code;
+      const transient = code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+      if (!transient || attempt >= RENAME_RETRY_ATTEMPTS - 1) {
+        try { rmSync(tmp, { force: true }); } catch (cleanupError) { /* best effort */ }
+        throw err;
+      }
+      sleepSync(Math.min(RENAME_RETRY_STEP_MS * (attempt + 1), RENAME_RETRY_MAX_MS));
+    }
+  }
   try { chmodSync(file, 0o600); } catch (err) { /* best effort on Windows */ }
 }
 
@@ -852,10 +877,15 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
       try {
         if (process.platform === 'win32') {
           if (typeof runner.pid === 'number') {
-            spawnSync('taskkill', ['/PID', String(runner.pid), '/T', '/F'], {
+            const killed = spawnSync('taskkill', ['/PID', String(runner.pid), '/T', '/F'], {
               windowsHide: true,
               stdio: 'ignore',
             });
+            // taskkill reports failure by status, not by throwing. Ignoring it
+            // means waiting out the whole grace window for nothing; the handle
+            // is ours, so escalate immediately (TerminateProcess does not need
+            // taskkill to have walked the tree).
+            if (killed.error || killed.status !== 0) runner.kill('SIGKILL');
           }
         } else {
           runner.kill('SIGTERM');

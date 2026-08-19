@@ -253,6 +253,48 @@ describe('cindy-subagent extension source', () => {
 
 
 
+  it('survives a Windows sharing violation while replacing status.json', () => {
+    // Windows 没有「替换正被别人打开的文件」:host 轮询读 status.json 时 rename 抛
+    // EPERM/EACCES/EBUSY。runner 里这条路径来自 50ms 的刷新定时器 —— 不重试 + 不 catch
+    // 就是整个 runner 进程被一次瞬时共享冲突炸掉(Windows CI shard1 的真实根因),
+    // 它 detach 出去的子进程也一起变成孤儿。
+    for (const source of [CINDY_SUBAGENT_RUNNER_SOURCE, CINDY_SUBAGENT_EXTENSION_SOURCE]) {
+      expect(source).toContain('const RENAME_RETRY_ATTEMPTS = 10;');
+      expect(source).toMatch(/code === 'EPERM' \|\| code === 'EACCES' \|\| code === 'EBUSY'/);
+      // 每个源码里只允许存在一处 rename 调用,且它必须在重试循环内 —— 否则「有重试代码」
+      // 与「写路径真的用了重试」是两回事。
+      expect([...source.matchAll(/(?<!\w)renameSync\(/g)]).toHaveLength(1);
+    }
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toMatch(
+      /function atomicWriteJson\(file, value\) \{[\s\S]*?renameWithRetry\(tmp, file\);/,
+    );
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toMatch(
+      /function renameWithRetry\(tmp, file\) \{\s*for \(let attempt = 0; ; attempt \+= 1\) \{\s*try \{\s*fs\.renameSync\(tmp, file\);/,
+    );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toMatch(
+      /function writePrivateJson\(file, value\) \{[\s\S]*?for \(let attempt = 0; ; attempt\+\+\) \{\s*try \{\s*renameSync\(tmp, file\);/,
+    );
+    // 定时器回调必须吞掉重试后仍失败的错误,交给下一个 tick;终态 result.json 的写入
+    // 不在此列(它有自己的抛出语义)。
+    const runner = CINDY_SUBAGENT_RUNNER_SOURCE;
+    const flush = runner.indexOf('function flushStatusNow()');
+    expect(flush).toBeGreaterThan(-1);
+    const body = runner.slice(flush, runner.indexOf('function scheduleStatus()', flush));
+    expect(body).toMatch(/try \{\s*atomicWriteJson\(statusPath, statusPayload\(\)\);\s*\} catch/);
+    expect(runner).toContain('atomicWriteJson(resultPath, terminalResultPayload(state.state));');
+  });
+
+  it('escalates to its own handle when taskkill reports failure', () => {
+    // spawnSync 的失败只体现在返回值(status / error)上,不进 catch。不检查 = Windows 上
+    // fallback 永远不可达:runner 里的 child.kill 死代码,扩展里则干等满 grace 才升级。
+    expect(CINDY_SUBAGENT_RUNNER_SOURCE).toMatch(
+      /const killed = spawnSync\('taskkill'[\s\S]*?if \(killed\.error \|\| killed\.status !== 0\) child\.kill\(signal\);/,
+    );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toMatch(
+      /const killed = spawnSync\('taskkill'[\s\S]*?if \(killed\.error \|\| killed\.status !== 0\) runner\.kill\('SIGKILL'\);/,
+    );
+  });
+
   it('declares the watchdog constants exactly once in the composed module', () => {
     // 主体与看门狗段是拼起来的:同名 const 声明两次 → 拼接后的模块直接 SyntaxError,
     // 整个扩展加载失败(连 cindy-bridge 之外的既有能力都不受影响,纯粹是子代理全哑)。

@@ -45,6 +45,13 @@ const MAX_PROCESSED_CONTROL_IDS = 256;
 const MAX_CONTROL_RECEIPTS = 512;
 const CONTROL_RECEIPT_TTL_MS = 5 * 60 * 1000;
 const SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
+// Windows has no atomic replace of a file someone else has open: while the Host
+// polls status.json (or an AV scanner opens it), rename fails with EPERM /
+// EACCES / EBUSY. The sharing violation clears in milliseconds, so a bounded
+// retry is what separates a status flush from a dead runner.
+const RENAME_RETRY_ATTEMPTS = 10;
+const RENAME_RETRY_STEP_MS = 25;
+const RENAME_RETRY_MAX_MS = 100;
 
 function fail(message) {
   try { process.stderr.write('[cindy-subagent-runner] ' + message + '\n'); } catch (_) {}
@@ -55,12 +62,35 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
+}
+
+function renameWithRetry(tmp, file) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(tmp, file);
+      return;
+    } catch (error) {
+      const code = error && error.code;
+      const transient = code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+      if (!transient || attempt >= RENAME_RETRY_ATTEMPTS - 1) {
+        // Do not leave the staged copy behind: a caller that swallows this
+        // error retries on its next tick and would accumulate one file per try.
+        try { fs.unlinkSync(tmp); } catch (_) {}
+        throw error;
+      }
+      sleepSync(Math.min(RENAME_RETRY_STEP_MS * (attempt + 1), RENAME_RETRY_MAX_MS));
+    }
+  }
+}
+
 function atomicWriteJson(file, value) {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = file + '.tmp-' + process.pid + '-' + randomUUID();
   fs.writeFileSync(tmp, JSON.stringify(value) + '\n', { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  renameWithRetry(tmp, file);
   try { fs.chmodSync(file, 0o600); } catch (_) {}
 }
 
@@ -134,10 +164,13 @@ function terminateOwnedTree(child, signal) {
       if (typeof child.pid === 'number') {
         const args = ['/PID', String(child.pid), '/T'];
         if (signal === 'SIGKILL') args.push('/F');
-        spawnSync('taskkill', args, {
+        const killed = spawnSync('taskkill', args, {
           windowsHide: true,
           stdio: 'ignore',
         });
+        // taskkill fails by exit status, not by throwing, so without this check
+        // the fallback below is unreachable on Windows.
+        if (killed.error || killed.status !== 0) child.kill(signal);
       }
       return;
     }
@@ -325,12 +358,20 @@ function main() {
     };
   }
 
+  // Publishing status is best effort. It runs from timers, so an escaping error
+  // takes down the whole runner (and orphans its children) over a snapshot the
+  // next tick would rewrite anyway. The terminal record the Host converges on is
+  // result.json, whose own call sites keep throwing.
   function flushStatusNow() {
     if (state.statusTimer) {
       clearTimeout(state.statusTimer);
       state.statusTimer = undefined;
     }
-    atomicWriteJson(statusPath, statusPayload());
+    try {
+      atomicWriteJson(statusPath, statusPayload());
+    } catch (_) {
+      scheduleStatus();
+    }
   }
 
   function scheduleStatus() {

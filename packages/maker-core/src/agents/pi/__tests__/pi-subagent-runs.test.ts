@@ -2,12 +2,13 @@ import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile }
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   canHostControlPiSubagentRun,
   controlPiSubagentRuns,
   hasActivePiSubagentRunsSync,
+  killVerifiedPiSubagentRunner,
   listPiSubagentRunDiagnostics,
   listPiSubagentRuns,
   piSubagentControlOwnership,
@@ -17,9 +18,31 @@ import {
   readPiSubagentTranscriptPage,
   stopAllPiSubagentRunsForExit,
   stopAndRemovePiSubagentRuns,
+  stopPiSubagentRunsForAccountBoundary,
   syncPiSubagentPermissions,
   type PiSubagentRunStatus,
 } from '../pi-subagent-runs.js';
+
+/**
+ * The identity probe and the Windows kill both go through `child_process`, and
+ * both have to be observable to test "did we really reclaim it?". Nothing else
+ * in this file spawns, so the default implementation just reports an empty
+ * command line.
+ */
+interface SpawnSyncStub {
+  status?: number | null;
+  stdout?: string;
+  error?: Error;
+}
+const childProcess = vi.hoisted(() => ({
+  spawn: vi.fn(),
+  spawnSync: vi.fn((..._args: unknown[]) => ({ status: 0, stdout: '' } as {
+    status?: number | null;
+    stdout?: string;
+    error?: Error;
+  })),
+}));
+vi.mock('node:child_process', () => childProcess);
 
 const roots: string[] = [];
 
@@ -295,6 +318,126 @@ describe('PI durable subagent run store', () => {
       ) as { action: string };
       expect(control.action).toBe('stop');
       await expect(readdir(path.join(root, foreign))).resolves.toEqual(['status.json']);
+    });
+  });
+
+  /**
+   * The account boundary escalates to killing the runner because a durable
+   * child holds unrevocable BYOM credentials. "Reclaimed" therefore has to mean
+   * the process is gone, not that a signal was accepted: `taskkill` reports
+   * failure through its exit status, and a sweep that believes it would let the
+   * account switch proceed with the outgoing credentials still in use.
+   */
+  describe('verified runner reclaim', () => {
+    const runId = '123e4567-e89b-42d3-a456-426614174080';
+    const runnerPid = 424_242;
+    const runnerScript = `/runs/${runId}/cindy-subagent-runner.cjs`;
+    const restores: Array<() => void> = [];
+
+    function usePlatform(value: NodeJS.Platform): void {
+      const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { ...original, value });
+      restores.push(() => Object.defineProperty(process, 'platform', original));
+    }
+
+    /**
+     * Swallow the actual kills, and answer a liveness probe for the runner pid
+     * the way the OS answers one for a zombie: still there. Other pids (owner
+     * attribution, staleness) keep the real answer.
+     */
+    function stubKill(): void {
+      const real = process.kill.bind(process);
+      const spy = vi.spyOn(process, 'kill').mockImplementation(
+        ((pid: number, signal?: NodeJS.Signals | number) => (
+          signal === 0 && Math.abs(pid) !== runnerPid ? real(pid, signal) : true
+        )) as typeof process.kill,
+      );
+      restores.push(() => spy.mockRestore());
+    }
+
+    /**
+     * The runner's command line stays visible for `aliveProbes` identity checks
+     * and then reads as `deadCommandLine` — which is how a reaped process, a
+     * zombie, and a recycled pid all look to the probe.
+     */
+    function stubProbes(options: {
+      aliveProbes: number;
+      taskkill?: SpawnSyncStub;
+      deadCommandLine?: string;
+    }): void {
+      let probes = 0;
+      childProcess.spawnSync.mockImplementation((...args: unknown[]) => {
+        if (args[0] === 'taskkill') return options.taskkill ?? { status: 0 };
+        probes += 1;
+        return {
+          status: 0,
+          stdout: probes <= options.aliveProbes
+            ? `node ${runnerScript} config.json`
+            : options.deadCommandLine ?? '',
+        };
+      });
+    }
+
+    const runner = (overrides: Partial<PiSubagentRunStatus> = {}): PiSubagentRunStatus =>
+      status(runId, { runnerPid, runnerScript, ...overrides });
+
+    afterEach(() => {
+      restores.splice(0).forEach((restore) => restore());
+      childProcess.spawnSync.mockReset();
+      childProcess.spawnSync.mockImplementation((..._args: unknown[]) => ({ status: 0, stdout: '' }));
+    });
+
+    it.each([
+      ['a non-zero exit status', { status: 1 }],
+      ['a spawn error', { status: null, error: new Error('spawn taskkill ENOENT') }],
+      ['a timeout', { status: null, error: new Error('ETIMEDOUT') }],
+    ])('reports failure when taskkill fails with %s and the runner survives', async (_label, taskkill) => {
+      usePlatform('win32');
+      stubKill();
+      stubProbes({ aliveProbes: Number.MAX_SAFE_INTEGER, taskkill });
+
+      await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(false);
+    });
+
+    it('reports success when taskkill claims failure but the runner is actually gone', async () => {
+      usePlatform('win32');
+      stubKill();
+      // Only the pre-kill identity check sees it: on Windows a dead pid makes
+      // the CIM query return nothing, exactly like a reaped POSIX process.
+      stubProbes({ aliveProbes: 1, taskkill: { status: 1 } });
+
+      await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(true);
+    });
+
+    it('treats a zombie left by the kill as reclaimed', async () => {
+      usePlatform('linux');
+      stubKill();
+      // `kill(pid, 0)` still succeeds for a zombie, so confirming with it would
+      // report this reclaimed runner as unreclaimed forever.
+      stubProbes({ aliveProbes: 1, deadCommandLine: '[node] <defunct>' });
+
+      await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(true);
+    });
+
+    it('reports failure when the runner survives the kill', async () => {
+      usePlatform('linux');
+      stubKill();
+      stubProbes({ aliveProbes: Number.MAX_SAFE_INTEGER });
+
+      await expect(killVerifiedPiSubagentRunner(runner())).resolves.toBe(false);
+      // One pre-kill identity check plus the bounded confirmation poll.
+      expect(childProcess.spawnSync.mock.calls.length).toBeGreaterThan(1);
+    });
+
+    it('does not report an account-boundary sweep as complete while a runner survives', async () => {
+      const root = await makeRoot();
+      usePlatform('linux');
+      stubKill();
+      stubProbes({ aliveProbes: Number.MAX_SAFE_INTEGER });
+      await writeStatus(root, runner({ updatedAt: Date.now() }));
+
+      await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+        .resolves.toBe(false);
     });
   });
 
