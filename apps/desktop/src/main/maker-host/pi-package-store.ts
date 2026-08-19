@@ -34,6 +34,12 @@ import {
   evaluatePiRuntimeRequirements,
 } from './pi-package-compatibility.js';
 import {
+  isWithinConfinement,
+  openConstrainedRegularFile,
+  resolveStablePackagePath,
+  sameStableFileIdentity,
+} from './pi-package-file-boundary.js';
+import {
   consumePiPackageMutationGrant,
   piPackageMutationNeedsGrant,
   type PiPackageMutationGrant,
@@ -281,7 +287,8 @@ async function snapshotRootForInstalledPackage(
     // Snapshot that resolver root so hoisted siblings remain reachable from
     // the copied extension. A forged/out-of-store list entry falls back to
     // its own package root instead of widening the copy boundary.
-    return installedRoot !== nodeModulesRoot && isWithinPath(nodeModulesRoot, installedRoot)
+    return installedRoot !== nodeModulesRoot
+      && isWithinConfinement(nodeModulesRoot, installedRoot)
       ? npmRoot
       : installedRoot;
   } catch {
@@ -666,10 +673,15 @@ function assertInspectionBudget(budget: InspectionBudget, depth = 0, increment =
 async function readUtf8FileBounded(
   file: string,
   maxBytes: number,
+  confinementRoot: string,
 ): Promise<{ text: string; bytes: number }> {
-  const handle = await fs.open(file, 'r');
+  const { handle, stat } = await openConstrainedRegularFile(
+    confinementRoot,
+    file,
+    'Pi package metadata contains an escaped link',
+    'Pi package metadata changed before reading',
+  );
   try {
-    const stat = await handle.stat();
     if (stat.size > maxBytes) throw new PiPackageInspectionLimitError();
     const buffer = Buffer.alloc(maxBytes + 1);
     let bytes = 0;
@@ -679,16 +691,24 @@ async function readUtf8FileBounded(
       bytes += result.bytesRead;
     }
     if (bytes > maxBytes) throw new PiPackageInspectionLimitError();
+    const after = await handle.stat();
+    if (!sameStableFileIdentity(stat, after) || bytes !== after.size) {
+      throw new Error('Pi package metadata changed while reading');
+    }
     return { text: buffer.subarray(0, bytes).toString('utf8'), bytes };
   } finally {
     await handle.close();
   }
 }
 
-async function readInspectionMetadata(file: string, budget: InspectionBudget): Promise<string> {
+async function readInspectionMetadata(
+  file: string,
+  budget: InspectionBudget,
+  confinementRoot: string,
+): Promise<string> {
   const remaining = MAX_INSPECTION_METADATA_BYTES - budget.metadataBytes;
   if (remaining < 0) throw new PiPackageInspectionLimitError();
-  const result = await readUtf8FileBounded(file, remaining);
+  const result = await readUtf8FileBounded(file, remaining, confinementRoot);
   budget.metadataBytes += result.bytes;
   assertInspectionBudget(budget);
   return result.text;
@@ -947,7 +967,11 @@ async function collectFilesByExtension(
   return [...new Set(out)];
 }
 
-async function collectSkills(input: string[], budget: InspectionBudget): Promise<PiManagedPackageSkill[]> {
+async function collectSkills(
+  input: string[],
+  budget: InspectionBudget,
+  confinementRoot: string,
+): Promise<PiManagedPackageSkill[]> {
   const skillFiles: string[] = [];
   for (const candidate of input) {
     let stat;
@@ -972,11 +996,10 @@ async function collectSkills(input: string[], budget: InspectionBudget): Promise
   }
   const skills: PiManagedPackageSkill[] = [];
   for (const file of [...new Set(skillFiles)]) {
-    const root = path.dirname(file);
     let name = path.basename(file, path.extname(file));
     let description: string | undefined;
     try {
-      const parsed = matter(await readInspectionMetadata(file, budget));
+      const parsed = matter(await readInspectionMetadata(file, budget, confinementRoot));
       if (typeof parsed.data.name === 'string' && parsed.data.name.trim()) name = parsed.data.name.trim();
       if (typeof parsed.data.description === 'string' && parsed.data.description.trim()) {
         description = parsed.data.description.trim();
@@ -1063,13 +1086,14 @@ async function extensionResourceView(root: string, file: string): Promise<PiPack
 async function promptCommand(
   file: string,
   budget: InspectionBudget,
+  confinementRoot: string,
 ): Promise<{ name: string; description: string }> {
   const name = truncateDisplayField(
     path.basename(file, path.extname(file)),
     MAX_DISPLAY_NAME_BYTES,
   );
   try {
-    const parsed = matter(await readInspectionMetadata(file, budget));
+    const parsed = matter(await readInspectionMetadata(file, budget, confinementRoot));
     const description = typeof parsed.data.description === 'string'
       ? parsed.data.description.trim()
       : '';
@@ -1165,7 +1189,10 @@ async function inspectPackage(
   let installedRoot: string | undefined;
   try {
     const budget = createInspectionBudget();
-    const root = await fs.realpath(pkg.installedPath);
+    const { canonicalPath: root, stat: rootStat } = await resolveStablePackagePath(
+      pkg.installedPath,
+      'Pi package root changed during inspection',
+    );
     installedRoot = root;
     if (pkg.filtered) {
       return {
@@ -1183,7 +1210,6 @@ async function inspectPackage(
         installedRoot: root,
       };
     }
-    const rootStat = await fs.stat(root);
     if (rootStat.isFile()) {
       const isExtension = /\.(?:ts|js)$/i.test(root);
       const launchRoot = await snapshotRootForInstalledPackage(pkg.source, root);
@@ -1227,7 +1253,7 @@ async function inspectPackage(
     let manifest: PackageManifest = {};
     try {
       manifest = JSON.parse(
-        (await readUtf8FileBounded(manifestPath, MAX_PACKAGE_JSON_BYTES)).text,
+        (await readUtf8FileBounded(manifestPath, MAX_PACKAGE_JSON_BYTES, root)).text,
       ) as PackageManifest;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -1253,7 +1279,7 @@ async function inspectPackage(
     const themeInputs = await expandManifestEntries(root, themeEntries, budget);
     const [extensions, skills, prompts, themes] = await Promise.all([
       collectExtensions(await confinedExistingPaths(root, extensionInputs), budget),
-      collectSkills(await confinedExistingPaths(root, skillInputs), budget),
+      collectSkills(await confinedExistingPaths(root, skillInputs), budget, root),
       collectFilesByExtension(await confinedExistingPaths(root, promptInputs), ['.md'], budget),
       collectFilesByExtension(await confinedExistingPaths(root, themeInputs), ['.json'], budget),
     ]);
@@ -1298,7 +1324,7 @@ async function inspectPackage(
       && !explicitlyDisabled
       && !requiresExtensionApproval;
     const promptCommands = enabled
-      ? await Promise.all(prompts.map((file) => promptCommand(file, budget)))
+      ? await Promise.all(prompts.map((file) => promptCommand(file, budget, root)))
       : [];
     const warning = hasDisabledInstallLifecycleScript(manifest.scripts)
       ? 'lifecycle-scripts-disabled' as const
@@ -1836,11 +1862,6 @@ function enqueueMutation<T>(
   return result;
 }
 
-function isWithinPath(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 class PiPackageSnapshotLimitError extends Error {
   constructor(readonly scope: 'package' | 'aggregate' = 'package') {
     super('Pi extension snapshot exceeds the safe resource limit');
@@ -1923,12 +1944,7 @@ function sameStableStat(
   before: Stats,
   after: Stats,
 ): boolean {
-  return before.dev === after.dev
-    && before.ino === after.ino
-    && before.mode === after.mode
-    && before.size === after.size
-    && before.mtimeMs === after.mtimeMs
-    && before.ctimeMs === after.ctimeMs;
+  return sameStableFileIdentity(before, after);
 }
 
 /**
@@ -1942,18 +1958,23 @@ async function fingerprintPiPackageTree(
   limits: PiPackageSnapshotLimits = DEFAULT_SNAPSHOT_LIMITS,
   aggregateBudget?: SnapshotBudgetCounters,
 ): Promise<string> {
-  const root = await fs.realpath(rawRoot);
+  const { canonicalPath: root } = await resolveStablePackagePath(
+    rawRoot,
+    'Pi extension package changed before fingerprinting',
+  );
   const budget = createSnapshotCopyBudget(limits, aggregateBudget);
   const hash = createHash('sha256');
   updatePackageFingerprintField(hash, 'cindy-pi-package-fingerprint-v1');
 
   const visit = async (candidate: string, relativePath: string): Promise<void> => {
     assertSnapshotBudget(budget);
-    const canonical = await fs.realpath(candidate);
-    if (!isWithinPath(root, canonical)) {
+    const { canonicalPath: canonical, stat: before } = await resolveStablePackagePath(
+      candidate,
+      'Pi extension package changed before fingerprinting',
+    );
+    if (!isWithinConfinement(root, canonical)) {
       throw new Error('Pi extension fingerprint contains an escaped link');
     }
-    const before = await fs.stat(canonical);
     recordSnapshotEntry(budget);
     assertSnapshotBudget(budget, before.isFile() ? before.size : 0);
     const name = relativePath || '.';
@@ -1969,8 +1990,11 @@ async function fingerprintPiPackageTree(
         for (const entry of entries) {
           await visit(path.join(canonical, entry), relativePath ? path.join(relativePath, entry) : entry);
         }
-        const [after, finalEntries] = await Promise.all([
-          fs.stat(canonical),
+        const [{ stat: after }, finalEntries] = await Promise.all([
+          resolveStablePackagePath(
+            canonical,
+            'Pi extension package changed while fingerprinting',
+          ),
           fs.readdir(canonical).then((items) => items.sort()),
         ]);
         if (!sameStableStat(before, after) || entries.join('\0') !== finalEntries.join('\0')) {
@@ -1987,9 +2011,13 @@ async function fingerprintPiPackageTree(
       hash,
       `file:${name}:${before.mode & 0o777}:${before.size}`,
     );
-    const handle = await fs.open(canonical, 'r');
+    const { handle, stat: opened } = await openConstrainedRegularFile(
+      root,
+      canonical,
+      'Pi extension fingerprint contains an escaped link',
+      'Pi extension package changed before fingerprinting',
+    );
     try {
-      const opened = await handle.stat();
       if (!sameStableStat(before, opened)) {
         throw new Error('Pi extension package changed before fingerprinting');
       }
@@ -2024,11 +2052,13 @@ async function copySnapshotEntryBounded(
   budget: SnapshotCopyBudget,
 ): Promise<void> {
   assertSnapshotBudget(budget);
-  const canonicalSource = await fs.realpath(sourcePath);
-  if (!isWithinPath(confinementRoot, canonicalSource)) {
+  const { canonicalPath: canonicalSource, stat: sourceStat } = await resolveStablePackagePath(
+    sourcePath,
+    'Pi extension package changed before copying snapshot',
+  );
+  if (!isWithinConfinement(confinementRoot, canonicalSource)) {
     throw new Error('Pi extension snapshot contains an escaped link');
   }
-  const sourceStat = await fs.stat(canonicalSource);
   const sourceMode = sourceStat.mode & 0o777;
   recordSnapshotEntry(budget);
   assertSnapshotBudget(budget, sourceStat.isFile() ? sourceStat.size : 0);
@@ -2053,8 +2083,11 @@ async function copySnapshotEntryBounded(
           budget,
         );
       }
-      const [after, finalEntries] = await Promise.all([
-        fs.stat(canonicalSource),
+      const [{ stat: after }, finalEntries] = await Promise.all([
+        resolveStablePackagePath(
+          canonicalSource,
+          'Pi extension package changed while copying snapshot',
+        ),
         fs.readdir(canonicalSource).then((entries) => entries.sort()),
       ]);
       if (
@@ -2075,11 +2108,15 @@ async function copySnapshotEntryBounded(
   }
   if (!sourceStat.isFile()) throw new Error('Pi extension snapshot contains a special file');
 
-  const sourceHandle = await fs.open(canonicalSource, 'r');
+  const { handle: sourceHandle, stat: opened } = await openConstrainedRegularFile(
+    confinementRoot,
+    canonicalSource,
+    'Pi extension snapshot contains an escaped link',
+    'Pi extension package changed before copying snapshot',
+  );
   let targetHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
-    const opened = await sourceHandle.stat();
-    if (!opened.isFile() || !sameStableStat(sourceStat, opened)) {
+    if (!sameStableStat(sourceStat, opened)) {
       throw new Error('Pi extension package changed before copying snapshot');
     }
     targetHandle = await fs.open(targetPath, 'wx', sourceMode);
@@ -2132,12 +2169,12 @@ function mostSpecificSnapshotOwner(
   };
   for (const mapping of mappings) {
     if (!mapping.directory && resolved !== mapping.source) continue;
-    if (mapping.directory && !isWithinPath(mapping.source, resolved)) continue;
+    if (mapping.directory && !isWithinConfinement(mapping.source, resolved)) continue;
     consider({ ...mapping, skipped: false });
   }
   for (const skippedRoot of skippedPackageRoots) {
     const source = path.resolve(skippedRoot);
-    if (resolved !== source && !isWithinPath(source, resolved)) continue;
+    if (resolved !== source && !isWithinConfinement(source, resolved)) continue;
     consider({ source, directory: resolved !== source, skipped: true });
   }
   return owner;
@@ -2187,8 +2224,12 @@ export async function stageManagedPackageSnapshot(
       }
       let source: string | undefined;
       try {
-        source = await fs.realpath(rawRoot);
-        const sourceStat = await fs.stat(source);
+        const resolvedRoot = await resolveStablePackagePath(
+          rawRoot,
+          'Pi extension package root changed before snapshotting',
+        );
+        source = resolvedRoot.canonicalPath;
+        const sourceStat = resolvedRoot.stat;
         const directory = sourceStat.isDirectory();
         if (!directory && !sourceStat.isFile()) {
           throw new Error('Pi extension package root is not a file or directory');

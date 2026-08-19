@@ -8,7 +8,6 @@
  */
 
 import { parse } from '@babel/parser';
-import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -18,6 +17,12 @@ import type {
   PiPackageCompatibilityIssue,
   PiPackageRuntimeRequirement,
 } from '../../shared/piPackages.js';
+import {
+  isWithinConfinement,
+  openConstrainedRegularFile,
+  resolveStablePackagePath,
+  sameStableFileIdentity,
+} from './pi-package-file-boundary.js';
 
 const MAX_FILES = 256;
 const MAX_FILE_BYTES = 512 * 1024;
@@ -489,10 +494,17 @@ function parseModule(source: string): ParsedModule {
   };
 }
 
-async function readSourceFileBounded(file: string): Promise<{ source: string; bytes: number }> {
-  const handle = await fs.open(file, 'r');
+async function readSourceFileBounded(
+  file: string,
+  packageRoot: string,
+): Promise<{ source: string; bytes: number }> {
+  const { handle, stat } = await openConstrainedRegularFile(
+    packageRoot,
+    file,
+    'Pi extension analysis contains an escaped link',
+    'Pi extension source changed before analysis',
+  );
   try {
-    const stat = await handle.stat();
     if (stat.size > MAX_FILE_BYTES) throw new Error('Pi extension source exceeds analysis limit');
     const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
     let bytes = 0;
@@ -502,6 +514,10 @@ async function readSourceFileBounded(file: string): Promise<{ source: string; by
       bytes += result.bytesRead;
     }
     if (bytes > MAX_FILE_BYTES) throw new Error('Pi extension source exceeds analysis limit');
+    const after = await handle.stat();
+    if (!sameStableFileIdentity(stat, after) || bytes !== after.size) {
+      throw new Error('Pi extension source changed during analysis');
+    }
     return { source: buffer.subarray(0, bytes).toString('utf8'), bytes };
   } finally {
     await handle.close();
@@ -528,9 +544,12 @@ async function resolveLocalModule(
   const rootPrefix = `${packageRoot}${path.sep}`;
   for (const candidate of candidates) {
     try {
-      const canonical = await fs.realpath(candidate);
+      const { canonicalPath: canonical, stat } = await resolveStablePackagePath(
+        candidate,
+        'Pi extension module changed during analysis',
+      );
       if (canonical !== packageRoot && !canonical.startsWith(rootPrefix)) continue;
-      if ((await fs.stat(canonical)).isFile()) return canonical;
+      if (stat.isFile()) return canonical;
     } catch {
       // Try the next legal module candidate.
     }
@@ -542,9 +561,16 @@ export async function analyzePiExtensionCompatibility(
   entryFile: string,
   packageRoot: string,
 ): Promise<PiExtensionCompatibilityAnalysis> {
-  const canonicalRoot = await fs.realpath(packageRoot);
+  const { canonicalPath: canonicalRoot } = await resolveStablePackagePath(
+    packageRoot,
+    'Pi extension package root changed during analysis',
+  );
   const rootPrefix = `${canonicalRoot}${path.sep}`;
-  const queue = [await fs.realpath(entryFile)];
+  const { canonicalPath: canonicalEntry } = await resolveStablePackagePath(
+    entryFile,
+    'Pi extension entry changed during analysis',
+  );
+  const queue = [canonicalEntry];
   const visited = new Set<string>();
   const detectedApis = new Set<PiExtensionUiApi>();
   let totalBytes = 0;
@@ -558,7 +584,7 @@ export async function analyzePiExtensionCompatibility(
     }
     const file = queue.shift()!;
     if (visited.has(file)) continue;
-    if (file !== canonicalRoot && !file.startsWith(rootPrefix)) {
+    if (!isWithinConfinement(canonicalRoot, file)) {
       incomplete = true;
       continue;
     }
@@ -568,7 +594,7 @@ export async function analyzePiExtensionCompatibility(
     }
     visited.add(file);
     try {
-      const sourceFile = await readSourceFileBounded(file);
+      const sourceFile = await readSourceFileBounded(file, canonicalRoot);
       if (totalBytes + sourceFile.bytes > MAX_TOTAL_BYTES) {
         incomplete = true;
         continue;

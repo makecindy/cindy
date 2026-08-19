@@ -852,6 +852,132 @@ describe('Pi package executable-code boundary', () => {
     expect(leftovers).toEqual([]);
   });
 
+  it('rejects a directly installed file package replaced during stable path resolution', async () => {
+    const packageFile = path.join(runtime.userData, 'direct-extension.ts');
+    const outsideFile = path.join(runtime.userData, 'host-private.ts');
+    await fs.writeFile(packageFile, 'export default function approved() {}\n');
+    await fs.writeFile(outsideFile, 'export default function hostPrivate() {}\n');
+    runtime.listOutput = `User packages:\n  ${packageFile}\n    ${packageFile}\n`;
+    const originalLstat = fs.lstat.bind(fs);
+    let replaced = false;
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, options) => {
+      const stat = await originalLstat(target, options as never);
+      if (!replaced && path.resolve(String(target)) === path.resolve(packageFile)) {
+        replaced = true;
+        await fs.rm(packageFile);
+        await fs.symlink(outsideFile, packageFile, 'file');
+      }
+      return stat;
+    });
+    try {
+      const store = await import('../pi-package-store.js');
+      await expect(store.listPiPackages()).resolves.toMatchObject({
+        packages: [{
+          source: packageFile,
+          enabled: false,
+          canToggle: false,
+          warning: 'inspection-failed',
+        }],
+      });
+      await expect(store.resolveManagedPiPackageResources()).resolves.toEqual({
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+      });
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
+  it('rejects a directly installed file package replaced after fingerprint realpath', async () => {
+    const packageFile = path.join(runtime.userData, 'fingerprint-direct-extension.ts');
+    const outsideFile = path.join(runtime.userData, 'fingerprint-host-private.ts');
+    await fs.writeFile(packageFile, 'export default function approved() {}\n');
+    await fs.writeFile(outsideFile, 'export default function hostPrivate() {}\n');
+    runtime.listOutput = `User packages:\n  ${packageFile}\n    ${packageFile}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source: packageFile, enabled: true });
+    const snapshotRoot = path.join(runtime.userData, 'fingerprint-direct-file-snapshot');
+    const canonicalPackageFile = await fs.realpath(packageFile);
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now + 2_000);
+
+    const originalRealpath = fs.realpath.bind(fs);
+    let replaced = false;
+    let packageRealpathCalls = 0;
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => {
+      const resolved = await originalRealpath(...args);
+      if (path.resolve(String(args[0])) === path.resolve(canonicalPackageFile)) {
+        packageRealpathCalls += 1;
+      }
+      // A fresh direct-file inspection resolves the root twice, compatibility
+      // resolves the entry twice, and fingerprinting starts with the fifth
+      // package-file realpath. Replace only after that realpath has returned.
+      if (!replaced && packageRealpathCalls === 5) {
+        replaced = true;
+        await fs.rm(packageFile);
+        await fs.symlink(outsideFile, packageFile, 'file');
+      }
+      return resolved;
+    });
+    let resolvedResources;
+    try {
+      resolvedResources = await store.resolveManagedPiPackageResources({ snapshotRoot });
+    } finally {
+      realpathSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+
+    expect(replaced).toBe(true);
+    expect(packageRealpathCalls).toBeGreaterThanOrEqual(5);
+    expect(resolvedResources).toEqual({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    });
+    await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
+    await expect(store.listPiPackages()).resolves.toMatchObject({
+      packages: [{
+        source: packageFile,
+        enabled: false,
+        canToggle: false,
+        warning: 'inspection-failed',
+      }],
+    });
+  });
+
+  it('rejects a direct file snapshot whose package root is replaced by a symlink', async () => {
+    const packageFile = path.join(runtime.userData, 'snapshot-direct-extension.ts');
+    const outsideFile = path.join(runtime.userData, 'snapshot-host-private.ts');
+    await fs.writeFile(packageFile, 'export default function approved() {}\n');
+    await fs.writeFile(outsideFile, 'export default function hostPrivate() {}\n');
+    const snapshotRoot = path.join(runtime.userData, 'direct-file-race-snapshot');
+    const originalLstat = fs.lstat.bind(fs);
+    let replaced = false;
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, options) => {
+      const stat = await originalLstat(target, options as never);
+      if (!replaced && path.resolve(String(target)) === path.resolve(packageFile)) {
+        replaced = true;
+        await fs.rm(packageFile);
+        await fs.symlink(outsideFile, packageFile, 'file');
+      }
+      return stat;
+    });
+    try {
+      const store = await import('../pi-package-store.js');
+      await expect(store.stageManagedPackageSnapshot({
+        extensions: [packageFile],
+        skills: [],
+        promptTemplates: [],
+        packageRoots: [packageFile],
+      }, snapshotRoot)).rejects.toThrow(/root changed before snapshotting/);
+    } finally {
+      lstatSpy.mockRestore();
+    }
+
+    await expect(fs.stat(snapshotRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    const leftovers = (await fs.readdir(runtime.userData)).filter((entry) => (
+      entry.startsWith(`${path.basename(snapshotRoot)}.tmp-`)
+    ));
+    expect(leftovers).toEqual([]);
+  });
+
   it.each([
     { kind: 'Skill', phase: 'before read', mismatchCall: 1, relativePath: path.join('skills', 'sample', 'SKILL.md') },
     { kind: 'Skill', phase: 'after read', mismatchCall: 2, relativePath: path.join('skills', 'sample', 'SKILL.md') },
