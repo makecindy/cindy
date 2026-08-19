@@ -1188,8 +1188,9 @@ export default function LoginScreen() {
   // 只管渲染与命中,读屏仍会念出不可见的注销状态)。iOS 走 accessibilityElementsHidden、
   // Android 走 importantForAccessibility,两端都要给(PR #464 codex)。
   const realmConsentOpen = realmConfirmation !== null;
+  const captchaChallengeOpen = auth.captchaChallenge !== null;
   const deletionBubbleA11yHidden =
-    consentDialogOpen || realmConsentOpen || handoffPhase !== 'done';
+    consentDialogOpen || realmConsentOpen || captchaChallengeOpen || handoffPhase !== 'done';
 
   return (
     <MobileLoginHandoffStage
@@ -1211,7 +1212,9 @@ export default function LoginScreen() {
         // Android 读屏:弹窗打开时隐藏背景登录组(accessibilityViewIsModal 仅 iOS
         // 生效;codex 审查 P2)。iOS 忽略此属性,无副作用。
         importantForAccessibility={
-          consentDialogOpen || realmConsentOpen ? 'no-hide-descendants' : 'auto'
+          consentDialogOpen || realmConsentOpen || captchaChallengeOpen
+            ? 'no-hide-descendants'
+            : 'auto'
         }
         onLayout={measureBaseline}
         ref={outerGroupRef}

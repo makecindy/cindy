@@ -149,6 +149,7 @@ export function LoginCaptchaWebView({
               onLoadEnd={() => setReady(true)}
               onError={() => setFailed(true)}
               onHttpError={() => setFailed(true)}
+              onContentProcessDidTerminate={() => setFailed(true)}
               onRenderProcessGone={() => setFailed(true)}
               style={{ backgroundColor: 'transparent', flex: 1 }}
             />

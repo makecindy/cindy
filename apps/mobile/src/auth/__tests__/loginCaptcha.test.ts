@@ -123,4 +123,19 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
     expect(captchaWebViewSource).toContain('withLoginCaptchaTheme(url, mode)');
     expect(captchaWebViewSource).toContain('source={{ uri: themedUrl }}');
   });
+
+  it('captcha WebView 的 iOS/Android 渲染进程异常都进入失败重试态', () => {
+    expect(captchaWebViewSource).toContain('onContentProcessDidTerminate={() => setFailed(true)}');
+    expect(captchaWebViewSource).toContain('onRenderProcessGone={() => setFailed(true)}');
+  });
+
+  it('captcha 打开时从 Android TalkBack 隐藏背景登录组与注销气泡', () => {
+    expect(loginSource).toContain('const captchaChallengeOpen = auth.captchaChallenge !== null');
+    expect(loginSource).toContain(
+      'consentDialogOpen || realmConsentOpen || captchaChallengeOpen || handoffPhase',
+    );
+    expect(loginSource).toContain(
+      'consentDialogOpen || realmConsentOpen || captchaChallengeOpen',
+    );
+  });
 });
