@@ -41,6 +41,17 @@ function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function sameSchedulerChannels(
+  left: SchedulerAdvertisementFrame['channels'],
+  right: SchedulerAdvertisementFrame['channels'],
+): boolean {
+  return left.length === right.length
+    && left.every((channel, index) => (
+      channel.channel === right[index]?.channel
+      && channel.identity === right[index]?.identity
+    ));
+}
+
 function runtimeGenerationKey(identity: string, generation: string): string {
   return `${identity}\0${generation}`;
 }
@@ -91,6 +102,7 @@ export class ImSchedulerManager {
   private deviceLinkReady = false;
   private schedulerHooksInstalled = false;
   private transportWasConnectingAtStop: boolean | null = null;
+  private peerProbeInvalidatedLease = false;
 
   constructor(private readonly discord: DiscordIM) {}
 
@@ -205,16 +217,18 @@ export class ImSchedulerManager {
         // Desktops to activate from incompatible snapshots.
         const previous = this.peers.get(source);
         const alreadyConfirmed = this.confirmedPeers.has(source);
-        if (alreadyConfirmed && (!previous || payload.sentAt >= previous.sentAt)) {
-          this.observePeerRuntime(payload.runtime, payload.runtimeGaps);
-          this.peers.set(source, {
-            deviceId: source,
-            sentAt: payload.sentAt,
-            lastSeenAt: Date.now(),
-            channels: payload.channels,
-            runtime: payload.runtime,
-            runtimeGaps: payload.runtimeGaps,
-          });
+        if (
+          alreadyConfirmed
+          && previous
+          && !sameSchedulerChannels(previous.channels, payload.channels)
+        ) {
+          // A probe has no tag for our current discovery round. Treat a
+          // changed binding as an invalidation signal, never as a replacement
+          // election view: a delayed probe from an older peer round may carry
+          // a newer wall clock and must not overwrite the nonce-bound reply
+          // we already accepted.
+          this.peerProbeInvalidatedLease = true;
+          this.beginDiscoveryGrace();
         }
         this.advertise(source, payload.nonce);
         void this.reconcile();
@@ -374,13 +388,15 @@ export class ImSchedulerManager {
         return;
       }
       const identity = this.discord.getSchedulerIdentity();
+      const clearRuntimeMarker = this.peerProbeInvalidatedLease;
+      this.peerProbeInvalidatedLease = false;
       if (Date.now() < this.discoveryDeadline || !this.authoritativeDesktopPeers) {
-        await this.ensureStandby(identity ?? 'discord');
+        await this.ensureStandby(identity ?? 'discord', clearRuntimeMarker);
         return;
       }
       const self = getSelfDeviceId();
       if (!self || !identity) {
-        await this.ensureStandby(identity ?? 'discord');
+        await this.ensureStandby(identity ?? 'discord', clearRuntimeMarker);
         return;
       }
       const now = Date.now();
@@ -390,7 +406,7 @@ export class ImSchedulerManager {
         // Presence without a fresh advertisement is an unknown candidate, not
         // evidence that the peer has no Discord binding. Fail closed until the
         // peer explicitly advertises (including an empty channel list).
-        await this.ensureStandby(identity);
+        await this.ensureStandby(identity, clearRuntimeMarker);
         return;
       }
       if (this.isLocalIngress(identity, devices)) {
@@ -403,7 +419,10 @@ export class ImSchedulerManager {
         }
         await this.ensureActive(identity);
       } else {
-        await this.ensureStandby(identity, this.hasRemoteCandidate(identity));
+        await this.ensureStandby(
+          identity,
+          clearRuntimeMarker || this.hasRemoteCandidate(identity),
+        );
       }
     });
     this.reconcileTail = current.catch(() => undefined);
@@ -1014,6 +1033,7 @@ export class ImSchedulerManager {
     this.connectedIdentity = null;
     this.withdrawingIdentity = null;
     this.reconnectWithdrawal = null;
+    this.peerProbeInvalidatedLease = false;
     this.reconcileTail = Promise.resolve();
   }
 

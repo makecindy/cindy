@@ -13,6 +13,7 @@ import type {
   StreamingTextHandle,
 } from '../types.js';
 import {
+  connectedStatusForBotTag,
   createDiscordGateway,
   mapDiscordLoginErrorToStatus,
   type DiscordGateway,
@@ -439,6 +440,14 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         // Keep the provider's real connection status. In particular, an
         // existing discord.js client can still be reconnecting; only a real
         // ShardReady/ShardResume event may promote it back to connected.
+        if (this.gateway.ingressOpen) {
+          // ShardReady/ShardResume may have arrived while this Desktop was
+          // still denied and therefore been projected to standby. Once the
+          // stale handoff is cancelled, republish the Gateway's real state so
+          // the scheduler restores its connected identity and reconnect
+          // supervision instead of retaining a synthetic standby forever.
+          this.setStatus(connectedStatusForBotTag(this.gateway.botTag));
+        }
         return;
       }
       this.configVersion += 1;

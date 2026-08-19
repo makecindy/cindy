@@ -917,6 +917,7 @@ describe('DiscordIM inbound pipeline', () => {
 
     await im.init();
     await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+    gateway.setIngressOpen(false);
     gateway.emitStatus({ kind: 'connecting' });
     expect(im.getStatus()).toEqual({ kind: 'connecting' });
 
@@ -932,6 +933,50 @@ describe('DiscordIM inbound pipeline', () => {
     expect(gateway.destroy).not.toHaveBeenCalled();
     expect(gateway.appId).toBe('app-1');
     expect(im.getStatus()).toEqual({ kind: 'connecting' });
+  });
+
+  it('restores connected after a Gateway resumes during a cancelled handoff', async () => {
+    const gateway = makeGateway();
+    const token = `${Buffer.from('12345678901234567').toString('base64url')}.secret.signature`;
+    const im = new DiscordIM(makeHost({
+      initialSecrets: [
+        ['discord-bot-token', token],
+        ['discord-owner-user-id', 'user-1'],
+      ],
+    }), {
+      gatewayFactory: (handlers) => {
+        gateway.setHandlers(handlers);
+        return gateway;
+      },
+    });
+    const releaseTask = deferred();
+    let transportAllowed = true;
+    im.setSchedulerHooks({ isTransportAllowed: () => transportAllowed });
+    im.onMessage(() => {
+      im.trackAcceptedTask(releaseTask.promise);
+    });
+
+    await im.init();
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    await gateway.emitDm(message({ id: 'msg-task', content: 'run a task' }));
+
+    transportAllowed = false;
+    const handoff = im.enterSchedulerStandby({ clearRuntimeActiveMarker: true });
+    await flushMicrotasks();
+
+    // The real Gateway recovers while the original handoff is still valid.
+    // Its connected event is correctly projected to standby until election
+    // grants this Desktop ingress again.
+    gateway.setIngressOpen(true);
+    gateway.emitStatus({ kind: 'connected', appId: 'bot#0000' });
+    expect(im.getStatus()).toEqual({ kind: 'standby', appId: '12345678901234567' });
+
+    transportAllowed = true;
+    releaseTask.resolve();
+    await handoff;
+
+    expect(gateway.destroy).not.toHaveBeenCalled();
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: 'bot#0000' });
   });
 
   it('destroys a forced-closed Gateway when a stale handoff regains ownership', async () => {
@@ -2727,6 +2772,9 @@ function makeGateway(options: { client?: unknown; clearAppIdOnDestroy?: boolean 
     },
     setAppId(nextAppId: string) {
       appId = nextAppId;
+    },
+    setIngressOpen(nextIngressOpen: boolean) {
+      ingressOpen = nextIngressOpen;
     },
     emitStatus(status: IMStatus) {
       onStatus?.(status);

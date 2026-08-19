@@ -1284,6 +1284,41 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('does not let a delayed peer probe overwrite the current nonce-bound view', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+    expect(discord.init).not.toHaveBeenCalled();
+
+    harness.pushHandler?.('a', {
+      kind: 'probe',
+      sentAt: Date.now() + 60_000,
+      nonce: 'delayed-peer-round',
+      channels: [],
+    });
+    await manager.reconcile();
+
+    // The untagged probe can invalidate the round, but cannot replace the
+    // confirmed peer view and elect this Desktop from its stale empty binding.
+    expect(discord.init).not.toHaveBeenCalled();
+    expect(harness.hooks?.isTransportAllowed('12345678901234567')).toBe(false);
+
+    confirmPeer('a', [{ channel: 'discord', identity: '12345678901234567' }]);
+    await finishDiscovery(manager);
+    expect(discord.init).not.toHaveBeenCalled();
+    await manager.stop();
+  });
+
   it('rejects a delayed advertisement reply from an older discovery nonce', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [
