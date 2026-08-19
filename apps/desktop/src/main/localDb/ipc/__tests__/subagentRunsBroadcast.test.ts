@@ -233,6 +233,137 @@ describe('Subagent runs broadcast boundary', () => {
   });
 
   /**
+   * Reconciliation picks the newest generation across the healthy and the
+   * unreadable sets, so a resume whose durable state went stale/corrupt makes
+   * the row fail. The detail projection re-read `listPiSubagentRuns` — which
+   * only ever returns readable generations — and its `find` landed on the
+   * previous one, painting last run's completed children and output back over
+   * the failed row.
+   */
+  describe('detail projection generation recency', () => {
+    const olderHealthyGeneration = {
+      version: 1,
+      runId: '123e4567-e89b-42d3-a456-426614174090',
+      taskId: 'parent-tool',
+      parentSessionId: 'session-1',
+      runnerInstanceId: 'runner-old',
+      state: 'completed',
+      context: 'fresh',
+      title: 'Older healthy generation',
+      startedAt: 1_000,
+      updatedAt: 2_000,
+      endedAt: 2_000,
+      tasks: [{
+        childId: 'child-1',
+        sessionId: 'pi-session-1',
+        agent: 'worker',
+        status: 'completed',
+        output: 'previous generation answer',
+      }],
+    };
+    const crashedNewerGeneration = {
+      kind: 'stale' as const,
+      runId: '123e4567-e89b-42d3-a456-426614174091',
+      taskId: 'parent-tool',
+      parentSessionId: 'session-1',
+      title: 'Crashed resume',
+      startedAt: 3_000,
+      updatedAt: 4_000,
+      message: 'runner stopped unexpectedly',
+    };
+    /** The row exactly as reconciliation leaves it for each case. */
+    const detailRow = (overrides: Record<string, unknown>) => ({
+      id: 'run-1',
+      logicalAgentId: 'parent-tool',
+      provider: 'pi',
+      providerRunIds: ['123e4567-e89b-42d3-a456-426614174090'],
+      capabilities: { viewFullTranscript: true },
+      ...overrides,
+    });
+
+    it('does not present a superseded generation as the crashed run result', async () => {
+      registerSubagentRunsIpc();
+      const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+      // Written by the diagnostic path: failed, carrying the diagnostic
+      // message — and still holding the result an earlier generation returned,
+      // which the row keeps on purpose.
+      h.getSubagentRunDetail.mockResolvedValue(detailRow({
+        status: 'failed',
+        summary: 'runner stopped unexpectedly',
+        returnedResult: 'previous generation answer',
+        returnedResultTruncated: true,
+      }));
+      h.listPiSubagentRuns.mockResolvedValue([olderHealthyGeneration]);
+      h.listPiSubagentRunDiagnostics.mockResolvedValue([crashedNewerGeneration]);
+
+      const response = await detail({}, {
+        sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+      }) as { run: Record<string, unknown> };
+
+      // Nothing from the superseded generation reaches the view: no completed
+      // children, no result body, and no stale truncation flag implying one.
+      expect(response.run.children).toBeUndefined();
+      expect('returnedResult' in response.run).toBe(false);
+      expect('returnedResultTruncated' in response.run).toBe(false);
+      expect(JSON.stringify(response.run)).not.toContain('previous generation answer');
+      // What is left is the diagnostic the row already records.
+      expect(response.run.status).toBe('failed');
+      expect(response.run.summary).toBe('runner stopped unexpectedly');
+    });
+
+    it('still projects the newest generation when no diagnostic supersedes it', async () => {
+      registerSubagentRunsIpc();
+      const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+      h.getSubagentRunDetail.mockResolvedValue(detailRow({
+        status: 'completed',
+        returnedResult: 'previous generation answer',
+      }));
+      h.listPiSubagentRuns.mockResolvedValue([olderHealthyGeneration]);
+      h.listPiSubagentRunDiagnostics.mockResolvedValue([]);
+
+      const response = await detail({}, {
+        sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+      }) as { run: { children: Array<{ output?: string }>; returnedResult?: string } };
+
+      expect(response.run.children.map((child) => child.output))
+        .toEqual(['previous generation answer']);
+      expect(response.run.returnedResult).toBe('previous generation answer');
+    });
+
+    it('still projects a healthy generation newer than every diagnostic', async () => {
+      registerSubagentRunsIpc();
+      const detail = h.ipcHandlers.get('local-db:subagent-runs:detail')!;
+      h.getSubagentRunDetail.mockResolvedValue(detailRow({
+        status: 'completed',
+        returnedResult: 'resumed answer',
+        providerRunIds: ['123e4567-e89b-42d3-a456-426614174092'],
+      }));
+      h.listPiSubagentRuns.mockResolvedValue([{
+        ...olderHealthyGeneration,
+        runId: '123e4567-e89b-42d3-a456-426614174092',
+        title: 'Newer healthy generation',
+        startedAt: 5_000,
+        updatedAt: 6_000,
+        endedAt: 6_000,
+        tasks: [{ ...olderHealthyGeneration.tasks[0]!, output: 'resumed answer' }],
+      }]);
+      // The crash is the *older* generation now: it must not blank the resume.
+      h.listPiSubagentRunDiagnostics.mockResolvedValue([{
+        ...crashedNewerGeneration,
+        startedAt: 1_000,
+        updatedAt: 2_000,
+      }]);
+
+      const response = await detail({}, {
+        sessionId: 'session-1', provider: 'pi', runIdOrAlias: 'parent-tool',
+      }) as { run: { children: Array<{ output?: string }>; returnedResult?: string } };
+
+      expect(response.run.children.map((child) => child.output)).toEqual(['resumed answer']);
+      expect(response.run.returnedResult).toBe('resumed answer');
+    });
+  });
+
+  /**
    * `resume` only works while the parent task is a loaded PI session — the
    * control handler resolves `maker.getSession(sessionId)` and refuses
    * otherwise. Browsing a finished run after a restart never loads it, so the

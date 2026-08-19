@@ -453,6 +453,40 @@ function main() {
     if (childTask.hardKillTimer && typeof childTask.hardKillTimer.unref === 'function') childTask.hardKillTimer.unref();
   }
 
+  // Is there a stop waiting in the mailbox that this batch has not seen?
+  //
+  // The batch partition puts stop first within one scan, but a scan is a
+  // snapshot: a stop written while the batch was still executing sits on disk
+  // unseen until the next poll, and by then an approval from this batch has
+  // already been forwarded. What is forwarded cannot be recalled — the child
+  // may already be running the command — so the account boundary sweep's
+  // verified kill stays the backstop for that. What this closes is the window
+  // between consuming a control and actually acting on it, which a long batch
+  // can stretch a long way.
+  //
+  // One readdir per forwarded control. Approvals move at human pace, so the
+  // cost is negligible next to what it prevents.
+  function stopIsWaiting(target) {
+    let files = [];
+    try {
+      files = fs.readdirSync(controlDir).filter(function (file) {
+        return /^[0-9a-f-]{36}\.json$/i.test(file);
+      });
+    } catch (_) {
+      return false;
+    }
+    for (const file of files) {
+      let control;
+      try { control = readJson(path.join(controlDir, file)); } catch (_) { continue; }
+      if (!control || control.action !== 'stop' || control.version !== CONTROL_VERSION) continue;
+      const requestId = typeof control.requestId === 'string' ? control.requestId : '';
+      if (requestId && state.processedControlIds.has(requestId)) continue;
+      const scope = typeof control.childId === 'string' ? control.childId : undefined;
+      if (!scope || !target || scope === target) return true;
+    }
+    return false;
+  }
+
   function applyControl(control) {
     if (!control || control.version !== CONTROL_VERSION) return { accepted: false, reason: 'invalid-control' };
     const requestId = typeof control.requestId === 'string' ? control.requestId : '';
@@ -497,6 +531,13 @@ function main() {
       && typeof control.approvalId === 'string'
       && (typeof control.confirmed === 'boolean' || typeof control.value === 'string')
     ) {
+      // Fail closed on a stop that landed after this batch was read. The
+      // control is consumed either way; it is simply never forwarded, and the
+      // receipt below reports it as not accepted, which is the same thing the
+      // Host already understands as "not delivered".
+      if (stopIsWaiting(target)) {
+        return complete({ accepted: false, reason: 'stopped' });
+      }
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;
@@ -517,6 +558,12 @@ function main() {
       return complete({ accepted: accepted, reason: accepted ? undefined : 'approval-unavailable' });
     }
     if ((control.action === 'steer' || control.action === 'follow_up') && typeof control.message === 'string' && control.message.trim()) {
+      // Same freshness check, same reason: a stop makes every later instruction
+      // for that scope meaningless, and forwarding one after it has landed is
+      // the account boundary's whole complaint.
+      if (stopIsWaiting(target)) {
+        return complete({ accepted: false, reason: 'stopped' });
+      }
       let accepted = false;
       for (const task of selected) {
         if (state.stopRequested || task.stopRequested) continue;

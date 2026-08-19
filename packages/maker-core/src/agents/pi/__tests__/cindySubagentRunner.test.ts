@@ -1136,6 +1136,59 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitForClose(fixture.child, fixture.stderr);
   });
 
+  it('refuses to forward an approval once a stop is already waiting', async () => {
+    // The batch partition orders one scan; a scan is a snapshot. A stop written
+    // while the batch was still executing sits unseen on disk until the next
+    // poll — by which time the approval has been forwarded and the child may
+    // already be running the command. What is forwarded cannot be recalled, so
+    // the sweep's verified kill stays the backstop; this closes the window
+    // between consuming a control and acting on it.
+    //
+    // Written in the order that reproduces it: the approval carries the earlier
+    // seq, so the partition would still hand it to the child first — only a
+    // fresh look at the mailbox can catch the stop.
+    const fixture = await makeFixture({ approval: true });
+    const pending = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.tasks[0]?.pendingApproval ? run : null;
+    });
+    const controlsDir = path.join(fixture.runDir, 'controls');
+    await mkdir(controlsDir, { recursive: true });
+    const stopId = randomUUID();
+    await writeFile(
+      path.join(controlsDir, `${stopId}.json`),
+      `${JSON.stringify({ version: 1, requestId: stopId, seq: 2, requestedAt: 2, action: 'stop' })}\n`,
+      { mode: 0o600 },
+    );
+    const approvalId = randomUUID();
+    await writeFile(
+      path.join(controlsDir, `${approvalId}.json`),
+      `${JSON.stringify({
+        version: 1,
+        requestId: approvalId,
+        seq: 1,
+        requestedAt: 1,
+        action: 'approval',
+        childId: pending.tasks[0]?.childId,
+        approvalId: 'approval-1',
+        confirmed: true,
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    const stopped = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'stopped' ? run : null;
+    });
+
+    expect(stopped.tasks[0]?.output ?? '').toBe('');
+    const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
+    expect(commands).not.toContainEqual(
+      expect.objectContaining({ type: 'extension_ui_response', id: 'approval-1' }),
+    );
+    await waitForClose(fixture.child, fixture.stderr);
+  });
+
   it('forwards a source-aware child approval value through the durable mailbox', async () => {
     const fixture = await makeFixture({ approval: true, approvalMethod: 'input' });
     const pending = await waitFor(async () => {

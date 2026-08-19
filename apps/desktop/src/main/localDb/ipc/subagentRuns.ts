@@ -130,7 +130,37 @@ const runProjectionWriteDirectly: DurableWriteEnqueue = (_label, fn) =>
 
 let enqueueProjectionWrite: DurableWriteEnqueue = runProjectionWriteDirectly;
 
-async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
+/**
+ * Is this durable status still the newest generation of its logical task?
+ *
+ * One logical task can have several durable generations after a resume, and a
+ * generation whose state file is stale or corrupt is missing from
+ * `listPiSubagentRuns` altogether — it only surfaces as a diagnostic. So the
+ * newest generation is the truth whether it is a healthy status or a
+ * diagnostic, and any healthy status a strictly newer diagnostic supersedes is
+ * the *previous* run's answer, not this one's.
+ *
+ * Shared by reconciliation (which decides what the projected row says) and by
+ * the detail projection (which decides whether that generation's children and
+ * result may be laid over the row). A second copy of this comparison would
+ * drift, and the two disagreeing is exactly the failure this guards: the row
+ * read "failed" while the detail view still rendered the superseded
+ * generation's completed output.
+ */
+function isNewestPiGeneration(
+  status: { taskId: string; updatedAt: number },
+  newestDiagnosticUpdatedAt: ReadonlyMap<string, number>,
+): boolean {
+  const newerDiagnostic = newestDiagnosticUpdatedAt.get(status.taskId);
+  return newerDiagnostic === undefined || newerDiagnostic <= status.updatedAt;
+}
+
+/**
+ * Reconcile the durable PI records into the projection, and report the newest
+ * diagnostic generation per task so the caller can judge generation recency on
+ * the same snapshot the row was just written from.
+ */
+async function reconcilePiDurableRuns(sessionId: string): Promise<ReadonlyMap<string, number>> {
   const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
   const statuses = await listPiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
   const fingerprints = reconcileFingerprintsFor(sessionId, activeOwnerScopeKey());
@@ -196,8 +226,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
     if (seenTaskIds.has(status.taskId)) continue;
     // A strictly newer unreadable generation wins: this run crashed, and the
     // previous generation's result must not stand in for it.
-    const newerDiagnostic = newestDiagnosticUpdatedAt.get(status.taskId);
-    if (newerDiagnostic !== undefined && newerDiagnostic > status.updatedAt) continue;
+    if (!isNewestPiGeneration(status, newestDiagnosticUpdatedAt)) continue;
     seenTaskIds.add(status.taskId);
     const terminal = isPiSubagentTerminal(status.state);
     const projectedStatus = status.state === 'queued' ? 'running' : status.state;
@@ -278,6 +307,7 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<void> {
       updatedAt: new Date(diagnostic.updatedAt).toISOString(),
     }, diagnostic.updatedAt);
   }
+  return newestDiagnosticUpdatedAt;
 }
 
 const SUBAGENT_PROVIDERS = [
@@ -393,7 +423,12 @@ export function registerSubagentRunsIpc(
       return { supported: false, run: null } satisfies SubagentRunDetailResponse;
     }
     const runIdOrAlias = requireString(body.runIdOrAlias, 'runIdOrAlias');
-    if (provider === 'pi') await reconcilePiDurableRuns(sessionId);
+    // Reused by the projection below: generation recency has to be judged on
+    // the same snapshot reconciliation just wrote the row from, not on a second
+    // scan that could disagree with it.
+    const newestDiagnosticUpdatedAt = provider === 'pi'
+      ? await reconcilePiDurableRuns(sessionId)
+      : new Map<string, number>();
     const run = await getSubagentRunDetail(sessionId, provider, runIdOrAlias);
     let projectedRun = run;
     if (run && provider === 'pi') {
@@ -405,7 +440,30 @@ export function registerSubagentRunsIpc(
         || run.providerRunIds.includes(candidate.runId)
       );
       const status = statuses.find(belongsToRun);
-      if (status) {
+      if (status && !isNewestPiGeneration(status, newestDiagnosticUpdatedAt)) {
+        // A newer generation exists but its durable state is stale or corrupt,
+        // so `listPiSubagentRuns` omits it and `find` lands on the previous,
+        // still readable generation. Reconciliation has already written the row
+        // as failed with the diagnostic message; laying this generation's
+        // children and output over it republished last run's answer as the
+        // crashed run's own result — completed children, a filled result body,
+        // and the diagnostic nowhere on screen.
+        //
+        // The row keeps the earlier `returnedResult` on purpose (a durable
+        // record of what was once returned survives a later failure), but the
+        // detail view has no field that says "from an earlier generation": it
+        // renders `returnedResult` as this run's result, and only falls back to
+        // showing `summary` — the diagnostic message — when there is none. So
+        // the projection drops both halves and lets the failed status and the
+        // diagnostic summary stand alone. The earlier answer is still reachable
+        // through the transcript, which is addressed per generation.
+        const {
+          returnedResult: _supersededResult,
+          returnedResultTruncated: _supersededTruncated,
+          ...withoutSupersededResult
+        } = run;
+        projectedRun = withoutSupersededResult;
+      } else if (status) {
         // One logical child, one id per generation: a resume mints
         // `<newRunId>-<n>` for every task it carries over. What it does *not*
         // change is the PI session the task is resumed on — `sessionDir` and
