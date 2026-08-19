@@ -4583,6 +4583,13 @@
     "expandControlledNotice": "展開被控提示：{{label}}",
     "versionMismatch": "對方版本不一致，部分功能可能受限"
   },
+  "accountBoundaryAbort": {
+    "title": "帳戶切換未完成",
+    "message": "部分服務已停用，且無法自動恢復。",
+    "detail": "目前帳戶的模型路由、訊息連線與定時執行暫不可用。重新啟動 Cindy 即可恢復——你的任務與資料不受影響。",
+    "restartNow": "立即重新啟動",
+    "later": "稍後"
+  },
   "accountDeletion": {
     "entryButton": "刪除帳號",
     "entryAria": "刪除目前帳號",

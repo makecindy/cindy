@@ -4583,6 +4583,13 @@
     "expandControlledNotice": "リモート操作の通知を展開: {{label}}",
     "versionMismatch": "相手のバージョンが異なります。一部機能が制限される場合があります"
   },
+  "accountBoundaryAbort": {
+    "title": "アカウントの切り替えが完了しませんでした",
+    "message": "一部のサービスが停止し、自動では復旧できませんでした。",
+    "detail": "このアカウントのモデルルーティング、メッセージ接続、スケジュール実行が利用できません。Cindy を再起動すると復旧します。タスクとデータに影響はありません。",
+    "restartNow": "今すぐ再起動",
+    "later": "後で"
+  },
   "accountDeletion": {
     "entryButton": "アカウントを削除",
     "entryAria": "現在のアカウントを削除",

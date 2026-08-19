@@ -842,6 +842,7 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { setMainLocale, t } from './i18n.js';
+import { showAccountBoundaryAbortNotice } from './accountBoundaryAbortNotice.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -1290,6 +1291,22 @@ let accountBoundaryAbortedMidTeardown: string | null = null;
 function markAccountBoundaryAbortedMidTeardown(reason: string): void {
   if (accountBoundaryAbortedMidTeardown !== null) return;
   accountBoundaryAbortedMidTeardown = reason;
+  // Fire-and-forget on purpose: the teardown still has to rethrow and still has
+  // to lower its launch fence, and neither may wait on a person. The notice
+  // itself never rejects — it downgrades a dialog it cannot show to a log.
+  void showAccountBoundaryAbortNotice({
+    strings: {
+      title: t('accountBoundaryAbort.title'),
+      message: t('accountBoundaryAbort.message'),
+      detail: t('accountBoundaryAbort.detail'),
+      restartNow: t('accountBoundaryAbort.restartNow'),
+      later: t('accountBoundaryAbort.later'),
+    },
+    showDialog: (options) => dialog.showMessageBox(options),
+    relaunch: () => app.relaunch(),
+    quit: () => app.quit(),
+    logError: (message, error) => authBoundaryLog.error(message, error),
+  });
   authBoundaryLog.error(
     `account handover on ${reason} was aborted after teardown had already run — this `
     + 'account keeps its custom provider catalog cleared and its IM, scheduler, '
@@ -1301,6 +1318,17 @@ function markAccountBoundaryAbortedMidTeardown(reason: string): void {
 /** Test seam: which reason aborted mid-teardown, or null if none has. */
 export function __accountBoundaryAbortedMidTeardownForTests(): string | null {
   return accountBoundaryAbortedMidTeardown;
+}
+
+/**
+ * Cleared by a handover that completes.
+ *
+ * A successful switch replaces the runtime the abort had left half dismantled,
+ * so the blocking state stops being true and the next abort — if there ever is
+ * one — has to be able to say so again.
+ */
+function clearAccountBoundaryAbortMark(): void {
+  accountBoundaryAbortedMidTeardown = null;
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
@@ -1657,6 +1685,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   if (blockingFailures.length > 0) {
     throw new AggregateError(blockingFailures, `account boundary teardown on ${reason} was incomplete`);
   }
+  // Reached only when the handover ran all the way through, which is exactly
+  // when a previous abort's blocking state stops being true.
+  clearAccountBoundaryAbortMark();
 }
 
 authManager.setAccountSwitchTeardown(async () => {

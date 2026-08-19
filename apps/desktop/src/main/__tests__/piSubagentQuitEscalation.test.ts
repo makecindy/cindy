@@ -338,6 +338,28 @@ describe('PI Subagent quit sweep', () => {
     for (const named of ['custom provider catalog', 'IM, scheduler,', 'restarted']) {
       expect(source).toContain(named);
     }
+    // And it reaches the user, rather than only the log. Fire-and-forget: the
+    // teardown still has to rethrow and still has to lower its fence, and
+    // neither may wait on a person.
+    const marker = source.slice(
+      source.indexOf('function markAccountBoundaryAbortedMidTeardown('),
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+    );
+    expect(marker).toContain('void showAccountBoundaryAbortNotice({');
+    expect(marker).toContain("t('accountBoundaryAbort.title')");
+    // Once per abort: the marker is set first and an already-set marker returns
+    // before ever reaching the dialog.
+    const guard = marker.indexOf('if (accountBoundaryAbortedMidTeardown !== null) return;');
+    expect(guard).toBeGreaterThan(-1);
+    expect(marker.indexOf('void showAccountBoundaryAbortNotice({')).toBeGreaterThan(guard);
+    // A completed handover takes the blocking state back down.
+    expect(source).toContain('clearAccountBoundaryAbortMark();');
+    const teardownBody = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+      source.indexOf('authManager.setAccountSwitchTeardown('),
+    );
+    expect(teardownBody.indexOf('clearAccountBoundaryAbortMark();'))
+      .toBeGreaterThan(teardownBody.indexOf('if (blockingFailures.length > 0) {'));
   });
 
   it('keeps the Maker when a session it still holds failed to detach', () => {
