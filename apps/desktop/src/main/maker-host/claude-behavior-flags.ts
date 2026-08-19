@@ -26,14 +26,26 @@
 
 const STATIC_CLAUDE_BEHAVIOR_FLAGS: Readonly<Record<string, string>> = {
   CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS: '1',
-  // 网关 upstream 透传 tool_reference 块, 显式开启 ToolSearch
-  // 否则 CC 看到非 first-party host 默认 disable, 每次请求都全量塞工具定义。
-  ENABLE_TOOL_SEARCH: 'auto',
 };
+
+/**
+ * ToolSearch 依赖上游接受 deferred tools / tool_reference。仅对已知支持该协议的
+ * XD 网关与 Anthropic 原生路由开启；其它显式来源默认关闭，避免兼容供应商返回 400。
+ */
+export function claudeToolSearchMode(
+  providerId: string | null | undefined,
+  credentialMode?: string,
+): 'auto' | 'false' {
+  const provider = providerId?.trim() || null;
+  if (provider) return provider === 'xd' || provider === 'anthropic' ? 'auto' : 'false';
+  return credentialMode === 'provider-oauth' ? 'false' : 'auto';
+}
 
 export interface ClaudeSpawnFlagsContext {
   /** 本次 spawn 的凭证形态(maker-core AgentCredentialMode;undefined = adapter fallback)。 */
   credentialMode?: string;
+  /** 本次 spawn 的会话来源。null/undefined = 隐式默认路由。 */
+  providerId?: string | null;
   /** 是否连了 Claude.ai 订阅。惰性回调:gateway-key 分支不调用、不产生钥匙串读。 */
   oauthConnected: () => boolean;
 }
@@ -44,7 +56,9 @@ export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Recor
   // (env-builder cleanProcessEnv),用户 shell 若 export 过 CLAUDE_CODE_ATTRIBUTION_HEADER=0,
   // 缺席的 key 压不住继承值,#758 会原样复现。CLI 判定(cli.js c5):仅
   // '0'/'false'/'no'/'off' 视为禁用,'1' = 保留归因,与未设置同义。
-  return keepAttribution
-    ? { ...STATIC_CLAUDE_BEHAVIOR_FLAGS, CLAUDE_CODE_ATTRIBUTION_HEADER: '1' }
-    : { ...STATIC_CLAUDE_BEHAVIOR_FLAGS, CLAUDE_CODE_ATTRIBUTION_HEADER: '0' };
+  return {
+    ...STATIC_CLAUDE_BEHAVIOR_FLAGS,
+    ENABLE_TOOL_SEARCH: claudeToolSearchMode(ctx.providerId, ctx.credentialMode),
+    CLAUDE_CODE_ATTRIBUTION_HEADER: keepAttribution ? '1' : '0',
+  };
 }
