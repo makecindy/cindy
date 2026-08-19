@@ -55,7 +55,12 @@ describe('createWorkLouderCodexSystemFrontmostInput', () => {
 
   it('discards a hold-scroll helper that finishes after stop', async () => {
     let resolveSpawn!: (child: {
-      stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn>; destroyed: boolean };
+      stdin: {
+        write: ReturnType<typeof vi.fn>;
+        end: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
+        destroyed: boolean;
+      };
       kill: ReturnType<typeof vi.fn>;
       once: ReturnType<typeof vi.fn>;
     }) => void;
@@ -71,7 +76,7 @@ describe('createWorkLouderCodexSystemFrontmostInput', () => {
     pump.setSpeed(-800);
     pump.stop();
     const child = {
-      stdin: { write: vi.fn(), end: vi.fn(), destroyed: false },
+      stdin: { write: vi.fn(), end: vi.fn(), on: vi.fn(), destroyed: false },
       kill: vi.fn(),
       once: vi.fn(),
     };
@@ -79,8 +84,35 @@ describe('createWorkLouderCodexSystemFrontmostInput', () => {
     await Promise.resolve();
 
     expect(child.kill).toHaveBeenCalledOnce();
-    expect(child.stdin.write).toHaveBeenCalledWith('stop\n');
+    expect(child.stdin.write).toHaveBeenCalledWith('stop\n', expect.any(Function));
+    expect(child.stdin.on).toHaveBeenCalledWith('error', expect.any(Function));
     expect(fallback.stop).toHaveBeenCalled();
+  });
+
+  it('listens for hold-scroll stdin errors before writing speed', async () => {
+    let resolveSpawn!: (child: {
+      stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; destroyed: boolean };
+      kill: ReturnType<typeof vi.fn>;
+      once: ReturnType<typeof vi.fn>;
+    }) => void;
+    const spawn = vi.fn(
+      () =>
+        new Promise<Parameters<typeof resolveSpawn>[0]>((resolve) => {
+          resolveSpawn = resolve;
+        }),
+    );
+    const pump = createMacHoldScrollPump({ setSpeed: vi.fn(), stop: vi.fn() }, spawn);
+    pump.setSpeed(-800);
+    const child = {
+      stdin: { write: vi.fn(), end: vi.fn(), on: vi.fn(), destroyed: false },
+      kill: vi.fn(),
+      once: vi.fn(),
+    };
+    resolveSpawn(child);
+    await Promise.resolve();
+
+    expect(child.stdin.on).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(child.stdin.write).toHaveBeenCalledWith('-800\n', expect.any(Function));
   });
 
   it('keeps sub-notch Windows wheel remainders across ticks', () => {

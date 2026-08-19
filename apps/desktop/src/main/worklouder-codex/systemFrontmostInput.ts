@@ -176,12 +176,27 @@ export function createIntervalScrollPump(
 }
 
 export type HoldScrollChild = Pick<ChildProcess, 'kill' | 'once'> & {
-  stdin?: Pick<NonNullable<ChildProcess['stdin']>, 'write' | 'end' | 'destroyed'> | null;
+  stdin?: Pick<NonNullable<ChildProcess['stdin']>, 'write' | 'end' | 'destroyed' | 'on'> | null;
 };
 
-function discardHoldScrollChild(next: HoldScrollChild): void {
+function ignoreHoldScrollStdinErrors(child: HoldScrollChild): void {
+  child.stdin?.on('error', () => undefined);
+}
+
+function writeHoldScrollLine(child: HoldScrollChild, line: string): void {
+  const stdin = child.stdin;
+  if (!stdin || stdin.destroyed) return;
   try {
-    next.stdin?.write('stop\n');
+    stdin.write(line, () => undefined);
+  } catch {
+    // The helper may already have closed stdin.
+  }
+}
+
+function discardHoldScrollChild(next: HoldScrollChild): void {
+  ignoreHoldScrollStdinErrors(next);
+  writeHoldScrollLine(next, 'stop\n');
+  try {
     next.stdin?.end();
   } catch {
     // The helper may already have exited after the last wheel event.
@@ -200,8 +215,8 @@ export function createMacHoldScrollPump(
   let speed = 0;
 
   const writeSpeed = (): void => {
-    if (!child?.stdin || child.stdin.destroyed) return;
-    child.stdin.write(`${Math.round(speed)}\n`);
+    if (!child) return;
+    writeHoldScrollLine(child, `${Math.round(speed)}\n`);
   };
 
   const start = (): void => {
@@ -216,6 +231,7 @@ export function createMacHoldScrollPump(
         }
         child = next;
         starting = false;
+        ignoreHoldScrollStdinErrors(next);
         next.once('exit', () => {
           if (child === next) child = null;
         });
