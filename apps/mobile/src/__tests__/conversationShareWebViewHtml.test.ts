@@ -164,7 +164,7 @@ describe('buildConversationShareHtml 富内容导出', () => {
     const sessionSource = readFileSync(
       resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(nativeSource).toContain('conversationShareMaxSourcePixels');
     expect(nativeSource).toContain('UIWindow(windowScene: windowScene)');
