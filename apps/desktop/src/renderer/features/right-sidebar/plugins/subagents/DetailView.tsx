@@ -425,7 +425,37 @@ function PiDurableDetailView({
   // rendered one" cannot disagree: previously this counted a `visibleResult`
   // that the suppressed fallback never drew, so neither the result nor the
   // missing-reply notice appeared.
-  const showDurableResultFallback = !hasAssistantItem && Boolean(visibleResult);
+  /**
+   * Is what we are looking at the *end* of this generation's transcript?
+   *
+   * Two ways it is not. The runner stops appending the moment the record hits
+   * its byte cap and writes a `transcript-truncated` marker — so truncation
+   * always loses the *tail*, which is exactly where the newest reply is. And the
+   * renderer pages head-first with a page bound, so a long transcript can stop
+   * short with `transcriptCursor` still set.
+   */
+  const currentGenerationTruncated = useMemo(
+    () => conversation.system.some((entry) => (
+      entry.systemEvent?.kind === 'transcript-truncated'
+      && (!entry.childId || currentGenerationChildIds.has(entry.childId))
+    )),
+    [conversation.system, currentGenerationChildIds],
+  );
+  const transcriptTailComplete = transcriptCursor === null && !currentGenerationTruncated;
+  // An assistant item is only proof that *this* generation replied — not that we
+  // are looking at its latest reply. A follow-up produces another `message_end`,
+  // and the runner overwrites `task.output` each time, so the durable result is
+  // always the newest one while the transcript may still be showing an earlier
+  // one. With the tail missing, "some assistant line exists" and "the newest
+  // reply is on screen" come apart, and suppressing on the first was how the
+  // user ended up reading a stale answer with the current one nowhere.
+  //
+  // When the tail is complete this is exactly the previous condition. When it is
+  // not, the result is shown even at the cost of repeating a reply that happens
+  // to already be visible: seeing the newest answer twice is a far smaller
+  // failure than not seeing it at all.
+  const showDurableResultFallback =
+    (!hasAssistantItem || !transcriptTailComplete) && Boolean(visibleResult);
   const hasAssistantReply = hasAssistantItem || showDurableResultFallback;
   // A parallel run stays `running` until its last child settles, so the run
   // status alone would keep a waiting spinner under a child that already

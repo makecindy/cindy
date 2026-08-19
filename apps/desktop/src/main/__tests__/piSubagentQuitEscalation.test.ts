@@ -311,6 +311,35 @@ describe('PI Subagent quit sweep', () => {
       .toBeGreaterThan(teardown.indexOf('the PI Subagent launch fence could not be raised'));
   });
 
+  it('records that a handover aborted after teardown had already run', () => {
+    // The abort keeps the user on the old account, but the custom provider
+    // catalog is already cleared and IM / scheduler / embedding / Ghost / Learn
+    // are already stopped — and their construction duals hang off the login and
+    // DB-ready sequence, which nothing on this path re-runs. Both abort
+    // sub-paths (a failed sweep and a failed detach) reach the same marker;
+    // only the pre-teardown fence failure does not, because nothing has been
+    // taken apart yet when it throws.
+    const teardown = source.slice(
+      source.indexOf('function markAccountBoundaryAbortedMidTeardown('),
+      source.indexOf('authManager.setAccountSwitchTeardown('),
+    );
+    const handler = teardown.slice(teardown.indexOf('if (err instanceof PiSubagentAccountBoundaryError) {'));
+    const mark = handler.indexOf('markAccountBoundaryAbortedMidTeardown(reason);');
+    expect(mark).toBeGreaterThan(-1);
+    expect(handler.indexOf('throw err;')).toBeGreaterThan(mark);
+    // One handler for both abort shapes: the sweep verdict and the detach
+    // failure both throw the same error type into it.
+    expect(teardown).toContain('if (!stopped) throw new PiSubagentAccountBoundaryError(reason);');
+    expect(teardown).toContain('if (piSessionFailures.length > 0) {');
+    // The fence-acquisition throw happens before the marker exists in the flow.
+    expect(source.indexOf("'the PI Subagent launch fence could not be raised'"))
+      .toBeLessThan(source.indexOf('markAccountBoundaryAbortedMidTeardown(reason);'));
+    // Says which services are down rather than only that something failed.
+    for (const named of ['custom provider catalog', 'IM, scheduler,', 'restarted']) {
+      expect(source).toContain(named);
+    }
+  });
+
   it('keeps the Maker when a session it still holds failed to detach', () => {
     // `Session.detach` leaves a failed session in `error`, not `closed`, so the
     // Maker keeps its status listener and its active-session slot on purpose

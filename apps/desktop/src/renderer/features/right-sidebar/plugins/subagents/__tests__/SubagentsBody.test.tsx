@@ -1207,6 +1207,96 @@ describe('SubagentsBody', () => {
     expect(screen.queryByText('rightSidebar.subagents.completedNoReply')).toBeNull();
   });
 
+  it('shows the durable result when the transcript was truncated before the newest reply', async () => {
+    // A follow-up gives the same child a second `message_end`, and the runner
+    // overwrites `task.output` each time — so the durable result is the newest
+    // reply while the transcript may still be showing an earlier one. The
+    // runner also stops appending at its byte cap, which always loses the
+    // *tail*. "Some assistant line exists" then stopped meaning "the newest
+    // reply is on screen", and the user read a stale answer with the current
+    // one nowhere.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      children: [{
+        id: 'run-1-1', role: 'scout', status: 'completed',
+        output: 'the newest answer',
+      }],
+    };
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [
+        entry({ id: 'e1', childId: 'run-1-1', content: 'the first answer' }),
+        entry({
+          id: 'e2', childId: 'run-1-1', role: 'system',
+          content: 'Transcript storage limit reached.',
+          systemEvent: { kind: 'transcript-truncated' },
+        }),
+      ],
+      tailCursor: 'cursor-1',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    expect(await screen.findByText('the first answer')).toBeTruthy();
+    expect(screen.getByText('the newest answer')).toBeTruthy();
+  });
+
+  it('shows the durable result while the transcript tail is still unread', async () => {
+    // Same gap from the other direction: paging is head-first with a page
+    // bound, so a long transcript can stop short with more still to load.
+    currentDetail = {
+      ...detail('unused'),
+      status: 'completed',
+      capabilities: {
+        ...detail('unused').capabilities,
+        viewFullTranscript: true,
+        viewReturnedResult: true,
+      },
+      children: [{
+        id: 'run-1-1', role: 'scout', status: 'completed',
+        output: 'the newest answer',
+      }],
+    };
+    // `nextCursor` on every page: the eager loop stops at its page bound and
+    // leaves `transcriptCursor` set.
+    loadTranscript.mockResolvedValue({
+      supported: true,
+      entries: [entry({ id: 'e1', childId: 'run-1-1', content: 'the first answer' })],
+      nextCursor: 'cursor-next',
+      tailCursor: 'cursor-next',
+    });
+    render(
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />,
+    );
+
+    // The eager loop re-reads the same page up to its bound, so the transcript
+    // legitimately holds repeats of that entry; the assertion that matters is
+    // that the durable result is on screen next to them.
+    expect((await screen.findAllByText('the first answer')).length).toBeGreaterThan(0);
+    expect(screen.getByText('the newest answer')).toBeTruthy();
+  });
+
   it('still suppresses the durable result once the current generation replies', async () => {
     currentDetail = {
       ...detail('unused'),

@@ -1264,6 +1264,45 @@ class PiSubagentAccountBoundaryError extends Error {
   }
 }
 
+/**
+ * Did an account handover abort after it had already taken services apart?
+ *
+ * The abort keeps the user on the old account, but by the time it can happen
+ * the custom provider catalog has been cleared and IM, the scheduler, embedding,
+ * the Ghost projection and Learn have been stopped. Their construction duals all
+ * hang off the login / DB-ready sequence (`localDb` onReady and the
+ * `app:ready-for-bot` handler), which nothing re-runs on this path — so the old
+ * account keeps working for anything already in memory and silently does not for
+ * everything that was torn down.
+ *
+ * This records the fact and says so once, plainly. It is deliberately not a
+ * partial re-init: of the six, only IM, hook control and the scheduler have an
+ * entry point that is idempotent and reachable from here; the provider catalog —
+ * the one that decides which routes an agent may take — is repopulated by a
+ * readiness arm published from the startup closure, and calling half the list
+ * would leave the account looking recovered while its routing stayed empty.
+ *
+ * Read by nothing yet: the next step is a user-visible "restart required" state,
+ * which is a product decision, not one to smuggle in here.
+ */
+let accountBoundaryAbortedMidTeardown: string | null = null;
+
+function markAccountBoundaryAbortedMidTeardown(reason: string): void {
+  if (accountBoundaryAbortedMidTeardown !== null) return;
+  accountBoundaryAbortedMidTeardown = reason;
+  authBoundaryLog.error(
+    `account handover on ${reason} was aborted after teardown had already run — this `
+    + 'account keeps its custom provider catalog cleared and its IM, scheduler, '
+    + 'embedding, Ghost projection and Learn services stopped until the app is '
+    + 'restarted or a later handover succeeds',
+  );
+}
+
+/** Test seam: which reason aborted mid-teardown, or null if none has. */
+export function __accountBoundaryAbortedMidTeardownForTests(): string | null {
+  return accountBoundaryAbortedMidTeardown;
+}
+
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const blockingFailures: unknown[] = [];
   // Raised before anything else in this function, because everything below
@@ -1562,6 +1601,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
             // still spending this account's credentials. Staying poisoned is the
             // lesser harm there, and the log above is what says so.
             if (shutdownRan && retainedPiSessions === 0) resetMaker();
+            markAccountBoundaryAbortedMidTeardown(reason);
             throw err;
           }
           authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
