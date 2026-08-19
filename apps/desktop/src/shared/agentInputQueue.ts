@@ -237,6 +237,13 @@ export interface AgentInputQueuedMessage {
         scheduleName: string;
         /** 老队列快照可能没有；新 scheduler run 始终写入。 */
         runId?: string;
+      }
+    | {
+        /** cindy_helper 的 send_to_session 入队来源；只用于本人排队消息控制授权。 */
+        kind: 'session';
+        senderSessionId: string;
+        /** 原始可编辑正文；单独保留以兼容未来可能加入的派发包装。 */
+        displayText: string;
       };
   /**
    * 本条由**手机控制端**入队 / 插入。

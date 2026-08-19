@@ -87,7 +87,10 @@ import {
   scheduleFocusPath,
 } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
-import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import {
+  projectSidebarSessionActivity,
+  resolveSidebarRightStatus,
+} from './sidebarRightStatus';
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
@@ -166,28 +169,18 @@ export function SessionCard({
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id);
-  const remoteRightStatus =
-    remoteActivity == null
-      ? null
-      : remoteActivity.phase === 'error'
-        ? ('error' as const)
-        : remoteActivity.phase === 'needs-interaction'
-          ? ('awaiting' as const)
-          : remoteActivity.phase === 'running'
-            ? ('running' as const)
-            : ('done' as const);
-  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
-  // 状态槽。只并入 phase=running,与 SessionItem / 折叠 rail 同一口径;
-  // needs-interaction 继续由右侧 awaiting 表达。
-  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
-  const rightStatusKind =
-    remoteRightStatus ??
-    resolveSidebarRightStatus({
-      attentionKind,
-      isUrgentFromContext,
-      isRunning,
-      hasAttentionNotification,
-    });
+  const sessionActivity = projectSidebarSessionActivity({
+    sessionId: session.id,
+    title: session.title,
+    recordStatus: session.status,
+    liveActivity: remoteActivity ?? islandActivity,
+    attentionKind,
+    isUrgentFromContext,
+    isRunning,
+    hasAttentionNotification,
+  });
+  const leftIconRunning = sessionActivity.currentTurnActive === true;
+  const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   const activityIso = session.updatedAt;

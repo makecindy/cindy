@@ -123,17 +123,19 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain('titlePrefixWidth');
   });
 
-  it('merges remote activity into the left vendor-mark running state', () => {
-    // 远程会话的运行态原先只进右侧状态槽,左侧图标仍只看本地 running 集。
-    // 只并入 phase=running,与折叠 rail / remoteLampOf 同一口径;
-    // needs-interaction 继续由右侧 awaiting 表达。
+  it('projects local and remote activity through the shared session status model', () => {
+    // 左侧运行标记和右侧状态槽必须消费同一投影，避免各自组合本地/远程状态源。
+    expect(sessionItemSource).toContain('projectSidebarSessionActivity({');
     expect(sessionItemSource).toContain(
-      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
+    expect(sessionItemSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionItemSource).toContain('isRunning={leftIconRunning}');
+    expect(sessionCardSource).toContain('projectSidebarSessionActivity({');
     expect(sessionCardSource).toContain(
-      "const leftIconRunning = isRunning || remoteActivity?.phase === 'running'",
+      'const leftIconRunning = sessionActivity.currentTurnActive === true',
     );
+    expect(sessionCardSource).toContain('resolveSidebarRightStatus(sessionActivity)');
     expect(sessionCardSource).toContain('isRunning={leftIconRunning}');
     expect(sessionCardSource).not.toContain('isRemoteSessionActivityActive');
     expect(sessionItemSource).not.toContain('isRemoteSessionActivityActive');

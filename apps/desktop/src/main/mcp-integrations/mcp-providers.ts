@@ -35,7 +35,10 @@ import {
   listSessionsForHistory,
   getMessagesForHistory,
 } from '../localDb/chatHistoryReader.js';
-import { tryGetDbClient } from '../localDb/client/current.js';
+import {
+  isDbClientNotReadyError,
+  tryGetDbClient,
+} from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
 import { resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
 import {
@@ -100,20 +103,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   ): (...args: Args) => Promise<R> {
     return async (...args) => {
       const s = tryGetOrcaCollabService();
-      if (!s)
-        return {
-          ok: false,
-          errorCode: 'HOST_NOT_READY' as const,
-          message: 'orca collab service not initialized',
-        } as R;
-      try {
-        return await fn(s, ...args);
-      } catch (err) {
-        return {
-          ok: false,
-          errorCode: 'INTERNAL' as const,
-          message: err instanceof Error ? err.message : String(err),
-        } as R;
+      if (!s) return { ok: false, errorCode: 'HOST_NOT_READY' as const, message: 'orca collab service not initialized' } as R;
+      try { return await fn(s, ...args); }
+      catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL';
+        return { ok: false, errorCode, message } as R;
       }
     };
   }
@@ -322,6 +317,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       logger: createLogger('mcp/cindy_helper'),
+      sessionQueue: {
+        listSessionQueue: wrap((service, sessionId: string) => service.listSessionQueue(sessionId)),
+        listSessionQueuedCounts: wrap((service, sessionIds: string[]) =>
+          service.listSessionQueuedCounts(sessionIds)),
+      },
+      sessionControl: {
+        updateQueuedMessage: wrap((service, params) => service.updateSessionQueuedMessage(params)),
+        cancelQueuedMessage: wrap((service, params) => service.cancelSessionQueuedMessage(params)),
+        steerSession: wrap((service, params) => service.steerSession(params)),
+        stopSessionTurn: wrap((service, params) => service.stopSessionTurn(params)),
+        getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
+      },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -512,24 +519,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           }
         },
         listWorkdirs: async (args) => {
-          try {
-            const page = await listWorkdirsForHistory(args);
-            return { ok: true, page };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL';
-            return { ok: false, errorCode, message: msg };
-          }
+          try { const page = await listWorkdirsForHistory(args); return { ok: true, page }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         listSessions: async (args) => {
-          try {
-            const page = await listSessionsForHistory(args);
-            return { ok: true, page };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL';
-            return { ok: false, errorCode, message: msg };
-          }
+          try { const page = await listSessionsForHistory(args); return { ok: true, page }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
         getMessages: async (args) => {
           return readChatHistoryMessages(args, {
@@ -538,14 +533,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           });
         },
         searchChatHistory: async (args) => {
-          try {
-            const result = await searchChatHistoryHybrid(args);
-            return { ok: true, result };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            const errorCode = /localDb not ready/i.test(msg) ? 'HOST_NOT_READY' : 'INTERNAL';
-            return { ok: false, errorCode, message: msg };
-          }
+          try { const result = await searchChatHistoryHybrid(args); return { ok: true, result }; }
+          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
         },
       },
       // submit_github_issue: 官方反馈提交(确认卡片 → serverApiFetch)。

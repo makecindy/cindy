@@ -547,12 +547,21 @@ function providerAwareGuardianReviewerModel(
 
 const GUARDIAN_PROVIDER_SEARCH_TOOL_TYPES = new Set(['web_search', 'x_search']);
 
+function providerSearchToolChoiceReferencesRemovedTool(
+  toolChoice: unknown,
+  tools: readonly unknown[],
+): boolean {
+  if (!isPlainObject(toolChoice) || typeof toolChoice.type !== 'string') return false;
+  if (!GUARDIAN_PROVIDER_SEARCH_TOOL_TYPES.has(toolChoice.type)) return false;
+  return !tools.some((tool) => isPlainObject(tool) && tool.type === toolChoice.type);
+}
+
 /**
  * Guardian decides whether another action may run. Provider-hosted search
  * tools must not let that reviewer initiate an unrelated upstream network
  * action with the approval context.
  */
-function stripGuardianProviderSearchTools(
+function stripProviderSearchTools(
   body: Record<string, unknown>,
 ): Record<string, unknown> {
   if (!Array.isArray(body.tools)) return body;
@@ -565,8 +574,16 @@ function stripGuardianProviderSearchTools(
   if (tools.length === body.tools.length) return body;
 
   const next = { ...body };
-  if (tools.length > 0) next.tools = tools;
-  else delete next.tools;
+  if (tools.length > 0) {
+    next.tools = tools;
+    if (providerSearchToolChoiceReferencesRemovedTool(next.tool_choice, tools)) {
+      next.tool_choice = 'auto';
+    }
+  } else {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+  }
   return next;
 }
 
@@ -591,7 +608,7 @@ function createProviderAwareGuardianReviewerTransform(
       toModel: mainModel,
       providerId: getSessionProvider(sessionId),
     });
-    return stripGuardianProviderSearchTools({ ...body, model: mainModel });
+    return stripProviderSearchTools({ ...body, model: mainModel });
   };
 }
 
@@ -878,10 +895,13 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
       // Keep the already parsed body if the defensive strip result cannot be parsed.
     }
   }
-  if (opts.requestModelOverride && isPlainObject(body)) {
-    body = stripGuardianProviderSearchTools({
+  // Chat Completions has no Responses-native search tool. Codex can attach it
+  // automatically even for an ordinary turn, so remove it before translating
+  // a provider-routed chat request instead of failing the entire request.
+  if (isPlainObject(body) && (opts.requestModelOverride || opts.bridge === 'chat')) {
+    body = stripProviderSearchTools({
       ...body,
-      model: opts.requestModelOverride,
+      ...(opts.requestModelOverride ? { model: opts.requestModelOverride } : {}),
     });
   }
   if (isPlainObject(body)) {

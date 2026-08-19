@@ -3263,6 +3263,16 @@ export class PiAgent extends BaseAgent {
         }
       },
 
+      async requestGracefulStop(): Promise<void> {
+        if (proc.isClosed) throw new Error('No active Pi turn to stop');
+        dismissAllPendingPrompts('turn_aborted', 'deny');
+        const resp = await proc.request({ type: 'abort' });
+        if (!resp.success) {
+          throw new Error(`Pi graceful stop rejected: ${resp.error ?? 'unknown'}`);
+        }
+        clearActiveTurnPermissionPolicy('turn_aborted');
+      },
+
       async abort(): Promise<void> {
         if (proc.isClosed) return;
         // 先把等待中的调用 fail-closed 唤醒；即使 abort RPC 失败，也不能让用户刚拒绝/
@@ -4075,6 +4085,7 @@ export class PiAgent extends BaseAgent {
           const permissionRequest = {
             kind: 'permission' as const,
             requestId: id,
+            toolUseId: id,
             toolName,
             input,
             ...(hostApprovalPresentation?.title
