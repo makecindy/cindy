@@ -361,6 +361,47 @@ describe('Discord scheduler manager', () => {
     await manager.stop();
   });
 
+  it('invalidates an in-flight snapshot when an unknown peer reports offline', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [];
+    let resolveFirstSnapshot!: (snapshot: {
+      selfDeviceId: string;
+      peers: Array<{ deviceId: string; platform: string }>;
+    }) => void;
+    let resolveSecondSnapshot!: (snapshot: {
+      selfDeviceId: string;
+      peers: Array<{ deviceId: string; platform: string }>;
+    }) => void;
+    harness.fetchDeviceSnapshot
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstSnapshot = resolve;
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveSecondSnapshot = resolve;
+      }));
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    harness.presenceHandler?.({
+      deviceId: 'a',
+      platform: 'darwin',
+      online: false,
+      lastSeenAt: Date.now(),
+    });
+    resolveFirstSnapshot({
+      selfDeviceId: 'z',
+      peers: [{ deviceId: 'a', platform: 'darwin' }],
+    });
+
+    await vi.waitFor(() => expect(harness.fetchDeviceSnapshot).toHaveBeenCalledTimes(2));
+    resolveSecondSnapshot({ selfDeviceId: 'z', peers: [] });
+    await finishDiscovery(manager);
+
+    expect(discord.init).toHaveBeenCalledOnce();
+    await manager.stop();
+  });
+
   it('starts the deterministic winner and lets a standby take over after it goes offline', async () => {
     harness.selfDeviceId = 'z';
     harness.peers = [{
@@ -1441,6 +1482,50 @@ describe('Discord scheduler manager', () => {
       && (payload as { kind?: unknown }).kind === 'probe'
     )).length;
     expect(probesAfterExpiry).toBeGreaterThan(probesBeforeExpiry);
+    await manager.stop();
+  });
+
+  it('accepts a current-nonce reply after the peer clock rolls back', async () => {
+    harness.selfDeviceId = 'z';
+    harness.peers = [{
+      deviceId: 'a',
+      platform: 'darwin',
+      online: true,
+      lastSeenAt: Date.now(),
+    }];
+    const discord = createDiscord();
+    const manager = createManager(discord);
+
+    await manager.start();
+    const nonce = latestProbeNonce('a');
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: 9_999_999_999,
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      inReplyTo: nonce,
+    });
+    await finishDiscovery(manager);
+    const probesBeforeRollback = harness.sendPush.mock.calls.filter(([, , payload]) => (
+      typeof payload === 'object'
+      && payload !== null
+      && (payload as { kind?: unknown }).kind === 'probe'
+    )).length;
+
+    harness.pushHandler?.('a', {
+      kind: 'advertisement',
+      sentAt: 1,
+      channels: [{ channel: 'discord', identity: '12345678901234567' }],
+      inReplyTo: nonce,
+    });
+    await vi.advanceTimersByTimeAsync(7_900);
+    await manager.reconcile();
+
+    const probesAfterRollback = harness.sendPush.mock.calls.filter(([, , payload]) => (
+      typeof payload === 'object'
+      && payload !== null
+      && (payload as { kind?: unknown }).kind === 'probe'
+    )).length;
+    expect(probesAfterRollback).toBe(probesBeforeRollback);
     await manager.stop();
   });
 

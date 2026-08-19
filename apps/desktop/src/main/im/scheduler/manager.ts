@@ -125,7 +125,11 @@ export class ImSchedulerManager {
           this.liveDesktopPresence.set(snapshot.deviceId, snapshot.platform);
           this.presenceMembershipVersion += 1;
         }
-      } else if (this.liveDesktopPresence.delete(snapshot.deviceId)) {
+      } else if (
+        this.liveDesktopPresence.delete(snapshot.deviceId)
+        || !snapshot.online
+        || isDeviceRevoked(snapshot.deviceId)
+      ) {
         this.presenceMembershipVersion += 1;
       }
       const snapshotIncludedPeer = this.authoritativeDesktopPeers?.has(snapshot.deviceId) === true;
@@ -229,7 +233,10 @@ export class ImSchedulerManager {
         return;
       }
       const previous = this.peers.get(source);
-      if (previous && payload.sentAt < previous.sentAt) return;
+      // A reply for the current nonce is already fenced by this discovery
+      // round. Do not let a wall-clock rollback discard that confirmation;
+      // sentAt ordering only protects replies that are not nonce-bound.
+      if (payload.inReplyTo !== this.discoveryNonce && previous && payload.sentAt < previous.sentAt) return;
       this.observePeerRuntime(payload.runtime, payload.runtimeGaps);
       this.peers.set(source, {
         deviceId: source,
