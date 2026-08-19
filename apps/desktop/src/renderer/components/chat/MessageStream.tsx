@@ -1475,7 +1475,26 @@ export function buildRenderItems(
   if (opts?.historyWindowIncomplete === true) {
     for (const [index, insertion] of planInsertAt) {
       if (insertion.source !== 'task') continue;
-      const stateAtInsertion = getLatestMessageTodoState(messages.slice(0, index + 1), {
+      const prefix = messages.slice(0, index + 1);
+      const prefixPlanToolUseIds = new Set(
+        prefix
+          .filter((message) => isAgentPlanToolName(message.toolName))
+          .map((message) => message.toolUseId)
+          .filter((toolUseId): toolUseId is string => Boolean(toolUseId)),
+      );
+      // TaskList / TaskGet 的权威内容在后续 tool_result 行里。只切到工具行会把
+      // 已完整的 snapshot 重新判成半截；保留当前前缀中计划调用的匹配结果，但
+      // 不把后续计划事件带进来，避免改变「正在复核哪张 insertion」的语义。
+      const validationMessages = [
+        ...prefix,
+        ...messages.slice(index + 1).filter(
+          (message) =>
+            message.role === 'tool_result' &&
+            typeof message.toolUseId === 'string' &&
+            prefixPlanToolUseIds.has(message.toolUseId),
+        ),
+      ];
+      const stateAtInsertion = getLatestMessageTodoState(validationMessages, {
         taskHistoryMayBeIncomplete: true,
       });
       if (!stateAtInsertion.isResolved || stateAtInsertion.latestInsertionIndex !== index) {

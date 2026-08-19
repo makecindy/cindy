@@ -1076,11 +1076,18 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
   let previousTaskTodos: MessageRenderTodoItem[] | null = null;
   let sawTaskEvent = false;
   let currentSessionBoundaryKnown = !hasEarlierMessages;
+  let lastUserBoundaryIndex = -1;
+  let currentSessionUserBoundaryIndex = -1;
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
+    if (isPlanUserBoundary(message)) {
+      lastUserBoundaryIndex = index;
+      continue;
+    }
     if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
 
+    const toolName = toolNameOf(message);
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const resultTasks = taskRecordsFromResult(resultText);
     const input = readRecord(toolInputOf(message)) ?? {};
@@ -1093,22 +1100,40 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
       [...unresolvedTaskStatuses.values()].every(
         (status) => status === 'completed' || status === 'deleted',
       );
+    const targetsExistingTask = taskToolTargetsExistingTask(message, resultText, taskState);
     const continuesCompletedTaskSession =
       previousAllDone &&
-      (taskToolTargetsExistingTask(message, resultText, taskState) ||
+      (targetsExistingTask ||
         Boolean(targetTaskId && unresolvedTaskStatuses.has(targetTaskId)));
+    // 与 findMessageTodoInsertions 保持同一条所有权边界：真实 user turn 后的
+    // 新 TaskCreate / 新清单不能继承前一轮的孤儿状态；显式更新当前已知 Task
+    // 仍允许跨 turn 续写，且不移动 session 的原始所有权锚点。
+    const crossesUserBoundary =
+      sawTaskEvent &&
+      lastUserBoundaryIndex > currentSessionUserBoundaryIndex &&
+      !targetsExistingTask;
     const startsNewSession =
       !sawTaskEvent ||
+      crossesUserBoundary ||
       (previousAllDone && !continuesCompletedTaskSession);
     if (startsNewSession) {
+      const startsAfterCompletedSession =
+        sawTaskEvent && previousAllDone && !continuesCompletedTaskSession;
+      const startsWithTaskCreateAfterVisibleUser =
+        toolName === 'TaskCreate' &&
+        lastUserBoundaryIndex >= 0 &&
+        (!sawTaskEvent || crossesUserBoundary);
       taskState.clear();
       unresolvedTaskStatuses.clear();
       previousTaskTodos = null;
-      if (sawTaskEvent) currentSessionBoundaryKnown = true;
+      currentSessionBoundaryKnown =
+        !hasEarlierMessages ||
+        startsAfterCompletedSession ||
+        startsWithTaskCreateAfterVisibleUser;
+      currentSessionUserBoundaryIndex = lastUserBoundaryIndex;
     }
     sawTaskEvent = true;
 
-    const toolName = toolNameOf(message);
     if (toolName === 'TaskList') {
       if (taskListResultIsAuthoritative(resultText)) {
         currentSessionBoundaryKnown = true;

@@ -739,6 +739,72 @@ describe('buildRenderItems — key stability', () => {
     expect(plans[0].key).toBe('todo-plan2');
   });
 
+  it('keeps an authoritative TaskList card when its result follows the insertion row', () => {
+    const messages = [
+      mkUser('u1', 'Show the current tasks'),
+      mkTool('task-list', 'TaskList'),
+      mkResult(
+        'r-task-list',
+        'tu-task-list',
+        JSON.stringify({
+          tasks: [
+            { id: '1', subject: 'Inspect renderer', status: 'in_progress' },
+            { id: '2', subject: 'Run tests', status: 'pending' },
+          ],
+        }),
+      ),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      key: 'todo-task-list',
+      todos: [
+        { content: 'Inspect renderer', status: 'in_progress' },
+        { content: 'Run tests', status: 'pending' },
+      ],
+    });
+  });
+
+  it('renders a new Task plan after a real user turn despite an older orphan update', () => {
+    const messages = [
+      mkTool('old-update', 'TaskUpdate', { taskId: 'old', status: 'in_progress' }),
+      mkUser('u2', 'Start a new plan'),
+      mkTool('new-task-1', 'TaskCreate', { subject: 'Inspect renderer' }),
+      mkResult(
+        'r-new-task-1',
+        'tu-new-task-1',
+        'Task #new-1 created successfully: Inspect renderer',
+      ),
+      mkTool('new-task-2', 'TaskCreate', { subject: 'Run tests' }),
+      mkResult(
+        'r-new-task-2',
+        'tu-new-task-2',
+        'Task #new-2 created successfully: Run tests',
+      ),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      key: 'todo-new-task-1',
+      todos: [
+        { content: 'Inspect renderer', status: 'pending' },
+        { content: 'Run tests', status: 'pending' },
+      ],
+    });
+  });
+
   it('recovers an old plan anchor after prepend changes the session key', () => {
     const oldWindow = buildRenderItems([
       mkTool('plan2', 'update_plan', {
