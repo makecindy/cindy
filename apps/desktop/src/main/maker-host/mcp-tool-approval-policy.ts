@@ -59,6 +59,7 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   'cindy_scheduler::list_tools',
   'cindy_ssh::list_tools',
   'cindy_helper::list_tools',
+  'cindy_docs::list_tools',
   'cindy_memory::list_tools',
   'cindy_contacts::list_tools',
   'cindy_slack::slack_status',
@@ -167,6 +168,30 @@ function skipsRoutelessDeviceApproval(args: unknown): boolean {
   return !hasIOSSimulatorInstanceRoute(parsed);
 }
 
+/**
+ * cindy_docs 的只读内层工具。
+ *
+ * 为什么不能直接写进 READ_ONLY_MCP_TOOLS:cindy_docs 是渐进披露 server，对外只有
+ * `list_tools` / `call_tool` 两个工具名，`read_sheet` 是 `call_tool` 的内层 action —
+ * 按 `<server>::<tool>` 精确匹配永远命中不到它，登记进去只会变成一条骗人的死规则
+ * （还会派生出一个不存在的 `mcp__cindy_docs__read_sheet` allowedTools 条目）。
+ *
+ * read_sheet 只读工作目录内的表格文件：路径由 @cindy/mcps 的 cindy-docs/_paths.ts
+ * 确定性钳制在会话 workingDir 内，不写盘、不出境，符合「有没有携带内容出境」的判据。
+ * 其余五个工具都会落盘（make_* / render_pdf / office_to_pdf），一律不在此表，
+ * 继续走常规审批链。
+ */
+const READ_ONLY_DOCS_INNER_TOOLS: ReadonlySet<string> = new Set(['read_sheet']);
+
+/** 取 cindy_docs progressive 调用的内层工具名。 */
+function readDocsInnerToolName(context: McpToolApprovalContext): string | undefined {
+  if (context.serverName !== 'cindy_docs') return undefined;
+  if (context.toolName !== 'call_tool') return undefined;
+  const params = readJsonObject(context.toolParams);
+  const rawName = typeof params?.name === 'string' ? params.name.trim() : '';
+  return rawName.length > 0 ? rawName : undefined;
+}
+
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
 function toClaudeToolName(key: string): string {
   const [serverName, toolName] = key.split('::');
@@ -196,6 +221,10 @@ export function getDesktopMcpToolApprovalPolicy(
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
       : 'prompt-each-time';
+  }
+  const docsInnerTool = readDocsInnerToolName(context);
+  if (docsInnerTool && READ_ONLY_DOCS_INNER_TOOLS.has(docsInnerTool)) {
+    return 'auto-approve';
   }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
   if (iosSimulatorCall) {

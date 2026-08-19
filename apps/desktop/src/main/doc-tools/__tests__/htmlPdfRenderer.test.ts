@@ -1,0 +1,298 @@
+/**
+ * htmlPdfRenderer 测试:用可控的 electron 桩驱动隐藏渲染窗。
+ *
+ * 覆盖 electron-security §3 / §3.1 里对这扇窗真正适用的那几条:
+ *  - 安全字段全部显式写死、无 preload、不 show;
+ *  - 导航与弹窗 fail closed;
+ *  - 即用即毁(成功、失败、超时三条路径都销毁窗口);
+ *  - 同刻并发 1、其余排队;
+ *  - 30s 超时;
+ *  - 加载失败 / 渲染进程崩溃只让这次渲染失败,不升级、不自动重建。
+ */
+
+import { EventEmitter } from 'node:events';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+interface FakeWindowOptions {
+  webPreferences?: Record<string, unknown>;
+  show?: boolean;
+  [k: string]: unknown;
+}
+
+class FakeWebContents extends EventEmitter {
+  windowOpenHandler: ((details: unknown) => unknown) | undefined;
+
+  printToPDF = vi.fn(async (_opts: unknown) => FakeBrowserWindow.pdfResult());
+
+  setWindowOpenHandler(handler: (details: unknown) => unknown): void {
+    this.windowOpenHandler = handler;
+  }
+}
+
+class FakeBrowserWindow extends EventEmitter {
+  static instances: FakeBrowserWindow[] = [];
+  static pdfResult: () => Promise<Buffer> | Buffer = () => Buffer.from('%PDF-ok');
+  static loadBehavior: (win: FakeBrowserWindow, file: string) => Promise<void> = async () => {};
+
+  readonly webContents = new FakeWebContents();
+  readonly options: FakeWindowOptions;
+  destroyed = false;
+  shown = false;
+  loadedFile: string | undefined;
+
+  constructor(options: FakeWindowOptions) {
+    super();
+    this.options = options;
+    FakeBrowserWindow.instances.push(this);
+  }
+
+  async loadFile(file: string): Promise<void> {
+    this.loadedFile = file;
+    await FakeBrowserWindow.loadBehavior(this, file);
+  }
+
+  show(): void {
+    this.shown = true;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+  }
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+}
+
+let tempRoot: string;
+
+vi.mock('electron', () => ({
+  BrowserWindow: FakeBrowserWindow,
+  app: { getPath: () => tempRoot },
+  nativeTheme: { shouldUseDarkColors: false },
+}));
+
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+const { renderHtmlToPdf, __getActiveRenderCount } = await import('../htmlPdfRenderer.js');
+
+const BASE_INPUT = {
+  pageSize: 'A4' as const,
+  landscape: false,
+  printBackground: true,
+  margins: { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 },
+  timeoutMs: 30_000,
+};
+
+beforeEach(async () => {
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-renderer-'));
+  FakeBrowserWindow.instances = [];
+  FakeBrowserWindow.pdfResult = () => Buffer.from('%PDF-ok');
+  FakeBrowserWindow.loadBehavior = async () => {};
+});
+
+afterEach(async () => {
+  await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+});
+
+describe('渲染窗的安全配置', () => {
+  it('§3 的安全字段全部显式写死,且没有 preload、不 show', async () => {
+    await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>x</p>' });
+    const win = FakeBrowserWindow.instances[0]!;
+    const prefs = win.options.webPreferences!;
+
+    expect(win.options.show).toBe(false);
+    expect(prefs).toMatchObject({
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      plugins: false,
+      navigateOnDragDrop: false,
+      webviewTag: false,
+    });
+    expect(prefs.preload).toBeUndefined();
+    expect(prefs.enableBlinkFeatures).toBeUndefined();
+    expect(win.shown).toBe(false);
+  });
+
+  it('弹窗与 Renderer 发起的导航一律 deny', async () => {
+    await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>x</p>' });
+    const win = FakeBrowserWindow.instances[0]!;
+    expect(win.webContents.windowOpenHandler!({ url: 'https://evil.example' })).toEqual({
+      action: 'deny',
+    });
+
+    // will-navigate 只对 Renderer 发起的导航触发,首帧 loadFile 不经过它,
+    // 所以这里全拒 —— 包括页面想重新加载自己。
+    for (const url of ['https://evil.example', `file://${win.loadedFile}`, 'about:blank']) {
+      const event = { preventDefault: vi.fn() };
+      win.webContents.emit('will-navigate', event, url);
+      expect(event.preventDefault, `${url} should be blocked`).toHaveBeenCalled();
+    }
+  });
+});
+
+describe('渲染主流程', () => {
+  it('内联 HTML 落到临时文件被加载,渲染完临时目录被清理', async () => {
+    let loadedContent = '';
+    FakeBrowserWindow.loadBehavior = async (_win, file) => {
+      loadedContent = await fs.readFile(file, 'utf-8');
+    };
+    const pdf = await renderHtmlToPdf({ ...BASE_INPUT, html: '<h1>hello</h1>' });
+    expect(pdf.toString()).toBe('%PDF-ok');
+    expect(loadedContent).toBe('<h1>hello</h1>');
+
+    const tempFile = FakeBrowserWindow.instances[0]!.loadedFile!;
+    await expect(fs.stat(path.dirname(tempFile))).rejects.toThrow();
+  });
+
+  it('htmlPath 直接加载,不产生临时文件', async () => {
+    const source = path.join(tempRoot, 'src.html');
+    await fs.writeFile(source, '<p>x</p>', 'utf-8');
+    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: source });
+    expect(FakeBrowserWindow.instances[0]!.loadedFile).toBe(source);
+    // 源文件不属于渲染器,绝不能被清理掉
+    await expect(fs.stat(source)).resolves.toBeTruthy();
+  });
+
+  it('排版参数原样交给 printToPDF(margins 用 custom)', async () => {
+    await renderHtmlToPdf({
+      ...BASE_INPUT,
+      html: '<p/>',
+      pageSize: 'Letter',
+      landscape: true,
+      printBackground: false,
+      margins: { top: 1, bottom: 0.2, left: 0.3, right: 0.4 },
+    });
+    expect(FakeBrowserWindow.instances[0]!.webContents.printToPDF).toHaveBeenCalledWith({
+      pageSize: 'Letter',
+      landscape: true,
+      printBackground: false,
+      margins: { marginType: 'custom', top: 1, bottom: 0.2, left: 0.3, right: 0.4 },
+    });
+  });
+
+  it('成功后窗口即刻销毁(不隐藏复用)', async () => {
+    await renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' });
+    expect(FakeBrowserWindow.instances[0]!.destroyed).toBe(true);
+  });
+
+  it('每次渲染都是全新窗口,不跨任务复用 webContents', async () => {
+    await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>1</p>' });
+    await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>2</p>' });
+    expect(FakeBrowserWindow.instances).toHaveLength(2);
+    expect(FakeBrowserWindow.instances[0]).not.toBe(FakeBrowserWindow.instances[1]);
+  });
+});
+
+describe('故障隔离', () => {
+  it('加载失败让这次渲染失败,窗口销毁,且不去调 printToPDF', async () => {
+    FakeBrowserWindow.loadBehavior = async (win) => {
+      win.webContents.emit('did-fail-load', {}, -6, 'ERR_FILE_NOT_FOUND');
+      await new Promise(() => {
+        /* 永不 resolve —— 真实 loadFile 在失败时也不会正常完成 */
+      });
+    };
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow(
+      /HTML 加载失败/,
+    );
+    const win = FakeBrowserWindow.instances[0]!;
+    expect(win.destroyed).toBe(true);
+    expect(win.webContents.printToPDF).not.toHaveBeenCalled();
+  });
+
+  it('渲染进程崩溃被翻成失败,不升级成别的东西', async () => {
+    FakeBrowserWindow.loadBehavior = async (win) => {
+      win.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+      await new Promise(() => {});
+    };
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow(
+      /渲染进程异常退出\(crashed\)/,
+    );
+    expect(FakeBrowserWindow.instances[0]!.destroyed).toBe(true);
+  });
+
+  it('printToPDF 抛错时窗口照样销毁,不泄漏', async () => {
+    FakeBrowserWindow.pdfResult = () => Promise.reject(new Error('printToPDF boom'));
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow('printToPDF boom');
+    expect(FakeBrowserWindow.instances[0]!.destroyed).toBe(true);
+  });
+
+  it('失败不自动重试:一次调用只建一扇窗', async () => {
+    FakeBrowserWindow.pdfResult = () => Promise.reject(new Error('boom'));
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>' })).rejects.toThrow();
+    expect(FakeBrowserWindow.instances).toHaveLength(1);
+  });
+
+  it('前一次失败不影响排在后面的那次', async () => {
+    // 按调用顺序取行为:两次渲染是排队串行的,不能靠"改一次全局变量"来区分。
+    const behaviors: Array<() => Promise<Buffer>> = [
+      () => Promise.reject(new Error('boom')),
+      () => Promise.resolve(Buffer.from('%PDF-second')),
+    ];
+    FakeBrowserWindow.pdfResult = () => behaviors.shift()!();
+
+    const failing = renderHtmlToPdf({ ...BASE_INPUT, html: '<p>1</p>' });
+    const following = renderHtmlToPdf({ ...BASE_INPUT, html: '<p>2</p>' });
+
+    await expect(failing).rejects.toThrow('boom');
+    expect((await following).toString()).toBe('%PDF-second');
+  });
+});
+
+describe('超时与并发', () => {
+  it('超过 timeoutMs 直接判超时并销毁窗口', async () => {
+    // 用真实计时器 + 很短的超时:假计时器会让「渲染排队链」这条真实异步链
+    // 卡在半路,测出来的就不是生产行为了。
+    FakeBrowserWindow.loadBehavior = async () => {
+      await new Promise(() => {
+        /* 卡住不返回,模拟加载不出来的外部资源 */
+      });
+    };
+    await expect(
+      renderHtmlToPdf({ ...BASE_INPUT, html: '<p/>', timeoutMs: 50 }),
+    ).rejects.toThrow(/渲染超时\(50ms timeout\)/);
+    expect(FakeBrowserWindow.instances[0]!.destroyed).toBe(true);
+  });
+
+  it('同刻只跑一个渲染,其余排队', async () => {
+    const gates: Array<() => void> = [];
+    FakeBrowserWindow.loadBehavior = async () =>
+      new Promise<void>((resolve) => {
+        gates.push(resolve);
+      });
+
+    const first = renderHtmlToPdf({ ...BASE_INPUT, html: '<p>1</p>' });
+    const second = renderHtmlToPdf({ ...BASE_INPUT, html: '<p>2</p>' });
+
+    // 让第一个走到 loadFile
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    expect(FakeBrowserWindow.instances).toHaveLength(1);
+    expect(__getActiveRenderCount()).toBe(1);
+
+    gates[0]!();
+    await first;
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
+    expect(FakeBrowserWindow.instances).toHaveLength(2);
+    gates[1]!();
+    await second;
+    expect(__getActiveRenderCount()).toBe(0);
+  });
+});

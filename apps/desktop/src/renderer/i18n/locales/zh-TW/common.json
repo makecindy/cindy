@@ -2946,6 +2946,10 @@
           "name": "Cindy 記憶",
           "description": "跨 Agent 的長期記憶，讓上下文在任務之間持續"
         },
+        "docs": {
+          "name": "文件工坊",
+          "description": "把內容做成真檔案 —— PDF、Word、Excel、PPT，也能讀取既有的表格檔案"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "宿主能力自省 —— 告訴 Agent 當前可用的工具與模型"

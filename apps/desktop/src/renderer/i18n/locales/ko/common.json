@@ -2946,6 +2946,10 @@
           "name": "Cindy 메모리",
           "description": "세션 간 컨텍스트를 유지하는 Agent 공통 장기 메모리"
         },
+        "docs": {
+          "name": "문서 공방",
+          "description": "내용을 실제 파일로 — PDF / Word / Excel / PowerPoint 생성과 기존 스프레드시트 읽기"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "호스트 기능 공개 — 사용 가능한 도구와 모델을 Agent에 알림"

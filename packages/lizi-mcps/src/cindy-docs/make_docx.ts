@@ -1,0 +1,76 @@
+/**
+ * cindy-docs/make_docx.ts —— Markdown → Word(.docx)。
+ *
+ * 结构化生成(marked lexer → docx 对象树),不是「打印成 PDF 再改名」:出来的
+ * 是真 Word 文档,标题进导航窗格、表格能选中、列表能续编号,用户可以接着改。
+ */
+
+import { promises as fs } from 'node:fs';
+
+import { z } from 'zod';
+
+import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
+import { describeOutput, DocsPathError, prepareOutputPath, resolveSessionRoot } from './_paths.js';
+import { errorPayload, okPayload } from './_payload.js';
+import { markdownToDocxBuffer } from './markdownToDocx.js';
+import type { DocsMcpSessionCtx } from './types.js';
+
+const DESCRIPTION = [
+  '把 Markdown 正文生成为真正的 Word 文档(.docx)。',
+  '',
+  '【何时用】用户要 Word / doc / 「可编辑的文档」/ 需要交给别人接着改的正式文稿。',
+  '只要产物要给人二次编辑,就用本工具,不要生成 PDF 再让用户想办法转回去。',
+  '',
+  '【支持的 Markdown】标题 #~######、段落、**粗体**、*斜体*、~~删除线~~、`行内代码`、',
+  '```代码块```、有序/无序列表(含嵌套)、表格(支持列对齐)、> 引用、--- 分隔线、链接。',
+  '图片不内嵌,会降级成 "[图片: 说明]" 文本。',
+  '',
+  '【分页】需要强制分页时,在 Markdown 里单独写一行 `<!-- pagebreak -->`。',
+  '',
+  '【输出】outPath 必须在本任务的工作目录内(建议 documents/ 子目录,文件名带日期)。',
+  '目录不存在会自动创建;同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
+].join('\n');
+
+export function registerMakeDocxTool(
+  registry: DocsToolRegistry,
+  sessionCtx: DocsMcpSessionCtx,
+): void {
+  registry.register({
+    name: 'make_docx',
+    category: 'author',
+    description: DESCRIPTION,
+    inputShape: {
+      markdown: z.string().min(1).describe('文档正文(Markdown)。'),
+      outPath: z
+        .string()
+        .min(1)
+        .describe('输出 .docx 路径,工作目录内的相对路径或绝对路径,如 documents/报告-2026-08-19.docx。'),
+      title: z
+        .string()
+        .optional()
+        .describe('可选文档标题:写进 Word 文档属性,并在正文最前加一个标题段。'),
+      overwrite: z
+        .boolean()
+        .default(false)
+        .describe('目标文件已存在时是否覆盖。默认 false(存在即报 FILE_EXISTS)。'),
+    },
+    handler: async ({ markdown, outPath, title, overwrite }) => {
+      try {
+        const root = resolveSessionRoot(sessionCtx);
+        const abs = await prepareOutputPath(root, outPath, overwrite);
+        const buffer = await markdownToDocxBuffer(markdown, title ? { title } : {});
+        await fs.writeFile(abs, buffer);
+        return okPayload({
+          ...(await describeOutput(root, abs)),
+          format: 'docx',
+        });
+      } catch (err) {
+        if (err instanceof DocsPathError) {
+          return errorPayload(err.code, err.hint, { message: err.message });
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return errorPayload('DOCX_BUILD_FAILED', `生成 Word 文档失败:${message}`, { message });
+      }
+    },
+  });
+}

@@ -2946,6 +2946,10 @@
           "name": "Cindy メモリ",
           "description": "セッションをまたいでコンテキストを保持する Agent 横断の長期メモリ"
         },
+        "docs": {
+          "name": "ドキュメント工房",
+          "description": "内容を実ファイルにする — PDF / Word / Excel / PowerPoint の生成と、既存スプレッドシートの読み取り"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "ホスト機能の開示 — 利用可能なツールとモデルを Agent に伝える"

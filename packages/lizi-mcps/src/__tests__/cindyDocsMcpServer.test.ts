@@ -1,0 +1,612 @@
+/**
+ * cindy_docs MCP server 测试:真 McpServer + InMemoryTransport,真文件往返。
+ *
+ * 覆盖:
+ *  - list_tools 渐进披露(类目概览 / 按类目列表)
+ *  - render_pdf 的注册门(host 没注入渲染回调时工具不出现)
+ *  - make_docx / make_pptx / make_xlsx 的真文件产出(解包断言 XML / exceljs 读回)
+ *  - read_sheet 的 xlsx / csv / tsv 与截断标注
+ *  - 路径边界:.. 穿越、绝对路径越界、symlink 逃逸
+ *  - overwrite 语义
+ *  - 无 workingDir 时 fail closed
+ *  - render_pdf 的空产物 / 超时归类
+ */
+
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
+import { isSupportedPptxImage, PPTX_THEMES } from '../cindy-docs/make_pptx.js';
+import type { DocsMcpDeps, DocsMcpSessionCtx, DocsPdfRenderInput } from '../cindy-docs/types.js';
+
+let workdir: string;
+const created: string[] = [];
+
+beforeEach(async () => {
+  workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-test-'));
+  created.push(workdir);
+});
+
+afterEach(async () => {
+  while (created.length > 0) {
+    const dir = created.pop()!;
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
+
+function sessionCtx(overrides: Partial<DocsMcpSessionCtx> = {}): DocsMcpSessionCtx {
+  return {
+    agentKind: 'claude-code',
+    workingDir: workdir,
+    sessionId: 'sess-1',
+    ...overrides,
+  };
+}
+
+async function connect(deps: DocsMcpDeps = {}, ctx = sessionCtx()) {
+  const server = createCindyDocsMcpServer(deps, ctx);
+  const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'docs-test-client', version: '0.0.0' });
+  await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+  return client;
+}
+
+function payload(result: unknown): Record<string, unknown> {
+  const content = (result as { content: Array<{ text: string }> }).content;
+  return JSON.parse(content[0]!.text) as Record<string, unknown>;
+}
+
+async function callTool(
+  client: Client,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return payload(
+    await client.callTool({ name: 'call_tool', arguments: { name, args } }),
+  );
+}
+
+async function unzip(file: string, entry: string): Promise<string> {
+  const zip = await JSZip.loadAsync(await fs.readFile(file));
+  const found = zip.file(entry);
+  if (!found) throw new Error(`missing ${entry}; have ${Object.keys(zip.files).join(',')}`);
+  return found.async('string');
+}
+
+describe('cindy_docs 入口工具', () => {
+  it('只暴露 list_tools / call_tool 两个入口', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(['call_tool', 'list_tools']);
+  });
+
+  it('list_tools 不传 category 返回三个类目', async () => {
+    const client = await connect({ renderHtmlToPdf: async () => Buffer.from('%PDF-') });
+    const result = payload(await client.callTool({ name: 'list_tools', arguments: {} }));
+    const categories = (result.categories as Array<{ name: string; tool_count: number }>);
+    expect(categories.map((c) => c.name).sort()).toEqual(['author', 'convert', 'read']);
+    expect(categories.find((c) => c.name === 'author')?.tool_count).toBe(3);
+    expect(categories.find((c) => c.name === 'convert')?.tool_count).toBe(2);
+  });
+
+  it('host 没注入渲染回调时 render_pdf 不注册', async () => {
+    const client = await connect({});
+    const result = payload(
+      await client.callTool({ name: 'list_tools', arguments: { category: 'convert' } }),
+    );
+    const names = (result.tools as Array<{ name: string }>).map((t) => t.name);
+    expect(names).toEqual(['office_to_pdf']);
+
+    const called = await callTool(client, 'render_pdf', { html: '<p>x</p>', outPath: 'a.pdf' });
+    expect(called.errorCode).toBe('UNKNOWN_TOOL');
+  });
+
+  it('未知工具名与非法参数都返回可自纠的结构化错误', async () => {
+    const client = await connect();
+    expect((await callTool(client, 'nope', {})).errorCode).toBe('UNKNOWN_TOOL');
+    const bad = await callTool(client, 'make_docx', { markdown: 'x' });
+    expect(bad.errorCode).toBe('INVALID_ARGS');
+    expect((bad.data as Record<string, unknown>).schema).toBeDefined();
+  });
+
+  it('未知字段不被静默忽略', async () => {
+    const client = await connect();
+    const bad = await callTool(client, 'make_docx', {
+      markdown: 'x',
+      outPath: 'a.docx',
+      tittle: '拼错的字段',
+    });
+    expect(bad.errorCode).toBe('INVALID_ARGS');
+  });
+});
+
+describe('make_docx', () => {
+  it('生成真 Word 文件,标题/粗体/列表/表格/代码块/分页符都落到 XML', async () => {
+    const client = await connect();
+    const markdown = [
+      '# 一级标题',
+      '',
+      '正文 **加粗** 与 *斜体* 与 `code`。',
+      '',
+      '- 无序一',
+      '- 无序二',
+      '',
+      '1. 有序一',
+      '2. 有序二',
+      '',
+      '> 引用一句',
+      '',
+      '| 列A | 列B |',
+      '|---|---|',
+      '| 1 | 2 |',
+      '',
+      '```js',
+      'const x = 1;',
+      '```',
+      '',
+      '<!-- pagebreak -->',
+      '',
+      '尾页正文。',
+    ].join('\n');
+
+    const result = await callTool(client, 'make_docx', {
+      markdown,
+      outPath: 'documents/报告.docx',
+      title: '测试报告',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.format).toBe('docx');
+    expect(result.relativePath).toBe(path.join('documents', '报告.docx'));
+    expect(result.bytes as number).toBeGreaterThan(3000);
+
+    const file = result.path as string;
+    const xml = await unzip(file, 'word/document.xml');
+    expect(xml).toContain('Heading1');
+    expect(xml).toContain('一级标题');
+    expect(xml).toContain('<w:b/>');
+    expect(xml).toContain('<w:i/>');
+    expect(xml).toContain('Courier New');
+    expect(xml).toContain('<w:numPr>');
+    expect(xml).toContain('<w:tbl>');
+    expect(xml).toContain('引用一句');
+    expect(xml).toContain('const x = 1;');
+    expect(xml).toContain('w:type="page"');
+    // title 同时写进 core properties
+    expect(await unzip(file, 'docProps/core.xml')).toContain('测试报告');
+    // 有序列表用 decimal 编号定义
+    expect(await unzip(file, 'word/numbering.xml')).toContain('decimal');
+  });
+
+  it('引用块内外的有序列表不共用编号(instance 计数器全篇唯一)', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: ['> 1. 引用里的一', '> 2. 引用里的二', '', '1. 块外的一', '2. 块外的二'].join(
+        '\n',
+      ),
+      outPath: 'lists.docx',
+    });
+    expect(result.ok).toBe(true);
+    const xml = await unzip(result.path as string, 'word/document.xml');
+    const instances = [...xml.matchAll(/<w:numId w:val="(\d+)"\/>/g)].map((m) => m[1]);
+    // 两个列表各自一个 numId,不能是同一个 —— 否则块外列表会从 3 开始编号。
+    expect(new Set(instances).size).toBe(2);
+  });
+
+  it('输出目录不存在时自动创建', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# hi',
+      outPath: 'a/b/c/deep.docx',
+    });
+    expect(result.ok).toBe(true);
+    await expect(fs.stat(path.join(workdir, 'a/b/c/deep.docx'))).resolves.toBeTruthy();
+  });
+});
+
+describe('make_xlsx', () => {
+  it('写出的表能被 exceljs 读回,表头加粗 + 冻结首行 + 类型保真', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_xlsx', {
+      sheets: [
+        {
+          name: '明细',
+          header: ['区域', '收入', '达标'],
+          rows: [
+            ['华东', 1200, true],
+            ['华南', 860, false],
+            ['西北', null, false],
+          ],
+        },
+        { name: '备注', rows: [['只有数据没有表头']] },
+      ],
+      outPath: 'data/report.xlsx',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.sheets).toEqual([
+      { name: '明细', rows: 3 },
+      { name: '备注', rows: 1 },
+    ]);
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(result.path as string);
+    const ws = wb.getWorksheet('明细')!;
+    expect(ws.getRow(1).font?.bold).toBe(true);
+    // exceljs 的 views 是 normal / frozen / split 的联合类型,ySplit 只存在于
+    // frozen 分支 —— 断言前先窄化,别用 any 把类型信息丢掉。
+    const view = ws.views?.[0];
+    expect(view?.state).toBe('frozen');
+    expect(view?.state === 'frozen' ? view.ySplit : undefined).toBe(1);
+    expect(ws.getRow(2).getCell(1).value).toBe('华东');
+    expect(ws.getRow(2).getCell(2).value).toBe(1200);
+    expect(ws.getRow(2).getCell(3).value).toBe(true);
+    // 列宽按内容自适应,且不小于下限
+    expect(ws.getColumn(1).width!).toBeGreaterThanOrEqual(8);
+    // 无表头的表不冻结
+    expect(wb.getWorksheet('备注')!.views?.[0]?.state ?? 'normal').not.toBe('frozen');
+  });
+
+  it('非法工作表名被消毒,重名自动去重', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_xlsx', {
+      sheets: [
+        { name: 'a/b:c', rows: [['1']] },
+        { name: 'a/b:c', rows: [['2']] },
+      ],
+      outPath: 'x.xlsx',
+    });
+    expect(result.ok).toBe(true);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(result.path as string);
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['a_b_c', 'a_b_c_2']);
+  });
+});
+
+describe('make_pptx', () => {
+  it('生成真 pptx,标题/要点/备注都在,深浅主题背景不同', async () => {
+    const client = await connect();
+    const light = await callTool(client, 'make_pptx', {
+      slides: [
+        { title: '结论先行', bullets: ['要点一', '要点二'], notes: '这里是备注', body: '补充说明' },
+        { title: '第二页' },
+      ],
+      outPath: 'deck-light.pptx',
+      theme: 'light',
+      title: '汇报',
+    });
+    expect(light.ok).toBe(true);
+    expect(light.slides).toBe(2);
+    expect(light.theme).toBe('light');
+
+    const slide1 = await unzip(light.path as string, 'ppt/slides/slide1.xml');
+    expect(slide1).toContain('结论先行');
+    expect(slide1).toContain('要点一');
+    expect(slide1).toContain('补充说明');
+    expect(slide1).toContain(PPTX_THEMES.light.background);
+    const notes = await unzip(light.path as string, 'ppt/notesSlides/notesSlide1.xml');
+    expect(notes).toContain('这里是备注');
+
+    const dark = await callTool(client, 'make_pptx', {
+      slides: [{ title: '深色' }],
+      outPath: 'deck-dark.pptx',
+      theme: 'dark',
+    });
+    const darkSlide = await unzip(dark.path as string, 'ppt/slides/slide1.xml');
+    expect(darkSlide).toContain(PPTX_THEMES.dark.background);
+    expect(PPTX_THEMES.dark.background).not.toBe(PPTX_THEMES.light.background);
+  });
+
+  it('图片路径越界时整个生成不发生,不留半成品', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_pptx', {
+      slides: [
+        { title: '第一页' },
+        { title: '带图', imagePath: '../../../etc/hosts' },
+      ],
+      outPath: 'deck.pptx',
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    await expect(fs.stat(path.join(workdir, 'deck.pptx'))).rejects.toThrow();
+  });
+
+  it('不支持的图片格式先被拦下,不生成打不开的坏包', async () => {
+    await fs.writeFile(path.join(workdir, 'pic.webp'), 'not-really-webp');
+    const client = await connect();
+    const result = await callTool(client, 'make_pptx', {
+      slides: [{ title: '带图', imagePath: 'pic.webp' }],
+      outPath: 'deck.pptx',
+    });
+    expect(result.errorCode).toBe('UNSUPPORTED_IMAGE');
+    expect((result.data as Record<string, string>).hint).toContain('.png');
+    await expect(fs.stat(path.join(workdir, 'deck.pptx'))).rejects.toThrow();
+
+    // 支持的扩展名照常放行
+    expect(isSupportedPptxImage('/a/b.PNG')).toBe(true);
+    expect(isSupportedPptxImage('/a/b.svg')).toBe(false);
+  });
+});
+
+describe('read_sheet', () => {
+  it('读回自己刚生成的 xlsx,支持按名与按序号选表', async () => {
+    const client = await connect();
+    await callTool(client, 'make_xlsx', {
+      sheets: [
+        { name: 'S1', header: ['a', 'b'], rows: [[1, 2]] },
+        { name: 'S2', header: ['c'], rows: [['x']] },
+      ],
+      outPath: 'r.xlsx',
+    });
+
+    const first = await callTool(client, 'read_sheet', { path: 'r.xlsx' });
+    expect(first.ok).toBe(true);
+    expect(first.sheet).toBe('S1');
+    expect(first.sheetNames).toEqual(['S1', 'S2']);
+    expect(first.rows).toEqual([
+      ['a', 'b'],
+      [1, 2],
+    ]);
+    expect(first.truncated).toBe(false);
+
+    expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 'S2' })).rows).toEqual([
+      ['c'],
+      ['x'],
+    ]);
+    expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 2 })).sheet).toBe('S2');
+
+    const missing = await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: '不存在' });
+    expect(missing.errorCode).toBe('SHEET_NOT_FOUND');
+    expect((missing.data as Record<string, string>).hint).toContain('S1');
+    expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 9 })).errorCode).toBe(
+      'SHEET_NOT_FOUND',
+    );
+  });
+
+  it('读 csv / tsv,引号与跨行字段保真', async () => {
+    const client = await connect();
+    await fs.writeFile(
+      path.join(workdir, 'a.csv'),
+      'name,note\r\n甲,"含,逗号"\r\n乙,"跨\n行"\r\n',
+      'utf-8',
+    );
+    const csv = await callTool(client, 'read_sheet', { path: 'a.csv' });
+    expect(csv.format).toBe('csv');
+    expect(csv.rows).toEqual([
+      ['name', 'note'],
+      ['甲', '含,逗号'],
+      ['乙', '跨\n行'],
+    ]);
+
+    await fs.writeFile(path.join(workdir, 'a.tsv'), 'x\ty\n1\t2\n', 'utf-8');
+    expect((await callTool(client, 'read_sheet', { path: 'a.tsv' })).rows).toEqual([
+      ['x', 'y'],
+      ['1', '2'],
+    ]);
+  });
+
+  it('超过 maxRows 时明确标注截断,不假装这就是全表', async () => {
+    const client = await connect();
+    const lines = Array.from({ length: 50 }, (_, i) => `${i},v${i}`).join('\n');
+    await fs.writeFile(path.join(workdir, 'big.csv'), lines, 'utf-8');
+    const result = await callTool(client, 'read_sheet', { path: 'big.csv', maxRows: 10 });
+    expect(result.returnedRows).toBe(10);
+    expect(result.totalRows).toBe(50);
+    expect(result.truncated).toBe(true);
+    expect(result.truncationNote).toContain('50');
+  });
+
+  it('.xls 与未知扩展名给出可执行的降级指引', async () => {
+    const client = await connect();
+    await fs.writeFile(path.join(workdir, 'old.xls'), 'x', 'utf-8');
+    const xls = await callTool(client, 'read_sheet', { path: 'old.xls' });
+    expect(xls.errorCode).toBe('UNSUPPORTED_FORMAT');
+    expect((xls.data as Record<string, string>).hint).toContain('.xlsx');
+
+    await fs.writeFile(path.join(workdir, 'a.pdf'), 'x', 'utf-8');
+    expect((await callTool(client, 'read_sheet', { path: 'a.pdf' })).errorCode).toBe(
+      'UNSUPPORTED_FORMAT',
+    );
+  });
+
+  it('文件不存在返回 NOT_A_FILE', async () => {
+    const client = await connect();
+    expect((await callTool(client, 'read_sheet', { path: 'ghost.csv' })).errorCode).toBe(
+      'NOT_A_FILE',
+    );
+  });
+});
+
+describe('路径边界与覆盖语义', () => {
+  it('.. 穿越与工作目录外的绝对路径都被拒', async () => {
+    const client = await connect();
+    for (const outPath of ['../escape.docx', path.join(os.tmpdir(), 'escape.docx'), '/etc/x.docx']) {
+      const result = await callTool(client, 'make_docx', { markdown: '# x', outPath });
+      expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+      expect((result.data as Record<string, string>).hint).toContain('工作目录');
+    }
+  });
+
+  it('经 symlink 指向工作目录外也被拒', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));
+    created.push(outside);
+    await fs.symlink(outside, path.join(workdir, 'link'), 'dir');
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# x',
+      outPath: 'link/escaped.docx',
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    await expect(fs.stat(path.join(outside, 'escaped.docx'))).rejects.toThrow();
+  });
+
+  it('同名文件默认不覆盖,overwrite:true 才覆盖', async () => {
+    const client = await connect();
+    const first = await callTool(client, 'make_docx', { markdown: '# 第一版', outPath: 'a.docx' });
+    expect(first.ok).toBe(true);
+    const firstBytes = first.bytes as number;
+
+    const blocked = await callTool(client, 'make_docx', { markdown: '# 第二版', outPath: 'a.docx' });
+    expect(blocked.errorCode).toBe('FILE_EXISTS');
+    expect((blocked.data as Record<string, string>).hint).toContain('overwrite');
+    // 被拒时原文件必须原封不动
+    expect((await fs.stat(path.join(workdir, 'a.docx'))).size).toBe(firstBytes);
+
+    const forced = await callTool(client, 'make_docx', {
+      markdown: '# 第二版内容更长一些用来改变体积',
+      outPath: 'a.docx',
+      overwrite: true,
+    });
+    expect(forced.ok).toBe(true);
+    expect(await unzip(forced.path as string, 'word/document.xml')).toContain('第二版');
+  });
+
+  it('无 workingDir 时 fail closed', async () => {
+    const client = await connect({}, sessionCtx({ workingDir: '' }));
+    const result = await callTool(client, 'make_docx', { markdown: '# x', outPath: 'a.docx' });
+    expect(result.errorCode).toBe('NO_SESSION_CONTEXT');
+  });
+
+  it('远程(SSH)会话拒绝生成本地文件', async () => {
+    const client = await connect({}, sessionCtx({ remoteHostId: 'box-1' }));
+    const result = await callTool(client, 'make_docx', { markdown: '# x', outPath: 'a.docx' });
+    expect(result.errorCode).toBe('REMOTE_SESSION_UNSUPPORTED');
+  });
+
+  it('归属解析不出来时不借用构建期 ctx', async () => {
+    // getSessionContext 是权威来源:返回 undefined 表示本次调用无法确认归属,
+    // 此时必须 fail closed,而不是回落到闭包里那个 workdir。
+    const ctx = sessionCtx({ getSessionContext: () => undefined });
+    const client = await connect({}, ctx);
+    const result = await callTool(client, 'make_docx', { markdown: '# x', outPath: 'a.docx' });
+    expect(result.errorCode).toBe('NO_SESSION_CONTEXT');
+  });
+});
+
+describe('render_pdf', () => {
+  const pdfBytes = Buffer.from(`%PDF-1.7\n${'x'.repeat(4096)}\n%%EOF`);
+
+  it('把 host 返回的字节落盘,并透传排版参数', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return pdfBytes;
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      html: '<h1>hi</h1>',
+      outPath: 'out/a.pdf',
+      pageSize: 'Letter',
+      landscape: true,
+      margins: { top: 1, bottom: 1, left: 0.5, right: 0.5 },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.format).toBe('pdf');
+    expect(result.bytes).toBe(pdfBytes.length);
+    expect(await fs.readFile(path.join(workdir, 'out/a.pdf'))).toEqual(pdfBytes);
+    expect(seen[0]).toMatchObject({
+      html: '<h1>hi</h1>',
+      pageSize: 'Letter',
+      landscape: true,
+      printBackground: true,
+      margins: { top: 1, bottom: 1, left: 0.5, right: 0.5 },
+      timeoutMs: 30_000,
+    });
+  });
+
+  it('htmlPath 走边界校验后交给 host 的是绝对路径', async () => {
+    const seen: DocsPdfRenderInput[] = [];
+    await fs.writeFile(path.join(workdir, 'src.html'), '<p>x</p>', 'utf-8');
+    const client = await connect({
+      renderHtmlToPdf: async (input) => {
+        seen.push(input);
+        return pdfBytes;
+      },
+    });
+    const result = await callTool(client, 'render_pdf', {
+      htmlPath: 'src.html',
+      outPath: 'a.pdf',
+    });
+    expect(result.ok).toBe(true);
+    expect(seen[0]!.htmlPath).toBe(path.join(workdir, 'src.html'));
+  });
+
+  it('htmlPath 与 html 必须二选一', async () => {
+    const client = await connect({ renderHtmlToPdf: async () => pdfBytes });
+    expect((await callTool(client, 'render_pdf', { outPath: 'a.pdf' })).errorCode).toBe(
+      'INVALID_ARGS',
+    );
+    expect(
+      (
+        await callTool(client, 'render_pdf', {
+          outPath: 'a.pdf',
+          html: '<p/>',
+          htmlPath: 'x.html',
+        })
+      ).errorCode,
+    ).toBe('INVALID_ARGS');
+  });
+
+  it('空产物报 RENDER_EMPTY,超小产物带回验告警', async () => {
+    const empty = await connect({ renderHtmlToPdf: async () => Buffer.alloc(0) });
+    expect((await callTool(empty, 'render_pdf', { html: '<p/>', outPath: 'a.pdf' })).errorCode).toBe(
+      'RENDER_EMPTY',
+    );
+
+    const tiny = await connect({ renderHtmlToPdf: async () => Buffer.from('%PDF-1.7') });
+    const result = await callTool(tiny, 'render_pdf', { html: '<p/>', outPath: 'b.pdf' });
+    expect(result.ok).toBe(true);
+    expect(result.warning).toContain('白页');
+  });
+
+  it('超时被归成 RENDER_TIMEOUT,其余失败归 RENDER_FAILED', async () => {
+    const timeout = await connect({
+      renderHtmlToPdf: async () => {
+        throw new Error('HTML 渲染超时(30000ms timeout)');
+      },
+    });
+    const timedOut = await callTool(timeout, 'render_pdf', { html: '<p/>', outPath: 'a.pdf' });
+    expect(timedOut.errorCode).toBe('RENDER_TIMEOUT');
+
+    const failed = await connect({
+      renderHtmlToPdf: async () => {
+        throw new Error('render process gone');
+      },
+    });
+    expect(
+      (await callTool(failed, 'render_pdf', { html: '<p/>', outPath: 'a.pdf' })).errorCode,
+    ).toBe('RENDER_FAILED');
+  });
+
+  it('渲染失败时不留下空文件', async () => {
+    const client = await connect({
+      renderHtmlToPdf: async () => {
+        throw new Error('boom');
+      },
+    });
+    await callTool(client, 'render_pdf', { html: '<p/>', outPath: 'a.pdf' });
+    await expect(fs.stat(path.join(workdir, 'a.pdf'))).rejects.toThrow();
+  });
+});
+
+describe('工具错误遥测', () => {
+  it('errorCode 会被交给注入的 logger', async () => {
+    const warn = vi.fn();
+    const client = await connect({
+      logger: {
+        trace: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn,
+        error: vi.fn(),
+      },
+    });
+    await callTool(client, 'read_sheet', { path: 'ghost.csv' });
+    expect(warn).toHaveBeenCalled();
+  });
+});

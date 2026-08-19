@@ -59,6 +59,7 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy_scheduler__list_tools',
       'mcp__cindy_ssh__list_tools',
       'mcp__cindy_helper__list_tools',
+      'mcp__cindy_docs__list_tools',
       'mcp__cindy_memory__list_tools',
       'mcp__cindy_contacts__list_tools',
       'mcp__cindy_slack__slack_status',
@@ -104,6 +105,47 @@ describe('desktop MCP approval policy', () => {
     expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_contacts' })).toBe(
       'prompt-each-time',
     );
+  });
+
+  // cindy_docs 是渐进披露 server:对外只有 list_tools / call_tool。read_sheet 只读
+  // 会话工作目录内的表格(路径由 @cindy/mcps 确定性钳制),免审批;其余五个工具都会
+  // 落盘,必须继续走常规审批链 —— 一次"同意 call_tool"不能变成写盘的通行证。
+  it('auto-approves only the docs read-only inner tool', () => {
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_docs',
+        toolName: 'call_tool',
+        toolParams: { name: 'read_sheet', args: { path: 'a.csv' } },
+      }),
+    ).toBe('auto-approve');
+
+    for (const inner of ['make_docx', 'make_pptx', 'make_xlsx', 'render_pdf', 'office_to_pdf']) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_docs',
+          toolName: 'call_tool',
+          toolParams: { name: inner, args: { outPath: 'a.docx' } },
+        }),
+        `${inner} must not be auto-approved`,
+      ).toBe('prompt');
+    }
+
+    // 内层名读不出来时 fail closed,回落常规审批,而不是按 server 整体放行。
+    expect(
+      getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_docs', toolName: 'call_tool' }),
+    ).toBe('prompt');
+    // cindy_docs 不在 TRUSTED_MCP_SERVERS 里,server 级别不整体静默。
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_docs' })).toBe('prompt');
+  });
+
+  it('reads the docs inner tool the way the Host will receive it (stringified args)', () => {
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_docs',
+        toolName: 'call_tool',
+        toolParams: JSON.stringify({ name: 'read_sheet', args: { path: 'a.csv' } }),
+      }),
+    ).toBe('auto-approve');
   });
 
   it('auto-approves only explicitly reviewed builtin servers', () => {

@@ -17,6 +17,7 @@ import {
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
+import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getIOSSimulatorMcpDeps } from './ios-simulator.js';
 import { getBrowserMcpDeps } from './browser.js';
@@ -300,6 +301,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       pool: deps.lspPool,
       logger: createLogger('mcp/cindy_lsp'),
       isUserEnabled: () => readLspModeSettings().enabled,
+    },
+    // cindy_docs(文档工坊): docx / pptx / xlsx / csv 全在 @cindy/mcps 内用纯 JS 库实现,
+    // 这里只补上包里做不到的那一件事 —— HTML → PDF 要 Chromium printToPDF,
+    // 而 @cindy/mcps 不 import electron。renderHtmlToPdf 就是这条闭包注入线。
+    docs: {
+      logger: createLogger('mcp/cindy_docs'),
+      renderHtmlToPdf,
     },
     // xdt-helper: 自省 + history + send_to_session (essential 常开)。
     // send_to_session 是 skill(issue-bot 等)的会话路由原语, 放 essential 常开不断。

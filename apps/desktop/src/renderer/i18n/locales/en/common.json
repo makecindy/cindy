@@ -2920,6 +2920,10 @@
           "name": "Cindy Memory",
           "description": "Cross-agent long-term memory for persistent context across sessions"
         },
+        "docs": {
+          "name": "Document Toolkit",
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint, plus reading existing spreadsheets"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "Host capability disclosure — tells agents what tools and models are available"
