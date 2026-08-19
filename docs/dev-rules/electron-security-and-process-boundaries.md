@@ -125,8 +125,19 @@ webview）——所有例外都必须继续由 `webview-security.ts` 在 `will-a
 
 内置浏览器为了捕获 `window.open`，会在 Main hardener 中设置 `allowpopups`，随后由
 `setWindowOpenHandler` 拒绝真实弹窗并转成受控标签页。这是唯一允许的窄例外；Renderer
-不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload，
-身份由 Main 根据真实 `webContents` 反查。
+不得自行添加 `allowpopups`。Ghost 面板更严格：专属 partition、无 Node、无通用 preload；
+只允许 Main 强制注入固定的最小 Agent bridge，身份由 Main 根据真实 `webContents` 反查，
+插件不能自报 ghostId／sessionId 或选择 IPC channel；面板用户激活只能请求 Host 自有确认框，
+逐次确认完整最终 prompt 后 Main 才能签发一次性 Agent 票据。独立面板窗的
+确认必须路由到承载目标任务的主壳窗口。`settingsHtml` 虽与面板共用 Ghost webview
+安全闸，但不得注入该 preload，也不得登记为面板 Agent sender；若它与
+`panel.html` 指向同一文件，按路径无法区分两种界面，必须 fail closed 且不注入 Agent preload。
+存量面板的同源页面导航不得因此被改写；Guest 离开唯一 `panel.html` 入口时撤销
+Main sender 登记，完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都只按
+主 frame 的最终 URL 同步，不得由子 frame URL 恢复；只在主 frame 回到该入口后恢复。
+sender 登记还必须绑定 attach 时的数据 owner generation；账户／身份边界变化后，旧 Guest
+即使插件 id 相同也必须拒绝并清理登记。面板的单次确认票不得建立
+`agent.background` 会话关联，不能把当次同意升级为后续无确认调用。
 
 ## 4．preload 与 Context Bridge
 

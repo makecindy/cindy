@@ -5,6 +5,7 @@ import {
   ipcMain,
   safeStorage,
   shell,
+  webContents,
   type WebContents,
 } from 'electron';
 import fs from 'node:fs';
@@ -14,6 +15,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { supportsCindyVersion } from '@cindy/plugin-protocol';
 
 import { createLogger } from '../logger.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   type GhostAppRegion,
@@ -234,6 +236,11 @@ import {
   type CindyVideoParams,
 } from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
+import { GhostPanelAgentBridge } from './panelAgentBridge.js';
+import {
+  resolveGhostPanelConfirmationTargetId,
+  resolveGhostPanelTargetSessionId,
+} from './panelAgentTarget.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
@@ -262,6 +269,11 @@ import {
   readGhostUnread,
   type GhostUnreadEntry,
 } from './ghostUnreadStore.js';
+import {
+  GHOST_PANEL_AGENT_SEND_CHANNEL,
+  GHOST_PANEL_AGENT_TARGET_CHANNEL,
+} from '../../shared/ghostPanelAgent.js';
+import { ghostPanelContextForWebContents } from './runtime/ghostPanelWebContents.js';
 import { isGhostUnreadProjectable, selectRevokedGhostUnreadIds } from './ghostUnreadProjection.js';
 import { GhostConfirmSlot } from './confirmSlot.js';
 import {
@@ -1579,6 +1591,46 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
   getGhostAgentSlot().setRunner(runner);
 }
 
+let panelAgentBridgeSingleton: GhostPanelAgentBridge | null = null;
+
+/** 插件面板只经此窄桥复用现有 agent 槽，不能指定任务或运行模式。 */
+function getGhostPanelAgentBridge(): GhostPanelAgentBridge {
+  if (!panelAgentBridgeSingleton) {
+    panelAgentBridgeSingleton = new GhostPanelAgentBridge({
+      panelContext: (senderWebContentsId) =>
+        ghostPanelContextForWebContents(senderWebContentsId, getActiveDataOwnerPushStamp()),
+      hasAgentPermission: (ghostId) => {
+        const ghost = findAvailableGhost(ghostId);
+        return Boolean(ghost?.enabled && ghost.manifest.slots.includes('agent'));
+      },
+      targetSessionId: ghostPanelTargetSessionId,
+      isInteractive: isInteractiveGhostPanel,
+      confirmSend: (ghostId, finalPrompt, hostWebContentsId, sessionId) => {
+        const targetWebContentsId = ghostPanelConfirmationTargetWebContentsId(
+          hostWebContentsId,
+          sessionId,
+        );
+        if (targetWebContentsId === null) {
+          return Promise.resolve({
+            ok: false,
+            errorCode: 'UNAVAILABLE',
+            message: '找不到承载当前任务的主窗口',
+          });
+        }
+        return getGhostConfirmSlot().handleHostAgentSendConfirmation(
+          ghostId,
+          finalPrompt,
+          targetWebContentsId,
+        );
+      },
+      issueUserActionToken: (ghostId, sessionId) =>
+        getGhostAgentSlot().issueUserActionToken(ghostId, sessionId, 'panel'),
+      run: (ghostId, payload) => getGhostAgentSlot().handleRequest(ghostId, payload),
+    });
+  }
+  return panelAgentBridgeSingleton;
+}
+
 let errandSlotSingleton: GhostErrandSlot | null = null;
 
 /** 派活取件槽单例(agent 槽 errand 加档):资格审/频控/任务表的统一守门点。 */
@@ -2361,6 +2413,68 @@ function mainShellWindows(): BrowserWindow[] {
   );
 }
 
+/** 主窗口和已上报自身会话的应用副窗口都是面板的任务宿主。 */
+function ghostPanelHostOwnsSession(hostContents: WebContents): boolean {
+  if (isMainShellWindowUrl(hostContents.getURL())) return true;
+  const hostWindow = BrowserWindow.fromWebContents(hostContents);
+  return isSecondaryAppWindow(hostWindow) && ghostSessionFocusByWebContents.has(hostContents.id);
+}
+
+/**
+ * 面板目标任务解析：停靠态取承载宿主窗口自己的路由；独立面板窗只在主窗口
+ * 唯一时回落。多窗口有歧义就拒绝，绝不让插件提供 sessionId 猜目标。
+ */
+function ghostPanelTargetSessionId(hostWebContentsId: number): string | null {
+  const hostContents = webContents.fromId(hostWebContentsId);
+  if (!hostContents || hostContents.isDestroyed()) return null;
+  const candidates = mainShellWindows();
+  return resolveGhostPanelTargetSessionId({
+    hostOwnsSession: ghostPanelHostOwnsSession(hostContents),
+    hostSessionId: ghostSessionFocusByWebContents.get(hostWebContentsId),
+    mainShellSessionIds: candidates.map((window) =>
+      ghostSessionFocusByWebContents.get(window.webContents.id),
+    ),
+  });
+}
+
+/**
+ * 宿主确认必须落在真正承载目标任务的宿主窗口。停靠面板直接用
+ * 自己的 Host；独立面板窗只在能唯一找到同一任务的主壳时放行。
+ */
+function ghostPanelConfirmationTargetWebContentsId(
+  hostWebContentsId: number,
+  sessionId: string,
+): number | null {
+  const hostContents = webContents.fromId(hostWebContentsId);
+  if (!hostContents || hostContents.isDestroyed()) return null;
+  return resolveGhostPanelConfirmationTargetId({
+    hostOwnsSession: ghostPanelHostOwnsSession(hostContents),
+    hostWebContentsId,
+    hostSessionId: ghostSessionFocusByWebContents.get(hostWebContentsId),
+    targetSessionId: sessionId,
+    mainShells: mainShellWindows().map((window) => ({
+      webContentsId: window.webContents.id,
+      sessionId: ghostSessionFocusByWebContents.get(window.webContents.id),
+    })),
+  });
+}
+
+/** 发送副作用只接受当前获得焦点、且所在窗口可见的真实面板 Guest。 */
+function isInteractiveGhostPanel(senderWebContentsId: number, hostWebContentsId: number): boolean {
+  const sender = webContents.fromId(senderWebContentsId);
+  const hostContents = webContents.fromId(hostWebContentsId);
+  if (!sender || sender.isDestroyed() || !sender.isFocused()) return false;
+  if (!hostContents || hostContents.isDestroyed()) return false;
+  const window = BrowserWindow.fromWebContents(hostContents);
+  return Boolean(
+    window &&
+    !window.isDestroyed() &&
+    window.isVisible() &&
+    !window.isMinimized() &&
+    BrowserWindow.getFocusedWindow() === window,
+  );
+}
+
 function focusedIOSSimulatorContext(): IOSSimulatorSlotFocusContext | null {
   const candidates = mainShellWindows();
   const focused = BrowserWindow.getFocusedWindow();
@@ -2809,14 +2923,15 @@ function resumeGhostUnreadProjection(ghostId: string): void {
 
 let confirmSlotSingleton: GhostConfirmSlot | null = null;
 
-/** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
+/** 意识确认弹窗通道(main → **单个**窗口;renderer 用宿主 ConfirmDialog 渲染)。 */
 export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
 
 /**
  * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
  * 超时兜底在 GhostConfirmDialogBridge,这里只组装"投给哪个窗口"。
  *
- * 只投**一个**窗口(focused ?? 第一个),不像 notify 那样广播:模态确认框广播
+ * 只投**一个**窗口：普通 confirm 沿用 focused ?? 第一个；面板 Agent
+ * 确认则精确投给承载目标任务的宿主窗口。不像 notify 那样广播:模态确认框广播
  * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
  * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
  */
@@ -2825,9 +2940,27 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
     const bridge =
       getGhostConfirmDialogBridge() ??
       initGhostConfirmDialogBridge({
-        sendToWindow: (payload) => {
-          const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        sendToWindow: (payload, targetWebContentsId) => {
+          let win: BrowserWindow | null | undefined;
+          if (targetWebContentsId !== undefined) {
+            const targetContents = webContents.fromId(targetWebContentsId);
+            if (
+              !targetContents ||
+              targetContents.isDestroyed() ||
+              !ghostPanelHostOwnsSession(targetContents)
+            ) {
+              return false;
+            }
+            win = BrowserWindow.fromWebContents(targetContents);
+          } else {
+            win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          }
           if (!win || win.isDestroyed()) return false;
+          // detached 面板可以在主壳被遮挡、隐藏或最小化时发起确认；确认必须
+          // 出现在用户实际可见的宿主表面，不能静默等到超时再当作取消。
+          if (win.isMinimized()) win.restore();
+          if (!win.isVisible()) win.show();
+          win.focus();
           sendGhostWindowPush(win, GHOST_CONFIRM_CHANNEL, payload);
           return true;
         },
@@ -2841,6 +2974,9 @@ export function getGhostConfirmSlot(): GhostConfirmSlot {
           ghostName: params.ghostName,
           ...(params.iconDataUrl ? { iconDataUrl: params.iconDataUrl } : {}),
           body: params.body,
+          ...(params.targetWebContentsId !== undefined
+            ? { targetWebContentsId: params.targetWebContentsId }
+            : {}),
           confirmText: params.confirmText,
           cancelText: params.cancelText,
           danger: params.danger,
@@ -5713,6 +5849,16 @@ export function registerGhostIpc(): void {
       ? 'retry-pending'
       : 'completed';
   };
+
+  // ── 面板最小 Agent 桥 ──────────────────────────────────────────────
+  // sender 身份来自 will/did-attach-webview 的 Main 登记，不接受插件自报
+  // ghostId/sessionId。preload 先消费真实用户激活；这里再校验可见与焦点。
+  ipcMain.handle(GHOST_PANEL_AGENT_TARGET_CHANNEL, (event) =>
+    getGhostPanelAgentBridge().getTarget(event.sender.id),
+  );
+  ipcMain.handle(GHOST_PANEL_AGENT_SEND_CHANNEL, (event, payload: unknown) =>
+    getGhostPanelAgentBridge().send(event.sender.id, payload),
+  );
 
   // ── 管子(脑机接口)main 侧 handler(docs/dev-rules/plugin-security-and-authoring.md)──────────────
   // 身份不信任 sender 自报,一律按 webContents id 反查绑定表验身。

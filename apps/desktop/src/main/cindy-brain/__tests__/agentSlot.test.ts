@@ -205,6 +205,18 @@ describe('agentSlot · 会话模式与审计', () => {
     });
   });
 
+  it('面板点击票在审计内容中标注 surface，普通卡片票保持旧结构', async () => {
+    const runner = acceptedRunner();
+    const slot = makeSlot({ runner });
+    const token = slot.issueUserActionToken('alpha', 'session-1', 'panel')!;
+
+    await slot.handleRequest('alpha', userRequest(token));
+    expect(JSON.parse(runner.mock.calls[0][0].persistedContent).ghostAgent).toMatchObject({
+      trigger: 'user-action',
+      surface: 'panel',
+    });
+  });
+
   it('用户原文里的 event_json 字样保持原样，只替换模板本身的占位符', async () => {
     const runner = acceptedRunner();
     const slot = makeSlot({ runner });
@@ -274,5 +286,23 @@ describe('agentSlot · 后台权限', () => {
     now += 10_000;
     expect((await slot.handleRequest('alpha', request('session-1'))).ok).toBe(true);
     expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it('面板逐次确认票不建立 background 会话关联', async () => {
+    const runner = acceptedRunner();
+    const slot = makeSlot({
+      ghosts: [fakeGhost('alpha', { background: true })],
+      runner,
+    });
+    slot.issueUserActionToken('alpha', 'session-1', 'panel');
+
+    expect(
+      await slot.handleRequest('alpha', {
+        ...userRequest('unused'),
+        trigger: 'background',
+        sessionId: 'session-1',
+      }),
+    ).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(runner).not.toHaveBeenCalled();
   });
 });

@@ -1600,10 +1600,15 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          // 意识电子脑管子桥(离屏沙箱逻辑页专用;面板 webview 无 preload,
-          // hardener 亦强制 delete。见 brain/runtime/electronSandboxAdapter)。
+          // 意识电子脑完整管子桥(离屏沙箱逻辑页专用；面板绝不复用此桥)。
           entry: 'src/preload/ghostPreload.ts',
           config: 'vite.ghost-preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 插件面板 Guest 专用最小桥：只开放真实用户操作下向当前任务发送消息。
+          entry: 'src/preload/ghostPanelGuestPreload.ts',
+          config: 'vite.preload.config.ts',
           target: 'preload',
         },
       ],

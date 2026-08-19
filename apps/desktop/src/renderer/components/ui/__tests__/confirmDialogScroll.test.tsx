@@ -94,4 +94,20 @@ describe('ConfirmDialog 长内容布局', () => {
     expect(dialog.querySelectorAll('.overflow-y-auto').length).toBe(0);
     expect(flashScrollbar).not.toHaveBeenCalled();
   });
+
+  it('调用方可让完整长正文保留换行并折断无分隔长词', () => {
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={() => {}}
+        title="面板发送确认"
+        description={'message\n' + 'x'.repeat(1024)}
+        textClassName="whitespace-pre-wrap break-words"
+      />,
+    );
+    const description = screen.getByRole('alertdialog').querySelector('p') as HTMLElement;
+    expect(description.textContent).toBe('message\n' + 'x'.repeat(1024));
+    expect(description.className).toContain('whitespace-pre-wrap');
+    expect(description.className).toContain('break-words');
+  });
 });

@@ -13,8 +13,8 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
  * 信任边界(与 Toast 的来源身份头同款):
  * - 标题是**主机文案**(带插件名),插件写不了;
  * - 身份头(图标 + 名字)由这里画,数据来自 main 的已装清单(不是插件自报);
- * - 插件只供 body 与按钮字,main 侧已净化 + 卡长度;这里作纯文本渲染(description
- *   与 content 都是文本节点,不注入 HTML);
+ * - 插件主动 confirm 的 body/按钮字已由 main 净化限长；Host 强制的 Agent
+ *   确认则携带完整最终 prompt。两者都作纯文本渲染，不注入 HTML；
  * - 用户的点击才是答案:确认 true、取消/Esc/点外部 false,原样回给 main。
  *
  * main 只把请求投给**单个**窗口,所以收到即本窗口负责弹,不需要按窗口类型 gate
@@ -39,6 +39,8 @@ export function GhostConfirmDialogHost() {
             // 主机文案:插件名只作插值,伪装不了这句话本身
             title: t('settings.ghosts.confirm.dialogTitle', { name: ghostName }),
             description: body,
+            // Agent 最终 prompt 可能含换行或无断点长 JSON；确认边界必须完整可读。
+            textClassName: 'whitespace-pre-wrap break-words',
             // 身份头:与 Toast 的来源头同款视觉(语义 token,明暗两档自动跟随)
             content: (
               <span className="inline-flex items-center gap-1.5">

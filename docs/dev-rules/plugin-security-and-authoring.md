@@ -51,7 +51,8 @@
 - 每个运行中的插件使用独立 Electron 沙箱进程与专属 session partition。沙箱禁止直接访问
   Node、宿主文件系统和网络。
 - 插件只允许读取自身安装目录内、经安全相对路径校验的静态资源，不得越权读取其它目录。
-- 逻辑页只能经最小 `contextBridge` 管子申请主机能力；面板 webview 保持零特权桥。
+- 逻辑页只能经最小 `contextBridge` 管子申请主机能力；面板 webview 不获得该完整管子，
+  只可在声明 `agent` slot 后使用 Host 固定的 `agent.getTarget/send` 最小桥。
 - 主机按 `webContents` 绑定反查真实 ghostId，**不信任 sender 自报身份**。
 - 沉睡、抽离和主机退出必须终止对应沙箱；沙箱崩溃只由 `GhostRuntime` 收敛，不得带崩
   主应用。
@@ -239,6 +240,20 @@
   `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
   Host 不自动回调插件，也不得新增画廊等插件业务语义。
 - 面板供片与注入的主题 token 只用 `ghostPanelTheme.ts` 白名单内的值，不扩大暴露面。
+- 面板 Agent 最小桥不接受插件自报 `ghostId`、`sessionId`、运行模式或后台触发；Host 按
+  Guest WebContents 登记反查插件身份，在发送瞬间解析承载窗口当前任务，并要求面板可见、
+  聚焦及 preload 消费一份短暂真实用户激活。该激活只能请求 Cindy 自有确认框，Host 必须在
+  用户逐次确认后才签发一次性 Agent 票据；普通面板点击不得直接兑换收费回合。`context` 必须
+  递归验证为可无损 JSON 值，拒绝静默改写。Host 确认框必须完整展示实际将进入
+  Agent 的 message + context，不得用截断摘要代替。独立面板窗的确认只能投给承载
+  目标任务的唯一主壳窗口；`settingsHtml` 与 `panel.html` 同路径时不注入面板桥。
+  存量同源导航继续允许，但 Guest 离开唯一 `panel.html` 入口时必须撤销 Agent sender；
+  完整导航及 `history.pushState`／`replaceState`／hash 等页内导航都只按主 frame 的最终 URL
+  同步，不得由子 frame URL 恢复；主 frame 返回入口后才恢复。面板票据不得建立
+  `agent.background` 会话关联。sender 身份绑定 attach 时的数据 owner generation；账户或
+  身份边界变化后，旧 Guest 即使遇到同 id 插件也不能继续使用桥。
+  消息只进入普通 user 回合，失败时不得回落到其它窗口或历史任务。该能力复用既有
+  `agent` slot，不新增权限，也不影响存量插件。
 - `ios-simulator` 槽只允许读取 Host 当前台前任务的公开模拟器状态，并请求打开既有
   Host viewer。请求协议不得出现插件自报 `sessionId`，可选 `instanceId` 必须重新匹配
   当前任务的公开实例。视频帧、viewer lease、触控、Sidecar／Helper、artifact 路径、进程

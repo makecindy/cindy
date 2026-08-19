@@ -46,9 +46,12 @@ import {
   applyWebviewHardening,
   installBrowserGuestHandlers,
   installDeferredPopupRouter,
+  isGhostPanelAgentEntry,
   isGuestShortcutKeyDownType,
   resolveGuestShortcutAction,
   setRsbPopupOpenerResolver,
+  shouldEnableGhostPanelAgentBridge,
+  shouldRegisterGhostPanelAgentSender,
 } from '../webview-security';
 
 describe('applyWebviewHardening', () => {
@@ -267,6 +270,66 @@ describe('installBrowserGuestHandlers(main-owned popup)', () => {
 });
 
 describe('applyGhostWebviewHardening(意识面板 webview)', () => {
+  it('只把可唯一识别的 panel.html 当作 Agent bridge 入口', () => {
+    expect(
+      isGhostPanelAgentEntry('cindy-ghost://art/ui/panel.html', 'ui/panel.html', 'settings.html'),
+    ).toBe(true);
+    expect(isGhostPanelAgentEntry('cindy-ghost://art/settings.html', 'ui/panel.html')).toBe(false);
+    expect(
+      isGhostPanelAgentEntry(
+        'cindy-ghost://art/ui/shared.html',
+        'ui/shared.html',
+        'ui/shared.html',
+      ),
+    ).toBe(false);
+    expect(isGhostPanelAgentEntry('not a url', 'ui/panel.html')).toBe(false);
+  });
+
+  it('只有声明 agent 槽的 panel 入口才启用 Agent bridge', () => {
+    expect(
+      shouldEnableGhostPanelAgentBridge(
+        'cindy-ghost://art/ui/panel.html',
+        'ui/panel.html',
+        'settings.html',
+        ['panel', 'agent'],
+      ),
+    ).toBe(true);
+    expect(
+      shouldEnableGhostPanelAgentBridge(
+        'cindy-ghost://art/ui/panel.html',
+        'ui/panel.html',
+        'settings.html',
+        ['panel'],
+      ),
+    ).toBe(false);
+  });
+
+  it('Agent sender 只在唯一 panel 入口登记，不把设置页当成 sender', () => {
+    expect(
+      shouldRegisterGhostPanelAgentSender(
+        'cindy-ghost://art/ui/panel.html?view=canvas#node-1',
+        'art',
+        'ui/panel.html',
+        'settings.html',
+      ),
+    ).toBe(true);
+    expect(
+      shouldRegisterGhostPanelAgentSender(
+        'cindy-ghost://art/settings.html',
+        'art',
+        'ui/panel.html',
+        'settings.html',
+      ),
+    ).toBe(false);
+    expect(
+      shouldRegisterGhostPanelAgentSender(
+        'cindy-ghost://art/another-page.html',
+        'art',
+        'ui/panel.html',
+      ),
+    ).toBe(false);
+  });
+
   it('同一套安全锁全部生效,但保留意识专属分区、掐死 popup', () => {
     const webPreferences: Record<string, unknown> = {
       nodeIntegration: true,
@@ -305,6 +368,21 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
     expect('allowpopups' in params).toBe(false);
     expect('disablewebsecurity' in params).toBe(false);
     expect('webpreferences' in params).toBe(false);
+  });
+
+  it('只接受 Main 指定的面板最小 preload，覆盖 renderer 注入路径', () => {
+    const webPreferences: Record<string, unknown> = { preload: '/tmp/evil-preload.js' };
+    const params: Record<string, string> = {
+      src: 'cindy-ghost://art/panel.html',
+      partition: 'cindy-ghost-art',
+    };
+
+    applyGhostWebviewHardening(webPreferences, params, {
+      panelPreloadPath: '/app/.vite/build/ghostPanelGuestPreload.js',
+    });
+
+    expect(webPreferences.preload).toBe('/app/.vite/build/ghostPanelGuestPreload.js');
+    expect(params.partition).toBe('cindy-ghost-art');
   });
 });
 

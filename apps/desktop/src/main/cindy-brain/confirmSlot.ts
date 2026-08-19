@@ -47,8 +47,13 @@ export interface GhostConfirmShowParams {
   ghostName: string;
   /** 插件图标 data URL(身份头;未声明图标时缺省)。 */
   iconDataUrl?: string;
-  /** 净化后的问句正文。 */
+  /**
+   * 确认正文。插件主动 confirm 请求会净化并限长；Host 强制的
+   * Agent 确认则展示完整最终 prompt，不做截断或改写。
+   */
   body: string;
+  /** 只对 Host 强制确认使用：精确投给承载目标任务的主壳 WebContents。 */
+  targetWebContentsId?: number;
   /** 净化后的主按钮文案;null = 用主机缺省文案。 */
   confirmText: string | null;
   /** 净化后的次按钮文案;null = 用主机缺省文案。 */
@@ -100,6 +105,31 @@ export class GhostConfirmSlot {
 
   constructor(private readonly deps: ConfirmSlotDeps) {}
 
+  /**
+   * Host 为插件面板 Agent 发送强制弹出的逐次确认。
+   *
+   * 这不是插件主动申请 confirm 槽：确认由 Host 安全策略强制，因此只要求插件
+   * 已启用并声明 agent 槽。正文由 Host 生成，与确认后实际进入
+   * Agent 的最终 prompt 逐字一致；现有确认组件负责长文滚动展示。
+   */
+  async handleHostAgentSendConfirmation(
+    ghostId: string,
+    finalPrompt: string,
+    targetWebContentsId: number,
+  ): Promise<GhostPipeConfirmResult> {
+    const ghost = this.deps.getGhost(ghostId);
+    if (!ghost?.enabled || !ghost.manifest.slots.includes('agent')) {
+      return fail('PERMISSION_DENIED', '插件未申请 Agent 新回合权限，或当前未启用');
+    }
+    return this.show(ghost, {
+      body: finalPrompt,
+      targetWebContentsId,
+      confirmText: null,
+      cancelText: null,
+      danger: false,
+    });
+  }
+
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeConfirmResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || !ghost.manifest.slots.includes('confirm')) {
@@ -139,6 +169,22 @@ export class GhostConfirmSlot {
       );
     }
 
+    return this.show(ghost, {
+      body,
+      confirmText: confirmText.value,
+      cancelText: cancelText.value,
+      danger: request.danger === true,
+    });
+  }
+
+  private async show(
+    ghost: InstalledGhost,
+    request: Pick<
+      GhostConfirmShowParams,
+      'body' | 'targetWebContentsId' | 'confirmText' | 'cancelText' | 'danger'
+    >,
+  ): Promise<GhostPipeConfirmResult> {
+    const ghostId = ghost.manifest.id;
     // 骚扰钳制:限速按尝试记账(spam 顺延窗口),再看全局在场标记。
     const now = this.deps.now?.() ?? Date.now();
     const last = this.lastAttemptAt.get(ghostId);
@@ -157,10 +203,13 @@ export class GhostConfirmSlot {
         ghostId,
         ghostName: ghost.manifest.name,
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
-        body,
-        confirmText: confirmText.value,
-        cancelText: cancelText.value,
-        danger: request.danger === true,
+        body: request.body,
+        ...(request.targetWebContentsId !== undefined
+          ? { targetWebContentsId: request.targetWebContentsId }
+          : {}),
+        confirmText: request.confirmText,
+        cancelText: request.cancelText,
+        danger: request.danger,
       });
     } catch (error) {
       this.deps.log?.warn('ghost confirm dialog failed', {

@@ -28,12 +28,14 @@ import { app, type BrowserWindow, type WebContents } from 'electron';
 
 import { BROWSER_PARTITION } from '../shared/webviewPartition';
 import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
+import type { DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
 import {
   matchesElectronInput,
   type AppShortcutCombo,
   type AppShortcutId,
 } from '../shared/appShortcuts';
 import { getAppShortcutStore } from './app-shortcuts/index.js';
+import { getActiveDataOwnerPushStamp } from './appSessionState.js';
 import {
   handleGhostExternalLinkNavigation,
   handleGhostPreviewNavigation,
@@ -41,6 +43,10 @@ import {
 } from './cindy-brain/index.js';
 import { classifyGhostPanelNavigation } from './cindy-brain/previewGate.js';
 import { registerGhostWebContents } from './cindy-brain/runtime/electronSandboxAdapter.js';
+import {
+  registerGhostPanelWebContents,
+  unregisterGhostPanelWebContents,
+} from './cindy-brain/runtime/ghostPanelWebContents.js';
 import {
   attributeRsbNativePopupSurface,
   createRsbNativePopupSurface,
@@ -57,6 +63,52 @@ import {
  */
 export function getBrowserCommentPreloadPath(): string {
   return path.join(__dirname, 'browserCommentPreload.js');
+}
+
+/** Host 唯一可信的插件面板 Guest preload 产物路径。 */
+export function getGhostPanelGuestPreloadPath(): string {
+  return path.join(__dirname, 'ghostPanelGuestPreload.js');
+}
+
+/**
+ * settingsHtml 与 panel.html 共用 Ghost webview 闸，但只有可唯一识别的面板入口
+ * 可拿 Agent bridge。两者指向同一文件时按路径无法分辨设置页，fail closed。
+ */
+export function isGhostPanelAgentEntry(
+  src: unknown,
+  panelHtml: unknown,
+  settingsHtml?: unknown,
+): boolean {
+  if (typeof src !== 'string' || typeof panelHtml !== 'string') return false;
+  if (typeof settingsHtml === 'string' && settingsHtml === panelHtml) return false;
+  try {
+    return new URL(src).pathname === `/${panelHtml}`;
+  } catch {
+    return false;
+  }
+}
+
+/** 只有同时声明 agent 槽的唯一 panel 入口才注入并登记 Agent bridge。 */
+export function shouldEnableGhostPanelAgentBridge(
+  src: unknown,
+  panelHtml: unknown,
+  settingsHtml: unknown,
+  slots: readonly unknown[],
+): boolean {
+  return slots.includes('agent') && isGhostPanelAgentEntry(src, panelHtml, settingsHtml);
+}
+
+/** 只在 Guest 当前仍处于唯一 panel 入口时保留 Main sender 登记。 */
+export function shouldRegisterGhostPanelAgentSender(
+  url: string,
+  ghostId: string,
+  panelHtml?: string,
+  settingsHtml?: string,
+): boolean {
+  return (
+    classifyGhostPanelNavigation(url, ghostId) === 'allow' &&
+    isGhostPanelAgentEntry(url, panelHtml, settingsHtml)
+  );
 }
 
 /**
@@ -141,6 +193,7 @@ export function applyWebviewHardening(
 export function applyGhostWebviewHardening(
   webPreferences: Record<string, unknown>,
   params: Record<string, string>,
+  options?: { panelPreloadPath?: string },
 ): void {
   delete params.disablewebsecurity;
   delete params.webpreferences;
@@ -157,7 +210,11 @@ export function applyGhostWebviewHardening(
   webPreferences.allowRunningInsecureContent = false;
   webPreferences.webviewTag = false;
   webPreferences.plugins = false;
-  delete webPreferences.preload;
+  if (options?.panelPreloadPath) {
+    webPreferences.preload = options.panelPreloadPath;
+  } else {
+    delete webPreferences.preload;
+  }
 }
 
 /** Renderer 接收 popup 路由消息的 IPC channel。main → renderer。 */
@@ -658,7 +715,13 @@ export function installWebviewHardener(): void {
     // will-attach → did-attach 对同一个 guest 同步成对触发;用闭包变量把
     // will 阶段的意识判定带给 did 阶段(意识 guest 走独立接线,不装浏览器
     // 的 popup 路由与快捷键转发)。
-    let pendingGhostAttach: { id: string } | null = null;
+    let pendingGhostAttach: {
+      id: string;
+      agentBridge: boolean;
+      ownerStamp: DataOwnerPushStamp;
+      panelHtml?: string;
+      settingsHtml?: string;
+    } | null = null;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
@@ -670,8 +733,22 @@ export function installWebviewHardener(): void {
           pendingGhostAttach = null;
           return;
         }
-        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params);
-        pendingGhostAttach = { id: ghost.manifest.id };
+        const agentBridge = shouldEnableGhostPanelAgentBridge(
+          params.src,
+          ghost.manifest.panel?.html,
+          ghost.manifest.settingsHtml,
+          ghost.manifest.slots,
+        );
+        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params, {
+          ...(agentBridge ? { panelPreloadPath: getGhostPanelGuestPreloadPath() } : {}),
+        });
+        pendingGhostAttach = {
+          id: ghost.manifest.id,
+          agentBridge,
+          ownerStamp: getActiveDataOwnerPushStamp(),
+          ...(ghost.manifest.panel?.html ? { panelHtml: ghost.manifest.panel.html } : {}),
+          ...(ghost.manifest.settingsHtml ? { settingsHtml: ghost.manifest.settingsHtml } : {}),
+        };
         return;
       }
       pendingGhostAttach = null;
@@ -685,11 +762,47 @@ export function installWebviewHardener(): void {
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
       if (pendingGhostAttach) {
-        const ghostId = pendingGhostAttach.id;
+        const { id: ghostId, agentBridge, ownerStamp, panelHtml, settingsHtml } = pendingGhostAttach;
         pendingGhostAttach = null;
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
         registerGhostWebContents(guestContents.id);
+        if (agentBridge) {
+          const panelSenderContext = {
+            ghostId,
+            hostWebContentsId: contents.id,
+            ownerStamp,
+          };
+          const isOwnerCurrent = () => {
+            const current = getActiveDataOwnerPushStamp();
+            return (
+              current.dataOwnerId === ownerStamp.dataOwnerId &&
+              current.ownerGeneration === ownerStamp.ownerGeneration
+            );
+          };
+          if (isOwnerCurrent()) {
+            registerGhostPanelWebContents(guestContents.id, panelSenderContext);
+          }
+          const syncPanelAgentSender = (url: string) => {
+            if (
+              isOwnerCurrent() &&
+              shouldRegisterGhostPanelAgentSender(url, ghostId, panelHtml, settingsHtml)
+            ) {
+              registerGhostPanelWebContents(guestContents.id, panelSenderContext);
+            } else {
+              unregisterGhostPanelWebContents(guestContents.id);
+            }
+          };
+          guestContents.on('did-navigate', (_event, url) => syncPanelAgentSender(url));
+          // history.pushState/replaceState 和 hash 跳转不会触发 did-navigate；
+          // 只按主 frame 的最终 URL 同步，避免子 frame 伪造 panel URL 恢复 sender 身份。
+          guestContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+            if (isMainFrame) syncPanelAgentSender(url);
+          });
+          guestContents.once('destroyed', () => {
+            unregisterGhostPanelWebContents(guestContents.id);
+          });
+        }
         // 意识面板零弹窗、零跳转:window.open 全拒,导航锁死在自己协议同源内。
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);
@@ -697,7 +810,17 @@ export function installWebviewHardener(): void {
         guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         guestContents.on('will-navigate', (event, url) => {
           const nav = classifyGhostPanelNavigation(url, ghostId);
-          if (nav === 'allow') return;
+          if (nav === 'allow') {
+            // 保留存量多页面面板的同源导航，但离开唯一 panel 入口前立即
+            // 撤销 Main sender 身份；导航回 panel 后由 did-navigate 重新登记。
+            if (
+              agentBridge &&
+              !shouldRegisterGhostPanelAgentSender(url, ghostId, panelHtml, settingsHtml)
+            ) {
+              unregisterGhostPanelWebContents(guestContents.id);
+            }
+            return;
+          }
           event.preventDefault();
           if (nav === 'preview') {
             handleGhostPreviewNavigation(ghostId, url, contents, guestContents);
