@@ -2654,6 +2654,10 @@ export function CCAgentSessionView({
         const agentSkillInvocation = agentKind === 'pi'
           ? agentSkillInvocationForDispatch(message, hit)
           : undefined;
+        if (agentKind === 'pi' && hit?.kind === 'agent-skill' && !agentSkillInvocation) {
+          toast.warning(t('commandPalette.skillUnavailableForNewTask'));
+          return { handled: true, accepted: false };
+        }
         return {
           handled: false,
           accepted: false,

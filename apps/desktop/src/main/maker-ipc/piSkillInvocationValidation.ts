@@ -395,26 +395,32 @@ export async function isCurrentPiSkillInvocation(
     return loadedMatches === 1;
   }
   let runtimeMatches = 0;
+  const matchedUserProofs = new Set<FrozenUserSkillSourceProof>();
   for (const command of manifest.commands) {
-    if (
-      command.name === invocation.runtimeCommandName
-      && command.source === 'skill'
-      && (
-        await runtimeManagedPackageSkillMatchesSource(
-          invocationSourcePath,
-          command,
-          manifest.managedPackageSkills ?? [],
-          dependencies,
-          deadlineAtMs,
-        )
-        || await runtimeUserSkillMatchesSource(
-          invocationSourcePath,
-          command,
-          dependencies,
-          deadlineAtMs,
-        )
-      )
-    ) runtimeMatches += 1;
+    if (command.name !== invocation.runtimeCommandName || command.source !== 'skill') continue;
+    if (await runtimeManagedPackageSkillMatchesSource(
+      invocationSourcePath,
+      command,
+      manifest.managedPackageSkills ?? [],
+      dependencies,
+      deadlineAtMs,
+    )) {
+      runtimeMatches += 1;
+    } else if (await runtimeUserSkillMatchesSource(
+      invocationSourcePath,
+      command,
+      dependencies,
+      deadlineAtMs,
+    )) {
+      const proof = frozenUserSkillSourceProof(Reflect.get(
+        command,
+        PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE,
+      ));
+      if (proof && !matchedUserProofs.has(proof)) {
+        matchedUserProofs.add(proof);
+        runtimeMatches += 1;
+      }
+    }
     if (runtimeMatches > 1) return false;
   }
   return runtimeMatches === 1;

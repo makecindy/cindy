@@ -1482,12 +1482,14 @@ describe('Maker Pi runtime skill status', () => {
         'ready',
         { userSkillBaseDirs: [path.join(root, 'pi-home')] },
       );
-      const ambiguous = await maker.listAgentSkills('pi', {
+      const equivalent = await maker.listAgentSkills('pi', {
         workingDir: root,
         sessionId: 'user-pathful',
       });
-      expect(ambiguous.skills[0]).not.toHaveProperty('runtimeStatus');
-      expect(ambiguous.skills[0]).not.toHaveProperty('runtimeCommandName');
+      expect(equivalent.skills[0]).toMatchObject({
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:frontmatter-name',
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

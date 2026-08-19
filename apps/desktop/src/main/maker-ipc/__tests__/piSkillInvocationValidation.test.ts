@@ -231,16 +231,27 @@ describe('Pi Skill invocation validation', () => {
           command: 'get_commands',
           success: true,
           data: {
-            commands: [{
-              name: 'skill:demo',
-              source: 'skill',
-              sourceInfo: {
-                scope: 'user',
-                source: 'auto',
-                baseDir: userBaseDir,
-                path: path.join(userSource, 'SKILL.md'),
+            commands: [
+              {
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: {
+                  scope: 'user',
+                  source: 'auto',
+                  baseDir: userBaseDir,
+                  path: path.join(userSource, 'SKILL.md'),
+                },
               },
-            }],
+              {
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: {
+                  scope: 'user',
+                  source: 'auto',
+                  baseDir: userBaseDir,
+                },
+              },
+            ],
           },
         }),
       },
