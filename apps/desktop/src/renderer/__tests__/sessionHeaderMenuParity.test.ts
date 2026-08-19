@@ -66,6 +66,8 @@ describe('session menu parity across header and sidebar variants', () => {
 
   it('keeps the Cindy fork-family branch entry in the header only', () => {
     expect(headerSource).toContain("t('ccAgent.sidebar.sessionMenu.sessionBranches')");
+    expect(headerSource).toContain("useCCSessions({ includeArchived: 'all' })");
+    expect(headerSource).toContain('Boolean(session.parentSessionId)');
     expect(headerSource).toContain('canShowBranchTree = !isEmpty && hasSessionFamily');
     expect(headerSource).not.toContain("agentKind === 'pi' || hasSessionFamily");
     expect(sessionItemSource).not.toContain("t('ccAgent.sidebar.sessionMenu.sessionBranches')");

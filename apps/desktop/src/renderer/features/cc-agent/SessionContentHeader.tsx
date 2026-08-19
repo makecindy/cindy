@@ -127,6 +127,9 @@ export function SessionContentHeader({
 }: SessionContentHeaderProps) {
   const { t } = useTranslation();
   const { sessions, patchLocal } = useCCSessions();
+  // 分叉家族要看见已归档的父/子任务,不能只扫 active 桶。与 sidebar attention
+  // / SplitGroup 同一口径,复用已有 includeArchived:'all',不另造加载通道。
+  const { sessions: familySessions } = useCCSessions({ includeArchived: 'all' });
   const remoteProjectSessions = useRemoteProjectSessions();
   const routeSessionById = useMemo(
     () => new Map([...sessions, ...remoteProjectSessions].map((s) => [s.id, s])),
@@ -385,18 +388,20 @@ export function SessionContentHeader({
   const [shareExportOpen, setShareExportOpen] = useState(false);
   const [branchTreeOpen, setBranchTreeOpen] = useState(false);
   const allKnownSessions = useMemo(
-    () => [...sessions, ...remoteProjectSessions],
-    [remoteProjectSessions, sessions],
+    () => [...familySessions, ...remoteProjectSessions],
+    [familySessions, remoteProjectSessions],
   );
   const hasSessionFamily = useMemo(
     () =>
+      Boolean(session.parentSessionId) ||
       allKnownSessions.some(
         (item) => item.parentSessionId === session.id || item.id === session.parentSessionId,
       ),
     [allKnownSessions, session.id, session.parentSessionId],
   );
   // 只给 Cindy 任务分叉家族保留入口。Pi 原生 branch tree 不再单凭 agentKind=pi 露出,
-  // 避免普通 Pi 任务把 overflow 撑长；有父子任务时仍可打开统一树。
+  // 避免普通 Pi 任务把 overflow 撑长。当前任务带 parentSessionId,或 all 桶里能扫到
+  // 父/子(含归档),都算家族成员。
   const canShowBranchTree = !isEmpty && hasSessionFamily;
 
   /* ---- Archive / Delete / Unarchive ----
