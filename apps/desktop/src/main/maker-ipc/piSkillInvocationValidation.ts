@@ -286,10 +286,9 @@ async function runtimeUserSkillMatchesSource(
   if (derivedFromBase !== selected) return false;
 
   if (command.sourceInfo.path === undefined) {
-    // Pinned Pi v0.83 normally omits path for auto-loaded user Skills. Catalog
-    // capture freezes the directory entry, canonical target, and entrypoint
-    // identities in a non-enumerable Symbol. Revalidate all three so a symlink
-    // retarget or same-path directory replacement fails closed.
+    // Catalog capture freezes the directory entry, canonical target, and
+    // entrypoint identities in a non-enumerable Symbol. Revalidate all three so
+    // a symlink retarget or same-path directory replacement fails closed.
     return frozenUserSkillSourceMatches(
       selected,
       command,
@@ -302,10 +301,11 @@ async function runtimeUserSkillMatchesSource(
     deadlineAtMs,
   );
   if (!runtimePath) return false;
-  const runtimeSkillDir = path.basename(runtimePath) === 'SKILL.md'
+  const runtimeSkillDir = path.basename(runtimePath).toLowerCase() === 'skill.md'
     ? await canonicalLocalPath(path.dirname(runtimePath), dependencies, deadlineAtMs)
     : runtimePath;
-  return runtimeSkillDir === selected;
+  return runtimeSkillDir === selected
+    && await frozenUserSkillSourceMatches(selected, command, deadlineAtMs);
 }
 
 async function runtimeManagedPackageSkillMatchesSource(

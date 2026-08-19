@@ -632,9 +632,9 @@ async function scanOneSourceAsync(
 }
 
 /**
- * Resolve pathless Pi user commands back to the exact directory entries that
- * supplied their frontmatter names. This is internal runtime provenance only;
- * callers still need to revalidate the returned directory snapshot before use.
+ * Resolve Pi user commands back to the exact directory entries that supplied
+ * their frontmatter names. This is internal runtime provenance only; callers
+ * still need to revalidate the returned directory snapshot before use.
  */
 export async function scanPiRuntimeUserSkillSources(
   baseDirs: readonly string[],

@@ -35,7 +35,7 @@ describe('Pi runtime capability parsing', () => {
     expect(parsePiRuntimeCommands({ commands: [] })).toEqual({ ok: true, commands: [] });
   });
 
-  it('freezes a pathless user Skill by scanned directory when frontmatter name differs', async () => {
+  it('freezes pathless and pathful user Skills by scanned directory when frontmatter name differs', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-runtime-user-skill-'));
     const baseDir = path.join(root, 'pi-home');
     const firstTarget = path.join(root, 'target-a');
@@ -65,11 +65,23 @@ describe('Pi runtime capability parsing', () => {
             command: 'get_commands',
             success: true,
             data: {
-              commands: [{
-                name: 'skill:frontmatter-name',
-                source: 'skill',
-                sourceInfo: { source: 'auto', scope: 'user', baseDir },
-              }],
+              commands: [
+                {
+                  name: 'skill:frontmatter-name',
+                  source: 'skill',
+                  sourceInfo: { source: 'auto', scope: 'user', baseDir },
+                },
+                {
+                  name: 'skill:frontmatter-name',
+                  source: 'skill',
+                  sourceInfo: {
+                    source: 'auto',
+                    scope: 'user',
+                    baseDir,
+                    path: path.join(firstTarget, 'SKILL.md'),
+                  },
+                },
+              ],
             },
           }),
         },
@@ -93,7 +105,11 @@ describe('Pi runtime capability parsing', () => {
         ),
       });
       expect(Object.isFrozen(provenance)).toBe(true);
-      expect(JSON.stringify(manifest)).not.toContain(firstTarget);
+      expect(Reflect.get(
+        manifest.commands[1],
+        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
+      )).toBe(provenance);
+      expect(JSON.stringify(runtimeCommand)).not.toContain(firstTarget);
 
       fs.unlinkSync(linkedSource);
       fs.symlinkSync(

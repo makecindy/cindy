@@ -216,23 +216,46 @@ describe('Pi Skill invocation validation', () => {
   it('requires exact current user Skill source provenance too', async () => {
     const userBaseDir = path.join(repoRoot, 'user-skill-provenance', '.agents');
     const userSource = path.join(userBaseDir, 'skills', 'demo');
+    const replacement = path.join(userBaseDir, 'skills', 'replacement');
+    const original = path.join(userBaseDir, 'skills', 'original');
     fs.mkdirSync(userSource, { recursive: true });
     fs.writeFileSync(path.join(userSource, 'SKILL.md'), '# user skill\n');
+    fs.mkdirSync(replacement, { recursive: true });
+    fs.writeFileSync(path.join(replacement, 'SKILL.md'), '# replacement user skill\n');
     const userItem = item({ scope: 'user', sourcePath: userSource });
     const userSkills = skills({ scope: 'user', path: userSource, runtimeStatus: undefined });
-    const userManifest = manifest({
-      commands: [{
-        name: 'skill:demo',
-        source: 'skill',
-        sourceInfo: {
-          scope: 'user',
-          source: 'auto',
-          baseDir: userBaseDir,
-          path: path.join(userSource, 'SKILL.md'),
-        },
-      }],
-    });
+    const userManifest = await capturePiRuntimeCapabilityManifest(
+      {
+        request: async () => ({
+          type: 'response',
+          command: 'get_commands',
+          success: true,
+          data: {
+            commands: [{
+              name: 'skill:demo',
+              source: 'skill',
+              sourceInfo: {
+                scope: 'user',
+                source: 'auto',
+                baseDir: userBaseDir,
+                path: path.join(userSource, 'SKILL.md'),
+              },
+            }],
+          },
+        }),
+      },
+      {},
+      1,
+      'ready',
+      { userSkillBaseDirs: [userBaseDir] },
+    );
     expect(await isCurrentPiSkillInvocation(userItem, userManifest, userSkills)).toBe(true);
+
+    fs.renameSync(userSource, original);
+    fs.renameSync(replacement, userSource);
+    expect(fs.readFileSync(path.join(userSource, 'SKILL.md'), 'utf8')).toContain('replacement');
+    expect(await isCurrentPiSkillInvocation(userItem, userManifest, userSkills)).toBe(false);
+
     expect(await isCurrentPiSkillInvocation(
       userItem,
       userManifest,
@@ -291,21 +314,35 @@ describe('Pi Skill invocation validation', () => {
         linkedSource,
         process.platform === 'win32' ? 'junction' : 'dir',
       );
+      const linkedManifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: {
+                  scope: 'user',
+                  source: 'auto',
+                  baseDir: userBaseDir,
+                  path: path.join(sharedSource, 'SKILL.md'),
+                },
+              }],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [userBaseDir] },
+      );
 
       expect(await isCurrentPiSkillInvocation(
         item({ scope: 'user', sourcePath: linkedSource }),
-        manifest({
-          commands: [{
-            name: 'skill:demo',
-            source: 'skill',
-            sourceInfo: {
-              scope: 'user',
-              source: 'auto',
-              baseDir: userBaseDir,
-              path: path.join(sharedSource, 'SKILL.md'),
-            },
-          }],
-        }),
+        linkedManifest,
         skills({ scope: 'user', path: linkedSource, runtimeStatus: undefined }),
       )).toBe(true);
     } finally {

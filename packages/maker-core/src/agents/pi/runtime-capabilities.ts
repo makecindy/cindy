@@ -62,19 +62,18 @@ async function awaitRuntimeCapabilityStep<T>(
   }
 }
 
-async function capturePathlessUserSkillSources(
+async function captureUserSkillSources(
   commands: readonly PiRuntimeCommand[],
   options: PiRuntimeCapabilityCaptureOptions,
   deadlineAtMs: number,
 ): Promise<boolean> {
   if (!options.userSkillBaseDirs?.length) return true;
-  const pathlessCommands = commands.filter((command) => (
+  const userCommands = commands.filter((command) => (
     command.source === 'skill'
     && command.sourceInfo.scope === 'user'
     && command.sourceInfo.source === 'auto'
-    && command.sourceInfo.path === undefined
   ));
-  if (pathlessCommands.length === 0) return true;
+  if (userCommands.length === 0) return true;
   const allowedBaseDirs = new Set<string>();
   for (const rawBaseDir of options.userSkillBaseDirs) {
     if (!path.isAbsolute(rawBaseDir) || rawBaseDir.includes('\0')) continue;
@@ -108,7 +107,8 @@ async function capturePathlessUserSkillSources(
     else candidatesByCommand.set(key, [candidate]);
   }
 
-  for (const command of pathlessCommands) {
+  const canonicalEntrypoints = new Map<string, string | null>();
+  for (const command of userCommands) {
     const rawBaseDir = command.sourceInfo.baseDir;
     if (
       !/^skill:[^\s/\\\0]+$/.test(command.name)
@@ -122,9 +122,37 @@ async function capturePathlessUserSkillSources(
         deadlineAtMs,
       );
       if (!allowedBaseDirs.has(canonicalBaseDir)) continue;
-      const matches = candidatesByCommand.get(
+      let matches = candidatesByCommand.get(
         [canonicalBaseDir, command.name].join('\0'),
       );
+      const rawRuntimePath = command.sourceInfo.path;
+      if (rawRuntimePath !== undefined) {
+        if (!path.isAbsolute(rawRuntimePath) || rawRuntimePath.includes('\0')) continue;
+        const canonicalRuntimePath = await awaitRuntimeCapabilityStep(
+          () => fsp.realpath(path.resolve(rawRuntimePath)),
+          deadlineAtMs,
+        );
+        const exactMatches: NonNullable<typeof matches> = [];
+        for (const candidate of matches ?? []) {
+          let canonicalEntrypoint = canonicalEntrypoints.get(candidate.proof.entrypointPath);
+          if (canonicalEntrypoint === undefined) {
+            try {
+              canonicalEntrypoint = await awaitRuntimeCapabilityStep(
+                () => fsp.realpath(candidate.proof.entrypointPath),
+                deadlineAtMs,
+              );
+            } catch {
+              canonicalEntrypoint = null;
+            }
+            canonicalEntrypoints.set(candidate.proof.entrypointPath, canonicalEntrypoint);
+          }
+          if (
+            canonicalRuntimePath === candidate.canonicalSourcePath
+            || canonicalRuntimePath === canonicalEntrypoint
+          ) exactMatches.push(candidate);
+        }
+        matches = exactMatches;
+      }
       if (matches?.length !== 1) continue;
       const candidate = matches[0]!;
       Object.defineProperty(command, PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE, {
@@ -402,7 +430,7 @@ export async function capturePiRuntimeCapabilityManifest(
       }, 'failed');
     }
     const provenanceDeadlineAtMs = Date.now() + PI_RUNTIME_USER_SKILL_PROVENANCE_TIMEOUT_MS;
-    const provenanceComplete = await capturePathlessUserSkillSources(
+    const provenanceComplete = await captureUserSkillSources(
       parsed.commands,
       options,
       provenanceDeadlineAtMs,

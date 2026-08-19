@@ -1373,10 +1373,17 @@ describe('Maker Pi runtime skill status', () => {
   it('maps a pathful auto-loaded user Skill by its runtime entrypoint', async () => {
     const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'maker-pi-user-pathful-')));
     const sourcePath = path.join(root, 'pi-home', 'skills', 'directory-name');
-    const entrypointPath = path.join(sourcePath, 'SKILL.md');
+    const entrypointPath = path.join(sourcePath, 'skill.md');
+    const replacementPath = path.join(root, 'replacement');
+    const originalPath = path.join(root, 'original');
     try {
       mkdirSync(sourcePath, { recursive: true });
       writeFileSync(entrypointPath, '---\nname: frontmatter-name\n---\n# User Skill\n');
+      mkdirSync(replacementPath, { recursive: true });
+      writeFileSync(
+        path.join(replacementPath, 'skill.md'),
+        '---\nname: frontmatter-name\n---\n# Replacement Skill\n',
+      );
       let runtimeManifest = await capturePiRuntimeCapabilityManifest(
         {
           request: async () => ({
@@ -1438,6 +1445,15 @@ describe('Maker Pi runtime skill status', () => {
           runtimeCommandName: 'skill:frontmatter-name',
         }],
       });
+
+      renameSync(sourcePath, originalPath);
+      renameSync(replacementPath, sourcePath);
+      const replaced = await maker.listAgentSkills('pi', {
+        workingDir: root,
+        sessionId: 'user-pathful',
+      });
+      expect(replaced.skills[0]).not.toHaveProperty('runtimeStatus');
+      expect(replaced.skills[0]).not.toHaveProperty('runtimeCommandName');
 
       runtimeManifest = await capturePiRuntimeCapabilityManifest(
         {

@@ -360,19 +360,25 @@ async function pathfulUserSkillRuntimeCommandName(
   const resolvedRuntimePath = path.resolve(runtimePath);
   const selectedEntry = path.resolve(sourcePath);
   try {
-    const [canonicalRuntimePath, canonicalBaseDir, canonicalSelected] = await Promise.all([
+    const [canonicalRuntimePath, canonicalBaseDir, canonicalSelected, frozenSource] = await Promise.all([
       awaitPiSkillCatalogStep(() => fs.realpath(resolvedRuntimePath), deadlineAtMs),
       awaitPiSkillCatalogStep(() => fs.realpath(path.resolve(baseDir)), deadlineAtMs),
       awaitPiSkillCatalogStep(() => fs.realpath(selectedEntry), deadlineAtMs),
+      currentFrozenUserSkillSourcePath(Reflect.get(
+        command,
+        PI_RUNTIME_USER_SKILL_CANONICAL_SOURCE,
+      ), deadlineAtMs),
     ]);
-    const canonicalSource = path.basename(canonicalRuntimePath) === 'SKILL.md'
+    const canonicalSource = path.basename(canonicalRuntimePath).toLowerCase() === 'skill.md'
       ? path.dirname(canonicalRuntimePath)
       : canonicalRuntimePath;
     const derivedFromBase = await awaitPiSkillCatalogStep(
       () => fs.realpath(path.join(canonicalBaseDir, 'skills', path.basename(selectedEntry))),
       deadlineAtMs,
     );
-    return derivedFromBase === canonicalSelected && canonicalSource === canonicalSelected
+    return derivedFromBase === canonicalSelected
+      && canonicalSource === canonicalSelected
+      && frozenSource === canonicalSelected
       ? command.name
       : null;
   } catch (error) {
