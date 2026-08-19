@@ -121,9 +121,6 @@ export interface ResolveSessionGitDirDeps {
   probeGitDir: (dir: string) => Promise<GitHeadInfo | null>;
 }
 
-/** 任务信息 worktree 徽标:最多回溯这么多个不重复遥测目录。 */
-const MAX_UNIQUE_TELEMETRY_DIRS = 20;
-
 export interface FindLiveLinkedWorktreeDeps {
   recentToolUseContents: (sessionId: string) => Promise<string[]>;
   /** 若 dir 在 linked worktree 内,返回该 worktree 的 repo root(`rev-parse --show-toplevel`)。 */
@@ -150,7 +147,6 @@ export function collectUniqueTelemetryDirs(
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     dirs.push(resolved);
-    if (dirs.length >= MAX_UNIQUE_TELEMETRY_DIRS) break;
   }
   return dirs;
 }

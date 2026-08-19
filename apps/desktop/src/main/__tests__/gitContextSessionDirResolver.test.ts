@@ -224,6 +224,26 @@ describe('findLiveLinkedWorktree', () => {
     });
   });
 
+  it('looks past many recent checkout dirs to find an older live worktree', async () => {
+    const recent = Array.from({ length: 21 }, (_, i) =>
+      toolUse('exec', { command: 'git status', cwd: `/Users/x/main/pkg-${i}` }),
+    );
+    const res = await findLiveLinkedWorktree('s', {
+      recentToolUseContents: async () => [
+        ...recent,
+        toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' }),
+      ],
+      resolveLinkedWorktreeRoot: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? path.resolve('/Users/x/wt-a') : null,
+      probeGitDir: async (dir) =>
+        dir === path.resolve('/Users/x/wt-a') ? branchHead('feat/a') : branchHead('main'),
+    });
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-a'),
+      branch: 'feat/a',
+    });
+  });
+
   it('clears the candidate when every telemetry worktree is gone', async () => {
     const res = await findLiveLinkedWorktree('s', {
       recentToolUseContents: async () => [
