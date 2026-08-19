@@ -16,7 +16,7 @@ export type WindowsPathKind = 'file' | 'directory';
 export interface WindowsGitPathProbes {
   readRegistryInstallPaths: () => readonly string[];
   findGitExecutablesOnPath: (pathValue: string | undefined) => readonly string[];
-  readGitExecPath: (gitPath: string) => string | undefined;
+  readGitExecPaths: (gitPaths: readonly string[]) => ReadonlyMap<string, string>;
   probePathKinds: (candidates: readonly string[]) => ReadonlyMap<string, WindowsPathKind>;
   isDirectory: (candidate: string) => boolean;
   isFile: (candidate: string) => boolean;
@@ -36,6 +36,7 @@ export const WINDOWS_GIT_REGISTRY_KEYS = [
 
 const WINDOWS_GIT_EXECUTABLE = 'git.exe';
 const WINDOWS_PATH_PROBE_TIMEOUT_MS = 3_000;
+const WINDOWS_GIT_EXEC_PATH_TIMEOUT_MS = 2_000;
 
 /**
  * PowerShell emits each registry value as UTF-16LE Base64. The transport is
@@ -347,27 +348,97 @@ function defaultFindGitExecutablesOnPath(pathValue: string | undefined): readonl
   return candidates.filter((candidate) => kinds.get(normalizedWindowsPath(candidate)) === 'file');
 }
 
-function defaultReadGitExecPath(gitPath: string): string | undefined {
-  if (process.platform !== 'win32') return undefined;
-  const extension = path.win32.extname(gitPath).toLowerCase();
-  if (extension !== '.exe' && extension !== '.com') return undefined;
+function decodeWindowsGitExecPathLines(output: string): Map<string, string> {
+  const paths = new Map<string, string>();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const [encodedGitPath, encodedExecPath] = rawLine.trim().split('\t');
+    if (!encodedGitPath || !encodedExecPath) continue;
+    const gitPath = Buffer.from(encodedGitPath, 'base64').toString('utf16le').trim();
+    const execPath = Buffer.from(encodedExecPath, 'base64').toString('utf16le').trim();
+    if (gitPath && execPath) paths.set(gitPath, execPath);
+  }
+  return paths;
+}
+
+function defaultReadGitExecPaths(gitPaths: readonly string[]): ReadonlyMap<string, string> {
+  if (process.platform !== 'win32') return new Map();
+  const powershell = windowsPowerShellPath();
+  if (!powershell) return new Map();
+  const candidates = uniqueWindowsPaths(gitPaths).filter((gitPath) => {
+    const extension = path.win32.extname(gitPath).toLowerCase();
+    return extension === '.exe' || extension === '.com';
+  });
+  if (candidates.length === 0) return new Map();
+  const script = [
+    '$stdin = [Console]::OpenStandardInput()',
+    '$memory = New-Object System.IO.MemoryStream',
+    '$stdin.CopyTo($memory)',
+    '$json = [Text.Encoding]::UTF8.GetString($memory.ToArray())',
+    '$paths = @($json | ConvertFrom-Json)',
+    "$probeScript = @'",
+    'param([string]$gitPath)',
+    'try {',
+    '  $execPath = @(& $gitPath --exec-path 2>$null) | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -First 1',
+    '  if ($execPath) {',
+    '    $encodedGitPath = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($gitPath))',
+    '    $encodedExecPath = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$execPath))',
+    '    $encodedGitPath + "`t" + $encodedExecPath',
+    '  }',
+    '} catch {}',
+    "'@",
+    '$operations = New-Object System.Collections.ArrayList',
+    'foreach ($gitPath in $paths) {',
+    '  $shell = [PowerShell]::Create()',
+    '  [void]$shell.AddScript($probeScript)',
+    '  [void]$shell.AddArgument([string]$gitPath)',
+    '  $async = $shell.BeginInvoke()',
+    '  [void]$operations.Add([PSCustomObject]@{ Shell = $shell; Async = $async })',
+    '}',
+    '$clock = [Diagnostics.Stopwatch]::StartNew()',
+    `$budgetMs = ${WINDOWS_GIT_EXEC_PATH_TIMEOUT_MS - 250}`,
+    'while ($operations.Count -gt 0 -and $clock.ElapsedMilliseconds -lt $budgetMs) {',
+    '  $completed = @($operations | Where-Object { $_.Async.IsCompleted })',
+    '  if ($completed.Count -eq 0) {',
+    '    Start-Sleep -Milliseconds 10',
+    '    continue',
+    '  }',
+    '  foreach ($operation in $completed) {',
+    '    try {',
+    '      foreach ($line in $operation.Shell.EndInvoke($operation.Async)) {',
+    '        [Console]::Out.WriteLine([string]$line)',
+    '      }',
+    '    } catch {} finally {',
+    '      $operation.Shell.Dispose()',
+    '      [void]$operations.Remove($operation)',
+    '    }',
+    '  }',
+    '}',
+  ].join('\n');
   try {
-    const output = execFileSync(gitPath, ['--exec-path'], {
+    const output = execFileSync(
+      powershell,
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 2_000,
+      input: Buffer.from(JSON.stringify(candidates), 'utf8'),
+      stdio: ['pipe', 'pipe', 'ignore'],
+      timeout: WINDOWS_GIT_EXEC_PATH_TIMEOUT_MS,
       windowsHide: true,
-    });
-    return output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-  } catch {
-    return undefined;
+      },
+    );
+    return decodeWindowsGitExecPathLines(output);
+  } catch (error) {
+    const stdout = error && typeof error === 'object' && 'stdout' in error ? error.stdout : undefined;
+    if (typeof stdout === 'string') return decodeWindowsGitExecPathLines(stdout);
+    if (Buffer.isBuffer(stdout)) return decodeWindowsGitExecPathLines(stdout.toString('utf8'));
+    return new Map();
   }
 }
 
 const defaultProbes: WindowsGitPathProbes = {
   readRegistryInstallPaths: defaultReadRegistryInstallPaths,
   findGitExecutablesOnPath: defaultFindGitExecutablesOnPath,
-  readGitExecPath: defaultReadGitExecPath,
+  readGitExecPaths: defaultReadGitExecPaths,
   probePathKinds: defaultProbeWindowsPathKinds,
   // The production resolver replaces these placeholders with one batched
   // snapshot. They remain injectable for cross-platform pure-function tests.
@@ -451,11 +522,11 @@ function gitInstallRootCandidatesFromExecPath(execPath: string | undefined): str
   return uniqueWindowsPaths(candidates);
 }
 
-function gitInstallRootCandidatesForPath(gitPath: string, probes: WindowsGitPathProbes): string[] {
+function gitInstallRootCandidatesForPath(gitPath: string, execPath: string | undefined): string[] {
   const candidates: string[] = [];
   const inferred = gitInstallRootFromPath(gitPath);
   if (inferred) candidates.push(inferred);
-  candidates.push(...gitInstallRootCandidatesFromExecPath(probes.readGitExecPath(gitPath)));
+  candidates.push(...gitInstallRootCandidatesFromExecPath(execPath));
   return uniqueWindowsPaths(candidates);
 }
 
@@ -528,10 +599,12 @@ export function resolveWindowsGitPath({ platform = process.platform, existingPat
   const probes: WindowsGitPathProbes = { ...defaultProbes, ...overrides };
   const original = existingPath ?? '';
   const segments = original.split(';').filter((segment) => segment.trim() !== '');
+  const gitExecutables = probes.findGitExecutablesOnPath(existingPath);
+  const shimExecutables = gitExecutables.filter((gitPath) => gitInstallRootFromPath(gitPath) === undefined);
+  const execPaths = shimExecutables.length > 0 ? probes.readGitExecPaths(shimExecutables) : new Map<string, string>();
   const rootCandidates = uniqueWindowsPaths([
     ...probes.readRegistryInstallPaths(),
-    ...probes.findGitExecutablesOnPath(existingPath)
-      .flatMap((gitPath) => gitInstallRootCandidatesForPath(gitPath, probes)),
+    ...gitExecutables.flatMap((gitPath) => gitInstallRootCandidatesForPath(gitPath, execPaths.get(gitPath))),
   ]);
   const injectedFileProbes = overrides?.isDirectory !== undefined || overrides?.isFile !== undefined;
   const fileProbes: WindowsGitFileProbes = injectedFileProbes
