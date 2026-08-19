@@ -415,14 +415,21 @@ function supportsContextualEmbedding(model: string): boolean {
  *   - AUTH_FAILED(未登录 / 凭证不可用)、DISABLED(用户在设置里停用了该供应商或型号)
  *     → NO_CANDIDATE:与"目录里没有可用型号"同一语义面 —— 插件改什么都没用,是主机
  *     侧条件不满足,应如实告诉用户而不是重试轰炸;
- *   - BAD_REQUEST(400/422 输入错误)、TRANSIENT_ERROR(404 路由暂时不可达)、
- *     NETWORK_ERROR / SERVER_ERROR / 其它 → INTERNAL:主机侧故障,重试由调方决定。
+ *   - BAD_REQUEST(400/422 输入或参数错误)→ INVALID_PARAMS:与 INVALID_MODEL 不同,
+ *     这不是型号本身不可用,输入修正后可重试;不能把它当主机故障(INTERNAL)让插件
+ *     盲目重试同一个坏请求,也不能当型号永久失效;
+ *   - TRANSIENT_ERROR(404 路由暂时不可达)、NETWORK_ERROR / SERVER_ERROR / 其它
+ *     → INTERNAL:主机侧或网络侧故障,重试由调方决定。
  */
 function embeddingErrorCode(err: unknown): string {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code !== 'string') return 'INTERNAL';
   switch (code) {
     case 'INVALID_MODEL':
+      return 'INVALID_PARAMS';
+    case 'BAD_REQUEST':
+      // 输入/参数类错误(400/422):修正请求后可重试,不是型号永久失效。
+      // 与 INVALID_MODEL 区分开 —— 后者是型号本身不可用,改输入也没用。
       return 'INVALID_PARAMS';
     case 'RATE_LIMITED':
       return 'RATE_LIMITED';
@@ -431,6 +438,9 @@ function embeddingErrorCode(err: unknown): string {
     case 'AUTH_FAILED':
     case 'DISABLED':
       return 'NO_CANDIDATE';
+    case 'TRANSIENT_ERROR':
+    case 'NETWORK_ERROR':
+    case 'SERVER_ERROR':
     default:
       return 'INTERNAL';
   }
