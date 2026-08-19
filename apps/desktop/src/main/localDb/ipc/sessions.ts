@@ -1771,6 +1771,78 @@ export async function setSessionsStatusInDb(
 }
 
 const piSubagentCleanupTimers = new Map<string, NodeJS.Timeout>();
+/** Longer than the adapter's own close budget, so a normal close is never cut short. */
+const PI_SUBAGENT_CLEANUP_CLOSE_TIMEOUT_MS = 15_000;
+
+/**
+ * Can this parent task still start a durable Subagent?
+ *
+ * Only one thing can: the `cindy-subagent` extension, which exists solely
+ * inside the parent PI process. `stopAndRemovePiSubagentRuns` finishes by
+ * scanning for an empty run root and deleting it — so if the parent is still
+ * alive, a launch entering after that scan recreates the root and spawns a
+ * detached runner, on the deleted task's inherited provider credentials, with
+ * the cleanup already reporting success and its retry timer discarded. The
+ * publish-intent-first protocol makes the converse true: a launch that started
+ * before the parent died has already written its `queued` status, so the scan
+ * sees it and stops it. Proving the parent stopped is therefore the whole
+ * barrier.
+ *
+ * Not the host-level launch fence: that one blocks *every* session's launches
+ * for the duration, and this is one deleted task's cleanup.
+ *
+ * `closeSession` is idempotent and is issued here rather than waited for
+ * elsewhere: the worktree recycle path also closes the session, but the two are
+ * unordered and its close is best-effort, so waiting on it could mean waiting
+ * forever. It resolves only after `proc.close()` confirms the PI process exited
+ * (adapter contract); if the close failed the session is left in `error`, which
+ * `isSessionAlive` still reports as alive — so the recheck below stays
+ * conservative by construction.
+ */
+async function piSubagentLauncherProvenStopped(sessionId: string): Promise<boolean> {
+  let maker: ReturnType<typeof import('../../maker-host/index.js').getMakerIfReady>;
+  try {
+    // Dynamic, like every other maker-host use here: localDb must not take a
+    // static edge on it.
+    const mh = await import('../../maker-host/index.js');
+    maker = mh.getMakerIfReady();
+  } catch (err) {
+    // Unable to ask is not permission to proceed.
+    log.warn('PI Subagent cleanup could not reach the Maker host', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+  // No Maker means no loaded session, and so no extension anywhere that could
+  // launch for this task.
+  if (!maker) return true;
+  if (!maker.isSessionAlive(sessionId)) return true;
+  const closing = maker.closeSession(sessionId).catch((err: unknown) => {
+    log.warn('PI Subagent cleanup close of the deleted parent task failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
+  // Bounded. `closeSession` has no deadline of its own, and this path used to
+  // await nothing unbounded: a wedged close would otherwise park this attempt
+  // forever, and with it the retry that is supposed to keep trying. Giving up
+  // returns "not proven stopped", so the backoff re-enters — and `Session.close`
+  // hands back the same in-flight promise, so no second close is issued.
+  let deadline: NodeJS.Timeout | undefined;
+  const closed = await Promise.race([
+    closing.then(() => true),
+    new Promise<boolean>((resolve) => {
+      deadline = setTimeout(() => resolve(false), PI_SUBAGENT_CLEANUP_CLOSE_TIMEOUT_MS);
+      deadline.unref?.();
+    }),
+  ]).finally(() => { if (deadline) clearTimeout(deadline); });
+  if (!closed) {
+    log.warn('PI Subagent cleanup timed out closing the deleted parent task', { sessionId });
+    return false;
+  }
+  return !maker.isSessionAlive(sessionId);
+}
 
 function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void {
   if (piSubagentCleanupTimers.has(sessionId)) return;
@@ -1779,11 +1851,21 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
   piSubagentCleanupTimers.set(sessionId, marker);
   void (async () => {
     try {
-      const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
-      const removed = await stopAndRemovePiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
-      if (removed) {
-        piSubagentCleanupTimers.delete(sessionId);
-        return;
+      // Every attempt, not just the first: the parent may still have been alive
+      // when an earlier one gave up, and this is the only thing standing
+      // between the conclusive scan and a launch that outruns it.
+      if (await piSubagentLauncherProvenStopped(sessionId)) {
+        const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+        const removed = await stopAndRemovePiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
+        if (removed) {
+          piSubagentCleanupTimers.delete(sessionId);
+          return;
+        }
+      } else {
+        log.warn('PI Subagent cleanup deferred: the deleted parent task is still running', {
+          sessionId,
+          attempt,
+        });
       }
     } catch (err) {
       log.warn('PI Subagent cleanup attempt failed', {

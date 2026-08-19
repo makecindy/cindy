@@ -10,7 +10,8 @@
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
@@ -30,7 +31,11 @@ const h = vi.hoisted(() => ({
   })),
   tapWindowBroadcast: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
-  stopAndRemovePiSubagentRuns: vi.fn(async () => true),
+  stopAndRemovePiSubagentRuns: vi.fn(async (_root: string) => true),
+  getMakerIfReady: vi.fn((): {
+    isSessionAlive: (id: string) => boolean;
+    closeSession: (id: string) => Promise<void>;
+  } | null => null),
   userData: '',
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
@@ -75,6 +80,11 @@ vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary:
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
+}));
+// Loaded dynamically by the cleanup's launcher gate; the real module pulls in
+// the whole Host.
+vi.mock('../../../maker-host/index.js', () => ({
+  getMakerIfReady: h.getMakerIfReady,
 }));
 
 import { registerSessionIpc, resumeDeletedPiSubagentCleanup } from '../sessions';
@@ -170,6 +180,9 @@ beforeEach(() => {
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
   h.handlers.clear();
   h.stopAndRemovePiSubagentRuns.mockClear();
+  h.stopAndRemovePiSubagentRuns.mockImplementation(async () => true);
+  h.getMakerIfReady.mockReset();
+  h.getMakerIfReady.mockReturnValue(null);
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
   registerSessionIpc();
@@ -202,6 +215,86 @@ describe('local-db:sessions:update handler wiring', () => {
       path.join(parentRoot, 'cc-local'),
     );
   });
+
+  it('will not run the conclusive scan while the deleted task is still loaded', async () => {
+    // The scan ends by finding an empty run root and deleting it. Only the
+    // parent PI process can launch a durable Subagent, so while it is alive a
+    // launch can enter *after* that scan — recreating the root and spawning a
+    // detached runner on the deleted task's credentials, with cleanup already
+    // reporting success and its retry timer thrown away.
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-live-'));
+    const runRoot = path.join(
+      h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
+    );
+    await mkdir(runRoot, { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+
+    let alive = true;
+    // A close that does not confirm termination leaves the session in `error`,
+    // which still reads as alive — the case the gate has to keep refusing on.
+    const closeSession = vi.fn(async () => undefined);
+    h.getMakerIfReady.mockReturnValue({ isSessionAlive: () => alive, closeSession });
+
+    await resumeDeletedPiSubagentCleanup();
+    // Twice, so the gate is pinned to *every* attempt rather than the first:
+    // the backoff retry re-enters the same body, and a parent that was alive
+    // when one attempt gave up is exactly the case the later ones must recheck.
+    await vi.waitFor(
+      () => { expect(closeSession.mock.calls.length).toBeGreaterThanOrEqual(2); },
+      { timeout: 5_000 },
+    );
+    expect(closeSession).toHaveBeenCalledWith('codex-local');
+    // Nothing was scanned or removed while the launcher could still fire.
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
+    expect(existsSync(runRoot)).toBe(true);
+
+    // The parent finally goes away; the backoff retry re-runs the same gate.
+    alive = false;
+    await vi.waitFor(
+      () => { expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(runRoot); },
+      { timeout: 5_000 },
+    );
+  }, 20_000);
+
+  it('leaves no runner behind when a launch races the scan of a deleted task', async () => {
+    // The timing the finding describes, end to end: parent alive at cleanup
+    // time, and a launch entering the moment the scan declares the root empty.
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-race-'));
+    const runRoot = path.join(
+      h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
+    );
+    await mkdir(runRoot, { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+
+    const spawnedRunDir = path.join(runRoot, '123e4567-e89b-42d3-a456-426614174090');
+    let alive = true;
+    h.getMakerIfReady.mockReturnValue({
+      isSessionAlive: () => alive,
+      // Closing the parent is what actually ends the launcher. The run it had
+      // already published its intent for is still on disk — that one the scan
+      // can see, and must stop.
+      closeSession: vi.fn(async () => {
+        await mkdir(spawnedRunDir, { recursive: true });
+        alive = false;
+      }),
+    });
+    h.stopAndRemovePiSubagentRuns.mockImplementation(async (root: string) => {
+      const entries = await readdir(root).catch(() => [] as string[]);
+      await rm(root, { recursive: true, force: true });
+      // An empty root is the conclusive verdict — and while the parent lives,
+      // a launch lands in exactly the window that verdict just opened.
+      if (entries.length === 0 && alive) await mkdir(spawnedRunDir, { recursive: true });
+      return true;
+    });
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => { expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalled(); });
+
+    // Cleanup reported success, so nothing will look at this task again: the
+    // root has to be genuinely gone, with no orphan inside it.
+    expect(existsSync(spawnedRunDir)).toBe(false);
+    expect(existsSync(runRoot)).toBe(false);
+  }, 20_000);
 
   it('does not resurrect a deleted task through the generic status writer', async () => {
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
