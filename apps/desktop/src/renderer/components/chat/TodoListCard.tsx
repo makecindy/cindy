@@ -25,6 +25,7 @@ import { CircleCheck, CircleDot, Circle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -256,21 +257,22 @@ export function TodoListCard({
               }}
             >
               {onDismiss && revealed && (
-                <button
-                  type="button"
-                  onClick={onDismiss}
-                  aria-label={t('chat.planPill.dismiss')}
-                  title={t('chat.planPill.dismiss')}
-                  className={cn(
-                    'absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full',
-                    'text-[var(--msg-tool-card-chevron)] transition-colors',
-                    'hover:bg-[var(--model-item-hover)] hover:text-[var(--msg-tool-card-text)]',
-                    'active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  )}
-                >
-                  <X size={14} aria-hidden="true" />
-                </button>
+                <Tip text={t('chat.planPill.dismiss')}>
+                  <button
+                    type="button"
+                    onClick={onDismiss}
+                    aria-label={t('chat.planPill.dismiss')}
+                    className={cn(
+                      'absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full',
+                      'text-[var(--msg-tool-card-chevron)] transition-colors',
+                      'hover:bg-[var(--model-item-hover)] hover:text-[var(--msg-tool-card-text)]',
+                      'active:scale-[0.98]',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    )}
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </Tip>
               )}
               <div
                 className={cn(
