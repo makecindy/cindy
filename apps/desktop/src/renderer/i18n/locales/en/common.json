@@ -7849,7 +7849,7 @@
         "syncCodexAlreadyLinked": "Codex sessions for this project are already linked",
         "syncCodexNone": "No Codex sessions found for this project",
         "syncCodexFailed": "Codex sync failed: {{error}}",
-        "search": "Search sessions"
+        "search": "Search sessions in this project"
       },
       "deepLink": {
         "copied": "Deep link copied",

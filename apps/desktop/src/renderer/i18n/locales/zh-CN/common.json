@@ -7837,7 +7837,7 @@
         "syncCodexAlreadyLinked": "此项目的 Codex 任务已经链接过了",
         "syncCodexNone": "没有找到此项目的 Codex 任务",
         "syncCodexFailed": "Codex 同步失败：{{error}}",
-        "search": "搜索任务"
+        "search": "在项目内搜索任务"
       },
       "deepLink": {
         "copied": "已复制深度链接",

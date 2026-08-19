@@ -312,6 +312,28 @@ describe('buildUnifiedListSections', () => {
     ]);
   });
 
+  it('传 providerOrder 时组间按设置页拖动序排,未收录供应商按首见序追加', () => {
+    const xdModel = entryOf({
+      providerId: 'xd',
+      modelId: 'deepseek-v4-pro',
+      displayName: 'DeepSeek V4 Pro',
+    });
+    const sections = buildUnifiedListSections({
+      entries: [opus, gpt, xdModel],
+      favorites: [],
+      query: '',
+      rail: { kind: 'all' },
+      // 目录首见序 = anthropic → openai → xd;拖动序点名 openai 提前,
+      // 未收录的 xd 按首见序追加,顺序表里的未知 id 直接忽略。
+      providerOrder: ['unknown-provider', 'openai', 'anthropic'],
+    });
+    expect(sections.map((section) => section.group?.providerId)).toEqual([
+      'openai',
+      'anthropic',
+      'xd',
+    ]);
+  });
+
   it('搜索命中名称 / id / 描述', () => {
     const described = entryOf({ description: '擅长长上下文推理' });
     for (const query of ['opus', 'CLAUDE-OPUS', '长上下文']) {
@@ -534,6 +556,21 @@ describe('buildUnifiedRail', () => {
     ]);
     // 草稿场景不出现这一格。
     expect(buildUnifiedRail(entries).some((item) => item.kind === 'engine')).toBe(false);
+  });
+
+  it('传 providerOrder 时供应商图标按设置页拖动序排,未收录供应商按首见序追加', () => {
+    const entries = [
+      entryOf({ providerId: 'xd', modelId: 'a' }),
+      entryOf({ providerId: 'anthropic', modelId: 'b' }),
+      entryOf({ providerId: 'openai', modelId: 'c' }),
+    ];
+    expect(buildUnifiedRail(entries, undefined, ['openai', 'xd'])).toEqual([
+      { kind: 'favorites' },
+      { kind: 'all' },
+      { kind: 'provider', providerId: 'openai' },
+      { kind: 'provider', providerId: 'xd' },
+      { kind: 'provider', providerId: 'anthropic' },
+    ]);
   });
 });
 

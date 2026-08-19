@@ -7864,7 +7864,7 @@
         "openInExplorer": "파일 관리자에서 열기",
         "newInDirectory": "이 디렉터리에서 새 세션",
         "copyDeepLink": "딥 링크 복사",
-        "search": "세션 검색"
+        "search": "이 프로젝트에서 세션 검색"
       },
       "deepLink": {
         "copied": "딥 링크가 복사되었습니다",

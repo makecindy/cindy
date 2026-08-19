@@ -7864,7 +7864,7 @@
         "openInExplorer": "ファイルマネージャーで開く",
         "newInDirectory": "このディレクトリで新規セッション",
         "copyDeepLink": "ディープリンクをコピー",
-        "search": "セッションを検索"
+        "search": "このプロジェクト内のセッションを検索"
       },
       "deepLink": {
         "copied": "ディープリンクをコピーしました",

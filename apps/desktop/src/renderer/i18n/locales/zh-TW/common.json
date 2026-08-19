@@ -7864,7 +7864,7 @@
         "syncCodexAlreadyLinked": "此專案的 Codex 任務已經連結過了",
         "syncCodexNone": "沒有找到此專案的 Codex 任務",
         "syncCodexFailed": "Codex 同步失敗：{{error}}",
-        "search": "搜尋任務"
+        "search": "在專案內搜尋任務"
       },
       "deepLink": {
         "copied": "已複製深度連結",
