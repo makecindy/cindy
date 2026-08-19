@@ -48,6 +48,7 @@ import {
   resetWorkLouderCodexSettings,
   writeWorkLouderCodexSettingsPatch,
 } from './settingsStore.js';
+import { listWorkersByLeads } from '../localDb/orcaTeamStore.js';
 import {
   buildWorkLouderCodexTaskCatalog,
   listWorkLouderCodexTaskCatalog,
@@ -152,6 +153,16 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
   },
   dispatchRendererAction,
   dispatchPreviewInput,
+  async (leadSessionIds) => {
+    if (leadSessionIds.length === 0) return {};
+    const grouped = await listWorkersByLeads(leadSessionIds);
+    return Object.fromEntries(
+      Object.entries(grouped).map(([leadId, workers]) => [
+        leadId,
+        workers.map((worker) => worker.sessionId),
+      ]),
+    );
+  },
 );
 
 let settingsIpcRegistered = false;

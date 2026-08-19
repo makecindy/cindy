@@ -8,6 +8,7 @@ import {
   isWorkLouderCodexHostMessage,
   isWorkLouderCodexLightingFrameOff,
   parseWorkLouderCodexAgentKeyPress,
+  foldOrcaWorkerActivityOntoLeads,
   projectWorkLouderCodexSlotActivity,
   type WorkLouderCodexSessionActivity,
   WorkLouderLightingEffect,
@@ -76,6 +77,27 @@ describe('createWorkLouderCodexLightingFrame', () => {
     expect(projected).toEqual([undefined, running, undefined, undefined, undefined, undefined]);
     expect(frame.threads[0].brightness).toBe(0);
     expect(frame.threads[1].brightness).toBeGreaterThan(0);
+  });
+
+  it('lights the lead task key when only an Orca worker is running', () => {
+    const folded = foldOrcaWorkerActivityOntoLeads(
+      [activity('worker-1', 'running')],
+      { 'lead-1': ['worker-1'] },
+    );
+    const frame = createWorkLouderCodexLightingFrame(folded, ['lead-1']);
+
+    expect(folded).toEqual([activity('worker-1', 'running'), activity('lead-1', 'running')]);
+    expect(frame.ambient.effect).toBe(WorkLouderLightingEffect.Snake);
+    expect(frame.threads[0].brightness).toBeGreaterThan(0);
+  });
+
+  it('keeps a lead question ahead of a running worker', () => {
+    const folded = foldOrcaWorkerActivityOntoLeads(
+      [activity('lead-1', 'needs-interaction'), activity('worker-1', 'running')],
+      { 'lead-1': ['worker-1'] },
+    );
+
+    expect(folded[0]).toEqual(activity('lead-1', 'needs-interaction'));
   });
 });
 

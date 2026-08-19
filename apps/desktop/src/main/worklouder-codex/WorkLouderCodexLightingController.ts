@@ -25,6 +25,7 @@ import {
   createWorkLouderCodexOffFrame,
   createWorkLouderCodexLightingFrame,
   createWorkLouderCodexWindowRevealFrame,
+  foldOrcaWorkerActivityOntoLeads,
   isWorkLouderCodexLightingFrameOff,
   type WorkLouderCodexHidEvent,
   type WorkLouderCodexJoystickEvent,
@@ -82,12 +83,16 @@ export interface WorkLouderCodexLightingSink {
 }
 
 type TaskCatalogLoader = () => Promise<WorkLouderCodexTaskCatalog | readonly string[]>;
+type WorkerSessionLoader = (
+  leadSessionIds: readonly string[],
+) => Promise<Readonly<Record<string, readonly string[]>>>;
 
 /** Keeps task LEDs, physical controls, and the settings projection on one state machine. */
 export class WorkLouderCodexLightingController {
   private lastFrameKey = '';
   private slotSessionIds: string[] = [];
   private latestActivity: readonly WorkLouderCodexSessionActivity[] = [];
+  private workersByLead: Readonly<Record<string, readonly string[]>> = {};
   private taskCatalog: WorkLouderCodexTaskCatalog = { sidebar: [], lastSent: [], options: [] };
   private agentSlots: WorkLouderCodexAgentSlotState[] = emptyAgentSlots();
   private slotRefreshVersion = 0;
@@ -130,6 +135,7 @@ export class WorkLouderCodexLightingController {
       undefined,
     private readonly dispatchPreviewInput: (input: WorkLouderCodexPreviewInput) => void = () =>
       undefined,
+    private readonly loadWorkerSessions: WorkerSessionLoader = async () => ({}),
   ) {}
 
   start(): void {
@@ -239,6 +245,8 @@ export class WorkLouderCodexLightingController {
         if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
         this.taskCatalog = catalog;
         this.publishAgentSlots();
+        await this.refreshWorkerSessions(refreshVersion);
+        if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
         this.updateLightingFrame(true);
         this.emitState();
       } finally {
@@ -277,6 +285,8 @@ export class WorkLouderCodexLightingController {
     this.taskSlotsEnabled = true;
     this.inputActionsEnabled = true;
     this.publishAgentSlots();
+    await this.refreshWorkerSessions(refreshVersion);
+    if (refreshVersion !== this.slotRefreshVersion) return;
     this.updateLightingFrame(true);
     this.emitState();
   }
@@ -294,6 +304,7 @@ export class WorkLouderCodexLightingController {
     this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
     this.agentSlots = emptyAgentSlots();
     this.slotSessionIds = [];
+    this.workersByLead = {};
     this.pendingAgentKeyTap = null;
     this.joystickNeedsCenter = this.joystickDirection !== null;
     this.joystickDirection = null;
@@ -633,7 +644,7 @@ export class WorkLouderCodexLightingController {
     const recentRank = new Map(
       this.taskCatalog.options.map((task, index) => [task.id, index] as const),
     );
-    const prioritized = this.latestActivity
+    const prioritized = this.lightingActivity()
       .filter((activity) => optionById.has(activity.sessionId))
       .toSorted((left, right) => {
         const scoreDiff = activityPriority(right) - activityPriority(left);
@@ -648,8 +659,19 @@ export class WorkLouderCodexLightingController {
     return [...prioritized, ...this.taskCatalog.sidebar.filter((task) => !included.has(task.id))];
   }
 
+  private lightingActivity(): WorkLouderCodexSessionActivity[] {
+    return foldOrcaWorkerActivityOntoLeads(this.latestActivity, this.workersByLead);
+  }
+
+  private async refreshWorkerSessions(refreshVersion: number): Promise<void> {
+    const leadIds = [...new Set(this.slotSessionIds.filter(Boolean))];
+    const workersByLead = await this.loadWorkerSessions(leadIds);
+    if (refreshVersion !== this.slotRefreshVersion) return;
+    this.workersByLead = workersByLead;
+  }
+
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
-    const baseFrame = createWorkLouderCodexLightingFrame(this.latestActivity, this.slotSessionIds);
+    const baseFrame = createWorkLouderCodexLightingFrame(this.lightingActivity(), this.slotSessionIds);
     const baseFrameKey = JSON.stringify(baseFrame);
     const baseFrameChanged = baseFrameKey !== this.lastBaseFrameKey;
     this.lastBaseFrameKey = baseFrameKey;

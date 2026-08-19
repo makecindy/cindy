@@ -36,6 +36,39 @@ describe('WorkLouderCodexLightingController', () => {
     expect(sink.update).toHaveBeenCalledTimes(1);
   });
 
+  it('lights a lead task key from a running Orca worker', async () => {
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => ['lead-1'],
+      vi.fn(),
+      vi.fn(),
+      async () => ({ 'lead-1': ['worker-1'] }),
+    );
+    await controller.resumeTaskSlots();
+    sink.update.mockClear();
+
+    controller.updateSessionActivity([
+      {
+        sessionId: 'worker-1',
+        phase: 'running',
+        compactDetail: '',
+        attention: false,
+      },
+    ]);
+
+    const frame = sink.update.mock.lastCall?.[0];
+    expect(isWorkLouderCodexLightingFrameOff(frame)).toBe(false);
+    expect(frame?.threads[0]?.brightness).toBeGreaterThan(0);
+  });
+
   it('activates the task assigned to the pressed Agent key', async () => {
     const keyHandlerRef: { current: ((slot: number) => void) | null } = { current: null };
     const sink = {
