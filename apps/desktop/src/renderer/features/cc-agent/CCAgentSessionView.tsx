@@ -3988,14 +3988,32 @@ export function CCAgentSessionView({
       {ownsRoute && sessionId && setRightSidebarSessionId && (
         <RightSidebarSessionIdRegistration
           sessionId={sessionId}
-          // A Pi task always offers the tab, as before. A task that is no
+          // A local Pi task always offers the tab, as before. A task that is no
           // longer on Pi keeps offering it for exactly as long as its durable
           // runs exist — terminal ones included, matching what a Pi task shows
           // — and stops once cleanup has removed them. `undefined` while the
           // session is unresolved stays untouched: the shell reads that as
           // "not known yet", not as "unavailable".
+          //
+          // `remoteHostId` mirrors the capability gate rather than adding one:
+          // `agents/pi` computes `remote` as `Boolean(opts.remoteHostId)` and
+          // skips installing the durable Subagent extension and runner for such
+          // a session, so an SSH-hosted Pi task can never produce a run. Without
+          // this the harness alone opened a tab that stays empty forever and
+          // whose controls address the *local* filesystem, not the remote host.
+          // This is not SSH-hosted Subagent support — that needs the wire
+          // protocol to own the run files end-to-end and is out of scope here;
+          // this only stops advertising an entry the capability gate disabled.
+          //
+          // `durablePiRunsPresent` is deliberately left ungated: device-link is
+          // a supported path and discovers through `listRemote`, while an SSH
+          // task has no deviceId (`remoteHostId` and `deviceLinkDeviceId` are
+          // separate fields) so its local list is always empty and presence
+          // always false — it cannot leak back in through this branch.
           subagentsAvailable={
-            session ? session.agentKind === 'pi' || durablePiRunsPresent : undefined
+            session
+              ? (session.agentKind === 'pi' && !session.remoteHostId) || durablePiRunsPresent
+              : undefined
           }
           initialCollapsed={shouldFirstFrameRevealOrcaWorkers ? false : undefined}
           writeInitialCollapsedRecord={shouldFirstFrameRevealOrcaWorkers}

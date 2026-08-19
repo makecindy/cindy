@@ -480,9 +480,20 @@ describe('startSubagentTabDiscovery', () => {
       expect(depsLine).toContain('onPresenceChange:');
     });
 
-    it('declares the entry available for a Pi task or for one that owns runs', () => {
+    it('declares the entry available for a local Pi task or for one that owns runs', () => {
       expect(source).toContain(
-        'session ? session.agentKind === \'pi\' || durablePiRunsPresent : undefined',
+        "(session.agentKind === 'pi' && !session.remoteHostId) || durablePiRunsPresent",
+      );
+      // The harness alone is not enough: `agents/pi` treats a session with a
+      // `remoteHostId` as remote and never installs the durable Subagent
+      // extension for it, so an SSH-hosted Pi task can never own a run.
+      // Declaring the entry from `agentKind` alone opened a tab that stays
+      // empty forever and whose controls address the local filesystem rather
+      // than the remote host. `durablePiRunsPresent` stays ungated: device-link
+      // is supported and discovers remotely, and an SSH task's local list is
+      // always empty so it cannot come back through that branch.
+      expect(source).not.toContain(
+        "session ? session.agentKind === 'pi' || durablePiRunsPresent : undefined",
       );
       // Unresolved session still reads as "not known yet" rather than
       // "unavailable" — the shell distinguishes the two.
