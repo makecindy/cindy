@@ -29,6 +29,18 @@ export const PI_CUSTOMIZATION_SCAN_DEADLINE_MS = 30_000;
 export const MAX_PI_CUSTOMIZATION_SCAN_ENTRIES = 10_000;
 const MAX_PI_CUSTOMIZATION_SKILL_MD_BYTES = 16 * 1024 * 1024;
 const MAX_PI_CUSTOMIZATION_SCAN_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_PI_CUSTOMIZATION_FRONTMATTER_BYTES = 16 * 1024;
+const MAX_PI_CUSTOMIZATION_FRONTMATTER_LINES = 128;
+const MAX_PI_CUSTOMIZATION_FRONTMATTER_LINE_BYTES = 2 * 1024;
+const PI_CUSTOMIZATION_FRONTMATTER_PARSE_ERROR =
+  'Pi Skill frontmatter exceeds the bounded parser budget';
+const PI_CUSTOMIZATION_FRONTMATTER_STRING_FIELDS = Object.freeze({
+  name: 256,
+  description: 4_096,
+  displayName: 256,
+  summary: 4_096,
+  version: 128,
+});
 const PI_CUSTOMIZATION_SCAN_TIMEOUT = 'PI_CUSTOMIZATION_SCAN_TIMEOUT';
 const PI_CUSTOMIZATION_SCAN_BUDGET = 'PI_CUSTOMIZATION_SCAN_BUDGET';
 const PI_CUSTOMIZATION_SCAN_UNSAFE_FILE = 'PI_CUSTOMIZATION_SCAN_UNSAFE_FILE';
@@ -169,6 +181,83 @@ function filesystemErrorCode(error: unknown): string | undefined {
     && typeof (error as { code?: unknown }).code === 'string'
     ? (error as { code: string }).code
     : undefined;
+}
+
+function boundedPiSkillFrontmatterSource(raw: string): {
+  source?: string;
+  parseError?: string;
+} {
+  const start = raw.charCodeAt(0) === 0xfeff ? 1 : 0;
+  const firstLineLength = raw.startsWith('---\r\n', start)
+    ? 5
+    : raw.startsWith('---\n', start)
+      ? 4
+      : 0;
+  if (firstLineLength === 0) return {};
+
+  let cursor = start + firstLineLength;
+  let lineCount = 1;
+  let byteLength = firstLineLength;
+  while (cursor <= raw.length) {
+    const lineWindowEnd = Math.min(
+      raw.length,
+      cursor + MAX_PI_CUSTOMIZATION_FRONTMATTER_LINE_BYTES + 1,
+    );
+    const lineWindow = raw.slice(cursor, lineWindowEnd);
+    const relativeLineEnd = lineWindow.indexOf('\n');
+    if (relativeLineEnd < 0 && lineWindowEnd < raw.length) {
+      return { parseError: PI_CUSTOMIZATION_FRONTMATTER_PARSE_ERROR };
+    }
+    const nextLineEnd = relativeLineEnd < 0 ? -1 : cursor + relativeLineEnd;
+    const lineEnd = nextLineEnd < 0 ? raw.length : nextLineEnd;
+    const rawLine = raw.slice(cursor, lineEnd);
+    const lineByteLength = Buffer.byteLength(rawLine, 'utf8') + (nextLineEnd < 0 ? 0 : 1);
+    lineCount += 1;
+    byteLength += lineByteLength;
+    if (
+      lineCount > MAX_PI_CUSTOMIZATION_FRONTMATTER_LINES
+      || lineByteLength > MAX_PI_CUSTOMIZATION_FRONTMATTER_LINE_BYTES
+      || byteLength > MAX_PI_CUSTOMIZATION_FRONTMATTER_BYTES
+    ) {
+      return { parseError: PI_CUSTOMIZATION_FRONTMATTER_PARSE_ERROR };
+    }
+    const line = rawLine.replace(/\r$/, '');
+    if (line === '---' || line === '...') {
+      return {
+        source: raw.slice(start, nextLineEnd < 0 ? lineEnd : nextLineEnd + 1),
+      };
+    }
+    if (nextLineEnd < 0) break;
+    cursor = nextLineEnd + 1;
+  }
+  return { parseError: PI_CUSTOMIZATION_FRONTMATTER_PARSE_ERROR };
+}
+
+function parseBoundedPiSkillFrontmatter(
+  raw: string,
+): ReturnType<typeof parseFrontmatter> {
+  const bounded = boundedPiSkillFrontmatterSource(raw);
+  if (bounded.parseError) return { parseError: bounded.parseError };
+  if (!bounded.source) return {};
+  const parsed = parseFrontmatter(bounded.source);
+  if (!parsed.frontmatter) return parsed;
+
+  const frontmatter: Record<string, unknown> = {};
+  for (const [field, maxBytes] of Object.entries(PI_CUSTOMIZATION_FRONTMATTER_STRING_FIELDS)) {
+    const value = parsed.frontmatter[field];
+    if (typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= maxBytes) {
+      frontmatter[field] = value;
+    } else if (field === 'version' && typeof value === 'number' && Number.isFinite(value)) {
+      frontmatter[field] = value;
+    }
+  }
+  return {
+    ...(parsed.description ? { description: parsed.description } : {}),
+    ...(Object.keys(frontmatter).length > 0
+      ? { frontmatter: Object.freeze(frontmatter) }
+      : {}),
+    ...(parsed.parseError ? { parseError: parsed.parseError } : {}),
+  };
 }
 
 function sameFileSnapshot(first: fs.Stats, second: fs.Stats): boolean {
@@ -488,7 +577,7 @@ async function readFolderSkillAsync(
       budget,
       captureEntrypointIdentity,
     );
-    ({ description, frontmatter, parseError } = parseFrontmatter(raw));
+    ({ description, frontmatter, parseError } = parseBoundedPiSkillFrontmatter(raw));
   } catch (error) {
     if (isScanFatal(error) || (source.scope === 'repo' && isUnsafeSkillFile(error))) {
       throw error;

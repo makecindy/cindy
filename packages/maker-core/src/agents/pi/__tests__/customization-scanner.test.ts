@@ -232,6 +232,48 @@ describe('scanPiCustomizations', () => {
     expect(close).toHaveBeenCalledTimes(4);
   });
 
+  it('bounds project Skill frontmatter parsing and retains only supported scalar fields', async () => {
+    const root = tempRoot();
+    const repo = path.join(root, 'repo');
+    mkdirSync(path.join(repo, '.git'), { recursive: true });
+    const largeSkill = writeSkill(repo, path.join('.pi', 'skills'), 'large-frontmatter');
+    const filteredSkill = writeSkill(repo, path.join('.pi', 'skills'), 'filtered-frontmatter');
+    writeFileSync(
+      path.join(largeSkill, 'SKILL.md'),
+      `---\nname: large-frontmatter\ndescription: ${'x'.repeat(20 * 1024)}\n---\n# body\n`,
+    );
+    writeFileSync(
+      path.join(filteredSkill, 'SKILL.md'),
+      [
+        '---',
+        'name: filtered-frontmatter',
+        'description: safe description',
+        'version: 1.2.3',
+        'metadata:',
+        '  nested:',
+        '    retained: false',
+        '---',
+        '# body',
+        '',
+      ].join('\n'),
+    );
+
+    const result = await scanPiCustomizations({ workingDirs: [repo] });
+    const large = projectItems(result).find((item) => item.name === 'large-frontmatter');
+    const filtered = projectItems(result).find((item) => item.name === 'filtered-frontmatter');
+
+    expect(large).toMatchObject({
+      frontmatter: undefined,
+      parseError: 'Pi Skill frontmatter exceeds the bounded parser budget',
+    });
+    expect(filtered?.frontmatter).toEqual({
+      name: 'filtered-frontmatter',
+      description: 'safe description',
+      version: '1.2.3',
+    });
+    expect(filtered?.frontmatter).not.toHaveProperty('metadata');
+  });
+
   it('stops streaming a growing project SKILL.md at the byte budget', async () => {
     const root = tempRoot();
     const repo = path.join(root, 'repo');
