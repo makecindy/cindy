@@ -6,6 +6,7 @@ import {
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
   filterResultsByWorkingDirs,
+  remoteIndexedSearchIgnoredWorkingDirs,
   mergeConversationSearchFanout,
   requestForOrigin,
   resolveConversationSearchOrigins,
@@ -384,6 +385,33 @@ describe('searchConversationsAcrossOrigins', () => {
     expect(pinSessionOrigin).toHaveBeenCalledWith('dev-a', 'legacy');
   });
 
+  it('falls back to sessions:list when the indexed page ignored workingDirs', async () => {
+    const invokeRemote = vi.fn(async (_deviceId: string, channel: string) => {
+      if (channel === 'local-db:conversations:search') {
+        return response([result('other-project', 50, { workingDir: '/other' })]);
+      }
+      return [session({ id: 'legacy', title: 'Needle legacy', workingDir: '/repo-remote' })];
+    });
+    const page = await searchConversationsAcrossOrigins(request, {
+      origins: [
+        {
+          kind: 'remote',
+          deviceId: 'dev-a',
+          deviceName: 'Studio',
+          connected: true,
+          sessionIds: null,
+          workingDirs: ['/repo-remote'],
+        },
+      ],
+      searchLocal: async () => emptyConversationSearchResponse('needle'),
+      invokeRemote,
+      listCachedRemoteSessions: () => [],
+      pinSessionOrigin: vi.fn(),
+    });
+    expect(invokeRemote).toHaveBeenCalledWith('dev-a', 'local-db:sessions:list', [100, 'all']);
+    expect(page.results.map((item) => item.session.id)).toEqual(['legacy']);
+  });
+
   it('skips remote invokes when hybrid reuses the first remote page', async () => {
     const invokeRemote = vi.fn();
     const page = await searchConversationsAcrossOrigins(
@@ -507,5 +535,41 @@ describe('filterResultsByRequestFilters', () => {
       },
     );
     expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
+
+  it('keeps a remote hit when updatedAt is recent but userSendAt is old', () => {
+    const page = filterResultsByRequestFilters(
+      response([
+        result('keep', 1, {
+          userSendAt: '2020-01-01T00:00:00.000Z',
+          updatedAt: new Date().toISOString(),
+        }),
+      ]),
+      { filters: { lastActivity: '7d' } },
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
+});
+
+describe('remoteIndexedSearchIgnoredWorkingDirs', () => {
+  it('detects an old host that searched globally and filled the page from other projects', () => {
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([
+          result('other', 1, { workingDir: '/other' }),
+          result('keep', 1, { workingDir: '/repo-remote' }),
+        ]),
+        ['/repo-remote'],
+      ),
+    ).toBe(true);
+  });
+
+  it('does not treat an in-project page as unsupported', () => {
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response([result('keep', 1, { workingDir: '/repo-remote' })]),
+        ['/repo-remote'],
+      ),
+    ).toBe(false);
   });
 });

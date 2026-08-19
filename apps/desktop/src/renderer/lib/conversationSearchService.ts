@@ -9,6 +9,7 @@ import {
   emptyConversationSearchResponse,
   filterResultsByRequestFilters,
   LEGACY_REMOTE_SESSION_LIST_LIMIT,
+  remoteIndexedSearchIgnoredWorkingDirs,
   mergeConversationSearchFanout,
   requestForOrigin,
   searchCachedSessionsByTitle,
@@ -97,6 +98,14 @@ async function searchOneOrigin(
 
   try {
     const response = await searchRemoteIndexed(origin.deviceId, originRequest, deps.invokeRemote);
+    if (remoteIndexedSearchIgnoredWorkingDirs(response, origin.workingDirs)) {
+      return finalizeRemoteResponse(
+        await searchRemoteLegacyByTitle(origin.deviceId, originRequest, deps),
+        origin,
+        originRequest,
+        deps.pinSessionOrigin,
+      );
+    }
     return finalizeRemoteResponse(response, origin, originRequest, deps.pinSessionOrigin);
   } catch (error) {
     if (isDeviceLinkNotConnected(error)) {
@@ -108,29 +117,12 @@ async function searchOneOrigin(
       );
     }
     if (isChannelNotAllowed(error)) {
-      try {
-        const sessions = await listRemoteSessions(
-          origin.deviceId,
-          originRequest,
-          deps.invokeRemote,
-        );
-        return finalizeRemoteResponse(
-          searchCachedSessionsByTitle(sessions, originRequest),
-          origin,
-          originRequest,
-          deps.pinSessionOrigin,
-        );
-      } catch {
-        return finalizeRemoteResponse(
-          searchCachedSessionsByTitle(
-            deps.listCachedRemoteSessions(origin.deviceId),
-            originRequest,
-          ),
-          origin,
-          originRequest,
-          deps.pinSessionOrigin,
-        );
-      }
+      return finalizeRemoteResponse(
+        await searchRemoteLegacyByTitle(origin.deviceId, originRequest, deps),
+        origin,
+        originRequest,
+        deps.pinSessionOrigin,
+      );
     }
     return finalizeRemoteResponse(
       searchCachedSessionsByTitle(deps.listCachedRemoteSessions(origin.deviceId), originRequest),
@@ -148,6 +140,19 @@ async function searchRemoteIndexed(
 ): Promise<ConversationSearchResponse> {
   const response = await invokeRemote(deviceId, 'local-db:conversations:search', [request]);
   return response as ConversationSearchResponse;
+}
+
+async function searchRemoteLegacyByTitle(
+  deviceId: string,
+  request: ConversationSearchRequest,
+  deps: ConversationSearchFanoutDeps,
+): Promise<ConversationSearchResponse> {
+  try {
+    const sessions = await listRemoteSessions(deviceId, request, deps.invokeRemote);
+    return searchCachedSessionsByTitle(sessions, request);
+  } catch {
+    return searchCachedSessionsByTitle(deps.listCachedRemoteSessions(deviceId), request);
+  }
 }
 
 async function listRemoteSessions(

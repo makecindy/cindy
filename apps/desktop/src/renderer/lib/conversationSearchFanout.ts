@@ -357,6 +357,16 @@ export function requestForOrigin(
   };
 }
 
+export function remoteIndexedSearchIgnoredWorkingDirs(
+  response: ConversationSearchResponse,
+  workingDirs: string[] | null | undefined,
+): boolean {
+  const allowed = normalizeWorkingDirSet(workingDirs);
+  if (allowed == null) return false;
+  const results = Array.isArray(response?.results) ? response.results : [];
+  return results.some((item) => !matchesWorkingDirSet(item.session.workingDir, allowed));
+}
+
 export function filterResultsByWorkingDirs(
   response: ConversationSearchResponse,
   workingDirs: string[] | null | undefined,
@@ -511,7 +521,11 @@ function cutoffForLastActivity(lastActivity: ConversationSearchLastActivityFilte
 function sessionActivityMs(
   session: Pick<Session, 'userSendAt' | 'updatedAt'> | ConversationSearchSessionSummary,
 ): number {
-  const value = session.userSendAt ?? session.updatedAt;
+  return Math.max(parseActivityMs(session.userSendAt), parseActivityMs(session.updatedAt));
+}
+
+function parseActivityMs(value: string | null | undefined): number {
+  if (!value) return 0;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : 0;
 }
