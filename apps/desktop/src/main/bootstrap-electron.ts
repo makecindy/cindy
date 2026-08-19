@@ -1235,6 +1235,21 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
   }
 }
 
+/**
+ * Raised when the account boundary cannot prove the outgoing account's durable
+ * Subagent runners are stopped. Distinct class because every *other* failure in
+ * that block is deliberately non-fatal; this one must abort the handover.
+ */
+class PiSubagentAccountBoundaryError extends Error {
+  constructor(reason: string, override readonly cause?: unknown) {
+    super(
+      `PI Subagent runners could not be confirmed stopped on ${reason}; `
+      + 'account switch aborted so the outgoing account\'s credentials are not left in use',
+    );
+    this.name = 'PiSubagentAccountBoundaryError';
+  }
+}
+
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const blockingFailures: unknown[] = [];
   // Hardware must stop before the long async drain. Otherwise a held stick or
@@ -1399,26 +1414,36 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       // writing the workspace — sweep the whole agent home so no child of the
       // outgoing owner survives into the next one. Same call the quit path uses;
       // idempotent with the per-handle stop above.
-      try {
-        const stopped = await stopAllPiSubagentRunsForExit(
-          path.join(app.getPath('userData'), 'pi-agent-home'),
-          undefined,
-          // A runner that never consumes its mailbox still holds direct BYOM
-          // credentials from the outgoing account, and those cannot be revoked
-          // the way the proxy token can. Escalate to a verified kill rather than
-          // logging and handing the account over.
-          { hostPid: process.pid, killUnresponsiveRunners: true },
-        );
-        if (!stopped) {
-          authBoundaryLog.warn(
-            `PI Subagent runners survived stop and identity-verified kill on ${reason}`,
-          );
-        }
-      } catch (err) {
-        authBoundaryLog.error(`stop PI Subagent runners on ${reason} failed (non-fatal):`, err);
-      }
+      // This one is *not* non-fatal. Everything below hands the runtime to the
+      // next owner: the Maker is discarded, the outgoing database is disposed
+      // and the app session is committed to a new account. A runner we could
+      // not confirm as stopped keeps running against direct BYOM credentials
+      // from the outgoing account — credentials no token revocation can reach —
+      // so completing the handover would leave the previous account paying for,
+      // and the previous workspace being edited by, a process nobody is left to
+      // supervise. Abort instead and let the logout / switch fail and be
+      // retried. Scope is unchanged: only runs attributable to this runtime are
+      // waited on or killed, so another instance's runners never block us.
+      const stopped = await stopAllPiSubagentRunsForExit(
+        path.join(app.getPath('userData'), 'pi-agent-home'),
+        undefined,
+        // A runner that never consumes its mailbox still holds direct BYOM
+        // credentials from the outgoing account, and those cannot be revoked
+        // the way the proxy token can. Escalate to a verified kill rather than
+        // logging and handing the account over.
+        { hostPid: process.pid, killUnresponsiveRunners: true },
+      ).catch((err: unknown) => {
+        throw new PiSubagentAccountBoundaryError(reason, err);
+      });
+      if (!stopped) throw new PiSubagentAccountBoundaryError(reason);
       resetMaker();
     } catch (err) {
+      // The abort above must not be laundered into "non-fatal": it is the one
+      // failure in this block that has to stop the handover.
+      if (err instanceof PiSubagentAccountBoundaryError) {
+        authBoundaryLog.error(`${err.message} (cause:`, err.cause, ')');
+        throw err;
+      }
       authBoundaryLog.error(`maker shutdown on ${reason} failed (non-fatal):`, err);
       resetMaker();
     }

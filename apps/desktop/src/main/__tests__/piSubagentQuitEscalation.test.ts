@@ -49,6 +49,33 @@ describe('PI Subagent quit sweep', () => {
     expect(failureBranch).toMatch(/survived stop and identity-verified kill/);
   });
 
+  it('aborts the account boundary when runners cannot be confirmed stopped', () => {
+    // Everything after this point in the teardown hands the runtime over: the
+    // Maker is discarded, the outgoing DB is disposed, the app session commits
+    // to a new account. Logging and continuing would leave a runner spending
+    // the previous account's BYOM credentials with nobody supervising it.
+    expect(source).toContain('class PiSubagentAccountBoundaryError extends Error');
+    const teardown = source.slice(
+      source.indexOf('async function teardownAuthAccountBoundary(reason: string)'),
+    );
+    const sweep = teardown.indexOf('const stopped = await stopAllPiSubagentRunsForExit(');
+    const body = teardown.slice(sweep, teardown.indexOf('resetMaker();', sweep));
+    expect(sweep).toBeGreaterThan(-1);
+    // Both failure shapes abort: a false verdict and a throwing sweep.
+    expect(body).toContain('throw new PiSubagentAccountBoundaryError(reason, err);');
+    expect(body).toContain('if (!stopped) throw new PiSubagentAccountBoundaryError(reason);');
+    // The surrounding catch deliberately downgrades everything else to
+    // non-fatal — this one must not be laundered with it.
+    const handler = teardown.slice(teardown.indexOf('} catch (err) {', sweep));
+    const rethrow = handler.indexOf('throw err;');
+    const nonFatal = handler.indexOf('(non-fatal)');
+    expect(rethrow).toBeGreaterThan(-1);
+    expect(rethrow).toBeLessThan(nonFatal);
+    // The abort has to land before the handover steps, not after them.
+    expect(teardown.indexOf('resetMaker();', sweep)).toBeGreaterThan(sweep);
+    expect(teardown.indexOf('lifecycleDbClientManager.dispose(reason)', sweep)).toBeGreaterThan(sweep);
+  });
+
   it('keeps the account-boundary sweep on the same escalation contract', () => {
     // Two entry points, one rule: the app going away and the account going away
     // are both "this runtime's children must not outlive it".

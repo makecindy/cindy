@@ -214,15 +214,24 @@ describe('PI durable subagent run store', () => {
     }
 
     /**
-     * Answer the start-time probe as if the process had been up `elapsedSec`,
-     * or fail the probe outright when null. `ps -o etime=` prints `mm:ss`.
+     * Make the probe report that the process started at `startTimeSec`, or fail
+     * outright when null.
+     *
+     * Answers in each platform's own dialect, because the probe parses them
+     * differently: `ps -o etime=` yields *elapsed* time, the Windows CIM query
+     * yields an *absolute* epoch second. A stub that returned one shape for
+     * both made this suite pass on POSIX and fail on Windows, where the elapsed
+     * seconds were read as an epoch and every comparison mismatched.
      */
-    function stubStartProbe(elapsedSec: number | null): void {
+    function stubStartProbe(startTimeSec: number | null): void {
       childProcess.spawnSync.mockImplementation((...args: unknown[]) => {
-        if (elapsedSec === null) return { status: 1, stdout: '' };
-        const minutes = Math.floor(elapsedSec / 60);
-        const seconds = String(elapsedSec % 60).padStart(2, '0');
-        return { status: 0, stdout: args[0] === 'ps' ? `${minutes}:${seconds}` : String(elapsedSec) };
+        if (startTimeSec === null) return { status: 1, stdout: '' };
+        if (args[0] !== 'ps') return { status: 0, stdout: String(startTimeSec) };
+        const elapsed = Math.max(0, Math.round(Date.now() / 1_000) - startTimeSec);
+        return {
+          status: 0,
+          stdout: `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`,
+        };
       });
     }
 
@@ -259,7 +268,7 @@ describe('PI durable subagent run store', () => {
       const ownerPid = nextOwnerPid++;
       stubAliveOwner(ownerPid);
       // The live process at that pid started long after the run was recorded.
-      stubStartProbe(30);
+      stubStartProbe(nowSec() - 30);
       const owner = foreignOwnerId(ownerPid, nowSec() - 86_400);
 
       expect(piSubagentControlOwnership(run(owner), process.pid)).toBe('orphaned');
@@ -280,7 +289,7 @@ describe('PI durable subagent run store', () => {
       const ownerPid = nextOwnerPid++;
       const startTimeSec = nowSec() - 600;
       stubAliveOwner(ownerPid);
-      stubStartProbe(600);
+      stubStartProbe(startTimeSec);
       const owner = foreignOwnerId(ownerPid, startTimeSec);
 
       expect(piSubagentControlOwnership(run(owner), process.pid)).toBe('foreign-live');
@@ -299,7 +308,7 @@ describe('PI durable subagent run store', () => {
       const ownerPid = nextOwnerPid++;
       stubAliveOwner(ownerPid);
       // Would report a mismatch if anything asked — nothing may ask.
-      stubStartProbe(30);
+      stubStartProbe(nowSec() - 30);
 
       expect(piSubagentControlOwnership(run(`${ownerPid}:scope-foreign`), process.pid))
         .toBe('foreign-live');
@@ -318,7 +327,7 @@ describe('PI durable subagent run store', () => {
     it('probes a given owner pid once per sweep instead of once per run', async () => {
       const ownerPid = nextOwnerPid++;
       stubAliveOwner(ownerPid);
-      stubStartProbe(30);
+      stubStartProbe(nowSec() - 30);
       const owner = foreignOwnerId(ownerPid, nowSec() - 86_400);
       const agentHome = await makeRoot();
       const root = piSubagentRunRoot(agentHome, 'session-1');

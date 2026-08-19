@@ -308,7 +308,17 @@ export async function killVerifiedPiSubagentRunner(status: PiSubagentRunStatus):
  * only the Host ever parses it back.
  */
 export function piSubagentRuntimeOwnerId(hostPid: number, scopeId: string): string {
-  return `${hostPid}.${ownProcessStartTimeSec()}:${scopeId}`;
+  // The start time may only be stamped for *this* process, because it is the
+  // only one whose start time we can read without a probe. Minting an id for
+  // another pid (tests, tooling) must fall back to the legacy two-part shape:
+  // stamping our own start time onto someone else's pid would assert a start
+  // identity that is simply false, and the liveness comparison against it then
+  // succeeds or fails on nothing but how close the two processes launched —
+  // a live foreign owner reads as an orphan the moment the gap exceeds the
+  // tolerance. A legacy id has no start time, so liveness stays conservative.
+  return hostPid === process.pid
+    ? `${hostPid}.${ownProcessStartTimeSec()}:${scopeId}`
+    : `${hostPid}:${scopeId}`;
 }
 
 /** Wall-clock second this process started, in the form the owner id records. */

@@ -26,7 +26,10 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 
-import { requestStopAllPiSubagentRunsSync } from '@cindy/maker-core/pi-subagent-runs';
+import {
+  requestStopAllPiSubagentRunsSync,
+  stopAllPiSubagentRunsForExit,
+} from '@cindy/maker-core/pi-subagent-runs';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifest } from './manifestService';
@@ -386,7 +389,7 @@ async function requestAutoRelaunch(
     lastAutoRelaunchBlockReason = null;
     autoRelaunchInProgress = true;
     log.info('auto relaunch conditions met (%s), applying update v%s', reason, readyVersion ?? '<unknown>');
-    executeRelaunch(theme);
+    void executeRelaunch(theme);
     return { accepted: true };
   } finally {
     autoRelaunchDecisionDepth = Math.max(0, autoRelaunchDecisionDepth - 1);
@@ -1337,8 +1340,10 @@ function forceQuit(): void {
   // build_app uses detached process groups, so parent exit does not reliably
   // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
   abortIOSSimulatorOperationsForExit();
-  // Scoped to this process so an update relaunch never kills a concurrent
-  // instance's Subagents out of the shared agent home.
+  // Residual window only: `executeRelaunch` already reclaimed this runtime's
+  // runners (and refused to get here otherwise). This covers a run that started
+  // in the moments since. Stays synchronous by necessity — awaiting anything
+  // here can pop a dialog and stall the updater's pid poll.
   requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
     hostPid: process.pid,
   });
@@ -1390,7 +1395,34 @@ function executeUpdateMacOS(zipPath: string): void {
   forceQuit();
 }
 
-function executeRelaunch(theme: 'light' | 'dark'): void {
+/**
+ * Bounded reclaim of this runtime's durable Subagent runners before an update
+ * relaunch. Returns false when any of them could not be confirmed stopped.
+ *
+ * Budget: 2s for the stop mailbox plus ~0.8s of exit confirmation per surviving
+ * runner (5 identity probes x 200ms, run one after another), with a 4s race as
+ * the hard ceiling so a wedged probe can never hold the update — and never pops
+ * a dialog, which is the whole reason this path bypasses the graceful chain.
+ */
+async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
+  const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+  try {
+    return await Promise.race([
+      stopAllPiSubagentRunsForExit(agentHome, 2_000, {
+        // Scoped to this process so an update relaunch never kills a concurrent
+        // instance's Subagents out of the shared agent home.
+        hostPid: process.pid,
+        killUnresponsiveRunners: true,
+      }),
+      new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), 4_000); }),
+    ]);
+  } catch (err) {
+    log.error('Subagent reclaim before update relaunch failed: %s', String(err));
+    return false;
+  }
+}
+
+async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -1435,6 +1467,23 @@ function executeRelaunch(theme: 'light' | 'dark'): void {
     return;
   }
 
+  // Gate *before* the updater is spawned, not inside forceQuit: once the
+  // updater script is running it polls our pid and SIGKILLs us after 120s
+  // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
+  // process alive — it only delays the kill. Refusing here is the last point
+  // where "do not relaunch" is still a real outcome.
+  //
+  // A runner we cannot confirm stopped holds direct BYOM credentials inherited
+  // through its spawn env, and the relaunched app has no handle to it.
+  if (!await reclaimSubagentRunnersForRelaunch()) {
+    log.error(
+      'executeRelaunch() cancelled — PI Subagent runners could not be confirmed stopped; '
+      + 'update relaunch aborted rather than leaving them running unsupervised',
+    );
+    handleApplyFailure('subagent_reclaim_unconfirmed');
+    return;
+  }
+
   // Increment applyAttempts before spawning so that if the updater itself
   // crashes (spawn succeeds → forceQuit → updater fails → old version boots),
   // the counter persists across restarts and eventually breaks the loop.
@@ -1476,7 +1525,7 @@ export function initUpdateService(): void {
     // default and the .env'd-out look most users have.
     const resolved = theme === 'light' || theme === 'dark' ? theme : 'dark';
     resolvedRelaunchTheme = resolved;
-    executeRelaunch(resolved);
+    void executeRelaunch(resolved);
   });
 
   ipcMain.handle(
