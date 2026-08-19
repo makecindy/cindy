@@ -4554,9 +4554,10 @@ const registerIpcHandlers = () => {
 
   // 登录 captcha 托管挑战页地址(不含 query)。只返回按构建区域拼出的公开 URL,
   // 无副作用、不含凭证;renderer 的 LoginCaptchaOverlay 用它装载 webview。
-  ipcMain.handle('auth:get-captcha-challenge-url', async () =>
-    authManager.getLoginCaptchaChallengeUrl(),
-  );
+  ipcMain.handle('auth:get-captcha-challenge-url', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.getLoginCaptchaChallengeUrl();
+  });
 
   ipcMain.handle('auth:logout', async () => {
     await authManager.logout();
