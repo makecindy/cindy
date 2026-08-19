@@ -26,6 +26,7 @@ const CREATE_SQL = `
     name TEXT NOT NULL,
     runtimes TEXT NOT NULL DEFAULT '{}',
     auth TEXT,
+    usage TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -388,6 +389,46 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     await deleteCustomProvider('openrouter');
     expect(await listCustomProviders()).toEqual([]);
     expect(await getCustomProvider('openrouter')).toBeNull();
+  });
+
+  it('persists the usage capability marker through create / update / read', async () => {
+    mountDb();
+    const codingPlan: CustomProviderConfig = {
+      ...valid,
+      id: 'zhipu-coding-plan',
+      usage: { kind: 'glm-coding-plan', platform: 'zhipu' },
+    };
+    await createCustomProvider(codingPlan);
+    expect(await getCustomProvider('zhipu-coding-plan')).toMatchObject({
+      usage: { kind: 'glm-coding-plan', platform: 'zhipu' },
+    });
+
+    // 编辑(不带 usage 字段的旧表单形态)→ 标记被移除(能力由配置显式声明,不默认保留)
+    await updateCustomProvider('zhipu-coding-plan', { ...valid, id: 'zhipu-coding-plan' });
+    expect((await getCustomProvider('zhipu-coding-plan'))?.usage).toBeUndefined();
+
+    // 再编辑回来 → 恢复
+    await updateCustomProvider('zhipu-coding-plan', codingPlan);
+    expect(await getCustomProvider('zhipu-coding-plan')).toMatchObject({
+      usage: { kind: 'glm-coding-plan', platform: 'zhipu' },
+    });
+  });
+
+  it('validates the usage capability marker against the whitelist', () => {
+    expect(validateCustomProviderConfig({
+      ...valid,
+      usage: { kind: 'glm-coding-plan', platform: 'zai' },
+    }).ok).toBe(true);
+    // 未知 kind / 非法 platform / 非对象 → 拒绝入库
+    for (const usage of [
+      { kind: 'kimi-coding-plan', platform: 'zhipu' },
+      { kind: 'glm-coding-plan', platform: 'moonshot' },
+      'nope',
+      null,
+    ]) {
+      const result = validateCustomProviderConfig({ ...valid, usage } as CustomProviderConfig);
+      expect(result.ok).toBe(false);
+    }
   });
 
   it('applies discovered models only while the saved provider still matches its snapshot', async () => {

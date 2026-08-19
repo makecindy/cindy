@@ -4847,6 +4847,14 @@
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
     "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "セッション {{cost}}",
+    "glm": {
+      "fiveHourLabel": "5時間枠",
+      "mcpMonthlyLabel": "MCP 月間",
+      "windowSegment": "{{label}} 残り {{remaining}}",
+      "windowLine": "{{label}} 残り {{remaining}} (使用済み {{used}})",
+      "resetAt": "{{at}} にリセット",
+      "waitingDetail": "GLM Coding Plan の使用量は現在利用できません。自動的に再試行されます。"
+    },
     "codex": {
       "waiting": "Codex --",
       "noUsageLabel": "使用量なし",

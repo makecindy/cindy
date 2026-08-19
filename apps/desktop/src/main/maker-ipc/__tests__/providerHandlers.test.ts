@@ -40,6 +40,7 @@ const CREATE_SQL = `
   CREATE TABLE custom_providers (
     id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, runtimes TEXT NOT NULL DEFAULT '{}',
     auth TEXT,
+    usage TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   );
   CREATE INDEX idx_custom_providers_sort_order ON custom_providers (sort_order);

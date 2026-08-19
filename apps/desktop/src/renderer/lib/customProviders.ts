@@ -245,6 +245,8 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
       : p.auth.method === 'none'
         ? { auth: { method: 'none' as const } }
         : {}),
+    // 订阅用量能力非凭证元数据,编辑往返必须无损保留(丢了 chip 就识别不出订阅)。
+    ...(p.usage ? { usage: p.usage } : {}),
     runtimes,
   };
 }

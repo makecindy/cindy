@@ -75,6 +75,17 @@ export type ProviderAccess =
   | { kind: 'managed' };
 
 /**
+ * 订阅用量能力标记 —— 声明「这个供应商配置承载可查询的订阅套餐余量」。
+ *
+ * 由目录预设携带、创建自定义供应商时快照进 `CustomProviderConfig` 持久化；usage
+ * reader 与状态栏 chip 据此识别订阅额度，**不靠 baseUrl 域名或可编辑名称猜测**
+ * （普通 GLM API 与 GLM Coding Plan 共用同一个 `/api/anthropic` 端点，URL 无法区分）。
+ * `kind` 当前只有智谱编码套餐一种；后续新供应商（Kimi / 百炼等 coding plan）扩展联合。
+ */
+export type ProviderUsageCapability =
+  | { kind: 'glm-coding-plan'; platform: 'zhipu' | 'zai' };
+
+/**
  * 通用路由器消费的「钥匙策略」——决定一笔请求到达上游时的鉴权头怎么处理。
  * 具体到某 runtime 的 header 落地（x-api-key vs Bearer、是否删 anthropic-beta、
  * 是否透传 chatgpt-account-id）由该 runtime 的代理实现，本字段只表达意图：
@@ -448,6 +459,12 @@ export interface Provider {
   /** 用户使用该供应商时的额度来源；旧目录可缺省，由 source 从 bundled 同 id 条目补齐。 */
   access?: ProviderAccess;
   /**
+   * 订阅用量能力（可选）：声明该供应商有可查询的订阅套餐余量（如 GLM Coding Plan
+   * 的 5 小时 / MCP 月度窗口）。由 buildUserProvider 从 CustomProviderConfig.usage
+   * 快照带入；usage reader / 状态栏 chip 消费，路由不读。内置供应商暂不携带。
+   */
+  usage?: ProviderUsageCapability;
+  /**
    * 该供应商用于「起会话标题」一次性轻任务的最经济模型 id（须存在于本供应商任一 agent 的
    * `models` 里）。host 侧标题 oneShot（见 apps/desktop title-one-shot）按本字段选模型、取该
    * 模型在目录里的最低 effort 档、走单次 HTTP 请求生成标题。缺省 = 该供应商不参与智能起名
@@ -610,6 +627,12 @@ export interface ProviderPreset {
    * 创建后会快照进 CustomProviderConfig，不随预设后续更新。
    */
   authMethod?: 'apiKey' | 'none';
+  /**
+   * 订阅用量能力（可选）：coding plan 类预设声明自己有可查询的订阅余量；
+   * 创建时快照进 CustomProviderConfig.usage（不随预设后续更新），
+   * 状态栏 chip 据此识别订阅额度来源。sanitizePresets 会剥离未知 kind。
+   */
+  usage?: ProviderUsageCapability;
   /** per-runtime 预填数据（至少一个）。 */
   runtimes: Partial<Record<AgentKind, ProviderPresetRuntime>>;
 }
@@ -696,6 +719,12 @@ export interface CustomProviderConfig {
     | { method: 'apiKey'; oauth?: never }
     | { method: 'oauth'; oauth: OAuthProviderDescriptor }
     | { method: 'none'; oauth?: never };
+  /**
+   * 订阅用量能力（可选）：从预设快照而来，标记该配置承载可查询的订阅套餐余量
+   * （如 GLM Coding Plan）。非凭证、可被用户编辑保留；usage reader 与状态栏 chip
+   * 据此识别订阅来源——普通 GLM API 与 Coding Plan 端点同形，不能靠 baseUrl 区分。
+   */
+  usage?: ProviderUsageCapability;
   /** per-runtime 独立配置（键为 agent，只含已配置的 runtime；至少一个）。 */
   runtimes: Partial<Record<AgentKind, CustomProviderRuntimeConfig>>;
 }

@@ -57,6 +57,16 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.models['claude-code']).toBeUndefined();
   });
 
+  it('passes the usage capability marker through to the Provider', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      usage: { kind: 'glm-coding-plan', platform: 'zhipu' },
+    });
+    expect(p.usage).toEqual({ kind: 'glm-coding-plan', platform: 'zhipu' });
+    // 无标记的配置不带 usage 字段
+    expect(buildUserProvider(codexOnly).usage).toBeUndefined();
+  });
+
   it('generates api-key-header routing with that runtime baseUrl, no key', () => {
     const p = buildUserProvider(codexOnly);
     expect(p.routing.codex).toEqual({

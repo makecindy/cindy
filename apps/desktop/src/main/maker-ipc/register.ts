@@ -534,8 +534,10 @@ import {
 import { escapePiPackageNativeDialogText } from '../maker-host/pi-package-native-dialog.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
+  syncGlmCodingPlanUsageForProviderChange,
   triggerClaudeSubscriptionUsageRefresh,
   triggerCodexAccountUsageRefresh,
+  triggerGlmCodingPlanUsageRefresh,
   triggerXaiSubscriptionUsageRefresh,
 } from './usage.js';
 import {
@@ -4789,6 +4791,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 429 退避 / 未连订阅 no-op 都在 reader 内部; turn 内的实时刷新由 proxy 旁路读
         // unified headers 兜住, 这里只负责把 scoped 分模型窗口等端点独有数据拉新。
         triggerClaudeSubscriptionUsageRefresh();
+        // GLM Coding Plan 自定义供应商轮: turn 后刷新该 provider 的订阅余量(#2768 九轮)
+        // —— 节流 / 退避 / 非 GLM 供应商 no-op 都在 reader 内; 远程会话额度事实在被控端,
+        // 与 chip 同口径抑制本机刷新。
+        if (!session.remoteHostId) {
+          const glmTurnProviderId = getSessionProvider(session.id);
+          if (glmTurnProviderId) triggerGlmCodingPlanUsageRefresh(glmTurnProviderId);
+        }
       }
       // Codex done 事件: 记 today token 累计 (替代老 registerCodexIpc 里的 recordCodexTurnUsage 接入点)。
       // codex/index.ts 在 turn.completed 时把 SDK usage 翻成 camelCase 塞进 done.data.usage, 这里直接转给 broadcaster。
@@ -4805,6 +4814,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         turnModelPromiseBySession.delete(session.id);
         const usage = (event.data as { usage?: unknown } | undefined)?.usage;
         if (usage) recordCodexTurnUsage(usage);
+        // GLM Coding Plan 走 codex runtime 的会话轮: turn 后刷新该 provider 的订阅余量
+        // (#2768 九轮,与 claude-code 分支同口径;非 GLM 供应商在 reader 内静默 no-op)。
+        if (sessionProvider && !isRemoteCodexSession) {
+          triggerGlmCodingPlanUsageRefresh(sessionProvider);
+        }
         // 按模型记账: codex done.data.usage 是 **per-turn 增量语义** (maker-core
         // codexDoneUsage 契约: promptTokens=本 turn 未命中输入, completionTokens=输出+推理
         // 合并, cachedTokens=命中缓存; 整 turn 没收到 tokenUsage/updated 时全 0)。
@@ -5020,6 +5034,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
       if (event.type === 'done' && event.source === 'pi') {
         const sessionProvider = getSessionProvider(session.id);
+        // GLM Coding Plan 走 pi runtime 的会话轮: turn 后刷新该 provider 的订阅余量
+        // (#2768 十轮;两个 GLM 预设都声明 pi runtime。非 GLM 供应商在 reader 内静默
+        // no-op,远程会话与 chip 同口径抑制——与 claude-code/codex 两分支同款)。
+        if (sessionProvider && !session.remoteHostId) {
+          triggerGlmCodingPlanUsageRefresh(sessionProvider);
+        }
         const modelPromise =
           turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
         turnModelPromiseBySession.delete(session.id);
@@ -5891,6 +5911,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
+    onCustomProviderMutated: (providerId: string) =>
+      syncGlmCodingPlanUsageForProviderChange(providerId),
     beginRouteMutation: (providerId) => beginProviderRouteMutation(providerId),
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),

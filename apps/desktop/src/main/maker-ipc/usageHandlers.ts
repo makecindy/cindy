@@ -11,6 +11,7 @@ import type {
   MobileCodexRateLimitsResult,
 } from '@cindy/maker-shared/device-link-contract';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
+import type { GlmCodingPlanUsageSnapshot } from '../../shared/glmCodingPlanUsage.js';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import type { ClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import type { ModelPricingMap } from '../usage/modelPricing.js';
@@ -61,6 +62,7 @@ export interface MakerUsageHandlerDeps {
   readCodexRateLimits(): Promise<MobileCodexRateLimitsResult>;
   consumeCodexRateLimitReset(idempotencyKey: string): Promise<MobileCodexRateLimitResetResult>;
   readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubscriptionUsageSnapshot | null>;
+  readGlmCodingPlanUsageSnapshot(providerId: string): Promise<GlmCodingPlanUsageSnapshot | null>;
   readXaiSubscriptionUsageSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null>;
   assertTrustedSender?(event: unknown): void;
   readClaudeAccountUsageSnapshot(): ClaudeAccountUsageSnapshot | null;
@@ -69,6 +71,14 @@ export interface MakerUsageHandlerDeps {
   readReferenceModelPricing(): ModelPricingMap;
   readUsageHistory(opts?: UsageHistoryReadOptions): Promise<UsageHistoryPayload>;
   emptyUsageHistory(): UsageHistoryPayload;
+  /**
+   * sender 归属校验(生产 = security/trustedAppRenderer 的 assertTrustedAppRendererEvent,
+   * 不通过时抛 PERMISSION_DENIED)。经 deps 注入保持 handler body 免 Electron 可测
+   * (规则同 providerHandlers)。USAGE_GLM_CODING_PLAN 会触发凭证背书的出网请求,
+   * **必须**有守卫才放行(electron-security:新 handler 不得以旧代码没校验为由省略;
+   * #2768 首轮 review r3785828851)。
+   */
+  assertTrustedUsageSender?(event: unknown): void;
 }
 
 export function registerMakerUsageHandlers(
@@ -125,6 +135,27 @@ export function registerMakerUsageHandlers(
   registry.handle(MAKER_INVOKE.USAGE_CLAUDE_SUBSCRIPTION, async () => {
     return await deps.readClaudeSubscriptionUsageSnapshot();
   });
+
+  // GLM Coding Plan 订阅余量 (5h token / MCP 月度窗口) — cached-first, per-provider。
+  // 该 handler 会按 renderer 传入的 providerId 触发凭证背书的出网刷新,先验 sender
+  // 再读任何配置 —— 守卫缺失时 fail-closed 拒绝,不裸跑。providerId 还要过 slug
+  // 白名单:requireString 只拒空值,任意长字符串会在 reader 的 states Map 永久落
+  // 条目并逐次触发 DB 查询(被注入的 renderer 可借此膨胀 main 内存;#2768 三轮
+  // review r3788613364)——与 custom-provider-store 的 CUSTOM_PROVIDER_ID_RE 同规则。
+  registry.handle(
+    MAKER_INVOKE.USAGE_GLM_CODING_PLAN,
+    async (event, providerId: unknown) => {
+      if (!deps.assertTrustedUsageSender) {
+        throwIpcError('PERMISSION_DENIED', 'usage sender trust guard unavailable');
+      }
+      deps.assertTrustedUsageSender(event);
+      const id = requireString(providerId, 'providerId');
+      if (!/^[a-z0-9_-]{1,40}$/.test(id)) {
+        throwIpcError('INVALID_PARAMS', 'providerId must be a custom provider slug');
+      }
+      return await deps.readGlmCodingPlanUsageSnapshot(id);
+    },
+  );
 
   registry.handle(MAKER_INVOKE.USAGE_XAI_SUBSCRIPTION, async (event) => {
     deps.assertTrustedSender?.(event);

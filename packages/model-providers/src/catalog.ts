@@ -22,6 +22,7 @@ import type {
   ProviderPreset,
   PresetSortRegion,
   ProviderModelRouteConfig,
+  ProviderUsageCapability,
 } from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
@@ -705,9 +706,27 @@ export function sanitizePresets(input: unknown): ProviderPreset[] {
       const { nameZhTW: _drop, ...rest } = preset as ProviderPreset & { nameZhTW: unknown };
       preset = rest as ProviderPreset;
     }
+    // usage 能力标记非法 / 未知 kind（远端目录领先本客户端）时剥字段不淘汰整条——
+    // 老客户端对新增能力天然"视而不见"，预设本体照常可创建（只是暂无订阅余量展示）。
+    if (!isUsableUsageCapability(preset.usage)) {
+      const { usage: _drop, ...rest } = preset as ProviderPreset & { usage?: unknown };
+      preset = rest as ProviderPreset;
+    }
     out.push(normalizePresetRuntimeOptions(preset));
   }
   return out;
+}
+
+/**
+ * usage 能力标记的白名单校验：本客户端认识的 (kind, platform) 组合才算可用。
+ * 供 sanitizePresets 剥离与 host 侧 store 校验共用同一定义（见 types.ts
+ * ProviderUsageCapability —— 联合扩展时这里同步加白名单）。
+ */
+export function isUsableUsageCapability(v: unknown): v is ProviderUsageCapability {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const u = v as { kind?: unknown; platform?: unknown };
+  if (u.kind === 'glm-coding-plan') return u.platform === 'zhipu' || u.platform === 'zai';
+  return false;
 }
 
 /**

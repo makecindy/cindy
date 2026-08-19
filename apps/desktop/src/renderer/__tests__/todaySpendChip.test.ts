@@ -323,6 +323,35 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(quotaHoverCardSource).not.toContain('monthlyLimit');
   });
 
+  it('shows GLM Coding Plan subscription windows from the capability-marked custom provider', () => {
+    // 身份判定:来自 provider 配置快照的 usage 能力标记(普通 GLM API 与 Coding Plan
+    // 共用 /api/anthropic,域名不可判),不是 providerId 前缀 / 名称猜测。
+    expect(source).toContain('useProviderUsageCapability(');
+    expect(source).toContain("glmProviderUsageCapability?.kind === 'glm-coding-plan'");
+    // per-provider 快照 hook + 独立展示分支(不并 usesCodexQuotaForm / isClaudeSubscription)
+    expect(source).toContain('useGlmCodingPlanUsage(');
+    expect(source).toContain('const usesGlmQuotaForm = isGlmCodingPlanSession;');
+    expect(source).toContain('getGlmChipWindows(glmCodingPlanUsage, t, windowLabelNowMs)');
+    expect(source).toContain("'todaySpend.glm.windowSegment'");
+    // 倒计时 tick 与悬念期催刷覆盖 GLM 形态
+    expect(source).toContain('!usesCodexQuotaForm && !isClaudeSubscription && !usesGlmQuotaForm');
+    expect(source).toContain('requestGlmCodingPlanRefresh(providerId)');
+    // 告警判定是纯数据判定,收在 shared/glmCodingPlanUsage.ts(有直接单测)
+    expect(source).toContain('const glmCodingPlanAlerting = usesGlmQuotaForm && hasAlertingGlmWindow(glmCodingPlanUsage);');
+    expect(source).not.toContain('function hasAlertingGlmWindow(');
+    expect(source).toContain('claudeSubscriptionAlerting || glmCodingPlanAlerting');
+    // token 窗与 MCP 月度窗分别展示,不相加成一个总百分比
+    expect(source).toContain('getGlmChipWindows');
+    expect(source.match(/getGlmChipWindows[\s\S]{0,900}/)?.[0]).toContain("key: 'glm-5h'");
+    expect(source.match(/getGlmChipWindows[\s\S]{0,1400}/)?.[0]).toContain("key: 'glm-mcp-monthly'");
+    // 5 种语言的窗口文案 key 齐全
+    for (const localeSource of localeSources) {
+      expect(localeSource).toContain('"glm"');
+      expect(localeSource).toContain('"fiveHourLabel"');
+      expect(localeSource).toContain('"mcpMonthlyLabel"');
+    }
+  });
+
   it('labels the Codex chip windows by time until reset while tooltip keeps the window name', () => {
     expect(source).toContain('const DAY_MS = 24 * 60 * 60 * 1000');
     // chip label = 紧凑倒计时 (天级向上取整, 与旧 getDaysUntilReset 口径一致; <1 天

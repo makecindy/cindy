@@ -313,6 +313,8 @@ export const MAKER_INVOKE = {
   USAGE_CODEX_RATE_LIMIT_RESET: 'maker:usage:codex-rate-limit-reset',
   // Claude 订阅账号余量 (oauth/usage 端点 + unified headers 双源, cached-first) — 状态栏 chip 用
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
+  // GLM Coding Plan 订阅余量 (monitor 端点, cached-first, per-provider) — 状态栏 chip 用
+  USAGE_GLM_CODING_PLAN: 'maker:usage:glm-coding-plan',
   // SuperGrok 账号周用量 (cli-chat-proxy settings + billing?format=credits)
   USAGE_XAI_SUBSCRIPTION: 'maker:usage:xai-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。

@@ -32,6 +32,7 @@ export type {
   ProviderPreset,
   ProviderPresetRuntime,
   PresetSortRegion,
+  ProviderUsageCapability,
   OAuthAuthorizationCodeDescriptor,
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
@@ -49,7 +50,7 @@ export type { ResolvedPiModelRoute } from './pi-catalog-marker.js';
 
 export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
-export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from './catalog.js';
+export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion, isUsableUsageCapability } from './catalog.js';
 
 export {
   buildUserProvider,

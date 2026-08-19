@@ -13,6 +13,7 @@
  *   - USAGE_TODAY_TOKENS_CHANGED   每 turn done 后推 Codex token 累计 (按 agentKind)
  *   - USAGE_CODEX_ACCOUNT_CHANGED  推 Codex 账号订阅用量快照
  *   - USAGE_CLAUDE_SUBSCRIPTION_CHANGED 推 Claude 订阅账号余量快照 (5h/周/分模型窗口)
+ *   - USAGE_GLM_CODING_PLAN_CHANGED 推 GLM Coding Plan 订阅余量快照 (per-provider)
  *
  * 用户:
  *   - maker-ipc/register.ts: 在 maker:event done 时 record (Claude / Codex API → recordTurnSpend,
@@ -30,10 +31,13 @@ import type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 import { incrementDailyModelUsage, type DailyModelUsageDelta } from './localDb/dailyModelUsage';
 import { getDbClient } from './localDb/client/current';
 import { getCurrentUserId } from './localDb/index';
+import { getActiveAppSession, getActiveDataOwnerPushStamp } from './appSessionState';
+import type { DataOwnerPushStamp } from '../shared/dataOwnerPush';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
   type ClaudeSubscriptionUsageSnapshot,
 } from '../shared/claudeSubscriptionUsage';
+import type { GlmCodingPlanUsageSnapshot } from '../shared/glmCodingPlanUsage';
 import type { XaiSubscriptionUsageSnapshot } from '../shared/xaiSubscriptionUsage';
 import type { AgentKind } from '@cindy/maker-core';
 
@@ -58,6 +62,11 @@ export const USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed';
 export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
 /** IPC channel: main → renderer 推 Claude 订阅账号余量变化 (端点刷新 / headers 旁路)。 */
 export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-changed';
+/**
+ * IPC channel: main → renderer 推 GLM Coding Plan 订阅余量变化 (per-provider)。
+ * payload = { providerId, snapshot: GlmCodingPlanUsageSnapshot | null } (null = 清除)。
+ */
+export const USAGE_GLM_CODING_PLAN_CHANGED = 'usage:glm-coding-plan-changed';
 /** IPC channel: main → renderer 推 SuperGrok 账号周用量快照。 */
 export const USAGE_XAI_SUBSCRIPTION_CHANGED = 'usage:xai-subscription-changed';
 
@@ -890,6 +899,288 @@ export async function readClaudeSubscriptionUsageSnapshot(): Promise<ClaudeSubsc
   return claudeSubscriptionUsageSnapshot;
 }
 
+
+// ── GLM Coding Plan usage (persisted per-provider snapshots) ─────────────────
+// 与 Claude subscription 段同源设计(内存缓存 + 落库 + 广播),差异:
+//   - 归属维度是 provider id(GLM Coding Plan 是用户自定义 provider,可配多个实例);
+//   - 单数据源(monitor 端点),无 merge 语义,record 即全量替换;
+//   - owner 变化(账号切换)时整体作废内存缓存 —— DB 按 userId 切片,新账号读不到
+//     旧行,冷启动 hydration 自然为空。
+
+/**
+ * push payload:renderer 按 providerId 过滤自己关心的那份。ownerStamp 是广播时刻的
+ * 完整 owner 戳(#2768 十轮 P1-b:id + ownerGeneration)—— 同账号重登/本地档案恢复
+ * 会让 renderer 的世代号前进,只比 id 的旧戳挡不住重登前排队的迟到推送。ownerId
+ * 为旧版 renderer 的兼容字段保留(有 ownerStamp 时 renderer 以完整戳为准)。
+ */
+export interface GlmCodingPlanUsagePushPayload {
+  providerId: string;
+  /** 完整 owner 戳(主导);旧字段,新 renderer 在 ownerStamp 存在时忽略。 */
+  ownerId: string | null;
+  ownerStamp?: DataOwnerPushStamp;
+  snapshot: GlmCodingPlanUsageSnapshot | null;
+}
+
+const glmCodingPlanUsageSnapshots = new Map<string, GlmCodingPlanUsageSnapshot | null>();
+const glmCodingPlanUsageHydrated = new Set<string>();
+const glmCodingPlanUsageLoadPromises = new Map<string, Promise<void>>();
+/**
+ * per-provider 世代: clear 只作废**该 provider** 在飞的 hydration / record——全局世代
+ * 会把无关 provider 的并发写一并误丢(成功请求已进 180s 节流,误丢后一个节流窗内
+ * 无法恢复;#2768 二轮 review r3788460233)。owner 变化才整体作废(ownerEpoch)。
+ */
+const glmCodingPlanUsageGenerations = new Map<string, number>();
+let glmCodingPlanUsageOwnerEpoch = 0;
+let glmCodingPlanUsageOwner: string | null = null;
+let glmCodingPlanUsageOwnerGenerationValue = 0;
+let glmCodingPlanUsageOwnerInitialized = false;
+
+function glmGenerationOf(providerId: string): number {
+  return glmCodingPlanUsageGenerations.get(providerId) ?? 0;
+}
+
+/**
+ * GLM 用量条件提交令牌(#2768 七轮根因修复,十轮升级为完整世代):调用方在
+ * **发起 fetch 之前**领取,fetch 完成后随 record/clear 带回;期间任何
+ * clear(世代 bump)或 owner 边界推进(完整世代,含同 id 重登——id 相同、
+ * appSession.generation 前进)都会令令牌失效,store 直接拒绝提交。它取代
+ * 「写完再验 + 补偿」形态——补偿自身仍是跨 await 的先检查后动作,窗口永远
+ * 关不干净(#2768 四~七轮实证)。owner 维度从 userId 升级为房子的
+ * (userId, appSession.generation) 双维(#2768 十一轮 review):同账号重登
+ * 前排队的写同样被拒。
+ */
+export interface GlmUsageWriteToken {
+  readonly providerId: string;
+  readonly generation: number;
+  readonly ownerEpoch: number;
+  /** 主进程侧完整 owner 世代(appSession.generation,含同 id 重登)。 */
+  readonly ownerGeneration: number;
+}
+
+/** 领取条件提交令牌(在发起 fetch 之前调用;token 捕获点 = fetch 前,非提交时)。 */
+export function beginGlmCodingPlanUsageWrite(providerId: string): GlmUsageWriteToken {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  return {
+    providerId,
+    generation: glmGenerationOf(providerId),
+    ownerEpoch: glmCodingPlanUsageOwnerEpoch,
+    ownerGeneration: getActiveAppSession().generation,
+  };
+}
+
+/**
+ * 只作废在飞令牌、不删持久化快照(CRUD 更新的正确动作):provider CRUD 在
+ * UPDATE handler 末尾无条件触发(afterChange 不区分改了哪个字段),但改显示名 /
+ * 加模型 / 调 header 不改变额度归属 —— 快照仍是有效数据,删了会让额度显示在
+ * 无关编辑后立刻消失(补刷失败则空一个节流窗)。作废令牌(堵 fetch 窗口竞态)
+ * 与删快照(数据真失效)是两件事,UPDATE 除非身份失配只做前者。
+ */
+export function invalidateGlmCodingPlanUsageWrites(providerId: string): void {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  glmCodingPlanUsageGenerations.set(providerId, glmGenerationOf(providerId) + 1);
+}
+
+/** 令牌是否仍然有效(世代、owner epoch 与完整 owner 世代都未前进;providerId 属调用方自查)。 */
+function isGlmUsageWriteTokenCurrent(token: GlmUsageWriteToken): boolean {
+  return (
+    token.ownerGeneration === getActiveAppSession().generation
+    && token.ownerEpoch === glmCodingPlanUsageOwnerEpoch
+    && token.generation === glmGenerationOf(token.providerId)
+  );
+}
+
+function resetGlmCodingPlanUsageCacheIfOwnerChanged(): void {
+  // 完整 owner 世代(#2768 十一轮 review):同 id 重登(appSession.generation 前进)
+  // 也算 owner 变化——缓存/世代全部作废,上一会话的观察不跨会话沿用。
+  const session = getActiveAppSession();
+  const owner = session.dataOwnerId;
+  const generation = session.generation;
+  if (
+    glmCodingPlanUsageOwnerInitialized
+    && owner === glmCodingPlanUsageOwner
+    && generation === glmCodingPlanUsageOwnerGenerationValue
+  ) return;
+  const isFirstInit = !glmCodingPlanUsageOwnerInitialized;
+  glmCodingPlanUsageOwnerInitialized = true;
+  glmCodingPlanUsageOwner = owner;
+  glmCodingPlanUsageOwnerGenerationValue = generation;
+  if (isFirstInit) return;
+  glmCodingPlanUsageSnapshots.clear();
+  glmCodingPlanUsageHydrated.clear();
+  glmCodingPlanUsageLoadPromises.clear();
+  glmCodingPlanUsageGenerations.clear();
+  glmCodingPlanUsageOwnerEpoch += 1;
+}
+
+function ensureGlmCodingPlanUsageLoaded(providerId: string): Promise<void> {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  if (glmCodingPlanUsageHydrated.has(providerId)) return Promise.resolve();
+  let load = glmCodingPlanUsageLoadPromises.get(providerId);
+  if (!load) {
+    const generation = glmGenerationOf(providerId);
+    const ownerEpoch = glmCodingPlanUsageOwnerEpoch;
+    // 完整 owner 世代(id+generation)捕获:同 id 重登(appSession.generation 前进)
+    // 也要让本 hydration 作废(#2768 十一轮 review;此前只比 userId)。
+    const sessionAtStart = getActiveAppSession();
+    const ownerAtStart = sessionAtStart.dataOwnerId;
+    const ownerGenerationAtStart = sessionAtStart.generation;
+    load = (async () => {
+      try {
+        if (!ownerAtStart) return;
+        const row = await getDbClient().queryOne<{ snapshot?: string | null }>(
+          'SELECT snapshot FROM coding_plan_usage_snapshots WHERE provider_id = ?',
+          [providerId],
+        );
+        // owner 直接复核:ownerEpoch 是懒检测——await 期间没有任何 GLM 入口触发
+        // reset 的话它不前进,单靠世代比对发现不了切号。A 账号的 hydration 结果
+        // 不得落进 B 账号的内存(#2768 七轮 Codex P1);同 id 重登同样作废(十一轮)。
+        // 丢弃后下一次入口的 reset 会按新 owner 重新水合,自愈无残留。
+        const sessionNow = getActiveAppSession();
+        if (
+          sessionNow.dataOwnerId !== ownerAtStart
+          || sessionNow.generation !== ownerGenerationAtStart
+        ) return;
+        // 本 provider 被 clear / owner 变化抢先 → 本次读结果作废。
+        if (
+          ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+          || generation !== glmGenerationOf(providerId)
+        ) return;
+        glmCodingPlanUsageHydrated.add(providerId);
+        if (!row?.snapshot) return;
+        const parsed: unknown = JSON.parse(row.snapshot);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          // 单数据源无 merge:内存里若已有更新快照(读库期间 record 到达),保留内存值。
+          if (!glmCodingPlanUsageSnapshots.has(providerId)) {
+            glmCodingPlanUsageSnapshots.set(
+              providerId,
+              parsed as GlmCodingPlanUsageSnapshot,
+            );
+          }
+        }
+      } catch (err) {
+        log.warn(
+          'readGlmCodingPlanUsageSnapshot failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+    glmCodingPlanUsageLoadPromises.set(providerId, load);
+  }
+  return load.finally(() => {
+    // 与 claude 段同理:清理放 await 之后,防 IIFE 同步走完时 promise 被写回复用。
+    if (glmCodingPlanUsageLoadPromises.get(providerId) === load) {
+      glmCodingPlanUsageLoadPromises.delete(providerId);
+    }
+  });
+}
+
+export async function recordGlmCodingPlanUsageSnapshot(
+  providerId: string,
+  snapshot: unknown,
+  token?: GlmUsageWriteToken,
+): Promise<void> {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return;
+  // 令牌在 fetch 前领取:CRUD 落在 fetch 期间(而非 record 自己的 await 里)时,
+  // 世代/epoch/完整 owner 世代已在领取后前进 → 此处直接拒绝。无令牌 = 老调用
+  // 路径,沿用入口捕获(仍防 record 自身 await 窗口内的 clear)。
+  const generation = token ? token.generation : glmGenerationOf(providerId);
+  const ownerEpoch = token ? token.ownerEpoch : glmCodingPlanUsageOwnerEpoch;
+  const ownerGeneration = token
+    ? token.ownerGeneration
+    : getActiveAppSession().generation;
+  if (token && token.providerId !== providerId) return;
+  await ensureGlmCodingPlanUsageLoaded(providerId);
+  if (
+    ownerGeneration !== getActiveAppSession().generation
+    || ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+    || generation !== glmGenerationOf(providerId)
+  ) return;
+
+  const next = snapshot as GlmCodingPlanUsageSnapshot;
+  glmCodingPlanUsageSnapshots.set(providerId, next);
+  broadcastGlmCodingPlanUsage({ providerId, snapshot: next });
+
+  if (!glmCodingPlanUsageHydrated.has(providerId)) {
+    log.warn('skip persisting glm coding plan usage snapshot: hydration unavailable');
+    return;
+  }
+  try {
+    // 写库与补偿删除用**同一捕获的 client + 捕获的 updated_at 区分子**(#2768
+    // 八轮 review + 十一轮 review):INSERT 挂起期间 owner 切换的话,重新
+    // getDbClient() 会落到新账号的 DB 切片(删错库);新世代也可能已把快照写进
+    // 同一行——即使序列化内容恰好完全相同,写入时刻列(updated_at,INSERT 时的
+    // Date.now(),与快照内部 updatedAt 是两回事)也唯一标识本次写入(十一轮
+    // Greptile P1 结构修复,不再靠「内容相同概率低」)。补偿只删「本次写入的
+    // 那笔」——行已不是我们写的就不再动它,残留清理由新世代的写入自然覆盖。
+    const db = getDbClient();
+    const written = JSON.stringify(next);
+    const writtenAt = Date.now();
+    await db.exec(
+      `INSERT INTO coding_plan_usage_snapshots (provider_id, snapshot, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(provider_id) DO UPDATE SET
+         snapshot = excluded.snapshot,
+         updated_at = excluded.updated_at`,
+      [providerId, written, writtenAt],
+    );
+    if (
+      ownerGeneration !== getActiveAppSession().generation
+      || ownerEpoch !== glmCodingPlanUsageOwnerEpoch
+      || generation !== glmGenerationOf(providerId)
+    ) {
+      // clear 在写库 await 期间抢先:补偿删除,防下次冷启动读回残留。
+      // 双条件谓词(十一轮复审裁决):内容+写入时刻并集——同毫秒边界上失效方向
+      // 偏向「不删」(残留由下次刷新 upsert 盖掉,节流窗内自愈)而非「误删」
+      // (用户额度变空最长 180s),与「宁可补偿不足不可误删」同原则。
+      await db.exec(
+        'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ? AND snapshot = ? AND updated_at = ?',
+        [providerId, written, writtenAt],
+      );
+    }
+  } catch (err) {
+    log.warn(
+      'recordGlmCodingPlanUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function clearGlmCodingPlanUsageSnapshot(
+  providerId: string,
+  token?: GlmUsageWriteToken,
+): Promise<void> {
+  resetGlmCodingPlanUsageCacheIfOwnerChanged();
+  // 带令牌的清除('empty' / 401 降级路径):令牌失效 → 静默放弃,不 bump 世代、
+  // 不广播——CRUD 已在此期间接管(它自己的强制清会 bump)。无令牌 = 强制清
+  // (CRUD 钩子 / read 身份失配),无条件执行。
+  if (token && !isGlmUsageWriteTokenCurrent(token)) return;
+  glmCodingPlanUsageHydrated.add(providerId);
+  glmCodingPlanUsageSnapshots.set(providerId, null);
+  // 只 bump 本 provider 的世代 —— 其它 provider 并发中的 hydration/record 不受影响。
+  glmCodingPlanUsageGenerations.set(providerId, glmGenerationOf(providerId) + 1);
+  broadcastGlmCodingPlanUsage({ providerId, snapshot: null });
+
+  try {
+    await getDbClient().exec(
+      'DELETE FROM coding_plan_usage_snapshots WHERE provider_id = ?',
+      [providerId],
+    );
+  } catch (err) {
+    log.warn(
+      'clearGlmCodingPlanUsageSnapshot failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+export async function readGlmCodingPlanUsageSnapshot(
+  providerId: string,
+): Promise<GlmCodingPlanUsageSnapshot | null> {
+  await ensureGlmCodingPlanUsageLoaded(providerId);
+  return glmCodingPlanUsageSnapshots.get(providerId) ?? null;
+}
+
+
 // ── xAI / SuperGrok subscription usage (persisted latest snapshot) ──────────
 // agent_kind='xai'。单源全量替换,没有 headers 增量 merge。
 
@@ -1084,6 +1375,25 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
     if (!win.isDestroyed()) {
       win.webContents.send(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
     }
+  }
+}
+
+function broadcastGlmCodingPlanUsage(
+  payload: Omit<GlmCodingPlanUsagePushPayload, 'ownerId' | 'ownerStamp'>,
+): void {
+  // owner 戳在广播出口统一盖:快照归属 = 广播时刻的 data owner。完整戳
+  // (id+generation)让 renderer 能拒绝同 id 重登前排队的迟到推送(#2768 十轮)。
+  const ownerStamp = getActiveDataOwnerPushStamp();
+  const stamped: GlmCodingPlanUsagePushPayload = {
+    ...payload,
+    ownerStamp,
+    ownerId: ownerStamp.dataOwnerId,
+  };
+  for (const win of BrowserWindow.getAllWindows()) {
+    // 与 xAI 订阅广播同款过滤(#2768 十一轮 review):账号用量数据只发给可信的
+    // 应用窗口,装载了不可信内容的辅助窗口/已导航走的窗口不收。
+    if (!isTrustedAppRendererWindow(win)) continue;
+    win.webContents.send(USAGE_GLM_CODING_PLAN_CHANGED, stamped);
   }
 }
 

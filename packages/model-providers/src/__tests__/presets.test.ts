@@ -45,6 +45,26 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('keeps whitelisted usage capability markers and strips unknown ones', () => {
+    const valid = {
+      ...VALID_PRESET,
+      id: 'zhipu-coding-plan',
+      usage: { kind: 'glm-coding-plan', platform: 'zhipu' },
+    };
+    expect(sanitizePresets([valid])).toEqual([valid]);
+    // 未知 kind(远端目录领先本客户端)/ 非法 platform / 非对象 → 剥字段不淘汰整条
+    // (老客户端对新增能力"视而不见",预设本体照常可创建)。
+    for (const usage of [
+      { kind: 'kimi-coding-plan', platform: 'zhipu' },
+      { kind: 'glm-coding-plan', platform: 'moonshot' },
+      'nope',
+    ]) {
+      const out = sanitizePresets([{ ...VALID_PRESET, id: 'x', usage }]);
+      expect(out).toHaveLength(1);
+      expect(out[0].usage).toBeUndefined();
+    }
+  });
+
   it('materializes the legacy Pi Messages protocol only for the exact Claude endpoint', () => {
     const legacy = {
       ...VALID_PRESET,
@@ -140,6 +160,7 @@ describe('sanitizePresets', () => {
       runtimes: { pi: { ...valid.runtimes.pi, piCatalogProviderId: '../xai' } },
     }])).toEqual([]);
   });
+
   it('accepts explicit Pi reasoning metadata and rejects ambiguous capability declarations', () => {
     const piReasoning = {
       ...VALID_PRESET,

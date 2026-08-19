@@ -13,6 +13,8 @@ import type { Maker } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { getActiveAppSession } from '../appSessionState.js';
+import { getCurrentUserId } from '../localDb/index.js';
 import {
   readClaudeAccountUsageSnapshot,
   triggerClaudeAccountUsageRefresh,
@@ -30,6 +32,16 @@ import {
 } from '../usage/xaiSubscriptionUsage.js';
 import { createXaiSubscriptionUsageReader } from '../usage/xaiSubscriptionUsageRefresh.js';
 import { createCodexAccountUsageSnapshotReader } from '../usage/codexAccountUsageRefresh.js';
+import {
+  GlmCodingPlanUsageRateLimitedError,
+  GlmCodingPlanUsageUnauthorizedError,
+  fetchGlmCodingPlanUsageSnapshot,
+} from '../usage/glmCodingPlanUsage.js';
+import {
+  createGlmCodingPlanUsageReader,
+  createOwnerGuardedReadSource,
+} from '../usage/glmCodingPlanUsageRefresh.js';
+import type { GlmCodingPlanReadSourceResult } from '../usage/glmCodingPlanUsageRefresh.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import {
@@ -38,22 +50,29 @@ import {
 } from '../usage/codexWebUsage.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
 import {
+  beginGlmCodingPlanUsageWrite,
   clearClaudeSubscriptionUsageSnapshot,
   clearCodexAccountUsageSnapshot,
+  clearGlmCodingPlanUsageSnapshot,
   clearXaiSubscriptionUsageSnapshot,
+  invalidateGlmCodingPlanUsageWrites,
   readAgentTodayUsage,
   readClaudeSubscriptionUsageSnapshot,
   readCodexAccountUsageSnapshot,
+  readGlmCodingPlanUsageSnapshot,
   readXaiSubscriptionUsageSnapshot,
   recordClaudeSubscriptionUsageSnapshot,
   recordCodexAccountUsageSnapshot,
+  recordGlmCodingPlanUsageSnapshot,
   recordXaiSubscriptionUsageSnapshot,
 } from '../usageBroadcaster.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { readClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
+import { getCustomProvider } from '../maker-host/custom-provider-store.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { setClaudeRateLimitHeadersListener } from '../maker-host/claude-rate-limit-headers-observer.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { createCodexRateLimitResetService } from '../usage/codexRateLimitReset.js';
 
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
@@ -177,6 +196,123 @@ export function syncClaudeSubscriptionUsageForAuthChange(): void {
   });
 }
 
+// ── GLM Coding Plan 订阅余量 reader ─────────────────────────────────────────
+
+/** scrypt 应用盐 —— 与 claude 侧同机制,换前缀防跨源指纹碰撞。 */
+const GLM_KEY_FINGERPRINT_SALT = 'xdt-glm-coding-plan-usage-fp-v1';
+
+const glmKeyFingerprints = new Map<string, string>();
+
+/** provider API key → 归属指纹(scrypt 截 16 hex,不含 key 原文;按 key 缓存)。 */
+function fingerprintGlmKey(key: string): string {
+  const cached = glmKeyFingerprints.get(key);
+  if (cached) return cached;
+  const fingerprint = scryptSync(key, GLM_KEY_FINGERPRINT_SALT, 32)
+    .toString('hex')
+    .slice(0, 16);
+  // 有界缓存:同账号 provider 数量级是个位数,超界(异常)时清空重来即可,不驱逐策略。
+  if (glmKeyFingerprints.size > 32) glmKeyFingerprints.clear();
+  glmKeyFingerprints.set(key, fingerprint);
+  return fingerprint;
+}
+
+/**
+ * GLM 素材读取的完整 owner 键(#2768 十一轮 review):`(userId, appSession.generation)`
+ * ——同账号重登/本地档案恢复会让世代前进,只比 userId 的旧键挡不住重登前排队的
+ * 配置读取拼出跨世代素材。对齐 appSessionState 的世代语义。
+ */
+function readGlmOwnerScopeKey(): string {
+  const session = getActiveAppSession();
+  return `${session.dataOwnerId ?? 'none'}:${session.generation}`;
+}
+
+/**
+ * 解析一个自定义 provider 的用量查询素材:配置带 usage 能力标记 + 至少一个 runtime
+ * 有 key 才可查询(runtime 优先序 claude-code > codex > pi,取第一个有 key 的)。
+ * 已知限制(v1):per-runtime key 理论上可不同,快照按"实际用于查询的那把 key"的
+ * 指纹归属;两端不同 key 的边缘形态以查询端为准。
+ *
+ * owner 复核由 createOwnerGuardedReadSource 统一包一层(全出口覆盖,审计 B):
+ * 「无 usage 能力 / 无 key」这类提前 return 的 null,同样会在切账号瞬间被
+ * 误当"已删除"清掉新账号同名 provider 的快照。
+ */
+async function readGlmCodingPlanSource(
+  providerId: string,
+): Promise<GlmCodingPlanReadSourceResult> {
+  const config = await getCustomProvider(providerId);
+  if (config?.usage?.kind !== 'glm-coding-plan') return null;
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const rt = config.runtimes[agent];
+    if (!rt) continue;
+    const key = readCustomProviderKey(providerId, agent);
+    if (!key) continue;
+    return {
+      providerId,
+      runtimeBaseUrl: rt.baseUrl,
+      apiKey: key,
+      platform: config.usage.platform,
+    };
+  }
+  return null;
+}
+
+const glmCodingPlanUsageReader = createGlmCodingPlanUsageReader({
+  // owner 全出口复核(审计 B + 十一轮):(userId, appSession.generation) 双维键,
+  // 同账号重登世代前进也让素材判 stale——提前 return 的 null 也在切账号/重登时
+  // 转 stale-owner。
+  readSource: createOwnerGuardedReadSource(readGlmOwnerScopeKey, readGlmCodingPlanSource),
+  fetchSnapshot: (source) =>
+    fetchGlmCodingPlanUsageSnapshot({
+      runtimeBaseUrl: source.runtimeBaseUrl,
+      apiKey: source.apiKey,
+      platform: source.platform,
+      // 吃系统代理的出网通道(与 provider 连通性探测同栈;用户代理软件跑系统代理
+      // 模式时裸 fetch 直连会被拒)。
+      fetchFn: outboundFetch,
+    }),
+  // 条件提交令牌(七轮根因修复):fetch 前领取,失效即拒——取代写后补偿;
+  // CRUD 更新走 invalidate(只作废令牌,身份未变不删快照)。
+  beginWrite: beginGlmCodingPlanUsageWrite,
+  invalidateWrites: invalidateGlmCodingPlanUsageWrites,
+  recordSnapshot: recordGlmCodingPlanUsageSnapshot,
+  clearSnapshot: clearGlmCodingPlanUsageSnapshot,
+  readCachedSnapshot: readGlmCodingPlanUsageSnapshot,
+  fingerprintKey: fingerprintGlmKey,
+  now: () => Date.now(),
+  isUnauthorizedError: (err) => err instanceof GlmCodingPlanUsageUnauthorizedError,
+  isRateLimitedError: (err) => err instanceof GlmCodingPlanUsageRateLimitedError,
+  onRefreshError: (err) => {
+    log.warn(
+      'glm coding plan usage refresh failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  },
+});
+
+/**
+ * 自定义供应商 CRUD 后的 GLM 用量快照同步钩子(providerHandlers 的
+ * onCustomProviderMutated 消费):删除 / 失去能力 → 清快照;换 key → 指纹失配清
+ * 快照 + 立即刷新。fire-and-forget,不阻塞 CRUD。
+ */
+/**
+ * GLM Coding Plan turn-done 钩子:显式选定了供应商的本地会话轮结束后触发一次
+ * 受 180s 节流保护的余量刷新(#2768 九轮)——长会话连续多 turn 不会一直顶着挂载
+ * 时的旧快照。非 GLM 供应商 readSource 为 no source → 静默 no-op 且不触及快照
+ * 存储;代价是每轮一次配置查询(人类 turn 节奏,可忽),状态槽位有意不保留——
+ * 这正是同轮 P1 保持 states Map 有界的做法。远程会话由调用方抑制(额度事实在
+ * 被控端)。
+ */
+export function triggerGlmCodingPlanUsageRefresh(providerId: string): void {
+  glmCodingPlanUsageReader.triggerRefresh(providerId);
+}
+
+export function syncGlmCodingPlanUsageForProviderChange(providerId: string): void {
+  void glmCodingPlanUsageReader.syncForProviderChange(providerId).catch(() => {
+    /* reader 内部已把错误交给 onRefreshError, 这里只兜底 promise 拒绝。 */
+  });
+}
+
+
 async function readXaiCredentialsInfo(): Promise<{ accessToken: string } | null> {
   if (!hasGrokOAuthLogin()) return null;
   try {
@@ -273,6 +409,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
       desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => codexRateLimitResetService.read()),
     consumeCodexRateLimitReset: codexRateLimitResetService.consume,
     readClaudeSubscriptionUsageSnapshot: () => claudeSubscriptionUsageReader.read(),
+    readGlmCodingPlanUsageSnapshot: (providerId: string) =>
+      glmCodingPlanUsageReader.read(providerId),
+    // GLM 用量 handler 触发凭证背书的出网刷新:先验 sender(electron-security 新
+    // handler 门禁;handler 侧守卫缺失时 fail-closed)。
+    assertTrustedUsageSender: (event) =>
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
     readXaiSubscriptionUsageSnapshot: () => xaiSubscriptionUsageReader.read(),
     assertTrustedSender: (event) => {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);

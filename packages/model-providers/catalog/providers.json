@@ -1686,6 +1686,10 @@
       "nameZhTW": "智譜 GLM Coding Plan（中國大陸）",
       "docsUrl": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
       "regionHint": "cn",
+      "usage": {
+        "kind": "glm-coding-plan",
+        "platform": "zhipu"
+      },
       "runtimes": {
         "claude-code": {
           "baseUrl": "https://open.bigmodel.cn/api/anthropic",
@@ -1763,6 +1767,10 @@
       "name": "Z.ai GLM Coding Plan (Global)",
       "docsUrl": "https://docs.z.ai/devpack/overview",
       "regionHint": "global",
+      "usage": {
+        "kind": "glm-coding-plan",
+        "platform": "zai"
+      },
       "runtimes": {
         "claude-code": {
           "baseUrl": "https://api.z.ai/api/anthropic",

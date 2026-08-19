@@ -30,6 +30,7 @@ import {
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  isUsableUsageCapability,
   PI_REASONING_EFFORTS,
   PI_MODEL_APIS,
   preservesPiCatalogModels,
@@ -462,6 +463,12 @@ export function validateCustomProviderConfig(
     if (!a.ok) return a;
   }
 
+  // usage 能力标记白名单校验：未知 kind（未来预设数据领先本客户端）整体拒绝——
+  // 与 catalog sanitizePresets 的"剥字段"不同,入库侧收严,防止坏形状进 SQLite。
+  if (c.usage !== undefined && !isUsableUsageCapability(c.usage)) {
+    return invalid('usage capability invalid');
+  }
+
   if (!c.runtimes || typeof c.runtimes !== 'object' || Array.isArray(c.runtimes)) {
     return invalid('runtimes required');
   }
@@ -535,6 +542,7 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
     if (rt) runtimes[agent] = normalizeRuntime(agent, rt);
   }
   const out: CustomProviderConfig = { id: config.id, name: config.name.trim(), runtimes };
+  if (config.usage && isUsableUsageCapability(config.usage)) out.usage = config.usage;
   // auth 规整：apiKey（默认形态）不落 auth 字段；none / oauth 显式落盘。
   if (config.auth?.method === 'oauth' && config.auth.oauth) {
     const d = config.auth.oauth;
@@ -639,6 +647,17 @@ export function mergeDiscoveredModelsIntoConfig(
   };
 }
 
+/** 安全解析 usage 列 JSON（坏数据 / 白名单外 kind 兜底为 undefined = 无用量能力）。 */
+function parseUsage(raw: string | null): CustomProviderConfig['usage'] {
+  if (!raw) return undefined;
+  try {
+    const v: unknown = JSON.parse(raw);
+    return isUsableUsageCapability(v) ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 安全解析 auth 列 JSON（坏数据 / 结构不完整兜底为 undefined = API key 历史形态）。 */
 function parseAuth(raw: string | null): CustomProviderConfig['auth'] {
   if (!raw) return undefined;
@@ -732,6 +751,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
 
 function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderConfig {
   const auth = parseAuth(row.auth);
+  const usage = parseUsage(row.usage);
   const runtimes = parseRuntimes(row.runtimes);
   // #527 之前保存的远程 auth:none 记录保留原始表单数据，供设置页展示和修复。
   // buildUserProvider 会把不满足当前 loopback 边界的 runtime 标成 disabled；路由解析
@@ -740,6 +760,7 @@ function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderCo
     id: row.id,
     name: row.name,
     ...(auth ? { auth } : {}),
+    ...(usage ? { usage } : {}),
     runtimes,
   };
 }
@@ -783,6 +804,7 @@ export async function createCustomProvider(
     name: c.name,
     runtimes: JSON.stringify(c.runtimes),
     auth: c.auth ? JSON.stringify(c.auth) : null,
+    usage: c.usage ? JSON.stringify(c.usage) : null,
     sortOrder: nextOrder,
     createdAt: now,
     updatedAt: now,
@@ -812,6 +834,7 @@ export async function updateCustomProvider(
       name: c.name,
       runtimes: JSON.stringify(c.runtimes),
       auth: c.auth ? JSON.stringify(c.auth) : null,
+      usage: c.usage ? JSON.stringify(c.usage) : null,
       updatedAt: Math.max(now, existing.updatedAt + 1),
     })
     .where(eq(customProviders.id, id));
@@ -850,6 +873,7 @@ export async function updateCustomProviderIfUnchanged(
       name: nextConfig.name,
       runtimes: JSON.stringify(nextConfig.runtimes),
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
+      usage: nextConfig.usage ? JSON.stringify(nextConfig.usage) : null,
       updatedAt: Math.max(now, existing.updatedAt + 1),
     })
     .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));

@@ -248,6 +248,8 @@ export function buildUserProvider(
         : { method: 'apiKey' },
     // API key / 无鉴权代理都属于用户自备接口；通用 OAuth 可能订阅也可能按量，未声明前不猜。
     ...(isOAuth ? {} : { access: { kind: 'api' as const } }),
+    // 订阅用量能力随配置快照透传（usage reader / chip 消费；路由不读）。
+    ...(config.usage ? { usage: config.usage } : {}),
     routing,
     models,
   };
