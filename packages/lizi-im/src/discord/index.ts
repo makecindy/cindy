@@ -421,11 +421,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         // the REST client for already accepted work below.
         await this.gateway.closeIngress();
       }
-      // A same-device ownership handoff closes the websocket before this
-      // drain. A normal remote handoff keeps the Gateway receiving DMs so
-      // messages arriving during the drain are accepted into this queue. In
-      // both cases keep the REST client and lease generation alive only long
-      // enough for accepted work to commit its terminal response.
+      // Normal remote handoff may leave the websocket transport alive so a
+      // reconnect can recover the captured outbound lease. The provider gate
+      // still rejects every new business event while the old accepted work
+      // drains; Ready/Resume must not promote that drain into ingress.
       await this.drainSchedulerHandoffWork();
       // Presence can change while an accepted Agent turn is draining. If the
       // remote winner disappeared and this Desktop owns ingress again, the
@@ -1152,7 +1151,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private async handleDmMessage(m: MessageLike): Promise<void> {
-    if (this.disposing || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining)) return;
+    if (this.disposing || !this.schedulerTransportAllowed()) return;
     const acceptedOwnerUserId = this.ownerUserId;
     if (m.author.id !== acceptedOwnerUserId) return;
 
@@ -1215,7 +1214,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     if (
       this.disposing
-      || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining)
+      || !this.schedulerTransportAllowed()
     ) {
       return Promise.resolve();
     }
