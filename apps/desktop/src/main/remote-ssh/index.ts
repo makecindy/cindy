@@ -266,6 +266,22 @@ export function getRemoteSshPool(): ConnectionPool {
   return getPool();
 }
 
+/** Pi's Responses client expects the provider base URL to end at the `/v1` API root. */
+export function buildRemotePiQuickTestModelsJson(endpoint: string): string {
+  const trimmed = endpoint.trim().replace(/\/+$/, '');
+  const baseUrl = trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+  return JSON.stringify({
+    providers: {
+      cindy: {
+        baseUrl,
+        api: 'openai-responses',
+        apiKey: '$CINDY_PI_API_KEY',
+        models: [{ id: 'dummy-quick', name: 'Quick Test' }],
+      },
+    },
+  });
+}
+
 /**
  * Like getRemoteSshPool() but guarantees the pool has been hydrated from
  * ~/.ssh/config first. Required by callers that read `pool.list()` before any
@@ -1192,16 +1208,7 @@ export function registerRemoteSshIpc(): void {
       }
       const modelsDir = '$HOME/.xdt-server/v1/pi-oneshot';
       // models.json 经 bash heredoc 写远端(内容无密钥;key 走 env 插值)。
-      const modelsJson = JSON.stringify({
-        providers: {
-          cindy: {
-            baseUrl: endpoint,
-            api: 'anthropic-messages',
-            apiKey: '$CINDY_PI_API_KEY',
-            models: [{ id: 'dummy-quick', name: 'Quick Test' }],
-          },
-        },
-      });
+      const modelsJson = buildRemotePiQuickTestModelsJson(endpoint);
       const mkModelsCmd = [
         `mkdir -p ${modelsDir}`,
         `cat > ${modelsDir}/models.json <<'PIEOF'`,

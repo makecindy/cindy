@@ -63,9 +63,14 @@ import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSu
 import { PromotionalGrantNotice } from '@/components/onboarding/PromotionalGrantNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
-import { AgentSelect } from '@/components/new-chat/AgentSelect';
-import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import {
+  dbToMakerAgentKind,
+  normalizeDbAgentKind,
+  type MakerAgentKindWire,
+} from '../../../shared/agentKindConversion';
 import { getBranchName } from '../../../shared/managedWorktreeBranches';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -78,6 +83,7 @@ import {
   patchDraft,
   patchCollab,
   patchCurrentVendorPrefs,
+  patchVendorPrefs,
   resetDraftWorkspaceTargets,
   getFastModeForModel,
   setFastModeForModel,
@@ -92,6 +98,7 @@ import {
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
   rememberRecoverableHandoff,
   setPending,
@@ -119,12 +126,18 @@ import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
 import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  rebaseInlineRangesAfterSlashCommandRewrite,
+  rewritePiSkillMessageForSend,
+} from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import {
   consumeNewMakerDialogueTargetRequest,
+  consumeNewMakerFolderPickerRequest,
   readNewMakerDialogueTargetRequest,
+  readNewMakerFolderPickerRequest,
 } from './lib/newMakerRouteState';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
@@ -157,7 +170,11 @@ import {
 } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
-import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
+import {
+  DEFAULT_DRAFT_SESSION_TITLE,
+  deriveOptimisticSessionTitle,
+  normalizeAutoTitle,
+} from '@cindy/maker-shared/session-title';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { InvisibleWindowDragStrip } from '@/components/layout/windowDrag';
@@ -242,6 +259,8 @@ import { resolveNewMakerDraftRightSidebar } from './newMakerDraftRightSidebar';
 import { resolveNewMakerDraftEffort } from './newMakerDraftModelPrefs';
 import { closeAllTabs as closeRightSidebarTabs } from '@/features/right-sidebar/store';
 import { revealOrcaWorkersTab } from '@/features/right-sidebar/plugins/orca-workers/actions';
+import { normalizeProjectKey } from './lib/projectGrouping';
+import { requestSidebarProjectRestore } from './lib/sidebarProjectRestore';
 
 const log = createLogger('NewMakerDraftRoute');
 const IS_MAC_PLATFORM = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
@@ -337,29 +356,33 @@ const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
  * (`remoteProjectsStore.setPendingTitlePreview`,免得干等一次隧道往返),本机路径缺的
  * 是对称的这一半。
  *
- * 预览经 `emitAutoTitlePreview` 交给 sessionsStore:那边把它记进叠加层,既能活过新建
- * 会话触发的 `forceRefreshAll`(否则会被仍带哨兵的 DB 快照冲掉),又统一持有「标题是否
- * 仍是哨兵」这唯一一份判据。不写 DB —— 权威标题仍由 main 落库并广播回来,那个串与这里
- * 算的是同一个(共用 `normalizeAutoTitle`),回流时不跳变。
+ * 预览必须在 `createSession` **之前**登记:main 一插入就广播 `sessions:created`,
+ * renderer 立刻 `forceRefreshAll`,那次重拉仍带哨兵。预览晚一步,用户就会先看到
+ * 「未命名任务」。sessionsStore.prependCreated 也会叠同一层,第一帧才不会露哨兵。
  *
- * **只对能证明一致的纯文本消息放行**。带 @mention / 附件 / 会话引用时,权威占位由
- * `deriveAutoTitleSeed` 另行推导(剔除 mention 的 wire token、拿文件名合成描述),这里
- * 算不出同一个串 —— 预览会先显示 A 再跳成 B,比短暂显示占位更糟。这类消息交给显示层的
- * 「未命名任务」兜底,等权威标题回流。
- *
- * 纯文本时两侧一致是可证明的:无 reference / 未编码引用标记时 `projectLiteralUserText`
- * 退化为 `text.trim()`,无 mention 时 `stripMentionTokens` 同样只做 trim,而
- * `normalizeAutoTitle` 本身已含 trim。
+ * 有字用字;没字再用附件名 / 类别词。带 @mention / 编码引用时权威占位由
+ * `deriveAutoTitleSeed` 另行剔除 wire token,这里算不出同一个串,仍不预览。
  */
 function optimisticFirstMessageTitle(
   message: string,
   files: AttachedFile[] | undefined,
   mentions: MentionedResource[] | undefined,
   opts: { quotesEncoded?: boolean; agentReferences?: AgentInputReference[] } | undefined,
+  labels: { image: string; file: string },
 ): string | null {
-  if (files?.length || mentions?.length) return null;
-  if (opts?.agentReferences?.length || opts?.quotesEncoded) return null;
-  return normalizeAutoTitle(message) || null;
+  if (mentions?.length || opts?.agentReferences?.length || opts?.quotesEncoded) return null;
+  const first = files?.[0];
+  const title = deriveOptimisticSessionTitle({
+    text: message,
+    fileNames: (files ?? [])
+      .filter((file) => !file.path?.startsWith('clipboard://'))
+      .map((file) => file.originalName || file.name)
+      .filter(Boolean),
+    imageLabel: labels.image,
+    fileLabel: labels.file,
+    firstFileIsImage: first?.category === 'image',
+  });
+  return title || null;
 }
 
 /**
@@ -580,7 +603,13 @@ export function NewMakerDraftRoute() {
     () => readNewMakerDialogueTargetRequest(location.state),
     [location.state],
   );
+  const folderPickerRequest = useMemo(
+    () => readNewMakerFolderPickerRequest(location.state),
+    [location.state],
+  );
   const handledDialogueTargetRequestRef = useRef<string | null>(null);
+  const modePickerSelectionSeqRef = useRef(0);
+  const handledFolderPickerRequestRef = useRef<string | null>(null);
   // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
   // 与进行中对话页(CCAgentSessionView 同传 914)一致,发送首条消息时输入框宽度不跳变。
   // minWidth=640:小屏兜一个体面下限(与对话页对称);窄于下限时 hook 自动回落成
@@ -657,6 +686,22 @@ export function NewMakerDraftRoute() {
   // 当前 vendor 对应的 prefs(切 vendor 后这里自动重算 → 透传到 ChatInput initial*)
   const currentPrefs = draft.lastByVendor[draft.vendor];
   const chatPrefs = currentPrefs;
+  // 统一模型选择器里选中的收藏锚点(规格 §1.5)。组件态:它描述「这次草稿选中的是哪一条
+  // 副本」,不是要跨重启保留的偏好 —— 详见 handleUnifiedDraftSelect 里的取舍说明。
+  //
+  // 存的是**选中那一刻的快照**(uid + 当时写进草稿的 wire model id + 引擎),不是只存 uid 再
+  // 回头查收藏表。数据层把行合并成「归一化 id + 每引擎 wireModelId」之后,收藏条目按**归一化
+  // id** 存(那是行的稳定身份),而草稿里放的是 **wire id**(那才是发得出去的那个)——直接拿
+  // favorite.modelId 去比 draftInitialModel,像 `chatgpt/gpt-5.6-luna` 这类两者本就不相等的
+  // 模型会**每次都判成失配**,刚点上的收藏立刻掉勾。快照比的是「草稿现在还是不是我当初写下的
+  // 那一份」,两边都是 wire id,与收藏表用哪套 id 无关。
+  const [selectedFavoriteAnchor, setSelectedFavoriteAnchor] = useState<{
+    uid: string;
+    /** 选中时写进草稿的 wire model id(≠ 收藏条目里的归一化行 id)。 */
+    wireModelId: string;
+    vendor: MakerVendor;
+  } | null>(null);
+  const selectedFavoriteUid = selectedFavoriteAnchor?.uid ?? null;
   const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
   const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -1140,6 +1185,19 @@ export function NewMakerDraftRoute() {
     unsupported: deviceProvidersUnsupported,
   } = useDeviceProviders(effectiveDeviceLinkDeviceId);
   const providers = effectiveDeviceLinkDeviceId ? deviceProviders : localProviders;
+  // 统一面板的启用判据是**两级**,与 ChatInput 的 unifiedPanelCapable / unifiedPanelActive
+  // 一一对应,工具条的引擎下拉必须按后者(active)决定去留:
+  //   · capable(本变量)—— 联合列表只认供应商目录,老被控端(不支持 provider:list)只有
+  //     一份拍平 capabilities → 开了就是空列表,composer 那边会降级回旧面板;
+  //   · active —— 再叠上形态偏好(modelPickerLayout,默认 'original' = 最原始选择器)。
+  // 旧面板是「先选引擎再选模型」,所以只要没真正启用统一面板,就必须把工具条上的引擎下拉
+  // 还回来 —— 否则那条链路上根本换不了引擎(只按 capable 撤掉时,默认形态下的新建草稿
+  // 就彻底没有换引擎入口)。统一面板真启用时不注入(引擎跟着模型走)。
+  const unifiedModelPanelEnabled =
+    !effectiveDeviceLinkDeviceId || !deviceProvidersUnsupported;
+  const modelPickerLayoutPref = useModelPickerLayout();
+  const unifiedModelPanelActive =
+    unifiedModelPanelEnabled && modelPickerLayoutPref !== 'original';
   const remoteModelListStatus = !isDeviceLinkDraft
     ? 'idle'
     : capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)
@@ -1757,19 +1815,48 @@ export function NewMakerDraftRoute() {
   //     真正选择模型时额外带 markModelChoice=true 更新该来源 lastModel。
   // 选中模型编辑时两路都会触发(effort 经 ChatInput.rememberProviderChoice + onEffortDidChange;
   // fast 经 ModelSelector.handleEditFast + onFastModeChange),各司其职,缺一会丢 trigger 或 provider 记忆。
+  //
+  // ⚠️ **`target` 是给「这一次选择顺带写穿」用的**(2026-08-17 review):缺省分支从闭包读
+  // `dlSel` / `capabilityAgentKind`,那是**上一次**渲染看到的运行配置。选中一行时
+  // `setDlSel` 还没提交、跨引擎时 `switchVendor` 还在途,此刻读闭包会把**新模型**的
+  // effort / Fast 以 active:true 写到**旧模型**(甚至旧引擎)的偏好上 —— 被控端那边看到的
+  // 是「A 模型被改了档」。所以选中路径必须把本次 selection 的目标值显式传进来。
   const pushActiveDraftPref = useCallback(
-    (patch: { effort?: Effort; fast?: boolean }) => {
+    (
+      patch: { effort?: Effort; fast?: boolean },
+      /**
+       * 本次写穿的显式目标(选中一行时 = 这次 selection 的目标配置);不传 = 沿用当前状态,
+       * 既有调用点(handleEffortDidChange / handleFastModeChange)行为不变。
+       */
+      target?: {
+        agent: MakerAgentKindWire;
+        providerId: string | null;
+        modelId: string;
+        effort?: Effort;
+      },
+    ) => {
       if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) return;
-      const model = dlSel?.model ?? deviceLinkInitial?.model;
+      const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;
       if (!model) return;
+      // 只改 Fast 时也要带上激活档(被控端 trigger 要更新激活 effort)。给了显式目标就**只**
+      // 认目标自己的档:此刻 dlSel 里还是上一个模型的档,拿它顶上等于把 A 的档写到 B 头上;
+      // 目标没档就整个不下发 effort,让被控端保留它为该模型记的那份。
       const activeEffort =
         patch.effort ??
-        (patch.fast !== undefined ? (dlSel?.effort ?? deviceLinkInitial?.effort) : undefined);
+        (patch.fast !== undefined
+          ? target
+            ? target.effort
+            : (dlSel?.effort ?? deviceLinkInitial?.effort)
+          : undefined);
       window.electronAPI.deviceLink
         .invoke(effectiveDeviceLinkDeviceId, 'maker:apply-new-maker-draft-pref', [
           {
-            agent: capabilityAgentKind,
-            providerId: dlSel?.providerId ?? deviceLinkInitial?.providerId ?? '',
+            agent: target?.agent ?? capabilityAgentKind,
+            // 显式目标里 providerId 可以是 null(跟随默认路由)—— 与「没给目标」区分开:
+            // 前者落成空串(被控端 provider 层 no-op),后者才回落当前状态。
+            providerId: target
+              ? (target.providerId ?? '')
+              : (dlSel?.providerId ?? deviceLinkInitial?.providerId ?? ''),
             modelId: model,
             active: true,
             markModelChoice: false,
@@ -1910,6 +1997,23 @@ export function NewMakerDraftRoute() {
     draftInitialModel,
     capabilityAgentKind,
   ]);
+
+  // 收藏锚点的失效兜底:选中一条收藏后,如果草稿的 (模型, 引擎) 又被别的路径改掉
+  // (引擎不可用 coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 ——
+  // 留着它面板会在一条不相干的收藏上打勾。锚点本身被删 / 换账号后查无此条的情形,
+  // 由面板侧的 activeFavoriteUid 兜底,这里只管「还在,但已经不是它了」。
+  //
+  // 比的是**快照里的 wire id** 与草稿当前的 wire id —— 不去查收藏条目(它按归一化行 id 存,
+  // 与草稿的 wire id 天生可能不等,见 selectedFavoriteAnchor 的说明)。
+  useEffect(() => {
+    if (!selectedFavoriteAnchor) return;
+    if (
+      selectedFavoriteAnchor.wireModelId !== draftInitialModel ||
+      selectedFavoriteAnchor.vendor !== draft.vendor
+    ) {
+      setSelectedFavoriteAnchor(null);
+    }
+  }, [selectedFavoriteAnchor, draftInitialModel, draft.vendor]);
 
   /**
    * 把草稿转移到一个新的运行目标(设备 + 工作区)——**四条路径唯一的转移动作**。
@@ -2094,6 +2198,9 @@ export function NewMakerDraftRoute() {
       return;
     }
     handledDialogueTargetRequestRef.current = dialogueTargetRequest.requestId;
+    // 同路由的对话目标是比在途目录恢复更新的用户选择。先推进同一 sequence owner，
+    // 让旧 restore completion 只能释放锁，不能把目录重新写回草稿。
+    modePickerSelectionSeqRef.current += 1;
     patchCollab({ enabled: false });
     applyDraftTarget({
       deviceId: dialogueTargetRequest.deviceId,
@@ -2492,6 +2599,140 @@ export function NewMakerDraftRoute() {
     [isDeviceLinkDraft, patchActivePrefs],
   );
 
+  // ─── 统一模型选择器:一次选中 = 一次完整写入 ─────────────────────────────
+  // (model-selector-unified §2.4 / M5)
+  //
+  // 面板里的一行自带引擎(推荐 ⊕ 用户 override ⊕ 收藏副本),所以选中要连引擎一起落。
+  // 顺序是硬要求:**先 switchVendor,再写 pref** —— patchVendorPrefs 按 vendor 分槽,
+  // 反过来会把目标行写进上一个引擎的槽里,切回去时才发现模型串了。
+  //
+  // 深度 / Fast 的每模型记忆已由 ChatInput 按目标引擎槽写过(见 onUnifiedDraftSelect
+  // 的 prop 说明);这里只负责草稿自身的四元组 (vendor, model, effort, providerId)。
+  //
+  // **id 口径**:`selection.modelId` 已经是选中引擎的 **wire model id**(上游 ModelSelector
+  // 统一分支按 `capabilities[engine].wireModelId` 交出来的)。草稿里存的、createSession 发出去
+  // 的、providerModelMemory 里当键的,全是它。行的归一化 id 只是面板内部的行身份,**一律不进
+  // 草稿** —— 写错这一格的后果不是显示难看,是首条请求路由到一个不存在的 model id。
+  const handleUnifiedDraftSelect = useCallback(
+    (selection: {
+      vendor: MakerVendor;
+      providerId: string;
+      /** 选中引擎的 **wire model id**(不是行的归一化 id)。 */
+      modelId: string;
+      effort?: Effort;
+      fast: boolean;
+      favoriteUid: string | null;
+    }) => {
+      // 收藏锚点是**组件态**:它描述的是「这次草稿选中的是哪一条副本」,不属于要跨重启
+      // 保留的偏好(重进首页从模型行重新开始即可)。放这里天然随路由卸载失效,也不必为
+      // 切账号 / 切设备再补一条清理 —— 面板侧另有一道兜底:uid 在当前 owner 的收藏里
+      // 查不到就自动回落模型行(UnifiedModelPanel.activeFavoriteUid)。
+      // 锚点连同**本次写进草稿的 wire id** 一起记,失效判定才有可比的同类值。
+      setSelectedFavoriteAnchor(
+        selection.favoriteUid
+          ? {
+              uid: selection.favoriteUid,
+              wireModelId: selection.modelId,
+              vendor: selection.vendor,
+            }
+          : null,
+      );
+      if (selection.vendor !== draft.vendor) switchVendor(selection.vendor, currentPrefs);
+      if (isDeviceLinkDraft) {
+        dlRuntimeTouchedRef.current = true;
+        // ★ 跨引擎选择必须**前置**把 seed key 推到目标引擎(2026-08-17 review 第三轮 G1)。
+        //
+        // 病根:上面的 switchVendor 改了 draft.vendor → 下一次渲染 capabilityAgentKind 跟着变 →
+        // 播种 effect 看到 `${deviceId}:${capabilityAgentKind}` 这个 key 与 dlSeedKeyRef 不等,
+        // 按 shouldReseedDeviceLinkDraftDefaults 的第一条(新目标一律重种)**无条件**拿目标引擎的
+        // 被控端远程默认值重播种 —— 用户刚点选的 selection.modelId 当场被覆盖,建出来的远程任务
+        // 用的不是他选的模型。
+        //
+        // 修法是让「这次显式选择」本身成为新引擎的 seed:key 按播种 effect 的构造**逐字一致**地
+        // 前置写进 ref,于是那次 effect 走的是「同一目标」分支;dlRuntimeTouchedRef 已置 true,
+        // 目标引擎 capabilities 到达时只做合法性夹紧(保留 current.model),不再换成区域默认。
+        // 重复渲染 / 重复播种窗口一并覆盖:key 一旦被显式选择占住,后续每一帧都判成同一目标。
+        // 同引擎分支 key 不变,本就不会进入重播种(同样由 controllerTouched 挡住能力刷新重校)。
+        if (effectiveDeviceLinkDeviceId) {
+          dlSeedKeyRef.current = `${effectiveDeviceLinkDeviceId}:${dbToMakerAgentKind(
+            normalizeDbAgentKind(selection.vendor),
+          )}`;
+        }
+        setDlSel((prev) => {
+          const previous = prev ?? deviceLinkInitial;
+          // 与 handleModelDidChange 的远程分支同一条口径:换模型必须按**目标模型**重新解析
+          // 被控端记的 effort / fast(per-model 记忆 + `${agent}:*` 全局预设 + 目标模型的
+          // efforts 校验),不能沿用上一个模型的档 —— 沿用会把 A 模型的 high 原样带到只
+          // 支持 low 的 B 模型上,再被兜底成一个用户没选过的字面量。面板显式给出的
+          // effort / fast 是这次选择的一部分,叠在基线之上。
+          const baseline = capabilities
+            ? resolveDeviceLinkDraftDefaults(
+                capabilities,
+                remoteDraftState.value ?? previous,
+                selection.modelId,
+                capabilityAgentKind,
+              )
+            : previous;
+          // 能力与镜像都还没到:推不出任何一档,保持原状而不是编一个默认值。
+          if (!baseline) return previous;
+          return {
+            ...baseline,
+            // 用户在面板里点的就是这一行:即便它不在被控端拍平 availableModels 里(基线会
+            // clamp 到 models[0]),也不替他改选。
+            model: selection.modelId,
+            ...(selection.effort ? { effort: selection.effort } : {}),
+            fastMode: selection.fast,
+            // permissionMode 不按模型记:控制端已有的显式选择优先于基线重算。
+            ...(previous?.permissionMode !== undefined
+              ? { permissionMode: previous.permissionMode }
+              : {}),
+            providerId: selection.providerId,
+          };
+        });
+        // 选中模型的 effort/fast 写穿被控端(active=true):与既有 handleEffortDidChange /
+        // handleFastModeChange 同一条通道,缺了它被控端 trigger 的激活档不会跟着变。
+        //
+        // ★ 目标必须**显式**给(2026-08-17 review):上面的 setDlSel 还没提交,此刻
+        // pushActiveDraftPref 从闭包读到的 dlSel / capabilityAgentKind 都还是**上一次**的
+        // 运行配置 —— 同引擎 A 切 B 会把 B 的 effort / Fast 以 active:true 写到 **A** 的偏好上;
+        // 跨引擎连 agent 都是旧的(switchVendor 在途,capabilityAgentKind 下一帧才跟上)。
+        // 口径与 handleModelDidChange 的远程分支一致:换模型一律按**目标模型 / 目标引擎**走。
+        pushActiveDraftPref(
+          {
+            ...(selection.effort ? { effort: selection.effort } : {}),
+            fast: selection.fast,
+          },
+          {
+            agent: dbToMakerAgentKind(normalizeDbAgentKind(selection.vendor)),
+            providerId: selection.providerId,
+            modelId: selection.modelId,
+            ...(selection.effort ? { effort: selection.effort } : {}),
+          },
+        );
+        return;
+      }
+      // 本地草稿:一次写进目标 vendor 的槽。走 patchVendorPrefs(不是 Preserving 版)——
+      // 这是用户在 New Maker picker 里的**显式**模型选择,modelChosenByVendor 必须打标
+      // (scheduler 的成本兜底默认模型依赖它)。
+      patchVendorPrefs(selection.vendor, {
+        model: selection.modelId,
+        providerId: selection.providerId,
+        ...(selection.effort ? { effort: selection.effort } : {}),
+      });
+    },
+    [
+      draft.vendor,
+      currentPrefs,
+      isDeviceLinkDraft,
+      effectiveDeviceLinkDeviceId,
+      deviceLinkInitial,
+      capabilities,
+      remoteDraftState,
+      capabilityAgentKind,
+      pushActiveDraftPref,
+    ],
+  );
+
   // ─── 用户改 workingDir(FolderPicker)→ 写回 draft ─────────────────────
   // picker 选 "对话(不在项目中)" 时 dir=null,此时一并清掉 extraDirs,行为对齐
   // 侧边栏 DialogueSection 的 handleCreateDialogue —— 进入对话草稿不应保留
@@ -2537,10 +2778,32 @@ export function NewMakerDraftRoute() {
     // 打开项目 picker 时收掉设备 picker(两个 popover 都是 absolute 浮层,会互相遮挡)。
     if (open) setDevicePickerOpen(false);
   }, []);
+
+  useLayoutEffect(() => {
+    if (
+      !folderPickerRequest ||
+      handledFolderPickerRequestRef.current === folderPickerRequest.requestId
+    ) {
+      return;
+    }
+    handledFolderPickerRequestRef.current = folderPickerRequest.requestId;
+    setFolderPickerOpen(true);
+    setDevicePickerOpen(false);
+    navigate(`${location.pathname}${location.search}${location.hash}`, {
+      replace: true,
+      state: consumeNewMakerFolderPickerRequest(location.state),
+    });
+  }, [folderPickerRequest, location, navigate]);
   const handleDevicePickerOpenChange = useCallback((open: boolean) => {
     setDevicePickerOpen(open);
     if (open) setFolderPickerOpen(false);
   }, []);
+  useEffect(
+    () => () => {
+      modePickerSelectionSeqRef.current += 1;
+    },
+    [],
+  );
   /**
    * 选中的设备真正从可选列表里消失时(对方撤销「允许被控」/ 本机关掉对它的控制 / 解除配对),
    * 把草稿收敛回本机。
@@ -2566,6 +2829,16 @@ export function NewMakerDraftRoute() {
     // 去清远程运行配置 —— 能跑,但没人能一眼看出为什么。现在与另三条路径走同一个动作。
     applyDraftTarget({ deviceId: null, deviceName: null, workingDir: null });
   }, [effectiveDeviceLinkDeviceId, selectableDevices, selectableDevicesLoaded, applyDraftTarget]);
+
+  // 创建目标正在异步提交时，发送、建目标以及设备／工作区切换必须共用同一把锁。
+  // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，
+  // 避免其中一半提前释放后让旧草稿目标被消费。
+  const sendInFlightRef = useRef(false);
+  const [sendInFlight, setSendInFlight] = useState(false);
+  const markSendInFlight = useCallback((value: boolean) => {
+    sendInFlightRef.current = value;
+    setSendInFlight(value);
+  }, []);
 
   /**
    * 换设备(#807)。**一并清掉 workingDir 与 extraDirs** —— 上一台机器的路径在新机器上
@@ -2605,13 +2878,48 @@ export function NewMakerDraftRoute() {
    * picker 里列的项目必然属于当前设备,path 直接写进 draft 即可。
    */
   const handleModePickerSelect = useCallback(
-    (path: string, source: FolderPickerSelectSource) => {
+    async (path: string, source: FolderPickerSelectSource) => {
       // 与设备 pill 同款保护:发送已在途时那次调用的闭包持有旧工作区,draft 却会可见地切到
       // 新的 —— 会话建在旧工作区里,而用户刚选的那个又被 create 后的重置清掉。
       if (sendInFlightRef.current) return;
+      // 只有真正接受的选择才能作废上一轮。若锁已占用却先递增，第二次点击会同时被拒绝、
+      // 又让第一轮完成后命中 sequence fence，最终两个选择都不生效。
+      const selectionSeq = ++modePickerSelectionSeqRef.current;
+      // 本机项目可能曾被用户「从侧栏移除」:任务和 workingDir 仍在,但 hidden overlay
+      // 会把它们投影到「对话」。旧段头「新建项目」按钮会在重选目录时解除隐藏；按钮移除后
+      // 创建页必须接过这条恢复路径。远程项目由各自设备维护可见性,纯对话也没有项目可恢复。
+      if (source !== 'dialogue' && !effectiveDeviceLinkDeviceId) {
+        const localProjectKey = normalizeProjectKey(path);
+        if (localProjectKey?.startsWith('local:')) {
+          // 恢复和草稿目标应用是一笔提交：期间复用创建锁，阻止 Send / Goal 或其它目标切换
+          // 消费旧 workingDir。锁保持到新目标同步写入完成，reject / fence 早退也由 finally 释放。
+          markSendInFlight(true);
+          try {
+            // Selecting a folder commits its project restoration. The fence below only prevents
+            // an older async completion from overwriting a newer draft target; rolling shared
+            // visibility back could re-hide a project restored by another window.
+            await requestSidebarProjectRestore(localProjectKey);
+            // 恢复在途期间手动发送和目标切换都被同一把锁挡住；这里仍保留 sequence / device
+            // fence，覆盖卸载与权威设备状态变化等不经过交互 handler 的路径。
+            if (
+              selectionSeq !== modePickerSelectionSeqRef.current ||
+              (getDraft().deviceLinkDeviceId ?? null) !== null
+            ) {
+              return;
+            }
+            handleWorkingDirChange(path);
+          } catch (err) {
+            log.warn('[new-maker] restore selected project failed', err);
+            toast.error(t('ccAgent.sidebar.createProjectFailed'));
+          } finally {
+            markSendInFlight(false);
+          }
+          return;
+        }
+      }
       handleWorkingDirChange(source === 'dialogue' ? null : path);
     },
-    [handleWorkingDirChange],
+    [effectiveDeviceLinkDeviceId, handleWorkingDirChange, markSendInFlight, t],
   );
 
   // 用户点击 checkbox 是唯一改动路径。本地草稿直接写工作端偏好;
@@ -2840,17 +3148,6 @@ export function NewMakerDraftRoute() {
     setWtName(name);
   }, []);
 
-  // 防止用户在 send 流程中再次按下 send(异步 createSession 期间)。
-  const sendInFlightRef = useRef(false);
-  /**
-   * 与 sendInFlightRef 同步的渲染态。ref 用于同步 guard(重复发送、切设备)——它必须即时可读;
-   * state 只负责让「发送在途」能驱动 UI 禁用(ref 变化不触发渲染)。两者一起改,别只动一个。
-   */
-  const [sendInFlight, setSendInFlight] = useState(false);
-  const markSendInFlight = useCallback((value: boolean) => {
-    sendInFlightRef.current = value;
-    setSendInFlight(value);
-  }, []);
   const wtRef = useRef({
     enabled: wtEnabled,
     name: wtName,
@@ -3034,6 +3331,11 @@ export function NewMakerDraftRoute() {
       // catch 里撤回,否则空会话会跨列表刷新一直显示一句**没发出去**的话
       // (PR #1031 review P1;worktree 与 goal 两条路径各有自己的撤回点)。
       let optimisticTitleSessionId: string | null = null;
+      let remoteOptimisticTitleSessionId: string | null = null;
+      const autoTitleLabels = {
+        image: t('ccAgent.autoTitle.image'),
+        file: t('ccAgent.autoTitle.file'),
+      };
       void (async () => {
         try {
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
@@ -3259,6 +3561,23 @@ export function NewMakerDraftRoute() {
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
             }
+            {
+              const optimisticTitle = optimisticFirstMessageTitle(
+                message,
+                files,
+                mentions,
+                opts,
+                autoTitleLabels,
+              );
+              if (optimisticTitle) {
+                remoteProjectsStore.setPendingTitlePreview(
+                  remoteSessionId,
+                  optimisticTitle,
+                  Boolean(normalizeAutoTitle(message)),
+                );
+                remoteOptimisticTitleSessionId = remoteSessionId;
+              }
+            }
             // remoteSessionId 到手就是**提交点**:对端会话已经建出来了。此后任何一步都不许再把它
             // 退化成「创建失败」—— 用户会照着提示重试,于是对端多出第二个会话,第一个空着永久滞留。
             // 钉归属 → 补临时行 → 触发回流这三条不变量、以及各自被 review 抓出来的理由,都在
@@ -3354,6 +3673,17 @@ export function NewMakerDraftRoute() {
           // 拉起 Worker (见下方 "F-COLLAB: draft 阶段开了协同模式" 段)。
 
           const sessionId = makeDraftSessionId();
+          const optimisticTitle = optimisticFirstMessageTitle(
+            message,
+            files,
+            mentions,
+            opts,
+            autoTitleLabels,
+          );
+          if (optimisticTitle) {
+            emitAutoTitlePreview(sessionId, optimisticTitle);
+            optimisticTitleSessionId = sessionId;
+          }
           const workingDir = selectedWorkingDir;
           const wt = selectedWorktree;
           // 生效条件 = 勾选 && baseRepo 已就绪。上面的发送门已阻止不完整状态；
@@ -3384,6 +3714,7 @@ export function NewMakerDraftRoute() {
               providerId,
             });
             if (!newSession) {
+              if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
               toastCreateSessionFailed();
               return;
             }
@@ -3397,11 +3728,6 @@ export function NewMakerDraftRoute() {
               userSendAt: sendAt.toISOString(),
               updatedAt: sendAt.toISOString(),
             });
-            // 标题即时预览,理由同普通 send 分支(见 optimisticFirstMessageTitle)。
-            {
-              const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts);
-              if (optimisticTitle) emitAutoTitlePreview(newSession.id, optimisticTitle);
-            }
             sessionService.touchUserSend(newSession.id, sendAt.getTime()).catch((err) => {
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
@@ -3545,9 +3871,21 @@ export function NewMakerDraftRoute() {
                   }
                 }
 
+                const dispatchedMessage = await rewritePiSkillMessageForSend({
+                  agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
+                  message,
+                  workingDir: newDir,
+                  sessionId: newSession.id,
+                });
+                const rebaseRanges = <T extends { start: number; end: number }>(
+                  ranges: readonly T[] | undefined,
+                ): T[] | undefined => {
+                  if (!ranges) return undefined;
+                  return rebaseInlineRangesAfterSlashCommandRewrite(ranges, message, dispatchedMessage);
+                };
                 const accepted = await makerChatStore.sendMessage(
                   newSession.id,
-                  message,
+                  dispatchedMessage,
                   model,
                   effort,
                   permissionMode,
@@ -3557,13 +3895,13 @@ export function NewMakerDraftRoute() {
                   {
                     ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
                     ...(opts?.agentReferences?.length
-                      ? { agentReferences: opts.agentReferences }
+                      ? { agentReferences: rebaseRanges(opts.agentReferences) }
                       : {}),
                     ...(opts?.pastedTextRanges?.length
-                      ? { pastedTextRanges: opts.pastedTextRanges }
+                      ? { pastedTextRanges: rebaseRanges(opts.pastedTextRanges) }
                       : {}),
                     ...(opts?.slashCommandRanges !== undefined
-                      ? { slashCommandRanges: opts.slashCommandRanges }
+                      ? { slashCommandRanges: rebaseRanges(opts.slashCommandRanges) }
                       : {}),
                   },
                 );
@@ -3615,6 +3953,7 @@ export function NewMakerDraftRoute() {
             providerId,
           });
           if (!newSession) {
+            if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
             toastCreateSessionFailed();
             return;
           }
@@ -3640,11 +3979,6 @@ export function NewMakerDraftRoute() {
           {
             const iso = new Date().toISOString();
             sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
-            const optimisticTitle = optimisticFirstMessageTitle(message, files, mentions, opts);
-            if (optimisticTitle) {
-              emitAutoTitlePreview(newSession.id, optimisticTitle);
-              optimisticTitleSessionId = newSession.id;
-            }
           }
 
           // F-COLLAB: draft 阶段开了协同模式 → createSession 之后立刻 enableOrca
@@ -3715,10 +4049,14 @@ export function NewMakerDraftRoute() {
               : undefined,
           });
         } catch (err) {
+          // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
+          // 归属切换也会提前 return,必须先撤;否则已建、未发出首条的空会话会一直顶着原文。
+          if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
+          if (remoteOptimisticTitleSessionId) {
+            remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
+          }
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           log.error('[draft send]', err);
-          // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
-          if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
           toast.error(
             isRemotePrecreatedWorktreeCleanupPendingError(err)
               ? t('ccAgent.draft.remoteWorktreeCleanupPending')
@@ -3804,6 +4142,8 @@ export function NewMakerDraftRoute() {
         throw new Error(t('goal.newGoalDialog.busy'));
       }
       markSendInFlight(true);
+      let goalSessionId: string | null = null;
+      let optimisticGoalTitle: string | null = null;
       try {
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
         const selectedWorktree = { ...wtRef.current };
@@ -4042,6 +4382,12 @@ export function NewMakerDraftRoute() {
           if (!remoteSessionId) {
             throw new Error(t('ccAgent.draft.createSessionFailed'));
           }
+          {
+            const optimisticGoalTitle = normalizeAutoTitle(objective);
+            if (optimisticGoalTitle) {
+              remoteProjectsStore.setPendingTitlePreview(remoteSessionId, optimisticGoalTitle, true);
+            }
+          }
           // 与发送路径共用同一段交接收尾(钉归属 → 补临时行 → 触发回流)。三条不变量对目标路径
           // 同样成立,只是后果换了个形状:goalApiFor 也按归属路由,漏了钉子它就把 setGoal 发给本机
           // maker、对端刚建好的会话永远拿不到目标;而它不抛这条在这里更要紧 —— 抛出去 NewGoalDialog
@@ -4172,7 +4518,9 @@ export function NewMakerDraftRoute() {
           && selectedWorktree.enabled
           && selectedWorktree.confirmedIneligible !== true,
         );
-        const goalSessionId = makeDraftSessionId();
+        goalSessionId = makeDraftSessionId();
+        optimisticGoalTitle = normalizeAutoTitle(objective);
+        if (optimisticGoalTitle) emitAutoTitlePreview(goalSessionId, optimisticGoalTitle);
         let goalWorkingDir = selectedWorkingDir;
         let goalWorktreeName = '';
         let goalWorktreeBranchName = '';
@@ -4206,6 +4554,7 @@ export function NewMakerDraftRoute() {
           providerId: chatInitialProviderId ?? null,
         });
         if (!newSession) {
+          if (optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
           throw new Error(t('ccAgent.draft.createSessionFailed'));
         }
         if (useLocalGoalWorktree) {
@@ -4234,13 +4583,9 @@ export function NewMakerDraftRoute() {
           });
           await refreshWorktrees();
         }
-        // 目标文案是纯文本(goal 对话框没有附件 / mention 入口),直接即时预览 ——
-        // 与下面 autoNameSession(objective) 最终写入的占位是同一个串。
-        const optimisticGoalTitle = normalizeAutoTitle(objective);
         {
           const iso = new Date().toISOString();
           sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
-          if (optimisticGoalTitle) emitAutoTitlePreview(newSession.id, optimisticGoalTitle);
         }
         // 草稿开了协同 → 新建目标路径也要拉起 Worker(与 Send 路径同口径);否则用户开了协同
         // 却走「新建目标」会得到一个没有 Worker 的 lead session(codex P2)。失败 toast + 降级
@@ -4304,6 +4649,9 @@ export function NewMakerDraftRoute() {
           state: orcaWorkersRevealState ? { orcaWorkersReveal: orcaWorkersRevealState } : undefined,
         });
       } catch (error) {
+        // 预览在 createSession 之前登记。worktree 建议名 / 建树 / 回滚失败都走这里,
+        // 不撤回会让空会话或未建成的 goalSessionId 一直顶着目标原文。
+        if (goalSessionId && optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
         if (isLocalGoalWorktreeCleanupPendingError(error)) {
           log.error('[draft goal] incomplete local worktree session cleanup failed', {
             setupError: error.setupError,
@@ -4609,7 +4957,7 @@ export function NewMakerDraftRoute() {
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
                     remoteHostId={draft.remoteHostId ?? null}
-                    deviceLinkDeviceId={effectiveDeviceLinkDeviceId}
+                    deviceLinkDeviceId={effectiveDeviceLinkDeviceId ?? null}
                     modelMemoryOverride={deviceLinkDraftMemory}
                     initialModel={draftInitialModel}
                     initialEffort={draftInitialEffort}
@@ -4628,16 +4976,26 @@ export function NewMakerDraftRoute() {
                     folderPickerOpen={folderPickerOpen}
                     onFolderPickerOpenChange={handleFolderPickerOpenChange}
                     showFolderPicker={false}
+                    // 统一模型选择器(model-selector-unified §1.1):引擎不再是工具条上的
+                    // 独立控件 —— 它跟着模型走(推荐映射自动配好,并在模型 pill 与每一行
+                    // 右侧常驻显示),高级调整收进行配置浮层。两条例外都由
+                    // unifiedModelPanelActive 表达:device-link 老被控端的 capabilities-only
+                    // 降级、以及形态偏好停在 'original'(默认档)—— 那两路 composer 都回落
+                    // 旧面板,引擎下拉必须一起回来。
                     middleToolbarSlot={
-                      <AgentSelect
-                        value={draft.vendor}
-                        onChange={handleVendorChange}
-                        visualVariant="create-agent"
-                        className="shrink-0"
-                        disabled={wtCreating}
-                        hiddenVendors={hiddenSwitcherVendors}
-                      />
+                      unifiedModelPanelActive ? undefined : (
+                        <AgentSelect
+                          value={draft.vendor}
+                          onChange={handleVendorChange}
+                          visualVariant="create-agent"
+                          className="shrink-0"
+                          disabled={wtCreating}
+                          hiddenVendors={hiddenSwitcherVendors}
+                        />
+                      )
                     }
+                    onUnifiedDraftSelect={handleUnifiedDraftSelect}
+                    selectedFavoriteUid={selectedFavoriteUid}
                     // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由
                     // resolveCollabEntryPolicy 单点判定,与会话视图同一份(issue #1170)。Lead = 当前
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
@@ -4681,15 +5039,17 @@ export function NewMakerDraftRoute() {
                         : undefined
                     }
                     compactMiddleToolbarSlot={
-                      <AgentSelect
-                        value={draft.vendor}
-                        onChange={handleVendorChange}
-                        iconOnly
-                        visualVariant="create-agent"
-                        className="shrink-0"
-                        disabled={wtCreating}
-                        hiddenVendors={hiddenSwitcherVendors}
-                      />
+                      unifiedModelPanelActive ? undefined : (
+                        <AgentSelect
+                          value={draft.vendor}
+                          onChange={handleVendorChange}
+                          iconOnly
+                          visualVariant="create-agent"
+                          className="shrink-0"
+                          disabled={wtCreating}
+                          hiddenVendors={hiddenSwitcherVendors}
+                        />
+                      )
                     }
                     narrowToolbar={isDraftToolbarNarrow}
                     paletteMaxHeight={240}

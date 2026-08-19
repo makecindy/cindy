@@ -655,8 +655,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
   });
 
   it('入口按被控端能力位门控:device-link 不再被排除,SSH 远程仍排除', () => {
+    // 2026-08-12 统一模型选择器(M6):会话内换引擎有了两种形态,门禁必须**逐字一致** ——
+    //   · 统一面板(现在的常态):sessionEngineFilter 提供跨引擎入口;
+    //   · 旧两步分段(仅 device-link 老被控端 capabilities-only 降级时还会渲染):agentSwitch。
+    // 任一处放松,SSH 远程或缺 CAS 能力的被控端就会露出一个必然失败的切换入口。
     expect(source).toContain(
-      'sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported',
+      '!sessionId || !vendorKey || remoteHostId || !sessionAgentSwitchSupported',
+    );
+    expect(source).toMatch(
+      /!unifiedPanelActive &&\s*\n\s*sessionId &&\s*\n\s*vendorKey &&\s*\n\s*!remoteHostId &&\s*\n\s*sessionAgentSwitchSupported/,
     );
     expect(source).toContain('ccCaps.capabilities?.supportsSessionAgentSwitch === true');
     expect(source).toContain('ccCaps.capabilities.supportsSessionAgentSwitchCas === true');
@@ -724,7 +731,8 @@ describe('ChatInput 的入口门控与调用路由', () => {
       'const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sourceSessionId);',
     );
     expect(source).toContain('const ackAction = resolveAgentSwitchAckAction({');
-    expect(source).toContain("if (ackAction === 'discard') return;");
+    // `return false` = 「这次选择没落地」(见「切换事务返回真实结果」一条)。
+    expect(source).toContain("if (ackAction === 'discard') return false;");
     expect(source).toContain("if (ackAction === 'same-engine-reselect') {");
     expect(source).toContain('sameEngineRevision: result.sameEngineRevision,');
     expect(source).toContain('sameEngineSuperseded: result.sameEngineSuperseded,');
@@ -759,11 +767,11 @@ describe('ChatInput 的入口门控与调用路由', () => {
       reservation,
     );
     const scopeGuard = source.indexOf(
-      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',
+      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return false;',
       invoke,
     );
     const reselect = source.indexOf('const applied = providerId', scopeGuard);
-    const staleGuard = source.indexOf('if (applied === false) return;', reselect);
+    const staleGuard = source.indexOf('if (applied === false) return false;', reselect);
     const release = source.indexOf('exclusiveTurn.release();', reselect);
     expect(reservation).toBeGreaterThanOrEqual(0);
     expect(invoke).toBeGreaterThan(reservation);
@@ -861,7 +869,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
       'if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;',
     );
     const switchGuard = source.indexOf(
-      'if (hasPendingAgentSendDispatch(sessionId)) return;',
+      'if (hasPendingAgentSendDispatch(sessionId)) return false;',
       sendFinish,
     );
 
@@ -893,13 +901,60 @@ describe('ChatInput 的入口门控与调用路由', () => {
   });
 
   it('await 返回后做会话作用域校验:旧会话响应不得借最新 ref 写进当前会话', () => {
+    // `return false` 而不是裸 return:见下一条 —— 这是「没把选择落到会话上」的出口之一。
     expect(source).toContain(
-      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',
+      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return false;',
     );
     // 读回同理:往返期间被切走就丢弃。
     expect(source).toContain(
       'cancelled: cancelled || !isSessionScopeCurrent(sessionId, currentSessionIdRef.current),',
     );
+  });
+
+  /**
+   * 2026-08-17 review 第二项:`performAgentSwitch` 必须把**真实结果**交出去。
+   *
+   * 病根:统一面板的跨引擎链路(`sessionEngineFilter.onCrossEngineSelect`)此前
+   * fire-and-forget 之后立即 `return true` —— 那个 true 只表示「确认框过了」。面板侧把
+   * 「成功才做」的清理挂在它上面(恢复推荐清 override / 删除当前选中的收藏),于是
+   * `switchSessionAgent` 抛错、或 pending send 把切换挡下时,用户的 override / 收藏已经
+   * 被清掉,原配置无从恢复。
+   *
+   * 锁三件事:① 所有「没落地」的出口返 false;② 登记 / 应用成功的出口返 true;
+   * ③ 跨引擎回调 await 并原样透传,不再自己造布尔。
+   */
+  it('切换事务返回真实结果:失败 / 被拒返 false,登记成功才返 true', () => {
+    const start = source.indexOf('const performAgentSwitch = useCallback(');
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf('const performAgentSwitchRef = useRef(', start));
+    // 签名显式声明 Promise<boolean> —— 返回值是契约的一部分,不靠推断。
+    expect(body).toContain('): Promise<boolean> => {');
+    // 「没落地」的四个出口:无会话 / pending send 拒绝 / 会话已切走 / ack 被超车。
+    expect(body).toContain('if (!sessionId) return false;');
+    expect(body).toContain('if (hasPendingAgentSendDispatch(sessionId)) return false;');
+    expect(body).toContain("if (ackAction === 'discard') return false;");
+    // 同引擎重选被修订号守卫拒下 = 没落地。
+    expect(body).toContain('if (applied === false) return false;');
+    // 事务抛错(toast 之外)也必须让调用方知道「没切」。
+    expect(body).toMatch(/\} catch \(err\) \{[\s\S]*?return false;\s*\} finally \{/);
+    // 登记意图 / 同引擎重选成功 / 立即切换三条成功路径才返 true。
+    expect(body.match(/return true;/g)?.length).toBe(3);
+  });
+
+  it('统一面板的跨引擎回调 await 并透传事务结果,不再返回「确认框过了」', () => {
+    const start = source.indexOf('const sessionEngineFilter = useMemo(');
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf('}, [', start));
+    // 取消确认 = false(现状,不变)。
+    expect(body).toContain('if (!(await confirmAgentBrowseSwitch())) return false;');
+    // 真实结果原样交出去;绝不再出现 fire-and-forget + 提前 true。
+    expect(body).toContain('const applied = await performAgentSwitchRef.current(');
+    expect(body).toContain('return applied;');
+    expect(body).not.toContain('void performAgentSwitchRef.current(');
+    expect(body).not.toContain('return true;');
+    // 收藏锚点也挂在**真实结果**上(2026-08-17 review 第三轮 G4):取消 / 失败不记锚点。
+    expect(body).toContain('if (applied) {');
+    expect(body).toContain('setSessionFavoriteAnchor(');
   });
 });
 

@@ -160,9 +160,8 @@ export type OAuthProviderDescriptor =
  */
 export interface RoutingDescriptor {
   /**
-   * 上游 wire protocol。缺省按 agent 保持历史语义：Claude Code = anthropic-messages，
-   * Codex = openai-responses。Codex 的 openai-chat / anthropic-messages 会分别进入
-   * 对应的本地 Responses bridge。
+   * 上游 wire protocol。Claude Code / Codex 缺省保持历史语义；Pi 必须显式声明。
+   * Codex 的 openai-chat / anthropic-messages 会分别进入对应的本地 Responses bridge。
    */
   wireProtocol?: ProviderWireProtocol;
   /** 真实上游 base URL（direct 时是供应商自家；gateway 时是 XD 网关 base）。 */

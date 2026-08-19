@@ -323,12 +323,12 @@ async function linkEntriesIntoRoot(
 }
 
 /**
- * Makes global skills usable from both Claude Code and Codex without moving user data.
+ * Makes global skills usable from Claude Code, Codex, and Pi without moving user data.
  *
  * Rules:
- * - ~/.agents/skills is the shared index that Cindy Codex already scans.
- * - Existing ~/.claude/skills entries are linked into ~/.agents/skills so Codex can see them.
- * - ~/.agents/skills and ~/.codex/skills entries are linked into ~/.claude/skills so Claude can see them.
+ * - ~/.agents/skills is the shared index that Cindy Codex and Pi scan.
+ * - Existing ~/.claude/skills and ~/.codex/skills entries are linked into ~/.agents/skills.
+ * - ~/.agents/skills and ~/.codex/skills entries are linked into ~/.claude/skills.
  * - Existing non-symlink paths are never overwritten.
  */
 export async function prepareSharedGlobalSkillLinks(
@@ -403,6 +403,16 @@ export async function prepareSharedGlobalSkillLinks(
   actions.push(...codexToClaude.actions);
   warnings.push(...codexToClaude.warnings);
   changed = changed || codexToClaude.changed;
+
+  const codexToShared = await linkEntriesIntoRoot(
+    codexEntries,
+    paths.sharedSkillsDir,
+    false,
+    opts.assertOwnerStable,
+  );
+  actions.push(...codexToShared.actions);
+  warnings.push(...codexToShared.warnings);
+  changed = changed || codexToShared.changed;
 
   opts.assertOwnerStable?.();
   return {

@@ -185,7 +185,7 @@ describe('desktop auth session-expiry detection', () => {
     );
   });
 
-  it('requires every Ghost runtime lookup to match the durable projection owner', () => {
+  it('gates Ghost runtime lookups only on the process-local AppSession boundary', () => {
     const ghostSource = readFileSync(
       resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
       'utf8',
@@ -193,23 +193,23 @@ describe('desktop auth session-expiry detection', () => {
     const start = ghostSource.indexOf('export function isGhostAvailableForActiveSession(');
     const end = ghostSource.indexOf('\n}\n', start);
     const body = ghostSource.slice(start, end);
-    expect(body).toContain('isGhostSkillProjectionBoundaryStableForOwner(activeOwner)');
+    expect(body).toContain('isAppSessionBoundaryPending()');
+    expect(body).toContain('getAppCapabilities().canUseCindyAccountServices');
+    expect(body).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
 
     const requireStart = ghostSource.indexOf('function requireGhostAvailableForActiveSession(');
     const requireEnd = ghostSource.indexOf('\n}\n', requireStart);
     const requireBody = ghostSource.slice(requireStart, requireEnd);
     expect(requireBody).toContain("throwIpcError(\n        'PRECONDITION_FAILED'");
     expect(requireBody).toContain('isAppSessionBoundaryPending()');
-    // A durable Ghost owner mismatch must stay a retryable precondition error
-    // (not a misleading PERMISSION_DENIED) even when the App session itself is
-    // not switching. The owner-stable check has to sit inside the
-    // PRECONDITION_FAILED branch, so require it to appear before the
-    // PERMISSION_DENIED throw — otherwise a regression that moves it into the
-    // permission branch would still pass a mere toContain.
-    const ownerStableIndex = requireBody.indexOf('!isGhostSkillProjectionBoundaryStableForOwner(activeOwner)');
+    expect(requireBody).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
+    // The durable Ghost projection is shared by sibling instances and is not a
+    // runtime authorization source. Only this process's active owner switch is
+    // retryable; a settled session without account capability remains denied.
+    const boundaryPendingIndex = requireBody.indexOf('isAppSessionBoundaryPending()');
     const permissionDeniedIndex = requireBody.indexOf("'PERMISSION_DENIED'");
-    expect(ownerStableIndex).toBeGreaterThan(-1);
+    expect(boundaryPendingIndex).toBeGreaterThan(-1);
     expect(permissionDeniedIndex).toBeGreaterThan(-1);
-    expect(ownerStableIndex).toBeLessThan(permissionDeniedIndex);
+    expect(boundaryPendingIndex).toBeLessThan(permissionDeniedIndex);
   });
 });

@@ -257,7 +257,7 @@ test("canonicalizeUserDataDir follows symlink parents when the leaf does not exi
 	const linkParent = path.join(root, "link");
 	try {
 		fs.mkdirSync(realParent);
-		fs.symlinkSync(realParent, linkParent);
+		fs.symlinkSync(realParent, linkParent, process.platform === "win32" ? "junction" : "dir");
 		const viaLink = canonicalizeUserDataDir(path.join(linkParent, "Cindy"));
 		const viaReal = canonicalizeUserDataDir(path.join(realParent, "Cindy"));
 		assert.equal(viaLink, viaReal);

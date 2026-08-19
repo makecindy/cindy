@@ -21,6 +21,11 @@ import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
+import {
+  holdStandaloneStopTokenDelta,
+  stripInternalWebCitations,
+  type StandaloneStopTokenHold,
+} from '@cindy/maker-shared/internal-citation';
 import type { createAsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
@@ -115,12 +120,16 @@ export interface RuntimeState {
   /** tool_use.id → tool_use.name。用于在 tool_result echo 时区分命令输出和内容结果。 */
   toolUseIdToName: Map<string, string>;
   /**
-   * SDK partial stream 按 parent_tool_use_id 隔离的真实模型。
-   * 并发 subagent 的 stream_event 会交错，不能用会话级元数据推断。
+   * SDK child assistant 消息按 parent_tool_use_id 隔离的真实模型。
+   * 并发 subagent 的完整消息与 stream_event 都会交错，不能用会话级元数据推断。
    */
   streamModelByParentToolUseId: Map<string, string>;
-  /** Agent 异步启动回执里的权威模型，优先级高于流式事件里的 wire model。 */
+  /** Agent 工具回执里的权威模型，优先级高于流式事件里的 wire model。 */
   resolvedSubagentModelByParentToolUseId: Map<string, string>;
+  /** 已经通过 agent_task_update 下发过的模型；与 stream map 分离，避免漏发或重复发。 */
+  publishedSubagentModelByParentToolUseId: Map<string, string>;
+  /** parent tool_use.id 对应的最近任务状态；晚到的模型观测不能把终态倒退成 running。 */
+  subagentStatusByParentToolUseId: Map<string, AgentTaskStatus>;
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
   subagentParentToolUseIdByTaskId: Map<string, string>;
   /**
@@ -143,6 +152,12 @@ export interface RuntimeState {
    * translator 在 handleResult 里按上一条 result 做 delta, 再把 per-turn usage 交给 UsageTracker。
    */
   lastResultUsageAggregate: ResultUsageAggregate | null;
+  /**
+   * 按 parent + content-block index 隔离的停止符清洗缓冲。text_delta 可能把
+   * `<|eos|>` 拆开，必须先拼回该块的快照再清洗。`emitted` 只表示本块是否已
+   * 发出可见正文，不能看整轮 `uiEmittedText`，也不能跨 text block 复用。
+   */
+  streamStopTokenByKey: Map<string, StandaloneStopTokenHold>;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -151,11 +166,14 @@ export function newRuntimeState(): RuntimeState {
     toolUseIdToName: new Map(),
     streamModelByParentToolUseId: new Map(),
     resolvedSubagentModelByParentToolUseId: new Map(),
+    publishedSubagentModelByParentToolUseId: new Map(),
+    subagentStatusByParentToolUseId: new Map(),
     subagentParentToolUseIdByTaskId: new Map(),
     confirmedSubagentTaskIds: new Set(),
     excludedSubagentTaskIds: new Set(),
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
+    streamStopTokenByKey: new Map(),
   };
 }
 
@@ -338,30 +356,47 @@ function readToolResultFullText(blockRaw: unknown): { toolUseId: string; fullTex
 }
 
 /**
- * 从 Agent 工具的异步启动回执中提取权威模型。
- * Claude Code 会把最终解析后的模型放在 tool_use_result.resolvedModel；这比
- * 流式子消息的时序推断可靠，适合直接补到 AgentTaskUpdate 给任务卡展示。
+ * 从 Agent 工具回执中提取任务身份、生命周期与权威模型。
+ * Claude Code 会把最终解析后的模型放在 tool_use_result.resolvedModel；同步前台
+ * Agent 直接返回 completed，异步 Agent 返回 async_launched。两者都比根据请求参数
+ * 或流式子消息时序推断可靠，应直接投影成 AgentTaskUpdate。
  */
-interface AsyncSubagentLaunch {
+interface SubagentToolResult {
   taskId: string;
   parentToolUseId: string;
   prompt?: string;
   model?: string;
+  status: 'running' | 'completed';
+  usage?: AgentTaskUsage;
 }
 
-function extractAsyncSubagentLaunch(
+function readResultNumber(
+  result: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): number | undefined {
+  const value = result[camelKey] ?? result[snakeKey];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function extractSubagentToolResult(
   msg: {
     message?: { content?: unknown };
     tool_use_result?: unknown;
     toolUseResult?: unknown;
   },
-): AsyncSubagentLaunch | null {
+): SubagentToolResult | null {
   const rawResult = msg.tool_use_result ?? msg.toolUseResult;
   if (!rawResult || typeof rawResult !== 'object' || Array.isArray(rawResult)) return null;
   const result = rawResult as Record<string, unknown>;
   const isAsync = result.isAsync === true || result.is_async === true;
   const status = result.status;
-  if (!isAsync && status !== 'async_launched') return null;
+  const rawAgentId = result.agentId ?? result.agent_id;
+  const agentId = typeof rawAgentId === 'string' && rawAgentId ? rawAgentId : undefined;
+  const isAsyncLaunch = isAsync || status === 'async_launched';
+  // completed 很常见，必须同时有 Agent 专属的 agentId 才能识别为同步子任务回执。
+  const isCompletedAgent = status === 'completed' && Boolean(agentId);
+  if (!isAsyncLaunch && !isCompletedAgent) return null;
 
   const model = typeof result.resolvedModel === 'string'
     ? result.resolvedModel
@@ -378,18 +413,24 @@ function extractAsyncSubagentLaunch(
   }
   if (!toolResult) return null;
 
-  const rawAgentId = result.agentId ?? result.agent_id;
-  const taskId = typeof rawAgentId === 'string' && rawAgentId
-    ? rawAgentId
-    : toolResult.toolUseId;
+  const taskId = agentId ?? toolResult.toolUseId;
   const prompt = typeof result.prompt === 'string' && result.prompt
     ? result.prompt
     : undefined;
+  const usage: AgentTaskUsage = {};
+  const totalTokens = readResultNumber(result, 'totalTokens', 'total_tokens');
+  const toolUses = readResultNumber(result, 'totalToolUseCount', 'total_tool_use_count');
+  const durationMs = readResultNumber(result, 'totalDurationMs', 'total_duration_ms');
+  if (totalTokens !== undefined) usage.totalTokens = totalTokens;
+  if (toolUses !== undefined) usage.toolUses = toolUses;
+  if (durationMs !== undefined) usage.durationMs = durationMs;
   return {
     taskId,
     parentToolUseId: toolResult.toolUseId,
     model,
     prompt,
+    status: isCompletedAgent ? 'completed' : 'running',
+    ...(Object.keys(usage).length > 0 ? { usage } : {}),
   };
 }
 
@@ -569,17 +610,34 @@ export function translateSdkMessage(
           source: 'claude-code',
         });
       }
-      const subagentLaunch = extractAsyncSubagentLaunch(msg);
-      if (subagentLaunch) {
-        const { taskId, parentToolUseId, model, prompt } = subagentLaunch;
+      const subagentResult = extractSubagentToolResult(msg);
+      if (subagentResult) {
+        const { taskId, parentToolUseId, model, prompt, status, usage } = subagentResult;
+        const actualModel = model
+          ?? ctx.rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
+          ?? ctx.rt.streamModelByParentToolUseId.get(parentToolUseId);
         ctx.rt.subagentParentToolUseIdByTaskId.set(taskId, parentToolUseId);
         ctx.rt.confirmedSubagentTaskIds.add(taskId);
         ctx.rt.excludedSubagentTaskIds.delete(taskId);
+        // 迟到的 async_launched 回执（status=running）不得把已有终态降级回 running：
+        // 事件乱序时（task_notification: completed 先到）这会让 Renderer 永久转圈。
+        // 状态机只允许 running → 终态，终态后到达的 launch 回执只补元数据、不改状态。
+        const previousStatus = ctx.rt.subagentStatusByParentToolUseId.get(parentToolUseId);
+        const isTerminal = previousStatus === 'completed'
+          || previousStatus === 'failed'
+          || previousStatus === 'stopped';
+        const effectiveStatus = status === 'running' && isTerminal
+          ? previousStatus!
+          : status;
+        ctx.rt.subagentStatusByParentToolUseId.set(parentToolUseId, effectiveStatus);
         if (model) {
           ctx.rt.resolvedSubagentModelByParentToolUseId.set(parentToolUseId, model);
         }
-        if (prompt) {
-          ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model });
+        if (actualModel) {
+          ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
+        }
+        if (status === 'running' && prompt && !isTerminal) {
+          ctx.onSubagentTaskLaunched?.({ taskId, parentToolUseId, prompt, model: actualModel });
         }
         queue.push({
           type: 'agent_task_update',
@@ -587,13 +645,17 @@ export function translateSdkMessage(
             provider: 'claude-code',
             taskId,
             parentToolUseId,
-            status: 'running',
+            status: effectiveStatus,
             subagentObservation: {
+              // A synchronous completed Agent result may be the first and only
+              // lifecycle observation. It is authoritative to create the run,
+              // while the completed status still keeps the record terminal.
               kind: 'spawn',
               logicalSubagentId: taskId,
               parentToolUseId,
             },
-            ...(model ? { model } : {}),
+            ...(actualModel ? { model: actualModel } : {}),
+            ...(usage ? { usage } : {}),
           },
           source: 'claude-code',
         });
@@ -930,6 +992,18 @@ function toClaudeTaskUpdate(msg: {
   if (msg.subtype === 'task_notification') {
     status = msg.status === 'failed' || msg.status === 'stopped' ? msg.status : 'completed';
   }
+  if (parentToolUseId) {
+    // 事件乱序防线（与 user 消息回执分支同一条不变量）：终态后的 task_started /
+    // task_progress（恒 running）不得把内部终态登记降级回运行中。注意只挡 Map
+    // 回写、不改事件投影——迟到的 running 帧仍按 running 下发，由下游
+    // terminalBackgroundTaskIds 等按 taskId 的终态闩统一丢弃，两道闸口径一致。
+    const previousStatus = rt.subagentStatusByParentToolUseId.get(parentToolUseId);
+    const wouldDowngrade = status === 'running'
+      && (previousStatus === 'completed' || previousStatus === 'failed' || previousStatus === 'stopped');
+    if (!wouldDowngrade) {
+      rt.subagentStatusByParentToolUseId.set(parentToolUseId, status);
+    }
+  }
   const sdkUsage = toClaudeTaskUsage(msg.usage);
   const hostUsage = msg.subtype === 'task_notification'
     ? getSubagentTaskUsage?.(msg.task_id)
@@ -942,6 +1016,9 @@ function toClaudeTaskUpdate(msg: {
     ? rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
       ?? rt.streamModelByParentToolUseId.get(parentToolUseId)
     : undefined;
+  if (parentToolUseId && model) {
+    rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, model);
+  }
   // CLI 对纯心跳帧节流省略该字段;收窄失败/缺失都不下发(undefined = 下游沿用上一帧)。
   const workflowProgress = normalizeWorkflowProgressEntries(msg.workflow_progress);
   const taskType = msg.task_type;
@@ -1018,6 +1095,9 @@ function toClaudeTaskUpdatedPatch(msg: {
   const isKnownSubagent =
     !isExcludedTask &&
     (Boolean(parentToolUseId) || rt.confirmedSubagentTaskIds.has(msg.task_id));
+  if (isKnownSubagent && parentToolUseId) {
+    rt.subagentStatusByParentToolUseId.set(parentToolUseId, status);
+  }
   return {
     provider: 'claude-code',
     taskId: msg.task_id,
@@ -1065,6 +1145,8 @@ function mapTaskUpdatedStatus(status: string | undefined, hasError: boolean): Ag
  */
 function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
   if (block.type === 'text') {
+    // Silent-stop 看上游有没有交出 text block，不看展示层清洗后还剩什么。
+    // 整条只剩 `<|eos|>` 仍算正常收口；泄漏只在可见文本 / 落库路径隐藏。
     return typeof block.text === 'string' && block.text.length > 0;
   }
   if (block.type === 'thinking' || block.type === 'redacted_thinking') {
@@ -1141,11 +1223,52 @@ function handleAssistant(
   const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
     ? msg.parent_tool_use_id
     : undefined;
-  // 与 handleStreamEvent 的 streamModel 记录对齐:关闭 partial streaming 时 sidechain
-  // 只有 assistant 消息可作模型来源,loop guard 的按 scope 适用性判定依赖这张表。
-  if (parentToolUseId && typeof assistantMeta.model === 'string' && assistantMeta.model) {
-    ctx.rt.streamModelByParentToolUseId.set(parentToolUseId, assistantMeta.model);
+  // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
+  // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；
+  // 同时保持 main 新增的 loop guard 按 parent scope 读取同一张 stream model 表。
+  // resolvedModel 若已由启动回执给出仍保持更高优先级；这里把观测提升成 parent-linked
+  // task update，让实时卡片与后续 task_notification 都能沿用同一个 actual model。
+  const assistantModel = typeof assistantMeta.model === 'string' && assistantMeta.model
+    ? assistantMeta.model
+    : undefined;
+  if (parentToolUseId && assistantModel) {
+    ctx.rt.streamModelByParentToolUseId.set(parentToolUseId, assistantModel);
+    const actualModel = ctx.rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
+      ?? assistantModel;
+    const publishedModel = ctx.rt.publishedSubagentModelByParentToolUseId.get(parentToolUseId);
+    if (publishedModel !== actualModel) {
+      let taskId: string | undefined;
+      for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
+        if (candidateParentId !== parentToolUseId) continue;
+        taskId = candidateTaskId;
+        break;
+      }
+      if (!taskId) {
+        // child assistant 可能早于稳定 taskId 到达。只保留模型观测，等后续生命周期
+        // 事件用真实 taskId 发布，避免按 parentToolUseId 造出无法收口的第二条任务。
+      } else {
+        const status = ctx.rt.subagentStatusByParentToolUseId.get(parentToolUseId) ?? 'running';
+        ctx.rt.publishedSubagentModelByParentToolUseId.set(parentToolUseId, actualModel);
+        queue.push({
+          type: 'agent_task_update',
+          data: {
+            provider: 'claude-code',
+            taskId,
+            parentToolUseId,
+            status,
+            model: actualModel,
+            subagentObservation: {
+              kind: status === 'running' ? 'progress' : 'terminal',
+              logicalSubagentId: taskId,
+              parentToolUseId,
+            },
+          },
+          source: 'claude-code',
+        });
+      }
+    }
   }
+
   const content = msg.message?.content ?? [];
   // silent-stop 观测素材: 本条消息是否带实质内容(非空 text / 非 thinking 块)。
   // 未知块 fail-safe 为有内容，避免 SDK 新 block 被误续跑。
@@ -1154,17 +1277,25 @@ function handleAssistant(
   for (const blockRaw of content) {
     const block = blockRaw as { type?: string; text?: string; name?: string; id?: string; input?: unknown; thinking?: string; signature?: string };
     if (block.type === 'text' && typeof block.text === 'string') {
-      ctx.turn.text += block.text;
-      if (block.text.length > 0) {
-        ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += block.text;
+      const parentStreamKey = parentToolUseId ?? '__main__';
+      const prefix = `${parentStreamKey}:`;
+      for (const key of ctx.rt.streamStopTokenByKey.keys()) {
+        if (key === parentStreamKey || key.startsWith(prefix)) {
+          ctx.rt.streamStopTokenByKey.delete(key);
+        }
       }
-      queue.push({
-        type: 'text',
-        data: { text: block.text, isFinal: true },
-        source: 'claude-code',
-        agentMeta: assistantMeta,
-      });
+      const visibleText = stripInternalWebCitations(block.text);
+      ctx.turn.text += visibleText;
+      if (visibleText.length > 0) {
+        ctx.turn.hasEmittedText = true;
+        ctx.turn.uiEmittedText += visibleText;
+        queue.push({
+          type: 'text',
+          data: { text: visibleText, isFinal: true },
+          source: 'claude-code',
+          agentMeta: assistantMeta,
+        });
+      }
     } else if (block.type === 'tool_use') {
       ctx.turn.toolUses += 1;
       // ctx.log.info('SDK ▷ tool_use', {
@@ -1223,6 +1354,7 @@ function handleStreamEvent(
 ): void {
   const event = msg.event as {
     type?: string;
+    index?: number;
     delta?: Record<string, unknown>;
     usage?: Record<string, number>;
     message?: { model?: string; usage?: Record<string, number> };
@@ -1237,6 +1369,10 @@ function handleStreamEvent(
   // 冗余 add: 防 SDK 顺序契约变化 (stream_event 先于 assistant message yield), Set 幂等。
   if (event.type === 'content_block_start') {
     const cb = event.content_block;
+    if (cb && cb.type === 'text') {
+      const blockIndex = typeof event.index === 'number' ? event.index : 0;
+      ctx.rt.streamStopTokenByKey.delete(`${parentToolUseId ?? '__main__'}:${blockIndex}`);
+    }
     if (cb && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
       if (typeof cb.name === 'string' && cb.name.length > 0) {
         ctx.rt.toolUseIdToName.set(cb.id, cb.name);
@@ -1248,14 +1384,16 @@ function handleStreamEvent(
   // SDKPartialAssistantMessage 自带 parent_tool_use_id；并发 subagent 会在同一 Query
   // 事件流中交错，必须按 parent 隔离模型，不能使用会话级 lastAssistantMeta 串联。
   // 老 SDK / 单测若没有 wrapper 元数据，才保留旧兜底行为。
-  const streamKey = parentToolUseId ?? '__main__';
+  const parentStreamKey = parentToolUseId ?? '__main__';
+  const blockIndex = typeof event.index === 'number' ? event.index : 0;
+  const streamKey = `${parentStreamKey}:${blockIndex}`;
   const eventModel = event.message?.model;
   if (typeof eventModel === 'string' && eventModel) {
-    ctx.rt.streamModelByParentToolUseId.set(streamKey, eventModel);
+    ctx.rt.streamModelByParentToolUseId.set(parentStreamKey, eventModel);
   }
   const streamModel = typeof eventModel === 'string' && eventModel
     ? eventModel
-    : ctx.rt.streamModelByParentToolUseId.get(streamKey);
+    : ctx.rt.streamModelByParentToolUseId.get(parentStreamKey);
   const fallbackMeta: Record<string, unknown> | undefined = parentToolUseId
     ? {
         parentUuid: parentToolUseId,
@@ -1274,16 +1412,20 @@ function handleStreamEvent(
     const delta = event.delta as { type?: string; text?: string; thinking?: string } | undefined;
     if (!delta) return;
     if (delta.type === 'text_delta' && typeof delta.text === 'string') {
-      if (delta.text.length > 0) {
+      const buffer = ctx.rt.streamStopTokenByKey.get(streamKey)
+        ?? { pending: '', emitted: false };
+      const visibleDelta = holdStandaloneStopTokenDelta(buffer, delta.text);
+      ctx.rt.streamStopTokenByKey.set(streamKey, buffer);
+      if (visibleDelta && visibleDelta.length > 0) {
         ctx.turn.hasEmittedText = true;
-        ctx.turn.uiEmittedText += delta.text;
+        ctx.turn.uiEmittedText += visibleDelta;
+        queue.push({
+          type: 'text',
+          data: { text: visibleDelta, isFinal: false },
+          source: 'claude-code',
+          agentMeta: fallbackMeta,
+        });
       }
-      queue.push({
-        type: 'text',
-        data: { text: delta.text, isFinal: false },
-        source: 'claude-code',
-        agentMeta: fallbackMeta,
-      });
     } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
       // 第一次见 thinking_delta 时 lazy-init 一个 buffer (老链路 agentManager.ts:2322-2335)
       if (!ctx.rt.currentThinking) {
@@ -1561,7 +1703,9 @@ function handleResult(
   // 的正常轮会被误判成空响应 terminal error(Codex P2)。tracker.getTurnUsage() 在 endTurn
   // 之前读到的正是本轮 streamed 累计;真正的空网关响应该累计也为 0, 不影响判定。
   const emitted = ctx.turn.uiEmittedText;
-  const full = !msg.is_error && typeof msg.result === 'string' ? msg.result : '';
+  const full = !msg.is_error && typeof msg.result === 'string'
+    ? stripInternalWebCitations(msg.result)
+    : '';
   let turnUsageDeltaAllZero: boolean;
   if (resultUsage) {
     turnUsageDeltaAllZero =

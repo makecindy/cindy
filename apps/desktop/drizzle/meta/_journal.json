@@ -645,6 +645,13 @@
       "when": 1786794359638,
       "tag": "0091_amazing_blur",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "6",
+      "when": 1786696564943,
+      "tag": "0092_fixed_zeigeist",
+      "breakpoints": true
     }
   ]
 }
