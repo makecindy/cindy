@@ -747,16 +747,42 @@ html:lang(ko) {
 }
 
 /* Slash 指令确认胶囊 — doc 里仍是普通 `/command` 文本。字号、字重和文字色
-   完全继承 composer 正文;仅用 surface/border/radius 表达“已命中命令”。 */
+   完全继承 composer 正文;仅用 surface/border/radius 表达“已命中命令”。
+   inline-flex 让 padding 进布局,避免行首悬挂绘制溢出输入卡片。 */
 .ProseMirror .slash-cmd-pill {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
   background: var(--surface-chip);
   border: 1px solid var(--border-default);
   border-radius: 9999px;
   padding: 2px 8px 3px;
+  margin-inline: 0 4px;
   color: var(--chat-input-text);
   font: inherit;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
+}
+/* Pi 线路名 `/skill:git` 里的 `skill:` 只做识别:展示层与 CC/Codex 一样只留 `/git`。 */
+.ProseMirror .slash-cmd-runtime-prefix {
+  display: none;
+}
+/* 隐藏 runtime 前缀后 ProseMirror 会把胶囊切成相邻 span,接缝拼回一颗。 */
+.ProseMirror .slash-cmd-pill:has(+ .slash-cmd-pill),
+.ProseMirror .slash-cmd-pill:has(+ .slash-cmd-runtime-prefix) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: 0;
+  margin-right: 0;
+  padding-right: 0;
+}
+.ProseMirror .slash-cmd-pill + .slash-cmd-pill,
+.ProseMirror .slash-cmd-runtime-prefix + .slash-cmd-pill {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 0;
+  margin-left: 0;
+  padding-left: 0;
 }
 
 /* 快速开始预填胶囊 — QuickStartPillMark。点击 New Maker 快速开始卡片后

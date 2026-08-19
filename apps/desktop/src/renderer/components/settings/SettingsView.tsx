@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
+import { Navigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
-import { ArrowLeft } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
+import { SettingsContentHeaderRegistration } from './SettingsContentHeader';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
@@ -55,7 +55,6 @@ interface SettingsOutletContext {
 }
 
 export function SettingsView() {
-  const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
@@ -187,29 +186,16 @@ export function SettingsView() {
       role="main"
       aria-label={t('settings.title')}
     >
+      {/* 返回 + 标题注入 46px ContentHeader，与聊天标题栏同高，不再额外叠顶栏留白。 */}
+      <SettingsContentHeaderRegistration />
       {/* Outer container — page itself does not scroll; columns own their scroll behavior. */}
-      <div className="flex h-full min-h-0 w-full justify-start pt-7 pb-5">
+      <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4"
+          className="flex h-full min-h-0 shrink-0 flex-col overflow-y-auto pl-6 pr-4"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
         >
-          {/* Back navigation — gap 10, pb 18, aligned with menu items via px-3 */}
-          <div className="flex items-center gap-2.5 px-3 pb-[18px]">
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              aria-label={t('settings.back')}
-              className="flex items-center justify-center text-[var(--settings-back-icon)] transition-colors hover:text-[var(--settings-back-text)]"
-            >
-              <ArrowLeft size={20} />
-            </button>
-            <h1 className="text-24 font-medium leading-[1.1] text-[var(--settings-back-text)]">
-              {t('settings.title')}
-            </h1>
-          </div>
-
           <SettingsSidebarNav
             tabIds={visibleTabIds}
             activeTab={activeTab}
@@ -221,14 +207,13 @@ export function SettingsView() {
             Most tabs scroll as a page; Session Import and Plugins use a fixed-height
             workspace so only their inner lists scroll.
             right padding mirrors sidebar's 24px left inset.
-            pt-[56px] pushes content top to align with the first nav tab (General),
-            skipping the "Settings" header height (h1 24/1.1 + pb-18 + gap-2 ≈ 52px).
+            顶栏已收进 ContentHeader，内容与左侧第一个导航项顶对齐。
             scrollbar-gutter:stable —— 所有分区都预留同一滚动条槽位；即使
             Session Import 自身不滚动，也要保持与普通滚动页相同的内容宽度。 */}
         <div
           ref={contentScrollRef}
           className={cn(
-            'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 pt-[56px] [scrollbar-gutter:stable]',
+            'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 [scrollbar-gutter:stable]',
             activeTab === 'import' || activeTab === 'ghosts'
               ? 'overflow-hidden'
               : 'overflow-y-auto',

@@ -699,6 +699,13 @@ describe('remoteProjectsStore pending title preview', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.title).toBe('我自己起的名字');
   });
 
+  it('can explicitly drop a preview when first-message handoff fails', () => {
+    remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1', { title: 'New Maker' })]);
+    remoteProjectsStore.setPendingTitlePreview('s1', '帮我排查登录失败');
+    remoteProjectsStore.clearPendingTitlePreview('s1');
+    expect(remoteProjectsStore.getMergedRemoteSessions()[0]?.title).toBe('New Maker');
+  });
+
   it('survives a snapshot rebuild while the authoritative title stays default', () => {
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1', { title: 'New Maker' })]);
     remoteProjectsStore.setPendingTitlePreview('s1', '帮我排查登录失败');

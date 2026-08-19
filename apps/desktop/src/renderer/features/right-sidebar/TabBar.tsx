@@ -42,6 +42,7 @@ import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
+import { Tip } from '@/components/ui/tooltip';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
@@ -251,7 +252,6 @@ export function TabBar({
           {onDetach && (
             <ChromeIconButton
               aria-label={t('rightSidebar.tabs.controls.detachAria')}
-              title={t('rightSidebar.tabs.controls.detachAria')}
               onClick={onDetach}
             >
               <PictureInPicture2 size={14} />
@@ -436,22 +436,24 @@ export function TabStrip({
         className={cn('relative flex shrink-0 items-center', addButtonWrapperClassName)}
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <button
-          type="button"
-          aria-label={t('rightSidebar.tabs.addAria')}
-          aria-haspopup="menu"
-          aria-expanded={dropdownOpen}
-          onClick={() => setDropdownOpen((v) => !v)}
-          className={cn(
-            'inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors',
-            addButtonClassName,
-            dropdownOpen
-              ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
-              : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
-          )}
-        >
-          <Plus size={13} />
-        </button>
+        <Tip text={t('rightSidebar.tabs.addAria')} side="bottom">
+          <button
+            type="button"
+            aria-label={t('rightSidebar.tabs.addAria')}
+            aria-haspopup="menu"
+            aria-expanded={dropdownOpen}
+            onClick={() => setDropdownOpen((v) => !v)}
+            className={cn(
+              'inline-flex h-6 w-6 items-center justify-center rounded-full transition-colors',
+              addButtonClassName,
+              dropdownOpen
+                ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
+                : 'text-[var(--titlebar-icon)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+            )}
+          >
+            <Plus size={13} />
+          </button>
+        </Tip>
         {dropdownOpen && (
           <AddTabDropdown
             anchorRef={addButtonWrapperRef}
@@ -636,23 +638,25 @@ function TabPill({
           )}
         </span>
       </button>
-      <button
-        type="button"
-        data-no-drag
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        aria-label={closeAriaLabel}
-        className={cn(
-          'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-opacity hover:text-[var(--text-primary)]',
-          // chip:close 常驻显形(Chrome 式)——若 hover 才显形,常态下右侧会留出
-          // 一块看不见的占位空白,文字视觉上不居中;flush(Win)维持 hover 显形不变。
-          pillVariant === 'flush' && 'opacity-0 group-hover:opacity-100',
-        )}
-      >
-        <X size={10} />
-      </button>
+      <Tip text={closeAriaLabel}>
+        <button
+          type="button"
+          data-no-drag
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          aria-label={closeAriaLabel}
+          className={cn(
+            'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-opacity hover:text-[var(--text-primary)]',
+            // chip:close 常驻显形(Chrome 式)——若 hover 才显形,常态下右侧会留出
+            // 一块看不见的占位空白,文字视觉上不居中;flush(Win)维持 hover 显形不变。
+            pillVariant === 'flush' && 'opacity-0 group-hover:opacity-100',
+          )}
+        >
+          <X size={10} />
+        </button>
+      </Tip>
     </div>
   );
 }

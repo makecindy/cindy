@@ -2541,7 +2541,10 @@ export default async function cindyBridge(pi: any) {
     if (spec.authorization) headers.authorization = spec.authorization;
     const dataUrl = 'data:' + mime + ';base64,' + base64;
     // 按 wire 协议构造请求体（对齐 host 侧 vision-channel 的 buildVisionRequestBody）。
-    const wire = spec.wireProtocol || 'openai-chat';
+    const wire = spec.wireProtocol;
+    if (wire !== 'anthropic-messages' && wire !== 'openai-responses' && wire !== 'openai-chat') {
+      throw new Error('vision: wire protocol is not configured');
+    }
     const body = wire === 'openai-responses'
       ? {
           model: spec.model,

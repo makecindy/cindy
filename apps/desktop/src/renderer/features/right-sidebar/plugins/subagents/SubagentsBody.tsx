@@ -21,6 +21,7 @@ import type {
 
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 import { formatCompactTokens } from '@/lib/usageFormat';
@@ -272,15 +273,16 @@ function HeaderBack({
   const { t } = useTranslation();
   return (
     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--border-default)] px-3">
-      <button
-        type="button"
-        onClick={onBack}
-        title={t('rightSidebar.subagents.back')}
-        aria-label={t('rightSidebar.subagents.back')}
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-      >
-        <ArrowLeft size={15} aria-hidden="true" />
-      </button>
+      <Tip text={t('rightSidebar.subagents.back')} side="bottom">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label={t('rightSidebar.subagents.back')}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          <ArrowLeft size={15} aria-hidden="true" />
+        </button>
+      </Tip>
       <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
         {title}
       </span>

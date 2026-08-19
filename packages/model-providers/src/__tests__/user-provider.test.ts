@@ -125,8 +125,8 @@ describe('buildUserProvider (per-runtime)', () => {
       id: 'meta/llama-4-405b',
       name: 'Llama 4 405B',
       contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
-      // codex runtime：参考内置默认 effort 档位（low/medium/high/xhigh，默认 high）。
-      efforts: ['low', 'medium', 'high', 'xhigh'],
+      // codex runtime：参考内置默认 effort 档位（low/medium/high/xhigh/max，默认 high）。
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       defaultEffort: 'high',
       group: 'custom:openrouter',
       defaultEnabled: true,
@@ -199,7 +199,7 @@ describe('buildUserProvider (per-runtime)', () => {
       }),
       expect.objectContaining({
         id: 'unregistered-model',
-        efforts: ['low', 'medium', 'high', 'xhigh'],
+        efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
         defaultEffort: 'high',
       }),
     ]);
@@ -238,7 +238,7 @@ describe('buildUserProvider (per-runtime)', () => {
       { modelRegistry: registry },
     );
     expect(ambiguous.models.codex?.[0]).toMatchObject({
-      efforts: ['low', 'medium', 'high', 'xhigh'],
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       defaultEffort: 'high',
     });
 
@@ -275,7 +275,7 @@ describe('buildUserProvider (per-runtime)', () => {
       { modelRegistry: BUNDLED_CATALOG.modelRegistry },
     );
     expect(noTargetRoute.models.codex?.[0]).toMatchObject({
-      efforts: ['low', 'medium', 'high', 'xhigh'],
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       defaultEffort: 'high',
     });
   });
@@ -465,6 +465,7 @@ describe('buildUserProvider (per-runtime)', () => {
     expect((p.models.pi ?? [])[0]?.defaultEffort).toBeNull();
     expect((p.models.pi ?? [])[0]?.group).toBe('custom:localollama');
     expect((p.models.pi ?? [])[0]?.supportsImageInput).toBe(true);
+    expect(p.routing.pi?.wireProtocol).toBe('openai-chat');
   });
 
   it('never infers Pi efforts from a same-named Registry model', () => {

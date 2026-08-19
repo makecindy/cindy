@@ -61,7 +61,12 @@ import {
   pickAndUpdateGhost,
   reapproveInstalledGhost,
 } from '@/cindy-brain/installFlow';
-import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
+import {
+  GhostManualSummary,
+  GhostPermissionList,
+  GhostUpdateReview,
+} from '@/cindy-brain/GhostPermissionList';
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import {
@@ -283,6 +288,15 @@ export function marketUpdateAllowsPermissionExpansion(
   addedPermissionCount: number,
 ): boolean {
   return installed.approval.state !== 'approved' || addedPermissionCount > 0;
+}
+
+/**
+ * 市场装入成功后是否打开已装详情(同时收起市场详情)。
+ * 首装:装完即开(2026-07-26)。更新/替换:留在当前页——列表就留列表,
+ * 市场详情就刷新详情,方便连续更新,也不把替换用户从原详情踢回列表。
+ */
+export function shouldOpenInstalledDetailAfterMarketSuccess(isUpdate: boolean): boolean {
+  return !isUpdate;
 }
 
 /** 读「忽略本轮更新」的持久值(键按数据归属分桶,见 ignoredRoundStorageKey)。 */
@@ -814,7 +828,7 @@ export function GhostPluginPage({
     [t],
   );
 
-  /** 真实包的唯一权限确认由窗口级 Host 在这一次 install IPC 事务内完成。 */
+  /** 下载真实包;权限卡已在页面确认,Host 只在真实包超出已审清单时再弹。 */
   const installReviewedMarketPackage = useCallback(
     async (input: {
       pluginId: string;
@@ -826,12 +840,11 @@ export function GhostPluginPage({
     [],
   );
 
-  // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
-  // 权限 diff,经用户确认后才安装,不做静默升级。
+  // 市场更新流程由列表卡片和详情页共用:先按市场清单立刻弹出确认,下载发生在
+  // 用户点确认之后。真实包若没有超出已确认的权限,窗口级 Host 不再复弹。
   //
   // 同版本的 `installed` 也走这里:缺少批准状态的存量安装靠"用市场包重装同一
   // release"恢复,此时权限 diff 会把目标包的全部权限当新增项逐条列出。
-  // 所有来源先展示详情清单；官方包下载后仍以真实包清单兜底发现额外权限。
   // 原位更新不切换来源(#2043):点击后详情若已不再是 update-available 则如实
   // 提示状态变化,install 一律 allowSourceReplacement: false。
   const handleMarketUpdate = useCallback(
@@ -865,18 +878,6 @@ export function GhostPluginPage({
           return;
         }
         const diff = diffMarketUpdatePermissionItems(installedGhost, next.manifest);
-        const approved = await confirm({
-          title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
-          description: t('settings.ghosts.updateConfirm.body', {
-            from: installedGhost?.manifest.version ?? next.version,
-            to: next.version,
-          }),
-          content: <GhostUpdateReview diff={diff} />,
-          maxWidth: 520,
-          confirmText: t('settings.ghosts.updateConfirm.confirm'),
-          cancelText: t('settings.ghosts.updateConfirm.cancel'),
-        });
-        if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
         const options: PluginMarketInstallOptions = {
           expectedReleaseId: next.releaseId,
           expectedManifest: next.manifest,
@@ -891,18 +892,35 @@ export function GhostPluginPage({
           // 原位更新不切换来源(#2043):只有冲突替换显式走 runMarketInstallFlow。
           allowSourceReplacement: false,
         };
+        const approved = await confirm({
+          title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
+          description: t('settings.ghosts.updateConfirm.body', {
+            from: installedGhost?.manifest.version ?? next.version,
+            to: next.version,
+          }),
+          content: (
+            <GhostUpdateReview
+              diff={diff}
+              manualCount={next.manifest.manual?.items.length ?? 0}
+            />
+          ),
+          maxWidth: 520,
+          confirmText: t('settings.ghosts.updateConfirm.confirm'),
+          cancelText: t('settings.ghosts.updateConfirm.cancel'),
+        });
+        if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
         const ghost = await installReviewedMarketPackage({
           pluginId: next.pluginId,
           options,
         });
-        if (!ghost) return;
-        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
+        if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
         toast.success(
           t('settings.ghosts.toast.updated', {
             name: ghost.manifest.name,
             version: ghost.manifest.version,
           }),
         );
+        // 列表/详情共用此路径:成功后不切页面,方便连续点其它插件的更新。
         await refreshMarket();
       } catch (error) {
         if (isMarketBusyLeaseActive(marketBusyLease)) {
@@ -1249,6 +1267,25 @@ export function GhostPluginPage({
         const diff = isUpdate
           ? diffMarketUpdatePermissionItems(installedGhost!, marketDetail.manifest)
           : null;
+        const options: PluginMarketInstallOptions = {
+          expectedReleaseId: marketDetail.releaseId,
+          expectedManifest: marketDetail.manifest,
+          ...(isUpdate && installedGhost
+            ? { expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval) }
+            : {}),
+          ...(isUpdate &&
+            (diff!.added.length > 0 ||
+              installedGhost?.approval.state !== 'approved')
+            ? {
+                allowPermissionExpansion: true,
+                ...(installedGhost
+                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
+                  : {}),
+              }
+            : {}),
+          // 来源隔离(#2043):仅用户显式选择的冲突替换允许切换来源;更新与原位安装不切换。
+          allowSourceReplacement: marketDetail.installState === 'conflict',
+        };
         const confirmed = await confirm({
           title: isUpdate
             ? t('settings.ghosts.updateConfirm.title', { name: marketDetail.name })
@@ -1263,9 +1300,15 @@ export function GhostPluginPage({
                   : 'settings.ghosts.market.customInstallConfirmDescription',
               ),
           content: isUpdate ? (
-            <GhostUpdateReview diff={diff!} />
+            <GhostUpdateReview
+              diff={diff!}
+              manualCount={marketDetail.manifest.manual?.items.length ?? 0}
+            />
           ) : (
-            <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+            <div>
+              <GhostManualSummary count={marketDetail.manifest.manual?.items.length ?? 0} />
+              <GhostPermissionList items={ghostPermissionItems(marketDetail.manifest)} />
+            </div>
           ),
           maxWidth: 520,
           confirmText: isUpdate
@@ -1277,31 +1320,13 @@ export function GhostPluginPage({
           autoFocusConfirm: true,
         });
         if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
-        const options: PluginMarketInstallOptions = {
-          expectedReleaseId: marketDetail.releaseId,
-          expectedManifest: marketDetail.manifest,
-          ...(isUpdate && installedGhost
-            ? { expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval) }
-            : {}),
-          ...(isUpdate && (diff!.added.length > 0 || installedGhost?.approval.state !== 'approved')
-            ? {
-                allowPermissionExpansion: true,
-                ...(installedGhost
-                  ? { reviewedBaseline: ghostPermissionBaselineKey(installedGhost.manifest) }
-                  : {}),
-              }
-            : {}),
-          // 来源隔离(#2043):仅用户显式选择的冲突替换允许切换来源;更新与原位安装不切换。
-          allowSourceReplacement: marketDetail.installState === 'conflict',
-        };
         const ghost = await installReviewedMarketPackage({
           pluginId: marketDetail.pluginId,
           options,
         });
-        if (!ghost) return;
-        if (!isMarketBusyLeaseActive(marketBusyLease)) return;
+        if (!ghost || !isMarketBusyLeaseActive(marketBusyLease)) return;
         // 市场首装装完即开(2026-07-26 定案),toast 用"已安装";更新路径如实
-        // 用"已更新"(生效状态未被改变)。
+        // 用"已更新"(生效状态未被改变),并留在当前页方便连续更新多个插件。
         toast.success(
           isUpdate
             ? t('settings.ghosts.toast.updated', {
@@ -1312,10 +1337,14 @@ export function GhostPluginPage({
                 name: ghost.manifest.name,
               }),
         );
-        setMarketDetail((current) =>
-          current?.pluginId === marketDetail.pluginId ? null : current,
-        );
-        setSelectedId(ghost.manifest.id);
+        if (shouldOpenInstalledDetailAfterMarketSuccess(isUpdate)) {
+          setMarketDetail((current) =>
+            current?.pluginId === marketDetail.pluginId ? null : current,
+          );
+          setSelectedId(ghost.manifest.id);
+        } else {
+          await refreshVisibleMarketDetail(marketDetail.pluginId).catch(() => undefined);
+        }
         await refreshMarket();
       } catch (error) {
         if (isMarketBusyLeaseActive(marketBusyLease)) {
@@ -1331,6 +1360,7 @@ export function GhostPluginPage({
       isMarketBusyLeaseActive,
       installReviewedMarketPackage,
       refreshMarket,
+      refreshVisibleMarketDetail,
       releaseMarketBusy,
       t,
     ],
@@ -1568,6 +1598,7 @@ export function GhostPluginPage({
                         updateBusy={
                           (item.marketUpdate !== null && marketBusyId !== null) || batchRunning
                         }
+                        updatePending={item.marketUpdate?.pluginId === marketBusyId}
                         onUpdate={
                           item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                         }
@@ -1596,6 +1627,7 @@ export function GhostPluginPage({
                             updateBusy={
                               (item.marketUpdate !== null && marketBusyId !== null) || batchRunning
                             }
+                            updatePending={item.marketUpdate?.pluginId === marketBusyId}
                             onUpdate={
                               item.marketUpdate ? () => void handleMarketUpdate(item.id) : undefined
                             }
@@ -1727,6 +1759,7 @@ export function GhostPluginPage({
                                 key={item.pluginId}
                                 item={item}
                                 busy={marketBusyId !== null}
+                                pending={marketBusyId === item.pluginId}
                                 onSelect={() => void handleSelectMarket(item.pluginId)}
                                 onInstall={
                                   canOfferMarketInstall(mode, item.ghostId)
@@ -1747,6 +1780,7 @@ export function GhostPluginPage({
                           key={item.pluginId}
                           item={item}
                           busy={marketBusyId !== null}
+                          pending={marketBusyId === item.pluginId}
                           onSelect={() => void handleSelectMarket(item.pluginId)}
                           onInstall={
                             canOfferMarketInstall(mode, item.ghostId)
@@ -1841,12 +1875,15 @@ export function LegacyGhostRecoveryNotice({
 export function MarketPluginCard({
   item,
   busy,
+  pending = false,
   onSelect,
   onInstall,
   onIconLoadError,
 }: {
   item: PluginMarketItem;
   busy: boolean;
+  /** 本卡正在安装:主按钮换成 Spinner。 */
+  pending?: boolean;
   onSelect: () => void;
   /** 卡片直接安装；卡片正文、右侧空白与右上角箭头都进入详情。 */
   onInstall?: () => void;
@@ -1949,6 +1986,7 @@ export function MarketPluginCard({
               onInstall();
             }}
             disabled={unavailable}
+            aria-busy={pending || undefined}
             aria-label={
               item.installState === 'conflict'
                 ? t('settings.ghosts.market.replaceAria', { name: item.name })
@@ -1956,15 +1994,19 @@ export function MarketPluginCard({
             }
             aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
             className={cn(
-              'relative z-[1] inline-flex h-8 shrink-0 items-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
+              'relative z-[1] inline-flex h-8 min-w-[72px] shrink-0 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)]',
               'transition-[background-color,border-color,transform,opacity] duration-150 hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40',
             )}
           >
-            {t(
-              item.installState === 'conflict'
-                ? 'settings.ghosts.market.replace'
-                : 'settings.ghosts.market.install',
+            {pending ? (
+              <Spinner size={14} />
+            ) : (
+              t(
+                item.installState === 'conflict'
+                  ? 'settings.ghosts.market.replace'
+                  : 'settings.ghosts.market.install',
+              )
             )}
           </button>
         ) : null}
@@ -2072,6 +2114,7 @@ export function GhostPluginCard({
   sourceLabel,
   updateVersion,
   updateBusy = false,
+  updatePending = false,
   onUpdate,
   effectiveEnabled,
   onPrimary,
@@ -2083,6 +2126,8 @@ export function GhostPluginCard({
   /** 市场存在新版本时的目标版本;与 onUpdate 同时提供。 */
   updateVersion?: string;
   updateBusy?: boolean;
+  /** 本卡正在更新:更新胶囊换成 Spinner。 */
+  updatePending?: boolean;
   onUpdate?: () => void;
   effectiveEnabled?: boolean;
   onPrimary: () => void;
@@ -2199,19 +2244,26 @@ export function GhostPluginCard({
               type="button"
               onClick={stopAnd(onUpdate)}
               disabled={updateBusy}
+              aria-busy={updatePending || undefined}
               aria-label={t('settings.ghosts.page.updateAria', {
                 name: item.name,
                 version: updateVersion,
               })}
               className={cn(
-                'inline-flex h-7 items-center gap-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 text-11 font-medium text-[var(--text-primary)]',
+                'inline-flex h-7 min-w-[72px] items-center justify-center gap-1 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2.5 text-11 font-medium text-[var(--text-primary)]',
                 'transition-colors duration-150 hover:bg-[var(--surface-hover-soft)]',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                 'disabled:cursor-wait disabled:opacity-40',
               )}
             >
-              <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
-              {t('settings.ghosts.page.updateTo', { version: updateVersion })}
+              {updatePending ? (
+                <Spinner size={12} />
+              ) : (
+                <>
+                  <ArrowUp size={11} className="text-[var(--text-secondary)]" aria-hidden="true" />
+                  {t('settings.ghosts.page.updateTo', { version: updateVersion })}
+                </>
+              )}
             </button>
           ) : null}
           <button

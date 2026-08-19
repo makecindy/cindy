@@ -351,6 +351,17 @@ import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import {
+  attachWorkLouderCodexWindowReveal,
+} from './worklouder-codex/index.js';
+import {
+  disposeInputDevices,
+  resumeInputDeviceTaskSlots,
+  startInputDeviceRuntime,
+  startInputDevices,
+  suspendInputDeviceTaskSlots,
+  updateInputDeviceSessionActivity,
+} from './input-devices/index.js';
+import {
   isAppContentWindow,
   isFocusedAppContentWindow,
   markAppContentWindow,
@@ -1214,6 +1225,9 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   const blockingFailures: unknown[] = [];
+  // Hardware must stop before the long async drain. Otherwise a held stick or
+  // microphone keeps acting on the outgoing account while caches and IM stop.
+  suspendInputDeviceTaskSlots();
   // The boundary is already marked pending by every caller. New actions now
   // fail closed; drain an action that crossed the boundary before closing its DB.
   try {
@@ -3095,6 +3109,8 @@ const createWindow = () => {
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
   installWindowHiddenBroadcast(mainWindow);
+  // Keyboard hello when the window comes back from hide / minimize / Dock.
+  attachWorkLouderCodexWindowReveal(mainWindow);
 
   // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
   // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
@@ -3285,6 +3301,9 @@ const registerIpcHandlers = () => {
   initAgentIslandService({
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
+    onSessionActivityChange: (activity) => {
+      updateInputDeviceSessionActivity(activity);
+    },
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
@@ -6864,6 +6883,8 @@ app.on('ready', async () => {
   });
 
   registerIpcHandlers();
+  startInputDeviceRuntime();
+  startInputDevices();
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
   // 无 DB / 无登录依赖,随其它顶层 handler 一起注册即可。
   registerFsBrowseIpc();
@@ -6945,6 +6966,15 @@ app.on('ready', async () => {
           userId,
           mode: dbClientTakeover.mode,
         });
+        // Teardown already closed the keyboard. The renderer still enters the
+        // main UI, so restore hardware even when the lifecycle client did not.
+        try {
+          await resumeInputDeviceTaskSlots();
+        } catch (error) {
+          dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       }
       if (dbClientTakeover.mode === 'unchanged') {
@@ -6963,7 +6993,23 @@ app.on('ready', async () => {
         // held across a Ghost boundary), and starts consumers if the original
         // then() skipped them while boundaryPending.
         void ensureCurrentAccountProviderReadiness();
+        // Logout suspends the keyboard. Relogin of the same owner still lands
+        // here, so restore task slots even when the lifecycle client is reused.
+        try {
+          await resumeInputDeviceTaskSlots();
+        } catch (error) {
+          dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
+      }
+      try {
+        await resumeInputDeviceTaskSlots();
+      } catch (error) {
+        dbClientLog.warn('Input device task slot refresh failed (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
@@ -7515,6 +7561,7 @@ onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
 onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
+onQuit('input-devices', () => disposeInputDevices(), 'async');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
 // 不阻塞)。不收会一直锁安装目录里的 adb.exe,弄挂增量更新(os error 32)。
 onQuit('android-adb-kill-server', () => disposeAndroidAdb(), 'sync');

@@ -17,6 +17,9 @@
  */
 
 import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
+import { leadingSlashInvocation } from '@cindy/maker-shared';
+
+export { leadingSlashInvocation };
 
 import { createLogger } from '@/lib/logger';
 
@@ -44,8 +47,8 @@ export function slashCommandInvocationName(command: UnifiedCommand): string {
 }
 
 /**
- * Palette selection already inserts runtimeCommandName. Apply the same mapping
- * to a matching command that the user typed or pasted directly before send.
+ * Palette / composer keep the human name (`/git`). Rewrite only at dispatch so
+ * Pi receives the runtime alias (`/skill:git`) without leaking it into the UI.
  */
 export function rewriteAgentSkillInvocationForDispatch(
   message: string,
@@ -59,9 +62,43 @@ export function rewriteAgentSkillInvocationForDispatch(
   ) {
     return message;
   }
-  const match = message.match(/^\/(\S+)([\s\S]*)$/);
-  if (!match || match[1].toLowerCase() !== command.name.toLowerCase()) return message;
-  return `/${command.runtimeCommandName}${match[2]}`;
+  const leading = leadingSlashInvocation(message);
+  if (!leading || leading.name.toLowerCase() !== command.name.toLowerCase()) return message;
+  return `${message.slice(0, leading.start)}/${command.runtimeCommandName}${message.slice(leading.end)}`;
+}
+
+/** Rewrite `/git` → `/skill:git` even when the skill is still `discovered`. */
+export function rewritePiSkillAliasFromCommand(
+  message: string,
+  command: UnifiedCommand | undefined,
+): string {
+  const leading = leadingSlashInvocation(message);
+  if (
+    !leading
+    || command?.kind !== 'agent-skill'
+    || !command.runtimeCommandName
+    || leading.name.toLowerCase() !== command.name.toLowerCase()
+  ) {
+    return rewriteAgentSkillInvocationForDispatch(message, command);
+  }
+  return `${message.slice(0, leading.start)}/${command.runtimeCommandName}${message.slice(leading.end)}`;
+}
+
+/** First-message / worktree send paths that skip SessionView dispatch. */
+export async function rewritePiSkillMessageForSend(params: {
+  agentKind: AgentKind;
+  message: string;
+  workingDir?: string | null;
+  sessionId?: string;
+}): Promise<string> {
+  if (params.agentKind !== 'pi') return params.message;
+  const leading = leadingSlashInvocation(params.message);
+  if (!leading) return params.message;
+  const commands = await loadAllCommands(params.agentKind, params.workingDir, {
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  });
+  const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
+  return rewritePiSkillAliasFromCommand(params.message, hit);
 }
 
 /**
@@ -74,12 +111,13 @@ export function rebaseInlineRangesAfterSlashCommandRewrite<T extends { start: nu
   rewrittenMessage: string,
 ): T[] {
   if (originalMessage === rewrittenMessage) return [...ranges];
-  const originalCommand = originalMessage.match(/^\/\S+/)?.[0];
-  const rewrittenCommand = rewrittenMessage.match(/^\/\S+/)?.[0];
+  const originalCommand = leadingSlashInvocation(originalMessage);
+  const rewrittenCommand = leadingSlashInvocation(rewrittenMessage);
   if (!originalCommand || !rewrittenCommand) return [...ranges];
 
-  const boundary = originalCommand.length;
-  const delta = rewrittenCommand.length - boundary;
+  const boundary = originalCommand.end;
+  const delta = (rewrittenCommand.end - rewrittenCommand.start)
+    - (originalCommand.end - originalCommand.start);
   if (delta === 0) return [...ranges];
   return ranges.map((range) => ({
     ...range,

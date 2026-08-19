@@ -4,6 +4,7 @@
     "SESSION_RUNNING": "このセッションは現在タスクを実行中です。しばらくしてからもう一度お試しください。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "現在の Pi モデルでは画像入力が有効になっていません。画像に対応するモデルへ切り替えてください。カスタムモデルの場合は、プロバイダー設定で「画像入力に対応」を有効にしてから、新しい Pi タスクを開始してください。",
     "CREDENTIAL_SWITCH_BUSY": "他の Codex タスクが実行中のため、今回のプロバイダー切り替えは適用されませんでした（セッションは元のプロバイダーのままです）。他のタスクが終わってからもう一度お試しください。",
+    "PI_CATALOG_RELOAD_UNCONFIRMED": "モデルカタログの再読み込みを確認できなかったため、このタスクを終了しました。タスクを開き直してからモデルを切り替えてください。",
     "REMOTE_WORKDIR_INVALID": "リモートプロジェクトのパスが無効です。プロジェクトディレクトリを選び直してください。",
     "REMOTE_WORKDIR_NOT_FOUND": "リモートプロジェクトのディレクトリが見つかりません。選び直してください。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "リモートプロジェクトのパスはディレクトリではありません。プロジェクトディレクトリを選び直してください。",
@@ -1414,6 +1415,16 @@
           "piChatHelp": "Pi がプロバイダーの OpenAI 互換 Chat Completions API に直接接続します。",
           "piAnthropicHelp": "Pi がプロバイダーの Anthropic Messages API に直接接続します。"
         },
+        "modelProtocol": {
+          "label": "モデルプロトコル",
+          "inherit": "デフォルトを継承",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "継承すると上のプロバイダープロトコルを使用します。このモデルだけ別のプロトコルが必要な場合に上書きします。",
+          "ariaLabel": "{{model}} のモデルプロトコル"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",
@@ -1452,7 +1463,8 @@
           "button": "接続テスト",
           "testing": "テスト中…",
           "ok": "接続に成功しました（{{ms}}ms）",
-          "needFields": "先にベース URL と少なくとも 1 つのモデル ID を入力してください"
+          "needFields": "先にベース URL と少なくとも 1 つのモデル ID を入力してください",
+          "unsupportedProtocol": "接続テストはこのモデルプロトコルに対応していません"
         },
         "fetch": {
           "button": "モデル一覧を取得",
@@ -2350,10 +2362,10 @@
     },
     "subagentModels": {
       "title": "サブエージェント",
-      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定し、Codex サブエージェントのガードレールを構成します。設定は入口ごとに適用され、モデルごとには保存されません。",
-      "unspecified": "指定しない（既定の動作を使用）",
-      "hint": "Claude Code のサブエージェントではモデルのみ指定でき、推論強度は Claude Code 本来の動作に従います。選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
-      "codexV2ModelHint": "サブエージェントの既定モデルは Codex 自身のモデルカタログ内のモデルである必要があり、カタログ外のモデル（互換ブリッジ経由のサードパーティモデルなど）は Codex に拒否されます。Sol / Terra（マルチエージェント V2）はさらに V2 カタログモデル（現在は gpt-5.6-sol と gpt-5.6-terra）のみを受け付けます。旧版マルチエージェント（V1）に V2 の制限はありません。",
+      "description": "Claude Code と Codex のサブエージェントモデルを選択します。",
+      "unspecified": "既定の設定を使用",
+      "hint": "Claude Code の変更は新しいセッションから適用されます。Codex の変更はアイドル時に自動で適用されます。",
+      "codexV2ModelHint": "Claude Code は選択したモデルを既定値として使用します。ローカルの Codex サブエージェントはすべて、選択したモデルと推論強度に固定されます。",
       "saveFailed": "サブエージェント設定の保存に失敗しました",
       "guardrails": {
         "title": "Codex サブエージェントガードレール",
@@ -2379,13 +2391,13 @@
     },
     "compaction": {
       "title": "コンテキスト圧縮",
-      "description": "Claude Code がいつ自動的にコンテキストを圧縮するかを制御します。",
+      "description": "Claude Code と Pi がいつ自動的にコンテキストを圧縮するかを制御します。この設定は Codex に影響しません。Codex は独自にコンテキスト圧縮を管理します。",
       "card": {
         "label": "圧縮トリガーしきい値",
-        "badge": "Claude Code のみ",
+        "badge": "Claude Code と Pi",
         "description": "コンテキスト使用量がこの割合に達したときに自動圧縮します。低くすると早めに圧縮して余裕を多く残し、高くすると遅めに圧縮して 1 ターンのコンテキストをより多く使います。",
-        "hint": "コンテキスト使用量がこの割合に達すると自動圧縮します（/compact を自動実行するのと同等）。変更は即時反映され、次のチャットターン終了時に新しい割合で判定します。",
-        "sliderAria": "Claude Code の自動圧縮トリガーしきい値を調整"
+        "hint": "コンテキスト使用量がこの割合に達すると自動圧縮します。変更は即時反映され、次のターン終了時またはより小さいウィンドウへ切り替えたあとに新しい割合で判定します。",
+        "sliderAria": "自動圧縮トリガーしきい値を調整"
       }
     },
     "personalization": {
@@ -3235,6 +3247,311 @@
       "reset": "デフォルトに戻す",
       "recording": "新しいショートカットを入力…",
       "editAria": "{{name}} のショートカットを変更",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "前のタスク",
+            "description": "サイドバーで現在のタスクの上にあるタスクを開きます"
+          },
+          "session.selectNext": {
+            "name": "次のタスク",
+            "description": "サイドバーで現在のタスクの下にあるタスクを開きます"
+          },
+          "toggleRightSidebar": {
+            "name": "右サイドバーの切り替え",
+            "description": "右サイドバーを表示/非表示にします"
+          },
+          "composer.toggleFastMode": {
+            "name": "高速モードの切り替え",
+            "description": "現在の入力欄で高速モードをオン/オフにします"
+          },
+          "approval.approve": {
+            "name": "リクエストを承認",
+            "description": "確認待ちのリクエストを承認します"
+          },
+          "approval.decline": {
+            "name": "リクエストを拒否",
+            "description": "確認待ちのリクエストを拒否します"
+          },
+          "forkTask": {
+            "name": "新しいタスクで続ける",
+            "description": "現在のタスクから新しいタスクを作成します"
+          },
+          "composer.submit": {
+            "name": "メッセージを送信",
+            "description": "入力欄のメッセージを送信します"
+          },
+          "feedback": {
+            "name": "フィードバックを送信",
+            "description": "製品フィードバックを Cindy チームに送信します"
+          },
+          "toggleTerminal": {
+            "name": "ターミナルを開く",
+            "description": "ターミナルパネルを開きます"
+          },
+          "copyConversationMarkdown": {
+            "name": "Markdown としてコピー",
+            "description": "現在のタスクの内容を Markdown としてコピーします",
+            "copied": "Markdown としてコピーしました",
+            "empty": "このタスクにはまだコピーできる内容がありません",
+            "failed": "コピーできませんでした"
+          },
+          "archiveTask": {
+            "name": "タスクをアーカイブ",
+            "description": "現在のタスクをアーカイブします"
+          },
+          "newTask": {
+            "name": "新しいタスク",
+            "description": "新しいタスクを開始します"
+          },
+          "openBrowserTab": {
+            "name": "ブラウザタブを開く",
+            "description": "新しいブラウザタブを開きます"
+          },
+          "toggleTaskPin": {
+            "name": "ピン留めの切り替え",
+            "description": "現在のタスクをピン留め、または解除します"
+          },
+          "toggleReviewTab": {
+            "name": "レビューの切り替え",
+            "description": "現在のタスクのレビューを表示/非表示にします"
+          },
+          "composer.addPhotos": {
+            "name": "画像を追加",
+            "description": "入力欄に画像を追加します"
+          },
+          "settings": {
+            "name": "設定",
+            "description": "Cindy の設定を開きます"
+          },
+          "manageTasks": {
+            "name": "予約タスクを管理",
+            "description": "予約タスクを作成または管理します"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "推論強度を上げる",
+            "description": "現在の入力欄の推論強度を上げます"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "推論強度を下げる",
+            "description": "現在の入力欄の推論強度を下げます"
+          },
+          "openFolder": {
+            "name": "フォルダを開く",
+            "description": "ローカルプロジェクトを Cindy に追加します"
+          },
+          "composer.addFiles": {
+            "name": "ファイルとフォルダを添付",
+            "description": "入力欄にファイルとフォルダを添付します"
+          },
+          "openSkills": {
+            "name": "スキルを開く",
+            "description": "インストール済みおよびおすすめのスキルを表示します"
+          },
+          "composer.togglePlanMode": {
+            "name": "プランモードの切り替え",
+            "description": "現在の入力欄でプランモードをオン/オフにします"
+          },
+          "navigateForward": {
+            "name": "進む",
+            "description": "ナビゲーション履歴を前に進みます"
+          },
+          "toggleSidebar": {
+            "name": "サイドバーの切り替え",
+            "description": "サイドバーを表示/非表示にします"
+          },
+          "navigateBack": {
+            "name": "戻る",
+            "description": "ナビゲーション履歴を戻ります"
+          },
+          "composer.focus": {
+            "name": "入力欄にフォーカス",
+            "description": "カーソルを入力欄に移動します"
+          },
+          "conversation.scrollUp": {
+            "name": "上にスクロール",
+            "description": "対話を上にスクロールします"
+          },
+          "conversation.scrollDown": {
+            "name": "下にスクロール",
+            "description": "対話を下にスクロールします"
+          },
+          "conversation.scrollBottom": {
+            "name": "最新へ移動",
+            "description": "最新のメッセージまでスクロールします"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "Agent キーでタスクを開き、ライトで状態を表示します。",
+        "openAria": "Work Louder Codex Micro の設定を開く",
+        "back": "キーボードショートカットに戻る",
+        "retry": "再試行",
+        "device": {
+          "title": "デバイス",
+          "firmware": "ファームウェア {{version}}",
+          "inputMonitoring": {
+            "label": "入力モニタリング",
+            "granted": "macOS は Cindy のキーボード入力の受信を許可しています。",
+            "denied": "macOS がキーボード入力をブロックしています。システム設定で Cindy を許可してください。",
+            "unknown": "Cindy は macOS の入力モニタリング権限をまだ確認していません。",
+            "not-required": "このプラットフォームでは入力モニタリングは必要ありません。",
+            "open": "システム設定を開く"
+          }
+        },
+        "errors": {
+          "load": "Codex Micro の設定を読み込めませんでした",
+          "save": "Codex Micro の設定を保存できませんでした"
+        },
+        "connection": {
+          "label": "接続",
+          "status": {
+            "connecting": "接続中",
+            "connected": "接続済み",
+            "not-detected": "検出されていません",
+            "error": "接続エラー",
+            "unavailable": "SDK を利用できません"
+          },
+          "descriptions": {
+            "connecting": "Cindy が Work Louder デバイスサービスを起動しています。",
+            "connected": "USB 接続済みです。Cindy がキー入力を待ち受け、タスクのライトを同期しています。",
+            "not-detected": "データ通信対応の USB ケーブルで接続してください。ChatGPT がデバイスを使用している場合は終了してください。",
+            "error": "Cindy はキーボードと通信できませんでした。自動的に再試行しています。",
+            "unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。",
+            "connection-timeout": "Work Louder サービスが時間内に応答しませんでした。Cindy は自動的に再試行します。",
+            "connection-failed": "Work Louder サービスを起動できませんでした。Cindy は自動的に再試行します。",
+            "permission-required": "macOS がキーボードへのアクセスを拒否しました。入力モニタリングで Cindy を許可してから再試行してください。",
+            "sdk-unavailable": "公式 Work Louder SDK が見つかりません。Codex Micro 対応の ChatGPT または Codex アプリを残した状態で Cindy を再起動してください。"
+          }
+        },
+        "lighting": {
+          "title": "ライト",
+          "brightness": {
+            "label": "明るさ",
+            "description": "キー、タスク、アンビエントライト全体の明るさを調整します。",
+            "aria": "Codex Micro のライトの明るさを調整"
+          },
+          "autoDim": {
+            "label": "自動消灯",
+            "description": "操作がないとライトを消し、キーボードの使用またはタスク状態の変化で復帰します。",
+            "aria": "Codex Micro の自動消灯時間を選択",
+            "options": {
+              "off": "オフ",
+              "30-seconds": "30 秒",
+              "1-minute": "1 分",
+              "3-minutes": "3 分",
+              "10-minutes": "10 分",
+              "30-minutes": "30 分",
+              "1-hour": "1 時間"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "ソースをカスタムにしたとき、このタスクキーが開く対象です。",
+          "title": "Agent キー",
+          "source": {
+            "label": "タスクの順序",
+            "description": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+            "descriptions": {
+              "sidebar": "AG00～AG05 はサイドバーの上から 6 件で、並び順もサイドバーと同じです。",
+              "last-sent": "AG00～AG05 は、最後にメッセージを送ったタスクの新しい順です。",
+              "priority": "AG00～AG05 は優先タスクの上から 6 件です。",
+              "custom": "AG00～AG05 はそれぞれ指定したタスクを開きます。"
+            },
+            "value": "サイドバー順",
+            "options": {
+              "sidebar": "サイドバー順",
+              "last-sent": "最近のタスク",
+              "priority": "優先タスク",
+              "custom": "カスタム"
+            }
+          },
+          "singleTap": {
+            "label": "1 回押して Cindy をアクティブにする",
+            "description": "オンにすると 1 回押すだけでタスクを開いて Cindy を前面に表示します。オフの場合も 1 回押すとタスクを切り替え、350 ミリ秒以内に同じキーをもう一度押すと Cindy を前面に表示します。",
+            "aria": "Agent キーを 1 回押して Cindy をアクティブにする"
+          },
+          "newTask": "新しいタスク",
+          "slot": "最近の {{position}} 件目",
+          "slotAria": "AG{{slot}} で最近の {{position}} 件目のタスクを開く"
+        },
+        "commandKeys": {
+          "builtInDescription": "キーキャップ既定の動作のままにするか、別の動作に割り当てます。",
+          "builtIn": "キーキャップの組み込みアクションを使用",
+          "unmapped": "このキーキャップには動作がありません"
+        },
+        "microphone": {
+          "title": "マイク",
+          "separate": {
+            "label": "マイクキーを分ける",
+            "description": "ACT10 と ACT11 を 1 つの MIC キーにまとめず、別々に使います。"
+          }
+        },
+        "analog": {
+          "title": "ジョイスティック",
+          "description": "ジョイスティックの各方向に割り当てるアクションを選択します。",
+          "directions": {
+            "up": "上",
+            "right": "右",
+            "down": "下",
+            "left": "左"
+          }
+        },
+        "encoder": {
+          "title": "エンコーダー",
+          "mode": {
+            "label": "エンコーダーモード",
+            "description": "エンコーダーの回転と押下で操作する機能を選択します。",
+            "options": {
+              "session-switch": "タスクを切り替え",
+              "composer-navigation": "コンポーザーを移動",
+              "reasoning": "推論強度",
+              "conversation-scroll": "会話をスクロール",
+              "custom": "カスタム"
+            }
+          },
+          "gestures": {
+            "left": "左に回す",
+            "right": "右に回す",
+            "click": "押す",
+            "longPress": "長押し"
+          },
+          "customDescription": "このエンコーダージェスチャーのアクションを選択します。"
+        },
+        "actions": {
+          "choose": "アクションを選択",
+          "none": "アクションなし",
+          "tasks": "タスク",
+          "commands": "コマンド",
+          "keycaps": "キーキャップ",
+          "skills": "スキル"
+        },
+        "layout": {
+          "editor": {
+            "done": "完了",
+            "title": "キーキャップを編集",
+            "description": "この物理キーに表示するキーキャップを選択します。",
+            "searchPlaceholder": "キーキャップを検索",
+            "close": "キーキャップエディターを閉じる",
+            "cancel": "キャンセル",
+            "save": "保存",
+            "assignedShortcut": "割り当てられたアクション",
+            "selectKeycap": "キーキャップ {{keycap}} を選択"
+          },
+          "keyboard": {
+            "indicator": "ステータスライト",
+            "title": "配置",
+            "description": "キーキャップをクリックしてラベルと組み込みアクションを選択します。",
+            "analogStick": "ジョイスティック",
+            "encoder": "エンコーダー"
+          },
+          "reset": {
+            "title": "キー配置をリセット",
+            "description": "タスク順序やライト設定を変えずに、キーキャップ、ジョイスティック、エンコーダー、マイクの割り当てを初期状態に戻します。",
+            "button": "配置をリセット"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "ショートカット設定の保存に失敗しました",
         "notBindable": "このキーの組み合わせは使用できません",
@@ -4547,7 +4864,7 @@
   "titleBar": {
     "menu": "メニュー",
     "minimize": "最小化",
-    "maximize": "最大化",
+    "maximizeOrRestore": "ウィンドウを最大化または元のサイズに戻す",
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
@@ -4576,6 +4893,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "サイドバーを切り替え",
+    "collapseSidebar": "サイドバーを折りたたむ",
+    "expandSidebar": "サイドバーを展開",
     "collapsePanel": "折りたたみ",
     "expandPanel": "展開"
   },
@@ -4790,6 +5109,8 @@
       "rotateDevice": "デバイスを回転",
       "lockScreen": "画面をロック",
       "unlockScreen": "画面をロック解除",
+      "controlsUnavailable": "シミュレータの操作は一時的に使用できません",
+      "enterTextBeforeSending": "送信するテキストを入力してください",
       "agentBusyTitle": "Agent がこのデバイスを使用中",
       "agentBusyDescription": "現在の Agent 操作が終わるまで手動入力は一時停止されます。",
       "takeControl": "操作を引き継ぐ",
@@ -4866,19 +5187,24 @@
       "urlPlaceholder": "URL を入力または検索",
       "goBack": "戻る",
       "goForward": "進む",
+      "goBackUnavailable": "前のページはありません",
+      "goForwardUnavailable": "次のページはありません",
       "reload": "再読み込み",
       "stop": "読み込み停止",
       "screenshot": "スクリーンショット",
       "screenshotCopied": "スクリーンショットをクリップボードにコピーしました",
       "screenshotFailed": "スクリーンショットに失敗しました",
       "comment": "ページにコメント",
+      "exitCommentMode": "コメントモードを終了",
       "commentModeHint": "要素をクリック / Shift ドラッグで範囲選択 · Cmd/Ctrl+クリックで即追加 · Esc で終了",
       "commentPlaceholder": "ここをどう変えたいか記述してください…",
       "commentSubmit": "コメントを追加",
       "commentCancel": "キャンセル",
       "commentAdded": "コメントを入力欄に追加しました",
       "commentFailed": "コメントの追加に失敗しました",
-      "styleTweaks": "スタイル調整",
+      "styleTweaksExpand": "スタイル調整を表示",
+      "styleTweaksCollapse": "スタイル調整を隠す",
+      "styleTweaksSubmitting": "コメントを送信中…",
       "styleReset": "リセット",
       "styleTextLabel": "テキスト",
       "moreTools": "その他",
@@ -5274,6 +5600,7 @@
       "completed": "完了",
       "empty": "このセッションにバックグラウンドタスクはまだありません",
       "stop": "停止",
+      "stopping": "停止中…",
       "back": "戻る",
       "progressSummary": "{{done}}/{{total}} Agent",
       "tokens": "{{value}} tokens",
@@ -5651,7 +5978,8 @@
         "discount": "{{percent}}%お得",
         "perMillion": "モデル標準価格",
         "fixedFx": "固定レート 1 USD = 6.7 CNY による概算",
-        "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません"
+        "subscriptionEstimate": "価値の推定であり、実際の請求額ではありません",
+        "discountedVsStandard": "割引中 · 標準価格から {{percent}}% お得"
       },
       "trigger": {
         "placeholder": "モデルを選択",
@@ -5706,6 +6034,28 @@
       },
       "agentSwitch": {
         "hint": "{{agent}} に切り替えた後に使用するモデルを選択してください"
+      },
+      "unified": {
+        "railFavorites": "お気に入り",
+        "railAll": "すべて",
+        "favoritesGroup": "お気に入り",
+        "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
+        "layoutBadge": "スタイルBを試す",
+        "layoutClassic": "スタイルAに戻す",
+        "layoutTryUnified": "新しいセレクターを試す",
+        "layoutOriginal": "旧版に戻す",
+        "addFavorite": "お気に入りに保存",
+        "removeFavorite": "お気に入りから削除",
+        "favoriteConfig": "保存した設定",
+        "recommended": "推奨",
+        "recommendedConfig": "推奨設定",
+        "customized": "カスタム済み",
+        "reset": "推奨に戻す",
+        "fastTip": "Fast · 優先処理で高速 · 使用量が増えます",
+        "effortEndFast": "高速",
+        "effortEndSmart": "高精度",
+        "railSameEngine": "{{agent}} のみ",
+        "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります"
       }
     },
     "permissionSelector": {
@@ -7103,6 +7453,7 @@
       "scopeLocalSessions": "このデバイスのセッション",
       "dialogues": "会話",
       "newDialogue": "新規セッション",
+      "creationInProgress": "作成処理が進行中です",
       "dialoguesToggleExpand": "会話を展開",
       "dialoguesToggleCollapse": "会話を折りたたむ",
       "loadingDialogues": "読み込み中…",
@@ -7222,6 +7573,8 @@
         "hiddenCount": "{{count}} 件折りたたみ",
         "stopped": "停止中",
         "aria": "{{title}} の自動化セッション、{{count}} 回実行、{{attention}} 件対応待ち",
+        "expand": "{{title}} の実行履歴を展開",
+        "collapse": "{{title}} の実行履歴を折りたたむ",
         "menu": {
           "runNow": "今すぐ実行",
           "more": "その他の操作",
@@ -7291,6 +7644,7 @@
         "delete": "選択したセッションを削除",
         "clear": "選択を解除",
         "archiveNone": "選択中のセッションにアーカイブ可能な項目がありません",
+        "actionInProgress": "別の操作を処理中です",
         "skipRunning": "{{count}} 件は実行中",
         "skipAttached": "{{count}} 件は遠隔操作中",
         "skipNotActive": "{{count}} 件はアクティブではありません",
@@ -8113,6 +8467,12 @@
       }
     },
     "builtinTemplates": {
+      "schedule": {
+        "daily": "毎日 {{time}}",
+        "weekdays": "平日 {{time}}",
+        "weekly": "{{weekday}} {{time}}",
+        "monthly": "毎月{{day}}日 {{time}}"
+      },
       "categories": {
         "dev-automation": "開発自動化",
         "info-radar": "情報レーダー",

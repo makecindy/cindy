@@ -173,7 +173,12 @@ function canonicalPiRuntimePath(value: string): string {
   }
 }
 
-const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 250;
+// Windows realpath/stat calls can legitimately take longer than 250 ms under
+// concurrent CI or endpoint scanning even for a tiny skill tree. Keep the
+// entry budget as the complexity bound, but give the fail-closed fingerprint
+// enough wall-clock time to preserve an unchanged launch snapshot's loaded
+// status across supported platforms.
+const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_TIMEOUT_MS = 1_000;
 const PI_PROJECT_SKILL_PALETTE_FINGERPRINT_ENTRY_BUDGET = 2_048;
 
 async function fingerprintPiProjectSkillForPalette(

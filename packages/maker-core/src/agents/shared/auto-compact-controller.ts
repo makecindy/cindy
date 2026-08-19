@@ -13,16 +13,16 @@ export interface AutoCompactControllerDeps {
   logger: Logger;
   /** 当前 session 绑定的 workdir (日志 context) */
   workdir: string;
-  /** 当前 session 的 agent kind ('claude-code') */
+  /** 当前 session 的 agent kind（日志用，如 claude-code / pi） */
   agentKind: string;
   /** 返回当前自动压缩阈值百分比。undefined 表示关闭 host 侧自动压缩。 */
   getThresholdPct: () => number | undefined;
 }
 
 /**
- * AutoCompactController — 基于 usage 快照在 turn 结束时触发一次静默 `/compact`。
+ * AutoCompactController — 基于 usage 快照在 turn 结束时触发一次 host 自动压缩。
  *
- * 控制器只做判定与 fire-once 状态管理; 具体注入 inputQueue 由 agent session 闭包执行。
+ * 控制器只做判定与 fire-once 状态管理; Claude Code 注入 `/compact`，Pi 调 compact RPC。
  */
 export class AutoCompactController {
   private latest: UsageSnapshot | null = null;

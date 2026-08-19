@@ -30,6 +30,7 @@ const knobs = vi.hoisted(() => ({
   onEvent: null as null | ((event: unknown) => void),
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
+  requests: [] as string[],
 }));
 
 vi.mock('../transport.js', () => ({
@@ -71,6 +72,7 @@ vi.mock('../rpc-client.js', () => ({
       knobs.onEvent = o?.onEvent ?? null;
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
+      knobs.requests.push(cmd.type);
       if (cmd.type === 'get_state') {
         const gate = knobs.getStateGate;
         if (gate) await gate;
@@ -126,6 +128,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.onEvent = null;
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
+    knobs.requests = [];
     disposed = 0;
     proxyDisposed = 0;
     preparedMcpContext = undefined;
@@ -365,6 +368,18 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(clearIntervalSpy).toHaveBeenCalledOnce();
     expect(disposed).toBe(1); // close() 才注销
     expect(proxyDisposed).toBe(1);
+  });
+
+  it('graceful stop uses only the Pi abort RPC and keeps the process alive', async () => {
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    knobs.onEvent?.({ type: 'message_start' });
+    knobs.requests = [];
+
+    await expect(handle.requestGracefulStop?.()).resolves.toBeUndefined();
+    expect(knobs.requests).toEqual(['abort']);
+    expect(knobs.closeCount).toBe(0);
+
+    await handle.close();
   });
 
   it('keeps local runtime files until a close retry confirms process exit', async () => {

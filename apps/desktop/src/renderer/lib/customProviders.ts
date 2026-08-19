@@ -22,6 +22,7 @@ import type {
   AgentKind,
   CatalogModel,
   CustomProviderConfig,
+  PiModelApi,
   PiReasoningEffort,
   ProviderView,
   ProviderRuntimeModelConfig,
@@ -44,10 +45,9 @@ export function piCatalogProviderIdAfterRouteEdit(
   const marker = next.piCatalogProviderId;
   if (agent !== 'pi' || !marker || marker !== previous.piCatalogProviderId) return marker;
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
-  return normalizeBaseUrl(previous.baseUrl) === normalizeBaseUrl(next.baseUrl)
-    && effectivePiWireProtocol(previous.wireProtocol)
-      === effectivePiWireProtocol(next.wireProtocol)
-    && preservesPiCatalogModels(previous.models, next.models)
+  return normalizeBaseUrl(previous.baseUrl) === normalizeBaseUrl(next.baseUrl) &&
+    effectivePiWireProtocol(previous.wireProtocol) === effectivePiWireProtocol(next.wireProtocol) &&
+    preservesPiCatalogModels(previous.models, next.models)
     ? marker
     : undefined;
 }
@@ -75,18 +75,30 @@ export function replaceCustomProviderModelId(
   return { id: nextId, name: model.name };
 }
 
-/**
- * A preset piApi is upstream metadata, not a second user choice. Once the user
- * explicitly chooses a PI runtime protocol, remove those hidden per-model
- * defaults so the saved runtime protocol becomes authoritative.
- */
-export function clearCustomProviderModelPiApiOverrides(
+/** 单模型 Pi 协议覆盖；undefined 表示继承供应商默认协议。 */
+export function setCustomProviderModelPiApi(
   models: readonly ProviderRuntimeModelConfig[],
+  targetIndex: number,
+  piApi: PiModelApi | undefined,
 ): ProviderRuntimeModelConfig[] {
-  return models.map((model) => {
-    if (!model.piApi) return model;
+  return models.map((model, index) => {
+    if (index !== targetIndex) return model;
     const next = { ...model };
-    delete next.piApi;
+    if (piApi) next.piApi = piApi;
+    else delete next.piApi;
+    const selectedWireProtocol = piApi === 'anthropic-messages'
+      ? 'anthropic-messages'
+      : piApi === 'openai-completions'
+        ? 'openai-chat'
+        : piApi === 'openai-responses'
+          ? 'openai-responses'
+          : undefined;
+    // "Inherit default" means inheriting both protocol and endpoint. For an explicit override,
+    // retain a model endpoint only when it already speaks that protocol; otherwise the provider
+    // endpoint is the only safe pair (also repairs legacy protocol/route mismatches on save).
+    if (!selectedWireProtocol || next.route?.wireProtocol !== selectedWireProtocol) {
+      delete next.route;
+    }
     return next;
   });
 }
@@ -97,9 +109,7 @@ export function customProviderWireProtocolForSave(
   wireProtocol: ProviderWireProtocol,
   defaultWireProtocol: ProviderWireProtocol,
 ): ProviderWireProtocol | undefined {
-  return agent === 'pi' || wireProtocol !== defaultWireProtocol
-    ? wireProtocol
-    : undefined;
+  return agent === 'pi' || wireProtocol !== defaultWireProtocol ? wireProtocol : undefined;
 }
 
 export function setCustomProviderModelSupportsImageInput(
@@ -193,15 +203,16 @@ export function customProviderModelConfigFromCatalogModel(
     name: model.name,
     ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
     ...(model.route ? { route: { ...model.route } } : {}),
-    ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
+    ...(model.contextWindowExplicit === true ||
+    model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
     ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),
     ...(reasoningEfforts.length > 0 ? { reasoning: true, reasoningEfforts } : {}),
-    ...(agent === 'pi'
-      && model.defaultEffort
-      && reasoningEfforts.includes(model.defaultEffort as PiReasoningEffort)
+    ...(agent === 'pi' &&
+    model.defaultEffort &&
+    reasoningEfforts.includes(model.defaultEffort as PiReasoningEffort)
       ? { reasoningDefaultEffort: model.defaultEffort as PiReasoningEffort }
       : {}),
   };
