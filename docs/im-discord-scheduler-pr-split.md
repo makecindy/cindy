@@ -62,7 +62,9 @@ Device Link 的具体 host/client 接线全部延后到 PR-B。PR-A 只在
 - 只有当前权威 Desktop 快照中的 peer 能参与 probe/advertisement；binding 变化会在下一轮 probe 中传播当前非敏感 identity，并立即重算本地选举。
 - runtime gap 以 `(identity, binding generation, runtime generation)` 精确去重，同一
   binding 的多个未解决 generation 可同时保留，并按该元组确定性裁剪到协议上限；
-  binding generation 继续作为重绑生命周期屏障，不携带 token 或 secret。
+  clean 只解析精确元组，并保留四个协议窗口的确定性 resolved tombstone，防止该重放窗口内
+  先到的 clean 被迟到 dirty 复活；binding generation 继续作为重绑生命周期屏障，不携带
+  token 或 secret。
 - PR-A 的 manager 不被任何现有 IM 启动路径调用。
 
 ### PR-A 不包含

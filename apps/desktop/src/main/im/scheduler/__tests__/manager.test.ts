@@ -547,6 +547,54 @@ describe('dormant scheduler manager', () => {
     manager.stop();
   });
 
+  it('does not re-adopt a dirty generation after its exact clean frame arrived first', () => {
+    const harness = createTransport();
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => 'round-000000000000',
+      bindingGenerationFactory: () => currentLocalBindingGeneration,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    const probe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce?: string } | undefined;
+    const generation = 'c'.repeat(32);
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 2,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtime: { identity, generation, state: 'clean' },
+      },
+    });
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 3,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: probe?.nonce,
+        runtimeGaps: [{ identity, generation, state: 'dirty' }],
+      },
+    });
+
+    expect(manager.getRuntimeGaps().values()).toEqual([]);
+    manager.stop();
+  });
+
   it('keeps the binding barrier after more stale gaps than the wire limit', () => {
     const harness = createTransport();
     const manager = new ImSchedulerManager({

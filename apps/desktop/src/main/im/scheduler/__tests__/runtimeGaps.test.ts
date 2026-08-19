@@ -39,6 +39,15 @@ describe('bounded runtime gaps', () => {
     expect(gaps.values()).toEqual([second, nextBinding]);
   });
 
+  it('does not resurrect a dirty generation whose clean frame arrived first', () => {
+    const gaps = new RuntimeGapSet();
+    const resolvedBeforeDirty = gap('12345678901234567', '3'.repeat(32));
+
+    expect(gaps.resolve(resolvedBeforeDirty)).toBe(true);
+    expect(gaps.adopt(resolvedBeforeDirty)).toBe(false);
+    expect(gaps.values()).toEqual([]);
+  });
+
   it('retains at most the protocol limit with deterministic tuple ordering', () => {
     const gaps = new RuntimeGapSet();
     for (let index = 0; index < 9; index += 1) {

@@ -1,12 +1,18 @@
 import { MAX_RUNTIME_GAPS, type SchedulerRuntimeFrame } from '@cindy/device-link';
 import { compareSchedulerStrings } from './state';
 
+const MAX_RESOLVED_RUNTIME_GENERATIONS = MAX_RUNTIME_GAPS * 4;
+
 /**
  * Bounded, deterministic runtime-gap state. This is deliberately a data
  * structure only; Discord offline notices and Gateway lifecycle stay in PR-B.
  */
 export class RuntimeGapSet {
   private readonly gaps = new Map<string, SchedulerRuntimeFrame>();
+  private readonly resolved = new Map<
+    string,
+    Pick<SchedulerRuntimeFrame, 'identity' | 'bindingGeneration' | 'generation'>
+  >();
 
   private static key(
     runtime: Pick<SchedulerRuntimeFrame, 'identity' | 'bindingGeneration' | 'generation'>,
@@ -17,7 +23,7 @@ export class RuntimeGapSet {
   adopt(runtime: SchedulerRuntimeFrame): boolean {
     if (runtime.state !== 'dirty') return false;
     const key = RuntimeGapSet.key(runtime);
-    if (this.gaps.has(key)) return false;
+    if (this.resolved.has(key) || this.gaps.has(key)) return false;
     this.gaps.set(key, { ...runtime, state: 'dirty' });
     this.trim();
     return this.gaps.has(key);
@@ -26,7 +32,16 @@ export class RuntimeGapSet {
   resolve(
     runtime: Pick<SchedulerRuntimeFrame, 'identity' | 'bindingGeneration' | 'generation'>,
   ): boolean {
-    return this.gaps.delete(RuntimeGapSet.key(runtime));
+    const key = RuntimeGapSet.key(runtime);
+    const changed = !this.resolved.has(key) || this.gaps.has(key);
+    this.gaps.delete(key);
+    this.resolved.set(key, {
+      identity: runtime.identity,
+      bindingGeneration: runtime.bindingGeneration,
+      generation: runtime.generation,
+    });
+    this.trimResolved();
+    return changed;
   }
 
   get(identity: string): SchedulerRuntimeFrame | undefined {
@@ -51,6 +66,7 @@ export class RuntimeGapSet {
 
   clear(): void {
     this.gaps.clear();
+    this.resolved.clear();
   }
 
   clearIdentity(identity: string): boolean {
@@ -60,6 +76,11 @@ export class RuntimeGapSet {
       this.gaps.delete(key);
       changed = true;
     }
+    for (const [key, runtime] of this.resolved) {
+      if (runtime.identity !== identity) continue;
+      this.resolved.delete(key);
+      changed = true;
+    }
     return changed;
   }
 
@@ -67,5 +88,14 @@ export class RuntimeGapSet {
     const retained = this.values().slice(0, MAX_RUNTIME_GAPS);
     this.gaps.clear();
     for (const runtime of retained) this.gaps.set(RuntimeGapSet.key(runtime), runtime);
+  }
+
+  private trimResolved(): void {
+    if (this.resolved.size <= MAX_RESOLVED_RUNTIME_GENERATIONS) return;
+    const retained = [...this.resolved.entries()]
+      .sort(([left], [right]) => compareSchedulerStrings(left, right))
+      .slice(0, MAX_RESOLVED_RUNTIME_GENERATIONS);
+    this.resolved.clear();
+    for (const [key, runtime] of retained) this.resolved.set(key, runtime);
   }
 }

@@ -328,7 +328,9 @@ export class ImSchedulerManager {
     this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
     this.pendingPeerProbeChannels.delete(sourceDeviceId);
     for (const runtime of [payload.runtime, ...(payload.runtimeGaps ?? [])]) {
-      if (runtime?.state === 'dirty') this.adoptRuntimeGap(runtime);
+      if (!runtime || !this.isRuntimeForLocalBinding(runtime)) continue;
+      if (runtime.state === 'dirty') this.runtimeGaps.adopt(runtime);
+      if (runtime.state === 'clean') this.runtimeGaps.resolve(runtime);
     }
     if (this.isDiscoveryComplete()) this.cancelDiscoveryRetry();
     this.reconcile();
@@ -343,15 +345,17 @@ export class ImSchedulerManager {
     // not merely to the Discord application id. This is the durable barrier:
     // an old peer frame cannot return after a reset, even if no tombstone for
     // that opaque runtime generation was ever retained locally.
-    const localBinding = this.getLocalBinding();
-    if (
-      !localBinding ||
-      runtime.identity !== localBinding.identity ||
-      runtime.bindingGeneration !== localBinding.bindingGeneration
-    ) {
-      return;
-    }
+    if (!this.isRuntimeForLocalBinding(runtime)) return;
     this.runtimeGaps.adopt(runtime);
+  }
+
+  private isRuntimeForLocalBinding(runtime: SchedulerRuntimeFrame): boolean {
+    const localBinding = this.getLocalBinding();
+    return Boolean(
+      localBinding &&
+      runtime.identity === localBinding.identity &&
+      runtime.bindingGeneration === localBinding.bindingGeneration,
+    );
   }
 
   private observePeerProbe(
