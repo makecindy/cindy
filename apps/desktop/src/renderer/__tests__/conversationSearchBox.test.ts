@@ -224,15 +224,17 @@ describe('ConversationSearchBox live search', () => {
     expect(hybridMode).toBeGreaterThan(keywordMode);
   });
 
-  it('ignores delayed keyword results once the hybrid refresh has started', () => {
-    const keywordStaleGuard = source.indexOf('if (semanticStartedSeqRef.current === seq) return;');
-    const hybridStartedMark = source.indexOf('semanticStartedSeqRef.current = seq;');
+  it('reuses the first remote page for hybrid and still merges late remote hits', () => {
     const hybridMode = source.indexOf("semanticMode: 'hybrid'");
+    const reuseRemote = source.indexOf('reuseRemoteResults');
+    const mergeLateRemote = source.indexOf('mergeConversationSearchFanout');
 
     expect(source).toContain('semanticStartedSeqRef');
-    expect(keywordStaleGuard).toBeGreaterThan(-1);
-    expect(hybridStartedMark).toBeGreaterThan(keywordStaleGuard);
-    expect(hybridStartedMark).toBeLessThan(hybridMode);
+    expect(reuseRemote).toBeGreaterThan(hybridMode);
+    expect(mergeLateRemote).toBeGreaterThan(-1);
+    expect(source).toContain('if (semanticStartedSeqRef.current === seq)');
+    expect(source).toContain('results: remoteResultsRef.current');
+    expect(source).toContain('next.remoteResults');
   });
 
   it('restores a terminal state if the hybrid refresh fails first', () => {
@@ -279,6 +281,14 @@ describe('ConversationSearchBox live search', () => {
             sessionIds: ['session-a1', 'session-a2'],
           }),
         }),
+        expect.objectContaining({
+          origins: [
+            expect.objectContaining({
+              kind: 'local',
+              sessionIds: ['session-a1', 'session-a2'],
+            }),
+          ],
+        }),
       );
     }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
   });
@@ -313,6 +323,7 @@ describe('ConversationSearchBox live search', () => {
             sessionIds: ['visible-session-a1', 'visible-session-a2'],
           }),
         }),
+        expect.anything(),
       );
     }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
   });
@@ -409,6 +420,14 @@ describe('ConversationSearchBox live search', () => {
             sessionIds: ['session-a1', 'session-a2'],
           }),
         }),
+        expect.objectContaining({
+          origins: [
+            expect.objectContaining({
+              kind: 'local',
+              sessionIds: ['session-a1', 'session-a2'],
+            }),
+          ],
+        }),
       );
     }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
 
@@ -500,6 +519,7 @@ describe('ConversationSearchBox live search', () => {
     await waitFor(() => {
       expect(searchConversations).toHaveBeenCalledWith(
         expect.objectContaining({ unnamedLabel: 'ccAgent.common.unnamedSession' }),
+        expect.anything(),
       );
     }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
 
@@ -548,5 +568,210 @@ describe('ConversationSearchBox live search', () => {
     expect(projectNodeSource).not.toContain('useSessionSearch');
     expect(projectNodeSource).not.toContain('search.isOpen');
     expect(projectNodeSource).not.toContain('search.open();');
+  });
+
+  it('keeps SSH project identity when a local project shares the same workingDir', async () => {
+    vi.mocked(searchConversations).mockResolvedValue({
+      query: 'needle',
+      results: [],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+    const localTwin: ProjectNodeData = {
+      ...projects[0],
+      projectKey: 'local:/workspace/repo',
+      workingDir: '/workspace/repo',
+      displayName: 'Local Repo',
+      sessions: [{ id: 'local-same-path' } as ProjectNodeData['sessions'][number]],
+    };
+    const sshTwin: ProjectNodeData = {
+      ...projects[0],
+      projectKey: 'remote:ssh-host:/workspace/repo',
+      scope: 'remote',
+      workingDir: '/workspace/repo',
+      remoteHostId: 'ssh-host',
+      displayName: 'SSH Repo',
+      sessions: [{ id: 'ssh-same-path' } as ProjectNodeData['sessions'][number]],
+    };
+    render(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [localTwin, sshTwin],
+        allowedSessionIds: ['local-same-path', 'ssh-same-path'],
+        hiddenProjectKeys,
+      }),
+    );
+    fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+    await screen.findByTestId('conversation-search-popover');
+    fireEvent.click(screen.getByText('SSH Repo').closest('button') as HTMLButtonElement);
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), {
+      target: { value: 'needle' },
+    });
+    await waitFor(() => {
+      expect(searchConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          semanticMode: 'keyword',
+          filters: expect.objectContaining({ sessionIds: ['ssh-same-path'] }),
+        }),
+        expect.objectContaining({
+          origins: [
+            expect.objectContaining({
+              kind: 'local',
+              sessionIds: ['ssh-same-path'],
+            }),
+          ],
+        }),
+      );
+    }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
+    expect(searchConversations).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        origins: [expect.objectContaining({ workingDirs: ['/workspace/repo'] })],
+      }),
+    );
+  });
+
+  it('searches a filter-selected remote project by workingDir instead of mirrored ids', async () => {
+    vi.mocked(searchConversations).mockResolvedValue({
+      query: 'needle',
+      results: [],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+    const remoteProject: ProjectNodeData = {
+      projectKey: 'device:dev-a:/repo-remote',
+      scope: 'remote',
+      workingDir: '/repo-remote',
+      remoteHostId: null,
+      deviceLinkDeviceId: 'dev-a',
+      deviceLinkDeviceName: 'Studio',
+      deviceLinkConnectionStatus: 'connected',
+      displayName: 'Repo Remote',
+      segments: 1,
+      sessions: [{ id: 'mirrored-only' } as ProjectNodeData['sessions'][number]],
+      latestActivityAt: '2026-06-14T00:00:00.000Z',
+    };
+    render(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [remoteProject],
+        allowedSessionIds: ['mirrored-only'],
+        hiddenProjectKeys,
+        searchDevices: [{ deviceId: 'dev-a', deviceName: 'Studio', connected: true }],
+      }),
+    );
+    fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+    await screen.findByTestId('conversation-search-popover');
+    fireEvent.click(screen.getByText('Repo Remote').closest('button') as HTMLButtonElement);
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), {
+      target: { value: 'needle' },
+    });
+    await waitFor(() => {
+      expect(searchConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          semanticMode: 'keyword',
+          filters: expect.objectContaining({ sessionIds: null }),
+        }),
+        expect.objectContaining({
+          origins: [
+            expect.objectContaining({
+              kind: 'remote',
+              deviceId: 'dev-a',
+              sessionIds: null,
+              workingDirs: ['/repo-remote'],
+            }),
+          ],
+        }),
+      );
+    }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
+  });
+
+  it('searches a remote project by workingDir instead of the mirrored session window', async () => {
+    vi.mocked(searchConversations).mockResolvedValue({
+      query: 'needle',
+      results: [],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+    const remoteProject: ProjectNodeData = {
+      projectKey: 'device:dev-a:/repo-remote',
+      scope: 'remote',
+      workingDir: '/repo-remote',
+      remoteHostId: null,
+      deviceLinkDeviceId: 'dev-a',
+      deviceLinkDeviceName: 'Studio',
+      deviceLinkConnectionStatus: 'connected',
+      displayName: 'Repo Remote',
+      segments: 1,
+      sessions: [{ id: 'mirrored-only' } as ProjectNodeData['sessions'][number]],
+      latestActivityAt: '2026-06-14T00:00:00.000Z',
+    };
+    render(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [remoteProject],
+        allowedSessionIds: ['mirrored-only'],
+        hiddenProjectKeys,
+        searchDevices: [{ deviceId: 'dev-a', deviceName: 'Studio', connected: true }],
+        projectFilterRequest: {
+          projectKey: remoteProject.projectKey,
+          projectName: 'Repo Remote',
+          sessionIds: ['mirrored-only'],
+          workingDir: '/repo-remote',
+          deviceLinkDeviceId: 'dev-a',
+          requestId: 1,
+        },
+      }),
+    );
+    await screen.findByTestId('conversation-search-popover');
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), {
+      target: { value: 'needle' },
+    });
+    await waitFor(() => {
+      expect(searchConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          semanticMode: 'keyword',
+          filters: expect.objectContaining({ sessionIds: null }),
+        }),
+        expect.objectContaining({
+          origins: [
+            expect.objectContaining({
+              kind: 'remote',
+              deviceId: 'dev-a',
+              sessionIds: null,
+              workingDirs: ['/repo-remote'],
+            }),
+          ],
+        }),
+      );
+    }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
+  });
+
+  it('includes device-link remote sessions in the sidebar search universe', () => {
+    const contextSource = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'conversationSearchContext.tsx'),
+      'utf8',
+    );
+    const sidebarSource = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
+      'utf8',
+    );
+    expect(contextSource).toContain('useRemoteProjectSessions');
+    expect(contextSource).toContain('selectVisibleSessions');
+    expect(contextSource).toContain('shouldReleaseConversationSearchLock');
+    expect(contextSource).toContain("requestRemoteSessionStatus(device.deviceId, 'archived')");
+    expect(sidebarSource).toContain('useRemoteProjectSessions');
+    expect(sidebarSource).toContain('workingDir: project.workingDir');
+    expect(sidebarSource).toContain('deviceLinkDeviceId: project.deviceLinkDeviceId');
+    expect(sidebarSource).toContain('useConversationSearchRequest');
+    expect(sidebarSource).toContain(
+      'projectFilterRequest={isCollapsed ? projectFilterRequest : null}',
+    );
+    expect(sidebarSource).toMatch(
+      /searchProjectSessions[\s\S]*selectVisibleSessions\([\s\S]*allSessionsForAttention[\s\S]*remoteProjectSessions/,
+    );
   });
 });

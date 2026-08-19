@@ -194,7 +194,9 @@
     .animate-confirm-overlay-in,
     .animate-confirm-overlay-out,
     .animate-confirm-content-in,
-    .animate-confirm-content-out {
+    .animate-confirm-content-out,
+    .animate-confirm-content-layout-in,
+    .animate-confirm-content-layout-out {
       animation-duration: 0ms !important;
     }
 

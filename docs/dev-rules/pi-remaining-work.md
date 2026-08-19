@@ -70,9 +70,9 @@ auto fail-closed、成本派生链、弹窗正文 harness 无关)。
   BYOM 会话中途切回网关模型 401。改为仅 anthropic/openai/xai 用占位符,BYOM/自定义拿真网关 key。
 - **保留 `cindy` provider id**(custom-provider-store.ts RESERVED_IDS):撞 pi 网关 provider id
   会让其模型既被排除出网关块又不写原生块 → `--model` 校验失败。
-- **两处源码契约测试同步 pi 改动**:`sessionHeaderMenuParity`(导出 HTML / 手动压缩是头部专属
-  live-session 菜单项,不要求侧栏同步)、`automationGeneratedSessions`(自动组头图标改用
-  `agentKindToVendor`,pi 会话显示 π)。
+- **两处源码契约测试同步 pi 改动**:`sessionHeaderMenuParity`(导出 HTML / 压缩暂隐;
+  任务分支只在 Cindy 分叉家族时显示,仍是头部专属)、`automationGeneratedSessions`(
+  自动组头图标改用 `agentKindToVendor`,pi 会话显示 π)。
 
 **已评估暂不修(设计权衡 / 边缘,后续按需)**:
 - **#2 已解决 — 纯 BYOM 不依赖网关 key**:`getState` 按 custom provider runtime 校验自身

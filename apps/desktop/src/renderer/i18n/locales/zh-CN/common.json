@@ -3776,7 +3776,7 @@
         "updateTo": "更新到 v{{version}}",
         "updateAria": "将 {{name}} 更新到 v{{version}}",
         "createWithCindy": "使用 Cindy 创建",
-        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，先读第 0 章「设计对齐」，再用 section 参数读透相关章节（动手前至少读完沙箱红线与打包流程两章），不要直接开始实现。先从提问开始：优先用带选项的提问卡片，每张卡片聚焦一个关键决策并标注你的推荐项，把我可能不知道的设计选项主动摆出来让我选——比如界面形态（停靠面板、插件页内面板、对话卡片还是无界面）、$ 点名词、启动模式、是否联网、是否需要设置页；并逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
+        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，先读第 0 章「设计对齐」，再用 section 参数读透相关章节（动手前至少读完第 2 章卡槽总览、沙箱红线与打包流程三章），不要直接开始实现。先从提问开始：优先用带选项的提问卡片，每张卡片聚焦一个关键决策并标注你的推荐项，把我可能不知道的设计选项主动摆出来让我选——比如界面形态（停靠面板、插件页内面板、对话卡片还是无界面）、$ 点名词、启动模式、后台能力（旁听事件、应用内轻提示、未读角标、确认弹窗）、是否联网、是否需要设置页、要不要随包 Node 进程跑重活、要不要图片视频等媒体能力；并逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
         "filterAll": "全部",
         "filtersAria": "按来源筛选插件",
         "origin": {
@@ -7535,7 +7535,16 @@
   "chat": {
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
-      "skippedAnswer": "已跳过"
+      "skippedAnswer": "已跳过",
+      "pendingTitle": "等待回答",
+      "restoreAriaLabel": "展开问题卡片",
+      "minimizeAriaLabel": "收起问题卡片",
+      "back": "返回",
+      "skip": "跳过",
+      "next": "下一题",
+      "submit": "提交",
+      "customAnswer": "输入其他回答…",
+      "answerPlaceholder": "请输入回答…"
     },
     "planReviewBubble": {
       "title": "计划审阅",
@@ -8804,7 +8813,7 @@
         "syncCodexAlreadyLinked": "此项目的 Codex 任务已经链接过了",
         "syncCodexNone": "没有找到此项目的 Codex 任务",
         "syncCodexFailed": "Codex 同步失败：{{error}}",
-        "search": "搜索任务"
+        "search": "在项目内搜索任务"
       },
       "deepLink": {
         "copied": "已复制深度链接",

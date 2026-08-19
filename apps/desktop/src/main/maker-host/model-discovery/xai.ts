@@ -3,7 +3,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import type { Effort } from '@cindy/model-providers';
+import { effortRank, type Effort } from '@cindy/model-providers';
 
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../../appSessionState.js';
 import { createLogger, type Logger } from '../../logger.js';
@@ -111,6 +111,18 @@ function effort(value: unknown): Effort | undefined {
   return typeof value === 'string' && VALID_EFFORTS.has(value) ? (value as Effort) : undefined;
 }
 
+/**
+ * 档位数组一律**规范升序**(低 → 高)。x.ai 的 `/v1/models` 下发的是**降序**
+ * (Chris 2026-08-19 实测:`['high','medium','low']`),而全仓消费端(EffortSlider 的
+ * 按下标画轴、`efforts[0]`=最低 / `efforts.at(-1)`=最高的取值点)契约都是升序 ——
+ * 原序透传出去,Grok 4.5 的滑杆整条轴反向,用户以为在拉高、实际每次都写 low。
+ * 顺序是**表示细节**,在入库这一点归一,payload / 磁盘缓存怎么排都不再泄漏到下游;
+ * `parseCachedModels` 复用本函数,已落盘的降序缓存下次读取即被纠正,不必等刷新。
+ */
+function canonicalEffortOrder(list: readonly Effort[]): Effort[] {
+  return [...list].sort((a, b) => effortRank(a) - effortRank(b));
+}
+
 function parseReasoningEfforts(raw: unknown): { efforts?: Effort[]; declaredDefault?: Effort } {
   if (!Array.isArray(raw)) return {};
   const efforts: Effort[] = [];
@@ -121,7 +133,7 @@ function parseReasoningEfforts(raw: unknown): { efforts?: Effort[]; declaredDefa
     efforts.push(value);
     if (isRecord(item) && item.default === true) declaredDefault = value;
   }
-  return { efforts, declaredDefault };
+  return { efforts: canonicalEffortOrder(efforts), declaredDefault };
 }
 
 function canonicalModelId(raw: string): string {
@@ -161,7 +173,9 @@ export function parseXaiAccountModels(payload: unknown): XaiDiscoveredModel[] {
     } else if (efforts === undefined && declaredDefault) {
       efforts = [declaredDefault];
     } else if (efforts && declaredDefault && !efforts.includes(declaredDefault)) {
-      efforts = [...efforts, declaredDefault];
+      // 追加后重排:declaredDefault 直接 push 到尾部会破坏 parseReasoningEfforts
+      // 已经建立的规范升序(见 canonicalEffortOrder)。
+      efforts = canonicalEffortOrder([...efforts, declaredDefault]);
     }
     const name = stringField(value, 'name');
     const description = stringField(value, 'description');

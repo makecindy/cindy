@@ -249,9 +249,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'local-db:bots:list',
   'local-db:bots:get',
   'local-db:sessions:get',
-  // Read-only indexed task search for the remote Composer @ palette. Older
-  // controlled clients reject this channel and the controller falls back to
-  // the bounded legacy sessions:list projection.
+  // Read-only indexed task search for the remote Composer @ palette and the
+  // controller sidebar task search. Older controlled clients reject this
+  // channel and the controller falls back to the bounded legacy sessions:list
+  // projection.
   'local-db:conversations:search',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
