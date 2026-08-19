@@ -95,6 +95,9 @@ const fsKnobs = vi.hoisted(() => ({
   /** Suspends the next `rm`, so a deletion can be held open across other work. */
   holdRmOnce: null as null | Promise<void>,
   onRmHeld: null as null | (() => void),
+  /** Fails the next `remaining` unlinks with `code`, the shape of a file lock. */
+  rmFailures: null as null | { remaining: number; code: string },
+  rmAttempts: 0,
 }));
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -111,6 +114,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       fsKnobs.holdRmOnce = null;
       fsKnobs.onRmHeld?.();
       await gate;
+    }
+    fsKnobs.rmAttempts += 1;
+    const failures = fsKnobs.rmFailures;
+    if (failures && failures.remaining > 0) {
+      failures.remaining -= 1;
+      throw Object.assign(new Error(`${failures.code}: simulated file lock`), {
+        code: failures.code,
+      });
     }
     return actual.rm(...args);
   };
@@ -167,6 +178,8 @@ afterEach(async () => {
   fsKnobs.failWriteFileOnce = false;
   fsKnobs.holdRmOnce = null;
   fsKnobs.onRmHeld = null;
+  fsKnobs.rmFailures = null;
+  fsKnobs.rmAttempts = 0;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -1454,6 +1467,134 @@ describe('PI durable subagent run store', () => {
 
           expect(existsSync(file)).toBe(false);
           expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        });
+      });
+
+      /**
+       * The stale sweep can reach this process's *own* fence path after pid
+       * reuse: the OS hands our pid back to us, the file the previous
+       * incarnation left is correctly judged stale, and its unlink then sits in
+       * the event loop while a quit or account boundary publishes a new fence on
+       * the very same path. Unserialised, the stale unlink removes that new
+       * fence and the boundary believes a door is shut that is standing open.
+       */
+      describe('the stale sweep against this process own path', () => {
+        async function writePreviousIncarnationFence(agentHome: string): Promise<string> {
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          await mkdir(path.dirname(file), { recursive: true });
+          // Our pid, someone else's start second: exactly what pid reuse leaves.
+          await writeFile(file, `${JSON.stringify({
+            version: 1,
+            hostPid: process.pid,
+            hostStartTimeSec: 1,
+            leaseId: 'previous-life',
+            createdAt: 1,
+          })}\n`);
+          return file;
+        }
+
+        it('does not delete the fence a boundary published while its unlink was pending', async () => {
+          const agentHome = await makeRoot();
+          const file = await writePreviousIncarnationFence(agentHome);
+          let openHeld!: () => void;
+          let letRmRun!: () => void;
+          const rmHeld = new Promise<void>((resolve) => { openHeld = resolve; });
+          fsKnobs.onRmHeld = openHeld;
+          fsKnobs.holdRmOnce = new Promise<void>((resolve) => { letRmRun = resolve; });
+
+          const sweeping = clearStalePiSubagentLaunchFence(agentHome);
+          await rmHeld;
+          // A boundary starts while the stale unlink is suspended.
+          const acquiring = acquirePiSubagentLaunchFence(agentHome);
+          // Long enough for an unserialised publish to land inside the window.
+          await new Promise((resolve) => { setTimeout(resolve, 150); });
+          letRmRun();
+          const release = await acquiring;
+          await sweeping;
+
+          expect(existsSync(file)).toBe(true);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+
+          await release();
+          expect(existsSync(file)).toBe(false);
+        });
+
+        it('still clears the previous incarnation when no boundary intervenes', async () => {
+          const agentHome = await makeRoot();
+          const file = await writePreviousIncarnationFence(agentHome);
+
+          await clearStalePiSubagentLaunchFence(agentHome);
+
+          expect(existsSync(file)).toBe(false);
+        });
+
+        it('leaves a fence this process just published alone', async () => {
+          // The other interleaving: the publish is already in the chain when the
+          // sweep queues behind it, so the sweep re-reads a fence whose start
+          // time is this incarnation's and keeps it.
+          const agentHome = await makeRoot();
+          await writePreviousIncarnationFence(agentHome);
+          const release = await acquirePiSubagentLaunchFence(agentHome);
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+
+          await clearStalePiSubagentLaunchFence(agentHome);
+
+          expect(existsSync(file)).toBe(true);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(true);
+          await release();
+        });
+      });
+
+      /**
+       * Swallowing a locked unlink is not harmless: the in-memory lease is gone
+       * by then, so the file left behind names a *live* pid with nobody holding
+       * it, every durable launch is refused as "restarting", and the stale sweep
+       * will not clean it either because it only clears dead owners.
+       */
+      describe('a fence unlink that hits a transient lock', () => {
+        it('rides out a lock that clears', async () => {
+          const agentHome = await makeRoot();
+          const release = await acquirePiSubagentLaunchFence(agentHome);
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          fsKnobs.rmFailures = { remaining: 3, code: 'EBUSY' };
+
+          await release();
+
+          // The consequence first: a swallowed lock leaves a fence naming a live
+          // pid that nothing will clean, and every durable launch is refused.
+          expect(existsSync(file)).toBe(false);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+          expect(fsKnobs.rmAttempts).toBeGreaterThan(3);
+        });
+
+        it('gives up quietly on a lock that does not, and heals on the next boundary', async () => {
+          const agentHome = await makeRoot();
+          const release = await acquirePiSubagentLaunchFence(agentHome);
+          const file = piSubagentLaunchFencePath(agentHome, process.pid);
+          fsKnobs.rmFailures = { remaining: Number.MAX_SAFE_INTEGER, code: 'EBUSY' };
+
+          // Documented residue: bounded retries, no throw, file still there.
+          await expect(release()).resolves.toBeUndefined();
+          expect(existsSync(file)).toBe(true);
+
+          // Self-healing rather than permanent: the next boundary rewrites the
+          // path with its own lease, and that holder's release takes it down.
+          fsKnobs.rmFailures = null;
+          const next = await acquirePiSubagentLaunchFence(agentHome);
+          await next();
+          expect(existsSync(file)).toBe(false);
+          expect(isPiSubagentLaunchFenceActive(agentHome, process.pid)).toBe(false);
+        });
+
+        it('does not retry a permanent error', async () => {
+          const agentHome = await makeRoot();
+          const release = await acquirePiSubagentLaunchFence(agentHome);
+          fsKnobs.rmFailures = { remaining: Number.MAX_SAFE_INTEGER, code: 'EROFS' };
+          fsKnobs.rmAttempts = 0;
+
+          await release();
+
+          expect(fsKnobs.rmAttempts).toBe(1);
         });
       });
 

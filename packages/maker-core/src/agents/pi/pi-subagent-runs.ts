@@ -491,7 +491,56 @@ export async function acquirePiSubagentLaunchFence(agentHome: string): Promise<(
 async function removeOwnedLaunchFenceFile(file: string, leaseId: string): Promise<void> {
   const onDisk = readLaunchFence(file);
   if (onDisk?.leaseId !== undefined && onDisk.leaseId !== leaseId) return;
-  await fs.rm(file, { force: true }).catch(() => undefined);
+  await removeLaunchFenceFile(file);
+}
+
+/**
+ * How long to keep trying to unlink a fence file that is momentarily locked.
+ *
+ * Windows hands back EPERM/EACCES/EBUSY while a virus scanner or a runner that
+ * is mid-read still has the file open; those clear well inside a second. Same
+ * shape and the same reasoning as the runner's rename retry: ten attempts on a
+ * 25ms step capped at 100ms, so the whole budget is under a second and a
+ * genuinely stuck file does not hold a boundary open.
+ */
+const FENCE_UNLINK_RETRY_ATTEMPTS = 10;
+const FENCE_UNLINK_RETRY_STEP_MS = 25;
+const FENCE_UNLINK_RETRY_MAX_MS = 100;
+
+/**
+ * Delete a fence file, riding out a transient lock.
+ *
+ * The single deletion point for every caller (release, the reservation
+ * rollback, and the stale sweep), because swallowing a lock is not harmless
+ * here: the in-memory lease is already gone, so the file left behind names a
+ * *live* pid with nobody holding it — every durable launch this process makes
+ * is then refused as "restarting", and the stale sweep will not clean it either
+ * because it only clears dead owners.
+ *
+ * Still silent when the retries run out, and there is no logger on this path.
+ * The residue is the same one described above, and it is self-healing rather
+ * than permanent: the next acquire on this path rewrites the file with its own
+ * lease, and that holder's release deletes it.
+ */
+async function removeLaunchFenceFile(file: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rm(file, { force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // `force` already treats a missing file as success; belt and braces.
+      if (code === 'ENOENT') return;
+      const transient = code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+      if (!transient || attempt >= FENCE_UNLINK_RETRY_ATTEMPTS - 1) return;
+      await new Promise<void>((resolve) => {
+        setTimeout(
+          resolve,
+          Math.min(FENCE_UNLINK_RETRY_MAX_MS, FENCE_UNLINK_RETRY_STEP_MS * (attempt + 1)),
+        );
+      });
+    }
+  }
 }
 
 /**
@@ -499,10 +548,18 @@ async function removeOwnedLaunchFenceFile(file: string, leaseId: string): Promis
  * an update relaunch, where the fence was raised by the host we replaced. A
  * fence owned by a live process (another instance mid-relaunch) is left alone.
  *
- * Deliberately outside the per-file serialisation chain: it cannot reach a file
- * this process publishes. Our own per-pid fence names a live pid whose start
- * time matches, which is the case this returns early on, and the legacy shared
- * name is only ever read here — no build still writes it.
+ * Each file's judge-and-delete goes through that file's serialisation chain.
+ * The earlier reading — that this could never reach a file *this* process
+ * publishes — does not survive pid reuse: the OS hands our pid to us, this sweep
+ * finds `.launch-fence-<our pid>.json` written by the previous incarnation,
+ * correctly calls it stale, and its unlink sits in the event loop while a quit
+ * or account boundary publishes a new fence on the very same path. The stale
+ * unlink then removes the *new* fence, and the boundary believes a door is
+ * closed that is standing open.
+ *
+ * Ownership is therefore re-read inside the chain. The pass before it only
+ * narrows the candidates; a verdict formed outside the chain is a verdict on
+ * data that may already be stale by the time the delete runs.
  */
 export async function clearStalePiSubagentLaunchFence(agentHome: string): Promise<void> {
   const runsRoot = piSubagentRunsRoot(agentHome);
@@ -517,43 +574,47 @@ export async function clearStalePiSubagentLaunchFence(agentHome: string): Promis
     || (entry.startsWith(PI_SUBAGENT_LAUNCH_FENCE_PREFIX)
       && entry.endsWith(PI_SUBAGENT_LAUNCH_FENCE_SUFFIX))
   ));
+  // One chain per path, so the scan still runs the files concurrently: two
+  // different fences never share a chain and cannot block each other.
   await Promise.all(fences.map(async (entry) => {
     const file = path.join(runsRoot, entry);
-    let content: string;
-    try {
-      content = await fs.readFile(file, 'utf8');
-    } catch (error) {
-      // ENOENT: somebody else already cleared it, nothing to do. Anything else
-      // is a transient read failure, and a fence we cannot read is one we must
-      // not delete either — a launcher now obeys it, so removing it on a
-      // sharing conflict would open the window the owner is still holding shut.
-      // The next sweep tries again.
-      return;
-    }
-    let fence: PiSubagentLaunchFence | null;
-    try {
-      fence = parseLaunchFence(JSON.parse(content));
-    } catch {
-      // Readable and malformed. No atomic writer publishes that, so it names no
-      // owner — and it is the one case that must still be removed: the launch
-      // check now treats an unparseable file as a fence, so leaving it would
-      // block this host's durable launches for good.
-      await fs.rm(file, { force: true }).catch(() => undefined);
-      return;
-    }
-    // A live owner is an instance genuinely mid-relaunch; leave it alone —
-    // unless the live process at that pid started at a different time than the
-    // fence records, which means the pid was recycled and this file is a
-    // previous life's leftover. An unreadable start time stays conservative.
-    if (fence && isProcessAlive(fence.hostPid) !== false) {
-      if (fence.hostStartTimeSec === undefined) return;
-      const startTimeSec = fence.hostPid === process.pid
-        ? ownProcessStartTimeSec()
-        : probeProcessStartTimeSec(fence.hostPid, Date.now());
-      if (startTimeSec === null) return;
-      if (Math.abs(startTimeSec - fence.hostStartTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC) return;
-    }
-    await fs.rm(file, { force: true }).catch(() => undefined);
+    await queueLaunchFenceDiskWork(file, async () => {
+      let content: string;
+      try {
+        content = await fs.readFile(file, 'utf8');
+      } catch (error) {
+        // ENOENT: somebody else already cleared it, nothing to do. Anything else
+        // is a transient read failure, and a fence we cannot read is one we must
+        // not delete either — a launcher now obeys it, so removing it on a
+        // sharing conflict would open the window the owner is still holding shut.
+        // The next sweep tries again.
+        return;
+      }
+      let fence: PiSubagentLaunchFence | null;
+      try {
+        fence = parseLaunchFence(JSON.parse(content));
+      } catch {
+        // Readable and malformed. No atomic writer publishes that, so it names no
+        // owner — and it is the one case that must still be removed: the launch
+        // check now treats an unparseable file as a fence, so leaving it would
+        // block this host's durable launches for good.
+        await removeLaunchFenceFile(file);
+        return;
+      }
+      // A live owner is an instance genuinely mid-relaunch; leave it alone —
+      // unless the live process at that pid started at a different time than the
+      // fence records, which means the pid was recycled and this file is a
+      // previous life's leftover. An unreadable start time stays conservative.
+      if (fence && isProcessAlive(fence.hostPid) !== false) {
+        if (fence.hostStartTimeSec === undefined) return;
+        const startTimeSec = fence.hostPid === process.pid
+          ? ownProcessStartTimeSec()
+          : probeProcessStartTimeSec(fence.hostPid, Date.now());
+        if (startTimeSec === null) return;
+        if (Math.abs(startTimeSec - fence.hostStartTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC) return;
+      }
+      await removeLaunchFenceFile(file);
+    });
   }));
 }
 
