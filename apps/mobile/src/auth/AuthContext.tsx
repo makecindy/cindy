@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState, Linking } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 import {
   AuthApiError,
   CindyAuthClient,
@@ -59,8 +59,9 @@ import {
   resetMobileSessionRealm,
 } from '@/config/env';
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
-import { ensureDeviceId } from '@/auth/deviceId';
-import { isAccessTokenExpiring } from '@/auth/jwt';
+import { ensureDeviceId, hasStoredDeviceId } from '@/auth/deviceId';
+import { decodeJwtOrgSlug, isAccessTokenExpiring } from '@/auth/jwt';
+import { maybeEnableXdOrgBetaDefault } from '@/auth/xdOrgBetaDefault';
 import { getAuthLocale } from '@/auth/loginMessages';
 import { acquireNativeSocialCredential } from '@/auth/nativeSocial';
 import {
@@ -100,6 +101,12 @@ import {
   clearCanaryChannel,
   syncCanaryChannel,
 } from '@/update/canaryChannelStore';
+import {
+  prepareBetaChannelForDevice,
+  enableUncustomizedBetaChannel,
+  readBetaChannelState,
+} from '@/update/betaChannelStore';
+import { probeBetaChannel } from '@/update/fetchLatestRelease';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -329,6 +336,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  /** 登录态落地后为 xd 组织尝试打开设备级 beta；不阻塞主界面。 */
+  const scheduleXdOrgBetaDefault = useCallback(
+    (token: string, expectedAuthGeneration: number) => {
+      if (!IS_OTA_SELFHOST) return;
+      const currentUser = userRef.current;
+      if (!currentUser) return;
+      const expectedUserId = currentUser.id;
+      void maybeEnableXdOrgBetaDefault(
+        {
+          expectedAuthGeneration,
+          expectedUserId,
+          user: {
+            membershipKind: currentUser.membershipKind,
+            orgSlug: decodeJwtOrgSlug(token),
+            orgName: currentUser.orgName,
+          },
+        },
+        {
+          readCurrentAuthIdentity: () => ({
+            authGeneration: authGenerationRef.current,
+            userId: userRef.current?.id ?? null,
+          }),
+          readChannelState: readBetaChannelState,
+          probeBetaManifest: () =>
+            probeBetaChannel(Platform.OS === 'android' ? 'android' : 'ios'),
+          enableBeta: () =>
+            enableUncustomizedBetaChannel(
+              () =>
+                authGenerationRef.current === expectedAuthGeneration &&
+                userRef.current?.id === expectedUserId,
+            ),
+        },
+      ).catch(() => undefined);
+    },
+    [],
+  );
+
   const serializeRefreshTokenMutation = useCallback(
     <T,>(operation: () => Promise<T>): Promise<T> => {
       const run = refreshTokenMutationRef.current.then(operation, operation);
@@ -535,6 +579,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
       sessionRecoverySuspendedRef.current = false;
       scheduleCanaryChannelSync(outcome.accessToken, generation);
+      scheduleXdOrgBetaDefault(outcome.accessToken, generation);
       updateLoginState(
         reduceAuthFlow(loginStateRef.current, { type: 'outcome', outcome }),
       );
@@ -549,6 +594,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loadMe,
       persistAccountDeletionReceipt,
       scheduleCanaryChannelSync,
+      scheduleXdOrgBetaDefault,
       serializeRefreshTokenMutation,
       setToken,
       updateLoginState,
@@ -597,6 +643,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             mergeMembershipWithExisting(pair.membership, userRef.current),
           );
           scheduleCanaryChannelSync(pair.accessToken, generation);
+          scheduleXdOrgBetaDefault(pair.accessToken, generation);
           void loadMe(pair.accessToken, did, generation).catch(() => undefined);
           return pair.accessToken;
         } catch (error) {
@@ -616,6 +663,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applyUser,
       loadMe,
       scheduleCanaryChannelSync,
+      scheduleXdOrgBetaDefault,
       serializeRefreshTokenMutation,
       setToken,
     ],
@@ -626,10 +674,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const run = async () => {
       setIsBusy(true);
       try {
+        const hadExistingDeviceId = await hasStoredDeviceId();
         const did = await ensureDeviceId();
         if (cancelled || sessionRecoverySuspendedRef.current) return;
         deviceIdRef.current = did;
         setDeviceId(did);
+        // beta 偏好存储异常不能拖垮认证启动；失败时 store 保持 migration hold，
+        // 只会保守地不自动开 beta。
+        await prepareBetaChannelForDevice({ hadExistingDeviceId }).catch(
+          () => undefined,
+        );
         // Old Feishu refresh tokens are not valid in auth-server. Purge them explicitly
         // instead of sending them to the new endpoint or restoring an unrelated profile.
         await Promise.all([
@@ -1369,12 +1423,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
     // Invalidate in-flight remote creates before any async logout cleanup begins.
     setMobileAuthOwner(null);
+    // 同步失效认证代次，必须早于第一个 await。否则推送 token 注销的网络等待窗口内，
+    // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。
+    authGenerationRef.current += 1;
+    refreshInFlightRef.current = null;
     await unregisterPushTokenBestEffort(
       accessTokenRef.current,
       activeAuthRealmRef.current,
     );
-    authGenerationRef.current += 1;
-    refreshInFlightRef.current = null;
     setToken(null);
     applyUser(null);
     updateLoginState(null);
