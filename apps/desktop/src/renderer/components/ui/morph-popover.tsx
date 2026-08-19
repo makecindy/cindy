@@ -48,6 +48,17 @@ import { cn } from '@/lib/utils';
  * 行高亮、i18n 全部由调用方提供。业务不进这里。
  */
 
+/**
+ * 内容侧主动请求重量的自定义事件名(从内容任意节点冒泡派发即可)。
+ *
+ * 为什么需要它:面板内容若被「不超过宿主高度」的钳制链约束(如统一模型选择器的
+ * min-h-0 弹性列),内容**增长**时元素尺寸被钳住不变,ResizeObserver 看不到任何
+ * 变化 —— 切到条目更多的视图后面板永远卡在小尺寸(2026-08-14 实机自查:xAI 视图
+ * 收缩到 243px,切回「全部」不再长回)。收缩能被 RO 看到,增长必须由内容侧吱声。
+ * 非 morph 宿主(Radix 分支)收不到此事件,无副作用。
+ */
+export const MORPH_CONTENT_RESIZE_EVENT = 'cindy:morph-content-resize';
+
 const MORPH_MS = 220;
 const MORPH_EASE = 'cubic-bezier(0.3, 0.9, 0.25, 1)';
 /** 面板停靠位与 chip 之间的间隙(对齐 Radix sideOffset 习惯) */
@@ -94,6 +105,19 @@ interface MorphPopoverProps {
    * hug, 面板按内容/panelWidth 展开。
    */
   panelWidthMode?: 'content' | 'trigger';
+  /**
+   * 一次打开内**宽度只进不退**:打开后的重量(RO / 内容重量请求)允许面板变宽,
+   * 不允许回缩;下次打开重新起算。给「面板内还有视图筛选」的调用方(统一模型
+   * 选择器):筛选把内容变窄时面板宽度跳变,rail 图标会在指针底下移位
+   * (Chris 2026-08-14 实测反馈)。高度不受影响,继续双向跟随内容。
+   */
+  stickyWidth?: boolean;
+  /**
+   * stickyWidth 的**形态代际**:值变化 = 调用方声明面板整体换了形态(如统一模型
+   * 选择器的列表样式切换),宽度水位当场清零、允许面板回缩重新贴内容。只进不退
+   * 防的是同形态内筛选抖动,不该把上一形态(如带侧栏)的宽度扛进下一形态。
+   */
+  stickyWidthKey?: unknown;
   /** 面板形变起点底色/边色(= chip 的),默认 composer pill 规格。 */
   startBg?: string;
   startBorderColor?: string;
@@ -141,6 +165,8 @@ export function MorphPopover({
   align = 'start',
   panelWidth,
   panelWidthMode = 'content',
+  stickyWidth = false,
+  stickyWidthKey,
   startBg = 'var(--composer-pill-bg)',
   startBorderColor = 'var(--border-default)',
   endBg = 'var(--model-dropdown-bg)',
@@ -167,6 +193,15 @@ export function MorphPopover({
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
   const settledRef = useRef(false);
+  // stickyWidth 的本次打开宽度水位(见 prop 注释);开场重置。
+  const stickyWidthRef = useRef(0);
+  // stickyWidthKey 换代 → 水位清零(render 期 ref 比对:重置必须发生在切换引发的
+  // ResizeObserver 补量之前,effect 会晚于它)。
+  const stickyWidthKeyRef = useRef(stickyWidthKey);
+  if (stickyWidthKeyRef.current !== stickyWidthKey) {
+    stickyWidthKeyRef.current = stickyWidthKey;
+    stickyWidthRef.current = 0;
+  }
   // 指针驱动的关闭(菜单动作、trigger toggle、outside 交接)不把焦点归还 trigger:
   // 否则旧层会在收合结束时抢走下一层交互面的焦点。键盘关闭仍按 §14.2 回焦。
   const pointerInteractionRef = useRef(false);
@@ -200,7 +235,14 @@ export function MorphPopover({
         align === 'end'
           ? chipRect.right - VIEWPORT_PADDING
           : window.innerWidth - chipRect.left - VIEWPORT_PADDING;
-      const targetW = Math.min(desiredW, viewportMaxW, Math.max(chipRect.width, sideAvailW));
+      // stickyWidth:同一次打开内宽度只进不退(视口/锚点钳制仍最优先)。
+      const stickyFloor = stickyWidth ? stickyWidthRef.current : 0;
+      const targetW = Math.min(
+        Math.max(desiredW, stickyFloor),
+        viewportMaxW,
+        Math.max(chipRect.width, sideAvailW),
+      );
+      if (stickyWidth && targetW > stickyWidthRef.current) stickyWidthRef.current = targetW;
       panel.style.width = `${targetW}px`;
       // 可视高度钳制:停靠位到视口边缘的可用空间(内容区自滚)。avail 夹到 ≥0——
       // chip 极靠近视口边(如 side='top' 且距顶 <14px)时 avail 会为负,负 height
@@ -214,7 +256,7 @@ export function MorphPopover({
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
     },
-    [align, panelWidth, panelWidthMode, side],
+    [align, panelWidth, panelWidthMode, side, stickyWidth],
   );
 
   /**
@@ -282,6 +324,7 @@ export function MorphPopover({
     if (open) {
       settledRef.current = false;
       pointerInteractionRef.current = false;
+      stickyWidthRef.current = 0; // stickyWidth 水位按「一次打开」起算
       const rect = wrap.getBoundingClientRect();
       chipRectRef.current = rect;
       // 1) 面板落到 chip 精确几何(与 chip 重合的起点),transition 关闭防测量污染。
@@ -438,9 +481,21 @@ export function MorphPopover({
       });
     });
     ro.observe(content);
+    // 内容侧的显式重量请求(MORPH_CONTENT_RESIZE_EVENT):内容增长被钳制链挡住时
+    // RO 无事件,由内容自己吱声;与 RO 走同一条 settle 门 + rAF 合并。
+    const onResizeRequest = () => {
+      if (roRaf) return;
+      roRaf = requestAnimationFrame(() => {
+        roRaf = 0;
+        if (!settledRef.current) return;
+        syncPanelToContent();
+      });
+    };
+    content.addEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     return () => {
       if (roRaf) cancelAnimationFrame(roRaf);
       ro.disconnect();
+      content.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     };
   }, [mounted, open, syncPanelToContent]);
 

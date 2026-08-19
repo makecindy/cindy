@@ -29,6 +29,23 @@ import {
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior';
 import {
+  WORKLOUDER_CODEX_ACTION_CHANNEL,
+  WORKLOUDER_CODEX_GET_STATE_CHANNEL,
+  WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL,
+  WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL,
+  WORKLOUDER_CODEX_PROBE_CHANNEL,
+  WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL,
+  WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL,
+  type WorkLouderCodexPublishedTask,
+  WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL,
+  WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL,
+  type WorkLouderCodexPreviewInput,
+  type WorkLouderCodexRendererAction,
+  type WorkLouderCodexSettingsPatch,
+  type WorkLouderCodexState,
+} from '../shared/workLouderCodex';
+import {
   ANALYTICS_SETTINGS_CHANGE_CHANNEL,
   type AnalyticsSettingsPayload,
 } from '../shared/analyticsSettings';
@@ -632,6 +649,7 @@ const fanOutIOSSimulatorRouteStatus = createIpcFanOut(IOS_SIMULATOR_ROUTE_STATUS
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
+const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
 const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed'); // Codex token
 const fanOutMakerUsageModelPricing = createIpcFanOut('usage:model-pricing-changed');
@@ -846,6 +864,22 @@ const appearanceSettingsInfo = ipcRenderer.sendSync(
   'appearance-settings:get-sync',
 ) as AppearanceSettings | null;
 
+type CindyMediaPreferenceOption = {
+  id: string;
+  label: string;
+  group: string;
+  providerId: string;
+  providerName: string;
+  modelId: string;
+  modelName: string;
+  routing?: import('@cindy/model-providers').Provider['routing'];
+};
+
+type CindyMediaPreferenceKind = {
+  options: CindyMediaPreferenceOption[];
+  defaultModel: CindyMediaPreferenceOption | null;
+};
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   osRelease: ipcRenderer.sendSync('get-os-release') as string,
@@ -1057,22 +1091,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
        * 每类目一份下拉数据(能力键按类目取对应清单)。
        * options 为空或 defaultModel 为 null = 目录没给该类目模型,能力暂不可用。
        */
-      image: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
-      imageEdit: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
-      video: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
-      videoEdit: {
-        options: Array<{ id: string; label: string }>;
-        defaultModel: { id: string; label: string } | null;
-      };
+      image: CindyMediaPreferenceKind;
+      imageEdit: CindyMediaPreferenceKind;
+      video: CindyMediaPreferenceKind;
+      videoEdit: CindyMediaPreferenceKind;
       /** 文本类(快问快答):选项是当前供应商目录的全部文本模型(cat: 编码钉值,
        *  带供应商/模型/徽标等结构化字段供富列表渲染);declaredModel = 身份卡声明
        *  的偏好模型;utilityProfiles = 存量轻量档位钉的展示名表(老钉值回显用)。 */
@@ -1530,6 +1552,45 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     notifyWindowsCloseBehaviorPromptShown: (): void =>
       ipcRenderer.send(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL),
+  },
+
+  workLouderCodex: {
+    getState: (): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_GET_STATE_CHANNEL),
+    setSettings: (patch: WorkLouderCodexSettingsPatch): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_SETTINGS_CHANNEL, patch),
+    resetSettings: (): Promise<WorkLouderCodexState> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_RESET_SETTINGS_CHANNEL),
+    openInputMonitoringSettings: (): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_OPEN_INPUT_MONITORING_CHANNEL),
+    probe: (): Promise<WorkLouderCodexState> => ipcRenderer.invoke(WORKLOUDER_CODEX_PROBE_CHANNEL),
+    publishTasks: (tasks: WorkLouderCodexPublishedTask[]): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_PUBLISH_TASKS_CHANNEL, tasks),
+    setLayoutPreviewActive: (active: boolean): Promise<void> =>
+      ipcRenderer.invoke(WORKLOUDER_CODEX_SET_LAYOUT_PREVIEW_CHANNEL, active),
+    onStateChanged: (callback: (state: WorkLouderCodexState) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: WorkLouderCodexState): void => {
+        callback(state);
+      };
+      ipcRenderer.on(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_STATE_CHANGED_CHANNEL, listener);
+    },
+    onAction: (callback: (action: WorkLouderCodexRendererAction) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        action: WorkLouderCodexRendererAction,
+      ): void => callback(action);
+      ipcRenderer.on(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_ACTION_CHANNEL, listener);
+    },
+    onPreviewInput: (callback: (input: WorkLouderCodexPreviewInput) => void): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        input: WorkLouderCodexPreviewInput,
+      ): void => callback(input);
+      ipcRenderer.on(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(WORKLOUDER_CODEX_PREVIEW_INPUT_CHANNEL, listener);
+    },
   },
 
   // ── 右侧栏独立子窗口(RSB window)──────────────────────────────────────
@@ -5256,11 +5317,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     listAgentCommands: (
       agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code',
+      params: { sessionId?: string; allowManagedPiPackagePreview?: boolean } = {},
     ): Promise<{
       success: boolean;
       error?: string;
       commands?: Array<{ kind: 'agent-builtin'; name: string; description: string }>;
-    }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind),
+      runtimeStatus?: import('../shared/piPackages').PiPackageCommandRuntimeStatus;
+    }> => ipcRenderer.invoke('maker:list-agent-commands', agentKind, params),
 
     listAgentSkills: (
       agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code',
@@ -5280,6 +5343,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         runtimeCommandName?: string;
       }>;
     }> => ipcRenderer.invoke('maker:list-agent-skills', agentKind, params),
+
+    listPiPackages: (): Promise<import('../shared/piPackages').PiPackageListResult> =>
+      ipcRenderer.invoke('maker:pi-packages:list'),
+
+    mutatePiPackage: (
+      request: import('../shared/piPackages').PiPackageMutationRequest,
+    ): Promise<import('../shared/piPackages').PiPackageMutationResult> =>
+      ipcRenderer.invoke('maker:pi-packages:mutate', request),
+
+    onPiPackagesChanged: fanOutMakerPiPackagesChanged,
 
     /**
      * 订阅 main 端 DesktopCommandRegistry execute 后广播的"做 UI 动作"信号。

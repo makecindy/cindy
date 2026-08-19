@@ -137,6 +137,24 @@ async function makeSrcDir(files: Record<string, string | Buffer>): Promise<strin
 }
 
 describe('packGhostDir', () => {
+  it.skipIf(process.platform === 'win32')(
+    'archives real Unix execute bits while stripping special bits',
+    async () => {
+      const dir = await makeSrcDir({
+        'ghost.json': JSON.stringify(GOOD_MANIFEST),
+        'main.js': 'export default {};',
+        'bin/tool': '#!/bin/sh\necho ok\n',
+      });
+      await fs.promises.chmod(path.join(dir, 'bin', 'tool'), 0o4755);
+
+      const packed = await packGhostDir(dir);
+      expect(packed).toMatchObject({ ok: true });
+      if (!packed.ok) return;
+      const zip = await JSZip.loadAsync(await fs.promises.readFile(packed.cindyPath));
+      expect(Number(zip.files['bin/tool'].unixPermissions) & 0o7777).toBe(0o755);
+    },
+  );
+
   it('writes an in-workdir alias output to the canonical source directory', async () => {
     const sourceTarget = path.join(workDir, 'source-target');
     const sourceAlias = path.join(workDir, 'source-alias');

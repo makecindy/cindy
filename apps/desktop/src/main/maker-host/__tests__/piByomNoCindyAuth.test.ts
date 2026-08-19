@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const grokOAuth = vi.hoisted(() => ({ loggedIn: false }));
+const state = vi.hoisted(() => ({ loggedIn: false, sharedSkillRefreshes: 0 }));
 
 vi.mock('electron', () => ({
   app: {
@@ -11,6 +11,11 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../auth-adapters.js', () => ({
   readClaudeApiKey: () => null,
+  desktopClaudeAuthAdapter: {
+    ensureSharedGlobalSkills: async () => {
+      state.sharedSkillRefreshes += 1;
+    },
+  },
   desktopCodexAuthAdapter: { getState: async () => ({ authenticated: false }) },
 }));
 vi.mock('../custom-provider-header-secrets.js', () => ({
@@ -19,7 +24,13 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       id: 'local-keyless',
       name: 'Local keyless',
       auth: { method: 'none' },
-      runtimes: { pi: { baseUrl: 'http://127.0.0.1:11434/v1', models: [{ id: 'local-model' }] } },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'local-model' }],
+        },
+      },
     },
     {
       id: 'xai',
@@ -28,6 +39,7 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       runtimes: {
         pi: {
           baseUrl: 'https://private-xai.example/v1',
+          wireProtocol: 'openai-chat',
           models: [{ id: 'private-grok' }, { id: 'grok-4.6' }],
         },
       },
@@ -39,9 +51,9 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
     providerId === 'xai' ? 'legacy-custom-key' : null,
 }));
 vi.mock('../grok-oauth-login.js', () => ({
-  hasGrokOAuthLogin: () => grokOAuth.loggedIn,
+  hasGrokOAuthLogin: () => state.loggedIn,
   getGrokAccessToken: async () => 'grok-test-token',
-  peekGrokAccessToken: () => (grokOAuth.loggedIn ? 'grok-test-token' : null),
+  peekGrokAccessToken: () => (state.loggedIn ? 'grok-test-token' : null),
   recoverGrokAuthAfterRejection: async () => 'superseded' as const,
 }));
 
@@ -49,7 +61,25 @@ import { desktopPiAuthAdapter, resolvePiNativeProviders } from '../pi-host.js';
 
 describe('Pi pure BYOM auth without a Cindy account', () => {
   beforeEach(() => {
-    grokOAuth.loggedIn = false;
+    state.loggedIn = false;
+    state.sharedSkillRefreshes = 0;
+  });
+
+  it('refreshes local shared skills before provider resolution and skips remote homes', async () => {
+    await resolvePiNativeProviders({
+      workingDir: '/tmp/project',
+      providerId: 'local-keyless',
+      model: 'local-model',
+    });
+    expect(state.sharedSkillRefreshes).toBe(1);
+
+    await resolvePiNativeProviders({
+      workingDir: '/remote/project',
+      remoteHostId: 'remote-1',
+      providerId: 'local-keyless',
+      model: 'local-model',
+    });
+    expect(state.sharedSkillRefreshes).toBe(1);
   });
 
   it('authenticates the native provider and only uses an inert gateway placeholder', async () => {
@@ -78,7 +108,7 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
   });
 
   it('keeps an official xai resume on SuperGrok when a custom provider has the same model', async () => {
-    grokOAuth.loggedIn = true;
+    state.loggedIn = true;
     const resolved = await resolvePiNativeProviders({
       workingDir: '/tmp/project',
       providerId: 'xai',
@@ -102,7 +132,7 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
   });
 
   it('restores a migrated custom:xai session from its saved endpoint after SuperGrok is connected', async () => {
-    grokOAuth.loggedIn = true;
+    state.loggedIn = true;
     const resolved = await resolvePiNativeProviders({
       workingDir: '/tmp/project',
       providerId: 'custom:xai',

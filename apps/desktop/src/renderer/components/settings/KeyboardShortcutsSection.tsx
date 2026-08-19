@@ -45,6 +45,7 @@ import {
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { WorkLouderCodexEntryContainer, WorkLouderCodexSettings } from './WorkLouderCodexSettings';
 
 const log = createLogger('settings:keyboard-shortcuts');
 
@@ -65,9 +66,16 @@ export function KeyboardShortcutsSection() {
     Record<AppShortcutId, AppShortcutCombo | null>
   >;
   const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
+  const [workLouderSettingsOpen, setWorkLouderSettingsOpen] = useState(false);
   const [error, setError] = useState<RecordingError | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const mutationRequestIdRef = useRef(0);
+  const workLouderOpenRequested =
+    new URLSearchParams(window.location.search).get('workLouderCodex') === '1';
+
+  useEffect(() => {
+    if (workLouderOpenRequested) setWorkLouderSettingsOpen(true);
+  }, [workLouderOpenRequested]);
 
   const mutationErrorMessage = useCallback(
     (err: unknown) => {
@@ -190,13 +198,11 @@ export function KeyboardShortcutsSection() {
         return;
       }
       const requestId = beginShortcutAction();
-      window.electronAPI.appShortcuts
-        .setOverride(recordingId, combo)
-        .catch((err: unknown) => {
-          // main 侧校验兜底失败 (理论上 renderer 已前置校验)
-          log.warn('setOverride failed', err);
-          reportMutationError(requestId, err, recordingId);
-        });
+      window.electronAPI.appShortcuts.setOverride(recordingId, combo).catch((err: unknown) => {
+        // main 侧校验兜底失败 (理论上 renderer 已前置校验)
+        log.warn('setOverride failed', err);
+        reportMutationError(requestId, err, recordingId);
+      });
       cancel();
     };
     window.addEventListener('keydown', handler, true);
@@ -217,24 +223,34 @@ export function KeyboardShortcutsSection() {
     });
   }, [beginShortcutAction, reportMutationError]);
 
-  const handleResetOne = useCallback((id: AppShortcutId) => {
-    const requestId = beginShortcutAction();
-    void window.electronAPI.appShortcuts.clearOverride(id).catch((err: unknown) => {
-      reportMutationError(requestId, err, id);
-    });
-  }, [beginShortcutAction, reportMutationError]);
+  const handleResetOne = useCallback(
+    (id: AppShortcutId) => {
+      const requestId = beginShortcutAction();
+      void window.electronAPI.appShortcuts.clearOverride(id).catch((err: unknown) => {
+        reportMutationError(requestId, err, id);
+      });
+    },
+    [beginShortcutAction, reportMutationError],
+  );
 
   /** 删除绑定 = override 置 null, 该快捷键禁用 (显示"未设置")。 */
-  const handleDeleteOne = useCallback((id: AppShortcutId) => {
-    const requestId = beginShortcutAction();
-    setRecordingId(null);
-    void window.electronAPI.appShortcuts.setOverride(id, null).catch((err: unknown) => {
-      reportMutationError(requestId, err, id);
-    });
-  }, [beginShortcutAction, reportMutationError]);
+  const handleDeleteOne = useCallback(
+    (id: AppShortcutId) => {
+      const requestId = beginShortcutAction();
+      setRecordingId(null);
+      void window.electronAPI.appShortcuts.setOverride(id, null).catch((err: unknown) => {
+        reportMutationError(requestId, err, id);
+      });
+    },
+    [beginShortcutAction, reportMutationError],
+  );
 
   const iconButtonClass =
     'inline-flex h-[26px] w-[26px] items-center justify-center rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors';
+
+  if (workLouderSettingsOpen) {
+    return <WorkLouderCodexSettings onBack={() => setWorkLouderSettingsOpen(false)} />;
+  }
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -253,6 +269,8 @@ export function KeyboardShortcutsSection() {
         )}
       </div>
       {globalError && <span className="text-12 text-[var(--error-fg)]">{globalError}</span>}
+
+      <WorkLouderCodexEntryContainer onOpen={() => setWorkLouderSettingsOpen(true)} />
 
       <div
         className={cn(
@@ -322,7 +340,10 @@ export function KeyboardShortcutsSection() {
                       beginShortcutAction();
                       setRecordingId(def.id);
                     }}
-                    className={cn(iconButtonClass, !def.rebindable && 'opacity-50 pointer-events-none')}
+                    className={cn(
+                      iconButtonClass,
+                      !def.rebindable && 'opacity-50 pointer-events-none',
+                    )}
                     aria-label={t('settings.shortcuts.editAria', { name: itemLabel(def) })}
                     title={t('settings.shortcuts.edit')}
                   >
@@ -333,7 +354,10 @@ export function KeyboardShortcutsSection() {
                       type="button"
                       disabled={!def.rebindable}
                       onClick={() => handleDeleteOne(def.id)}
-                      className={cn(iconButtonClass, !def.rebindable && 'opacity-50 pointer-events-none')}
+                      className={cn(
+                        iconButtonClass,
+                        !def.rebindable && 'opacity-50 pointer-events-none',
+                      )}
                       aria-label={t('settings.shortcuts.deleteAria', { name: itemLabel(def) })}
                       title={t('settings.shortcuts.delete')}
                     >

@@ -1114,12 +1114,14 @@ describe("cindy · media MCP 边界", () => {
     const result = await handleMedia(fakeDeps({ callMedia }), {
       action: "prepare",
       capability: "image.generate",
+      provider_id: "openai",
       model_id: "vendor/image-model",
     });
 
     expect(callMedia).toHaveBeenCalledWith({
       action: "prepare",
       capability: "image.generate",
+      providerId: "openai",
       modelId: "vendor/image-model",
     });
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });

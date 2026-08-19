@@ -14056,6 +14056,7 @@ function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | n
     item.targetAgentKind !== 'claude-code'
     && item.targetAgentKind !== 'codex'
     && item.targetAgentKind !== 'pi'
+    && item.targetAgentKind !== 'kimi-code'
   ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);

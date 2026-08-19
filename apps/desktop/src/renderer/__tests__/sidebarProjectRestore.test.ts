@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   collectRestorableProjectKeys,
+  registerSidebarProjectRestoreHandler,
+  requestSidebarProjectRestore,
   restoreHiddenProjectIfPresent,
+  restoreSelectedHiddenProject,
 } from '@/features/cc-agent/lib/sidebarProjectRestore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -233,5 +236,123 @@ describe('restoreHiddenProjectIfPresent', () => {
 
     await expect(result).resolves.toBe(false);
     expect(ensureProjectIncluded).not.toHaveBeenCalled();
+  });
+});
+
+describe('restoreSelectedHiddenProject', () => {
+  it('unhides a selected project and admits it to an explicit Project filter', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(true);
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set([PROJECT_KEY]),
+        setProjectHidden,
+        getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(true);
+
+    expect(setProjectHidden).toHaveBeenCalledWith(PROJECT_KEY, false);
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('skips hidden-state persistence but re-admits an already-visible project', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(false);
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set(),
+        setProjectHidden,
+        getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(false);
+
+    expect(setProjectHidden).not.toHaveBeenCalled();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('admits a newly selected path without acquiring the hidden-project write lock', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(false);
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set(),
+        setProjectHidden,
+        getCurrentProjectKeys: () => new Set(),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(false);
+
+    expect(setProjectHidden).not.toHaveBeenCalled();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('finishes restoration when another window already cleared the hidden marker', async () => {
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: 'local:c:/workspace/cindy',
+        hiddenProjectKeys: new Set(['local:C:/Workspace/Cindy']),
+        setProjectHidden: vi.fn().mockResolvedValue(false),
+        getCurrentProjectKeys: () => new Set(['local:C:/Workspace/Cindy']),
+        ensureProjectIncluded,
+        localPlatform: 'win32',
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledWith('local:C:/Workspace/Cindy');
+  });
+
+  it('uses the selected path when the restored project has no remaining tasks', async () => {
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set([PROJECT_KEY]),
+        setProjectHidden: vi.fn().mockResolvedValue(true),
+        getCurrentProjectKeys: () => new Set(),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+});
+
+describe('sidebar project restore coordinator', () => {
+  it('delegates selection restoration to the mounted sidebar owner', async () => {
+    const handler = vi.fn().mockResolvedValue(true);
+    const unregister = registerSidebarProjectRestoreHandler(handler);
+
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(true);
+    expect(handler).toHaveBeenCalledWith(PROJECT_KEY);
+
+    unregister();
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(false);
+  });
+
+  it('does not let an older cleanup unregister the current sidebar owner', async () => {
+    const unregisterFirst = registerSidebarProjectRestoreHandler(vi.fn().mockResolvedValue(false));
+    const currentHandler = vi.fn().mockResolvedValue(true);
+    const unregisterCurrent = registerSidebarProjectRestoreHandler(currentHandler);
+
+    unregisterFirst();
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(true);
+    expect(currentHandler).toHaveBeenCalledOnce();
+
+    unregisterCurrent();
   });
 });

@@ -1437,8 +1437,10 @@ describe('new session model', () => {
       permissionMode: 'acceptEdits',
       fastMode: false,
       providerId: null,
+      firstMessage: '帮我排查登录失败',
     }, new Date('2026-06-16T10:00:00.000Z'))).toMatchObject({
       id: 's-new',
+      title: '帮我排查登录失败',
       workingDir: '/repo',
       workspaceKind: 'project',
       agentKind: 'cc',
@@ -1481,6 +1483,7 @@ describe('new session model', () => {
       providerId: 'deepseek',
     });
     expect(session.providerId).toBe('deepseek');
+    expect(session.title).toBe('New Maker');
     // 未绑定来源的草稿 → null(默认路由),与真实会话同形
     expect(sessionFromCreateResult({ sessionId: 's-n' }, {
       agentKind: 'claude-code',
@@ -2331,6 +2334,18 @@ describe('submit guard catalog wiring (source locks)', () => {
     const lastCheck = settleSlice.lastIndexOf('!ensureDeviceAlive()) return;');
     expect(lastCheck).toBeGreaterThan(0);
     expect(settleSlice.slice(lastCheck)).not.toMatch(/await /);
+  });
+
+  it('goal settle 只登记本机预览,不把目标文案写成用户改名', () => {
+    const goalSlice = newSource.slice(newSource.indexOf('const createGoalSession = useCallback'));
+    const settleSlice = goalSlice.slice(
+      goalSlice.indexOf('── settle 段'),
+      goalSlice.indexOf('router.replace({'),
+    );
+    expect(settleSlice).toContain('remoteSessionStore.setPendingTitlePreview(result.sessionId, session.title)');
+    expect(settleSlice).not.toContain('persistRemoteGoalSessionTitle');
+    expect(settleSlice).not.toContain('patchSessionMeta');
+    expect(settleSlice).not.toContain('generateSessionTitle');
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AgentEvent } from '../../../types/events.js';
+import type { AgentEvent, AgentTaskUpdateEventData } from '../../../types/events.js';
 import { createAsyncQueue } from '../../shared/async-queue.js';
 import { UsageTracker } from '../../shared/usage-tracker.js';
 import {
@@ -8,6 +8,11 @@ import {
   translateSdkMessage,
   type TurnState,
 } from '../translator.js';
+
+type AgentTaskUpdateEvent = AgentEvent & {
+  type: 'agent_task_update';
+  data: AgentTaskUpdateEventData;
+};
 
 function createTurnState(): TurnState {
   return {
@@ -533,6 +538,220 @@ describe('Claude Code assistant text streaming contract', () => {
 });
 
 describe('Claude Code translator subagent model attribution', () => {
+  it('keeps an early full child model without publishing a temporary task id', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    // 即使 partial message_start 已先写入 stream map，完整 assistant 仍必须把模型
+    // 提升成 task update；stream map 本身不是「已经对 UI 发布」的证据。
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu_agent_a',
+        event: {
+          type: 'message_start',
+          message: { model: 'codex/gpt-5.6-sol', usage: { input_tokens: 0 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'child-assistant',
+        session_id: 'sdk-session',
+        parent_tool_use_id: 'toolu_agent_a',
+        message: {
+          model: 'codex/gpt-5.6-sol',
+          content: [{ type: 'text', text: 'child answer' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await collect(queue);
+    expect(events.find((event) => event.type === 'agent_task_update')).toBeUndefined();
+    expect(events.find((event) => event.type === 'text')?.agentMeta).toEqual(
+      expect.objectContaining({
+        parentUuid: 'toolu_agent_a',
+        model: 'codex/gpt-5.6-sol',
+      }),
+    );
+  });
+
+  it('publishes the saved child model when the stable task id arrives', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent_a',
+        message: { model: 'codex/gpt-5.6-sol', content: [] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_agent_a',
+        task_type: 'local_agent',
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0]?.data).toMatchObject({
+      taskId: 'agent-a',
+      parentToolUseId: 'toolu_agent_a',
+      status: 'running',
+      model: 'codex/gpt-5.6-sol',
+    });
+  });
+
+  it('keeps the child actual model on the later terminal task update', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent_a',
+        message: { model: 'codex/gpt-5.6-sol', content: [] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_agent_a',
+        status: 'completed',
+        usage: { total_tokens: 42 },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent =>
+        event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      taskId: 'agent-a',
+      parentToolUseId: 'toolu_agent_a',
+      status: 'completed',
+      model: 'codex/gpt-5.6-sol',
+    });
+  });
+
+  it('does not reopen a terminal task when the full child assistant arrives late', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_agent_a',
+        status: 'completed',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent_a',
+        message: { model: 'codex/gpt-5.6-sol', content: [] },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      taskId: 'agent-a',
+      parentToolUseId: 'toolu_agent_a',
+      status: 'completed',
+      model: 'codex/gpt-5.6-sol',
+      subagentObservation: {
+        kind: 'terminal',
+        logicalSubagentId: 'agent-a',
+        parentToolUseId: 'toolu_agent_a',
+      },
+    });
+  });
+
+  it('preserves a terminal task_updated status when the full child assistant arrives late', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_agent_a', content: 'launched' }],
+        },
+        toolUseResult: {
+          isAsync: true,
+          agentId: 'agent-a',
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'agent-a',
+        patch: { status: 'completed' },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent_a',
+        message: { model: 'codex/gpt-5.6-sol', content: [] },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      taskId: 'agent-a',
+      parentToolUseId: 'toolu_agent_a',
+      status: 'completed',
+      model: 'codex/gpt-5.6-sol',
+      subagentObservation: {
+        kind: 'terminal',
+        logicalSubagentId: 'agent-a',
+        parentToolUseId: 'toolu_agent_a',
+      },
+    });
+  });
+
   it('keeps two concurrent subagent stream models isolated from the parent agent', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
@@ -635,6 +854,359 @@ describe('Claude Code translator subagent model attribution', () => {
         logicalSubagentId: 'agent-a',
         parentToolUseId: 'toolu_agent_a',
       },
+    });
+  });
+
+  it('does not downgrade a terminal task when the async launch receipt arrives late', async () => {
+    // 事件乱序（P1-3）：task_notification: completed 先到，async_launched 回执后到。
+    // 修复前事件序列会变成 completed → running，Renderer 永久转圈。
+    const queue = createAsyncQueue<AgentEvent>();
+    const onSubagentTaskLaunched = vi.fn();
+    const ctx = createCtx({ onSubagentTaskLaunched });
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_agent_a',
+        status: 'completed',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_agent_a',
+              content: [{ type: 'text', text: 'Async agent launched successfully.' }],
+            },
+          ],
+        },
+        tool_use_result: {
+          isAsync: true,
+          status: 'async_launched',
+          agentId: 'agent-a',
+          prompt: 'Survey the codebase',
+          resolvedModel: 'codex/gpt-5.6-sol',
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    // 迟到的 launch 回执保留终态、只补模型元数据；也不重放 onSubagentTaskLaunched。
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      taskId: 'agent-a',
+      parentToolUseId: 'toolu_agent_a',
+      status: 'completed',
+      model: 'codex/gpt-5.6-sol',
+    });
+    expect(onSubagentTaskLaunched).not.toHaveBeenCalled();
+  });
+
+  it('keeps the internal terminal latch when task_started/task_progress arrive late (projection unchanged)', async () => {
+    // 迟到的 task_started/task_progress 事件仍按 running 投影下发（下游
+    // terminalBackgroundTaskIds 按 taskId 丢弃，两道闸口径一致）；但内部终态登记
+    // 不得被降级——迟到的 child assistant 读 Map 时必须仍看到终态。
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_agent_a',
+        status: 'failed',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_progress',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_agent_a',
+      },
+      queue,
+      ctx,
+    );
+    // 迟到的 child assistant：读内部 Map 投影状态。若上面的 task_progress 把 Map
+    // 降级回 running，这里会推 running 帧；终态闩保住时应为 failed。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent_a',
+        message: { model: 'codex/gpt-5.6-sol', content: [] },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent =>
+        event.type === 'agent_task_update',
+    );
+    const progressFrame = taskUpdates.find(
+      (event) => event.data.subagentObservation?.kind === 'progress'
+        && event.data.taskId === 'agent-a',
+    );
+    // 迟到的 task_progress 投影保持 running（交给下游终态闩丢弃，translator 不改写）。
+    expect(progressFrame?.data.status).toBe('running');
+    // 最后一帧（child assistant）读内部闩，终态未被降级。
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      status: 'failed',
+      model: 'codex/gpt-5.6-sol',
+    });
+  });
+
+  it('projects a synchronous completed Agent result with its actual model and usage', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const onSubagentTaskLaunched = vi.fn();
+    const ctx = createCtx({ onSubagentTaskLaunched });
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_sync_agent',
+              content: [{ type: 'text', text: 'The agent completed successfully.' }],
+            },
+          ],
+        },
+        toolUseResult: {
+          status: 'completed',
+          agentId: 'agent-sync',
+          prompt: 'Review the current changes',
+          resolvedModel: 'vendor-a/model-sol',
+          totalTokens: 22_113,
+          totalToolUseCount: 0,
+          totalDurationMs: 4_949,
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data).toEqual({
+      provider: 'claude-code',
+      taskId: 'agent-sync',
+      parentToolUseId: 'toolu_sync_agent',
+      status: 'completed',
+      model: 'vendor-a/model-sol',
+      usage: { totalTokens: 22_113, toolUses: 0, durationMs: 4_949 },
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'agent-sync',
+        parentToolUseId: 'toolu_sync_agent',
+      },
+    });
+    expect(onSubagentTaskLaunched).not.toHaveBeenCalled();
+  });
+
+  it('accepts snake_case fields from a synchronous completed Agent result', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_sync_agent', content: 'done' }],
+        },
+        tool_use_result: {
+          status: 'completed',
+          agent_id: 'agent-sync',
+          resolved_model: 'provider-b/model-terra',
+          total_tokens: 84,
+          total_tool_use_count: 2,
+          total_duration_ms: 1_250,
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates[0]?.data).toMatchObject({
+      taskId: 'agent-sync',
+      parentToolUseId: 'toolu_sync_agent',
+      status: 'completed',
+      model: 'provider-b/model-terra',
+      usage: { totalTokens: 84, toolUses: 2, durationMs: 1_250 },
+      subagentObservation: { kind: 'spawn' },
+    });
+  });
+
+  it('uses a child runtime model when a completed Agent result has no resolvedModel', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          model: 'claude-opus-4-6',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_sync_agent',
+              name: 'Agent',
+              input: { prompt: 'Review changes', model: 'requested-model' },
+            },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_sync_agent',
+        message: { model: 'vendor-runtime/model-actual', content: [] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_sync_agent', content: 'done' }],
+        },
+        toolUseResult: {
+          status: 'completed',
+          agentId: 'agent-sync',
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      taskId: 'agent-sync',
+      parentToolUseId: 'toolu_sync_agent',
+      status: 'completed',
+      model: 'vendor-runtime/model-actual',
+      subagentObservation: { kind: 'spawn' },
+    });
+    expect(taskUpdates.at(-1)?.data).not.toMatchObject({ model: 'requested-model' });
+  });
+
+  it('lets a full child assistant replace an earlier stream model when no resolvedModel exists', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu_sync_agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'vendor-stream/model-early', usage: { input_tokens: 0 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_sync_agent', content: 'done' }],
+        },
+        toolUseResult: { status: 'completed', agentId: 'agent-sync' },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_sync_agent',
+        message: { model: 'vendor-assistant/model-actual', content: [] },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates.at(-2)?.data).toMatchObject({
+      taskId: 'agent-sync',
+      status: 'completed',
+      model: 'vendor-stream/model-early',
+      subagentObservation: { kind: 'spawn' },
+    });
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      taskId: 'agent-sync',
+      status: 'completed',
+      model: 'vendor-assistant/model-actual',
+      subagentObservation: { kind: 'terminal' },
+    });
+  });
+
+  it('keeps resolvedModel authoritative over a later full child assistant', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_sync_agent', content: 'done' }],
+        },
+        toolUseResult: {
+          status: 'completed',
+          agentId: 'agent-sync',
+          resolvedModel: 'vendor-resolved/model-authoritative',
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_sync_agent',
+        message: { model: 'vendor-assistant/model-late', content: [] },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event) => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates.at(-1)?.data).toMatchObject({
+      taskId: 'agent-sync',
+      status: 'completed',
+      model: 'vendor-resolved/model-authoritative',
     });
   });
 

@@ -21,6 +21,7 @@ export function normalizeSessionAgentSwitchIntent(
     item.targetAgentKind !== 'claude-code'
     && item.targetAgentKind !== 'codex'
     && item.targetAgentKind !== 'pi'
+    && item.targetAgentKind !== 'kimi-code'
   ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失(undefined)按 null 处理,与桌面 projectPendingAgentSwitchIntent 的

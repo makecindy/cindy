@@ -437,6 +437,69 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessions()[0].agentSwitchIntent).toBeNull();
   });
 
+  it('does not let a draft sentinel snapshot replace an optimistic first-message title', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '帮我排查登录失败' }),
+    ]);
+    remoteSessionStore.setPendingTitlePreview('s1', '帮我排查登录失败');
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: 'New Maker' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('帮我排查登录失败');
+
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'New Maker' });
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('帮我排查登录失败');
+
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '登录失败排查' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('登录失败排查');
+  });
+
+  it('keeps the first-message preview after pendingLocalCreation settles', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '帮我排查登录失败', pendingLocalCreation: true }),
+    ]);
+    remoteSessionStore.setPendingTitlePreview('s1', '帮我排查登录失败');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { pendingLocalCreation: false });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: 'New Maker' }),
+    ]);
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('帮我排查登录失败');
+    expect(remoteSessionStore.getSessions()[0]?.pendingLocalCreation).toBeFalsy();
+  });
+
+  it('lets an authoritative New Maker rename through after the preview is cleared', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s1', { title: '帮我排查登录失败' }),
+    ]);
+    remoteSessionStore.setPendingTitlePreview('s1', '帮我排查登录失败');
+    remoteSessionStore.clearPendingTitlePreview('s1');
+    remoteSessionStore.applySessionPatch('dev-1', 's1', { title: 'New Maker' });
+    expect(remoteSessionStore.getSessions()[0]?.title).toBe('New Maker');
+  });
+
+  it('keeps a title preview across a stale list that temporarily omits the new session', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s-old'),
+    ]);
+    remoteSessionStore.upsertDeviceSession(
+      'dev-1',
+      'Mac',
+      session('s-new', { title: '帮我排查登录失败', pendingLocalCreation: true }),
+    );
+    remoteSessionStore.setPendingTitlePreview('s-new', '帮我排查登录失败');
+    remoteSessionStore.applySessionPatch('dev-1', 's-new', { pendingLocalCreation: false });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s-old'),
+    ]);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
+      session('s-old'),
+      session('s-new', { title: 'New Maker' }),
+    ]);
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 's-new')?.title).toBe('帮我排查登录失败');
+  });
+
   it('dedupes an unchanged message push by id or client id', () => {
     remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
     const versionAfterSet = remoteSessionStore.getMessageVersion();

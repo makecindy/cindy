@@ -230,6 +230,7 @@ function detail(
 function reviewedInstallOptions(item: VisiblePluginSummary, allowSourceReplacement = false) {
   return {
     expectedReleaseId: item.currentRelease.id,
+    expectedManifest: manifest(item.ghostId, item.currentRelease.version),
     allowSourceReplacement,
   };
 }
@@ -1070,11 +1071,15 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     const { ghost } = await h.service.install(item.id, reviewedInstallOptions(item));
 
-    expect(runtime.install).toHaveBeenCalledWith(expect.stringMatching(/\.cindy$/), {
-      ghostId: 'cindy-test',
-      version: '1.0.0',
-      permissionPolicy: { mode: 'manual', sourceType: 'server' },
-    });
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/\.cindy$/),
+      expect.objectContaining({
+        ghostId: 'cindy-test',
+        version: '1.0.0',
+        permissionPolicy: { mode: 'manual', sourceType: 'server' },
+        reviewedManifest: expect.objectContaining({ id: 'cindy-test' }),
+      }),
+    );
     // 安装入口用目录 summary 做 detail 身份绑定(防止把 A 的确认导向 B 的内容),
     // 因此手动安装也会先取一次目录,但不做任何 listAll 之外的多余请求。
     expect(h.api.listAll).toHaveBeenCalledTimes(1);
@@ -1155,11 +1160,14 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     const ordinaryHarness = harness([ordinary]);
     await ordinaryHarness.service.install(ordinary.id, reviewedInstallOptions(ordinary));
-    expect(runtime.install.mock.calls[0]?.[1]).toEqual({
-      ghostId: 'cindy-test',
-      version: '1.0.0',
-      permissionPolicy: { mode: 'manual', sourceType: 'server' },
-    });
+    expect(runtime.install.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        ghostId: 'cindy-test',
+        version: '1.0.0',
+        permissionPolicy: { mode: 'manual', sourceType: 'server' },
+        reviewedManifest: expect.objectContaining({ id: 'cindy-test' }),
+      }),
+    );
   });
 
   it('旧 source:market + manifestDigest 安装会回填 cindy-github 官方 trust', async () => {
@@ -1414,6 +1422,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
       permissionPolicy: { mode: 'manual', sourceType: 'server' },
+      reviewedManifest: expect.objectContaining({ id: item.ghostId }),
     });
     expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('permissionBaselineManifest');
   });

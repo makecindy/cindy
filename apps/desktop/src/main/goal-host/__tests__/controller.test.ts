@@ -504,11 +504,11 @@ describe('GoalController', () => {
       verdictJson: '```json\n{"goal_status":"continue","reason":"next"}\n```',
       tokens: 10,
     });
-    await tick();
-
-    expect(local.session.sends).toHaveLength(2);
-    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(2);
-    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(local.session.sends).toHaveLength(2);
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(2);
+      expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('propagates a typed restore error when the route switch closes the initially ensured session', async () => {

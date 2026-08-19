@@ -21,3 +21,7 @@ export const emptyTextStripController = createThreadStripController();
 // 空 assistant 消息主动剥离 —— always-on(moonshot/kimi 空 thinking 占位被中断
 // 持久化后回放 400 "with role 'assistant' must not be empty")。必须与上面是独立实例。
 export const emptyAssistantStripController = createThreadStripController();
+
+// xAI ModelInput 422 主动剥离 —— always-on(Gateway / LiteLLM 中转 grok 时
+// Codex 历史里的非 ModelInput item 会整包 422;恢复一次后该 thread 发送前预洗)。
+export const xaiModelInputStripController = createThreadStripController();

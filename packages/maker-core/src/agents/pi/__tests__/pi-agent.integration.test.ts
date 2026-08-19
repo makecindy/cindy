@@ -15,6 +15,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1297,11 +1299,17 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           model: 'byom-model', // 属于原生 provider,不是网关模型
         });
         // models.json 里有独立的 localbyom provider 块,baseUrl 直连原生端点。
-        // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根;
-        // 本 test 只起一个会话,run-tmp 下恰有一个子目录。
-        const { readFileSync, readdirSync } = await import('node:fs');
+        // 现落在每会话隔离的 configHome(agentHome/run-tmp/<hex>),不在共享 agentHome 根。
+        // 整组测试共享 agentHome，前序用例可能留下已清空的 run-tmp 子目录；只认仍持有
+        // models.json 的活动会话目录，并要求当前恰好一个，避免目录枚举顺序造成误判。
         const runTmp = path.join(agentHome, 'run-tmp');
-        const configHome = path.join(runTmp, readdirSync(runTmp)[0]);
+        const activeConfigHomes = readdirSync(runTmp, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => path.join(runTmp, entry.name))
+          .filter((candidate) => existsSync(path.join(candidate, 'models.json')));
+        expect(activeConfigHomes).toHaveLength(1);
+        const configHome = activeConfigHomes[0];
+        if (!configHome) throw new Error('active Pi config home missing');
         const config = JSON.parse(readFileSync(path.join(configHome, 'models.json'), 'utf8')) as {
           providers: Record<string, { baseUrl: string; api: string; apiKey: string; models: Array<{ id: string }> }>;
         };
@@ -1916,10 +1924,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
               'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
-              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH',
-              'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
+              'CINDY_PI_SECRET_ENV_NAMES CINDY_PI_MANAGED_RG_PATH CINDY_PI_BASH_PACKAGE_HOME',
+              'CINDY_PI_PERMISSION_FILE PI_PACKAGE_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
-              'done; printf "PI_ENV_CLEAN\\n"',
+              'done; printf "PI_BASH_HOME:%s\\nPI_ENV_CLEAN\\n" "$PI_CODING_AGENT_DIR"',
             ].join(' '),
           }),
           anthropicStreamBody('env isolation finished'),
@@ -1939,6 +1947,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           ?.flatMap((message) => message.content ?? [])
           .find((block) => block.type === 'tool_result')?.content ?? '';
         expect(toolResult).toContain('PI_ENV_CLEAN');
+        expect(toolResult).toMatch(/PI_BASH_HOME:.*[/\\]bash-package-home/);
         expect(toolResult).not.toContain('PI_ENV_LEAK:');
         expect(toolResult).not.toContain('test-key-123');
         expect(toolResult).not.toContain('remote-mcp-secret-canary');

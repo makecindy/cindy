@@ -795,6 +795,16 @@ const actions = {
     recompute();
   },
 
+  /**
+   * 撤回一次远程标题预览。远端会话已建、但首条消息没交出去时调用 —— 权威标题
+   * 仍是哨兵,叠加层会一直把没发出去的话顶在空会话上。
+   */
+  clearPendingTitlePreview(sessionId: string): void {
+    if (!sessionId || !pendingTitlePreview.has(sessionId)) return;
+    dropTitleOverlay(sessionId);
+    recompute();
+  },
+
   /** 测试专用:清空标题预览叠加层。 */
   __resetPendingTitlePreviewForTest(): void {
     pendingTitlePreview.clear();

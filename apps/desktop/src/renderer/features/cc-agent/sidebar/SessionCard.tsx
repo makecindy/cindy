@@ -87,7 +87,11 @@ import {
   scheduleFocusPath,
 } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
-import { resolveSidebarRightStatus } from './sidebarRightStatus';
+import {
+  projectSidebarSessionActivity,
+  resolveSidebarRightStatus,
+} from './sidebarRightStatus';
+import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
 import {
@@ -165,28 +169,18 @@ export function SessionCard({
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id);
-  const remoteRightStatus =
-    remoteActivity == null
-      ? null
-      : remoteActivity.phase === 'error'
-        ? ('error' as const)
-        : remoteActivity.phase === 'needs-interaction'
-          ? ('awaiting' as const)
-          : remoteActivity.phase === 'running'
-            ? ('running' as const)
-            : ('done' as const);
-  // 左侧 vendor mark 呼吸原先只看本地 running 集;远程会话的运行态只进了右侧
-  // 状态槽。只并入 phase=running,与 SessionItem / 折叠 rail 同一口径;
-  // needs-interaction 继续由右侧 awaiting 表达。
-  const leftIconRunning = isRunning || remoteActivity?.phase === 'running';
-  const rightStatusKind =
-    remoteRightStatus ??
-    resolveSidebarRightStatus({
-      attentionKind,
-      isUrgentFromContext,
-      isRunning,
-      hasAttentionNotification,
-    });
+  const sessionActivity = projectSidebarSessionActivity({
+    sessionId: session.id,
+    title: session.title,
+    recordStatus: session.status,
+    liveActivity: remoteActivity ?? islandActivity,
+    attentionKind,
+    isUrgentFromContext,
+    isRunning,
+    hasAttentionNotification,
+  });
+  const leftIconRunning = sessionActivity.currentTurnActive === true;
+  const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   const activityIso = session.updatedAt;
@@ -580,17 +574,18 @@ export function SessionCard({
         activeForeground={isActive}
       />
     ) : showAutomationTimer ? (
-      <button
-        type="button"
-        className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
-        aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-        title={t('ccAgent.sidebar.automationGenerated')}
-        onClick={(e) => void handleAutomationIconClick(e)}
-        onKeyDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-      >
-        <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
-      </button>
+      <Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}>
+        <button
+          type="button"
+          className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
+          aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
+          onClick={(e) => void handleAutomationIconClick(e)}
+          onKeyDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
+        </button>
+      </Tip>
     ) : null;
 
   // list 变体标题前缀:状态图标 + 自动化徽章 + 间隔(保持 main 既有行为不变)。
@@ -1362,33 +1357,35 @@ function CardAction({
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick(e);
-      }}
-      onPointerDown={(e) => e.stopPropagation()}
-      onDoubleClick={(e) => e.stopPropagation()}
-      className={cn(
-        variant === 'list'
-          ? cn(
-              'shrink-0 size-5 flex items-center justify-center rounded-md',
-              'focus:outline-none',
-              isActive
-                ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-                : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
-            )
-          : cn(
-              'flex size-6 items-center justify-center rounded-[7px]',
-              'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
-              'border border-sidebar-border',
-              'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
-            ),
-      )}
-    >
-      {children}
-    </button>
+    <Tip text={label}>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick(e);
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className={cn(
+          variant === 'list'
+            ? cn(
+                'shrink-0 size-5 flex items-center justify-center rounded-md',
+                'focus:outline-none',
+                isActive
+                  ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+                  : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+              )
+            : cn(
+                'flex size-6 items-center justify-center rounded-[7px]',
+                'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
+                'border border-sidebar-border',
+                'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+              ),
+        )}
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }

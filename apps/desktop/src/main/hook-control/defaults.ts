@@ -88,11 +88,15 @@ export function resolveHookSessionConfig(
 ): ResolvedHookSessionConfig {
   const defaults = deps.readDefaults();
 
-  // 1. agent: 显式合法值 > 草稿默认
-  const agentKind: 'claude-code' | 'codex' | 'pi' | 'kimi-code' =
+  // 1. agent: 显式合法值 > 草稿默认(草稿默认同样需过准入白名单——IM 全局默认
+  // 可能已被持久化为尚未注册的 kimi-code,未经校验采用会撞 requireAgent 中断派发;
+  // 回退系统默认并留日志,而不是静默换掉连个说法都没有)。
+  const agentKind: 'claude-code' | 'codex' | 'pi' =
     overrides.agentKind !== null && AGENT_KINDS.has(overrides.agentKind)
-      ? (overrides.agentKind as 'claude-code' | 'codex' | 'pi' | 'kimi-code')
-      : defaults.agentKind;
+      ? (overrides.agentKind as 'claude-code' | 'codex' | 'pi')
+      : AGENT_KINDS.has(defaults.agentKind)
+        ? (defaults.agentKind as 'claude-code' | 'codex' | 'pi')
+        : 'claude-code'; // 系统出厂默认(IM_DEFAULT_SETTINGS.agentKind),避免跨层 import
 
   const models = deps.getModels(agentKind);
   const findModel = (id: string) => models.find((m) => m.id === id);

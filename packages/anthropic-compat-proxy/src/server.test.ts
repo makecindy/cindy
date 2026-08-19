@@ -26,6 +26,7 @@ import {
   repairToolExchangeAdjacency,
   stripEncryptedContentFromBody,
 } from './transform.js';
+import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle } from './types.js';
@@ -477,6 +478,124 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
     expect(upstream.bodies).toHaveLength(2);
     expect(upstream.bodies[0]).toContain('encrypted_content');
     expect(upstream.bodies[1]).not.toContain('encrypted_content');
+  });
+
+  it('retries LiteLLM-wrapped xAI ModelInput 422 after sanitizing input', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(422, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'litellm.BadRequestError: XaiException - {"error":"Failed to deserialize the JSON body into the target type: data did not match any variant of untagged enum ModelInput"}',
+        }));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, attempt: idx }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createXaiModelInputRecoveryRule()],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'my-custom-grok',
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'agent_message', author: 'bot', content: 'done' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.text)).toMatchObject({ ok: true });
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[0]).toContain('agent_message');
+    expect(upstream.bodies[1]).not.toContain('agent_message');
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'message', role: 'user', content: 'hi' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[collab bot]\ndone' }],
+      },
+    ]);
+  });
+
+  it('does not rewrite OpenAI collab history when another recovery rule retries', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, attempt: idx }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [
+        createEncryptedContentRecoveryRule({ enabled: () => true }),
+        createXaiModelInputRecoveryRule(),
+      ],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'reasoning', encrypted_content: 'gAAAsecret' },
+        { type: 'agent_message', author: 'bot', content: 'keep me' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'agent_message', author: 'bot', content: 'keep me' },
+    ]);
+  });
+
+  it('does not stack encrypted-content strip onto a ModelInput 422 retry', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(422, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: 'litellm.BadRequestError: XaiException - {"error":"data did not match any variant of untagged enum ModelInput"}',
+        }));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, attempt: idx }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [
+        createEncryptedContentRecoveryRule({ enabled: () => true }),
+        createXaiModelInputRecoveryRule(),
+      ],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'grok-4.5',
+      input: [
+        { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAAkeep' },
+        { type: 'agent_message', author: 'bot', content: 'done' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(JSON.parse(upstream.bodies[1]).input).toEqual([
+      { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAAkeep' },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '[collab bot]\ndone' }],
+      },
+    ]);
   });
 
   it('keeps proactive stripping active when a provider transform rewrites the model id', async () => {

@@ -583,7 +583,7 @@ function workerToRecord(
 }
 
 function fromDbAgentKind(agentKind: string): MakerAgentKind {
-  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  return agentKind === 'codex' || agentKind === 'pi' || agentKind === 'kimi-code' ? agentKind : agentKind === 'kimi' ? 'kimi-code' : 'claude-code';
 }
 
 function msToIso(ms: number | null | undefined): string | null {

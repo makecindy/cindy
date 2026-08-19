@@ -4,6 +4,7 @@
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
+    "PI_CATALOG_RELOAD_UNCONFIRMED": "Model catalog reload was not confirmed, so this task was stopped. Reopen the task and switch models again.",
     "REMOTE_WORKDIR_INVALID": "The remote project path is invalid. Choose the project directory again.",
     "REMOTE_WORKDIR_NOT_FOUND": "The remote project directory no longer exists. Choose it again.",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "The remote project path is not a folder. Choose a project directory.",
@@ -106,6 +107,7 @@
       "remote": "Remote machines",
       "devices": "Device Link",
       "builtinTools": "Tools",
+      "piExtensions": "Pi Extensions",
       "computerUse": "Automation",
       "help": "Help",
       "about": "About",
@@ -1414,6 +1416,16 @@
           "piChatHelp": "Pi connects directly to the provider's OpenAI-compatible Chat Completions API.",
           "piAnthropicHelp": "Pi connects directly to the provider's Anthropic Messages API."
         },
+        "modelProtocol": {
+          "label": "Model protocol",
+          "inherit": "Inherit default",
+          "messages": "Messages",
+          "chat": "Chat",
+          "responses": "Responses",
+          "google": "Google Generative AI",
+          "help": "Inherit uses the provider protocol above. Override only when this model needs a different protocol.",
+          "ariaLabel": "Model protocol for {{model}}"
+        },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
@@ -1452,7 +1464,8 @@
           "button": "Test connection",
           "testing": "Testing…",
           "ok": "Connected ({{ms}} ms)",
-          "needFields": "Fill in the base URL and at least one model ID first"
+          "needFields": "Fill in the base URL and at least one model ID first",
+          "unsupportedProtocol": "This model protocol is not supported by connection testing"
         },
         "fetch": {
           "button": "Fetch model list",
@@ -2351,10 +2364,10 @@
     },
     "subagentModels": {
       "title": "Subagents",
-      "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
-      "unspecified": "Not specified (use default behavior)",
-      "hint": "Claude Code subagents only support choosing a model; reasoning effort follows Claude Code's native behavior. Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
-      "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
+      "description": "Choose the Subagent model for Claude Code and Codex.",
+      "unspecified": "Use default setting",
+      "hint": "Claude Code changes apply to new sessions. Codex changes apply automatically when it is idle.",
+      "codexV2ModelHint": "Claude Code uses the selected model as its default. All local Codex Subagents are locked to the selected model and reasoning effort.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {
         "title": "Codex subagent guardrails",
@@ -2380,13 +2393,13 @@
     },
     "compaction": {
       "title": "Context compaction",
-      "description": "Control when Claude Code automatically compacts context.",
+      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
       "card": {
         "label": "Compaction trigger threshold",
-        "badge": "Claude Code only",
+        "badge": "Claude Code and Pi",
         "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
-        "hint": "Automatically compacts when context usage reaches this percentage, equivalent to running /compact automatically. Changes take effect immediately and are checked after the next chat turn ends.",
-        "sliderAria": "Adjust Claude Code auto-compaction trigger threshold"
+        "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
+        "sliderAria": "Adjust auto-compaction trigger threshold"
       }
     },
     "personalization": {
@@ -2556,6 +2569,85 @@
       },
       "capThreads": "Cap Toolchain Parallelism",
       "capThreadsHint": "Injects environment variables such as VITEST_MAX_FORKS and MAKEFLAGS so a single test or build command can't take every CPU core. Variables you set yourself are never overridden."
+    },
+    "piPackages": {
+      "title": "Pi extensions",
+      "entryTitle": "Pi extension settings",
+      "entryDescription": "Install, enable, or uninstall extensions for Cindy's Pi",
+      "backToGeneral": "Back to General",
+      "description": "Extensions stay in Cindy on this device. Any ordinary Pi task executed here can use them, even when started from a phone or another connected client. Review does not load them.",
+      "installSectionTitle": "Install an extension",
+      "installSectionDescription": "Paste the install source from a pi.dev page, or enter an npm package name, Git URL, or absolute local path.",
+      "installedSectionTitle": "Installed",
+      "sourcePlaceholder": "npm package, Git URL, or absolute local path",
+      "inspectionHint": "After installation, Cindy checks resources and compatibility. Executable extension code stays disabled until you trust the source and enable it.",
+      "install": "Install",
+      "update": "Update",
+      "remove": "Uninstall",
+      "empty": "No extensions are installed for Cindy's Pi yet.",
+      "piUnavailable": "Cindy's Pi is not installed, so extensions cannot be managed yet.",
+      "toggleAria": "Enable or disable {{name}}",
+      "updateAria": "Update {{name}}",
+      "removeAria": "Uninstall {{name}}",
+      "showDetails": "Show details for {{name}}",
+      "collapseDetails": "Hide details for {{name}}",
+      "rowStatus": { "compatible": "Compatible", "noticeCount": "{{count}} compatibility notices", "unmanageable": "Manage from Pi" },
+      "operationFailed": "The Pi extension operation failed. Check the source or network and try again.",
+      "loading": "Loading Pi extensions…",
+      "loadFailed": "Cindy couldn't load Pi extensions. Check the connection and try again.",
+      "retry": "Retry",
+      "operationInProgress": "Working on {{name}}…",
+      "relativePathUnsupported": "Use an absolute path for local extensions in Settings. Relative paths such as ./extension can be installed from a Pi task.",
+      "confirmTitle": "Install a third-party Pi extension?",
+      "confirmDescription": "{{source}} may contain third-party code. Install and update do not run npm lifecycle scripts. If executable extension code is found, it stays disabled until you review the inspection and explicitly enable it.",
+      "confirmInstall": "Accept risk and install",
+      "updateConfirmTitle": "Update a third-party Pi extension?",
+      "updateConfirmDescription": "{{source}} may replace installed code with a new third-party version. Update does not run npm lifecycle scripts, and executable extension code must be approved again before it can run.",
+      "confirmUpdate": "Accept risk and update",
+      "uninstallTitle": "Uninstall Pi extension?",
+      "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
+      "confirmUninstall": "Uninstall",
+      "extensionDialogConfirm": "Confirm",
+      "cancel": "Cancel",
+      "resources": { "extension": "Extension code", "skill": "Skill", "prompt": "Prompt template", "theme": "Theme" },
+      "status": { "supported": "Fully supported by Cindy", "extensionSupported": "No known Pi TUI dependency found", "partial": "Compatibility limits found", "unsupported": "Installed, but not loaded by Cindy", "unknown": "Compatibility check incomplete" },
+      "compatibility": {
+        "supported": "Skills and prompt templates are fully supported. Extension source is inspected after install instead of being classified only by resource type.",
+        "partial": "When Pi TUI APIs are detected, Cindy lists the specific limits. The extension can still be installed and you decide whether to keep it enabled.",
+        "unsupported": "Themes: kept in the extension, but Cindy does not use Pi's TUI themes."
+      },
+      "issues": {
+        "interactive-dialogs": "Selection, confirmation, input, and multi-line editor dialogs are shown as Cindy question cards. Only dialogs with a timer are cancelled.",
+        "notifications": "Pi notifications are added to the Cindy task transcript instead of being shown as Pi TUI toasts.",
+        "status-display": "Pi working indicators and status-bar content are not shown.",
+        "widgets": "Pi editor widgets are not shown.",
+        "terminal-title": "Terminal window title changes are ignored.",
+        "editor-integration": "Pi terminal editor reads, writes, paste actions, or custom editor components are unavailable.",
+        "tui-layout": "Pi headers, footers, and tool-panel layout changes are unavailable.",
+        "custom-ui": "Custom Pi TUI views are unavailable.",
+        "theme-control": "Pi TUI theme discovery or switching is unavailable.",
+        "terminal-input": "Terminal key-input listeners are unavailable in Cindy's RPC interface.",
+        "tui-rendering": "Shortcuts and custom message, Markdown, or entry renderers target Pi TUI and are not shown by Cindy.",
+        "cli-flags": "Command-line flags registered by an Extension cannot be configured through Cindy's fixed Pi launch settings.",
+        "analysis-incomplete": "Cindy could not inspect every reachable local source file, so other limits may exist."
+      },
+      "detectedApis": "Detected Pi APIs: {{apis}}",
+      "runtimeRequirementTitle": "Pi version requirement",
+      "runtimeMismatch": "{{packageName}} requires Pi {{range}}, but Cindy currently uses {{currentVersion}}.",
+      "runtimeLegacyPackage": "{{packageName}} belongs to Pi's legacy runtime namespace. Extensions built against it may not load in Cindy's current Pi.",
+      "runtimeUnknown": "{{packageName}} requires Pi {{range}}, but Cindy could not determine whether its current Pi version satisfies it.",
+      "compatibilityNoticeTitle": "Installed with compatibility limits",
+      "compatibilityNoticeDescription": "{{name}} finished installing or updating. Cindy's inspection is shown below; its current enabled state remains visible in the extension list, and changes affect only new or restarted Pi tasks.",
+      "extensionApprovalTitle": "Enable executable Extension code?",
+      "extensionApprovalDescription": "When enabled, third-party Extension code runs in the same process as Pi and can read files and environment variables available to Pi, including model or API credentials. Cindy cannot isolate that access today. Enable only sources you fully trust.",
+      "parserDisclaimer": "This static compatibility check is not a security audit and cannot prove arbitrary third-party code is fully compatible.",
+      "disableAfterInstall": "Disable this extension",
+      "keepEnabled": "Keep enabled",
+      "keepDisabled": "Keep disabled",
+      "approveAndEnable": "Accept risk and enable",
+      "done": "Done",
+      "warning": { "no-resources": "No Pi resources were found in this extension.", "inspection-failed": "The extension is configured, but its installed contents could not be inspected.", "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.", "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.", "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.", "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work." },
+      "success": { "install": "Pi extension installed. The current task is unchanged; start or restart a Pi task to use it.", "remove": "Pi extension removed. The current task keeps the old extension until it is closed.", "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.", "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it." }
     },
     "computerUse": {
       "title": "Automation",
@@ -3236,6 +3328,311 @@
       "reset": "Reset to default",
       "recording": "Press new shortcut…",
       "editAria": "Change shortcut for {{name}}",
+      "workLouderCodex": {
+        "commands": {
+          "session.selectPrevious": {
+            "name": "Previous task",
+            "description": "Open the task above the current one in the sidebar"
+          },
+          "session.selectNext": {
+            "name": "Next task",
+            "description": "Open the task below the current one in the sidebar"
+          },
+          "toggleRightSidebar": {
+            "name": "Toggle right sidebar",
+            "description": "Show or hide the right sidebar"
+          },
+          "composer.toggleFastMode": {
+            "name": "Toggle Fast mode",
+            "description": "Turn Fast mode on or off in the current composer"
+          },
+          "approval.approve": {
+            "name": "Approve request",
+            "description": "Approve the active request"
+          },
+          "approval.decline": {
+            "name": "Decline request",
+            "description": "Decline the active request"
+          },
+          "forkTask": {
+            "name": "Continue in new task",
+            "description": "Create a new task from the current one"
+          },
+          "composer.submit": {
+            "name": "Send message",
+            "description": "Send the current composer message"
+          },
+          "feedback": {
+            "name": "Send feedback",
+            "description": "Send product feedback to the Cindy team"
+          },
+          "toggleTerminal": {
+            "name": "Open terminal",
+            "description": "Open the terminal panel"
+          },
+          "copyConversationMarkdown": {
+            "name": "Copy as Markdown",
+            "description": "Copy the current task as Markdown",
+            "copied": "Copied the task as Markdown",
+            "empty": "This task has nothing to copy yet",
+            "failed": "Could not copy the task"
+          },
+          "archiveTask": {
+            "name": "Archive task",
+            "description": "Archive the current task"
+          },
+          "newTask": {
+            "name": "New task",
+            "description": "Start a new task"
+          },
+          "openBrowserTab": {
+            "name": "Open browser tab",
+            "description": "Open a new browser tab"
+          },
+          "toggleTaskPin": {
+            "name": "Toggle pin",
+            "description": "Pin or unpin the current task"
+          },
+          "toggleReviewTab": {
+            "name": "Toggle review",
+            "description": "Show or hide review for the current task"
+          },
+          "composer.addPhotos": {
+            "name": "Add photos",
+            "description": "Add photos to the composer"
+          },
+          "settings": {
+            "name": "Settings",
+            "description": "Open Cindy settings"
+          },
+          "manageTasks": {
+            "name": "Manage scheduled tasks",
+            "description": "Create or manage scheduled tasks"
+          },
+          "composer.increaseReasoningEffort": {
+            "name": "Increase reasoning effort",
+            "description": "Raise the reasoning effort for the current composer"
+          },
+          "composer.decreaseReasoningEffort": {
+            "name": "Decrease reasoning effort",
+            "description": "Lower the reasoning effort for the current composer"
+          },
+          "openFolder": {
+            "name": "Open folder",
+            "description": "Add a local project to Cindy"
+          },
+          "composer.addFiles": {
+            "name": "Attach files and folders",
+            "description": "Attach files and folders to the composer"
+          },
+          "openSkills": {
+            "name": "Go to skills",
+            "description": "Browse installed and recommended skills"
+          },
+          "composer.togglePlanMode": {
+            "name": "Toggle plan mode",
+            "description": "Turn plan mode on or off in the current composer"
+          },
+          "navigateForward": {
+            "name": "Forward",
+            "description": "Go forward in navigation history"
+          },
+          "toggleSidebar": {
+            "name": "Toggle sidebar",
+            "description": "Show or hide the sidebar"
+          },
+          "navigateBack": {
+            "name": "Back",
+            "description": "Go back in navigation history"
+          },
+          "composer.focus": {
+            "name": "Focus composer",
+            "description": "Move the cursor into the composer"
+          },
+          "conversation.scrollUp": {
+            "name": "Scroll up",
+            "description": "Scroll the conversation up"
+          },
+          "conversation.scrollDown": {
+            "name": "Scroll down",
+            "description": "Scroll the conversation down"
+          },
+          "conversation.scrollBottom": {
+            "name": "Jump to latest",
+            "description": "Scroll to the latest message"
+          }
+        },
+        "title": "Work Louder Codex Micro",
+        "beta": "Beta",
+        "entryDescription": "Open tasks with the Agent keys and mirror their status with lighting.",
+        "openAria": "Open Work Louder Codex Micro settings",
+        "back": "Back to keyboard shortcuts",
+        "retry": "Try again",
+        "device": {
+          "title": "Device",
+          "firmware": "Firmware {{version}}",
+          "inputMonitoring": {
+            "label": "Input Monitoring",
+            "granted": "macOS allows Cindy to receive keyboard input.",
+            "denied": "macOS is blocking keyboard input. Allow Cindy in System Settings.",
+            "unknown": "Cindy has not checked the macOS Input Monitoring permission yet.",
+            "not-required": "Input Monitoring is not required on this platform.",
+            "open": "Open System Settings"
+          }
+        },
+        "errors": {
+          "load": "Failed to load Codex Micro settings",
+          "save": "Failed to save Codex Micro settings"
+        },
+        "connection": {
+          "label": "Connection",
+          "status": {
+            "connecting": "Connecting",
+            "connected": "Connected",
+            "not-detected": "Not detected",
+            "error": "Connection problem",
+            "unavailable": "SDK unavailable"
+          },
+          "descriptions": {
+            "connecting": "Cindy is starting the Work Louder device service.",
+            "connected": "USB is connected. Cindy is listening for key presses and syncing task lighting.",
+            "not-detected": "Connect the keyboard with a data-capable USB cable. Close ChatGPT if it is using the device.",
+            "error": "Cindy could not communicate with the keyboard and is retrying automatically.",
+            "unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy.",
+            "connection-timeout": "The Work Louder service did not respond in time. Cindy will retry automatically.",
+            "connection-failed": "The Work Louder service failed to start. Cindy will retry automatically.",
+            "permission-required": "macOS denied keyboard access. Allow Cindy in Input Monitoring, then try again.",
+            "sdk-unavailable": "The official Work Louder SDK was not found. Keep a supported ChatGPT or Codex app installed, then restart Cindy."
+          }
+        },
+        "lighting": {
+          "title": "Lighting",
+          "brightness": {
+            "label": "Brightness",
+            "description": "Adjust the overall brightness of the key, task, and ambient lighting.",
+            "aria": "Adjust Codex Micro lighting brightness"
+          },
+          "autoDim": {
+            "label": "Auto-dim",
+            "description": "Turn lighting off after inactivity and restore it when the keyboard is used or a task changes state.",
+            "aria": "Choose Codex Micro auto-dim delay",
+            "options": {
+              "off": "Off",
+              "30-seconds": "30 seconds",
+              "1-minute": "1 minute",
+              "3-minutes": "3 minutes",
+              "10-minutes": "10 minutes",
+              "30-minutes": "30 minutes",
+              "1-hour": "1 hour"
+            }
+          }
+        },
+        "agentKeys": {
+          "customDescription": "What this agent key opens when the source is set to custom.",
+          "title": "Agent keys",
+          "source": {
+            "label": "Task order",
+            "description": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+            "descriptions": {
+              "sidebar": "AG00–AG05 follow the first six tasks in the sidebar, in the order shown there.",
+              "last-sent": "AG00–AG05 follow the six tasks you last sent a message in.",
+              "priority": "AG00–AG05 follow the first six priority tasks.",
+              "custom": "AG00–AG05 each open the task you assign."
+            },
+            "value": "Sidebar order",
+            "options": {
+              "sidebar": "Sidebar order",
+              "last-sent": "Recent tasks",
+              "priority": "Priority",
+              "custom": "Custom"
+            }
+          },
+          "singleTap": {
+            "label": "Focus Cindy with a single tap",
+            "description": "When enabled, one tap opens the task and brings Cindy forward. When disabled, one tap still switches tasks in the background; a second tap within 350 ms brings Cindy forward.",
+            "aria": "Focus Cindy with a single Agent-key tap"
+          },
+          "newTask": "New task",
+          "slot": "Recent {{position}}",
+          "slotAria": "AG{{slot}} opens recent task {{position}}"
+        },
+        "commandKeys": {
+          "builtInDescription": "Leave this on the keycap default, or bind the key to something else.",
+          "builtIn": "Use the keycap's built-in action",
+          "unmapped": "This keycap has no action"
+        },
+        "microphone": {
+          "title": "Microphone",
+          "separate": {
+            "label": "Use separate microphone keys",
+            "description": "Keep ACT10 and ACT11 separate instead of combining them into one MIC key."
+          }
+        },
+        "analog": {
+          "title": "Joystick",
+          "description": "Choose the action for each joystick direction.",
+          "directions": {
+            "up": "Up",
+            "right": "Right",
+            "down": "Down",
+            "left": "Left"
+          }
+        },
+        "encoder": {
+          "title": "Encoder",
+          "mode": {
+            "label": "Encoder mode",
+            "description": "Choose what turning and pressing the encoder controls.",
+            "options": {
+              "session-switch": "Switch tasks",
+              "composer-navigation": "Navigate the composer",
+              "reasoning": "Reasoning effort",
+              "conversation-scroll": "Scroll the conversation",
+              "custom": "Custom"
+            }
+          },
+          "gestures": {
+            "left": "Turn left",
+            "right": "Turn right",
+            "click": "Press",
+            "longPress": "Long press"
+          },
+          "customDescription": "Choose the action for this encoder gesture."
+        },
+        "actions": {
+          "choose": "Choose an action",
+          "none": "No action",
+          "tasks": "Tasks",
+          "commands": "Commands",
+          "keycaps": "Keycaps",
+          "skills": "Skills"
+        },
+        "layout": {
+          "editor": {
+            "done": "Done",
+            "title": "Edit keycap",
+            "description": "Choose the keycap shown on this physical key.",
+            "searchPlaceholder": "Search keycaps",
+            "close": "Close keycap editor",
+            "cancel": "Cancel",
+            "save": "Save",
+            "assignedShortcut": "Assigned action",
+            "selectKeycap": "Select keycap {{keycap}}"
+          },
+          "keyboard": {
+            "indicator": "Status lights",
+            "title": "Layout",
+            "description": "Click a keycap to choose its label and built-in action.",
+            "analogStick": "Joystick",
+            "encoder": "Encoder"
+          },
+          "reset": {
+            "title": "Reset key layout",
+            "description": "Restore keycaps, joystick, encoder, and microphone assignments without changing task order or lighting.",
+            "button": "Reset layout"
+          }
+        }
+      },
       "errors": {
         "saveFailed": "Failed to save shortcut settings",
         "notBindable": "This key combination cannot be used",
@@ -4541,7 +4938,7 @@
   "titleBar": {
     "menu": "Menu",
     "minimize": "Minimize",
-    "maximize": "Maximize",
+    "maximizeOrRestore": "Maximize or Restore Window",
     "close": "Close",
     "menuItems": {
       "settings": "Settings",
@@ -4570,6 +4967,8 @@
   },
   "contentHeader": {
     "toggleSidebar": "Toggle sidebar",
+    "collapseSidebar": "Collapse Sidebar",
+    "expandSidebar": "Expand Sidebar",
     "collapsePanel": "Collapse",
     "expandPanel": "Expand"
   },
@@ -4784,6 +5183,8 @@
       "rotateDevice": "Rotate Device",
       "lockScreen": "Lock Screen",
       "unlockScreen": "Unlock Screen",
+      "controlsUnavailable": "Simulator controls are temporarily unavailable",
+      "enterTextBeforeSending": "Enter text before sending",
       "agentBusyTitle": "Agent Using This Device",
       "agentBusyDescription": "Manual input is paused until the current Agent action finishes.",
       "takeControl": "Take Control",
@@ -4860,19 +5261,24 @@
       "urlPlaceholder": "Enter URL or search",
       "goBack": "Back",
       "goForward": "Forward",
+      "goBackUnavailable": "No previous page",
+      "goForwardUnavailable": "No next page",
       "reload": "Reload",
       "stop": "Stop loading",
       "screenshot": "Screenshot",
       "screenshotCopied": "Screenshot copied to clipboard",
       "screenshotFailed": "Screenshot failed",
       "comment": "Comment on the page",
+      "exitCommentMode": "Exit comment mode",
       "commentModeHint": "Click an element or Shift-drag an area · Cmd/Ctrl-click to add instantly · Esc to exit",
       "commentPlaceholder": "Describe the change you want here…",
       "commentSubmit": "Add comment",
       "commentCancel": "Cancel",
       "commentAdded": "Comment added to the chat input",
       "commentFailed": "Failed to add comment",
-      "styleTweaks": "Style tweaks",
+      "styleTweaksExpand": "Show style controls",
+      "styleTweaksCollapse": "Hide style controls",
+      "styleTweaksSubmitting": "Submitting comment…",
       "styleReset": "Reset",
       "styleTextLabel": "Text",
       "moreTools": "More",
@@ -5268,6 +5674,7 @@
       "completed": "Completed",
       "empty": "No background tasks in this session yet",
       "stop": "Stop",
+      "stopping": "Stopping…",
       "back": "Back",
       "progressSummary": "{{done}}/{{total}} agents",
       "tokens": "{{value}} tokens",
@@ -5645,7 +6052,8 @@
         "discount": "Save {{percent}}%",
         "perMillion": "Standard model pricing",
         "fixedFx": "Estimated at the fixed rate of 1 USD = 6.7 CNY",
-        "subscriptionEstimate": "Value estimate, not an actual bill"
+        "subscriptionEstimate": "Value estimate, not an actual bill",
+        "discountedVsStandard": "Discounted · {{percent}}% off standard"
       },
       "trigger": {
         "placeholder": "Select model",
@@ -5700,6 +6108,28 @@
       },
       "agentSwitch": {
         "hint": "Pick the model to use after switching to {{agent}}"
+      },
+      "unified": {
+        "railFavorites": "Favorites",
+        "railAll": "All",
+        "favoritesGroup": "Favorites",
+        "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
+        "layoutBadge": "Try style B",
+        "layoutClassic": "Back to style A",
+        "layoutTryUnified": "Try the new picker",
+        "layoutOriginal": "Back to old picker",
+        "addFavorite": "Save to favorites",
+        "removeFavorite": "Remove from favorites",
+        "favoriteConfig": "Saved setup",
+        "recommended": "Recommended",
+        "recommendedConfig": "Recommended setup",
+        "customized": "Customized",
+        "reset": "Reset to recommended",
+        "fastTip": "Fast · priority speed · uses more quota",
+        "effortEndFast": "Faster",
+        "effortEndSmart": "Smarter",
+        "railSameEngine": "{{agent}} only",
+        "crossEngineWarning": "Switching engines rebuilds context and may lose content"
       }
     },
     "permissionSelector": {
@@ -5750,7 +6180,7 @@
           },
           "bypassPermissions": {
             "label": "Full access",
-            "description": "Every tool runs without asking. Highest risk; use only for trusted tasks."
+            "description": "Routine tools run without asking. Installing, updating, or removing Pi extensions still requires confirmation. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -7107,6 +7537,7 @@
       "scopeLocalSessions": "This device’s sessions",
       "dialogues": "Chat",
       "newDialogue": "New session",
+      "creationInProgress": "Creation is already in progress",
       "dialoguesToggleExpand": "Expand Chat",
       "dialoguesToggleCollapse": "Collapse Chat",
       "loadingDialogues": "Loading…",
@@ -7226,6 +7657,8 @@
         "hiddenCount": "{{count}} hidden",
         "stopped": "Stopped",
         "aria": "{{title}} automation sessions, {{count}} runs, {{attention}} pending",
+        "expand": "Expand {{title}} runs",
+        "collapse": "Collapse {{title}} runs",
         "menu": {
           "runNow": "Run now",
           "more": "More actions",
@@ -7295,6 +7728,7 @@
         "delete": "Delete selected sessions",
         "clear": "Clear selection",
         "archiveNone": "No selected sessions can be archived",
+        "actionInProgress": "Another action is already in progress",
         "skipRunning": "{{count}} running",
         "skipAttached": "{{count}} remotely controlled",
         "skipNotActive": "{{count}} not active",
@@ -8117,6 +8551,12 @@
       }
     },
     "builtinTemplates": {
+      "schedule": {
+        "daily": "Daily at {{time}}",
+        "weekdays": "Weekdays at {{time}}",
+        "weekly": "{{weekday}} at {{time}}",
+        "monthly": "Monthly on day {{day}} at {{time}}"
+      },
       "categories": {
         "dev-automation": "Development automation",
         "info-radar": "Information radar",

@@ -273,7 +273,7 @@ describe('reusable auxiliary window chrome', () => {
     render(<GhostPanelWindowLayout />);
 
     const mergeBack = screen.getByRole('button', { name: 'rightSidebar.window.mergeBack' });
-    expect(mergeBack.getAttribute('title')).toBe('rightSidebar.window.mergeBack');
+    expect(mergeBack.getAttribute('title')).toBeNull();
     expect(mergeBack.textContent).not.toContain('rightSidebar.window.mergeBack');
     fireEvent.click(mergeBack);
 
