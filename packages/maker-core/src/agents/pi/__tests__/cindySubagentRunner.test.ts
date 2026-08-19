@@ -17,6 +17,16 @@ import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js
  * message — so this only has to be comfortably above them.
  */
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+/**
+ * Wait budget for the one case that queues a 513-request control backlog.
+ *
+ * Everything else here waits on an event; that case waits on I/O throughput,
+ * and the suite default is a per-event budget. See the arithmetic at its call
+ * site. The case carries a matching per-test override, since the file-level 60s
+ * cannot contain a wait that is allowed to run for 90s.
+ */
+const CONTROL_BACKLOG_WAIT_MS = 90_000;
+const CONTROL_BACKLOG_TEST_TIMEOUT_MS = 120_000;
 import {
   controlPiSubagentRuns,
   isPiSubagentTerminal,
@@ -175,6 +185,16 @@ async function makeFixture(options: {
   surviveStdinEnd?: boolean;
   /** Model a wedged runner: publish status, never consume the stop mailbox. */
   ignoreStopControl?: boolean;
+  /**
+   * Hold a finishing child's turn until this many child pids are on disk.
+   *
+   * Sequencing tool for cases whose premise is "a sibling child is already
+   * running when X happens". Spawn order alone does not give that: a lane can
+   * finish its own task and move on before a sibling's freshly spawned process
+   * has even reached its first line, so the assertions would race a real
+   * process launch. Bounded — see `waitForPidCount` in the generated child.
+   */
+  gateFinishOnPidCount?: number;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -280,6 +300,23 @@ if (process.env.CINDY_TEST_PI_PIDS) {
 if (process.env.CINDY_TEST_PI_TOKENS) {
   fs.appendFileSync(process.env.CINDY_TEST_PI_TOKENS, JSON.stringify(process.env.CINDY_PI_SESSION_TOKEN || null) + '\\n');
 }
+// Block this child's turn until \`count\` children have recorded their pid.
+// Synchronous on purpose: this process has nothing else to do, and the caller
+// needs the guarantee *before* it answers the prompt. Bounded so a sibling that
+// never starts turns into the case's own readable assertion failure instead of
+// a hang.
+function waitForPidCount(count) {
+  const deadline = Date.now() + 20000;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    let seen = 0;
+    try {
+      seen = fs.readFileSync(process.env.CINDY_TEST_PI_PIDS, 'utf8').split('\\n').filter(Boolean).length;
+    } catch (_) { /* not created yet */ }
+    if (seen >= count || Date.now() >= deadline) return;
+    Atomics.wait(sleeper, 0, 0, 20);
+  }
+}
 let buffer = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -298,6 +335,7 @@ process.stdin.on('data', (chunk) => {
       ${options.approval
     ? `process.stdout.write(JSON.stringify({ type: 'extension_ui_request', id: 'approval-1', method: ${JSON.stringify(approvalMethod)}, title: 'cindy:permission', ${approvalMethod === 'input' ? 'placeholder' : 'message'}: JSON.stringify({ toolName: 'write', input: { path: 'a.txt' } }) }) + '\\n');`
     : `${options.hangOnMessage ? `if (command.message !== ${JSON.stringify(options.hangOnMessage)}) {` : ''}
+      ${options.gateFinishOnPidCount ? `waitForPidCount(${options.gateFinishOnPidCount});` : ''}
       process.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'read' }) + '\\n');
       ${fixtureLifecycle}
       ${options.hangOnMessage ? '}' : ''}`}
@@ -663,24 +701,39 @@ describe('Cindy durable PI Subagent runner', () => {
       const started = settled.filter(
         (outcome) => outcome.status === 'fulfilled' && typeof outcome.value === 'string',
       );
-      expect(started).toHaveLength(1);
-      // The loser either lost the claim or lost the re-check under it; either
-      // way it must not have launched a second runner over the same session.
-      const resumedRunId = (started[0] as PromiseFulfilledResult<string>).value;
+      // Mutual exclusion is the claim under test, and it has to be asserted
+      // without assuming *which* racer wins. The alias racer cannot finish even
+      // when it takes the claim: the session-containment guard compares
+      // `path.resolve(sessionDir)` against `path.resolve(root)`, and the
+      // symlinked root is not a textual prefix of the real session path — so it
+      // dies with "escaped its run root" after winning. Asserting "exactly one
+      // fulfilled" therefore silently assumed a coin flip (it went red ~1 run in
+      // 4, and more often once the claim write became two steps).
+      const refusedTheClaim = settled.filter((outcome) => (
+        outcome.status === 'rejected'
+        && /already resuming this Subagent generation/i.test(String(outcome.reason?.message ?? ''))
+      ));
+      expect(refusedTheClaim).toHaveLength(1);
+      expect(started.length).toBeLessThanOrEqual(1);
+      // Whoever got through, there is never a second live generation over the
+      // same PI child session — that is what a lost claim has to prevent.
       const runs = await listPiSubagentRuns(fixture.root);
-      expect(runs.filter((run) => run.taskId === first.taskId && run.runId !== first.runId))
-        .toHaveLength(1);
+      const resumedRuns = runs.filter((run) => run.taskId === first.taskId && run.runId !== first.runId);
+      expect(resumedRuns).toHaveLength(started.length);
 
-      await controlPiSubagentRuns(fixture.root, resumedRunId, 'stop');
-      await waitFor(
-        async () => {
-          const settledRuns = await listPiSubagentRuns(fixture.root);
-          const resumed = settledRuns.find((run) => run.runId === resumedRunId);
-          return resumed && isPiSubagentTerminal(resumed.state) ? resumed : null;
-        },
-        undefined,
-        'the hung resumed generation to stop',
-      );
+      if (started.length === 1) {
+        const resumedRunId = (started[0] as PromiseFulfilledResult<string>).value;
+        await controlPiSubagentRuns(fixture.root, resumedRunId, 'stop');
+        await waitFor(
+          async () => {
+            const settledRuns = await listPiSubagentRuns(fixture.root);
+            const resumed = settledRuns.find((run) => run.runId === resumedRunId);
+            return resumed && isPiSubagentTerminal(resumed.state) ? resumed : null;
+          },
+          undefined,
+          'the hung resumed generation to stop',
+        );
+      }
     });
   });
 
@@ -1078,9 +1131,15 @@ describe('Cindy durable PI Subagent runner', () => {
         requestedAt: Date.now(),
       })}\n`, { mode: 0o600 });
     }));
+    // Both waits below are bounded by throughput, not by an event: the runner
+    // consumes 513 control files one at a time and writes a receipt for each,
+    // every one an atomic write (temp file + rename, with the Windows
+    // share-violation retry on top). At the 50-100ms per write a Windows CI disk
+    // with a realtime scanner attached delivers, that is 26-51s of pure I/O — the
+    // suite's 30s default expired mid-pipeline while the runner was healthy.
     await waitFor(
       async () => (await readdir(controlsDir)).length === 0 ? true : null,
-      undefined,
+      CONTROL_BACKLOG_WAIT_MS,
       'the runner to drain every queued control request',
     );
     // Draining the mailbox is not the same event as publishing the receipts:
@@ -1091,7 +1150,7 @@ describe('Cindy durable PI Subagent runner', () => {
     const receiptsDir = path.join(fixture.runDir, 'control-receipts');
     await waitFor(
       async () => (await readdir(receiptsDir)).length === 512 ? true : null,
-      undefined,
+      CONTROL_BACKLOG_WAIT_MS,
       'the retained control receipts to settle at the 512 bound',
     );
 
@@ -1107,7 +1166,7 @@ describe('Cindy durable PI Subagent runner', () => {
       return run?.state === 'stopped' ? run : null;
     });
     await waitForClose(fixture.child, fixture.stderr);
-  });
+  }, CONTROL_BACKLOG_TEST_TIMEOUT_MS);
 
   it('stops this owner\'s detached runner at an account boundary and keeps its durable files', async () => {
     const fixture = await makeFixture({ hang: true, runtimeOwnerId: 'owner-a' });
@@ -1157,11 +1216,19 @@ describe('Cindy durable PI Subagent runner', () => {
     // Lane A runs task 1 to completion, then picks up the poisoned task 3 and
     // throws. Lane B is still parked on task 2's hanging child at that moment,
     // so a real, running child exists when the failure is published.
+    //
+    // `gateFinishOnPidCount` is what makes that premise a fact rather than a
+    // hope: task 1's child does not answer until two children have recorded
+    // their pid, so lane A cannot reach the poisoned task before task 2's
+    // process is up and on disk. Without it CI saw one pid — task 2 had been
+    // spawned (the terminal snapshot records it) but was killed before its
+    // freshly booted process wrote anything.
     const fixture = await makeFixture({
       tasks: 3,
       concurrency: 2,
       hangOnMessage: 'task 2',
       poisonSessionDirIndex: 2,
+      gateFinishOnPidCount: 2,
     });
 
     const failed = await waitFor(
