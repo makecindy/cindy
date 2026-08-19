@@ -150,20 +150,34 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("runnerInstanceId: 'launch-pending-' + runId");
   });
 
-  it('checks the launch fence before staging or spawning a durable run', () => {
+  it('publishes the run directory before reading the fence, and spawns after', () => {
     // The Host cannot prevent this spawn by scanning: it happens here, inside
-    // Pi, in an extension the Host never calls. The fence is the only way an
-    // update relaunch can guarantee no runner appears behind its back — and it
-    // has to be read before anything is written to the run directory.
+    // Pi, in an extension the Host never calls. A single fence read before the
+    // spawn is not enough either — the Host could raise the fence and finish
+    // scanning in the gap between the read and the write. What makes it
+    // airtight is the *order*: the Host writes its fence and then scans, this
+    // writes its run directory and then reads. Opposite orders, so at least one
+    // side always sees the other. Both halves are pinned here because either
+    // one moving re-opens the hole.
     const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
     expect(src).toContain("const LAUNCH_FENCE_FILENAME = '.launch-fence.json'");
     const launch = src.indexOf('function launchDurableRun(');
+    const mkdir = src.indexOf('mkdirSync(runDir', launch);
+    const publish = src.indexOf("writePrivateJson(join(runDir, 'status.json')", launch);
     const check = src.indexOf('if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {', launch);
-    const stage = src.indexOf('mkdirSync(runDir', launch);
     const spawned = src.indexOf('spawn(nodeExecutable', launch);
-    expect(check).toBeGreaterThan(launch);
-    expect(stage).toBeGreaterThan(check);
+    expect(mkdir).toBeGreaterThan(launch);
+    expect(publish).toBeGreaterThan(mkdir);
+    expect(check).toBeGreaterThan(publish);
     expect(spawned).toBeGreaterThan(check);
+    // The published record has to be one the Host's scan can actually count.
+    const staging = src.slice(publish, check);
+    expect(staging).toContain("state: 'queued'");
+    expect(staging).toContain('runtimeOwnerId: runtimeOwnerId');
+    expect(staging).toContain("runnerInstanceId: 'launch-pending-' + runId");
+    // A refusal rolls the directory back, or the Host would count a run that
+    // never existed forever.
+    expect(src.slice(check, spawned)).toContain('rmSync(runDir, { recursive: true, force: true })');
     // Only our own host's live fence counts: a fence from another instance
     // sharing the agent home, or one left by a dead host, must not block.
     const fn = src.slice(src.indexOf('function launchFenceBlocksSpawn('), launch);

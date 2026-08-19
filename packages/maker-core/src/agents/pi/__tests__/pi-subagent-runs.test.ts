@@ -14,6 +14,7 @@ import {
   acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
   isPiSubagentLaunchFenceActive,
+  isPiSubagentRunStale,
   piSubagentControlOwnership,
   piSubagentLaunchFencePath,
   piSubagentOwnerHostPid,
@@ -239,6 +240,12 @@ describe('PI durable subagent run store', () => {
 
     beforeEach(() => { runnerPid += 1; });
 
+    /** The identity memo is keyed by pid; a fresh pid is a fresh answer. */
+    function runnerIdentityCacheBust(): void {
+      runnerPid += 1;
+      stubAliveRunner();
+    }
+
     function stubAliveRunner(): void {
       const real = process.kill.bind(process);
       const spy = vi.spyOn(process, 'kill').mockImplementation(
@@ -298,6 +305,47 @@ describe('PI durable subagent run store', () => {
       await expect(listPiSubagentRuns(root)).resolves.toEqual([
         expect.objectContaining({ state: 'running' }),
       ]);
+    });
+
+    it('keeps an unverifiable runner active rather than declaring it stale', async () => {
+      // The probe failing is not evidence the runner died. Calling it stale
+      // hides a live run from the sweep — which then reports a success it did
+      // not achieve — and makes deleting the parent task take the metadata of a
+      // run that is still going.
+      stubAliveRunner();
+      childProcess.spawnSync.mockImplementation(() => ({
+        status: null,
+        stdout: '',
+        error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+      }));
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      await writeStatus(root, expired());
+
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([
+        expect.objectContaining({ state: 'running' }),
+      ]);
+      // The boundary fails honestly instead of claiming a clean sweep.
+      await expect(stopAllPiSubagentRunsForExit(agentHome, 0, { killUnresponsiveRunners: true }))
+        .resolves.toBe(false);
+      // And deleting the parent task leaves the record alone.
+      await expect(stopAndRemovePiSubagentRuns(root, 0)).resolves.toBe(false);
+      await expect(readdir(root)).resolves.toContain(
+        '123e4567-e89b-42d3-a456-4266141740b0',
+      );
+    });
+
+    it('answers the same as the reclaim path for the same process', async () => {
+      // Two classifiers, one judgement. They are mirrored rather than shared
+      // because one has to block; a drift between them would mean the list and
+      // the sweep disagree about whether a run exists.
+      stubAliveRunner();
+      for (const [label, matches] of [['running', true], ['gone', false]] as const) {
+        stubCommandLine(matches);
+        runnerIdentityCacheBust();
+        expect(isPiSubagentRunStale(expired())).toBe(label === 'gone');
+        expect(await killVerifiedPiSubagentRunner(expired())).toBe(label === 'gone');
+      }
     });
 
     it('keeps legacy records without a runner script on the pid-only answer', async () => {
@@ -1006,6 +1054,28 @@ describe('PI durable subagent run store', () => {
       // agent home is shared by dev, packaged and every --passive instance.
       const foreignHome = await fenceHome(process.ppid);
       expect(isPiSubagentLaunchFenceActive(foreignHome, process.pid)).toBe(false);
+    });
+
+    it('counts a launch that published its run directory before the fence went up', async () => {
+      // The other half of the ordering argument, from the Host's side: a
+      // launcher that got as far as writing its `queued` status *must* be
+      // visible to every scan the relaunch performs, so the stability check
+      // refuses instead of exiting behind its back.
+      const agentHome = await makeRoot();
+      const root = piSubagentRunRoot(agentHome, 'session-1');
+      await writeStatus(root, status(runId, {
+        state: 'queued',
+        runnerInstanceId: `launch-pending-${runId}`,
+        runnerPid: undefined,
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+      }));
+      // The fence goes up afterwards — the interleaving the launcher's read
+      // could have missed.
+      const release = await acquirePiSubagentLaunchFence(agentHome);
+
+      expect(hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid })).toBe(true);
+      await release();
     });
 
     it('raises, releases, and cleans up after a departed owner', async () => {

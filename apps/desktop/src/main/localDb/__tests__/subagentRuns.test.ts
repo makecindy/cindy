@@ -296,6 +296,46 @@ describe('durable Subagent runs', () => {
     });
   });
 
+  it('restores the row after a transient diagnostic, down to its capabilities', async () => {
+    // One unreadable read of an already-finished status.json — a Windows
+    // sharing conflict is enough — used to be permanent: the diagnostic wrote
+    // `failed` plus the reduced PR1 capability set, and the healthy write that
+    // followed was absorbed by the failed state and inherited those reduced
+    // capabilities, so the finished result never came back and the transcript
+    // and resume affordances stayed gone.
+    const generation = '123e4567-e89b-42d3-a456-4266141740f0';
+    const spawn = {
+      kind: 'spawn' as const,
+      logicalSubagentId: generation,
+      providerRunIds: [generation],
+    };
+    await persistSubagentTaskUpdate('session-1', observed({
+      provider: 'pi', taskId: 'flaky-tool', status: 'completed', taskType: 'pi_subagent',
+      summary: 'the answer',
+    }, spawn), 'pi');
+    await persistSubagentTaskUpdate('session-1', observed({
+      provider: 'pi', taskId: 'flaky-tool', status: 'failed',
+      taskType: 'pi_subagent_diagnostic', summary: 'status is unreadable',
+    }, spawn), 'pi');
+
+    const broken = await getSubagentRunDetail('session-1', 'pi', generation);
+    expect(broken?.status).toBe('failed');
+
+    // The file reads again, and the durable record is the authority.
+    await persistSubagentTaskUpdate('session-1', observed({
+      provider: 'pi', taskId: 'flaky-tool', status: 'completed', taskType: 'pi_subagent',
+      summary: 'the answer',
+    }, spawn), 'pi');
+
+    const detail = await getSubagentRunDetail('session-1', 'pi', generation);
+    expect(detail?.status).toBe('completed');
+    expect(detail?.capabilities).toMatchObject({
+      viewActivity: true,
+      viewFullTranscript: true,
+      resume: true,
+    });
+  });
+
   it('reopens a terminal PI durable row for a new resumed native generation', async () => {
     await persistSubagentTaskUpdate('session-1', observed({
       provider: 'pi', taskId: 'resume-tool',

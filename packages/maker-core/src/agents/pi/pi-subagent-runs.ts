@@ -167,6 +167,16 @@ function piSubagentRunsRoot(agentHome: string): string {
   return path.join(agentHome, 'runtime', 'pi-subagent-runs');
 }
 
+/**
+ * Inverse of `piSubagentRunRoot`: `<agentHome>/runtime/pi-subagent-runs/<sid>`
+ * back to `<agentHome>`. Spelled out once so the two fence checks on this path
+ * cannot disagree about how many levels to climb — getting it wrong disables
+ * the fence silently.
+ */
+function piSubagentAgentHomeFromRunRoot(runRoot: string): string {
+  return path.dirname(path.dirname(path.dirname(runRoot)));
+}
+
 export function piSubagentLaunchFencePath(agentHome: string): string {
   return path.join(piSubagentRunsRoot(agentHome), PI_SUBAGENT_LAUNCH_FENCE_FILENAME);
 }
@@ -397,6 +407,25 @@ export function verifyPiSubagentRunnerIdentity(status: PiSubagentRunStatus): boo
  * and never depends on a probe that a dead process cannot answer.
  */
 type PiSubagentRunnerPresence = 'gone' | 'running' | 'unverifiable';
+
+/**
+ * Synchronous mirror of `classifyRunnerPresence`.
+ *
+ * Same three answers from the same evidence, in the same order — the only
+ * difference is the blocking probe, which the callers on the synchronous
+ * force-quit and list paths have no way around. A cross-check test pins the two
+ * against each other so they cannot drift into disagreeing about a process.
+ */
+function classifyRunnerPresenceSync(status: PiSubagentRunStatus): PiSubagentRunnerPresence {
+  const pid = status.runnerPid;
+  if (!Number.isSafeInteger(pid) || (pid ?? 0) <= 0) return 'gone';
+  if (isProcessAlive(pid!) === false) return 'gone';
+  const script = status.runnerScript;
+  if (typeof script !== 'string' || script.length === 0) return 'unverifiable';
+  const commandLine = readProcessCommandLine(pid!);
+  if (commandLine === null) return 'unverifiable';
+  return commandLine.includes(script) ? 'running' : 'gone';
+}
 
 async function classifyRunnerPresence(status: PiSubagentRunStatus): Promise<PiSubagentRunnerPresence> {
   const pid = status.runnerPid;
@@ -762,9 +791,9 @@ function isProcessAlive(pid: number | undefined): boolean | null {
  */
 const RUNNER_IDENTITY_TTL_MS = 10_000;
 const RUNNER_IDENTITY_CACHE_MAX = 64;
-const runnerIdentityCache = new Map<string, { at: number; matches: boolean }>();
+const runnerIdentityCache = new Map<string, { at: number; presence: PiSubagentRunnerPresence }>();
 
-function runnerIdentityStillMatches(status: PiSubagentRunStatus): boolean {
+function runnerPresenceForStale(status: PiSubagentRunStatus): PiSubagentRunnerPresence {
   const key = `${status.runnerPid}:${status.runnerScript}`;
   const now = Date.now();
   // Liveness ahead of the memo, so a cached "still the runner" can never
@@ -774,19 +803,19 @@ function runnerIdentityStillMatches(status: PiSubagentRunStatus): boolean {
   // outlived its process is what makes a sweep count work that is already over.
   // A signal-0 syscall, no spawn, and only on the expired-heartbeat path.
   if (isProcessAlive(status.runnerPid) === false) {
-    runnerIdentityCache.set(key, { at: now, matches: false });
-    return false;
+    runnerIdentityCache.set(key, { at: now, presence: 'gone' });
+    return 'gone';
   }
   const cached = runnerIdentityCache.get(key);
-  if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.matches;
-  const matches = verifyPiSubagentRunnerIdentity(status);
-  runnerIdentityCache.set(key, { at: now, matches });
+  if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.presence;
+  const presence = classifyRunnerPresenceSync(status);
+  runnerIdentityCache.set(key, { at: now, presence });
   if (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
     for (const [entryKey, entry] of runnerIdentityCache) {
       if (now - entry.at >= RUNNER_IDENTITY_TTL_MS) runnerIdentityCache.delete(entryKey);
     }
   }
-  return matches;
+  return presence;
 }
 
 export function isPiSubagentRunStale(
@@ -797,19 +826,22 @@ export function isPiSubagentRunStale(
   // Hot path: this runs for every run on every list read (the panel polls once
   // a second). A live heartbeat is proof enough — never probe here.
   if (now - status.updatedAt <= STALE_HEARTBEAT_MS) return false;
-  if (!Number.isSafeInteger(status.runnerPid) || status.runnerPid! <= 0) return true;
-  if (isProcessAlive(status.runnerPid) === false) return true;
-  // The heartbeat expired but the pid is live. That is only evidence the runner
-  // is alive if the pid is still *that* runner: a crashed runner's pid can be
-  // recycled, and then the record reads as running forever, controls are routed
-  // to a process that never consumes them, and the account-boundary sweep
-  // deadlocks — the kill correctly refuses to signal the replacement process,
-  // so `killedAll` stays false and the boundary can never complete.
+  // The heartbeat expired but the pid may be live. Three answers, not two:
   //
-  // Records with no `runnerScript` (written before it existed) have nothing to
-  // verify against, so they keep the historical pid-only answer.
-  if (typeof status.runnerScript !== 'string' || status.runnerScript.length === 0) return false;
-  return !runnerIdentityStillMatches(status);
+  //  - `gone`: no process, or the pid now runs something else. Stale — a
+  //    recycled pid would otherwise make the record read as running forever,
+  //    route controls to a process that never consumes them, and deadlock the
+  //    account boundary (the kill correctly refuses to signal the replacement,
+  //    so `killedAll` never becomes true).
+  //  - `running`: still that runner, just quiet. Active.
+  //  - `unverifiable`: the pid is live but the command line could not be read,
+  //    or the record predates `runnerScript`. **Active**, because the opposite
+  //    is far worse: calling a live runner stale hides it from the sweep, which
+  //    then reports success it did not achieve, and makes parent-task deletion
+  //    remove the metadata of a run that is still going. A false "active" only
+  //    costs an honest failure at the boundary — the kill path answers
+  //    `unverifiable` with a refusal too, so the two stay consistent.
+  return runnerPresenceForStale(status) === 'gone';
 }
 
 async function listRunDirectoryIds(root: string): Promise<string[]> {
@@ -1824,18 +1856,11 @@ async function resumeClaimedPiSubagentRun(
   const launchStartedAt = Date.now();
   try {
     await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
-    await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
-    await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
-    await fs.writeFile(bridgeExtension, bridgeSource, { mode: 0o600, flag: 'wx' });
-    await writeAtomicJson(permissionFile, launch.permissionSnapshot);
-    await fs.writeFile(runnerFile, runnerSource, { mode: 0o600, flag: 'wx' });
-    await Promise.all([
-      fs.chmod(runDir, 0o700).catch(() => undefined),
-      fs.chmod(bridgeExtension, 0o600).catch(() => undefined),
-      fs.chmod(permissionFile, 0o600).catch(() => undefined),
-      fs.chmod(runnerFile, 0o600).catch(() => undefined),
-    ]);
-    await writeAtomicJson(path.join(runDir, 'config.json'), config);
+    // Same ordering as the in-Pi launcher, for the same reason: publish a
+    // record the relaunch's scan can see, *then* read the fence. A fence check
+    // before this write could be overtaken by a relaunch that raises its fence
+    // and finishes scanning in the gap. See `launchDurableRun`'s comment for
+    // the full argument; the rollback below is what a refusal leaves behind.
     await writeAtomicJson(path.join(runDir, 'status.json'), {
       version: 1,
       runId,
@@ -1856,6 +1881,21 @@ async function resumeClaimedPiSubagentRun(
         status: 'queued',
       })),
     });
+    if (isPiSubagentLaunchFenceActive(piSubagentAgentHomeFromRunRoot(root), process.pid)) {
+      throw new Error('Cindy is restarting for an update; retry this resume shortly.');
+    }
+    await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await fs.writeFile(bridgeExtension, bridgeSource, { mode: 0o600, flag: 'wx' });
+    await writeAtomicJson(permissionFile, launch.permissionSnapshot);
+    await fs.writeFile(runnerFile, runnerSource, { mode: 0o600, flag: 'wx' });
+    await Promise.all([
+      fs.chmod(runDir, 0o700).catch(() => undefined),
+      fs.chmod(bridgeExtension, 0o600).catch(() => undefined),
+      fs.chmod(permissionFile, 0o600).catch(() => undefined),
+      fs.chmod(runnerFile, 0o600).catch(() => undefined),
+    ]);
+    await writeAtomicJson(path.join(runDir, 'config.json'), config);
   } catch (error) {
     await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -1907,7 +1947,7 @@ export async function resumePiSubagentRun(
   // Resume is the Host's own way of putting a new runner on disk, so it obeys
   // the same fence the in-Pi launcher does. `root` is the per-session run
   // directory; the fence lives one level up, next to every session's runs.
-  if (isPiSubagentLaunchFenceActive(path.dirname(path.dirname(path.dirname(root))), process.pid)) {
+  if (isPiSubagentLaunchFenceActive(piSubagentAgentHomeFromRunRoot(root), process.pid)) {
     throw new Error('Cindy is restarting for an update; retry this resume shortly.');
   }
   return serializePiSubagentResume(root, () => resumePiSubagentRunUnlocked(

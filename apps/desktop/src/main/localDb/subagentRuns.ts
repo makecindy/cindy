@@ -243,6 +243,22 @@ function initialCapabilities(update: AgentTaskUpdate): Readonly<SubagentCapabili
     : SUBAGENT_PR1_CAPABILITIES;
 }
 
+/**
+ * A PI durable run's own status record is the authority for that task.
+ *
+ * It is written by the runner and reconciled by generation, and it never walks
+ * a terminal state backwards on its own — so when one of these arrives it
+ * replaces whatever a *diagnostic* projection put on the row, rather than
+ * merging with it. Without that, one transient unreadable status was permanent:
+ * the diagnostic wrote `failed` plus the reduced PR1 capability set, and every
+ * later healthy write was then absorbed by the failed state and inherited the
+ * reduced capabilities, so the row never showed the finished result again and
+ * lost its transcript and resume affordances.
+ */
+function isPiDurableAuthority(update: AgentTaskUpdate): boolean {
+  return update.provider === 'pi' && update.taskType === 'pi_subagent';
+}
+
 function capabilitiesForUpdate(
   update: AgentTaskUpdate,
   data: unknown,
@@ -251,7 +267,9 @@ function capabilitiesForUpdate(
   if (update.provider === 'pi' && update.taskType === 'pi_subagent_diagnostic') {
     return { ...SUBAGENT_PR1_CAPABILITIES };
   }
-  const current = existing
+  // Rebuilt, not inherited: the row may be carrying the diagnostic's reduced
+  // set, and this update is the authority for what the run can actually do.
+  const current = existing && !isPiDurableAuthority(update)
     ? parseCapabilities(existing.capabilities)
     : { ...initialCapabilities(update) };
   if (!data || typeof data !== 'object' || Array.isArray(data)) return current;
@@ -266,8 +284,9 @@ function mergeStatus(
   next: SubagentRunStatus,
   provider: SubagentProvider,
   resume = false,
+  authoritative = false,
 ): SubagentRunStatus {
-  if (!previous || resume) return next;
+  if (!previous || resume || authoritative) return next;
   if (previous === 'failed' || previous === 'stopped') return previous;
   // Codex can discover a running descendant after the direct child appeared
   // complete; that is aggregate expansion, not resurrection of a failed run.
@@ -571,7 +590,13 @@ export async function persistSubagentTaskUpdate(
     && incomingProviderRunIds.some((id) => !existingProviderRunIds.includes(id)),
   );
   const startedAt = existing?.startedAt ?? finiteTime(update.createdAt, updatedAt);
-  const status = mergeStatus(existing?.status, update.status, update.provider, resumed);
+  const status = mergeStatus(
+    existing?.status,
+    update.status,
+    update.provider,
+    resumed,
+    isPiDurableAuthority(update),
+  );
   const aliases = mergeUnique(
     existing ? parseStringArray(existing.aliases) : [],
     incomingIdentityAliases,

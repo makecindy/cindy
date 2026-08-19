@@ -725,11 +725,6 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
   if (!runRoot || !runnerFile || !nodeExecutable || !configHome || !sourcePermissionFile || !parentSessionId || !runtimeOwnerId) {
     throw new Error('subagent: durable runner is unavailable for this session.');
   }
-  // Before anything is staged or spawned: a run started now would outlive the
-  // restart with credentials nobody is left holding.
-  if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {
-    throw new Error('subagent: Cindy is restarting for an update; retry shortly.');
-  }
   const permission = readPermissionSnapshot();
   const runId = randomUUID();
   const runDir = join(runRoot, runId);
@@ -795,18 +790,21 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
   const durableRunnerFile = join(runDir, 'runner.cjs');
   try {
     mkdirSync(runDir, { recursive: true, mode: 0o700 });
-    try { chmodSync(runDir, 0o700); } catch (err) { /* best effort on Windows */ }
-    copyFileSync(sourcePermissionFile, permissionFile);
-    try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
-    mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
-    copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
-    copyFileSync(join(configHome, 'extensions', 'cindy-bridge.ts'), bridgeExtension);
-    try { chmodSync(join(childConfigHome, 'models.json'), 0o600); } catch (err) { /* best effort on Windows */ }
-    try { chmodSync(bridgeExtension, 0o600); } catch (err) { /* best effort on Windows */ }
-    mkdirSync(childSessionRoot, { recursive: true, mode: 0o700 });
-    writePrivateJson(configPath, config);
-    copyFileSync(runnerFile, durableRunnerFile);
-    try { chmodSync(durableRunnerFile, 0o600); } catch (err) { /* best effort on Windows */ }
+    // Publish the intent *before* reading the fence, and read the fence before
+    // anything is spawned. That ordering is the whole mutual exclusion, and it
+    // needs no lock:
+    //
+    //   host:     write fence  ->  scan until stable
+    //   launcher: write runDir ->  read fence
+    //
+    // The two orders are opposite, so consider the only two outcomes. If the
+    // launcher reads no fence, the fence write happened after that read, and
+    // this runDir was written before it — so every scan the host performs (all
+    // of them after its fence write) sees this directory, counts it active
+    // (parsed as 'queued', or unreadable and therefore counted conservatively),
+    // and the relaunch is cancelled or the next reclaim round collects it. If
+    // the launcher reads a fence, it refuses and rolls back below. No
+    // interleaving lets a run escape both.
     const launchStartedAt = Date.now();
     writePrivateJson(join(runDir, 'status.json'), {
       version: 1,
@@ -830,6 +828,21 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
         };
       }),
     });
+    if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {
+      throw new Error('subagent: Cindy is restarting for an update; retry shortly.');
+    }
+    try { chmodSync(runDir, 0o700); } catch (err) { /* best effort on Windows */ }
+    copyFileSync(sourcePermissionFile, permissionFile);
+    try { chmodSync(permissionFile, 0o600); } catch (err) { /* best effort on Windows */ }
+    mkdirSync(childConfigHome, { recursive: true, mode: 0o700 });
+    copyFileSync(join(configHome, 'models.json'), join(childConfigHome, 'models.json'));
+    copyFileSync(join(configHome, 'extensions', 'cindy-bridge.ts'), bridgeExtension);
+    try { chmodSync(join(childConfigHome, 'models.json'), 0o600); } catch (err) { /* best effort on Windows */ }
+    try { chmodSync(bridgeExtension, 0o600); } catch (err) { /* best effort on Windows */ }
+    mkdirSync(childSessionRoot, { recursive: true, mode: 0o700 });
+    writePrivateJson(configPath, config);
+    copyFileSync(runnerFile, durableRunnerFile);
+    try { chmodSync(durableRunnerFile, 0o600); } catch (err) { /* best effort on Windows */ }
   } catch (err) {
     try { rmSync(runDir, { recursive: true, force: true }); } catch (_) { /* best effort cleanup */ }
     throw err;
