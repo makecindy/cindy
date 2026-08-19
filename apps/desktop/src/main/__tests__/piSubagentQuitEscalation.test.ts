@@ -103,6 +103,78 @@ describe('PI Subagent quit sweep', () => {
     expect(hook.slice(guardEnd)).toMatch(/piSubagentLog\.error/);
   });
 
+  /**
+   * The async phase raises the fence once and, if that throws, carries on
+   * fenceless. The whole mutual-exclusion argument (fence, then scan, against
+   * the launcher's publish, then read) is void in that state — and a
+   * concurrent `shutdown-maker` that times out or reports a failed detach
+   * leaves a parent Pi alive to exploit it.
+   */
+  describe('a quit that could not raise its fence', () => {
+    function finalSweepSource(): string {
+      const start = source.indexOf("onQuit(\n  'pi-subagent-final-sweep',");
+      expect(start).toBeGreaterThanOrEqual(0);
+      const end = source.indexOf("  'post-async',\n);", start);
+      expect(end).toBeGreaterThan(start);
+      return source.slice(start, end);
+    }
+
+    it('tracks whether the fence really went up, not just whether it was released', () => {
+      // `releaseQuitLaunchFence` is also null after a *successful* release, so
+      // it cannot answer "was one ever raised" — which is the question both the
+      // retry and the final log depend on.
+      expect(source).toContain('let quitLaunchFenceRaised = false;');
+      const asyncHook = source.slice(
+        source.indexOf("onQuit(\n  'pi-subagent-runners',"),
+        source.indexOf("onQuit(\n  'shutdown-maker',"),
+      );
+      expect(asyncHook).toContain('quitLaunchFenceRaised = true;');
+    });
+
+    it('retries the fence before the final scan, and scans after it', () => {
+      // Restores the ordering the argument rests on, and confines the fenceless
+      // window to the async phase instead of the whole quit.
+      const hook = finalSweepSource();
+      const retry = hook.indexOf('if (!quitLaunchFenceRaised) {');
+      const acquire = hook.indexOf('acquirePiSubagentLaunchFence(agentHome)', retry);
+      const scan = hook.indexOf('stopAllPiSubagentRunsForExit(agentHome, 1_000,');
+      expect(retry).toBeGreaterThan(-1);
+      expect(acquire).toBeGreaterThan(retry);
+      expect(scan).toBeGreaterThan(acquire);
+      expect(hook.slice(acquire, scan)).toContain('quitLaunchFenceRaised = true;');
+    });
+
+    it('keeps re-scanning while fenceless and the parent is unproven', () => {
+      // Nothing runs after this disposer, so a single pass would leave "after
+      // the last scan" wide open. Repetition narrows it to the gap between two
+      // scans, and each round is another chance for a slow `shutdown-maker` to
+      // finish — which ends the loop.
+      const hook = finalSweepSource();
+      const loop = hook.indexOf('if (!quitLaunchFenceRaised && !makerShutdownSettled) {');
+      expect(loop).toBeGreaterThan(-1);
+      expect(hook.slice(loop)).toContain('while (!makerShutdownSettled && Date.now() < deadline)');
+      // Bounded, and tighter per round than the conclusive pass, so it fits the
+      // post-async budget rather than being cut off by it.
+      expect(source).toContain('const FENCELESS_QUIT_RESWEEP_BUDGET_MS = 2_500;');
+      expect(hook.slice(loop)).toContain('stopAllPiSubagentRunsForExit(agentHome, 300,');
+    });
+
+    it('does not claim to hold a fence it never raised', () => {
+      const hook = finalSweepSource();
+      // The hold branch is now conditional on one actually existing.
+      expect(hook).toContain('} else if (quitLaunchFenceRaised) {');
+      const holding = hook.indexOf('holding the PI Subagent ');
+      const fenceless = hook.indexOf('no PI Subagent launch fence and no proof the parent is down');
+      expect(holding).toBeGreaterThan(-1);
+      expect(fenceless).toBeGreaterThan(holding);
+      // The fenceless branch states the exposure instead of implying a closed
+      // door, and the old wording is not what it reaches for.
+      const fencelessBranch = hook.slice(hook.lastIndexOf('} else {', fenceless));
+      expect(fencelessBranch).not.toContain('holding the PI Subagent');
+      expect(fencelessBranch).toContain('could still publish a durable runner after the last scan');
+    });
+  });
+
   it('only calls the parent down when shutdownMaker actually finished', () => {
     // `shutdownMaker` awaits `waitForTurnChangeSetActions()` before it ever
     // reaches `maker.shutdown`, so a rejection can mean the Maker was never

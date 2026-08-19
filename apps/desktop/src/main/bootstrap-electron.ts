@@ -7778,6 +7778,30 @@ onQuit(
 let releaseQuitLaunchFence: (() => Promise<void>) | null = null;
 
 /**
+ * Did the quit fence actually go up?
+ *
+ * Separate from `releaseQuitLaunchFence`, which is also null once the fence has
+ * been *lowered*. The final sweep has to tell "never raised" from "raised and
+ * released", because its own log used to claim it was holding a fence that had
+ * never existed — and because "never raised" is the one state that needs a
+ * retry and a fallback.
+ */
+let quitLaunchFenceRaised = false;
+
+/**
+ * How long the final sweep keeps re-scanning when it has no fence and the
+ * parent is not provably down.
+ *
+ * Sized against this phase's 6s per-disposer race, after the ~2.5s the first
+ * pass may take: three ~1s rounds fit with headroom. Each round is deliberately
+ * tighter than the single conclusive pass — the point is to keep narrowing the
+ * window in which a surviving parent could publish, not to wait out any one
+ * runner.
+ */
+const FENCELESS_QUIT_RESWEEP_BUDGET_MS = 2_500;
+const FENCELESS_QUIT_RESWEEP_INTERVAL_MS = 400;
+
+/**
  * Did `shutdownMaker()` run all the way through?
  *
  * Only fulfilment counts, and the distinction is not pedantic: `shutdownMaker`
@@ -7820,9 +7844,11 @@ onQuit(
     // to a verified kill); if it reads the fence it refuses and rolls back.
     try {
       releaseQuitLaunchFence = await acquirePiSubagentLaunchFence(agentHome);
+      quitLaunchFenceRaised = true;
     } catch (err) {
-      // A fence we cannot raise is not a reason to hold up the quit: without it
-      // we are exactly where we were before, and the sweep still runs.
+      // Not a reason to hold up the quit, and usually transient I/O: the final
+      // sweep retries before it scans, so the fenceless window is confined to
+      // this phase rather than lasting the whole quit.
       piSubagentLog.warn('could not raise the Subagent launch fence before the quit sweep:', err);
     }
     {
@@ -7924,6 +7950,22 @@ onQuit(
   async () => {
     const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
     try {
+      // Retry the fence before scanning, not after. The first attempt runs in
+      // the async phase where a transient I/O failure is likely and nothing is
+      // retried; raising it here restores the ordering the whole argument rests
+      // on — fence, then scan — and confines the fenceless window to that
+      // earlier phase instead of the rest of the quit.
+      if (!quitLaunchFenceRaised) {
+        try {
+          releaseQuitLaunchFence = await acquirePiSubagentLaunchFence(agentHome);
+          quitLaunchFenceRaised = true;
+        } catch (err) {
+          piSubagentLog.warn(
+            'could not raise the Subagent launch fence before the final quit sweep either:',
+            err,
+          );
+        }
+      }
       const stopped = await stopAllPiSubagentRunsForExit(agentHome, 1_000, {
         killBudgetMs: 1_500,
         hostPid: process.pid,
@@ -7934,6 +7976,28 @@ onQuit(
           'PI Subagent runners appeared after the first quit sweep and could not be '
           + 'confirmed stopped — they are still running with their inherited credentials',
         );
+      }
+      // No fence and no proof the parent is down: this pass is not conclusive,
+      // and nothing runs after it. Keep re-scanning while the parent might still
+      // be publishing, so the window a survivor has to slip a run through is the
+      // gap between two scans rather than "everything after the last one".
+      // `shutdown-maker` may simply be slow — every round is another chance for
+      // it to finish, and the loop ends the moment it does.
+      if (!quitLaunchFenceRaised && !makerShutdownSettled) {
+        const deadline = Date.now() + FENCELESS_QUIT_RESWEEP_BUDGET_MS;
+        while (!makerShutdownSettled && Date.now() < deadline) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, FENCELESS_QUIT_RESWEEP_INTERVAL_MS).unref?.();
+          });
+          if (makerShutdownSettled) break;
+          // Tighter per-round budgets than the pass above: this is about
+          // repetition, not about waiting any single runner out.
+          await stopAllPiSubagentRunsForExit(agentHome, 300, {
+            killBudgetMs: 700,
+            hostPid: process.pid,
+            killUnresponsiveRunners: true,
+          }).catch(() => false);
+        }
       }
     } catch (err) {
       piSubagentLog.error('final PI Subagent quit sweep failed:', err);
@@ -7952,7 +8016,7 @@ onQuit(
         const release = releaseQuitLaunchFence;
         releaseQuitLaunchFence = null;
         await release?.().catch(() => undefined);
-      } else {
+      } else if (quitLaunchFenceRaised) {
         // The async phase timed out with `shutdown-maker` still in flight, or
         // it threw before the Maker was shut down. Either way a hung parent Pi
         // may still be alive, and nothing runs after this to collect what it
@@ -7962,6 +8026,18 @@ onQuit(
           'parent shutdown was not confirmed complete on quit — holding the PI Subagent '
           + 'launch fence until this process exits so a still-live parent cannot start '
           + 'a durable runner nothing is left to reclaim',
+        );
+      } else {
+        // Neither guarantee is available: the fence could not be raised on
+        // either attempt, and the parent was never confirmed down. Saying we
+        // are "holding the fence" here — which this branch used to — described
+        // a door that was never shut. The repeated scans above are the only
+        // thing narrowing the window; state the exposure instead of implying it
+        // is closed.
+        piSubagentLog.error(
+          'quit ended with no PI Subagent launch fence and no proof the parent is down — '
+          + 'a surviving parent could still publish a durable runner after the last scan, '
+          + 'and it would keep running with the credentials it inherited',
         );
       }
     }
