@@ -65,7 +65,8 @@ interface RegistryEffortMetadata {
 }
 
 /**
- * 仅在模型能由当前 agent 的 Registry route 唯一识别时复用 effort 元数据。
+ * 仅在当前 agent 的 Registry route 唯一识别模型，或所有匹配都声明相同能力时，
+ * 复用 effort 元数据。
  * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
  */
 function registryEffortMetadata(
@@ -87,20 +88,33 @@ function registryEffortMetadata(
     ),
   );
   const uniqueEntries = [...new Map(matches.map((entry) => [entry.id, entry])).values()];
-  if (uniqueEntries.length !== 1) return undefined;
-
-  const entry = uniqueEntries[0]!;
-  const perAgent = entry.perAgent?.[agent];
-  const efforts = perAgent?.efforts ?? entry.efforts;
-  if (!efforts) return undefined;
-  const declaredDefault = perAgent?.defaultEffort ?? entry.defaultEffort;
-  const defaultEffort =
-    declaredDefault && efforts.includes(declaredDefault)
-      ? declaredDefault
-      : efforts.includes(DEFAULT_CUSTOM_EFFORT)
-        ? DEFAULT_CUSTOM_EFFORT
-        : (efforts[efforts.length - 1] ?? null);
-  return { efforts: [...efforts], defaultEffort };
+  const metadata = uniqueEntries.map((entry): RegistryEffortMetadata | undefined => {
+    const perAgent = entry.perAgent?.[agent];
+    const efforts = perAgent?.efforts ?? entry.efforts;
+    if (!efforts) return undefined;
+    const declaredDefault = perAgent?.defaultEffort ?? entry.defaultEffort;
+    const defaultEffort =
+      declaredDefault && efforts.includes(declaredDefault)
+        ? declaredDefault
+        : efforts.includes(DEFAULT_CUSTOM_EFFORT)
+          ? DEFAULT_CUSTOM_EFFORT
+          : (efforts[efforts.length - 1] ?? null);
+    return { efforts: [...efforts], defaultEffort };
+  });
+  const first = metadata[0];
+  if (
+    !first ||
+    metadata.some(
+      (value) =>
+        !value ||
+        value.defaultEffort !== first.defaultEffort ||
+        value.efforts.length !== first.efforts.length ||
+        value.efforts.some((effort, index) => effort !== first.efforts[index]),
+    )
+  ) {
+    return undefined;
+  }
+  return first;
 }
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
