@@ -779,6 +779,74 @@ describe("IOSSimulatorProjectBuilder", () => {
     );
   });
 
+  it("does not retry when Package.resolved and a missing-file error are on different lines", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    await mkdir(path.join(root, "Example.xcworkspace"));
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args.includes("-list")) {
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("build")) {
+          return {
+            stdout: "note: resolved versions are listed in Package.resolved",
+            stderr: "error: 'Header.h' file not found\nNo such file or directory: Foo.swift",
+            exitCode: 65,
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
+    await expect(
+      new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+        worktreeRoot: root,
+        derivedDataPath: path.join(root, "derived"),
+      }),
+    ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
+    expect(run.mock.calls.filter(([, args]) => args.includes("build"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("does not retry when unable to load a different resolved file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
+    roots.push(root);
+    await mkdir(path.join(root, "Example.xcworkspace"));
+    const run = vi.fn<IOSSimulatorCommandRunner["run"]>(
+      async (_command, args) => {
+        if (args.includes("-list")) {
+          return {
+            stdout: JSON.stringify({ workspace: { schemes: ["Example"] } }),
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        if (args.includes("build")) {
+          return {
+            stdout: "",
+            stderr: "error: unable to load the resolved file of Foo.xcframework",
+            exitCode: 65,
+          };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
+    await expect(
+      new IOSSimulatorProjectBuilder({ commandRunner: { run } }).build({
+        worktreeRoot: root,
+        derivedDataPath: path.join(root, "derived"),
+      }),
+    ).rejects.toMatchObject({ code: "APP_BUILD_FAILED" });
+    expect(run.mock.calls.filter(([, args]) => args.includes("build"))).toHaveLength(
+      1,
+    );
+  });
+
   it("pre-flights against the .app target when a scheme has multiple targets", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cindy-project-"));
     roots.push(root);

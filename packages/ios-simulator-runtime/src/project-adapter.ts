@@ -96,20 +96,24 @@ function tail(value: string, maxBytes = 32 * 1024): string {
     : bytes.subarray(-maxBytes).toString("utf8");
 }
 
+const PACKAGE_RESOLVED_ON_LINE = /\bPackage\.resolved\b/i;
+const PACKAGE_RESOLVED_UNUSABLE_ON_LINE =
+  /\b(missing|does not exist|couldn't be opened|could not be opened|unable to read|no such file|unable to load the resolved file)\b/i;
+
 /**
- * Retry the resolved-file pin only for Xcode's "file missing / unusable"
- * diagnostics. A compile or link failure that merely mentions Package.resolved
- * must not trigger a second full build.
+ * Retry the resolved-file pin only when one diagnostic line names
+ * Package.resolved and says that file is missing or unusable. Two
+ * independent whole-log matches would retry a compile/link failure that
+ * mentions the lockfile on one line and a missing header on another.
  */
 function isMissingPackageResolvedDiagnostic(
   result: IOSSimulatorCommandResult,
 ): boolean {
   const output = `${result.stdout}\n${result.stderr}`;
-  if (!/\bPackage\.resolved\b/i.test(output)) return false;
-  return (
-    /\b(missing|does not exist|couldn't be opened|could not be opened|unable to read|no such file)\b/i.test(
-      output,
-    ) || /unable to load the resolved file/i.test(output)
+  return output.split(/\r?\n/).some(
+    (line) =>
+      PACKAGE_RESOLVED_ON_LINE.test(line) &&
+      PACKAGE_RESOLVED_UNUSABLE_ON_LINE.test(line),
   );
 }
 
