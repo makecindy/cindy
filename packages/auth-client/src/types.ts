@@ -55,7 +55,8 @@ export type CaptchaConfig = z.infer<typeof captchaConfigSchema>;
 
 /**
  * auth-server 托管 Turnstile 挑战页的固定路径(wire 契约)。
- * 完整地址 = authApiBaseUrl + 本路径 + `?theme=<light|dark>&lang=<BCP-47>`;
+ * 完整地址 = authApiBaseUrl + 本路径 +
+ * `?action=<email_request_code|phone_request_code>&theme=<light|dark>&lang=<BCP-47>`;
  * 页面把结果写进 location.hash(`cindy-captcha=ok.<token>` / `err.<code>`)
  * 或经 ReactNativeWebView.postMessage 回传(双宿主同页兼容)。
  */

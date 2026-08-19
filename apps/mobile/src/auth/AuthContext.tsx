@@ -423,10 +423,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** 出题并等结果。有效登录主题由 ThemeOverrideProvider 内的 WebView 补入 URL。 */
-  const runCaptchaChallenge = useCallback((): Promise<string | null> => {
+  const runCaptchaChallenge = useCallback((kind: VerificationKind): Promise<string | null> => {
     let base = getMobileEndpointForRealm(BUILD_AUTH_REGION, 'authApiBaseUrl');
     while (base.endsWith('/')) base = base.slice(0, -1);
-    const url = `${base}${CAPTCHA_CHALLENGE_PAGE_PATH}?lang=${encodeURIComponent(getLoginLanguage())}`;
+    const action = captchaRequiredActionForVerificationKind(kind);
+    const url = `${base}${CAPTCHA_CHALLENGE_PAGE_PATH}?action=${encodeURIComponent(action)}&lang=${encodeURIComponent(getLoginLanguage())}`;
     return new Promise<string | null>((resolve) => {
       // 单飞:dispatchLoginAction 本身串行,这里不会出现并发挑战。
       captchaResolveRef.current = resolve;
@@ -448,7 +449,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ) {
         return { proceed: true };
       }
-      const token = await runCaptchaChallenge();
+      const token = await runCaptchaChallenge(kind);
       return token === null
         ? { proceed: false }
         : { proceed: true, captchaToken: token };
@@ -480,7 +481,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const code = authErrorCode(error);
         if (code !== 'CAPTCHA_REQUIRED' && code !== 'CAPTCHA_INVALID')
           throw error;
-        const retryToken = await runCaptchaChallenge();
+        const retryToken = await runCaptchaChallenge(kind);
         if (retryToken === null) throw error;
         await authClientFor(did, BUILD_AUTH_REGION).requestCode(
           kind,

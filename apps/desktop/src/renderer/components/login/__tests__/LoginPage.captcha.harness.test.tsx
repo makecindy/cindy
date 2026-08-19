@@ -176,6 +176,11 @@ describe('LoginPage captcha 前置闸(providers 主动触发)', () => {
     fireEvent.click(screen.getByText('login.resendCode'));
     await screen.findByTestId('login-captcha-overlay');
     expect(loginHook.value.dispatchWithResult).not.toHaveBeenCalled();
+    await waitFor(() => {
+      const src = document.querySelector('webview')?.getAttribute('src');
+      expect(src).toBeTruthy();
+      expect(new URL(src!).searchParams.get('action')).toBe('phone_request_code');
+    });
 
     await emitCaptchaResult('cindy-captcha=ok.phone-captcha-token');
     await waitFor(() =>

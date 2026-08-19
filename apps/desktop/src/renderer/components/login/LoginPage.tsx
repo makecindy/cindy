@@ -465,13 +465,16 @@ export function LoginPage() {
   // 后续并发调用按取消处理，避免同一枚单次 token 被两个发码请求重复消费。
   const captchaChallengePendingRef = useRef(false);
   /** 打开挑战 overlay 并等结果:token = 通过;null = 用户取消或挑战页地址不可得。 */
-  const obtainCaptchaToken = async (): Promise<string | null> => {
+  const obtainCaptchaToken = async (kind: VerificationKind): Promise<string | null> => {
     if (captchaChallengePendingRef.current) return null;
     captchaChallengePendingRef.current = true;
     try {
       let baseUrl: string;
       try {
         baseUrl = await window.electronAPI.authGetCaptchaChallengeUrl();
+        const target = new URL(baseUrl);
+        target.searchParams.set('action', captchaRequiredActionForVerificationKind(kind));
+        baseUrl = target.toString();
       } catch (error) {
         // IPC 面缺失/异常:视同取消(不发码,用户可重试);错误细节只进日志。
         log.error('resolve captcha challenge url failed', error);
@@ -502,7 +505,7 @@ export function LoginPage() {
     Promise.resolve(undefined),
   );
   captchaGateRef.current = () =>
-    captchaRequiredFor('email') ? obtainCaptchaToken() : Promise.resolve(undefined);
+    captchaRequiredFor('email') ? obtainCaptchaToken('email') : Promise.resolve(undefined);
   useEffect(() => {
     setLoginEmailCaptchaGate(() => captchaGateRef.current());
     return () => setLoginEmailCaptchaGate(null);
@@ -522,7 +525,7 @@ export function LoginPage() {
     ) {
       return;
     }
-    const token = await obtainCaptchaToken();
+    const token = await obtainCaptchaToken('email');
     if (token === null) return;
     await dispatchWithResult({
       type: 'request-code',
@@ -537,7 +540,7 @@ export function LoginPage() {
   const dispatchRequestCode = async (kind: VerificationKind, value: string) => {
     let captchaToken: string | undefined;
     if (captchaRequiredFor(kind)) {
-      const token = await obtainCaptchaToken();
+      const token = await obtainCaptchaToken(kind);
       if (token === null) return; // 取消:不发码、不 arm、不报错
       captchaToken = token;
     }
@@ -553,7 +556,7 @@ export function LoginPage() {
       !result.success &&
       (result.code === 'CAPTCHA_REQUIRED' || result.code === 'CAPTCHA_INVALID')
     ) {
-      const retryToken = await obtainCaptchaToken();
+      const retryToken = await obtainCaptchaToken(kind);
       if (retryToken === null) return;
       result = await dispatchWithResult({
         type: 'request-code',

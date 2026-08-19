@@ -93,6 +93,7 @@ describe('AuthContext captcha 闸接线(静态源码断言)', () => {
     expect(branch).toContain('if (!gate.proceed) return false;');
     expect(branch).toContain('requestCodeWithCaptchaFallback');
     expect(authContextSource).toContain('captchaRequiredActionForVerificationKind(kind)');
+    expect(authContextSource).toContain('?action=${encodeURIComponent(action)}&lang=');
   });
 
   it('挑战页地址由构建区域 authApiBaseUrl + 共享路径常量拼出', () => {

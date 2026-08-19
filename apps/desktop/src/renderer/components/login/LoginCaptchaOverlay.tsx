@@ -73,7 +73,7 @@ export function LoginCaptchaOverlay({
   challengeBaseUrl,
   onResult,
 }: {
-  /** 托管挑战页地址(不含 query),来自 main 的 authGetCaptchaChallengeUrl。 */
+  /** 托管挑战页地址（已含业务 action），源地址来自 main。 */
   challengeBaseUrl: string;
   onResult: (token: string | null) => void;
 }) {
@@ -96,10 +96,10 @@ export function LoginCaptchaOverlay({
     onResultRef.current(token);
   };
 
-  const challengeUrl = `${challengeBaseUrl}?${new URLSearchParams({
-    theme: isDark ? 'dark' : 'light',
-    lang: i18n.language,
-  }).toString()}`;
+  const challengeTarget = new URL(challengeBaseUrl);
+  challengeTarget.searchParams.set('theme', isDark ? 'dark' : 'light');
+  challengeTarget.searchParams.set('lang', i18n.language);
+  const challengeUrl = challengeTarget.toString();
 
   // 模态语义对齐 LoginConsentDialog:焦点入取消钮、背景兄弟节点 inert、关闭归还焦点。
   useEffect(() => {
