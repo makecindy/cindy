@@ -869,7 +869,10 @@ describe('maker:event hot path ordering', () => {
     // 仅取 claude-code 块 (到 codex 块前)。
     const claudeDoneSource = wireSessionSource.slice(claudeDoneIndex, codexDoneIndex);
     // 主路径:按真实 provider / billing route 取价，所有 sink 共用区域金额结果。
-    expect(claudeDoneSource).toContain('const billingRoute: BillingRoute = session.remoteHostId');
+    expect(claudeDoneSource).toContain(
+      'const billingRoute: BillingRoute = billingRouteForClaudeSession({',
+    );
+    expect(claudeDoneSource.match(/billingRouteForClaudeSession\(\{/g)).toHaveLength(2);
     expect(claudeDoneSource).toContain("billingRoute === 'xd-gateway'");
     expect(claudeDoneSource).toContain('await getGatewayModelPricingForModel()');
     expect(claudeDoneSource).toContain(': getReferenceModelPricing();');

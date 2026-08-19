@@ -495,6 +495,7 @@ import {
 } from '../usage/usageHistory.js';
 import {
   billingRouteForExplicitProvider,
+  billingRouteForClaudeSession,
   buildClaudeTurnUsageDetails,
   computePriceQuoteTurnMoney,
   estimateClaudeSubscriptionTurnValue,
@@ -4555,12 +4556,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   (observedClaudeRoute != null
                     ? observedClaudeRoute === 'subscription'
                     : !readClaudeApiKey())));
-            const billingRoute: BillingRoute = session.remoteHostId
-              ? 'unknown'
-              : isClaudeSubscriptionSession
-                ? 'subscription'
-                : (explicitProviderBillingRoute ??
-                  (observedClaudeRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+            const billingRoute: BillingRoute = billingRouteForClaudeSession({
+              remote: Boolean(session.remoteHostId),
+              explicitProviderRoute: explicitProviderBillingRoute,
+              subscriptionSession: isClaudeSubscriptionSession,
+              observedRoute: observedClaudeRoute,
+            });
             const pricing =
               billingRoute === 'xd-gateway'
                 ? await getGatewayModelPricingForModel()
@@ -4738,12 +4739,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                     ?.access?.kind
                 : null,
             );
-            const route: BillingRoute = session.remoteHostId
-              ? 'unknown'
-              : providerId === 'anthropic' || observedRoute === 'subscription'
-                ? 'subscription'
-                : (explicitProviderRoute ??
-                  (observedRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+            const route: BillingRoute = billingRouteForClaudeSession({
+              remote: Boolean(session.remoteHostId),
+              explicitProviderRoute,
+              subscriptionSession:
+                providerId === 'anthropic' || observedRoute === 'subscription',
+              observedRoute,
+            });
             // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
             // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
             // 避免把订阅 SDK 自报 cost 误记进计费)。但显式 provider-api 是权威路由:

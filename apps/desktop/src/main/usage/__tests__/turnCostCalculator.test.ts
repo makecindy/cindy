@@ -8,6 +8,7 @@ import {
 } from '../ledgerCurrency';
 import {
   billingRouteForExplicitProvider,
+  billingRouteForClaudeSession,
   buildClaudeTurnUsageDetails,
   computePriceQuoteTurnMoney,
   computeGatewayTurnCost,
@@ -123,6 +124,42 @@ describe('model id and route helpers', () => {
     expect(billingRouteForExplicitProvider('custom-api', undefined)).toBe('provider-api');
     expect(billingRouteForExplicitProvider(null, null)).toBeNull();
   });
+
+  it('preserves explicit provider billing routes for remote Claude sessions', () => {
+    for (const explicitProviderRoute of [
+      'provider-api',
+      'subscription',
+      'xd-gateway',
+    ] as const) {
+      expect(
+        billingRouteForClaudeSession({
+          remote: true,
+          explicitProviderRoute,
+          subscriptionSession: false,
+          observedRoute: null,
+        }),
+      ).toBe(explicitProviderRoute);
+    }
+  });
+
+  it.each([
+    [true, true, 'gateway', 'unknown'],
+    [false, true, null, 'subscription'],
+    [false, false, 'gateway', 'xd-gateway'],
+    [false, false, null, 'unknown'],
+  ] as const)(
+    'uses the safe fallback for remote=%s subscription=%s observed=%s',
+    (remote, subscriptionSession, observedRoute, expected) => {
+      expect(
+        billingRouteForClaudeSession({
+          remote,
+          explicitProviderRoute: null,
+          subscriptionSession,
+          observedRoute,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it('normalizes model suffixes without dropping provider prefixes', () => {
     expect(normalizeModelIdForPricing('gpt-5.5[1m]')).toBe('gpt-5.5');
@@ -705,6 +742,44 @@ describe('resolveTurnCost', () => {
 });
 
 describe('resolveClaudeTurnCostSinks', () => {
+  it('prices a remote DeepSeek BYOK turn from cache-aware pricing instead of SDK cost', () => {
+    const billingRoute = billingRouteForClaudeSession({
+      remote: true,
+      explicitProviderRoute: billingRouteForExplicitProvider('deepseek', 'api'),
+      subscriptionSession: false,
+      observedRoute: null,
+    });
+    const result = resolveClaudeTurnCostSinks(
+      [
+        delta('deepseek-v4-flash[1m]', {
+          inputTokensDelta: 76_219,
+          outputTokensDelta: 72_130,
+          cacheReadTokensDelta: 33_272_704,
+          costUsdDelta: 18.820746,
+        }),
+      ],
+      catalog(
+        quote('deepseek-v4-flash', 0.2, 2, {
+          providerId: 'deepseek',
+          currency: 'CNY',
+          cacheReadPerMtok: 0.02,
+          source: 'provider-reference',
+          approximate: true,
+        }),
+      ),
+      { providerId: 'deepseek', billingRoute, region: 'cn' },
+    );
+
+    expect(billingRoute).toBe('provider-api');
+    expect(result.turnMoney).toBeNull();
+    expect(result.estimatedTurnMoney).toMatchObject({
+      amount: expect.closeTo(0.82495788),
+      currency: 'CNY',
+      kind: 'value-estimate',
+    });
+    expect(result.perModel[0].source).toBe('reference');
+  });
+
   it('sums structured per-model money using one billing route', () => {
     const pricing = catalog(quote('claude-opus-4-8', 5, 25), quote('gpt-5.5', 2, 8));
     const result = resolveClaudeTurnCostSinks(
