@@ -736,6 +736,47 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('closes a stopped Pi runtime before publishing the new route and waking its queued first send', async () => {
+    const sessionId = rememberSession('runtime-set-model-pi-stop-switch');
+    setSessionProvider(sessionId, 'openai');
+    const order: string[] = [];
+    const closeSession = vi.fn(async () => {
+      order.push('close');
+      expect(getSessionProvider(sessionId)).toBe('openai');
+    });
+    const wakeSessionInputQueue = vi.fn(() => {
+      order.push('wake');
+      expect(getSessionProvider(sessionId)).toBe('xd');
+    });
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'chatgpt/gpt-5.5',
+        setModel: vi.fn(async () => {}),
+      }),
+      listActiveSessions: () => [
+        { id: sessionId, agentKind: 'pi', remoteHostId: null, isTurnRunning: () => false },
+      ],
+      closeSession,
+    };
+
+    await expect(applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      clearPendingCredentialSwitch: vi.fn((_sid, opts) => {
+        expect(opts).toEqual({ wake: false });
+      }),
+      wakeSessionInputQueue,
+    })).resolves.toEqual({ status: 'applied' });
+
+    expect(order).toEqual(['close', 'wake']);
+    expect(closeSession).toHaveBeenCalledOnce();
+    expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
+  });
+
   it('falls back to the busy throw when no pending channel is injected', async () => {
     // 老调用方(未注入 registerPendingCredentialSwitch)保持旧 fail-closed 语义。
     const sessionId = rememberSession('runtime-set-model-defer-no-channel');
