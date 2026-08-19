@@ -2,7 +2,7 @@ import { appendFile, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile }
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   canHostControlPiSubagentRun,
@@ -187,6 +187,108 @@ describe('PI durable subagent run store', () => {
       action: string;
     };
     expect(control.action).toBe('stop');
+  });
+
+  /**
+   * An expired heartbeat plus a live pid is not evidence the runner is alive —
+   * only that *something* holds that pid. A recycled one makes the record read
+   * as running forever, routes controls to a process that never consumes them,
+   * and deadlocks the account-boundary sweep: the kill correctly refuses to
+   * signal the replacement, so `killedAll` never becomes true.
+   */
+  describe('stale detection after an expired heartbeat', () => {
+    /** Distinct per case: the identity memo is keyed by pid + script. */
+    let runnerPid = 910_001;
+    const runnerScript = '/runs/cindy-subagent-runner.cjs';
+    const restores: Array<() => void> = [];
+
+    beforeEach(() => { runnerPid += 1; });
+
+    function stubAliveRunner(): void {
+      const real = process.kill.bind(process);
+      const spy = vi.spyOn(process, 'kill').mockImplementation(
+        ((pid: number, signal?: NodeJS.Signals | number) => (
+          signal === 0 && pid === runnerPid ? true : real(pid, signal)
+        )) as typeof process.kill,
+      );
+      restores.push(() => spy.mockRestore());
+    }
+
+    /** The live process at that pid is (or is not) still the recorded runner. */
+    function stubCommandLine(matches: boolean): void {
+      childProcess.spawnSync.mockImplementation(() => ({
+        status: 0,
+        stdout: matches ? `node ${runnerScript} config.json` : 'node /some/other/program.js',
+      }));
+    }
+
+    const expired = (overrides: Partial<PiSubagentRunStatus> = {}): PiSubagentRunStatus =>
+      status('123e4567-e89b-42d3-a456-4266141740b0', {
+        runnerPid,
+        runnerScript,
+        startedAt: Date.now() - 600_000,
+        updatedAt: Date.now() - 600_000,
+        ...overrides,
+      });
+
+    afterEach(() => {
+      restores.splice(0).forEach((restore) => restore());
+      childProcess.spawnSync.mockReset();
+      childProcess.spawnSync.mockImplementation((..._args: unknown[]) => ({ status: 0, stdout: '' }));
+    });
+
+    it('treats a recycled runner pid as stale and stops blocking the sweep', async () => {
+      stubAliveRunner();
+      stubCommandLine(false);
+      const root = await makeRoot();
+      await writeStatus(root, expired());
+
+      // Hidden from the live list, reported as a diagnostic instead.
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([]);
+      await expect(listPiSubagentRunDiagnostics(root)).resolves.toEqual([
+        expect.objectContaining({ kind: 'stale' }),
+      ]);
+      // And the boundary completes: a stale run is out of scope for the kill,
+      // so it can no longer hold `killedAll` at false forever.
+      await expect(stopPiSubagentRunsForAccountBoundary(root, { timeoutMs: 0 }))
+        .resolves.toBe(true);
+    });
+
+    it('keeps a run active when the pid is still that runner', async () => {
+      stubAliveRunner();
+      stubCommandLine(true);
+      const root = await makeRoot();
+      await writeStatus(root, expired());
+
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([
+        expect.objectContaining({ state: 'running' }),
+      ]);
+    });
+
+    it('keeps legacy records without a runner script on the pid-only answer', async () => {
+      stubAliveRunner();
+      stubCommandLine(false);
+      const root = await makeRoot();
+      await writeStatus(root, expired({ runnerScript: undefined }));
+
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([
+        expect.objectContaining({ state: 'running' }),
+      ]);
+    });
+
+    it('never probes while the heartbeat is fresh', async () => {
+      stubAliveRunner();
+      stubCommandLine(false);
+      const root = await makeRoot();
+      await writeStatus(root, expired({ updatedAt: Date.now() }));
+
+      await expect(listPiSubagentRuns(root)).resolves.toEqual([
+        expect.objectContaining({ state: 'running' }),
+      ]);
+      // The panel polls this once a second for every run; a probe here would be
+      // a `ps`/CIM spawn per run per second.
+      expect(childProcess.spawnSync).not.toHaveBeenCalled();
+    });
   });
 
   /**

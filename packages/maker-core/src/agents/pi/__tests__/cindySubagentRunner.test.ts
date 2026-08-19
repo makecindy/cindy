@@ -104,7 +104,7 @@ async function tempRoot(): Promise<string> {
 async function waitFor<T>(
   read: () => Promise<T | null>,
   timeoutMs = 30_000,
-  what = 'runner state',
+  what: string | (() => string) = 'runner state',
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -112,7 +112,7 @@ async function waitFor<T>(
     if (value !== null) return value;
     if (Date.now() >= deadline) {
       throw new Error(
-        `timed out after ${timeoutMs}ms waiting for ${what}\n${await activeFixtureDiagnostics()}`,
+        `timed out after ${timeoutMs}ms waiting for ${typeof what === 'function' ? what() : what}\n${await activeFixtureDiagnostics()}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -790,19 +790,24 @@ describe('Cindy durable PI Subagent runner', () => {
       const started = settled.filter(
         (outcome) => outcome.status === 'fulfilled' && typeof outcome.value === 'string',
       );
-      // Mutual exclusion is the claim under test, and it has to be asserted
-      // without assuming *which* racer wins. The alias racer cannot finish even
-      // when it takes the claim: the session-containment guard compares
-      // `path.resolve(sessionDir)` against `path.resolve(root)`, and the
-      // symlinked root is not a textual prefix of the real session path — so it
-      // dies with "escaped its run root" after winning. Asserting "exactly one
-      // fulfilled" therefore silently assumed a coin flip (it went red ~1 run in
-      // 4, and more often once the claim write became two steps).
+      // Mutual exclusion is the claim under test, and it is asserted without
+      // assuming *which* racer wins. Either may now finish: the containment
+      // guard resolves both sides canonically, so a symlinked root is no longer
+      // rejected as an escape. Asserting "exactly one fulfilled" instead would
+      // still be a coin flip on which racer got there first.
+      // Windows CI saw this set come back empty, which no local ordering
+      // reproduces. Dump both outcomes verbatim so the next run names the cause
+      // instead of only reporting the count.
+      const describeOutcomes = (): string => JSON.stringify(settled.map((outcome) => (
+        outcome.status === 'fulfilled'
+          ? { fulfilled: outcome.value }
+          : { rejected: String((outcome.reason as Error)?.stack ?? outcome.reason) }
+      )), null, 2);
       const refusedTheClaim = settled.filter((outcome) => (
         outcome.status === 'rejected'
         && /already resuming this Subagent generation/i.test(String(outcome.reason?.message ?? ''))
       ));
-      expect(refusedTheClaim).toHaveLength(1);
+      expect(refusedTheClaim, `resume outcomes: ${describeOutcomes()}`).toHaveLength(1);
       expect(started.length).toBeLessThanOrEqual(1);
       // Whoever got through, there is never a second live generation over the
       // same PI child session — that is what a lost claim has to prevent.
@@ -1237,17 +1242,26 @@ describe('Cindy durable PI Subagent runner', () => {
     // 512 is the retained-receipt bound, so waiting for it is deterministic —
     // the cap is what stops the count from ever going past it.
     const receiptsDir = path.join(fixture.runDir, 'control-receipts');
+    // Count what the runner itself counts. `readdir` also sees the `.tmp-*`
+    // staging files of an atomic write in flight (and any a failed rename left
+    // behind on Windows), and those would hold the total off 512 forever.
+    const countReceipts = async (): Promise<number> =>
+      (await readdir(receiptsDir)).filter((file) => /^[0-9a-f-]{36}\.json$/i.test(file)).length;
+    let lastReceiptCount = -1;
     await waitFor(
-      async () => (await readdir(receiptsDir)).length === 512 ? true : null,
+      async () => {
+        lastReceiptCount = await countReceipts();
+        return lastReceiptCount === 512 ? true : null;
+      },
       CONTROL_BACKLOG_WAIT_MS,
-      'the retained control receipts to settle at the 512 bound',
+      () => `the retained control receipts to settle at the 512 bound (last count: ${lastReceiptCount})`,
     );
 
     const commands = (await readCommandsIfPresent(fixture.commandsFile)) ?? [];
     expect(commands.filter((command) => (
       command.type === 'steer' && command.message === 'legacy direction once'
     ))).toHaveLength(1);
-    expect(await readdir(receiptsDir)).toHaveLength(512);
+    expect(await countReceipts()).toBe(512);
 
     await expect(controlPiSubagentRuns(fixture.root, running.runId, 'stop')).resolves.toBe(1);
     await waitFor(async () => {

@@ -2,7 +2,19 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+/**
+ * Read a source file with line endings normalised.
+ *
+ * A Windows checkout has CRLF on disk, so any multi-line literal an assertion
+ * matches against ("onQuit(\n  'pi-subagent-runners'," and friends) silently
+ * misses there while passing everywhere else — three of these went red on the
+ * Windows runner alone.
+ */
+function readSourceNormalized(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+}
+
+const source = readSourceNormalized('../bootstrap-electron.ts');
 
 /**
  * The quit hook is Electron wiring in a module that cannot be imported under

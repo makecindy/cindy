@@ -1422,7 +1422,32 @@ async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
   }
 }
 
+/**
+ * Never rejects.
+ *
+ * This became async so the Subagent reclaim could be awaited before the updater
+ * spawns, and that quietly changed the failure contract: a throw used to reach
+ * the caller synchronously, but both call sites are fire-and-forget, so after
+ * the change *any* throw became an unhandled rejection. CI caught it on the
+ * first `statSync` after the gate (the staged patch had been cleaned up under a
+ * finished test), failing the whole run while every assertion passed. Production
+ * has the same shape: a patch file that disappears between the readiness check
+ * and the spawn.
+ */
 async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
+  try {
+    await executeRelaunchUnguarded(theme);
+  } catch (err) {
+    log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
+    try {
+      handleApplyFailure('relaunch_failed');
+    } catch (cleanupErr) {
+      log.error('executeRelaunch() failure cleanup also failed: %s', String(cleanupErr));
+    }
+  }
+}
+
+async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;

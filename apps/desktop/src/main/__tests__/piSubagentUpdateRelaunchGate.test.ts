@@ -2,8 +2,20 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-const source = readFileSync(new URL('../updateService.ts', import.meta.url), 'utf8');
-const macScript = readFileSync(new URL('../updateScriptMacOS.ts', import.meta.url), 'utf8');
+/**
+ * Read a source file with line endings normalised.
+ *
+ * A Windows checkout has CRLF on disk, so any multi-line literal an assertion
+ * matches against ("onQuit(\n  'pi-subagent-runners'," and friends) silently
+ * misses there while passing everywhere else — three of these went red on the
+ * Windows runner alone.
+ */
+function readSourceNormalized(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+}
+
+const source = readSourceNormalized('../updateService.ts');
+const macScript = readSourceNormalized('../updateScriptMacOS.ts');
 
 /**
  * An update relaunch is the same credential boundary as quit: this process is
@@ -50,6 +62,22 @@ describe('PI Subagent reclaim before an update relaunch', () => {
     expect(branch).toContain("handleApplyFailure('subagent_reclaim_unconfirmed')");
     expect(branch).toContain('return;');
     expect(branch).toMatch(/could not be confirmed stopped/);
+  });
+
+  it('never rejects, because both entry points are fire-and-forget', () => {
+    // Async + `void` means any throw is an unhandled rejection, which vitest
+    // fails the whole run on and production turns into a silent dead end.
+    expect(source).toContain('async function executeRelaunch(');
+    const wrapper = source.slice(
+      source.indexOf('async function executeRelaunch('),
+      source.indexOf('async function executeRelaunchUnguarded('),
+    );
+    expect(wrapper).toMatch(/try \{\s*await executeRelaunchUnguarded\(theme\);\s*\} catch/);
+    expect(wrapper).toContain("handleApplyFailure('relaunch_failed')");
+    // The gate and everything after it live in the guarded body.
+    const guarded = source.slice(source.indexOf('async function executeRelaunchUnguarded('));
+    expect(guarded.indexOf('reclaimSubagentRunnersForRelaunch()')).toBeGreaterThan(-1);
+    expect(guarded.indexOf('fs.statSync(readyFilePath).size')).toBeGreaterThan(-1);
   });
 
   it('keeps every relaunch entry point on the awaited path', () => {

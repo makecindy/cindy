@@ -565,14 +565,52 @@ function isProcessAlive(pid: number | undefined): boolean | null {
   }
 }
 
+/**
+ * Identity memo for the stale check, keyed by the pair it proves.
+ *
+ * Same shape and TTL as the owner start-time memo: the check only runs for runs
+ * whose heartbeat already expired, but a wedged run stays in that state and the
+ * panel polls the list once a second.
+ */
+const RUNNER_IDENTITY_TTL_MS = 10_000;
+const runnerIdentityCache = new Map<string, { at: number; matches: boolean }>();
+
+function runnerIdentityStillMatches(status: PiSubagentRunStatus): boolean {
+  const key = `${status.runnerPid}:${status.runnerScript}`;
+  const now = Date.now();
+  const cached = runnerIdentityCache.get(key);
+  if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.matches;
+  const matches = verifyPiSubagentRunnerIdentity(status);
+  runnerIdentityCache.set(key, { at: now, matches });
+  if (runnerIdentityCache.size > PROCESS_START_PROBE_CACHE_MAX) {
+    for (const [entryKey, entry] of runnerIdentityCache) {
+      if (now - entry.at >= RUNNER_IDENTITY_TTL_MS) runnerIdentityCache.delete(entryKey);
+    }
+  }
+  return matches;
+}
+
 export function isPiSubagentRunStale(
   status: PiSubagentRunStatus,
   now = Date.now(),
 ): boolean {
   if (isPiSubagentTerminal(status.state)) return false;
+  // Hot path: this runs for every run on every list read (the panel polls once
+  // a second). A live heartbeat is proof enough — never probe here.
   if (now - status.updatedAt <= STALE_HEARTBEAT_MS) return false;
   if (!Number.isSafeInteger(status.runnerPid) || status.runnerPid! <= 0) return true;
-  return isProcessAlive(status.runnerPid) === false;
+  if (isProcessAlive(status.runnerPid) === false) return true;
+  // The heartbeat expired but the pid is live. That is only evidence the runner
+  // is alive if the pid is still *that* runner: a crashed runner's pid can be
+  // recycled, and then the record reads as running forever, controls are routed
+  // to a process that never consumes them, and the account-boundary sweep
+  // deadlocks — the kill correctly refuses to signal the replacement process,
+  // so `killedAll` stays false and the boundary can never complete.
+  //
+  // Records with no `runnerScript` (written before it existed) have nothing to
+  // verify against, so they keep the historical pid-only answer.
+  if (typeof status.runnerScript !== 'string' || status.runnerScript.length === 0) return false;
+  return !runnerIdentityStillMatches(status);
 }
 
 async function listRunDirectoryIds(root: string): Promise<string[]> {
@@ -1460,7 +1498,14 @@ async function resumeClaimedPiSubagentRun(
   }
   const canonicalSourcePrefix = `${canonicalSourceDir}${path.sep}`;
   for (const task of sourceConfig.tasks) {
-    if (typeof task.sessionDir !== 'string' || !path.resolve(task.sessionDir).startsWith(`${path.resolve(root)}${path.sep}`)) {
+    // Shape only. Containment is decided by the canonical block below, which
+    // resolves both sides and walks the parent chain — a textual
+    // `resolve(sessionDir).startsWith(resolve(root))` test here was both weaker
+    // (it does not follow symlinks, so a sessionDir symlinked out of the root
+    // passed it) and wrong in the other direction: a run root reached through a
+    // symlink, or through a Windows 8.3 short path, is not a textual prefix of
+    // its own session paths, so a legitimate resume was rejected as an escape.
+    if (typeof task.sessionDir !== 'string' || task.sessionDir.length === 0) {
       throw new Error('PI Subagent resume session escaped its run root');
     }
     const sessionStat = await fs.lstat(task.sessionDir);
