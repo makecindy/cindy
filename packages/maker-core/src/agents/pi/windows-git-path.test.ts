@@ -74,14 +74,14 @@ describe('Windows Git/PATH helpers', () => {
     const offlineGit = '\\\\offline-server\\Git\\cmd\\git.exe';
     const localCmd = 'C:\\PortableGit\\cmd';
     const localGit = `${localCmd}\\git.exe`;
-    const batches: string[][] = [];
+    const phases: string[][][] = [];
 
     const kinds = probePartitionedWindowsPathKinds(
       [offlineGit, localCmd, localGit],
       new Set(),
-      (batch) => {
-        batches.push([...batch]);
-        if (batch.includes(offlineGit)) return new Map();
+      (batches) => {
+        phases.push(batches.map((batch) => [...batch]));
+        if (batches.some((batch) => batch.includes(offlineGit))) return new Map();
         return new Map([
           [localCmd, 'directory'],
           [localGit, 'file'],
@@ -89,7 +89,7 @@ describe('Windows Git/PATH helpers', () => {
       },
     );
 
-    expect(batches).toEqual([[localCmd, localGit], [offlineGit]]);
+    expect(phases).toEqual([[[localCmd], [localGit]], [[offlineGit]]]);
     expect(kinds).toEqual(new Map([
       [localCmd, 'directory'],
       [localGit, 'file'],
@@ -100,14 +100,13 @@ describe('Windows Git/PATH helpers', () => {
     const offlineMappedGit = 'Z:\\Git\\cmd\\git.exe';
     const localCmd = 'C:\\PortableGit\\cmd';
     const localGit = `${localCmd}\\git.exe`;
-    const batches: string[][] = [];
+    const phases: string[][][] = [];
 
     const kinds = probePartitionedWindowsPathKinds(
       [offlineMappedGit, localCmd, localGit],
       new Set(),
-      (batch) => {
-        batches.push([...batch]);
-        if (batch.includes(offlineMappedGit)) return new Map();
+      (batches) => {
+        phases.push(batches.map((batch) => [...batch]));
         return new Map([
           [localCmd, 'directory'],
           [localGit, 'file'],
@@ -115,7 +114,7 @@ describe('Windows Git/PATH helpers', () => {
       },
     );
 
-    expect(batches).toEqual([[offlineMappedGit], [localCmd, localGit]]);
+    expect(phases).toEqual([[[offlineMappedGit], [localCmd], [localGit]]]);
     expect(kinds).toEqual(new Map([
       [localCmd, 'directory'],
       [localGit, 'file'],
@@ -127,20 +126,20 @@ describe('Windows Git/PATH helpers', () => {
     const firstUnc = '\\\\offline-one\\Git\\cmd\\git.exe';
     const secondUnc = '\\\\offline-two\\Git\\cmd\\git.exe';
     const mappedGit = 'Z:\\Git\\cmd\\git.exe';
-    const batches: string[][] = [];
+    const phases: string[][][] = [];
 
     probePartitionedWindowsPathKinds(
       [firstUnc, localGit, secondUnc, mappedGit],
       new Set(['Z']),
-      (batch) => {
-        batches.push([...batch]);
+      (batches) => {
+        phases.push(batches.map((batch) => [...batch]));
         return new Map();
       },
     );
 
-    expect(batches).toEqual([
-      [localGit],
-      [firstUnc, secondUnc, mappedGit],
+    expect(phases).toEqual([
+      [[localGit]],
+      [[firstUnc], [secondUnc], [mappedGit]],
     ]);
   });
 
@@ -152,7 +151,6 @@ describe('Windows Git/PATH helpers', () => {
     const kinds = probePartitionedWindowsPathKinds(
       [offlineGit, mappedGit],
       new Set(['Z']),
-      () => new Map(),
       (batches) => {
         networkBatches.push(batches.map((batch) => [...batch]));
         return new Map([[mappedGit, 'file']]);
@@ -163,12 +161,49 @@ describe('Windows Git/PATH helpers', () => {
     expect(kinds).toEqual(new Map([[mappedGit, 'file']]));
   });
 
+  it('isolates candidates within the same network root under one shared budget', () => {
+    const offlineGit = 'Z:\\OldGit\\cmd\\git.exe';
+    const mappedGit = 'Z:\\PortableGit\\cmd\\git.exe';
+    const phases: string[][][] = [];
+
+    const kinds = probePartitionedWindowsPathKinds(
+      [offlineGit, mappedGit],
+      new Set(['Z']),
+      (batches) => {
+        phases.push(batches.map((batch) => [...batch]));
+        return new Map([[mappedGit, 'file']]);
+      },
+    );
+
+    expect(phases).toEqual([[[offlineGit], [mappedGit]]]);
+    expect(kinds).toEqual(new Map([[mappedGit, 'file']]));
+  });
+
+  it('uses one shared local budget when mapped drives cannot be classified', () => {
+    const firstOfflineGit = 'Y:\\Git\\cmd\\git.exe';
+    const secondOfflineGit = 'Z:\\Git\\cmd\\git.exe';
+    const localGit = 'C:\\PortableGit\\cmd\\git.exe';
+    const phases: string[][][] = [];
+
+    const kinds = probePartitionedWindowsPathKinds(
+      [firstOfflineGit, secondOfflineGit, localGit],
+      new Set(),
+      (batches) => {
+        phases.push(batches.map((batch) => [...batch]));
+        return new Map([[localGit, 'file']]);
+      },
+    );
+
+    expect(phases).toEqual([[[firstOfflineGit], [secondOfflineGit], [localGit]]]);
+    expect(kinds).toEqual(new Map([[localGit, 'file']]));
+  });
+
   it('keeps a valid HKLM Git root after an earlier offline HKCU root', () => {
     const offlineRoot = '\\\\offline-server\\Git';
     const localRoot = 'C:\\Program Files\\Git';
     const localCmd = `${localRoot}\\cmd`;
     const localGit = `${localCmd}\\git.exe`;
-    const batches: string[][] = [];
+    const phases: string[][][] = [];
 
     const result = resolveWindowsGitPath({
       platform: 'win32',
@@ -179,9 +214,11 @@ describe('Windows Git/PATH helpers', () => {
         probePathKinds: (candidates) => probePartitionedWindowsPathKinds(
           candidates,
           new Set(),
-          (batch) => {
-            batches.push([...batch]);
-            if (batch.some((candidate) => candidate.startsWith(offlineRoot))) return new Map();
+          (batches) => {
+            phases.push(batches.map((batch) => [...batch]));
+            if (batches.some((batch) => batch.some((candidate) => candidate.startsWith(offlineRoot)))) {
+              return new Map();
+            }
             return new Map([
               [localCmd, 'directory'],
               [localGit, 'file'],
@@ -191,8 +228,8 @@ describe('Windows Git/PATH helpers', () => {
       },
     });
 
-    expect(batches[0]).toContain(localGit);
-    expect(batches.at(-1)?.every((candidate) => candidate.startsWith(offlineRoot))).toBe(true);
+    expect(phases[0]?.flat()).toContain(localGit);
+    expect(phases.at(-1)?.flat().every((candidate) => candidate.startsWith(offlineRoot))).toBe(true);
     expect(result).toBe(`C:\\Windows;${localCmd}`);
   });
 

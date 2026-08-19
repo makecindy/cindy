@@ -193,31 +193,15 @@ function defaultNetworkDriveLetters(powershell: string): ReadonlySet<string> {
 export function probePartitionedWindowsPathKinds(
   candidates: readonly string[],
   networkDriveLetters: ReadonlySet<string>,
-  probeBatch: (batch: readonly string[]) => ReadonlyMap<string, WindowsPathKind>,
-  probeNetworkBatches: (
+  probeBatches: (
     batches: readonly (readonly string[])[],
-  ) => ReadonlyMap<string, WindowsPathKind> = (batches) => probeBatch(batches.flat()),
+  ) => ReadonlyMap<string, WindowsPathKind>,
 ): Map<string, WindowsPathKind> {
   const { local, network } = partitionWindowsProbeCandidates(candidates, networkDriveLetters);
   const kinds = new Map<string, WindowsPathKind>();
-  const batchesByRoot = (paths: readonly string[]): string[][] => {
-    const batches = new Map<string, string[]>();
-    for (const candidate of paths) {
-      const root = normalizedWindowsPath(path.win32.parse(candidate).root);
-      const batch = batches.get(root);
-      if (batch) batch.push(candidate);
-      else batches.set(root, [candidate]);
-    }
-    return [...batches.values()];
-  };
-  for (const batch of batchesByRoot(local)) {
-    for (const [candidate, kind] of probeBatch(batch)) {
-      kinds.set(candidate, kind);
-    }
-  }
-  const networkBatches = batchesByRoot(network);
-  if (networkBatches.length > 0) {
-    for (const [candidate, kind] of probeNetworkBatches(networkBatches)) {
+  for (const phase of [local, network]) {
+    if (phase.length === 0) continue;
+    for (const [candidate, kind] of probeBatches(phase.map((candidate) => [candidate]))) {
       kinds.set(candidate, kind);
     }
   }
@@ -237,31 +221,30 @@ function defaultProbeWindowsPathKindBatches(
     '$json = [Text.Encoding]::UTF8.GetString($memory.ToArray())',
   ];
   const probeLines = (outputLine: string): string[] => [
-    'foreach ($candidate in $paths) {',
-    '  try {',
-    '    $item = Get-Item -LiteralPath ([string]$candidate) -Force -ErrorAction Stop',
-    "    $kind = if ($item.PSIsContainer) { 'D' } else { 'F' }",
-    '    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$candidate))',
+    'try {',
+    '  $item = Get-Item -LiteralPath $candidate -Force -ErrorAction Stop',
+    "  $kind = if ($item.PSIsContainer) { 'D' } else { 'F' }",
+    '  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($candidate))',
     outputLine,
-    '  } catch {}',
-    '}',
+    '} catch {}',
   ];
-  const script = nonEmptyBatches.length === 1 ? [
+  const candidates = nonEmptyBatches.flat();
+  const script = candidates.length === 1 ? [
     ...inputPrelude,
-    '$paths = @($json | ConvertFrom-Json)',
-    ...probeLines('    [Console]::Out.WriteLine($kind + "`t" + $encoded)'),
+    '$candidate = [string]($json | ConvertFrom-Json)',
+    ...probeLines('  [Console]::Out.WriteLine($kind + "`t" + $encoded)'),
   ].join('\n') : [
     ...inputPrelude,
-    '$groups = @($json | ConvertFrom-Json)',
+    '$paths = @($json | ConvertFrom-Json)',
     "$probeScript = @'",
-    'param([object[]]$paths)',
-    ...probeLines('    $kind + "`t" + $encoded'),
+    'param([string]$candidate)',
+    ...probeLines('  $kind + "`t" + $encoded'),
     "'@",
     '$operations = New-Object System.Collections.ArrayList',
-    'foreach ($group in $groups) {',
+    'foreach ($candidate in $paths) {',
     '  $shell = [PowerShell]::Create()',
     '  [void]$shell.AddScript($probeScript)',
-    '  [void]$shell.AddArgument(@($group.paths))',
+    '  [void]$shell.AddArgument([string]$candidate)',
     '  $async = $shell.BeginInvoke()',
     '  [void]$operations.Add([PSCustomObject]@{ Shell = $shell; Async = $async })',
     '}',
@@ -285,9 +268,7 @@ function defaultProbeWindowsPathKindBatches(
     '  }',
     '}',
   ].join('\n');
-  const input = nonEmptyBatches.length === 1
-    ? nonEmptyBatches[0]
-    : nonEmptyBatches.map((paths) => ({ paths }));
+  const input = candidates.length === 1 ? candidates[0] : candidates;
   try {
     const output = execFileSync(
       powershell,
@@ -303,16 +284,9 @@ function defaultProbeWindowsPathKindBatches(
     return decodeWindowsPathKindLines(output);
   } catch (error) {
     // The shared hard timeout stops any blocked runspaces. Keep records from
-    // other roots that completed before the coordinator was terminated.
+    // other candidates that completed before the coordinator was terminated.
     return decodeWindowsPathKindsFromProbeError(error);
   }
-}
-
-function defaultProbeWindowsPathKindsBatch(
-  powershell: string,
-  candidates: readonly string[],
-): ReadonlyMap<string, WindowsPathKind> {
-  return defaultProbeWindowsPathKindBatches(powershell, [candidates]);
 }
 
 /**
@@ -330,7 +304,6 @@ function defaultProbeWindowsPathKinds(candidates: readonly string[]): ReadonlyMa
   return probePartitionedWindowsPathKinds(
     absoluteCandidates,
     defaultNetworkDriveLetters(powershell),
-    (batch) => defaultProbeWindowsPathKindsBatch(powershell, batch),
     (batches) => defaultProbeWindowsPathKindBatches(powershell, batches),
   );
 }
