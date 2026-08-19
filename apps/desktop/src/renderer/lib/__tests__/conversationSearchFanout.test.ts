@@ -454,6 +454,23 @@ describe('searchConversationsAcrossOrigins', () => {
     ]);
   });
 
+  it('rejects a failed local hybrid instead of publishing an empty reuse page', async () => {
+    await expect(
+      searchConversationsAcrossOrigins(
+        { ...request, semanticMode: 'hybrid' },
+        {
+          origins: [{ kind: 'local', sessionIds: null }],
+          reuseRemoteResults: [],
+          searchLocal: async () => {
+            throw new Error('hybrid down');
+          },
+          invokeRemote: vi.fn(),
+          listCachedRemoteSessions: () => [],
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'UNKNOWN' });
+  });
+
   it('returns an empty page when there are no origins', async () => {
     const page = await searchConversationsAcrossOrigins(request, {
       origins: [],

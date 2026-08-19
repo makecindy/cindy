@@ -127,7 +127,7 @@ describe('useConversationSearch sort persistence', () => {
 });
 
 describe('useConversationSearch visibility scope', () => {
-  it('keeps global search unbounded while scoping an explicit project by workingDir', async () => {
+  it('keeps global search unbounded while scoping an explicit local project by session ids', async () => {
     vi.useFakeTimers();
     const searchMock = vi.mocked(searchConversations);
     const project: ProjectNodeData = {
@@ -176,14 +176,15 @@ describe('useConversationSearch visibility scope', () => {
     });
     expect(searchMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        filters: expect.objectContaining({ sessionIds: null }),
+        filters: expect.objectContaining({
+          sessionIds: ['loaded', 'outside-sidebar-cache'],
+        }),
       }),
       expect.objectContaining({
         origins: [
           expect.objectContaining({
             kind: 'local',
-            sessionIds: null,
-            workingDirs: ['/repo'],
+            sessionIds: ['loaded', 'outside-sidebar-cache'],
           }),
         ],
       }),

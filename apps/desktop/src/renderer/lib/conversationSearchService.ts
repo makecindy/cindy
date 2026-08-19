@@ -58,6 +58,9 @@ export async function searchConversationsAcrossOrigins(
   );
   const present = pages.filter((page): page is ConversationSearchResponse => page !== null);
   if (reuseRemote) {
+    if (origins.length > 0 && present.length === 0) {
+      throw new ApiError('UNKNOWN', 0, 'conversation search failed');
+    }
     present.push({
       query,
       results: deps.reuseRemoteResults ?? [],

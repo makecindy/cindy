@@ -172,7 +172,7 @@ export interface UseConversationSearchParams {
   enabled: boolean;
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
-  /** Bounds explicit project-scoped searches; global search remains unbounded. */
+  /** Kept for callers; explicit local/SSH project scope uses the project node sessions. */
   allowedSessionIds?: readonly string[];
   projectFilterRequest?: {
     projectKey: string;
@@ -200,7 +200,7 @@ export function useConversationSearch({
   enabled,
   navigate,
   allKnownProjects,
-  allowedSessionIds,
+  allowedSessionIds: _allowedSessionIds,
   projectFilterRequest,
   machineSelection = MACHINE_ALL,
   searchDevices = EMPTY_SEARCH_DEVICES,
@@ -240,10 +240,7 @@ export function useConversationSearch({
   const requestId = projectFilterRequest?.requestId ?? 0;
 
   const trimmed = query.trim();
-  const allowedSessionIdSet = useMemo(
-    () => (allowedSessionIds == null ? null : new Set(allowedSessionIds)),
-    [allowedSessionIds],
-  );
+  void _allowedSessionIds;
   const selectedProjectSessionIds = useMemo(() => {
     if (projectSelection === 'all') return null;
     const selected = buildProjectKeyComparisonSet(projectSelection, localPlatform);
@@ -267,18 +264,13 @@ export function useConversationSearch({
     ) {
       indexedSessionIds = lockedProjectSessionIds;
     }
-    const allowedIds =
-      allowedSessionIdSet == null
-        ? indexedSessionIds
-        : indexedSessionIds.filter((sessionId) => allowedSessionIdSet.has(sessionId));
-    if (allowedIds.length > 0) return allowedIds;
+    if (indexedSessionIds.length > 0) return indexedSessionIds;
     const selectedRemoteOnly =
       selectedProjects.some((project) => project.deviceLinkDeviceId != null) ||
       Boolean(lockedProjectDeviceId && lockedMatchesSelection);
     return selectedRemoteOnly ? null : [];
   }, [
     allKnownProjects,
-    allowedSessionIdSet,
     lockedProjectDeviceId,
     lockedProjectKey,
     lockedProjectSessionIds,
