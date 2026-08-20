@@ -307,6 +307,30 @@ describe('device-link 远程交互往返 — permission', () => {
       decision: { kind: 'permission', behavior: 'deny', reason: '不允许' },
     });
   });
+
+  it('authoritative permission snapshot replaces a stale displayed request after reconnect', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'stale-permission',
+      toolName: 'Read',
+      input: { file_path: '/stale.txt' },
+    });
+    await flush();
+
+    // The renderer missed the dismissal for A. The host snapshot is now the
+    // source of truth and contains only B, which must become the visible head.
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'fresh-permission',
+      toolName: 'Read',
+      input: { file_path: '/fresh.txt' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('fresh-permission');
+    expect(makerChatStore.getSnapshot(s).pendingPermissionQueue).toEqual([]);
+  });
 });
 
 describe('device-link 远程交互往返 — plan_review', () => {

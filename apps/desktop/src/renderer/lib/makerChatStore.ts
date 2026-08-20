@@ -659,6 +659,28 @@ export interface PendingPermission {
   autoReviewUnavailable?: boolean;
 }
 
+function parsePendingPermissionRequest(
+  request: Record<string, unknown> | undefined,
+): PendingPermission | null {
+  if (!request || request.kind !== 'permission' || typeof request.requestId !== 'string') {
+    return null;
+  }
+  const metadata = request.metadata as Record<string, unknown> | undefined;
+  return {
+    requestId: request.requestId,
+    toolName: typeof request.toolName === 'string' ? request.toolName : '',
+    input:
+      request.input && typeof request.input === 'object'
+        ? (request.input as Record<string, unknown>)
+        : {},
+    title: typeof request.title === 'string' ? request.title : undefined,
+    displayName: typeof request.displayName === 'string' ? request.displayName : undefined,
+    description: typeof request.description === 'string' ? request.description : undefined,
+    suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
+    autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+  };
+}
+
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
 export interface PendingAskUser {
   requestId: string;
@@ -8685,6 +8707,9 @@ function reconcilePendingInteractions(
       // a Device Link reconnect cannot leave cards that the Host already closed.
       // Other interaction kinds keep their existing replay semantics.
       const authoritativePluginSetupIds = new Set<string>();
+      const authoritativePermissions = list
+        .map((item) => parsePendingPermissionRequest(item?.request))
+        .filter((permission): permission is PendingPermission => permission !== null);
       for (const item of list) {
         const request = item?.request;
         if (
@@ -8697,6 +8722,28 @@ function reconcilePendingInteractions(
       }
       if (!isCurrentInteractionReconcile()) return 0;
       setState(sessionId, (state) => {
+        // Permission snapshots are authoritative too. In particular, do not
+        // append the snapshot behind a stale displayed request: a renderer can
+        // miss A's dismissal, reconnect while B is pending, and otherwise keep
+        // showing A forever while B waits in the new FIFO queue.
+        const existingPermissions = [
+          ...(state.pendingPermission ? [state.pendingPermission] : []),
+          ...state.pendingPermissionQueue,
+        ];
+        const existingByRequestId = new Map(
+          existingPermissions.map((permission) => [permission.requestId, permission]),
+        );
+        const reconciledPermissions = authoritativePermissions.map(
+          (permission) => existingByRequestId.get(permission.requestId) ?? permission,
+        );
+        const nextPermission = reconciledPermissions[0] ?? null;
+        const nextPermissionQueue = reconciledPermissions.slice(1);
+        const permissionChanged =
+          state.pendingPermission !== nextPermission ||
+          state.pendingPermissionQueue.length !== nextPermissionQueue.length ||
+          state.pendingPermissionQueue.some(
+            (permission, index) => permission !== nextPermissionQueue[index],
+          );
         const currentSurvives =
           state.pendingPluginSetup !== null &&
           authoritativePluginSetupIds.has(state.pendingPluginSetup.requestId);
@@ -8718,11 +8765,18 @@ function reconcilePendingInteractions(
             ? state.pluginSetupCommandInFlight
             : null;
 
-        if (!currentChanged && !queueChanged && nextCommand === state.pluginSetupCommandInFlight) {
+        if (
+          !permissionChanged &&
+          !currentChanged &&
+          !queueChanged &&
+          nextCommand === state.pluginSetupCommandInFlight
+        ) {
           return state;
         }
         return {
           ...state,
+          pendingPermission: nextPermission,
+          pendingPermissionQueue: nextPermissionQueue,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
@@ -9376,9 +9430,9 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
 async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   const existing = remoteOptimisticPumps.get(sessionId);
   if (existing) return existing;
-  // Self-reference is intentional: the async body reaches its first await
-  // before consulting the registry, so the initialized Promise is available
-  // when a detached clear/owner generation checks whether it was replaced.
+  // The holder avoids a temporal-dead-zone type error while allowing the async
+  // body to compare its identity with a newer pump after its first await.
+  const runRef: { promise?: Promise<void> } = {};
   const run = (async () => {
     while (true) {
       const record = firstUnacceptedRemoteOptimisticSend(sessionId);
@@ -9386,7 +9440,7 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
       const prepared = await prepareRemoteOptimisticSend(sessionId, record);
       if (prepared.kind === 'deferred') return;
       if (prepared.kind === 'cancelled') {
-        if (remoteOptimisticPumps.get(sessionId) !== run) return;
+        if (remoteOptimisticPumps.get(sessionId) !== runRef.promise) return;
         continue;
       }
       if (prepared.kind === 'failed') {
@@ -9401,7 +9455,7 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
       // the active pump to dispatch them deterministically. A clear/owner boundary,
       // however, detaches the old pump so it cannot race a newer generation.
       if (result.kind === 'cancelled') {
-        if (remoteOptimisticPumps.get(sessionId) !== run) return;
+        if (remoteOptimisticPumps.get(sessionId) !== runRef.promise) return;
         continue;
       }
       if (result.kind === 'failed') {
@@ -9410,8 +9464,9 @@ async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
       }
     }
   })().finally(() => {
-    if (remoteOptimisticPumps.get(sessionId) === run) remoteOptimisticPumps.delete(sessionId);
+    if (remoteOptimisticPumps.get(sessionId) === runRef.promise) remoteOptimisticPumps.delete(sessionId);
   });
+  runRef.promise = run;
   remoteOptimisticPumps.set(sessionId, run);
   return run;
 }
