@@ -250,16 +250,21 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
+    if (!cur || cur.clearedAt !== session.clearedAt || cur.userSendAt !== session.userSendAt) {
+      return;
+    }
     if (
-      !cur ||
       !shouldGeneratePinnedCardSummary({
         status: cur.status,
         pinnedAt: cur.pinnedAt,
         pinnedSectionIsCard,
-      }) ||
-      cur.clearedAt !== session.clearedAt ||
-      cur.userSendAt !== session.userSendAt
+      })
     ) {
+      // 生成期间切出卡片:不能写回这份结果,也不能把上一轮句子留到下次切回卡片。
+      // /clear、unpin、新一轮发送由各自 handler 清摘要,这里只处理模式切换窗口。
+      if (cur.status === 'active' && cur.pinnedAt != null && !pinnedSectionIsCard) {
+        await clearSessionTaskSummary(sessionId);
+      }
       return;
     }
 
