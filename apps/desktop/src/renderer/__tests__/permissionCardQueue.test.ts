@@ -231,6 +231,61 @@ describe('permission card queue (issue #3092)', () => {
     expect(snap.pendingPermissionQueue.map((p) => p.requestId)).toEqual(['perm-3']);
   });
 
+  it('queues a fresh request arriving in the settlement window instead of surfacing it', () => {
+    pushPermission('perm-1');
+    pushPermission('perm-2');
+
+    makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow' });
+    // perm-3 arrives while perm-1 awaits main's confirmation: it must join the
+    // back of the queue, not jump onto the empty slot ahead of perm-2
+    // (Greptile review on #3104).
+    pushPermission('perm-3');
+
+    let snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.pendingPermission).toBeNull();
+    expect(snap.pendingPermissionQueue.map((p) => p.requestId)).toEqual(['perm-2', 'perm-3']);
+
+    listeners.dismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'perm-1',
+      reason: 'resolved',
+      decision: { kind: 'permission', behavior: 'allow' },
+    });
+
+    snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.pendingPermission?.requestId).toBe('perm-2');
+    expect(snap.pendingPermissionQueue.map((p) => p.requestId)).toEqual(['perm-3']);
+  });
+
+  it('does not promote the queue on an unrelated dismissal in the settlement window', () => {
+    pushPermission('perm-1');
+    pushPermission('perm-2');
+
+    makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow' });
+    // e.g. an optimistically-cleared ask/plan interaction settles at this exact
+    // moment — its dismissal matches no pending state and must NOT surface
+    // perm-2 while repeat inputs may still be arriving (Codex review on #3104).
+    listeners.dismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'ask-unrelated',
+      reason: 'resolved',
+      decision: { kind: 'ask_user_question', answers: {} },
+    });
+
+    let snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.pendingPermission).toBeNull();
+    expect(snap.pendingPermissionQueue.map((p) => p.requestId)).toEqual(['perm-2']);
+
+    listeners.dismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'perm-1',
+      reason: 'resolved',
+      decision: { kind: 'permission', behavior: 'allow' },
+    });
+    snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.pendingPermission?.requestId).toBe('perm-2');
+  });
+
   it('refreshes on duplicate requestId without duplicating queue entries', () => {
     pushPermission('perm-1', 'first title');
     pushPermission('perm-2', 'queued title');
