@@ -27,6 +27,7 @@ import {
 } from '@/state/modelEnginePrefs';
 import {
   addModelFavorite,
+  getModelFavorite,
   removeModelFavorite,
   updateModelFavorite,
   type ModelFavoriteConfig,
@@ -747,9 +748,18 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       onBeforeRemoveFavorite(anchor);
       removeModelFavorite(anchor.uid);
     };
-    // 删的不是当前选中锚点 → 它不影响「正在跑什么」,行为不变:只删记录。
+    // 勾选身份只认 uid(收藏是独立条目);**回落正在跑的配置**必须另过一关:
+    // 副本仍是正在跑的那一份。用户选中收藏后又从别的入口改了模型/思维,uid 还在,
+    // 但不能把后来的选择覆盖成这条旧收藏的默认(2026-08-20 review P1)。
+    const item = getModelFavorite(anchor.uid);
+    const favoriteStillLive =
+      !!item &&
+      !!resolveFavoriteConfig &&
+      isLiveRow(entry, resolveFavoriteConfig(entry, item));
     const fallback =
-      selectedFavoriteUid && selectedFavoriteUid === anchor.uid
+      selectedFavoriteUid &&
+      selectedFavoriteUid === anchor.uid &&
+      favoriteStillLive
         ? resolveDefaultRowConfig?.(entry)
         : undefined;
     if (!fallback) {

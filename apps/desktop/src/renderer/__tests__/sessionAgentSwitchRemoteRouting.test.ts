@@ -1217,7 +1217,21 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(actions).toContain('config.agent !== runtimeAgent');
     expect(actions).not.toContain('config.agent !== sessionAgent');
   });
+
+  it('打开选单只滚动选中行,不把焦点从搜索框抢走', () => {
+    const panel = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/UnifiedModelPanel.tsx'),
+      'utf8',
+    );
+    const ensure = panel.slice(
+      panel.indexOf('const ensureSelectedVisible = useCallback'),
+      panel.indexOf('}, [pickerLayout]);'),
+    );
+    expect(ensure).not.toContain('row.focus');
+    expect(ensure).toContain('computeSelectedRowScrollTop');
+  });
 });
+
 
 
 describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#1927)', () => {

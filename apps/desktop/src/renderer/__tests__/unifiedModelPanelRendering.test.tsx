@@ -738,6 +738,37 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     expect(listModelFavorites()).toHaveLength(0);
   });
 
+  it('选中收藏后 live 配置已改:删收藏只删记录,不把后来的选择覆盖成旧收藏默认', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'high',
+      fast: true,
+    });
+    const onUnifiedSelect = vi.fn();
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      onEffortChange,
+      onFastModeChange,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      // 正在跑的是 Claude + low,和这条 Codex 收藏对不上。
+      vendorKey: 'cc',
+      effort: 'low',
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+
   it('会话内同引擎:深度 / Fast 经实时回调复位,记录同时删除', async () => {
     const uid = addModelFavorite({
       providerId: 'xd',

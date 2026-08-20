@@ -610,11 +610,9 @@ export function UnifiedModelPanel({
       rowTop: rowRect.top - listRect.top + el.scrollTop,
       rowBottom: rowRect.bottom - listRect.top + el.scrollTop,
     });
-    // 勾在收藏行上还不够:键盘焦点必须也在那一行,否则「打开选单焦点在下面同名模型」
-    // (Chris 2026-08-20)。preventScroll:滚动由下面居中负责,这里只搬焦点。
-    if (row !== document.activeElement && typeof row.focus === 'function') {
-      row.focus({ preventScroll: true });
-    }
+    // 只滚动、不抢焦点(DESIGN.md §14.2:弹层打开焦点在搜索框)。打开/改搜索词时
+    // 把焦点搬到选中行,第一个字符就会把搜索框失焦。勾选与居中已经能让收藏行可见;
+    // 键盘在行上 ←/Enter 仍由行自己的 tabIndex 接手。
     if (alignment.oversized) {
       // 行比可视区还高:此刻只能顶对齐,但**保持在途**(2026-08-19 预审 P1-3)——morph 生长
       // 途中的一串中间尺寸都可能暂时「装不下一行」,在这里收工的话面板长开后不再复核,
