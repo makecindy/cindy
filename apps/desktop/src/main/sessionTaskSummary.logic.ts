@@ -171,3 +171,12 @@ export function shouldGeneratePinnedCardSummary(args: {
 }): boolean {
   return args.status === 'active' && args.pinnedAt != null && args.pinnedSectionIsCard;
 }
+
+/** 一次生成尝试结算后:没写出新摘要、且已经不在卡片模式 → 必须作废库里的旧句子。
+ *  成功写回的本轮摘要留下;失败 / 空结果 / 写回放弃 / 中途抛错都走这条。 */
+export function shouldVoidSummaryAfterGenerationAttempt(args: {
+  wroteFresh: boolean;
+  pinnedSectionIsCard: boolean;
+}): boolean {
+  return !args.wroteFresh && !args.pinnedSectionIsCard;
+}

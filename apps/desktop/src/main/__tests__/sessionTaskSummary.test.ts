@@ -20,6 +20,7 @@ import {
   maxCharsForTier,
   hasSummarizableMaterial,
   shouldGeneratePinnedCardSummary,
+  shouldVoidSummaryAfterGenerationAttempt,
 } from '../sessionTaskSummary.logic';
 
 describe('pickTier — 距今时间为主轴的档位选择', () => {
@@ -129,6 +130,33 @@ describe('shouldGeneratePinnedCardSummary', () => {
         pinnedSectionIsCard: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe('shouldVoidSummaryAfterGenerationAttempt', () => {
+  it('成功写回则留下,即使随后切出卡片', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: true,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(false);
+  });
+  it('仍在卡片模式则不因失败作废', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: false,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+  });
+  it('未写回且已切出卡片 → 作废旧句子', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: false,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(true);
   });
 });
 

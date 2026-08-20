@@ -43,6 +43,7 @@ import {
   maxCharsForTier,
   hasSummarizableMaterial,
   shouldGeneratePinnedCardSummary,
+  shouldVoidSummaryAfterGenerationAttempt,
 } from './sessionTaskSummary.logic.js';
 
 const log = createLogger('sessionTaskSummary');
@@ -155,6 +156,7 @@ export async function maybeGenerateSessionTaskSummary(
 
 /** 实际生成一次:读素材 → 选档 → oneShot → 写回前重查 → 落库 + 广播。失败 swallow。 */
 async function generateSummaryOnce(sessionId: string): Promise<void> {
+  let wroteFresh = false;
   try {
     const db = getDbClient().drizzle;
     const [session] = await db
@@ -260,23 +262,30 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
         pinnedSectionIsCard,
       })
     ) {
-      // 生成期间切出卡片:不能写回这份结果,也不能把上一轮句子留到下次切回卡片。
-      // /clear、unpin、新一轮发送由各自 handler 清摘要,这里只处理模式切换窗口。
-      if (cur.status === 'active' && cur.pinnedAt != null && !pinnedSectionIsCard) {
-        await clearSessionTaskSummary(sessionId);
-      }
       return;
     }
 
     // 直写 summary,不 bump updatedAt——摘要刷新不应引起 sidebar 重排
     await db.update(sessions).set({ summary }).where(eq(sessions.id, sessionId));
     lastGeneratedAt.set(sessionId, Date.now());
+    wroteFresh = true;
     broadcastPatched(sessionId, { summary });
   } catch (err) {
     log.warn('generate task summary failed (swallowed)', {
       sessionId,
       error: String(err),
     });
+  } finally {
+    // 不变量:生成尝试一旦开始,结算时若不在卡片模式且没写出新摘要,旧句子必须作废。
+    // 覆盖成功写回以外的全部出口(空结果 / 抛错 / 写回放弃 / 中途 return)。
+    if (
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh,
+        pinnedSectionIsCard,
+      })
+    ) {
+      await clearSessionTaskSummary(sessionId);
+    }
   }
 }
 
