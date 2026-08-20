@@ -34,7 +34,10 @@ export async function defaultProbeOpenAiModels(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal, redirect: 'manual' });
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      return false;
+    }
     if (!response.ok) return false;
     const body = (await response.json()) as { data?: unknown };
     return Array.isArray(body.data);

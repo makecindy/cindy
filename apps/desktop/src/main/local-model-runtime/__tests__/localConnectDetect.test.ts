@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { detectLocalConnectPresets } from '../localConnectDetect.js';
+import { defaultProbeOpenAiModels, detectLocalConnectPresets } from '../localConnectDetect.js';
 
 describe('detectLocalConnectPresets', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('treats LM Studio as present when the official app exists', async () => {
     await expect(
       detectLocalConnectPresets({
@@ -38,5 +42,20 @@ describe('detectLocalConnectPresets', () => {
         probe: async () => false,
       }),
     ).resolves.toEqual([]);
+  });
+
+  it('does not treat an outbound redirect as a local runtime', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: 'x' }] }), {
+        status: 302,
+        headers: { location: 'https://evil.example/v1/models' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchImpl);
+    await expect(defaultProbeOpenAiModels('http://127.0.0.1:8080/v1/models')).resolves.toBe(false);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://127.0.0.1:8080/v1/models',
+      expect.objectContaining({ redirect: 'manual' }),
+    );
   });
 });
