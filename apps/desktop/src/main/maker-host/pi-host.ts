@@ -61,11 +61,11 @@ import {
   MANAGED_OLLAMA_PROVIDER_ID,
   matchesManagedOllamaFingerprint,
 } from '../../shared/localModelRuntime.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import {
   applyQwen38NativeOverlay,
   shouldApplyQwen38Overlay,
 } from '../local-model-runtime/qwenProfile.js';
-import { startOfficialOllamaApp } from '../local-model-runtime/ollamaRuntime.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import {
   desktopClaudeAuthAdapter,
@@ -1500,28 +1500,11 @@ export async function resolvePiNativeProviders(ctx: {
   }
   const isRemote = Boolean(ctx.remoteHostId);
   if (!isRemote && ctx.providerId === MANAGED_OLLAMA_PROVIDER_ID) {
-    const managed = configs.find((config) => config.id === MANAGED_OLLAMA_PROVIDER_ID);
-    if (
-      !managed ||
-      !matchesManagedOllamaFingerprint({
-        id: managed.id,
-        authMethod: managed.auth?.method,
-        runtimes: managed.runtimes,
-      })
-    ) {
-      throw new Error(
-        '[LOCAL_OLLAMA_NOT_READY] Managed Ollama provider is missing or was customized. Reconnect it in Settings → Model Providers.',
-      );
-    }
-    const ready = await startOfficialOllamaApp({
-      platform: process.platform,
-      fetchImpl: (url, init) => fetch(url, init),
+    await ensureManagedOllamaReadyForSession({
+      providerId: ctx.providerId,
+      remoteHostId: ctx.remoteHostId ?? null,
+      userDataDir: app.getPath('userData'),
     });
-    if (ready.kind !== 'ready') {
-      throw new Error(
-        `[LOCAL_OLLAMA_NOT_READY] Local model service is not ready (${ready.kind}). Open Settings → Model Providers → Ollama.`,
-      );
-    }
   }
   // 远端会话:本地 loopback 端点(本机 Ollama/vLLM)远端够不到。
   // 轮 42 P2(codex-connector):**不再 pre-filter 掉** —— 让 PiAgent 的

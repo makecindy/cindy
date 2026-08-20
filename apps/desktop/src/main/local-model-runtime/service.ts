@@ -147,7 +147,6 @@ interface ActivePull {
   abort: AbortController;
   stopReason: 'pause' | 'cancel' | null;
   digests: Set<string>;
-  startedAt: number;
 }
 
 export class PullAbortedError extends Error {
@@ -506,7 +505,6 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       abort: new AbortController(),
       stopReason: null,
       digests: new Set<string>(),
-      startedAt: Date.now(),
     };
     actives.set(name, op);
     let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
@@ -637,16 +635,12 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     op.abort.abort();
     await op.promise.catch(() => undefined);
     if (reason === 'cancel') {
-      await removeCancelledDownload(op.name, [...op.digests], op.startedAt);
+      await removeCancelledDownload(op.name, [...op.digests]);
     }
     return { ok: true };
   }
 
-  async function removeCancelledDownload(
-    name: string,
-    digests: readonly string[],
-    touchedSinceMs?: number,
-  ): Promise<void> {
+  async function removeCancelledDownload(name: string, digests: readonly string[]): Promise<void> {
     try {
       await deleteModel(name);
     } catch (error) {
@@ -656,9 +650,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       });
     }
     try {
-      await waitForCancelledBlobs(
-        othersBusy() ? { digests } : undefined,
-      );
+      await waitForCancelledBlobs({ digests });
     } catch (error) {
       log.warn('wait for cancelled ollama blobs failed', {
         name,
@@ -666,13 +658,11 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       });
     }
     try {
-      const exclusive = !othersBusy();
       await purgeCancelledPull({
         name,
         digests,
-        deleteAllIncomplete: exclusive,
-        pruneUnreferenced: exclusive,
-        ...(exclusive && touchedSinceMs != null ? { touchedSinceMs } : {}),
+        deleteAllIncomplete: false,
+        pruneUnreferenced: false,
       });
     } catch (error) {
       log.warn('purge cancelled ollama blobs failed', {
@@ -680,16 +670,6 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         error: error instanceof Error ? error.message : String(error),
       });
     }
-  }
-
-  function othersBusy(): boolean {
-    if (actives.size > 0) return true;
-    if (pausedByName.size === 0) {
-      for (const record of loadPausedRecordsSync()) {
-        pausedByName.set(record.name, progressFromPausedRecord(record));
-      }
-    }
-    return pausedByName.size > 0;
   }
 
   function isAbortError(error: unknown): boolean {

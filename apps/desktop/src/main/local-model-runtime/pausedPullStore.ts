@@ -63,6 +63,16 @@ export function progressFromPausedRecord(record: PausedPullRecord): LocalModelPu
 }
 
 export function createPausedPullStore(filePath: string) {
+  let queue: Promise<void> = Promise.resolve();
+  const serialized = <T>(op: () => Promise<T>): Promise<T> => {
+    const run = queue.then(op, op);
+    queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+
   const persist = async (items: readonly PausedPullRecord[]): Promise<void> => {
     if (items.length === 0) {
       try {
@@ -121,18 +131,24 @@ export function createPausedPullStore(filePath: string) {
         digests: [...new Set(digests.filter((item) => item.startsWith('sha256:')))],
         updatedAt: Date.now(),
       };
-      const items = (await readAll()).filter((item) => item.name !== next.name);
-      items.push(next);
-      await persist(items);
+      await serialized(async () => {
+        const items = (await readAll()).filter((item) => item.name !== next.name);
+        items.push(next);
+        await persist(items);
+      });
     },
     async remove(name: string): Promise<PausedPullRecord | null> {
-      const items = await readAll();
-      const record = items.find((item) => item.name === name) ?? null;
-      await persist(items.filter((item) => item.name !== name));
-      return record;
+      return serialized(async () => {
+        const items = await readAll();
+        const record = items.find((item) => item.name === name) ?? null;
+        await persist(items.filter((item) => item.name !== name));
+        return record;
+      });
     },
     async clear(): Promise<void> {
-      await persist([]);
+      await serialized(async () => {
+        await persist([]);
+      });
     },
   };
 }

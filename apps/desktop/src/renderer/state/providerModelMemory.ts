@@ -417,21 +417,31 @@ export function clearProviderModelFast(
 }
 
 /**
- * 快照当前全部槽的 (effortByModel, fastByModel)(丢弃 lastModel)。用于 renderer → main 缓存和
- * device-link 控制端镜像被控设备的全局模型预设。深拷贝,调用方拿到的快照不随后续本地改动变化。
+ * 快照当前全部槽的 (effortByModel, fastByModel, thinkingByModel)(丢弃 lastModel)。
+ * 用于 renderer → main 缓存和 device-link 控制端镜像被控设备的全局模型预设。
+ * 深拷贝,调用方拿到的快照不随后续本地改动变化。
  */
 export function snapshotForSeed(): Record<
   string,
-  { effortByModel: Record<string, Effort>; fastByModel: Record<string, boolean> }
+  {
+    effortByModel: Record<string, Effort>;
+    fastByModel: Record<string, boolean>;
+    thinkingByModel: Record<string, boolean>;
+  }
 > {
   const out: Record<
     string,
-    { effortByModel: Record<string, Effort>; fastByModel: Record<string, boolean> }
+    {
+      effortByModel: Record<string, Effort>;
+      fastByModel: Record<string, boolean>;
+      thinkingByModel: Record<string, boolean>;
+    }
   > = {};
   for (const [k, slot] of Object.entries(load())) {
     out[k] = {
       effortByModel: { ...slot.effortByModel },
       fastByModel: { ...slot.fastByModel },
+      thinkingByModel: { ...slot.thinkingByModel },
     };
   }
   return out;

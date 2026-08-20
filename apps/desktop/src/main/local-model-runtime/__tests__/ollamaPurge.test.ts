@@ -102,4 +102,23 @@ describe('purgeCancelledOllamaPull', () => {
     await expect(readFile(path.join(blobs, 'sha256-keep'), 'utf8')).resolves.toBe('installed');
     await expect(readFile(path.join(blobs, 'sha256-orphan'), 'utf8')).rejects.toThrow();
   });
+
+  it('does not sweep unrelated incomplete blobs when only attributed digests are given', async () => {
+    const root = path.join(os.tmpdir(), `ollama-purge-scoped-${Date.now()}`);
+    const blobs = path.join(root, 'blobs');
+    await mkdir(blobs, { recursive: true });
+    await writeFile(path.join(blobs, 'sha256-aaa'), 'ours');
+    await writeFile(path.join(blobs, 'sha256-other.tmp'), 'someone-else');
+
+    const result = await purgeCancelledOllamaPull({
+      modelsDir: root,
+      name: 'qwen3.8:27b-mxfp8',
+      digests: ['sha256:aaa'],
+    });
+    expect(result.deleted).toContain('sha256-aaa');
+    expect(result.deleted).not.toContain('sha256-other.tmp');
+    await expect(readFile(path.join(blobs, 'sha256-other.tmp'), 'utf8')).resolves.toBe(
+      'someone-else',
+    );
+  });
 });

@@ -140,9 +140,8 @@ describe('local model pull state machine', () => {
     expect(purgeCancelledPull).toHaveBeenCalledWith({
       name: 'gpt-oss:20b',
       digests: [],
-      deleteAllIncomplete: true,
-      pruneUnreferenced: true,
-      touchedSinceMs: expect.any(Number),
+      deleteAllIncomplete: false,
+      pruneUnreferenced: false,
     });
   });
 
@@ -175,8 +174,8 @@ describe('local model pull state machine', () => {
     expect(purgeCancelledPull).toHaveBeenCalledWith({
       name: 'gpt-oss:20b',
       digests: [],
-      deleteAllIncomplete: true,
-      pruneUnreferenced: true,
+      deleteAllIncomplete: false,
+      pruneUnreferenced: false,
     });
   });
 
@@ -239,9 +238,8 @@ describe('local model pull state machine', () => {
     expect(purgeCancelledPull).toHaveBeenCalledWith({
       name: 'qwen3.8:27b-mxfp8',
       digests: ['sha256:ccc'],
-      deleteAllIncomplete: true,
-      pruneUnreferenced: true,
-      touchedSinceMs: expect.any(Number),
+      deleteAllIncomplete: false,
+      pruneUnreferenced: false,
     });
   });
 

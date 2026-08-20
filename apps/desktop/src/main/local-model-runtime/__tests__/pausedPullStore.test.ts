@@ -56,4 +56,26 @@ describe('pausedPullStore', () => {
     await store.remove('gpt-oss:20b');
     await expect(store.read()).resolves.toMatchObject({ name: 'gemma4:12b' });
   });
+
+  it('keeps parallel writes instead of letting one overwrite the other', async () => {
+    const dir = path.join(os.tmpdir(), `paused-pull-race-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const store = createPausedPullStore(path.join(dir, 'paused.json'));
+    await Promise.all([
+      store.write(
+        { name: 'gpt-oss:20b', status: 'paused', phase: 'paused', done: true },
+        ['sha256:aaa'],
+      ),
+      store.write(
+        { name: 'gemma4:12b', status: 'paused', phase: 'paused', done: true },
+        ['sha256:bbb'],
+      ),
+      store.write(
+        { name: 'ornith15:35b', status: 'paused', phase: 'paused', done: true },
+        ['sha256:ccc'],
+      ),
+    ]);
+    const names = (await store.readAll()).map((item) => item.name).sort();
+    expect(names).toEqual(['gemma4:12b', 'gpt-oss:20b', 'ornith15:35b']);
+  });
 });

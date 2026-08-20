@@ -174,6 +174,14 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
     expect(m.snapshotForSeed()['claude-code:*']).toBeUndefined();
   });
 
+  it('snapshot 带上思考开关', async () => {
+    const m = await loadModule();
+    m.setProviderModelThinking('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', false);
+    expect(m.snapshotForSeed()['pi:cindy-local-ollama']?.thinkingByModel).toEqual({
+      'qwen3.8:27b-mxfp8': false,
+    });
+  });
+
   it('多模型 effort 跨重启持久化(v2)', async () => {
     const m1 = await loadModule();
     m1.setProviderModelChoice('claude-code', 'anthropic', 'claude-opus-4-8', 'high');

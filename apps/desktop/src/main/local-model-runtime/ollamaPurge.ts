@@ -37,7 +37,7 @@ async function incompleteBlobSnapshot(
   try {
     entries = (await readdir(blobsDir)).filter((file) => {
       if (!isIncompleteBlobName(file)) return false;
-      if (!digestBases || digestBases.size === 0) return true;
+      if (!digestBases) return true;
       return digestBases.has(blobBaseName(file));
     }).sort();
   } catch {
@@ -68,10 +68,9 @@ export async function waitForIncompleteBlobsToSettle(opts: {
   const intervalMs = opts.intervalMs ?? 150;
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const digestBases =
-    opts.digests && opts.digests.length > 0
-      ? new Set(opts.digests.map(blobFileName).filter((value) => value.startsWith('sha256-')))
-      : undefined;
+  const digestBases = opts.digests
+    ? new Set(opts.digests.map(blobFileName).filter((value) => value.startsWith('sha256-')))
+    : undefined;
   const deadline = now() + timeoutMs;
   let last = '';
   let stable = 0;
