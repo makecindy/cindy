@@ -73,6 +73,7 @@ import {
 } from '@/device-link/topicRegistry';
 import {
   applyRemoteProjectOrderPush,
+  resetRemoteProjectOrderPushFence,
   SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
 } from '@/session/remoteProjectOrder';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
@@ -725,6 +726,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         );
       }
       setConnectionEpoch((n) => n + 1);
+      resetRemoteProjectOrderPushFence();
       void rehydrateWithClient(client);
     });
     const offPresence = client.onPresenceChanged((snap) => {
@@ -798,6 +800,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
       onLinkClosed: (deviceId, reason) => {
+        resetRemoteProjectOrderPushFence(deviceId);
         updateRehydrateSuppressionOnLinkClose(
           rehydrateSuppressedDeviceIds,
           deviceId,
@@ -1570,6 +1573,7 @@ function markOfflineDeviceMirror(deviceId: string): void {
 }
 
 function wipeUnavailableDeviceMirror(deviceId: string): void {
+  resetRemoteProjectOrderPushFence(deviceId);
   invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   remoteScheduleEventStore.clearDevice(deviceId);

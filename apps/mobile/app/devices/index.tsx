@@ -116,6 +116,7 @@ import {
   applyHostProjectOrder,
   controllerKeysFromHost,
   fetchHostProjectOrder,
+  rememberRemoteProjectOrderStamp,
   subscribeRemoteProjectOrderChanged,
 } from '@/session/remoteProjectOrder';
 import {
@@ -973,6 +974,10 @@ export default function HomeScreen() {
         return [deviceId, result] as const;
       }));
       if (cancelled) return;
+      for (const [deviceId, result] of entries) {
+        if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
+        if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
+      }
       setHostProjectOrders((current) => {
         const next = new Map(current);
         for (const [deviceId, result] of entries) {

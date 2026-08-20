@@ -40,6 +40,26 @@ const remoteProjectOrderListeners = new Set<RemoteProjectOrderListener>();
 const remoteProjectOrderStamps = new Map<string, SyncedProjectOrderOwnerStamp>();
 const stampedRemoteProjectOrderDevices = new Set<string>();
 
+/** peer 新连接代际 / 主机进程重启后 generation 可能从更小值重计,必须清掉旧水印。 */
+export function resetRemoteProjectOrderPushFence(deviceId?: string): void {
+  if (deviceId) {
+    remoteProjectOrderStamps.delete(deviceId);
+    stampedRemoteProjectOrderDevices.delete(deviceId);
+    return;
+  }
+  remoteProjectOrderStamps.clear();
+  stampedRemoteProjectOrderDevices.clear();
+}
+
+export function rememberRemoteProjectOrderStamp(
+  deviceId: string,
+  stamp: SyncedProjectOrderOwnerStamp | undefined,
+): void {
+  if (!stamp) return;
+  stampedRemoteProjectOrderDevices.add(deviceId);
+  remoteProjectOrderStamps.set(deviceId, stamp);
+}
+
 export function subscribeRemoteProjectOrderChanged(listener: RemoteProjectOrderListener): () => void {
   remoteProjectOrderListeners.add(listener);
   return () => {
