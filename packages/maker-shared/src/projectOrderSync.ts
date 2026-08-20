@@ -194,6 +194,33 @@ export function isHostLocalProjectKey(key: string): boolean {
   return key.startsWith(LOCAL_PREFIX);
 }
 
+function isWindowsStyleProjectPath(value: string): boolean {
+  return /^[a-z]:[\/]/i.test(value) || value.startsWith('\\') || value.startsWith('//') || value.includes('\\');
+}
+
+/** 与手机首页 projectGroupKey 同一套 Windows 折径:正斜杠 + 小写。POSIX 保持原样。 */
+export function normalizeProjectOrderPath(path: string): string {
+  const normalized = path.trim().replaceAll('\\', '/');
+  if (isWindowsStyleProjectPath(path.trim()) || isWindowsStyleProjectPath(normalized)) {
+    return normalized.toLowerCase();
+  }
+  return normalized;
+}
+
+export function foldProjectOrderKey(key: string): string {
+  const trimmed = key.trim();
+  if (trimmed.startsWith(LOCAL_PREFIX)) {
+    return `${LOCAL_PREFIX}${normalizeProjectOrderPath(trimmed.slice(LOCAL_PREFIX.length))}`;
+  }
+  if (trimmed.startsWith(DEVICE_PREFIX)) {
+    const rest = trimmed.slice(DEVICE_PREFIX.length);
+    const sep = rest.indexOf(':');
+    if (sep < 0) return trimmed;
+    return `${DEVICE_PREFIX}${rest.slice(0, sep + 1)}${normalizeProjectOrderPath(rest.slice(sep + 1))}`;
+  }
+  return trimmed;
+}
+
 /** 被控端正本只收本机项目。混排里的 `device:` 键不得写进这份列表。 */
 export function hostLocalProjectKeysOnly(keys: unknown): string[] {
   return normalizeSyncedProjectOrderList(keys).filter(isHostLocalProjectKey);
@@ -230,25 +257,36 @@ export function deviceProjectKeyPrefix(deviceId: string): string {
   return `${DEVICE_PREFIX}${encodeURIComponent(deviceId)}:`;
 }
 
-/** 被控端 `local:/path` → 控制端 `device:<id>:/path`。 */
+/** 被控端 `local:/path` → 控制端 `device:<id>:/path`。Windows 路径按首页同一规则折叠。 */
 export function remapHostProjectKeyToController(deviceId: string, hostKey: string): string | null {
   const trimmed = hostKey.trim();
   if (!trimmed) return null;
   if (trimmed.startsWith(LOCAL_PREFIX)) {
-    return `${deviceProjectKeyPrefix(deviceId)}${trimmed.slice(LOCAL_PREFIX.length)}`;
+    return `${deviceProjectKeyPrefix(deviceId)}${normalizeProjectOrderPath(trimmed.slice(LOCAL_PREFIX.length))}`;
   }
-  if (trimmed.startsWith(deviceProjectKeyPrefix(deviceId))) return trimmed;
+  const prefix = deviceProjectKeyPrefix(deviceId);
+  if (trimmed.startsWith(prefix)) {
+    return `${prefix}${normalizeProjectOrderPath(trimmed.slice(prefix.length))}`;
+  }
   return null;
 }
 
-/** 控制端 `device:<id>:/path` → 被控端 `local:/path`。 */
-export function remapControllerProjectKeyToHost(deviceId: string, controllerKey: string): string | null {
+/** 控制端 `device:<id>:/path` → 被控端 `local:/path`。已知主机键按折叠值还原大小写。 */
+export function remapControllerProjectKeyToHost(
+  deviceId: string,
+  controllerKey: string,
+  knownHostKeys: readonly string[] = [],
+): string | null {
   const trimmed = controllerKey.trim();
   if (!trimmed) return null;
   const prefix = deviceProjectKeyPrefix(deviceId);
-  if (trimmed.startsWith(prefix)) return `${LOCAL_PREFIX}${trimmed.slice(prefix.length)}`;
-  if (trimmed.startsWith(LOCAL_PREFIX)) return trimmed;
-  return null;
+  let hostKey: string | null = null;
+  if (trimmed.startsWith(prefix)) hostKey = `${LOCAL_PREFIX}${trimmed.slice(prefix.length)}`;
+  else if (trimmed.startsWith(LOCAL_PREFIX)) hostKey = trimmed;
+  if (!hostKey) return null;
+  const folded = foldProjectOrderKey(hostKey);
+  const restored = knownHostKeys.find((key) => foldProjectOrderKey(key) === folded);
+  return restored ?? folded;
 }
 
 export function remapHostOrderToController(deviceId: string, keys: readonly string[]): string[] {
@@ -263,11 +301,15 @@ export function remapHostOrderToController(deviceId: string, keys: readonly stri
   return next;
 }
 
-export function remapControllerOrderToHost(deviceId: string, keys: readonly string[]): string[] {
+export function remapControllerOrderToHost(
+  deviceId: string,
+  keys: readonly string[],
+  knownHostKeys: readonly string[] = [],
+): string[] {
   const next: string[] = [];
   const seen = new Set<string>();
   for (const key of keys) {
-    const mapped = remapControllerProjectKeyToHost(deviceId, key);
+    const mapped = remapControllerProjectKeyToHost(deviceId, key, knownHostKeys);
     if (!mapped || seen.has(mapped)) continue;
     seen.add(mapped);
     next.push(mapped);

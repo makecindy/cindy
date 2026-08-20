@@ -1290,6 +1290,7 @@ export default function HomeScreen() {
             home.projects.map((project) => project.key),
           )
           : hostManualProjectOrder,
+        knownHostKeys: hostProjectOrders.get(selectedDeviceId)?.manualProjectOrder,
         ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: nextPatch.projectOrder,
       }).then((result) => {
@@ -1429,6 +1430,7 @@ export default function HomeScreen() {
       );
       if (!next) return;
       void applyHostProjectOrder(invoke, selectedDeviceId, {
+        knownHostKeys: hostProjectOrders.get(selectedDeviceId)?.manualProjectOrder,
         manualProjectOrder: next,
         ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: 'custom',

@@ -29,6 +29,16 @@ describe('project order key remap', () => {
     ]);
     expect(remapControllerOrderToHost(deviceId, controller)).toEqual(host);
   });
+
+  it('folds Windows host paths to the mobile grouping key and restores case on the way back', () => {
+    const deviceId = 'win-box';
+    const host = ['local:C:/Work/App'];
+    const controller = remapHostOrderToController(deviceId, host);
+    expect(controller).toEqual([
+      `device:${encodeURIComponent(deviceId)}:c:/work/app`,
+    ]);
+    expect(remapControllerOrderToHost(deviceId, controller, host)).toEqual(host);
+  });
 });
 
 describe('parseSyncedProjectOrderSnapshot', () => {

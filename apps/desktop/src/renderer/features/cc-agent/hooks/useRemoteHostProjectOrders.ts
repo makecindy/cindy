@@ -241,7 +241,11 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
         SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
         [{
           ...ownerStamp,
-          manualProjectOrder: remapControllerOrderToHost(deviceId, request.manualProjectOrder),
+          manualProjectOrder: remapControllerOrderToHost(
+            deviceId,
+            request.manualProjectOrder,
+            orders.get(deviceId)?.manualProjectOrder ?? [],
+          ),
           projectOrder: request.projectOrder,
         }],
       );

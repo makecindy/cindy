@@ -85,6 +85,7 @@ export async function applyHostProjectOrder(
   snapshot: {
     manualProjectOrder: readonly string[];
     ownerStamp?: SyncedProjectOrderOwnerStamp;
+    knownHostKeys?: readonly string[];
     projectOrder: 'activity' | 'custom';
   },
 ): Promise<HostProjectOrderResult> {
@@ -92,7 +93,11 @@ export async function applyHostProjectOrder(
   try {
     const raw = await invoke<unknown>(deviceId, SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, [{
       ...snapshot.ownerStamp,
-      manualProjectOrder: remapControllerOrderToHost(deviceId, snapshot.manualProjectOrder),
+      manualProjectOrder: remapControllerOrderToHost(
+        deviceId,
+        snapshot.manualProjectOrder,
+        snapshot.knownHostKeys ?? [],
+      ),
       projectOrder: snapshot.projectOrder,
     }]);
     return { kind: 'ok', snapshot: parseSyncedProjectOrderSnapshot(raw) };
