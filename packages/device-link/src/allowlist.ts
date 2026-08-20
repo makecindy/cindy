@@ -231,6 +231,11 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // GET 只读 main 内存镜像；APPLY 只更新该 repo 的 future-session 偏好，不执行 git/fs。
   'maker:get-new-maker-worktree-branch-pref',
   'maker:apply-new-maker-worktree-branch-pref',
+  // 被控端侧栏项目顺序(显示偏好,真相在被控端 Main)。GET 只读;APPLY 写被控端
+  // owner 作用域快照。不用 `:set` 后缀(全局设置写禁模式)。老被控端无 handler
+  // → CHANNEL_NOT_ALLOWED → 控制端吞掉,回退本机/按时间。
+  'sidebar-settings:get-project-order',
+  'sidebar-settings:apply-project-order',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
@@ -574,6 +579,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'local-db:messages:deleted',
   // 被控端 terminal error 落库脏信号:控制端据此把已加载历史的远程会话标脏,下次打开重拉。
   'local-db:session:error-persisted',
+  // 被控端项目手动顺序变化:控制端 / 手机首页按被控端正本重排。
+  'sidebar-settings:project-order-changed',
   // 被控端「当前 New Maker 草稿」全量变更:被控端草稿 effort/fast/选中 等任意变化时广播,
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →
   // topics.ts 的 ACCOUNT_CHANNELS 把它并入 `sessions` topic(控制端按设备订阅 sessions)。

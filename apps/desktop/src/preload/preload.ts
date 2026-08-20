@@ -2,6 +2,13 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import { isDeepLinkProviderConnectId } from '../shared/deepLinkSchemes';
+import {
+  parseProjectOrderSnapshot,
+  SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
+  SIDEBAR_GET_PROJECT_ORDER_CHANNEL,
+  SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
+  type SyncedProjectOrderSnapshot,
+} from '../shared/projectOrderSettings';
 import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
@@ -4636,6 +4643,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
           cb(Array.from(payload), ownerStamp);
         }
       }),
+    getProjectOrder: async (): Promise<SyncedProjectOrderSnapshot> =>
+      parseProjectOrderSnapshot(await ipcRenderer.invoke(SIDEBAR_GET_PROJECT_ORDER_CHANNEL)),
+    applyProjectOrder: async (request: {
+      manualProjectOrder: readonly string[];
+      projectOrder: 'activity' | 'custom';
+    }): Promise<SyncedProjectOrderSnapshot> =>
+      parseProjectOrderSnapshot(await ipcRenderer.invoke(SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, request)),
+    onProjectOrderChanged: (
+      cb: (snapshot: SyncedProjectOrderSnapshot) => void,
+    ): (() => void) => {
+      const listener = (_event: unknown, payload: unknown) => {
+        cb(parseProjectOrderSnapshot(payload));
+      };
+      ipcRenderer.on(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL, listener);
+      return () => {
+        ipcRenderer.removeListener(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL, listener);
+      };
+    },
   },
 
   remotePrecreatedWorktreeLedger: {

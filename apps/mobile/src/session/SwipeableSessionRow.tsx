@@ -59,7 +59,7 @@ const ICON_SIZE = iconSize.swipeAction;
 /**
  * 页面级滑动控制 bundle:registry + 三个动作回调打包成一个稳定引用(useMemo),
  * 供 ProjectRow / AutomationGroupChildren 等嵌套渲染路径向下透传——不提供时对应
- * 行退化为不可滑动(设备详情页等未接滑动的调用点保持原行为)。
+ * 行退化为不可滑动(选择态或不需要手势的调用点保持原行为)。
  */
 export interface SessionSwipeControls {
   registry: SwipeRowRegistry;

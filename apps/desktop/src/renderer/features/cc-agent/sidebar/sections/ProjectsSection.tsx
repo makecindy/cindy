@@ -39,6 +39,13 @@ import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
 import { MACHINE_ALL } from '@/features/device-link/selectedMachineStore';
+import { projectOrderWriteLedger } from '@cindy/maker-shared/project-order-sync';
+import {
+  controllerManualOrderForDevice,
+  projectOrderWriteScopeForSelection,
+  useLocalHostProjectOrder,
+  useRemoteHostProjectOrders,
+} from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
@@ -265,6 +272,9 @@ export function ProjectsSection({
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
+  const selectedMachineForOrder = useEffectiveSelectedMachineId();
+  const localHostProjectOrder = useLocalHostProjectOrder();
+  const remoteHostProjectOrders = useRemoteHostProjectOrders(selectedMachineForOrder);
   // 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。独立于置顶段的三态设置。
   const { mode: mainViewMode } = useSidebarMainViewMode();
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
@@ -290,16 +300,59 @@ export function ProjectsSection({
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
       // 位置会被无关拖拽悄悄打乱)。做法:先取全量规范顺序作 baseline,再把可见新序原位填回。
-      // projectKeysForOrderBaseline 是未过滤全量 universe 的 key,因此 baseline 含
-      // 隐藏项;setManualProjectOrder 内部会再归一化一次(对已规范的 merged 结果幂等)。
-      const fullOrder = normalizeManualProjectOrder(
-        filter.manualProjectOrder,
-        projectKeysForOrderBaseline,
-      );
-      const merged = mergeVisibleReorder(fullOrder, visibleNewOrder);
-      filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
+      const scope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+      const hostSnapshot = scope.kind === 'host' && scope.deviceId === null
+        ? localHostProjectOrder.snapshot
+        : scope.kind === 'host' && scope.deviceId
+          ? remoteHostProjectOrders.orders.get(scope.deviceId)
+          : undefined;
+      const persistViewer = (order: readonly string[]) => {
+        const fullOrder = normalizeManualProjectOrder(filter.manualProjectOrder, projectKeysForOrderBaseline);
+        const merged = mergeVisibleReorder(fullOrder, order);
+        filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
+        if (filter.projectOrder !== 'custom') filter.setProjectOrder('custom');
+      };
+      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId === null) {
+        const localKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith('local:'));
+        const fullOrder = normalizeManualProjectOrder(
+          localHostProjectOrder.snapshot.manualProjectOrder,
+          localKeys,
+        );
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder);
+        void localHostProjectOrder.apply({
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        }).then((snapshot) => {
+          if (!snapshot) persistViewer(visibleNewOrder);
+        });
+        return;
+      }
+      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId) {
+        const deviceId = scope.deviceId;
+        const remoteKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith(`device:${encodeURIComponent(deviceId)}:`));
+        const current = controllerManualOrderForDevice(
+          deviceId,
+          remoteHostProjectOrders.orders.get(deviceId),
+        ) ?? [];
+        const fullOrder = normalizeManualProjectOrder(current, remoteKeys);
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder);
+        void remoteHostProjectOrders.apply(deviceId, {
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        }).then((snapshot) => {
+          if (!snapshot) persistViewer(visibleNewOrder);
+        });
+        return;
+      }
+      persistViewer(visibleNewOrder);
     },
-    [filter, projectKeysForOrderBaseline],
+    [
+      filter,
+      localHostProjectOrder,
+      projectKeysForOrderBaseline,
+      remoteHostProjectOrders,
+      selectedMachineForOrder,
+    ],
   );
 
   // toggleDisabled 用 allKnownProjects（不是过滤后的 projects），避免 filter 收窄到 0 时
