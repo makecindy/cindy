@@ -2854,6 +2854,16 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 const sessions = new Map<string, SessionChatState>();
 /** Prevent one gesture from resolving the newly promoted permission head. */
 const permissionResponseInFlight = new Set<string>();
+/**
+ * 防重窗口:本机 resolve-interaction handler 同步返回,IPC Promise 往往在双击的
+ * 第二个 click / 键重复事件到达之前就 settle;若 finally 随即解除 guard,第二次
+ * 输入会读到刚推广的下一条权限卡并误批(Codex review P1)。因此 guard 必须保持
+ * 到重复输入窗口结束再释放。500ms 对齐 Windows 默认双击时间(项目先例:
+ * swallowActivationClick 的 RELEASE_GUARD_MS=300)。
+ */
+const PERMISSION_RESPONSE_GUARD_WINDOW_MS = 500;
+/** 每个 session 的防重释放定时器(供 purge 清理,防止迟到释放误伤新会话)。 */
+const permissionResponseGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
@@ -3332,6 +3342,9 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
+  const permissionGuardTimer = permissionResponseGuardTimers.get(sessionId);
+  if (permissionGuardTimer !== undefined) clearTimeout(permissionGuardTimer);
+  permissionResponseGuardTimers.delete(sessionId);
   permissionResponseInFlight.delete(sessionId);
   clearWakeBridgeReconcileTimer(sessionId);
   sessions.delete(sessionId);
@@ -13621,7 +13634,15 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   }
   void response
     .catch((err) => log.error('Failed to respond to permission:', err))
-    .finally(() => permissionResponseInFlight.delete(sessionId));
+    .finally(() => {
+      // IPC 已 settle,但同一手势的第二次输入(双击第二击 / 键重复)可能还没到:
+      // 保持 guard 到窗口结束,窗口内任何新响应都被挡下,不会误批推广后的新卡。
+      const timer = setTimeout(() => {
+        permissionResponseInFlight.delete(sessionId);
+        permissionResponseGuardTimers.delete(sessionId);
+      }, PERMISSION_RESPONSE_GUARD_WINDOW_MS);
+      permissionResponseGuardTimers.set(sessionId, timer);
+    });
 }
 
 /**

@@ -203,6 +203,9 @@ function emptyProjection(sessionId: string) {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+// 等待超过 permissionResponseInFlight 的防重窗口(500ms),模拟用户读完下一张卡后
+// 才做下一次批准;guard 未释放时第二次响应会被当作同一手势的重复输入挡下。
+const waitPastPermissionGuardWindow = () => new Promise((r) => setTimeout(r, 560));
 const DEVICE_ID = 'dev-int-scn';
 let n = 0;
 const sid = () => `int-scn-${n++}`;
@@ -282,6 +285,9 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(host.resolved[0]?.requestId).toBe('parallel-first');
     expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('parallel-second');
 
+    // 这是两次独立的用户手势(读完第二张卡再批):必须等防重窗口结束,
+    // 否则第二次响应会被当作双击重复输入挡下。
+    await waitPastPermissionGuardWindow();
     makerChatStore.respondToPermission(s, { behavior: 'allow' });
     await flush();
     expect(host.resolved.map((item) => item.requestId)).toEqual([
@@ -314,6 +320,44 @@ describe('device-link 远程交互往返 — permission', () => {
 
     expect(host.resolved.map((item) => item.requestId)).toEqual(['duplicate-first']);
     expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('duplicate-second');
+  });
+
+  it('双击第二击在 IPC 已 settle 后到达也不能误批推广后的新卡', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'async-double-first',
+      toolName: 'Read',
+      input: { file_path: '/first.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'async-double-second',
+      toolName: 'Read',
+      input: { file_path: '/second.txt' },
+    });
+    await flush();
+
+    // 第一次点击:IPC 同步 handler 让 Promise 很快 settle(guard 已释放前
+    // 的窗口由防重窗口覆盖)。第二次点击在 IPC settle 之后、防重窗口之内到达。
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush(); // 此刻 IPC 已 settle,但 guard 仍应保持(窗口未结束)
+    makerChatStore.respondToPermission(s, { behavior: 'deny', message: 'double-click' });
+    await flush();
+
+    // 第二次输入被防重窗口挡下,只能批掉第一张卡,第二张卡仍挂起。
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['async-double-first']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('async-double-second');
+
+    // 防重窗口结束后,用户对新卡的正常批准仍可进行。
+    await waitPastPermissionGuardWindow();
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'async-double-first',
+      'async-double-second',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 
   it('permission deny 同样经隧道回传 behavior=deny', async () => {
