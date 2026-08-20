@@ -159,6 +159,15 @@ describe('ChatInput model source switching wiring', () => {
    * 档位集合,而意图期的回调(performAgentSwitch(intent.target, …))按目标能力校验,
    * 用户点的档位被静默回落。
    */
+  it('passes unresolved runtime identity through instead of falling back to the intent target', () => {
+    const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
+    expect(start).toBeGreaterThan(-1);
+    const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
+    expect(block).toContain('runtimeAgent: runtimeAgentKind ?? undefined');
+    expect(block).not.toContain('runtimeAgentKind ?? currentAgent');
+    expect(block).not.toContain('runtimeAgentKind ?? vendorKeyToAgentKind');
+  });
+
   it('prefers the pending switch intent target as the unified panel session agent', () => {
     expect(chatInputSource).toContain(
       'const intentTargetAgent = agentSwitchIntent?.target ?? null;',

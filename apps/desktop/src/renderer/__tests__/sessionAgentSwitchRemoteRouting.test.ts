@@ -1211,9 +1211,11 @@ describe('ChatInput 的入口门控与调用路由', () => {
       resolve(process.cwd(), 'src/renderer/components/new-chat/useUnifiedRowActions.ts'),
       'utf8',
     );
-    expect(actions).toContain(
+    expect(actions).toContain('const runtimeAgent = sessionEngineFilter?.runtimeAgent;');
+    expect(actions).not.toContain(
       'const runtimeAgent = sessionEngineFilter?.runtimeAgent ?? sessionAgent;',
     );
+    expect(actions).toContain('if (runtimeAgent === undefined) return true;');
     expect(actions).toContain('shouldCrossEngine(config.agent)');
     expect(actions).toContain('pendingSwitch');
     expect(actions).toContain('favoriteCopyIsLive');

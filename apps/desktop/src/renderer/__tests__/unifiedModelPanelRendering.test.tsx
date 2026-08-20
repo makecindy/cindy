@@ -337,7 +337,11 @@ describe('统一模型选择器面板', () => {
 
 describe('统一面板 · 会话内形态', () => {
   const onCrossEngineSelect = vi.fn();
-  const sessionEngineFilter = { currentAgent: 'codex' as const, onCrossEngineSelect };
+  const sessionEngineFilter = {
+    currentAgent: 'codex' as const,
+    runtimeAgent: 'codex' as const,
+    onCrossEngineSelect,
+  };
 
   beforeEach(() => {
     onCrossEngineSelect.mockClear();
@@ -364,7 +368,11 @@ describe('统一面板 · 会话内形态', () => {
    */
   it('同引擎视图不显示「候选含当前引擎、但落点在别家」的行', () => {
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
     });
@@ -522,6 +530,113 @@ describe('统一面板 · 会话内形态', () => {
     );
   });
 
+  it('真实引擎未知且挂着意图:点意图目标行仍走确认事务,不走普通 onSelect', async () => {
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
+      vendorKey: 'cc',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'xd',
+        modelId: 'gpt-5.5',
+        targetAgent: 'codex',
+      }),
+    );
+  });
+
+  it('真实引擎未知且挂着意图:点另一引擎的模型行同样走确认事务', async () => {
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
+      vendorKey: 'cc',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('Opus 5'));
+    });
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'anthropic',
+        targetAgent: 'claude-code',
+      }),
+    );
+  });
+
+  it('真实引擎未知且挂着意图:点意图目标收藏仍走确认事务', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'high',
+    });
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
+      vendorKey: 'cc',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'high',
+    });
+    const favoriteRow = within(screen.getAllByRole('group')[0])
+      .getByText('GPT-5.5')
+      .closest('[data-unified-anchor]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(favoriteRow);
+    });
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'xd',
+        targetAgent: 'codex',
+        favoriteUid: uid,
+      }),
+    );
+  });
+
+  it('真实引擎未知且挂着意图:点引擎胶囊仍走切换事务,不直接 return', async () => {
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
+      vendorKey: 'cc',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'xd',
+        targetAgent: 'claude-code',
+        favoriteUid: null,
+      }),
+    );
+  });
+
   it('挂着待切换意图时点回真实引擎胶囊:仍走切换事务,不直接 return', async () => {
     renderPanel({
       sessionEngineFilter: {
@@ -629,7 +744,11 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
     const onEffortChange = vi.fn();
     const onFastModeChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       effort: 'low',
@@ -652,7 +771,11 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
     setModelEngineOverride('xd', 'gpt-5.5', 'cc');
     const onCrossEngineSelect = vi.fn(() => true);
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       effort: 'low',
@@ -683,7 +806,11 @@ describe('统一面板 · 恢复推荐应用到 live 配置', () => {
     const onCrossEngineSelect = vi.fn(() => false);
     const onFastModeChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       effort: 'low',
@@ -925,6 +1052,47 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     });
   });
 
+  it('真实引擎未知时删除选中收藏:走切换事务,不走同引擎 live 回落', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+      fast: true,
+    });
+    const onCrossEngineSelect = vi.fn(() => true);
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'xd',
+        targetAgent: 'codex',
+        favoriteUid: null,
+      }),
+    );
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(listModelFavorites()).toHaveLength(0);
+    });
+  });
+
   it('会话内同引擎:深度 / Fast 经实时回调复位,记录同时删除', async () => {
     const uid = addModelFavorite({
       providerId: 'xd',
@@ -937,7 +1105,11 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     const onEffortChange = vi.fn();
     const onFastModeChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -960,7 +1132,11 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'cc' });
     const onCrossEngineSelect = vi.fn(() => true);
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -991,7 +1167,11 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     const onEffortChange = vi.fn();
     const onFastModeChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1100,7 +1280,11 @@ describe('统一面板 · 同引擎实时写入成功才清存储', () => {
     });
     const onEffortChange = vi.fn(() => false);
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1277,7 +1461,11 @@ describe('统一面板 · 改模型行的实时配置后收藏不再选中', () 
     const onFastModeChange = vi.fn();
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1306,7 +1494,11 @@ describe('统一面板 · 改模型行的实时配置后收藏不再选中', () 
     });
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1332,7 +1524,11 @@ describe('统一面板 · 改模型行的实时配置后收藏不再选中', () 
     });
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1384,7 +1580,11 @@ describe('统一面板 · 会话内选中收藏要真正应用', () => {
     const onFastModeChange = vi.fn();
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       effort: 'low',
@@ -1422,7 +1622,11 @@ describe('统一面板 · 会话内选中收藏要真正应用', () => {
     const onEffortChange = vi.fn();
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       effort: 'low',
@@ -1443,7 +1647,11 @@ describe('统一面板 · 会话内选中收藏要真正应用', () => {
     addModelFavorite({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' });
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       effort: 'low',
@@ -1462,7 +1670,11 @@ describe('统一面板 · 会话内选中收藏要真正应用', () => {
     const uid = addModelFavorite({ providerId: 'openai', modelId: 'gpt-5.6', agent: 'codex' });
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       effort: 'low',
@@ -1744,7 +1956,11 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
     });
     const onCrossEngineSelect = vi.fn(() => true);
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1781,7 +1997,11 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
     });
     const onCrossEngineSelect = vi.fn(() => false);
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -1803,7 +2023,11 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
     // 选中的是 Opus 5,那条收藏不是当前锚点。
     renderPanel({
       onUnifiedSelect,
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
       onEffortChange: vi.fn(),
@@ -1968,7 +2192,11 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
     });
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
       onSessionFavoriteAnchorChange,
@@ -1990,7 +2218,11 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
   it('选中普通模型行 → 回传 null(把上一条锚点清掉)', async () => {
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect: vi.fn() },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect: vi.fn(),
+      },
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
       onSessionFavoriteAnchorChange,
@@ -2006,7 +2238,11 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
     const onCrossEngineSelect = vi.fn(() => true);
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       onSessionFavoriteAnchorChange,
@@ -2048,7 +2284,11 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
     });
     const onCrossEngineSelect = vi.fn(() => true);
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'claude-code' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
       currentProviderId: 'anthropic',
       modelId: 'claude-opus-5',
       vendorKey: 'cc',
@@ -2089,7 +2329,11 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
     const onCrossEngineSelect = vi.fn(() => true);
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
@@ -2133,7 +2377,11 @@ describe('统一面板 · 会话内回传收藏锚点', () => {
     const onCrossEngineSelect = vi.fn(() => false);
     const onSessionFavoriteAnchorChange = vi.fn();
     renderPanel({
-      sessionEngineFilter: { currentAgent: 'codex' as const, onCrossEngineSelect },
+      sessionEngineFilter: {
+        currentAgent: 'codex' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
       selectedFavoriteUid: uid,
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',

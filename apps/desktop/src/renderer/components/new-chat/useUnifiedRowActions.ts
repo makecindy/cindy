@@ -223,17 +223,23 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 无损,直接写回草稿即可。两个字段必须同时具备:少了任一个,跨引擎行就没有落点。
    */
   const inSession = sessionEngineFilter !== undefined && sessionAgent !== undefined;
-  /** 跨引擎确认 / 切换路由只认任务正在跑的引擎,不认挂着的意图目标。 */
-  const runtimeAgent = sessionEngineFilter?.runtimeAgent ?? sessionAgent;
-  /** 面板展示的是待发送意图,不是正在跑的引擎。 */
+  /**
+   * 任务**正在跑**的引擎。只认调用方显式给的 `runtimeAgent`,缺省**不**回落 sessionAgent:
+   * 那是面板展示 / 意图目标。冷加载 runtime 未到时回落,会把意图目标当成真实引擎,
+   * 点它就绕过确认(2026-08-20 review)。
+   */
+  const runtimeAgent = sessionEngineFilter?.runtimeAgent;
+  /** 面板展示的是待发送意图,不是正在跑的引擎。真实引擎未知时不算「已在意图上」。 */
   const pendingSwitch =
     inSession &&
     runtimeAgent !== undefined &&
     sessionEngineFilter.currentAgent !== runtimeAgent;
-  const shouldCrossEngine = (target: AgentKind): boolean =>
-    sessionEngineFilter !== undefined &&
-    runtimeAgent !== undefined &&
-    (target !== runtimeAgent || pendingSwitch);
+  const shouldCrossEngine = (target: AgentKind): boolean => {
+    if (sessionEngineFilter === undefined) return false;
+    // 真实引擎还没确认:一律走切换确认,不能当同引擎放行。
+    if (runtimeAgent === undefined) return true;
+    return target !== runtimeAgent || pendingSwitch;
+  };
   /**
    * 这条收藏副本是不是**正在跑的完整配置**(来源 + 模型 + 引擎 + 思维 + Fast)。
    * `isLiveRow` 只比身份三元组,给模型行的引擎胶囊 / 实时写入用;收藏的删除回落与
@@ -532,9 +538,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       const next = resolveEngineConfig?.(entry, engine);
       if (sessionEngineFilter && sessionAgent !== undefined) {
         const targetAgent = agentKindOfEngine(engine);
-        // 已在真实引擎上、也没有待发送意图 → 无事可做。挂着 Pi 意图时点回 Claude 胶囊
-        // 必须走切换事务,由 same-engine 路径清掉意图(2026-08-20 review P1)。
-        if (targetAgent === runtimeAgent && !pendingSwitch) return;
+        // 已在真实引擎上、也没有待发送意图 → 无事可做。真实引擎未知、或挂着意图时
+        // 点回正在跑的引擎,都走切换事务(未知 fail-closed;意图由 same-engine 路径清掉)。
+        if (!shouldCrossEngine(targetAgent)) return;
         // 会话内改选中行的引擎 = 一次跨引擎切换:交给 performAgentSwitch 事务(确认弹窗
         // + 上下文重建)。**不预写全局 override**:用户取消确认时不该留下任何痕迹。
         sessionEngineFilter.onCrossEngineSelect({
