@@ -188,6 +188,16 @@ export class GhostInstallReceiptStore {
     return path.resolve(this.getRootDir());
   }
 
+  /**
+   * `readBoundedFileNoFollowSync({ containWithin })` 要求根已经是 realpath。
+   * `rootDir()` 只做 `path.resolve`，在 macOS `/var` → `/private/var`、relocated
+   * home 这类祖先链接下会让合法 receipt 被误判「不是普通文件」。写路径仍用
+   * `rootDir()`——目录可能尚未存在，realpath 会 ENOENT。
+   */
+  private containmentRoot(): string {
+    return fs.realpathSync(this.rootDir());
+  }
+
   read(id: string): GhostInstallReceiptReadResult {
     const result = this.readForRecovery(id);
     if (result.state === 'approved') return result;
@@ -201,7 +211,7 @@ export class GhostInstallReceiptStore {
     let bytes: Buffer | null;
     try {
       bytes = readBoundedFileNoFollowSync(receiptPath, MAX_RECEIPT_BYTES, {
-        containWithin: this.rootDir(),
+        containWithin: this.containmentRoot(),
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -449,7 +459,7 @@ export class GhostInstallReceiptStore {
       const bytes = readBoundedFileNoFollowSync(
         this.migrationLedgerPath(),
         MAX_MIGRATION_LEDGER_BYTES,
-        { containWithin: this.rootDir() },
+        { containWithin: this.containmentRoot() },
       );
       if (bytes === null) return null;
       const raw = JSON.parse(
@@ -684,7 +694,7 @@ export class GhostInstallReceiptStore {
       // reads from the same handle with O_NONBLOCK so a FIFO/device blocks
       // neither the open nor the subsequent read.
       bytes = readBoundedFileNoFollowSync(markerPath, MAX_PENDING_MUTATION_BYTES, {
-        containWithin: this.rootDir(),
+        containWithin: this.containmentRoot(),
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
