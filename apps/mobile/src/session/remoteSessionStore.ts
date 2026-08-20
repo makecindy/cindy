@@ -3144,28 +3144,24 @@ export const remoteSessionStore = {
         rawGenerationDurationMs !== null ||
         typeof data?.generationActive === 'boolean' ||
         typeof data?.generationReliable === 'boolean';
-      const outputTokens = isTurnStart
-        ? 0
-        : rawOutputTokens !== null
-          ? rawOutputTokens
-          : current.outputTokens;
-      const generationDurationMs = isTurnStart
-        ? 0
-        : rawGenerationDurationMs !== null
-          ? rawGenerationDurationMs
-          : current.generationDurationMs;
-      const generationActive = !isRunning || isTurnStart
+      // turn 边界清的是上一轮残留,不是本条 status 自带的 live 字段。
+      // 重连/前台恢复会先清 maker-turn,活跃快照只恢复宽 isRunning,于是下一条
+      // 用量刷新被当成 isTurnStart;若这里无条件归零,权威 output / duration
+      // 会被丢掉,紧接着的终态也来不及再显示 tok/s。
+      const outputTokens = rawOutputTokens !== null
+        ? rawOutputTokens
+        : (isTurnStart ? 0 : current.outputTokens);
+      const generationDurationMs = rawGenerationDurationMs !== null
+        ? rawGenerationDurationMs
+        : (isTurnStart ? 0 : current.generationDurationMs);
+      const generationActive = !isRunning
         ? false
         : typeof data?.generationActive === 'boolean'
           ? data.generationActive
-          : hasLiveFields
-            ? false
-            : current.generationActive;
-      const generationReliable = isTurnStart
-        ? true
-        : typeof data?.generationReliable === 'boolean'
-          ? data.generationReliable
-          : current.generationReliable;
+          : (isTurnStart || hasLiveFields ? false : current.generationActive);
+      const generationReliable = typeof data?.generationReliable === 'boolean'
+        ? data.generationReliable
+        : (isTurnStart ? true : current.generationReliable);
       // maker turn 边界 false→true 时清掉上一轮残留的 live task updates:它们是 turn 级
       // live 状态,残留到下一轮会被渲染层的孤儿兜底当作"仍在运行的子 agent"追加到消息流
       // 末尾(桌面端靠 idle demote / clear 清,手机 store 是常驻单例,只能在 turn 边界收口)。

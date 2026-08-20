@@ -5895,14 +5895,18 @@ function mergeLiveGenerationStatus(
   AgentStatus,
   'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable'
 > {
-  if (isTurnStart) {
-    return {
-      outputTokens: 0,
-      generationDurationMs: 0,
-      generationActive: false,
-      generationReliable: true,
-    };
-  }
+  // Turn start drops leftover metrics from the previous turn, then keeps any
+  // live fields carried by this same status. A reconnect-shaped first event
+  // (isRunning false→true with output / duration already present) must not
+  // zero the values that just arrived.
+  const baseline = isTurnStart
+    ? {
+        outputTokens: 0,
+        generationDurationMs: 0,
+        generationActive: false,
+        generationReliable: true,
+      }
+    : previous;
   const hasLiveFields =
     typeof update.outputTokens === 'number' ||
     typeof update.generationDurationMs === 'number' ||
@@ -5910,27 +5914,27 @@ function mergeLiveGenerationStatus(
     typeof update.generationReliable === 'boolean';
   if (!hasLiveFields) {
     return {
-      outputTokens: previous.outputTokens,
-      generationDurationMs: previous.generationDurationMs,
-      generationActive: previous.generationActive,
-      generationReliable: previous.generationReliable,
+      outputTokens: baseline.outputTokens,
+      generationDurationMs: baseline.generationDurationMs,
+      generationActive: update.isRunning ? baseline.generationActive : false,
+      generationReliable: baseline.generationReliable,
     };
   }
   const merged = {
     outputTokens:
-      typeof update.outputTokens === 'number' ? update.outputTokens : previous.outputTokens,
+      typeof update.outputTokens === 'number' ? update.outputTokens : baseline.outputTokens,
     generationDurationMs:
       typeof update.generationDurationMs === 'number'
         ? update.generationDurationMs
-        : previous.generationDurationMs,
+        : baseline.generationDurationMs,
     generationActive:
       typeof update.generationActive === 'boolean'
         ? update.generationActive
-        : previous.generationActive,
+        : baseline.generationActive,
     generationReliable:
       typeof update.generationReliable === 'boolean'
         ? update.generationReliable
-        : previous.generationReliable,
+        : baseline.generationReliable,
   };
   if (!update.isRunning) {
     return { ...merged, generationActive: false };
