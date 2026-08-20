@@ -9,6 +9,16 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 export const CONTEXT_MODE_STALE_EXTENSION_PATH = '~/.pi/extensions/context-mode';
+export const CONTEXT_MODE_DOCTOR_TOOL_NAME = 'ctx_doctor';
+export const CONTEXT_MODE_DOCTOR_COMMAND_NAME = 'ctx-doctor';
+
+export function isContextModeDoctorToolName(toolName: string): boolean {
+  return toolName === CONTEXT_MODE_DOCTOR_TOOL_NAME;
+}
+
+export function isContextModeDoctorCommandName(commandName: string | null | undefined): boolean {
+  return commandName === CONTEXT_MODE_DOCTOR_COMMAND_NAME;
+}
 
 function isContextModePackageRoot(dir: string): boolean {
   try {

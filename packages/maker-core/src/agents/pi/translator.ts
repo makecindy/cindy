@@ -33,6 +33,7 @@ import {
   formatOverloadRetryMessage,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
@@ -131,8 +132,10 @@ export interface PiTranslateContext {
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
   /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
   hostAutoCompactInFlight: boolean;
-  /** Optional rewrite for tool result text (Cindy-managed context-mode doctor paths). */
+  /** Optional rewrite for ctx_doctor tool result text (Cindy-managed package paths). */
   rewriteToolResultText?: (text: string) => string;
+  /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
+  toolNamesByCallId: Map<string, string>;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -159,6 +162,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
     subagentToolCalls: new Map(),
+    toolNamesByCallId: new Map(),
     pendingAssistantError: null,
     hostAutoCompactInFlight: false,
   };
@@ -179,6 +183,7 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.isStreaming = false;
   ctx.pendingAssistantError = null;
   ctx.subagentToolCalls.clear();
+  ctx.toolNamesByCallId.clear();
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -388,6 +393,7 @@ export function translatePiEvent(
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
       ctx.subagentToolCalls.clear();
+      ctx.toolNamesByCallId.clear();
       ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -466,6 +472,7 @@ export function translatePiEvent(
       const toolUseId = String(event.toolCallId ?? '');
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
+      if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
       queue.push({
         type: 'tool_use',
         data: {
@@ -525,7 +532,15 @@ export function translatePiEvent(
       const toolUseId = String(event.toolCallId ?? '');
       const isError = event.isError === true;
       const rawText = toolResultFullText(event.result);
-      const fullText = ctx.rewriteToolResultText ? ctx.rewriteToolResultText(rawText) : rawText;
+      const toolName = String(
+        event.toolName
+          ?? (toolUseId ? ctx.toolNamesByCallId.get(toolUseId) : undefined)
+          ?? '',
+      );
+      if (toolUseId) ctx.toolNamesByCallId.delete(toolUseId);
+      const fullText = isContextModeDoctorToolName(toolName) && ctx.rewriteToolResultText
+        ? ctx.rewriteToolResultText(rawText)
+        : rawText;
       queue.push({
         type: 'tool_result_full',
         data: { toolUseId, fullText, isError },
