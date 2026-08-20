@@ -1814,4 +1814,36 @@ describe('session-agent-switch handoff injection', () => {
     // 5. accepted 之后才消费交接(未派发则保留下次重试)。
     expect(consumePendingHandoff).toHaveBeenCalledWith('session-1');
   });
+
+  it('overflow prepare 在 getSession 之前；peek 不再关掉发送目标', async () => {
+    const callOrder: string[] = [];
+    let unhealthy = true;
+    const fresh = createSession();
+    const { deps } = createDeps({
+      prepareUnhealthySession: vi.fn(async () => {
+        callOrder.push('prepare');
+        unhealthy = false;
+      }),
+      getSession: vi.fn(() => {
+        callOrder.push('getSession');
+        return unhealthy ? createSession({ getStatus: () => 'closed' as const }) : fresh;
+      }),
+      peekPendingHandoff: vi.fn(async () => {
+        callOrder.push('peek');
+        return 'OVERFLOW-HANDOFF';
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '继续' }, {
+      agentKind: 'codex',
+      workingDir: '/tmp/w',
+    });
+
+    expect(callOrder.indexOf('prepare')).toBeGreaterThanOrEqual(0);
+    expect(callOrder.indexOf('prepare')).toBeLessThan(callOrder.indexOf('getSession'));
+    expect(callOrder.indexOf('getSession')).toBeLessThan(callOrder.indexOf('peek'));
+    expect(fresh.send).toHaveBeenCalledTimes(1);
+    const sent = vi.mocked(fresh.send).mock.calls[0]?.[0] as { content: string };
+    expect(sent.content).toContain('OVERFLOW-HANDOFF');
+  });
 });

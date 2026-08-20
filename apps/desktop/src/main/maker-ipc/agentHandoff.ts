@@ -717,11 +717,6 @@ export interface AgentHandoffPendingRegistry {
   set(sessionId: string, handoff: string, expectedGeneration?: number): void;
   /** 取当前 clear 纪元(只由 `/clear` 推进),配合 `set` 的 `expectedGeneration` 使用。 */
   readGeneration(sessionId: string): number;
-  /**
-   * 发送前换窗的唯一挂钩。所有会 peek 再 session.send 的入口共享这一处，
-   * 不要在个别发送函数里再调 prepareUnhealthySession。
-   */
-  setBeforePeek(fn: ((sessionId: string) => Promise<void>) | undefined): void;
   peek(sessionId: string): Promise<string | null>;
   consume(sessionId: string): void;
   /**
@@ -788,7 +783,6 @@ export function createAgentHandoffPendingRegistry(
   const pending = new Map<string, string | null>();
   /** 值由 queryPending 产出(已含组合结果)的 session,decorate 必须跳过它们。 */
   const composedByQuery = new Set<string>();
-  let beforePeek: ((sessionId: string) => Promise<void>) | undefined;
   /**
    * 每个 session 的 **clear 纪元**:只有 `/clear`(invalidate / clear)递增它。
    *
@@ -821,11 +815,7 @@ export function createAgentHandoffPendingRegistry(
     readGeneration(sessionId) {
       return genOf(sessionId);
     },
-    setBeforePeek(fn) {
-      beforePeek = fn;
-    },
     async peek(sessionId) {
-      await beforePeek?.(sessionId);
       if (pending.has(sessionId)) {
         const cached = pending.get(sessionId) ?? null;
         if (cached === null || !decorateCached || composedByQuery.has(sessionId)) return cached;

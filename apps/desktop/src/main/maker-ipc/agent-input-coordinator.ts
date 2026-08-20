@@ -209,6 +209,8 @@ export interface AgentInputSendOpts {
   persistUserMessage?: {
     clientId: string;
     content: string;
+    /** Overflow 重放用的 agent-facing wire payload（mention / 标注附件等）。 */
+    agentFacingWireContent?: unknown;
     sdkSessionId?: string;
     delivery: AgentInputDelivery;
     expectedClearBoundaryMs?: number | null;

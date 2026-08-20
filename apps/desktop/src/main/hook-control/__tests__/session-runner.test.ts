@@ -110,6 +110,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 }));
 vi.mock('../../maker-ipc/register.js', () => ({
   beginTurnChangeSetAtDispatch: h.beginTurnChangeSetAtDispatch,
+  prepareUnhealthySessionForSend: vi.fn(async () => undefined),
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: () => false,
   installDesktopInteractionListener: h.installDesktopInteractionListener,

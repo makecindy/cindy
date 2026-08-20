@@ -272,15 +272,6 @@ describe('createAgentHandoffPendingRegistry', () => {
     expect(consumed).toHaveBeenCalledWith('s1');
   });
 
-  it('runs beforePeek before returning a cached handoff so every send path can rebuild', async () => {
-    const beforePeek = vi.fn(async () => undefined);
-    const reg = createAgentHandoffPendingRegistry(async () => 'from-db');
-    reg.setBeforePeek(beforePeek);
-    reg.set('s1', 'H1');
-    expect(await reg.peek('s1')).toBe('H1');
-    expect(beforePeek).toHaveBeenCalledWith('s1');
-  });
-
   it('内存命中也过 decorate:agent-switch 直接 set 的交接仍能并上 fork 来源标记', async () => {
     // fork 出子会话后、首发前切引擎:切换流程走 setPendingHandoff 直接写内存,
     // 不经 DB fallback。没有这层组合,来源标记会被整条跳过。

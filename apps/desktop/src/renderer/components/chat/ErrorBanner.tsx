@@ -294,7 +294,6 @@ export function ErrorBanner({
   const hideRetry =
     isSilentStopExhausted ||
     isClaudeGatewayOpusPlanMismatch ||
-    errorReason === 'context-overflow' ||
     isCodexThreadStale ||
     showInvalidEncryptedContentRecovery ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||

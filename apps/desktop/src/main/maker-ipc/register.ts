@@ -2854,6 +2854,11 @@ export async function acquirePendingAgentSwitchForDirectSend(
   return pendingAgentSwitchApplyHolder?.(sessionId, signal) ?? (() => {});
 }
 
+/** 直发路径在 createSession / 重读 live session 之前关掉不健康原生会话。 */
+export async function prepareUnhealthySessionForSend(sessionId: string): Promise<void> {
+  await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+}
+
 /** Later successful model/provider picks supersede an earlier cross-engine intent. */
 export function cancelPendingAgentSwitchForSession(sessionId: string): void {
   cancelPendingAgentSwitchHolder?.(sessionId);
@@ -8313,6 +8318,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         bootstrapAfterSwitch: true,
         signal,
       });
+      await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
       return release;
     } catch (err) {
       release();
@@ -8881,6 +8887,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await runAcceptedCallback(onAccepted, targetSessionId, clientId);
       };
 
+      await contextOverflowRolloverHolder?.prepareUnhealthySession(targetSessionId);
       let live = maker.getSession(targetSessionId);
       if (live) {
         if (live.isTurnRunning?.()) {
@@ -10881,6 +10888,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isMobileClientInvoke: () => isMobileControllerInvoke(),
     applyPendingAgentSwitch: (sessionId) =>
       applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
+    prepareUnhealthySession: (sessionId) =>
+      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
     log,
   });
 
@@ -11001,9 +11010,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withSessionLock: withSendToSessionLock,
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log,
-  });
-  agentHandoffPending.setBeforePeek(async (sessionId) => {
-    await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
   });
   /**
    * Same-turn steer contract: resolved STEER means maker-core accepted the

@@ -214,6 +214,11 @@ export interface MakerSendTransactionDeps {
    */
   applyPendingAgentSwitch?(sessionId: string): Promise<void>;
   /**
+   * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
+   * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
+   */
+  prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  /**
    * session-agent-switch:pending 交接读取(agentHandoff 注册表)。命中时把交接
    * 文本前置进 wire payload(不影响 persistUserMessage 落库显示内容),并在
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
@@ -599,6 +604,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
       await deps.applyPendingAgentSwitch?.(sessionId);
+      await deps.prepareUnhealthySession?.(sessionId);
       let sess = deps.getSession(sessionId);
       // Maker keeps a failed Session registered until its real handle cleanup
       // succeeds. It is not a reusable send target: route it through the

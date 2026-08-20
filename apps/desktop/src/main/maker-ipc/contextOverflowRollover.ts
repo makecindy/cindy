@@ -470,6 +470,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       return true;
     });
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
+    // 关掉当前 live handle。调用方必须在解析发送目标之前调用 prepare,
+    // 再 getSession / createSession;peek 之后对旧对象 send 会打到已关闭实例。
     if (live) await deps.closeSession(sessionId);
     const label = engineLabelForOverflow(sessionRow.agentKind);
     const handoff = buildHandoffText(handoffMessages, {
