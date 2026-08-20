@@ -79,6 +79,37 @@ function loadBashIsolationHelper(
   ) => Record<string, string | undefined>;
 }
 
+function loadOneShotEnvHelper(): {
+  takeOneShotEnv: (name: string) => string | undefined;
+  env: Record<string, string | undefined>;
+  globalThis: Record<string, unknown>;
+} {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const BRIDGE_RELOAD_STASH_GLOBAL');
+  const end = source.indexOf('// 凭证/密钥路径特征由 maker-core 的单一来源生成');
+  if (start < 0 || end <= start) throw new Error('one-shot env helper was not found');
+  const executableSource = [
+    source.slice(start, end),
+    '(globalThis as any).takeOneShotEnv = takeOneShotEnv;',
+  ].join('\n');
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.None,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  const context: Record<string, unknown> = {
+    process: { env: {} },
+  };
+  // runInNewContext 的 context 即该 realm 的 globalThis,stash 会落在上面。
+  runInNewContext(compiled, context);
+  const takeOneShotEnv = context.takeOneShotEnv as (name: string) => string | undefined;
+  if (typeof takeOneShotEnv !== 'function') {
+    throw new Error('one-shot env helper was not loaded');
+  }
+  return { takeOneShotEnv, env: context.process.env as Record<string, string | undefined>, globalThis: context };
+}
+
 function loadPiPackageMutationCommandHelper(): (input: unknown) => boolean {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const parserStart = source.indexOf('function readShellRedirectionTarget');
@@ -1012,6 +1043,56 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
   });
 
+  it('keeps one-shot startup env available across bridge reloads without leaving it in process.env', () => {
+    // #3070 回归:首次加载读 env → 删 → stash 到 globalThis;重载时 env 已被消费,
+    // 从 stash 取回 host 注入的原始值,bash 不再永久 fail-closed。
+    const helper = loadOneShotEnvHelper();
+
+    // 首次加载:读到 host 注入值,env 随即被删,stash 建立。
+    helper.env.CINDY_PI_BASH_PACKAGE_HOME = '/host/injected/bash-package-home';
+    expect(helper.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME'))
+      .toBe('/host/injected/bash-package-home');
+    expect(helper.env.CINDY_PI_BASH_PACKAGE_HOME).toBeUndefined();
+
+    // 重载(#3070 现场):env 已被首次加载删除,取回 stash 的原始值。
+    expect(helper.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME'))
+      .toBe('/host/injected/bash-package-home');
+    expect(helper.env.CINDY_PI_BASH_PACKAGE_HOME).toBeUndefined();
+
+    // 进程内代码事后改写 env 不会污染重载:重载读的是 stash,不是 env。
+    helper.env.CINDY_PI_BASH_PACKAGE_HOME = '/attacker/controlled/home';
+    expect(helper.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME'))
+      .toBe('/host/injected/bash-package-home');
+
+    // 多个一次性 env 互不干扰(包管理 token 同族修复)。
+    helper.env.CINDY_PI_PACKAGE_MANAGEMENT = 'a'.repeat(48);
+    expect(helper.takeOneShotEnv('CINDY_PI_PACKAGE_MANAGEMENT')).toBe('a'.repeat(48));
+    expect(helper.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
+    expect(helper.takeOneShotEnv('CINDY_PI_PACKAGE_MANAGEMENT')).toBe('a'.repeat(48));
+    expect(helper.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME'))
+      .toBe('/host/injected/bash-package-home');
+
+    // 非 Cindy 初始化的进程(env 从未注入、无 stash)保持 fail-closed 语义:
+    // 返回 undefined,下游 isolatedBashEnvironment 照旧 throw。
+    const fresh = loadOneShotEnvHelper();
+    expect(fresh.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME')).toBeUndefined();
+
+    // 结构断言:入口走 takeOneShotEnv,裸 delete 只存在于 helper 内部。
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    expect(source).toContain('const bashPackageHome = takeOneShotEnv(PI_BASH_PACKAGE_HOME_ENV);');
+    expect(source).toContain('const piPackageManagementToken = takeOneShotEnv(PI_PACKAGE_MANAGEMENT_ENV);');
+    expect(source).not.toContain('delete process.env[PI_BASH_PACKAGE_HOME_ENV];');
+    expect(source.match(/delete process\.env\[name\];/g)).toHaveLength(1);
+    const helperSlice = source.slice(
+      source.indexOf('const BRIDGE_RELOAD_STASH_GLOBAL'),
+      source.indexOf('// 凭证/密钥路径特征由 maker-core 的单一来源生成'),
+    );
+    expect(helperSlice).toContain('delete process.env[name];');
+    expect(source.indexOf('delete process.env[name];')).toBeLessThan(
+      source.indexOf('export default async function cindyBridge'),
+    );
+  });
+
   it('blocks Pi package mutations before bash while preserving ordinary commands', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('bashCommandMutatesPiPackages(nextParams)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
@@ -1019,9 +1100,6 @@ describe('cindy-bridge extension source', () => {
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('clean.PI_CODING_AGENT_DIR = bashPackageHome');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('delete clean.PI_PACKAGE_DIR');
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      'delete process.env[PI_PACKAGE_MANAGEMENT_ENV]',
-    );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('token: piPackageManagementToken');
 
     const mutatesPiPackages = loadPiPackageMutationCommandHelper();

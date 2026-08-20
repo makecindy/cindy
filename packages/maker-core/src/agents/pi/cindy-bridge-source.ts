@@ -443,6 +443,55 @@ function whichRgOnPath(): string {
   return '';
 }
 
+// 一次性启动 env 的跨重载存取(#3070)。CINDY_PI_BASH_PACKAGE_HOME /
+// CINDY_PI_PACKAGE_MANAGEMENT 由 host 在 spawn 时注入一次,bridge 首次加载后即从
+// process.env 删除(防止进程内其它代码改写)。但 Pi 会重载扩展:同一进程里 bridge
+// 文件被再次执行时 env 已被删,重载实例拿到 undefined —— bash 从此永久
+// fail-closed。解法:首次加载把值 stash 进 globalThis。扩展重载与首次加载共享
+// 同一 realm 与 globalThis(事故机理即重载看到了被删的 env,证明共享),重载实例
+// 从 stash 取回 host 注入的原始字节,不经过任何可改写的 env 面;事后写进 env 的
+// 值一律视为不可信并再次删除。stash 本身与闭包变量同为进程内存,不比现状多暴露
+// 任何东西(值本就留在首次加载的闭包里)。stash 也拿不到(进程从未由 Cindy 初始
+// 化,如手工把 bridge 拷进用户 ~/.pi)时返回 undefined,下游保持原 fail-closed
+// —— 不猜外来 runtime 的路径。
+const BRIDGE_RELOAD_STASH_GLOBAL = '__cindyBridgeOneShotEnv';
+
+function stashOneShotEnvValue(key: string, value: string): void {
+  try {
+    const stash = (globalThis as Record<string, unknown>)[BRIDGE_RELOAD_STASH_GLOBAL];
+    const map = (stash && typeof stash === 'object' ? stash : {}) as Record<string, string>;
+    map[key] = value;
+    (globalThis as Record<string, unknown>)[BRIDGE_RELOAD_STASH_GLOBAL] = map;
+  } catch {
+    // globalThis 不可写的受限环境:退化为仅本次加载可见,行为与旧版一致。
+  }
+}
+
+function readStashedOneShotEnvValue(key: string): string | undefined {
+  try {
+    const stash = (globalThis as Record<string, unknown>)[BRIDGE_RELOAD_STASH_GLOBAL];
+    if (!stash || typeof stash !== 'object') return undefined;
+    const value = (stash as Record<string, string | undefined>)[key];
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function takeOneShotEnv(name: string): string | undefined {
+  const stashed = readStashedOneShotEnvValue(name);
+  const value = process.env[name];
+  if (value !== undefined) {
+    delete process.env[name];
+    // stash 已有记录而 env 又出现值,说明该值是首次加载之后被进程内代码写进来的
+    // (host 只在 spawn 时注入一次,且首次加载已删)—— 不可信,继续用 stash 原始值。
+    if (stashed === undefined) stashOneShotEnvValue(name, value);
+    return stashed ?? value;
+  }
+  // 重载路径:env 已被首次加载消费,取回 stash 的原始值(可能为 undefined)。
+  return stashed;
+}
+
 // 凭证/密钥路径特征由 maker-core 的单一来源生成。bridge 自包含、运行时不能 import，
 // 但不再维护第二份手写名单，避免新增凭证目录时 Pi 静默漏拦。
 const CREDENTIAL_PATH_PATTERNS = ${JSON.stringify(SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS)}
@@ -2439,8 +2488,10 @@ function rgGlob(
 }
 
 export default async function cindyBridge(pi: any) {
-  const bashPackageHome = process.env[PI_BASH_PACKAGE_HOME_ENV];
-  delete process.env[PI_BASH_PACKAGE_HOME_ENV];
+  // 一次性启动 env 经 takeOneShotEnv 存取:首次加载读删 + stash,扩展重载(#3070)
+  // 从 stash 取回原始值,而不是拿到 undefined 让 bash 永久 fail-closed。
+  const bashPackageHome = takeOneShotEnv(PI_BASH_PACKAGE_HOME_ENV);
+  const piPackageManagementToken = takeOneShotEnv(PI_PACKAGE_MANAGEMENT_ENV);
   // 主 Pi 不传 --tools：那个白名单也会筛掉动态 MCP 与 subagent。改由 bridge 注册
   // 专用只读工具；子代理仍用自己的 read,grep,find,ls 白名单收紧能力面。
   const grepTool = createGrepTool(process.cwd());
@@ -2573,8 +2624,7 @@ export default async function cindyBridge(pi: any) {
   // CLI from bash writes to Pi's default user home and bypasses Cindy's
   // compatibility/approval state. Normal local tasks therefore receive one
   // host-backed mutation tool; Review and SSH remoteHostId tasks do not.
-  const piPackageManagementToken = process.env[PI_PACKAGE_MANAGEMENT_ENV];
-  delete process.env[PI_PACKAGE_MANAGEMENT_ENV];
+  // (token 经函数开头的 takeOneShotEnv 取得,重载后工具不再静默消失。)
   if (piPackageManagementToken && /^[A-Za-z0-9_-]{40,256}$/.test(piPackageManagementToken)) {
     pi.registerTool({
       name: 'cindy_pi_extension',
