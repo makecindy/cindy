@@ -300,9 +300,8 @@ export function createWorkLouderCodexSystemFrontmostInput(deps?: {
   // broken unless it was held.
   //
   // No separate suspend/wake reset here: unlike the native shortcut listeners,
-  // the keypad owner already forces a `release` when the device disconnects or
-  // the layout stops owning the key (`releaseHeldHardwareGestures`), so a lost
-  // key-up cannot strand this controller in its pressed state.
+  // the keypad owner forces a `release` when the layout stops owning the key or
+  // its task slots are suspended (`releaseHeldHardwareGestures`).
   const voicePhases = new ShortcutHoldPhaseController({
     holdDelayMs: deps?.holdDelayMs,
     onTrigger: triggerVoice,
