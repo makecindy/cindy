@@ -193,7 +193,14 @@ function safeAppendTranscript(state, record) {
   const bytes = Buffer.byteLength(line, 'utf8');
   if (state.transcriptBytes + bytes > MAX_TRANSCRIPT_BYTES) {
     const marker = JSON.stringify({ type: 'cindy.subagent.transcript_truncated', at: Date.now() }) + '\n';
-    try { fs.appendFileSync(state.transcriptPath, marker, { encoding: 'utf8', mode: 0o600 }); } catch (_) {}
+    const markerBytes = Buffer.byteLength(marker, 'utf8');
+    // Never push the file past the cap: openTranscriptGeneration treats any
+    // oversize file as unreadable and the user loses the whole conversation,
+    // not just the tail. Skip the marker if it would not fit.
+    if (state.transcriptBytes + markerBytes <= MAX_TRANSCRIPT_BYTES) {
+      try { fs.appendFileSync(state.transcriptPath, marker, { encoding: 'utf8', mode: 0o600 }); } catch (_) {}
+      state.transcriptBytes += markerBytes;
+    }
     state.transcriptTruncated = true;
     return;
   }

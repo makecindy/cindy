@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 
 import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
@@ -437,6 +439,15 @@ describe('cindy-subagent extension source', () => {
     );
   });
 
+  it('does not let a truncation marker push the transcript past the cap', () => {
+    const runner = CINDY_SUBAGENT_RUNNER_SOURCE;
+    const fn = runner.indexOf('function safeAppendTranscript');
+    expect(fn).toBeGreaterThan(-1);
+    const body = runner.slice(fn, runner.indexOf('function main()', fn));
+    expect(body).toContain('const markerBytes = Buffer.byteLength(marker, \'utf8\');');
+    expect(body).toContain('if (state.transcriptBytes + markerBytes <= MAX_TRANSCRIPT_BYTES)');
+  });
+
   it('declares the watchdog constants exactly once in the composed module', () => {
     // 主体与看门狗段是拼起来的:同名 const 声明两次 → 拼接后的模块直接 SyntaxError,
     // 整个扩展加载失败(连 cindy-bridge 之外的既有能力都不受影响,纯粹是子代理全哑)。
@@ -462,5 +473,19 @@ describe('cindy-subagent extension source', () => {
     // 收到 Cindy 的 SIGTERM 后不会退出,每次关会话都要等满 3s 宽限再被 SIGKILL。
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("process.on('SIGTERM'");
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("process.on('SIGINT'");
+  });
+
+  it('marks durable terminal snapshots as terminal observations', () => {
+    const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../index.ts'), 'utf8');
+    expect(source).toContain("kind: terminal ? 'terminal' : 'spawn'");
+  });
+
+  it('does not store an English resume prefix as the run title', () => {
+    const source = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '../pi-subagent-runs.ts'),
+      'utf8',
+    );
+    expect(source).not.toContain('Resumed Subagent');
+    expect(source).toContain('title: sourceConfig.title,');
   });
 });

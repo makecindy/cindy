@@ -287,6 +287,12 @@ async function reconcilePiDurableRuns(sessionId: string): Promise<ReadonlyMap<st
     // newest, so an older diagnostic still loses to it — and a newer one no
     // longer gets dropped just because health was walked first.
     if (seenTaskIds.has(diagnostic.taskId!) || seenDiagnosticTaskIds.has(diagnostic.taskId!)) continue;
+    // Unreadable status.json (`corrupt`) is not proof of death — Windows sharing
+    // conflicts hit live runners too. Projecting `failed` strips the active-run
+    // visibility exemption, after which matchingRow cannot find the row behind
+    // a /clear or rewind boundary and refuses to recreate it. Stale (parsed,
+    // runner gone) remains the only diagnostic allowed to close the row.
+    if (diagnostic.kind === 'corrupt') continue;
     seenDiagnosticTaskIds.add(diagnostic.taskId!);
     await persistIfChanged(`${DIAGNOSTIC_FINGERPRINT_PREFIX}${diagnostic.taskId}`, {
       provider: 'pi',

@@ -2737,11 +2737,14 @@ export class PiAgent extends BaseAgent {
             durationMs: Math.max(0, (status.endedAt ?? status.updatedAt) - status.startedAt),
           },
           subagentObservation: {
-            // A UUID run directory is host-owned discovery authority. Mark each
-            // deduplicated snapshot as spawn/enrichment so the durable DB may
-            // learn native run/child ids even though the tool-start event fired
-            // before the detached runner UUID existed.
-            kind: 'spawn',
+            // A UUID run directory is host-owned discovery authority. Non-terminal
+            // snapshots stay spawn/enrichment so the durable DB may learn native
+            // run/child ids even though the tool-start event fired before the
+            // detached runner UUID existed. Terminal snapshots must be `terminal`:
+            // message persist only stores compact-card `agentTaskStatus` for that
+            // kind, otherwise reopen falls back to the launch receipt and shows
+            // `running` forever.
+            kind: terminal ? 'terminal' : 'spawn',
             logicalSubagentId: status.runId,
             parentToolUseId: taskId,
             providerRunIds: [status.runId, ...status.tasks.map((task) => task.childId)],

@@ -2377,7 +2377,10 @@ async function resumeClaimedPiSubagentRun(
     childConfigHome,
     bridgeExtension,
     permissionFile,
-    title: sourceConfig.title ? `Resume: ${sourceConfig.title}` : 'Resumed Subagent',
+    // Keep the original title: the sidebar renders it verbatim, so an English
+    // prefix would leak into zh/ja/ko. Continuation is already the same logical
+    // run (same taskId); untitled stays untitled.
+    title: sourceConfig.title,
     description: followUp,
     runtimeOwnerId: launch.runtimeOwnerId,
     interactiveOwner: 'host',
