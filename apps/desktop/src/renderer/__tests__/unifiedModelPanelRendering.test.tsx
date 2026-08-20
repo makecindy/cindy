@@ -761,7 +761,6 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
       modelId: 'gpt-5.5',
       agent: 'cc',
       effort: 'low',
-      fast: true,
     });
     const onUnifiedSelect = vi.fn();
     renderPanel({
@@ -770,10 +769,10 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
       currentProviderId: 'xd',
       modelId: 'gpt-5.5',
       vendorKey: 'cc',
-      // 选中的收藏 = 草稿正在跑它的副本:live 深度/Fast 必须与副本一致,否则锚点按
-      // 「副本 ≠ live」回落(2026-08-19 review P2 的完整配置校验)。
+      // 选中的收藏 = 草稿正在跑它的副本:live 深度/Fast 必须与**解析后的副本**一致。
+      // cc 那条没有 Fast 能力,副本 Fast 恒为关 —— 不能拿收藏条目里的 fast:true 去对。
       effort: 'low',
-      fastMode: true,
+      fastMode: false,
     });
     await act(async () => {
       fireEvent.click(favoriteStar());
@@ -820,6 +819,110 @@ describe('统一面板 · 删除选中的收藏回落到模型默认', () => {
     expect(onUnifiedSelect).not.toHaveBeenCalled();
     expect(onEffortChange).not.toHaveBeenCalled();
     expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+
+  it('选中收藏后只改了思维档:删收藏只删记录,不覆盖当前思维', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onUnifiedSelect = vi.fn();
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      onEffortChange,
+      onFastModeChange,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      // composer / 其它入口把思维改到 high,uid 还在。
+      effort: 'high',
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+
+  it('选中收藏后只改了 Fast:删收藏只删记录,不覆盖当前 Fast', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onUnifiedSelect = vi.fn();
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      onEffortChange,
+      onFastModeChange,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'low',
+      fastMode: true,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    expect(listModelFavorites()).toHaveLength(0);
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+  });
+
+  it('挂着待切换意图时删除回落到真实引擎的收藏:走切换事务清意图', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'cc',
+      effort: 'medium',
+    });
+    const onCrossEngineSelect = vi.fn(() => true);
+    const onEffortChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'codex' as const,
+        onCrossEngineSelect,
+      },
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'medium',
+      onEffortChange,
+      onFastModeChange,
+    });
+    await act(async () => {
+      fireEvent.click(favoriteStar());
+    });
+    // 默认回落 gpt 家族主场 Codex = 正在跑的引擎,但面板正挂着切到 Claude 的意图:
+    // 必须走 same-engine 切换事务清意图,不能只复位深度 / Fast。
+    expect(onCrossEngineSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      targetAgent: 'codex',
+      effort: 'high',
+      fast: false,
+      favoriteUid: null,
+    });
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(listModelFavorites()).toHaveLength(0);
+    });
   });
 
   it('会话内同引擎:深度 / Fast 经实时回调复位,记录同时删除', async () => {
@@ -1453,6 +1556,69 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
       expect(listModelFavorites()[0]?.effort).toBe('high');
     });
     expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+  });
+
+  it('选中收藏后只改了思维档:编辑深度只更新收藏记录,不写回正在跑的配置', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onEffortChange = vi.fn();
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'high',
+      onEffortChange,
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.effort).toBe('high');
+    });
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
+  });
+
+  it('选中收藏后只改了 Fast:编辑 Fast 只更新收藏记录,不写回正在跑的配置', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onFastModeChange = vi.fn();
+    const onEffortChange = vi.fn();
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'codex',
+      effort: 'low',
+      fastMode: true,
+      onEffortChange,
+      onFastModeChange,
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-fast-toggle]') as HTMLElement);
+    });
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.fast).toBe(true);
+    });
+    expect(onFastModeChange).not.toHaveBeenCalled();
     expect(onUnifiedSelect).not.toHaveBeenCalled();
   });
 

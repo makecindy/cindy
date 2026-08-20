@@ -782,9 +782,10 @@ export function UnifiedModelPanel({
   } = useUnifiedRowActions({
     interactionDisabled,
     isLiveRow,
-    // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值 —— 与 configOf 里
-    // 「选中行读 live 值」取的是同一个格子(见 useUnifiedRowActions.liveEffort)。
+    // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值,以及收藏 live 判定
+    // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
     liveEffort: selectedEffort,
+    liveFast: fastMode,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,
