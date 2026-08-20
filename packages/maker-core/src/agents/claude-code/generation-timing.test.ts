@@ -47,6 +47,14 @@ describe('claude generation timing', () => {
       vi.useRealTimers();
     }
   });
+
+  it('marks timing unreliable when pausing without a generation start boundary', () => {
+    const state = newClaudeGenerationState();
+    pauseClaudeGeneration(state, 'tool-1', 1_400);
+    resumeClaudeGeneration(state, 'tool-1', 5_000);
+    finalizeClaudeGeneration(state, 5_200);
+    expect(state.reliable).toBe(false);
+  });
 });
 
 function createTurnState(): TurnState {
@@ -197,6 +205,26 @@ describe('claude generation pause boundaries', () => {
     expect(ctx.rt.generation.durationMs).toBe(500);
     expect(ctx.rt.generation.reliable).toBe(true);
 
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  it('marks timing unreliable when a completed tool_use arrives without message_start', () => {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_3', name: 'Read', input: { file_path: '/tmp/a' } }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_3')).toBe(true);
+    expect(ctx.rt.generation.reliable).toBe(false);
     resetClaudeGenerationTiming(ctx.rt.generation);
     queue.end();
   });

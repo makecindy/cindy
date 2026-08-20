@@ -84,7 +84,13 @@ export function pauseClaudeGeneration(
     return;
   }
   if (state.pendingToolIds.has(pauseId)) return;
-  if (state.pendingToolIds.size === 0) closeInterval(state, pausedAt);
+  if (state.pendingToolIds.size === 0) {
+    // No open generation interval means we never saw message_start (or it was
+    // already closed). Pausing here would resume the clock at tool_result and
+    // still count earlier output tokens, so tok/s would be inflated.
+    if (state.startedAt === null) state.reliable = false;
+    else closeInterval(state, pausedAt);
+  }
   state.pendingToolIds.add(pauseId);
 }
 

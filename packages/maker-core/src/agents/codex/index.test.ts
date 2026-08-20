@@ -15212,6 +15212,73 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
+  it('flushes throttled token usage onto the last running status before Done', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-generation-usage-flush',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+        throw new Error('expected generation usage handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const sendPromise = handle.send({ type: 'user', content: 'fast' });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+        await Promise.resolve();
+      }
+      now = 1_050;
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-fast' } });
+      now = 1_200;
+      handlers.tokenUsageUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-fast',
+        tokenUsage: {
+          last: { inputTokens: 10, outputTokens: 40, cachedInputTokens: 0 },
+        },
+      });
+      now = 1_300;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-fast', status: 'completed', durationMs: 300 },
+      });
+      await sendPromise;
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+
+      const runningLive = events.filter(
+        (event) =>
+          event.type === 'status'
+          && (event.data as { isRunning?: boolean }).isRunning === true
+          && (event.data as { outputTokens?: number }).outputTokens === 40,
+      );
+      expect(runningLive.length).toBeGreaterThan(0);
+      const doneStatus = events.find(
+        (event) =>
+          event.type === 'status'
+          && (event.data as { status?: string }).status === 'Done',
+      );
+      expect(doneStatus?.data).toMatchObject({
+        isRunning: false,
+        outputTokens: 40,
+        generationDurationMs: 250,
+      });
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('keeps descendant approval waits out of the root generation timer', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
