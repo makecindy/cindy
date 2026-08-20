@@ -116,6 +116,7 @@ import {
   applyHostProjectOrder,
   controllerKeysFromHost,
   fetchHostProjectOrder,
+  subscribeRemoteProjectOrderChanged,
 } from '@/session/remoteProjectOrder';
 import {
   isHostProjectOrderReachable,
@@ -956,8 +957,17 @@ export default function HomeScreen() {
     })).then((entries) => {
       if (!cancelled) setHostProjectOrders(new Map(entries));
     });
+    const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
+      if (cancelled || !ids.includes(deviceId)) return;
+      setHostProjectOrders((current) => {
+        const next = new Map(current);
+        next.set(deviceId, snapshot);
+        return next;
+      });
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [deviceModels, invoke]);
   const revokedTipDeviceName = useMemo(
@@ -1247,6 +1257,7 @@ export default function HomeScreen() {
             home.projects.map((project) => project.key),
           )
           : hostManualProjectOrder,
+        ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: nextPatch.projectOrder,
       }).then((snapshot) => {
         if (!snapshot) {
@@ -1380,6 +1391,7 @@ export default function HomeScreen() {
       if (!next) return;
       void applyHostProjectOrder(invoke, selectedDeviceId, {
         manualProjectOrder: next,
+        ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: 'custom',
       }).then((snapshot) => {
         if (!snapshot) {
@@ -1492,9 +1504,9 @@ export default function HomeScreen() {
       onOpenSession={openSession}
       onShowOptions={showSessionOptions}
       onToggleAutomationGroup={toggleAutomationGroup}
-      onProjectDragEnd={projectOrder === 'custom' ? endProjectDrag : undefined}
-      onProjectDragMove={projectOrder === 'custom' ? moveProjectDrag : undefined}
-      onProjectDragStart={projectOrder === 'custom' ? beginProjectDrag : undefined}
+      onProjectDragEnd={displayedProjectOrder === 'custom' ? endProjectDrag : undefined}
+      onProjectDragMove={displayedProjectOrder === 'custom' ? moveProjectDrag : undefined}
+      onProjectDragStart={displayedProjectOrder === 'custom' ? beginProjectDrag : undefined}
       onShowAllDialogue={showAllDialogueSessions}
       onToggleProject={toggleProject}
       projectDragging={projectDrag?.key === (item.kind === 'project' ? item.project.key : '')}
@@ -1514,7 +1526,7 @@ export default function HomeScreen() {
     endProjectDrag,
     moveProjectDrag,
     projectDrag,
-    projectOrder,
+    displayedProjectOrder,
     showAllDialogueSessions,
     visibleProjectKeys,
     expandedAutomationGroups,

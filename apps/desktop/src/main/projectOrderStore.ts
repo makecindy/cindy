@@ -18,11 +18,14 @@ import {
   SIDEBAR_GET_PROJECT_ORDER_CHANNEL,
   SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
 } from '../shared/projectOrderSettings.js';
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from './device-link/invoke-context.js';
 import {
   activeOwnerScopeKey,
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
+  isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
 } from './appSessionState.js';
 import { createLogger } from './logger.js';
@@ -79,25 +82,60 @@ function currentStore() {
   return store;
 }
 
-function toSnapshot(authoritative: boolean, settings: ProjectOrderShape): SyncedProjectOrderSnapshot {
+function toSnapshot(
+  authoritative: boolean,
+  settings: ProjectOrderShape,
+  ownerStamp?: DataOwnerPushStamp,
+): SyncedProjectOrderSnapshot {
   return {
     authoritative,
     available: true,
     manualProjectOrder: Array.from(settings.manualProjectOrder),
     projectOrder: settings.projectOrder,
+    ...(ownerStamp ? { ownerStamp } : {}),
   };
+}
+
+function assertRequestedOwner(request: DataOwnerPushStamp): void {
+  const current = getActiveDataOwnerPushStamp();
+  if (
+    isAppSessionBoundaryPending()
+    || !current.dataOwnerId
+    || current.dataOwnerId !== request.dataOwnerId
+    || current.ownerGeneration !== request.ownerGeneration
+  ) {
+    throwIpcError('PRECONDITION_FAILED', 'active account changed during project order mutation');
+  }
+}
+
+function parseApplyRequest(raw: unknown): {
+  manualProjectOrder: unknown;
+  projectOrder: unknown;
+} & DataOwnerPushStamp {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !isDataOwnerPushStamp(raw)) {
+    throwIpcError('INVALID_PARAMS', 'invalid project order owner stamp');
+  }
+  return raw as { manualProjectOrder: unknown; projectOrder: unknown } & DataOwnerPushStamp;
+}
+
+function notifyChanged(snapshot: SyncedProjectOrderSnapshot, ownerStamp: DataOwnerPushStamp): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isAppContentWindow(window)) continue;
+    window.webContents.send(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL, snapshot, ownerStamp);
+  }
+  tapWindowBroadcast(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL, snapshot, ownerStamp);
 }
 
 function readSnapshot(): SyncedProjectOrderSnapshot {
   const stamp = getActiveDataOwnerPushStamp();
-  if (!stamp.dataOwnerId) return toSnapshot(false, DEFAULTS);
+  if (!stamp.dataOwnerId || isAppSessionBoundaryPending()) return toSnapshot(false, DEFAULTS);
   try {
     const store = currentStore();
     store.invalidateIfChanged();
     const state = store.readState();
     const authoritative = state.customizedKeys.includes('projectOrder')
       || state.customizedKeys.includes('manualProjectOrder');
-    return toSnapshot(authoritative, state.value);
+    return toSnapshot(authoritative, state.value, stamp);
   } catch (error) {
     log.warn('project order read failed', {
       error: error instanceof Error ? error.message : String(error),
@@ -107,21 +145,24 @@ function readSnapshot(): SyncedProjectOrderSnapshot {
 }
 
 function applySnapshot(raw: unknown): SyncedProjectOrderSnapshot {
-  const record = raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? raw as Record<string, unknown>
-    : {};
+  const request = parseApplyRequest(raw);
+  assertRequestedOwner(request);
+  const scopeKey = activeOwnerScopeKey();
+  const ownerStamp: DataOwnerPushStamp = {
+    dataOwnerId: request.dataOwnerId,
+    ownerGeneration: request.ownerGeneration,
+  };
   const next = normalizeSettings({
-    manualProjectOrder: record.manualProjectOrder,
-    projectOrder: record.projectOrder,
+    manualProjectOrder: request.manualProjectOrder,
+    projectOrder: request.projectOrder,
   });
   const store = currentStore();
   store.writePatch(next, { preserveDefaults: true });
-  const snapshot = toSnapshot(true, next);
-  const ownerStamp = getActiveDataOwnerPushStamp();
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!isAppContentWindow(window)) continue;
-    window.webContents.send(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL, snapshot, ownerStamp);
+  if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeKey) {
+    throwIpcError('PRECONDITION_FAILED', 'active account changed during project order mutation');
   }
+  const snapshot = toSnapshot(true, next, ownerStamp);
+  notifyChanged(snapshot, ownerStamp);
   return snapshot;
 }
 

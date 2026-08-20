@@ -142,7 +142,7 @@ import {
 import { sessionActivityMs } from './lib/dateSessionGrouping';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
-import { projectOrderWriteLedger } from '@cindy/maker-shared/project-order-sync';
+import { resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import {
   controllerManualOrderForDevice,
   projectOrderWriteScopeForSelection,
@@ -1733,41 +1733,20 @@ function ExpandedView({
       : scope.kind === 'host' && scope.deviceId
         ? remoteHostProjectOrders.get(scope.deviceId)
         : undefined;
-    if (projectOrderWriteLedger(scope, hostSnapshot) === 'viewer') {
-      return {
-        order: filter.manualProjectOrder,
-        projectOrder: filter.projectOrder,
-        sortBy: filter.sortBy,
-      };
-    }
-    if (scope.kind === 'host' && scope.deviceId === null) {
-      const local = localHostProjectOrder.snapshot;
-      if (local.authoritative && local.projectOrder === 'custom') {
-        return {
-          order: local.manualProjectOrder,
-          projectOrder: 'custom' as const,
-          sortBy: filter.sortBy,
-        };
-      }
-      return {
-        order: [],
-        projectOrder: 'activity' as const,
-        sortBy: filter.sortBy,
-      };
-    }
-    const remapped = scope.kind === 'host' && scope.deviceId
-      ? controllerManualOrderForDevice(scope.deviceId, remoteHostProjectOrders.get(scope.deviceId))
-      : null;
-    if (remapped) {
-      return {
-        order: remapped,
-        projectOrder: 'custom' as const,
-        sortBy: filter.sortBy,
-      };
-    }
+    const hostManual = scope.kind === 'host' && scope.deviceId === null
+      ? localHostProjectOrder.snapshot.manualProjectOrder
+      : scope.kind === 'host' && scope.deviceId
+        ? controllerManualOrderForDevice(scope.deviceId, hostSnapshot) ?? []
+        : [];
+    const displayed = resolveDisplayedProjectOrder(
+      scope,
+      hostSnapshot,
+      filter,
+      hostManual,
+    );
     return {
-      order: [],
-      projectOrder: 'activity' as const,
+      order: displayed.manualProjectOrder,
+      projectOrder: displayed.projectOrder,
       sortBy: filter.sortBy,
     };
   }, [

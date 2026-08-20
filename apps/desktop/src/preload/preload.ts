@@ -461,6 +461,7 @@ const fanOutSidebarPinnedOrderChanged = createIpcFanOut('sidebar-settings:pinned
 const fanOutSidebarHiddenProjectKeysChanged = createIpcFanOut(
   'sidebar-settings:hidden-project-keys-changed',
 );
+const fanOutSidebarProjectOrderChanged = createIpcFanOut(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL);
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut('maker:file-browser:event');
 const fanOutFileBrowserTransfer = createIpcFanOut('maker:file-browser:transfer');
@@ -4647,20 +4648,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       parseProjectOrderSnapshot(await ipcRenderer.invoke(SIDEBAR_GET_PROJECT_ORDER_CHANNEL)),
     applyProjectOrder: async (request: {
       manualProjectOrder: readonly string[];
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
       projectOrder: 'activity' | 'custom';
     }): Promise<SyncedProjectOrderSnapshot> =>
-      parseProjectOrderSnapshot(await ipcRenderer.invoke(SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, request)),
+      parseProjectOrderSnapshot(await ipcRenderer.invoke(SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, {
+        ...request.ownerStamp,
+        manualProjectOrder: request.manualProjectOrder,
+        projectOrder: request.projectOrder,
+      })),
     onProjectOrderChanged: (
-      cb: (snapshot: SyncedProjectOrderSnapshot) => void,
-    ): (() => void) => {
-      const listener = (_event: unknown, payload: unknown) => {
-        cb(parseProjectOrderSnapshot(payload));
-      };
-      ipcRenderer.on(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL, listener);
-      return () => {
-        ipcRenderer.removeListener(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL, listener);
-      };
-    },
+      cb: (
+        snapshot: SyncedProjectOrderSnapshot,
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ): (() => void) =>
+      fanOutSidebarProjectOrderChanged((payload, ownerStamp) => {
+        if (!isDataOwnerPushStamp(ownerStamp)) return;
+        cb(parseProjectOrderSnapshot({ ...parseProjectOrderSnapshot(payload), ownerStamp }), ownerStamp);
+      }),
   },
 
   remotePrecreatedWorktreeLedger: {

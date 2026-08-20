@@ -71,6 +71,10 @@ import {
   normalizeDeviceLinkTopics,
   topicsMissingRemoteAck,
 } from '@/device-link/topicRegistry';
+import {
+  applyRemoteProjectOrderPush,
+  SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
+} from '@/session/remoteProjectOrder';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import {
@@ -1157,6 +1161,10 @@ export function routeFrame(env: Envelope, handlers: {
   }
   if (push.channel === 'maker:schedule:event') {
     remoteScheduleEventStore.apply(env.src, push.payload);
+  }
+  if (push.channel === SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL) {
+    applyRemoteProjectOrderPush(env.src, push.payload);
+    return;
   }
   if (push.channel === FILE_BROWSER_EVENT_CHANNEL) {
     // 文件树变更是 workdir 域事件,与会话 store 无关,单独分发给文件浏览页。

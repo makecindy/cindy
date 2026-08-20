@@ -4,7 +4,9 @@ import {
   remapHostOrderToController,
   SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
   SIDEBAR_GET_PROJECT_ORDER_CHANNEL,
+  SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
   UNAVAILABLE_PROJECT_ORDER_SNAPSHOT,
+  type SyncedProjectOrderOwnerStamp,
   type SyncedProjectOrderSnapshot,
 } from '@cindy/maker-shared/project-order-sync';
 
@@ -26,13 +28,36 @@ export async function fetchHostProjectOrder(
   }
 }
 
+type RemoteProjectOrderListener = (deviceId: string, snapshot: SyncedProjectOrderSnapshot) => void;
+const remoteProjectOrderListeners = new Set<RemoteProjectOrderListener>();
+
+export function subscribeRemoteProjectOrderChanged(listener: RemoteProjectOrderListener): () => void {
+  remoteProjectOrderListeners.add(listener);
+  return () => {
+    remoteProjectOrderListeners.delete(listener);
+  };
+}
+
+export function applyRemoteProjectOrderPush(deviceId: string, payload: unknown): void {
+  const snapshot = parseSyncedProjectOrderSnapshot(payload);
+  for (const listener of remoteProjectOrderListeners) listener(deviceId, snapshot);
+}
+
+export { SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL };
+
 export async function applyHostProjectOrder(
   invoke: <T>(deviceId: string, channel: string, args: unknown[]) => Promise<T>,
   deviceId: string,
-  snapshot: { manualProjectOrder: readonly string[]; projectOrder: 'activity' | 'custom' },
+  snapshot: {
+    manualProjectOrder: readonly string[];
+    ownerStamp?: SyncedProjectOrderOwnerStamp;
+    projectOrder: 'activity' | 'custom';
+  },
 ): Promise<SyncedProjectOrderSnapshot | null> {
+  if (!snapshot.ownerStamp) return null;
   try {
     const raw = await invoke<unknown>(deviceId, SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, [{
+      ...snapshot.ownerStamp,
       manualProjectOrder: remapControllerOrderToHost(deviceId, snapshot.manualProjectOrder),
       projectOrder: snapshot.projectOrder,
     }]);

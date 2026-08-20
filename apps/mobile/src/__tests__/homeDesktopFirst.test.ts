@@ -100,6 +100,7 @@ describe('mobile home desktop-first surface', () => {
     expect(headerGlass).toContain('from \'expo-glass-effect\'');
     expect(headerGlass).toContain('glassEffectStyle="regular"');
     expect(source).toContain('<HomeChromeFrost visible={headerFrosted} />');
+    expect(source).toContain('onProjectDragStart={displayedProjectOrder === \'custom\'');
     expect(source).toContain('<HomeGlassMenuPanel');
     expect(source).toContain('<HomeMenuScrim');
     const glassMenu = readSource('src/session/HomeGlassMenuPanel.tsx');

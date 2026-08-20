@@ -39,7 +39,10 @@ import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
 import { MACHINE_ALL } from '@/features/device-link/selectedMachineStore';
-import { projectOrderWriteLedger } from '@cindy/maker-shared/project-order-sync';
+import {
+  projectOrderWriteLedger,
+  resolveDisplayedProjectOrder,
+} from '@cindy/maker-shared/project-order-sync';
 import {
   controllerManualOrderForDevice,
   projectOrderWriteScopeForSelection,
@@ -280,7 +283,23 @@ export function ProjectsSection({
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
   // 折叠溢出且未点「显示全部」时禁用，避免只重排可见前缀。
-  const customProjectOrder = filter.groupBy === 'project' && filter.projectOrder === 'custom';
+  const projectOrderScope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+  const hostSnapshotForDisplay = projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+    ? localHostProjectOrder.snapshot
+    : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+      ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
+      : undefined;
+  const displayedProjectOrder = resolveDisplayedProjectOrder(
+    projectOrderScope,
+    hostSnapshotForDisplay,
+    filter,
+    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+      ? localHostProjectOrder.snapshot.manualProjectOrder
+      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+        ? controllerManualOrderForDevice(projectOrderScope.deviceId, hostSnapshotForDisplay) ?? []
+        : [],
+  );
+  const customProjectOrder = filter.groupBy === 'project' && displayedProjectOrder.projectOrder === 'custom';
   const projectDragEnabled = customProjectOrder;
   const projectKeysForOrderBaseline = allProjectKeysForOrder;
   // 段级收起已随「全部任务 = 范围下拉」取消(2026-08-13 用户定稿):标题的点击
@@ -471,8 +490,8 @@ export function ProjectsSection({
         groupBy: filter.groupBy,
         groupDialogue: filter.groupDialogue,
         sortBy: filter.sortBy,
-        projectOrder: filter.projectOrder,
-        manualProjectOrder: filter.manualProjectOrder,
+        projectOrder: displayedProjectOrder.projectOrder,
+        manualProjectOrder: displayedProjectOrder.manualProjectOrder,
         priorityContext,
         notifications,
         scheduleSessionIndex,
@@ -486,8 +505,7 @@ export function ProjectsSection({
       filter.groupBy,
       filter.groupDialogue,
       filter.sortBy,
-      filter.projectOrder,
-      filter.manualProjectOrder,
+      displayedProjectOrder,
       priorityContext,
       notifications,
       scheduleSessionIndex,

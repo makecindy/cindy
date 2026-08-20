@@ -8,6 +8,7 @@ import {
   remapControllerOrderToHost,
   remapHostOrderToController,
   remapHostProjectKeyToController,
+  resolveDisplayedProjectOrder,
   resolveProjectOrderWriteScope,
   shouldPersistViewerSortAfterHostActivity,
 } from '../projectOrderSync';
@@ -64,6 +65,43 @@ describe('resolveProjectOrderWriteScope', () => {
   it('routes a single machine to that host', () => {
     expect(resolveProjectOrderWriteScope(['local'], 'local')).toEqual({ kind: 'host', deviceId: null });
     expect(resolveProjectOrderWriteScope(['dev-1'], 'local')).toEqual({ kind: 'host', deviceId: 'dev-1' });
+  });
+});
+
+describe('resolveDisplayedProjectOrder', () => {
+  const viewer = { projectOrder: 'activity' as const, manualProjectOrder: ['device:a:/x'] };
+  const hostCustom = {
+    authoritative: true,
+    available: true,
+    manualProjectOrder: ['local:/a'],
+    projectOrder: 'custom' as const,
+  };
+
+  it('uses the viewer mixed list for ALL / unavailable hosts', () => {
+    expect(resolveDisplayedProjectOrder(
+      { kind: 'viewer' },
+      hostCustom,
+      viewer,
+      ['device:a:/x'],
+    )).toEqual(viewer);
+    expect(resolveDisplayedProjectOrder(
+      { kind: 'host', deviceId: 'dev-1' },
+      { ...hostCustom, available: false },
+      viewer,
+      ['device:dev-1:/a'],
+    )).toEqual(viewer);
+  });
+
+  it('uses the remapped host custom list for a single reachable machine', () => {
+    expect(resolveDisplayedProjectOrder(
+      { kind: 'host', deviceId: 'dev-1' },
+      hostCustom,
+      viewer,
+      ['device:dev-1:/a'],
+    )).toEqual({
+      projectOrder: 'custom',
+      manualProjectOrder: ['device:dev-1:/a'],
+    });
   });
 });
 

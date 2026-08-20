@@ -1,11 +1,18 @@
 export type SyncedProjectOrderMode = 'activity' | 'custom';
 
+export interface SyncedProjectOrderOwnerStamp {
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+}
+
 export interface SyncedProjectOrderSnapshot {
   authoritative: boolean;
   /** false = 被控端没有这个接口,控制端应回退到自己的混排。缺省视为 true。 */
   available: boolean;
   manualProjectOrder: string[];
   projectOrder: SyncedProjectOrderMode;
+  /** 被控端当前 data owner。APPLY 必须原样带回;缺省表示旧主机/不可用快照。 */
+  ownerStamp?: SyncedProjectOrderOwnerStamp;
 }
 
 export const UNAVAILABLE_PROJECT_ORDER_SNAPSHOT: SyncedProjectOrderSnapshot = {
@@ -17,6 +24,7 @@ export const UNAVAILABLE_PROJECT_ORDER_SNAPSHOT: SyncedProjectOrderSnapshot = {
 
 export const SIDEBAR_GET_PROJECT_ORDER_CHANNEL = 'sidebar-settings:get-project-order';
 export const SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL = 'sidebar-settings:apply-project-order';
+export const SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL = 'sidebar-settings:project-order-changed';
 
 const LOCAL_PREFIX = 'local:';
 const DEVICE_PREFIX = 'device:';
@@ -40,16 +48,60 @@ export function normalizeSyncedProjectOrderList(value: unknown): string[] {
   return next;
 }
 
+export function parseSyncedProjectOrderOwnerStamp(
+  value: unknown,
+): SyncedProjectOrderOwnerStamp | undefined {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  if (!record) return undefined;
+  const dataOwnerId = record.dataOwnerId;
+  const ownerGeneration = record.ownerGeneration;
+  if (!(dataOwnerId === null || typeof dataOwnerId === 'string')) return undefined;
+  if (
+    typeof ownerGeneration !== 'number'
+    || !Number.isInteger(ownerGeneration)
+    || ownerGeneration < 0
+  ) {
+    return undefined;
+  }
+  return { dataOwnerId, ownerGeneration };
+}
+
 export function parseSyncedProjectOrderSnapshot(value: unknown): SyncedProjectOrderSnapshot {
   const record = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+  const ownerStamp = parseSyncedProjectOrderOwnerStamp(record.ownerStamp)
+    ?? parseSyncedProjectOrderOwnerStamp(record);
   return {
     authoritative: record.authoritative === true,
     available: record.available !== false,
     manualProjectOrder: hostLocalProjectKeysOnly(record.manualProjectOrder),
     projectOrder: parseSyncedProjectOrderMode(record.projectOrder),
+    ...(ownerStamp ? { ownerStamp } : {}),
   };
+}
+
+export function resolveDisplayedProjectOrder(
+  scope: ProjectOrderWriteScope,
+  hostSnapshot: SyncedProjectOrderSnapshot | undefined,
+  viewer: { projectOrder: SyncedProjectOrderMode; manualProjectOrder: readonly string[] },
+  hostManualProjectOrder: readonly string[],
+): { projectOrder: SyncedProjectOrderMode; manualProjectOrder: readonly string[] } {
+  if (projectOrderWriteLedger(scope, hostSnapshot) === 'viewer') {
+    return {
+      projectOrder: viewer.projectOrder,
+      manualProjectOrder: [...viewer.manualProjectOrder],
+    };
+  }
+  if (hostSnapshot?.authoritative && hostSnapshot.projectOrder === 'custom') {
+    return {
+      projectOrder: 'custom',
+      manualProjectOrder: [...hostManualProjectOrder],
+    };
+  }
+  return { projectOrder: 'activity', manualProjectOrder: [] };
 }
 
 export function isHostProjectOrderReachable(
