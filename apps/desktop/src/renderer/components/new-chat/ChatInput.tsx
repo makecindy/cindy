@@ -1103,6 +1103,10 @@ export function ChatInput({
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
   // 避免在用户放好了附件/评论/语音稿但正文为空时,仍发起付费的 predictNextPrompt 调用。
   const voiceDraftTextRef = useRef('');
+  // voiceDraftTextRef 是全局语音状态的镜像,切换任务时仍可能留着源任务的稿子。
+  // 判断"这段稿子属于当前输入框"要走与 decoration 同一个归属判据
+  // (voiceLocksCurrentComposer),该值在下方算出后回填这里供稳定闭包读取。
+  const voiceBusyOnCurrentComposerRef = useRef(false);
   const composerFullyEmptyRef = useRef<() => boolean>(() => true);
   composerFullyEmptyRef.current = () => {
     const ed = editorRef.current;
@@ -1476,11 +1480,13 @@ export function ChatInput({
   // 多行草稿判定的 ChatInput 侧合并:doc 之外还有两类"可见但不在 doc 里"的内容——
   // 语音听写草稿(VoiceInputDraftDecoration)与浏览器评论(formatBrowserCommentsForSend
   // 只要有评论就展开成多行块)。漏掉任何一类,multiline 挡下普通 Enter 都会误发。
+  // 语音项必须与 decoration 一样限定归属当前输入框,否则源任务还在听写时切走,
+  // 目标输入框会拿着别人的多行稿子把单行草稿判成多行。
   // keydown 稳定闭包读 ref,render 侧同样经此取值。
   const isComposerDraftMultiline = useCallback(
     (doc: Parameters<typeof isMultilineDraftDoc>[0] | null | undefined): boolean =>
       (doc ? isMultilineDraftDoc(doc) : false) ||
-      voiceDraftTextRef.current.includes('\n') ||
+      (voiceBusyOnCurrentComposerRef.current && voiceDraftTextRef.current.includes('\n')) ||
       browserCommentsRef.current.length > 0,
     [],
   );
@@ -3082,6 +3088,8 @@ export function ChatInput({
     ownerStorageKey: voiceOwnerStorageKeyRef.current,
     currentStorageKey: storageKeyForDraftRef.current,
   });
+  // 回填供 isComposerDraftMultiline 的稳定闭包判断语音稿归属(见该 helper 注释)。
+  voiceBusyOnCurrentComposerRef.current = voiceBusyOnCurrentComposer;
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
   composerMutationLockedRef.current = composerMutationLocked;
   useEffect(() => {

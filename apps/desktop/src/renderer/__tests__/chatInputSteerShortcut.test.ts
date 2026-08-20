@@ -173,7 +173,14 @@ describe('ChatInput steer shortcut contract', () => {
       'multilineDraft: isComposerDraftMultiline(editorRef.current?.view.state.doc)',
     );
     expect(chatInputSource).toContain('isComposerDraftMultiline(ed.state.doc)');
-    expect(chatInputSource).toContain("voiceDraftTextRef.current.includes('\\n')");
+    // 语音稿必须限定归属当前输入框(与 decoration 同一判据):源任务还在听写时
+    // 切走,目标输入框不能拿别人的多行稿子把自己的单行草稿判成多行。
+    expect(chatInputSource).toContain(
+      "(voiceBusyOnCurrentComposerRef.current && voiceDraftTextRef.current.includes('\\n'))",
+    );
+    expect(chatInputSource).toContain(
+      'voiceBusyOnCurrentComposerRef.current = voiceBusyOnCurrentComposer;',
+    );
     expect(chatInputSource).toContain('browserCommentsRef.current.length > 0');
     expect(pendingQueuePanelSource).toContain('isPendingQueueSteerShortcut');
     expect(pendingQueuePanelSource).toContain('void onSteer(entry.clientId);');
