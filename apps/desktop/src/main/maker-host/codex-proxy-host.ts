@@ -2167,10 +2167,16 @@ export function createModelRoutingTransform(
     const sessionId = sessionIdFromHeaders(ctx.headers);
     if (isCollabSpawnRequest(ctx.headers)) {
       if (!sessionId) return unresolvedCollabSpawnRouteDecision();
-      return getSessionSearchModeEnabled(sessionId).then((enabled) => {
-        if (enabled) return searchModeCollabSpawnDecision();
-        return continueModelRouting();
-      });
+      return getSessionSearchModeEnabled(sessionId).then(
+        (enabled) => (enabled ? searchModeCollabSpawnDecision() : continueModelRouting()),
+        (err) => {
+          log.warn('search mode lookup failed; blocking collab spawn', {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return searchModeCollabSpawnDecision();
+        },
+      );
     }
     return continueModelRouting();
 

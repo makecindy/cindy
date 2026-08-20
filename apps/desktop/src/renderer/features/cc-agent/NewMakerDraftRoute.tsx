@@ -3298,7 +3298,8 @@ export function NewMakerDraftRoute() {
         );
         return false;
       }
-      const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+      const shouldEnableCollab =
+        effectiveCollab.enabled && collabPolicyEligible && policyEnabled && !effectiveSearchMode;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -4296,7 +4297,8 @@ export function NewMakerDraftRoute() {
             throw new Error(t('newChat.collaboration.disabledHint'));
           }
         }
-        const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+        const shouldEnableCollab =
+          effectiveCollab.enabled && collabPolicyEligible && policyEnabled && !effectiveSearchMode;
         // 同 handleSend:remoteDraftState 未就绪时不得放行,否则提交 capability 兜底值而非该设备的
         // 草稿值(缓存已热时另两个 loading 会立刻为 false,拦不住)。
         if (isDeviceLinkDraft && remoteModelListStatus === 'error') {

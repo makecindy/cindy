@@ -840,7 +840,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withPlanReconcile;
       const searchModeOn =
         isOrdinaryUserTurn &&
-        shouldApplySearchMode(await deps.isSearchModeEnabled?.(sessionId).catch(() => false));
+        shouldApplySearchMode(await deps.isSearchModeEnabled?.(sessionId).catch(() => true));
       const outgoing = searchModeOn
         ? prependNoteToWireUserMessage(withMobile as HandoffWireMessage, SEARCH_MODE_PROMPT)
         : withMobile;

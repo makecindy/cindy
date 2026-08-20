@@ -670,11 +670,11 @@ export async function getSessionSearchModeEnabled(id: string): Promise<boolean> 
       .limit(1);
     return row?.searchModeEnabled === true;
   } catch (err) {
-    log.warn('getSessionSearchModeEnabled failed', {
+    log.warn('getSessionSearchModeEnabled failed; treating search mode as on', {
       sessionId: id,
       err: err instanceof Error ? err.message : String(err),
     });
-    return false;
+    return true;
   }
 }
 

@@ -31,11 +31,11 @@ export function createSearchModeHooks(
     try {
       return await deps.isSearchModeEnabled(sessionId);
     } catch (err) {
-      log.warn('search mode lookup failed; leaving tools unchanged', {
+      log.warn('search mode lookup failed; denying ritual tools', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return false;
+      return true;
     }
   };
 

@@ -36,6 +36,33 @@ describe('createSearchModeHooks', () => {
     });
   });
 
+  it('denies ritual tools when search mode lookup fails', async () => {
+    const hooks = createSearchModeHooks(
+      {
+        resolveCindySessionId: () => 'sess-1',
+        isSearchModeEnabled: async () => {
+          throw new Error('db unavailable');
+        },
+      },
+      logger,
+    );
+    const deny = hooks.PreToolUse?.[0]?.hooks[0];
+    const result = await deny?.(
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Task',
+        tool_input: {},
+        tool_use_id: 't1',
+        session_id: 'sdk-1',
+      } as never,
+      't1',
+      { signal: new AbortController().signal } as never,
+    );
+    expect(result).toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+  });
+
   it('leaves ritual tools alone when search mode is off', async () => {
     const hooks = createSearchModeHooks(
       {
