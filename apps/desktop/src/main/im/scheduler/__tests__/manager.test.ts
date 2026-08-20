@@ -1769,6 +1769,85 @@ describe('dormant scheduler manager', () => {
     });
   });
 
+  it('rejects a conflicting delayed advertisement after confirming the same retry nonce', async () => {
+    vi.useFakeTimers();
+    const harness = createTransport();
+    let round = 0;
+    const manager = new ImSchedulerManager({
+      transport: harness.transport,
+      getLocalChannel: () => ({ channel: 'discord', identity }),
+      nonceFactory: () => `round-${String(++round).padStart(14, '0')}`,
+      discoveryRetryDelayMs: 100,
+      maxDiscoveryRetries: 2,
+    });
+    manager.start();
+    harness.emit({
+      type: 'snapshot',
+      snapshot: { selfDeviceId: 'z', peers: [{ deviceId: 'a', platform: 'win32' }], observedAt: 1 },
+    });
+    const initialProbe = harness.pushes.find(
+      (push) => push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+    )?.payload as { nonce: string };
+
+    await vi.advanceTimersByTimeAsync(100);
+    const retryProbe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce: string };
+    expect(retryProbe.nonce).toBe(initialProbe.nonce);
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 3,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: initialProbe.nonce,
+      },
+    });
+    expect(manager.getDecision().reason).toBe('peer-won');
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 2,
+        channels: [],
+        inReplyTo: initialProbe.nonce,
+      },
+    });
+    expect(manager.getDecision().reason).toBe('incomplete-peer-view');
+
+    const refreshedProbe = [...harness.pushes]
+      .reverse()
+      .find(
+        (push) =>
+          push.peerDeviceId === 'a' && (push.payload as { kind?: unknown }).kind === 'probe',
+      )?.payload as { nonce: string };
+    expect(refreshedProbe.nonce).not.toBe(initialProbe.nonce);
+
+    harness.emit({
+      type: 'push',
+      sourceDeviceId: 'a',
+      payload: {
+        kind: 'advertisement',
+        sentAt: 4,
+        channels: [{ channel: 'discord', identity }],
+        inReplyTo: refreshedProbe.nonce,
+      },
+    });
+    expect(manager.getDecision()).toEqual({
+      state: 'standby',
+      channel: { channel: 'discord', identity },
+      reason: 'peer-won',
+    });
+    manager.stop();
+  });
+
   it('rotates discovery when contradictory peer probes arrive out of order', () => {
     const harness = createTransport();
     let round = 0;

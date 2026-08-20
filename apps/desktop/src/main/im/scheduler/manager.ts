@@ -324,6 +324,17 @@ export class ImSchedulerManager {
       this.reconcile();
       return;
     }
+    if (this.confirmedPeers.has(sourceDeviceId)) {
+      const confirmedChannels = this.peers.get(sourceDeviceId)?.frame.channels ?? [];
+      if (!sameSchedulerChannels(confirmedChannels, payload.channels)) {
+        // Retries reuse a nonce, so differently bound advertisements for that
+        // nonce have no trustworthy ordering. Keep neither and require the
+        // peer to confirm its current binding in a fresh round.
+        this.beginDiscoveryRound();
+        this.reconcile();
+        return;
+      }
+    }
     this.confirmedPeers.add(sourceDeviceId);
     this.peers.set(sourceDeviceId, { sentAt: payload.sentAt, frame: payload });
     this.pendingPeerProbeChannels.delete(sourceDeviceId);
