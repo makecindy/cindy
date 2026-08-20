@@ -57,6 +57,10 @@ function createDb(): Database.Database {
     CREATE INDEX right_sidebar_tabs_session_idx ON right_sidebar_tabs (session_id, position);
     CREATE UNIQUE INDEX right_sidebar_tabs_subagents_singleton_idx
       ON right_sidebar_tabs (session_id) WHERE kind = 'subagents';
+    CREATE UNIQUE INDEX right_sidebar_tabs_bot_delegations_singleton_idx
+      ON right_sidebar_tabs (session_id) WHERE kind = 'bot-delegations';
+    CREATE UNIQUE INDEX right_sidebar_tabs_bot_artifacts_singleton_idx
+      ON right_sidebar_tabs (session_id) WHERE kind = 'bot-artifacts';
   `);
   sqlite.prepare(`INSERT INTO sessions (id) VALUES (?)`).run('s1');
   sqlite.prepare(`INSERT INTO sessions (id) VALUES (?)`).run('s2');
@@ -315,6 +319,21 @@ describe('rightSidebarTabs IPC', () => {
       expect(listed.tabs).toHaveLength(1);
       expect(listed.tabs[0]).toMatchObject({ kind: 'subagents', isActive: false });
       expect(listed.activeTabId).toBeNull();
+    });
+
+    it('accepts the Bot deliverables tab as a singleton kind', async () => {
+      const created = await invoke<{ tab: ListResp['tabs'][number]; created: boolean }>(
+        'local-db:right-sidebar-tabs:ensure-singleton',
+        { sessionId: 's1', kind: 'bot-artifacts', state: { filter: 'all' } },
+      );
+      expect(created.created).toBe(true);
+      expect(created.tab).toMatchObject({ kind: 'bot-artifacts', isActive: false });
+      const again = await invoke<{ tab: ListResp['tabs'][number]; created: boolean }>(
+        'local-db:right-sidebar-tabs:ensure-singleton',
+        { sessionId: 's1', kind: 'bot-artifacts', state: { filter: 'image' } },
+      );
+      expect(again.created).toBe(false);
+      expect(again.tab.id).toBe(created.tab.id);
     });
 
     it('fails closed for unknown sessions and non-singleton kinds', async () => {

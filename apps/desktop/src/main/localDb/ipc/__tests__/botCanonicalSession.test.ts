@@ -2489,8 +2489,8 @@ describe('Bot canonical Session lifecycle', () => {
           WHERE session_id = 'session-2' ORDER BY created_at, rowid`).all(),
       ).toEqual([
         {
-          role: 'user',
-          content: expect.stringContaining('Research the release compatibility matrix.'),
+          role: 'assistant',
+          content: '',
         },
       ]);
       await invoke('local-db:bots:create-canonical-session', {
@@ -2548,12 +2548,12 @@ describe('Bot canonical Session lifecycle', () => {
           WHERE session_id = 'session-2' ORDER BY created_at, rowid`).all(),
       ).toEqual([
         {
-          role: 'user',
-          content: expect.stringContaining('Research the release compatibility matrix.'),
+          role: 'assistant',
+          content: '',
         },
         {
           role: 'assistant',
-          content: expect.stringContaining('All supported clients remain compatible.'),
+          content: '',
         },
       ]);
       expect(
@@ -2627,12 +2627,12 @@ describe('Bot canonical Session lifecycle', () => {
           WHERE session_id = 'session-2' ORDER BY created_at, rowid`).all(),
       ).toEqual([
         {
-          role: 'user',
-          content: expect.stringContaining('Investigate a deliberately failing task.'),
+          role: 'assistant',
+          content: '',
         },
         {
           role: 'assistant',
-          content: expect.stringContaining('The dependency was unavailable.'),
+          content: '',
         },
       ]);
     } finally {
@@ -2987,11 +2987,11 @@ describe('Bot canonical Session lifecycle', () => {
       );
       expect(abortSession).toHaveBeenCalledWith('session-3');
       expect(
-        h.sqlite!.prepare(`SELECT content FROM messages
-          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+        h.sqlite!.prepare(`SELECT role, content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).get(
           'bot-delegation-target-result:delegation-parent-renew',
         ),
-      ).toContain('已取消');
+      ).toEqual({ role: 'assistant', content: '' });
     } finally {
       service.dispose();
     }
@@ -3050,11 +3050,11 @@ describe('Bot canonical Session lifecycle', () => {
           .get('delegation-1'),
       ).toBe('cancelled');
       expect(
-        h.sqlite!.prepare(`SELECT content FROM messages
-          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+        h.sqlite!.prepare(`SELECT role, content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).get(
           'bot-delegation-target-result:delegation-1',
         ),
-      ).toContain('已取消');
+      ).toEqual({ role: 'assistant', content: '' });
     } finally {
       service.dispose();
     }
@@ -4104,11 +4104,11 @@ describe('Bot canonical Session lifecycle', () => {
         }),
       );
       expect(
-        h.sqlite!.prepare(`SELECT content FROM messages
-          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+        h.sqlite!.prepare(`SELECT role, content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).get(
           'bot-delegation-target-result:delegation-restore',
         ),
-      ).toContain('Recovered result.');
+      ).toEqual({ role: 'assistant', content: '' });
       await restored.restore();
       expect(
         h.sqlite!.prepare(`SELECT count(*) FROM messages
@@ -4252,11 +4252,11 @@ describe('Bot canonical Session lifecycle', () => {
           .get('delegation-expired-restart'),
       ).toBe('timed-out');
       expect(
-        h.sqlite!.prepare(`SELECT content FROM messages
-          WHERE session_id = 'session-2' AND client_id = ?`).pluck().get(
+        h.sqlite!.prepare(`SELECT role, content FROM messages
+          WHERE session_id = 'session-2' AND client_id = ?`).get(
           'bot-delegation-target-result:delegation-expired-restart',
         ),
-      ).toContain('已超时');
+      ).toEqual({ role: 'assistant', content: '' });
     } finally {
       restored.dispose();
     }
@@ -5307,12 +5307,15 @@ describe('Bot teammate collaboration', () => {
         `bot-delegation-request:${firstId}`,
         `bot-delegation-request:${secondId}`,
       ]);
-      // 第二棒的目标读到的是第一棒的结论，不是原始需求。
-      const secondRequest = h.sqlite!
-        .prepare('SELECT content FROM messages WHERE client_id = ?')
-        .pluck()
-        .get(`bot-delegation-target-request:${secondId}`) as string;
-      expect(secondRequest).toContain('先对齐、再做卡、最后接插话');
+      // 第二棒的目标读到的是第一棒的结论，不是原始需求。任务全文只进子任务去程,
+      // 目标主任务里只留协作卡锚点,不再复读一遍。
+      expect(
+        h.sqlite!.prepare('SELECT objective FROM bot_delegations WHERE id = ?').pluck().get(secondId),
+      ).toContain('先对齐、再做卡、最后接插话');
+      expect(
+        h.sqlite!.prepare('SELECT role, content FROM messages WHERE client_id = ?')
+          .get(`bot-delegation-target-request:${secondId}`),
+      ).toEqual({ role: 'assistant', content: '' });
 
       const secondChild = (design as { childSessionId: string }).childSessionId;
       clock = 40_000;
@@ -5645,12 +5648,26 @@ describe('Bot delegation end-to-end runtime', () => {
       }
     };
 
+    const settleChild = async (sessionId: string, reply: string): Promise<void> => {
+      writeMessage(sessionId, `assistant-${++seq}`, 'assistant', reply);
+      h.sqlite!.prepare(
+        `UPDATE sessions SET total_token_usage = total_token_usage + 100,
+           last_turn_ended_at = ? WHERE id = ?`,
+      ).run(currentTime, sessionId);
+      await delegation.settleSession({
+        childSessionId: sessionId,
+        outcome: 'done',
+        resultText: reply,
+      });
+    };
+
     return {
       delegation,
       outbox,
       started,
       changed,
       runPendingTurns,
+      settleChild,
       dispose: () => {
         delegation.dispose();
         outbox.dispose();
@@ -5738,6 +5755,102 @@ describe('Bot delegation end-to-end runtime', () => {
         delegationId: delegated.ok ? delegated.delegationId : '',
         status: 'completed',
       });
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('runs A→B→C and wakes every requester with the real result', async () => {
+    await seedPair();
+    await invoke('local-db:bots:create', {
+      id: 'bot-c',
+      name: '第三棒',
+      capabilities: {
+        harness: 'pi',
+        model: 'grok-4.5',
+        permissions: 'trusted',
+        providerId: PROVIDER,
+        effort: 'high',
+        fastMode: true,
+      },
+    });
+    const runtime = createDelegationRuntime();
+    try {
+      const first = await runtime.delegation.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-b',
+        objective: '先查兼容矩阵，再据此出一版结论。',
+        maxDepth: 2,
+      });
+      expect(first).toMatchObject({ ok: true, status: 'running' });
+      const firstChild = first.ok ? first.childSessionId : '';
+
+      const nested = await runtime.delegation.delegateToBot({
+        callerSessionId: firstChild,
+        targetBotId: 'bot-c',
+        objective: '查三个版本的兼容矩阵。',
+      });
+      expect(nested).toMatchObject({ ok: true, status: 'running', depth: 2 });
+      const nestedChild = nested.ok ? nested.childSessionId : '';
+
+      await runtime.settleChild(nestedChild, '矩阵查完了：三个版本都兼容。');
+      await runtime.outbox.drain();
+      const nestedCompletion = `bot-delegation-completion:${nested.ok ? nested.delegationId : ''}`;
+      expect(
+        h.sqlite!.prepare('SELECT role, content FROM messages WHERE session_id = ? AND client_id = ?')
+          .get(firstChild, nestedCompletion),
+      ).toEqual({
+        role: 'user',
+        content: expect.stringContaining('矩阵查完了：三个版本都兼容。'),
+      });
+      expect(runtime.started.some((turn) => turn.sessionId === firstChild)).toBe(true);
+
+      await runtime.settleChild(firstChild, '策划结论：三个版本都兼容，可以出稿。');
+      await runtime.outbox.drain();
+      const firstCompletion = `bot-delegation-completion:${first.ok ? first.delegationId : ''}`;
+      expect(
+        h.sqlite!.prepare('SELECT role, content FROM messages WHERE session_id = ? AND client_id = ?')
+          .get('session-1', firstCompletion),
+      ).toEqual({
+        role: 'user',
+        content: expect.stringContaining('策划结论：三个版本都兼容，可以出稿。'),
+      });
+      expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('recovers the child answer from the transcript when done.result is empty', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime();
+    try {
+      const delegated = await runtime.delegation.delegateToBot({
+        callerSessionId: 'session-1',
+        targetBotId: 'bot-b',
+        objective: '查一下版本兼容矩阵。',
+      });
+      const childSessionId = delegated.ok ? delegated.childSessionId : '';
+      h.sqlite!.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES (?, ?, ?, 'assistant', ?, ?)`,
+      ).run('ans-1', 'assistant-final', childSessionId, '三个版本都兼容。', 20_000);
+      await runtime.delegation.settleSession({
+        childSessionId,
+        outcome: 'done',
+        resultText: '',
+      });
+      await runtime.outbox.drain();
+      expect(
+        h.sqlite!.prepare('SELECT result_summary FROM bot_delegations WHERE id = ?').pluck()
+          .get(delegated.ok ? delegated.delegationId : ''),
+      ).toBe('三个版本都兼容。');
+      expect(
+        h.sqlite!.prepare('SELECT content FROM messages WHERE session_id = ? AND client_id = ?')
+          .pluck()
+          .get('session-1', `bot-delegation-completion:${delegated.ok ? delegated.delegationId : ''}`),
+      ).toContain('三个版本都兼容。');
+      expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
     } finally {
       runtime.dispose();
     }

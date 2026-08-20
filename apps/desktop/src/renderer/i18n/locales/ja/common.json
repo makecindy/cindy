@@ -5086,6 +5086,12 @@
         "eyebrow": "右サイドバー",
         "title": "パネルを開く",
         "desc": "ファイル、レビュー、リソース使用量、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
+        "botTitle": "成果物と相手の協同",
+        "botDesc": "仲間の会話では成果物ライブラリと相手の協同が最初に開きます。レビューやターミナルは必要なときだけ足してください。",
+        "openArtifacts": "成果物を開く",
+        "artifactsSub": "相手が渡したもの",
+        "openDelegations": "相手の協同を開く",
+        "delegationsSub": "委譲と返答",
         "openFile": "ファイルを開く",
         "fileSub": "Files",
         "openReview": "レビューを開く",
@@ -6756,6 +6762,7 @@
     },
     "collab": {
       "joined": "{{name}} が会話に加わりました",
+      "inboundJoined": "{{name}} から仕事が届きました",
       "guestTag": "ゲスト",
       "nudge": "催促する",
       "nudgeSend": "送信",
@@ -6764,6 +6771,7 @@
       "interjected": "{{name}} に催促しました",
       "stop": "停止",
       "openTask": "{{name}} の会話を見る",
+      "watchWork": "作業の様子を見る",
       "actionFailed": "送信できませんでした。もう一度お試しください。",
       "retrying": "まだ開始できていません。再試行中…",
       "status": {
@@ -6793,6 +6801,7 @@
     "artifacts": {
       "open": "開く",
       "openLibrary": "成果物ライブラリを開く",
+      "openFailed": "成果物を開けませんでした。もう一度お試しください。",
       "reveal": "ライブラリで表示",
       "retry": "再試行",
       "subtitle": "このメンバーが作ったもの",

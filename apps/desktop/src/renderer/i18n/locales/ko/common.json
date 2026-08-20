@@ -5086,6 +5086,12 @@
         "eyebrow": "오른쪽 사이드바",
         "title": "패널 시작하기",
         "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 리소스 사용량, 내장 브라우저, 터미널을 여기에 여세요.",
+        "botTitle": "산출물과 상대의 협업",
+        "botDesc": "동료 대화는 산출물 라이브러리와 상대의 협업이 기본입니다. 리뷰와 터미널은 필요할 때 더하세요.",
+        "openArtifacts": "산출물 열기",
+        "artifactsSub": "상대가 넘긴 것",
+        "openDelegations": "상대의 협업 열기",
+        "delegationsSub": "위임과 회신",
         "openFile": "파일 열기",
         "fileSub": "Files",
         "openReview": "리뷰 열기",
@@ -6756,6 +6762,7 @@
     },
     "collab": {
       "joined": "{{name}}님이 대화에 참여했습니다",
+      "inboundJoined": "{{name}}님이 이 일을 맡겼습니다",
       "guestTag": "게스트",
       "nudge": "재촉하기",
       "nudgeSend": "보내기",
@@ -6764,6 +6771,7 @@
       "interjected": "{{name}}을(를) 재촉했습니다",
       "stop": "중지",
       "openTask": "{{name}}의 대화 보기",
+      "watchWork": "작업 과정 보기",
       "actionFailed": "보내지 못했습니다. 다시 시도해 주세요.",
       "retrying": "아직 시작하지 못했습니다. 다시 시도 중…",
       "status": {
@@ -6793,6 +6801,7 @@
     "artifacts": {
       "open": "열기",
       "openLibrary": "산출물 라이브러리 열기",
+      "openFailed": "산출물을 열 수 없습니다. 다시 시도해 주세요.",
       "reveal": "보관함에서 보기",
       "retry": "다시 시도",
       "subtitle": "이 팀원이 만든 것",

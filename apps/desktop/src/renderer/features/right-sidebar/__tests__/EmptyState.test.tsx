@@ -51,4 +51,31 @@ describe('EmptyState 面板收束(2026-08)', () => {
     fireEvent.click(screen.getByText('rightSidebar.tabs.empty.openSubagents'));
     expect(onAddSubagentsTab).toHaveBeenCalledOnce();
   });
+
+  it('uses the teammate empty state instead of the generic engineering welcome', () => {
+    const onAddArtifactsTab = vi.fn();
+    const onAddDelegationsTab = vi.fn();
+    render(
+      <EmptyState
+        botSession
+        onAddArtifactsTab={onAddArtifactsTab}
+        onAddDelegationsTab={onAddDelegationsTab}
+        onAddFileTab={vi.fn()}
+        onAddReviewTab={vi.fn()}
+        onAddSubagentsTab={vi.fn()}
+        onAddBackgroundTasksTab={vi.fn()}
+        onAddBrowserTab={vi.fn()}
+        onAddTerminalTab={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('rightSidebar.tabs.empty.botTitle')).toBeTruthy();
+    expect(screen.queryByText('rightSidebar.tabs.empty.title')).toBeNull();
+    expect(screen.queryByText('rightSidebar.tabs.empty.openReview')).toBeNull();
+    expect(screen.queryByText('rightSidebar.tabs.empty.openTerminal')).toBeNull();
+    expect(screen.queryByText('rightSidebar.tabs.empty.openSubagents')).toBeNull();
+    fireEvent.click(screen.getByText('rightSidebar.tabs.empty.openArtifacts'));
+    fireEvent.click(screen.getByText('rightSidebar.tabs.empty.openDelegations'));
+    expect(onAddArtifactsTab).toHaveBeenCalledOnce();
+    expect(onAddDelegationsTab).toHaveBeenCalledOnce();
+  });
 });

@@ -2167,6 +2167,9 @@ export const rightSidebarTabs = sqliteTable(
     uniqBotDelegations: uniqueIndex('right_sidebar_tabs_bot_delegations_singleton_idx')
       .on(t.sessionId)
       .where(sql`${t.kind} = 'bot-delegations'`),
+    uniqBotArtifacts: uniqueIndex('right_sidebar_tabs_bot_artifacts_singleton_idx')
+      .on(t.sessionId)
+      .where(sql`${t.kind} = 'bot-artifacts'`),
   }),
 );
 

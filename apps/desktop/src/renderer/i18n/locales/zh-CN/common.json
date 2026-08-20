@@ -5086,6 +5086,12 @@
         "eyebrow": "右侧栏",
         "title": "开始一个面板",
         "desc": "在右侧打开文件、审查、资源用量、内置浏览器或终端，与左侧对话并行工作。",
+        "botTitle": "交付物和 TA 的协同",
+        "botDesc": "伙伴任务默认打开交付物仓库和 TA 的协同。审查、终端这些工程面板需要时再加。",
+        "openArtifacts": "打开交付物",
+        "artifactsSub": "TA 交出来的东西",
+        "openDelegations": "打开 TA 的协同",
+        "delegationsSub": "委派和回传",
         "openFile": "打开文件",
         "fileSub": "Files",
         "openReview": "打开审查",
@@ -6756,6 +6762,7 @@
     },
     "collab": {
       "joined": "{{name}} 加入了对话",
+      "inboundJoined": "{{name}} 把活交给了你",
       "guestTag": "客座",
       "nudge": "催一下",
       "nudgeSend": "发送",
@@ -6764,6 +6771,7 @@
       "interjected": "你催了 {{name}} 一下",
       "stop": "停止",
       "openTask": "看 {{name}} 的对话",
+      "watchWork": "看工作过程",
       "actionFailed": "没发出去，再试一次。",
       "retrying": "还没开始，正在重试…",
       "status": {
@@ -6793,6 +6801,7 @@
     "artifacts": {
       "open": "打开",
       "openLibrary": "打开交付物仓库",
+      "openFailed": "打不开交付物，再试一次。",
       "reveal": "在仓库中查看",
       "retry": "重试",
       "subtitle": "TA 做出来的东西",

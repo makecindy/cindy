@@ -148,23 +148,37 @@ describe('mapServerMessages — Bot collaboration', () => {
     expect(mapped.systemCardType).toBeUndefined();
   });
 
-  it('points a guest request back at the task that asked for the work', () => {
+  it('turns the inbound request into the same live collaboration card', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([
       row({
         clientId: 'bot-delegation-target-request:delegation-1',
-        role: 'user',
-        content: '[来自 Cindy 的 Bot 委派]\n\n给伙伴协作做一版方案',
+        role: 'assistant',
+        content: '',
         agentMeta: { botCollaboration: { ...META, role: 'guest-request' } },
       }),
     ]);
-    expect(mapped.guestBot).toEqual({
-      botId: 'bot-cindy',
-      name: 'Cindy',
-      delegationId: 'delegation-1',
-      linkedSessionId: SESSION_ID,
+    expect(mapped.systemCardType).toBe('bot-collab');
+    expect(mapped.systemCardData).toMatchObject({
+      role: 'guest-request',
+      fromBotName: 'Cindy',
+      parentSessionId: SESSION_ID,
+      childSessionId: 'child-1',
     });
-    // 请求镜像的正文是给目标 agent 读的原文，不做裁剪。
-    expect(mapped.content).toContain('给伙伴协作做一版方案');
+    expect(mapped.guestBot).toBeUndefined();
+  });
+
+  it('turns the inbound result mirror into a collaboration report, not a wall of text', () => {
+    const [mapped] = makerChatStore.__mapServerMessagesForTest([
+      row({
+        clientId: 'bot-delegation-target-result:delegation-1',
+        role: 'assistant',
+        content: '',
+        agentMeta: { botCollaboration: { ...META, role: 'result-mirror' } },
+      }),
+    ]);
+    expect(mapped.systemCardType).toBe('bot-collab');
+    expect(mapped.systemCardData).toMatchObject({ role: 'result-mirror' });
+    expect(mapped.content).toBe('');
   });
 
   it('leaves pre-marker mirror rows exactly as they were', () => {

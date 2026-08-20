@@ -15224,7 +15224,12 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     const collaboration = readBotCollaborationMeta(m.agentMeta?.botCollaboration);
     if (
       m.role === 'assistant'
-      && (collaboration?.role === 'delegation-request' || collaboration?.role === 'interjection')
+      && (
+        collaboration?.role === 'delegation-request'
+        || collaboration?.role === 'interjection'
+        || collaboration?.role === 'guest-request'
+        || collaboration?.role === 'result-mirror'
+      )
     ) {
       return {
         clientId: m.clientId,

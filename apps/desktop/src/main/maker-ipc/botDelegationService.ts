@@ -791,16 +791,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   >): Promise<void> => {
     const plan = parseBotDelegationPlanSnapshot(row.permissionSnapshotJson);
     if (!plan?.targetCanonicalSessionId) return;
-    const requesterName = await requesterDisplayName(row.requestingBotId);
     await persistTimelineMessage({
       sessionId: plan.targetCanonicalSessionId,
       clientId: BOT_DELEGATION_CLIENT_ID.targetRequest(row.id),
-      role: 'user',
-      content: [
-        `[来自 ${requesterName} 的 Bot 委派]`,
-        row.objective,
-        `委派记录：${row.id}`,
-      ].join('\n\n'),
+      // 目标主任务里只留协作卡锚点:真正干活的是子任务,这里再复读一遍任务全文
+      // 既不会叫醒目标主线程,还会把对话变成废话墙。卡上的「看工作过程」才是入口。
+      role: 'assistant',
+      content: '',
       createdAt: row.createdAt,
       agentMeta: {
         botCollaboration: await collaborationMeta(row, 'guest-request'),
@@ -823,26 +820,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   >): Promise<void> => {
     const plan = parseBotDelegationPlanSnapshot(row.permissionSnapshotJson);
     if (!plan?.targetCanonicalSessionId || isActiveDelegation(row.status)) return;
-    const requesterName = await requesterDisplayName(row.requestingBotId);
-    const statusLabel = row.status === 'completed'
-      ? '已完成'
-      : row.status === 'cancelled'
-        ? '已取消'
-        : row.status === 'timed-out'
-          ? '已超时'
-          : '失败';
     await persistTimelineMessage({
       sessionId: plan.targetCanonicalSessionId,
       clientId: BOT_DELEGATION_CLIENT_ID.targetResult(row.id),
+      // 终态同样只留卡:结论和交付物走委派行上的结构化字段,不在这里复读任务全文,
+      // 也不把子任务 id 裸丢进对话。
       role: 'assistant',
-      content: [
-        `[Bot 委派${statusLabel}]`,
-        `来源：${requesterName}`,
-        `任务：${row.objective}`,
-        row.resultSummary ? `结果：\n${row.resultSummary}` : '',
-        row.lastError ? `错误：${row.lastError}` : '',
-        row.childSessionId ? `完整执行任务：${row.childSessionId}` : '',
-      ].filter(Boolean).join('\n\n'),
+      content: '',
       createdAt: row.completedAt ?? undefined,
       agentMeta: {
         botCollaboration: await collaborationMeta(row, 'result-mirror'),
@@ -862,7 +846,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     lastError?: string | null;
     permissionSnapshotJson: string;
   }): Promise<void> => {
-    if (!params.parentSessionId) return;
+    if (!params.parentSessionId) {
+      log.warn('skip Bot delegation completion: parent session is missing', {
+        delegationId: params.id,
+      });
+      return;
+    }
     const db = getDbClient().drizzle;
     const [parent] = await db
       .select({
@@ -881,10 +870,27 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       parent?.status !== 'active'
       || parent.botId !== params.requestingBotId
       || (parent.role !== 'canonical' && parent.role !== 'route')
-    ) return;
+    ) {
+      log.warn('skip Bot delegation completion: parent is not a live requester task', {
+        delegationId: params.id,
+        parentSessionId: params.parentSessionId,
+        parentStatus: parent?.status ?? null,
+        parentBotId: parent?.botId ?? null,
+        parentRole: parent?.role ?? null,
+        requestingBotId: params.requestingBotId,
+      });
+      return;
+    }
     const plan = parseBotDelegationPlanSnapshot(params.permissionSnapshotJson);
     const frozenTarget = plan?.completionTarget;
-    if (frozenTarget && frozenTarget.parentSessionId !== params.parentSessionId) return;
+    if (frozenTarget && frozenTarget.parentSessionId !== params.parentSessionId) {
+      log.warn('skip Bot delegation completion: frozen target no longer matches parent', {
+        delegationId: params.id,
+        parentSessionId: params.parentSessionId,
+        frozenParentSessionId: frozenTarget.parentSessionId,
+      });
+      return;
+    }
     // Legacy canonical and delegation-child parents are still safe because
     // they target an exact task. A legacy IM Route lacks an ownership
     // generation and must not be redirected through the Route's current owner.
@@ -1221,7 +1227,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     parseStringArray(row.artifactRefsJson).length
       ? `Artifacts:\n${parseStringArray(row.artifactRefsJson).join('\n')}`
       : '',
-    'Work independently using your own Bot profile. Return a concise result and artifact references to the requesting Bot.',
+    'Work independently using your own Bot profile and workspace.',
+    'Return a concise conclusion. Do not write files into the requester\'s directory and do not ask the user to copy a local path; protocol artifact references in your result are collected automatically.',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -1957,10 +1964,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         message: `objective 必须为 1-${MAX_OBJECTIVE_CHARS} 个字符`,
       };
     }
-    const requestedMaxDepth = Math.min(
-      HARD_MAX_DEPTH,
-      Math.max(1, Math.floor(input.maxDepth ?? DEFAULT_MAX_DEPTH)),
-    );
     const requestedTimeoutMs = Math.min(
       MAX_TIMEOUT_MS,
       Math.max(1_000, Math.floor(input.timeoutMs ?? DEFAULT_TIMEOUT_MS)),
@@ -2010,6 +2013,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       && Number.isSafeInteger(configuredParentMaxDepth)
       ? Math.max(1, Math.min(HARD_MAX_DEPTH, configuredParentMaxDepth))
       : HARD_MAX_DEPTH;
+    // 上层已经把 max_depth 抬到 2+ 时,子层默认继承那条链的上限,而不是再裁回扁平 1。
+    // 否则 A 明确授权连环编排,B 一转手就被默认值卡死,A→B→C 永远建不起来。
+    const requestedMaxDepth = Math.min(
+      HARD_MAX_DEPTH,
+      Math.max(1, Math.floor(input.maxDepth ?? (parentDelegation ? parentMaxDepth : DEFAULT_MAX_DEPTH))),
+    );
     const automationMaxDepth = automationContext?.plan.limits.maxDelegationDepth ?? HARD_MAX_DEPTH;
     const maxDepth = Math.min(requestedMaxDepth, parentMaxDepth, automationMaxDepth);
     const parentDepth = parentDelegation?.depth ?? 0;
@@ -2791,7 +2800,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const lastError = overBudget
       ? `Bot delegation token budget exceeded (${tokensUsed}/${row.budgetTokens}).`
       : params.error ?? null;
-    const resultSummary = params.resultText?.trim().slice(0, MAX_RESULT_CHARS) || null;
+    // done.result 不是字符串时(部分 Pi / 订阅档位只把终答写进消息行)不能把空结果
+    // 当成「对方什么都没说」——发起方会被叫醒,但手里是一段没 Result 的废话墙。
+    const recoveredText = params.resultText?.trim()
+      || (params.outcome === 'done'
+        ? (await readLatestAssistantText(params.childSessionId))?.trim() ?? ''
+        : '');
+    const resultSummary = recoveredText.slice(0, MAX_RESULT_CHARS) || null;
     const outputArtifactsJson = JSON.stringify(collectBotOutputArtifacts(params.resultText));
     const changed = await updateTerminal({
       delegationId: row.id,

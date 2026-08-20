@@ -12,7 +12,7 @@
  * 是右上角那个通用面板开关 —— 用户根本找不到 TA 交付了什么(真机验收结论)。所以
  * 这里给一个带图标 + 文案的显式入口,点击 = 用户主动打开(reveal 默认 true)。
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Package, Settings2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -38,7 +38,17 @@ export function BotSessionContentHeader({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [openError, setOpenError] = useState<string | null>(null);
   const openSettings = () => navigate(`/bots/${bot.id}?settings=1`);
+  const openDeliverables = async (): Promise<void> => {
+    if (!sessionId) return;
+    setOpenError(null);
+    try {
+      await openBotArtifactsTab(sessionId, { userInitiated: true });
+    } catch {
+      setOpenError(t('bots.artifacts.openFailed'));
+    }
+  };
 
   return (
     <div
@@ -55,16 +65,27 @@ export function BotSessionContentHeader({
         <span className="min-w-0 truncate">{bot.name}</span>
       </button>
       {sessionId ? (
-        <button
-          type="button"
-          data-testid="bot-artifacts-header-entry"
-          onClick={() => void openBotArtifactsTab(sessionId, { userInitiated: true })}
-          title={t('bots.artifacts.openLibrary')}
-          className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-12 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-        >
-          <Package size={14} aria-hidden="true" />
-          <span>{t('rightSidebar.tabs.kinds.botArtifacts')}</span>
-        </button>
+        <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
+          <button
+            type="button"
+            data-testid="bot-artifacts-header-entry"
+            onClick={() => void openDeliverables()}
+            title={t('bots.artifacts.openLibrary')}
+            className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-12 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          >
+            <Package size={14} aria-hidden="true" />
+            <span>{t('rightSidebar.tabs.kinds.botArtifacts')}</span>
+          </button>
+          {openError ? (
+            <span
+              role="status"
+              data-testid="bot-artifacts-header-error"
+              className="max-w-[160px] truncate text-11 text-[var(--error-fg)]"
+            >
+              {openError}
+            </span>
+          ) : null}
+        </span>
       ) : null}
       <button
         type="button"

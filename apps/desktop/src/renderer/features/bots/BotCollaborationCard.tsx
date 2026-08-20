@@ -90,7 +90,10 @@ function CollaborationCardBody({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const profiles = useBotProfiles();
-  const { row, resolved } = useBotDelegation(sessionId ?? meta.parentSessionId, meta.delegationId);
+  // 委派行永远挂在发起方任务上。目标主任务里的入站卡必须按 parentSessionId 去读,
+  // 否则会拿目标伙伴自己的出向清单去对,永远对不上。
+  const { row, resolved } = useBotDelegation(meta.parentSessionId, meta.delegationId);
+  const inbound = meta.role === 'guest-request' || meta.role === 'result-mirror';
   const [expanded, setExpanded] = useState(false);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -154,6 +157,8 @@ function CollaborationCardBody({
       `/bots/${encodeURIComponent(meta.toBotId)}/session/${encodeURIComponent(childSessionId)}`,
     );
   };
+
+  const watchWorkLabel = t('bots.collab.watchWork', { name: to.name });
 
   const runAction = async (action: () => Promise<{ ok: boolean; message?: string }>) => {
     setPending(true);
@@ -301,7 +306,7 @@ function CollaborationCardBody({
                 className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 <ExternalLink size={11} aria-hidden="true" />
-                {t('bots.collab.openTask', { name: to.name })}
+                {watchWorkLabel}
               </button>
             ) : null}
           </div>
@@ -332,7 +337,9 @@ function CollaborationCardBody({
       <div className="flex items-center gap-2.5">
         {heads}
         <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--text-primary)]">
-          {t('bots.collab.joined', { name: to.name })}
+          {inbound
+            ? t('bots.collab.inboundJoined', { name: from.name })
+            : t('bots.collab.joined', { name: to.name })}
         </span>
       </div>
       <div className="mt-2.5 flex items-center gap-2 border-t border-[var(--border-default)] pt-2.5">
@@ -361,29 +368,33 @@ function CollaborationCardBody({
       ) : null}
       {row ? (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            disabled={pending || !sessionId}
-            onClick={() => setComposing((value) => !value)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
-          >
-            <Megaphone size={11} aria-hidden="true" />
-            {t('bots.collab.nudge')}
-          </button>
-          <button
-            type="button"
-            disabled={pending || !sessionId}
-            onClick={() => {
-              if (!sessionId) return;
-              void runAction(async () =>
-                window.electronAPI.maker.cancelBotDelegation(sessionId, meta.delegationId),
-              );
-            }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
-          >
-            <Square size={11} aria-hidden="true" />
-            {t('bots.collab.stop')}
-          </button>
+          {!inbound ? (
+            <>
+              <button
+                type="button"
+                disabled={pending || !sessionId}
+                onClick={() => setComposing((value) => !value)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
+              >
+                <Megaphone size={11} aria-hidden="true" />
+                {t('bots.collab.nudge')}
+              </button>
+              <button
+                type="button"
+                disabled={pending || !sessionId}
+                onClick={() => {
+                  if (!sessionId) return;
+                  void runAction(async () =>
+                    window.electronAPI.maker.cancelBotDelegation(sessionId, meta.delegationId),
+                  );
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
+              >
+                <Square size={11} aria-hidden="true" />
+                {t('bots.collab.stop')}
+              </button>
+            </>
+          ) : null}
           {row.childSessionId ? (
             <button
               type="button"
@@ -391,7 +402,7 @@ function CollaborationCardBody({
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
             >
               <ExternalLink size={11} aria-hidden="true" />
-              {t('bots.collab.openTask', { name: to.name })}
+              {watchWorkLabel}
             </button>
           ) : null}
         </div>

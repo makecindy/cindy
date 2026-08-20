@@ -5088,6 +5088,12 @@
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
         "desc": "Open files, review, resource usage, a built-in browser, or a terminal here to work alongside the chat on the left.",
+        "botTitle": "Deliverables and their collaboration",
+        "botDesc": "A teammate chat opens to deliverables and their collaboration. Review and terminal stay available if you need them.",
+        "openArtifacts": "Open deliverables",
+        "artifactsSub": "What they handed back",
+        "openDelegations": "Open their collaboration",
+        "delegationsSub": "Delegations and replies",
         "openFile": "Open files",
         "fileSub": "Files",
         "openReview": "Open review",
@@ -6758,6 +6764,7 @@
     },
     "collab": {
       "joined": "{{name}} joined the conversation",
+      "inboundJoined": "{{name}} handed you this work",
       "guestTag": "Guest",
       "nudge": "Nudge",
       "nudgeSend": "Send",
@@ -6766,6 +6773,7 @@
       "interjected": "You nudged {{name}}",
       "stop": "Stop",
       "openTask": "Open {{name}}'s conversation",
+      "watchWork": "Watch the work",
       "actionFailed": "That didn't go through. Try again.",
       "retrying": "Hasn't started yet — retrying…",
       "status": {
@@ -6795,6 +6803,7 @@
     "artifacts": {
       "open": "Open",
       "openLibrary": "Open the deliverables library",
+      "openFailed": "Couldn't open deliverables. Try again.",
       "reveal": "View in library",
       "retry": "Retry",
       "subtitle": "What this teammate has made",

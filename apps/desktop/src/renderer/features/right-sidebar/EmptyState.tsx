@@ -16,6 +16,8 @@ import {
   FolderOpen,
   Globe,
   ListTodo,
+  Package,
+  Share2,
   Terminal,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -29,6 +31,10 @@ interface EmptyStateProps {
   onAddReviewTab: () => void;
   onAddSubagentsTab: () => void;
   onAddBackgroundTasksTab: () => void;
+  /** 伙伴会话:默认只推交付物 / TA 的协同,不把工程空态原样摆出来。 */
+  botSession?: boolean;
+  onAddArtifactsTab?: () => void;
+  onAddDelegationsTab?: () => void;
 }
 
 export function EmptyState({
@@ -38,6 +44,9 @@ export function EmptyState({
   onAddReviewTab,
   onAddSubagentsTab,
   onAddBackgroundTasksTab,
+  botSession = false,
+  onAddArtifactsTab,
+  onAddDelegationsTab,
 }: EmptyStateProps) {
   const { t } = useTranslation();
   return (
@@ -47,54 +56,73 @@ export function EmptyState({
           {t('rightSidebar.tabs.empty.eyebrow')}
         </span>
         <span className="text-20 font-semibold leading-tight text-[var(--text-primary)]">
-          {t('rightSidebar.tabs.empty.title')}
+          {t(botSession ? 'rightSidebar.tabs.empty.botTitle' : 'rightSidebar.tabs.empty.title')}
         </span>
         <span className="text-13 leading-relaxed text-[var(--text-tertiary)]">
-          {t('rightSidebar.tabs.empty.desc')}
+          {t(botSession ? 'rightSidebar.tabs.empty.botDesc' : 'rightSidebar.tabs.empty.desc')}
         </span>
       </div>
       <div className="flex w-full flex-col">
-        <ActionRow
-          icon={FolderOpen}
-          label={t('rightSidebar.tabs.empty.openFile')}
-          sub={t('rightSidebar.tabs.empty.fileSub')}
-          onClick={onAddFileTab}
-        />
-        {/* 审查项:tabs 列表为空时(用户从未开过或手动关掉过 review tab),这里是
-            用户重开 review tab 的入口。放在文件浏览器下面,顺序与 + dropdown 保持
-            一致(file-browser order=10 → review order=15 → browser order=20)。 */}
-        <ActionRow
-          icon={FileDiff}
-          label={t('rightSidebar.tabs.empty.openReview')}
-          sub={t('rightSidebar.tabs.empty.reviewSub')}
-          onClick={onAddReviewTab}
-        />
-        {/* 后台任务:顺序与 + dropdown 一致(review order=15 → background-tasks
-            order=17 → browser order=20)。 */}
-        <ActionRow
-          icon={Bot}
-          label={t('rightSidebar.tabs.empty.openSubagents')}
-          sub={t('rightSidebar.tabs.empty.subagentsSub')}
-          onClick={onAddSubagentsTab}
-        />
-        <ActionRow
-          icon={ListTodo}
-          label={t('rightSidebar.tabs.empty.openBackgroundTasks')}
-          sub={t('rightSidebar.tabs.empty.backgroundTasksSub')}
-          onClick={onAddBackgroundTasksTab}
-        />
-        <ActionRow
-          icon={Globe}
-          label={t('rightSidebar.tabs.empty.openBrowser')}
-          sub={t('rightSidebar.tabs.empty.browserSub')}
-          onClick={onAddBrowserTab}
-        />
-        <ActionRow
-          icon={Terminal}
-          label={t('rightSidebar.tabs.empty.openTerminal')}
-          sub={t('rightSidebar.tabs.empty.terminalSub')}
-          onClick={onAddTerminalTab}
-        />
+        {botSession ? (
+          <>
+            {onAddArtifactsTab ? (
+              <ActionRow
+                icon={Package}
+                label={t('rightSidebar.tabs.empty.openArtifacts')}
+                sub={t('rightSidebar.tabs.empty.artifactsSub')}
+                onClick={onAddArtifactsTab}
+              />
+            ) : null}
+            {onAddDelegationsTab ? (
+              <ActionRow
+                icon={Share2}
+                label={t('rightSidebar.tabs.empty.openDelegations')}
+                sub={t('rightSidebar.tabs.empty.delegationsSub')}
+                onClick={onAddDelegationsTab}
+              />
+            ) : null}
+          </>
+        ) : null}
+        {!botSession ? (
+          <>
+            <ActionRow
+              icon={FolderOpen}
+              label={t('rightSidebar.tabs.empty.openFile')}
+              sub={t('rightSidebar.tabs.empty.fileSub')}
+              onClick={onAddFileTab}
+            />
+            <ActionRow
+              icon={FileDiff}
+              label={t('rightSidebar.tabs.empty.openReview')}
+              sub={t('rightSidebar.tabs.empty.reviewSub')}
+              onClick={onAddReviewTab}
+            />
+            <ActionRow
+              icon={Bot}
+              label={t('rightSidebar.tabs.empty.openSubagents')}
+              sub={t('rightSidebar.tabs.empty.subagentsSub')}
+              onClick={onAddSubagentsTab}
+            />
+            <ActionRow
+              icon={ListTodo}
+              label={t('rightSidebar.tabs.empty.openBackgroundTasks')}
+              sub={t('rightSidebar.tabs.empty.backgroundTasksSub')}
+              onClick={onAddBackgroundTasksTab}
+            />
+            <ActionRow
+              icon={Globe}
+              label={t('rightSidebar.tabs.empty.openBrowser')}
+              sub={t('rightSidebar.tabs.empty.browserSub')}
+              onClick={onAddBrowserTab}
+            />
+            <ActionRow
+              icon={Terminal}
+              label={t('rightSidebar.tabs.empty.openTerminal')}
+              sub={t('rightSidebar.tabs.empty.terminalSub')}
+              onClick={onAddTerminalTab}
+            />
+          </>
+        ) : null}
       </div>
       <p className="px-1 text-11 text-[var(--text-tertiary)]">
         {t('rightSidebar.tabs.empty.addMoreHint')}

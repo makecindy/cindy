@@ -9447,6 +9447,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           model: meta.model,
           resumeSessionId: meta.sdkSessionId,
           permissionMode: 'bypassPermissions',
+          // 发起方回合结束后进程常被释放。漏掉 providerId = 回落到隐式默认路由,
+          // 订阅 / 自定义来源的伙伴会以 AGENT_NOT_READY 起不来,委派结果停在外发
+          // 队列里,表现就是「对方做完了,发起方没被叫醒」。
+          ...(dbRow.providerId ? { providerId: dbRow.providerId } : {}),
         });
         await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);
         if (createOpts.extraDirs === undefined) {

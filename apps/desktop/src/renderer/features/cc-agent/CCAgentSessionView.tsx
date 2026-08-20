@@ -831,18 +831,16 @@ export function CCAgentSessionView({
     if (!ownsWindowRoute || !viewVisible || !sessionId || session?.source !== 'bot') return;
     // 顺序即默认落点:交付物先注册,所以桶为空时右栏开关落在「交付物」;协同 tab
     // 随后静默注册,不抢走已经存在的激活 tab(两者共存,用户选了谁就是谁)。
-    void (async () => {
-      await openBotArtifactsTab(sessionId, {
-        focusTab: false,
-        revealSidebar: false,
-        userInitiated: false,
-      });
-      await openBotDelegationsTab(sessionId, {
-        focusTab: false,
-        revealSidebar: false,
-        userInitiated: false,
-      });
-    })().catch(() => undefined);
+    void openBotArtifactsTab(sessionId, {
+      focusTab: false,
+      revealSidebar: false,
+      userInitiated: false,
+    }).catch(() => undefined);
+    void openBotDelegationsTab(sessionId, {
+      focusTab: false,
+      revealSidebar: false,
+      userInitiated: false,
+    }).catch(() => undefined);
   }, [ownsWindowRoute, session?.source, sessionId, viewVisible]);
 
   // worktree-parallel-sessions:订阅当前 session 的 worktree 创建态(creating/failed)。

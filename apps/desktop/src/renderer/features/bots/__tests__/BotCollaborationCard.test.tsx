@@ -148,6 +148,24 @@ describe('BotCollaborationCard', () => {
     expect(screen.getByText('bots.collab.nudge')).toBeTruthy();
   });
 
+  it('shows the inbound card on the target task without requester controls', async () => {
+    listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
+    render(
+      <BotCollaborationCard
+        data={{ ...meta({ role: 'guest-request' }) }}
+        sessionId="target-canonical"
+      />,
+    );
+
+    expect(screen.getByText(/bots\.collab\.inboundJoined/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.running/)).toBeTruthy());
+    expect(screen.queryByText('bots.collab.nudge')).toBeNull();
+    expect(screen.queryByText('bots.collab.stop')).toBeNull();
+    expect(listBotDelegations).toHaveBeenCalledWith(SESSION_ID);
+    fireEvent.click(screen.getByText(/bots\.collab\.watchWork/));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-planner/session/child-1');
+  });
+
   it('sends a nudge to the running delegation through the host channel', async () => {
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
     render(<BotCollaborationCard data={{ ...meta() }} sessionId={SESSION_ID} />);
@@ -243,7 +261,7 @@ describe('BotCollaborationCard', () => {
 
     fireEvent.click(report);
     expect(screen.getByText('给伙伴协作做一版方案')).toBeTruthy();
-    fireEvent.click(screen.getByText(/bots\.collab\.openTask/));
+    fireEvent.click(screen.getByText(/bots\.collab\.watchWork/));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-planner/session/child-1');
   });
 

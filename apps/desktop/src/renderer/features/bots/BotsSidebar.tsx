@@ -57,8 +57,14 @@ function BotsSidebarContent() {
     通知的状态机，在这里再挂一份会把那些副作用发两遍。
   */
   const islandActivity = useAgentIslandActivityMap();
-  const isBotTyping = (canonicalSessionId: string | undefined): boolean =>
-    !!canonicalSessionId && islandActivity.get(canonicalSessionId)?.phase === 'running';
+  const isBotWorking = (bot: { canonicalSessionId?: string | null; sessions: Array<{ id: string }> }): boolean => {
+    // 委派干活发生在子任务,不在主任务。只看 canonical 的话,目标伙伴侧栏会一直是
+    // 静默的,发起方却在等 —— 这正是「目标侧执行过程黑洞」在列表上的样子。
+    if (bot.canonicalSessionId && islandActivity.get(bot.canonicalSessionId)?.phase === 'running') {
+      return true;
+    }
+    return bot.sessions.some((session) => islandActivity.get(session.id)?.phase === 'running');
+  };
 
   // 曾经这里还按 bot 逐个拉 `getBotHealth` 只为在行尾画一个状态图标。图标下线之后
   // 这一轮 N 次 IPC 也一起下线——列表不再为一个不显示的东西查询。
@@ -210,7 +216,7 @@ function BotsSidebarContent() {
               // TA 正在回话时，第二行临时让位给「正在输入…」——聊天列表里这一行
               // 回答的是「TA 现在怎么样」，进行中比上一句说过什么更要紧。回合一
               // 结束就落回最新消息预览，不留痕。
-              const typing = isBotTyping(bot.canonicalSessionId);
+              const typing = isBotWorking(bot);
               const subtitleText = typing
                 ? t('bots.list.typing')
                 : subtitle.kind === 'placeholder'

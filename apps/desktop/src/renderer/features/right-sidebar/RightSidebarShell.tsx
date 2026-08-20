@@ -63,6 +63,7 @@ import { initIOSSimulatorFocusBridge } from './lib/iosSimulatorFocusBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { useBotProfiles } from '@/features/bots/botStore';
 import {
   isIOSSimulatorPluginAvailable,
   mergeIOSSimulatorVisibleTabOrder,
@@ -155,6 +156,15 @@ export function RightSidebarShell({
   railChromeActionsHitHole = false,
 }: RightSidebarShellProps) {
   const { isFullscreen } = useMacFullscreen();
+  const bots = useBotProfiles();
+  const isBotSession = Boolean(
+    sessionId
+    && bots.some(
+      (bot) =>
+        bot.canonicalSessionId === sessionId
+        || bot.sessions.some((session) => session.id === sessionId),
+    ),
+  );
   const chromeActionsLeft =
     isMac && !isFullscreen
       ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
@@ -672,6 +682,9 @@ export function RightSidebarShell({
           // tab 列表为空时永远渲染 EmptyState。审查页签只通过「+」dropdown 或
           // EmptyState 的"打开审查"入口由用户主动创建。
           <EmptyState
+            botSession={isBotSession}
+            onAddArtifactsTab={() => handleAdd('bot-artifacts')}
+            onAddDelegationsTab={() => handleAdd('bot-delegations')}
             onAddFileTab={() => handleAdd('file-browser')}
             onAddReviewTab={() => handleAdd('review')}
             onAddSubagentsTab={() => handleAdd('subagents')}

@@ -5086,6 +5086,12 @@
         "eyebrow": "右側欄",
         "title": "開始一個面板",
         "desc": "在右側開啟檔案、審查、資源用量、內建瀏覽器或終端，與左側對話並行工作。",
+        "botTitle": "交付物和 TA 的協同",
+        "botDesc": "夥伴任務預設開啟交付物倉庫和 TA 的協同。審查、終端這些工程面板需要時再加。",
+        "openArtifacts": "開啟交付物",
+        "artifactsSub": "TA 交出來的東西",
+        "openDelegations": "開啟 TA 的協同",
+        "delegationsSub": "委派和回傳",
         "openFile": "開啟檔案",
         "fileSub": "Files",
         "openReview": "開啟審查",
@@ -6756,6 +6762,7 @@
     },
     "collab": {
       "joined": "{{name}} 加入了對話",
+      "inboundJoined": "{{name}} 把活交給了你",
       "guestTag": "客座",
       "nudge": "催一下",
       "nudgeSend": "傳送",
@@ -6764,6 +6771,7 @@
       "interjected": "你催了 {{name}} 一下",
       "stop": "停止",
       "openTask": "看 {{name}} 的對話",
+      "watchWork": "看工作過程",
       "actionFailed": "沒送出去，再試一次。",
       "retrying": "還沒開始，正在重試…",
       "status": {
@@ -6793,6 +6801,7 @@
     "artifacts": {
       "open": "開啟",
       "openLibrary": "打開交付物倉庫",
+      "openFailed": "打不開交付物，再試一次。",
       "reveal": "在倉庫中檢視",
       "retry": "重試",
       "subtitle": "TA 做出來的東西",

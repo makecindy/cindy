@@ -41,6 +41,16 @@ describe('BotSessionContentHeader', () => {
     expect(openBotArtifactsTab).toHaveBeenCalledWith('sess-1', { userInitiated: true });
   });
 
+  it('tells the user when opening deliverables fails', async () => {
+    openBotArtifactsTab.mockRejectedValueOnce(new Error('not a singleton'));
+    render(<BotSessionContentHeader bot={bot} sessionId="sess-1" />);
+    fireEvent.click(screen.getByTestId('bot-artifacts-header-entry'));
+    expect(await screen.findByTestId('bot-artifacts-header-error')).toBeTruthy();
+    expect(screen.getByTestId('bot-artifacts-header-error').textContent).toBe(
+      'bots.artifacts.openFailed',
+    );
+  });
+
   it('renders no entry without a session id', () => {
     render(<BotSessionContentHeader bot={bot} sessionId={null} />);
     expect(screen.queryByTestId('bot-artifacts-header-entry')).toBeNull();
