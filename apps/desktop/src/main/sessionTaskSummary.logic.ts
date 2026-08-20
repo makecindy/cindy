@@ -39,7 +39,8 @@ export const TIER_DIRECTIVE: Record<SummaryTier, string> = {
   short: '本任务使用短档:不超过12字。',
   long: '本任务是重度使用的会话,优先使用长档(18~26字);例外:如果会话本质是重复的单次简单操作(如反复生图、批量翻译),仍用短档。',
   auto: '请按上面的档位说明,根据会话内容自行判断用短档还是长档。',
-  stale: '本任务很久没有活动了:用超短档,不超过8字,几个词点出任务即可(如"生成海报。""术语表方案。")。',
+  stale:
+    '本任务很久没有活动了:用超短档,不超过8字,几个词点出任务即可(如"生成海报。""术语表方案。")。',
 };
 
 /** 档位 → sanitize 硬上限。短档也硬截,保证时间衰减回填的"length > 16 才重生成"条件能收敛。 */
@@ -160,4 +161,13 @@ export function pickTier(args: {
 /** 有无可总结素材——空草稿被置顶时 user/assistant 文本皆空,没东西可总结,跳过。 */
 export function hasSummarizableMaterial(userMsg: string, assistantMsg: string): boolean {
   return Boolean(userMsg || assistantMsg);
+}
+
+/** 摘要只在「置顶 + 置顶段是卡片模式」时生成。列表/文字模式不花 oneShot。 */
+export function shouldGeneratePinnedCardSummary(args: {
+  status: string;
+  pinnedAt: number | string | null | undefined;
+  pinnedSectionIsCard: boolean;
+}): boolean {
+  return args.status === 'active' && args.pinnedAt != null && args.pinnedSectionIsCard;
 }

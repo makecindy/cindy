@@ -4692,6 +4692,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:update', id, patch),
       touchUserSend: (id: string, atMs?: number): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:touchUserSend', id, atMs),
+      setPinnedCardSummaries: (enabled: boolean): Promise<void> =>
+        ipcRenderer.invoke('local-db:sessions:set-pinned-card-summaries', enabled),
       /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: (): Promise<string[]> =>
         ipcRenderer.invoke('local-db:sessions:interrupted-pending'),

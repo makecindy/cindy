@@ -4224,6 +4224,8 @@ interface ElectronAPI {
        * fire-and-forget；renderer 应在 emitPatch userSendAt 之后调用，作为持久化兜底。
        */
       touchUserSend: (id: string, atMs?: number) => Promise<void>;
+      /** 置顶段切到卡片模式才生成/回填任务摘要。 */
+      setPinnedCardSummaries: (enabled: boolean) => Promise<void>;
       /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: () => Promise<string[]>;
       /** 红点派生的周期性重算源:尾部停在未 dismissed 错误行的 active 会话 id。 */

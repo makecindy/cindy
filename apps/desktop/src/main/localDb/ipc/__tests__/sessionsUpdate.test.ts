@@ -113,6 +113,7 @@ function createDb(): void {
       im_user_id TEXT,
       summary TEXT,
       provider_id TEXT,
+      codex_plan_json TEXT,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
@@ -137,11 +138,15 @@ function createDb(): void {
   insert.run('cc-local', '/old/dir', 'cc', null, 'dialogue');
   insert.run('codex-local', '/old/dir', 'codex', null, 'dialogue');
   insert.run('cc-remote', '/remote/dir', 'cc', 'host-1', 'project');
-  sqlite.prepare(`
+  sqlite
+    .prepare(
+      `
     INSERT INTO sessions (
       id, working_dir, agent_kind, remote_host_id, workspace_kind, source, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, 'review', 1, 1)
-  `).run('review-local', '/review/dir', 'codex', null, 'dialogue');
+  `,
+    )
+    .run('review-local', '/review/dir', 'codex', null, 'dialogue');
   h.sqlite = sqlite;
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
 }
@@ -239,15 +244,20 @@ describe('local-db:sessions:update handler wiring', () => {
 
     h.tapWindowBroadcast.mockClear();
     h.summarizeSession.mockClear();
+    h.sqlite!.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run(
+      'PR 已提交并开启，相关单测通过。',
+      'codex-local',
+    );
     await invokeUpdate('codex-local', { pinnedAt: null });
 
     const unpinned = h
-      .sqlite!.prepare('SELECT pinned_at AS pinnedAt FROM sessions WHERE id = ?')
-      .get('codex-local') as { pinnedAt: number | null };
+      .sqlite!.prepare('SELECT pinned_at AS pinnedAt, summary FROM sessions WHERE id = ?')
+      .get('codex-local') as { pinnedAt: number | null; summary: string | null };
     expect(unpinned.pinnedAt).toBeNull();
+    expect(unpinned.summary).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { pinnedAt: null },
+      patch: { pinnedAt: null, summary: null },
     });
     expect(h.summarizeSession).not.toHaveBeenCalled();
   });
@@ -262,7 +272,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.pinnedAt).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { pinnedAt: null },
+      patch: { pinnedAt: null, summary: null },
     });
     expect(h.summarizeSession).not.toHaveBeenCalled();
   });

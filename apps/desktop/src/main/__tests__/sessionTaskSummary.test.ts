@@ -19,6 +19,7 @@ import {
   pickTier,
   maxCharsForTier,
   hasSummarizableMaterial,
+  shouldGeneratePinnedCardSummary,
 } from '../sessionTaskSummary.logic';
 
 describe('pickTier — 距今时间为主轴的档位选择', () => {
@@ -98,6 +99,39 @@ describe('hasSummarizableMaterial — 空草稿跳过', () => {
   });
 });
 
+describe('shouldGeneratePinnedCardSummary', () => {
+  it('只在置顶 + 活跃 + 卡片模式时生成', () => {
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: 1,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: 1,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: null,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'archived',
+        pinnedAt: 1,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('sanitize — 去噪 + 句界截断', () => {
   it('短文本原样(去引号/折叠空白)', () => {
     expect(sanitize('"生成海报。"', SUMMARY_MAX_CHARS)).toBe('生成海报。');
@@ -151,15 +185,17 @@ describe('extractText — messages.content JSON → 纯文本', () => {
     const raw = JSON.stringify({
       text,
       quotesEncoded: true,
-      agentReferences: [{
-        kind: 'message',
-        start: text.indexOf(href),
-        end: text.indexOf(href) + href.length,
-        href,
-        sessionId: 'session-a',
-        messageClientId: 'message-a',
-        text: 'Target message body',
-      }],
+      agentReferences: [
+        {
+          kind: 'message',
+          start: text.indexOf(href),
+          end: text.indexOf(href) + href.length,
+          href,
+          sessionId: 'session-a',
+          messageClientId: 'message-a',
+          text: 'Target message body',
+        },
+      ],
     });
 
     const projected = extractText(raw, 'user');

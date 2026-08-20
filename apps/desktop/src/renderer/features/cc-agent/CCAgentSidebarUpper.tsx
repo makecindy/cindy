@@ -2601,9 +2601,14 @@ function ExpandedView({
         return;
       }
       // 同 handleRename:回滚值刻意仍读 sessions,不换成 sessionsById。
-      const oldPinnedAt = sessionsRef.current.find((s) => s.id === sessionId)?.pinnedAt ?? null;
+      const current = sessionsRef.current.find((s) => s.id === sessionId);
+      const oldPinnedAt = current?.pinnedAt ?? null;
+      const oldSummary = current?.summary ?? null;
       const newPinnedAt = currentlyPinned ? null : new Date().toISOString();
-      patchLocal(sessionId, { pinnedAt: newPinnedAt });
+      patchLocal(
+        sessionId,
+        currentlyPinned ? { pinnedAt: null, summary: null } : { pinnedAt: newPinnedAt },
+      );
       // pin / re-pin 时把它顶到 manualPinnedOrder 首位，否则带着老 rank 会卡回原位。
       // unpin 不主动从 order 里删（无害,下次 drag 触发的 normalize 会顺手 GC）。
       if (!currentlyPinned) {
@@ -2618,7 +2623,12 @@ function ExpandedView({
       } catch (err) {
         log.error('[session pin]', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
-        patchLocal(sessionId, { pinnedAt: oldPinnedAt });
+        patchLocal(
+          sessionId,
+          currentlyPinned
+            ? { pinnedAt: oldPinnedAt, summary: oldSummary }
+            : { pinnedAt: oldPinnedAt },
+        );
       }
     },
     // 只依赖 filter.promotePin(useCallback 稳定),不要整个 filter ——

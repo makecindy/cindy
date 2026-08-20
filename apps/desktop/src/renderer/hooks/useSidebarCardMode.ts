@@ -86,6 +86,16 @@ export function getSidebarMainViewMode(): SidebarMainViewMode {
   return DEFAULT_MAIN_MODE;
 }
 
+function notifyPinnedCardSummaries(mode: SidebarViewMode): void {
+  try {
+    const setEnabled = window.electronAPI?.localDb?.sessions?.setPinnedCardSummaries;
+    if (typeof setEnabled !== 'function') return;
+    void setEnabled(mode === 'card');
+  } catch {
+    // tests / preload 未挂载
+  }
+}
+
 /** 同标签页内的实例间同步(原生 storage 事件只发给其它窗口)。 */
 const listeners = new Set<() => void>();
 
@@ -105,15 +115,18 @@ export function useSidebarCardMode(): {
     } catch {
       // localStorage 不可用——内存 SoT 已生效;仅跨窗口同步缺失。
     }
+    notifyPinnedCardSummaries(next);
     listeners.forEach((fn) => fn());
   }, []);
 
   useEffect(() => {
+    notifyPinnedCardSummaries(getSidebarViewMode());
     const sync = () => setModeState(getSidebarViewMode());
     listeners.add(sync);
     const onStorage = (e: StorageEvent) => {
       if (e.key !== STORAGE_KEY) return;
       memoryValue = parseMode(e.newValue) ?? DEFAULT_MODE;
+      notifyPinnedCardSummaries(memoryValue);
       sync();
     };
     window.addEventListener('storage', onStorage);
