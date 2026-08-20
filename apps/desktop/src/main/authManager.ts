@@ -873,7 +873,12 @@ async function withCloudOwnerCommit<T>(opts: {
       previousOwnerId: opts.previousOwnerId,
       nextOwnerId: opts.nextOwnerId,
       prepareTransition: async ({ ownerChanged }) => {
-        notifyRendererAuthBoundaryPending();
+        // Same-owner Ghost repair (token refresh when the durable projection is
+        // unstable) is not a logout. Broadcasting snapshotLoggedOutAuthState()
+        // here bounced ProtectedRoute to /login every ~55 minutes.
+        if (ownerChanged) {
+          notifyRendererAuthBoundaryPending();
+        }
         releaseBoundary = beginAppSessionBoundary();
         if (ownerChanged) {
           await opts.prepareTransition();
@@ -1695,7 +1700,9 @@ function snapshotAuthState(): AuthState {
     mode: appSession.mode,
     dataOwnerId: appSession.dataOwnerId,
     ownerGeneration: appSession.generation,
-    canEnterApp: appSession.mode !== 'signed-out' && !isAppSessionBoundaryPending(),
+    // Pending is an IPC fail-closed window, not a signed-out shell. Folding it
+    // into canEnterApp made same-owner refresh remount the whole UI.
+    canEnterApp: appSession.mode !== 'signed-out',
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
     deviceId,
