@@ -9647,6 +9647,8 @@
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
+      "outputDegeneration": "The response became highly repetitive, so Cindy stopped it. If the repetition was intentional, resend your request with /allow-repetitive-output at the beginning.",
+      "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
       "hostShellCommandBlocked": "Cindy blocked a shell command that would bypass the embedded iOS Simulator. Use the iOS Simulator tool for device control, app launches, interaction, screenshots, and diagnostics.",

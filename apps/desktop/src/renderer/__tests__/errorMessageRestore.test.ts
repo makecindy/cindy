@@ -62,6 +62,13 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     expect(ERROR_REASON_I18N_KEYS.session_event_loop_crashed).toBe('logic.errors.turnFailed');
   });
 
+  it('maps Pi output guards to stable localized copy', () => {
+    expect(ERROR_REASON_I18N_KEYS['output-degeneration']).toBe(
+      'logic.errors.outputDegeneration',
+    );
+    expect(ERROR_REASON_I18N_KEYS['output-limit']).toBe('logic.errors.outputLimit');
+  });
+
   it('restores the overload reason from persisted rows so history can localize it', () => {
     const mapped = makerChatStore.__mapServerMessagesForTest([
       errorRow('e-overload', {

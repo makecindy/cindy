@@ -296,6 +296,53 @@ describe('pi translator', () => {
     }));
   });
 
+  it('preserves length-limited text but reports that the Pi response is incomplete', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'a long but incomplete answer' }],
+          model: 'DeepSeek-V4-Flash-0731',
+          stopReason: 'length',
+          usage: { input: 100, output: 16_000 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    expect(events.filter((event) => event.type === 'text')).toContainEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          text: 'a long but incomplete answer',
+          isFinal: true,
+        }),
+      }),
+    );
+    expect(events.filter((event) => event.type === 'error')).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          reason: 'output-limit',
+          isTerminal: true,
+        }),
+      }),
+    ]);
+    expect((events.find((event) => event.type === 'done')?.data as {
+      result?: unknown;
+      usage?: { outputTokens?: unknown };
+    })).toMatchObject({
+      result: 'a long but incomplete answer',
+      usage: { outputTokens: 16_000 },
+    });
+  });
+
   it('drops a pending provider error when Pi auto-retry succeeds', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

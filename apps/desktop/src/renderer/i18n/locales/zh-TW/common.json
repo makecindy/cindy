@@ -9634,6 +9634,8 @@
       "qrExpired": "二維碼已過期，請重新開始",
       "registrationFailed": "建立失敗，請稍後重試",
       "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
+      "outputDegeneration": "回覆內容出現大量重複，Cindy 已停止本輪輸出。如果確實需要重複內容，請在請求開頭加入 /allow-repetitive-output 後重新傳送。",
+      "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以直接傳送下一則訊息繼續。",
       "permissionTightenInterruptFailed": "收緊權限時未能停止正在執行的任務，它可能會繼續免確認執行直到結束；如有需要請手動停止。",
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
       "hostShellCommandBlocked": "Cindy 已阻止會繞過內嵌模擬器的 Shell 命令。請改用模擬器工具控制裝置、啟動 App、操作介面、截圖和診斷。",

@@ -1093,6 +1093,75 @@ describe('orca_worker_bridge MCP helpers', () => {
     }))).toMatchObject({ status: 'done' });
   });
 
+  it('keeps a terminal error while a trailing done event preserves the final result', async () => {
+    const lead = makeSession('lead-1');
+    const { server } = makeWorkerBridgeLeadHarness(lead);
+
+    await server._registeredTools.read_lead.handler({ worker_id: 'worker-1' });
+    lead.emit({
+      type: 'error',
+      data: {
+        message: 'The model reached its output limit.',
+        reason: 'output-limit',
+        isTerminal: true,
+      },
+    } as AgentEvent);
+    lead.emit({
+      type: 'done',
+      data: { result: 'Truncated lead result' },
+    } as AgentEvent);
+
+    expect(parseToolJson(await server._registeredTools.read_lead.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({
+      status: 'error',
+      result: 'Truncated lead result',
+    });
+  });
+
+  it('resets a terminal error when a new lead turn starts outside send_to_lead', async () => {
+    const lead = makeSession('lead-1');
+    const { server } = makeWorkerBridgeLeadHarness(lead);
+
+    await server._registeredTools.read_lead.handler({ worker_id: 'worker-1' });
+    lead.emit({
+      type: 'error',
+      data: {
+        message: 'The model reached its output limit.',
+        reason: 'output-limit',
+        isTerminal: true,
+      },
+    } as AgentEvent);
+    lead.emit({
+      type: 'done',
+      data: { result: 'Truncated lead result' },
+    } as AgentEvent);
+
+    lead.emit({
+      type: 'status',
+      data: { status: 'Working…', isRunning: true },
+    } as AgentEvent);
+
+    expect(parseToolJson(await server._registeredTools.read_lead.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({
+      status: 'running',
+      result: '',
+    });
+
+    lead.emit({
+      type: 'done',
+      data: { result: 'Recovered lead result' },
+    } as AgentEvent);
+
+    expect(parseToolJson(await server._registeredTools.read_lead.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({
+      status: 'done',
+      result: 'Recovered lead result',
+    });
+  });
+
   it('send_to_lead accepted false does not persist success or mark done', async () => {
     const lead = makeSession('lead-1', { sendResult: CANCELLED_SEND });
     const logger = makeLogger();
