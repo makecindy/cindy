@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createAsyncQueue } from '../shared/async-queue.js';
+import { UsageTracker } from '../shared/usage-tracker.js';
+import type { AgentEvent } from '../../types/events.js';
 import {
   beginClaudeGeneration,
   finalizeClaudeGeneration,
@@ -8,6 +11,11 @@ import {
   resetClaudeGenerationTiming,
   resumeClaudeGeneration,
 } from './generation-timing.js';
+import {
+  newRuntimeState,
+  translateSdkMessage,
+  type TurnState,
+} from './translator.js';
 
 describe('claude generation timing', () => {
   afterEach(() => {
@@ -38,5 +46,158 @@ describe('claude generation timing', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+function createTurnState(): TurnState {
+  return {
+    text: '',
+    toolUses: 0,
+    apiCalls: 0,
+    sawCompactBoundary: false,
+    hasEmittedText: false,
+    uiEmittedText: '',
+    pendingApiError: null,
+    interruptRequested: false,
+    generation: 0,
+    interruptGeneration: 0,
+    lastAssistantMsgHadSubstance: true,
+  };
+}
+
+function createTranslatorCtx() {
+  return {
+    rt: newRuntimeState(),
+    turn: createTurnState(),
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    getModel: () => 'claude-sonnet-4.5',
+    getEffort: () => 'medium' as const,
+    getPermissionMode: () => 'auto' as const,
+    onSessionId: vi.fn(),
+    getSdkSessionId: () => undefined,
+    getLogTitle: () => undefined,
+    tracker: new UsageTracker(),
+  };
+}
+
+describe('claude generation pause boundaries', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps generating through tool-argument deltas and pauses on message_delta', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(1_000);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+
+    vi.setSystemTime(1_200);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu_1', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(1_000);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+    expect(ctx.rt.generation.durationMs).toBe(0);
+
+    vi.setSystemTime(1_600);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{"command":"ls"}' },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBe(1_000);
+    expect(ctx.rt.generation.pendingToolIds.size).toBe(0);
+
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 40 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_1')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(800);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
+  });
+
+  it('pauses on a completed assistant tool_use when stream_event never arrived', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    vi.setSystemTime(1_500);
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_2', name: 'Read', input: { file_path: '/tmp/a' } }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    expect(ctx.rt.generation.startedAt).toBeNull();
+    expect(ctx.rt.generation.pendingToolIds.has('toolu_2')).toBe(true);
+    expect(ctx.rt.generation.durationMs).toBe(500);
+    expect(ctx.rt.generation.reliable).toBe(true);
+
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    queue.end();
   });
 });

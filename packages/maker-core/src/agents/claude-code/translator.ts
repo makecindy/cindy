@@ -1334,12 +1334,11 @@ function handleAssistant(
       //   toolUseId: block.id,
       //   turnToolUses: ctx.turn.toolUses,
       // });
-      if (typeof block.id === 'string' && block.id.length > 0) {
-        if (typeof block.name === 'string' && block.name.length > 0) {
-          ctx.rt.toolUseIdToName.set(block.id, block.name);
-        }
-        pauseClaudeGeneration(ctx.rt.generation, block.id);
-        ctx.onToolUseStart?.(block.id, block.name, block.input, parentToolUseId);
+      const toolUseId = rememberClaudeToolUseId(ctx, block.id, block.name);
+      if (toolUseId) {
+        // 完整 assistant 消息已带工具参数,即使没有 stream_event 也可在此停表。
+        pauseClaudeGenerationForToolUse(ctx, toolUseId);
+        ctx.onToolUseStart?.(toolUseId, block.name, block.input, parentToolUseId);
       }
       queue.push({
         type: 'tool_use',
@@ -1374,6 +1373,36 @@ function handleAssistant(
   }
 }
 
+function rememberClaudeToolUseId(
+  ctx: TranslateContext,
+  toolUseId: unknown,
+  toolName: unknown,
+): string | null {
+  if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
+  const existingName = ctx.rt.toolUseIdToName.get(toolUseId);
+  ctx.rt.toolUseIdToName.set(
+    toolUseId,
+    typeof toolName === 'string' && toolName.length > 0
+      ? toolName
+      : (existingName ?? ''),
+  );
+  return toolUseId;
+}
+
+function pauseClaudeGenerationForToolUse(
+  ctx: TranslateContext,
+  toolUseId: unknown,
+): void {
+  if (typeof toolUseId !== 'string' || toolUseId.length === 0) return;
+  pauseClaudeGeneration(ctx.rt.generation, toolUseId);
+}
+
+function pauseClaudeGenerationForKnownTools(ctx: TranslateContext): void {
+  for (const toolUseId of ctx.rt.toolUseIdToName.keys()) {
+    pauseClaudeGenerationForToolUse(ctx, toolUseId);
+  }
+}
+
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
 
 function handleStreamEvent(
@@ -1405,12 +1434,15 @@ function handleStreamEvent(
       const blockIndex = typeof event.index === 'number' ? event.index : 0;
       ctx.rt.streamStopTokenByKey.delete(`${parentToolUseId ?? '__main__'}:${blockIndex}`);
     }
-    if (cb && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-      if (typeof cb.name === 'string' && cb.name.length > 0) {
-        ctx.rt.toolUseIdToName.set(cb.id, cb.name);
+    if (cb && cb.type === 'tool_use') {
+      const toolUseId = rememberClaudeToolUseId(ctx, cb.id, cb.name);
+      if (toolUseId) {
+        // watchdog / loop-guard 仍要立刻拿到 tool id。生成计时要等
+        // message_delta 或完整 assistant tool_use: content_block_start
+        // 早于参数 input_json_delta,这里停表会把参数生成时间从分母抠掉,
+        // 而后续 message_delta 仍把这些 token 加进 outputTokens。
+        ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId);
       }
-      pauseClaudeGeneration(ctx.rt.generation, cb.id);
-      ctx.onToolUseStart?.(cb.id, cb.name, cb.input, parentToolUseId);
     }
   }
 
@@ -1487,6 +1519,10 @@ function handleStreamEvent(
   }
 
   if (event.type === 'message_delta') {
+    // message_delta 是整条 assistant 消息(含工具参数 token)生成完毕后的
+    // 第一个事件。在此停表,才能排除工具执行/审批等待,又不把参数生成
+    // 区间从 tok/s 分母里抠掉。
+    pauseClaudeGenerationForKnownTools(ctx);
     const usage = event.usage;
     if (usage) {
       const dIn = usage.input_tokens ?? 0;
