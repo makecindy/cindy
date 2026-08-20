@@ -1043,7 +1043,7 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("startsWith('mcp__')");
   });
 
-  it('keeps one-shot startup env available across bridge reloads without leaving it in process.env', () => {
+  it('keeps the bash-package-home env available across bridge reloads and the package token out of globalThis', () => {
     // #3070 回归:首次加载读 env → 删 → stash 到 globalThis;重载时 env 已被消费,
     // 从 stash 取回 host 注入的原始值,bash 不再永久 fail-closed。
     const helper = loadOneShotEnvHelper();
@@ -1064,23 +1064,14 @@ describe('cindy-bridge extension source', () => {
     expect(helper.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME'))
       .toBe('/host/injected/bash-package-home');
 
-    // 多个一次性 env 互不干扰(包管理 token 同族修复)。
-    helper.env.CINDY_PI_PACKAGE_MANAGEMENT = 'a'.repeat(48);
-    expect(helper.takeOneShotEnv('CINDY_PI_PACKAGE_MANAGEMENT')).toBe('a'.repeat(48));
-    expect(helper.env.CINDY_PI_PACKAGE_MANAGEMENT).toBeUndefined();
-    expect(helper.takeOneShotEnv('CINDY_PI_PACKAGE_MANAGEMENT')).toBe('a'.repeat(48));
-    expect(helper.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME'))
-      .toBe('/host/injected/bash-package-home');
-
     // 非 Cindy 初始化的进程(env 从未注入、无 stash)保持 fail-closed 语义:
     // 返回 undefined,下游 isolatedBashEnvironment 照旧 throw。
     const fresh = loadOneShotEnvHelper();
     expect(fresh.takeOneShotEnv('CINDY_PI_BASH_PACKAGE_HOME')).toBeUndefined();
 
-    // 结构断言:入口走 takeOneShotEnv,裸 delete 只存在于 helper 内部。
+    // 结构断言:路径走 takeOneShotEnv,裸 delete 只存在于 helper 内部。
     const source = CINDY_BRIDGE_EXTENSION_SOURCE;
     expect(source).toContain('const bashPackageHome = takeOneShotEnv(PI_BASH_PACKAGE_HOME_ENV);');
-    expect(source).toContain('const piPackageManagementToken = takeOneShotEnv(PI_PACKAGE_MANAGEMENT_ENV);');
     expect(source).not.toContain('delete process.env[PI_BASH_PACKAGE_HOME_ENV];');
     expect(source.match(/delete process\.env\[name\];/g)).toHaveLength(1);
     const helperSlice = source.slice(
@@ -1091,6 +1082,17 @@ describe('cindy-bridge extension source', () => {
     expect(source.indexOf('delete process.env[name];')).toBeLessThan(
       source.indexOf('export default async function cindyBridge'),
     );
+
+    // 凭证不进 globalThis stash(review P1):包管理 token 保持读一次即删、
+    // 仅闭包持有 —— 同进程的第三方托管扩展与 bridge 共享 globalThis,stash
+    // 等于把 bearer token 暴露给任意托管代码。重载后工具退场是可接受代价。
+    expect(source).toContain('const piPackageManagementToken = process.env[PI_PACKAGE_MANAGEMENT_ENV];');
+    expect(source).toContain('delete process.env[PI_PACKAGE_MANAGEMENT_ENV];');
+    expect(source.indexOf('delete process.env[PI_PACKAGE_MANAGEMENT_ENV];')).toBeGreaterThan(
+      source.indexOf('export default async function cindyBridge'),
+    );
+    expect(helperSlice).not.toContain('CINDY_PI_PACKAGE_MANAGEMENT');
+    expect(source).not.toContain('takeOneShotEnv(PI_PACKAGE_MANAGEMENT_ENV)');
   });
 
   it('blocks Pi package mutations before bash while preserving ordinary commands', () => {
