@@ -108,7 +108,7 @@ import {
 } from '@/session/homeListPriority';
 import {
   projectDropIndexFromY,
-  reorderVisibleProjectToIndex,
+  reorderVisibleProjectByDropIndex,
   snapshotManualProjectOrder,
   type HomeProjectOrder,
 } from '@/session/homeProjectOrder';
@@ -227,6 +227,8 @@ export default function HomeScreen() {
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
   const syncInFlightRef = useRef<Promise<void> | null>(null);
+  const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
+  const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
   const devicesRef = useRef<DeviceView[]>([]);
   // schedule-index hydration 延后任务登记表(按设备 id 索引):为同一设备注册新延后任务前取消上一轮
   // pending 的,避免 800ms 窗口内多次 hydrate 时较早回调用旧快照覆盖新状态(并发覆盖竞态);卸载时 cancelAll。
@@ -459,6 +461,7 @@ export default function HomeScreen() {
     const visible = options.visible === true;
     if (visible) setRefreshing(true);
     if (syncInFlightRef.current) {
+      syncQueuedRef.current = options;
       return syncInFlightRef.current.finally(() => {
         if (visible) setRefreshing(false);
       });
@@ -560,6 +563,11 @@ export default function HomeScreen() {
       })
       .finally(() => {
         if (syncInFlightRef.current === task) syncInFlightRef.current = null;
+        const queued = syncQueuedRef.current;
+        if (queued) {
+          syncQueuedRef.current = null;
+          void loadHomeRef.current(queued);
+        }
       });
 
     syncInFlightRef.current = task;
@@ -567,6 +575,7 @@ export default function HomeScreen() {
       if (visible) setRefreshing(false);
     });
   }, [apiFetch, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, revokedDevices, softInvalidateDeviceMirror]);
+  loadHomeRef.current = loadHome;
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
   // spinner);loadHome 返回后由 setDeviceSessions / removeDevice 正常覆盖收敛。缓存为空时列表
@@ -951,12 +960,28 @@ export default function HomeScreen() {
       return undefined;
     }
     let cancelled = false;
-    void Promise.all(ids.map(async (deviceId) => {
-      const snapshot = await fetchHostProjectOrder(invoke, deviceId);
-      return [deviceId, snapshot] as const;
-    })).then((entries) => {
-      if (!cancelled) setHostProjectOrders(new Map(entries));
-    });
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const load = async (attempt: number) => {
+      const entries = await Promise.all(ids.map(async (deviceId) => {
+        const result = await fetchHostProjectOrder(invoke, deviceId);
+        return [deviceId, result] as const;
+      }));
+      if (cancelled) return;
+      setHostProjectOrders((current) => {
+        const next = new Map(current);
+        for (const [deviceId, result] of entries) {
+          if (result.kind === 'ok') next.set(deviceId, result.snapshot);
+          else if (result.kind === 'unavailable') next.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
+        }
+        return next;
+      });
+      if (attempt < 3 && entries.some(([, result]) => result.kind === 'transient')) {
+        retryTimer = setTimeout(() => {
+          void load(attempt + 1);
+        }, 2000);
+      }
+    };
+    void load(1);
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
       if (cancelled || !ids.includes(deviceId)) return;
       setHostProjectOrders((current) => {
@@ -967,6 +992,7 @@ export default function HomeScreen() {
     });
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
       unsubscribe();
     };
   }, [deviceModels, invoke]);
@@ -1259,8 +1285,8 @@ export default function HomeScreen() {
           : hostManualProjectOrder,
         ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: nextPatch.projectOrder,
-      }).then((snapshot) => {
-        if (!snapshot) {
+      }).then((result) => {
+        if (result.kind === 'unavailable') {
           setHostProjectOrders((current) => {
             const next = new Map(current);
             next.set(selectedDeviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
@@ -1273,9 +1299,10 @@ export default function HomeScreen() {
           void saveHomeViewPreferences(nextPatch);
           return;
         }
+        if (result.kind !== 'ok') return;
         setHostProjectOrders((current) => {
           const next = new Map(current);
-          next.set(selectedDeviceId, snapshot);
+          next.set(selectedDeviceId, result.snapshot);
           return next;
         });
       });
@@ -1307,7 +1334,7 @@ export default function HomeScreen() {
       const session: ProjectDragSession = {
         count: input.count,
         height: self.height,
-        hoverIndex: projectDropIndexFromY(layouts, input.absoluteY),
+        hoverIndex: projectDropIndexFromY(layouts.filter((item) => item.key !== input.key), input.absoluteY),
         key: input.key,
         layouts,
         originY: self.y,
@@ -1350,7 +1377,10 @@ export default function HomeScreen() {
     if (!session) return;
     // 跟手:幽灵行顶边 = 手指 Y - 半行高,避免跳到触点下方。
     projectDragY.value = absoluteY - session.height / 2 - session.rootY;
-    const hoverIndex = projectDropIndexFromY(session.layouts, absoluteY);
+    const hoverIndex = projectDropIndexFromY(
+      session.layouts.filter((item) => item.key !== session.key),
+      absoluteY,
+    );
     if (hoverIndex === session.hoverIndex) return;
     const next = { ...session, hoverIndex };
     projectDragRef.current = next;
@@ -1382,7 +1412,7 @@ export default function HomeScreen() {
         selectedDeviceId,
         hostProjectOrders.get(selectedDeviceId) ?? UNAVAILABLE_PROJECT_ORDER_SNAPSHOT,
       );
-      const next = reorderVisibleProjectToIndex(
+      const next = reorderVisibleProjectByDropIndex(
         currentKeys.length > 0 ? currentKeys : visibleKeys,
         visibleKeys,
         session.key,
@@ -1393,8 +1423,8 @@ export default function HomeScreen() {
         manualProjectOrder: next,
         ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: 'custom',
-      }).then((snapshot) => {
-        if (!snapshot) {
+      }).then((result) => {
+        if (result.kind === 'unavailable') {
           setHostProjectOrders((current) => {
             const nextOrders = new Map(current);
             nextOrders.set(selectedDeviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
@@ -1403,15 +1433,16 @@ export default function HomeScreen() {
           persistViewer(next);
           return;
         }
+        if (result.kind !== 'ok') return;
         setHostProjectOrders((current) => {
           const nextOrders = new Map(current);
-          nextOrders.set(selectedDeviceId, snapshot);
+          nextOrders.set(selectedDeviceId, result.snapshot);
           return nextOrders;
         });
       });
       return;
     }
-    const next = reorderVisibleProjectToIndex(
+    const next = reorderVisibleProjectByDropIndex(
       manualProjectOrder,
       visibleProjectKeys,
       session.key,

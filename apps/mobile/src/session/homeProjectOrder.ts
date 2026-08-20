@@ -107,6 +107,31 @@ export function moveVisibleProjectOrder(
   return reorderVisibleProjectToIndex(currentFullOrder, visible, sourceKey, nextIndex);
 }
 
+/**
+ * 把源行从可见列表拿掉之后,按 dropIndex 插回去。
+ * dropIndex 是剩余行里的插入位(0..remaining.length),由 projectDropIndexFromY 在排除源行后算出。
+ */
+export function reorderVisibleProjectByDropIndex(
+  currentFullOrder: readonly string[],
+  visibleKeys: readonly string[],
+  sourceKey: string,
+  dropIndex: number,
+): string[] | null {
+  const visible = normalizeProjectKeyList(visibleKeys);
+  const from = visible.indexOf(sourceKey);
+  if (from < 0) return null;
+  const remaining = visible.filter((key) => key !== sourceKey);
+  const to = Math.max(0, Math.min(remaining.length, Math.round(dropIndex)));
+  const nextVisible = remaining.slice();
+  nextVisible.splice(to, 0, sourceKey);
+  if (nextVisible.every((key, index) => key === visible[index])) return null;
+  const fullOrder = normalizeManualProjectOrder(currentFullOrder, [
+    ...currentFullOrder,
+    ...visible,
+  ]);
+  return mergeVisibleReorder(fullOrder, nextVisible);
+}
+
 export function projectDropIndexFromY(
   layouts: readonly { height: number; y: number }[],
   y: number,
@@ -115,5 +140,5 @@ export function projectDropIndexFromY(
   for (let i = 0; i < layouts.length; i += 1) {
     if (y < layouts[i].y + layouts[i].height / 2) return i;
   }
-  return layouts.length - 1;
+  return layouts.length;
 }

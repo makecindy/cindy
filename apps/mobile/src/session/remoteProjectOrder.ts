@@ -1,4 +1,5 @@
 import {
+  isHostProjectOrderChannelMissing,
   parseSyncedProjectOrderSnapshot,
   remapControllerOrderToHost,
   remapHostOrderToController,
@@ -11,20 +12,24 @@ import {
 } from '@cindy/maker-shared/project-order-sync';
 
 export function isProjectOrderUnavailable(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
-  return code === 'CHANNEL_NOT_ALLOWED' || code === 'REMOTE_DISABLED';
+  return isHostProjectOrderChannelMissing(error);
 }
+
+export type HostProjectOrderResult =
+  | { kind: 'ok'; snapshot: SyncedProjectOrderSnapshot }
+  | { kind: 'unavailable' }
+  | { kind: 'transient' };
 
 export async function fetchHostProjectOrder(
   invoke: <T>(deviceId: string, channel: string, args: unknown[]) => Promise<T>,
   deviceId: string,
-): Promise<SyncedProjectOrderSnapshot> {
+): Promise<HostProjectOrderResult> {
   try {
     const raw = await invoke<unknown>(deviceId, SIDEBAR_GET_PROJECT_ORDER_CHANNEL, []);
-    return parseSyncedProjectOrderSnapshot(raw);
-  } catch {
-    return UNAVAILABLE_PROJECT_ORDER_SNAPSHOT;
+    return { kind: 'ok', snapshot: parseSyncedProjectOrderSnapshot(raw) };
+  } catch (error) {
+    if (isHostProjectOrderChannelMissing(error)) return { kind: 'unavailable' };
+    return { kind: 'transient' };
   }
 }
 
@@ -53,18 +58,18 @@ export async function applyHostProjectOrder(
     ownerStamp?: SyncedProjectOrderOwnerStamp;
     projectOrder: 'activity' | 'custom';
   },
-): Promise<SyncedProjectOrderSnapshot | null> {
-  if (!snapshot.ownerStamp) return null;
+): Promise<HostProjectOrderResult> {
+  if (!snapshot.ownerStamp) return { kind: 'transient' };
   try {
     const raw = await invoke<unknown>(deviceId, SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, [{
       ...snapshot.ownerStamp,
       manualProjectOrder: remapControllerOrderToHost(deviceId, snapshot.manualProjectOrder),
       projectOrder: snapshot.projectOrder,
     }]);
-    return parseSyncedProjectOrderSnapshot(raw);
+    return { kind: 'ok', snapshot: parseSyncedProjectOrderSnapshot(raw) };
   } catch (error) {
-    if (isProjectOrderUnavailable(error)) return null;
-    return null;
+    if (isHostProjectOrderChannelMissing(error)) return { kind: 'unavailable' };
+    return { kind: 'transient' };
   }
 }
 

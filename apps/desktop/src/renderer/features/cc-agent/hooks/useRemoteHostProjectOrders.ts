@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   hostLocalProjectKeysOnly,
+  isHostProjectOrderChannelMissing,
   parseSyncedProjectOrderSnapshot,
   remapControllerOrderToHost,
   remapHostOrderToController,
@@ -48,7 +49,7 @@ export function useLocalHostProjectOrder(seed?: {
   apply(request: {
     manualProjectOrder: readonly string[];
     projectOrder: SyncedProjectOrderMode;
-  }): Promise<SyncedProjectOrderSnapshot | null>;
+  }): Promise<{ kind: 'ok'; snapshot: SyncedProjectOrderSnapshot } | { kind: 'unavailable' } | { kind: 'transient' }>;
   snapshot: SyncedProjectOrderSnapshot;
 } {
   const [snapshot, setSnapshot] = useState<SyncedProjectOrderSnapshot>(PENDING_LOCAL_SNAPSHOT);
@@ -105,10 +106,10 @@ export function useLocalHostProjectOrder(seed?: {
   const apply = useCallback(async (request: {
     manualProjectOrder: readonly string[];
     projectOrder: SyncedProjectOrderMode;
-  }): Promise<SyncedProjectOrderSnapshot | null> => {
+  }): Promise<{ kind: 'ok'; snapshot: SyncedProjectOrderSnapshot } | { kind: 'unavailable' } | { kind: 'transient' }> => {
     const api = window.electronAPI?.sidebarSettings;
     const ownerStamp = snapshotRef.current.ownerStamp;
-    if (!api?.applyProjectOrder || !ownerStamp) return null;
+    if (!api?.applyProjectOrder || !ownerStamp) return { kind: 'transient' };
     try {
       const next = await api.applyProjectOrder({
         manualProjectOrder: hostLocalProjectKeysOnly(request.manualProjectOrder),
@@ -116,9 +117,9 @@ export function useLocalHostProjectOrder(seed?: {
         projectOrder: request.projectOrder,
       });
       setSnapshot(next);
-      return next;
+      return { kind: 'ok', snapshot: next };
     } catch {
-      return null;
+      return { kind: 'transient' };
     }
   }, []);
 
@@ -129,7 +130,7 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
   apply(
     deviceId: string,
     request: { manualProjectOrder: readonly string[]; projectOrder: SyncedProjectOrderMode },
-  ): Promise<SyncedProjectOrderSnapshot | null>;
+  ): Promise<{ kind: 'ok'; snapshot: SyncedProjectOrderSnapshot } | { kind: 'unavailable' } | { kind: 'transient' }>;
   orders: ReadonlyMap<string, SyncedProjectOrderSnapshot>;
 } {
   const remoteIds = useMemo(
@@ -145,22 +146,35 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
       return undefined;
     }
     let cancelled = false;
-    void Promise.all(
-      ids.map(async (deviceId) => {
-        try {
-          const raw = await window.electronAPI.deviceLink.invoke(
-            deviceId,
-            SIDEBAR_GET_PROJECT_ORDER_CHANNEL,
-            [],
-          );
-          return [deviceId, parseSyncedProjectOrderSnapshot(raw)] as const;
-        } catch {
-          return [deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT] as const;
+    const load = async () => {
+      const entries = await Promise.all(
+        ids.map(async (deviceId) => {
+          try {
+            const raw = await window.electronAPI.deviceLink.invoke(
+              deviceId,
+              SIDEBAR_GET_PROJECT_ORDER_CHANNEL,
+              [],
+            );
+            return [deviceId, { kind: 'ok' as const, snapshot: parseSyncedProjectOrderSnapshot(raw) }] as const;
+          } catch (error) {
+            if (isHostProjectOrderChannelMissing(error)) {
+              return [deviceId, { kind: 'unavailable' as const }] as const;
+            }
+            return [deviceId, { kind: 'transient' as const }] as const;
+          }
+        }),
+      );
+      if (cancelled) return;
+      setOrders((current) => {
+        const copy = new Map(current);
+        for (const [deviceId, result] of entries) {
+          if (result.kind === 'ok') copy.set(deviceId, result.snapshot);
+          else if (result.kind === 'unavailable') copy.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
         }
-      }),
-    ).then((entries) => {
-      if (!cancelled) setOrders(new Map(entries));
-    });
+        return copy;
+      });
+    };
+    void load();
     const offPush = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (cancelled || push.channel !== SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL) return;
       if (!ids.includes(push.deviceId)) return;
@@ -181,10 +195,10 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
   const apply = useCallback(async (
     deviceId: string,
     request: { manualProjectOrder: readonly string[]; projectOrder: SyncedProjectOrderMode },
-  ): Promise<SyncedProjectOrderSnapshot | null> => {
+  ): Promise<{ kind: 'ok'; snapshot: SyncedProjectOrderSnapshot } | { kind: 'unavailable' } | { kind: 'transient' }> => {
     try {
       const ownerStamp = orders.get(deviceId)?.ownerStamp;
-      if (!ownerStamp) return null;
+      if (!ownerStamp) return { kind: 'transient' };
       const raw = await window.electronAPI.deviceLink.invoke(
         deviceId,
         SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
@@ -200,14 +214,17 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
         copy.set(deviceId, next);
         return copy;
       });
-      return next;
-    } catch {
-      setOrders((current) => {
-        const copy = new Map(current);
-        copy.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
-        return copy;
-      });
-      return null;
+      return { kind: 'ok', snapshot: next };
+    } catch (error) {
+      if (isHostProjectOrderChannelMissing(error)) {
+        setOrders((current) => {
+          const copy = new Map(current);
+          copy.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
+          return copy;
+        });
+        return { kind: 'unavailable' };
+      }
+      return { kind: 'transient' };
     }
   }, [orders]);
 

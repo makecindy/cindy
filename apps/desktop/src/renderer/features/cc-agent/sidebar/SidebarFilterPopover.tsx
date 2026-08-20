@@ -435,8 +435,8 @@ export function SidebarFilterPopover({
             ? localHostProjectOrder.snapshot.manualProjectOrder
             : hostKeys,
           projectOrder: 'custom',
-        }).then((snapshot) => {
-          if (!snapshot) setViewerProjectOrder('custom');
+        }).then((result) => {
+          if (result.kind === 'unavailable') setViewerProjectOrder('custom');
         });
         return;
       }
@@ -447,8 +447,8 @@ export function SidebarFilterPopover({
       void remoteHostProjectOrders.apply(projectOrderScope.deviceId, {
         manualProjectOrder: current,
         projectOrder: 'custom',
-      }).then((snapshot) => {
-        if (!snapshot) setViewerProjectOrder('custom');
+      }).then((result) => {
+        if (result.kind === 'unavailable') setViewerProjectOrder('custom');
       });
       return;
     }

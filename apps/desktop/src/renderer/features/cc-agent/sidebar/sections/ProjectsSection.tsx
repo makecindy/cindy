@@ -341,8 +341,8 @@ export function ProjectsSection({
         void localHostProjectOrder.apply({
           manualProjectOrder: next,
           projectOrder: 'custom',
-        }).then((snapshot) => {
-          if (!snapshot) persistViewer(visibleNewOrder);
+        }).then((result) => {
+          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
         });
         return;
       }
@@ -358,8 +358,8 @@ export function ProjectsSection({
         void remoteHostProjectOrders.apply(deviceId, {
           manualProjectOrder: next,
           projectOrder: 'custom',
-        }).then((snapshot) => {
-          if (!snapshot) persistViewer(visibleNewOrder);
+        }).then((result) => {
+          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
         });
         return;
       }

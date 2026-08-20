@@ -4,6 +4,7 @@ import {
   moveVisibleProjectOrder,
   normalizeManualProjectOrder,
   projectDropIndexFromY,
+  reorderVisibleProjectByDropIndex,
   reorderVisibleProjectToIndex,
   snapshotManualProjectOrder,
 } from '@/session/homeProjectOrder';
@@ -52,6 +53,15 @@ describe('reorderVisibleProjectToIndex', () => {
   });
 });
 
+describe('reorderVisibleProjectByDropIndex', () => {
+  it('inserts into the remaining list so dragging down does not skip a slot', () => {
+    expect(reorderVisibleProjectByDropIndex(['a', 'b', 'c'], ['a', 'b', 'c'], 'a', 1))
+      .toEqual(['b', 'a', 'c']);
+    expect(reorderVisibleProjectByDropIndex(['a', 'b', 'c'], ['a', 'b', 'c'], 'a', 2))
+      .toEqual(['b', 'c', 'a']);
+  });
+});
+
 describe('projectDropIndexFromY', () => {
   const layouts = [
     { height: 56, y: 100 },
@@ -62,6 +72,6 @@ describe('projectDropIndexFromY', () => {
   it('uses midpoints so crossing the lower half of a row targets the next slot', () => {
     expect(projectDropIndexFromY(layouts, 110)).toBe(0);
     expect(projectDropIndexFromY(layouts, 190)).toBe(2);
-    expect(projectDropIndexFromY(layouts, 400)).toBe(2);
+    expect(projectDropIndexFromY(layouts, 400)).toBe(3);
   });
 });

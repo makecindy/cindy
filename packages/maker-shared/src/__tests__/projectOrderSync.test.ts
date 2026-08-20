@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hostLocalProjectKeysOnly,
+  isHostProjectOrderChannelMissing,
   isHostProjectOrderReachable,
   parseSyncedProjectOrderSnapshot,
   projectOrderLedgerForScope,
@@ -47,6 +48,15 @@ describe('parseSyncedProjectOrderSnapshot', () => {
       manualProjectOrder: ['local:/a'],
       projectOrder: 'custom',
     });
+  });
+});
+
+describe('isHostProjectOrderChannelMissing', () => {
+  it('only treats missing-channel codes as unavailable', () => {
+    expect(isHostProjectOrderChannelMissing({ code: 'CHANNEL_NOT_ALLOWED' })).toBe(true);
+    expect(isHostProjectOrderChannelMissing({ code: 'REMOTE_DISABLED' })).toBe(true);
+    expect(isHostProjectOrderChannelMissing({ code: 'NOT_CONNECTED' })).toBe(false);
+    expect(isHostProjectOrderChannelMissing(new Error('timeout'))).toBe(false);
   });
 });
 

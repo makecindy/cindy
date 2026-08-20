@@ -110,6 +110,13 @@ export function isHostProjectOrderReachable(
   return snapshot?.available !== false;
 }
 
+/** 只有被控端明确没有这个通道才降级到查看端账本。超时 / 掉线要重试。 */
+export function isHostProjectOrderChannelMissing(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+  return code === 'CHANNEL_NOT_ALLOWED' || code === 'REMOTE_DISABLED';
+}
+
 /** 被控端够不到时,读写都走控制端自己的混排。 */
 export function projectOrderWriteLedger(
   scope: ProjectOrderWriteScope,
