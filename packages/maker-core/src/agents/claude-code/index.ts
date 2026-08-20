@@ -143,6 +143,7 @@ import { findClaudeSessionJsonl } from './claude-projects-fs.js';
 import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
+import { resetClaudeGenerationTiming } from './generation-timing.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
 import type {
   ScanAtResourcesOptions,
@@ -2349,6 +2350,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
+      resetClaudeGenerationTiming(runtimeState.generation);
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;

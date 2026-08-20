@@ -170,7 +170,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain("'session.screen.modelBusyRetrying'");
     expect(source).toContain("'session.screen.rateLimitRetrying'");
     expect(source).toContain('{reconnectAttempt.attempt}/{reconnectAttempt.maxAttempts}');
-    expect(source).toContain('ArrowDown');
     expect(source).toContain('useSessionRunStatus');
     expect(source).toContain('remoteSessionRunStatus.tokenUsage');
     expect(source).toContain('remoteSessionRunStatus.startedAt ?? composerActivityStartedAt');
@@ -178,9 +177,17 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}');
     expect(source).toContain('startedAt={composerActivityStartedAtMs}');
     expect(source).toContain('tokenUsage={composerActivityTokenUsage}');
-    expect(source).toContain('{!sideTaskRunning ? (');
+    expect(source).toContain('outputTokens={remoteSessionRunStatus.outputTokens}');
+    expect(source).toContain('generationDurationMs={remoteSessionRunStatus.generationDurationMs}');
+    expect(source).toContain('ArrowDown');
+    expect(source).toContain('{!sideTaskRunning && showUsageMeta ? (');
+    expect(source).toContain('generationActive={remoteSessionRunStatus.generationActive}');
+    expect(source).toContain('const showUsageMeta = Boolean(rateText) || tokenUsage > 0;');
+    expect(source).toContain('return `${formatted} tok/s`;');
+    expect(source).toContain("const unit = options?.compact === false ? 'tokens' : 'tok';");
     expect(source).toContain('function formatComposerActivityElapsed');
     expect(source).toContain('function formatComposerActivityTokens');
+    expect(source).toContain('function formatComposerActivityRate');
     expect(source).toContain('composerActivityPrimary');
     expect(source).toContain('composerActivityMeta');
     expect(source).toContain('composerActivityMetaText');
@@ -688,6 +695,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toContain('voiceDuration');
     expect(source).not.toContain('recordingDuration');
     expect(source).not.toContain('formatVoiceDuration');
-    expect(source).not.toContain('durationMs');
+    expect(source).not.toContain('voiceDurationMs');
+    expect(source).not.toMatch(/(?:const|let)\s+durationMs\b/);
   });
 });

@@ -102,6 +102,10 @@ export interface RemoteSessionRunStatus {
   startedAt: number | null;
   status: string;
   tokenUsage: number;
+  outputTokens: number;
+  generationDurationMs: number;
+  generationActive: boolean;
+  generationReliable: boolean;
 }
 
 export interface RemoteSessionReconnectAttempt {
@@ -154,6 +158,10 @@ const EMPTY_SESSION_RUN_STATUS: RemoteSessionRunStatus = Object.freeze({
   startedAt: null,
   status: '',
   tokenUsage: 0,
+  outputTokens: 0,
+  generationDurationMs: 0,
+  generationActive: false,
+  generationReliable: true,
 });
 
 const shards = new Map<string, DeviceShard>();
@@ -3129,6 +3137,35 @@ export const remoteSessionStore = {
       const tokenUsage = rawTokenUsage !== null && rawTokenUsage > 0
         ? rawTokenUsage
         : (isTurnStart ? 0 : current.tokenUsage);
+      const rawOutputTokens = readNumber(data, 'outputTokens');
+      const rawGenerationDurationMs = readNumber(data, 'generationDurationMs');
+      const hasLiveFields =
+        rawOutputTokens !== null ||
+        rawGenerationDurationMs !== null ||
+        typeof data?.generationActive === 'boolean' ||
+        typeof data?.generationReliable === 'boolean';
+      const outputTokens = isTurnStart
+        ? 0
+        : rawOutputTokens !== null
+          ? rawOutputTokens
+          : current.outputTokens;
+      const generationDurationMs = isTurnStart
+        ? 0
+        : rawGenerationDurationMs !== null
+          ? rawGenerationDurationMs
+          : current.generationDurationMs;
+      const generationActive = !isRunning || isTurnStart
+        ? false
+        : typeof data?.generationActive === 'boolean'
+          ? data.generationActive
+          : hasLiveFields
+            ? false
+            : current.generationActive;
+      const generationReliable = isTurnStart
+        ? true
+        : typeof data?.generationReliable === 'boolean'
+          ? data.generationReliable
+          : current.generationReliable;
       // maker turn 边界 false→true 时清掉上一轮残留的 live task updates:它们是 turn 级
       // live 状态,残留到下一轮会被渲染层的孤儿兜底当作"仍在运行的子 agent"追加到消息流
       // 末尾(桌面端靠 idle demote / clear 清,手机 store 是常驻单例,只能在 turn 边界收口)。
@@ -3153,6 +3190,10 @@ export const remoteSessionStore = {
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
         status: rawStatus ?? current.status,
         tokenUsage,
+        outputTokens,
+        generationDurationMs,
+        generationActive,
+        generationReliable,
       };
       if (
         writeSessionRunStatus(sessionId, next)

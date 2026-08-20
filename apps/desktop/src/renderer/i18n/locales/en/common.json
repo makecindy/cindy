@@ -6775,6 +6775,10 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details"
     },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
+    },
     "shareImage": {
       "entry": "Share as Image",
       "title": "Share Conversation",

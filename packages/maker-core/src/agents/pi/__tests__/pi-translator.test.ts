@@ -5,7 +5,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createPiTranslateContext, translatePiEvent, usageSnapshotOf } from '../translator.js';
+import {
+  createPiTranslateContext,
+  disposePiTranslateContext,
+  translatePiEvent,
+  usageSnapshotOf,
+} from '../translator.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { AsyncQueue } from '../../shared/async-queue.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -602,6 +607,10 @@ describe('pi translator', () => {
     expect(usage.turnDurationMs).toBeGreaterThanOrEqual(0);
     // 快照累计 input+output。
     expect(usageSnapshotOf(ctx).tokenUsage).toBe(120);
+    expect(usageSnapshotOf(ctx).outputTokens).toBe(20);
+    expect(usageSnapshotOf(ctx).generationReliable).toBe(true);
+    expect(usageSnapshotOf(ctx).generationDurationMs).toBe(1_200);
+    expect(usageSnapshotOf(ctx).generationActive).toBe(false);
     // done.data.result 带上最终回复文本 —— register.ts 的 will-assistant-message 出口钩子
     // 与 Orca worker 终态 finalText 都读它,不带上就对 Pi 静默跳过(codex review P1)。
     expect((done!.data as { result?: unknown }).result).toBe('hi');
@@ -609,6 +618,28 @@ describe('pi translator', () => {
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
     }));
+  });
+
+  it('marks generation active on message_start so the UI can tick live TPS', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    expect(usageSnapshotOf(ctx).generationActive).toBe(true);
+    expect(usageSnapshotOf(ctx).generationReliable).toBe(true);
+    expect(events.filter((e) => e.type === 'status')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'status',
+          data: expect.objectContaining({
+            status: 'Working…',
+            isRunning: true,
+            generationActive: true,
+          }),
+        }),
+      ]),
+    );
+    disposePiTranslateContext(ctx);
   });
 
   it('reads Pi v0.83 generation duration from timestamp with a live heartbeat', () => {
@@ -793,11 +824,12 @@ describe('pi translator', () => {
       ctx,
     );
 
-    expect(events).toEqual([{
+    expect(events.filter((e) => e.type === 'thinking')).toEqual([{
       type: 'thinking',
       data: { stage: 'redacted', blockId: 'pi-think-1' },
       source: 'pi',
     }]);
+    disposePiTranslateContext(ctx);
   });
 
   it('cleans up a visible placeholder when redaction is only known at thinking_end', () => {

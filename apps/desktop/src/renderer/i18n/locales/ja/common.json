@@ -4988,7 +4988,7 @@
     "timeLine": "時間 {{duration}}",
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
-    "tokenLine": "Token: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
+    "tokenLine": "トークン: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
     "cacheLine": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}} · ヒット率 {{rate}}",
     "cacheLineNoRate": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}}",
     "modelLine": "モデル: {{model}}",
@@ -6772,6 +6772,10 @@
       "turnCostEstimatedValue": "価値 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "リクエストの明細"
+    },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
       "entry": "画像として共有",

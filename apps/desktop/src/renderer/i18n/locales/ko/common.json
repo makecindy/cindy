@@ -4988,7 +4988,7 @@
     "timeLine": "시간 {{duration}}",
     "costLine": "이번 턴 비용: {{cost}}",
     "valueLine": "이번 턴 토큰 가치: {{cost}}",
-    "tokenLine": "Token: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
+    "tokenLine": "토큰: 총 {{total}} · 입력 {{input}} · 출력 {{output}}",
     "cacheLine": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}} · 적중률 {{rate}}",
     "cacheLineNoRate": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}}",
     "modelLine": "모델: {{model}}",
@@ -6772,6 +6772,10 @@
       "turnCostEstimatedValue": "가치 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "이번 요청 상세"
+    },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
       "entry": "이미지로 공유",

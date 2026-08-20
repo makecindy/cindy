@@ -782,6 +782,10 @@ interface CCAgentStatusUpdate {
   costUsd?: number;
   contextTokens: number;
   contextWindow: number;
+  outputTokens?: number;
+  generationDurationMs?: number;
+  generationActive?: boolean;
+  generationReliable?: boolean;
   isRunning: boolean;
   /** Host-owned SDK boundary claim; a claimed `status(false)` is not product idle. */
   turnContinuationId?: number;

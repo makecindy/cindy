@@ -4972,7 +4972,7 @@
     "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
     "cacheLabel": "缓存",
     "timeLabel": "耗时",
-    "timeAndRateValue": "{{duration}} 速度：{{rate}} token/秒",
+    "timeAndRateValue": "{{duration}} 速度：{{rate}} tokens/秒",
     "modelLabel": "模型",
     "staleData": "数据更新于 {{minutes}} 分钟前",
     "paceTrendFast": "按当前平均速度偏快（粗略趋势）",
@@ -4983,12 +4983,12 @@
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
     "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
-    "performanceLine": "速度 {{rate}} token/秒 · 耗时 {{duration}}",
-    "performanceRateLine": "速度 {{rate}} token/秒",
+    "performanceLine": "速度 {{rate}} tokens/秒 · 耗时 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} tokens/秒",
     "timeLine": "耗时 {{duration}}",
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
-    "tokenLine": "Token：共 {{total}} · 输入 {{input}} · 输出 {{output}}",
+    "tokenLine": "Tokens：共 {{total}} · 输入 {{input}} · 输出 {{output}}",
     "cacheLine": "缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "缓存拆分：读取 {{read}} · 写入 {{create}}",
     "modelLine": "模型：{{model}}",
@@ -6772,6 +6772,10 @@
       "turnCostEstimatedValue": "价值 {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本轮明细"
+    },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
       "entry": "分享为图片",

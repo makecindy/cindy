@@ -9477,6 +9477,10 @@ export default function SessionScreen() {
                     sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}
                     startedAt={composerActivityStartedAtMs}
                     tokenUsage={composerActivityTokenUsage}
+                    outputTokens={remoteSessionRunStatus.outputTokens}
+                    generationDurationMs={remoteSessionRunStatus.generationDurationMs}
+                    generationReliable={remoteSessionRunStatus.generationReliable}
+                    generationActive={remoteSessionRunStatus.generationActive}
                     visible={showComposerActivity}
                   />
                 </View>
@@ -10332,12 +10336,20 @@ function ComposerActivityStatus({
   sideTaskRunning,
   startedAt,
   tokenUsage,
+  outputTokens,
+  generationDurationMs,
+  generationReliable,
+  generationActive,
   visible,
 }: {
   reconnectAttempt: RemoteSessionRunStatus['reconnectAttempt'];
   sideTaskRunning: boolean;
   startedAt: number | null;
   tokenUsage: number;
+  outputTokens: number;
+  generationDurationMs: number;
+  generationReliable: boolean;
+  generationActive: boolean;
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -10362,6 +10374,13 @@ function ComposerActivityStatus({
 
   const elapsedText = formatComposerActivityElapsed(elapsed);
   const tokenText = formatComposerActivityTokens(tokenUsage);
+  const tokenA11yText = formatComposerActivityTokens(tokenUsage, { compact: false });
+  const rateText = formatComposerActivityRate(
+    outputTokens,
+    generationDurationMs,
+    generationReliable,
+  );
+  const showUsageMeta = Boolean(rateText) || tokenUsage > 0;
   // 三类进度共用这一个 attempt 字段, 但说法必须分开: 模型容量、请求限流与传输层重连
   // 的用户含义不同，混用会把用户引向错误的排查方向。
   const activityText = reconnectAttempt
@@ -10391,11 +10410,22 @@ function ComposerActivityStatus({
       </View>
       <View style={styles.composerActivityMeta}>
         <Text style={styles.composerActivityMetaText}>{elapsedText}</Text>
-        {!sideTaskRunning ? (
+        {!sideTaskRunning && showUsageMeta ? (
           <>
             <Text style={styles.composerActivityMetaText}>·</Text>
-            <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-            <Text style={styles.composerActivityMetaText}>{tokenText}</Text>
+            {rateText ? (
+              <Text
+                accessibilityLabel={tokenUsage > 0 ? tokenA11yText : undefined}
+                style={styles.composerActivityMetaText}
+              >
+                {rateText}
+              </Text>
+            ) : (
+              <>
+                <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                <Text style={styles.composerActivityMetaText}>{tokenText}</Text>
+              </>
+            )}
           </>
         ) : null}
       </View>
@@ -10410,10 +10440,28 @@ function formatComposerActivityElapsed(seconds: number): string {
   return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
 }
 
-function formatComposerActivityTokens(tokenUsage: number): string {
+function formatComposerActivityTokens(
+  tokenUsage: number,
+  options?: { compact?: boolean },
+): string {
   const safeTokens = Math.max(0, Math.round(tokenUsage));
-  if (safeTokens >= 1000) return `${(safeTokens / 1000).toFixed(1)}k tokens`;
-  return `${safeTokens} tokens`;
+  const unit = options?.compact === false ? 'tokens' : 'tok';
+  if (safeTokens >= 1000) return `${(safeTokens / 1000).toFixed(1)}k ${unit}`;
+  return `${safeTokens} ${unit}`;
+}
+
+function formatComposerActivityRate(
+  outputTokens: number,
+  durationMs: number,
+  generationReliable: boolean,
+): string | null {
+  if (!generationReliable || outputTokens <= 0 || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+  const rate = (outputTokens * 1000) / durationMs;
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  const formatted = rate < 0.1 ? '<0.1' : rate >= 100 ? rate.toFixed(0) : rate.toFixed(1).replace(/\.0$/, '');
+  return `${formatted} tok/s`;
 }
 
 function ComposerPaletteRow({
