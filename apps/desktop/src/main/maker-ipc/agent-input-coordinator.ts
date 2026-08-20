@@ -470,6 +470,11 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  /**
+   * 真人消息刚进队、尚未 drain / sendToAgent。灵动岛用它在 agent 进程拉起前
+   * 就进入 running 并播开始音效,避免「任务开始」跟着 isRunning 一起晚响。
+   */
+  previewQueuedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /** 自动输入推进了会话，但不构成真人介入，也不能重置自动恢复预算。 */
   onAutomaticEnqueue?: (sessionId: string) => void;
   /**
@@ -1424,10 +1429,12 @@ export class AgentInputCoordinator {
       if (state.recovery?.kind !== 'queue-head') {
         this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
       }
+      this.deps.previewQueuedUserTurn?.(sessionId, item);
     } else if (automaticOrigin && !schedulerOrigin) {
       this.deps.onAutomaticEnqueue?.(sessionId);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
+      this.deps.previewQueuedUserTurn?.(sessionId, item);
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
@@ -4422,6 +4429,7 @@ export class AgentInputCoordinator {
       if (!isSchedulerOriginItem(item)) this.deps.onAutomaticEnqueue?.(sessionId);
     } else if (!isUiContinuationItem(item)) {
       this.deps.onUserEnqueue?.(sessionId);
+      this.deps.previewQueuedUserTurn?.(sessionId, item);
     }
     this.abandonActiveTurnRecoveryForUserAction(state);
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);

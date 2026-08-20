@@ -74,6 +74,7 @@ import {
   getRemoteSessionActivity,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { absorbSessionStarting } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { SectionCollapse } from '../SectionCollapse';
@@ -390,6 +391,44 @@ export function ProjectsSection({
     unclassified,
     remoteActivityRevision,
     viewedIdForSort,
+  ]);
+
+  // 远程权威状态 / attention 到了就收掉 starting,避免对端跑完后 starting
+  // 还把已完成任务钉在运行中档。不要用上面的 running 集合 —— 那已经并进了
+  // starting,会把自己清掉。
+  useEffect(() => {
+    const settled = new Set<string>(notifications);
+    for (const id of urgentSet) settled.add(id);
+    for (const [sessionId, kind] of attentionKinds) {
+      if (kind === 'awaiting' || kind === 'error') settled.add(sessionId);
+    }
+    const considerRemote = (session: Session) => {
+      const activity = getRemoteSessionActivity(session.id);
+      if (!activity) return;
+      if (
+        activity.phase === 'running' ||
+        activity.phase === 'needs-interaction' ||
+        activity.phase === 'error' ||
+        activity.phase === 'completed'
+      ) {
+        settled.add(session.id);
+      }
+    };
+    for (const project of projects) {
+      for (const session of project.sessions) considerRemote(session);
+    }
+    for (const session of dialogues) considerRemote(session);
+    for (const session of unclassified) considerRemote(session);
+    absorbSessionStarting(settled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
+  }, [
+    notifications,
+    urgentSet,
+    attentionKinds,
+    projects,
+    dialogues,
+    unclassified,
+    remoteActivityRevision,
   ]);
 
   // E 期「按设备分组」:有远程设备连接 + 开关开 → 按设备切段(本机在前,

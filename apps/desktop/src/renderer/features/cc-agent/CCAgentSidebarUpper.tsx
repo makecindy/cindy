@@ -92,6 +92,7 @@ import {
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
+import { useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
@@ -1216,21 +1217,35 @@ function ExpandedView({
   // handleMoveSession 的运行中拦截闸门,后台活动不得静默扩大行为闸门的口径
   // (move / 归档 / 通知语义都保持只认真 running)。
   const backgroundActivitySessionIds = useBackgroundActivitySessionIds();
+  // 刚发送尚未 isRunning 的任务并进 display running:排序与呼吸点马上进运行中档,
+  // 但不扩大 effectiveRunningSessionIds 的归档 / 移动闸门。
+  const startingSessionIds = useStartingSessionIds(runningSessionIds);
   const displayRunningSessionIds = useMemo(() => {
-    if (backgroundActivitySessionIds.size === 0) return effectiveRunningSessionIds;
+    if (backgroundActivitySessionIds.size === 0 && startingSessionIds.size === 0) {
+      return effectiveRunningSessionIds;
+    }
     const next = new Set(effectiveRunningSessionIds);
     for (const id of backgroundActivitySessionIds) next.add(id);
+    for (const id of startingSessionIds) next.add(id);
     for (const [leadSessionId, workerSessionIds] of orcaLeadWorkerMap) {
       if (next.has(leadSessionId)) continue;
       for (const workerSessionId of workerSessionIds) {
-        if (backgroundActivitySessionIds.has(workerSessionId)) {
+        if (
+          backgroundActivitySessionIds.has(workerSessionId) ||
+          startingSessionIds.has(workerSessionId)
+        ) {
           next.add(leadSessionId);
           break;
         }
       }
     }
     return next;
-  }, [effectiveRunningSessionIds, backgroundActivitySessionIds, orcaLeadWorkerMap]);
+  }, [
+    effectiveRunningSessionIds,
+    backgroundActivitySessionIds,
+    startingSessionIds,
+    orcaLeadWorkerMap,
+  ]);
   const collapsedAttentionToneFor = useCallback(
     (sessions: readonly Session[]) =>
       resolveCollapsedProjectAttentionTone({
@@ -3801,6 +3816,7 @@ function CollapsedView({
   const { runningSessionIds } = useSessionRunningStatus(activeSessionId);
   // 后台子任务活跃会话同样点亮呼吸(与 ExpandedView 同口径,纯视觉合并)。
   const backgroundActivitySessionIds = useBackgroundActivitySessionIds();
+  const startingSessionIds = useStartingSessionIds(runningSessionIds);
   // 瓷砖未读点颜色按 attention kind(done 绿 / awaiting TapTap 蓝 / error 红);组件层
   // 取一次,renderItem 里查表(renderItem 非组件,不能 per-item 用 hook)。
   const attentionKinds = useSessionAttentionKinds();
@@ -3834,7 +3850,11 @@ function CollapsedView({
   // 却不亮」(codex review)。
   const orcaLeadWorkerMap = useOrcaLeadWorkerMap(sessions);
   const railRunningIds = useMemo(() => {
-    const next = new Set([...runningSessionIds, ...backgroundActivitySessionIds]);
+    const next = new Set([
+      ...runningSessionIds,
+      ...backgroundActivitySessionIds,
+      ...startingSessionIds,
+    ]);
     for (const [leadSessionId, workerSessionIds] of orcaLeadWorkerMap) {
       if (next.has(leadSessionId)) continue;
       for (const workerSessionId of workerSessionIds) {
@@ -3845,7 +3865,7 @@ function CollapsedView({
       }
     }
     return next;
-  }, [runningSessionIds, backgroundActivitySessionIds, orcaLeadWorkerMap]);
+  }, [runningSessionIds, backgroundActivitySessionIds, startingSessionIds, orcaLeadWorkerMap]);
 
   return (
     <div

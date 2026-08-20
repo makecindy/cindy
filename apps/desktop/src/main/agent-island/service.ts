@@ -860,7 +860,9 @@ export class AgentIslandService {
       this.replacementTurnDispatchingSessionIds.delete(hydrated.sessionId);
     }
     const rollbackKey = this.userPromptRollbackKey(hydrated.sessionId, debugMeta.clientId);
-    if (rollbackKey) {
+    // 入队预览和 persist 预览共用 clientId。第一次快照才是「发送前」;
+    // 第二次若覆盖,persist 失败回滚会回到 running,开始音效对应的预览就撤不掉。
+    if (rollbackKey && !this.userPromptRollbackTokens.has(rollbackKey)) {
       this.userPromptRollbackTokens.set(rollbackKey, {
         state: createAgentIslandUserPromptRollbackToken(this.state, hydrated.sessionId),
         attention: this.sessionHadAttentionAtRunStart.has(hydrated.sessionId)

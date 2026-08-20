@@ -127,6 +127,7 @@ import {
 import { showWorktreeError } from '@/lib/worktreeToast';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { markSessionStarting } from '@/lib/sessionStartingStore';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared } from '@/lib/sessionsBus';
 import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
@@ -3797,6 +3798,7 @@ export function NewMakerDraftRoute() {
               userSendAt: sendAt.toISOString(),
               updatedAt: sendAt.toISOString(),
             });
+            markSessionStarting(newSession.id);
             sessionService.touchUserSend(newSession.id, sendAt.getTime()).catch((err) => {
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
@@ -4050,6 +4052,7 @@ export function NewMakerDraftRoute() {
           {
             const iso = new Date().toISOString();
             sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
+            markSessionStarting(newSession.id);
           }
 
           // F-COLLAB: draft 阶段开了协同模式 → createSession 之后立刻 enableOrca
@@ -4675,6 +4678,7 @@ export function NewMakerDraftRoute() {
         {
           const iso = new Date().toISOString();
           sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
+          markSessionStarting(newSession.id);
         }
         // 草稿开了协同 → 新建目标路径也要拉起 Worker(与 Send 路径同口径);否则用户开了协同
         // 却走「新建目标」会得到一个没有 Worker 的 lead session(codex P2)。失败 toast + 降级

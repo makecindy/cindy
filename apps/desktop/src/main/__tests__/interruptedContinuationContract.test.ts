@@ -237,6 +237,15 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toMatch(/supportsScheduleIntervalNullClear:\s*true/);
   });
 
+  it('previews user enqueues to Agent Island before drain/sendToAgent', () => {
+    expect(registerSource).toContain('previewQueuedUserTurn: (sessionId, item) => {');
+    expect(registerSource).toContain("source: 'enqueue'");
+    const enqueuePreview = coordinatorSource.indexOf('this.deps.previewQueuedUserTurn?.(sessionId, item);');
+    const drainImmediate = coordinatorSource.indexOf("void this.drain(sessionId, 'enqueue-immediate');");
+    expect(enqueuePreview).toBeGreaterThan(-1);
+    expect(drainImmediate).toBeGreaterThan(enqueuePreview);
+  });
+
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
     const userEnqueueStart = registerSource.indexOf('onUserEnqueue:');
     const userEnqueueEnd = registerSource.indexOf('onDiscardedQueuedMessage:', userEnqueueStart);

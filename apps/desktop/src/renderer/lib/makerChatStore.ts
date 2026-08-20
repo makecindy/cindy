@@ -121,6 +121,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
+import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   markSessionAutomaticHistoryLoadCompleted,
@@ -11333,6 +11334,8 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       ? { workingDir, userSendAt: userSendAtIso, updatedAt: userSendAtIso }
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
+  // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
+  markSessionStarting(sessionId);
 }
 
 /**
@@ -11829,6 +11832,15 @@ function sendMessage(
             files,
           ),
       );
+    },
+  ).then(
+    (ok) => {
+      if (!ok) clearSessionStarting(sessionId);
+      return ok;
+    },
+    (err) => {
+      clearSessionStarting(sessionId);
+      throw err;
     },
   );
 }

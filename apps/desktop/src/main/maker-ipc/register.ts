@@ -11655,6 +11655,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       failPendingSchedulerAutoResume(sessionId);
       publishUiSessionIntervention(sessionId);
     },
+    previewQueuedUserTurn: (sessionId, item) => {
+      notifyAgentIslandUserPrompt(
+        {
+          id: sessionId,
+          agentKind: item.createOpts?.agentKind,
+          workDir: item.workingDir,
+        },
+        item.persistedContent || item.text,
+        { source: 'enqueue', clientId: item.clientId },
+      );
+    },
     onAutomaticEnqueue: (sessionId) => {
       // Orca 等自动输入会推进同一会话，必须撤销旧 retry owner，避免它消费这轮事件；
       // 但预算充值仍只发生在真人消息的持久化路径，自动输入不会重置 episode。
