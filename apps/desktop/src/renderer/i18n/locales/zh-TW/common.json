@@ -6602,7 +6602,7 @@
       "modelSwitchContextGuard": {
         "title": "這個模型裝不下目前的對話",
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
-        "overflowDescription": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。換過去後，Cindy 會先整理一份摘要再繼續；聊天記錄還在，只是不會整段原樣帶給新模型。",
+        "overflowDescription": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。換過去後，Cindy 會先整理一份摘要再繼續；對話記錄還在，只是不會整段原樣帶給新模型。",
         "confirmSwitch": "切換並繼續",
         "cancelSwitch": "先不換"
       },
@@ -6983,7 +6983,7 @@
       "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",
       "piManagerUnavailable": "遠端 Pi 管理器未就緒，請稍後重試；若持續失敗請到「設定 → 遠端機器」重新安裝 Pi。",
       "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。",
-      "contextOverflow": "這則訊息本身已超過模型上下文上限，無法在目前任務裡自動換窗繼續。請縮短輸入或去掉過大附件後再試。"
+      "contextOverflow": "這則訊息本身已超過模型上下文上限，無法在目前 Agent 中自動換窗繼續。請縮短輸入或去掉過大附件後再試。"
     },
     "backgroundActivity": {
       "status": "後臺子任務執行中，模型用量仍在消耗…",

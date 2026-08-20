@@ -40,17 +40,17 @@ describe('isContextOverflowErrorData', () => {
         message: '{"code":"invalid-argument","error":"unsupported field: foo"}',
       }),
     ).toBe(false);
-    expect(isContextOverflowErrorData({ message: 'Rate limit exceeded: too many tokens per minute' })).toBe(
-      false,
-    );
+    expect(
+      isContextOverflowErrorData({ message: 'Rate limit exceeded: too many tokens per minute' }),
+    ).toBe(false);
   });
 });
 
 describe('shouldRebuildPiNativeSession', () => {
   it('treats a PI prompt RPC timeout as an unhealthy native session', () => {
-    expect(
-      isPiPromptRpcTimeoutError({ message: 'pi rpc timeout after 30000ms: prompt' }),
-    ).toBe(true);
+    expect(isPiPromptRpcTimeoutError({ message: 'pi rpc timeout after 30000ms: prompt' })).toBe(
+      true,
+    );
     expect(shouldRebuildPiNativeSession({ message: 'pi rpc timeout after 30000ms: prompt' })).toBe(
       true,
     );
@@ -66,20 +66,20 @@ describe('shouldRebuildPiNativeSession', () => {
       ),
     ).toBe(500_000);
     expect(shouldRebuildForContextPressure(553_582, 1_050_000)).toBe(false);
-    expect(shouldRebuildForContextPressure(553_582, effectivePiContextWindow('x-ai/grok-4.6', 1_050_000))).toBe(
-      true,
-    );
+    expect(
+      shouldRebuildForContextPressure(
+        553_582,
+        effectivePiContextWindow('x-ai/grok-4.6', 1_050_000),
+      ),
+    ).toBe(true);
     expect(shouldRebuildForContextPressure(400_000, 500_000)).toBe(false);
     expect(shouldRebuildForContextPressure(400_000, 500_000, 75)).toBe(true);
     expect(shouldRebuildForContextPressure(450_000, 500_000)).toBe(true);
   });
 
   it('resolves a verified window with the session agent and explicit provider', () => {
-    const resolve = vi.fn(
-      (agentKind: string, modelId: string, providerId: string | null) =>
-        agentKind === 'codex' && modelId === 'gpt-5.6' && providerId === 'xd'
-          ? 372_000
-          : null,
+    const resolve = vi.fn((agentKind: string, modelId: string, providerId: string | null) =>
+      agentKind === 'codex' && modelId === 'gpt-5.6' && providerId === 'xd' ? 372_000 : null,
     );
 
     expect(lookupVerifiedContextWindow(resolve, 'gpt-5.6', 'xd', 'codex')).toBe(372_000);
@@ -88,9 +88,8 @@ describe('shouldRebuildPiNativeSession', () => {
   });
 
   it('does not borrow the xAI route when the session provider is unresolved', () => {
-    const resolve = vi.fn(
-      (_agentKind: string, _modelId: string, providerId: string | null) =>
-        providerId === 'xai' ? 500_000 : null,
+    const resolve = vi.fn((_agentKind: string, _modelId: string, providerId: string | null) =>
+      providerId === 'xai' ? 500_000 : null,
     );
 
     expect(lookupVerifiedContextWindow(resolve, 'grok-4.6')).toBeNull();
@@ -119,7 +118,10 @@ describe('shouldRebuildPiNativeSession', () => {
     ).toBeNull();
     expect(
       findLatestRebuildableError(
-        [msg('user', '继续', 'u1'), msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1')],
+        [
+          msg('user', '继续', 'u1'),
+          msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1'),
+        ],
         false,
       ),
     ).toBeNull();
@@ -150,10 +152,7 @@ describe('planContextOverflowRollover', () => {
       ]).action,
     ).toBe('stop');
     expect(
-      planContextOverflowRollover([
-        msg('user', '继续', 'u1'),
-        msg('assistant', '先说一句', 'a1'),
-      ]),
+      planContextOverflowRollover([msg('user', '继续', 'u1'), msg('assistant', '先说一句', 'a1')]),
     ).toMatchObject({ action: 'stop', reason: 'has-side-effects' });
     expect(
       planContextOverflowRollover([
@@ -172,9 +171,10 @@ describe('planContextOverflowRollover', () => {
   });
 
   it('refuses a second rollover of the same user message', () => {
-    expect(
-      planContextOverflowRollover([msg('user', '继续', 'u1')], 'u1'),
-    ).toMatchObject({ action: 'stop', reason: 'already-rolled' });
+    expect(planContextOverflowRollover([msg('user', '继续', 'u1')], 'u1')).toMatchObject({
+      action: 'stop',
+      reason: 'already-rolled',
+    });
   });
 });
 
@@ -223,8 +223,15 @@ describe('createContextOverflowRollover', () => {
     expect(deps.closeSession).toHaveBeenCalledWith('s1');
     expect(deps.commitRebuild).toHaveBeenCalledWith(
       's1',
-      expect.stringContaining('exceeded the model\'s context window'),
-      { reason: 'context-overflow', sourceUserClientId: 'u2', expectedClearedAt: null },
+      expect.stringContaining("exceeded the model's context window"),
+      expect.objectContaining({
+        reason: 'context-overflow',
+        sourceUserClientId: 'u2',
+        sourceAgentKind: 'pi',
+        sourceModel: 'x-ai/grok-4.6',
+        sourceProviderId: 'xai',
+        expectedClearedAt: null,
+      }),
     );
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.any(String), 3);
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).toContain('先做 A');
@@ -248,10 +255,7 @@ describe('createContextOverflowRollover', () => {
   });
 
   it('rebuilds before send when Grok context is already over the real window', async () => {
-    const deps = makeDeps([
-      msg('user', '继续', 'u1'),
-      msg('assistant', '好', 'a1'),
-    ]);
+    const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
       agentKind: 'pi',
@@ -270,10 +274,7 @@ describe('createContextOverflowRollover', () => {
   });
 
   it('uses the host compact threshold when deciding pre-send pressure rebuild', async () => {
-    const deps = makeDeps([
-      msg('user', '继续', 'u1'),
-      msg('assistant', '好', 'a1'),
-    ]);
+    const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
       agentKind: 'pi',
@@ -293,10 +294,7 @@ describe('createContextOverflowRollover', () => {
 
   it('uses the same pressure guard for Claude Code and Codex before send', async () => {
     for (const agentKind of ['cc', 'codex'] as const) {
-      const deps = makeDeps([
-        msg('user', '继续', 'u1'),
-        msg('assistant', '好', 'a1'),
-      ]);
+      const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
       deps.getSessionRow.mockResolvedValue({
         status: 'active',
         agentKind,
@@ -471,19 +469,43 @@ describe('createContextOverflowRollover', () => {
 });
 
 describe('persistedUserContentToWireMessage', () => {
-  it('keeps images from the persist envelope instead of flattening to text', () => {
+  it('replays the retained agent-facing payload without projecting it to display text', () => {
+    const wirePayload = {
+      type: 'user' as const,
+      content: [
+        { type: 'text', text: '原始引用语义' },
+        { type: 'text', text: 'SESSION_REFERENCE_DATA_V1\nquoted context' },
+      ],
+    };
     expect(
       persistedUserContentToWireMessage({
-        text: '看这张图',
-        images: [{ url: 'xdt-image://sess/a.png' }],
+        text: '显示给用户的正文',
+        agentFacingWireContent: wirePayload,
+      }),
+    ).toEqual(wirePayload);
+  });
+
+  it('projects structured references for legacy persisted messages', () => {
+    const href = 'cindy://project/%2Frepos%2Fcindy';
+    const text = `请处理 ${href}`;
+    expect(
+      persistedUserContentToWireMessage({
+        text,
+        agentReferences: [
+          {
+            kind: 'project',
+            start: text.indexOf(href),
+            end: text.indexOf(href) + href.length,
+            href,
+            name: 'src',
+            workingDir: '/repo/src',
+          },
+        ],
+        images: [],
         files: [],
       }),
-    ).toEqual({
-      type: 'user',
-      content: [
-        { type: 'text', text: '看这张图' },
-        { type: 'image', path: 'xdt-image://sess/a.png' },
-      ],
-    });
+    ).toBe(
+      '请处理 [Referenced project]\nName: src\nWorking directory: /repos/cindy\n[/Referenced project]',
+    );
   });
 });

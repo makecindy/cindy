@@ -5,9 +5,7 @@ import {
   type SessionSendResult,
   type UserMessage,
 } from '@cindy/maker-core';
-import {
-  CODEX_RESUME_NOT_READY_WIRE_MESSAGE,
-} from '@cindy/maker-shared/agent-input-projection';
+import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 
 import {
   createHostSendFailure,
@@ -64,6 +62,7 @@ type MakerSendOptions = {
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
+    agentFacingWireContent?: unknown;
     sdkSessionId?: unknown;
     delivery?: unknown;
     shouldBroadcast?: unknown;
@@ -261,6 +260,7 @@ type ResolveSessionResult =
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   clientId: string;
   content: unknown;
+  agentFacingWireContent?: IpcUserMessage;
   sdkSessionId?: string;
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
@@ -279,6 +279,9 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   return {
     clientId: persist.clientId,
     content: persist.content,
+    ...(persist.agentFacingWireContent && typeof persist.agentFacingWireContent === 'object'
+      ? { agentFacingWireContent: persist.agentFacingWireContent as IpcUserMessage }
+      : {}),
     ...(typeof persist.sdkSessionId === 'string' ? { sdkSessionId: persist.sdkSessionId } : {}),
     ...(persist.autoResume === true ? { autoResume: true as const } : {}),
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
@@ -803,9 +806,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       })();
       const startsWithSlashCommand =
         reconcileSlashRanges !== undefined
-          ? reconcileSlashRanges.some(
-              (range) => (range as { start?: unknown } | null)?.start === 0,
-            )
+          ? reconcileSlashRanges.some((range) => (range as { start?: unknown } | null)?.start === 0)
           : reconcilePersistText.startsWith('/');
       const isOrdinaryUserTurn =
         soForReconcile.origin === undefined &&
@@ -829,8 +830,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
       // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
       const mobileClientNote =
-        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true)
-        && shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
+        (deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true) &&
+        shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildMobileClientPromptNote()
           : null;
       const outgoing = mobileClientNote
@@ -1008,7 +1009,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         ...(persistUserMessage.recoveryCheckpoint
                           ? { recoveryCheckpoint: persistUserMessage.recoveryCheckpoint }
                           : {}),
-                        ...(persistUserMessage.origin ? { origin: persistUserMessage.origin } : {}),
+                        ...(persistUserMessage.agentFacingWireContent
+                          ? { agentFacingWireContent: persistUserMessage.agentFacingWireContent }
+                          : {}),
                         // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
                         // 对齐,renderer 据此渲染"由自动化任务发送"标签。
                         ...(so.origin ? { origin: so.origin } : {}),

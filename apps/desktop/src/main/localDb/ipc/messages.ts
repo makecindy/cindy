@@ -21,10 +21,7 @@ import {
 import { throwIpcError, requireString } from '../../utils/ipcValidate';
 import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
-import {
-  collectCindyMediaHashes,
-  commitMessageMediaRefs,
-} from '../../cindy-media/chatAttachments';
+import { collectCindyMediaHashes, commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
 import {
   removeRefs as removeMediaRefs,
   removeSessionAttachmentRefIfUnreferencedByLiveMessage,
@@ -442,8 +439,7 @@ export function registerMessageIpc(): void {
         ),
       );
     const entries = extractEstimatedSessionValueEntries(rows);
-    const totalValueMoney =
-      addCompatibleRegionalMoney(entries.map((entry) => entry.money));
+    const totalValueMoney = addCompatibleRegionalMoney(entries.map((entry) => entry.money));
     const hasCompleteUsdProjection = entries.every((entry) => typeof entry.costUsd === 'number');
     return {
       totalValueMoney,
@@ -619,11 +615,19 @@ export function broadcastMessageRow(
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
   if (ownerScope !== undefined && ownerScope !== null) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+    broadcastTap.tapWindowBroadcast(
+      'local-db:messages:created',
+      { sessionId, message: msg },
+      ownerStamp,
+    );
   } else if (ownerStamp === undefined) {
     broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
   } else {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
+    broadcastTap.tapWindowBroadcast(
+      'local-db:messages:created',
+      { sessionId, message: msg },
+      ownerStamp,
+    );
   }
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   for (const win of BrowserWindow.getAllWindows()) {
@@ -952,6 +956,9 @@ export async function commitContextRebuild(
   meta: {
     reason: 'context-overflow' | 'pi-prompt-timeout';
     sourceUserClientId: string | null;
+    sourceAgentKind?: 'cc' | 'codex' | 'pi';
+    sourceModel?: string | null;
+    sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
   },
 ): Promise<{ updatedAt: number }> {
@@ -965,6 +972,9 @@ export async function commitContextRebuild(
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,
+      ...(meta.sourceAgentKind ? { sourceAgentKind: meta.sourceAgentKind } : {}),
+      ...(meta.sourceModel !== undefined ? { sourceModel: meta.sourceModel } : {}),
+      ...(meta.sourceProviderId !== undefined ? { sourceProviderId: meta.sourceProviderId } : {}),
     }),
     markerCreatedAt: now,
     updatedAt: now,
@@ -973,9 +983,13 @@ export async function commitContextRebuild(
   return { updatedAt: now };
 }
 
-export async function findLatestContextRebuildMeta(
-  sessionId: string,
-): Promise<{ reason?: string; sourceUserClientId?: string | null } | null> {
+export async function findLatestContextRebuildMeta(sessionId: string): Promise<{
+  reason?: string;
+  sourceUserClientId?: string | null;
+  sourceAgentKind?: 'cc' | 'codex' | 'pi';
+  sourceModel?: string | null;
+  sourceProviderId?: string | null;
+} | null> {
   const db = getDbClient().drizzle;
   const [row] = await db
     .select({ content: messages.content })
@@ -988,11 +1002,23 @@ export async function findLatestContextRebuildMeta(
     const parsed = JSON.parse(row.content) as {
       reason?: unknown;
       sourceUserClientId?: unknown;
+      sourceAgentKind?: unknown;
+      sourceModel?: unknown;
+      sourceProviderId?: unknown;
     };
     return {
       reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
       sourceUserClientId:
         typeof parsed.sourceUserClientId === 'string' ? parsed.sourceUserClientId : null,
+      ...(parsed.sourceAgentKind === 'cc' ||
+      parsed.sourceAgentKind === 'codex' ||
+      parsed.sourceAgentKind === 'pi'
+        ? { sourceAgentKind: parsed.sourceAgentKind }
+        : {}),
+      ...(typeof parsed.sourceModel === 'string' ? { sourceModel: parsed.sourceModel } : {}),
+      ...(typeof parsed.sourceProviderId === 'string'
+        ? { sourceProviderId: parsed.sourceProviderId }
+        : {}),
     };
   } catch {
     return null;
@@ -1180,9 +1206,7 @@ export async function supersedeRetriedUserTurn(
   const [retryRow] = await db
     .select({ createdAt: messages.createdAt, rowid: messageRowid })
     .from(messages)
-    .where(
-      and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)),
-    )
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)))
     .limit(1);
   if (!oldRow || !retryRow) return [];
   // 窗口两端都用 (created_at, rowid) 双键:error 行的 createdAt 取"本轮最后行 + 1",
@@ -1363,7 +1387,8 @@ export async function createMessage(
 ): Promise<Message> {
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
-  const guarded = opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
+  const guarded =
+    opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
   const expected = guarded ? opts?.expectedClearBoundaryMs : undefined;
   if (
     guarded &&
@@ -1390,7 +1415,7 @@ export async function createMessage(
   const visibleCreatedAt =
     guarded && expected !== null && expected !== undefined
       ? Math.max(body.createdAt ?? now, expected + 1)
-      : body.createdAt ?? now;
+      : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
   try {
     if (guarded) {
@@ -1822,8 +1847,7 @@ export async function readPriorUserRoundCost(
     if (isEstimate) estimatedCurrencies.add(segment.currency);
   }
   const money = addCompatibleRegionalMoney(values);
-  const hasEstimatedValue =
-    money !== null && estimatedCurrencies.has(money.currency);
+  const hasEstimatedValue = money !== null && estimatedCurrencies.has(money.currency);
   return {
     money,
     costUsd: money?.currency === 'USD' ? money.amount : 0,
@@ -2214,36 +2238,38 @@ export async function listMessagesForAgentHandoff(
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(limit);
   rows.reverse();
-  return rows.map((r) => {
-    let content: unknown = r.content;
-    try {
-      content = JSON.parse(r.content);
-    } catch {
-      // 与 messageToCamel 同口径:非法 JSON 保留原字符串
-    }
-    let agentMeta: Record<string, unknown> | null = null;
-    if (r.agentMeta) {
+  return rows
+    .map((r) => {
+      let content: unknown = r.content;
       try {
-        const parsed: unknown = JSON.parse(r.agentMeta);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          agentMeta = parsed as Record<string, unknown>;
-        }
+        content = JSON.parse(r.content);
       } catch {
-        // 非法 JSON 视为无 meta
+        // 与 messageToCamel 同口径:非法 JSON 保留原字符串
       }
-    }
-    if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
-      return null;
-    }
-    return {
-      clientId: r.clientId,
-      role: r.role,
-      content,
-      createdAt: r.createdAt,
-      agentMeta,
-      toolUseId: r.toolUseId ?? null,
-    };
-  }).filter((row): row is NonNullable<typeof row> => row !== null);
+      let agentMeta: Record<string, unknown> | null = null;
+      if (r.agentMeta) {
+        try {
+          const parsed: unknown = JSON.parse(r.agentMeta);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            agentMeta = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // 非法 JSON 视为无 meta
+        }
+      }
+      if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
+        return null;
+      }
+      return {
+        clientId: r.clientId,
+        role: r.role,
+        content,
+        createdAt: r.createdAt,
+        agentMeta,
+        toolUseId: r.toolUseId ?? null,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
 }
 
 /** Phase 2:目标引擎的停泊原生会话(由最近一次"它离场"的边界行派生)。 */

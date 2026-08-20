@@ -1849,11 +1849,7 @@ export class AgentInputCoordinator {
     // marker 已置位,筛查期间并发 steer / drain 被挡;stop / clearSession 竞态
     // 由筛查后的 marker 复查兜底。
     if (!item.bypassGhostHooks && this.deps.screenUserMessage) {
-      const verdict = await this.deps.screenUserMessage(
-        sessionId,
-        getAgentFacingText(item),
-        item,
-      );
+      const verdict = await this.deps.screenUserMessage(sessionId, getAgentFacingText(item), item);
       const cur = this.getState(sessionId);
       const ownsCurrentRequest = this.isCurrentSteerRequest(
         cur,
@@ -1861,10 +1857,7 @@ export class AgentInputCoordinator {
         steerGeneration,
         steerRequestToken,
       );
-      if (
-        !ownsCurrentRequest ||
-        !matchesExpectedTurn()
-      ) {
+      if (!ownsCurrentRequest || !matchesExpectedTurn()) {
         // stop/close/clearSession 赢在筛查期间:steer 事务已被取消,静默放弃。
         if (
           ownsCurrentRequest &&
@@ -2194,14 +2187,7 @@ export class AgentInputCoordinator {
     const persisted = await this.persistAcceptedUserMessage(sessionId, accepted.activeTurn);
     const settled = this.getState(sessionId);
     let releasedSteerMarker = false;
-    if (
-      this.isCurrentSteerRequest(
-        settled,
-        item.clientId,
-        steerGeneration,
-        steerRequestToken,
-      )
-    ) {
+    if (this.isCurrentSteerRequest(settled, item.clientId, steerGeneration, steerRequestToken)) {
       releasedSteerMarker = this.clearSteeringMarker(settled, item.clientId, {
         generation: steerGeneration,
         token: steerRequestToken,
@@ -3342,16 +3328,29 @@ export class AgentInputCoordinator {
     if (typeof projected.text === 'string' && projected.text.includes(RECOVERY_CHECKPOINT_MARKER)) {
       projected.text = projected.text.slice(0, projected.text.indexOf(RECOVERY_CHECKPOINT_MARKER));
     }
-    if (typeof projected.persistedContent === 'string' && projected.persistedContent.includes(RECOVERY_CHECKPOINT_MARKER)) {
-      projected.persistedContent = projected.persistedContent.slice(0, projected.persistedContent.indexOf(RECOVERY_CHECKPOINT_MARKER));
+    if (
+      typeof projected.persistedContent === 'string' &&
+      projected.persistedContent.includes(RECOVERY_CHECKPOINT_MARKER)
+    ) {
+      projected.persistedContent = projected.persistedContent.slice(
+        0,
+        projected.persistedContent.indexOf(RECOVERY_CHECKPOINT_MARKER),
+      );
     }
     // chatMessage.content is the outbound payload sent to remote controllers
     // (device-link); it must mirror the same strip so the checkpoint marker
     // never leaks past transport boundaries.
-    if (projected.chatMessage && typeof projected.chatMessage.content === 'string' && projected.chatMessage.content.includes(RECOVERY_CHECKPOINT_MARKER)) {
+    if (
+      projected.chatMessage &&
+      typeof projected.chatMessage.content === 'string' &&
+      projected.chatMessage.content.includes(RECOVERY_CHECKPOINT_MARKER)
+    ) {
       projected.chatMessage = {
         ...projected.chatMessage,
-        content: projected.chatMessage.content.slice(0, projected.chatMessage.content.indexOf(RECOVERY_CHECKPOINT_MARKER)),
+        content: projected.chatMessage.content.slice(
+          0,
+          projected.chatMessage.content.indexOf(RECOVERY_CHECKPOINT_MARKER),
+        ),
       };
     }
     return projected;
@@ -3593,84 +3592,81 @@ export class AgentInputCoordinator {
         head.persistedContent,
         referenceContexts,
       );
-      const result = await this.deps.sendToAgent(
-        sessionId,
-        buildMakerUserMessage(head, referenceContexts),
-        head.createOpts,
-        {
-          messageUuid: active.messageUuid,
-          userName: head.userName,
-          throwOnStartFailure: true,
-          ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
-            ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
-            : {}),
-          signal: this.getInputAbortSignal(sessionId, active.generation),
+      const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
+      const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
+        messageUuid: active.messageUuid,
+        userName: head.userName,
+        throwOnStartFailure: true,
+        ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
+          ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
+          : {}),
+        signal: this.getInputAbortSignal(sessionId, active.generation),
+        expectedClearBoundaryMs: active.clearBoundaryMs,
+        expectedInputGeneration: active.generation,
+        ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
+        // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
+        ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
+        persistUserMessage: {
+          clientId: head.clientId,
+          content: head.persistedContent,
+          ...(referenceContexts.length > 0 ? { agentFacingWireContent: makerUserMessage } : {}),
+          sdkSessionId,
+          delivery: active.delivery,
           expectedClearBoundaryMs: active.clearBoundaryMs,
           expectedInputGeneration: active.generation,
-          ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
-          // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
-          ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
-          persistUserMessage: {
-            clientId: head.clientId,
-            content: head.persistedContent,
-            sdkSessionId,
-            delivery: active.delivery,
-            expectedClearBoundaryMs: active.clearBoundaryMs,
-            expectedInputGeneration: active.generation,
-            // 自动续跑标记必须一路透到落库:renderer 靠 agentMeta.autoResume 隐藏气泡,
-            // host 靠它跳过额度充值(见 AgentInputQueuedMessage.autoResume)。
-            ...(head.autoResume ? { autoResume: true } : {}),
-            ...(head.autoResumeInfo ? { autoResumeInfo: head.autoResumeInfo } : {}),
-            ...(head.recoveryCheckpoint ? { recoveryCheckpoint: head.recoveryCheckpoint } : {}),
-            ...(head.origin ? { origin: head.origin } : {}),
-            shouldBroadcast: () => this.isTurnGenerationCurrent(sessionId, active),
-            onPersisting: () => {
-              this.notifyUserMessagePersisting(sessionId, head);
-              if (this.isTurnGenerationCurrent(sessionId, active)) {
-                active.persisting = true;
-              }
-            },
-            onPersisted: async () => {
-              // The DB row already owns any staged attachment references. This
-              // callback intentionally runs before generation checks: a clear
-              // or Stop may win the pre-vendor race after persistence, but it
-              // must not delete media that the durable row now references.
-              this.notifyUserMessagePersisted(sessionId, head);
-              if (this.isTurnGenerationCurrent(sessionId, active)) {
-                active.persisted = true;
-                active.persisting = false;
-                active.dispatchLifecycle = 'awaiting-dispatch-hooks';
-                this.notifyUserMessageQueryable(sessionId, head);
-                // 跨过 DB 持久化边界即刻收窄快照:此后崩溃属 interrupted-turn
-                // 辖区,若等到下一次 emit(turn done)才写,长 turn 内崩溃会把
-                // 已送达的消息二次恢复(issue #761)。
-                this.maybePersistQueueSnapshot(sessionId);
-              }
-              await this.deps.beforeDispatchUserTurn?.(sessionId, head);
-              if (!this.isActiveTurnCurrent(sessionId, active)) {
-                throw new Error(
-                  '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
-                );
-              }
-              // host 把排队 orca 消息的 accepted 副作用挂在这个 hook 上(置 running /
-              // autoBridgePending), 必须 await 完才能放行 vendor turn —— fire-and-forget
-              // 会让快 worker 在状态可见前结束 turn, 桥接被 turn-end handler 误跳过。
-              await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
-              if (!this.isActiveTurnCurrent(sessionId, active)) {
-                throw new Error(
-                  '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
-                );
-              }
-              active.dispatchLifecycle = 'sending';
-            },
-            onPersistFailed: () => {
-              this.notifyUserMessagePersistenceFailed(sessionId, head, {
-                retainForRetry: true,
-              });
-            },
+          // 自动续跑标记必须一路透到落库:renderer 靠 agentMeta.autoResume 隐藏气泡,
+          // host 靠它跳过额度充值(见 AgentInputQueuedMessage.autoResume)。
+          ...(head.autoResume ? { autoResume: true } : {}),
+          ...(head.autoResumeInfo ? { autoResumeInfo: head.autoResumeInfo } : {}),
+          ...(head.recoveryCheckpoint ? { recoveryCheckpoint: head.recoveryCheckpoint } : {}),
+          ...(head.origin ? { origin: head.origin } : {}),
+          shouldBroadcast: () => this.isTurnGenerationCurrent(sessionId, active),
+          onPersisting: () => {
+            this.notifyUserMessagePersisting(sessionId, head);
+            if (this.isTurnGenerationCurrent(sessionId, active)) {
+              active.persisting = true;
+            }
+          },
+          onPersisted: async () => {
+            // The DB row already owns any staged attachment references. This
+            // callback intentionally runs before generation checks: a clear
+            // or Stop may win the pre-vendor race after persistence, but it
+            // must not delete media that the durable row now references.
+            this.notifyUserMessagePersisted(sessionId, head);
+            if (this.isTurnGenerationCurrent(sessionId, active)) {
+              active.persisted = true;
+              active.persisting = false;
+              active.dispatchLifecycle = 'awaiting-dispatch-hooks';
+              this.notifyUserMessageQueryable(sessionId, head);
+              // 跨过 DB 持久化边界即刻收窄快照:此后崩溃属 interrupted-turn
+              // 辖区,若等到下一次 emit(turn done)才写,长 turn 内崩溃会把
+              // 已送达的消息二次恢复(issue #761)。
+              this.maybePersistQueueSnapshot(sessionId);
+            }
+            await this.deps.beforeDispatchUserTurn?.(sessionId, head);
+            if (!this.isActiveTurnCurrent(sessionId, active)) {
+              throw new Error(
+                '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
+              );
+            }
+            // host 把排队 orca 消息的 accepted 副作用挂在这个 hook 上(置 running /
+            // autoBridgePending), 必须 await 完才能放行 vendor turn —— fire-and-forget
+            // 会让快 worker 在状态可见前结束 turn, 桥接被 turn-end handler 误跳过。
+            await this.deps.onAcceptedQueuedMessage?.(sessionId, head);
+            if (!this.isActiveTurnCurrent(sessionId, active)) {
+              throw new Error(
+                '[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch',
+              );
+            }
+            active.dispatchLifecycle = 'sending';
+          },
+          onPersistFailed: () => {
+            this.notifyUserMessagePersistenceFailed(sessionId, head, {
+              retainForRetry: true,
+            });
           },
         },
-      );
+      });
       if (this.discardOnStaleActiveTurn(sessionId, active, isSendDispatched(result))) return;
       active.persisting = false;
       if (!isSendDispatched(result)) {

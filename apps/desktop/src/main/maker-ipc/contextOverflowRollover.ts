@@ -5,25 +5,23 @@
  * 规划函数是纯的，host 只负责关 live handle、落库、注入交接、wire 重放失败那条 user 消息。
  */
 
+import { CONTEXT_OVERFLOW_REASON, isContextOverflowErrorMessage } from '@cindy/maker-core';
 import {
-  CONTEXT_OVERFLOW_REASON,
-  isContextOverflowErrorMessage,
-} from '@cindy/maker-core';
+  projectAgentFacingText,
+  readAgentInputReferences,
+} from '@cindy/maker-shared/agent-input-projection';
 
 import {
   assessModelSwitchContext,
   shouldHandoffAfterContextAssessment,
 } from '../../shared/modelSwitchAssessment';
-import {
-  buildHandoffText,
-  extractPlainText,
-  type HandoffSourceMessage,
-} from './agentHandoff.js';
+import { buildHandoffText, extractPlainText, type HandoffSourceMessage } from './agentHandoff.js';
 
 const SYNTHETIC_TRIGGER_PREFIX = '[UI_ACTION_TRIGGER]';
 
 export interface OverflowSourceMessage extends HandoffSourceMessage {
   clientId: string;
+  agentMeta?: Record<string, unknown> | null;
 }
 
 export type OverflowRolloverStopReason = 'no-user' | 'has-side-effects' | 'already-rolled';
@@ -33,6 +31,7 @@ export type OverflowRolloverPlan =
       action: 'rebuild';
       sourceUserClientId: string;
       sourceUserContent: unknown;
+      sourceUserAgentFacingWireContent?: unknown;
       handoffMessages: OverflowSourceMessage[];
     }
   | { action: 'stop'; reason: OverflowRolloverStopReason };
@@ -81,8 +80,7 @@ export const effectivePiContextWindow = effectiveContextWindow;
 
 export function lookupVerifiedContextWindow(
   resolve:
-    | ((agentKind: string, modelId: string, providerId: string | null) => number | null)
-    | undefined,
+    ((agentKind: string, modelId: string, providerId: string | null) => number | null) | undefined,
   model: string | null | undefined,
   providerId?: string | null,
   agentKind?: string,
@@ -97,9 +95,10 @@ export function lookupVerifiedContextWindow(
   // fallback; directory lookup must stay scoped to this session's provider.
   const providerIds = [providerId ?? null];
   for (const id of [...new Set(ids)]) {
-    const callResolve = (pid: string | null): number | null =>
-      resolve(agentKind ?? 'pi', id, pid);
-    const hit = providerIds.map(callResolve).find((value) => typeof value === 'number' && value > 0);
+    const callResolve = (pid: string | null): number | null => resolve(agentKind ?? 'pi', id, pid);
+    const hit = providerIds
+      .map(callResolve)
+      .find((value) => typeof value === 'number' && value > 0);
     if (typeof hit === 'number' && hit > 0) return hit;
   }
   return null;
@@ -129,8 +128,16 @@ function hasTurnSideEffects(messagesAfterUser: OverflowSourceMessage[]): boolean
 }
 
 export type OverflowReplayWireMessage =
-  | string
-  | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
+  string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
+
+function isOverflowReplayWireMessage(value: unknown): value is OverflowReplayWireMessage {
+  if (typeof value === 'string') return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.type === 'user' && (typeof record.content === 'string' || Array.isArray(record.content))
+  );
+}
 
 export function persistedUserContentToWireMessage(content: unknown): OverflowReplayWireMessage {
   if (typeof content === 'string') {
@@ -149,26 +156,31 @@ export function persistedUserContentToWireMessage(content: unknown): OverflowRep
   }
   if (!content || typeof content !== 'object') return '';
   const rec = content as Record<string, unknown>;
+  if (isOverflowReplayWireMessage(rec.agentFacingWireContent)) {
+    return rec.agentFacingWireContent;
+  }
   if (rec.type === 'user') {
     if (typeof rec.content === 'string' || Array.isArray(rec.content)) {
       return rec as OverflowReplayWireMessage;
     }
   }
   const text = typeof rec.text === 'string' ? rec.text : '';
+  const agentReferences = readAgentInputReferences(rec.agentReferences, text);
+  const projectedText = projectAgentFacingText({
+    text,
+    quotesEncoded: rec.quotesEncoded === true,
+    agentReferences,
+  });
   const images = Array.isArray(rec.images) ? rec.images : [];
   const files = Array.isArray(rec.files) ? rec.files : [];
-  if (images.length === 0 && files.length === 0) return text;
+  if (images.length === 0 && files.length === 0) return projectedText;
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  if (text) blocks.push({ type: 'text', text });
+  if (projectedText) blocks.push({ type: 'text', text: projectedText });
   for (const image of images) {
     if (!image || typeof image !== 'object') continue;
     const item = image as Record<string, unknown>;
     const path =
-      typeof item.path === 'string'
-        ? item.path
-        : typeof item.url === 'string'
-          ? item.url
-          : '';
+      typeof item.url === 'string' ? item.url : typeof item.path === 'string' ? item.path : '';
     if (path) blocks.push({ type: 'image', path });
   }
   for (const file of files) {
@@ -177,7 +189,7 @@ export function persistedUserContentToWireMessage(content: unknown): OverflowRep
     const path = typeof item.path === 'string' ? item.path : '';
     if (path) blocks.push({ type: 'file', path });
   }
-  return { type: 'user', content: blocks.length > 0 ? blocks : text };
+  return { type: 'user', content: blocks.length > 0 ? blocks : projectedText };
 }
 
 export function planContextOverflowRollover(
@@ -204,8 +216,16 @@ export function planContextOverflowRollover(
     action: 'rebuild',
     sourceUserClientId: sourceUser.clientId,
     sourceUserContent: sourceUser.content,
+    ...(sourceUser.agentMeta?.agentFacingWireContent !== undefined
+      ? { sourceUserAgentFacingWireContent: sourceUser.agentMeta.agentFacingWireContent }
+      : {}),
     handoffMessages: messages.slice(0, lastUserIndex),
   };
+}
+
+function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
+  if (value === 'codex' || value === 'pi') return value;
+  return 'cc';
 }
 
 export function engineLabelForOverflow(agentKind: string): string {
@@ -281,6 +301,9 @@ export interface ContextOverflowRolloverDeps {
     meta: {
       reason: 'context-overflow' | 'pi-prompt-timeout';
       sourceUserClientId: string | null;
+      sourceAgentKind?: 'cc' | 'codex' | 'pi';
+      sourceModel?: string | null;
+      sourceProviderId?: string | null;
       expectedClearedAt?: number | null;
     },
   ): Promise<void>;
@@ -289,6 +312,7 @@ export interface ContextOverflowRolloverDeps {
   replayUserMessage(
     sessionId: string,
     content: unknown,
+    agentFacingWireContent?: unknown,
   ): Promise<{ accepted: boolean }>;
   onRebuilt?(sessionId: string): void;
   withSessionLock?<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
@@ -348,11 +372,21 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       await deps.commitRebuild(sessionId, handoff, {
         reason: 'context-overflow',
         sourceUserClientId: plan.sourceUserClientId,
+        sourceAgentKind: normalizeOverflowDbAgentKind(sessionRow.agentKind),
+        sourceModel: sessionRow.model ?? null,
+        sourceProviderId: sessionRow.providerId ?? null,
         expectedClearedAt: sessionRow.clearedAt,
       });
       deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
       deps.onRebuilt?.(sessionId);
-      const replay = await deps.replayUserMessage(sessionId, plan.sourceUserContent);
+      const replay =
+        plan.sourceUserAgentFacingWireContent !== undefined
+          ? await deps.replayUserMessage(
+              sessionId,
+              plan.sourceUserContent,
+              plan.sourceUserAgentFacingWireContent,
+            )
+          : await deps.replayUserMessage(sessionId, plan.sourceUserContent);
       if (!replay.accepted) {
         deps.log.warn('context overflow rollover replay was not accepted', {
           sessionId,
@@ -428,6 +462,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     await deps.commitRebuild(sessionId, handoff, {
       reason: rebuildReason,
       sourceUserClientId: lastUser.clientId,
+      sourceAgentKind: normalizeOverflowDbAgentKind(sessionRow.agentKind),
+      sourceModel: sessionRow.model ?? null,
+      sourceProviderId: sessionRow.providerId ?? null,
       expectedClearedAt: sessionRow.clearedAt,
     });
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);

@@ -166,10 +166,7 @@ import {
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeGeneratedImage } from '../cindy-media/generatedMedia.js';
-import {
-  getDbClient,
-  isDbClientNotReadyError,
-} from '../localDb/client/current.js';
+import { getDbClient, isDbClientNotReadyError } from '../localDb/client/current.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence,
@@ -1528,11 +1525,15 @@ type SendToSessionInternalResult =
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
-  listSessionQueue: (sessionId: string) => Promise<
+  listSessionQueue: (
+    sessionId: string,
+  ) => Promise<
     | { ok: true; messages: SessionQueueInspectionEntry[] }
     | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
-  listSessionQueuedCounts: (sessionIds: string[]) => Promise<
+  listSessionQueuedCounts: (
+    sessionIds: string[],
+  ) => Promise<
     | { ok: true; counts: Record<string, number> }
     | { ok: false; errorCode: 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
@@ -2626,8 +2627,7 @@ export async function withSendToSessionLock<T>(
 }
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
-let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null =
-  null;
+let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null = null;
 const overflowSuppressedBroadcasts = new Map<
   string,
   {
@@ -5462,23 +5462,21 @@ let disposePiPackagesChangedBroadcast: (() => void) | null = null;
  * soon as the Renderer selects an owner, before the splash-gated Maker IPC bundle is available.
  */
 export function registerModelVisibilitySyncIpc(): void {
-  ipcMain.handle(MAKER_INVOKE.MODEL_VISIBILITY_SYNC, async (
-    event,
-    dataOwnerId: unknown,
-    ownerGeneration: unknown,
-    map: unknown,
-  ) => {
-    assertTrustedAppRendererEvent(event);
-    syncModelVisibilityMirrorForOwner(
-      map,
-      { dataOwnerId, ownerGeneration },
-      getActiveDataOwnerPushStamp(),
-      isAppSessionBoundaryPending(),
-      () => {
-        broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
-      },
-    );
-  });
+  ipcMain.handle(
+    MAKER_INVOKE.MODEL_VISIBILITY_SYNC,
+    async (event, dataOwnerId: unknown, ownerGeneration: unknown, map: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      syncModelVisibilityMirrorForOwner(
+        map,
+        { dataOwnerId, ownerGeneration },
+        getActiveDataOwnerPushStamp(),
+        isAppSessionBoundaryPending(),
+        () => {
+          broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        },
+      );
+    },
+  );
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
@@ -6278,81 +6276,89 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await getDesktopCommandRegistry().execute(name, c);
   });
 
-  ipcMain.handle(MAKER_INVOKE.LIST_AGENT_COMMANDS, async (event, agentKind: unknown, rawParams?: unknown) => {
-    assertAgentCommandListIpcCaller(event, {
-      isDeviceLinkInvoke,
-      assertTrustedSender: (sourceEvent) =>
-        assertTrustedAppRendererEvent(
-          sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
-        ),
-    });
-    try {
-      const kind = requireAgentKind(agentKind);
-      const params = rawParams === undefined ? {} : requireObject(rawParams);
-      if (params.sessionId !== undefined && typeof params.sessionId !== 'string') {
-        throwIpcError('INVALID_PARAMS', 'sessionId must be a string');
-      }
-      if (
-        params.allowManagedPiPackagePreview !== undefined
-        && typeof params.allowManagedPiPackagePreview !== 'boolean'
-      ) {
-        throwIpcError('INVALID_PARAMS', 'allowManagedPiPackagePreview must be a boolean');
-      }
-      const sessionId = typeof params.sessionId === 'string' && params.sessionId.trim()
-        ? params.sessionId.trim()
-        : undefined;
-      const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
-      const builtins = maker.listAgentCommands(kind);
-      const mayListPackageCommands = shouldListPiPackageCommands(
-        kind,
-        sessionId !== undefined,
-        sessionMeta,
-        params.allowManagedPiPackagePreview !== false,
-      );
-      let packageCommands: Array<{ name: string; description: string }> = [];
-      let runtimeStatus: import('../../shared/piPackages.js').PiPackageCommandRuntimeStatus | undefined;
-      if (mayListPackageCommands && sessionId) {
-        const manifest = maker.getSessionRuntimeCapabilities(sessionId);
-        runtimeStatus = manifest?.status === 'loaded'
-          ? 'loaded'
-          : manifest?.status === 'failed'
-            ? 'failed'
-            : manifest?.status === 'unknown'
-              ? 'unknown'
-              : 'pending';
-        const managedNames = new Set(manifest?.managedPackageCommandNames ?? []);
-        if (manifest?.status === 'loaded') {
-          packageCommands = manifest.commands.flatMap((command) => (
-            managedNames.has(command.name) && !command.name.startsWith('skill:')
-              ? [{
-                  name: command.name,
-                  description: command.description ?? `Pi extension command: ${command.name}`,
-                }]
-              : []
-          ));
-        } else if (!manifest) {
-          // An empty local Pi task may have a persisted session row before its
-          // process starts. Keep inspected Prompt templates visible; send waits
-          // for this task's get_commands catalog before allowing execution.
+  ipcMain.handle(
+    MAKER_INVOKE.LIST_AGENT_COMMANDS,
+    async (event, agentKind: unknown, rawParams?: unknown) => {
+      assertAgentCommandListIpcCaller(event, {
+        isDeviceLinkInvoke,
+        assertTrustedSender: (sourceEvent) =>
+          assertTrustedAppRendererEvent(
+            sourceEvent as Parameters<typeof assertTrustedAppRendererEvent>[0],
+          ),
+      });
+      try {
+        const kind = requireAgentKind(agentKind);
+        const params = rawParams === undefined ? {} : requireObject(rawParams);
+        if (params.sessionId !== undefined && typeof params.sessionId !== 'string') {
+          throwIpcError('INVALID_PARAMS', 'sessionId must be a string');
+        }
+        if (
+          params.allowManagedPiPackagePreview !== undefined &&
+          typeof params.allowManagedPiPackagePreview !== 'boolean'
+        ) {
+          throwIpcError('INVALID_PARAMS', 'allowManagedPiPackagePreview must be a boolean');
+        }
+        const sessionId =
+          typeof params.sessionId === 'string' && params.sessionId.trim()
+            ? params.sessionId.trim()
+            : undefined;
+        const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
+        const builtins = maker.listAgentCommands(kind);
+        const mayListPackageCommands = shouldListPiPackageCommands(
+          kind,
+          sessionId !== undefined,
+          sessionMeta,
+          params.allowManagedPiPackagePreview !== false,
+        );
+        let packageCommands: Array<{ name: string; description: string }> = [];
+        let runtimeStatus:
+          import('../../shared/piPackages.js').PiPackageCommandRuntimeStatus | undefined;
+        if (mayListPackageCommands && sessionId) {
+          const manifest = maker.getSessionRuntimeCapabilities(sessionId);
+          runtimeStatus =
+            manifest?.status === 'loaded'
+              ? 'loaded'
+              : manifest?.status === 'failed'
+                ? 'failed'
+                : manifest?.status === 'unknown'
+                  ? 'unknown'
+                  : 'pending';
+          const managedNames = new Set(manifest?.managedPackageCommandNames ?? []);
+          if (manifest?.status === 'loaded') {
+            packageCommands = manifest.commands.flatMap((command) =>
+              managedNames.has(command.name) && !command.name.startsWith('skill:')
+                ? [
+                    {
+                      name: command.name,
+                      description: command.description ?? `Pi extension command: ${command.name}`,
+                    },
+                  ]
+                : [],
+            );
+          } else if (!manifest) {
+            // An empty local Pi task may have a persisted session row before its
+            // process starts. Keep inspected Prompt templates visible; send waits
+            // for this task's get_commands catalog before allowing execution.
+            packageCommands = await listManagedPiPromptCommands();
+          }
+        } else if (mayListPackageCommands) {
+          // Before a task exists, only prompt templates are statically knowable.
+          // Extension commands appear after that exact Pi runtime confirms them.
           packageCommands = await listManagedPiPromptCommands();
         }
-      } else if (mayListPackageCommands) {
-        // Before a task exists, only prompt templates are statically knowable.
-        // Extension commands appear after that exact Pi runtime confirms them.
-        packageCommands = await listManagedPiPromptCommands();
+        const commands = mergePiPackageCommands(kind, builtins, packageCommands);
+        return { success: true, commands, ...(runtimeStatus ? { runtimeStatus } : {}) };
+      } catch (err) {
+        return toAgentCommandListFailure(err, {
+          reportError: (error) => {
+            log.warn('Agent command list failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        });
       }
-      const commands = mergePiPackageCommands(kind, builtins, packageCommands);
-      return { success: true, commands, ...(runtimeStatus ? { runtimeStatus } : {}) };
-    } catch (err) {
-      return toAgentCommandListFailure(err, {
-        reportError: (error) => {
-          log.warn('Agent command list failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        },
-      });
-    }
-  });
+    },
+  );
 
   ipcMain.handle(
     MAKER_INVOKE.LIST_AGENT_SKILLS,
@@ -6432,72 +6438,80 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       source: payload.source,
       ...(typeof payload.enabled === 'boolean' ? { enabled: payload.enabled } : {}),
     };
-    return runPiPackageMutationIpcBoundary(async () => {
-      if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
+    return runPiPackageMutationIpcBoundary(
+      async () => {
+        if (!piPackageMutationNeedsGrant(request)) return mutatePiPackage(request);
 
-      const enableIdentity = request.action === 'set-enabled' && request.enabled === true
-        ? await capturePiPackageEnableIdentity(request.source)
-        : undefined;
-      const grantBinding = enableIdentity
-        ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
-        : undefined;
+        const enableIdentity =
+          request.action === 'set-enabled' && request.enabled === true
+            ? await capturePiPackageEnableIdentity(request.source)
+            : undefined;
+        const grantBinding = enableIdentity
+          ? { expectedPackageFingerprint: enableIdentity.expectedPackageFingerprint }
+          : undefined;
 
-      const source = escapePiPackageNativeDialogText(request.source);
-      const copy =
-        request.action === 'set-enabled'
-          ? {
-              title: t('settings.piPackages.extensionApprovalTitle'),
-              message: enableIdentity?.displayLabel ?? '',
-              detail: t('settings.piPackages.extensionApprovalDescription'),
-              confirm: t('settings.piPackages.approveAndEnable'),
-            }
-          : request.action === 'remove'
+        const source = escapePiPackageNativeDialogText(request.source);
+        const copy =
+          request.action === 'set-enabled'
             ? {
-                title: t('settings.piPackages.uninstallTitle'),
-                message: t('settings.piPackages.uninstallTitle'),
-                detail: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
-                confirm: t('settings.piPackages.confirmUninstall'),
+                title: t('settings.piPackages.extensionApprovalTitle'),
+                message: enableIdentity?.displayLabel ?? '',
+                detail: t('settings.piPackages.extensionApprovalDescription'),
+                confirm: t('settings.piPackages.approveAndEnable'),
               }
-            : request.action === 'update'
+            : request.action === 'remove'
               ? {
-                  title: t('settings.piPackages.updateConfirmTitle'),
-                  message: t('settings.piPackages.updateConfirmTitle'),
-                  detail: t('settings.piPackages.updateConfirmDescription').replace(
-                    '{{source}}',
-                    source,
-                  ),
-                  confirm: t('settings.piPackages.confirmUpdate'),
+                  title: t('settings.piPackages.uninstallTitle'),
+                  message: t('settings.piPackages.uninstallTitle'),
+                  detail: t('settings.piPackages.uninstallDescription').replace('{{name}}', source),
+                  confirm: t('settings.piPackages.confirmUninstall'),
                 }
-              : {
-                  title: t('settings.piPackages.confirmTitle'),
-                  message: t('settings.piPackages.confirmTitle'),
-                  detail: t('settings.piPackages.confirmDescription').replace('{{source}}', source),
-                  confirm: t('settings.piPackages.confirmInstall'),
-                };
-      const owner = BrowserWindow.fromWebContents(event.sender);
-      const options = {
-        type: 'warning' as const,
-        title: copy.title,
-        message: copy.message,
-        detail: copy.detail,
-        buttons: [copy.confirm, t('settings.piPackages.cancel')],
-        defaultId: 1,
-        cancelId: 1,
-        noLink: true,
-      };
-      const decision = owner
-        ? await dialog.showMessageBox(owner, options)
-        : await dialog.showMessageBox(options);
-      if (decision.response !== 0) {
-        throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
-      }
-      return mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding));
-    }, t('settings.piPackages.operationFailed'), (error) => {
-      log.warn('Pi extension mutation failed', {
-        action: request.action,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
+              : request.action === 'update'
+                ? {
+                    title: t('settings.piPackages.updateConfirmTitle'),
+                    message: t('settings.piPackages.updateConfirmTitle'),
+                    detail: t('settings.piPackages.updateConfirmDescription').replace(
+                      '{{source}}',
+                      source,
+                    ),
+                    confirm: t('settings.piPackages.confirmUpdate'),
+                  }
+                : {
+                    title: t('settings.piPackages.confirmTitle'),
+                    message: t('settings.piPackages.confirmTitle'),
+                    detail: t('settings.piPackages.confirmDescription').replace(
+                      '{{source}}',
+                      source,
+                    ),
+                    confirm: t('settings.piPackages.confirmInstall'),
+                  };
+        const owner = BrowserWindow.fromWebContents(event.sender);
+        const options = {
+          type: 'warning' as const,
+          title: copy.title,
+          message: copy.message,
+          detail: copy.detail,
+          buttons: [copy.confirm, t('settings.piPackages.cancel')],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const decision = owner
+          ? await dialog.showMessageBox(owner, options)
+          : await dialog.showMessageBox(options);
+        if (decision.response !== 0) {
+          throwIpcError('MUTATION_CANCELLED', 'Pi extension mutation cancelled');
+        }
+        return mutatePiPackage(request, issuePiPackageMutationGrant(request, grantBinding));
+      },
+      t('settings.piPackages.operationFailed'),
+      (error) => {
+        log.warn('Pi extension mutation failed', {
+          action: request.action,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
   });
 
   ipcMain.handle(
@@ -6960,11 +6974,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           o.providerId = reroute;
         }
       } else if (shouldApplyExclusiveProviderRerouteLive(o.providerId)) {
-        const pin = await pinExclusiveSessionProvider(
-          o.agentKind,
-          o.model,
-          o.providerId ?? null,
-        );
+        const pin = await pinExclusiveSessionProvider(o.agentKind, o.model, o.providerId ?? null);
         if (pin) o.providerId = pin;
       }
     }
@@ -8112,15 +8122,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // still carry vendor-specific resume/fork anchors from before the close;
         // strip every native continuation hint so CC/Codex bootstrap fresh too.
         const freshVendorOptions = { ...co.vendorOptions };
-        for (const key of [
-          'resumeSessionAt',
-          'forkSession',
-          'threadId',
-          'tailTurnsToDrop',
-        ]) {
+        for (const key of ['resumeSessionAt', 'forkSession', 'threadId', 'tailTurnsToDrop']) {
           delete freshVendorOptions[key];
         }
-        co.vendorOptions = Object.keys(freshVendorOptions).length > 0 ? freshVendorOptions : undefined;
+        co.vendorOptions =
+          Object.keys(freshVendorOptions).length > 0 ? freshVendorOptions : undefined;
       }
       co.providerId = row.providerId;
       co.effort = (row.effort ?? undefined) as CreateOpts['effort'];
@@ -10313,8 +10319,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   idleReleaseWatcher.start();
 
   const sessionControlService = createSessionControlService({
-    sessionExists: async (sessionId) =>
-      (await maker.getSessionMeta(sessionId)) !== null,
+    sessionExists: async (sessionId) => (await maker.getSessionMeta(sessionId)) !== null,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     getSessionActivitySnapshot: readCanonicalSessionActivity,
     assertExternalInputAllowed: assertReviewExternalInputAllowed,
@@ -10380,7 +10385,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         await inputCoordinator.ensureQueueRestored(sessionId);
         if (!inputCoordinator.isQueueRestored(sessionId)) {
-          return { ok: false, errorCode: 'INTERNAL', message: `queue restore incomplete for ${sessionId}` };
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: `queue restore incomplete for ${sessionId}`,
+          };
         }
         return {
           ok: true,
@@ -10398,8 +10407,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listSessionQueuedCounts: async (sessionIds) => {
       try {
         const counts = await resolveSessionQueueCounts(sessionIds, {
-          getLiveQueue: (sessionId) =>
-            inputCoordinator.getQueueInspectionIfRestored(sessionId),
+          getLiveQueue: (sessionId) => inputCoordinator.getQueueInspectionIfRestored(sessionId),
           loadPersistedCounts: loadAgentInputQueueSnapshotCounts,
         });
         return { ok: true, counts };
@@ -10641,12 +10649,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       try {
         const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];
         const providerRouting = await getProviderRoutingContext();
-        const result: Record<string, Array<{
-          id: string;
-          label: string;
-          providers: Array<{ id: string; name: string }>;
-          defaultProviderId: string | null;
-        }>> = {};
+        const result: Record<
+          string,
+          Array<{
+            id: string;
+            label: string;
+            providers: Array<{ id: string; name: string }>;
+            defaultProviderId: string | null;
+          }>
+        > = {};
         for (const a of agents) {
           const caps = maker.getCapabilities(a);
           // key 必须区分 pi,否则 pi 模型会被塞进 claude_code 键与 CC 模型混淆。
@@ -10946,7 +10957,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
-    replayUserMessage: async (sessionId, content) => {
+    replayUserMessage: async (sessionId, content, agentFacingWireContent) => {
       const [row] = await getDbClient()
         .drizzle.select()
         .from(sessions)
@@ -10979,7 +10990,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       const result = await sendToAgentAcceptedUnlocked(
         sessionId,
-        persistedUserContentToWireMessage(content),
+        persistedUserContentToWireMessage(agentFacingWireContent ?? content),
         createOpts,
       );
       return { accepted: result.accepted === true };
@@ -11946,9 +11957,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sessionId,
         {
           message,
-          ...(isPiPromptRpcTimeoutError({ message })
-            ? { reason: 'pi-prompt-timeout' }
-            : {}),
+          ...(isPiPromptRpcTimeoutError({ message }) ? { reason: 'pi-prompt-timeout' } : {}),
         },
         null,
       );
@@ -14523,18 +14532,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerAndroidAutomationHandlers(createElectronIpcHandlerRegistry());
 
   // ── iOS Simulator pane / Agent discovery ────────────────────────────────
-  registerIOSSimulatorHandlers(
-    createElectronIpcHandlerRegistry(),
-    {
-      getPluginAccess: getIOSSimulatorPluginAccessDecision,
-      getSessionContext: async (sessionId) => {
-        const liveSession = maker.getSession(sessionId);
-        if (liveSession) return { workingDir: liveSession.workDir };
-        const snapshot = await getSessionRowSnapshotStrict(sessionId);
-        return snapshot ? { workingDir: snapshot.workingDir } : null;
-      },
+  registerIOSSimulatorHandlers(createElectronIpcHandlerRegistry(), {
+    getPluginAccess: getIOSSimulatorPluginAccessDecision,
+    getSessionContext: async (sessionId) => {
+      const liveSession = maker.getSession(sessionId);
+      if (liveSession) return { workingDir: liveSession.workDir };
+      const snapshot = await getSessionRowSnapshotStrict(sessionId);
+      return snapshot ? { workingDir: snapshot.workingDir } : null;
     },
-  );
+  });
 
   // ── Browser automation (Settings →「电脑使用」) ───────────────────────────
   // Probe local browser detection. Drives the detection status + download
