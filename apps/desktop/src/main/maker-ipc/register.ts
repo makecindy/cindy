@@ -693,7 +693,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
 } from './sessionAgentSwitchHandler.js';
 import {
-  extractPlainText,
+  extractAgentIslandPromptText,
   prependNoteToWireUserMessage,
   prependHandoffToUserMessage,
   type HandoffWireMessage,
@@ -3272,12 +3272,7 @@ function rollbackAgentIslandUserPrompt(
   }
 }
 
-function extractAgentIslandPromptText(content: unknown): string | null {
-  // 与落库信封、SDK blocks 共用 extractPlainText:stringifyUserContent JSON
-  // 不能当岛上正文显示。
-  const text = extractPlainText(content).trim();
-  return text || null;
-}
+
 
 /**
  * 当前是否有任意一个 session 正在跑 turn。

@@ -241,7 +241,7 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toContain('previewQueuedUserTurn: (sessionId, item) => {');
     expect(registerSource).toContain("source: 'enqueue'");
     expect(registerSource).toContain('item.text || item.persistedContent');
-    expect(registerSource).toContain('extractPlainText(content)');
+    expect(registerSource).toContain('extractAgentIslandPromptText(content)');
     const drainableHead = coordinatorSource.indexOf(
       'if (this.getDrainableHead(sessionId, state) === item)',
     );
