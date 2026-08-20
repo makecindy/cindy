@@ -618,6 +618,12 @@ interface SessionInputState {
   /** 保护新 generation 的 timer 不被旧 generation 的迟到 callback 清掉。 */
   sessionRunningRetryToken: symbol | null;
   /**
+   * First time we saw live-idle + tracker-busy while queued work was blocked.
+   * Terminal events may still be in Session's AsyncQueue after the handle
+   * flips idle; reconcile only after SESSION_RUNNING_RETRY_DELAY_MS.
+   */
+  staleLiveIdleSinceMs: number | null;
+  /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
    * 消息 —— 队列可拖拽重排,等待态必须跟消息走而不是跟"队首"这个位置走。null = 无等待。
@@ -680,6 +686,7 @@ function createInitialInputState(
     sessionRunningRetryOwnerKey: null,
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
+    staleLiveIdleSinceMs: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -2943,6 +2950,7 @@ export class AgentInputCoordinator {
   ): void {
     const state = this.getState(sessionId);
     const active = state.activeTurn;
+    state.staleLiveIdleSinceMs = null;
     this.clearAbortReconcileRetry(state);
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
@@ -3398,24 +3406,45 @@ export class AgentInputCoordinator {
     sessionId: string,
     state: SessionInputState,
   ): boolean {
-    if (state.abortBoundaryToken) return false;
-    if (state.queueAbortPending) return false;
-    if (state.queueInteractionLocks.length > 0) return false;
-    if (state.steeringQueueClientIds.length > 0) return false;
-    if (state.pendingExternalTerminalDone) return false;
-    if (this.deps.hasPendingInteraction(sessionId)) return false;
-    if (state.activeTurn && !isActiveTurnDispatched(state.activeTurn)) return false;
+    if (
+      state.abortBoundaryToken ||
+      state.queueAbortPending ||
+      state.queueInteractionLocks.length > 0 ||
+      state.steeringQueueClientIds.length > 0 ||
+      state.pendingExternalTerminalDone ||
+      this.deps.hasPendingInteraction(sessionId) ||
+      (state.activeTurn && !isActiveTurnDispatched(state.activeTurn))
+    ) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
     // Missing live probe fail-closed: do not steal abort/live-turn reconcile.
-    if (this.deps.isLiveTurnRunning?.(sessionId) !== false) return false;
+    if (this.deps.isLiveTurnRunning?.(sessionId) !== false) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
 
     const trackerOrLiveBusy = this.deps.isTurnRunning(sessionId);
     const zombieDispatched = Boolean(
       state.activeTurn && isActiveTurnDispatched(state.activeTurn),
     );
-    if (!trackerOrLiveBusy && !zombieDispatched) return false;
+    if (!trackerOrLiveBusy && !zombieDispatched) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
+
+    // Handle may already be idle while status/done is still queued in Session.
+    // Extra drains in this window must not confirm; wait the existing 250ms retry.
+    if (state.staleLiveIdleSinceMs == null) {
+      state.staleLiveIdleSinceMs = Date.now();
+    }
+    if (Date.now() - state.staleLiveIdleSinceMs < SESSION_RUNNING_RETRY_DELAY_MS) {
+      return false;
+    }
 
     const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
     if (!reconciled) return false;
+    state.staleLiveIdleSinceMs = null;
     if (zombieDispatched) this.onTurnEvent(sessionId, 'done');
     return true;
   }
@@ -3502,6 +3531,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const compact = this.getDrainableCompact(sessionId, state);
     if (compact) {
+      state.staleLiveIdleSinceMs = null;
       state.pendingCompacts = state.pendingCompacts.slice(1);
       await this.dispatchCompact(sessionId, compact, reason);
       return;
@@ -3518,6 +3548,11 @@ export class AgentInputCoordinator {
       ) {
         this.scheduleDrain(sessionId, 'reconcile-stale-idle');
         return;
+      }
+      if (hasRunnableWork && state.staleLiveIdleSinceMs != null) {
+        this.scheduleSessionRunningRetry(sessionId, 'stale-live-idle-confirm');
+      } else if (!hasRunnableWork) {
+        state.staleLiveIdleSinceMs = null;
       }
       // #2506 结果级诊断:排队输入被 gate 挡住时留痕(此前零日志,gate-clear
       // 到成功 drain 之间的静默滞留无从定位)。只记 id / 布尔 / 枚举,不记正文;
@@ -3548,6 +3583,7 @@ export class AgentInputCoordinator {
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
+    state.staleLiveIdleSinceMs = null;
     state.pendingQueue = state.pendingQueue.slice(1);
     this.removePendingCompactWaitClientId(state, head.clientId);
     if (!state.stickyError) {
