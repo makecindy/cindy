@@ -360,6 +360,42 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 
+  it('dismissal 释放防重 guard:对端已解决 A 后,用户对新卡 B 的响应不再被吞', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'dismiss-guard-a',
+      toolName: 'Read',
+      input: { file_path: '/a.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'dismiss-guard-b',
+      toolName: 'Read',
+      input: { file_path: '/b.txt' },
+    });
+    await flush();
+
+    // 本端提交 A 后回程丢失,另一控制端解决 A → 被控端广播 dismissal 推进到 B。
+    // 此时旧 resolve RPC 仍未 settle(隧道可达 ~30s),guard 若继续挂着,
+    // 用户对 B 的响应会被静默丢弃;dismissal 必须立即释放 guard。
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    host.hostDismiss(s, 'dismiss-guard-a', 'resolved', { behavior: 'allow' });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('dismiss-guard-b');
+
+    // 防重窗口未结束(300ms)也不得拦截: dismissal 已终结 A 的响应链。
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'dismiss-guard-a',
+      'dismiss-guard-b',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
   it('permission deny 同样经隧道回传 behavior=deny', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {

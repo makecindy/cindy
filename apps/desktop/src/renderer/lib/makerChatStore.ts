@@ -2858,12 +2858,21 @@ const permissionResponseInFlight = new Set<string>();
  * 防重窗口:本机 resolve-interaction handler 同步返回,IPC Promise 往往在双击的
  * 第二个 click / 键重复事件到达之前就 settle;若 finally 随即解除 guard,第二次
  * 输入会读到刚推广的下一条权限卡并误批(Codex review P1)。因此 guard 必须保持
- * 到重复输入窗口结束再释放。500ms 对齐 Windows 默认双击时间(项目先例:
- * swallowActivationClick 的 RELEASE_GUARD_MS=300)。
+ * 到重复输入窗口结束再释放。300ms 对齐项目先例 swallowActivationClick 的
+ * RELEASE_GUARD_MS,并兼顾 Greptile 反馈(窗口过长会把用户对新卡的真实响应
+ * 误判为重复输入而丢弃)。
  */
-const PERMISSION_RESPONSE_GUARD_WINDOW_MS = 500;
-/** 每个 session 的防重释放定时器(供 purge 清理,防止迟到释放误伤新会话)。 */
+const PERMISSION_RESPONSE_GUARD_WINDOW_MS = 300;
+/** 每个 session 的防重释放定时器(供 purge / dismissal 清理,防止迟到释放误伤新会话)。 */
 const permissionResponseGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** 立即释放某 session 的权限防重 guard(双击窗口未结束也照放,幂等)。 */
+function releasePermissionResponseGuard(sessionId: string): void {
+  const timer = permissionResponseGuardTimers.get(sessionId);
+  if (timer !== undefined) clearTimeout(timer);
+  permissionResponseGuardTimers.delete(sessionId);
+  permissionResponseInFlight.delete(sessionId);
+}
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
@@ -3342,10 +3351,7 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
-  const permissionGuardTimer = permissionResponseGuardTimers.get(sessionId);
-  if (permissionGuardTimer !== undefined) clearTimeout(permissionGuardTimer);
-  permissionResponseGuardTimers.delete(sessionId);
-  permissionResponseInFlight.delete(sessionId);
+  releasePermissionResponseGuard(sessionId);
   clearWakeBridgeReconcileTimer(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
@@ -7310,6 +7316,10 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       decision: dismissPayload.decision,
     };
     const sessionId = payload.sessionId;
+    // 交互被撤回/对端已解决:旧权限卡的响应链已终结,立即释放防重 guard,
+    // 否则本端旧 resolve RPC 可能要等隧道超时(可达 ~30s),期间用户对新推广
+    // 卡的所有响应都会被静默丢弃(Greptile/Codex review P1/P2)。
+    releasePermissionResponseGuard(sessionId);
     setState(sessionId, (s) =>
       handleStreamEvent(s, { sessionId, type: 'permission_dismissed', data }),
     );
@@ -13637,11 +13647,11 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
     .finally(() => {
       // IPC 已 settle,但同一手势的第二次输入(双击第二击 / 键重复)可能还没到:
       // 保持 guard 到窗口结束,窗口内任何新响应都被挡下,不会误批推广后的新卡。
-      const timer = setTimeout(() => {
-        permissionResponseInFlight.delete(sessionId);
-        permissionResponseGuardTimers.delete(sessionId);
-      }, PERMISSION_RESPONSE_GUARD_WINDOW_MS);
-      permissionResponseGuardTimers.set(sessionId, timer);
+  const timer = setTimeout(
+    () => releasePermissionResponseGuard(sessionId),
+    PERMISSION_RESPONSE_GUARD_WINDOW_MS,
+  );
+  permissionResponseGuardTimers.set(sessionId, timer);
     });
 }
 
