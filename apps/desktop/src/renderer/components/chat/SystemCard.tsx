@@ -873,8 +873,8 @@ function AutoResumeSeparator() {
 /**
  * 中断自愈活动行（进行中 / 已完成共用）。
  *
- * **形态刻意对齐 AgentActionRow（工具活动行）**：radius 6 / `px-2 py-[3px]` / 16px 状态
- * 图标槽位 / 14px `--msg-tool-card-chevron` 文字 / param 位 / 尾部 chevron / hover 抬到
+ * **形态刻意对齐 AgentActionRow（工具活动行）**：inner-control 8px / `px-2 py-[3px]` / 16px 状态
+ * 图标槽位 / 14px `--msg-tool-card-chevron` 文字 / param 位 / 尾部 18×18 槽始终占位 / hover 抬到
  * `--msg-code-inline-bg`。产品语义就是「这是 agent 干活流程里的一步，只不过这一步在
  * 重连」，而不是一条系统公告——所以它读起来必须像正常工作行，不是横幅、不是警告。
  *
@@ -985,11 +985,9 @@ function AutoResumeActionRow({
           </span>
         )}
         <span className="flex-1" />
-        {canExpand && (
-          <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
-            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </span>
-        )}
+        <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
+          {canExpand ? (expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />) : null}
+        </span>
       </button>
       {canExpand && expanded && (
         <div

@@ -29,6 +29,10 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     resolve(__dirname, '..', 'components', 'chat', 'AgentActionRow.tsx'),
     'utf8',
   );
+  const systemCard = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'SystemCard.tsx'),
+    'utf8',
+  );
 
   it('onToggle 不再批量 seed 后代工作组展开态', () => {
     // 外层 click 只能翻外层自身;内层「已工作」仍由用户单独展开。
@@ -76,10 +80,14 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     expect(actionRow).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
     expect(actionRow).toMatch(/ACTIVITY_ROW_RADIUS_CLASS/);
     expect(actionRow).toMatch(/ACTIVITY_ROW_COLOR_TRANSITION_CLASS/);
+    expect(systemCard).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
     // 槽位始终占位;只有可展开时才画三角。旧写法把整个 span 按 canExpand 卸掉,
-    // 短思考行会比工具行更靠右,长思考行的 `>` 又会被顶到另一条 x。
+    // 短思考行 / 仅有 outcome 的中断行会比工具行更靠右。
     expect(source).not.toMatch(
       /\{canExpand && \(\s*<span aria-hidden="true" className="inline-flex h-\[18px\]/,
+    );
+    expect(systemCard).not.toMatch(
+      /\{canExpand && \(\s*<span aria-hidden="true" className=\{ACTIVITY_ROW_CHEVRON_SLOT_CLASS\}/,
     );
   });
 

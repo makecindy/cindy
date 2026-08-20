@@ -168,4 +168,15 @@ describe('SystemCard auto-resume 行', () => {
     expect(button.textContent).toContain('chat.systemCard.autoResume.label');
     expect(button.textContent).toContain('502 upstream unreachable');
   });
+
+  it('仅有 outcome 时仍保留 18px 三角槽,不画三角', () => {
+    render(<SystemCard cardType="auto-resume" data={{ outcome: 'succeeded' }} />);
+    const button = screen.getByRole('button');
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    const slot = button.lastElementChild;
+    expect(slot?.className).toContain('w-[18px]');
+    expect(slot?.className).toContain('h-[18px]');
+    expect(slot?.className).toContain('ml-auto');
+    expect(slot?.querySelector('svg')).toBeNull();
+  });
 });
