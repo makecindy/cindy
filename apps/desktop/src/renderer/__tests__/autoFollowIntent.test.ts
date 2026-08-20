@@ -21,6 +21,8 @@ import {
   shouldApplyFollowLatestRequest,
   shouldBumpSendFollowCancelOnScroll,
   shouldCommitFollowLatestRequest,
+  tryRequestFollowLatest,
+  readFollowLatestRequestKey,
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
@@ -475,6 +477,47 @@ describe('send follow cancel generation', () => {
   });
 });
 
+describe('tryRequestFollowLatest', () => {
+  it('bumps only the source session when generation is unchanged', () => {
+    const sessionA = `follow-a-${Date.now()}`;
+    const sessionB = `follow-b-${Date.now()}`;
+    const startA = readSendFollowCancelGeneration(sessionA);
+    expect(
+      tryRequestFollowLatest({
+        sourceSessionId: sessionA,
+        currentSessionId: sessionA,
+        startGeneration: startA,
+      }),
+    ).toBe(true);
+    expect(readFollowLatestRequestKey(sessionA)).toBe(1);
+    expect(readFollowLatestRequestKey(sessionB)).toBe(0);
+    bumpSendFollowCancelGeneration(sessionA);
+    expect(
+      tryRequestFollowLatest({
+        sourceSessionId: sessionA,
+        currentSessionId: sessionA,
+        startGeneration: startA,
+      }),
+    ).toBe(false);
+    expect(readFollowLatestRequestKey(sessionA)).toBe(1);
+  });
+
+  it('does not bump session A when the visible session is already B', () => {
+    const sessionA = `follow-switch-a-${Date.now()}`;
+    const sessionB = `follow-switch-b-${Date.now()}`;
+    const startA = readSendFollowCancelGeneration(sessionA);
+    expect(
+      tryRequestFollowLatest({
+        sourceSessionId: sessionA,
+        currentSessionId: sessionB,
+        startGeneration: startA,
+      }),
+    ).toBe(false);
+    expect(readFollowLatestRequestKey(sessionA)).toBe(0);
+    expect(readFollowLatestRequestKey(sessionB)).toBe(0);
+  });
+});
+
 describe('resolveSendWindowHandoff', () => {
   it('local send leaves any anchored window so later tail items keep following', () => {
     expect(
@@ -599,6 +642,8 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('if (decision.pinToBottom && !windowHandoff.deferPinToNextRender)');
     expect(source).not.toContain('realTailUserSendOutsideWindow');
     expect(source).toContain('followLatestRequestKey');
+    expect(source).toContain('subscribeFollowLatestRequests');
+    expect(source).toContain('readFollowLatestRequestKey(sessionId)');
     expect(source).toContain('pinToBottom();');
     expect(source).toContain('bumpSendFollowCancelGeneration(sessionId)');
     expect(source).toContain('shouldBumpSendFollowCancelOnScroll({');
@@ -617,11 +662,22 @@ describe('MessageStream send-window handoff wiring', () => {
       resolve(__dirname, '../features/cc-agent/CCAgentSessionView.tsx'),
       'utf8',
     );
-    expect(source).toContain('followLatestRequestKey={followLatestRequestKey}');
+    expect(source).toContain('tryRequestFollowLatest({');
     expect(source).toContain('requestFollowLatest(sessionId, followStartGeneration)');
-    expect(source).toContain('shouldCommitFollowLatestRequest({');
     expect(source).toContain(
       'const followStartGeneration = readSendFollowCancelGeneration(sessionId);',
     );
+  });
+
+  it('edit-resend and blocked resend request follow-latest through the same owner', () => {
+    const source = readFileSync(
+      resolve(__dirname, '../components/chat/UserMessageEditBox.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('tryRequestFollowLatest({');
+    expect(source).toContain(
+      'const followStartGeneration = readSendFollowCancelGeneration(sessionId);',
+    );
+    expect(source).toContain('if (accepted)');
   });
 });

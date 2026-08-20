@@ -412,3 +412,49 @@ export function shouldCommitFollowLatestRequest({
   if (!shouldApplyFollowLatestRequest(sourceSessionId, currentSessionId)) return false;
   return startGeneration === currentGeneration;
 }
+
+const followLatestListeners = new Set<() => void>();
+const followLatestRequests = new Map<string, number>();
+
+export function subscribeFollowLatestRequests(onStoreChange: () => void): () => void {
+  followLatestListeners.add(onStoreChange);
+  return () => {
+    followLatestListeners.delete(onStoreChange);
+  };
+}
+
+export function readFollowLatestRequestKey(
+  sessionId: string | null | undefined,
+): number {
+  if (!sessionId) return 0;
+  return followLatestRequests.get(sessionId) ?? 0;
+}
+
+/** Accepted local send from any entry (composer, edit-resend) requests follow. */
+export function tryRequestFollowLatest({
+  sourceSessionId,
+  currentSessionId,
+  startGeneration,
+}: {
+  sourceSessionId: string | null | undefined;
+  currentSessionId: string | null | undefined;
+  startGeneration: number;
+}): boolean {
+  if (
+    !shouldCommitFollowLatestRequest({
+      sourceSessionId,
+      currentSessionId,
+      startGeneration,
+      currentGeneration: readSendFollowCancelGeneration(sourceSessionId),
+    })
+  ) {
+    return false;
+  }
+  if (!sourceSessionId) return false;
+  followLatestRequests.set(
+    sourceSessionId,
+    (followLatestRequests.get(sourceSessionId) ?? 0) + 1,
+  );
+  for (const listener of followLatestListeners) listener();
+  return true;
+}

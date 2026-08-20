@@ -73,7 +73,7 @@ import { InteractionPromptHost } from '@/components/interaction-portal';
 import { MessageStream } from '@/components/chat/MessageStream';
 import {
   readSendFollowCancelGeneration,
-  shouldCommitFollowLatestRequest,
+  tryRequestFollowLatest,
 } from '@/components/chat/autoFollowIntent';
 import { measureComposerStackTopOffset } from '@/components/chat/messageStreamIndicatorPosition';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
@@ -1275,20 +1275,13 @@ export function CCAgentSessionView({
   );
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
-  const [followLatestRequestKey, setFollowLatestRequestKey] = useState(0);
   const requestFollowLatest = useCallback(
     (sourceSessionId: string | null | undefined, startGeneration: number) => {
-      if (
-        !shouldCommitFollowLatestRequest({
-          sourceSessionId,
-          currentSessionId: sessionIdRef.current,
-          startGeneration,
-          currentGeneration: readSendFollowCancelGeneration(sourceSessionId),
-        })
-      ) {
-        return;
-      }
-      setFollowLatestRequestKey((key) => key + 1);
+      tryRequestFollowLatest({
+        sourceSessionId,
+        currentSessionId: sessionIdRef.current,
+        startGeneration,
+      });
     },
     [],
   );
@@ -3964,7 +3957,6 @@ export function CCAgentSessionView({
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
-      followLatestRequestKey={followLatestRequestKey}
       ownsHardwareScrollActions={ownsHardwareTaskActions}
     />
   );

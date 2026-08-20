@@ -290,7 +290,9 @@ import {
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
   selectTailUserMessageId,
+  readFollowLatestRequestKey,
   shouldBumpSendFollowCancelOnScroll,
+  subscribeFollowLatestRequests,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
@@ -369,12 +371,6 @@ interface MessageStreamProps {
    * behavior of treating every new tail user message as a local send.
    */
   isLocalUserSend?: (clientId: string) => boolean;
-  /**
-   * Bumped by the parent after an accepted local composer send. Forces the
-   * stream back to the default tail and pins, even if the new user row is no
-   * longer the last render item (assistant / tool cards already appended).
-   */
-  followLatestRequestKey?: number;
   /**
    * Whether this stream should consume hardware scroll commands.
    * Split panes keep every MessageStream mounted; only the focused owner may act.
@@ -2816,7 +2812,6 @@ export function MessageStream({
   forkOrigin,
   onOpenForkOrigin,
   isLocalUserSend,
-  followLatestRequestKey,
   ownsHardwareScrollActions = true,
 }: MessageStreamProps) {
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
@@ -2890,6 +2885,11 @@ export function MessageStream({
     collectKnownUserMessageIds(messages, (message) =>
       message.role === 'user' ? message.clientId : null,
     ),
+  );
+  const followLatestRequestKey = useSyncExternalStore(
+    subscribeFollowLatestRequests,
+    () => readFollowLatestRequestKey(sessionId),
+    () => 0,
   );
   const prevFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
 
@@ -4325,7 +4325,6 @@ export function MessageStream({
   // This is the only force-follow path: inference must not pin, because an
   // optimistic row can appear after the user already scrolled away.
   useLayoutEffect(() => {
-    if (followLatestRequestKey === undefined || followLatestRequestKey === null) return;
     if (prevFollowLatestRequestKeyRef.current === followLatestRequestKey) return;
     prevFollowLatestRequestKeyRef.current = followLatestRequestKey;
     cancelFocusJump({ consumeDeferredDelete: true });
