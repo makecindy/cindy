@@ -259,6 +259,38 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 
+  it('同一会话并行 permission 按 FIFO 展示和回传,不会丢掉先到的请求', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'parallel-first',
+      toolName: 'Read',
+      input: { file_path: '/outside/first.md' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'parallel-second',
+      toolName: 'Read',
+      input: { file_path: '/outside/second.md' },
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('parallel-first');
+
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved[0]?.requestId).toBe('parallel-first');
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('parallel-second');
+
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'parallel-first',
+      'parallel-second',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
   it('permission deny 同样经隧道回传 behavior=deny', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {

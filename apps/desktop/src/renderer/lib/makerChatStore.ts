@@ -2419,8 +2419,13 @@ export interface SessionChatState {
   historyLoaded: boolean;
   /** SDK-internal session id; null until the first `init` message of a turn lands. */
   sdkSessionId: string | null;
-  /** F-PERM-2: Currently pending permission request; null when none. */
+  /** F-PERM-2: Currently displayed permission request; null when none. */
   pendingPermission: PendingPermission | null;
+  /**
+   * Additional permission requests from the same turn, kept FIFO instead of
+   * overwriting the displayed request when Claude emits parallel tool_use calls.
+   */
+  pendingPermissionQueue: PendingPermission[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
@@ -2709,6 +2714,7 @@ function createInitialState(): SessionChatState {
     streamingClientId: null,
     streamingText: '',
     pendingPermission: null,
+    pendingPermissionQueue: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -2785,6 +2791,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   historyLoaded: true,
   sdkSessionId: null,
   pendingPermission: null,
+  pendingPermissionQueue: [],
   pendingAskUser: null,
   pendingPluginSetup: null,
   pendingPluginSetupQueue: [],
@@ -5225,6 +5232,7 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
+        pendingPermissionQueue: [],
         pendingAskUser: null,
         continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
@@ -5432,6 +5440,7 @@ export function handleStreamEvent(
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
         pendingPermission: null,
+        pendingPermissionQueue: [],
         pendingAskUser: null,
         // F-AUQ-MIN-5: same reset as the 'done' path.
         askUserViewerState: 'expanded',
@@ -5464,18 +5473,28 @@ export function handleStreamEvent(
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
       };
+      const permission: PendingPermission = {
+        requestId: data.requestId,
+        toolName: data.toolName,
+        input: data.input,
+        title: data.title,
+        displayName: data.displayName,
+        description: data.description,
+        suggestions: data.suggestions,
+        autoReviewUnavailable: data.autoReviewUnavailable === true,
+      };
+      if (
+        state.pendingPermission?.requestId === permission.requestId ||
+        state.pendingPermissionQueue.some((item) => item.requestId === permission.requestId)
+      ) {
+        return state;
+      }
       return {
         ...state,
-        pendingPermission: {
-          requestId: data.requestId,
-          toolName: data.toolName,
-          input: data.input,
-          title: data.title,
-          displayName: data.displayName,
-          description: data.description,
-          suggestions: data.suggestions,
-          autoReviewUnavailable: data.autoReviewUnavailable === true,
-        },
+        pendingPermission: state.pendingPermission ?? permission,
+        pendingPermissionQueue: state.pendingPermission
+          ? [...state.pendingPermissionQueue, permission]
+          : state.pendingPermissionQueue,
       };
     }
 
@@ -5493,7 +5512,20 @@ export function handleStreamEvent(
           ? (data.decision as Record<string, unknown>)
           : null;
       if (state.pendingPermission?.requestId === data.requestId) {
-        return { ...state, pendingPermission: null };
+        const [nextPermission = null, ...remainingPermissions] = state.pendingPermissionQueue;
+        return {
+          ...state,
+          pendingPermission: nextPermission,
+          pendingPermissionQueue: remainingPermissions,
+        };
+      }
+      if (state.pendingPermissionQueue.some((item) => item.requestId === data.requestId)) {
+        return {
+          ...state,
+          pendingPermissionQueue: state.pendingPermissionQueue.filter(
+            (item) => item.requestId !== data.requestId,
+          ),
+        };
       }
       if (state.pendingPluginSetup?.requestId === data.requestId) {
         const [nextSetup = null, ...remainingSetups] = state.pendingPluginSetupQueue;
@@ -5860,6 +5892,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     activeTurnRetryText: null,
     errorRetryText: null,
     pendingPermission: null,
+    pendingPermissionQueue: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -9343,11 +9376,10 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
 async function pumpRemoteOptimisticSends(sessionId: string): Promise<void> {
   const existing = remoteOptimisticPumps.get(sessionId);
   if (existing) return existing;
-  // Self-reference is intentional: a detached clear/owner generation must not
-  // keep draining after a newer pump replaces this Promise in the registry.
-  // eslint-disable-next-line prefer-const
-  let run!: Promise<void>;
-  run = (async () => {
+  // Self-reference is intentional: the async body reaches its first await
+  // before consulting the registry, so the initialized Promise is available
+  // when a detached clear/owner generation checks whether it was replaced.
+  const run = (async () => {
     while (true) {
       const record = firstUnacceptedRemoteOptimisticSend(sessionId);
       if (!record || record.dispatching) return;
@@ -12741,6 +12773,7 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissionQueue: [],
       continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
@@ -13185,6 +13218,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissionQueue: [],
       pendingAskUser: null,
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
@@ -13495,8 +13529,17 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   const { requestId } = state.pendingPermission;
   bumpInteractionReconcileEpoch(sessionId);
 
-  // Clear the pending permission immediately so the UI updates
-  setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
+  // Clear the displayed permission immediately and promote the next parallel
+  // request. Main keeps every resolver by requestId; the renderer must do the
+  // same rather than dropping the first tool_use when a later card arrives.
+  setState(sessionId, (s) => {
+    const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
+    return {
+      ...s,
+      pendingPermission: nextPermission,
+      pendingPermissionQueue: remainingPermissions,
+    };
+  });
 
   // Send to maker (InteractionDecision kind: 'permission')
   makerApiFor(sessionId)
