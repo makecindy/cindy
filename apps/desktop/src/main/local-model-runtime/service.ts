@@ -477,6 +477,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     const pausedPull = pulls.find((item) => item.phase === 'paused') ?? null;
     const catalogDirty = await syncManagedOllamaAgentProjections(
       resolveManagedOllamaAgents({ version: current.version }),
+      { stillActive: opts?.ownerStillActive },
     ).catch(() => false);
     const detectedLocalPresetIds = await detectedLocalPresetIdsPromise;
     if (current.kind !== 'ready' && current.kind !== 'pulling') {

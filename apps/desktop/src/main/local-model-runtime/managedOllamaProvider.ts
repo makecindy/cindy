@@ -206,9 +206,12 @@ export async function migrateManagedOllamaOnCatalogLoad(
 /** 把 Pi 已有模型补到 CC / Codex。legacy 会先迁成三 runtime。返回是否写过库。 */
 export async function syncManagedOllamaAgentProjections(
   agents: readonly ManagedOllamaAgent[] = ['pi', 'claude-code', 'codex'],
+  opts?: ManagedOllamaWriteOpts,
 ): Promise<boolean> {
   return enqueueManaged(async () => {
+    if (ownerChanged(opts)) return false;
     const existing = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
+    if (ownerChanged(opts)) return false;
     if (!existing || !fingerprintOf(existing)) return false;
     const migrated = migrateManagedOllamaProvider(existing) ?? existing;
     const piModels = migrated.runtimes.pi?.models ?? [];
@@ -217,6 +220,7 @@ export async function syncManagedOllamaAgentProjections(
       next = applyModelToAgents(next, model, agents, 'upsert');
     }
     if (JSON.stringify(next.runtimes) === JSON.stringify(existing.runtimes)) return false;
+    if (ownerChanged(opts)) return false;
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, next);
     return updated !== null;
   });
@@ -364,10 +368,13 @@ async function ensureManagedOllamaProviderUnlocked(
       const created = await createCustomProvider(buildEmptyManagedOllamaProvider());
       return { ok: true, created: true, provider: created };
     } catch {
+      if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
       const raced = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
+      if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
       if (raced && fingerprintOf(raced)) {
         const migrated = migrateManagedOllamaProvider(raced) ?? raced;
         if (migrated !== raced) {
+          if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
           const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, migrated);
           if (updated) return { ok: true, created: false, provider: updated };
         }
@@ -381,6 +388,7 @@ async function ensureManagedOllamaProviderUnlocked(
   const migrated = migrateManagedOllamaProvider(existing);
   if (!migrated) return { ok: false, code: 'MANAGED_ID_CONFLICT', existing };
   if (migrated !== existing) {
+    if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, migrated);
     if (!updated) return { ok: false, code: 'MANAGED_ID_CONFLICT', existing };
     return { ok: true, created: false, provider: updated };

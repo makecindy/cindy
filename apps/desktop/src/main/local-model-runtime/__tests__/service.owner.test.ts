@@ -5,7 +5,10 @@ vi.mock('../managedOllamaProvider.js', async (importOriginal) => {
   return {
     ...actual,
     readManagedOllamaProvider: vi.fn(async () => actual.buildEmptyManagedOllamaProvider()),
-    syncManagedOllamaAgentProjections: vi.fn(async () => false),
+    syncManagedOllamaAgentProjections: vi.fn(async (_agents, opts) => {
+      if (opts?.stillActive && !opts.stillActive()) return false;
+      return false;
+    }),
     upsertManagedOllamaModel: vi.fn(async (_model, _agents, opts) => {
       if (opts?.stillActive && !opts.stillActive()) return { ok: false, code: 'OWNER_CHANGED' };
       return {
@@ -28,6 +31,7 @@ vi.mock('../managedOllamaProvider.js', async (importOriginal) => {
 import { createLocalModelService, OwnerChangedError } from '../service.js';
 import {
   readManagedOllamaProvider,
+  syncManagedOllamaAgentProjections,
   upsertManagedOllamaModel,
   upsertManagedOllamaModels,
 } from '../managedOllamaProvider.js';
@@ -47,6 +51,7 @@ describe('owner change during pull', () => {
     vi.mocked(upsertManagedOllamaModel).mockClear();
     vi.mocked(upsertManagedOllamaModels).mockClear();
     vi.mocked(readManagedOllamaProvider).mockClear();
+    vi.mocked(syncManagedOllamaAgentProjections).mockClear();
   });
 
   it('does not upsert or import a pull finished after the account switched', async () => {
@@ -108,5 +113,21 @@ describe('owner change during pull', () => {
       ownerStillActive: () => false,
     });
     expect(upsertManagedOllamaModels).not.toHaveBeenCalled();
+  });
+
+  it('passes the captured owner into projection sync during list', async () => {
+    const service = createLocalModelService({
+      fetchImpl: readyFetch(),
+    });
+    await service.list({
+      owner: { dataOwnerId: 'alice', generation: 1 },
+      ownerStillActive: () => false,
+    });
+    expect(syncManagedOllamaAgentProjections).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ stillActive: expect.any(Function) }),
+    );
+    const opts = vi.mocked(syncManagedOllamaAgentProjections).mock.calls[0]?.[1];
+    expect(opts?.stillActive?.()).toBe(false);
   });
 });

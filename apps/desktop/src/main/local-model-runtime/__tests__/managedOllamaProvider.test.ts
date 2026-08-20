@@ -18,6 +18,7 @@ import {
   emptyPiRuntime,
   ensureManagedOllamaProvider,
   removeManagedOllamaModel,
+  syncManagedOllamaAgentProjections,
   upsertManagedOllamaModel,
   upsertManagedOllamaModels,
 } from '../managedOllamaProvider.js';
@@ -119,6 +120,23 @@ describe('managed Ollama model identity', () => {
       stillActive: () => false,
     });
     expect(result).toEqual({ ok: false, code: 'OWNER_CHANGED' });
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+
+  it('does not sync coding-agent projections after the captured owner is gone', async () => {
+    const existing = {
+      ...buildEmptyManagedOllamaProvider(),
+      runtimes: {
+        pi: emptyPiRuntime([{ id: 'glm-4.7-flash', name: 'glm-4.7-flash' }]),
+        'claude-code': emptyClaudeRuntime(),
+        codex: emptyCodexRuntime(),
+      },
+    };
+    vi.mocked(getCustomProvider).mockResolvedValue(existing);
+    const wrote = await syncManagedOllamaAgentProjections(['pi', 'claude-code', 'codex'], {
+      stillActive: () => false,
+    });
+    expect(wrote).toBe(false);
     expect(updateCustomProvider).not.toHaveBeenCalled();
   });
 });
