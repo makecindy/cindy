@@ -40,6 +40,7 @@ import { Spinner } from '@/components/ui/spinner';
 
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
@@ -174,7 +175,8 @@ function ThinkingActivityRow({
         expanded ? 'items-start' : 'items-center',
         canExpand
           ? [
-              'group cursor-pointer select-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
               ACTIVITY_ROW_HOVER_SURFACE_CLASS,
             ]
           : 'cursor-default',

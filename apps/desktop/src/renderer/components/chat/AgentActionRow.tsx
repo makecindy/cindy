@@ -67,6 +67,7 @@ import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
@@ -902,7 +903,7 @@ export function AgentActionRow({
           ACTIVITY_ROW_RADIUS_CLASS,
           'px-2 py-[3px]',
           ACTIVITY_ROW_HOVER_SURFACE_CLASS,
-          'transition-colors',
+          ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           'cursor-pointer select-none outline-none',
           'focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
           'text-left',

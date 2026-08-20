@@ -31,6 +31,7 @@ import {
 } from '../../../shared/reviewRun';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
@@ -945,7 +946,8 @@ function AutoResumeActionRow({
           'group flex w-full items-center gap-[6px]',
           ACTIVITY_ROW_RADIUS_CLASS,
           'px-2 py-[3px]',
-          'text-left outline-none transition-colors',
+          'text-left outline-none',
+          ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           canExpand
             ? cn(
                 'cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',

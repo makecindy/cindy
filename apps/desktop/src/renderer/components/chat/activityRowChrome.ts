@@ -12,7 +12,12 @@ export const ACTIVITY_ROW_RADIUS_CLASS = 'rounded-[8px]';
 /** Row surface that lifts on hover. Pair with `group` on the clickable row. */
 export const ACTIVITY_ROW_HOVER_SURFACE_CLASS = 'hover:bg-[var(--msg-code-inline-bg)]';
 
+/** Color hover. DESIGN.md §14.4: new transitions must cite motion tokens;
+ *  `transition-colors` alone uses Tailwind's hardcoded duration/easing. */
+export const ACTIVITY_ROW_COLOR_TRANSITION_CLASS =
+  'transition-colors duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]';
+
 /** Fixed 18×18 trailing chevron slot. Always reserve the column; hover paints
  *  the small rounded well behind the glyph (`group-hover` on the row). */
 export const ACTIVITY_ROW_CHEVRON_SLOT_CLASS =
-  `ml-auto flex h-[18px] w-[18px] shrink-0 items-center justify-center ${ACTIVITY_ROW_RADIUS_CLASS} text-[var(--msg-tool-card-chevron)] transition-colors group-hover:bg-[var(--cmd-palette-item-hover)]`;
+  `ml-auto flex h-[18px] w-[18px] shrink-0 items-center justify-center ${ACTIVITY_ROW_RADIUS_CLASS} ${ACTIVITY_ROW_COLOR_TRANSITION_CLASS} text-[var(--msg-tool-card-chevron)] group-hover:bg-[var(--cmd-palette-item-hover)]`;

@@ -61,6 +61,8 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     expect(chrome).toMatch(/h-\[18px\] w-\[18px\]/);
     expect(chrome).toMatch(/ACTIVITY_ROW_RADIUS_CLASS = 'rounded-\[8px\]'/);
     expect(chrome).toMatch(/rounded-\[8px\]/);
+    expect(chrome).toMatch(/duration-\[var\(--motion-fast,150ms\)\]/);
+    expect(chrome).toMatch(/ease-\[var\(--motion-ease-out\)\]/);
     expect(chrome).not.toMatch(/rounded-lg/);
     expect(chrome).not.toMatch(/var\(--radius\)/);
     expect(chrome).not.toMatch(/rounded-\[4px\]/);
@@ -68,10 +70,12 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     expect(source).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
     expect(source).toMatch(/ACTIVITY_ROW_HOVER_SURFACE_CLASS/);
     expect(source).toMatch(/ACTIVITY_ROW_RADIUS_CLASS/);
+    expect(source).toMatch(/ACTIVITY_ROW_COLOR_TRANSITION_CLASS/);
     expect(source).not.toMatch(/function ThinkingActivityRow[\s\S]*rounded-\[6px\]/);
     expect(actionRow).toMatch(/from '\.\/activityRowChrome'/);
     expect(actionRow).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
     expect(actionRow).toMatch(/ACTIVITY_ROW_RADIUS_CLASS/);
+    expect(actionRow).toMatch(/ACTIVITY_ROW_COLOR_TRANSITION_CLASS/);
     // 槽位始终占位;只有可展开时才画三角。旧写法把整个 span 按 canExpand 卸掉,
     // 短思考行会比工具行更靠右,长思考行的 `>` 又会被顶到另一条 x。
     expect(source).not.toMatch(
