@@ -443,59 +443,82 @@ function whichRgOnPath(): string {
   return '';
 }
 
-// 一次性启动 env 的跨重载存取(#3070)。CINDY_PI_BASH_PACKAGE_HOME 由 host 在
+// bash 隔离 home 的跨重载解析(#3070)。CINDY_PI_BASH_PACKAGE_HOME 由 host 在
 // spawn 时注入一次,bridge 首次加载后即从 process.env 删除(防止进程内其它代码
 // 改写)。但 Pi 会重载扩展:同一进程里 bridge 文件被再次执行时 env 已被删,重载
 // 实例拿到 undefined —— bash 从此永久 fail-closed。解法:首次加载把值 stash 进
-// globalThis。扩展重载与首次加载共享同一 realm 与 globalThis(事故机理即重载看
-// 到了被删的 env,证明共享),重载实例从 stash 取回 host 注入的原始字节,不经过任
-// 何可改写的 env 面;事后写进 env 的值一律视为不可信并再次删除。stash 也拿不到
-// (进程从未由 Cindy 初始化,如手工把 bridge 拷进用户 ~/.pi)时返回 undefined,
-// 下游保持原 fail-closed —— 不猜外来 runtime 的路径。
+// globalThis 上的 non-configurable / non-writable 属性(语言层面不可替换、不可
+// 删除),重载实例取回时再做双重验证。
 //
-// 只 stash 路径,不 stash 凭证:CINDY_PI_PACKAGE_MANAGEMENT 是 host 签发的
-// bearer token(授权 Pi 扩展安装变更),而本进程内会加载用户安装的第三方托管
-// 扩展 —— 它们与 bridge 共享 globalThis,放进 stash 等于把 token 暴露给任意
-// 托管代码,比留在首次加载闭包里更宽(review P1)。token 因此保持原语义:读一次
-// 即删、仅闭包持有,重载后 cindy_pi_extension 工具退场是可接受代价(bash 直装
-// 被拦,用户下次新会话可再拿到工具)。bash-package-home 是路径而非凭证,且本就
-// 经 PI_CODING_AGENT_DIR 进每个 bash 子进程 env,stash 不新增暴露面。
-const BRIDGE_RELOAD_STASH_GLOBAL = '__cindyBridgeOneShotEnv';
+// 威胁模型:本进程内会加载用户安装的第三方托管扩展,它们与 bridge 共享同一
+// realm,能触碰 globalThis 与 process.env。因此:
+//  - stash 用 defineProperty(writable:false, configurable:false) 封死事后改写
+//    /替换/删除;读取时校验属性形态,可写可配置的属性一律不信任。
+//  - 重载取值要求 stash 与 PI_CODING_AGENT_DIR 派生值(path.posix.join(configHome,
+//    'bash-package-home'),与 host 侧 index.ts 的 joinRemotePosixPath 派生式逐字
+//    一致)双重相等:事后改写 PI_CODING_AGENT_DIR 会让二者失配 → fail-closed
+//    (该 env 本就常驻可写,这里顺带把它变成 canary);抢跑预置 stash(攻击者
+//    扩展先于 bridge 首次加载执行)也得同时锚定 PI_CODING_AGENT_DIR 才可能一致,
+//    与「抢跑改写注入 env」在原实现下同级别,不新增面。
+//  - env 值在已消费(stash 已建立)后再次出现,视为进程内写入:删除并忽略。
+//  - stash 缺失(非 Cindy 初始化的进程,如手工把 bridge 拷进用户 ~/.pi)或双重
+//    验证失败 → 返回 undefined,下游 isolatedBashEnvironment 保持原 fail-closed,
+//    不猜外来 runtime 的路径。
+//
+// 凭证不走本机制:CINDY_PI_PACKAGE_MANAGEMENT 是 host 签发的 bearer token,
+// 保持读一次即删、仅闭包持有(见入口注释)。
+const BRIDGE_RELOAD_STASH_GLOBAL = '__cindyBridgeBashPackageHome';
 
-function stashOneShotEnvValue(key: string, value: string): void {
+function stashBashPackageHome(value: string): void {
   try {
-    const stash = (globalThis as Record<string, unknown>)[BRIDGE_RELOAD_STASH_GLOBAL];
-    const map = (stash && typeof stash === 'object' ? stash : {}) as Record<string, string>;
-    map[key] = value;
-    (globalThis as Record<string, unknown>)[BRIDGE_RELOAD_STASH_GLOBAL] = map;
+    Object.defineProperty(globalThis, BRIDGE_RELOAD_STASH_GLOBAL, {
+      value,
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
   } catch {
-    // globalThis 不可写的受限环境:退化为仅本次加载可见,行为与旧版一致。
+    // 属性已被抢跑占用或 globalThis 受限:本加载仍可用 env 值;重载后双重验证
+    // 会因 stash 缺失/失配而 fail-closed,不会信任被占用的值。
   }
 }
 
-function readStashedOneShotEnvValue(key: string): string | undefined {
+function readStashedBashPackageHome(): string | undefined {
   try {
-    const stash = (globalThis as Record<string, unknown>)[BRIDGE_RELOAD_STASH_GLOBAL];
-    if (!stash || typeof stash !== 'object') return undefined;
-    const value = (stash as Record<string, string | undefined>)[key];
-    return typeof value === 'string' ? value : undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, BRIDGE_RELOAD_STASH_GLOBAL);
+    // 只信任我们写入的形态:non-configurable + non-writable。可写可配置的属性
+    // (含 plain 赋值)随时可被第三方扩展替换,一律不信任。
+    if (!descriptor || descriptor.configurable || descriptor.writable) return undefined;
+    return typeof descriptor.value === 'string' ? descriptor.value : undefined;
   } catch {
     return undefined;
   }
 }
 
-function takeOneShotEnv(name: string): string | undefined {
-  const stashed = readStashedOneShotEnvValue(name);
-  const value = process.env[name];
-  if (value !== undefined) {
-    delete process.env[name];
-    // stash 已有记录而 env 又出现值,说明该值是首次加载之后被进程内代码写进来的
-    // (host 只在 spawn 时注入一次,且首次加载已删)—— 不可信,继续用 stash 原始值。
-    if (stashed === undefined) stashOneShotEnvValue(name, value);
-    return stashed ?? value;
+function derivedBashPackageHome(): string | undefined {
+  const configHome = process.env.PI_CODING_AGENT_DIR;
+  if (!configHome || !path.isAbsolute(configHome)) return undefined;
+  // 与 host 侧 index.ts 的 joinRemotePosixPath(configHome, 'bash-package-home')
+  // 逐字一致(posix join:本地 Windows 路径同样以正斜杠拼接)。
+  return path.posix.join(configHome, 'bash-package-home');
+}
+
+function resolveBashPackageHome(): string | undefined {
+  const injected = process.env[PI_BASH_PACKAGE_HOME_ENV];
+  if (injected !== undefined) delete process.env[PI_BASH_PACKAGE_HOME_ENV];
+  const stashed = readStashedBashPackageHome();
+  if (stashed === undefined) {
+    // 本进程首次加载:host 注入的 env 是权威,stash 供重载实例取回。
+    if (injected !== undefined) {
+      stashBashPackageHome(injected);
+      return injected;
+    }
+    return undefined;
   }
-  // 重载路径:env 已被首次加载消费,取回 stash 的原始值(可能为 undefined)。
-  return stashed;
+  // 重载(env 已被消费;或 env 值又被进程内写入 —— 上面的 delete 已顺手清掉):
+  // stash 与 PI_CODING_AGENT_DIR 派生值双重一致才信任,否则 fail-closed。
+  const derived = derivedBashPackageHome();
+  return derived !== undefined && stashed === derived ? stashed : undefined;
 }
 
 // 凭证/密钥路径特征由 maker-core 的单一来源生成。bridge 自包含、运行时不能 import，
@@ -2494,11 +2517,11 @@ function rgGlob(
 }
 
 export default async function cindyBridge(pi: any) {
-  // 一次性启动 env:路径走 takeOneShotEnv(首次加载读删 + stash,扩展重载(#3070)
-  // 从 stash 取回原始值,而不是拿到 undefined 让 bash 永久 fail-closed)。
+  // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
+  // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。
   // 包管理 token 是 bearer 凭证,保持读一次即删、仅闭包持有 —— 不进 globalThis
-  // stash(同进程的第三方托管扩展可读它,见 takeOneShotEnv 注释)。
-  const bashPackageHome = takeOneShotEnv(PI_BASH_PACKAGE_HOME_ENV);
+  // stash(同进程的第三方托管扩展可读它,见 resolveBashPackageHome 注释)。
+  const bashPackageHome = resolveBashPackageHome();
   const piPackageManagementToken = process.env[PI_PACKAGE_MANAGEMENT_ENV];
   delete process.env[PI_PACKAGE_MANAGEMENT_ENV];
   // 主 Pi 不传 --tools：那个白名单也会筛掉动态 MCP 与 subagent。改由 bridge 注册
