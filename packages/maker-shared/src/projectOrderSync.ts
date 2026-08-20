@@ -83,6 +83,11 @@ export function parseSyncedProjectOrderSnapshot(value: unknown): SyncedProjectOr
   };
 }
 
+/**
+ * 列表、拖拽、菜单勾选共用这一份结果。
+ * 不要再用 hostCustom ? custom : viewer.projectOrder 这类捷径——
+ * 查看端 custom + 单机 host activity 会把菜单勾成自定义、列表却按活动排。
+ */
 export function resolveDisplayedProjectOrder(
   scope: ProjectOrderWriteScope,
   hostSnapshot: SyncedProjectOrderSnapshot | undefined,
@@ -102,6 +107,40 @@ export function resolveDisplayedProjectOrder(
     };
   }
   return { projectOrder: 'activity', manualProjectOrder: [] };
+}
+
+/** GET 在途时若已收到更新推送 / APPLY 结果,丢弃过期 GET,避免旧快照盖住新顺序。 */
+export function createProjectOrderFetchFence() {
+  let seq = 0;
+  const invalidatedAt = new Map<string, number>();
+  return {
+    begin(_key: string): number {
+      seq += 1;
+      return seq;
+    },
+    noteLiveUpdate(key: string): void {
+      invalidatedAt.set(key, seq);
+    },
+    shouldApplyFetch(key: string, token: number): boolean {
+      return (invalidatedAt.get(key) ?? 0) < token;
+    },
+  };
+}
+
+export function localHostSeedOwnerKey(stamp: SyncedProjectOrderOwnerStamp): string {
+  return `${stamp.dataOwnerId ?? ''}:${stamp.ownerGeneration}`;
+}
+
+/** 只在该 owner 还没成功写入过、且查看端确实有本机自定义序时播种。失败不得记成功。 */
+export function shouldSeedLocalHostProjectOrder(
+  snapshot: SyncedProjectOrderSnapshot,
+  seed: { custom: boolean; keys: readonly string[] } | undefined,
+  seededOwners: ReadonlySet<string>,
+): boolean {
+  if (!snapshot.ownerStamp || snapshot.authoritative || !seed?.custom) return false;
+  if (seed.keys.some((key) => key.startsWith(DEVICE_PREFIX))) return false;
+  if (hostLocalProjectKeysOnly(seed.keys).length === 0) return false;
+  return !seededOwners.has(localHostSeedOwnerKey(snapshot.ownerStamp));
 }
 
 export function isHostProjectOrderReachable(

@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createProjectOrderFetchFence,
   hostLocalProjectKeysOnly,
   isHostProjectOrderChannelMissing,
   isHostProjectOrderReachable,
+  localHostSeedOwnerKey,
   parseSyncedProjectOrderSnapshot,
+  shouldSeedLocalHostProjectOrder,
   projectOrderLedgerForScope,
   projectOrderWriteLedger,
   remapControllerOrderToHost,
@@ -112,6 +115,71 @@ describe('resolveDisplayedProjectOrder', () => {
       projectOrder: 'custom',
       manualProjectOrder: ['device:dev-1:/a'],
     });
+  });
+
+  it('does not keep the viewer custom check when the host ledger is activity', () => {
+    expect(resolveDisplayedProjectOrder(
+      { kind: 'host', deviceId: 'dev-1' },
+      {
+        authoritative: true,
+        available: true,
+        manualProjectOrder: [],
+        projectOrder: 'activity',
+      },
+      { projectOrder: 'custom', manualProjectOrder: ['device:a:/x'] },
+      [],
+    )).toEqual({
+      projectOrder: 'activity',
+      manualProjectOrder: [],
+    });
+  });
+});
+
+describe('createProjectOrderFetchFence', () => {
+  it('drops a GET that finished after a live update', () => {
+    const fence = createProjectOrderFetchFence();
+    const token = fence.begin('dev-1');
+    fence.noteLiveUpdate('dev-1');
+    expect(fence.shouldApplyFetch('dev-1', token)).toBe(false);
+  });
+
+  it('still applies a GET that started after the last live update', () => {
+    const fence = createProjectOrderFetchFence();
+    fence.noteLiveUpdate('dev-1');
+    const token = fence.begin('dev-1');
+    expect(fence.shouldApplyFetch('dev-1', token)).toBe(true);
+  });
+});
+
+describe('shouldSeedLocalHostProjectOrder', () => {
+  const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 3 };
+  const emptyHost = {
+    authoritative: false,
+    available: true,
+    manualProjectOrder: [],
+    ownerStamp: stamp,
+    projectOrder: 'activity' as const,
+  };
+
+  it('seeds only once per owner after a successful write', () => {
+    expect(shouldSeedLocalHostProjectOrder(
+      emptyHost,
+      { custom: true, keys: ['local:/a'] },
+      new Set(),
+    )).toBe(true);
+    expect(shouldSeedLocalHostProjectOrder(
+      emptyHost,
+      { custom: true, keys: ['local:/a'] },
+      new Set([localHostSeedOwnerKey(stamp)]),
+    )).toBe(false);
+  });
+
+  it('retries after a failed seed because the owner is not marked', () => {
+    expect(shouldSeedLocalHostProjectOrder(
+      emptyHost,
+      { custom: true, keys: ['local:/a'] },
+      new Set(),
+    )).toBe(true);
   });
 });
 

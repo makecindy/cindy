@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  createProjectOrderFetchFence,
   hostLocalProjectKeysOnly,
   isHostProjectOrderChannelMissing,
+  localHostSeedOwnerKey,
   parseSyncedProjectOrderSnapshot,
   remapControllerOrderToHost,
   remapHostOrderToController,
   resolveProjectOrderWriteScope,
+  shouldSeedLocalHostProjectOrder,
   SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
   SIDEBAR_GET_PROJECT_ORDER_CHANNEL,
   SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
@@ -22,7 +25,7 @@ import {
 } from '@/features/device-link/selectedMachineStore';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
-let localHostSeedStarted = false;
+const seededLocalHostOwners = new Set<string>();
 
 const PENDING_LOCAL_SNAPSHOT: SyncedProjectOrderSnapshot = {
   authoritative: false,
@@ -55,6 +58,7 @@ export function useLocalHostProjectOrder(seed?: {
   const [snapshot, setSnapshot] = useState<SyncedProjectOrderSnapshot>(PENDING_LOCAL_SNAPSHOT);
   const seedRef = useRef(seed);
   const snapshotRef = useRef(snapshot);
+  const fetchFenceRef = useRef(createProjectOrderFetchFence());
   seedRef.current = seed;
   snapshotRef.current = snapshot;
 
@@ -62,29 +66,34 @@ export function useLocalHostProjectOrder(seed?: {
     const api = window.electronAPI?.sidebarSettings;
     if (!api?.getProjectOrder || !api.onProjectOrderChanged) return undefined;
     let cancelled = false;
-    void api.getProjectOrder().then((next) => {
-      if (cancelled) return;
-      setSnapshot(next);
+    let seedAttempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const fence = createProjectOrderFetchFence();
+    fetchFenceRef.current = fence;
+    const seedIfNeeded = (next: SyncedProjectOrderSnapshot) => {
       const seedValue = seedRef.current;
-      if (
-        next.authoritative
-        || localHostSeedStarted
-        || !seedValue?.custom
-        || seedValue.keys.some((key) => key.startsWith('device:'))
-        || !next.ownerStamp
-      ) {
-        return;
-      }
-      const localKeys = hostLocalProjectKeysOnly(seedValue.keys);
-      if (localKeys.length === 0) return;
-      localHostSeedStarted = true;
+      if (!shouldSeedLocalHostProjectOrder(next, seedValue, seededLocalHostOwners)) return;
+      if (!next.ownerStamp || seedAttempts >= 3) return;
+      seedAttempts += 1;
+      const localKeys = hostLocalProjectKeysOnly(seedValue!.keys);
       void api.applyProjectOrder({
         manualProjectOrder: localKeys,
         ownerStamp: next.ownerStamp,
         projectOrder: 'custom',
       }).then((applied) => {
+        seededLocalHostOwners.add(localHostSeedOwnerKey(applied.ownerStamp ?? next.ownerStamp!));
+        fence.noteLiveUpdate('local');
         if (!cancelled) setSnapshot(applied);
-      }).catch(() => undefined);
+      }).catch(() => {
+        if (cancelled || seedAttempts >= 3) return;
+        retryTimer = setTimeout(() => seedIfNeeded(snapshotRef.current), 1500);
+      });
+    };
+    const fetchToken = fence.begin('local');
+    void api.getProjectOrder().then((next) => {
+      if (cancelled || !fence.shouldApplyFetch('local', fetchToken)) return;
+      setSnapshot(next);
+      seedIfNeeded(next);
     }).catch(() => undefined);
     const unsubscribe = api.onProjectOrderChanged((next, ownerStamp) => {
       const current = snapshotRef.current.ownerStamp;
@@ -95,10 +104,13 @@ export function useLocalHostProjectOrder(seed?: {
       ) {
         return;
       }
+      fence.noteLiveUpdate('local');
       setSnapshot(next);
+      seedIfNeeded(next);
     });
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
       unsubscribe();
     };
   }, []);
@@ -116,6 +128,7 @@ export function useLocalHostProjectOrder(seed?: {
         ownerStamp,
         projectOrder: request.projectOrder,
       });
+      fetchFenceRef.current.noteLiveUpdate('local');
       setSnapshot(next);
       return { kind: 'ok', snapshot: next };
     } catch {
@@ -138,6 +151,7 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
     [selectedMachineId],
   );
   const [orders, setOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
+  const fetchFenceRef = useRef(createProjectOrderFetchFence());
 
   useEffect(() => {
     const ids = remoteIds ? remoteIds.split('\0') : [];
@@ -146,7 +160,10 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
       return undefined;
     }
     let cancelled = false;
+    const fence = createProjectOrderFetchFence();
+    fetchFenceRef.current = fence;
     const load = async () => {
+      const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
       const entries = await Promise.all(
         ids.map(async (deviceId) => {
           try {
@@ -168,6 +185,7 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
       setOrders((current) => {
         const copy = new Map(current);
         for (const [deviceId, result] of entries) {
+          if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
           if (result.kind === 'ok') copy.set(deviceId, result.snapshot);
           else if (result.kind === 'unavailable') copy.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
         }
@@ -180,6 +198,7 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
       if (!ids.includes(push.deviceId)) return;
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       const next = parseSyncedProjectOrderSnapshot(push.payload);
+      fence.noteLiveUpdate(push.deviceId);
       setOrders((current) => {
         const copy = new Map(current);
         copy.set(push.deviceId, next);
@@ -209,6 +228,7 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
         }],
       );
       const next = parseSyncedProjectOrderSnapshot(raw);
+      fetchFenceRef.current.noteLiveUpdate(deviceId);
       setOrders((current) => {
         const copy = new Map(current);
         copy.set(deviceId, next);

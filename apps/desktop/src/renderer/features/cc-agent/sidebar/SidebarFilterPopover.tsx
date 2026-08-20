@@ -56,7 +56,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { projectOrderWriteLedger } from '@cindy/maker-shared/project-order-sync';
+import { projectOrderWriteLedger, resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
 import {
   controllerManualOrderForDevice,
@@ -371,6 +371,7 @@ export function SidebarFilterPopover({
     groupDevice,
     sortBy,
     projectOrder,
+    manualProjectOrder,
     setStatus,
     toggleProject,
     setProjectsAll,
@@ -399,22 +400,24 @@ export function SidebarFilterPopover({
       : 'ccAgent.sidebar.filterGroupBy.flat',
   );
   const sortByValue = optionLabel(SORT_BY_OPTIONS, sortBy, t);
-  const hostCustom = projectOrderScope.kind === 'host'
-    && (
-      projectOrderScope.deviceId === null
-        ? localHostProjectOrder.snapshot.authoritative
-          && localHostProjectOrder.snapshot.projectOrder === 'custom'
-        : controllerManualOrderForDevice(
-          projectOrderScope.deviceId,
-          remoteHostProjectOrders.orders.get(projectOrderScope.deviceId),
-        ) != null
-    );
-  const scopedProjectOrder: FilterProjectOrder = hostCustom ? 'custom' : projectOrder;
   const hostSnapshotForWrite = projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
     ? localHostProjectOrder.snapshot
     : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
       ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
       : undefined;
+  const scopedProjectOrder: FilterProjectOrder = resolveDisplayedProjectOrder(
+    projectOrderScope,
+    hostSnapshotForWrite,
+    { manualProjectOrder, projectOrder },
+    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+      ? localHostProjectOrder.snapshot.manualProjectOrder
+      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+        ? controllerManualOrderForDevice(
+          projectOrderScope.deviceId,
+          hostSnapshotForWrite,
+        ) ?? []
+        : [],
+  ).projectOrder;
   const setProjectOrder = (next: FilterProjectOrder) => {
     if (
       projectOrderScope.kind === 'viewer'

@@ -119,8 +119,10 @@ import {
   subscribeRemoteProjectOrderChanged,
 } from '@/session/remoteProjectOrder';
 import {
+  createProjectOrderFetchFence,
   isHostProjectOrderReachable,
   projectOrderWriteLedger,
+  resolveDisplayedProjectOrder,
   resolveProjectOrderWriteScope,
   UNAVAILABLE_PROJECT_ORDER_SNAPSHOT,
   type SyncedProjectOrderSnapshot,
@@ -299,6 +301,7 @@ export default function HomeScreen() {
   const [projectOrder, setProjectOrder] = useState<HomeProjectOrder>('activity');
   const [manualProjectOrder, setManualProjectOrder] = useState<string[]>([]);
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
+  const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
   const homeRootRef = useRef<View>(null);
   const projectHeaderRefs = useRef(new Map<string, View>());
@@ -961,7 +964,10 @@ export default function HomeScreen() {
     }
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const fence = createProjectOrderFetchFence();
+    projectOrderFetchFenceRef.current = fence;
     const load = async (attempt: number) => {
+      const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
       const entries = await Promise.all(ids.map(async (deviceId) => {
         const result = await fetchHostProjectOrder(invoke, deviceId);
         return [deviceId, result] as const;
@@ -970,6 +976,7 @@ export default function HomeScreen() {
       setHostProjectOrders((current) => {
         const next = new Map(current);
         for (const [deviceId, result] of entries) {
+          if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
           if (result.kind === 'ok') next.set(deviceId, result.snapshot);
           else if (result.kind === 'unavailable') next.set(deviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
         }
@@ -984,6 +991,7 @@ export default function HomeScreen() {
     void load(1);
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
       if (cancelled || !ids.includes(deviceId)) return;
+      fence.noteLiveUpdate(deviceId);
       setHostProjectOrders((current) => {
         const next = new Map(current);
         next.set(deviceId, snapshot);
@@ -1068,15 +1076,14 @@ export default function HomeScreen() {
   const hostManualProjectOrder = selectedDeviceId && selectedHostOrder
     ? controllerKeysFromHost(selectedDeviceId, selectedHostOrder)
     : [];
-  const hostProjectOrder: HomeProjectOrder =
-    selectedHostOrder?.authoritative && selectedHostOrder.projectOrder === 'custom'
-      ? 'custom'
-      : 'activity';
-  const hostOrderReachable = !selectedDeviceId || isHostProjectOrderReachable(selectedHostOrder);
-  const displayedProjectOrder = selectedDeviceId && hostOrderReachable ? hostProjectOrder : projectOrder;
-  const displayedManualProjectOrder = selectedDeviceId && hostOrderReachable
-    ? hostManualProjectOrder
-    : manualProjectOrder;
+  const displayed = resolveDisplayedProjectOrder(
+    resolveProjectOrderWriteScope(selectedDeviceId ? [selectedDeviceId] : 'all', 'local'),
+    selectedHostOrder,
+    { manualProjectOrder, projectOrder },
+    hostManualProjectOrder,
+  );
+  const displayedProjectOrder = displayed.projectOrder;
+  const displayedManualProjectOrder = displayed.manualProjectOrder;
   const sections = useMemo(
     () => buildHomeSections(home, groupByProject, pinnedCollapsed, {
       dialogueTitle: t('devices.list.menu.dialogueFolder'),
@@ -1287,6 +1294,7 @@ export default function HomeScreen() {
         projectOrder: nextPatch.projectOrder,
       }).then((result) => {
         if (result.kind === 'unavailable') {
+          projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
           setHostProjectOrders((current) => {
             const next = new Map(current);
             next.set(selectedDeviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
@@ -1300,6 +1308,7 @@ export default function HomeScreen() {
           return;
         }
         if (result.kind !== 'ok') return;
+        projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const next = new Map(current);
           next.set(selectedDeviceId, result.snapshot);
@@ -1425,6 +1434,7 @@ export default function HomeScreen() {
         projectOrder: 'custom',
       }).then((result) => {
         if (result.kind === 'unavailable') {
+          projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
           setHostProjectOrders((current) => {
             const nextOrders = new Map(current);
             nextOrders.set(selectedDeviceId, UNAVAILABLE_PROJECT_ORDER_SNAPSHOT);
@@ -1434,6 +1444,7 @@ export default function HomeScreen() {
           return;
         }
         if (result.kind !== 'ok') return;
+        projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
         setHostProjectOrders((current) => {
           const nextOrders = new Map(current);
           nextOrders.set(selectedDeviceId, result.snapshot);
@@ -1870,7 +1881,7 @@ export default function HomeScreen() {
         groupDialogue={groupDialogue}
         onChangeView={applyDisplayView}
         onClose={() => setDisplaySettingsOpen(false)}
-        projectOrder={selectedDeviceId ? hostProjectOrder : projectOrder}
+        projectOrder={displayedProjectOrder}
         sortBy={sortBy}
         statusFilter={statusFilter}
         topOffset={chromeHeight}
