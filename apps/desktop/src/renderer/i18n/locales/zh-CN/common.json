@@ -2605,7 +2605,7 @@
       "confirmDescription": "{{source}} 是第三方代码，会与 Cindy 的 Pi 在同一进程中运行，可能读取 Pi 能访问的文件和凭证。安装不会执行 npm 生命周期脚本。确认后将安装扩展，并启用能够完成检查且受支持的资源。",
       "confirmInstall": "了解风险，安装并启用",
       "updateConfirmTitle": "更新这个 Pi 扩展？",
-      "updateConfirmDescription": "{{source}} 会下载第三方新版本并替换已安装代码。更新不会执行 npm 生命周期脚本。扩展代码与 Pi 在同一进程中运行，可能读取文件和凭证。确认后将更新扩展，并保留当前启用状态。",
+      "updateConfirmDescription": "{{source}} 会下载第三方新版本并替换已安装代码。更新不会执行 npm 生命周期脚本。扩展代码与 Pi 在同一进程中运行，可能读取文件和凭证。确认后将更新扩展。你主动关闭的扩展会保持关闭；其他扩展会在检查成功后启用。",
       "confirmUpdate": "了解风险并更新",
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",

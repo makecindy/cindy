@@ -2606,7 +2606,7 @@
       "confirmDescription": "{{source}} is third-party code. It will run in the same process as Cindy's Pi and may read files and credentials Pi can access. Install does not run npm lifecycle scripts. Confirming installs it. Cindy enables the resources it can inspect and support.",
       "confirmInstall": "Accept Risk, Install and Enable",
       "updateConfirmTitle": "Update This Pi Extension?",
-      "updateConfirmDescription": "{{source}} will download a new third-party version and replace the installed code. Update does not run npm lifecycle scripts. The code runs in the same process as Pi and may read files and credentials. Confirming updates it and preserves its current enabled state.",
+      "updateConfirmDescription": "{{source}} will download a new third-party version and replace the installed code. Update does not run npm lifecycle scripts. The code runs in the same process as Pi and may read files and credentials. Confirming updates it. If you turned it off, it stays off; otherwise, Cindy enables it after a successful inspection.",
       "confirmUpdate": "Accept Risk, Update",
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",

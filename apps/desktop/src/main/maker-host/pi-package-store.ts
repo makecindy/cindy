@@ -2379,11 +2379,12 @@ async function revokeExtensionApproval(sources: Iterable<string>): Promise<void>
 /**
  * One confirmed install/update is enough to run the affected package.
  * Sibling npm packages share one copy-root, so their fingerprints change when
- * another package is added; rebase those already-approved identities onto the
- * post-mutation tree instead of forcing the user to re-enable each one.
+ * another package is added. Rebase only identities that still matched before
+ * the mutation; stale or uninspectable approvals must remain fail closed.
  */
 async function persistEnabledExtensionApprovals(options: {
   inspected: InspectedPackage[];
+  rebaseSources: ReadonlySet<string>;
   enable?: InspectedPackage;
 }): Promise<void> {
   const state = await requireState();
@@ -2396,7 +2397,12 @@ async function persistEnabledExtensionApprovals(options: {
 
   for (const source of approved) {
     const pkg = inspectedBySource.get(source);
-    if (pkg?.contentFingerprint) fingerprints[source] = pkg.contentFingerprint;
+    if (!options.rebaseSources.has(source) || !pkg?.contentFingerprint) {
+      approved.delete(source);
+      delete fingerprints[source];
+      continue;
+    }
+    fingerprints[source] = pkg.contentFingerprint;
   }
 
   if (options.enable) {
@@ -2467,6 +2473,15 @@ export async function mutatePiPackage(
     // process populated its cache; no mutation may persist decisions derived
     // from that lock-external snapshot.
     const inspectedBeforeMutation = await inspectAllPackagesFreshUnderMutationLock();
+    const preMutationFreshApprovalSources = new Set(
+      inspectedBeforeMutation
+        .filter((pkg) => (
+          pkg.contentFingerprint
+          && pkg.view.requiresExtensionApproval !== true
+          && pkg.view.resources.some((resource) => resource.kind === 'extension')
+        ))
+        .map((pkg) => pkg.rawSource),
+    );
     let affectedSource: string | undefined;
     if (request.action === 'install') {
       mutationMayHaveChangedState = true;
@@ -2487,6 +2502,7 @@ export async function mutatePiPackage(
       affectedSource = affected?.rawSource;
       await persistEnabledExtensionApprovals({
         inspected: inspectedAfterInstall,
+        rebaseSources: preMutationFreshApprovalSources,
         ...(affected ? { enable: affected } : {}),
       });
     } else if (request.action === 'remove') {
@@ -2538,6 +2554,7 @@ export async function mutatePiPackage(
       // user had already turned this package off.
       await persistEnabledExtensionApprovals({
         inspected: inspectedAfterUpdate,
+        rebaseSources: preMutationFreshApprovalSources,
         ...(!wasExplicitlyDisabled && affected ? { enable: affected } : {}),
       });
     } else if (request.action === 'set-enabled') {

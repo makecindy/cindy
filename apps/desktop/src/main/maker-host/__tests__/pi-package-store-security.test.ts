@@ -570,6 +570,16 @@ describe('Pi package executable-code boundary', () => {
       enabled: true,
     });
 
+    runtime.holdMutationCommand = true;
+    const installing = mutateAuthorized(store, {
+      action: 'install',
+      source: secondSource,
+    });
+    await vi.waitFor(() => {
+      expect(runtime.spawns.at(-1)?.args).toEqual(
+        expect.arrayContaining(['install', secondSource]),
+      );
+    });
     await writeExtension(secondRoot, 'second-shared-extension');
     runtime.listOutput = [
       'User packages:',
@@ -579,16 +589,89 @@ describe('Pi package executable-code boundary', () => {
       `    ${secondRoot}`,
       '',
     ].join('\n');
-    const installed = await mutateAuthorized(store, {
-      action: 'install',
-      source: secondSource,
-    });
+    runtime.holdMutationCommand = false;
+    runtime.pendingClose?.(0);
+    const installed = await installing;
 
     expect(installed.packages).toEqual(expect.arrayContaining([
       expect.objectContaining({ source: firstSource, enabled: true }),
       expect.objectContaining({ source: secondSource, enabled: true }),
     ]));
     expect(installed.packages.every((pkg) => pkg.requiresExtensionApproval !== true)).toBe(true);
+  });
+
+  it('does not reapprove a stale sibling Extension when another package is installed', async () => {
+    const firstSource = 'npm:stale-shared-extension';
+    const secondSource = 'npm:new-shared-extension';
+    const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
+    const nodeModulesRoot = path.join(npmRoot, 'node_modules');
+    const firstRoot = path.join(nodeModulesRoot, 'stale-shared-extension');
+    const secondRoot = path.join(nodeModulesRoot, 'new-shared-extension');
+    const writeExtension = async (packageRoot: string, name: string) => {
+      await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
+      await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+        name,
+        version: '1.0.0',
+        pi: { extensions: ['./extensions/index.js'] },
+      }));
+      await fs.writeFile(
+        path.join(packageRoot, 'extensions', 'index.js'),
+        `module.exports = function setup${name.replace(/\W/g, '')}() {};\n`,
+      );
+    };
+    await writeExtension(firstRoot, 'stale-shared-extension');
+    runtime.listOutput = `User packages:\n  ${firstSource}\n    ${firstRoot}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: firstSource,
+      enabled: true,
+    });
+    await fs.writeFile(
+      path.join(firstRoot, 'extensions', 'index.js'),
+      'module.exports = function changedWithoutApproval() {};\n',
+    );
+
+    runtime.holdMutationCommand = true;
+    const installing = mutateAuthorized(store, {
+      action: 'install',
+      source: secondSource,
+    });
+    await vi.waitFor(() => {
+      expect(runtime.spawns.at(-1)?.args).toEqual(
+        expect.arrayContaining(['install', secondSource]),
+      );
+    });
+    await writeExtension(secondRoot, 'new-shared-extension');
+    runtime.listOutput = [
+      'User packages:',
+      `  ${firstSource}`,
+      `    ${firstRoot}`,
+      `  ${secondSource}`,
+      `    ${secondRoot}`,
+      '',
+    ].join('\n');
+    runtime.holdMutationCommand = false;
+    runtime.pendingClose?.(0);
+    const installed = await installing;
+
+    expect(installed.packages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: firstSource,
+        enabled: false,
+        requiresExtensionApproval: true,
+      }),
+      expect.objectContaining({ source: secondSource, enabled: true }),
+    ]));
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as {
+      approvedExtensionSources: string[];
+      approvedExtensionFingerprints: Record<string, string>;
+    };
+    expect(state.approvedExtensionSources).toEqual([secondSource]);
+    expect(Object.keys(state.approvedExtensionFingerprints)).toEqual([secondSource]);
   });
 
   it.skipIf(process.platform === 'win32')(
