@@ -99,6 +99,20 @@ function notifyPinnedCardSummaries(mode: SidebarViewMode): void {
 /** 同标签页内的实例间同步(原生 storage 事件只发给其它窗口)。 */
 const listeners = new Set<() => void>();
 
+/** 无订阅者 = 本进程错过了跨窗口 storage 事件;挂载时必须回读 storage 再通知 main。
+ *  仍有订阅者时不回读:内存是同窗口 SoT(setItem 失败时不能被旧 storage 改回去)。 */
+export function shouldRefreshPinnedModeFromStorage(subscribedListenerCount: number): boolean {
+  return subscribedListenerCount === 0;
+}
+
+function readPinnedModeFromStorage(): SidebarViewMode | null {
+  try {
+    return parseMode(localStorage.getItem(STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
 export function useSidebarCardMode(): {
   mode: SidebarViewMode;
   setMode: (next: SidebarViewMode) => void;
@@ -120,6 +134,13 @@ export function useSidebarCardMode(): {
   }, []);
 
   useEffect(() => {
+    if (shouldRefreshPinnedModeFromStorage(listeners.size)) {
+      const stored = readPinnedModeFromStorage();
+      if (stored) {
+        memoryValue = stored;
+        setModeState(stored);
+      }
+    }
     notifyPinnedCardSummaries(getSidebarViewMode());
     const sync = () => setModeState(getSidebarViewMode());
     listeners.add(sync);

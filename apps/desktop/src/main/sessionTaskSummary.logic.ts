@@ -180,3 +180,12 @@ export function shouldVoidSummaryAfterGenerationAttempt(args: {
 }): boolean {
   return !args.wroteFresh && !args.pinnedSectionIsCard;
 }
+
+/** 列表/文字 turn-done:摘要必须清空,同时带上最新消息 preview。
+ *  列表不再展示 summary,若只广播 summary:null,侧栏会停在进入本轮前的旧 preview。 */
+export function nonCardTurnDisplayPatch(preview: string | null): {
+  summary: null;
+  preview: string | null;
+} {
+  return { summary: null, preview };
+}

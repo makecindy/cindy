@@ -21,6 +21,7 @@ import {
   hasSummarizableMaterial,
   shouldGeneratePinnedCardSummary,
   shouldVoidSummaryAfterGenerationAttempt,
+  nonCardTurnDisplayPatch,
 } from '../sessionTaskSummary.logic';
 
 describe('pickTier — 距今时间为主轴的档位选择', () => {
@@ -157,6 +158,19 @@ describe('shouldVoidSummaryAfterGenerationAttempt', () => {
         pinnedSectionIsCard: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe('nonCardTurnDisplayPatch', () => {
+  it('列表结算必须同时清摘要并带上最新 preview', () => {
+    expect(nonCardTurnDisplayPatch('刚完成的回复')).toEqual({
+      summary: null,
+      preview: '刚完成的回复',
+    });
+    expect(nonCardTurnDisplayPatch(null)).toEqual({
+      summary: null,
+      preview: null,
+    });
   });
 });
 

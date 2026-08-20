@@ -23,13 +23,14 @@
  */
 
 import { BrowserWindow } from 'electron';
-import { and, count, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getMaker } from './maker-host/index.js';
 import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
 import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
 import { getDbClient } from './localDb/client/current.js';
 import { latestMessageText } from './localDb/latestMessageText.js';
+import { extractMessagePreview } from './localDb/mapper.js';
 import { messages, sessions } from './localDb/schema.js';
 import { createLogger } from './logger.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
@@ -44,6 +45,7 @@ import {
   hasSummarizableMaterial,
   shouldGeneratePinnedCardSummary,
   shouldVoidSummaryAfterGenerationAttempt,
+  nonCardTurnDisplayPatch,
 } from './sessionTaskSummary.logic.js';
 
 const log = createLogger('sessionTaskSummary');
@@ -77,11 +79,53 @@ function broadcastPatched(sessionId: string, patch: Record<string, unknown>): vo
   }
 }
 
-/** 列表/文字模式下作废旧摘要。不 bump updatedAt。
+const messageRowid = sql<number>`rowid`;
+
+/** 与 sessions:list / 删除消息同一口径的最近可见消息 preview。 */
+async function latestVisiblePreview(sessionId: string): Promise<string | null> {
+  const db = getDbClient().drizzle;
+  const [sessionRow] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const visibleAfterClear =
+    sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
+  const [latestRow] = await db
+    .select({ content: messages.content, role: messages.role })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        sql`${messages.role} IN ('user', 'assistant')`,
+        isNull(messages.rewindAt),
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        visibleAfterClear,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  return extractMessagePreview(latestRow?.content, latestRow?.role);
+}
+
+/** 列表/文字模式下作废旧摘要,并补上最新 preview。不 bump updatedAt。
  *  读/写之间用户可能已切回卡片:那时不能再抹掉摘要(回填可能刚因非空跳过),
  *  改走 force 生成盖成最新内容。 */
 async function clearSessionTaskSummary(sessionId: string): Promise<void> {
   try {
+    if (pinnedSectionIsCard) {
+      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+      return;
+    }
+    let preview: string | null = null;
+    try {
+      preview = await latestVisiblePreview(sessionId);
+    } catch (err) {
+      log.warn('latest visible preview for list settle failed (swallowed)', {
+        sessionId,
+        error: String(err),
+      });
+    }
     if (pinnedSectionIsCard) {
       await maybeGenerateSessionTaskSummary(sessionId, { force: true });
       return;
@@ -92,17 +136,18 @@ async function clearSessionTaskSummary(sessionId: string): Promise<void> {
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    if (!row?.summary) return;
-    if (pinnedSectionIsCard) {
-      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
-      return;
+    if (row?.summary) {
+      if (pinnedSectionIsCard) {
+        await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+        return;
+      }
+      await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
+      if (pinnedSectionIsCard) {
+        await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+        return;
+      }
     }
-    await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
-    if (pinnedSectionIsCard) {
-      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
-      return;
-    }
-    broadcastPatched(sessionId, { summary: null });
+    broadcastPatched(sessionId, nonCardTurnDisplayPatch(preview));
   } catch (err) {
     log.warn('clear stale task summary failed (swallowed)', {
       sessionId,
