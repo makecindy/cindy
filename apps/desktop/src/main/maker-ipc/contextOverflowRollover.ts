@@ -32,6 +32,7 @@ export type OverflowRolloverPlan =
       sourceUserClientId: string;
       sourceUserContent: unknown;
       sourceUserAgentFacingWireContent?: unknown;
+      skipGenericReplay: boolean;
       handoffMessages: OverflowSourceMessage[];
     }
   | { action: 'stop'; reason: OverflowRolloverStopReason };
@@ -219,8 +220,18 @@ export function planContextOverflowRollover(
     ...(sourceUser.agentMeta?.agentFacingWireContent !== undefined
       ? { sourceUserAgentFacingWireContent: sourceUser.agentMeta.agentFacingWireContent }
       : {}),
+    skipGenericReplay: isExternalDispatchOwner(sourceUser.agentMeta),
     handoffMessages: messages.slice(0, lastUserIndex),
   };
+}
+
+function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | undefined): boolean {
+  if (!agentMeta) return false;
+  if (agentMeta.hookSource) return true;
+  const origin = agentMeta.origin;
+  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return false;
+  const kind = (origin as { kind?: unknown }).kind;
+  return kind === 'scheduler' || kind === 'im' || kind === 'goal';
 }
 
 function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
@@ -378,6 +389,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         expectedClearedAt: sessionRow.clearedAt,
       });
       deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
+      if (plan.skipGenericReplay) {
+        deps.log.info('overflow rebuilt; external owner must retry send', {
+          sessionId,
+          sourceUserClientId: plan.sourceUserClientId,
+        });
+        return true;
+      }
       const replay =
         plan.sourceUserAgentFacingWireContent !== undefined
           ? await deps.replayUserMessage(

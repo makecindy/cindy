@@ -10889,8 +10889,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
     await assertReviewExternalInputAllowed(sessionId);
     return await withSendToSessionLock(sessionId, async () => {
-      // 已死的本地原生会话不要再 resume/compact：发送前换成干净窗口，交接走 pending handoff。
-      await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
       return sendToAgentAcceptedUnlocked(...args);
     });
   };
@@ -11003,6 +11001,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withSessionLock: withSendToSessionLock,
     withCloseSuppressed: withRehydrateCloseSuppressed,
     log,
+  });
+  agentHandoffPending.setBeforePeek(async (sessionId) => {
+    await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
   });
   /**
    * Same-turn steer contract: resolved STEER means maker-core accepted the

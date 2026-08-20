@@ -255,6 +255,34 @@ describe('createContextOverflowRollover', () => {
     expect(deps.onRebuilt).not.toHaveBeenCalled();
   });
 
+  it('rebuilds scheduler/IM turns without generic replay so the owner retries', async () => {
+    const deps = makeDeps([
+      {
+        ...msg('user', '心跳任务', 'u-sched'),
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR 心跳' } },
+      },
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+    ).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.setPendingHandoff).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    expect(deps.onRebuilt).not.toHaveBeenCalled();
+  });
+
+  it('marks external-origin turns as skipGenericReplay in the plan', () => {
+    const plan = planContextOverflowRollover([
+      {
+        ...msg('user', 'from im', 'u-im'),
+        agentMeta: { origin: { kind: 'im', channel: 'feishu' } },
+      },
+    ]);
+    expect(plan).toMatchObject({ action: 'rebuild', skipGenericReplay: true });
+  });
+
   it('does not replay when the failed turn already had tool side effects', async () => {
     const deps = makeDeps([
       msg('user', '改文件', 'u1'),
