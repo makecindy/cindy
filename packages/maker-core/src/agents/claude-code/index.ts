@@ -3441,6 +3441,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     function teardownDeadHandle(logLabel: string): void {
       // Provider death is not a successful user cancellation. Session status
       // and the queued terminal error/done must decide observer settlement.
+      resetClaudeGenerationTiming(runtimeState.generation);
       discardActiveContinuation(logLabel);
       turnInFlight = false;
       // handle 死透 → 后续没有排队 turn 可跑, counter 归零避免残留污染下一 handle 重建
@@ -5927,6 +5928,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (closed) return;
         // Closing/dead sessions settle through Session status (or their queued
         // terminal event), never through the successful task-stop path.
+        resetClaudeGenerationTiming(runtimeState.generation);
         discardActiveContinuation('session_closed');
         clearUpstreamResponseIdle();
         pendingToolIds.clear();
@@ -5962,6 +5964,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? {
             async detach() {
               if (closed) return;
+              resetClaudeGenerationTiming(runtimeState.generation);
               discardActiveContinuation('session_detached', true);
               clearUpstreamResponseIdle();
               pendingToolIds.clear();

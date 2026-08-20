@@ -5,6 +5,7 @@ import {
   finalizeClaudeGeneration,
   newClaudeGenerationState,
   pauseClaudeGeneration,
+  resetClaudeGenerationTiming,
   resumeClaudeGeneration,
 } from './generation-timing.js';
 
@@ -23,5 +24,19 @@ describe('claude generation timing', () => {
     expect(state.reliable).toBe(true);
     expect(state.durationMs).toBe(600);
     expect(state.startedAt).toBeNull();
+  });
+
+  it('stops the heartbeat when the session is reset without a result event', () => {
+    vi.useFakeTimers();
+    try {
+      const state = newClaudeGenerationState();
+      beginClaudeGeneration(state, 1_000);
+      expect(state.heartbeatTimer).not.toBeNull();
+      resetClaudeGenerationTiming(state);
+      expect(state.heartbeatTimer).toBeNull();
+      expect(state.heartbeatAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
