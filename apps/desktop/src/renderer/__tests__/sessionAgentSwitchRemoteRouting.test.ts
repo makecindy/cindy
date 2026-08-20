@@ -1214,7 +1214,9 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(actions).toContain(
       'const runtimeAgent = sessionEngineFilter?.runtimeAgent ?? sessionAgent;',
     );
-    expect(actions).toContain('config.agent !== runtimeAgent');
+    expect(actions).toContain('shouldCrossEngine(config.agent)');
+    expect(actions).toContain('pendingSwitch');
+    expect(actions).toContain('favoriteCopyIsLive');
     expect(actions).not.toContain('config.agent !== sessionAgent');
   });
 

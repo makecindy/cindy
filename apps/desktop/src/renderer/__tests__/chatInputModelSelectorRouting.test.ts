@@ -188,9 +188,9 @@ describe('ChatInput model source switching wiring', () => {
     expect(block).toContain('wireModelId: modelId,');
     expect(block).toContain('engine: agentKindToVendor(targetAgent),');
     expect(block).toContain('providerId,');
-    // 派生校验必须比对来源:仅来源被切走(wire id / 引擎不变)时锚点失效
-    // (2026-08-17 review:跨窗口 / 外部 patch 切来源后不得继续勾旧来源的收藏)。
-    expect(chatInputSource).toContain(
+    // 勾选只认 uid(Chris 2026-08-20):不拿正在跑的来源去对副本。
+    expect(chatInputSource).toContain('sessionFavoriteAnchor?.uid ?? null');
+    expect(chatInputSource).not.toContain(
       'sessionFavoriteAnchor.providerId === activeProviderId &&',
     );
   });

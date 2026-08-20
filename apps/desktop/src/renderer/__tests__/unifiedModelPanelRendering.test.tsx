@@ -496,6 +496,59 @@ describe('统一面板 · 会话内形态', () => {
     expect(onProviderChange).toHaveBeenCalledWith('xd', 'gpt-5.5', 'high');
   });
 
+  it('挂着待切换意图时点回真实引擎行:走 onCrossEngineSelect 清意图,不走普通 onSelect', async () => {
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'pi',
+        runtimeAgent: 'claude-code',
+        onCrossEngineSelect,
+      },
+      vendorKey: 'cc',
+      currentProviderId: 'anthropic',
+      modelId: 'claude-opus-5',
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    });
+    await act(async () => {
+      fireEvent.click(rowFor('Opus 5'));
+    });
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'anthropic',
+        targetAgent: 'claude-code',
+      }),
+    );
+  });
+
+  it('挂着待切换意图时点回真实引擎胶囊:仍走切换事务,不直接 return', async () => {
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'codex',
+        runtimeAgent: 'claude-code',
+        onCrossEngineSelect,
+      },
+      vendorKey: 'cc',
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    await act(async () => {
+      fireEvent.pointerEnter(rowFor('GPT-5.5'));
+    });
+    const flyout = await screen.findByTestId('unified-model-config-flyout');
+    await act(async () => {
+      fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement);
+    });
+    expect(onCrossEngineSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'xd',
+        targetAgent: 'claude-code',
+        favoriteUid: null,
+      }),
+    );
+  });
+
   /**
    * 引擎口径分裂 = 跨引擎**待切换意图期**(2026-08-17 review):ChatInput 在意图登记后把
    * `currentAgent` 换成意图目标,而 vendorKey(→ liveAgentKind)仍是旧引擎。面板的
@@ -1370,6 +1423,37 @@ describe('统一面板 · 编辑选中的收藏同步到 live', () => {
     await waitFor(() => {
       expect(listModelFavorites()[0]?.effort).toBe('high');
     });
+  });
+
+  it('选中收藏已不是 live 配置:改深度只更新收藏记录,不写回正在跑的配置', async () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'low',
+    });
+    const onEffortChange = vi.fn();
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      onUnifiedSelect,
+      selectedFavoriteUid: uid,
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+      vendorKey: 'cc',
+      effort: 'medium',
+      onEffortChange,
+    });
+    const flyout = await openFavoriteFlyout();
+    await act(async () => {
+      fireEvent.keyDown(flyout.querySelector('[role="slider"]') as HTMLElement, {
+        key: 'ArrowRight',
+      });
+    });
+    await waitFor(() => {
+      expect(listModelFavorites()[0]?.effort).toBe('high');
+    });
+    expect(onEffortChange).not.toHaveBeenCalled();
+    expect(onUnifiedSelect).not.toHaveBeenCalled();
   });
 
   it('草稿选中的收藏改 Fast:live 回调收到新值,收藏副本同步更新', async () => {
