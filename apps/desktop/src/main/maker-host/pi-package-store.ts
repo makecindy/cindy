@@ -2376,6 +2376,55 @@ async function revokeExtensionApproval(sources: Iterable<string>): Promise<void>
   });
 }
 
+/**
+ * One confirmed install/update is enough to run the affected package.
+ * Sibling npm packages share one copy-root, so their fingerprints change when
+ * another package is added; rebase those already-approved identities onto the
+ * post-mutation tree instead of forcing the user to re-enable each one.
+ */
+async function persistEnabledExtensionApprovals(options: {
+  inspected: InspectedPackage[];
+  enable?: InspectedPackage;
+}): Promise<void> {
+  const state = await requireState();
+  const disabled = new Set(state.disabledSources);
+  const approved = new Set(state.approvedExtensionSources);
+  const fingerprints = { ...state.approvedExtensionFingerprints };
+  const inspectedBySource = new Map(
+    options.inspected.map((pkg) => [pkg.rawSource, pkg]),
+  );
+
+  for (const source of approved) {
+    const pkg = inspectedBySource.get(source);
+    if (pkg?.contentFingerprint) fingerprints[source] = pkg.contentFingerprint;
+  }
+
+  if (options.enable) {
+    const pkg = options.enable;
+    if (pkg.view.resources.some((resource) => resource.kind === 'extension')) {
+      if (pkg.contentFingerprint) {
+        approved.add(pkg.rawSource);
+        fingerprints[pkg.rawSource] = pkg.contentFingerprint;
+        disabled.delete(pkg.rawSource);
+      }
+    } else {
+      approved.delete(pkg.rawSource);
+      delete fingerprints[pkg.rawSource];
+      disabled.delete(pkg.rawSource);
+    }
+  }
+
+  await writeState({
+    version: STATE_VERSION,
+    disabledSources: [...disabled].sort(),
+    approvedExtensionSources: [...approved].sort(),
+    approvedExtensionFingerprints: Object.fromEntries(
+      Object.entries(fingerprints).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    snapshotUnavailableRoots: state.snapshotUnavailableRoots,
+  });
+}
+
 function sourceAliases(source: string): string[] {
   return source.includes(':') || source.includes('://') || isLocalPackageSource(source)
     ? [source]
@@ -2423,7 +2472,8 @@ export async function mutatePiPackage(
       mutationMayHaveChangedState = true;
       // Reinstalling an existing source can replace executable code. Revoke
       // before invoking Pi so even a partially failed install cannot inherit a
-      // stale approval on the next runtime.
+      // stale approval on the next runtime. A successful install is itself the
+      // user decision to enable the new bytes.
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
       await revokeExtensionApproval([
         ...sourceAliases(source),
@@ -2432,12 +2482,13 @@ export async function mutatePiPackage(
       invalidateInspectionCache();
       await runPiPackageCommand(['install', source, '--no-approve']);
       invalidateInspectionCache();
-      const affected = await findAffectedInspectedPackage(await inspectAllPackages(), source);
+      const inspectedAfterInstall = await inspectAllPackages();
+      const affected = await findAffectedInspectedPackage(inspectedAfterInstall, source);
       affectedSource = affected?.rawSource;
-      await revokeExtensionApproval([
-        ...sourceAliases(source),
-        ...(affectedSource ? sourceAliases(affectedSource) : []),
-      ]);
+      await persistEnabledExtensionApprovals({
+        inspected: inspectedAfterInstall,
+        ...(affected ? { enable: affected } : {}),
+      });
     } else if (request.action === 'remove') {
       mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
@@ -2464,10 +2515,15 @@ export async function mutatePiPackage(
     } else if (request.action === 'update') {
       mutationMayHaveChangedState = true;
       const previous = await findAffectedInspectedPackage(inspectedBeforeMutation, source);
-      await revokeExtensionApproval([
+      const updateAliases = [
         ...sourceAliases(source),
         ...(previous ? sourceAliases(previous.rawSource) : []),
-      ]);
+      ];
+      const stateBeforeUpdate = await requireState();
+      const wasExplicitlyDisabled = updateAliases.some((item) => (
+        stateBeforeUpdate.disabledSources.includes(item)
+      ));
+      await revokeExtensionApproval(updateAliases);
       invalidateInspectionCache();
       await runPiPackageCommand([
         'update',
@@ -2475,14 +2531,15 @@ export async function mutatePiPackage(
         '--no-approve',
       ]);
       invalidateInspectionCache();
-      const affected = await findAffectedInspectedPackage(await inspectAllPackages(), source);
+      const inspectedAfterUpdate = await inspectAllPackages();
+      const affected = await findAffectedInspectedPackage(inspectedAfterUpdate, source);
       affectedSource = affected?.rawSource ?? previous?.rawSource ?? source;
-      // An update changes executable code. Require a fresh, post-inspection
-      // approval before any extension from that source can run again.
-      await revokeExtensionApproval([
-        ...sourceAliases(source),
-        ...sourceAliases(affectedSource),
-      ]);
+      // A confirmed update is enough to keep running the new bytes, unless the
+      // user had already turned this package off.
+      await persistEnabledExtensionApprovals({
+        inspected: inspectedAfterUpdate,
+        ...(!wasExplicitlyDisabled && affected ? { enable: affected } : {}),
+      });
     } else if (request.action === 'set-enabled') {
       if (typeof request.enabled !== 'boolean') throw new Error('enabled must be a boolean');
       const target = await findAffectedInspectedPackage(inspectedBeforeMutation, source);

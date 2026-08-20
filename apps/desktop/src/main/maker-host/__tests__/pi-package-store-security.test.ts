@@ -439,7 +439,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(store.mutatePiPackage(request, fresh)).rejects.toThrow(/invalid or expired/i);
   });
 
-  it('holds Extension packages disabled until explicit approval and revokes approval on update', async () => {
+  it('holds Extension packages disabled until explicit approval and re-enables them after a confirmed update', async () => {
     const { root, source } = await createPackage();
     await fs.mkdir(path.join(root, 'skills', 'sample'), { recursive: true });
     await fs.writeFile(
@@ -502,15 +502,93 @@ describe('Pi package executable-code boundary', () => {
     const updated = await mutateAuthorized(store, { action: 'update', source });
     expect(updated.affectedPackage).toMatchObject({
       source,
-      enabled: false,
-      requiresExtensionApproval: true,
+      enabled: true,
     });
+    expect(updated.affectedPackage?.requiresExtensionApproval).toBeUndefined();
     await fs.rm(root, { recursive: true, force: true });
     await expect(Promise.all([
       fs.readFile(snapshotExtension, 'utf8'),
       fs.readFile(snapshotSkill, 'utf8'),
       fs.readFile(snapshotPrompt, 'utf8'),
     ])).resolves.toEqual(frozenResources);
+  });
+
+  it('enables an Extension package from the same confirmed install', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+
+    const installed = await mutateAuthorized(store, { action: 'install', source });
+
+    expect(installed.affectedPackage).toMatchObject({
+      source,
+      enabled: true,
+    });
+    expect(installed.affectedPackage?.requiresExtensionApproval).toBeUndefined();
+    expect(installed.packages).toMatchObject([{ source, enabled: true }]);
+  });
+
+  it('keeps an explicitly disabled Extension package disabled after a confirmed update', async () => {
+    const { source } = await createPackage();
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: false });
+
+    const updated = await mutateAuthorized(store, { action: 'update', source });
+
+    expect(updated.affectedPackage).toMatchObject({
+      source,
+      enabled: false,
+      requiresExtensionApproval: true,
+    });
+  });
+
+  it('does not disable an already-enabled npm Extension when another package is installed', async () => {
+    const firstSource = 'npm:first-shared-extension';
+    const secondSource = 'npm:second-shared-extension';
+    const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
+    const nodeModulesRoot = path.join(npmRoot, 'node_modules');
+    const firstRoot = path.join(nodeModulesRoot, 'first-shared-extension');
+    const secondRoot = path.join(nodeModulesRoot, 'second-shared-extension');
+    const writeExtension = async (packageRoot: string, name: string) => {
+      await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
+      await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
+        name,
+        version: '1.0.0',
+        pi: { extensions: ['./extensions/index.js'] },
+      }));
+      await fs.writeFile(
+        path.join(packageRoot, 'extensions', 'index.js'),
+        `module.exports = function setup${name.replace(/\W/g, '')}() {};\n`,
+      );
+    };
+    await writeExtension(firstRoot, 'first-shared-extension');
+    runtime.listOutput = `User packages:\n  ${firstSource}\n    ${firstRoot}\n`;
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, {
+      action: 'set-enabled',
+      source: firstSource,
+      enabled: true,
+    });
+
+    await writeExtension(secondRoot, 'second-shared-extension');
+    runtime.listOutput = [
+      'User packages:',
+      `  ${firstSource}`,
+      `    ${firstRoot}`,
+      `  ${secondSource}`,
+      `    ${secondRoot}`,
+      '',
+    ].join('\n');
+    const installed = await mutateAuthorized(store, {
+      action: 'install',
+      source: secondSource,
+    });
+
+    expect(installed.packages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: firstSource, enabled: true }),
+      expect.objectContaining({ source: secondSource, enabled: true }),
+    ]));
+    expect(installed.packages.every((pkg) => pkg.requiresExtensionApproval !== true)).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')(
@@ -1925,7 +2003,7 @@ describe('Pi package executable-code boundary', () => {
 
     await vi.waitFor(() => expect(listener).toHaveBeenCalled(), { timeout: 2_000 });
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
     unsubscribe();
   });
@@ -2023,15 +2101,14 @@ describe('Pi package executable-code boundary', () => {
     await mutateAuthorized(secondStore, { action: 'update', source });
 
     const snapshotRoot = path.join(runtime.userData, 'cross-process-session', 'managed-packages');
-    await expect(firstStore.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toEqual({
-      extensions: [],
-      skills: [],
-      promptTemplates: [],
-      packageRoots: [],
+    const snapshotExtension = path.join(snapshotRoot, '0', 'extensions', 'index.ts');
+    await expect(firstStore.resolveManagedPiPackageResources({ snapshotRoot })).resolves.toMatchObject({
+      extensions: [snapshotExtension],
+      packageRoots: [path.join(snapshotRoot, '0')],
     });
-    await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
+    await expect(fs.readFile(snapshotExtension, 'utf8')).resolves.toContain('replacedAfterApproval');
     await expect(firstStore.listPiPackages()).resolves.toMatchObject({
-      packages: [{ source, enabled: false, requiresExtensionApproval: true }],
+      packages: [{ source, enabled: true }],
     });
   });
 
@@ -2118,9 +2195,9 @@ describe('Pi package executable-code boundary', () => {
 
     expect(reinstalled.affectedPackage).toMatchObject({
       source: normalizedSource,
-      enabled: false,
-      requiresExtensionApproval: true,
+      enabled: true,
     });
+    expect(reinstalled.affectedPackage?.requiresExtensionApproval).toBeUndefined();
 
     await mutateAuthorized(store, { action: 'update', source: normalizedSource });
     await mutateAuthorized(store, { action: 'remove', source: normalizedSource });
