@@ -317,6 +317,7 @@ import {
 } from '@cindy/maker-shared/synthetic-trigger';
 import {
   ComposerResizeGrabber,
+  ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
   MOBILE_COMPOSER_CONTROL_SIZE,
@@ -2805,51 +2806,54 @@ export default function SessionScreen() {
     );
   };
 
-  // 工具条布局(对齐 Codex):左 = [+][权限图标][计划 chip];右 = [模型][语音][动作]。
+  // 工具条布局:左 = [+][权限][计划 chip][模型];右 = [停止][语音][发送]。
+  // 模型放左侧组,不随发送/停止出现而横向跳动。
   const renderComposerToolbar = () => (
     <>
-      {renderComposerAttachmentButton()}
-      {renderSessionPermissionButton()}
-      {planModeOn ? (
-        <PlanModeChip
-          disabled={controlBusy || !canUseRemoteSessionControls}
-          onExit={() => togglePlanMode(false)}
-          testID="session.planModeChip"
-        />
-      ) : null}
+      <ComposerToolbarLeftGroup testID="session.composerToolbarLeft">
+        {renderComposerAttachmentButton()}
+        {renderSessionPermissionButton()}
+        {planModeOn ? (
+          <PlanModeChip
+            disabled={controlBusy || !canUseRemoteSessionControls}
+            onExit={() => togglePlanMode(false)}
+            testID="session.planModeChip"
+          />
+        ) : null}
+        {composerRuntimeSummary ? (
+          <ComposerRuntimePill
+            disabled={controlBusy || !canUseRemoteSessionControls}
+            fastOn={composerPillFastOn}
+            label={composerRuntimeLabel}
+            leading={agentSwitchIntent ? (
+              <MobileAgentMark
+                agentKind={agentSwitchIntent.targetAgentKind}
+                color={colors.textSecondary}
+                size={iconSize.sm}
+              />
+            ) : composerPillSourceId ? (
+              // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
+              // 不静默换成 activeSourceId 的默认回退 Logo。
+              <MobileModelIconMark
+                color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
+                icon={currentSession && composerPillSourceProvider
+                  ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
+                  : undefined}
+                name={composerPillSourceProvider?.name ?? composerPillSourceId}
+                providerId={composerPillSourceId}
+                routing={composerPillSourceProvider?.routing}
+                logoKind={composerPillSourceProvider?.logoKind}
+              />
+            ) : null}
+            onPress={toggleComposerModelPicker}
+            testID="session.composerModelButton"
+          />
+        ) : null}
+      </ComposerToolbarLeftGroup>
       <ComposerToolbarSpacer />
-      {composerRuntimeSummary ? (
-        <ComposerRuntimePill
-          disabled={controlBusy || !canUseRemoteSessionControls}
-          fastOn={composerPillFastOn}
-          label={composerRuntimeLabel}
-          leading={agentSwitchIntent ? (
-            <MobileAgentMark
-              agentKind={agentSwitchIntent.targetAgentKind}
-              color={colors.textSecondary}
-              size={iconSize.sm}
-            />
-          ) : composerPillSourceId ? (
-            // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
-            // 不静默换成 activeSourceId 的默认回退 Logo。
-            <MobileModelIconMark
-              color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
-              icon={currentSession && composerPillSourceProvider
-                ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
-                : undefined}
-              name={composerPillSourceProvider?.name ?? composerPillSourceId}
-              providerId={composerPillSourceId}
-              routing={composerPillSourceProvider?.routing}
-              logoKind={composerPillSourceProvider?.logoKind}
-            />
-          ) : null}
-          onPress={toggleComposerModelPicker}
-          testID="session.composerModelButton"
-        />
-      ) : null}
-      {/* 工具排右段顺序:[模型][停止任务][语音占位][发送槽](spacer 已在模型左侧,
-          模型右对齐对齐 Codex)。停止任务在语音左边(对齐桌面),语音占位宽度随录音
-          胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽的邻接关系全程不变。 */}
+      {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边(对齐桌面),
+          语音占位宽度随录音胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽
+          的邻接关系全程不变。模型在 spacer 左侧,不随右段显隐横向跳动。 */}
       {renderComposerInlineStop()}
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
