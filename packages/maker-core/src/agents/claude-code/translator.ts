@@ -898,10 +898,24 @@ function handleSystem(
       retryAttempt: msg.attempt,
       maxRetries: msg.max_retries,
     };
-    // api_retry 不带 parent_tool_use_id，不能证明任何一个具体 sidechain 已耗尽。
-    // 因此它只更新主 turn 的诊断信息，不改变 sidechain 的终态；否则主链或并发
-    // sidechain A 的耗尽会被错误套到之后同 tag 的 sidechain B 上。
-    // sidechain 只能由带 parent_tool_use_id 的权威生命周期事件收口。
+    // api_retry 不带 parent_tool_use_id。只有当当前 turn 恰好只有一个同 tag 的
+    // 未决 sidechain 时，才能用事件顺序作窄化关联；多个候选或没有候选时不投影，
+    // 避免主链/sidechain A 的耗尽误伤后续同 tag 的 sidechain B。
+    if (
+      typeof msg.attempt === 'number' &&
+      typeof msg.max_retries === 'number' &&
+      msg.attempt >= msg.max_retries &&
+      typeof msg.error === 'string'
+    ) {
+      const candidates = [...ctx.rt.subagentRetryStateByParentToolUseId.entries()]
+        .filter(([, state]) => state.tag === msg.error && !state.projected);
+      if (candidates.length === 1) {
+        const [parentToolUseId, state] = candidates[0];
+        projectSubagentLaunchFailure(queue, ctx, parentToolUseId, {
+          errorMessage: state.errorMessage,
+        });
+      }
+    }
     ctx.log.info('SDK API request retrying', {
       attempt: msg.attempt,
       maxRetries: msg.max_retries,
@@ -1323,7 +1337,7 @@ function handleAssistant(
     // 看不到失败任务、也没有终态通知（#2967）。这里把它规范化为父会话可见的 failed
     // 任务。已有 taskId 的执行期失败由 task_notification:failed 收口，不重复上报。
     // 可重试的 tag（rate_limit / server_error / unknown）SDK 会自己退避重试并可能
-    // 自愈，立即投影 failed 会把自愈任务锁死成失败。由于 api_retry 不携带 parent_tool_use_id，重试耗尽也不能安全归属到某一个 sidechain；
+    // 自愈，立即投影 failed 会把自愈任务锁死成失败。由于 api_retry 不携带 parent_tool_use_id，重试耗尽也不能安全归属到某一个 sidechain。
     if (sidechainParentToolUseId) {
       let knownTaskId: string | undefined;
       for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {

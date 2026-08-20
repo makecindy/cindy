@@ -1459,7 +1459,7 @@ describe('Claude Code sidechain launch failure projection', () => {
     expect(taskUpdates).toHaveLength(0);
   });
 
-  it('does not project every open sidechain when api_retry exhausts after an envelope', async () => {
+  it('projects the uniquely pending sidechain when api_retry exhausts after its envelope', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
     // envelope 先到：记 open 等待，暂不投影。
@@ -1487,6 +1487,45 @@ describe('Claude Code sidechain launch failure projection', () => {
         error: 'rate_limit',
         error_status: 429,
         retry_delay_ms: 100,
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data).toMatchObject({
+      taskId: 'toolu_retry_exhausted',
+      parentToolUseId: 'toolu_retry_exhausted',
+      status: 'failed',
+    });
+  });
+
+  it('does not attribute exhausted retry to one of multiple same-tag sidechains', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    for (const parentToolUseId of ['toolu_retry_a', 'toolu_retry_b']) {
+      translateSdkMessage(
+        {
+          type: 'assistant',
+          error: 'rate_limit',
+          parent_tool_use_id: parentToolUseId,
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Rate limited.' }] },
+        },
+        queue,
+        ctx,
+      );
+    }
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
       },
       queue,
       ctx,
