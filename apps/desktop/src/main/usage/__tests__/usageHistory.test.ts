@@ -74,8 +74,8 @@ vi.mock('../referenceModelPricing', () => ({
           outputPerMtok: 10,
         }
       : undefined,
-  getSubscriptionDirectValuePrice: (model: string) =>
-    model === 'xai/grok-4.3' || model === 'grok-4.6'
+  getSubscriptionDirectValuePrice: (model: string, agent?: string) =>
+    model === 'xai/grok-4.3' || (model === 'grok-4.6' && agent === 'pi')
       ? {
           providerId: 'xai',
           modelId: model,
