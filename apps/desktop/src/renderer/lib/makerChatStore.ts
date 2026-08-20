@@ -2873,6 +2873,25 @@ function releasePermissionResponseGuard(sessionId: string): void {
   permissionResponseGuardTimers.delete(sessionId);
   permissionResponseInFlight.delete(sessionId);
 }
+
+/**
+ * dismissal 到达时重新武装防重窗口(仅当 guard 仍在场)。不能无条件释放:本端
+ * resolve A 时 main 会在 invoke reply settle 前同步广播 INTERACTION_DISMISSED,
+ * 若此时清除 guard,双击第二击 / 键重复会读到刚推广的 B 并误批(security P1)。
+ * 重新武装 = 从 dismissal 时刻起保留整个 gesture 窗口 —— 既挡住 A 的迟到输入,
+ * 又不再依赖旧 RPC settle(可达 ~30s 隧道超时)才释放,用户对新卡 B 的真实响应
+ * 在窗口结束后即可送达。guard 不在场(远端撤回,本端从未武装)时 no-op。
+ */
+function rearmPermissionResponseGuard(sessionId: string): void {
+  if (!permissionResponseInFlight.has(sessionId)) return;
+  const timer = permissionResponseGuardTimers.get(sessionId);
+  if (timer !== undefined) clearTimeout(timer);
+  const next = setTimeout(
+    () => releasePermissionResponseGuard(sessionId),
+    PERMISSION_RESPONSE_GUARD_WINDOW_MS,
+  );
+  permissionResponseGuardTimers.set(sessionId, next);
+}
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
@@ -7316,10 +7335,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       decision: dismissPayload.decision,
     };
     const sessionId = payload.sessionId;
-    // 交互被撤回/对端已解决:旧权限卡的响应链已终结,立即释放防重 guard,
-    // 否则本端旧 resolve RPC 可能要等隧道超时(可达 ~30s),期间用户对新推广
-    // 卡的所有响应都会被静默丢弃(Greptile/Codex review P1/P2)。
-    releasePermissionResponseGuard(sessionId);
+    // 交互被撤回/对端已解决/本端 resolve 回显:旧权限卡的响应链终结。不能
+    // 无条件释放 guard —— A 被 resolve 时 main 同步广播 dismissal,立即释放
+    // 会让双击第二击误批新推广的 B(security P1)。重新武装 gesture 窗口:
+    // 既挡住 A 的迟到输入,又不依赖旧 RPC settle(可达 ~30s)才放行 B 的真实
+    // 响应。guard 不在场时(远端撤回)no-op,不影响新卡即时响应。
+    rearmPermissionResponseGuard(sessionId);
     setState(sessionId, (s) =>
       handleStreamEvent(s, { sessionId, type: 'permission_dismissed', data }),
     );

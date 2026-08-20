@@ -360,7 +360,7 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 
-  it('dismissal 释放防重 guard:对端已解决 A 后,用户对新卡 B 的响应不再被吞', async () => {
+  it('dismissal 重新武装防重 guard:窗口内 A 的迟到输入不误批 B,窗口结束后 B 可正常响应', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {
       kind: 'permission',
@@ -377,8 +377,9 @@ describe('device-link 远程交互往返 — permission', () => {
     await flush();
 
     // 本端提交 A 后回程丢失,另一控制端解决 A → 被控端广播 dismissal 推进到 B。
-    // 此时旧 resolve RPC 仍未 settle(隧道可达 ~30s),guard 若继续挂着,
-    // 用户对 B 的响应会被静默丢弃;dismissal 必须立即释放 guard。
+    // main 在 resolve A 时同步广播 dismissal;若此刻清除 guard,双击第二击会
+    // 读到刚推广的 B 并误批(security P1)。正确语义:重新武装窗口 —— 窗口内
+    // A 的迟到输入仍被挡下,窗口结束后 B 的真实响应不受旧 RPC 阻塞。
     makerChatStore.respondToPermission(s, { behavior: 'allow' });
     await flush();
     host.hostDismiss(s, 'dismiss-guard-a', 'resolved', { behavior: 'allow' });
@@ -386,7 +387,14 @@ describe('device-link 远程交互往返 — permission', () => {
 
     expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('dismiss-guard-b');
 
-    // 防重窗口未结束(300ms)也不得拦截: dismissal 已终结 A 的响应链。
+    // 窗口未结束(300ms):A 的迟到输入不得误批 B。
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['dismiss-guard-a']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('dismiss-guard-b');
+
+    // 窗口结束后:用户对 B 的真实响应送达(不等旧 RPC ~30s 超时)。
+    await waitPastPermissionGuardWindow();
     makerChatStore.respondToPermission(s, { behavior: 'allow' });
     await flush();
     expect(host.resolved.map((item) => item.requestId)).toEqual([
