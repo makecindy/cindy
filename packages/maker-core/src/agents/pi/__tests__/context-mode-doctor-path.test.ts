@@ -37,6 +37,13 @@ describe('rewriteContextModeDoctorPath', () => {
     const other = 'sessions live under ~/.pi/context-mode/sessions';
     expect(rewriteContextModeDoctorPath(other, '/tmp/context-mode')).toBe(other);
   });
+
+  it('inserts dollar sequences in the managed root as literals', () => {
+    const root = '/tmp/cindy/$&/$1/user-dir/node_modules/context-mode';
+    const rewritten = rewriteContextModeDoctorPath(DOCTOR, root);
+    expect(rewritten).toContain(`(${root}/)`);
+    expect(rewritten).not.toContain(CONTEXT_MODE_STALE_EXTENSION_PATH);
+  });
 });
 
 describe('findContextModePackageRoot', () => {

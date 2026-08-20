@@ -55,7 +55,8 @@ export function rewriteContextModeDoctorPath(
 ): string {
   if (!actualRoot || !text.includes(CONTEXT_MODE_STALE_EXTENSION_PATH)) return text;
   const replacement = actualRoot.replace(/[/\\]+$/, '');
+  // Function replacement keeps dollar sequences in custom data dirs literal.
   return text
-    .replaceAll(`${CONTEXT_MODE_STALE_EXTENSION_PATH}/`, `${replacement}/`)
-    .replaceAll(CONTEXT_MODE_STALE_EXTENSION_PATH, replacement);
+    .replaceAll(`${CONTEXT_MODE_STALE_EXTENSION_PATH}/`, () => `${replacement}/`)
+    .replaceAll(CONTEXT_MODE_STALE_EXTENSION_PATH, () => replacement);
 }
