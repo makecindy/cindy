@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
+  casUpdate: vi.fn(async (..._args: unknown[]) => true),
+  migrateManaged: vi.fn((_config?: unknown) => null as unknown),
   getGrokAccessToken: vi.fn(),
   recoverGrokAuthAfterRejection: vi.fn(),
   warn: vi.fn(),
@@ -164,9 +166,17 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
 }));
 vi.mock('../../local-model-runtime/managedOllamaProvider.js', () => ({
   migrateManagedOllamaOnCatalogLoad: async () => false,
+  migrateManagedOllamaProvider: (config: unknown) => h.migrateManaged(config),
 }));
 vi.mock('../../local-model-runtime/localConnectHarness.js', () => ({
   migrateLocalConnectPresetsOnCatalogLoad: async () => 0,
+}));
+vi.mock('../../../shared/localConnectHarness.js', () => ({
+  migrateLocalConnectPresetsOnCatalogLoad: async () => 0,
+  migrateLocalConnectProvider: () => null,
+}));
+vi.mock('../custom-provider-store.js', () => ({
+  updateCustomProviderIfUnchanged: (...args: unknown[]) => h.casUpdate(...args),
 }));
 
 import {
@@ -287,6 +297,61 @@ describe('provider catalog realm reload', () => {
     await refreshCustomProvidersIntoCatalog();
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
     h.customProviderRead.mockReset();
+  });
+
+  it('does not publish a migrated snapshot after a failed CAS write', async () => {
+    const original: CustomProviderConfig = {
+      id: 'cas-provider',
+      name: 'Original',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://original.example/anthropic',
+          models: [{ id: 'original-model', name: 'Original Model' }],
+        },
+      },
+    };
+    const edited: CustomProviderConfig = {
+      ...original,
+      name: 'Edited by user',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://edited.example/anthropic',
+          models: [{ id: 'user-model', name: 'User Model' }],
+        },
+      },
+    };
+    const migrated: CustomProviderConfig = {
+      ...original,
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://migrated.example/anthropic',
+          models: [{ id: 'stale-model', name: 'Stale Model' }],
+        },
+      },
+    };
+    h.migrateManaged.mockReset();
+    h.casUpdate.mockReset();
+    h.customProviderRead.mockReset();
+    h.migrateManaged.mockImplementation((config: unknown) =>
+      (config as CustomProviderConfig).id === original.id ? migrated : null,
+    );
+    h.casUpdate.mockResolvedValueOnce(false);
+    h.customProviderRead.mockResolvedValueOnce([original]).mockResolvedValueOnce([edited]);
+
+    await refreshCustomProvidersIntoCatalog();
+
+    expect(h.casUpdate).toHaveBeenCalled();
+    const published = getActiveCatalog().providers.find((entry) => entry.id === original.id);
+    expect(published?.name).toBe('Edited by user');
+    expect(published?.models['claude-code']?.[0]).toMatchObject({ id: 'user-model' });
+    expect(JSON.stringify(published)).not.toContain('stale-model');
+    expect(JSON.stringify(published)).not.toContain('migrated.example');
+    setCustomProviders([]);
+    h.migrateManaged.mockReset();
+    h.casUpdate.mockReset();
+    h.customProviderRead.mockReset();
+    h.migrateManaged.mockImplementation(() => null);
+    h.casUpdate.mockResolvedValue(true);
   });
 
   it('reprojects custom efforts once on Registry refresh and preserves the custom route', async () => {

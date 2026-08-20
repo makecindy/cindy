@@ -70,6 +70,41 @@ describe('local model pull state machine', () => {
     expect(settled[0]?.status).toBe(settled[1]?.status);
   });
 
+  it('does not re-download an untagged name already installed as :latest', async () => {
+    const streamPull = vi.fn(async () => {
+      throw new Error('should not pull');
+    });
+    const service = createLocalModelService({
+      streamPull,
+      fetchImpl: async (url) => {
+        if (String(url).includes('/api/tags')) {
+          return new Response(JSON.stringify({ models: [{ name: 'glm-4.7-flash:latest' }] }));
+        }
+        return new Response(JSON.stringify({ models: [] }));
+      },
+    });
+    await service.pull('glm-4.7-flash').catch(() => undefined);
+    expect(streamPull).not.toHaveBeenCalled();
+  });
+
+  it('joins an untagged pull with its :latest alias', async () => {
+    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal));
+    const service = createLocalModelService({
+      streamPull,
+      pausedPullStore: memoryPausedStore(),
+      fetchImpl: async () => new Response(JSON.stringify({ models: [] })),
+    });
+    const first = service.pull('glm-4.7-flash');
+    const joined = service.pull('glm-4.7-flash:latest');
+    await vi.waitFor(() => {
+      expect(streamPull).toHaveBeenCalledTimes(1);
+    });
+    expect(service.activePulls().map((item) => item.name)).toEqual(['glm-4.7-flash']);
+    await service.abortPull('pause', 'glm-4.7-flash:latest');
+    const settled = await Promise.allSettled([first, joined]);
+    expect(settled[0]?.status).toBe(settled[1]?.status);
+  });
+
   it('does not re-download a model already present in local Ollama', async () => {
     const streamPull = vi.fn(async () => {
       throw new Error('should not pull');
@@ -143,6 +178,42 @@ describe('local model pull state machine', () => {
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
       deleteManifest: true,
+      keepDigests: [],
+    });
+  });
+
+  it('does not delete an untagged pull that Ollama already lists as :latest', async () => {
+    const deleteModel = vi.fn(async () => undefined);
+    const purgeCancelledPull = vi.fn(async () => undefined);
+    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal));
+    let installed: Array<{ name: string }> = [];
+    const service = createLocalModelService({
+      streamPull,
+      deleteModel,
+      purgeCancelledPull,
+      waitForCancelledBlobs: async () => undefined,
+      pausedPullStore: memoryPausedStore(),
+      fetchImpl: async (url) => {
+        if (String(url).includes('/api/tags')) {
+          return new Response(JSON.stringify({ models: installed }));
+        }
+        return new Response(JSON.stringify({ models: [] }));
+      },
+    });
+    const pulling = service.pull('glm-4.7-flash');
+    await vi.waitFor(() => {
+      expect(streamPull).toHaveBeenCalled();
+    });
+    installed = [{ name: 'glm-4.7-flash:latest' }];
+    await service.abortPull('cancel', 'glm-4.7-flash');
+    await pulling.catch(() => undefined);
+    expect(deleteModel).not.toHaveBeenCalled();
+    expect(purgeCancelledPull).toHaveBeenCalledWith({
+      name: 'glm-4.7-flash',
+      digests: [],
+      deleteAllIncomplete: false,
+      pruneUnreferenced: false,
+      deleteManifest: false,
       keepDigests: [],
     });
   });

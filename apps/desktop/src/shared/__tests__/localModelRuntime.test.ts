@@ -9,6 +9,7 @@ import {
   isLocalRuntimeBetaProviderId,
   isOllamaModelName,
   normalizeOllamaPullName,
+  ollamaModelRefsEqual,
   matchesManagedOllamaFingerprint,
   MANAGED_LMSTUDIO_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
@@ -60,6 +61,16 @@ describe('localModelRuntime', () => {
     ).toBe('hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL');
     expect(normalizeOllamaPullName('https://huggingface.co/datasets/foo/bar')).toBeNull();
     expect(normalizeOllamaPullName('https://example.com/unsloth/Qwen3.8-27B-GGUF')).toBeNull();
+  });
+
+  it('treats an untagged Ollama name as its :latest alias', () => {
+    expect(ollamaModelRefsEqual('glm-4.7-flash', 'glm-4.7-flash:latest')).toBe(true);
+    expect(ollamaModelRefsEqual('library/foo', 'library/foo:latest')).toBe(true);
+    expect(ollamaModelRefsEqual('hf.co/unsloth/Qwen3.8-27B-GGUF', 'hf.co/unsloth/Qwen3.8-27B-GGUF:latest')).toBe(
+      true,
+    );
+    expect(ollamaModelRefsEqual('gpt-oss:20b', 'gpt-oss:latest')).toBe(false);
+    expect(ollamaModelRefsEqual('qwen3.8:27b-mxfp8', 'qwen3.8:latest')).toBe(false);
   });
 
   it('explains Hugging Face MLX repos that Ollama cannot pull', () => {

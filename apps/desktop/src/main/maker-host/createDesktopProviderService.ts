@@ -760,7 +760,7 @@ export async function refreshCustomProvidersIntoCatalog(
         migrateManagedOllamaProvider(config) ?? migrateLocalConnectProvider(config);
       return migrated ?? config;
     });
-    await Promise.all(
+    const persisted = await Promise.all(
       next.flatMap((config, index) => {
         const previous = configs[index];
         if (!previous || JSON.stringify(config.runtimes) === JSON.stringify(previous.runtimes)) {
@@ -773,12 +773,23 @@ export async function refreshCustomProvidersIntoCatalog(
               id: config.id,
               err: String(err),
             });
+            return false;
           }),
         ];
       }),
     );
     if (!shouldApply()) {
       log.info('discarded stale custom provider catalog refresh after migration');
+      return;
+    }
+    if (persisted.some((applied) => applied !== true)) {
+      const fresh = await listCustomProvidersWithSecureHeaders();
+      if (!shouldApply()) {
+        log.info('discarded stale custom provider catalog refresh after cas miss');
+        return;
+      }
+      setCustomProviderConfigs(fresh);
+      log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
       return;
     }
     setCustomProviderConfigs(next);

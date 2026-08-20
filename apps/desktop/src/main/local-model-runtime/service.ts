@@ -3,9 +3,11 @@ import path from 'node:path';
 
 import { createLogger } from '../logger.js';
 import {
+  canonicalOllamaModelRef,
   isCuratedQwen38Tag,
   isOllamaModelName,
   normalizeOllamaPullName,
+  ollamaModelRefsEqual,
   recommendForHost,
   recommendQwen38,
   resolveManagedOllamaAgents,
@@ -203,6 +205,38 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   const actives = new Map<string, ActivePull>();
   const pausedByName = new Map<string, LocalModelPullProgress>();
   const unclaimedByName = new Map<string, LocalModelOwnerScope>();
+
+  function findActive(name: string): ActivePull | undefined {
+    const direct = actives.get(name);
+    if (direct) return direct;
+    for (const op of actives.values()) {
+      if (ollamaModelRefsEqual(op.name, name)) return op;
+    }
+    return undefined;
+  }
+
+  function unclaimedOwner(name: string): LocalModelOwnerScope | undefined {
+    const direct = unclaimedByName.get(name);
+    if (direct) return direct;
+    for (const [key, owner] of unclaimedByName) {
+      if (ollamaModelRefsEqual(key, name)) return owner;
+    }
+    return undefined;
+  }
+
+  function clearUnclaimed(name: string): void {
+    for (const key of [...unclaimedByName.keys()]) {
+      if (ollamaModelRefsEqual(key, name)) unclaimedByName.delete(key);
+    }
+  }
+
+  function tagsIncludeModel(
+    tags: readonly { name: string }[],
+    name: string,
+  ): boolean {
+    return tags.some((tag) => ollamaModelRefsEqual(tag.name, name));
+  }
+
   let startInFlight: Promise<LocalRuntimeStatus> | null = null;
   let installInFlight: Promise<LocalRuntimeStatus> | null = null;
   let installAbort: AbortController | null = null;
@@ -320,21 +354,23 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       return null;
     }
     const records = await loadPausedRecords();
-    const record = records.find((item) => item.name === name) ?? null;
-    pausedByName.delete(name);
+    const record = records.find((item) => ollamaModelRefsEqual(item.name, name)) ?? null;
+    for (const key of [...pausedByName.keys()]) {
+      if (ollamaModelRefsEqual(key, name)) pausedByName.delete(key);
+    }
     if (pausedPullStore.remove) {
-      await pausedPullStore.remove(name);
+      await pausedPullStore.remove(record?.name ?? name);
       return record;
     }
     const current = await pausedPullStore.read();
-    if (current?.name === name) await pausedPullStore.clear();
+    if (current && ollamaModelRefsEqual(current.name, name)) await pausedPullStore.clear();
     return record;
   }
 
   function visiblePulls(extraPaused: readonly LocalModelPullProgress[] = []): LocalModelPullProgress[] {
     const byName = new Map<string, LocalModelPullProgress>();
-    for (const item of extraPaused) byName.set(item.name, item);
-    for (const op of actives.values()) byName.set(op.name, op.lastProgress);
+    for (const item of extraPaused) byName.set(canonicalOllamaModelRef(item.name), item);
+    for (const op of actives.values()) byName.set(canonicalOllamaModelRef(op.name), op.lastProgress);
     return [...byName.values()];
   }
 
@@ -395,7 +431,9 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
 
   async function cindyModelIds(): Promise<Set<string>> {
     const existing = await readManagedOllamaProvider();
-    return new Set((existing?.runtimes.pi?.models ?? []).map((model) => model.id));
+    return new Set(
+      (existing?.runtimes.pi?.models ?? []).map((model) => canonicalOllamaModelRef(model.id)),
+    );
   }
 
   function listsForHost() {
@@ -466,7 +504,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         sizeBytes: tag.size,
         digest: tag.digest,
         contextLength,
-        inCindy: inCindy.has(tag.name),
+        inCindy: inCindy.has(canonicalOllamaModelRef(tag.name)),
       });
     }
     return {
@@ -498,7 +536,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       throw new Error('invalid ollama model name');
     }
     name = pullName;
-    const existing = actives.get(name);
+    const existing = findActive(name);
     if (existing) return existing.promise;
     const removalGeneration = managedOllamaRemovalGeneration();
     const owner = opts?.owner ?? null;
@@ -555,7 +593,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         let alreadyLocal = false;
         try {
           const tags = await fetchOllamaTags(fetchImpl);
-          alreadyLocal = tags.some((tag) => tag.name === name);
+          alreadyLocal = tagsIncludeModel(tags, name);
         } catch {
           alreadyLocal = false;
         }
@@ -646,7 +684,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   async function abortPull(reason: 'pause' | 'cancel', name: string): Promise<{ ok: true }> {
     const pullName = normalizeOllamaPullName(name);
     if (!pullName) throw new Error('invalid ollama model name');
-    const op = actives.get(pullName);
+    const op = findActive(pullName);
     if (!op) return { ok: true };
     op.stopReason = reason;
     op.abort.abort();
@@ -661,7 +699,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     let keepInstalled = true;
     try {
       const tags = await fetchOllamaTags(fetchImpl);
-      keepInstalled = tags.some((tag) => tag.name === name);
+      keepInstalled = tagsIncludeModel(tags, name);
     } catch {
       keepInstalled = true;
     }
@@ -703,11 +741,11 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   function otherPullDigests(exceptName: string): string[] {
     const kept = new Set<string>();
     for (const [name, op] of actives) {
-      if (name === exceptName) continue;
+      if (ollamaModelRefsEqual(name, exceptName)) continue;
       for (const digest of op.digests) kept.add(digest);
     }
     for (const record of loadPausedRecordsSync()) {
-      if (record.name === exceptName) continue;
+      if (ollamaModelRefsEqual(record.name, exceptName)) continue;
       for (const digest of record.digests) kept.add(digest);
     }
     return [...kept];
@@ -734,7 +772,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       throw new Error('invalid ollama model name');
     }
     name = pullName;
-    if (actives.has(name)) {
+    if (findActive(name)) {
       throw new PullBusyError();
     }
     await deleteModel(name);
@@ -747,7 +785,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       throw new Error('invalid ollama model name');
     }
     name = pullName;
-    if (actives.has(name)) {
+    if (findActive(name)) {
       await abortPull('cancel', name);
       return;
     }
@@ -761,7 +799,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   ): Promise<boolean> {
     const named = tags.filter((tag) => {
       if (!isOllamaModelName(tag.name)) return false;
-      const held = unclaimedByName.get(tag.name);
+      const held = unclaimedOwner(tag.name);
       if (!held) return true;
       return Boolean(owner && held.dataOwnerId === owner.dataOwnerId);
     });
@@ -773,7 +811,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     }
     const result = await upsertManagedOllamaModels(entries);
     if (result.ok) {
-      for (const tag of named) unclaimedByName.delete(tag.name);
+      for (const tag of named) clearUnclaimed(tag.name);
     }
     return result.ok;
   }

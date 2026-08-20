@@ -379,6 +379,22 @@ export function normalizeOllamaPullName(value: string): string | null {
   return isOllamaModelName(name) ? name : null;
 }
 
+/**
+ * Ollama 无 tag 时默认 `:latest`。比较 `/api/tags`、进行中 pull 和暂停记录时只走这里。
+ */
+export function canonicalOllamaModelRef(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  const slash = trimmed.lastIndexOf('/');
+  const local = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  if (local.includes(':')) return trimmed;
+  return `${trimmed}:latest`;
+}
+
+export function ollamaModelRefsEqual(left: string, right: string): boolean {
+  return canonicalOllamaModelRef(left) === canonicalOllamaModelRef(right);
+}
+
 export function parseOllamaVersion(value: string): [number, number, number] {
   const match = value.trim().match(/^(\d+)\.(\d+)(?:\.(\d+))?/);
   if (!match) return [0, 0, 0];
