@@ -132,6 +132,7 @@ import {
   setClaudeProxyOAuthSpawnChecker,
 } from './anthropic-compat-proxy-host.js';
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
+import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import {
@@ -967,6 +968,7 @@ export function getMaker(): Maker {
       // (浏览器自动化等高频入口)会逐次弹窗, 与 Codex 侧的静默执行行为分叉。
       getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
       getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
+      resolveClaudeSubagentModelAccess: resolveDesktopClaudeSubagentModelAccess,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CLAUDE_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 cc 列表注入
       // （含 claude 订阅模型 + XD 网关路由的 gpt / 国产 / gemini 等）。active catalog 已在 splash 期
@@ -1022,6 +1024,7 @@ export function getMaker(): Maker {
         startParams,
         vendorOptions,
         onApprovalRequest,
+        onSubagentModelAccessRequest,
         onOAuthRefresh,
         makerMemoryEnabled,
       }) => {
@@ -1156,6 +1159,9 @@ export function getMaker(): Maker {
               onApprovalRequest: onApprovalRequest as Parameters<
                 typeof openCcManagerSession
               >[0]['onApprovalRequest'],
+              onSubagentModelAccessRequest: onSubagentModelAccessRequest as Parameters<
+                typeof openCcManagerSession
+              >[0]['onSubagentModelAccessRequest'],
               onOAuthRefresh: onOAuthRefresh as Parameters<
                 typeof openCcManagerSession
               >[0]['onOAuthRefresh'],

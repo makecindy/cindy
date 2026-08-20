@@ -1278,6 +1278,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
+    // Library(持久作品库)设置面:概览/选位置(宿主弹原生选择器)/绑定/
+    // 迁移/回默认/解绑/删除。删除的破坏性确认在 Renderer 完成。
+    libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
+      ipcRenderer.invoke('ghosts:library-overview', id),
+    libraryPickLocation: (
+      id: string,
+    ): Promise<{ ok: boolean; cancelled?: boolean; candidate?: string; warnings?: string[]; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-pick-location', id),
+    libraryBind: (id: string, candidate: string): Promise<{ ok: boolean; message?: string; warnings?: string[] }> =>
+      ipcRenderer.invoke('ghosts:library-bind', id, candidate),
+    libraryRelocate: (id: string, candidate: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-relocate', id, candidate),
+    libraryRevertDefault: (id: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-revert-default', id),
+    libraryUnbind: (id: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-unbind', id),
+    libraryDelete: (id: string): Promise<{ ok: boolean; cancelled?: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-delete', id),
     legacyRecoveryStatus: (): Promise<
       import('../shared/legacyGhostRecovery').LegacyGhostRecoveryStatus
     > => ipcRenderer.invoke('ghosts:legacy-recovery-status'),
@@ -5204,6 +5222,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string,
     ): Promise<{
       tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>;
+      /** 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数(桥接对账收口权威依据)。 */
+      pendingContinuations?: number;
     }> => ipcRenderer.invoke('maker:session-background-tasks:list', sessionId),
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
     providerOAuthLogin: (

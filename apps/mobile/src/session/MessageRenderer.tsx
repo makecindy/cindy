@@ -2796,9 +2796,10 @@ function AgentTaskCard({
       toolName: item.toolCall?.label,
       toolInput: readAgentTaskToolInput(item.toolCall),
       update: item.update,
-      // 重连后 agent_task_update(live-only)为空,已完成子任务的唯一完成信号是配对工具结果
-      // (持久化在 secondaryBody)。喂给 model 后 status 兜底为 completed、summary 显示结果(与 desktop 对齐)。
+      // 重连后 live update 为空：结构化终态优先，存量历史再由配对结果兜底 completed。
+      // summary 仍来自 secondaryBody，与 desktop 对齐。
       result: item.toolCall?.secondaryBody,
+      persistedStatus: item.toolCall?.agentTaskStatus,
     }),
     [item.toolCall, item.update],
   );
@@ -3089,11 +3090,9 @@ function SubagentCard({
   const title = item.header.subagentType
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
-  const statusText = item.status === 'running'
-    ? t('message.renderer.statusRunning')
-    : item.durationMs !== undefined
+  const statusText = item.status === 'completed' && item.durationMs !== undefined
       ? t('message.renderer.workedDuration', { duration: formatDuration(item.durationMs) })
-      : t('message.renderer.statusCompleted');
+      : agentTaskStatusLabel(item.status);
   const subtitle = [item.header.description, statusText].filter(Boolean).join(' · ');
   return (
     <CollabCardShell

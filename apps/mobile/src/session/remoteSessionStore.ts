@@ -1055,7 +1055,17 @@ function preferCompleteMessage(existing: RemoteMessage | undefined, incoming: Re
   if (!existing) return incoming;
   const incomingTruncated = incoming.agentMeta?.remoteContentTruncated === true;
   const existingTruncated = existing.agentMeta?.remoteContentTruncated === true;
-  return incomingTruncated && !existingTruncated ? existing : incoming;
+  if (!incomingTruncated || existingTruncated) return incoming;
+  // Keep the complete payload, but do not throw away newer authoritative metadata
+  // (for example an Agent/Task terminal state patched after the original push).
+  return {
+    ...existing,
+    agentMeta: {
+      ...(existing.agentMeta ?? {}),
+      ...(incoming.agentMeta ?? {}),
+      remoteContentTruncated: false,
+    },
+  };
 }
 
 function messageIdentityMatches(a: RemoteMessage, b: RemoteMessage): boolean {

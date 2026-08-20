@@ -1786,10 +1786,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
     expect(sessionSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;');
-    expect(sharedSource).toContain('export const MOBILE_COMPOSER_CONTROL_SIZE = 34;');
-    expect(sharedSource).toContain('export function resolveMobileComposerVoiceButtonPlacement');
+    expect(sharedSource).toContain('MOBILE_COMPOSER_CONTROL_SIZE,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonPlacement,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
-    expect(sharedSource).toContain('styles.voiceButtonAnchor,');
+    expect(sharedSource).not.toContain('styles.voiceButtonAnchor');
     expect(newSource).not.toContain('messageInput: {');
     expect(newSource).not.toContain('composerToolbar: {');
     expect(newSource).not.toContain('permissionIcon: {');

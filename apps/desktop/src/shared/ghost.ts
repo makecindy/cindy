@@ -100,6 +100,12 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * plan/只读拒)、save 票据目录(主 agent 过户,复用 saveDeposit 预算)。
  * 字节永远由主机落盘,沙箱本身仍无 fs——本槽是"申请主机代写"的资格,
  * 不是文件系统访问权。
+ * 'library' = 持久作品库(2026-08-20):用户作品级存储(画布/素材/数据库),
+ * 与 'fs' 私有储物柜(配额封顶、卸载回收)语义不同:不受 ghost-fs 配额约束,
+ * 卸载插件**不删**(标 orphaned,删除必须走设置页独立确认)。字节与 SQL
+ * 一律由主机在 owner×plugin 隔离的 Library 根内代执行,插件只持不透明
+ * handle 与相对路径;SQLite 只能提交参数化语句,经宿主语句门(首词白名单)
+ * 过滤后在专属 worker 里跑——插件拿不到数据库对象,也拿不到任意路径。
  * 'session-context' = 会话上下文(2026-07-23):agent 派活(tool-call)时,主机把
  * 当次会话的可信 {session_id, workdir, workdir_is_local, workdir_is_read_only}
  * 注入 args.session_context。
@@ -143,6 +149,7 @@ export const GHOST_SLOTS = [
   'badge',
   'confirm',
   'fs',
+  'library',
   'session-context',
   'pick',
   'preview',
@@ -1593,6 +1600,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'badge') keys.push('slotBadge');
     else if (slot === 'confirm') keys.push('slotConfirm');
     else if (slot === 'fs') keys.push('slotFs');
+    else if (slot === 'library') keys.push('slotLibrary');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
     else if (slot === 'skill') keys.push('slotSkill');
     else if (slot === 'workspace') keys.push('slotWorkspace');
@@ -1676,6 +1684,7 @@ export interface GhostPermissionItem {
     | 'notify'
     | 'confirm'
     | 'fs'
+    | 'library'
     | 'session-context'
     | 'pick'
     | 'preview'
@@ -1995,6 +2004,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // 会话权限/其它目录逐次确认),让用户装入前就知道边界在哪。
   if (manifest.slots.includes('fs')) {
     items.push({ key: 'fs', kind: 'fs', labelKey: 'fsWrite', detailKey: 'fsWriteDetail' });
+  }
+  // library 槽:持久作品库(用户数据语义,不是临时缓存)。装入时必须讲清
+  // 三件事:卸载不删、删除走独立确认、数据库只收参数化语句。
+  if (manifest.slots.includes('library')) {
+    items.push({
+      key: 'library',
+      kind: 'library',
+      labelKey: 'libraryPersist',
+      detailKey: 'libraryPersistDetail',
+    });
   }
   // pick 槽:能弹系统选文件夹窗口。授权动作是用户亲手选中,装入时只告知
   // "它会来要"。
@@ -7456,6 +7475,106 @@ export type GhostPipeFsResult =
   | { ok: true; op: 'list'; entries: GhostFsListEntry[]; truncated?: boolean }
   | { ok: true; op: 'delete'; path: string; /** false = 本来就不存在(幂等)。 */ existed: boolean }
   | { ok: false; message: string };
+
+/* ── library 槽:持久作品库(2026-08-20;详见 docs/dev-rules/plugin-library-storage.md)── */
+
+/**
+ * library 槽操作集。文件操作与 fs:data 同为"主机代劳 + 相对路径",差异在:
+ * 无 256MiB/2000 文件配额(受磁盘保留水位与软水位约束)、写入原子化
+ * (staging+fsync+rename+identity 复验)、大文件走分块流、结构化错误码、
+ * 卸载不删。SQLite 子集(op:'db.*')只收参数化单语句,事务/迁移/备份由
+ * 宿主管理;首词白名单外的语句(ATTACH/PRAGMA/VACUUM/事务语句)一律拒。
+ */
+export const GHOST_LIBRARY_OPS = [
+  'open', 'status',
+  'read', 'write',
+  'writeBegin', 'writeChunk', 'writeCommit', 'writeAbort',
+  'list', 'stat', 'mkdir', 'delete', 'rename',
+  'db.open', 'db.exec', 'db.batch', 'db.migrate', 'db.backup', 'db.check', 'db.userVersion',
+] as const;
+export type GhostLibraryOp = (typeof GHOST_LIBRARY_OPS)[number];
+
+/** 上行:library 槽请求(cindy.library(req) ≡ send({type:'library-request', …req}))。 */
+export interface GhostPipeLibraryRequest {
+  type: 'library-request';
+  op: GhostLibraryOp;
+  /** library 相对路径(段数/总长上限比 fs 宽:32 段/512 字符)。 */
+  path?: string;
+  /** write 内容(≤16MiB;更大走 writeBegin 分块流)。 */
+  content?: string;
+  encoding?: 'utf8' | 'base64';
+  /** write:排他创建(目标已存在则 ALREADY_EXISTS)。 */
+  ifNotExists?: boolean;
+  /** 分块流:声明总字节数与期望 sha256(Commit 时核对)。 */
+  totalBytes?: number;
+  sha256?: string;
+  streamId?: string;
+  seq?: number;
+  /** list:递归开关/续游标/页大小。 */
+  recursive?: boolean;
+  cursor?: string;
+  limit?: number;
+  /** delete:目录递归。 */
+  recursiveDelete?: boolean;
+  /** rename 源/目标(库内相对路径)。 */
+  from?: string;
+  to?: string;
+  overwrite?: boolean;
+  /** SQLite 子集:库内 .sqlite 相对路径 + 参数化 SQL。 */
+  dbPath?: string;
+  sql?: string;
+  params?: unknown;
+  statements?: Array<{ sql: string; params?: unknown }>;
+  targetVersion?: number;
+  steps?: Array<{ toVersion: number; sql: string[] }>;
+  /** read 分段。 */
+  offset?: number;
+  length?: number;
+}
+
+/**
+ * library 槽返回:成功形态按 op 分流(文件操作带宿主实算 sha256——未来
+ * 网络同步的素材完整性地基);失败**结构化**(errorCode + 人话 message,
+ * 修掉 fs 槽无错误码的缺口),对沙箱永不 reject。
+ */
+export type GhostPipeLibraryResult =
+  | { ok: true; op: 'open' | 'status'; state: 'ready' | 'readonly' | 'unavailable'; reason?: string; usedBytes: number; fileCount: number; diskFreeBytes?: number | null; softLimitBytes?: number; softLimitExceeded?: boolean; location?: 'default' | 'custom' }
+  | { ok: true; op: 'read'; path: string; content: string; encoding: 'utf8' | 'base64'; bytes: number; sha256: string }
+  | { ok: true; op: 'write' | 'writeCommit'; path: string; bytes: number; sha256: string }
+  | { ok: true; op: 'writeBegin'; streamId: string }
+  | { ok: true; op: 'writeChunk'; accepted: number }
+  | { ok: true; op: 'writeAbort'; aborted: boolean }
+  | { ok: true; op: 'list'; entries: Array<{ path: string; kind: 'file' | 'dir'; bytes: number; mtime: number }>; hasMore: boolean; nextCursor: string | null }
+  | { ok: true; op: 'stat'; path: string; kind: 'file' | 'dir'; bytes: number; mtime: number }
+  | { ok: true; op: 'mkdir'; path: string; existed: boolean }
+  | { ok: true; op: 'delete'; path: string; existed: boolean }
+  | { ok: true; op: 'rename'; from: string; to: string }
+  | { ok: true; op: 'db.open'; opened: boolean }
+  | { ok: true; op: 'db.exec'; rows?: unknown[]; changes?: number; lastInsertRowid?: string | number }
+  | { ok: true; op: 'db.batch'; applied: number }
+  | { ok: true; op: 'db.migrate'; fromVersion: number; toVersion: number }
+  | { ok: true; op: 'db.backup'; backedUp: boolean }
+  | { ok: true; op: 'db.check'; healthy: boolean; detail: string }
+  | { ok: true; op: 'db.userVersion'; version: number | null }
+  | { ok: false; errorCode: string; message: string };
+
+/** Library 概览(ghosts:library-overview IPC 载荷;设置页插件详情消费)。 */
+export interface GhostLibraryOverview {
+  /** 插件是否声明了 library 槽(未声明时设置页不渲染该区)。 */
+  supported: boolean;
+  state: 'ready' | 'readonly' | 'unavailable';
+  reason: string | null;
+  location: 'default' | 'custom';
+  /** 自定义位置的用户所选父目录(用户自己选的,如实展示;默认位置为 null)。 */
+  customCandidate: string | null;
+  usedBytes: number;
+  fileCount: number;
+  diskFreeBytes: number | null;
+  softLimitBytes: number;
+  softLimitExceeded: boolean;
+  /** 卸载后未删除的标记(重装自动清除;设置页以横幅提示)。 */
+  orphaned: boolean;
+}
 
 /** 上行:network 槽代理 fetch 请求。 */
 export interface GhostPipeFetchRequest {

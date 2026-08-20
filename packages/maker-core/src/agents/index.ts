@@ -2,6 +2,10 @@ export * from './base-agent.js';
 // toSdkModelString: host 侧标题 oneShot 需要把 catalog model id 还原成 Anthropic wire 串
 // (claude-haiku-4-5 → claude-haiku-4-5-20251001),复用 SSoT 映射,避免在 host 硬编码 dated id。
 export { ClaudeCodeAgent, toSdkModelString, setClaudeSupportedModelsListener } from './claude-code/index.js';
+export type {
+  ClaudeSubagentModelAccessResult,
+  ClaudeSubagentModelAccessStatus,
+} from './claude-code/subagent-model-access.js';
 export { CodexAgent } from './codex/index.js';
 // host 导入本地 Codex rollout 历史时也要做 citation 归一化(流式路径在 translator
 // 内部做,导入路径拿到的是 rollout 原文),复用同一实现避免口径分叉。

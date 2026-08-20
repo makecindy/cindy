@@ -19,6 +19,24 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  it('projects a persisted agent task terminal state from tool_use metadata', () => {
+    const [item] = normalizeRemoteMessages([
+      message({
+        id: 'agent-tool',
+        role: 'tool_use',
+        toolUseId: 'toolu-agent',
+        content: { toolUseId: 'toolu-agent', toolName: 'Agent', input: { prompt: 'Inspect auth' } },
+        agentMeta: { agentTaskStatus: 'stopped' },
+      }),
+    ]);
+
+    expect(item).toMatchObject({
+      kind: 'tool',
+      label: 'Agent',
+      agentTaskStatus: 'stopped',
+    });
+  });
+
   it('sorts messages and extracts user/assistant text from desktop content shapes', () => {
     const items = normalizeRemoteMessages([
       message({

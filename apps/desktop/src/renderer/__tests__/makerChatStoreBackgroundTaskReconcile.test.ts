@@ -409,11 +409,21 @@ describe('活动熄灭触发的 stale running 对账', () => {
         'running',
       );
 
-      // 本机会话但没有 running 条目:调度前粗筛直接跳过
-      applyTask(idleSid, { taskId: 't2', status: 'completed', taskType: 'local_agent' });
+      // 本机会话但没有 running 条目、也没有唤醒桥接(非 wake 型终态不置位):
+      // 调度前粗筛直接跳过。
+      applyTask(idleSid, { taskId: 't2', status: 'completed', taskType: 'local_bash' });
       emitActivity({ sessionId: idleSid, active: false });
       await vi.advanceTimersByTimeAsync(3000);
       expect(listTasks).not.toHaveBeenCalled();
+
+      // wake 型终态会置位唤醒桥接(pendingTaskWake):即便没有 running 条目,
+      // 粗筛也要放行对账 —— 迟到 / 误投终态泄漏的桥接正是靠这次权威对账收口
+      // (收口条件与代际语义见 lib/__tests__/pendingTaskWakeBridgeReconcile.test.ts)。
+      applyTask(idleSid, { taskId: 't3', status: 'completed', taskType: 'local_agent' });
+      emitActivity({ sessionId: idleSid, active: false });
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(listTasks).toHaveBeenCalledTimes(1);
+      expect(listTasks).toHaveBeenCalledWith(idleSid);
     } finally {
       makerChatStore.purgeSession(remoteSid);
       makerChatStore.purgeSession(idleSid);

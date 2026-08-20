@@ -57,7 +57,11 @@ import {
 } from './authRefreshFailure';
 import { awaitWithStartupTimeout } from './authStartupGate';
 import { syncCanaryFlagAfterAuth } from './canaryFlagSync';
-import { maybeEnableXdOrgBetaDefault } from './xdOrgBetaDefault';
+import {
+  maybeEnableNonXdOrgBetaDefault,
+  maybeEnableXdOrgBetaDefault,
+  shouldAttemptOrgBetaDefault,
+} from './xdOrgBetaDefault';
 import { canRestoreAuthSessionForMembership } from './authRealmPolicy';
 import {
   createAuthBrowserAuthorizationSlot,
@@ -293,6 +297,22 @@ let pendingAuthRealm: AuthRegion | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let sessionInvalidationPromise: Promise<void> | null = null;
+// Real owner change / logout: keep the renderer fail-closed even if a late
+// notifyRenderer() races the teardown. Same-owner Ghost repair must not set
+// this — that was the 55-minute /login flash.
+let ownerChangeShellPendingDepth = 0;
+
+function enterOwnerChangeShellPending(): void {
+  ownerChangeShellPendingDepth += 1;
+}
+
+function leaveOwnerChangeShellPending(): void {
+  ownerChangeShellPendingDepth = Math.max(0, ownerChangeShellPendingDepth - 1);
+}
+
+function isOwnerChangeShellPending(): boolean {
+  return ownerChangeShellPendingDepth > 0;
+}
 /**
  * 设备标识。默认绑定物理机(machineIdSync)。
  *
@@ -856,6 +876,7 @@ async function withCloudOwnerCommit<T>(opts: {
     return withGhostSkillProjectionReadOnlyOwner(opts.nextOwnerId, opts.commit);
   }
   let releaseBoundary: (() => void) | null = null;
+  let heldOwnerChangeShell = false;
   // A same-owner projection repair tears down the owner-bound Ghost runtime but
   // keeps the same mode/owner, so commitActiveAppSession's same-owner early
   // return would NOT advance the owner generation — stale async work that
@@ -869,7 +890,14 @@ async function withCloudOwnerCommit<T>(opts: {
       previousOwnerId: opts.previousOwnerId,
       nextOwnerId: opts.nextOwnerId,
       prepareTransition: async ({ ownerChanged }) => {
-        notifyRendererAuthBoundaryPending();
+        // Same-owner Ghost repair (token refresh when the durable projection is
+        // unstable) is not a logout. Broadcasting snapshotLoggedOutAuthState()
+        // here bounced ProtectedRoute to /login every ~55 minutes.
+        if (ownerChanged) {
+          notifyRendererAuthBoundaryPending();
+          enterOwnerChangeShellPending();
+          heldOwnerChangeShell = true;
+        }
         releaseBoundary = beginAppSessionBoundary();
         if (ownerChanged) {
           await opts.prepareTransition();
@@ -897,6 +925,7 @@ async function withCloudOwnerCommit<T>(opts: {
   } finally {
     const release = releaseBoundary as (() => void) | null;
     release?.();
+    if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
     if (release) notifyRenderer();
   }
   if (committed) requestStableOwnerPostCommit('owner-commit');
@@ -925,6 +954,7 @@ async function withAccountFreeOwnerCommit(opts: {
 }): Promise<void> {
   let authCleared = opts.authAlreadyCleared ?? false;
   let releaseBoundary: (() => void) | null = null;
+  let heldOwnerChangeShell = false;
   // Same-owner account-free repair tears down the owner-bound Ghost runtime but
   // keeps the same mode/owner, so commitActiveAppSession's same-owner early
   // return would NOT advance the owner generation — stale async work that
@@ -962,6 +992,8 @@ async function withAccountFreeOwnerCommit(opts: {
       nextOwnerId: opts.nextMode === 'local' ? LOCAL_DATA_OWNER_ID : null,
       prepareTransition: async ({ ownerChanged }) => {
         notifyRendererAuthBoundaryPending();
+        enterOwnerChangeShellPending();
+        heldOwnerChangeShell = true;
         releaseBoundary = beginAppSessionBoundary();
         if (ownerChanged) {
           if (!authSessionTeardown) {
@@ -1030,6 +1062,7 @@ async function withAccountFreeOwnerCommit(opts: {
   } finally {
     const release = releaseBoundary as (() => void) | null;
     release?.();
+    if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
     if (release && notify) notifyRenderer();
   }
 
@@ -1417,6 +1450,11 @@ function scheduleCanaryFlagSync(input: {
     persistFlag: canaryFlagStore.sync,
   })
     .then((outcome) => {
+      scheduleNonXdOrgBetaDefault({
+        expectedAuthEpoch: input.expectedAuthEpoch,
+        expectedUserId: input.expectedUserId,
+        defaultEnableBeta: outcome.defaultEnableBeta,
+      });
       if (outcome.kind === 'synced') {
         log.info('canary feature flag synced: isCanary=%s', outcome.isCanary);
         // feature-flags 在登录态落地后异步返回；立即推送新快照，让 renderer
@@ -1495,6 +1533,56 @@ function scheduleXdOrgBetaDefault(input: {
     .catch((err) => {
       log.error('xd org beta channel default threw unexpectedly', err);
     });
+}
+
+/** feature-flags 返回后，仅为非 xd 组织补一次设备级 beta 默认值。 */
+function scheduleNonXdOrgBetaDefault(input: {
+  expectedAuthEpoch: number;
+  expectedUserId: string;
+  defaultEnableBeta?: boolean;
+}): void {
+  if (isPassiveSharedUserDataInstance()) return;
+  const user = currentUser;
+  if (!user) return;
+  const request = {
+    expectedAuthEpoch: input.expectedAuthEpoch,
+    expectedUserId: input.expectedUserId,
+    user: {
+      membershipKind: user.membershipKind,
+      orgName: user.orgName,
+      orgSlug: decodeAccessTokenOrgSlug(accessToken),
+    },
+  } as const;
+  if (
+    shouldAttemptOrgBetaDefault({
+      user: request.user,
+      defaultEnableBeta: input.defaultEnableBeta,
+    }) !== 'flag-enable'
+  ) {
+    return;
+  }
+  void maybeEnableNonXdOrgBetaDefault(request, {
+    readCurrentAuthIdentity: () => ({
+      authEpoch: authStateEpoch,
+      userId: currentUser?.id ?? null,
+    }),
+    readChannelState: () => ({
+      enableBeta: readUpdateChannelSettings().enableBeta,
+      isCustomized: isEnableBetaUserCustomized(),
+    }),
+    probeBetaManifest,
+    enableBeta: () =>
+      enableUncustomizedBetaChannel(
+        () =>
+          authStateEpoch === input.expectedAuthEpoch && currentUser?.id === input.expectedUserId,
+      ),
+  })
+    .then((outcome) => {
+      if (outcome.kind === 'enabled') log.info('feature-flag beta channel default enabled');
+      else if (outcome.reason === 'stale-auth') log.debug('discarded stale non-xd beta default');
+      else log.debug('non-xd beta channel default skipped: reason=%s', outcome.reason);
+    })
+    .catch((err) => log.error('non-xd beta channel default threw unexpectedly', err));
 }
 
 /**
@@ -1636,7 +1724,9 @@ function snapshotAuthState(): AuthState {
     mode: appSession.mode,
     dataOwnerId: appSession.dataOwnerId,
     ownerGeneration: appSession.generation,
-    canEnterApp: appSession.mode !== 'signed-out' && !isAppSessionBoundaryPending(),
+    // IPC pending is not a logout. Real owner change / logout still holds the
+    // shell closed so a late notifyRenderer() cannot remount the outgoing owner.
+    canEnterApp: appSession.mode !== 'signed-out' && !isOwnerChangeShellPending(),
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
     deviceId,

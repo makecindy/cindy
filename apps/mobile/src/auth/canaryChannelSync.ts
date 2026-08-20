@@ -12,8 +12,13 @@ export interface CanarySyncDeps {
 }
 
 export type CanarySyncOutcome =
-  | { kind: 'synced'; isCanary: boolean }
-  | { kind: 'preserved'; reason: 'request-failed' | 'invalid-response' | 'stale-auth' };
+  | { kind: 'synced'; isCanary: boolean; defaultEnableBeta?: boolean }
+  | {
+      kind: 'preserved';
+      reason:
+        'request-failed' | 'invalid-response' | 'stale-auth' | 'persist-failed';
+      defaultEnableBeta?: boolean;
+    };
 
 /** 请求失败/非法时保留旧值；登出或换账号后的迟到响应不得覆盖新身份。 */
 export async function syncCanaryChannelAfterAuth(
@@ -26,15 +31,32 @@ export async function syncCanaryChannelAfterAuth(
   } catch {
     return { kind: 'preserved', reason: 'request-failed' };
   }
-  const isCanary = value && typeof value === 'object'
-    ? (value as { isCanary?: unknown }).isCanary
-    : undefined;
+  const flags =
+    value && typeof value === 'object'
+      ? (value as { isCanary?: unknown; defaultEnableBeta?: unknown })
+      : undefined;
+  const isCanary = flags?.isCanary;
+  const defaultEnableBeta = readOptionalDefaultEnableBeta(flags?.defaultEnableBeta);
   if (typeof isCanary !== 'boolean') {
-    return { kind: 'preserved', reason: 'invalid-response' };
+    return {
+      kind: 'preserved',
+      reason: 'invalid-response',
+      ...defaultEnableBeta,
+    };
   }
   if (deps.readCurrentAuthGeneration() !== request.expectedAuthGeneration) {
-    return { kind: 'preserved', reason: 'stale-auth' };
+    return { kind: 'preserved', reason: 'stale-auth', ...defaultEnableBeta };
   }
-  await deps.persistFlag(isCanary);
-  return { kind: 'synced', isCanary };
+  try {
+    await deps.persistFlag(isCanary);
+  } catch {
+    return { kind: 'preserved', reason: 'persist-failed', ...defaultEnableBeta };
+  }
+  return { kind: 'synced', isCanary, ...defaultEnableBeta };
+}
+
+function readOptionalDefaultEnableBeta(
+  value: unknown,
+): { defaultEnableBeta: true } | Record<string, never> {
+  return value === true ? { defaultEnableBeta: true } : {};
 }

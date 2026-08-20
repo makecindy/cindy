@@ -2590,7 +2590,11 @@
       "removeAria": "卸载 {{name}}",
       "showDetails": "展开 {{name}} 的详情",
       "collapseDetails": "收起 {{name}} 的详情",
-      "rowStatus": { "compatible": "兼容", "noticeCount": "{{count}} 项兼容提示", "unmanageable": "请在 Pi 中管理" },
+      "rowStatus": {
+        "compatible": "兼容",
+        "noticeCount": "{{count}} 项兼容提示",
+        "unmanageable": "请在 Pi 中管理"
+      },
       "operationFailed": "Pi 扩展操作失败，请检查来源或网络后重试。",
       "loading": "正在加载 Pi 扩展…",
       "loadFailed": "暂时无法读取 Pi 扩展，请检查连接后重试。",
@@ -2608,8 +2612,19 @@
       "confirmUninstall": "卸载",
       "extensionDialogConfirm": "确认",
       "cancel": "取消",
-      "resources": { "extension": "扩展代码", "skill": "技能", "prompt": "提示模板", "theme": "主题" },
-      "status": { "supported": "Cindy 完整支持", "extensionSupported": "未发现已知 Pi TUI 依赖", "partial": "发现兼容限制", "unsupported": "已安装，但不会在 Cindy 中加载", "unknown": "无法完成兼容检查" },
+      "resources": {
+        "extension": "扩展代码",
+        "skill": "技能",
+        "prompt": "提示模板",
+        "theme": "主题"
+      },
+      "status": {
+        "supported": "Cindy 完整支持",
+        "extensionSupported": "未发现已知 Pi TUI 依赖",
+        "partial": "发现兼容限制",
+        "unsupported": "已安装，但不会在 Cindy 中加载",
+        "unknown": "无法完成兼容检查"
+      },
       "compatibility": {
         "supported": "技能和提示模板完整支持；扩展会在安装后解析实际源码，不再只按资源类型猜测。",
         "partial": "检测到 Pi TUI API 时会列出具体限制；扩展仍可安装并由你决定是否继续启用。",
@@ -2645,8 +2660,20 @@
       "keepDisabled": "保持停用",
       "approveAndEnable": "了解风险并启用",
       "done": "完成",
-      "warning": { "no-resources": "这个扩展没有发现 Pi 资源。", "inspection-failed": "扩展已登记，但无法检查已安装内容。", "inspection-limit": "扩展内容超过安全检查上限，已保持停用。", "unsupported-filter": "这个扩展使用了 Cindy 暂时无法安全复现的 Pi 资源筛选配置，因此保持停用。", "unsafe-source": "这个扩展的旧来源包含凭证或私密 URL 参数。Cindy 已隐藏敏感部分、保持停用，并禁止在应用内更新或移除。", "lifecycle-scripts-disabled": "这个扩展声明了安装脚本，但 Cindy 为安全起见没有执行。依赖安装脚本生成文件的功能可能不可用。" },
-      "success": { "install": "Pi 扩展已安装。当前任务不会变化；新建或重启 Pi 任务后生效。", "remove": "Pi 扩展已移除。当前任务仍保留旧扩展，关闭后才会彻底卸载。", "update": "Pi 扩展已更新。当前任务仍使用旧版本；新建或重启后生效。", "set-enabled": "Pi 扩展启用状态已保存。当前任务不会变化；新建或重启后生效。" }
+      "warning": {
+        "no-resources": "这个扩展没有发现 Pi 资源。",
+        "inspection-failed": "扩展已登记，但无法检查已安装内容。",
+        "inspection-limit": "扩展内容超过安全检查上限，已保持停用。",
+        "unsupported-filter": "这个扩展使用了 Cindy 暂时无法安全复现的 Pi 资源筛选配置，因此保持停用。",
+        "unsafe-source": "这个扩展的旧来源包含凭证或私密 URL 参数。Cindy 已隐藏敏感部分、保持停用，并禁止在应用内更新或移除。",
+        "lifecycle-scripts-disabled": "这个扩展声明了安装脚本，但 Cindy 为安全起见没有执行。依赖安装脚本生成文件的功能可能不可用。"
+      },
+      "success": {
+        "install": "Pi 扩展已安装。当前任务不会变化；新建或重启 Pi 任务后生效。",
+        "remove": "Pi 扩展已移除。当前任务仍保留旧扩展，关闭后才会彻底卸载。",
+        "update": "Pi 扩展已更新。当前任务仍使用旧版本；新建或重启后生效。",
+        "set-enabled": "Pi 扩展启用状态已保存。当前任务不会变化；新建或重启后生效。"
+      }
     },
     "computerUse": {
       "title": "自动操作",
@@ -3489,16 +3516,24 @@
         },
         "connection": {
           "label": "连接",
+          "toggle": {
+            "label": "启用",
+            "aria": "让这个 Cindy 占用 Codex Micro"
+          },
           "status": {
             "connecting": "正在连接",
             "connected": "已连接",
             "not-detected": "未检测到",
+            "present": "已连接",
+            "disabled": "未启用",
             "error": "连接异常",
             "unavailable": "SDK 不可用"
           },
           "descriptions": {
             "connecting": "Cindy 正在启动 Work Louder 设备服务。",
             "connected": "USB 已连接，Cindy 正在监听按键并同步任务灯效。",
+            "disabled": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
+            "present": "启用后，Cindy 会监听按键，并用灯光显示任务状态。",
             "not-detected": "请用支持数据传输的 USB 线连接键盘；如果 ChatGPT 正在占用设备，请先关闭。",
             "error": "Cindy 暂时无法与键盘通信，正在自动重试。",
             "unavailable": "未找到官方 Work Louder SDK。请保留支持 Codex Micro 的 ChatGPT 或 Codex 应用，重启 Cindy 后再试。",
@@ -4081,6 +4116,8 @@
         "confirmDetail": "它动手前可以弹一个和 Cindy 同款的确认框来问你，问句由它提供、框上会标注它的名字；同意还是取消都由你亲手点，它自己点不了。同时最多一个确认框，弹得太频会被拦下。",
         "fsWrite": "可写入文件(创建/修改)",
         "fsWriteDetail": "它自己的专属数据目录随时可写；当前任务的工作目录跟随任务的权限模式(免批模式直接写，逐条确认模式先征求你同意)；其它目录每次都需要你确认。文件始终由主机代写，插件本身无法直接访问你的文件系统。",
+        "libraryPersist": "可使用持久作品库(大量文件与数据库)",
+        "libraryPersistDetail": "它会获得一个由 Cindy 管理的独立存储区，用来保存你的作品数据(如画布、图片、数据库)，不受普通插件数据配额限制。文件与数据库操作全部由主机代执行，插件只能使用库内相对路径，无法触碰你的其它文件。卸载插件不会删除这些数据；删除必须在 Cindy 设置中单独确认。",
         "networkHost": "访问网络域名 {{host}}",
         "networkSecret": "需要你提供凭证「{{name}}」",
         "networkSecretGhostInputDetail": "凭证由这个插件自己的设置界面收集，录入时会经过插件页面；随后一次性交给主机加密保管，存入后插件无法读回，主机只在请求它声明的域名时注入。",
@@ -4230,11 +4267,60 @@
         "slotNotify": "系统提示",
         "slotBadge": "未读角标",
         "slotFs": "写文件",
+        "slotLibrary": "持久作品库",
         "slotSkill": "Agent 技能",
         "slotWorkspace": "工作区任务",
         "slotIOSSimulator": "内置 iOS 模拟器"
       },
       "commandPaletteTag": "插件指令",
+      "library": {
+        "title": "持久作品库",
+        "loading": "正在读取库信息…",
+        "loadFailed": "库信息读取失败",
+        "refresh": "刷新",
+        "locationLabel": "存储位置",
+        "locationDefault": "Cindy 管理的位置(系统数据目录)",
+        "locationCustomPrefix": "自定义：",
+        "usageLabel": "占用",
+        "filesUnit": "个文件",
+        "diskFreeLabel": "磁盘剩余",
+        "stateDiskMissing": "库不可用：存储磁盘未连接。重新连接后在设置中重新选择位置。",
+        "stateBindingMoved": "库不可用：存储位置已发生变化。请重新选择位置。",
+        "stateReadonly": "库当前处于只读状态。",
+        "orphanedBanner": "插件已卸载，但作品数据保留未删除；重新安装该插件后会自动恢复使用。",
+        "softLimitWarning": "库占用超过建议水位({{limit}})，建议清理或迁移到其它磁盘。",
+        "changeLocation": "更改位置…",
+        "revertDefault": "恢复默认位置",
+        "unbind": "解除位置记录",
+        "relocateConfirmTitle": "迁移作品库？",
+        "relocateConfirmDescription": "将把全部作品数据复制到新位置并逐项校验；原目录保留 14 天作为回滚余地。数据量大时可能需要几分钟，期间请尽量不使用该插件。",
+        "relocateConfirmText": "开始迁移",
+        "relocateDone": "作品库已迁移",
+        "relocateFailed": "迁移失败",
+        "relocateBusy": "正在迁移…",
+        "revertConfirmTitle": "迁回默认位置？",
+        "revertConfirmText": "迁回默认",
+        "unbindConfirmTitle": "解除自定义位置记录？",
+        "unbindConfirmDescription": "将回到 Cindy 管理的默认位置。原自定义目录中的数据不会被删除，也不会自动迁移；如需找回，请手动迁移该目录。",
+        "unbindConfirmText": "解除记录",
+        "cloudWarningTitle": "云同步目录提醒",
+        "cloudWarningProceed": "仍使用该位置",
+        "cloudWarningToast": "已使用云同步目录；数据库文件可能因同步被改写，建议尽快更换位置",
+        "deleteData": "删除作品数据…",
+        "deleteBusy": "正在删除…",
+        "deleteConfirmTitle": "删除该插件的全部作品数据？",
+        "deleteConfirmDescription": "这与卸载插件是两个独立操作。删除后数据移入回收站保留 30 天，期满后彻底清除；卸载或重装插件都不会影响这些数据。",
+        "deleteConfirmText": "删除数据",
+        "deleteDone": "作品数据已移入回收站",
+        "deleteFailed": "删除失败",
+        "pickFailed": "所选位置不可用",
+        "installLocationLabel": "作品库存储位置",
+        "installLocationDefault": "默认(Cindy 管理的位置)",
+        "installLocationPickedPrefix": "已选择：",
+        "installLocationChange": "更改…",
+        "bindAfterInstallFailed": "自定义存储位置设置失败，已回退默认位置",
+        "cancel": "取消"
+      },
       "updateConfirm": {
         "title": "更新插件「{{name}}」？",
         "body": "版本 {{from}} → {{to}}。将替换现有版本；生效状态与面板位置保持不变。",
