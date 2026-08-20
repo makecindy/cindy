@@ -3,11 +3,12 @@
 // 而不是只看最终工作树。这样临时产物即使随后被删除，或只由 merge commit 引入，
 // 也不能绕过检查。
 //
-// 判定基准（baseline）和遍历起点都是 base 分支当前 HEAD（base ref）本身，而不是
-// merge-base：一个文件只要已经存在于 base 分支（或只在 base 历史里出现又删除），
-// 无论 PR 是 rebase 还是 merge 同步了 main，都不会被误判成「本 PR 新引入」。这是
-// 覆盖 PR #1916 那种「反复 merge main」历史的关键——若以 merge-base 为基准或遍历
-// 起点，会把 main 上随后新增的合法文件、或 main 历史里出现又删除的产物误报成 PR 引入。
+// 判定基准（baseline）是 base 分支当前 HEAD（base ref）的整棵树，遍历起点也是 base
+// ref 本身（base..head），而非 merge-base：base 当前树里已有的文件绝不会被误判成
+// 「本 PR 新引入」；PR 通过 merge 同步 main 时带进来的 main 文件，由 merge parent
+// 交集判定排除（见 parseLogRawZ），同样不误报。注意：PR 自己的普通 commit 若重新
+// 引入 base 历史里「出现又删除」的路径/blob，仍会被判为新引入——这是有意为之，
+// 临时产物要拦、新大对象要 review，只有「从已有 parent 原样继承」才算复用。
 //
 // 两类规则分开判定，避免误杀：
 //   - 临时产物（tmp/、github-result-*.json、review 快照、CI 日志导出）：只要该
@@ -164,26 +165,44 @@ export function evaluateCandidate(candidate, allowlist) {
 }
 
 /**
- * 解析 `git log -m --raw -z --format=__C__%H` 的输出。`-m` 让 merge commit 对每个
- * parent 各展开一段 diff（每段前重复 `__C__<sha>` 头），等价于逐 (commit, parent)
- * 跑 `diff-tree`，但只用一次子进程，避免 O(commits × parents) 次的进程 spawn 开销。
+ * 解析 `git log -m --raw -z --format=__C__%H %P` 的输出。`-m` 让 merge commit 对每个
+ * parent 各展开一段 diff（每段前重复 `__C__<sha> <parents>` 头），只用一次子进程取得
+ * base..head 整段历史，避免 O(commits × parents) 次的进程 spawn 开销。
  *
- * 字段布局（`\0` 分隔）：`__C__<sha>` 标记当前 diff 段的 commit；其后是
- * `:oldmode newmode oldsha newsha status` 元数据与 path 交替出现（紧跟 header 的
- * 首条元数据带 `\n` 前缀）。rename/copy 时 path 段为 from\0to。跳过删除与 tree
- * 记录；gitlink/submodule（mode 160000）保留 path 以便命中 tmp/ 等路径规则，只跳过
- * blob 对象判定（gitlink 的 newsha 是 submodule 的 commit SHA，不是 blob）。
+ * 字段布局（`\0` 分隔）：header `__C__<sha> <p1> <p2>...`（parent 可为空，root commit
+ * 无 parent），其后是 `:oldmode newmode oldsha newsha status` 元数据与 path 交替出现
+ * （紧跟 header 的首条元数据带 `\n` 前缀）。rename/copy 时 path 段为 from\0to。跳过
+ * 删除与 tree 记录；gitlink/submodule（mode 160000）保留 path 以便命中 tmp/ 等路径
+ * 规则，只跳过 blob 对象判定（gitlink 的 newsha 是 submodule 的 commit SHA）。
+ *
+ * merge commit 判定的关键是「真实 parent 数」而非 `-m` 输出的段数——Git 会省略相对
+ * 某 parent 完全为空的 diff 段，数段会误把 merge 当普通 commit。这里从 header 的 %P
+ * 取 parentCount；对 merge 只保留「在每个 parent 段都出现相同 (path, blob, isGitlink)
+ * 键」的变更——即 merge 结果里任何 parent 都没有的对象（merge 自造内容），既覆盖
+ * 已有路径上被 merge 解析成新 blob 的情形，也排除从任一 parent 原样继承的内容。
+ * observed 段数 < parentCount 时，缺失 parent 视为空集合，交集自然为空（merge 未引入
+ * 任何新对象）。非 merge（含 root）commit 保留其全部变更。
  */
 function parseLogRawZ(stdout) {
   const fields = (Buffer.isBuffer(stdout) ? stdout.toString('utf8') : String(stdout)).split('\0');
-  const changes = [];
-  let commit = null;
+  // sha -> { parentCount, changes: Map<key, change>, segKeys: Set<string>[] }
+  const commits = new Map();
+  let currentSha = null;
+  let currentSeg = null;
   let index = 0;
   while (index < fields.length) {
     const field = fields[index++];
     if (!field) continue;
     if (field.startsWith('__C__')) {
-      commit = field.slice(5);
+      const tokens = field.slice(5).trim().split(/\s+/).filter(Boolean);
+      const sha = tokens[0];
+      const parentCount = tokens.length - 1;
+      if (!commits.has(sha)) {
+        commits.set(sha, { parentCount, changes: new Map(), segKeys: [] });
+      }
+      currentSha = sha;
+      currentSeg = new Set();
+      commits.get(sha).segKeys.push(currentSeg);
       continue;
     }
     const meta = field.startsWith('\n') ? field.slice(1) : field;
@@ -191,11 +210,13 @@ function parseLogRawZ(stdout) {
     const parts = meta.slice(1).split(' ');
     if (parts.length < 5) continue;
     const newmode = parts[1];
+    const oldsha = parts[2];
     const newsha = parts[3];
     const status = parts[4][0];
-    if (status === 'D') continue;
-    if (newmode === '040000') continue; // tree 记录，不是文件候选
     const isGitlink = newmode === '160000';
+    // 先按 status 无条件消费该 raw record 的 path（R/C 为 from\0to，其余一个），
+    // 再决定过滤。若在消费前就 continue，path 字段会残留在 stream 里，下一轮被误读，
+    // 甚至被「__C__...」开头的文件名伪造 header、让 parser 失步。
     let path;
     if (status === 'R' || status === 'C') {
       index++; // 跳过 from path
@@ -203,9 +224,38 @@ function parseLogRawZ(stdout) {
     } else {
       path = fields[index++];
     }
-    if (commit && path) changes.push({ commit, path, blob: newsha, isGitlink });
+    if (!currentSha || !path || !currentSeg) continue;
+    if (status === 'D') continue;
+    if (newmode === '040000') continue; // tree 记录，不是文件候选
+    // mode/type-only 变化（非 R/C 且 oldsha === newsha，如 chmod +x）没有引入新的
+    // path/blob，不计入候选，也不计入 segKeys——否则会破坏 merge「每个 parent 段都
+    // 出现相同 key」等价于「每个 parent 都没有该 path/blob」的判定。R/C 即使
+    // oldsha === newsha 仍是真正的新 (path, blob) 组合，必须保留。
+    if (status !== 'R' && status !== 'C' && oldsha === newsha) continue;
+    const key = `${path}\0${newsha}\0${isGitlink ? '1' : '0'}`;
+    currentSeg.add(key);
+    const entry = commits.get(currentSha);
+    if (!entry.changes.has(key)) {
+      entry.changes.set(key, { commit: currentSha, path, blob: newsha, isGitlink });
+    }
   }
-  return changes;
+
+  const result = [];
+  for (const { parentCount, changes, segKeys } of commits.values()) {
+    if (parentCount < 2) {
+      // 普通 / root commit：保留全部变更。
+      result.push(...changes.values());
+      continue;
+    }
+    // merge：只保留「每个 parent 段都出现相同 key」的对象。若 -m 省略了空段
+    // （segKeys.length < parentCount），缺失 parent 视为空集合，交集为空 → 不引入新对象。
+    if (segKeys.length < parentCount) continue;
+    const intersection = segKeys
+      .slice(1)
+      .reduce((acc, s) => new Set([...acc].filter((key) => s.has(key))), new Set(segKeys[0]));
+    for (const key of intersection) result.push(changes.get(key));
+  }
+  return result;
 }
 
 export function parseTreeSets(stdout) {
@@ -267,6 +317,10 @@ export function resolveRange({ argv = process.argv, env = process.env } = {}) {
   // 通过 merge 同步 main 时带进来的 main 历史提交也纳入扫描，从而把 base 分支上已经
   // 出现（或历史里出现又删除）的产物误报成本 PR 引入。baseSha..head 恰好是「PR 自身
   // 引入的提交」。
+  //
+  // 假设：PR 通过 merge 同步的 main 提交都已在当前 base ref 可达（正常的 PR-first 流程
+  // 下成立）。若 base ref lag 或发生过历史重写，merged main 的普通提交可能不在
+  // base..head 的排除范围里、被误报为新引入；这种异常工作流下需先同步 base。
   return { base: baseSha, head: headSha, baseRef: base };
 }
 
@@ -290,13 +344,15 @@ function blobSizes(blobs, cwd) {
 }
 
 /**
- * 扫描 base 到 head 之间每个 commit 相对每个 parent 的完整 diff。merge commit 必须
- * 逐 parent 检查；只看 first-parent 或最终 base...head diff 都会漏掉 merge 时短暂
- * 带入、随后删除的产物。
+ * 扫描 base 到 head 之间每个 commit 相对每个 parent 的完整 diff。merge commit 会逐
+ * parent 展开，但只把「所有 parent 都没有」的路径算作新引入（见 parseLogRawZ），
+ * 这样既不漏掉 merge 时短暂带入、随后删除的产物（它们相对每个 parent 都是新增），
+ * 也不会把 merge 从某个 parent 带入的既有文件误报成本 PR 新引入。
  *
  * baseline 与遍历起点都是 base ref（baseSha）本身：baseSha..head 恰好是「PR 自身引入
- * 的提交」，不含 PR 通过 merge 同步 main 时带进来的 main 历史提交，因此 base 分支上
- * 已有（或历史里出现又删除）的文件绝不会被误判成本 PR 引入。
+ * 的提交」，不含 PR 通过 merge 同步 main 时带进来的 main 历史提交。base 当前树已有的
+ * 文件、以及通过 merge 从 parent 原样继承的文件，都不会被误判成本 PR 新引入；但 PR
+ * 自己的 commit 重新引入 base 历史里出现又删除的路径/blob，仍会被判为新引入（有意为之）。
  */
 export function scanHistory(baseSha, head, { cwd = process.cwd() } = {}) {
   const { blobs: baselineBlobs, paths: baselinePaths } = parseTreeSets(
@@ -310,7 +366,7 @@ export function scanHistory(baseSha, head, { cwd = process.cwd() } = {}) {
   // 单次子进程取得 base..head 整段历史、每个 merge commit 逐 parent 展开的 raw diff。
   const output = execFileSync(
     'git',
-    ['log', '-m', '--raw', '-z', '--no-abbrev', '--format=__C__%H', `${baseSha}..${head}`],
+    ['log', '-m', '--raw', '-z', '--no-abbrev', '--format=__C__%H %P', `${baseSha}..${head}`],
     { cwd, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 }
   );
 
@@ -343,6 +399,39 @@ export function scanHistory(baseSha, head, { cwd = process.cwd() } = {}) {
   return candidates;
 }
 
+/**
+ * 最终树临时路径检查。merge 交集会把「从某个 parent 继承的临时文件」排除出历史候选，
+ * 但如果这类文件最终仍留在 HEAD 树里（PR 没删除它），它就会通过 PR 重新把禁止的临时
+ * 产物带回 main——历史扫描抓不到这种情况。这里对最终树做一次「base 没有、head 有」的
+ * 临时路径检查：命中不可白名单的临时路径（tmp/、github-result-*.json、review 快照、
+ * CI 日志导出）即失败。只针对临时路径，大对象/二进制仍由历史扫描的 isNewBlob 规则判定。
+ */
+export function collectFinalTreeTemporaryPaths(baseSha, head, { cwd = process.cwd() } = {}) {
+  const { paths: baselinePaths } = parseTreeSets(
+    execFileSync('git', ['ls-tree', '-r', '-z', baseSha], {
+      cwd,
+      encoding: 'buffer',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+  );
+  const { paths: headPaths } = parseTreeSets(
+    execFileSync('git', ['ls-tree', '-r', '-z', head], {
+      cwd,
+      encoding: 'buffer',
+      maxBuffer: 64 * 1024 * 1024,
+    })
+  );
+  const violations = [];
+  for (const path of headPaths) {
+    if (baselinePaths.has(path)) continue;
+    const pathReason = classifyPath(path);
+    if (pathReason) {
+      violations.push({ commit: head, path, reasons: [pathReason], finalTree: true });
+    }
+  }
+  return violations;
+}
+
 function loadAllowlist() {
   return validateAllowlist(JSON.parse(readFileSync(ALLOWLIST_PATH, 'utf8')));
 }
@@ -355,28 +444,50 @@ function main() {
   const { base, head, baseRef } = resolveRange();
   const allowlist = loadAllowlist();
   const candidates = scanHistory(base, head);
-  const failures = candidates
+  const historyFailures = candidates
     .map((candidate) => evaluateCandidate(candidate, allowlist))
     .filter(Boolean);
+  // 历史扫描之外，最终树检查兜底「merge 继承后仍留在最终树」的禁止临时产物。跳过历史
+  // 扫描已覆盖的 path（那些已由 historyFailures 判定），避免「新增 tmp 且仍留在 HEAD」
+  // 被重复报两次。
+  const scannedPaths = new Set(candidates.map((candidate) => candidate.path));
+  const finalTreeViolations = collectFinalTreeTemporaryPaths(base, head).filter(
+    (violation) => !scannedPaths.has(violation.path)
+  );
+  const failures = [...historyFailures, ...finalTreeViolations];
 
   if (failures.length > 0) {
     console.error(
       `Git history hygiene check failed: ${failures.length} disallowed path/blob introduction(s).\n`
     );
     for (const failure of failures) {
-      console.error(`- commit: ${failure.commit}`);
+      console.error(
+        `- commit: ${failure.finalTree ? `${shortSha(failure.commit)} (final tree)` : failure.commit}`
+      );
       console.error(`  path:   ${failure.path}`);
-      console.error(`  blob:   ${failure.blob}`);
-      console.error(`  size:   ${failure.size} bytes (${formatBytes(failure.size)})`);
+      if (!failure.finalTree) {
+        console.error(`  blob:   ${failure.blob}`);
+        console.error(`  size:   ${failure.size} bytes (${formatBytes(failure.size)})`);
+      }
       for (const reason of failure.reasons) {
         console.error(`  rule:   ${reason.rule} — ${reason.detail}`);
       }
     }
-    console.error('\nDeleting the file in a later commit does not remove its blob from reachable history.');
-    console.error('Before merge, rewrite or squash the pull request branch so the object is no longer reachable.');
-    console.error(
-      `A legitimate large blob, executable, or archive needs an exact path + blob SHA + reason in ${ALLOWLIST_PATH}.`
-    );
+    // 按失败类型分支给修复建议：历史引入的临时产物才需要 rewrite/squash（删除提交清不掉
+    // 历史 blob）；仅最终树残留的临时路径，合并前删除即可，不要误导贡献者去改写历史。
+    const hasHistoryViolation = historyFailures.length > 0;
+    if (hasHistoryViolation) {
+      console.error('\nDeleting the file in a later commit does not remove its blob from reachable history.');
+      console.error('Before merge, rewrite or squash the pull request branch so the object is no longer reachable.');
+      console.error(
+        `A legitimate large blob, executable, or archive needs an exact path + blob SHA + reason in ${ALLOWLIST_PATH}.`
+      );
+    }
+    if (finalTreeViolations.length > 0) {
+      console.error(
+        '\nA temporary path remains in the final tree. Delete it before merge; no history rewrite is needed for these.'
+      );
+    }
     process.exit(1);
   }
 
