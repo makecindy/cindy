@@ -1254,6 +1254,9 @@ function handleAssistant(
   const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
     ? msg.parent_tool_use_id
     : undefined;
+  // 子代理完整 assistant 没有 message_delta 时，result.usage 仍含其子输出，
+  // 而父级 Agent 工具区间已从分母排除。与 message_delta 路径同样 fail-closed。
+  if (parentToolUseId) markClaudeGenerationUnreliable(ctx.rt.generation);
   // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
   // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；
   // 同时保持 main 新增的 loop guard 按 parent scope 读取同一张 stream model 表。
