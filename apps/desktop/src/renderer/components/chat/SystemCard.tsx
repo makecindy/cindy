@@ -943,14 +943,14 @@ function AutoResumeActionRow({
         // 图标与 chevron 都是 aria-hidden,可见文本(动词 + 摘要)本身就是正确的无障碍名。
         disabled={!canExpand}
         className={cn(
-          'group flex w-full items-center gap-[6px]',
+          'flex w-full items-center gap-[6px]',
           ACTIVITY_ROW_RADIUS_CLASS,
           'px-2 py-[3px]',
           'text-left outline-none',
-          ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           canExpand
             ? cn(
-                'cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
+                'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
+                ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
                 ACTIVITY_ROW_HOVER_SURFACE_CLASS,
               )
             : 'cursor-default select-none',
