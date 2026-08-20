@@ -18,6 +18,7 @@ import {
   filterCuratedOllamaModels,
   isHfMlxPullName,
   normalizeOllamaPullName,
+  ollamaModelRefsEqual,
 } from '../../../shared/localModelRuntime';
 import { DownloadMeter } from './DownloadMeter';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
@@ -267,7 +268,7 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
     const base = searching ? filterCuratedOllamaModels(catalog, query) : featured;
     const extras = Object.values(pulls)
       .filter((item) => !item.done || item.phase === 'paused' || item.phase === 'error')
-      .map((item) => catalog.find((entry) => entry.libraryName === item.name))
+      .map((item) => catalog.find((entry) => ollamaModelRefsEqual(entry.libraryName, item.name)))
       .filter((entry): entry is CuratedOllamaModel => Boolean(entry))
       .filter((entry) => !base.some((item) => item.id === entry.id));
     return extras.length > 0 ? [...extras, ...base] : base;
@@ -277,11 +278,13 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
     [catalog],
   );
   const customPulls = Object.values(pulls).filter(
-    (item) => item.phase !== 'cancelled' && !catalogLibraryNames.has(item.name),
+    (item) =>
+      item.phase !== 'cancelled' &&
+      ![...catalogLibraryNames].some((libraryName) => ollamaModelRefsEqual(libraryName, item.name)),
   );
 
   const renderCatalogCard = (entry: CuratedOllamaModel) => {
-    const installed = models.some((model) => model.name === entry.libraryName);
+    const installed = models.some((model) => ollamaModelRefsEqual(model.name, entry.libraryName));
     const pull = pulls[entry.libraryName];
     const pulling = Boolean(pull && (!pull.done || pull.phase === 'paused'));
     const failed = pull?.phase === 'error';

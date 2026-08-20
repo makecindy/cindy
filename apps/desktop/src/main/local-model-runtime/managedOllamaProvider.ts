@@ -6,6 +6,7 @@ import type {
 } from '@cindy/model-providers';
 
 import {
+  canonicalOllamaModelRef,
   curatedOllamaDisplayName,
   MANAGED_OLLAMA_PROVIDER_ID,
   matchesLegacyPiOnlyOllamaFingerprint,
@@ -23,7 +24,13 @@ import {
 
 export type ManagedEnsureResult =
   | { ok: true; created: boolean; provider: CustomProviderConfig }
+  | { ok: false; code: 'OWNER_CHANGED' }
   | { ok: false; code: 'MANAGED_ID_CONFLICT'; existing: CustomProviderConfig };
+
+export interface ManagedOllamaWriteOpts {
+  stillActive?: () => boolean;
+  retainCanonicalIds?: ReadonlySet<string>;
+}
 
 export type ManagedOllamaAgent = Extract<AgentKind, 'pi' | 'claude-code' | 'codex'>;
 
@@ -228,8 +235,9 @@ export async function ensureManagedOllamaProvider(): Promise<ManagedEnsureResult
 export async function upsertManagedOllamaModel(
   model: ProviderRuntimeModelConfig,
   agents: readonly ManagedOllamaAgent[] = ['pi', 'claude-code', 'codex'],
+  opts?: ManagedOllamaWriteOpts,
 ): Promise<ManagedEnsureResult> {
-  return upsertManagedOllamaModels([{ model, agents }]);
+  return upsertManagedOllamaModels([{ model, agents }], opts);
 }
 
 export async function upsertManagedOllamaModels(
@@ -237,8 +245,10 @@ export async function upsertManagedOllamaModels(
     model: ProviderRuntimeModelConfig;
     agents?: readonly ManagedOllamaAgent[];
   }[],
+  opts?: ManagedOllamaWriteOpts,
 ): Promise<ManagedEnsureResult> {
   return enqueueManaged(async () => {
+    if (opts?.stillActive && !opts.stillActive()) return { ok: false, code: 'OWNER_CHANGED' };
     const ensured = await ensureManagedOllamaProviderUnlocked();
     if (!ensured.ok) return ensured;
     const latest = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
@@ -254,10 +264,36 @@ export async function upsertManagedOllamaModels(
         'upsert',
       );
     }
+    if (opts?.retainCanonicalIds) {
+      next = retainCanonicalModels(next, opts.retainCanonicalIds);
+    }
+    if (opts?.stillActive && !opts.stillActive()) return { ok: false, code: 'OWNER_CHANGED' };
+    if (JSON.stringify(next.runtimes) === JSON.stringify(latest.runtimes)) {
+      return { ok: true, created: false, provider: latest };
+    }
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, next);
     if (!updated) return { ok: false, code: 'MANAGED_ID_CONFLICT', existing: latest };
     return { ok: true, created: false, provider: updated };
   });
+}
+
+function retainCanonicalModels(
+  provider: CustomProviderConfig,
+  retain: ReadonlySet<string>,
+): CustomProviderConfig {
+  const runtimes = {
+    pi: provider.runtimes.pi ?? emptyPiRuntime(),
+    'claude-code': provider.runtimes['claude-code'] ?? emptyClaudeRuntime(),
+    codex: provider.runtimes.codex ?? emptyCodexRuntime(),
+  };
+  for (const agent of ['pi', 'claude-code', 'codex'] as const) {
+    const current = runtimes[agent];
+    runtimes[agent] = {
+      ...current,
+      models: current.models.filter((entry) => retain.has(canonicalOllamaModelRef(entry.id))),
+    };
+  }
+  return { ...provider, runtimes };
 }
 
 export async function removeManagedOllamaModel(name: string): Promise<ManagedEnsureResult> {

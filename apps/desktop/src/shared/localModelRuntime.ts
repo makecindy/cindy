@@ -421,7 +421,7 @@ export function resolveManagedOllamaAgents(input: {
     return agents;
   }
   const caps = new Set((input.capabilities ?? []).map((value) => value.toLowerCase()));
-  const toolsOk = caps.size === 0 || caps.has('tools') || caps.has('completion');
+  const toolsOk = caps.has('tools');
   if (toolsOk && (!input.version || ollamaVersionGte(input.version, '0.14.0'))) {
     agents.push('claude-code');
   }

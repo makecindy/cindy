@@ -6,16 +6,22 @@ vi.mock('../managedOllamaProvider.js', async (importOriginal) => {
     ...actual,
     readManagedOllamaProvider: vi.fn(async () => actual.buildEmptyManagedOllamaProvider()),
     syncManagedOllamaAgentProjections: vi.fn(async () => false),
-    upsertManagedOllamaModel: vi.fn(async () => ({
-      ok: true,
-      created: true,
-      provider: actual.buildEmptyManagedOllamaProvider(),
-    })),
-    upsertManagedOllamaModels: vi.fn(async () => ({
-      ok: true,
-      created: false,
-      provider: actual.buildEmptyManagedOllamaProvider(),
-    })),
+    upsertManagedOllamaModel: vi.fn(async (_model, _agents, opts) => {
+      if (opts?.stillActive && !opts.stillActive()) return { ok: false, code: 'OWNER_CHANGED' };
+      return {
+        ok: true,
+        created: true,
+        provider: actual.buildEmptyManagedOllamaProvider(),
+      };
+    }),
+    upsertManagedOllamaModels: vi.fn(async (_entries, opts) => {
+      if (opts?.stillActive && !opts.stillActive()) return { ok: false, code: 'OWNER_CHANGED' };
+      return {
+        ok: true,
+        created: false,
+        provider: actual.buildEmptyManagedOllamaProvider(),
+      };
+    }),
   };
 });
 
@@ -64,7 +70,11 @@ describe('owner change during pull', () => {
         ownerStillActive: () => false,
       }),
     ).rejects.toBeInstanceOf(OwnerChangedError);
-    expect(upsertManagedOllamaModel).not.toHaveBeenCalled();
+    expect(upsertManagedOllamaModel).toHaveBeenCalled();
+    expect(await vi.mocked(upsertManagedOllamaModel).mock.results.at(-1)?.value).toMatchObject({
+      ok: false,
+      code: 'OWNER_CHANGED',
+    });
 
     await service.list({ owner: { dataOwnerId: 'bob', generation: 2 } });
     const importedByBob = vi.mocked(upsertManagedOllamaModels).mock.calls.flatMap(
@@ -89,31 +99,14 @@ describe('owner change during pull', () => {
     expect(upsertManagedOllamaModels).not.toHaveBeenCalled();
   });
 
-  it('does not upsert if the account switches while describing the pulled model', async () => {
-    let checks = 0;
+  it('does not import tags after the account switched during list', async () => {
     const service = createLocalModelService({
-      streamPull: async () => undefined,
-      pausedPullStore: {
-        read: async () => null,
-        readSync: () => null,
-        readAll: async () => [],
-        readAllSync: () => [],
-        write: async () => undefined,
-        remove: async () => null,
-        clear: async () => undefined,
-      },
       fetchImpl: readyFetch(),
     });
-    await expect(
-      service.pull('gpt-oss:20b', {
-        owner: { dataOwnerId: 'alice', generation: 1 },
-        ownerStillActive: () => {
-          checks += 1;
-          return checks < 2;
-        },
-      }),
-    ).rejects.toBeInstanceOf(OwnerChangedError);
-    expect(upsertManagedOllamaModel).not.toHaveBeenCalled();
-    expect(checks).toBeGreaterThanOrEqual(2);
+    await service.list({
+      owner: { dataOwnerId: 'alice', generation: 1 },
+      ownerStillActive: () => false,
+    });
+    expect(upsertManagedOllamaModels).not.toHaveBeenCalled();
   });
 });

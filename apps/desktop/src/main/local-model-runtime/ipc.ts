@@ -41,6 +41,9 @@ export interface LocalModelHandlerDeps {
 
 function throwManagedResult(result: ManagedEnsureResult): { ok: true; created: boolean } {
   if (!result.ok) {
+    if (result.code === 'OWNER_CHANGED') {
+      throwIpcError('PRECONDITION_FAILED', 'active account changed during local model write');
+    }
     throwIpcError(
       'PRECONDITION_FAILED',
       `managed provider id '${result.existing.id}' already exists with a different shape`,
@@ -98,7 +101,11 @@ export function registerLocalModelHandlers(
       detectedLocalPresetIds: string[];
     }> => {
       deps.assertTrustedSender(event);
-      const result = await service.list({ owner: deps.currentOwnerSession?.() });
+      const owner = deps.currentOwnerSession?.();
+      const result = await service.list({
+        owner,
+        ownerStillActive: () => ownerMatches(owner),
+      });
       if (result.catalogDirty) {
         await deps.refreshCatalog();
         deps.broadcastChanged();
@@ -186,8 +193,12 @@ export function registerLocalModelHandlers(
     if (status.kind !== 'ready' && status.kind !== 'pulling') {
       throwIpcError('PRECONDITION_FAILED', 'ollama is not ready');
     }
+    const owner = deps.currentOwnerSession?.();
     const result = throwManagedResult(
-      await service.ensureProvider({ owner: deps.currentOwnerSession?.() }),
+      await service.ensureProvider({
+        owner,
+        ownerStillActive: () => ownerMatches(owner),
+      }),
     );
     await deps.refreshCatalog();
     deps.broadcastChanged();

@@ -98,7 +98,10 @@ export interface LocalModelListResult {
 export interface LocalModelService {
   status(): Promise<LocalRuntimeStatus>;
   start(): Promise<LocalRuntimeStatus>;
-  list(opts?: { owner?: LocalModelOwnerScope | null }): Promise<LocalModelListResult>;
+  list(opts?: {
+    owner?: LocalModelOwnerScope | null;
+    ownerStillActive?: () => boolean;
+  }): Promise<LocalModelListResult>;
   pull(
     name: string,
     opts?: {
@@ -107,7 +110,10 @@ export interface LocalModelService {
     },
   ): Promise<void>;
   abortPull(reason: 'pause' | 'cancel', name: string): Promise<{ ok: true }>;
-  ensureProvider(opts?: { owner?: LocalModelOwnerScope | null }): Promise<ManagedEnsureResult>;
+  ensureProvider(opts?: {
+    owner?: LocalModelOwnerScope | null;
+    ownerStillActive?: () => boolean;
+  }): Promise<ManagedEnsureResult>;
   setModelInPicker(name: string, enabled: boolean): Promise<ManagedEnsureResult>;
   deleteInstalled(name: string): Promise<ManagedEnsureResult>;
   discardPaused(name: string): Promise<void>;
@@ -444,7 +450,10 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     });
   }
 
-  async function list(opts?: { owner?: LocalModelOwnerScope | null }): Promise<LocalModelListResult> {
+  async function list(opts?: {
+    owner?: LocalModelOwnerScope | null;
+    ownerStillActive?: () => boolean;
+  }): Promise<LocalModelListResult> {
     const detectedLocalPresetIdsPromise = detectLocalConnectPresets({ platform }).catch(() => []);
     const current = await status();
     const { catalog, featured, memoryGb, recommendReason, appleSilicon } = listsForHost();
@@ -474,19 +483,23 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       };
     }
     let tags: Awaited<ReturnType<typeof fetchOllamaTags>> = [];
+    let tagsOk = false;
     try {
       tags = await fetchOllamaTags(fetchImpl);
+      tagsOk = true;
     } catch (error) {
       log.warn('ollama tags failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    const imported = await importLocalOllamaTags(tags, opts?.owner).catch((error) => {
-      log.warn('import local ollama tags failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    });
+    const imported = tagsOk
+      ? await importLocalOllamaTags(tags, opts).catch((error) => {
+          log.warn('import local ollama tags failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        })
+      : false;
     const inCindy = await cindyModelIds();
     const models: LocalInstalledModel[] = [];
     for (const tag of tags) {
@@ -609,28 +622,21 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
             op.abort.signal,
           );
         }
-        const ensureWritable = async (forget: boolean): Promise<boolean> => {
-          if (!(opts?.ownerStillActive?.() ?? true)) {
-            if (opts?.owner) unclaimedByName.set(name, opts.owner);
-            disarmCheckpoint();
-            if (forget) await forgetPaused(name);
-            throw new OwnerChangedError();
-          }
-          if (managedOllamaRemovalGeneration() !== removalGeneration) {
-            log.info('skip managed upsert after provider removed during pull', { name });
-            disarmCheckpoint();
-            if (forget) await forgetPaused(name);
-            return false;
-          }
-          return true;
-        };
-        if (!(await ensureWritable(true))) return;
         disarmCheckpoint();
         await forgetPaused(name);
         const { model, agents } = await describePulledModel(name);
-        if (!(await ensureWritable(false))) return;
-        const upserted = await upsertManagedOllamaModel(model, agents);
+        if (managedOllamaRemovalGeneration() !== removalGeneration) {
+          log.info('skip managed upsert after provider removed during pull', { name });
+          return;
+        }
+        const upserted = await upsertManagedOllamaModel(model, agents, {
+          stillActive: opts?.ownerStillActive,
+        });
         if (!upserted.ok) {
+          if (upserted.code === 'OWNER_CHANGED') {
+            if (opts?.owner) unclaimedByName.set(name, opts.owner);
+            throw new OwnerChangedError();
+          }
           throw new Error('MANAGED_ID_CONFLICT');
         }
         emitter.flush();
@@ -799,25 +805,43 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
 
   async function importLocalOllamaTags(
     tags: readonly { name: string }[],
-    owner?: LocalModelOwnerScope | null,
+    opts?: {
+      owner?: LocalModelOwnerScope | null;
+      ownerStillActive?: () => boolean;
+    },
   ): Promise<boolean> {
+    const owner = opts?.owner;
+    if (!(opts?.ownerStillActive?.() ?? true)) return false;
+    if (!(await readManagedOllamaProvider())) return false;
     const named = tags.filter((tag) => {
       if (!isOllamaModelName(tag.name)) return false;
       const held = unclaimedOwner(tag.name);
       if (!held) return true;
       return Boolean(owner && held.dataOwnerId === owner.dataOwnerId);
     });
-    if (named.length === 0) return false;
-    if (!(await readManagedOllamaProvider())) return false;
     const entries = [];
     for (const tag of named) {
       entries.push(await describePulledModel(tag.name));
     }
-    const result = await upsertManagedOllamaModels(entries);
+    const retainCanonicalIds = new Set([
+      ...named.map((tag) => canonicalOllamaModelRef(tag.name)),
+      ...keepPullNames().map((name) => canonicalOllamaModelRef(name)),
+    ]);
+    const result = await upsertManagedOllamaModels(entries, {
+      stillActive: opts?.ownerStillActive,
+      retainCanonicalIds,
+    });
     if (result.ok) {
       for (const tag of named) clearUnclaimed(tag.name);
     }
     return result.ok;
+  }
+
+  function keepPullNames(): string[] {
+    const names: string[] = [];
+    for (const name of actives.keys()) names.push(name);
+    for (const record of loadPausedRecordsSync()) names.push(record.name);
+    return names;
   }
 
   async function describePulledModel(name: string) {
@@ -861,12 +885,15 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     list,
     pull,
     abortPull,
-    ensureProvider: async (opts?: { owner?: LocalModelOwnerScope | null }) => {
+    ensureProvider: async (opts?: {
+      owner?: LocalModelOwnerScope | null;
+      ownerStillActive?: () => boolean;
+    }) => {
       const ensured = await ensureManagedOllamaProvider();
       if (ensured.ok) {
         try {
           const tags = await fetchOllamaTags(fetchImpl);
-          await importLocalOllamaTags(tags, opts?.owner);
+          await importLocalOllamaTags(tags, opts);
         } catch (error) {
           log.warn('import local ollama tags after ensure failed', {
             error: error instanceof Error ? error.message : String(error),

@@ -13,6 +13,7 @@ import {
   emptyCodexRuntime,
   emptyPiRuntime,
   upsertManagedOllamaModel,
+  upsertManagedOllamaModels,
 } from '../managedOllamaProvider.js';
 
 function providerWith(id: string) {
@@ -49,5 +50,31 @@ describe('managed Ollama model identity', () => {
       'glm-4.7-flash:latest',
     ]);
     expect(saved.runtimes.codex?.models.map((model) => model.id)).toEqual(['glm-4.7-flash:latest']);
+  });
+
+  it('drops models absent from a successful tags snapshot', async () => {
+    const existing = providerWith('gone-local');
+    vi.mocked(getCustomProvider).mockResolvedValue(existing);
+    vi.mocked(updateCustomProvider).mockImplementation(async (_id, next) => next);
+    await upsertManagedOllamaModels(
+      [{ model: { id: 'kept-local:latest', name: 'kept-local:latest' } }],
+      { retainCanonicalIds: new Set(['kept-local:latest']) },
+    );
+    const saved = vi.mocked(updateCustomProvider).mock.calls.at(-1)?.[1] as ReturnType<
+      typeof providerWith
+    >;
+    expect(saved.runtimes.pi?.models.map((model) => model.id)).toEqual(['kept-local:latest']);
+    expect(saved.runtimes.pi?.models.map((model) => model.id)).not.toContain('gone-local');
+  });
+
+  it('does not write when the captured owner is no longer active', async () => {
+    const existing = providerWith('glm-4.7-flash');
+    vi.mocked(getCustomProvider).mockResolvedValue(existing);
+    const result = await upsertManagedOllamaModels(
+      [{ model: { id: 'glm-4.7-flash:latest', name: 'glm-4.7-flash:latest' } }],
+      { stillActive: () => false },
+    );
+    expect(result).toEqual({ ok: false, code: 'OWNER_CHANGED' });
+    expect(updateCustomProvider).not.toHaveBeenCalled();
   });
 });

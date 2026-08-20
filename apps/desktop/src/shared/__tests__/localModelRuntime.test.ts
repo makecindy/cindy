@@ -316,6 +316,12 @@ describe('localModelRuntime', () => {
         requires: '0.32.12',
       }),
     ).toEqual(['pi']);
+    expect(
+      resolveManagedOllamaAgents({
+        version: '0.32.14',
+        capabilities: ['completion'],
+      }),
+    ).toEqual(['pi']);
   });
 
   it('marks local runtimes as beta, including generated llama.cpp / vLLM ids', () => {
