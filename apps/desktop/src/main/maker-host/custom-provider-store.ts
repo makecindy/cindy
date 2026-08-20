@@ -655,6 +655,21 @@ function parseAuth(raw: string | null): CustomProviderConfig['auth'] {
   return undefined;
 }
 
+/**
+ * 计算写回的 `updatedAt`：既要严格大于库里的旧值（`updateCustomProviderIfUnchanged` 依赖它
+ * 做乐观锁），也要不早于当前时刻。
+ *
+ * 必须先转数值再 +1：`updated_at` 列声明为 INTEGER，但 SQLite 非 STRICT 表允许存入文本，
+ * 而 `rowToConfig` 只读 id/name/runtimes/auth、不校验该列。一旦某行存的是字符串，
+ * `existing.updatedAt + 1` 会退化成字符串拼接，`Math.max` 得到 NaN，写入 NOT NULL 整数列
+ * 触发 SQLITE_CONSTRAINT_NOTNULL —— 该供应商此后永久无法保存，且错误对用户不可诉。
+ */
+function nextUpdatedAt(existingUpdatedAt: unknown, now: number): number {
+  const previous = Number(existingUpdatedAt);
+  if (!Number.isFinite(previous)) return now;
+  return Math.max(now, previous + 1);
+}
+
 /** 安全解析 runtimes JSON（坏数据兜底为 {}，逐字段防御）。 */
 function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRuntimeConfig>> {
   let v: unknown;
@@ -812,7 +827,7 @@ export async function updateCustomProvider(
       name: c.name,
       runtimes: JSON.stringify(c.runtimes),
       auth: c.auth ? JSON.stringify(c.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: nextUpdatedAt(existing.updatedAt, now),
     })
     .where(eq(customProviders.id, id));
   return c;
@@ -850,7 +865,7 @@ export async function updateCustomProviderIfUnchanged(
       name: nextConfig.name,
       runtimes: JSON.stringify(nextConfig.runtimes),
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: nextUpdatedAt(existing.updatedAt, now),
     })
     .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));
   return result.changes === 1;

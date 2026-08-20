@@ -933,6 +933,65 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(await updateCustomProvider('ghost', valid)).toBeNull();
   });
 
+  // updated_at 列声明为 INTEGER，但表不是 STRICT，所以历史脏数据可能是文本。旧实现直接
+  // 对它 +1 得到字符串拼接，Math.max 变 NaN，写入 NOT NULL 整数列即失败 —— 那个供应商
+  // 此后永久保存不了。
+  it('still saves when updated_at holds a non-numeric value', async () => {
+    mountDb();
+    await createCustomProvider(valid, 1_000);
+    raw!
+      .prepare('UPDATE custom_providers SET updated_at = ? WHERE id = ?')
+      .run('2026-08-19T01:45:07.003Z', 'openrouter');
+    expect(
+      raw!.prepare("SELECT typeof(updated_at) AS t FROM custom_providers WHERE id = 'openrouter'").get(),
+    ).toEqual({ t: 'text' });
+
+    const updated = await updateCustomProvider('openrouter', { ...valid, name: 'Recovered' }, 5_000);
+
+    expect(updated?.name).toBe('Recovered');
+    expect((await getCustomProvider('openrouter'))?.name).toBe('Recovered');
+    const row = raw!
+      .prepare("SELECT updated_at AS updatedAt, typeof(updated_at) AS t FROM custom_providers WHERE id = 'openrouter'")
+      .get() as { updatedAt: number; t: string };
+    expect(row.t).toBe('integer');
+    expect(row.updatedAt).toBe(5_000);
+  });
+
+  it('keeps the optimistic-lock bump strictly increasing when the clock does not advance', async () => {
+    mountDb();
+    await createCustomProvider(valid, 9_000);
+    // now 早于库里的 updatedAt：仍必须写出更大的值，否则乐观锁比较会失效。
+    await updateCustomProvider('openrouter', { ...valid, name: 'Same tick' }, 1_000);
+    const row = raw!
+      .prepare("SELECT updated_at AS updatedAt FROM custom_providers WHERE id = 'openrouter'")
+      .get() as { updatedAt: number };
+    expect(row.updatedAt).toBe(9_001);
+  });
+
+  it('recovers a non-numeric updated_at through the snapshot-guarded write too', async () => {
+    mountDb();
+    await createCustomProvider(valid, 1_000);
+    const snapshot = await getCustomProvider('openrouter');
+    raw!
+      .prepare('UPDATE custom_providers SET updated_at = ? WHERE id = ?')
+      .run('not-a-timestamp', 'openrouter');
+
+    // where 子句用旧值做乐观锁比较，文本值也要能匹配上并写回一个合法整数。
+    expect(
+      await updateCustomProviderIfUnchanged(
+        'openrouter',
+        snapshot!,
+        { ...snapshot!, name: 'Discovered' },
+        7_000,
+      ),
+    ).toBe(true);
+    const row = raw!
+      .prepare("SELECT updated_at AS updatedAt, typeof(updated_at) AS t FROM custom_providers WHERE id = 'openrouter'")
+      .get() as { updatedAt: number; t: string };
+    expect(row.t).toBe('integer');
+    expect(row.updatedAt).toBe(7_000);
+  });
+
   it('isolates data per db file (account switch = new db)', async () => {
     mountDb();
     await createCustomProvider(valid);
