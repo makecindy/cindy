@@ -342,6 +342,68 @@ test('merge resolving an existing path into a new unregistered binary fails', (t
   assert.match(`${result.stdout}${result.stderr}`, /unregistered binary\/archive/);
 });
 
+test('restoring a base-history archive via an ordinary commit does not false positive', (t) => {
+  const repo = createRepo();
+  t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+
+  // base 历史：引入 assets/tool.zip 后删除（base tip 上已没有）。
+  repo.write('assets/tool.zip', 'reviewed vendor input\n');
+  const withArchive = repo.commitAll('base introduces archive');
+  fs.rmSync(path.join(repo.dir, 'assets', 'tool.zip'), { recursive: true, force: true });
+  const movedBase = repo.commitAll('base deletes archive');
+
+  // feature 用普通 commit 原样恢复该 archive：blob 已在 base 可达历史里，不新增 clone
+  // 成本，二进制规则不应误报（isNewBlob=false）。
+  repo.git('switch', '--quiet', '-c', 'feature', repo.base);
+  repo.write('assets/tool.zip', 'reviewed vendor input\n');
+  repo.commitAll('restore base-history archive');
+
+  const result = repo.runCheck('HEAD', [], movedBase);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+});
+
+test('renaming a base-existing archive to a new path does not false positive', (t) => {
+  const repo = createRepo();
+  t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+
+  // base 已有一个小 assets/vendor.zip（base tip 树里有这个 blob）。
+  repo.write('assets/vendor.zip', 'reviewed vendor input\n');
+  const movedBase = repo.commitAll('base adds archive');
+
+  // feature 用 git mv 把它改名到新路径：blob 已在 base 可达历史里（isNewBlob=false），
+  // 且新路径不是临时路径（isNewPath 对二进制规则无感），不应误报。
+  repo.git('switch', '--quiet', '-c', 'feature', movedBase);
+  repo.git('mv', 'assets/vendor.zip', 'assets/renamed-vendor.zip');
+  repo.commitAll('rename archive to a new path');
+
+  const result = repo.runCheck('HEAD', [], movedBase);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+});
+
+test('restoring a base-history tmp path via an ordinary commit still fails', (t) => {
+  const repo = createRepo();
+  t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));
+
+  // base 历史：引入 tmp/legacy.json 后删除（base tip 上已没有）。
+  repo.write('tmp/legacy.json', '{"temporary":true}\n');
+  repo.commitAll('base introduces tmp');
+  fs.rmSync(path.join(repo.dir, 'tmp'), { recursive: true, force: true });
+  const movedBase = repo.commitAll('base deletes tmp');
+
+  // feature 用普通 commit 原样恢复该 tmp 路径，再删除。对象虽在 base 历史里（对象
+  // baseline 放宽），但临时路径规则按 base tip 树判定，路径是新引入的，必须仍失败，
+  // 锁死「对象 baseline 放宽绝不传染路径 baseline」。
+  repo.git('switch', '--quiet', '-c', 'feature', repo.base);
+  repo.write('tmp/legacy.json', '{"temporary":true}\n');
+  repo.commitAll('restore base-history tmp');
+  fs.rmSync(path.join(repo.dir, 'tmp'), { recursive: true, force: true });
+  repo.commitAll('drop tmp again');
+
+  const result = repo.runCheck('HEAD', [], movedBase);
+  assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+  assert.match(`${result.stdout}${result.stderr}`, /tmp\/legacy\.json/);
+});
+
 test('merge tree identical to a history-tmp parent does not false positive', (t) => {
   const repo = createRepo();
   t.after(() => fs.rmSync(repo.dir, { recursive: true, force: true }));

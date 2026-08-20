@@ -3,19 +3,23 @@
 // 而不是只看最终工作树。这样临时产物即使随后被删除，或只由 merge commit 引入，
 // 也不能绕过检查。
 //
-// 判定基准（baseline）是 base 分支当前 HEAD（base ref）的整棵树，遍历起点也是 base
-// ref 本身（base..head），而非 merge-base：base 当前树里已有的文件绝不会被误判成
-// 「本 PR 新引入」；PR 通过 merge 同步 main 时带进来的 main 文件，由 merge parent
-// 交集判定排除（见 parseLogRawZ），同样不误报。注意：PR 自己的普通 commit 若重新
-// 引入 base 历史里「出现又删除」的路径/blob，仍会被判为新引入——这是有意为之，
-// 临时产物要拦、新大对象要 review，只有「从已有 parent 原样继承」才算复用。
+// 判定基准（baseline）分两类、取不同来源，遍历起点统一是 base ref 本身（base..head）
+// 而非 merge-base，PR 通过 merge 同步 main 时带进来的 main 文件由 merge parent 交集
+// 判定排除（见 parseLogRawZ）：
+//   - 路径 baseline 用 base tip 树（ls-tree base）：临时产物规则按「base 当前树有没有
+//     这个 path」判定。因此 PR 无论用普通 commit 还是 merge 把禁止临时路径重新带回
+//     main，都会被拦（有意为之，临时产物不可白名单）。
+//   - 对象 baseline 用 base 可达历史（rev-list --objects base）：二进制/大对象规则按
+//     「blob 是否已在 base 可达历史」判定。因此恢复 base 历史里「出现又删除」的
+//     archive/大 blob、或把 base 已有二进制 rename 到新路径，都不新增 clone 成本，
+//     不算新对象，不误报。
 //
 // 两类规则分开判定，避免误杀：
 //   - 临时产物（tmp/、github-result-*.json、review 快照、CI 日志导出）：只要该
-//     path 是 PR 新引入的（baseline 里没有这个 path）就拒绝，不可白名单。
+//     path 是 PR 新引入的（base tip 树里没有这个 path）就拒绝，不可白名单。
 //   - 新对象（>50 MiB blob、.exe/.zip/.7z/.tar.gz 二进制）：只有该 blob 对象不在
-//     baseline（即 PR 真正新引入了对象）才拒绝，可精确登记白名单。因此把 base 里
-//     已有的二进制 rename 到新路径不会误报（没有新对象入库）。
+//     base 可达历史里（即 PR 真正引入了新对象、新增 clone 成本）才拒绝，可精确登记
+//     白名单。
 //
 // 只读 git 元数据，不访问网络、不读任何私有配置或凭证。性能上合并子进程调用：
 // 一次 rev-list 取全部 commit 与 parent、diff-tree 直接产出 blob SHA、一次
@@ -277,6 +281,28 @@ export function parseTreeSets(stdout) {
   return { blobs, paths };
 }
 
+/**
+ * 返回 ref 可达历史里所有对象的 SHA（commit/tree/blob）。用于判断某个 blob 是否已在
+ * base 可达历史里：已在历史里的对象重新引用不新增 clone 成本，不应被判成「新 blob」。
+ * 只读 git 元数据；对 3000 提交量级仓库约 1-2 秒、数 MB 输出，属可接受。
+ * 按空格切首字段取对象 SHA，同时接受 SHA-1（40 位）与 SHA-256（64 位），避免未来
+ * 迁移 object format 时把全部历史 blob 误判成新对象。
+ */
+function reachableObjectShas(ref, { cwd = process.cwd() } = {}) {
+  const output = execFileSync('git', ['rev-list', '--objects', ref], {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const shas = new Set();
+  for (const line of output.split(/\r?\n/)) {
+    if (!line) continue;
+    const sha = line.split(/\s+/, 1)[0];
+    if (/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(sha)) shas.add(sha);
+  }
+  return shas;
+}
+
 function revParse(ref) {
   try {
     return git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
@@ -350,18 +376,26 @@ function blobSizes(blobs, cwd) {
  * 也不会把 merge 从某个 parent 带入的既有文件误报成本 PR 新引入。
  *
  * baseline 与遍历起点都是 base ref（baseSha）本身：baseSha..head 恰好是「PR 自身引入
- * 的提交」，不含 PR 通过 merge 同步 main 时带进来的 main 历史提交。base 当前树已有的
- * 文件、以及通过 merge 从 parent 原样继承的文件，都不会被误判成本 PR 新引入；但 PR
- * 自己的 commit 重新引入 base 历史里出现又删除的路径/blob，仍会被判为新引入（有意为之）。
+ * 的提交」，不含 PR 通过 merge 同步 main 时带进来的 main 历史提交。两类 baseline 分开：
+ *   - 路径 baseline 用 base tip 树（临时路径规则：PR 把禁止临时路径带回 main 仍拦）；
+ *   - 对象 baseline 用 base 可达历史（二进制/大对象规则：恢复 base 历史已删除的
+ *     archive/大 blob 不新增 clone 成本，不算新 blob，不误报）。
+ * merge 从 parent 原样继承的文件，由 parseLogRawZ 的 parent 交集排除。
  */
 export function scanHistory(baseSha, head, { cwd = process.cwd() } = {}) {
-  const { blobs: baselineBlobs, paths: baselinePaths } = parseTreeSets(
+  // 路径 baseline 用 base tip 树：临时路径规则按「base 当前树有没有这个 path」判定，
+  // 因此 PR 重新把禁止临时路径带回 main 仍会被拦（有意为之）。
+  const { paths: baselinePaths } = parseTreeSets(
     execFileSync('git', ['ls-tree', '-r', '-z', baseSha], {
       cwd,
       encoding: 'buffer',
       maxBuffer: 64 * 1024 * 1024,
     })
   );
+  // 对象 baseline 用 base 可达历史：二进制/大对象规则按「blob 是否已在 base 可达历史」
+  // 判定，因此恢复 base 历史里「出现又删除」的 archive/大 blob 不新增 clone 成本，不算
+  // 新 blob，不误报。
+  const baselineBlobs = reachableObjectShas(baseSha, { cwd });
 
   // 单次子进程取得 base..head 整段历史、每个 merge commit 逐 parent 展开的 raw diff。
   const output = execFileSync(
