@@ -547,6 +547,54 @@ describe('pi translator', () => {
     expect(start?.turnScope).toBeUndefined();
   });
 
+  it('keeps idle compact_boundary background after a new turn starts mid-compact', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = false;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    expect(events.find((e) => e.type === 'status')?.turnScope).toBe('background');
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.isStreaming).toBe(true);
+
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { tokensBefore: 150000, estimatedTokensAfter: 32000 },
+      }),
+      queue,
+      ctx,
+    );
+    const boundary = events.find((e) => e.type === 'compact_boundary');
+    expect(boundary?.turnScope).toBe('background');
+    expect(
+      events.filter(
+        (e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('does not relabel an in-turn compact_boundary as background if streaming later stops', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    ctx.isStreaming = false;
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { tokensBefore: 150000, estimatedTokensAfter: 32000 },
+      }),
+      queue,
+      ctx,
+    );
+    const boundary = events.find((e) => e.type === 'compact_boundary');
+    expect(boundary).toBeDefined();
+    expect(boundary?.turnScope).toBeUndefined();
+  });
+
   it('#1933 review:auto compaction 在活跃 turn 内不补发 status(false)(不得误收口 turn)', () => {
     const ctx = createPiTranslateContext(noopLogger);
     ctx.isStreaming = true; // auto compaction 发生在活跃 turn 内

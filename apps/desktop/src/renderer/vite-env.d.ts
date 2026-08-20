@@ -704,6 +704,8 @@ interface CCAgentStreamEvent {
   agentMeta?: import('@/lib/ccAgent.types').AgentMeta;
   /** Host-owned SDK boundary claim; claimed done/status events are not product completion. */
   turnContinuationId?: number;
+  /** Idle/host compact is not a product turn; must not finalize live streaming. */
+  turnScope?: 'turn' | 'background';
   /**
    * F1-a: 由 main 端 messagePersistBroadcaster 为这条消息分配的稳定 persistId,
    * 经 maker:event payload 透传。renderer 用它当在途气泡 clientId(不再自造随机),

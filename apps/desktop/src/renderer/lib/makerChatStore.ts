@@ -5748,11 +5748,14 @@ export function handleStreamEvent(
       if (boundaryId && state.messages.some((message) => message.clientId === clientId)) {
         return state;
       }
-      const finalized = finalizeStreamingInState(state);
+      // Background compact belongs to the previous idle cycle. Finalizing here
+      // would seal a product turn that started after compaction_start.
+      const nextState =
+        event.turnScope === 'background' ? state : finalizeStreamingInState(state);
       return {
-        ...finalized,
+        ...nextState,
         messages: [
-          ...finalized.messages,
+          ...nextState.messages,
           {
             clientId,
             role: 'assistant' as const,
@@ -6320,6 +6323,7 @@ function dispatchStreamEventPayload(
     ...(event.turnContinuationId !== undefined
       ? { turnContinuationId: event.turnContinuationId }
       : {}),
+    ...(event.turnScope !== undefined ? { turnScope: event.turnScope } : {}),
     persistId,
     resolvedContent,
   } as CCAgentStreamEvent;
