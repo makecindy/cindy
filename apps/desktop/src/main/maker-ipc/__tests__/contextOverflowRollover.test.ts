@@ -283,6 +283,37 @@ describe('createContextOverflowRollover', () => {
     expect(plan).toMatchObject({ action: 'rebuild', skipGenericReplay: true });
   });
 
+  it('treats any origin.kind as an external owner, including orca', () => {
+    expect(
+      planContextOverflowRollover([
+        {
+          ...msg('user', 'from orca', 'u-orca'),
+          agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead' } },
+        },
+      ]),
+    ).toMatchObject({ action: 'rebuild', skipGenericReplay: true });
+    expect(
+      planContextOverflowRollover([msg('user', 'from cindy chat', 'u-user')]),
+    ).toMatchObject({ action: 'rebuild', skipGenericReplay: false });
+  });
+
+  it('rebuilds orca turns without generic replay so the owner retries', async () => {
+    const deps = makeDeps([
+      {
+        ...msg('user', '派给 worker', 'u-orca'),
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead', displayText: '派给 worker' } },
+      },
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+    ).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    expect(deps.onRebuilt).not.toHaveBeenCalled();
+  });
+
   it('does not replay when the failed turn already had tool side effects', async () => {
     const deps = makeDeps([
       msg('user', '改文件', 'u1'),

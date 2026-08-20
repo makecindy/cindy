@@ -231,7 +231,9 @@ function isExternalDispatchOwner(agentMeta: Record<string, unknown> | null | und
   const origin = agentMeta.origin;
   if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return false;
   const kind = (origin as { kind?: unknown }).kind;
-  return kind === 'scheduler' || kind === 'im' || kind === 'goal';
+  // 有 origin.kind 就是外部派单方（scheduler / IM / goal / orca / …）。
+  // 不要再列白名单：漏一个 kind 就会走 generic replay 冒充 Cindy 对话。
+  return typeof kind === 'string' && kind.length > 0;
 }
 
 function normalizeOverflowDbAgentKind(value: string): 'cc' | 'codex' | 'pi' {
