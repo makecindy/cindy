@@ -2412,6 +2412,16 @@ export interface SessionChatState {
   sdkSessionId: string | null;
   /** F-PERM-2: Currently pending permission request; null when none. */
   pendingPermission: PendingPermission | null;
+  /**
+   * Additional permission requests for this session, in arrival order. Parallel
+   * tool_use in one assistant message can broadcast several permission requests
+   * near-simultaneously; a single slot would let the later card overwrite the
+   * earlier one, which then can never be shown or answered — its main-process
+   * resolver just waits out the 10-minute timeout and the engine records
+   * deny('timeout') (issue #3092). Mirrors pendingPluginSetupQueue: show one
+   * card at a time, advance when the current card is answered or dismissed.
+   */
+  pendingPermissionQueue: PendingPermission[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
@@ -2700,6 +2710,7 @@ function createInitialState(): SessionChatState {
     streamingClientId: null,
     streamingText: '',
     pendingPermission: null,
+    pendingPermissionQueue: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -2776,6 +2787,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   historyLoaded: true,
   sdkSessionId: null,
   pendingPermission: null,
+  pendingPermissionQueue: [],
   pendingAskUser: null,
   pendingPluginSetup: null,
   pendingPluginSetupQueue: [],
@@ -5216,6 +5228,7 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
+        pendingPermissionQueue: [],
         pendingAskUser: null,
         continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
@@ -5423,6 +5436,7 @@ export function handleStreamEvent(
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
         pendingPermission: null,
+        pendingPermissionQueue: [],
         pendingAskUser: null,
         // F-AUQ-MIN-5: same reset as the 'done' path.
         askUserViewerState: 'expanded',
@@ -5455,18 +5469,35 @@ export function handleStreamEvent(
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
       };
+      const incoming: PendingPermission = {
+        requestId: data.requestId,
+        toolName: data.toolName,
+        input: data.input,
+        title: data.title,
+        displayName: data.displayName,
+        description: data.description,
+        suggestions: data.suggestions,
+        autoReviewUnavailable: data.autoReviewUnavailable === true,
+      };
+      // 并发 tool_use 会几乎同时广播多个 permission 请求。单槽覆盖会让先到的卡
+      // 永远失去展示与应答机会 —— main 侧 resolver 等满 10 分钟超时,引擎把该
+      // tool_use 记成 deny('timeout')(issue #3092)。与 pendingPluginSetup 同构:
+      // 一次展示一张,其余按到达顺序排队;同 requestId 重复投递(重连 reconcile
+      // 重放)只刷新内容、不重复排队。
+      if (!state.pendingPermission || state.pendingPermission.requestId === incoming.requestId) {
+        return { ...state, pendingPermission: incoming };
+      }
+      const queuedIndex = state.pendingPermissionQueue.findIndex(
+        (item) => item.requestId === incoming.requestId,
+      );
+      if (queuedIndex >= 0) {
+        const nextQueue = state.pendingPermissionQueue.slice();
+        nextQueue[queuedIndex] = incoming;
+        return { ...state, pendingPermissionQueue: nextQueue };
+      }
       return {
         ...state,
-        pendingPermission: {
-          requestId: data.requestId,
-          toolName: data.toolName,
-          input: data.input,
-          title: data.title,
-          displayName: data.displayName,
-          description: data.description,
-          suggestions: data.suggestions,
-          autoReviewUnavailable: data.autoReviewUnavailable === true,
-        },
+        pendingPermissionQueue: [...state.pendingPermissionQueue, incoming],
       };
     }
 
@@ -5484,7 +5515,22 @@ export function handleStreamEvent(
           ? (data.decision as Record<string, unknown>)
           : null;
       if (state.pendingPermission?.requestId === data.requestId) {
-        return { ...state, pendingPermission: null };
+        const [nextPermission = null, ...remainingPermissions] = state.pendingPermissionQueue;
+        return {
+          ...state,
+          pendingPermission: nextPermission,
+          pendingPermissionQueue: remainingPermissions,
+        };
+      }
+      if (state.pendingPermissionQueue.some((item) => item.requestId === data.requestId)) {
+        // 排队中的请求也可能被 main 侧先行收口(超时 / mode 切换 / 对端应答),
+        // 从队列摘除即可,不影响当前展示的卡。
+        return {
+          ...state,
+          pendingPermissionQueue: state.pendingPermissionQueue.filter(
+            (item) => item.requestId !== data.requestId,
+          ),
+        };
       }
       if (state.pendingPluginSetup?.requestId === data.requestId) {
         const [nextSetup = null, ...remainingSetups] = state.pendingPluginSetupQueue;
@@ -5799,6 +5845,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.streamingClientId &&
     !state.isStreaming &&
     !state.pendingPermission &&
+    state.pendingPermissionQueue.length === 0 &&
     !state.pendingAskUser &&
     !state.pendingPluginSetup &&
     state.pendingPluginSetupQueue.length === 0 &&
@@ -5848,6 +5895,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     activeTurnRetryText: null,
     errorRetryText: null,
     pendingPermission: null,
+    pendingPermissionQueue: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -12608,6 +12656,7 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissionQueue: [],
       continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
@@ -13362,8 +13411,18 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   const { requestId } = state.pendingPermission;
   bumpInteractionReconcileEpoch(sessionId);
 
-  // Clear the pending permission immediately so the UI updates
-  setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
+  // Clear the pending permission immediately so the UI updates, and advance the
+  // queue in the same commit — parallel tool_use may have more cards waiting
+  // (issue #3092). The follow-up permission_dismissed broadcast for this
+  // requestId no longer matches the (new) current card and is a no-op.
+  setState(sessionId, (s) => {
+    const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
+    return {
+      ...s,
+      pendingPermission: nextPermission,
+      pendingPermissionQueue: remainingPermissions,
+    };
+  });
 
   // Send to maker (InteractionDecision kind: 'permission')
   makerApiFor(sessionId)
