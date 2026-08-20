@@ -215,7 +215,13 @@ export function registerLocalModelHandlers(
       deps.assertTrustedSender(event);
       const pullName = requirePullName(name);
       if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
-      const result = throwManagedResult(await service.setModelInPicker(pullName, enabled));
+      const owner = deps.currentOwnerSession?.();
+      const result = throwManagedResult(
+        await service.setModelInPicker(pullName, enabled, {
+          owner,
+          ownerStillActive: () => ownerMatches(owner),
+        }),
+      );
       await deps.refreshCatalog();
       deps.broadcastChanged();
       return result;
@@ -238,7 +244,13 @@ export function registerLocalModelHandlers(
       throwIpcError('PRECONDITION_FAILED', 'ollama is not ready');
     }
     try {
-      const result = throwManagedResult(await service.deleteInstalled(pullName));
+      const owner = deps.currentOwnerSession?.();
+      const result = throwManagedResult(
+        await service.deleteInstalled(pullName, {
+          owner,
+          ownerStillActive: () => ownerMatches(owner),
+        }),
+      );
       await deps.refreshCatalog();
       deps.broadcastChanged();
       return result;

@@ -17,6 +17,7 @@ import {
   emptyCodexRuntime,
   emptyPiRuntime,
   ensureManagedOllamaProvider,
+  removeManagedOllamaModel,
   upsertManagedOllamaModel,
   upsertManagedOllamaModels,
 } from '../managedOllamaProvider.js';
@@ -109,5 +110,15 @@ describe('managed Ollama model identity', () => {
     expect(saved.runtimes.pi?.models.map((model) => model.id)).toEqual(['glm-4.7-flash']);
     expect(saved.runtimes['claude-code']?.models).toEqual([]);
     expect(saved.runtimes.codex?.models).toEqual([]);
+  });
+
+  it('does not delete a managed model after the captured owner is gone', async () => {
+    const existing = providerWith('glm-4.7-flash');
+    vi.mocked(getCustomProvider).mockResolvedValue(existing);
+    const result = await removeManagedOllamaModel('glm-4.7-flash', {
+      stillActive: () => false,
+    });
+    expect(result).toEqual({ ok: false, code: 'OWNER_CHANGED' });
+    expect(updateCustomProvider).not.toHaveBeenCalled();
   });
 });

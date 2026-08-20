@@ -114,8 +114,21 @@ export interface LocalModelService {
     owner?: LocalModelOwnerScope | null;
     ownerStillActive?: () => boolean;
   }): Promise<ManagedEnsureResult>;
-  setModelInPicker(name: string, enabled: boolean): Promise<ManagedEnsureResult>;
-  deleteInstalled(name: string): Promise<ManagedEnsureResult>;
+  setModelInPicker(
+    name: string,
+    enabled: boolean,
+    opts?: {
+      owner?: LocalModelOwnerScope | null;
+      ownerStillActive?: () => boolean;
+    },
+  ): Promise<ManagedEnsureResult>;
+  deleteInstalled(
+    name: string,
+    opts?: {
+      owner?: LocalModelOwnerScope | null;
+      ownerStillActive?: () => boolean;
+    },
+  ): Promise<ManagedEnsureResult>;
   discardPaused(name: string): Promise<void>;
   installRuntime(): Promise<LocalRuntimeStatus>;
   abortInstall(): Promise<{ ok: true }>;
@@ -766,18 +779,32 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     return error instanceof Error && /abort/i.test(error.message);
   }
 
-  async function setModelInPicker(name: string, enabled: boolean): Promise<ManagedEnsureResult> {
+  async function setModelInPicker(
+    name: string,
+    enabled: boolean,
+    opts?: {
+      owner?: LocalModelOwnerScope | null;
+      ownerStillActive?: () => boolean;
+    },
+  ): Promise<ManagedEnsureResult> {
     const pullName = normalizeOllamaPullName(name);
     if (!pullName) {
       throw new Error('invalid ollama model name');
     }
     name = pullName;
-    if (!enabled) return removeManagedOllamaModel(name);
+    const writeOpts = { stillActive: opts?.ownerStillActive };
+    if (!enabled) return removeManagedOllamaModel(name, writeOpts);
     const { model, agents } = await describePulledModel(name);
-    return upsertManagedOllamaModel(model, agents);
+    return upsertManagedOllamaModel(model, agents, writeOpts);
   }
 
-  async function deleteInstalled(name: string): Promise<ManagedEnsureResult> {
+  async function deleteInstalled(
+    name: string,
+    opts?: {
+      owner?: LocalModelOwnerScope | null;
+      ownerStillActive?: () => boolean;
+    },
+  ): Promise<ManagedEnsureResult> {
     const pullName = normalizeOllamaPullName(name);
     if (!pullName) {
       throw new Error('invalid ollama model name');
@@ -787,7 +814,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       throw new PullBusyError();
     }
     await deleteModel(name);
-    return removeManagedOllamaModel(name);
+    return removeManagedOllamaModel(name, { stillActive: opts?.ownerStillActive });
   }
 
   async function discardPaused(name: string): Promise<void> {

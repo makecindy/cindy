@@ -298,9 +298,14 @@ function retainCanonicalModels(
   return { ...provider, runtimes };
 }
 
-export async function removeManagedOllamaModel(name: string): Promise<ManagedEnsureResult> {
+export async function removeManagedOllamaModel(
+  name: string,
+  opts?: ManagedOllamaWriteOpts,
+): Promise<ManagedEnsureResult> {
   return enqueueManaged(async () => {
+    if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
     const existing = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
+    if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
     if (!existing) {
       return { ok: true, created: false, provider: buildEmptyManagedOllamaProvider() };
     }
@@ -313,6 +318,7 @@ export async function removeManagedOllamaModel(name: string): Promise<ManagedEns
       ['pi', 'claude-code', 'codex'],
       'remove',
     );
+    if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
     const updated = await updateCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, next);
     if (!updated) return { ok: false, code: 'MANAGED_ID_CONFLICT', existing };
     return { ok: true, created: false, provider: updated };
