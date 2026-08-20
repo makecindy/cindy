@@ -302,10 +302,15 @@ export interface ContextOverflowRolloverDeps {
   ): number | null;
   getAutoCompactThresholdPct?(): number | undefined;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
+  /** 不受 handoff 窗口限制的最近 user，避免工具密集 turn 把身份扫丢。 */
+  findLatestUser?(sessionId: string): Promise<OverflowSourceMessage | null>;
   findLatestRebuildMeta(
     sessionId: string,
   ): Promise<{ reason?: string; sourceUserClientId?: string | null } | null>;
-  getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
+  getLiveSession(sessionId: string): {
+    isTurnRunning(): boolean;
+    getUsageSnapshot?(): { contextTokens: number; contextWindow: number };
+  } | null | undefined;
   closeSession(sessionId: string): Promise<void>;
   drainPersistQueue(): Promise<void>;
   commitRebuild(
@@ -433,18 +438,29 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (live?.isTurnRunning()) return false;
     const source = await deps.listMessages(sessionId);
     const lastError = findLatestRebuildableError(source, sessionRow.agentKind === 'pi');
+    const liveUsage = live?.getUsageSnapshot?.();
+    const hasLiveTokens =
+      liveUsage !== undefined &&
+      Number.isFinite(liveUsage.contextTokens) &&
+      liveUsage.contextTokens >= 0;
+    const tokens = hasLiveTokens
+      ? liveUsage.contextTokens
+      : typeof sessionRow.contextTokens === 'number'
+        ? sessionRow.contextTokens
+        : 0;
+    const reportedWindow =
+      hasLiveTokens && liveUsage.contextWindow > 0
+        ? liveUsage.contextWindow
+        : typeof sessionRow.contextWindow === 'number'
+          ? sessionRow.contextWindow
+          : 0;
     const verified = lookupVerifiedContextWindow(
       deps.resolveVerifiedWindow,
       sessionRow.model,
       sessionRow.providerId,
       sessionRow.agentKind,
     );
-    const window = effectiveContextWindow(
-      sessionRow.model,
-      typeof sessionRow.contextWindow === 'number' ? sessionRow.contextWindow : 0,
-      verified,
-    );
-    const tokens = typeof sessionRow.contextTokens === 'number' ? sessionRow.contextTokens : 0;
+    const window = effectiveContextWindow(sessionRow.model, reportedWindow, verified);
     const pressure = shouldRebuildForContextPressure(
       tokens,
       window,
@@ -461,16 +477,23 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         break;
       }
     }
+    if (!lastUser) {
+      lastUser = (await deps.findLatestUser?.(sessionId)) ?? undefined;
+      lastUserIndex = -1;
+    }
     if (!lastUser) return false;
     const rebuildReason = isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
     // 待发出/失败的 user 还会由本次 send 或 Retry 再 wire 一次，交接里不能带。
     // 已完成的最后一轮（后面有非 error）要留在交接里。
-    const pendingOutbound = source.slice(lastUserIndex + 1).every((message) => message.role === 'error');
-    const handoffMessages = (pendingOutbound ? source.slice(0, lastUserIndex) : source).filter(
-      (message) => message.role !== 'error',
-    );
+    // lastUser 若不在 handoff 窗口里（index < 0），窗口全是其后的 tool/assistant，算已完成。
+    const pendingOutbound =
+      lastUserIndex >= 0 &&
+      source.slice(lastUserIndex + 1).every((message) => message.role === 'error');
+    const handoffMessages = (
+      pendingOutbound && lastUserIndex >= 0 ? source.slice(0, lastUserIndex) : source
+    ).filter((message) => message.role !== 'error');
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     // 关掉当前 live handle。调用方必须在解析发送目标之前调用 prepare,
     // 再 getSession / createSession;peek 之后对旧对象 send 会打到已关闭实例。

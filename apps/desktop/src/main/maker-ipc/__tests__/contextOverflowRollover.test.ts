@@ -193,8 +193,14 @@ describe('createContextOverflowRollover', () => {
         providerId: 'xai',
       })),
       listMessages: vi.fn(async () => source),
+      findLatestUser: vi.fn(async (): Promise<OverflowSourceMessage | null> => null),
       findLatestRebuildMeta: vi.fn(async () => null),
-      getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
+      getLiveSession: vi.fn(
+        (): {
+          isTurnRunning(): boolean;
+          getUsageSnapshot?: () => { contextTokens: number; contextWindow: number };
+        } => ({ isTurnRunning: () => false }),
+      ),
       closeSession: vi.fn(async () => undefined),
       getAutoCompactThresholdPct: undefined as (() => number | undefined) | undefined,
       drainPersistQueue: vi.fn(async () => undefined),
@@ -498,6 +504,54 @@ describe('createContextOverflowRollover', () => {
     const rollover = createContextOverflowRollover(deps);
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
     expect(String(deps.setPendingHandoff.mock.calls[0]?.[1] ?? '')).toContain('先做 A');
+  });
+
+  it('prefers live usage over a stale DB context snapshot', async () => {
+    const deps = makeDeps([msg('user', '先做 A', 'u1'), msg('assistant', '好', 'a1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'pi',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead.jsonl',
+      contextTokens: 1_000,
+      contextWindow: 500_000,
+      model: 'x-ai/grok-4.6',
+      providerId: 'xai',
+    });
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 450_000, contextWindow: 500_000 }),
+    });
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+  });
+
+  it('finds last user outside the bounded handoff window', async () => {
+    const deps = makeDeps([
+      msg('tool_use', { toolName: 'Edit' }, 't1'),
+      msg('tool_result', { output: 'ok' }, 'tr1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'pi',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead.jsonl',
+      contextTokens: 450_000,
+      contextWindow: 500_000,
+      model: 'x-ai/grok-4.6',
+      providerId: 'xai',
+    });
+    deps.findLatestUser.mockResolvedValue(msg('user', '先做 A', 'u-old'));
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1',
+      expect.any(String),
+      expect.objectContaining({ sourceUserClientId: 'u-old' }),
+    );
   });
 
   it('does not auto-replay a prompt RPC timeout as context-overflow', async () => {

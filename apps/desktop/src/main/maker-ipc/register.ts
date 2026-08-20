@@ -194,6 +194,7 @@ import {
   findParkedEngineSession,
   getMessageDeletionTarget,
   listMessagesForAgentHandoff,
+  findLatestUserMessageForRebuild,
   patchMessageAgentMeta,
   supersedeRetriedUserTurn,
   updateMessageContent,
@@ -10929,6 +10930,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return resolveVerifiedContextWindow(catalog, makerAgentKind, providerId, modelId);
     },
     listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
+    findLatestUser: findLatestUserMessageForRebuild,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
