@@ -5,7 +5,7 @@ import { promises as fsp } from 'node:fs';
  * maker-host 隔离 home(codex-home / claude-home)与用户全局目录(~/.codex、~/.agents 等)
  * 之间"受管目录链接"的共享原语。受管链接 = 由 xdt-maker 创建的 symlink(Windows 上是
  * junction),xdt-maker 只增删自己创建的链接,永不删除用户/agent CLI 自建的真实目录。
- * codex-global-skills / codex-global-plugins 都基于这组原语实现各自的桥接策略。
+ * codex-global-skills 用它建立桥接，codex-global-plugins 用它安全退役旧桥接链接。
  */
 
 export type ManagedLinkStatus = 'linked' | 'kept' | 'missing' | 'conflict' | 'skipped' | 'error';

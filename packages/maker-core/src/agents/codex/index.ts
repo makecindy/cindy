@@ -111,9 +111,8 @@ import {
 import { buildCodexEnv } from './env-builder.js';
 import {
   buildCodexCapabilityConfigOverrides,
-  buildCodexCapabilitySkillConfigOverrides,
+  buildCodexPluginIsolationConfig,
   buildCodexSessionCapabilityRoutingPolicy,
-  requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
@@ -541,9 +540,9 @@ function supportsCodexReadonlyReferenceDirs(userAgent: string | undefined): bool
 }
 
 /**
- * Per-thread plugin config for capability arbitration was verified against
- * Codex 0.145.0. If the host policy needs those overrides, an older daemon must
- * be rejected rather than silently starting with the downstream plugins active.
+ * Per-thread plugin and Skill isolation was verified against Codex 0.145.0.
+ * Older daemons must be rejected rather than silently exposing plugins Cindy
+ * cannot host reliably.
  */
 function supportsCodexCapabilityRoutingProtocol(userAgent: string | undefined): boolean {
   return codexUserAgentAtLeast(userAgent, [0, 145, 0]);
@@ -582,30 +581,6 @@ function quoteReviewConfigSegment(value: string): string {
 
 function renderReviewConfigSegment(value: string): string {
   return /^[A-Za-z0-9_-]+$/.test(value) ? value : quoteReviewConfigSegment(value);
-}
-
-function pluginIdFromCodexSkillPath(skillPath: string): string | null {
-  const segments = skillPath.replace(/\\/g, '/').split('/');
-  for (let index = 0; index < segments.length; index += 1) {
-    if (
-      segments[index] === 'plugins' &&
-      segments[index + 1] === 'cache' &&
-      segments[index + 2] &&
-      segments[index + 3]
-    ) {
-      return `${segments[index + 3]}@${segments[index + 2]}`;
-    }
-    if (
-      segments[index] === 'bundled-marketplaces' &&
-      segments[index + 1] &&
-      segments[index + 2] === 'plugins' &&
-      segments[index + 3]
-    ) {
-      const marketplace = segments[index + 1].replace(/\.staging-[^/]+$/, '');
-      return `${segments[index + 3]}@${marketplace}`;
-    }
-  }
-  return null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -3830,13 +3805,9 @@ export class CodexAgent extends BaseAgent {
     );
     let capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
       capabilityRoutingPolicy,
-      {
-        // Remote Codex uses its own isolated CODEX_HOME. Cindy currently
-        // prepares provenance-preserving plugin overlays only in the local
-        // home, so remote explicit-only harness plugins must fail closed.
-        isolatedPluginOverlays: !opts.remoteHostId,
-      },
     );
+    const capabilityRoutingRequiresProtocol =
+      Object.keys(capabilityRoutingConfig).length > 0;
     const capabilityRoutingProtocolSupported =
       supportsCodexCapabilityRoutingProtocol(initResp.userAgent);
     if (reviewMode && !capabilityRoutingProtocolSupported) {
@@ -3845,55 +3816,65 @@ export class CodexAgent extends BaseAgent {
         `Cindy Review requires Codex app-server 0.145.0 or newer for plugin and Skill isolation (current: ${initResp.userAgent ?? 'unknown'})`,
       );
     }
-    if (requiresCodexCapabilitySkillDiscovery(capabilityRoutingPolicy)) {
-      try {
-        assertCurrentHost('capability Skill discovery');
-        const { skills, errors } = await this.listSkillsForHost(
-          host,
-          opts.workingDir,
-          false,
-          CRITICAL_THREAD_RPC_TIMEOUT_MS,
-        );
-        assertCurrentHost('capability Skill discovery');
-        capabilityRoutingConfig = {
-          ...capabilityRoutingConfig,
-          ...buildCodexCapabilitySkillConfigOverrides(capabilityRoutingPolicy, [
-            ...skills,
-            // A malformed restricted Skill may be absent from `skills` while
-            // its concrete SKILL.md path is still reported here. Disable that
-            // path too instead of failing open on a catalog parse error.
-            ...errors.flatMap((error) =>
-              error.path ? [{ path: error.path, enabled: true }] : [],
-            ),
-          ]),
-        };
-      } catch (error) {
-        releaseHostBindingLeaseIfNeeded();
+    let skills: SkillMetadata[] = [];
+    let skillErrors: Array<{ path?: string; message: string }> = [];
+    let effectiveConfig: Record<string, unknown> = {};
+    let configuredPlugins: Record<string, unknown> = {};
+    try {
+      assertCurrentHost('plugin isolation discovery');
+      ({ skills, errors: skillErrors } = await this.listSkillsForHost(
+        host,
+        opts.workingDir,
+        false,
+        CRITICAL_THREAD_RPC_TIMEOUT_MS,
+      ));
+      const unscopedSkillError = skillErrors.find((error) => !error.path);
+      if (unscopedSkillError) throw new Error(unscopedSkillError.message);
+
+      const configResponse = await host.request<{ config?: Record<string, unknown> }>(
+        Method.ConfigRead,
+        { includeLayers: false },
+        { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+      );
+      effectiveConfig = asRecord(configResponse.config);
+      configuredPlugins = asRecord(effectiveConfig.plugins);
+      const pluginIsolationConfig = buildCodexPluginIsolationConfig(
+        configuredPlugins,
+        [
+          ...skills,
+          // Malformed plugin Skills may be absent from `skills`, but app-server
+          // still reports their concrete path. Disable those paths too.
+          ...skillErrors.flatMap((error) =>
+            error.path ? [{ path: error.path, enabled: true }] : [],
+          ),
+        ],
+      );
+      capabilityRoutingConfig = {
+        ...capabilityRoutingConfig,
+        ...pluginIsolationConfig,
+      };
+      const pluginIsolationRequiresProtocol = Object.keys(
+        pluginIsolationConfig,
+      ).some((key) => key.startsWith('plugins.'));
+      if (
+        !capabilityRoutingProtocolSupported &&
+        (capabilityRoutingRequiresProtocol || pluginIsolationRequiresProtocol)
+      ) {
         throw new Error(
-          `Cannot start Codex safely because Cindy could not inspect restricted Codex Skills: ${error instanceof Error ? error.message : String(error)}`,
+          `Cindy requires Codex app-server 0.145.0 or newer to isolate installed plugins (current: ${initResp.userAgent ?? 'unknown'})`,
         );
       }
+      assertCurrentHost('plugin isolation discovery');
+    } catch (error) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Cannot start Codex safely because Cindy could not disable Codex plugins and plugin Skills: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     if (reviewMode) {
       try {
         assertCurrentHost('Review capability isolation');
-        const { skills, errors } = await this.listSkillsForHost(
-          host,
-          opts.workingDir,
-          false,
-          CRITICAL_THREAD_RPC_TIMEOUT_MS,
-        );
-        const unscopedSkillError = errors.find((error) => !error.path);
-        if (unscopedSkillError) throw new Error(unscopedSkillError.message);
-
-        const configResponse = await host.request<{ config?: Record<string, unknown> }>(
-          Method.ConfigRead,
-          { includeLayers: false },
-          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
-        );
-        const effectiveConfig = asRecord(configResponse.config);
         const configuredMcp = asRecord(effectiveConfig.mcp_servers);
-        const configuredPlugins = asRecord(effectiveConfig.plugins);
         const configuredMcpServerNames = new Set(
           Object.entries(configuredMcp)
             .filter(([, serverConfig]) => hasCodexMcpTransport(serverConfig))
@@ -3936,13 +3917,8 @@ export class CodexAgent extends BaseAgent {
 
         const skillPaths = new Set([
           ...skills.map((skill) => skill.path),
-          ...errors.flatMap((error) => (error.path ? [error.path] : [])),
+          ...skillErrors.flatMap((error) => (error.path ? [error.path] : [])),
         ]);
-        const pluginIds = new Set(Object.keys(configuredPlugins));
-        for (const skillPath of skillPaths) {
-          const pluginId = pluginIdFromCodexSkillPath(skillPath);
-          if (pluginId) pluginIds.add(pluginId);
-        }
 
         const reviewCapabilityConfig: Record<string, unknown> = {};
         if (skillPaths.size > 0) {
@@ -3954,24 +3930,12 @@ export class CodexAgent extends BaseAgent {
         // accept a per-thread `.enabled=false` merge. `codex_apps` is an
         // app-server builtin surfaced by mcpServerStatus/list but absent from
         // config/read; synthesizing an override for it makes Codex 0.145.0
-        // reject thread/start with "invalid transport". Apps are isolated by
-        // `features.apps=false` below instead.
+        // reject thread/start with "invalid transport". Global plugin
+        // isolation already disables Apps separately.
         for (const serverName of configuredMcpServerNames) {
           reviewCapabilityConfig[
             `mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
           ] = false;
-        }
-        for (const pluginId of pluginIds) {
-          reviewCapabilityConfig[
-            `plugins.${quoteReviewConfigSegment(pluginId)}.enabled`
-          ] = false;
-          const pluginMcp = asRecord(asRecord(configuredPlugins[pluginId]).mcp_servers);
-          for (const [serverName, serverConfig] of Object.entries(pluginMcp)) {
-            if (!hasCodexMcpTransport(serverConfig)) continue;
-            reviewCapabilityConfig[
-              `plugins.${quoteReviewConfigSegment(pluginId)}.mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
-            ] = false;
-          }
         }
         capabilityRoutingConfig = {
           ...capabilityRoutingConfig,
@@ -3984,15 +3948,6 @@ export class CodexAgent extends BaseAgent {
           `Cannot start Codex Review safely because Cindy could not disable local Skills, plugins, and MCP servers: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-    }
-    if (
-      Object.keys(capabilityRoutingConfig).length > 0 &&
-      !capabilityRoutingProtocolSupported
-    ) {
-      releaseHostBindingLeaseIfNeeded();
-      throw new Error(
-        `Cindy capability routing requires Codex app-server 0.145.0 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
-      );
     }
     // Only the official OpenAI OAuth route uses Codex Guardian. Third-party,
     // gateway and custom-provider routes use the current session model through
@@ -4668,11 +4623,9 @@ export class CodexAgent extends BaseAgent {
         ...(reviewMode
           ? {
               web_search: 'disabled',
-              'features.apps': false,
               'features.goals': false,
               'features.hooks': false,
               'features.multi_agent': false,
-              'features.remote_plugin': false,
             }
           : {}),
         ...(reviewMode ? {} : host.getSessionMcpConfig(opts.sessionInstanceId)),

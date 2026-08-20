@@ -1212,9 +1212,7 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(startParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
-        'prompt',
+      'plugins."feishu-delegate@personal".enabled': false,
       'skills.config': [
         {
           path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
@@ -1247,9 +1245,7 @@ describe('CodexAgent capability routing', () => {
     )?.[1] as { config?: Record<string, unknown> };
     expect(resumeParams.config).toMatchObject({
       'plugins."computer-use@openai-bundled".enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
-        'prompt',
+      'plugins."feishu-delegate@personal".enabled': false,
       'skills.config': [
         {
           path: '/home/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
@@ -1266,7 +1262,7 @@ describe('CodexAgent capability routing', () => {
     await resumeHandle.close();
   });
 
-  it('keeps the plugin enabled when Cindy Computer Use is unavailable but hides its incompatible Skill', async () => {
+  it('disables the whole plugin when Cindy Computer Use is unavailable', async () => {
     const compatibilityOnlyRouting = {
       overrides: [capabilityRouting.overrides[1]],
     } as const;
@@ -1308,8 +1304,9 @@ describe('CodexAgent capability routing', () => {
         enabled: false,
       }],
     });
-    expect(params.config).not.toHaveProperty(
+    expect(params.config).toHaveProperty(
       'plugins."computer-use@openai-bundled".enabled',
+      false,
     );
 
     await handle.close();
@@ -1368,7 +1365,7 @@ describe('CodexAgent capability routing', () => {
     ).rejects.toThrow('requires Codex app-server 0.145.0 or newer');
   });
 
-  it('keeps remote Computer Use available without a local host replacement', async () => {
+  it('keeps remote Codex plugins isolated without a local host replacement', async () => {
     const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
     const host = installFakeHost(agent, (method, params) => {
       if (method !== Method.SkillsList) return undefined;
@@ -1409,14 +1406,15 @@ describe('CodexAgent capability routing', () => {
     expect(params.config).not.toHaveProperty(
       'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode',
     );
-    expect(params.config).not.toHaveProperty(
+    expect(params.config).toHaveProperty(
       'plugins."computer-use@openai-bundled".enabled',
+      false,
     );
 
     await handle.close();
   });
 
-  it('fails closed when restricted Skill discovery is unavailable', async () => {
+  it('fails closed when plugin Skill discovery is unavailable', async () => {
     const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
     installFakeHost(agent, (method) => {
       if (method === Method.SkillsList) {
@@ -1432,7 +1430,7 @@ describe('CodexAgent capability routing', () => {
       model: 'gpt-5.4',
       workingDir: '/repo',
     })).rejects.toThrow(
-      'Cannot start Codex safely because Cindy could not inspect restricted Codex Skills: skills/list unavailable',
+      'Cannot start Codex safely because Cindy could not disable Codex plugins and plugin Skills: skills/list unavailable',
     );
   });
 
@@ -6536,10 +6534,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(prepareCodexLocalCredentialModeSwitch).toHaveBeenCalledTimes(1);
     });
 
+    const firstHostSkillRequests = createdTransports[0].lines.filter((line) =>
+      line.includes('skills/list'),
+    ).length;
     const skills = agent.listAgentSkills({ workingDir: '/repo' });
     await Promise.resolve();
     await Promise.resolve();
-    expect(createdTransports[0].lines.some((line) => line.includes('skills/list'))).toBe(false);
+    expect(
+      createdTransports[0].lines.filter((line) => line.includes('skills/list')),
+    ).toHaveLength(firstHostSkillRequests);
 
     await keyHandle.close();
     switchGate.resolve();

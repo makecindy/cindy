@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js';
 import {
   buildCodexCapabilityConfigOverrides,
-  buildCodexCapabilitySkillConfigOverrides,
+  buildCodexPluginIsolationConfig,
   buildCodexSessionCapabilityRoutingPolicy,
-  requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
 
 describe('buildCodexSessionCapabilityRoutingPolicy', () => {
@@ -111,7 +110,7 @@ describe('buildCodexCapabilityConfigOverrides', () => {
     });
   });
 
-  it('does not widen unsupported or unrelated directives', () => {
+  it('fails closed explicit-only plugin routes and ignores unrelated directives', () => {
     const policy = {
       overrides: [
         {
@@ -160,9 +159,7 @@ describe('buildCodexCapabilityConfigOverrides', () => {
     } as const satisfies CapabilityRoutingPolicy;
 
     expect(buildCodexCapabilityConfigOverrides(policy)).toEqual({
-      'plugins."feishu-delegate@personal".mcp_servers.feishu-delegate.enabled': false,
-      'plugins."feishu-delegate@personal".mcp_servers.cindy-routed-feishu-delegate.default_tools_approval_mode':
-        'prompt',
+      'plugins."feishu-delegate@personal".enabled': false,
     });
   });
 
@@ -227,11 +224,7 @@ describe('buildCodexCapabilityConfigOverrides', () => {
       ],
     } as const satisfies CapabilityRoutingPolicy;
 
-    expect(
-      buildCodexCapabilityConfigOverrides(policy, {
-        isolatedPluginOverlays: false,
-      }),
-    ).toEqual({
+    expect(buildCodexCapabilityConfigOverrides(policy)).toEqual({
       'plugins."feishu-delegate@personal".enabled': false,
       'plugins."computer-use@openai-bundled".enabled': false,
     });
@@ -253,231 +246,73 @@ describe('buildCodexCapabilityConfigOverrides', () => {
       ],
     } as const satisfies CapabilityRoutingPolicy;
 
-    expect(() =>
-      buildCodexCapabilityConfigOverrides(policy, {
-        isolatedPluginOverlays: false,
-      }),
-    ).toThrowError(/source\.containerId is required/);
+    expect(() => buildCodexCapabilityConfigOverrides(policy))
+      .toThrowError(/source\.containerId is required/);
   });
 });
 
-describe('buildCodexCapabilitySkillConfigOverrides', () => {
-  const disabledPluginPolicy = {
-    overrides: [
-      {
-        capabilityId: 'computer-use',
-        source: {
-          kind: 'harness-plugin',
-          harness: 'codex',
-          surface: 'plugin',
-          id: 'computer-use@openai-bundled',
-        },
-        invocation: 'disabled',
-      },
-    ],
-  } as const satisfies CapabilityRoutingPolicy;
+describe('buildCodexPluginIsolationConfig', () => {
+  it('disables configured plugins, plugin MCP servers, and plugin Skills', () => {
+    const pluginSkill =
+      '/Users/dash/.codex/plugins/cache/personal/example/1.0.0/skills/run/SKILL.md';
+    const disabledStandaloneSkill =
+      '/Users/dash/.codex/skills/already-disabled/SKILL.md';
+    const similarStandaloneSkill =
+      '/Users/dash/repo/plugins/cache/personal/example/SKILL.md';
 
-  const disabledSkillPolicy = {
-    overrides: [
-      {
-        capabilityId: 'computer-use',
-        source: {
-          kind: 'harness-plugin',
-          harness: 'codex',
-          surface: 'skill',
-          id: 'computer-use:computer-use',
-          artifactId: 'computer-use',
-          containerId: 'computer-use@openai-bundled',
+    expect(buildCodexPluginIsolationConfig({
+      'example@personal': {
+        enabled: true,
+        mcp_servers: {
+          example_server: { command: 'node', args: ['server.js'] },
+          metadata_only: { enabled: true },
         },
-        invocation: 'disabled',
       },
-    ],
-  } as const satisfies CapabilityRoutingPolicy;
-
-  it('disables matching plugin Skills and preserves existing disabled Skills', () => {
-    expect(requiresCodexCapabilitySkillDiscovery(disabledPluginPolicy)).toBe(true);
-    expect(buildCodexCapabilitySkillConfigOverrides(disabledPluginPolicy, [
-      {
-        path: '/Users/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
-        enabled: true,
-      },
-      {
-        path: '/Users/dash/.codex/skills/already-disabled/SKILL.md',
-        enabled: false,
-      },
-      {
-        path: '/Users/dash/.codex/plugins/cache/openai-bundled/browser/1.0.0/skills/browser/SKILL.md',
-        enabled: true,
-      },
+    }, [
+      { path: pluginSkill, enabled: true },
+      { path: disabledStandaloneSkill, enabled: false },
+      { path: '/Users/dash/.codex/skills/standalone/SKILL.md', enabled: true },
+      { path: similarStandaloneSkill, enabled: true },
     ])).toEqual({
+      'features.apps': false,
+      'features.remote_plugin': false,
       'skills.config': [
-        {
-          path: '/Users/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
-          enabled: false,
-        },
-        {
-          path: '/Users/dash/.codex/skills/already-disabled/SKILL.md',
-          enabled: false,
-        },
+        { path: pluginSkill, enabled: false },
+        { path: disabledStandaloneSkill, enabled: false },
       ],
+      'plugins."example@personal".enabled': false,
+      'plugins."example@personal".mcp_servers.example_server.enabled': false,
     });
   });
 
-  it('matches remote Windows plugin cache paths without disabling namesakes', () => {
-    expect(buildCodexCapabilitySkillConfigOverrides(disabledPluginPolicy, [
-      {
-        path: 'C:\\Users\\dash\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\1.0.0\\skills\\computer-use\\SKILL.md',
-        enabled: true,
-      },
-      {
-        path: 'C:\\Users\\dash\\.codex\\skills\\computer-use\\SKILL.md',
-        enabled: true,
-      },
-    ])).toEqual({
-      'skills.config': [{
-        path: 'C:\\Users\\dash\\.codex\\plugins\\cache\\openai-bundled\\computer-use\\1.0.0\\skills\\computer-use\\SKILL.md',
-        enabled: false,
-      }],
-    });
-  });
+  it('derives plugin ids from Windows caches and bundled marketplace snapshots', () => {
+    const bundledSkill =
+      '/Users/dash/.codex/.tmp/bundled-marketplaces/openai-bundled/plugins/browser/skills/browser/SKILL.md';
+    const windowsSkill =
+      'C:\\Users\\dash\\.codex\\plugins\\cache\\personal\\example\\1.0.0\\skills\\run\\SKILL.md';
 
-  it('matches bundled marketplace snapshots without disabling namesakes', () => {
-    const macSnapshotPath =
-      '/Users/dash/.codex/.tmp/bundled-marketplaces/openai-bundled/plugins/computer-use/skills/computer-use/SKILL.md';
-    const windowsSnapshotPath =
-      'C:\\Users\\dash\\.codex\\.tmp\\bundled-marketplaces\\openai-bundled.staging-123\\plugins\\computer-use\\skills\\computer-use\\SKILL.md';
-    expect(buildCodexCapabilitySkillConfigOverrides(disabledSkillPolicy, [
-      { path: macSnapshotPath, enabled: true },
-      { path: windowsSnapshotPath, enabled: true },
-      {
-        path: '/Users/dash/.codex/skills/computer-use/SKILL.md',
-        enabled: true,
-      },
+    expect(buildCodexPluginIsolationConfig({}, [
+      { path: windowsSkill, enabled: true },
+      { path: bundledSkill, enabled: true },
     ])).toEqual({
+      'features.apps': false,
+      'features.remote_plugin': false,
       'skills.config': [
-        { path: macSnapshotPath, enabled: false },
-        { path: windowsSnapshotPath, enabled: false },
+        { path: bundledSkill, enabled: false },
+        { path: windowsSkill, enabled: false },
       ],
+      'plugins."browser@openai-bundled".enabled': false,
+      'plugins."example@personal".enabled': false,
     });
   });
 
-  it('disables only the selected incompatible Skill without disabling its plugin', () => {
-    expect(requiresCodexCapabilitySkillDiscovery(disabledSkillPolicy)).toBe(true);
-    expect(buildCodexCapabilityConfigOverrides(disabledSkillPolicy)).toEqual({});
-    expect(buildCodexCapabilitySkillConfigOverrides(disabledSkillPolicy, [
-      {
-        path: '/Users/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
-        enabled: true,
-      },
-      {
-        path: '/Users/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/setup/SKILL.md',
-        enabled: true,
-      },
-      {
-        path: '/Users/dash/.codex/skills/computer-use/SKILL.md',
-        enabled: true,
-      },
-    ])).toEqual({
-      'skills.config': [{
-        path: '/Users/dash/.codex/plugins/cache/openai-bundled/computer-use/1.0.0/skills/computer-use/SKILL.md',
-        enabled: false,
-      }],
-    });
-  });
-
-  it('does not replace the base skills config when the plugin contributes no Skills', () => {
-    expect(buildCodexCapabilitySkillConfigOverrides(disabledPluginPolicy, [{
+  it('keeps plugin features disabled when no installed plugin is present', () => {
+    expect(buildCodexPluginIsolationConfig({}, [{
       path: '/Users/dash/.codex/skills/already-disabled/SKILL.md',
       enabled: false,
-    }])).toEqual({});
-  });
-
-  it('fails closed when a disabled plugin id has no marketplace provenance', () => {
-    const invalidPolicy = {
-      overrides: [{
-        capabilityId: 'example',
-        source: {
-          kind: 'harness-plugin',
-          harness: 'codex',
-          surface: 'plugin',
-          id: 'plugin-without-marketplace',
-        },
-        invocation: 'disabled',
-      }],
-    } as const satisfies CapabilityRoutingPolicy;
-
-    expect(() => buildCodexCapabilitySkillConfigOverrides(invalidPolicy, []))
-      .toThrowError(/expected plugin id in <name>@<marketplace> form/);
-  });
-
-  it('identifies a missing plugin source id in the error', () => {
-    const invalidPolicy = {
-      overrides: [{
-        capabilityId: 'example',
-        source: {
-          kind: 'harness-plugin',
-          harness: 'codex',
-          surface: 'plugin',
-          id: '',
-        },
-        invocation: 'disabled',
-      }],
-    } as const satisfies CapabilityRoutingPolicy;
-
-    expect(() => buildCodexCapabilitySkillConfigOverrides(invalidPolicy, []))
-      .toThrowError(/source\.id is required/);
-  });
-
-  it('fails closed when a disabled Skill lacks precise plugin provenance', () => {
-    const noContainer = {
-      overrides: [{
-        capabilityId: 'example',
-        source: {
-          kind: 'harness-plugin',
-          harness: 'codex',
-          surface: 'skill',
-          id: 'example:skill',
-          artifactId: 'skill',
-        },
-        invocation: 'disabled',
-      }],
-    } as const satisfies CapabilityRoutingPolicy;
-    const noArtifact = {
-      overrides: [{
-        capabilityId: 'example',
-        source: {
-          kind: 'harness-plugin',
-          harness: 'codex',
-          surface: 'skill',
-          id: 'example:skill',
-          containerId: 'example@marketplace',
-        },
-        invocation: 'disabled',
-      }],
-    } as const satisfies CapabilityRoutingPolicy;
-
-    expect(() => buildCodexCapabilitySkillConfigOverrides(noContainer, []))
-      .toThrowError(/source\.containerId is required/);
-    expect(() => buildCodexCapabilitySkillConfigOverrides(noArtifact, []))
-      .toThrowError(/source\.artifactId is required/);
-  });
-
-  it('skips discovery for unrelated routing policies', () => {
-    const unrelatedPolicy = {
-      overrides: [{
-        capabilityId: 'computer-use',
-        source: {
-          kind: 'harness-plugin',
-          harness: 'claude-code',
-          surface: 'plugin',
-          id: 'computer-use@openai-bundled',
-        },
-        invocation: 'disabled',
-      }],
-    } as const satisfies CapabilityRoutingPolicy;
-
-    expect(requiresCodexCapabilitySkillDiscovery(unrelatedPolicy)).toBe(false);
-    expect(buildCodexCapabilitySkillConfigOverrides(unrelatedPolicy, []))
-      .toEqual({});
+    }])).toEqual({
+      'features.apps': false,
+      'features.remote_plugin': false,
+    });
   });
 });
