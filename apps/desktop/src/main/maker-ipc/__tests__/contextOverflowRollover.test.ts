@@ -238,6 +238,9 @@ describe('createContextOverflowRollover', () => {
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).not.toContain('再做 B');
     expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '再做 B');
     expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
+    expect(deps.onRebuilt.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.replayUserMessage.mock.invocationCallOrder[0],
+    );
   });
 
   it('does not replay when the failed turn already had tool side effects', async () => {
@@ -271,6 +274,7 @@ describe('createContextOverflowRollover', () => {
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
     expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
   });
 
   it('uses the host compact threshold when deciding pre-send pressure rebuild', async () => {

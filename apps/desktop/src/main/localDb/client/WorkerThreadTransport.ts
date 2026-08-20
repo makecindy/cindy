@@ -430,9 +430,7 @@ function contextRebuild(readyDb, args) {
         code: 'PRECONDITION_FAILED',
       });
     }
-    readyDb.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
-      sessionId,
-    );
+    // 只追加新边界。删掉更早的 context_rebuild 会让 fork 丢掉中间失效点。
     readyDb.prepare(
       "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
     ).run(markerId, markerClientId, sessionId, markerContent, markerCreatedAt, markerCreatedAt);

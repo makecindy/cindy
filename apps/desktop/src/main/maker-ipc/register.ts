@@ -10957,6 +10957,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
+    onRebuilt: (sessionId) => {
+      // overflow 终态已先走 coordinator onTurnEvent('error')，会留下 active-turn
+      // recovery 和错误横幅。重放绕开 coordinator，随后的 done 会被 recovery 吃掉。
+      agentInputCoordinatorHolder?.clearError(sessionId);
+    },
     replayUserMessage: async (sessionId, content, agentFacingWireContent) => {
       const [row] = await getDbClient()
         .drizzle.select()

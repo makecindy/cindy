@@ -302,7 +302,7 @@ export interface SessionAgentSwitchFallbackArgs {
   updatedAt: number;
 }
 
-/** 上下文超限后同一任务换干净原生会话：清 sdk 绑定并写入隐藏 context_rebuild。 */
+/** 上下文超限后同一任务换干净原生会话：清 sdk 绑定并追加隐藏 context_rebuild。 */
 export interface ContextRebuildArgs {
   sessionId: string;
   markerId: string;

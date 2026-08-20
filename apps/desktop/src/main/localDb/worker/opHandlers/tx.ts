@@ -219,7 +219,7 @@ function sessionAgentSwitchFallback(db: Database.Database, args: unknown): void 
   transaction();
 }
 
-/** 同一任务换干净原生会话：清 sdk_session_id + 隐藏 context_rebuild，不改可见消息。 */
+/** 同一任务换干净原生会话：清 sdk_session_id + 追加隐藏 context_rebuild，不改可见消息。 */
 function contextRebuild(db: Database.Database, args: unknown): void {
   const payload = asRecord(args, 'context.rebuild args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -243,9 +243,8 @@ function contextRebuild(db: Database.Database, args: unknown): void {
         code: 'PRECONDITION_FAILED',
       });
     }
-    db.prepare("DELETE FROM messages WHERE role = 'context_rebuild' AND session_id = ?").run(
-      sessionId,
-    );
+    // 只追加新边界。删掉更早的 context_rebuild 会让 fork 在「A 重建 → 切 B → B 再重建」
+    // 后误把 A 重建前的消息接到 A 重建后的 SDK session。
     db.prepare(
       "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
     ).run(markerId, markerClientId, sessionId, markerContent, markerCreatedAt, markerCreatedAt);
