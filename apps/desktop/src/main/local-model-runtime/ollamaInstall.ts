@@ -4,7 +4,6 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process';
 import https from 'node:https';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import type { LocalRuntimeInstallProgress } from '../../shared/localModelRuntime.js';
 import {
@@ -16,7 +15,6 @@ import {
 import { createPullSpeedTracker } from './pullProgress.js';
 import { findOllamaBinary, ollamaRuntimeRoot, sidecarManifestPath } from './ollamaSidecar.js';
 
-const execFileAsync = promisify(execFile);
 const TAR_BIN_DARWIN = '/usr/bin/tar';
 const MAX_REDIRECTS = 5;
 const EXTRACT_TIMEOUT_MS = 60_000;
@@ -150,10 +148,34 @@ export async function downloadOfficialAsset(
   await rename(tmp, destPath);
 }
 
+function runTar(
+  tarBin: string,
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(tarBin, args, { timeout: timeoutMs }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+    const abort = () => {
+      child.kill();
+      reject(new Error('aborted'));
+    };
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
 export async function extractOfficialArchive(
   archivePath: string,
   destDir: string,
   platform: NodeJS.Platform = process.platform,
+  signal?: AbortSignal,
 ): Promise<string> {
   await rm(destDir, { recursive: true, force: true });
   await mkdir(destDir, { recursive: true });
@@ -162,9 +184,13 @@ export async function extractOfficialArchive(
   const args = isWindows
     ? ['-xf', archivePath, '-C', destDir]
     : ['-xzf', archivePath, '-C', destDir];
-  await execFileAsync(tarBin, args, {
-    timeout: isWindows ? WINDOWS_EXTRACT_TIMEOUT_MS : EXTRACT_TIMEOUT_MS,
-  });
+  await runTar(
+    tarBin,
+    args,
+    isWindows ? WINDOWS_EXTRACT_TIMEOUT_MS : EXTRACT_TIMEOUT_MS,
+    signal,
+  );
+  if (signal?.aborted) throw new Error('aborted');
   const binary = findOllamaBinary(destDir);
   if (!binary) throw new Error('extracted ollama binary missing');
   if (!isWindows) await chmod(binary, 0o755);
@@ -197,6 +223,7 @@ export async function installOfficialSidecar(
   if (opts.signal?.aborted) throw new Error('aborted');
   const root = ollamaRuntimeRoot(userDataDir);
   const archivePath = path.join(root, 'downloads', asset.assetName);
+  const destDir = path.join(root, `v${asset.version}`);
   try {
   emit({
     phase: 'downloading',
@@ -229,8 +256,8 @@ export async function installOfficialSidecar(
   if (opts.signal?.aborted) throw new Error('aborted');
   emit({ phase: 'extracting', version: asset.version, done: false });
   const extract = opts.extract ?? extractOfficialArchive;
-  const destDir = path.join(root, `v${asset.version}`);
-  const binary = await extract(archivePath, destDir, platform);
+  const binary = await extract(archivePath, destDir, platform, opts.signal);
+  if (opts.signal?.aborted) throw new Error('aborted');
   const manifest: SidecarManifest = {
     version: asset.version,
     binary,
@@ -245,6 +272,7 @@ export async function installOfficialSidecar(
 } catch (error) {
   await rm(`${archivePath}.tmp`, { force: true });
   await rm(archivePath, { force: true });
+  await rm(destDir, { recursive: true, force: true });
   throw error;
 }
 }

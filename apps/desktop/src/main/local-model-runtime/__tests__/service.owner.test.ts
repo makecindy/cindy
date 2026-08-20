@@ -20,7 +20,11 @@ vi.mock('../managedOllamaProvider.js', async (importOriginal) => {
 });
 
 import { createLocalModelService, OwnerChangedError } from '../service.js';
-import { upsertManagedOllamaModel, upsertManagedOllamaModels } from '../managedOllamaProvider.js';
+import {
+  readManagedOllamaProvider,
+  upsertManagedOllamaModel,
+  upsertManagedOllamaModels,
+} from '../managedOllamaProvider.js';
 
 function readyFetch(models: string[] = ['gpt-oss:20b']) {
   return async (url: string | URL) => {
@@ -36,6 +40,7 @@ describe('owner change during pull', () => {
   beforeEach(() => {
     vi.mocked(upsertManagedOllamaModel).mockClear();
     vi.mocked(upsertManagedOllamaModels).mockClear();
+    vi.mocked(readManagedOllamaProvider).mockClear();
   });
 
   it('does not upsert or import a pull finished after the account switched', async () => {
@@ -73,5 +78,14 @@ describe('owner change during pull', () => {
       ([entries]) => entries.map((entry) => entry.model.id),
     );
     expect(importedByAlice).toContain('gpt-oss:20b');
+  });
+
+  it('does not recreate a deleted managed Ollama provider just by listing tags', async () => {
+    vi.mocked(readManagedOllamaProvider).mockResolvedValueOnce(null);
+    const service = createLocalModelService({
+      fetchImpl: readyFetch(),
+    });
+    await service.list();
+    expect(upsertManagedOllamaModels).not.toHaveBeenCalled();
   });
 });

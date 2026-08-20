@@ -766,6 +766,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       return Boolean(owner && held.dataOwnerId === owner.dataOwnerId);
     });
     if (named.length === 0) return false;
+    if (!(await readManagedOllamaProvider())) return false;
     const entries = [];
     for (const tag of named) {
       entries.push(await describePulledModel(tag.name));

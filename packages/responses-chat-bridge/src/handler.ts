@@ -18,21 +18,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function summarizeUpstreamError(text: string): string {
+function classifyUpstreamErrorBody(text: string): 'empty' | 'json' | 'text' {
+  if (!text.trim()) return 'empty';
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (isPlainObject(parsed)) {
-      const error = parsed.error;
-      const message =
-        (isPlainObject(error) && typeof error.message === 'string' && error.message)
-        || (typeof error === 'string' && error)
-        || (typeof parsed.message === 'string' && parsed.message);
-      if (message) return message.trim().slice(0, 240);
-    }
+    JSON.parse(text);
+    return 'json';
   } catch {
-    /* keep raw */
+    return 'text';
   }
-  return text.trim().slice(0, 240);
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -282,7 +275,7 @@ export function createResponsesChatHandler(
         log.warn?.('responses-chat bridge upstream error', {
           model: request.model,
           status: upstream.status,
-          error: summarizeUpstreamError(text),
+          errorKind: classifyUpstreamErrorBody(text),
         });
         await reportUpstreamError(upstream.status, text);
         res.off('close', abortUpstream);

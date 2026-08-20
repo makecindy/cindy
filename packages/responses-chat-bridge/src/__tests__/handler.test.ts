@@ -763,8 +763,9 @@ describe('createResponsesChatHandler', () => {
       'responses-chat bridge upstream error',
       expect.objectContaining({
         status: 500,
-        error: 'system message must be at the beginning',
+        errorKind: 'json',
       }),
     );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('system message must be at the beginning');
   });
 });
