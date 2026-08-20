@@ -11,13 +11,15 @@
 import { getCachedCapabilities, type ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 
+type ModelVendor = 'cc' | 'codex' | 'pi' | 'trueforge';
+
 export interface ModelDefinition {
   id: string;
   label: string;
   description: string;
   efforts: readonly Effort[];
   defaultEffort: Effort | null;
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: ModelVendor;
   contextWindow?: number;
   supportsFastMode?: boolean;
   /** 目录展示排序;缺省排末尾(见 getDefaultModelForVendor)。 */
@@ -29,10 +31,10 @@ export interface ModelDefinition {
    * 解耦)。缺省 = 不作为默认。getDefaultModelForVendor / newSessionDefaultModelId 据它选默认;
    * Pi 只接受自己的 v3 标记，不借用其它 Agent 的默认策略。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'trueforge')[];
 }
 
-function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi'): ModelDefinition {
+function toLegacy(m: ModelDescriptor, vendorKey: ModelVendor): ModelDefinition {
   return {
     id: m.id,
     label: m.displayName,
@@ -54,9 +56,11 @@ function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi'): ModelDe
 function allCachedModels(deviceId?: string): ModelDefinition[] {
   const cc = getCachedCapabilities('claude-code', deviceId);
   const codex = getCachedCapabilities('codex', deviceId);
+  const trueforge = getCachedCapabilities('trueforge', deviceId);
   return [
     ...(cc?.availableModels ?? []).map((m) => toLegacy(m, 'cc')),
     ...(codex?.availableModels ?? []).map((m) => toLegacy(m, 'codex')),
+    ...(trueforge?.availableModels ?? []).map((m) => toLegacy(m, 'trueforge')),
   ];
 }
 
@@ -104,12 +108,13 @@ export function getModelById(modelId: string, deviceId?: string): ModelDefinitio
 }
 
 /** vendor → capabilities 缓存的 agent 键(pi 有自己的能力清单)。 */
-function agentKindForVendor(vendorKey: 'cc' | 'codex' | 'pi'): 'claude-code' | 'codex' | 'pi' {
+function agentKindForVendor(vendorKey: ModelVendor): 'claude-code' | 'codex' | 'pi' | 'trueforge' {
+  if (vendorKey === 'trueforge') return 'trueforge';
   return vendorKey === 'codex' ? 'codex' : vendorKey === 'pi' ? 'pi' : 'claude-code';
 }
 
 export function getModelsForVendor(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: ModelVendor,
   deviceId?: string,
 ): readonly ModelDefinition[] {
   // 直接读该 vendor 对应 agent 的能力缓存 —— 不经 allCachedModels(后者只聚合 cc/codex 供
@@ -138,8 +143,8 @@ function firstByCatalogOrder(models: readonly ModelDefinition[]): ModelDefinitio
 
 /** vendor → 新对话默认所依据的目录 Agent 标记。 */
 function defaultMarkerAgentForVendor(
-  vendorKey: 'cc' | 'codex' | 'pi',
-): 'claude-code' | 'codex' | 'pi' {
+  vendorKey: ModelVendor,
+): 'claude-code' | 'codex' | 'pi' | 'trueforge' {
   if (vendorKey === 'cc') return 'claude-code';
   return vendorKey;
 }
@@ -155,7 +160,7 @@ function defaultMarkerAgentForVendor(
  * 本函数返回 null、默认行为不变。
  */
 export function newSessionDefaultModelId(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: ModelVendor,
   deviceId?: string,
 ): string | null {
   const agent = defaultMarkerAgentForVendor(vendorKey);
@@ -177,7 +182,7 @@ export function newSessionDefaultModelId(
  * useScheduleForm.ts getScheduleDefaultModel,不要把这里的默认接到 scheduler 上。
  */
 export function getDefaultModelForVendor(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: ModelVendor,
   deviceId?: string,
 ): ModelDefinition {
   const list = getModelsForVendor(vendorKey, deviceId);
@@ -208,9 +213,11 @@ export function getDefaultModelForVendor(
 const COLD_START_CC_MODEL_ID = 'claude-opus-5';
 const COLD_START_CODEX_MODEL_ID = 'gpt-5.6-sol';
 const COLD_START_PI_MODEL_ID = 'claude-sonnet-5';
+const COLD_START_TRUEFORGE_MODEL_ID = 'configured-model';
 
 /** 冷启动占位 id 的只读导出（newMakerDraft 的种子默认复用，避免另一处写死）。 */
-export function coldStartModelIdForVendor(vendorKey: 'cc' | 'codex' | 'pi'): string {
+export function coldStartModelIdForVendor(vendorKey: ModelVendor): string {
+  if (vendorKey === 'trueforge') return COLD_START_TRUEFORGE_MODEL_ID;
   return vendorKey === 'codex'
     ? COLD_START_CODEX_MODEL_ID
     : vendorKey === 'pi'
@@ -219,6 +226,7 @@ export function coldStartModelIdForVendor(vendorKey: 'cc' | 'codex' | 'pi'): str
 }
 
 /** 冷启动占位的展示名(与占位 id 同源,仅首帧短暂可见)。 */
-function coldStartLabelForVendor(vendorKey: 'cc' | 'codex' | 'pi'): string {
+function coldStartLabelForVendor(vendorKey: ModelVendor): string {
+  if (vendorKey === 'trueforge') return 'Configured model';
   return vendorKey === 'codex' ? 'GPT-5.6-Sol' : vendorKey === 'pi' ? 'Sonnet 5' : 'Opus 5';
 }

@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
       [] as Array<{
         id: string;
         title: string;
-        agentKind: 'cc' | 'codex' | 'pi';
+        agentKind: 'cc' | 'codex' | 'pi' | 'trueforge';
         source?: string;
       }>,
   ),
@@ -31,6 +31,7 @@ describe('ThreadPickerInline 会话引用状态', () => {
   it('does not offer Review tasks as scheduler targets', async () => {
     mocks.list.mockResolvedValueOnce([
       { id: 'session-review', title: 'Review task', agentKind: 'codex', source: 'review' },
+      { id: 'session-trueforge', title: 'TrueForge task', agentKind: 'trueforge', source: 'desktop' },
       { id: 'session-normal', title: 'Desktop task', agentKind: 'codex', source: 'desktop' },
     ]);
 
@@ -38,6 +39,7 @@ describe('ThreadPickerInline 会话引用状态', () => {
 
     expect(await screen.findByRole('option', { name: 'Desktop task · Codex' })).toBeDefined();
     expect(screen.queryByRole('option', { name: 'Review task · Codex' })).toBeNull();
+    expect(screen.queryByRole('option', { name: /TrueForge task/ })).toBeNull();
   });
 
   it('普通绑定会话被删除后要求重新选择且不再显示打开入口', async () => {

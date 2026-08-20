@@ -24,7 +24,11 @@ import {
 } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
-import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import {
+  dbToMakerAgentKind,
+  dbToSessionAgentKind,
+  normalizeDbAgentKind,
+} from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
 import {
   isCodexResumeNotReadyProjectionError,
@@ -1560,10 +1564,11 @@ export function CCAgentSessionView({
     togglePin,
   ]);
   // 展示引擎可乐观跟随 intent；真实 event reducer 仍只读 store.agentKind。
-  const displayAgentKind = agentSwitchIntent?.target ?? dbToMakerAgentKind(session?.agentKind);
+  const displayAgentKind = agentSwitchIntent?.target ?? dbToSessionAgentKind(session?.agentKind);
   // 真实会话 agentKind(pending switch intent 不影响)——压缩分流必须用它,
   // 否则 intent 乐观切到 pi 但真实会话仍在跑 claude-code 时会错调 compact-session(#1933 review)。
-  const realAgentKind = dbToMakerAgentKind(session?.agentKind);
+  const realAgentKind = dbToSessionAgentKind(session?.agentKind);
+  const isTrueForgeSession = realAgentKind === 'trueforge';
   const isCodex = displayAgentKind === 'codex';
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
   // 其余 agent 声明 manualCompact.supported(当前仅 pi)→ maker:compact-session;其余无入口。
@@ -1571,7 +1576,7 @@ export function CCAgentSessionView({
   // 用它判定会与 realAgentKind 分流不一致);remoteDeviceId 让远程 pi 取被控端能力。
   const { capabilities: realSessionCaps } = useAgentCapabilities(realAgentKind, remoteDeviceId);
   const compactChannel = useMemo(
-    () => resolveManualCompactChannel(realAgentKind, realSessionCaps),
+    () => resolveManualCompactChannel(isTrueForgeSession ? null : realAgentKind, realSessionCaps),
     [realAgentKind, realSessionCaps],
   );
   // 最新 channel 的可变镜像:useCallback 闭包在创建后固定捕获 compactChannel,确认框
@@ -3252,7 +3257,7 @@ export function CCAgentSessionView({
         sdkContextWindow: agentStatus.contextWindow,
         modelContextWindow: getModelContextWindow(
           sourceSession.model,
-          sourceSession.agentKind ?? 'cc',
+          sourceSession.agentKind === 'trueforge' ? 'cc' : (sourceSession.agentKind ?? 'cc'),
           remoteDeviceId,
         ),
       });
@@ -3477,6 +3482,7 @@ export function CCAgentSessionView({
     // sessionService.update 会写错 / refreshServerSession 对远程是 no-op。直接跳过(规则:host 为准)。
     if (getSessionDeviceId(sessionId)) return;
     const agent = displayAgentKind;
+    if (agent === 'trueforge') return;
     if (!shouldFallbackVendorModel(providers, sessionModel, agent)) return;
     // 用三值化后的 agent 映射选默认模型:Pi 会话必须回退到 Pi 目录默认,而不是被
     // `isCodex ? 'codex' : 'cc'` 误写成 CC 首选(可能是更贵的 Opus)(codex review)。
@@ -3906,7 +3912,7 @@ export function CCAgentSessionView({
       sessionTitle={session?.title ?? null}
       // 透传 agentKind 让 UserMessage 能按 capabilities.fork / rewind 决定
       // 消息下方 Fork / Rewind icon 的显示 (Codex rewind=false → 隐藏)。
-      agentKind={session?.agentKind}
+      agentKind={session?.agentKind === 'trueforge' ? undefined : session?.agentKind}
       remoteHostId={session?.remoteHostId ?? null}
       // text-lightbox-trigger-extension F1/F2: cwd flows from session
       // owner down through MessageStream → AssistantMessage / UserMessage.
@@ -4275,7 +4281,7 @@ export function CCAgentSessionView({
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
-                  agentKind={session?.agentKind}
+                  agentKind={session?.agentKind === 'trueforge' ? undefined : session?.agentKind}
                   remoteHostId={session?.remoteHostId ?? undefined}
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
@@ -4324,7 +4330,7 @@ export function CCAgentSessionView({
                 }
                 usageLimitRecovery={usageLimitRecovery}
                 onCancel={handleDismissError}
-                agentKind={session?.agentKind}
+                agentKind={session?.agentKind === 'trueforge' ? undefined : session?.agentKind}
                 remoteHostId={session?.remoteHostId ?? undefined}
                 deviceLinkDeviceId={remoteDeviceId}
                 modelId={session?.model}
@@ -4507,7 +4513,7 @@ export function CCAgentSessionView({
                   ownsHardwareComposerActions={ownsHardwareTaskActions}
                   // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
-                  runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
+                  runtimeAgentKind={session ? dbToSessionAgentKind(session.agentKind) : null}
                   // 协同会话不参与跨引擎切换；session 未加载时保留 undefined 未知态，
                   // 仅在完整元数据确认非 Orca 后传 null 开放入口。
                   sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}
@@ -4552,7 +4558,7 @@ export function CCAgentSessionView({
                   attachmentState={attachmentState}
                   externalDragOver={isDragOver}
                   onComposerDropHandled={resetFullAreaDragState}
-                  vendorKey={normalizeDbAgentKind(displayAgentKind)}
+                  vendorKey={displayAgentKind === 'trueforge' ? 'trueforge' : normalizeDbAgentKind(displayAgentKind)}
                   extraDirs={session?.extraDirs ?? []}
                   onExtraDirsChange={handleExtraDirsChange}
                   compactToolbar={compactToolbar}

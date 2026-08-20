@@ -56,6 +56,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
+import type { SessionDbAgentKind } from '../shared/agentKindConversion.js';
 
 const log = createLogger('messagePersistBroadcaster');
 
@@ -110,13 +111,13 @@ type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>
  * session.agent_kind 只代表"当前引擎",历史行的 agent_meta 必须按写入时引擎解析。
  * clearSessionPersistState 时清理。
  */
-const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
+const dbAgentKindBySession = new Map<string, SessionDbAgentKind>();
 
-export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
+export function noteSessionAgentKind(sessionId: string, dbAgentKind: SessionDbAgentKind): void {
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 
-export function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null {
+export function getSessionDbAgentKind(sessionId: string): SessionDbAgentKind | null {
   return dbAgentKindBySession.get(sessionId) ?? null;
 }
 

@@ -36,7 +36,7 @@ describe('NewMakerDraftRoute worktree send flow', () => {
   });
 
   it('never silently downgrades an explicit worktree request to a normal session', () => {
-    const selected = source.indexOf('const selectedWorktree = { ...wtRef.current };');
+    const selected = source.indexOf('const selectedWorktree = {');
     const guard = source.indexOf(
       '&& selectedWorktree.confirmedIneligible !== true',
       selected,
@@ -45,6 +45,9 @@ describe('NewMakerDraftRoute worktree send flow', () => {
     const guardedSource = source.slice(guard, markInFlight);
 
     expect(selected).toBeGreaterThan(-1);
+    expect(source.slice(selected, guard)).toContain(
+      'enabled: isTrueForgeDraft ? false : wtRef.current.enabled',
+    );
     expect(guard).toBeGreaterThan(selected);
     expect(markInFlight).toBeGreaterThan(guard);
     expect(guardedSource).toContain('!selectedWorktree.baseRepo');

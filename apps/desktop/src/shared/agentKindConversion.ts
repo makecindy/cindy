@@ -12,6 +12,9 @@
 export type DbAgentKind = 'cc' | 'codex' | 'pi';
 /** maker-core / IPC 契约侧的 agent 形态。 */
 export type MakerAgentKindWire = 'claude-code' | 'codex' | 'pi';
+/** Session persistence accepts experimental harnesses without widening stable provider contracts. */
+export type SessionDbAgentKind = DbAgentKind | 'trueforge';
+export type SessionMakerAgentKindWire = MakerAgentKindWire | 'trueforge';
 
 export function dbToMakerAgentKind(db: string | null | undefined): MakerAgentKindWire {
   if (db === 'codex') return 'codex';
@@ -28,4 +31,18 @@ export function makerToDbAgentKind(maker: string | null | undefined): DbAgentKin
 /** 宽输入归一成 DbAgentKind;非法值回落 'cc'(与 sessions 表 default 同语义)。 */
 export function normalizeDbAgentKind(value: string | null | undefined): DbAgentKind {
   return value === 'codex' || value === 'pi' ? value : 'cc';
+}
+
+export function dbToSessionAgentKind(db: string | null | undefined): SessionMakerAgentKindWire {
+  return db === 'trueforge' ? 'trueforge' : dbToMakerAgentKind(db);
+}
+
+export function sessionToDbAgentKind(maker: string | null | undefined): SessionDbAgentKind {
+  return maker === 'trueforge' ? 'trueforge' : makerToDbAgentKind(maker);
+}
+
+export function normalizeSessionDbAgentKind(
+  value: string | null | undefined,
+): SessionDbAgentKind {
+  return value === 'trueforge' ? 'trueforge' : normalizeDbAgentKind(value);
 }

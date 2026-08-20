@@ -551,7 +551,7 @@ import {
   runPiPackageListIpcBoundary,
   runPiPackageMutationIpcBoundary,
 } from './piPackageMutationIpc.js';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, sessionToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import {
@@ -1937,6 +1937,7 @@ export function stopOrcaIdleWatcher(): void {
 }
 
 function requireAgentKind(value: unknown): AgentKind {
+  if (value === 'trueforge') return value as AgentKind;
   if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
@@ -3715,7 +3716,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
 
   // session-agent-switch:登记本会话当前引擎,broadcaster / user 行落库据此逐行
   // stamp messages.agent_kind(切换后历史行的 agent_meta 必须按写入时引擎解析)。
-  noteSessionAgentKind(session.id, makerToDbAgentKind(session.agentKind));
+  noteSessionAgentKind(session.id, sessionToDbAgentKind(session.agentKind));
 
   // 订阅槽①旁听 tap(独立监听,叠加在主转发之外互不干扰):AgentEvent →
   // did-turn-*。资格(用户主会话)与自动化轮次过滤都在 tap 内部,这里零逻辑。
@@ -3890,7 +3891,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             markSessionTurnStarted(session.id);
           }
           if (
-            (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') &&
+            (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi' || event.source === 'trueforge') &&
             !turnModelPromiseBySession.has(session.id)
           ) {
             turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));
@@ -3997,7 +3998,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // EVENT broadcast 后结束逻辑 turn，并保留 terminal grace 给 renderer 收尾；
         // 可重试 error 保持 running。
         shouldMarkTurnTerminalIdleAfterBroadcast = true;
-        if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi') {
+        if (event.source === 'claude-code' || event.source === 'codex' || event.source === 'pi' || event.source === 'trueforge') {
           turnModelPromiseBySession.delete(session.id);
         }
         const errData =
@@ -4439,6 +4440,27 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 重算 —— 修 SDK 把它们按 Anthropic 价错算 (~2.5x) 的 bug。逐模型解析后四个 sink
       // (今日 / session / per-message / 按模型) 同源同值。
       // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
+      if (event.type === 'done' && event.source === 'trueforge') {
+        turnModelPromiseBySession.delete(session.id);
+        const rawUsage = (event.data as { usage?: unknown } | undefined)?.usage;
+        if (rawUsage && typeof rawUsage === 'object') {
+          const inputTokens = Number((rawUsage as { inputTokens?: unknown }).inputTokens) || 0;
+          const outputTokens = Number((rawUsage as { outputTokens?: unknown }).outputTokens) || 0;
+          void recordSessionTurnTokens(session.id, inputTokens + outputTokens);
+          if (turnAssistantPersistId) {
+            void recordTurnUsageOnMessage({
+              sessionId: session.id,
+              clientId: turnAssistantPersistId,
+              turnUsageDetails: buildTurnUsageDetails({
+                inputTokens,
+                outputTokens,
+                cacheReadTokens: 0,
+                cacheCreateTokens: 0,
+              }),
+            });
+          }
+        }
+      }
       if (event.type === 'done' && event.source === 'claude-code') {
         const modelPromise =
           turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
@@ -7290,11 +7312,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const makerSessionRegistry = createElectronIpcHandlerRegistry();
   registerMakerSessionCreateHandler(makerSessionRegistry, {
+    isRemoteInvoke: isDeviceLinkInvoke,
     // CREATE_SESSION 同样先走 remote ensure:remote draft (尤其 collab
     // lead) 的 SSH 重连 / agent 安装 / codex daemon MCP 注入必须先于
     // bootstrap, 否则 lead 首个 turn 没有 cindy_orca, 与 orca 架构文档的
     // "session start/resume 前置" 契约不符。本地会话 ensure 内部直接返回。
     bootstrapSession: async (co) => {
+      if ((co.agentKind as string) === 'trueforge' && co.remoteHostId) {
+        throwIpcError(
+          'UNSUPPORTED_CAPABILITY',
+          'TrueForge does not support SSH remote sessions in this version',
+        );
+      }
       await ensureRemoteReadyForSessionStart({ createOpts: co });
       const result = await bootstrapSession(co);
       // maker:create-session 是手机 / device-link 的创建入口，不经过
@@ -12389,6 +12418,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertRemoteInputClearNotInFlight(sid, remote);
     if (remote) {
       const row = await getInputSessionRow(sid);
+      if (row.agentKind === 'trueforge') {
+        throwIpcError(
+          'UNSUPPORTED_CAPABILITY',
+          'TrueForge sessions cannot be controlled over device-link in this version',
+        );
+      }
       const durableRow = await retryPendingInputClearBoundary(sid, true, row);
       if (!inputCoordinator.isGenerationCurrent(sid, expectedInputGeneration)) {
         throwIpcError(

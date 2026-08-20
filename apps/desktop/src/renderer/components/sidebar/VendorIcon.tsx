@@ -16,16 +16,20 @@
 import { cn } from '@/lib/utils';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { TrueForgeMark } from '@/components/icons/TrueForgeMark';
+import type { AgentKind } from '@/lib/ccAgent.types';
 
-export type VendorIconKind = 'cc' | 'codex' | 'pi';
+export type VendorIconKind = 'cc' | 'codex' | 'pi' | 'trueforge';
 
 /**
  * agentKind → VendorIcon vendor 的唯一映射。所有渲染 agent 身份图标的调用点
  * 必须走这里,禁止各自写 `=== 'codex' ? 'codex' : 'cc'` 二元三元(那会把 pi
  * 吞成 Claude 脸,2026-07-30 实测 bug)。兼容 'claude-code' 别名与 null。
  */
+export function agentKindToVendor(kind: AgentKind | null | undefined): AgentKind;
+export function agentKindToVendor(kind: string | null | undefined): VendorIconKind;
 export function agentKindToVendor(kind: string | null | undefined): VendorIconKind {
-  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
+  return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : kind === 'trueforge' ? 'trueforge' : 'cc';
 }
 
 interface VendorIconProps {
@@ -59,6 +63,8 @@ export function VendorIcon({
     <span className={wrapperClassName}>
       {vendor === 'codex' ? (
         <CodexMark size={size} />
+      ) : vendor === 'trueforge' ? (
+        <TrueForgeMark size={size} />
       ) : vendor === 'pi' ? (
         <span
           aria-hidden

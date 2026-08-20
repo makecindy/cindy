@@ -10,5 +10,5 @@ export interface SessionReference {
   state: 'available' | 'deleted' | 'missing';
   status?: 'active' | 'archived' | 'deleted';
   title?: string;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'trueforge';
 }

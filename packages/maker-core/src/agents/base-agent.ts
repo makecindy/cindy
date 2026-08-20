@@ -467,6 +467,8 @@ export interface AgentDeps {
    * 缺省 / 空串 → BaseAgent 构造期立即抛错, 不让 session 进半就绪状态。
    */
   binaryPath: string;
+  /** Service-backed harnesses opt out of the local executable requirement explicitly. */
+  runtimeKind?: 'binary' | 'service';
   logger: Logger;
 
   /**
@@ -1800,7 +1802,7 @@ export abstract class BaseAgent {
   protected memoryOverride: boolean | undefined;
 
   constructor(protected deps: AgentDeps) {
-    if (!deps.binaryPath) {
+    if (deps.runtimeKind !== 'service' && !deps.binaryPath) {
       throw new Error(
         `${this.constructor.name}: binaryPath is required at construction (host must provision binary before instantiating agent)`,
       );
@@ -2031,8 +2033,13 @@ export abstract class BaseAgent {
   }
 
   /** 同步取 binary path (host 注入时已存在, 构造期校验过)。供 maker:agent:status 用。 */
-  getBinaryPath(): string {
-    return this.deps.binaryPath;
+  getBinaryPath(): string | null {
+    return this.deps.binaryPath || null;
+  }
+
+  /** Runtime admission hook. Service adapters override this with a health probe. */
+  async isRuntimeReady(): Promise<boolean> {
+    return this.deps.runtimeKind === 'service' || !!this.deps.binaryPath;
   }
 
   // ── Memory 控制 (子类实现) ─────────────────────────────────────────────

@@ -134,7 +134,7 @@ export interface AgentEvent {
   type: AgentEventType;
   data: unknown;
   /** 事件来源标识，便于调试 */
-  source?: 'claude-code' | 'codex' | 'pi';
+  source?: 'claude-code' | 'codex' | 'pi' | 'trueforge';
   /**
    * Events that finish work owned by a completed turn can still arrive after a
    * later turn has started (for example, a V1 collab child). These are still

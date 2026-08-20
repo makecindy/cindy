@@ -109,6 +109,7 @@ import {
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
+import { buildTrueForgeAgent } from './trueforge-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -2009,6 +2010,18 @@ export function getMaker(): Maker {
       },
     });
 
+    let trueForgeAgent = null;
+    try {
+      trueForgeAgent = buildTrueForgeAgent({
+        logger: desktopMakerLogger,
+        fetch: outboundFetch,
+      });
+    } catch (error) {
+      desktopMakerLogger.warn('trueforge configuration rejected', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
       getProviderById: (providerId) =>
@@ -2036,6 +2049,7 @@ export function getMaker(): Maker {
         'claude-code': claudeAgent,
         codex: codexAgent,
         ...(piAgent ? { pi: piAgent } : {}),
+        ...(trueForgeAgent ? { trueforge: trueForgeAgent } : {}),
       },
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,
@@ -2045,9 +2059,11 @@ export function getMaker(): Maker {
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
         prepareStartOptions: async (sessionId, opts) => {
-          const providerReady = await ensureCurrentAccountProviderReadiness();
-          if (!providerReady) {
-            throw new Error('Account provider models are not ready for this app session; retry.');
+          if (String(opts.agentKind) !== 'trueforge') {
+            const providerReady = await ensureCurrentAccountProviderReadiness();
+            if (!providerReady) {
+              throw new Error('Account provider models are not ready for this app session; retry.');
+            }
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           if (opts.agentKind === 'codex') {

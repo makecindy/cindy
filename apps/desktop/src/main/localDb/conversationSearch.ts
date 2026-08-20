@@ -18,7 +18,7 @@ import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
-import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
+import { normalizeSessionDbAgentKind } from '../../shared/agentKindConversion.js';
 import {
   collectContentHitsUntilUniqueSessions,
   fuzzyTitleMatch,
@@ -364,7 +364,7 @@ function sessionSummaryFromRow(
     title: row.title,
     workingDir: row.workingDir,
     workspaceKind: row.workspaceKind,
-    agentKind: normalizeDbAgentKind(row.agentKind),
+    agentKind: normalizeSessionDbAgentKind(row.agentKind),
     status: row.status,
     source: row.source,
     orcaRole: row.orcaRole,

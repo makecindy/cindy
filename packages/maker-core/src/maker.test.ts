@@ -3269,6 +3269,40 @@ describe('Session permission mode leases', () => {
 });
 
 describe('Maker invalid-resume persistence bridge', () => {
+  it('injects the same compare-and-clear callback for experimental TrueForge sessions', async () => {
+    const trueForgeKind = 'trueforge' as AgentKind;
+    const storage = createStorage();
+    await storage.create({
+      id: 'trueforge-session',
+      agentKind: trueForgeKind,
+      workDir: '/repo',
+      title: 'TrueForge',
+      model: 'openai/gpt-5',
+      sdkSessionId: 'tf-old',
+    });
+    const startSession = vi.fn(async (opts: CreateSessionOptions) => {
+      expect(await opts.onInvalidResumeSession?.('tf-old')).toBe(true);
+      expect(await opts.onInvalidResumeSession?.('tf-old')).toBe(false);
+      return createHandle({ id: 'tf-new', agentKind: trueForgeKind });
+    });
+    const trueForgeAgent = createAgent(startSession);
+    (trueForgeAgent as { kind: AgentKind }).kind = trueForgeKind;
+    const maker = new Maker({
+      agents: { [trueForgeKind]: trueForgeAgent },
+      storage,
+      logger: createLogger(),
+    });
+
+    await maker.createSession({
+      id: 'trueforge-session',
+      agentKind: trueForgeKind,
+      workingDir: '/repo',
+      model: 'openai/gpt-5',
+      resumeSessionId: 'tf-old',
+    });
+    expect((await storage.get('trueforge-session'))?.sdkSessionId).toBe('tf-new');
+  });
+
   it('injects a compare-and-clear callback for resumed Claude sessions', async () => {
     const storage = createStorage();
     await storage.create({

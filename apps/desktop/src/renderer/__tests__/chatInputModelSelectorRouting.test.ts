@@ -81,10 +81,10 @@ describe('ChatInput model source switching wiring', () => {
    */
   it('never locks the union list to a guessed engine before session identity resolves', () => {
     expect(chatInputSource).toContain(
-      'const sessionEngineConfirmed = !sessionId || runtimeAgentKind != null;',
+      'const sessionEngineConfirmed = !sessionId || stableRuntimeAgentKind != null;',
     );
     expect(chatInputSource).toContain(
-      'inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null',
+      'inSessionEngineLocked && sessionEngineConfirmed ? (stableRuntimeAgentKind ?? agentKind) : null',
     );
     // 防复活:锁定分支不得再直接读 vendorKey 派生的 agentKind。
     expect(chatInputSource).not.toContain(
@@ -111,10 +111,10 @@ describe('ChatInput model source switching wiring', () => {
       'engineMarkVendor={unifiedPanelActive ? composerEngineMarkVendor : null}',
     );
     expect(chatInputSource).toContain(
-      "resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??",
+      "resolveModelSelectorAgentIdentity(stableRuntimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??",
     );
     // 草稿没有 session 身份可言,当前引擎就是 vendorKey。
-    expect(chatInputSource).toContain(': (vendorKey ?? null);');
+    expect(chatInputSource).toContain(': (stableVendorKey ?? null);');
   });
 
   it('falls back to the legacy panel only when the controlled device has no provider catalog', () => {
@@ -122,7 +122,7 @@ describe('ChatInput model source switching wiring', () => {
     // 就是一张空列表。判据必须是结构化的 unsupported,不是 providers.length===0
     // (后者在加载中恒成立,会让面板每次打开先闪一下旧布局)。
     expect(chatInputSource).toContain(
-      'const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;',
+      'const unifiedModelPanelEnabled = !isTrueForge && (!deviceLinkDeviceId || !remoteProviders.unsupported);',
     );
   });
 

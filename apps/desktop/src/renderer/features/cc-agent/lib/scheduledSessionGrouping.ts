@@ -113,7 +113,8 @@ export function groupScheduledSessions(sessions: readonly Session[], t?: TFunc):
       const latestActivityMs = sorted.length > 0 ? sortTimeMs(sorted[0]) : 0;
       if (latestActivityMs > dirLatest) dirLatest = latestActivityMs;
       // agentKind 取组内任一 session（同 schedule 的 fire 必同 agent）；老数据兜底 'cc'
-      const agentKind: AgentKind = sorted[0]?.agentKind ?? 'cc';
+      const storedAgentKind = sorted[0]?.agentKind;
+      const agentKind: AgentKind = storedAgentKind === 'trueforge' ? 'cc' : (storedAgentKind ?? 'cc');
       subGroups.push({ scheduleName, agentKind, sessions: sorted, latestActivityMs });
     }
     subGroups.sort((a, b) => b.latestActivityMs - a.latestActivityMs);

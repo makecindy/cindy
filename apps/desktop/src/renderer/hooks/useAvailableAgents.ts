@@ -20,7 +20,7 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useAvailableAgents');
 
-type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi';
+type RuntimeAgentKind = 'claude-code' | 'codex' | 'pi' | 'trueforge';
 
 /** runtime agent id → NewMaker vendor(其余保持同名)。 */
 function toVendor(agent: RuntimeAgentKind): MakerVendor {

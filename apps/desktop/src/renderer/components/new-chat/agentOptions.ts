@@ -17,22 +17,29 @@ import type { ComponentType } from 'react';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
+import { TrueForgeMark } from '@/components/icons/TrueForgeMark';
 import { SELECTABLE_VENDORS, type SelectableVendor } from '@/lib/agentVendors';
+import type { MakerVendor } from '@/lib/ccAgent.types';
+
+type AgentOptionVendor = Exclude<MakerVendor, 'orca'>;
 
 export interface AgentOption {
-  vendor: SelectableVendor;
+  vendor: AgentOptionVendor;
   /** 品牌名,不进 i18n(产品名跨语言不翻译)。 */
   label: string;
   Mark: ComponentType<{ size?: number; className?: string }>;
 }
 
-const VENDOR_PRESENTATION: Record<SelectableVendor, Omit<AgentOption, 'vendor'>> = {
+const VENDOR_PRESENTATION: Record<AgentOptionVendor, Omit<AgentOption, 'vendor'>> = {
   cc: { label: 'Claude', Mark: ClaudeMark },
   codex: { label: 'Codex', Mark: CodexMark },
   pi: { label: 'Pi', Mark: PiMark },
+  trueforge: { label: 'TrueForge', Mark: TrueForgeMark },
 };
 
-export const AGENT_OPTIONS: readonly AgentOption[] = SELECTABLE_VENDORS.map((vendor) => ({
+const AGENT_OPTION_VENDORS: readonly AgentOptionVendor[] = [...SELECTABLE_VENDORS, 'trueforge'];
+
+export const AGENT_OPTIONS: readonly AgentOption[] = AGENT_OPTION_VENDORS.map((vendor) => ({
   vendor,
   ...VENDOR_PRESENTATION[vendor],
 }));
