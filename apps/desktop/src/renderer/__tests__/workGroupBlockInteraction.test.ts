@@ -59,8 +59,10 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     expect(chrome).toMatch(/group-hover:bg-\[var\(--cmd-palette-item-hover\)\]/);
     expect(chrome).toMatch(/hover:bg-\[var\(--msg-code-inline-bg\)\]/);
     expect(chrome).toMatch(/h-\[18px\] w-\[18px\]/);
-    expect(chrome).toMatch(/ACTIVITY_ROW_RADIUS_CLASS = 'rounded-lg'/);
-    expect(chrome).toMatch(/rounded-lg/);
+    expect(chrome).toMatch(/ACTIVITY_ROW_RADIUS_CLASS = 'rounded-\[8px\]'/);
+    expect(chrome).toMatch(/rounded-\[8px\]/);
+    expect(chrome).not.toMatch(/rounded-lg/);
+    expect(chrome).not.toMatch(/var\(--radius\)/);
     expect(chrome).not.toMatch(/rounded-\[4px\]/);
     expect(source).toMatch(/from '\.\/activityRowChrome'/);
     expect(source).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);

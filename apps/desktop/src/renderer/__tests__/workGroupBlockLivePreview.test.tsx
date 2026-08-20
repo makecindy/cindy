@@ -527,12 +527,12 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     );
     expect(rows).toHaveLength(2);
     for (const row of rows) {
-      expect(row.className).toContain('rounded-lg');
+      expect(row.className).toContain('rounded-[8px]');
       const slot = row.lastElementChild;
       expect(slot?.className).toContain('w-[18px]');
       expect(slot?.className).toContain('h-[18px]');
       expect(slot?.className).toContain('ml-auto');
-      expect(slot?.className).toContain('rounded-lg');
+      expect(slot?.className).toContain('rounded-[8px]');
       expect(slot?.className).toContain('group-hover:bg-[var(--cmd-palette-item-hover)]');
     }
     expect(rows[0]?.querySelector('svg.lucide-chevron-right')).toBeNull();
