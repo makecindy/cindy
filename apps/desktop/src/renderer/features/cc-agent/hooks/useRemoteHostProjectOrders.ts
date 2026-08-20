@@ -67,7 +67,9 @@ export function useLocalHostProjectOrder(seed?: {
     if (!api?.getProjectOrder || !api.onProjectOrderChanged) return undefined;
     let cancelled = false;
     let seedAttempts = 0;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let fetchAttempts = 0;
+    let seedRetryTimer: ReturnType<typeof setTimeout> | undefined;
+    let fetchRetryTimer: ReturnType<typeof setTimeout> | undefined;
     const fence = createProjectOrderFetchFence();
     fetchFenceRef.current = fence;
     const seedIfNeeded = (next: SyncedProjectOrderSnapshot) => {
@@ -86,15 +88,23 @@ export function useLocalHostProjectOrder(seed?: {
         if (!cancelled) setSnapshot(applied);
       }).catch(() => {
         if (cancelled || seedAttempts >= 3) return;
-        retryTimer = setTimeout(() => seedIfNeeded(snapshotRef.current), 1500);
+        seedRetryTimer = setTimeout(() => seedIfNeeded(snapshotRef.current), 1500);
       });
     };
-    const fetchToken = fence.begin('local');
-    void api.getProjectOrder().then((next) => {
-      if (cancelled || !fence.shouldApplyFetch('local', fetchToken)) return;
-      setSnapshot(next);
-      seedIfNeeded(next);
-    }).catch(() => undefined);
+    const fetchOnce = () => {
+      if (cancelled || fetchAttempts >= 3) return;
+      fetchAttempts += 1;
+      const fetchToken = fence.begin('local');
+      void api.getProjectOrder().then((next) => {
+        if (cancelled || !fence.shouldApplyFetch('local', fetchToken)) return;
+        setSnapshot(next);
+        seedIfNeeded(next);
+      }).catch(() => {
+        if (cancelled || fetchAttempts >= 3) return;
+        fetchRetryTimer = setTimeout(fetchOnce, 1500);
+      });
+    };
+    fetchOnce();
     const unsubscribe = api.onProjectOrderChanged((next, ownerStamp) => {
       const current = snapshotRef.current.ownerStamp;
       if (
@@ -110,7 +120,8 @@ export function useLocalHostProjectOrder(seed?: {
     });
     return () => {
       cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
+      if (seedRetryTimer) clearTimeout(seedRetryTimer);
+      if (fetchRetryTimer) clearTimeout(fetchRetryTimer);
       unsubscribe();
     };
   }, []);
@@ -160,9 +171,10 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
       return undefined;
     }
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const fence = createProjectOrderFetchFence();
     fetchFenceRef.current = fence;
-    const load = async () => {
+    const load = async (attempt: number) => {
       const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
       const entries = await Promise.all(
         ids.map(async (deviceId) => {
@@ -191,8 +203,13 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
         }
         return copy;
       });
+      if (attempt < 3 && entries.some(([, result]) => result.kind === 'transient')) {
+        retryTimer = setTimeout(() => {
+          void load(attempt + 1);
+        }, 2000);
+      }
     };
-    void load();
+    void load(1);
     const offPush = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
       if (cancelled || push.channel !== SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL) return;
       if (!ids.includes(push.deviceId)) return;
@@ -207,6 +224,7 @@ export function useRemoteHostProjectOrders(selectedMachineId: MachineSelection):
     });
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
       offPush();
     };
   }, [remoteIds]);

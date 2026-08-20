@@ -682,5 +682,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(hookSource).toContain('shouldSeedLocalHostProjectOrder');
     expect(hookSource).toContain('seededLocalHostOwners.add');
     expect(hookSource).not.toContain('localHostSeedStarted = true');
+    expect(hookSource).toContain('void load(1)');
+    expect(hookSource).toContain('attempt < 3 && entries.some(([, result]) => result.kind === \'transient\')');
   });
 });
