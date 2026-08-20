@@ -5,7 +5,7 @@
  * typed `@` trigger and the composer `+` button (synthetic activation — no
  * `@` char in the doc, typing still filters). It renders the union of:
  *   - action rows from the legacy `+` MorphPopover menu (attach files, new
- *     goal, plan mode, collaboration, add reference directory)
+ *     goal, plan mode, search mode, collaboration, add reference directory)
  *   - scanned resources (files / dirs / agents / tabs / windows / tasks)
  *   - installed plugins (unavailable ones stay visible but disabled)
  *   - the reference-directories management section (empty query only)
@@ -107,6 +107,7 @@ const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
   'attach-files': Paperclip,
   'new-goal': Target,
   'plan-mode': ClipboardList,
+  'search-mode': Globe2,
   collaboration: UsersRound,
   'add-extra-dir': FolderPlus,
 };

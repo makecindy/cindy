@@ -12,6 +12,7 @@ const actions: ComposerSuggestionAction[] = [
   { id: 'attach-files', label: 'Add files', run: vi.fn() },
   { id: 'new-goal', label: 'New goal', run: vi.fn() },
   { id: 'plan-mode', label: 'Plan mode', checked: false, run: vi.fn() },
+  { id: 'search-mode', label: 'Search mode', checked: false, run: vi.fn() },
   { id: 'add-extra-dir', label: 'Add directory', run: vi.fn() },
 ];
 
@@ -59,6 +60,7 @@ describe('composerSuggestion', () => {
       'attach-files',
       'new-goal',
       'plan-mode',
+      'search-mode',
       'browser-tab:Docs',
       'agent:reviewer',
       'plugin-command:Cindy Art',

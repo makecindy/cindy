@@ -44,6 +44,7 @@ export interface VendorPrefs {
    * planModeEnabled 落库 + createOpts.planMode 生效。老 localStorage 缺字段 → false。
    */
   planMode: boolean;
+  searchMode: boolean;
   /**
    * per-vendor 记忆的「来源(供应商)」显式选择。null = 跟随该 agent 原生默认路由。
    * 与 model/effort 同口径:切 vendor / 重启后由 ChatInput 的 initialProviderId seed 回填,
@@ -171,6 +172,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
       // 新 Pi 草稿默认走 Auto Review；完全访问只能由用户显式选择并持久化。
       permissionMode: 'auto',
       planMode: false,
+      searchMode: false,
       providerId: null,
     };
   }
@@ -180,6 +182,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
       effort: 'high',
       permissionMode: 'auto',
       planMode: false,
+      searchMode: false,
       providerId: null,
     };
   }
@@ -190,6 +193,7 @@ function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
     // lastByVendor 记忆不受影响(sanitize 只在缺失 / 脏值时回落本默认)。
     permissionMode: 'auto',
     planMode: false,
+    searchMode: false,
     providerId: null,
   };
 }
@@ -335,6 +339,7 @@ function sanitize(raw: unknown): NewMakerDraft {
           ? (p.permissionMode as PermissionMode)
           : fallback.permissionMode,
       planMode: p.planMode === true || legacyPlanPermission,
+      searchMode: p.searchMode === true,
       // providerId: 接受非空 string 或 null;脏数据 / 缺字段一律落 null(跟随默认路由)。
       providerId:
         typeof p.providerId === 'string' && p.providerId.length > 0 ? p.providerId : null,

@@ -228,6 +228,8 @@ export interface Session {
    * 老 payload(device-link 老被控端)可能缺失 → 消费方按 false 兜底。
    */
   planModeEnabled?: boolean;
+  /** 搜索模式一级开关。打开后真挡帮手/插件，不喂 skill。老 payload 缺失按 false。 */
+  searchModeEnabled?: boolean;
   clearedAt: string | null; // ISO 8601 — messages before this timestamp are hidden
   pinnedAt: string | null;  // ISO 8601 — when pinned, null = not pinned
   /**

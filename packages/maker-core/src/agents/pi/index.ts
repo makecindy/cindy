@@ -1317,6 +1317,7 @@ export class PiAgent extends BaseAgent {
     }
     assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
+    const searchMode = !reviewMode && opts.searchMode === true;
 
     // BYOM:host 解析当前会话可用的原生 provider(用户自定义/本地模型)+ 需注入的 env(keys)。
     // 缺省 → 空,只有网关 provider `cindy`(现状不变)。失败不致命,降级为无原生 provider。
@@ -1961,8 +1962,9 @@ export class PiAgent extends BaseAgent {
     // 远端会话:host 可 gate 掉 in-process MCP bridge(loopback URL 远端够不到;
     // Phase 1 不桥 orca/memory/ghost)。外部 HTTP MCP 直连不受影响。
     const remoteSkipMcpBridge = Boolean(
-      opts.remoteHostId && this.deps.remotePiSkipMcpBridge?.(opts.remoteHostId));
-    if (!reviewMode && !remoteSkipMcpBridge && this.deps.preparePiExtraSpawnConfig) {
+      opts.remoteHostId && this.deps.remotePiSkipMcpBridge?.(opts.remoteHostId),
+    );
+    if (!reviewMode && !searchMode && !remoteSkipMcpBridge && this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
           sessionId: opts.sessionId,
@@ -2080,9 +2082,13 @@ export class PiAgent extends BaseAgent {
     // skills. Missing/throwing authorities and paths fail closed; never infer
     // approval from permission mode, MCP/plugin state, or caller vendor options.
     let projectResourceAssembly = unavailablePiProjectResourceAssembly(
-      reviewMode ? 'review-mode-project-resources-disabled' : 'approval-resolver-unavailable',
+      reviewMode
+        ? 'review-mode-project-resources-disabled'
+        : searchMode
+          ? 'search-mode-skills-disabled'
+          : 'approval-resolver-unavailable',
     );
-    if (!reviewMode && this.deps.resolvePiProjectTrustInput) {
+    if (!reviewMode && !searchMode && this.deps.resolvePiProjectTrustInput) {
       try {
         const trustInput = await this.deps.resolvePiProjectTrustInput({
           ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
@@ -2117,7 +2123,7 @@ export class PiAgent extends BaseAgent {
       promptTemplates: string[];
       packageRoots: string[];
     } = { extensions: [], skills: [], promptTemplates: [], packageRoots: [] };
-    if (!reviewMode && !opts.remoteHostId && this.deps.resolvePiManagedPackageResources) {
+    if (!reviewMode && !searchMode && !opts.remoteHostId && this.deps.resolvePiManagedPackageResources) {
       try {
         managedPackageResources = await this.deps.resolvePiManagedPackageResources({
           snapshotRoot: path.join(configHome, 'managed-packages'),
@@ -2147,12 +2153,20 @@ export class PiAgent extends BaseAgent {
       ...(appendSystemPrompt.length > 0 ? ['--append-system-prompt', appendSystemPrompt] : []),
       '--extension',
       bridgeExtensionPath,
-      ...(!reviewMode ? ['--extension', subagentExtensionPath] : []),
+      ...(!reviewMode && !searchMode ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-      ...managedPackageResources.extensions.flatMap((extensionPath) => ['--extension', extensionPath]),
-      ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
-      ...managedPackageResources.skills.flatMap((skill) => ['--skill', skill.path]),
-      ...managedPackageResources.promptTemplates.flatMap((promptPath) => ['--prompt-template', promptPath]),
+      ...(!searchMode
+        ? managedPackageResources.extensions.flatMap((extensionPath) => ['--extension', extensionPath])
+        : []),
+      ...(searchMode
+        ? ['--no-skills']
+        : [
+            ...projectResourceAssembly.launchSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
+            ...managedPackageResources.skills.flatMap((skill) => ['--skill', skill.path]),
+          ]),
+      ...(!searchMode
+        ? managedPackageResources.promptTemplates.flatMap((promptPath) => ['--prompt-template', promptPath])
+        : []),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();

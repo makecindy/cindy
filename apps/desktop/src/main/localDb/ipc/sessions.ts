@@ -346,6 +346,7 @@ const REMOTE_PERSIST_FIELDS = new Set([
   'permissionMode',
   'fastMode',
   'planModeEnabled',
+  'searchModeEnabled',
   'extraDirs',
 ]);
 
@@ -656,6 +657,24 @@ export async function getSessionRowSnapshot(id: string): Promise<SessionRowSnaps
       err: err instanceof Error ? err.message : String(err),
     });
     return null;
+  }
+}
+
+export async function getSessionSearchModeEnabled(id: string): Promise<boolean> {
+  try {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select({ searchModeEnabled: sessions.searchModeEnabled })
+      .from(sessions)
+      .where(eq(sessions.id, id))
+      .limit(1);
+    return row?.searchModeEnabled === true;
+  } catch (err) {
+    log.warn('getSessionSearchModeEnabled failed', {
+      sessionId: id,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return false;
   }
 }
 
@@ -1370,6 +1389,7 @@ export function registerSessionIpc(
       'permissionMode',
       'fastMode',
       'planModeEnabled',
+      'searchModeEnabled',
       'orcaRole',
       'extraDirs',
     ]);
@@ -1411,6 +1431,7 @@ export function registerSessionIpc(
       'permissionMode',
       'fastMode',
       'planModeEnabled',
+      'searchModeEnabled',
       'providerId',
       'orcaRole',
       'extraDirs',

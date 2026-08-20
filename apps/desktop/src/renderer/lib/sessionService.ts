@@ -61,6 +61,7 @@ export async function create(body?: {
   fastMode?: boolean;
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
+  searchModeEnabled?: boolean;
   agentKind?: 'cc' | 'codex' | 'pi';
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
@@ -131,6 +132,7 @@ export async function update(
     fastMode?: boolean;
     /** 计划模式一级开关(与 permissionMode 正交), 与 maker.setPlanMode 双 IPC 协调。 */
     planModeEnabled?: boolean;
+    searchModeEnabled?: boolean;
     sdkSessionId?: string | null;
     totalTokenUsage?: number;
     totalCostUsd?: number;

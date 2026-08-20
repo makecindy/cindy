@@ -434,6 +434,34 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
+  it('passes --no-skills and skips approved project skills when search mode is on', async () => {
+    const skillPath = path.join(cwd, '.pi', 'skills', 'approved-skill');
+    mkdirSync(skillPath, { recursive: true });
+    writeFileSync(path.join(skillPath, 'SKILL.md'), '# approved\n');
+    const handle = await new PiAgent(buildDeps({
+      resolvePiProjectTrustInput: async ({ workingDir }) =>
+        approvedInput(workingDir, 'rev-approved', [skillPath]),
+    })).startSession({ ...opts(), searchMode: true });
+    const args = knobs.spawnedArgs[0]!;
+
+    expect(args).toContain('--no-skills');
+    expect(args).not.toContain('--skill');
+    expect(args).not.toContain(path.posix.join(
+      knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!,
+      'extensions',
+      'cindy-subagent.ts',
+    ));
+    expect(knobs.spawnedEnvs[0]!).not.toHaveProperty('CINDY_PI_MCP_BRIDGE');
+    expect(preparedMcpContext).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(handle.getRuntimeCapabilities?.()?.projectResources).toMatchObject({
+        status: 'unavailable',
+        reason: 'search-mode-skills-disabled',
+      });
+    });
+    await handle.close();
+  });
+
   it('freezes approval per new session and fails closed after revocation', async () => {
     const skillPath = path.join(cwd, '.pi', 'skills', 'approved-skill');
     mkdirSync(skillPath, { recursive: true });

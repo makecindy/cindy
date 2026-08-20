@@ -1662,6 +1662,24 @@ describe('session-agent-switch handoff injection', () => {
     expect(consumeSealedPlanReconcileNote).not.toHaveBeenCalled();
   });
 
+  it('prepends the search-mode note on ordinary turns and leaves the persisted bubble unchanged', async () => {
+    const { deps, session } = createDeps({
+      isSearchModeEnabled: vi.fn(async () => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', { type: 'user', content: '新消息' }, undefined, {
+      persistUserMessage: { clientId: 'client-1', content: '{"text":"新消息","images":[],"files":[]}' },
+    });
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: expect.stringMatching(/^\[Cindy search mode\][\s\S]*\n\n新消息$/) },
+      expect.anything(),
+    );
+    const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1];
+    expect(persisted?.content).toBe('{"text":"新消息","images":[],"files":[]}');
+  });
+
   it('lazy-create 前调用 reconcileCreateOptsWithDb 以 DB 行校正 createOpts', async () => {
     const reconcile = vi.fn(async (_sessionId: string, co: MakerSessionCreateOpts) => {
       co.agentKind = 'codex';

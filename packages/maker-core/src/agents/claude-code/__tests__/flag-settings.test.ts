@@ -88,4 +88,32 @@ describe('buildClaudeFlagSettings', () => {
       'feishu-delegate:message-feishu-coworkers': 'user-invocable-only',
     });
   });
+
+  it('hides named skills in search mode without dropping routing overrides', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      hiddenSkillNames: ['web-access', 'playwright'],
+      capabilityRouting: {
+        overrides: [
+          {
+            capabilityId: 'feishu',
+            source: {
+              kind: 'harness-plugin',
+              harness: 'claude-code',
+              surface: 'skill',
+              id: 'feishu-delegate:message-feishu-coworkers',
+            },
+            invocation: 'explicit-only',
+          },
+        ],
+      },
+    });
+
+    expect(settings.skillOverrides).toEqual({
+      'feishu-delegate:message-feishu-coworkers': 'user-invocable-only',
+      'web-access': 'off',
+      playwright: 'off',
+    });
+  });
 });

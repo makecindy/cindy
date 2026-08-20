@@ -92,6 +92,7 @@ import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { getSessionSearchModeEnabled } from '../localDb/ipc/sessions.js';
 
 // scope = 'codex-proxy'。保持独立 scope,方便后续 E2E 日志脚本按 codex proxy 过滤。
 const log = createMakerLogger('codex-proxy');
@@ -109,6 +110,7 @@ const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
 const CODEX_GUARDIAN_SUBAGENT = 'guardian';
 const CODEX_COLLAB_SPAWN_SUBAGENT = 'collab_spawn';
 const CODEX_COLLAB_ROUTE_UNAVAILABLE_CODE = 'cindy_codex_parent_route_unavailable';
+const CODEX_COLLAB_SEARCH_MODE_CODE = 'cindy_search_mode_collab_blocked';
 
 let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
@@ -408,6 +410,24 @@ function unresolvedCollabSpawnRouteDecision(): RoutingDecision {
           type: 'server_error',
           code: CODEX_COLLAB_ROUTE_UNAVAILABLE_CODE,
           message: 'Cindy could not resolve the parent Provider route for this spawned Codex agent.',
+        },
+      }));
+    },
+  };
+}
+
+function searchModeCollabSpawnDecision(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      res.writeHead(403, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: CODEX_COLLAB_SEARCH_MODE_CODE,
+          message: 'Search mode is on. Spawned helpers are blocked. Use web_search only.',
         },
       }));
     },
@@ -2145,9 +2165,16 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
-    if (!sessionId && isCollabSpawnRequest(ctx.headers)) {
-      return unresolvedCollabSpawnRouteDecision();
+    if (isCollabSpawnRequest(ctx.headers)) {
+      if (!sessionId) return unresolvedCollabSpawnRouteDecision();
+      return getSessionSearchModeEnabled(sessionId).then((enabled) => {
+        if (enabled) return searchModeCollabSpawnDecision();
+        return continueModelRouting();
+      });
     }
+    return continueModelRouting();
+
+    function continueModelRouting(): RoutingDecision | Promise<RoutingDecision | null> | null {
     // 个性化子代理先继承父模型完成创建，再由前置 transform 强制写入冻结的
     // Provider/catalog model。嵌套子线程继承同一份路由快照。
     const subagentRoute = subagentRouteFromHeaders(ctx.headers);
@@ -2297,6 +2324,7 @@ export function createModelRoutingTransform(
       log.warn('codex routing → gateway but no api key configured; passthrough (可能 401)', { model });
     }
     return decision;
+    }
   };
 }
 

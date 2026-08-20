@@ -1375,6 +1375,12 @@ export interface StartSessionOptions {
    * 缺省 / undefined → 关闭。
    */
   planMode?: boolean;
+  /**
+   * 搜索模式：不把 skill 列表喂给模型。Claude 把已发现 skill 设为 off；
+   * Codex 用 skills.config 全关；Pi 加 --no-skills 且不挂已批准项目 skill。
+   * 缺省 / undefined → 关闭。Review 会话忽略此字段。
+   */
+  searchMode?: boolean;
   displayReasoning?: ReasoningDisplay;
   resumeSessionId?: string;
   /**

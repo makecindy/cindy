@@ -9929,6 +9929,14 @@
     },
     "exit": "계획 모드 종료"
   },
+  "searchMode": {
+    "menuItem": "검색 모드",
+    "indicator": {
+      "title": "검색 모드",
+      "hint": "환경 간섭을 배제하고 모델 자체의 웹 검색만 사용"
+    },
+    "exit": "검색 모드 종료"
+  },
   "globalDrop": {
     "cindyHint": "놓아서 플러그인 설치",
     "cshareHint": "놓아서 공유 세션 가져오기"

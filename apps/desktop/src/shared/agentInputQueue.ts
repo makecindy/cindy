@@ -128,6 +128,8 @@ export interface AgentInputCreateOpts {
   permissionMode?: string;
   /** 计划模式一级开关(与 permissionMode 正交), lazy-create / rehydrate 时透传给 maker。 */
   planMode?: boolean;
+  /** 搜索模式：startSession 时不把 skill 列表喂给模型。 */
+  searchMode?: boolean;
   userPrompt?: string;
   makerMemoryEnabled?: boolean;
   displayReasoning?: 'off' | 'summarized' | 'full';

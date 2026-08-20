@@ -397,6 +397,7 @@ import {
   readSessionExtraDirsFromDb,
   readSessionWorkingDirFromDb,
 } from '../maker-host/session-storage.js';
+import { getSessionSearchModeEnabled } from '../localDb/ipc/sessions.js';
 import {
   backgroundTurnPredatesSessionClear,
   clearSessionPersistState,
@@ -7963,6 +7964,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           providerId: sessions.providerId,
           effort: sessions.effort,
           fastMode: sessions.fastMode,
+          searchModeEnabled: sessions.searchModeEnabled,
         })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
@@ -7987,6 +7989,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       co.providerId = row.providerId;
       co.effort = (row.effort ?? undefined) as CreateOpts['effort'];
       co.fastMode = !!row.fastMode;
+      co.searchMode = row.searchModeEnabled === true;
     } catch {
       // 校正读库失败按原 opts 继续(与切换功能上线前行为一致)。
     }
@@ -8060,6 +8063,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: !!row.fastMode,
         permissionMode: (row.permissionMode ?? 'ask') as CreateOpts['permissionMode'],
         planMode: false,
+        searchMode: row.searchModeEnabled === true,
         title: row.title ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
         // 远端会话切换引擎后仍是远端:带回 remoteHostId 并走 ensure (SSH
@@ -8886,6 +8890,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           model: meta.model,
           resumeSessionId: meta.sdkSessionId,
           permissionMode: 'bypassPermissions',
+          searchMode: await getSessionSearchModeEnabled(targetSessionId),
         });
         await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);
         if (createOpts.extraDirs === undefined) {
@@ -9243,6 +9248,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       fastMode: !!row.fastMode,
       permissionMode: permissionModeOrAsk(row.permissionMode),
       planMode: false,
+      searchMode: row.searchModeEnabled === true,
       title: row.title ?? undefined,
       remoteHostId: row.remoteHostId ?? undefined,
       orcaRole: row.orcaRole as CreateOpts['orcaRole'],
@@ -9267,6 +9273,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       fastMode: createOpts.fastMode,
       permissionMode: createOpts.permissionMode,
       planMode: createOpts.planMode,
+      searchMode: createOpts.searchMode,
       makerMemoryEnabled: createOpts.makerMemoryEnabled,
       displayReasoning: createOpts.displayReasoning,
       vendorOptions: sanitizeVendorOptionsForQueuedItem(createOpts.vendorOptions),
@@ -10601,6 +10608,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     synthesizeOrcaVendorOptionsFromDb,
     readSessionExtraDirsFromDb,
     readSessionWorkingDirFromDb,
+    isSearchModeEnabled: (sessionId) => getSessionSearchModeEnabled(sessionId),
     withRehydrateCloseSuppressed,
     bootstrapSession,
     markOrcaRoleIfNeeded,
