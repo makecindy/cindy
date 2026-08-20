@@ -1459,19 +1459,20 @@ describe('Claude Code sidechain launch failure projection', () => {
     expect(taskUpdates).toHaveLength(0);
   });
 
-  it('projects the uniquely pending sidechain when api_retry exhausts after its envelope', async () => {
+  it('does not use transcript UUIDs to attribute an exhausted api_retry', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
-    // The SDK reuses this request uuid on the assistant error and api_retry frames.
-    // Correlation must use that identity, never the shared error tag.
-    // envelope 先到：记 open 等待，暂不投影。
+    // SDK assistant.uuid identifies the transcript event; the Anthropic response
+    // has its own message.id, while api_retry.uuid identifies a separate system
+    // event. Matching the two fabricated UUIDs would misattribute a retry.
     translateSdkMessage(
       {
         type: 'assistant',
         error: 'rate_limit',
-        uuid: 'retry-request-1',
+        uuid: 'assistant-transcript-event',
         parent_tool_use_id: 'toolu_retry_exhausted',
         message: {
+          id: 'msg_api_request_1',
           role: 'assistant',
           content: [{ type: 'text', text: 'Rate limited.' }],
         },
@@ -1479,7 +1480,6 @@ describe('Claude Code sidechain launch failure projection', () => {
       queue,
       ctx,
     );
-    // api_retry 不携带 parent_tool_use_id，但与 assistant error 共享 request uuid。
     translateSdkMessage(
       {
         type: 'system',
@@ -1487,7 +1487,7 @@ describe('Claude Code sidechain launch failure projection', () => {
         attempt: 3,
         max_retries: 3,
         error: 'rate_limit',
-        uuid: 'retry-request-1',
+        uuid: 'retry-system-event',
         error_status: 429,
         retry_delay_ms: 100,
       },
@@ -1498,12 +1498,8 @@ describe('Claude Code sidechain launch failure projection', () => {
     const taskUpdates = (await collect(queue)).filter(
       (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
     );
-    expect(taskUpdates).toHaveLength(1);
-    expect(taskUpdates[0].data).toMatchObject({
-      taskId: 'toolu_retry_exhausted',
-      parentToolUseId: 'toolu_retry_exhausted',
-      status: 'failed',
-    });
+    expect(taskUpdates).toHaveLength(0);
+    expect(ctx.rt.subagentRetryStateByParentToolUseId.has('toolu_retry_exhausted')).toBe(true);
   });
 
   it('does not attribute exhausted retry to one of multiple same-tag sidechains', async () => {
@@ -1595,7 +1591,7 @@ describe('Claude Code sidechain launch failure projection', () => {
     expect(ctx.rt.subagentRetryStateByParentToolUseId.has('toolu_retryable')).toBe(false);
   });
 
-  it('clears exhausted retry tags before the next turn', async () => {
+  it('clears pending retry state before the next turn', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
 
