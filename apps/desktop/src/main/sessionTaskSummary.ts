@@ -76,9 +76,15 @@ function broadcastPatched(sessionId: string, patch: Record<string, unknown>): vo
   }
 }
 
-/** 列表/文字模式下作废旧摘要。不 bump updatedAt。 */
+/** 列表/文字模式下作废旧摘要。不 bump updatedAt。
+ *  读/写之间用户可能已切回卡片:那时不能再抹掉摘要(回填可能刚因非空跳过),
+ *  改走 force 生成盖成最新内容。 */
 async function clearSessionTaskSummary(sessionId: string): Promise<void> {
   try {
+    if (pinnedSectionIsCard) {
+      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+      return;
+    }
     const db = getDbClient().drizzle;
     const [row] = await db
       .select({ summary: sessions.summary })
@@ -86,7 +92,15 @@ async function clearSessionTaskSummary(sessionId: string): Promise<void> {
       .where(eq(sessions.id, sessionId))
       .limit(1);
     if (!row?.summary) return;
+    if (pinnedSectionIsCard) {
+      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+      return;
+    }
     await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
+    if (pinnedSectionIsCard) {
+      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+      return;
+    }
     broadcastPatched(sessionId, { summary: null });
   } catch (err) {
     log.warn('clear stale task summary failed (swallowed)', {
