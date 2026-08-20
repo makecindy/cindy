@@ -69,6 +69,12 @@ describe('isHostProjectOrderChannelMissing', () => {
   it('only treats missing-channel codes as unavailable', () => {
     expect(isHostProjectOrderChannelMissing({ code: 'CHANNEL_NOT_ALLOWED' })).toBe(true);
     expect(isHostProjectOrderChannelMissing({ code: 'REMOTE_DISABLED' })).toBe(true);
+    expect(isHostProjectOrderChannelMissing({
+      message: '[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel not allowed remotely',
+    })).toBe(true);
+    expect(isHostProjectOrderChannelMissing(
+      new Error('[DEVICE_LINK_REMOTE_DISABLED] remote control disabled'),
+    )).toBe(true);
     expect(isHostProjectOrderChannelMissing({ code: 'NOT_CONNECTED' })).toBe(false);
     expect(isHostProjectOrderChannelMissing(new Error('timeout'))).toBe(false);
   });

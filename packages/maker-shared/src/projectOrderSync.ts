@@ -174,11 +174,29 @@ export function shouldAcceptHostProjectOrderPush(input: {
   return true;
 }
 
+const HOST_PROJECT_ORDER_MISSING_CHANNEL_CODES = new Set([
+  'CHANNEL_NOT_ALLOWED',
+  'REMOTE_DISABLED',
+  'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+  'DEVICE_LINK_REMOTE_DISABLED',
+]);
+
+function ipcCodeFromUnknown(error: unknown): string | undefined {
+  if (typeof error === 'string') {
+    return error.match(/\[([A-Z0-9_]+)\]/)?.[1];
+  }
+  if (!error || typeof error !== 'object') return undefined;
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
+  if (typeof code === 'string') return code;
+  const message = 'message' in error ? (error as { message?: unknown }).message : undefined;
+  if (typeof message === 'string') return message.match(/\[([A-Z0-9_]+)\]/)?.[1];
+  return undefined;
+}
+
 /** 只有被控端明确没有这个通道才降级到查看端账本。超时 / 掉线要重试。 */
 export function isHostProjectOrderChannelMissing(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const code = 'code' in error ? (error as { code?: unknown }).code : undefined;
-  return code === 'CHANNEL_NOT_ALLOWED' || code === 'REMOTE_DISABLED';
+  const code = ipcCodeFromUnknown(error);
+  return code !== undefined && HOST_PROJECT_ORDER_MISSING_CHANNEL_CODES.has(code);
 }
 
 /** 被控端够不到时,读写都走控制端自己的混排。 */
