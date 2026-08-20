@@ -2362,6 +2362,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // a result event. Retry state is turn-scoped, so clear it at the next turn boundary
       // as well as in the translator's normal result cleanup path.
       runtimeState.subagentRetryStateByParentToolUseId.clear();
+      runtimeState.exhaustedApiErrorUuids.clear();
       turnState.pendingApiError = null;
       turnState.lastAssistantRequestId = undefined;
       turnState.lastAssistantMsgHadSubstance = true;

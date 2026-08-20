@@ -1462,11 +1462,14 @@ describe('Claude Code sidechain launch failure projection', () => {
   it('projects the uniquely pending sidechain when api_retry exhausts after its envelope', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
+    // The SDK reuses this request uuid on the assistant error and api_retry frames.
+    // Correlation must use that identity, never the shared error tag.
     // envelope 先到：记 open 等待，暂不投影。
     translateSdkMessage(
       {
         type: 'assistant',
         error: 'rate_limit',
+        uuid: 'retry-request-1',
         parent_tool_use_id: 'toolu_retry_exhausted',
         message: {
           role: 'assistant',
@@ -1476,8 +1479,7 @@ describe('Claude Code sidechain launch failure projection', () => {
       queue,
       ctx,
     );
-    // api_retry 不携带 parent_tool_use_id，不能证明这个具体 sidechain 已耗尽；
-    // 即使 envelope 先到，也不能把同 tag 的全局重试事件当作该任务的终态。
+    // api_retry 不携带 parent_tool_use_id，但与 assistant error 共享 request uuid。
     translateSdkMessage(
       {
         type: 'system',
@@ -1485,6 +1487,7 @@ describe('Claude Code sidechain launch failure projection', () => {
         attempt: 3,
         max_retries: 3,
         error: 'rate_limit',
+        uuid: 'retry-request-1',
         error_status: 429,
         retry_delay_ms: 100,
       },
@@ -1589,6 +1592,7 @@ describe('Claude Code sidechain launch failure projection', () => {
       taskId: 'agent-self-healed',
       status: 'running',
     });
+    expect(ctx.rt.subagentRetryStateByParentToolUseId.has('toolu_retryable')).toBe(false);
   });
 
   it('clears exhausted retry tags before the next turn', async () => {

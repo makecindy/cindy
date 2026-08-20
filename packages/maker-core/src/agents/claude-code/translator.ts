@@ -150,8 +150,13 @@ export interface RuntimeState {
    */
   subagentRetryStateByParentToolUseId: Map<
     string,
-    { tag: string; errorMessage: string; projected: boolean }
+    { tag: string; errorMessage: string; projected: boolean; errorUuid?: string }
   >;
+  /**
+   * api_retry 没有 parent_tool_use_id，但 SDK 为同一 API-error 事件提供 uuid。
+   * 仅用这个请求级身份关联耗尽状态，禁止按 error tag 做全局归属。
+   */
+  exhaustedApiErrorUuids: Set<string>;
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
   subagentParentToolUseIdByTaskId: Map<string, string>;
   /**
@@ -192,6 +197,7 @@ export function newRuntimeState(): RuntimeState {
     publishedSubagentModelByParentToolUseId: new Map(),
     subagentStatusByParentToolUseId: new Map(),
     subagentRetryStateByParentToolUseId: new Map(),
+    exhaustedApiErrorUuids: new Set(),
     subagentParentToolUseIdByTaskId: new Map(),
     confirmedSubagentTaskIds: new Set(),
     excludedSubagentTaskIds: new Set(),
@@ -236,6 +242,7 @@ function resetTurnState(turn: TurnState, rt: RuntimeState): void {
   turn.lastAssistantRequestId = undefined;
   // 终态到达后必须丢弃本轮未决 sidechain，避免下一 turn 收口陈旧任务。
   rt.subagentRetryStateByParentToolUseId.clear();
+  rt.exhaustedApiErrorUuids.clear();
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
 
@@ -898,17 +905,19 @@ function handleSystem(
       retryAttempt: msg.attempt,
       maxRetries: msg.max_retries,
     };
-    // api_retry 不带 parent_tool_use_id。只有当当前 turn 恰好只有一个同 tag 的
-    // 未决 sidechain 时，才能用事件顺序作窄化关联；多个候选或没有候选时不投影，
-    // 避免主链/sidechain A 的耗尽误伤后续同 tag 的 sidechain B。
+    // api_retry 不带 parent_tool_use_id，但 SDK 为同一 API-error 提供 uuid。
+    // 只用请求级 uuid 关联 pending sidechain；没有 uuid 或无法精确匹配时不投影，
+    // 避免主链/并发 sidechain 的同 tag 重试误伤其他任务。
     if (
       typeof msg.attempt === 'number' &&
       typeof msg.max_retries === 'number' &&
       msg.attempt >= msg.max_retries &&
-      typeof msg.error === 'string'
+      typeof msg.uuid === 'string' &&
+      msg.uuid.length > 0
     ) {
+      ctx.rt.exhaustedApiErrorUuids.add(msg.uuid);
       const candidates = [...ctx.rt.subagentRetryStateByParentToolUseId.entries()]
-        .filter(([, state]) => state.tag === msg.error && !state.projected);
+        .filter(([, state]) => state.errorUuid === msg.uuid && !state.projected);
       if (candidates.length === 1) {
         const [parentToolUseId, state] = candidates[0];
         projectSubagentLaunchFailure(queue, ctx, parentToolUseId, {
@@ -997,6 +1006,11 @@ function handleSystem(
   ) {
     const update = toClaudeTaskUpdate(msg, ctx.rt, ctx.getSubagentTaskUsage);
     if (update) {
+      // task_started is authoritative evidence that the retryable launch recovered;
+      // remove the pending candidate before any unrelated api_retry can inspect it.
+      if (msg.subtype === 'task_started' && update.parentToolUseId) {
+        ctx.rt.subagentRetryStateByParentToolUseId.delete(update.parentToolUseId);
+      }
       queue.push({
         type: 'agent_task_update',
         data: update,
@@ -1285,6 +1299,7 @@ function handleAssistant(
   msg: {
     message?: { content?: Array<Record<string, unknown>> };
     error?: string;
+    uuid?: string;
     parent_tool_use_id?: string | null;
   },
   queue: EventQueue,
@@ -1337,7 +1352,8 @@ function handleAssistant(
     // 看不到失败任务、也没有终态通知（#2967）。这里把它规范化为父会话可见的 failed
     // 任务。已有 taskId 的执行期失败由 task_notification:failed 收口，不重复上报。
     // 可重试的 tag（rate_limit / server_error / unknown）SDK 会自己退避重试并可能
-    // 自愈，立即投影 failed 会把自愈任务锁死成失败。由于 api_retry 不携带 parent_tool_use_id，重试耗尽也不能安全归属到某一个 sidechain。
+    // 自愈，立即投影 failed 会把自愈任务锁死成失败。仅当 api_retry 的 uuid 与该
+    // sidechain error envelope 的 uuid 相同，才允许在重试耗尽后投影失败。
     if (sidechainParentToolUseId) {
       let knownTaskId: string | undefined;
       for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
@@ -1346,14 +1362,15 @@ function handleAssistant(
         break;
       }
       const retryable = RETRYABLE_SDK_ERROR_TAGS.has(msg.error ?? '');
-      // 只读取该 sidechain 自己的状态；不能读取一个没有身份的全局 retry tag。
-      // api_retry 不带 parent_tool_use_id，因此不会把它当成该 sidechain 的终态证据。
+      const errorUuid = typeof msg.uuid === 'string' && msg.uuid.length > 0 ? msg.uuid : undefined;
+      const retriesExhausted = errorUuid !== undefined
+        && ctx.rt.exhaustedApiErrorUuids.has(errorUuid);
       const state = ctx.rt.subagentRetryStateByParentToolUseId.get(sidechainParentToolUseId);
       if (state?.projected) {
         // 已投影过失败终态；幂等，不再重复上报也不清状态（防迟到 envelope 重投）。
         return;
       }
-      if (!knownTaskId && !retryable) {
+      if (!knownTaskId && (!retryable || retriesExhausted)) {
         projectSubagentLaunchFailure(queue, ctx, sidechainParentToolUseId, {
           errorMessage: redactSensitiveText(errorMessage),
           model:
@@ -1370,6 +1387,7 @@ function handleAssistant(
           tag: msg.error ?? 'unknown',
           errorMessage: redactSensitiveText(errorMessage),
           projected: false,
+          ...(errorUuid ? { errorUuid } : {}),
         });
         return;
       }
