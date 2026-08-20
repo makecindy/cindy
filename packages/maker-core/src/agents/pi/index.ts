@@ -2280,6 +2280,13 @@ export class PiAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'pi',
             getThresholdPct: getAutoCompactThresholdPct,
+            // 远端没有 overflow rollover,必须保留 host compact。
+            ...(opts.remoteHostId
+              ? {}
+              : {
+                  shouldHandoffAfterContextAssessment:
+                    this.deps.runtimeConfig.shouldHandoffAfterContextAssessment,
+                }),
           });
     // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
     // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。

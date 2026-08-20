@@ -1012,9 +1012,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         ...(persistUserMessage.agentFacingWireContent
                           ? { agentFacingWireContent: persistUserMessage.agentFacingWireContent }
                           : {}),
-                        // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
-                        // 对齐,renderer 据此渲染"由自动化任务发送"标签。
-                        ...(so.origin ? { origin: so.origin } : {}),
+                        // 队列来源写入 agentMeta,不发给 maker-core。Orca 只在 persist
+                        // 上;scheduler 直发可能只在 sendOpts.origin 上。
+                        ...((persistUserMessage.origin ?? so.origin)
+                          ? { origin: persistUserMessage.origin ?? so.origin }
+                          : {}),
                       },
                     },
                     persistUserMessage.shouldBroadcast ||
