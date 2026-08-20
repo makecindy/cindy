@@ -289,6 +289,7 @@ import {
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
   selectTailUserMessageId,
+  shouldBumpSendFollowCancelOnScroll,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
@@ -3993,11 +3994,11 @@ export function MessageStream({
   // shouldUnpinOnUpIntent),本回调只负责翻转:ref 与 state 同步更新(F2 不
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
-    bumpSendFollowCancelGeneration();
+    bumpSendFollowCancelGeneration(sessionId);
     if (!isNearBottomRef.current) return;
     isNearBottomRef.current = false;
     setIsNearBottom(false);
-  }, []);
+  }, [sessionId]);
 
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
@@ -4940,6 +4941,16 @@ export function MessageStream({
         nowNearBottom,
         wasNearBottom: isNearBottomRef.current,
       });
+      if (
+        shouldBumpSendFollowCancelOnScroll({
+          wasNearBottom: isNearBottomRef.current,
+          effectiveNearBottom,
+          scrollDelta: delta,
+          directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
+        })
+      ) {
+        bumpSendFollowCancelGeneration(sessionId);
+      }
       if (effectiveNearBottom !== isNearBottomRef.current) {
         isNearBottomRef.current = effectiveNearBottom;
         setIsNearBottom(effectiveNearBottom);
@@ -5054,6 +5065,7 @@ export function MessageStream({
     allRenderItems.length,
     setFirstVisibleItemKey,
     setAnchoredForwardItems,
+    sessionId,
   ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"

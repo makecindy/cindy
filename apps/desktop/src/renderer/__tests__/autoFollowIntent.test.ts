@@ -15,7 +15,10 @@ import {
   findLastMatchingId,
   resolveEffectiveNearBottom,
   resolveLastUserMessageObservation,
+  bumpSendFollowCancelGeneration,
+  readSendFollowCancelGeneration,
   shouldApplyFollowLatestRequest,
+  shouldBumpSendFollowCancelOnScroll,
   shouldCommitFollowLatestRequest,
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
@@ -434,6 +437,43 @@ describe('shouldCommitFollowLatestRequest', () => {
   });
 });
 
+describe('send follow cancel generation', () => {
+  it('isolates cancel generation per session so another pane cannot cancel this send', () => {
+    const aStart = readSendFollowCancelGeneration('session-a');
+    const bStart = readSendFollowCancelGeneration('session-b');
+    bumpSendFollowCancelGeneration('session-b');
+    expect(readSendFollowCancelGeneration('session-a')).toBe(aStart);
+    expect(readSendFollowCancelGeneration('session-b')).toBe(bStart + 1);
+  });
+
+  it('bumps on scrollbar unpin and continued user up-scroll, not on content growth while following', () => {
+    expect(
+      shouldBumpSendFollowCancelOnScroll({
+        wasNearBottom: true,
+        effectiveNearBottom: false,
+        scrollDelta: -40,
+        directionDeadZonePx: 2,
+      }),
+    ).toBe(true);
+    expect(
+      shouldBumpSendFollowCancelOnScroll({
+        wasNearBottom: false,
+        effectiveNearBottom: false,
+        scrollDelta: -40,
+        directionDeadZonePx: 2,
+      }),
+    ).toBe(true);
+    expect(
+      shouldBumpSendFollowCancelOnScroll({
+        wasNearBottom: true,
+        effectiveNearBottom: true,
+        scrollDelta: -1,
+        directionDeadZonePx: 2,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('resolveSendWindowHandoff', () => {
   it('local send leaves any anchored window so later tail items keep following', () => {
     expect(
@@ -522,7 +562,8 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).not.toContain('realTailUserSendOutsideWindow');
     expect(source).toContain('followLatestRequestKey');
     expect(source).toContain('pinToBottom();');
-    expect(source).toContain('bumpSendFollowCancelGeneration()');
+    expect(source).toContain('bumpSendFollowCancelGeneration(sessionId)');
+    expect(source).toContain('shouldBumpSendFollowCancelOnScroll({');
   });
 
   it('session view commits follow-latest only after accept and unchanged scroll generation', () => {
@@ -533,6 +574,8 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('followLatestRequestKey={followLatestRequestKey}');
     expect(source).toContain('requestFollowLatest(sessionId, followStartGeneration)');
     expect(source).toContain('shouldCommitFollowLatestRequest({');
-    expect(source).toContain('const followStartGeneration = readSendFollowCancelGeneration();');
+    expect(source).toContain(
+      'const followStartGeneration = readSendFollowCancelGeneration(sessionId);',
+    );
   });
 });

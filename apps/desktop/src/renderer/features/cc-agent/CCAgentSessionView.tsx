@@ -1283,7 +1283,7 @@ export function CCAgentSessionView({
           sourceSessionId,
           currentSessionId: sessionIdRef.current,
           startGeneration,
-          currentGeneration: readSendFollowCancelGeneration(),
+          currentGeneration: readSendFollowCancelGeneration(sourceSessionId),
         })
       ) {
         return;
@@ -2826,7 +2826,7 @@ export function CCAgentSessionView({
                 )
               : undefined;
           const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
-          const followStartGeneration = readSendFollowCancelGeneration();
+          const followStartGeneration = readSendFollowCancelGeneration(sessionId);
           const accepted = await dispatch(
             slashDispatch.message,
             pending.model,
@@ -3143,7 +3143,7 @@ export function CCAgentSessionView({
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
       };
       if (deliveryMode === 'steer') {
-        const followStartGeneration = readSendFollowCancelGeneration();
+        const followStartGeneration = readSendFollowCancelGeneration(sessionId);
         const accepted = await steerMessage(
           message,
           model,
@@ -3163,7 +3163,7 @@ export function CCAgentSessionView({
         }
         return accepted;
       }
-      const followStartGeneration = readSendFollowCancelGeneration();
+      const followStartGeneration = readSendFollowCancelGeneration(sessionId);
       const accepted = await sendMessage(
         message,
         model,
@@ -3667,7 +3667,7 @@ export function CCAgentSessionView({
             : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
-        const followStartGeneration = readSendFollowCancelGeneration();
+        const followStartGeneration = readSendFollowCancelGeneration(sessionId);
         const delivered = await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
             pendingText,

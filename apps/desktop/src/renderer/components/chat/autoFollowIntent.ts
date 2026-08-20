@@ -339,15 +339,39 @@ export function shouldApplyFollowLatestRequest(
   return Boolean(sourceSessionId && sourceSessionId === currentSessionId);
 }
 
-let sendFollowCancelGeneration = 0;
+const sendFollowCancelGenerations = new Map<string, number>();
 
-export function readSendFollowCancelGeneration(): number {
-  return sendFollowCancelGeneration;
+export function readSendFollowCancelGeneration(
+  sessionId: string | null | undefined,
+): number {
+  if (!sessionId) return 0;
+  return sendFollowCancelGenerations.get(sessionId) ?? 0;
 }
 
-/** User up-intent (wheel / touch / keys) cancels a still-pending follow-latest. */
-export function bumpSendFollowCancelGeneration(): void {
-  sendFollowCancelGeneration += 1;
+/** User up-intent on this stream cancels a still-pending follow-latest. */
+export function bumpSendFollowCancelGeneration(
+  sessionId: string | null | undefined,
+): void {
+  if (!sessionId) return;
+  sendFollowCancelGenerations.set(
+    sessionId,
+    (sendFollowCancelGenerations.get(sessionId) ?? 0) + 1,
+  );
+}
+
+export function shouldBumpSendFollowCancelOnScroll({
+  wasNearBottom,
+  effectiveNearBottom,
+  scrollDelta,
+  directionDeadZonePx,
+}: {
+  wasNearBottom: boolean;
+  effectiveNearBottom: boolean;
+  scrollDelta: number;
+  directionDeadZonePx: number;
+}): boolean {
+  if (wasNearBottom && !effectiveNearBottom) return true;
+  return !effectiveNearBottom && scrollDelta < -directionDeadZonePx;
 }
 
 export function shouldCommitFollowLatestRequest({
