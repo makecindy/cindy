@@ -1187,6 +1187,9 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(matches).toHaveLength(2);
     expect(selectorSource).not.toContain('(open || keepOpenForAgentConfirmation) && !disabled');
     expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentConfirmation');
+    // 切引擎成功也不收选单:applied=true 曾经会 setOpen(false),一点胶囊窗口就没了。
+    expect(selectorSource).toContain('setOpenWithoutAutoRefresh(true);');
+    expect(selectorSource).not.toContain('setOpenWithoutAutoRefresh(applied === false)');
   });
 
   it('换引擎确认只认任务真实引擎,不认挂着的意图', () => {
