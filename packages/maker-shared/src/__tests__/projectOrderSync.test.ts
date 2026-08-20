@@ -6,6 +6,7 @@ import {
   isHostProjectOrderReachable,
   localHostSeedOwnerKey,
   parseSyncedProjectOrderSnapshot,
+  shouldAcceptHostProjectOrderPush,
   shouldSeedLocalHostProjectOrder,
   projectOrderLedgerForScope,
   projectOrderWriteLedger,
@@ -148,6 +149,44 @@ describe('createProjectOrderFetchFence', () => {
     fence.noteLiveUpdate('dev-1');
     const token = fence.begin('dev-1');
     expect(fence.shouldApplyFetch('dev-1', token)).toBe(true);
+  });
+});
+
+describe('shouldAcceptHostProjectOrderPush', () => {
+  const ownerA = { dataOwnerId: 'acct-a', ownerGeneration: 2 };
+
+  it('drops a late frame from a previous owner or generation', () => {
+    expect(shouldAcceptHostProjectOrderPush({
+      controllerDataOwnerId: 'acct-a',
+      incoming: { dataOwnerId: 'acct-b', ownerGeneration: 9 },
+      incomingPresent: true,
+      previous: ownerA,
+      seenStampFromDevice: true,
+    })).toBe(false);
+    expect(shouldAcceptHostProjectOrderPush({
+      controllerDataOwnerId: 'acct-a',
+      incoming: { dataOwnerId: 'acct-a', ownerGeneration: 1 },
+      incomingPresent: true,
+      previous: ownerA,
+      seenStampFromDevice: true,
+    })).toBe(false);
+  });
+
+  it('keeps an unstamped frame only before the device has proven stamp support', () => {
+    expect(shouldAcceptHostProjectOrderPush({
+      controllerDataOwnerId: 'acct-a',
+      incoming: undefined,
+      incomingPresent: false,
+      previous: undefined,
+      seenStampFromDevice: false,
+    })).toBe(true);
+    expect(shouldAcceptHostProjectOrderPush({
+      controllerDataOwnerId: 'acct-a',
+      incoming: undefined,
+      incomingPresent: false,
+      previous: ownerA,
+      seenStampFromDevice: true,
+    })).toBe(false);
   });
 });
 

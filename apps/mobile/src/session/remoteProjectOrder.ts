@@ -1,6 +1,8 @@
 import {
   isHostProjectOrderChannelMissing,
+  parseSyncedProjectOrderOwnerStamp,
   parseSyncedProjectOrderSnapshot,
+  shouldAcceptHostProjectOrderPush,
   remapControllerOrderToHost,
   remapHostOrderToController,
   SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
@@ -35,6 +37,8 @@ export async function fetchHostProjectOrder(
 
 type RemoteProjectOrderListener = (deviceId: string, snapshot: SyncedProjectOrderSnapshot) => void;
 const remoteProjectOrderListeners = new Set<RemoteProjectOrderListener>();
+const remoteProjectOrderStamps = new Map<string, SyncedProjectOrderOwnerStamp>();
+const stampedRemoteProjectOrderDevices = new Set<string>();
 
 export function subscribeRemoteProjectOrderChanged(listener: RemoteProjectOrderListener): () => void {
   remoteProjectOrderListeners.add(listener);
@@ -43,9 +47,34 @@ export function subscribeRemoteProjectOrderChanged(listener: RemoteProjectOrderL
   };
 }
 
-export function applyRemoteProjectOrderPush(deviceId: string, payload: unknown): void {
+export function applyRemoteProjectOrderPush(
+  deviceId: string,
+  payload: unknown,
+  envelope: {
+    controllerDataOwnerId?: string | null;
+    ownerStamp?: unknown;
+    ownerStampPresent?: boolean;
+  } = {},
+): boolean {
+  const incomingPresent = envelope.ownerStampPresent
+    ?? Object.prototype.hasOwnProperty.call(envelope, 'ownerStamp');
+  const incoming = parseSyncedProjectOrderOwnerStamp(envelope.ownerStamp);
+  if (!shouldAcceptHostProjectOrderPush({
+    controllerDataOwnerId: envelope.controllerDataOwnerId ?? null,
+    incoming,
+    incomingPresent,
+    previous: remoteProjectOrderStamps.get(deviceId),
+    seenStampFromDevice: stampedRemoteProjectOrderDevices.has(deviceId),
+  })) {
+    return false;
+  }
+  if (incomingPresent && incoming) {
+    stampedRemoteProjectOrderDevices.add(deviceId);
+    remoteProjectOrderStamps.set(deviceId, incoming);
+  }
   const snapshot = parseSyncedProjectOrderSnapshot(payload);
   for (const listener of remoteProjectOrderListeners) listener(deviceId, snapshot);
+  return true;
 }
 
 export { SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL };

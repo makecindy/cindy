@@ -149,6 +149,31 @@ export function isHostProjectOrderReachable(
   return snapshot?.available !== false;
 }
 
+/**
+ * 项目顺序推送的代际门禁。控制端只收当前账号、且不比该设备已见过的更新更旧的帧。
+ * 旧主机没带 stamp 时,在该设备证明自己会打 stamp 之前仍放行。
+ */
+export function shouldAcceptHostProjectOrderPush(input: {
+  controllerDataOwnerId: string | null;
+  incoming: SyncedProjectOrderOwnerStamp | undefined;
+  incomingPresent: boolean;
+  previous: SyncedProjectOrderOwnerStamp | undefined;
+  seenStampFromDevice: boolean;
+}): boolean {
+  if (input.controllerDataOwnerId === null) return false;
+  if (!input.incomingPresent) return !input.seenStampFromDevice;
+  if (!input.incoming) return false;
+  if (input.incoming.dataOwnerId !== input.controllerDataOwnerId) return false;
+  if (
+    input.previous
+    && input.previous.dataOwnerId === input.incoming.dataOwnerId
+    && input.incoming.ownerGeneration < input.previous.ownerGeneration
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** 只有被控端明确没有这个通道才降级到查看端账本。超时 / 掉线要重试。 */
 export function isHostProjectOrderChannelMissing(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
