@@ -87,12 +87,32 @@ export function shouldUnpinOnUpIntent({ scrollHeight, clientHeight }: UpIntentUn
 export interface SelectTailUserMessageArgs<T extends { type: string }> {
   /** 当前有界窗口是否覆盖完整 render-item 尾部。 */
   windowCoversEnd: boolean;
-  /** 当前 DOM 窗口最后一个 render item。 */
-  visibleLastItem: T | undefined;
-  /** 内存中完整 render-item 序列最后一个 item。 */
-  realLastItem: T | undefined;
+  /** 当前 DOM 窗口的 render items。 */
+  visibleItems: readonly T[];
+  /** 内存中完整 render-item 序列。 */
+  allItems: readonly T[];
   /** 从 render item 提取 user message id；非 user item 返回 null。 */
   userMessageId: (item: T | undefined) => string | null;
+}
+
+/** Walk items from the tail and return the first matching value. */
+export function findLastMatching<T, U>(
+  items: readonly T[],
+  pick: (item: T) => U | null,
+): U | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const value = pick(items[i]);
+    if (value) return value;
+  }
+  return null;
+}
+
+/** Walk items from the tail and return the first matching id. */
+export function findLastMatchingId<T>(
+  items: readonly T[],
+  pickId: (item: T) => string | null,
+): string | null {
+  return findLastMatching(items, pickId);
 }
 
 /**
@@ -100,16 +120,17 @@ export interface SelectTailUserMessageArgs<T extends { type: string }> {
  *
  * bounded window 未覆盖会话末尾时，visible 尾只代表历史切片边界，可能刚好是
  * 一条旧 user message；拿它建基线会误判跳回底部或遮蔽真正的新发送。因此该态
- * 必须无条件读取内存全量的真实尾部。窗口覆盖末尾时 visible 尾与真实尾同义，
- * 保留 visible 路径避免纯扩窗造成额外观察变化。
+ * 必须无条件读取内存全量的真实尾部。窗口覆盖末尾时从 visible 尾往回找最近
+ * 一条 user——发送后同一帧 assistant / 工具卡已经接在后面时，只看最后一项
+ * 会把本次发送漏掉，后续不再强制跟底。
  */
 export function selectTailUserMessageId<T extends { type: string }>({
   windowCoversEnd,
-  visibleLastItem,
-  realLastItem,
+  visibleItems,
+  allItems,
   userMessageId,
 }: SelectTailUserMessageArgs<T>): string | null {
-  return userMessageId(windowCoversEnd ? visibleLastItem : realLastItem);
+  return findLastMatchingId(windowCoversEnd ? visibleItems : allItems, userMessageId);
 }
 
 export interface ResolveRenderPinArgs {
@@ -278,4 +299,42 @@ export function resolveNearBottomOnScroll({
   }
   if (wasNearBottom) return true;
   return scrollDelta > directionDeadZonePx;
+}
+
+export interface ResolveEffectiveNearBottomArgs {
+  /** Current bounded window includes the real session tail. */
+  windowCoversEnd: boolean;
+  /** Distance/direction resolver result for this scroll event. */
+  nowNearBottom: boolean;
+  /** Follow state before this scroll event. */
+  wasNearBottom: boolean;
+}
+
+/**
+ * Combine slice coverage with the scroll-event follow decision.
+ *
+ * A historical slice scrolled to its own bottom is not the session tail, so
+ * we must not *start* following there. An explicit follow (composer send /
+ * jump-to-latest) already set wasNearBottom; a late scroll event while the
+ * window has not yet switched back to the default tail must not cancel it.
+ */
+export function resolveEffectiveNearBottom({
+  windowCoversEnd,
+  nowNearBottom,
+  wasNearBottom,
+}: ResolveEffectiveNearBottomArgs): boolean {
+  if (windowCoversEnd) return nowNearBottom;
+  return wasNearBottom ? nowNearBottom : false;
+}
+
+/**
+ * A composer send that started on session A must not pin session B after the
+ * user switched routes. FadeSwitcher only remounts on the first path segment,
+ * so CCAgentSessionView state survives `/cc-agent/:id` changes.
+ */
+export function shouldApplyFollowLatestRequest(
+  sourceSessionId: string | null | undefined,
+  currentSessionId: string | null | undefined,
+): boolean {
+  return Boolean(sourceSessionId && sourceSessionId === currentSessionId);
 }

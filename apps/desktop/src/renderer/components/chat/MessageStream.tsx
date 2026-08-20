@@ -280,6 +280,9 @@ import {
   NO_SCROLL_TOLERANCE_PX,
 } from './viewportFillDetect';
 import {
+  findLastMatching,
+  findLastMatchingId,
+  resolveEffectiveNearBottom,
   resolveNearBottomOnScroll,
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
@@ -363,6 +366,12 @@ interface MessageStreamProps {
    * behavior of treating every new tail user message as a local send.
    */
   isLocalUserSend?: (clientId: string) => boolean;
+  /**
+   * Bumped by the parent after an accepted local composer send. Forces the
+   * stream back to the default tail and pins, even if the new user row is no
+   * longer the last render item (assistant / tool cards already appended).
+   */
+  followLatestRequestKey?: number;
   /**
    * Whether this stream should consume hardware scroll commands.
    * Split panes keep every MessageStream mounted; only the focused owner may act.
@@ -2804,6 +2813,7 @@ export function MessageStream({
   forkOrigin,
   onOpenForkOrigin,
   isLocalUserSend,
+  followLatestRequestKey,
   ownsHardwareScrollActions = true,
 }: MessageStreamProps) {
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
@@ -2870,10 +2880,10 @@ export function MessageStream({
   const [deleteCompensationReplay, setDeleteCompensationReplay] = useState(0);
   /** clientId of the last user-role message we've already observed. Used to
    *  detect a NEW user send → force pin regardless of prior scroll state. */
-  const lastUserMsg = messages[messages.length - 1];
   const lastUserMsgIdRef = useRef<string | null>(
-    lastUserMsg?.role === 'user' ? lastUserMsg.clientId : null,
+    findLastMatchingId(messages, (message) => (message.role === 'user' ? message.clientId : null)),
   );
+  const prevFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
 
   // ── render-window state ──
   // null = 默认窗口(取末尾 RENDER_WINDOW_INITIAL_ITEMS 个 item);非 null = 锚定到
@@ -4294,6 +4304,21 @@ export function MessageStream({
     });
   }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
 
+  // Composer send is an explicit "show me the result" intent. Don't wait for
+  // the tail render item to be a user message — assistant / tool cards often
+  // land in the same commit and used to hide the send from pin detection.
+  useLayoutEffect(() => {
+    if (followLatestRequestKey === undefined || followLatestRequestKey === null) return;
+    if (prevFollowLatestRequestKeyRef.current === followLatestRequestKey) return;
+    prevFollowLatestRequestKeyRef.current = followLatestRequestKey;
+    setFirstVisibleItemKey(null);
+    restoringRef.current = false;
+    isNearBottomRef.current = true;
+    setIsNearBottom(true);
+    setUnreadCount(0);
+    pinToBottom();
+  }, [followLatestRequestKey, pinToBottom]);
+
   // F3: 平滑滚到底的按钮回调。
   //   - 乐观更新 unreadCount / isNearBottom / isNearBottomRef → 按钮同一 tick fade-out
   //   - programmaticScrollRef 打开 → scroll handler 在动画期间不会误判为"用户上滚"
@@ -4432,24 +4457,21 @@ export function MessageStream({
   // result land.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
-    const visibleLastItem = visibleRenderItems[visibleRenderItems.length - 1];
-    const realLastItem = allRenderItems[allRenderItems.length - 1];
     const tailUserMessageId = selectTailUserMessageId({
       windowCoversEnd,
-      visibleLastItem,
-      realLastItem,
+      visibleItems: visibleRenderItems,
+      allItems: allRenderItems,
       userMessageId: (item) =>
         item?.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
     });
     const lastUserMsg =
       tailUserMessageId === null
         ? null
-        : realLastItem?.type === 'message' && realLastItem.message.clientId === tailUserMessageId
-          ? realLastItem.message
-          : visibleLastItem?.type === 'message' &&
-              visibleLastItem.message.clientId === tailUserMessageId
-            ? visibleLastItem.message
-            : null;
+        : findLastMatching(allRenderItems, (item) =>
+            item.type === 'message' && item.message.clientId === tailUserMessageId
+              ? item.message
+              : null,
+          );
 
     // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
     // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
@@ -4461,7 +4483,7 @@ export function MessageStream({
       : false;
     const userMessageObservation = resolveLastUserMessageObservation({
       restoring: restoringRef.current,
-      tailUserMessageId: lastUserMsg?.clientId ?? null,
+      tailUserMessageId,
       previousTailUserMessageId: lastUserMsgIdRef.current,
     });
     lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
@@ -4909,9 +4931,13 @@ export function MessageStream({
         thresholdPx: threshold,
         directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
       });
-      // render-window-bidirectional 要点 3: 窗口未覆盖末尾时强制判为非贴底。
-      // 否则 DOM 距底 <100px 会被误判成"贴底"，auto-follow 拽回底部、jump-down chip 不出现。
-      const effectiveNearBottom = !windowCoversEnd ? false : nowNearBottom;
+      // 历史切片滚到自己的底 ≠ 会话末尾，不能从这里开始跟随。已经在跟
+      // (本端发送 / 跳底)时，窗口还没切回尾窗的迟到 scroll 不得把跟随掐死。
+      const effectiveNearBottom = resolveEffectiveNearBottom({
+        windowCoversEnd,
+        nowNearBottom,
+        wasNearBottom: isNearBottomRef.current,
+      });
       if (effectiveNearBottom !== isNearBottomRef.current) {
         isNearBottomRef.current = effectiveNearBottom;
         setIsNearBottom(effectiveNearBottom);

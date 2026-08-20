@@ -71,6 +71,7 @@ import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
 import { MessageStream } from '@/components/chat/MessageStream';
+import { shouldApplyFollowLatestRequest } from '@/components/chat/autoFollowIntent';
 import { measureComposerStackTopOffset } from '@/components/chat/messageStreamIndicatorPosition';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
@@ -1269,6 +1270,13 @@ export function CCAgentSessionView({
       sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : false,
     [sessionId],
   );
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const [followLatestRequestKey, setFollowLatestRequestKey] = useState(0);
+  const requestFollowLatest = useCallback((sourceSessionId: string | null | undefined) => {
+    if (!shouldApplyFollowLatestRequest(sourceSessionId, sessionIdRef.current)) return;
+    setFollowLatestRequestKey((key) => key + 1);
+  }, []);
 
   const handleOpenForkOrigin = useCallback(() => {
     if (!canNavigateSession) {
@@ -2841,6 +2849,7 @@ export function CCAgentSessionView({
           );
           if (accepted) {
             pending.onDeferredAccepted?.();
+            requestFollowLatest(sessionId);
             const resumedSessionId = sessionId;
             if (resumedSessionId) {
               void dispatchDeferredUiAssignment(resumedSessionId, undefined).catch((err) => {
@@ -2864,6 +2873,7 @@ export function CCAgentSessionView({
       session?.agentKind,
       session?.orcaRole,
       sessionId,
+      requestFollowLatest,
       sendMessage,
       steerMessage,
     ],
@@ -3128,6 +3138,7 @@ export function CCAgentSessionView({
           sendOptions,
         );
         if (accepted && sessionId) {
+          requestFollowLatest(sessionId);
           void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
             log.error('recover deferred Worker assignment after user message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3146,6 +3157,7 @@ export function CCAgentSessionView({
         sendOptions,
       );
       if (accepted && sessionId) {
+        requestFollowLatest(sessionId);
         void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
           log.error('recover deferred Worker assignment after user message failed', err);
           toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3164,6 +3176,7 @@ export function CCAgentSessionView({
       patchLocalSession,
       sendMessage,
       steerMessage,
+      requestFollowLatest,
       navigate,
       session,
       sessionId,
@@ -3667,6 +3680,7 @@ export function CCAgentSessionView({
           ),
         );
         if (delivered) {
+          requestFollowLatest(sessionId);
           void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment).catch((err) => {
             log.error('deferred Worker assignment after first message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3682,6 +3696,7 @@ export function CCAgentSessionView({
     historyLoaded,
     maybeDispatchDesktopSlashCommand,
     restoreRecoverableHandoff,
+    requestFollowLatest,
     sendMessage,
     session,
     sessionId,
@@ -3930,6 +3945,7 @@ export function CCAgentSessionView({
       forkOrigin={forkOrigin}
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
+      followLatestRequestKey={followLatestRequestKey}
       ownsHardwareScrollActions={ownsHardwareTaskActions}
     />
   );

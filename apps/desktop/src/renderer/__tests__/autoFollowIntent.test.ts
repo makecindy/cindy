@@ -11,7 +11,11 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  findLastMatching,
+  findLastMatchingId,
+  resolveEffectiveNearBottom,
   resolveLastUserMessageObservation,
+  shouldApplyFollowLatestRequest,
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
@@ -267,38 +271,133 @@ describe('selectTailUserMessageId', () => {
   type Item = { type: 'message'; id: string; role: 'user' | 'assistant' };
   const userMessageId = (item: Item | undefined) =>
     item?.role === 'user' ? item.id : null;
+  const oldUser: Item = { type: 'message', id: 'old-user', role: 'user' };
+  const newUser: Item = { type: 'message', id: 'new-user', role: 'user' };
+  const assistant: Item = { type: 'message', id: 'assistant-tail', role: 'assistant' };
 
   it('uses the real tail when a bounded window does not cover the end', () => {
     expect(
       selectTailUserMessageId({
         windowCoversEnd: false,
-        visibleLastItem: { type: 'message', id: 'old-user', role: 'user' },
-        realLastItem: { type: 'message', id: 'new-user', role: 'user' },
+        visibleItems: [oldUser],
+        allItems: [oldUser, newUser],
         userMessageId,
       }),
     ).toBe('new-user');
   });
 
-  it('ignores an older visible-tail user when the real tail is assistant', () => {
+  it('walks back past a real assistant tail to the latest user send', () => {
     expect(
       selectTailUserMessageId({
         windowCoversEnd: false,
-        visibleLastItem: { type: 'message', id: 'old-user', role: 'user' },
-        realLastItem: { type: 'message', id: 'assistant-tail', role: 'assistant' },
+        visibleItems: [oldUser],
+        allItems: [oldUser, newUser, assistant],
+        userMessageId,
+      }),
+    ).toBe('new-user');
+  });
+
+  it('ignores an older visible-tail user when the real tail has no later user', () => {
+    expect(
+      selectTailUserMessageId({
+        windowCoversEnd: false,
+        visibleItems: [oldUser],
+        allItems: [assistant],
         userMessageId,
       }),
     ).toBeNull();
   });
 
-  it('uses the visible tail when the window covers the end', () => {
+  it('uses the latest visible user even when the covered tail is assistant', () => {
     expect(
       selectTailUserMessageId({
         windowCoversEnd: true,
-        visibleLastItem: { type: 'message', id: 'visible-user', role: 'user' },
-        realLastItem: { type: 'message', id: 'visible-user', role: 'user' },
+        visibleItems: [oldUser, newUser, assistant],
+        allItems: [oldUser, newUser, assistant],
         userMessageId,
       }),
-    ).toBe('visible-user');
+    ).toBe('new-user');
+  });
+});
+
+describe('findLastMatchingId', () => {
+  it('returns the last matching id walking from the tail', () => {
+    expect(
+      findLastMatchingId(
+        [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+        (item) => (item.id === 'c' ? null : item.id),
+      ),
+    ).toBe('b');
+    expect(findLastMatchingId([{ id: 'a' }], () => null)).toBeNull();
+    expect(
+      findLastMatching(
+        [{ id: 'a' }, { id: 'b' }],
+        (item) => (item.id === 'b' ? item : null),
+      )?.id,
+    ).toBe('b');
+  });
+});
+
+describe('resolveEffectiveNearBottom', () => {
+  it('uses the scroll-event decision when the window covers the end', () => {
+    expect(
+      resolveEffectiveNearBottom({
+        windowCoversEnd: true,
+        nowNearBottom: true,
+        wasNearBottom: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEffectiveNearBottom({
+        windowCoversEnd: true,
+        nowNearBottom: false,
+        wasNearBottom: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not start following at the bottom of a historical slice', () => {
+    expect(
+      resolveEffectiveNearBottom({
+        windowCoversEnd: false,
+        nowNearBottom: true,
+        wasNearBottom: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps an explicit follow while the window has not yet switched back to the tail', () => {
+    expect(
+      resolveEffectiveNearBottom({
+        windowCoversEnd: false,
+        nowNearBottom: true,
+        wasNearBottom: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('still drops follow when the user scrolls away during a stale-slice handoff', () => {
+    expect(
+      resolveEffectiveNearBottom({
+        windowCoversEnd: false,
+        nowNearBottom: false,
+        wasNearBottom: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldApplyFollowLatestRequest', () => {
+  it('applies only when the completing send still belongs to the visible session', () => {
+    expect(shouldApplyFollowLatestRequest('session-a', 'session-a')).toBe(true);
+    expect(shouldApplyFollowLatestRequest('session-a', 'session-b')).toBe(false);
+  });
+
+  it('ignores a late send after the user left the source session', () => {
+    expect(shouldApplyFollowLatestRequest('session-a', 'session-b')).toBe(false);
+    expect(shouldApplyFollowLatestRequest(null, 'session-b')).toBe(false);
+    expect(shouldApplyFollowLatestRequest('session-a', null)).toBe(false);
+    expect(shouldApplyFollowLatestRequest(undefined, 'session-b')).toBe(false);
   });
 });
 
@@ -388,5 +487,17 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('if (windowHandoff.clearWindowAnchor)');
     expect(source).toContain('if (decision.pinToBottom && !windowHandoff.deferPinToNextRender)');
     expect(source).not.toContain('realTailUserSendOutsideWindow');
+    expect(source).toContain('followLatestRequestKey');
+    expect(source).toContain('pinToBottom();');
+  });
+
+  it('session view asks the stream to follow latest after an accepted send', () => {
+    const source = readFileSync(
+      resolve(__dirname, '../features/cc-agent/CCAgentSessionView.tsx'),
+      'utf8',
+    );
+    expect(source).toContain('followLatestRequestKey={followLatestRequestKey}');
+    expect(source).toContain('requestFollowLatest(sessionId)');
+    expect(source).toContain('shouldApplyFollowLatestRequest(sourceSessionId, sessionIdRef.current)');
   });
 });
