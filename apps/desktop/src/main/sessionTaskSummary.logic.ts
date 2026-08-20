@@ -198,3 +198,11 @@ export function shouldForceGenerateOnClear(args: {
 }): boolean {
   return args.pinnedSectionIsCard && !args.sessionGenerateInFlight;
 }
+
+/** 切回卡片时若同 session 仍在飞:不能 await 自己,但必须在结算后 force 一次。 */
+export function shouldScheduleForceGenerateAfterInFlight(args: {
+  pinnedSectionIsCard: boolean;
+  sessionGenerateInFlight: boolean;
+}): boolean {
+  return args.pinnedSectionIsCard && args.sessionGenerateInFlight;
+}

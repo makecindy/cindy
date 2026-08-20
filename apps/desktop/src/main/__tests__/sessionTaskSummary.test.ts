@@ -23,6 +23,7 @@ import {
   shouldVoidSummaryAfterGenerationAttempt,
   nonCardTurnDisplayPatch,
   shouldForceGenerateOnClear,
+  shouldScheduleForceGenerateAfterInFlight,
 } from '../sessionTaskSummary.logic';
 
 describe('pickTier — 距今时间为主轴的档位选择', () => {
@@ -183,6 +184,31 @@ describe('shouldForceGenerateOnClear', () => {
     expect(
       shouldForceGenerateOnClear({
         pinnedSectionIsCard: true,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldScheduleForceGenerateAfterInFlight', () => {
+  it('切回卡片且生成仍在飞 → 结算后再 force,不在当前栈 await', () => {
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(true);
+  });
+  it('空闲或仍在列表 → 不预约', () => {
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: false,
         sessionGenerateInFlight: true,
       }),
     ).toBe(false);

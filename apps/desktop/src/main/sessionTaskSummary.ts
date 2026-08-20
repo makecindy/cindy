@@ -47,6 +47,7 @@ import {
   shouldVoidSummaryAfterGenerationAttempt,
   nonCardTurnDisplayPatch,
   shouldForceGenerateOnClear,
+  shouldScheduleForceGenerateAfterInFlight,
 } from './sessionTaskSummary.logic.js';
 
 const log = createLogger('sessionTaskSummary');
@@ -112,13 +113,31 @@ async function latestVisiblePreview(sessionId: string): Promise<string | null> {
 /** 已切回卡片:绝不继续写 null。没有生成在飞才 force 再生成;在飞则交给那次结算,避免自等待。 */
 async function stopClearBecauseCard(sessionId: string): Promise<boolean> {
   if (!pinnedSectionIsCard) return false;
+  const sessionGenerateInFlight = inFlight.has(sessionId);
   if (
     shouldForceGenerateOnClear({
       pinnedSectionIsCard: true,
-      sessionGenerateInFlight: inFlight.has(sessionId),
+      sessionGenerateInFlight,
     })
   ) {
     await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+    return true;
+  }
+  if (
+    shouldScheduleForceGenerateAfterInFlight({
+      pinnedSectionIsCard: true,
+      sessionGenerateInFlight,
+    })
+  ) {
+    const pending = inFlight.get(sessionId);
+    if (pending) {
+      void pending
+        .catch(() => undefined)
+        .then(() => {
+          if (!pinnedSectionIsCard) return;
+          return maybeGenerateSessionTaskSummary(sessionId, { force: true });
+        });
+    }
   }
   return true;
 }
