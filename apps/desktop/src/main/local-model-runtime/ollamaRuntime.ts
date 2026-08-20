@@ -30,9 +30,34 @@ export interface OllamaRuntimeDeps {
   spawnSidecar?: (binary: string) => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  signal?: AbortSignal;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function sleepUntilAborted(
+  sleep: (ms: number) => Promise<void>,
+  ms: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  if (signal.aborted) throw new Error('aborted');
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      sleep(ms),
+      new Promise<never>((_, reject) => {
+        onAbort = () => reject(new Error('aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
 
 export function macOllamaAppInstalled(
   platform: NodeJS.Platform,
@@ -191,7 +216,9 @@ export async function startOfficialOllamaApp(deps: OllamaRuntimeDeps): Promise<L
   const now = deps.now ?? Date.now;
   const deadline = now() + OLLAMA_START_TIMEOUT_MS;
   while (now() < deadline) {
-    await sleep(OLLAMA_START_POLL_MS);
+    if (deps.signal?.aborted) throw new Error('aborted');
+    await sleepUntilAborted(sleep, OLLAMA_START_POLL_MS, deps.signal);
+    if (deps.signal?.aborted) throw new Error('aborted');
     const next = await probeOllamaStatus(deps);
     if (next.kind === 'ready' || next.kind === 'port-conflict') return next;
   }

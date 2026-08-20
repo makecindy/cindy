@@ -97,4 +97,17 @@ describe('managed Ollama model identity', () => {
     expect(getCustomProvider).toHaveBeenCalled();
     expect(createCustomProvider).not.toHaveBeenCalled();
   });
+
+  it('removes a model from coding agents when the replacement lacks tools', async () => {
+    const existing = providerWith('glm-4.7-flash');
+    vi.mocked(getCustomProvider).mockResolvedValue(existing);
+    vi.mocked(updateCustomProvider).mockImplementation(async (_id, next) => next);
+    await upsertManagedOllamaModel({ id: 'glm-4.7-flash', name: 'GLM' }, ['pi']);
+    const saved = vi.mocked(updateCustomProvider).mock.calls.at(-1)?.[1] as ReturnType<
+      typeof providerWith
+    >;
+    expect(saved.runtimes.pi?.models.map((model) => model.id)).toEqual(['glm-4.7-flash']);
+    expect(saved.runtimes['claude-code']?.models).toEqual([]);
+    expect(saved.runtimes.codex?.models).toEqual([]);
+  });
 });

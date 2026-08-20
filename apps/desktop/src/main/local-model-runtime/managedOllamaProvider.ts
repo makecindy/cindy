@@ -330,12 +330,14 @@ function applyModelToAgents(
     'claude-code': provider.runtimes['claude-code'] ?? emptyClaudeRuntime(),
     codex: provider.runtimes.codex ?? emptyCodexRuntime(),
   };
-  for (const agent of agents) {
+  const allAgents: ManagedOllamaAgent[] = ['pi', 'claude-code', 'codex'];
+  for (const agent of allAgents) {
     const current = runtimes[agent];
     const without = current.models.filter((entry) => !ollamaModelRefsEqual(entry.id, model.id));
+    const keep = mode === 'upsert' && agents.includes(agent);
     runtimes[agent] = {
       ...current,
-      models: mode === 'remove' ? without : [...without, toAgentModel(model, agent)],
+      models: keep ? [...without, toAgentModel(model, agent)] : without,
     };
   }
   return { ...provider, runtimes };

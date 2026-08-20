@@ -281,7 +281,8 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         });
         if (signal.aborted) throw new Error('aborted');
         deps.onInstallProgress?.({ phase: 'starting', done: false });
-        const next = await startOfficialOllamaApp(runtimeDeps());
+        const next = await startOfficialOllamaApp({ ...runtimeDeps(), signal });
+        if (signal.aborted) throw new Error('aborted');
         deps.onStatus?.(next);
         if (next.kind === 'ready') {
           deps.onInstallProgress?.({ phase: 'success', version: next.version, done: true });

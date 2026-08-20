@@ -115,4 +115,20 @@ describe('ollamaRuntime', () => {
     expect(openApp).not.toHaveBeenCalled();
     expect(status.kind).toBe('port-conflict');
   });
+
+  it('aborts start polling when the install signal fires', async () => {
+    const abort = new AbortController();
+    const pending = startOfficialOllamaApp({
+      platform: 'darwin',
+      appExists: () => true,
+      openApp: async () => undefined,
+      signal: abort.signal,
+      sleep: () => new Promise(() => undefined),
+      fetchImpl: async () => {
+        throw new OllamaHttpError('refused', 'down');
+      },
+    });
+    abort.abort();
+    await expect(pending).rejects.toThrow('aborted');
+  });
 });

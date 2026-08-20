@@ -164,10 +164,14 @@ export function registerLocalModelHandlers(
       throwIpcError('INVALID_PARAMS', 'consent is required');
     }
     try {
+      const owner = deps.currentOwnerSession?.();
       const status = await service.installRuntime();
       if (status.kind === 'ready') {
         const result = throwManagedResult(
-          await service.ensureProvider({ owner: deps.currentOwnerSession?.() }),
+          await service.ensureProvider({
+            owner,
+            ownerStillActive: () => ownerMatches(owner),
+          }),
         );
         await deps.refreshCatalog();
         deps.broadcastChanged();
