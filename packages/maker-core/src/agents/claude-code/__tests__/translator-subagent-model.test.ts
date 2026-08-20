@@ -1561,6 +1561,73 @@ describe('Claude Code sidechain launch failure projection', () => {
     });
   });
 
+  it('clears exhausted retry tags before the next turn', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    // 第一轮耗尽 rate_limit；api_retry 没有 parent_tool_use_id，只能把标签
+    // 暂存在 RuntimeState。轮次正常结束后，该证据不能污染下一轮。
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-opus-4-6', usage: { input_tokens: 100 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.exhaustedApiErrorTags.has('rate_limit')).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: false,
+        result: 'First turn recovered.',
+        usage: { input_tokens: 100, output_tokens: 4 },
+        modelUsage: {
+          'claude-opus-4-6': { inputTokens: 100, outputTokens: 4, contextWindow: 200_000 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.exhaustedApiErrorTags.size).toBe(0);
+
+    // 第二轮第一次收到同标签错误时，仍应等待 SDK 重试，而不能直接投影 failed。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_next_turn',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited, retrying.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(0);
+  });
+
   it('does not leak a sidechain error into the main turn pendingApiError', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();

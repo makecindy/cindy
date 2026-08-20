@@ -231,7 +231,7 @@ function ccLiveStatus(
  * 清掉一个 turn 的非 usage 累积状态(usage 由 UsageTracker.endTurn 内部 reset)。
  * turn 收尾共用:正常 Done/done 路径与 empty-response 终态 error 提前 return 路径。
  */
-function resetTurnState(turn: TurnState): void {
+function resetTurnState(turn: TurnState, rt: RuntimeState): void {
   turn.text = '';
   turn.toolUses = 0;
   turn.apiCalls = 0;
@@ -242,6 +242,9 @@ function resetTurnState(turn: TurnState): void {
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
   turn.lastAssistantRequestId = undefined;
+  // api_retry 不携带 parent_tool_use_id，只能在当前 turn 内按 error tag 关联。
+  // 终态到达后必须丢弃本轮耗尽证据，避免下一 turn 的同类瞬时错误被误判为已耗尽。
+  rt.exhaustedApiErrorTags.clear();
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
 
@@ -2165,7 +2168,7 @@ function handleResult(
     // 还原 aggregate 基线: 本轮空响应的 result.usage(0)不能成为下一轮 delta 的基线,
     // 否则下一真实 turn 会从 0 起算、把整段历史 token 全算到那一轮(Codex P2)。
     ctx.rt.lastResultUsageAggregate = aggregateBeforeThisResult;
-    resetTurnState(ctx.turn);
+    resetTurnState(ctx.turn, ctx.rt);
     resetClaudeGenerationTiming(ctx.rt.generation);
     ctx.onTurnEnd?.();
     return;
@@ -2266,7 +2269,7 @@ function handleResult(
     source: 'claude-code',
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)
-  resetTurnState(ctx.turn);
+  resetTurnState(ctx.turn, ctx.rt);
   resetClaudeGenerationTiming(ctx.rt.generation);
   // turn 结束钩子 — agent 用来清 turnInFlight 标记 (rewind preview/commit 前置守卫读它)
   ctx.onTurnEnd?.();
