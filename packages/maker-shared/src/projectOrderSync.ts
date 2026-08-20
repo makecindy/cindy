@@ -140,9 +140,44 @@ export function shouldSeedLocalHostProjectOrder(
   seededOwners: ReadonlySet<string>,
 ): boolean {
   if (!snapshot.ownerStamp || snapshot.authoritative || !seed?.custom) return false;
-  if (seed.keys.some((key) => key.startsWith(DEVICE_PREFIX))) return false;
   if (hostLocalProjectKeysOnly(seed.keys).length === 0) return false;
   return !seededOwners.has(localHostSeedOwnerKey(snapshot.ownerStamp));
+}
+
+/**
+ * 按折叠键对齐手动序:prev 里对得上的项保留相对顺序,拼写改用 active 侧原样。
+ * Windows 首次写入的小写键因此能对上主机 `C:/Work/App`。
+ */
+export function reconcileManualProjectOrder(
+  prev: readonly string[],
+  activeKeys: readonly string[],
+): string[] {
+  const active: string[] = [];
+  const activeByFold = new Map<string, string>();
+  for (const value of activeKeys) {
+    const key = value.trim();
+    if (!key) continue;
+    const folded = foldProjectOrderKey(key);
+    if (activeByFold.has(folded)) continue;
+    activeByFold.set(folded, key);
+    active.push(key);
+  }
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const value of prev) {
+    const key = value.trim();
+    if (!key) continue;
+    const match = activeByFold.get(foldProjectOrderKey(key));
+    if (!match || seen.has(match)) continue;
+    seen.add(match);
+    next.push(match);
+  }
+  for (const key of active) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(key);
+  }
+  return next;
 }
 
 export function isHostProjectOrderReachable(

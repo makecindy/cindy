@@ -1521,15 +1521,17 @@ export default function HomeScreen() {
       pathname: '/devices/[deviceId]',
       // 带上 workingDir + 项目名,让目标页只显示「这个项目」的会话(名副其实地"查看全部 N 条")。
       // 未归类组(workingDir 为空)不传过滤参数,退化为整台设备的会话列表。
+      // statusFilter 跟首页当前筛选走,归档/全部入口不能掉回默认 active。
       params: {
         deviceId: project.deviceId,
         name: project.deviceName,
+        statusFilter,
         ...(project.workingDir
           ? { workingDir: project.workingDir, projectName: project.title }
           : {}),
       },
     });
-  }, [guardedPush]);
+  }, [guardedPush, statusFilter]);
 
   // renderItem 提取为稳定引用:打开「选项」sheet 等与列表数据无关的页面状态变更不再改变
   // renderItem 身份,SectionList 可见行不随之全量重渲染(review P2:每行 Swipeable 动画树

@@ -1,5 +1,7 @@
 /** 首页项目顺序:对齐桌面侧栏 #3030,但不共用桌面 localStorage / owner 作用域。 */
 
+import { reconcileManualProjectOrder } from '@cindy/maker-shared/project-order-sync';
+
 export type HomeProjectOrder = 'activity' | 'custom';
 
 export function normalizeProjectKey(value: string): string {
@@ -18,27 +20,12 @@ export function normalizeProjectKeyList(values: readonly string[]): string[] {
   return next;
 }
 
-/** 保留 prev 里仍存在的 key,新 key 追加末尾。 */
+/** 保留 prev 里仍存在的 key,新 key 追加末尾。折叠键对上时用 active 侧拼写。 */
 export function normalizeManualProjectOrder(
   prev: readonly string[],
   activeKeys: readonly string[],
 ): string[] {
-  const active = normalizeProjectKeyList(activeKeys);
-  const activeSet = new Set(active);
-  const seen = new Set<string>();
-  const next: string[] = [];
-  for (const value of prev) {
-    const key = normalizeProjectKey(value);
-    if (!key || !activeSet.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    next.push(key);
-  }
-  for (const key of active) {
-    if (seen.has(key)) continue;
-    seen.add(key);
-    next.push(key);
-  }
-  return next;
+  return reconcileManualProjectOrder(prev, activeKeys);
 }
 
 /**

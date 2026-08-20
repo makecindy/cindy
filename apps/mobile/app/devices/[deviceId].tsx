@@ -116,6 +116,7 @@ export default function DeviceDetailScreen() {
     automationName?: string;
     automationWorkingDir?: string;
     automationSessionIds?: string;
+    statusFilter?: string;
   }>();
   const deviceId = readRouteString(params.deviceId) ?? '';
   const deviceName = readRouteString(params.name) ?? readRouteString(params.deviceName) ?? deviceId;
@@ -153,7 +154,9 @@ export default function DeviceDetailScreen() {
   [allSessions, deviceId, projectWorkingDir]);
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
-  const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>('active');
+  const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(
+    () => parseRouteStatusFilter(readRouteString(params.statusFilter)),
+  );
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1205,6 +1208,19 @@ function parseSessionIdsParam(value: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+function parseRouteStatusFilter(value: string | null): RemoteSessionStatusFilter {
+  if (
+    value === 'active'
+    || value === 'waiting'
+    || value === 'automation'
+    || value === 'archived'
+    || value === 'all'
+  ) {
+    return value;
+  }
+  return 'active';
 }
 
 function readRouteString(value: unknown): string | null {

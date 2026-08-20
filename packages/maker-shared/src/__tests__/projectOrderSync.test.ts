@@ -16,6 +16,7 @@ import {
   resolveDisplayedProjectOrder,
   resolveProjectOrderWriteScope,
   shouldPersistViewerSortAfterHostActivity,
+  reconcileManualProjectOrder,
 } from '../projectOrderSync';
 
 describe('project order key remap', () => {
@@ -245,6 +246,23 @@ describe('shouldSeedLocalHostProjectOrder', () => {
       { custom: true, keys: ['local:/a'] },
       new Set(),
     )).toBe(true);
+  });
+
+  it('seeds the local subsequence of a mixed viewer ledger', () => {
+    expect(shouldSeedLocalHostProjectOrder(
+      emptyHost,
+      { custom: true, keys: ['local:/a', 'device:other:/b'] },
+      new Set(),
+    )).toBe(true);
+  });
+});
+
+describe('reconcileManualProjectOrder', () => {
+  it('keeps active spelling when prev only has the folded Windows key', () => {
+    expect(reconcileManualProjectOrder(
+      ['local:c:/work/app', 'local:/posix'],
+      ['local:C:/Work/App', 'local:/posix', 'local:/new'],
+    )).toEqual(['local:C:/Work/App', 'local:/posix', 'local:/new']);
   });
 });
 
