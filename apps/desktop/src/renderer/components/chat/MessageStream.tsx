@@ -280,6 +280,7 @@ import {
   NO_SCROLL_TOLERANCE_PX,
 } from './viewportFillDetect';
 import {
+  bumpSendFollowCancelGeneration,
   findLastMatching,
   findLastMatchingId,
   resolveEffectiveNearBottom,
@@ -3992,6 +3993,7 @@ export function MessageStream({
   // shouldUnpinOnUpIntent),本回调只负责翻转:ref 与 state 同步更新(F2 不
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
+    bumpSendFollowCancelGeneration();
     if (!isNearBottomRef.current) return;
     isNearBottomRef.current = false;
     setIsNearBottom(false);

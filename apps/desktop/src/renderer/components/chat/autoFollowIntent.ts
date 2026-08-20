@@ -338,3 +338,29 @@ export function shouldApplyFollowLatestRequest(
 ): boolean {
   return Boolean(sourceSessionId && sourceSessionId === currentSessionId);
 }
+
+let sendFollowCancelGeneration = 0;
+
+export function readSendFollowCancelGeneration(): number {
+  return sendFollowCancelGeneration;
+}
+
+/** User up-intent (wheel / touch / keys) cancels a still-pending follow-latest. */
+export function bumpSendFollowCancelGeneration(): void {
+  sendFollowCancelGeneration += 1;
+}
+
+export function shouldCommitFollowLatestRequest({
+  sourceSessionId,
+  currentSessionId,
+  startGeneration,
+  currentGeneration,
+}: {
+  sourceSessionId: string | null | undefined;
+  currentSessionId: string | null | undefined;
+  startGeneration: number;
+  currentGeneration: number;
+}): boolean {
+  if (!shouldApplyFollowLatestRequest(sourceSessionId, currentSessionId)) return false;
+  return startGeneration === currentGeneration;
+}

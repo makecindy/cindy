@@ -16,6 +16,7 @@ import {
   resolveEffectiveNearBottom,
   resolveLastUserMessageObservation,
   shouldApplyFollowLatestRequest,
+  shouldCommitFollowLatestRequest,
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
@@ -401,6 +402,38 @@ describe('shouldApplyFollowLatestRequest', () => {
   });
 });
 
+describe('shouldCommitFollowLatestRequest', () => {
+  it('commits only when the send still belongs to this session and the user did not scroll away', () => {
+    expect(
+      shouldCommitFollowLatestRequest({
+        sourceSessionId: 'session-a',
+        currentSessionId: 'session-a',
+        startGeneration: 3,
+        currentGeneration: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it('drops a failed-send leftover after the user scrolled or switched sessions', () => {
+    expect(
+      shouldCommitFollowLatestRequest({
+        sourceSessionId: 'session-a',
+        currentSessionId: 'session-a',
+        startGeneration: 3,
+        currentGeneration: 4,
+      }),
+    ).toBe(false);
+    expect(
+      shouldCommitFollowLatestRequest({
+        sourceSessionId: 'session-a',
+        currentSessionId: 'session-b',
+        startGeneration: 3,
+        currentGeneration: 3,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('resolveSendWindowHandoff', () => {
   it('local send leaves any anchored window so later tail items keep following', () => {
     expect(
@@ -489,21 +522,17 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).not.toContain('realTailUserSendOutsideWindow');
     expect(source).toContain('followLatestRequestKey');
     expect(source).toContain('pinToBottom();');
+    expect(source).toContain('bumpSendFollowCancelGeneration()');
   });
 
-  it('session view asks the stream to follow latest at dispatch, not after await', () => {
+  it('session view commits follow-latest only after accept and unchanged scroll generation', () => {
     const source = readFileSync(
       resolve(__dirname, '../features/cc-agent/CCAgentSessionView.tsx'),
       'utf8',
     );
     expect(source).toContain('followLatestRequestKey={followLatestRequestKey}');
-    expect(source).toContain('requestFollowLatest(sessionId)');
-    expect(source).toContain('shouldApplyFollowLatestRequest(sourceSessionId, sessionIdRef.current)');
-    expect(source).toContain(
-      'requestFollowLatest(sessionId);\n      const accepted = await sendMessage(',
-    );
-    expect(source).toContain(
-      'requestFollowLatest(sessionId);\n        const accepted = await steerMessage(',
-    );
+    expect(source).toContain('requestFollowLatest(sessionId, followStartGeneration)');
+    expect(source).toContain('shouldCommitFollowLatestRequest({');
+    expect(source).toContain('const followStartGeneration = readSendFollowCancelGeneration();');
   });
 });
