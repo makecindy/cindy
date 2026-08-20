@@ -5627,6 +5627,18 @@ export function handleStreamEvent(
           ),
         };
       }
+      // 无任何归属的 dismissed = 本端应答后(respondToPermission 乐观清)main 的
+      // resolved 收敛广播,该 requestId 已不在任何 pending 状态里。此刻才推进权限
+      // 队列 —— 与「应答即推进」相比,把下一张卡的上位挡在 main 确认之后,长按
+      // Enter / 双击的重复输入不会跨卡误批(Codex review on #3104)。
+      if (!state.pendingPermission && state.pendingPermissionQueue.length > 0) {
+        const [nextPermission = null, ...remainingPermissions] = state.pendingPermissionQueue;
+        return {
+          ...state,
+          pendingPermission: nextPermission,
+          pendingPermissionQueue: remainingPermissions,
+        };
+      }
       return state;
     }
 
@@ -13101,6 +13113,9 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      // /clear 期间远端 dismissal 可能丢失;残留队列会在新会话把 clear 前的幽灵
+      // 权限卡顶上来(Codex review on #3104)→ 与当前卡一起本地清空。
+      pendingPermissionQueue: [],
       pendingAskUser: null,
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
@@ -13411,18 +13426,16 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   const { requestId } = state.pendingPermission;
   bumpInteractionReconcileEpoch(sessionId);
 
-  // Clear the pending permission immediately so the UI updates, and advance the
-  // queue in the same commit — parallel tool_use may have more cards waiting
-  // (issue #3092). The follow-up permission_dismissed broadcast for this
-  // requestId no longer matches the (new) current card and is a no-op.
-  setState(sessionId, (s) => {
-    const [nextPermission = null, ...remainingPermissions] = s.pendingPermissionQueue;
-    return {
-      ...s,
-      pendingPermission: nextPermission,
-      pendingPermissionQueue: remainingPermissions,
-    };
-  });
+  // Clear the pending permission immediately so the UI updates. Deliberately do
+  // NOT promote the next queued card here: a held-down Enter (keydown repeat)
+  // or a double click would land the same "allow" on a card the user has not
+  // reviewed yet (Codex review on #3104). The queue advances only when main
+  // confirms this request is settled — its permission_dismissed
+  // (reason='resolved') broadcast, or the timeout/mode-change fallback, hits
+  // the no-match tail of the permission_dismissed handler and promotes the
+  // queue head. Repeat inputs in that window land on the empty slot and are
+  // ignored by the guard above.
+  setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
 
   // Send to maker (InteractionDecision kind: 'permission')
   makerApiFor(sessionId)

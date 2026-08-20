@@ -146,7 +146,7 @@ describe('permission card queue (issue #3092)', () => {
     expect(snap.pendingPermissionQueue.map((p) => p.requestId)).toEqual(['perm-2']);
   });
 
-  it('advances to the queued card after the current one is answered', () => {
+  it('advances to the queued card only after main confirms the answered one', () => {
     pushPermission('perm-1');
     pushPermission('perm-2');
 
@@ -156,7 +156,20 @@ describe('permission card queue (issue #3092)', () => {
       'perm-1',
       expect.objectContaining({ kind: 'permission', behavior: 'allow' }),
     );
-    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    // Optimistic clear only — the next card must wait for main's settlement so
+    // repeat inputs (held Enter / double click) cannot spill onto it.
+    let snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.pendingPermission).toBeNull();
+    expect(snap.pendingPermissionQueue.map((p) => p.requestId)).toEqual(['perm-2']);
+
+    listeners.dismissed?.({
+      sessionId: SESSION_ID,
+      requestId: 'perm-1',
+      reason: 'resolved',
+      decision: { kind: 'permission', behavior: 'allow' },
+    });
+
+    snap = makerChatStore.getSnapshot(SESSION_ID);
     expect(snap.pendingPermission?.requestId).toBe('perm-2');
     expect(snap.pendingPermissionQueue).toEqual([]);
 
@@ -166,6 +179,25 @@ describe('permission card queue (issue #3092)', () => {
       expect.objectContaining({ kind: 'permission', behavior: 'deny' }),
     );
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).toBeNull();
+  });
+
+  it('ignores repeat answers while the settled card awaits main confirmation', () => {
+    pushPermission('perm-1');
+    pushPermission('perm-2');
+
+    // Held-down Enter / double click: second respond fires before main's
+    // dismissed broadcast arrives. It must not touch the queued card.
+    makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow' });
+    makerChatStore.respondToPermission(SESSION_ID, { behavior: 'allow' });
+
+    expect(resolveInteraction).toHaveBeenCalledTimes(1);
+    expect(resolveInteraction).toHaveBeenCalledWith(
+      'perm-1',
+      expect.objectContaining({ kind: 'permission', behavior: 'allow' }),
+    );
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.pendingPermission).toBeNull();
+    expect(snap.pendingPermissionQueue.map((p) => p.requestId)).toEqual(['perm-2']);
   });
 
   it('advances to the queued card when main dismisses the current one', () => {
