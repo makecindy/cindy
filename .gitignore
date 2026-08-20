@@ -175,8 +175,6 @@ apps/mobile/e2e/visual-baselines/
 .cindy-worktrees/
 # 品牌迁移前已创建的 worktree 仍需保持 ignored。
 .xdt-worktrees/
-# 手工开发 worktree 统一放在仓库内该目录，避免污染主工作区状态。
-.worktrees/
 .xdtworktreeinclude
 /start-claude-clean.bat
 /start-claude-clean.ps1

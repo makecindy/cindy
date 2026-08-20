@@ -347,6 +347,37 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const ROOT_TURN_START_ORDER_CASES = [
+  {
+    name: 'response-first',
+    sessionSuffix: 'response-first',
+    steps: [
+      { kind: 'response', at: 2_000 },
+      { kind: 'started', at: 3_000 },
+    ],
+    expectedDurationMs: 2_000,
+  },
+  {
+    name: 'notification-first',
+    sessionSuffix: 'notification-first',
+    steps: [
+      { kind: 'started', at: 2_000 },
+      { kind: 'response', at: 3_000 },
+    ],
+    expectedDurationMs: 3_000,
+  },
+  {
+    name: 'duplicate turn/started',
+    sessionSuffix: 'duplicate-started',
+    steps: [
+      { kind: 'response', at: 2_000 },
+      { kind: 'started', at: 3_000 },
+      { kind: 'started', at: 3_500 },
+    ],
+    expectedDurationMs: 2_000,
+  },
+] as const;
+
 async function waitForExpectation(assertion: () => void | Promise<void>, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -15062,6 +15093,73 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it.each(ROOT_TURN_START_ORDER_CASES)(
+    'starts generation timing once for $name root-turn activation',
+    async ({ sessionSuffix, steps, expectedDurationMs }) => {
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const turnStartResponse = deferred<{ turn: { id: string } }>();
+        const agent = new CodexAgent(createDeps());
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) return turnStartResponse.promise;
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: `session-turn-start-order-${sessionSuffix}`,
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.turnStarted || !handlers.turnCompleted) {
+          throw new Error('expected turn lifecycle handlers');
+        }
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        const sendPromise = handle.send({ type: 'user', content: 'hello' });
+        await waitForExpectation(() => {
+          expect(host.request).toHaveBeenCalledWith(
+            Method.TurnStart,
+            expect.any(Object),
+            expect.any(Object),
+          );
+        });
+
+        for (const step of steps) {
+          now = step.at;
+          if (step.kind === 'response') {
+            turnStartResponse.resolve({ turn: { id: 'turn-ordering' } });
+            await sendPromise;
+          } else {
+            handlers.turnStarted({
+              threadId: 'start-thread-id',
+              turn: { id: 'turn-ordering' },
+            });
+          }
+        }
+
+        now = 5_000;
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-ordering', status: 'completed' },
+        });
+        await waitForExpectation(() => {
+          expect(events.some((event) => event.type === 'done')).toBe(true);
+        });
+        const done = events.find((event) => event.type === 'done');
+        expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs)
+          .toBe(expectedDurationMs);
+
+        await handle.close();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
   it('starts response-first generation timing at turn/started and excludes an approval wait', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -16722,6 +16820,114 @@ describe('CodexAgent rewind', () => {
 });
 
 describe('CodexAgent turn lifecycle', () => {
+  it.each(ROOT_TURN_START_ORDER_CASES)(
+    'preserves same-turn retry state across $name activation signals',
+    async ({ sessionSuffix, steps }) => {
+      const agent = new CodexAgent(createDeps());
+      const turnStartResponse = deferred<{ turn: { id: string } }>();
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return turnStartResponse.promise;
+        if (method === Method.TurnInterrupt) return {};
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-turn-retry-state-${sessionSuffix}`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnStarted || !handlers.error) {
+        throw new Error('expected turn lifecycle and error handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const sendPromise = handle.send({ type: 'user', content: 'hello' });
+      await waitForExpectation(() => {
+        expect(host.request).toHaveBeenCalledWith(
+          Method.TurnStart,
+          expect.any(Object),
+          expect.any(Object),
+        );
+      });
+      const applyStep = async (step: (typeof steps)[number]) => {
+        if (step.kind === 'response') {
+          turnStartResponse.resolve({ turn: { id: 'turn-retry-state' } });
+          await sendPromise;
+        } else {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-retry-state' },
+          });
+        }
+      };
+
+      await applyStep(steps[0]);
+      const authError = {
+        threadId: 'start-thread-id',
+        turnId: 'turn-retry-state',
+        willRetry: true,
+        error: { message: 'unexpected status 401 Unauthorized: Missing bearer' },
+      } as const;
+      const rateLimitError = {
+        threadId: 'start-thread-id',
+        turnId: 'turn-retry-state',
+        willRetry: true,
+        error: { message: 'unexpected status 429 Too Many Requests' },
+      } as const;
+      const backendError = {
+        threadId: 'start-thread-id',
+        turnId: 'turn-retry-state',
+        willRetry: true,
+        error: { message: 'unexpected status 403 Forbidden, url: https://chatgpt.com/backend-api/codex/responses' },
+      } as const;
+
+      handlers.error(authError);
+      handlers.error(rateLimitError);
+      handlers.error(rateLimitError);
+      for (let index = 0; index < 29; index += 1) {
+        handlers.error(backendError);
+      }
+
+      for (const step of steps.slice(1)) {
+        await applyStep(step);
+      }
+      handlers.error(authError);
+      handlers.error(rateLimitError);
+      handlers.error(backendError);
+
+      await waitForExpectation(() => {
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'error'
+              && (event.data as { isTerminal?: boolean }).isTerminal === true,
+          ),
+        ).toBe(true);
+      });
+      const errorEvents = events.filter((event) => event.type === 'error');
+      expect(
+        errorEvents.filter(
+          (event) => (event.data as { isTerminal?: boolean }).isTerminal === false,
+        ),
+      ).toHaveLength(2);
+      expect(errorEvents.at(-1)?.data).toMatchObject({
+        isTerminal: true,
+        message: expect.stringContaining('Codex backend unreachable'),
+      });
+      await waitForExpectation(() => {
+        expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+          threadId: 'start-thread-id',
+          turnId: 'turn-retry-state',
+        });
+      });
+
+      await handle.close();
+    },
+  );
+
   it('escalates a persistent willRetry retry-loop to a terminal error (issue #677)', async () => {
     // 远端摸不到 Codex 后端时 daemon 无限发 willRetry=true — 升级逻辑应在阈值处
     // 合成终态错误并复位 turn (isTurnRunning=false + Done status), 消息里带原始
@@ -23446,76 +23652,101 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
-  it('clears prior descendant diffs when each new turn is adopted by its response first', async () => {
-    const turnIds = ['turn-response-first-1', 'turn-response-first-2'];
-    const agent = new CodexAgent(createDeps());
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) {
-        const turnId = turnIds.shift();
-        if (!turnId) throw new Error('unexpected extra turn/start');
-        return { turn: { id: turnId } };
+  it.each(ROOT_TURN_START_ORDER_CASES)(
+    'clears prior diffs once for $name root-turn activation',
+    async ({ sessionSuffix, steps }) => {
+      const currentTurnResponse = deferred<{ turn: { id: string } }>();
+      let turnStartCount = 0;
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => {
+        if (method !== Method.TurnStart) return undefined;
+        turnStartCount += 1;
+        if (turnStartCount === 1) return { turn: { id: 'turn-previous-diff' } };
+        if (turnStartCount === 2) return currentTurnResponse.promise;
+        throw new Error('unexpected extra turn/start');
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-turn-diff-isolation-${sessionSuffix}`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.turnStarted
+        || !handlers.turnCompleted
+        || !handlers.turnDiffUpdated
+        || !handlers.descendantThreadStarted
+        || !handlers.descendantNotification
+      ) {
+        throw new Error('expected turn and descendant handlers');
       }
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-response-first-diff-isolation',
-      model: 'gpt-5.4',
-      workingDir: '/repo',
-    });
-    const events: AgentEvent[] = [];
-    void (async () => {
-      for await (const event of handle.events()) events.push(event);
-    })();
-    const handlers = host.getThreadHandlers();
-    if (
-      !handlers?.turnStarted
-      || !handlers.turnCompleted
-      || !handlers.turnDiffUpdated
-      || !handlers.descendantThreadStarted
-      || !handlers.descendantNotification
-    ) {
-      throw new Error('expected turn and descendant handlers');
-    }
 
-    await handle.send({ type: 'user', content: 'first turn' });
-    handlers.turnStarted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-response-first-1' },
-    });
-    handlers.descendantThreadStarted({
-      thread: { id: 'child-response-first-diff', parentThreadId: 'start-thread-id' },
-    });
-    handlers.descendantNotification('child-response-first-diff', 'turn/diff/updated', {
-      threadId: 'child-response-first-diff',
-      turnId: 'child-response-first-turn',
-      diff: 'diff --git a/previous-child.txt b/previous-child.txt\n--- a/previous-child.txt\n+++ b/previous-child.txt\n@@ -1 +1 @@\n-old\n+previous-child\n',
-    });
-    handlers.turnCompleted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-response-first-1', status: 'completed' },
-    });
+      await handle.send({ type: 'user', content: 'first turn' });
+      handlers.turnStarted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-previous-diff' },
+      });
+      handlers.descendantThreadStarted({
+        thread: { id: 'child-previous-diff', parentThreadId: 'start-thread-id' },
+      });
+      handlers.descendantNotification('child-previous-diff', 'turn/diff/updated', {
+        threadId: 'child-previous-diff',
+        turnId: 'child-previous-turn',
+        diff: 'diff --git a/previous-child.txt b/previous-child.txt\n--- a/previous-child.txt\n+++ b/previous-child.txt\n@@ -1 +1 @@\n-old\n+previous-child\n',
+      });
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-previous-diff', status: 'completed' },
+      });
 
-    await handle.send({ type: 'user', content: 'second turn' });
-    handlers.turnStarted({
-      threadId: 'start-thread-id',
-      turn: { id: 'turn-response-first-2' },
-    });
-    handlers.turnDiffUpdated({
-      threadId: 'start-thread-id',
-      turnId: 'turn-response-first-2',
-      diff: 'diff --git a/current-root.txt b/current-root.txt\n--- a/current-root.txt\n+++ b/current-root.txt\n@@ -1 +1 @@\n-old\n+current-root\n',
-    });
+      const sendPromise = handle.send({ type: 'user', content: 'second turn' });
+      await waitForExpectation(() => expect(turnStartCount).toBe(2));
+      const applyStep = async (step: (typeof steps)[number]) => {
+        if (step.kind === 'response') {
+          currentTurnResponse.resolve({ turn: { id: 'turn-current-diff' } });
+          await sendPromise;
+        } else {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-current-diff' },
+          });
+        }
+      };
 
-    await vi.waitFor(() => {
-      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
-      const diff = (last?.data as { diff?: string } | undefined)?.diff ?? '';
-      expect(last?.data).toMatchObject({ turnId: 'turn-response-first-2' });
-      expect(diff).toContain('+current-root');
-      expect(diff).not.toContain('+previous-child');
-    });
+      await applyStep(steps[0]);
+      handlers.turnDiffUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-current-diff',
+        diff: 'diff --git a/current-root.txt b/current-root.txt\n--- a/current-root.txt\n+++ b/current-root.txt\n@@ -1 +1 @@\n-old\n+current-root\n',
+      });
+      for (const step of steps.slice(1)) {
+        await applyStep(step);
+      }
+      handlers.descendantThreadStarted({
+        thread: { id: 'child-current-diff', parentThreadId: 'start-thread-id' },
+      });
+      handlers.descendantNotification('child-current-diff', 'turn/diff/updated', {
+        threadId: 'child-current-diff',
+        turnId: 'child-current-turn',
+        diff: 'diff --git a/current-child.txt b/current-child.txt\n--- a/current-child.txt\n+++ b/current-child.txt\n@@ -1 +1 @@\n-old\n+current-child\n',
+      });
 
-    await handle.close();
-  });
+      await vi.waitFor(() => {
+        const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+        const diff = (last?.data as { diff?: string } | undefined)?.diff ?? '';
+        expect(last?.data).toMatchObject({ turnId: 'turn-current-diff' });
+        expect(diff).toContain('+current-root');
+        expect(diff).toContain('+current-child');
+        expect(diff).not.toContain('+previous-child');
+      });
+
+      await handle.close();
+    },
+  );
 
   it('ignores descendant diffs that arrive after the child turn is terminal', async () => {
     const agent = new CodexAgent(createDeps());
