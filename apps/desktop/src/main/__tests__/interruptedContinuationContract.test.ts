@@ -240,6 +240,8 @@ describe('interrupted continuation enqueue contract', () => {
   it('previews user enqueues to Agent Island before drain/sendToAgent', () => {
     expect(registerSource).toContain('previewQueuedUserTurn: (sessionId, item) => {');
     expect(registerSource).toContain("source: 'enqueue'");
+    expect(registerSource).toContain('item.text || item.persistedContent');
+    expect(registerSource).toContain('extractPlainText(content)');
     const enqueuePreview = coordinatorSource.indexOf('this.deps.previewQueuedUserTurn?.(sessionId, item);');
     const drainImmediate = coordinatorSource.indexOf("void this.drain(sessionId, 'enqueue-immediate');");
     expect(enqueuePreview).toBeGreaterThan(-1);

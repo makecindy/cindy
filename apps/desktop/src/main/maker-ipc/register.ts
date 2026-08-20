@@ -693,6 +693,7 @@ import {
   type MakerSessionAgentSwitchHandlerDeps,
 } from './sessionAgentSwitchHandler.js';
 import {
+  extractPlainText,
   prependNoteToWireUserMessage,
   prependHandoffToUserMessage,
   type HandoffWireMessage,
@@ -3272,28 +3273,9 @@ function rollbackAgentIslandUserPrompt(
 }
 
 function extractAgentIslandPromptText(content: unknown): string | null {
-  if (typeof content === 'string') return content.trim() || null;
-  if (Array.isArray(content)) return extractAgentIslandPromptTextFromBlocks(content);
-  if (!content || typeof content !== 'object') return null;
-  const record = content as { content?: unknown; text?: unknown };
-  if (typeof record.content === 'string') return record.content.trim() || null;
-  if (Array.isArray(record.content)) return extractAgentIslandPromptTextFromBlocks(record.content);
-  if (typeof record.text === 'string') return record.text.trim() || null;
-  return null;
-}
-
-function extractAgentIslandPromptTextFromBlocks(blocks: unknown[]): string | null {
-  const text = blocks
-    .map((block) => {
-      if (typeof block === 'string') return block;
-      if (!block || typeof block !== 'object') return '';
-      const record = block as { type?: unknown; text?: unknown };
-      return record.type === 'text' && typeof record.text === 'string' ? record.text : '';
-    })
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
+  // 与落库信封、SDK blocks 共用 extractPlainText:stringifyUserContent JSON
+  // 不能当岛上正文显示。
+  const text = extractPlainText(content).trim();
   return text || null;
 }
 
@@ -11662,7 +11644,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentKind: item.createOpts?.agentKind,
           workDir: item.workingDir,
         },
-        item.persistedContent || item.text,
+        item.text || item.persistedContent,
         { source: 'enqueue', clientId: item.clientId },
       );
     },

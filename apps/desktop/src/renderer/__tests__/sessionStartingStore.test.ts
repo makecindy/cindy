@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  applyRemoteSessionActivity,
+  clearRemoteSessionActivity,
+  getRemoteSessionActivity,
+} from '@/features/device-link/remoteSessionActivityStore';
+import {
   absorbSessionStarting,
   clearSessionStarting,
   getStartingSessionIds,
@@ -12,11 +17,13 @@ import {
 describe('sessionStartingStore', () => {
   beforeEach(() => {
     resetSessionStartingStoreForTests();
+    clearRemoteSessionActivity();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     resetSessionStartingStoreForTests();
+    clearRemoteSessionActivity();
     vi.useRealTimers();
   });
 
@@ -43,6 +50,29 @@ describe('sessionStartingStore', () => {
     clearSessionStarting('keep');
     expect([...getStartingSessionIds()]).toEqual([]);
     clearSessionStarting('keep');
+  });
+
+  it('drops a stale remote completed mirror on first mark, not on TTL refresh', () => {
+    applyRemoteSessionActivity('dev-1', {
+      sessionId: 's1',
+      phase: 'completed',
+      compactDetail: '',
+      attention: true,
+    });
+    markSessionStarting('s1');
+    expect(getRemoteSessionActivity('s1')).toBeUndefined();
+    expect([...getStartingSessionIds()]).toEqual(['s1']);
+
+    applyRemoteSessionActivity('dev-1', {
+      sessionId: 's1',
+      phase: 'completed',
+      compactDetail: '',
+      attention: true,
+    });
+    markSessionStarting('s1');
+    expect(getRemoteSessionActivity('s1')).toMatchObject({ phase: 'completed' });
+    absorbSessionStarting(['s1']);
+    expect([...getStartingSessionIds()]).toEqual([]);
   });
 
   it('expires a starting mark that never becomes running', () => {
