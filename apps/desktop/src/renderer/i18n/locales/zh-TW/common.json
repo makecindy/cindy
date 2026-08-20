@@ -2579,7 +2579,7 @@
       "installSectionDescription": "貼上 pi.dev 頁面提供的安裝來源，或輸入 npm 套件名稱、Git 位址、本機絕對路徑。",
       "installedSectionTitle": "已安裝",
       "sourcePlaceholder": "npm 套件名稱、Git 位址或本機絕對路徑",
-      "inspectionHint": "安裝時會提示一次風險。確認後即安裝並啟用，隨後檢查資源與相容性。",
+      "inspectionHint": "安裝時只提示一次風險。確認後會安裝擴充功能、檢查資源與相容性，並在檢查成功後啟用。",
       "install": "安裝",
       "update": "更新",
       "remove": "解除安裝",
@@ -2601,11 +2601,11 @@
       "retry": "重試",
       "operationInProgress": "正在處理 {{name}}…",
       "confirmTitle": "安裝這個 Pi 擴充功能？",
-      "confirmDescription": "{{source}} 是第三方程式碼，會與 Cindy 的 Pi 在同一行程中執行，可能讀取 Pi 能存取的檔案和憑證。安裝不會執行 npm 生命週期指令碼。確認後即安裝並啟用。",
+      "confirmDescription": "{{source}} 是第三方程式碼，會與 Cindy 的 Pi 在同一行程中執行，可能讀取 Pi 能存取的檔案和憑證。安裝不會執行 npm 生命週期指令碼。確認後將安裝擴充功能，並啟用能夠完成檢查且受支援的資源。",
       "confirmInstall": "了解風險，安裝並啟用",
       "updateConfirmTitle": "更新這個 Pi 擴充功能？",
-      "updateConfirmDescription": "{{source}} 會下載第三方新版本並取代已安裝程式碼。更新不會執行 npm 生命週期指令碼。擴充程式碼與 Pi 在同一行程中執行，可能讀取檔案和憑證。確認後即更新並繼續啟用。",
-      "confirmUpdate": "了解風險，更新並啟用",
+      "updateConfirmDescription": "{{source}} 會下載第三方新版本並取代已安裝程式碼。更新不會執行 npm 生命週期指令碼。擴充程式碼與 Pi 在同一行程中執行，可能讀取檔案和憑證。確認後將更新擴充功能，並保留目前的啟用狀態。",
+      "confirmUpdate": "了解風險並更新",
       "uninstallTitle": "解除安裝 Pi 擴充功能？",
       "uninstallDescription": "將從這台裝置移除 {{name}}。目前已開啟的 Pi 任務仍會保留舊擴充功能，關閉後才會徹底卸載。",
       "confirmUninstall": "解除安裝",
@@ -2669,7 +2669,8 @@
         "lifecycle-scripts-disabled": "這個擴充功能宣告了安裝指令碼，但 Cindy 為了安全並未執行。依賴安裝指令碼產生檔案的功能可能無法使用。"
       },
       "success": {
-        "install": "Pi 擴充功能已安裝並啟用。目前任務不會改變；新建或重新啟動 Pi 任務後生效。",
+        "install": "Pi 擴充功能已安裝，請在下方查看啟用狀態。目前任務不會改變。",
+        "installEnabled": "Pi 擴充功能已安裝並啟用。目前任務不會改變；新建或重新啟動 Pi 任務後生效。",
         "remove": "Pi 擴充功能已移除。目前任務仍保留舊擴充功能，關閉後才會徹底卸載。",
         "update": "Pi 擴充功能已更新。目前任務仍使用舊版本；新建或重新啟動後生效。",
         "set-enabled": "Pi 擴充功能啟用狀態已儲存。目前任務不會改變；新建或重新啟動後生效。"
