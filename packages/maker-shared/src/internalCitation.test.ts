@@ -44,6 +44,13 @@ describe('leaked model stop tokens', () => {
     expect(stripInternalWebCitations('  <|eos|>\n')).toBe('');
   });
 
+  it('strips a whole-message run of stop tokens, including mixed tokens and blank lines', () => {
+    expect(stripStandaloneModelStopToken('<|eos|><|eos|>')).toBe('');
+    expect(stripInternalWebCitations('<|eos|>\n\n<|eos|>')).toBe('');
+    expect(stripInternalWebCitations('  <|eos|> <|eot_id|>\n')).toBe('');
+    expect(stripInternalWebCitations('<|eos|>answer')).toBe('answer');
+  });
+
   it('leaves embedded stop-token prose intact', () => {
     expect(stripInternalWebCitations('The token is <|eos|>')).toBe('The token is <|eos|>');
     expect(stripInternalWebCitations('done<|eot_id|>')).toBe('done<|eot_id|>');
@@ -55,16 +62,20 @@ describe('leaked model stop tokens', () => {
     expect(stableStandaloneModelStopTokenBoundary('<|eo')).toBe(0);
     expect(stableStandaloneModelStopTokenBoundary('  <|eo')).toBe(0);
     expect(stableStandaloneModelStopTokenBoundary('<|eos|>')).toBe(0);
+    expect(stableStandaloneModelStopTokenBoundary('<|eos|><|eos|>')).toBe(0);
+    expect(stableStandaloneModelStopTokenBoundary('<|eos|><|eo')).toBe(0);
     expect(stableStandaloneModelStopTokenBoundary('The token is <|eo')).toBe('The token is <|eo'.length);
     expect(isPossibleStandaloneStopPrefix('  <|eo')).toBe(true);
     expect(isPossibleStandaloneStopPrefix('<')).toBe(true);
     expect(isPossibleStandaloneStopPrefix('<|')).toBe(true);
     expect(isPossibleStandaloneStopPrefix(`${' '.repeat(23)}<|eos|>`)).toBe(true);
+    expect(isPossibleStandaloneStopPrefix('<|eos|><|eos|>')).toBe(true);
     expect(isPossibleStandaloneStopPrefix('The token is <|eo')).toBe(false);
   });
 
   it('is idempotent', () => {
     expect(stripInternalWebCitations(stripInternalWebCitations('<|eos|>'))).toBe('');
+    expect(stripInternalWebCitations(stripInternalWebCitations('<|eos|><|eos|>'))).toBe('');
     expect(stripInternalWebCitations(stripInternalWebCitations('The token is <|eos|>'))).toBe(
       'The token is <|eos|>',
     );
@@ -76,7 +87,7 @@ describe('leaked model stop tokens', () => {
     expect(holdStandaloneStopTokenDelta(a, '<|eo')).toBeNull();
     expect(holdStandaloneStopTokenDelta(b, 'answer')).toBe('answer');
     expect(holdStandaloneStopTokenDelta(a, 's|>')).toBeNull();
-    expect(a).toEqual({ pending: '<|eos|>', emitted: false });
+    expect(a).toEqual({ pending: '', emitted: false });
     expect(b).toEqual({ pending: '', emitted: true });
   });
 
@@ -84,23 +95,29 @@ describe('leaked model stop tokens', () => {
     const buffer = { pending: '', emitted: false };
     const padded = `${' '.repeat(23)}<|eos|>`;
     expect(holdStandaloneStopTokenDelta(buffer, padded)).toBeNull();
-    expect(buffer.emitted).toBe(false);
-    expect(buffer.pending.endsWith('<|eos|>')).toBe(true);
+    expect(buffer).toEqual({ pending: '', emitted: false });
   });
 
   it('holds whitespace-only deltas without releasing a later leftover token', () => {
     const buffer = { pending: '', emitted: false };
     expect(holdStandaloneStopTokenDelta(buffer, ' '.repeat(23))).toBeNull();
     expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
-    expect(buffer.emitted).toBe(false);
-    expect(buffer.pending.trim()).toBe('<|eos|>');
+    expect(buffer).toEqual({ pending: '', emitted: false });
   });
 
   it('holds a one-character leftover prefix until the closer arrives', () => {
     const buffer = { pending: '', emitted: false };
     expect(holdStandaloneStopTokenDelta(buffer, '<')).toBeNull();
     expect(holdStandaloneStopTokenDelta(buffer, '|eos|>')).toBeNull();
-    expect(buffer).toEqual({ pending: '<|eos|>', emitted: false });
+    expect(buffer).toEqual({ pending: '', emitted: false });
+  });
+
+  it('drops a completed leftover so a second copy cannot flush it as prose', () => {
+    const buffer = { pending: '', emitted: false };
+    expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
+    expect(holdStandaloneStopTokenDelta(buffer, '<|eos|>')).toBeNull();
+    expect(buffer).toEqual({ pending: '', emitted: false });
+    expect(holdStandaloneStopTokenDelta(buffer, 'answer')).toBe('answer');
   });
 
   it('still strips a split web citation after ordinary prose has been emitted', () => {

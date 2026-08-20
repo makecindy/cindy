@@ -355,6 +355,44 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'text')).toEqual([]);
   });
 
+  it('does not emit a repeated Grok stop token as assistant text', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '<|eos|>' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: '<|eos|>' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '<|eos|><|eos|>' }],
+          model: 'xai/grok-4.6',
+          stopReason: 'stop',
+        },
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'text')).toEqual([]);
+  });
+
   it('surfaces a terminal provider error after Pi settles instead of staying in Working', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

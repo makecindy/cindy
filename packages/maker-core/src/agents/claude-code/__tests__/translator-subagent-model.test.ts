@@ -222,6 +222,32 @@ describe('Claude Code assistant text streaming contract', () => {
     expect(ctx.turn.lastAssistantMsgHadSubstance).toBe(true);
   });
 
+  it('does not emit a repeated Grok stop token as assistant text', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'assistant-eos-repeat',
+        session_id: 'sdk-session',
+        parent_tool_use_id: null,
+        message: {
+          model: 'grok-4.6',
+          content: [{ type: 'text', text: '<|eos|><|eos|>' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const textEvents = (await collect(queue)).filter((event) => event.type === 'text');
+    expect(textEvents).toEqual([]);
+    expect(ctx.turn.hasEmittedText).toBe(false);
+    expect(ctx.turn.uiEmittedText).toBe('');
+    expect(ctx.turn.lastAssistantMsgHadSubstance).toBe(true);
+  });
+
   it('does not emit a stop token split across streaming deltas', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
@@ -458,7 +484,7 @@ describe('Claude Code assistant text streaming contract', () => {
     ]);
     expect(ctx.turn.uiEmittedText).toBe('answer');
     expect(ctx.rt.streamStopTokenByKey.get('toolu-a:0')).toEqual({
-      pending: '<|eos|>',
+      pending: '',
       emitted: false,
     });
   });
@@ -499,7 +525,7 @@ describe('Claude Code assistant text streaming contract', () => {
     ]);
     expect(ctx.turn.uiEmittedText).toBe('先看一眼。');
     expect(ctx.rt.streamStopTokenByKey.get('__main__:0')).toEqual({
-      pending: '<|eos|>',
+      pending: '',
       emitted: false,
     });
   });
@@ -547,7 +573,7 @@ describe('Claude Code assistant text streaming contract', () => {
       { text: '先看一眼。', isFinal: false },
     ]);
     expect(ctx.rt.streamStopTokenByKey.get('__main__:1')).toEqual({
-      pending: '<|eos|>',
+      pending: '',
       emitted: false,
     });
   });

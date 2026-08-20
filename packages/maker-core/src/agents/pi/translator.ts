@@ -119,7 +119,7 @@ export interface PiTranslateContext {
   /** contentIndex → 当前消息内的 thinking block 状态。 */
   thinkingBlocks: Map<number, PiThinkingBlock>;
   /**
-   * contentIndex → 独立停止符暂存。text_delta 可能把 `<|eos|>` 拆开，
+   * contentIndex → 停止符控制暂存。text_delta 可能把 `<|eos|>` 拆开或连写，
    * 必须按本块判定，不能和别的 text block 共用。
    */
   streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
