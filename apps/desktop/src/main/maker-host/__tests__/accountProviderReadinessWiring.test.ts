@@ -235,4 +235,29 @@ describe('account provider readiness wiring', () => {
     expect(goalReset).toBeGreaterThan(schedulerReadyReset);
     expect(goalReset).toBeLessThan(makerShutdown);
   });
+
+  it('guards async scheduler and Goal startup against an account boundary', () => {
+    const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
+    const generationBump = bootstrapSource.indexOf('accountRuntimeGeneration += 1;', teardown);
+    const start = bootstrapSource.indexOf('async function attemptStartScheduler');
+    const capturedGeneration = bootstrapSource.indexOf(
+      'const schedulerStartGeneration = accountRuntimeGeneration;',
+      start,
+    );
+    const refresh = bootstrapSource.indexOf('await waitForInitialCustomMcpRefresh();', start);
+    const refreshGuard = bootstrapSource.indexOf('if (!isCurrentSchedulerStart()) return;', refresh);
+    const schedulerAwait = bootstrapSource.indexOf('const scheduler = await startScheduler({', start);
+    const schedulerGuard = bootstrapSource.indexOf('if (!isCurrentSchedulerStart()) return;', schedulerAwait);
+    const goalGuard = bootstrapSource.indexOf(
+      'if (!isCurrentSchedulerStart()) return;',
+      schedulerGuard + 1,
+    );
+
+    expect(teardown).toBeGreaterThanOrEqual(0);
+    expect(generationBump).toBeGreaterThan(teardown);
+    expect(capturedGeneration).toBeGreaterThan(start);
+    expect(refreshGuard).toBeGreaterThan(refresh);
+    expect(schedulerGuard).toBeGreaterThan(schedulerAwait);
+    expect(goalGuard).toBeGreaterThan(schedulerGuard);
+  });
 });
