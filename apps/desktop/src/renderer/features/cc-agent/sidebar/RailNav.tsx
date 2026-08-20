@@ -30,7 +30,7 @@ import {
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { getSidebarViewMode } from '@/hooks/useSidebarCardMode';
+import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { Tip } from '@/components/ui/tooltip';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { projectIdentityKeyForSession } from '../lib/projectGrouping';
@@ -128,8 +128,9 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
   }, [preview]);
 
   const { session, isRunning, hasUnread } = preview;
+  const { mode: pinnedViewMode } = useSidebarCardMode();
   const body = resolveSessionCardBody({
-    variant: getSidebarViewMode() === 'card' ? 'card' : 'list',
+    variant: pinnedViewMode === 'card' ? 'card' : 'list',
     pinned: session.pinnedAt != null,
     summary: session.summary,
     preview: session.preview,

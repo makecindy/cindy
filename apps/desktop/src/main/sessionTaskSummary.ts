@@ -8,6 +8,7 @@
  *   1. maker-ipc/register.ts — turn 结束(done event)
  *   2. localDb/ipc/sessions.ts — 会话被置顶那一刻(动态 import 避免模块环)
  * 两处都还要满足「置顶段当前是卡片模式」(由 renderer 通知)。
+ * 列表/文字模式下的 turn-done(force)会清掉旧摘要,切回卡片时由回填按最新内容重写。
  *
  * 成本控制(对齐 title.ts 的口径):
  *   - 仅 status='active' 且 pinnedAt 非空、置顶段是卡片模式时生成
@@ -75,6 +76,26 @@ function broadcastPatched(sessionId: string, patch: Record<string, unknown>): vo
   }
 }
 
+/** 列表/文字模式下作废旧摘要。不 bump updatedAt。 */
+async function clearSessionTaskSummary(sessionId: string): Promise<void> {
+  try {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select({ summary: sessions.summary })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (!row?.summary) return;
+    await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
+    broadcastPatched(sessionId, { summary: null });
+  } catch (err) {
+    log.warn('clear stale task summary failed (swallowed)', {
+      sessionId,
+      error: String(err),
+    });
+  }
+}
+
 /** renderer 在置顶段显示模式变化时通知。切到卡片会重跑一次置顶回填。 */
 export function setPinnedSectionCardMode(enabled: boolean): void {
   const next = enabled === true;
@@ -90,7 +111,11 @@ export async function maybeGenerateSessionTaskSummary(
   sessionId: string,
   opts: { force?: boolean } = {},
 ): Promise<void> {
-  if (!pinnedSectionIsCard) return;
+  if (!pinnedSectionIsCard) {
+    // turn-done 是权威边界:列表态不生成,但必须作废旧摘要,否则切回卡片会先露出上一轮句子。
+    if (opts.force) await clearSessionTaskSummary(sessionId);
+    return;
+  }
   const existing = inFlight.get(sessionId);
   if (existing) {
     if (!opts.force) return; // 已有生成在跑 → 去重跳过

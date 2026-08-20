@@ -1554,9 +1554,13 @@ export function registerSessionIpc(
     },
   );
 
+  // 本机 UI 偏好:置顶段是不是卡片模式。故意不进 device-link allowlist —— 摘要
+  // oneShot 只服务本机卡片展示,控制端卡片回退 preview,不把付费生成推到被控端。
+  // 新增 handler 一律校验顶层 app renderer(electron-security §5)。
   ipcMain.handle(
     'local-db:sessions:set-pinned-card-summaries',
-    async (_e, enabled: unknown): Promise<void> => {
+    async (event, enabled: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
       if (typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
       }
