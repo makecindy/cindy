@@ -97,4 +97,15 @@ describe('sessionStartingStore', () => {
       'if (!remoteOptimisticSendRecords(sessionId)?.size)',
     );
   });
+
+  it('clears starting when enqueue only parks the message in a paused or locked queue', () => {
+    const source = readFileSync(resolve(__dirname, '..', 'lib', 'makerChatStore.ts'), 'utf8');
+    const start = source.indexOf('return operation.api.input');
+    const end = source.indexOf('function compactSession', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const enqueueResult = source.slice(start, end);
+    expect(enqueueResult).toContain('projection.queuePaused');
+    expect(enqueueResult).toContain('clearSessionStarting(sessionId)');
+  });
 });
