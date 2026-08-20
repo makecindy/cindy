@@ -842,7 +842,11 @@ import {
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
 import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
-import { startGoalController, getGoalController } from './goal-host/index.js';
+import {
+  startGoalController,
+  getGoalController,
+  resetGoalController,
+} from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
@@ -1313,6 +1317,10 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // 路径同构,这里关掉 teardown 路径的对偶窗口)。
   // 不 reject _pending — 让在途请求继续等下次 setSchedulerReady,30s 超时兜底。
   resetSchedulerReady();
+  // GoalController closes over the outgoing Maker and owner DB. Dispose it at
+  // the boundary so the next readiness pass creates a controller for the new
+  // account instead of reusing a shutdown Maker.
+  resetGoalController();
   const agentIslandService = getAgentIslandService();
   agentIslandService?.resetRuntimeState();
   // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在

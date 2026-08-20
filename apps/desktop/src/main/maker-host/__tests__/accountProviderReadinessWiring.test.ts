@@ -223,4 +223,16 @@ describe('account provider readiness wiring', () => {
     expect(joinPrevious).toBeGreaterThan(makerShutdown);
     expect(clearAfterJoin).toBeGreaterThan(joinPrevious);
   });
+
+  it('disposes GoalController before shutting down the outgoing Maker', () => {
+    const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
+    const schedulerReadyReset = bootstrapSource.indexOf('resetSchedulerReady();', teardown);
+    const goalReset = bootstrapSource.indexOf('resetGoalController();', teardown);
+    const makerShutdown = bootstrapSource.indexOf('await maker.shutdown()', teardown);
+
+    expect(teardown).toBeGreaterThanOrEqual(0);
+    expect(schedulerReadyReset).toBeGreaterThan(teardown);
+    expect(goalReset).toBeGreaterThan(schedulerReadyReset);
+    expect(goalReset).toBeLessThan(makerShutdown);
+  });
 });
