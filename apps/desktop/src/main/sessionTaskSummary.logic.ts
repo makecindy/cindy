@@ -189,3 +189,12 @@ export function nonCardTurnDisplayPatch(preview: string | null): {
 } {
   return { summary: null, preview };
 }
+
+/** clear 若发现已切回卡片,只在该 session 没有生成在飞时才 force 再生成。
+ *  generateSummaryOnce.finally → clear → maybeGenerate 会 await 尚未 settle 的同一条 inFlight,死锁。 */
+export function shouldForceGenerateOnClear(args: {
+  pinnedSectionIsCard: boolean;
+  sessionGenerateInFlight: boolean;
+}): boolean {
+  return args.pinnedSectionIsCard && !args.sessionGenerateInFlight;
+}

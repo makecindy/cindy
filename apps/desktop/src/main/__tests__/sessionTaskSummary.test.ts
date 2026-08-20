@@ -22,6 +22,7 @@ import {
   shouldGeneratePinnedCardSummary,
   shouldVoidSummaryAfterGenerationAttempt,
   nonCardTurnDisplayPatch,
+  shouldForceGenerateOnClear,
 } from '../sessionTaskSummary.logic';
 
 describe('pickTier — 距今时间为主轴的档位选择', () => {
@@ -158,6 +159,33 @@ describe('shouldVoidSummaryAfterGenerationAttempt', () => {
         pinnedSectionIsCard: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe('shouldForceGenerateOnClear', () => {
+  it('切回卡片且没有生成在飞 → 可以 force 再生成', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(true);
+  });
+  it('仍在列表 → 不生成', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: false,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(false);
+  });
+  it('生成尚未 settle 时不得再入,否则 await 同一条 inFlight 死锁', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(false);
   });
 });
 

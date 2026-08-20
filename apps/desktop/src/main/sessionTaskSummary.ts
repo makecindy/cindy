@@ -46,6 +46,7 @@ import {
   shouldGeneratePinnedCardSummary,
   shouldVoidSummaryAfterGenerationAttempt,
   nonCardTurnDisplayPatch,
+  shouldForceGenerateOnClear,
 } from './sessionTaskSummary.logic.js';
 
 const log = createLogger('sessionTaskSummary');
@@ -108,15 +109,26 @@ async function latestVisiblePreview(sessionId: string): Promise<string | null> {
   return extractMessagePreview(latestRow?.content, latestRow?.role);
 }
 
+/** 已切回卡片:绝不继续写 null。没有生成在飞才 force 再生成;在飞则交给那次结算,避免自等待。 */
+async function stopClearBecauseCard(sessionId: string): Promise<boolean> {
+  if (!pinnedSectionIsCard) return false;
+  if (
+    shouldForceGenerateOnClear({
+      pinnedSectionIsCard: true,
+      sessionGenerateInFlight: inFlight.has(sessionId),
+    })
+  ) {
+    await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+  }
+  return true;
+}
+
 /** 列表/文字模式下作废旧摘要,并补上最新 preview。不 bump updatedAt。
  *  读/写之间用户可能已切回卡片:那时不能再抹掉摘要(回填可能刚因非空跳过),
- *  改走 force 生成盖成最新内容。 */
+ *  且当前没有生成在飞时才 force 再生成——不得从 generateSummaryOnce.finally 再入 inFlight。 */
 async function clearSessionTaskSummary(sessionId: string): Promise<void> {
   try {
-    if (pinnedSectionIsCard) {
-      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
-      return;
-    }
+    if (await stopClearBecauseCard(sessionId)) return;
     let preview: string | null = null;
     try {
       preview = await latestVisiblePreview(sessionId);
@@ -126,10 +138,7 @@ async function clearSessionTaskSummary(sessionId: string): Promise<void> {
         error: String(err),
       });
     }
-    if (pinnedSectionIsCard) {
-      await maybeGenerateSessionTaskSummary(sessionId, { force: true });
-      return;
-    }
+    if (await stopClearBecauseCard(sessionId)) return;
     const db = getDbClient().drizzle;
     const [row] = await db
       .select({ summary: sessions.summary })
@@ -137,15 +146,9 @@ async function clearSessionTaskSummary(sessionId: string): Promise<void> {
       .where(eq(sessions.id, sessionId))
       .limit(1);
     if (row?.summary) {
-      if (pinnedSectionIsCard) {
-        await maybeGenerateSessionTaskSummary(sessionId, { force: true });
-        return;
-      }
+      if (await stopClearBecauseCard(sessionId)) return;
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
-      if (pinnedSectionIsCard) {
-        await maybeGenerateSessionTaskSummary(sessionId, { force: true });
-        return;
-      }
+      if (await stopClearBecauseCard(sessionId)) return;
     }
     broadcastPatched(sessionId, nonCardTurnDisplayPatch(preview));
   } catch (err) {
