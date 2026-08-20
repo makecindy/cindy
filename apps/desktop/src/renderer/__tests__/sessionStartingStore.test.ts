@@ -93,5 +93,8 @@ describe('sessionStartingStore', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(source.slice(start, end)).toContain('clearSessionStarting(sessionId)');
+    expect(source.slice(start, end)).toContain(
+      'if (!remoteOptimisticSendRecords(sessionId)?.size)',
+    );
   });
 });

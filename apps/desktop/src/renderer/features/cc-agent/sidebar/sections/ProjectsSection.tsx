@@ -72,9 +72,10 @@ import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
 import {
   getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
-import { absorbSessionStarting, getStartingSessionIds } from '@/lib/sessionStartingStore';
+import { absorbSessionStarting } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { SectionCollapse } from '../SectionCollapse';
@@ -393,36 +394,14 @@ export function ProjectsSection({
     viewedIdForSort,
   ]);
 
-  // 远程权威状态 / attention 到了就收掉 starting,避免对端跑完后 starting
-  // 还把已完成任务钉在运行中档。不要用上面的 running 集合 —— 那已经并进了
-  // starting,会把自己清掉。
+  // starting 只让位给真实 in-flight:本地 isRunning(见 useStartingSessionIds),
+  // 远程 running / needs-interaction。终态 attention 不再吸收 —— 旧终态会误伤
+  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。没经过 running
+  // 的快完成靠 TTL。
   useEffect(() => {
-    const starting = getStartingSessionIds();
     const settled = new Set<string>();
-    // 发送前已有的本地 done/error attention 不能吸收刚置位的 starting,
-    // 否则呼吸点要等真实 isRunning。远程终态已在 mark 时丢掉旧镜像。
-    for (const id of notifications) {
-      if (!starting.has(id)) settled.add(id);
-    }
-    for (const id of urgentSet) {
-      if (!starting.has(id)) settled.add(id);
-    }
-    for (const [sessionId, kind] of attentionKinds) {
-      if ((kind === 'awaiting' || kind === 'error') && !starting.has(sessionId)) {
-        settled.add(sessionId);
-      }
-    }
     const considerRemote = (session: Session) => {
-      const activity = getRemoteSessionActivity(session.id);
-      if (!activity) return;
-      // 上一轮 completed/error 在 markSessionStarting 时已经丢掉;这里剩下的
-      // 终态是本轮新到达的权威状态,应当吸收 starting。
-      if (
-        activity.phase === 'running' ||
-        activity.phase === 'needs-interaction' ||
-        activity.phase === 'error' ||
-        activity.phase === 'completed'
-      ) {
+      if (isRemoteSessionActivityActive(getRemoteSessionActivity(session.id))) {
         settled.add(session.id);
       }
     };
@@ -433,15 +412,7 @@ export function ProjectsSection({
     for (const session of unclassified) considerRemote(session);
     absorbSessionStarting(settled);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
-  }, [
-    notifications,
-    urgentSet,
-    attentionKinds,
-    projects,
-    dialogues,
-    unclassified,
-    remoteActivityRevision,
-  ]);
+  }, [projects, dialogues, unclassified, remoteActivityRevision]);
 
   // E 期「按设备分组」:有远程设备连接 + 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
