@@ -146,4 +146,22 @@ describe('purgeCancelledOllamaPull', () => {
       'sha256:keep',
     );
   });
+
+  it('does not delete a layer still used by another in-flight pull', async () => {
+    const root = path.join(os.tmpdir(), `ollama-purge-keep-digest-${Date.now()}`);
+    const blobs = path.join(root, 'blobs');
+    await mkdir(blobs, { recursive: true });
+    await writeFile(path.join(blobs, 'sha256-shared'), 'layer');
+    await writeFile(path.join(blobs, 'sha256-ours'), 'ours');
+
+    const result = await purgeCancelledOllamaPull({
+      modelsDir: root,
+      name: 'gpt-oss:20b',
+      digests: ['sha256:shared', 'sha256:ours'],
+      keepDigests: ['sha256:shared'],
+    });
+    expect(result.deleted).toContain('sha256-ours');
+    expect(result.deleted).not.toContain('sha256-shared');
+    await expect(readFile(path.join(blobs, 'sha256-shared'), 'utf8')).resolves.toBe('layer');
+  });
 });

@@ -129,6 +129,7 @@ export interface LocalModelServiceDeps {
     deleteAllIncomplete?: boolean;
     pruneUnreferenced?: boolean;
     deleteManifest?: boolean;
+    keepDigests?: readonly string[];
     touchedSinceMs?: number;
   }) => Promise<unknown>;
   waitForCancelledBlobs?: (opts?: { digests?: readonly string[] }) => Promise<void>;
@@ -174,6 +175,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       deleteAllIncomplete?: boolean;
       pruneUnreferenced?: boolean;
       deleteManifest?: boolean;
+      keepDigests?: readonly string[];
       touchedSinceMs?: number;
     }) =>
       purgeCancelledOllamaPull({
@@ -183,6 +185,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         deleteAllIncomplete: opts.deleteAllIncomplete,
         pruneUnreferenced: opts.pruneUnreferenced,
         deleteManifest: opts.deleteManifest,
+        keepDigests: opts.keepDigests,
         touchedSinceMs: opts.touchedSinceMs,
       }));
   const waitForCancelledBlobs =
@@ -687,6 +690,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         deleteAllIncomplete: false,
         pruneUnreferenced: false,
         deleteManifest: !keepInstalled,
+        keepDigests: otherPullDigests(name),
       });
     } catch (error) {
       log.warn('purge cancelled ollama blobs failed', {
@@ -694,6 +698,19 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  function otherPullDigests(exceptName: string): string[] {
+    const kept = new Set<string>();
+    for (const [name, op] of actives) {
+      if (name === exceptName) continue;
+      for (const digest of op.digests) kept.add(digest);
+    }
+    for (const record of loadPausedRecordsSync()) {
+      if (record.name === exceptName) continue;
+      for (const digest of record.digests) kept.add(digest);
+    }
+    return [...kept];
   }
 
   function isAbortError(error: unknown): boolean {

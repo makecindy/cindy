@@ -110,6 +110,16 @@ describe('makeMirrorAccessors', () => {
     expect(onWrite).toHaveBeenCalledWith('codex', 'openai', 'gpt-5.4', { fast: true });
   });
 
+  it('setThinking:乐观写镜像 + 用 {thinking} 调 onWrite', () => {
+    const onWrite = vi.fn();
+    const acc = makeMirrorAccessors(SESSION, onWrite);
+    acc.setThinking?.('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', false);
+    expect(acc.getThinking?.('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(false);
+    expect(onWrite).toHaveBeenCalledWith('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', {
+      thinking: false,
+    });
+  });
+
   it('setChoice:共享预设并显式标记真正选中模型', () => {
     const onWrite = vi.fn();
     const acc = makeMirrorAccessors(SESSION, onWrite);

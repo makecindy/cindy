@@ -5739,6 +5739,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       modelId?: unknown;
       effort?: unknown;
       fast?: unknown;
+      thinking?: unknown;
       active?: unknown;
       markModelChoice?: unknown;
     };
@@ -5760,6 +5761,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (p.fast !== undefined && typeof p.fast !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'fast must be boolean');
     }
+    if (p.thinking !== undefined && typeof p.thinking !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'thinking must be boolean');
+    }
     if (p.markModelChoice !== undefined && typeof p.markModelChoice !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'markModelChoice must be boolean');
     }
@@ -5771,6 +5775,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...(p.markModelChoice === false ? { markModelChoice: false } : {}),
       ...(p.effort !== undefined ? { effort: p.effort } : {}),
       ...(p.fast !== undefined ? { fast: p.fast } : {}),
+      ...(p.thinking !== undefined ? { thinking: p.thinking } : {}),
     });
   });
 

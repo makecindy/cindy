@@ -1809,6 +1809,7 @@ export function NewMakerDraftRoute() {
               : {}),
             ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
             ...(patch.fast !== undefined ? { fast: patch.fast } : {}),
+            ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
           },
         ])
         .catch(() => {

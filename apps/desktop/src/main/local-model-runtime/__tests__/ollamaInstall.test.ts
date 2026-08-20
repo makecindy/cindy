@@ -1,3 +1,4 @@
+import { access } from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,6 +33,35 @@ describe('installOfficialSidecar', () => {
     expect(JSON.parse(await readFile(path.join(dir, 'ollama-runtime', 'current.json'), 'utf8')).binary).toBe(
       binary,
     );
+    await expect(
+      access(path.join(dir, 'ollama-runtime', 'downloads', 'ollama-darwin.tgz')),
+    ).rejects.toThrow();
+  });
+
+  it('removes a leftover archive after a failed extract', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ollama-install-fail-'));
+    await expect(
+      installOfficialSidecar(dir, {
+        platform: 'darwin',
+        resolve: async () => ({
+          version: '0.32.14',
+          url: 'https://github.com/ollama/ollama/releases/download/v0.32.14/ollama-darwin.tgz',
+          sha256: 'ab'.repeat(32),
+          sizeBytes: 12,
+          assetName: 'ollama-darwin.tgz',
+        }),
+        download: async (_asset, destPath) => {
+          await mkdir(path.dirname(destPath), { recursive: true });
+          await writeFile(destPath, 'archive');
+        },
+        extract: async () => {
+          throw new Error('extract failed');
+        },
+      }),
+    ).rejects.toThrow('extract failed');
+    await expect(
+      access(path.join(dir, 'ollama-runtime', 'downloads', 'ollama-darwin.tgz')),
+    ).rejects.toThrow();
   });
 
   it('accepts a windows zip asset name', async () => {

@@ -2300,6 +2300,7 @@ interface ElectronAPI {
       markModelChoice?: boolean;
       effort?: string;
       fast?: boolean;
+      thinking?: boolean;
     }) => void,
   ) => () => void;
 

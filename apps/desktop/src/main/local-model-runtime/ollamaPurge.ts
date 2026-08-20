@@ -173,6 +173,7 @@ export async function purgeCancelledOllamaPull(opts: {
   deleteAllIncomplete?: boolean;
   pruneUnreferenced?: boolean;
   deleteManifest?: boolean;
+  keepDigests?: readonly string[];
   touchedSinceMs?: number;
 }): Promise<{ deleted: string[] }> {
   const deleted: string[] = [];
@@ -197,9 +198,12 @@ export async function purgeCancelledOllamaPull(opts: {
   } catch {
     return { deleted };
   }
+  const keep = new Set(
+    (opts.keepDigests ?? []).map(blobFileName).filter((value) => value.startsWith('sha256-')),
+  );
   for (const file of blobEntries) {
     const base = blobBaseName(file);
-    if (!base || used.has(base)) continue;
+    if (!base || used.has(base) || keep.has(base)) continue;
     const incomplete = isIncompleteBlobName(file);
     let recent = false;
     if (opts.touchedSinceMs != null && !incomplete) {

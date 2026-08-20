@@ -143,6 +143,7 @@ describe('local model pull state machine', () => {
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
       deleteManifest: true,
+      keepDigests: [],
     });
   });
 
@@ -178,6 +179,7 @@ describe('local model pull state machine', () => {
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
       deleteManifest: true,
+      keepDigests: [],
     });
   });
 
@@ -243,20 +245,28 @@ describe('local model pull state machine', () => {
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
       deleteManifest: true,
+      keepDigests: [],
     });
   });
 
   it('cancelling one download does not purge another in-flight pull', async () => {
     const purgeCancelledPull = vi.fn(async () => undefined);
-    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => {
-      return new Promise<void>((_resolve, reject) => {
-        if (signal?.aborted) {
-          reject(new Error('aborted'));
-          return;
-        }
-        signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-      });
-    });
+    const streamPull = vi.fn(
+      (
+        _name: string,
+        onEvent: (event: { status: string; digest?: string; completed?: number; total?: number }) => void,
+        signal?: AbortSignal,
+      ) => {
+        onEvent({ status: 'downloading', digest: 'sha256:shared', completed: 1, total: 10 });
+        return new Promise<void>((_resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    );
     const service = createLocalModelService({
       streamPull,
       purgeCancelledPull,
@@ -273,10 +283,11 @@ describe('local model pull state machine', () => {
     await first.catch(() => undefined);
     expect(purgeCancelledPull).toHaveBeenCalledWith({
       name: 'gpt-oss:20b',
-      digests: [],
+      digests: ['sha256:shared'],
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
       deleteManifest: true,
+      keepDigests: ['sha256:shared'],
     });
     expect(service.activePulls().map((item) => item.name)).toEqual(['llama3.1:8b']);
     await service.abortPull('cancel', 'llama3.1:8b');
@@ -311,6 +322,7 @@ describe('local model pull state machine', () => {
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
       deleteManifest: false,
+      keepDigests: [],
     });
   });
 

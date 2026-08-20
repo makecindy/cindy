@@ -27,12 +27,17 @@ import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 interface Slot {
   effortByModel: Record<string, Effort>;
   fastByModel: Record<string, boolean>;
+  thinkingByModel: Record<string, boolean>;
 }
 
 /** 被控端推 / 拉过来的全量快照形状(`${agent}:${providerId}` → Slot)。 */
 export type RemoteModelMemorySnapshot = Record<
   string,
-  { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
+  {
+    effortByModel: Record<string, string>;
+    fastByModel: Record<string, boolean>;
+    thinkingByModel?: Record<string, boolean>;
+  }
 >;
 
 // scopeKey(`draft:<deviceId>` | `session:<sessionId>`)→ (slotKey `${agent}:${providerId}` → Slot)
@@ -78,6 +83,7 @@ export function replaceScope(scopeKey: string, snapshot: RemoteModelMemorySnapsh
       bySlot.set(k, {
         effortByModel: { ...(slot.effortByModel as Record<string, Effort>) },
         fastByModel: { ...slot.fastByModel },
+        thinkingByModel: { ...(slot.thinkingByModel ?? {}) },
       });
     }
   }
@@ -101,7 +107,7 @@ function getSlot(scopeKey: string, agent: AgentKind, providerId: string, create:
   const k = slotKey(agent, providerId);
   let slot = bySlot.get(k);
   if (!slot && create) {
-    slot = { effortByModel: {}, fastByModel: {} };
+    slot = { effortByModel: {}, fastByModel: {}, thinkingByModel: {} };
     bySlot.set(k, slot);
   }
   return slot;
@@ -143,6 +149,32 @@ export function setMirrorEffort(
   emit();
 }
 
+export function getMirrorThinking(
+  scopeKey: string,
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): boolean | undefined {
+  if (!scopeKey || !providerId || !model) return undefined;
+  return getSlot(scopeKey, agent, providerId, false)?.thinkingByModel?.[model];
+}
+
+export function setMirrorThinking(
+  scopeKey: string,
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+  enabled: boolean,
+): void {
+  if (!scopeKey || !providerId || !model) return;
+  const providerSlot = getSlot(scopeKey, agent, providerId, true)!;
+  providerSlot.thinkingByModel ??= {};
+  if (providerSlot.thinkingByModel[model] === enabled) return;
+  providerSlot.thinkingByModel[model] = enabled;
+  scopeSerial.delete(scopeKey);
+  emit();
+}
+
 export function setMirrorFast(
   scopeKey: string,
   agent: AgentKind,
@@ -169,12 +201,13 @@ export function makeMirrorAccessors(
     agent: AgentKind,
     providerId: string,
     model: string,
-    patch: { effort?: Effort; fast?: boolean; markModelChoice?: boolean },
+    patch: { effort?: Effort; fast?: boolean; thinking?: boolean; markModelChoice?: boolean },
   ) => void,
 ): ModelMemoryAccessors {
   return {
     getEffort: (agent, providerId, model) => getMirrorEffort(scopeKey, agent, providerId, model),
     getFast: (agent, providerId, model) => getMirrorFast(scopeKey, agent, providerId, model),
+    getThinking: (agent, providerId, model) => getMirrorThinking(scopeKey, agent, providerId, model),
     setEffort: (agent, providerId, model, effort) => {
       setMirrorEffort(scopeKey, agent, providerId, model, effort);
       onWrite(agent, providerId, model, { effort });
@@ -186,6 +219,10 @@ export function makeMirrorAccessors(
     setFast: (agent, providerId, model, enabled) => {
       setMirrorFast(scopeKey, agent, providerId, model, enabled);
       onWrite(agent, providerId, model, { fast: enabled });
+    },
+    setThinking: (agent, providerId, model, enabled) => {
+      setMirrorThinking(scopeKey, agent, providerId, model, enabled);
+      onWrite(agent, providerId, model, { thinking: enabled });
     },
   };
 }

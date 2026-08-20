@@ -197,6 +197,7 @@ export async function installOfficialSidecar(
   if (opts.signal?.aborted) throw new Error('aborted');
   const root = ollamaRuntimeRoot(userDataDir);
   const archivePath = path.join(root, 'downloads', asset.assetName);
+  try {
   emit({
     phase: 'downloading',
     version: asset.version,
@@ -239,7 +240,13 @@ export async function installOfficialSidecar(
   await mkdir(path.dirname(manifestPath), { recursive: true });
   await writeFile(`${manifestPath}.tmp`, `${JSON.stringify(manifest)}\n`, 'utf8');
   await rename(`${manifestPath}.tmp`, manifestPath);
+  await rm(archivePath, { force: true });
   return { version: asset.version, binary };
+} catch (error) {
+  await rm(`${archivePath}.tmp`, { force: true });
+  await rm(archivePath, { force: true });
+  throw error;
+}
 }
 
 export async function installOfficialDarwinSidecar(
