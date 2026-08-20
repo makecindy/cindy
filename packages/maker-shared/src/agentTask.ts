@@ -166,6 +166,11 @@ export interface AgentTaskUpdate {
  * Derive the visible task status from the live update and its paired tool result.
  * A result is a terminal fact, so it closes a stale `running` update without
  * overriding an explicit failure or stopped state.
+ *
+ * 历史回放(Desktop 重载 / Mobile 断线重连)拿不到 live-only 的 agent_task_update,
+ * 卡片只能靠持久化的工具结果推导。若结果是结构化错误记录(ok:false / status:"error" /
+ * error 字段等),说明子任务以失败收尾 —— 必须推导成 `failed`,不能判成 `completed`
+ * (否则刚显示失败的启动任务恢复后变成“已完成”,Mobile 错过实时帧则从未显示失败)。
  */
 export function deriveAgentTaskStatus(
   updateStatus: AgentTaskStatus | undefined,
@@ -173,13 +178,52 @@ export function deriveAgentTaskStatus(
   options?: {
     resultIsLaunchReceipt?: boolean;
     persistedStatus?: AgentTaskTerminalStatus;
+    resultIsError?: boolean;
   },
 ): AgentTaskStatus {
   const persistedStatus = normalizeAgentTaskTerminalStatus(options?.persistedStatus);
   if (persistedStatus) return persistedStatus;
   const hasResult = typeof result === 'string' && result.trim().length > 0;
+  // 显式 live 终态优先:只有 running / 无 update 时才允许错误结果把任务判成
+  // failed —— completed/stopped 等 live 状态是权威,错误结果不覆盖它们。
+  if (
+    options?.resultIsError &&
+    hasResult &&
+    updateStatus !== 'completed' &&
+    updateStatus !== 'stopped' &&
+    updateStatus !== 'failed'
+  ) {
+    return 'failed';
+  }
   if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
   return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
+/**
+ * 判断子任务工具结果是否以失败收尾(历史回放恢复 failed 的依据)。判定为“是”的
+ * 形态:结构化 JSON 错误记录(ok:false / success:false / status ∈ error|failed|failure
+ * / 非空 error|errors|exception|stderr 字段)、`<tool_use_error>` 标记、或以
+ * Error/失败句式开头的短结果。与 messagePresentation.isErrorRecord 语义对齐
+ * (该函数不可达:agentTask 是叶子模块),但只读 result 字符串,不依赖工具元数据。
+ */
+export function isSubagentResultError(result: string | undefined): boolean {
+  const text = typeof result === 'string' ? result.trim() : '';
+  if (text.length === 0) return false;
+  if (text.startsWith('<tool_use_error>') || text.startsWith('<error>')) return true;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const record = parsed as Record<string, unknown>;
+    if (record.ok === false || record.success === false) return true;
+    const status = typeof record.status === 'string' ? record.status.toLowerCase() : '';
+    if (status === 'error' || status === 'failed' || status === 'failure') return true;
+    return ['error', 'errors', 'exception', 'stderr'].some((key) => {
+      const raw = record[key];
+      return typeof raw === 'string' ? raw.trim().length > 0 : raw !== undefined && raw !== null;
+    });
+  } catch {
+    return /^\b(error|failed|failure|exception|unable to start|could not start|启动失败|无法启动)\b/i.test(text);
+  }
 }
 
 /**
@@ -440,6 +484,8 @@ export function buildAgentTaskCardModel(input: {
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
       || subagentSpawnResultIndicatesRunning(toolName, result),
+    // 历史回放:无 live update 时从错误结果恢复 failed(而不是误判 completed)。
+    resultIsError: update === undefined && isSubagentResultError(result),
   });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider

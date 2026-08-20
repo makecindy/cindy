@@ -435,6 +435,45 @@ describe('buildAgentTaskCardModel', () => {
       .toBe('stopped');
   });
 
+  it('history replay: recovers failed from a structured error result when no live update exists', () => {
+    // Desktop 重载 / Mobile 断线重连:agent_task_update 是 live-only,卡片只能靠
+    // 持久化的工具结果推导。错误结果必须恢复 failed,不能判成 completed。
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { description: 'launch', prompt: 'run' },
+      result: JSON.stringify({ ok: false, error: 'model not found' }),
+    });
+    expect(model.status).toBe('failed');
+  });
+
+  it('history replay: recovers failed from a <tool_use_error> result with no live update', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { prompt: 'run' },
+      result: '<tool_use_error>Unable to start subagent: quota exceeded</tool_use_error>',
+    });
+    expect(model.status).toBe('failed');
+  });
+
+  it('history replay: an explicit live completed update wins over an error-looking result', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { prompt: 'run' },
+      result: '<tool_use_error>stale</tool_use_error>',
+      update: { provider: 'claude-code', taskId: 't', parentToolUseId: 't', status: 'completed' },
+    });
+    expect(model.status).toBe('completed');
+  });
+
+  it('history replay: a plain result with no live update still derives completed (no false failed)', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { prompt: 'run' },
+      result: 'subagent finished successfully',
+    });
+    expect(model.status).toBe('completed');
+  });
+
   it('falls back the title through update → tool input description → prompt', () => {
     expect(buildAgentTaskCardModel({ update: { provider: 'codex', taskId: 't', status: 'running', title: 'From update' } }).title)
       .toBe('From update');
