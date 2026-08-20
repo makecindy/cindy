@@ -1509,7 +1509,7 @@ export function registerSessionIpc(
     // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
     if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
       void import('../../sessionTaskSummary.js').then((m) =>
-        m.maybeGenerateSessionTaskSummary(sid),
+        m.maybeGenerateSessionTaskSummary(sid, { force: true }),
       );
     }
     notifyAgentIslandSessionPatch(updated.id, {
@@ -1644,7 +1644,7 @@ export async function patchSessionMetaInDb(
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
-      m.maybeGenerateSessionTaskSummary(sessionId),
+      m.maybeGenerateSessionTaskSummary(sessionId, { force: true }),
     );
   }
   return updated;

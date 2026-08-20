@@ -150,6 +150,7 @@ async function clearSessionTaskSummary(sessionId: string): Promise<void> {
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
       if (await stopClearBecauseCard(sessionId)) return;
     }
+    lastGeneratedAt.delete(sessionId);
     broadcastPatched(sessionId, nonCardTurnDisplayPatch(preview));
   } catch (err) {
     log.warn('clear stale task summary failed (swallowed)', {

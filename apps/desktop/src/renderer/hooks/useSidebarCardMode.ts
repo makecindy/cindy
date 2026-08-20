@@ -99,18 +99,29 @@ function notifyPinnedCardSummaries(mode: SidebarViewMode): void {
 /** 同标签页内的实例间同步(原生 storage 事件只发给其它窗口)。 */
 const listeners = new Set<() => void>();
 
-/** 无订阅者 = 本进程错过了跨窗口 storage 事件;挂载时必须回读 storage 再通知 main。
- *  仍有订阅者时不回读:内存是同窗口 SoT(setItem 失败时不能被旧 storage 改回去)。 */
-export function shouldRefreshPinnedModeFromStorage(subscribedListenerCount: number): boolean {
-  return subscribedListenerCount === 0;
+/** main 的卡片模式投影只由 setMode / storage 事件 / 本 renderer 首次挂载写入。
+ *  重挂载不得再通知:否则会把失败的 setItem 留下的旧持久值盖回 main。 */
+let mainNotified = false;
+let storageListenerBound = false;
+
+export function shouldNotifyMainOnPinnedModeMount(mainAlreadyNotified: boolean): boolean {
+  return !mainAlreadyNotified;
 }
 
-function readPinnedModeFromStorage(): SidebarViewMode | null {
-  try {
-    return parseMode(localStorage.getItem(STORAGE_KEY));
-  } catch {
-    return null;
-  }
+function applyPinnedModeFromStorage(raw: string | null): void {
+  memoryValue = parseMode(raw) ?? DEFAULT_MODE;
+  mainNotified = true;
+  notifyPinnedCardSummaries(memoryValue);
+  listeners.forEach((fn) => fn());
+}
+
+function ensurePinnedModeStorageListener(): void {
+  if (storageListenerBound || typeof window === 'undefined') return;
+  storageListenerBound = true;
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== STORAGE_KEY) return;
+    applyPinnedModeFromStorage(e.newValue);
+  });
 }
 
 export function useSidebarCardMode(): {
@@ -129,31 +140,21 @@ export function useSidebarCardMode(): {
     } catch {
       // localStorage 不可用——内存 SoT 已生效;仅跨窗口同步缺失。
     }
+    mainNotified = true;
     notifyPinnedCardSummaries(next);
     listeners.forEach((fn) => fn());
   }, []);
 
   useEffect(() => {
-    if (shouldRefreshPinnedModeFromStorage(listeners.size)) {
-      const stored = readPinnedModeFromStorage();
-      if (stored) {
-        memoryValue = stored;
-        setModeState(stored);
-      }
+    ensurePinnedModeStorageListener();
+    if (shouldNotifyMainOnPinnedModeMount(mainNotified)) {
+      mainNotified = true;
+      notifyPinnedCardSummaries(getSidebarViewMode());
     }
-    notifyPinnedCardSummaries(getSidebarViewMode());
     const sync = () => setModeState(getSidebarViewMode());
     listeners.add(sync);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORAGE_KEY) return;
-      memoryValue = parseMode(e.newValue) ?? DEFAULT_MODE;
-      notifyPinnedCardSummaries(memoryValue);
-      sync();
-    };
-    window.addEventListener('storage', onStorage);
     return () => {
       listeners.delete(sync);
-      window.removeEventListener('storage', onStorage);
     };
   }, []);
 

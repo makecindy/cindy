@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldRefreshPinnedModeFromStorage } from '../useSidebarCardMode';
+import { shouldNotifyMainOnPinnedModeMount } from '../useSidebarCardMode';
 
-describe('shouldRefreshPinnedModeFromStorage', () => {
-  it('无订阅者时回读 storage,避免副窗口用过期内存通知 main', () => {
-    expect(shouldRefreshPinnedModeFromStorage(0)).toBe(true);
+describe('shouldNotifyMainOnPinnedModeMount', () => {
+  it('本 renderer 首次挂载才通知 main', () => {
+    expect(shouldNotifyMainOnPinnedModeMount(false)).toBe(true);
   });
 
-  it('仍有订阅者时不回读,避免同窗口 setItem 失败被旧 storage 改回去', () => {
-    expect(shouldRefreshPinnedModeFromStorage(1)).toBe(false);
+  it('重挂载不再通知,避免失败的 setItem 旧值盖回 main', () => {
+    expect(shouldNotifyMainOnPinnedModeMount(true)).toBe(false);
   });
 });
