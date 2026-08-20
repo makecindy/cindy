@@ -154,9 +154,8 @@ export interface RuntimeState {
   >;
   /**
    * 本 turn 内已观察到「重试耗尽」的 SDK error tag。api_retry 不带
-   * parent_tool_use_id，耗尽只能按 tag 记录；envelope 先于/后于 api_retry 到达的
-   * 两种时序都要能据此判定终态。同 tag 并发 subagent 存在近似归属的残余风险（见
-   * handleSystem 注释），但比单个 turn 级 pendingApiError 串所有 tag 收窄得多。
+   * parent_tool_use_id，只能把标签作为后续、具体 sidechain error envelope 的辅助
+   * 证据；不能在 api_retry 到达时反向把耗尽投影给所有同 tag 的 open sidechain。
    */
   exhaustedApiErrorTags: Set<string>;
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
@@ -242,9 +241,10 @@ function resetTurnState(turn: TurnState, rt: RuntimeState): void {
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
   turn.lastAssistantRequestId = undefined;
-  // api_retry 不携带 parent_tool_use_id，只能在当前 turn 内按 error tag 关联。
-  // 终态到达后必须丢弃本轮耗尽证据，避免下一 turn 的同类瞬时错误被误判为已耗尽。
+  // api_retry 不携带 parent_tool_use_id，只能在当前 turn 内按 error tag 辅助判断。
+  // 终态到达后必须丢弃本轮耗尽证据及未决 sidechain，避免下一 turn 收口陈旧任务。
   rt.exhaustedApiErrorTags.clear();
+  rt.subagentRetryStateByParentToolUseId.clear();
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
 
@@ -907,27 +907,16 @@ function handleSystem(
       retryAttempt: msg.attempt,
       maxRetries: msg.max_retries,
     };
-    // api_retry 不带 parent_tool_use_id，只能按 error tag 近似归属。重试耗尽时：
-    //  1) 记下本 turn 已耗尽的 tag，供稍后到达的终态 error envelope 判定(#2967)；
-    //  2) 对**已经 open 等待**的同 tag sidechain 立即补发失败终态（envelope 先于
-    //     api_retry 到达的时序，否则没人再投递 envelope）。
-    // 自愈的 sidechain 由 task_started / 正常 assistant 清除，不会被误锁成失败。
-    // 残余风险：同 tag 并发 sidechain 中，一个耗尽会把另一个仍在重试的一并投影
-    // （api_retry 无 parent 导致不可精确归属）。这已比单个 turn 级 pendingApiError
-    // 串所有 tag、且会被任意正常 assistant 清掉的旧实现收窄得多。
+    // api_retry 不带 parent_tool_use_id，不能把耗尽事件归属给任何一个 sidechain。
+    // 这里只记录当前 turn 的 tag；后续具体 sidechain error envelope 到达时再用它
+    // 辅助判断。绝不能在这里遍历并投影所有同 tag 的 open sidechain——同 tag 的
+    // 并发 sidechain 或主链请求都可能触发这条 api_retry，误投影会锁死可自愈任务。
     if (
       typeof msg.attempt === 'number' &&
       typeof msg.max_retries === 'number' &&
       msg.attempt >= msg.max_retries
     ) {
       ctx.rt.exhaustedApiErrorTags.add(msg.error ?? 'unknown');
-      for (const [parentToolUseId, state] of ctx.rt.subagentRetryStateByParentToolUseId) {
-        if (state.tag === msg.error && !state.projected) {
-          projectSubagentLaunchFailure(queue, ctx, parentToolUseId, {
-            errorMessage: state.errorMessage,
-          });
-        }
-      }
     }
     ctx.log.info('SDK API request retrying', {
       attempt: msg.attempt,

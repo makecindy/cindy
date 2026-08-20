@@ -1464,7 +1464,7 @@ describe('Claude Code sidechain launch failure projection', () => {
     });
   });
 
-  it('projects a retryable sidechain error when api_retry exhausts after the envelope', async () => {
+  it('does not project every open sidechain when api_retry exhausts after an envelope', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
     // envelope 先到：记 open 等待，暂不投影。
@@ -1481,7 +1481,8 @@ describe('Claude Code sidechain launch failure projection', () => {
       queue,
       ctx,
     );
-    // api_retry 耗尽随后到达：对 open 的同 tag sidechain 补发失败终态。
+    // api_retry 不携带 parent_tool_use_id，不能证明这个具体 sidechain 已耗尽；
+    // 即使 envelope 先到，也不能把同 tag 的全局重试事件当作该任务的终态。
     translateSdkMessage(
       {
         type: 'system',
@@ -1499,12 +1500,7 @@ describe('Claude Code sidechain launch failure projection', () => {
     const taskUpdates = (await collect(queue)).filter(
       (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
     );
-    expect(taskUpdates).toHaveLength(1);
-    expect(taskUpdates[0].data).toMatchObject({
-      taskId: 'toolu_retry_exhausted',
-      parentToolUseId: 'toolu_retry_exhausted',
-      status: 'failed',
-    });
+    expect(taskUpdates).toHaveLength(0);
   });
 
   it('does not project a retryable sidechain error while the SDK is still retrying (then self-heals)', async () => {
@@ -1591,6 +1587,21 @@ describe('Claude Code sidechain launch failure projection', () => {
       ctx,
     );
     expect(ctx.rt.exhaustedApiErrorTags.has('rate_limit')).toBe(true);
+    // 建立一个未决 sidechain，验证 turn 收尾时 retry map 也不会残留。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_old_turn',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.subagentRetryStateByParentToolUseId.has('toolu_old_turn')).toBe(true);
 
     translateSdkMessage(
       {
@@ -1625,7 +1636,7 @@ describe('Claude Code sidechain launch failure projection', () => {
     const taskUpdates = (await collect(queue)).filter(
       (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
     );
-    expect(taskUpdates).toHaveLength(0);
+    expect(taskUpdates.filter((event) => event.data.taskId === 'toolu_next_turn')).toHaveLength(0);
   });
 
   it('does not leak a sidechain error into the main turn pendingApiError', async () => {
