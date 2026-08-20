@@ -74,7 +74,7 @@ import {
   getRemoteSessionActivity,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
-import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { absorbSessionStarting, getStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { SectionCollapse } from '../SectionCollapse';
@@ -397,10 +397,20 @@ export function ProjectsSection({
   // 还把已完成任务钉在运行中档。不要用上面的 running 集合 —— 那已经并进了
   // starting,会把自己清掉。
   useEffect(() => {
-    const settled = new Set<string>(notifications);
-    for (const id of urgentSet) settled.add(id);
+    const starting = getStartingSessionIds();
+    const settled = new Set<string>();
+    // 发送前已有的本地 done/error attention 不能吸收刚置位的 starting,
+    // 否则呼吸点要等真实 isRunning。远程终态已在 mark 时丢掉旧镜像。
+    for (const id of notifications) {
+      if (!starting.has(id)) settled.add(id);
+    }
+    for (const id of urgentSet) {
+      if (!starting.has(id)) settled.add(id);
+    }
     for (const [sessionId, kind] of attentionKinds) {
-      if (kind === 'awaiting' || kind === 'error') settled.add(sessionId);
+      if ((kind === 'awaiting' || kind === 'error') && !starting.has(sessionId)) {
+        settled.add(sessionId);
+      }
     }
     const considerRemote = (session: Session) => {
       const activity = getRemoteSessionActivity(session.id);

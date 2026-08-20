@@ -483,14 +483,51 @@ export function rollbackAgentIslandUserPrompt(
   state: AgentIslandState,
   token: AgentIslandUserPromptRollbackToken,
 ): void {
-  // 只还原该 session 自己的条目。全局 reveal 是岛级共享状态,回滚时不能
-  // 用入队时的快照覆盖,否则会把期间其它 session 的 reveal 一起抹掉。
+  // 只还原该 session 自己的条目和它自己的 reveal 归属。禁止整份写回
+  // activeTransientSessionId / reveal queue,否则会盖掉其它 session。
   if (token.session) {
-    state.sessions.set(token.sessionId, cloneSession(token.session));
+    const restored = cloneSession(token.session);
+    state.sessions.set(token.sessionId, restored);
+    restoreSessionScopedReveal(state, restored, Date.now());
     return;
   }
   state.sessions.delete(token.sessionId);
   removeQueuedTransientReveal(state, token.sessionId);
+}
+
+function restoreSessionScopedReveal(
+  state: AgentIslandState,
+  session: AgentIslandSessionState,
+  now: number,
+): void {
+  const sessionId = session.sessionId;
+  const wantsActive = session.revealUntil != null
+    && session.revealUntil > now
+    && session.deferredReveal !== true;
+  const wantsQueued = session.deferredRevealReason === 'queued';
+  if (!wantsActive && !wantsQueued) return;
+
+  if (wantsActive) {
+    if (!state.activeTransientSessionId || state.activeTransientSessionId === sessionId) {
+      state.activeTransientSessionId = sessionId;
+      state.transientRevealQueue = state.transientRevealQueue.filter(
+        (queuedSessionId) => queuedSessionId !== sessionId,
+      );
+      return;
+    }
+    if (!state.transientRevealQueue.includes(sessionId)) {
+      state.transientRevealQueue.push(sessionId);
+    }
+    session.deferredReveal = true;
+    session.deferredRevealReason = 'queued';
+    session.revealUntil = null;
+    return;
+  }
+
+  if (state.activeTransientSessionId === sessionId) return;
+  if (!state.transientRevealQueue.includes(sessionId)) {
+    state.transientRevealQueue.push(sessionId);
+  }
 }
 
 export function applyAgentIslandEvent(

@@ -2323,6 +2323,39 @@ describe('AgentIslandService native publishing', () => {
     expect(sessionIds).not.toContain('session-a');
   });
 
+  it('restores the same session completion reveal after a blocked follow-up preview', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setAppFocused(false);
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      displaySurface: 'completionCard',
+      currentSessionId: 's1',
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'follow up', {
+      clientId: 'follow',
+    });
+    service.rollbackUserPrompt('s1', 'follow');
+
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      displaySurface: 'completionCard',
+      currentSessionId: 's1',
+    });
+  });
+
   it('removes user-stopped sessions and ignores provider completion tails without playing completion sound', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
