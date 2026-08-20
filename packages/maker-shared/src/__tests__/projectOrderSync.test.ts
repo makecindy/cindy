@@ -50,6 +50,17 @@ describe('project order key remap', () => {
     ]);
     expect(remapControllerOrderToHost(deviceId, controller, host)).toEqual(host);
   });
+
+  it('keeps a POSIX backslash filename verbatim instead of folding it as Windows', () => {
+    const deviceId = 'posix-box';
+    // `foo\bar` 是 POSIX 下的单个合法文件名,不能被当成 Windows 分隔符折叠/小写,
+    // 否则会与 `local:/repo/foo/bar` 生成同一个项目键而错误合并。
+    const backslash = remapHostProjectKeyToController(deviceId, 'local:/repo/Foo\\Bar');
+    const slash = remapHostProjectKeyToController(deviceId, 'local:/repo/Foo/Bar');
+    expect(backslash).toBe(`device:${encodeURIComponent(deviceId)}:/repo/Foo\\Bar`);
+    expect(slash).toBe(`device:${encodeURIComponent(deviceId)}:/repo/Foo/Bar`);
+    expect(backslash).not.toBe(slash);
+  });
 });
 
 describe('parseSyncedProjectOrderSnapshot', () => {
