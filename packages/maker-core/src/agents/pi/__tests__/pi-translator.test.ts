@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import { createPiTranslateContext, translatePiEvent, usageSnapshotOf } from '../translator.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { AsyncQueue } from '../../shared/async-queue.js';
@@ -447,6 +448,36 @@ describe('pi translator', () => {
     const full = events.find((event) => event.type === 'tool_result_full');
     expect(full).toMatchObject({ data: { fullText: wire }, source: 'pi' });
     expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
+  });
+
+  it('rewrites context-mode doctor tool results to the Cindy-managed package path', () => {
+    const root = '/tmp/cindy/managed-packages/0/node_modules/context-mode';
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.rewriteToolResultText = (text) => rewriteContextModeDoctorPath(text, root);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'doctor-1',
+        toolName: 'ctx_doctor',
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: '[OK] Hook support: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+            },
+          ],
+        },
+      }),
+      queue,
+      ctx,
+    );
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({
+      data: {
+        fullText: `[OK] Hook support: (${root}/), not via JSON-stdio.`,
+      },
+    });
   });
 
   it('maps compaction_end (threshold) → compact_boundary with token deltas + updates contextTokens', () => {

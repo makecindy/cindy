@@ -131,6 +131,8 @@ export interface PiTranslateContext {
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
   /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
   hostAutoCompactInFlight: boolean;
+  /** Optional rewrite for tool result text (Cindy-managed context-mode doctor paths). */
+  rewriteToolResultText?: (text: string) => string;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -522,7 +524,8 @@ export function translatePiEvent(
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');
       const isError = event.isError === true;
-      const fullText = toolResultFullText(event.result);
+      const rawText = toolResultFullText(event.result);
+      const fullText = ctx.rewriteToolResultText ? ctx.rewriteToolResultText(rawText) : rawText;
       queue.push({
         type: 'tool_result_full',
         data: { toolUseId, fullText, isError },

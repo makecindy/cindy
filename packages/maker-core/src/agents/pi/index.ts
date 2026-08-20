@@ -113,6 +113,10 @@ import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../typ
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
 import { scanPiCustomizations } from './customization-scanner.js';
+import {
+  findContextModePackageRoot,
+  rewriteContextModeDoctorPath,
+} from './context-mode-doctor-path.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
@@ -2157,6 +2161,8 @@ export class PiAgent extends BaseAgent {
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
+    const contextModeRoot = findContextModePackageRoot(managedPackageResources.packageRoots);
+    ctx.rewriteToolResultText = (text) => rewriteContextModeDoctorPath(text, contextModeRoot);
     let interactionResolver: InteractionResolver | null = null;
     // Host 每轮权限策略(个人微信 / Telegram 群)。刻意保留在 send 之外的闭包里:
     // pi 的内部续跑(plan 审批后的实施轮、自动继续)不再经 handle.send,却必须继续
@@ -2538,12 +2544,13 @@ export class PiAgent extends BaseAgent {
               allowPiPackageManagement,
               piPackageManagementToken,
               emitExtensionNotification: (message) => {
+                const text = rewriteContextModeDoctorPath(message, contextModeRoot);
                 if (activeExtensionCommandNotifications) {
-                  activeExtensionCommandNotifications.push(message);
+                  activeExtensionCommandNotifications.push(text);
                 }
                 queue.push({
                   type: 'text',
-                  data: { text: message, isFinal: false },
+                  data: { text, isFinal: false },
                   source: 'pi',
                 });
               },
