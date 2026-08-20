@@ -186,6 +186,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain("t('session.screen.tokenCount'");
     expect(source).toContain("t('session.screen.tokenCountFull'");
     expect(source).toContain("t('session.screen.tokenRate'");
+    expect(source).toContain('accessibilityLabel={rateText}');
+    expect(source).toContain('accessibilityLabel={tokenA11yText}');
+    expect(source).not.toContain('accessibilityLabel={tokenUsage > 0 ? tokenA11yText : undefined}');
     expect(source).toContain('function formatComposerActivityElapsed');
     expect(source).toContain('function formatComposerActivityTokenCount');
     expect(source).toContain('function formatComposerActivityRateValue');

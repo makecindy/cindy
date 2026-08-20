@@ -10419,7 +10419,7 @@ function ComposerActivityStatus({
             <Text style={styles.composerActivityMetaText}>·</Text>
             {rateText ? (
               <Text
-                accessibilityLabel={tokenUsage > 0 ? tokenA11yText : undefined}
+                accessibilityLabel={rateText}
                 style={styles.composerActivityMetaText}
               >
                 {rateText}
@@ -10427,7 +10427,12 @@ function ComposerActivityStatus({
             ) : (
               <>
                 <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-                <Text style={styles.composerActivityMetaText}>{tokenText}</Text>
+                <Text
+                  accessibilityLabel={tokenA11yText}
+                  style={styles.composerActivityMetaText}
+                >
+                  {tokenText}
+                </Text>
               </>
             )}
           </>
