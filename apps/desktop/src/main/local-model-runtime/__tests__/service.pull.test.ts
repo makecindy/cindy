@@ -142,6 +142,7 @@ describe('local model pull state machine', () => {
       digests: [],
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
+      deleteManifest: true,
     });
   });
 
@@ -176,6 +177,7 @@ describe('local model pull state machine', () => {
       digests: [],
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
+      deleteManifest: true,
     });
   });
 
@@ -240,6 +242,7 @@ describe('local model pull state machine', () => {
       digests: ['sha256:ccc'],
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
+      deleteManifest: true,
     });
   });
 
@@ -273,9 +276,67 @@ describe('local model pull state machine', () => {
       digests: [],
       deleteAllIncomplete: false,
       pruneUnreferenced: false,
+      deleteManifest: true,
     });
     expect(service.activePulls().map((item) => item.name)).toEqual(['llama3.1:8b']);
     await service.abortPull('cancel', 'llama3.1:8b');
     await second.catch(() => undefined);
+  });
+
+  it('does not delete a model that is already installed when discarding a pause', async () => {
+    const deleteModel = vi.fn(async () => undefined);
+    const purgeCancelledPull = vi.fn(async () => undefined);
+    const pausedPullStore = memoryPausedStore();
+    const first = createLocalModelService({
+      streamPull: vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal)),
+      pausedPullStore,
+      fetchImpl: async () => new Response(JSON.stringify({ models: [] })),
+    });
+    const pulling = first.pull('gpt-oss:20b');
+    await first.abortPull('pause', 'gpt-oss:20b');
+    await pulling.catch(() => undefined);
+
+    const second = createLocalModelService({
+      pausedPullStore,
+      deleteModel,
+      purgeCancelledPull,
+      waitForCancelledBlobs: async () => undefined,
+      fetchImpl: async () => new Response(JSON.stringify({ models: [{ name: 'gpt-oss:20b' }] })),
+    });
+    await second.discardPaused('gpt-oss:20b');
+    expect(deleteModel).not.toHaveBeenCalled();
+    expect(purgeCancelledPull).toHaveBeenCalledWith({
+      name: 'gpt-oss:20b',
+      digests: [],
+      deleteAllIncomplete: false,
+      pruneUnreferenced: false,
+      deleteManifest: false,
+    });
+  });
+
+  it('does not resurrect a completed pull after flushing pending progress', async () => {
+    vi.useFakeTimers();
+    const pausedPullStore = memoryPausedStore();
+    const streamPull = vi.fn(
+      (
+        _name: string,
+        onEvent: (event: { status: string; digest?: string; completed?: number; total?: number }) => void,
+      ) => {
+        onEvent({ status: 'downloading', digest: 'sha256:abc', completed: 1, total: 10 });
+        return Promise.resolve();
+      },
+    );
+    const service = createLocalModelService({
+      streamPull,
+      pausedPullStore,
+      fetchImpl: async () => new Response(JSON.stringify({ models: [] })),
+    });
+    try {
+      await service.pull('gpt-oss:20b').catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await pausedPullStore.read('gpt-oss:20b')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

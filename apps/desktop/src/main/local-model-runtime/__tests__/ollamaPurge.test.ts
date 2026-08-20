@@ -121,4 +121,29 @@ describe('purgeCancelledOllamaPull', () => {
       'someone-else',
     );
   });
+
+  it('keeps the installed manifest when deleteManifest is false', async () => {
+    const root = path.join(os.tmpdir(), `ollama-purge-keep-${Date.now()}`);
+    const blobs = path.join(root, 'blobs');
+    const manifests = path.join(root, 'manifests', 'registry.ollama.ai', 'library');
+    await mkdir(blobs, { recursive: true });
+    await mkdir(path.join(manifests, 'gpt-oss'), { recursive: true });
+    await writeFile(path.join(blobs, 'sha256-keep'), 'installed');
+    await writeFile(
+      path.join(manifests, 'gpt-oss', '20b'),
+      JSON.stringify({ layers: [{ digest: 'sha256:keep' }] }),
+    );
+
+    const result = await purgeCancelledOllamaPull({
+      modelsDir: root,
+      name: 'gpt-oss:20b',
+      digests: ['sha256:keep'],
+      deleteManifest: false,
+    });
+    expect(result.deleted).not.toContain(path.join(manifests, 'gpt-oss', '20b'));
+    await expect(readFile(path.join(blobs, 'sha256-keep'), 'utf8')).resolves.toBe('installed');
+    await expect(readFile(path.join(manifests, 'gpt-oss', '20b'), 'utf8')).resolves.toContain(
+      'sha256:keep',
+    );
+  });
 });

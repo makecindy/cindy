@@ -275,6 +275,7 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:set-effort',
   'maker:set-permission-mode',
   'maker:set-fast-mode',
+  'maker:set-thinking-enabled',
   'maker:set-extra-dirs',
   // 模型列表「非选中行」effort/fast 写穿(会话镜像 + 草稿默认双写;老被控端
   // CHANNEL_NOT_ALLOWED → 手机端吞掉降级,见 sessionModelMirror)。

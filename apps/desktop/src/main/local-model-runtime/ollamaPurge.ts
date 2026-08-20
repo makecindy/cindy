@@ -172,6 +172,7 @@ export async function purgeCancelledOllamaPull(opts: {
   digests: readonly string[];
   deleteAllIncomplete?: boolean;
   pruneUnreferenced?: boolean;
+  deleteManifest?: boolean;
   touchedSinceMs?: number;
 }): Promise<{ deleted: string[] }> {
   const deleted: string[] = [];
@@ -184,7 +185,9 @@ export async function purgeCancelledOllamaPull(opts: {
     } catch {
       /* no complete manifest yet */
     }
-    if (await unlinkRetry(manifestPath)) deleted.push(manifestPath);
+    if (opts.deleteManifest !== false && (await unlinkRetry(manifestPath))) {
+      deleted.push(manifestPath);
+    }
   }
   const used = await collectReferencedBlobNames(opts.modelsDir);
   const blobsDir = path.join(opts.modelsDir, 'blobs');

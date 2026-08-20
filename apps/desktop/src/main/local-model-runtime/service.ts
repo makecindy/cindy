@@ -128,6 +128,7 @@ export interface LocalModelServiceDeps {
     digests: readonly string[];
     deleteAllIncomplete?: boolean;
     pruneUnreferenced?: boolean;
+    deleteManifest?: boolean;
     touchedSinceMs?: number;
   }) => Promise<unknown>;
   waitForCancelledBlobs?: (opts?: { digests?: readonly string[] }) => Promise<void>;
@@ -172,6 +173,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       digests: readonly string[];
       deleteAllIncomplete?: boolean;
       pruneUnreferenced?: boolean;
+      deleteManifest?: boolean;
       touchedSinceMs?: number;
     }) =>
       purgeCancelledOllamaPull({
@@ -180,6 +182,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         digests: opts.digests,
         deleteAllIncomplete: opts.deleteAllIncomplete,
         pruneUnreferenced: opts.pruneUnreferenced,
+        deleteManifest: opts.deleteManifest,
         touchedSinceMs: opts.touchedSinceMs,
       }));
   const waitForCancelledBlobs =
@@ -508,9 +511,18 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     };
     actives.set(name, op);
     let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+    let persistCheckpoints = true;
+    const disarmCheckpoint = () => {
+      persistCheckpoints = false;
+      if (checkpointTimer) {
+        clearTimeout(checkpointTimer);
+        checkpointTimer = null;
+      }
+    };
     const checkpoint = (force = false) => {
       const write = () => {
         checkpointTimer = null;
+        if (!persistCheckpoints) return;
         void rememberPaused(op.lastProgress, [...op.digests]).catch((error) => {
           log.warn('checkpoint in-flight pull failed', {
             name,
@@ -559,15 +571,17 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         const ownerOk = opts?.ownerStillActive?.() ?? true;
         if (!ownerOk) {
           if (opts?.owner) unclaimedByName.set(name, opts.owner);
-          if (checkpointTimer) clearTimeout(checkpointTimer);
+          disarmCheckpoint();
           await forgetPaused(name);
           throw new OwnerChangedError();
         }
         if (managedOllamaRemovalGeneration() !== removalGeneration) {
           log.info('skip managed upsert after provider removed during pull', { name });
+          disarmCheckpoint();
+          await forgetPaused(name);
           return;
         }
-        if (checkpointTimer) clearTimeout(checkpointTimer);
+        disarmCheckpoint();
         await forgetPaused(name);
         const { model, agents } = await describePulledModel(name);
         const upserted = await upsertManagedOllamaModel(model, agents);
@@ -585,7 +599,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         op.lastProgress = done;
         deps.onPullProgress?.(done);
       } catch (error) {
-        if (checkpointTimer) clearTimeout(checkpointTimer);
+        disarmCheckpoint();
         const aborted = op.stopReason ?? (isAbortError(error) ? 'cancel' : null);
         if (aborted) {
           emitter.flush();
@@ -641,13 +655,22 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
   }
 
   async function removeCancelledDownload(name: string, digests: readonly string[]): Promise<void> {
+    let keepInstalled = true;
     try {
-      await deleteModel(name);
-    } catch (error) {
-      log.warn('delete cancelled ollama pull failed', {
-        name,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const tags = await fetchOllamaTags(fetchImpl);
+      keepInstalled = tags.some((tag) => tag.name === name);
+    } catch {
+      keepInstalled = true;
+    }
+    if (!keepInstalled) {
+      try {
+        await deleteModel(name);
+      } catch (error) {
+        log.warn('delete cancelled ollama pull failed', {
+          name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     try {
       await waitForCancelledBlobs({ digests });
@@ -663,6 +686,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
         digests,
         deleteAllIncomplete: false,
         pruneUnreferenced: false,
+        deleteManifest: !keepInstalled,
       });
     } catch (error) {
       log.warn('purge cancelled ollama blobs failed', {

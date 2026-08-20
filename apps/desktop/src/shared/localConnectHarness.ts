@@ -5,9 +5,8 @@ import type {
 } from '@cindy/model-providers';
 
 import {
-  LLAMACPP_OPENAI_BASE_URL,
+  LOCAL_ADVANCED_PRESET_IDS,
   MANAGED_LMSTUDIO_PROVIDER_ID,
-  VLLM_OPENAI_BASE_URL,
 } from './localModelRuntime.js';
 
 function loopbackOrigin(baseUrl: string): string | null {
@@ -56,9 +55,11 @@ export function migrateLocalConnectProvider(
   if (!isPlainChatRuntime(pi)) return null;
 
   const isLmStudio = existing.id === MANAGED_LMSTUDIO_PROVIDER_ID;
-  const isDefaultLocalChat =
-    pi.baseUrl === LLAMACPP_OPENAI_BASE_URL || pi.baseUrl === VLLM_OPENAI_BASE_URL;
-  if (!isLmStudio && !isDefaultLocalChat) return null;
+  const isKnownPreset =
+    isLmStudio ||
+    (LOCAL_ADVANCED_PRESET_IDS as readonly string[]).includes(existing.id) ||
+    /^(llama-cpp|vllm)-\d+$/.test(existing.id);
+  if (!isKnownPreset) return null;
 
   const models = copyModels(pi.models);
   const origin = loopbackOrigin(pi.baseUrl);

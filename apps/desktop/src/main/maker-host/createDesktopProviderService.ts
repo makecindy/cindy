@@ -754,7 +754,7 @@ export async function refreshCustomProvidersIntoCatalog(
     const { migrateLocalConnectProvider } = await import(
       '../../shared/localConnectHarness.js'
     );
-    const { updateCustomProvider } = await import('./custom-provider-store.js');
+    const { updateCustomProviderIfUnchanged } = await import('./custom-provider-store.js');
     const next = configs.map((config) => {
       const migrated =
         migrateManagedOllamaProvider(config) ?? migrateLocalConnectProvider(config);
@@ -766,8 +766,9 @@ export async function refreshCustomProvidersIntoCatalog(
         if (!previous || JSON.stringify(config.runtimes) === JSON.stringify(previous.runtimes)) {
           return [];
         }
+        if (!shouldApply()) return [];
         return [
-          updateCustomProvider(config.id, config).catch((err: unknown) => {
+          updateCustomProviderIfUnchanged(previous.id, previous, config).catch((err: unknown) => {
             log.warn('persist migrated custom provider failed', {
               id: config.id,
               err: String(err),

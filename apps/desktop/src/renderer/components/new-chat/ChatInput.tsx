@@ -8175,24 +8175,44 @@ export function ChatInput({
                     onFastModeChange={handleFastModeChange}
                     thinkingEnabled={
                       currentModelAgentKind && effectiveSourceId
-                        ? (getProviderModelThinking(
+                        ? (modelMemory?.getThinking?.(
                             currentModelAgentKind,
                             effectiveSourceId,
                             activeModel,
-                          ) ?? true)
+                          ) ??
+                          (!deviceLinkDeviceId
+                            ? getProviderModelThinking(
+                                currentModelAgentKind,
+                                effectiveSourceId,
+                                activeModel,
+                              )
+                            : undefined) ??
+                          true)
                         : true
                     }
                     onThinkingChange={async (enabled) => {
                       if (currentModelAgentKind && effectiveSourceId) {
-                        setProviderModelThinking(
-                          currentModelAgentKind,
-                          effectiveSourceId,
-                          activeModel,
-                          enabled,
-                        );
+                        if (modelMemory?.setThinking) {
+                          modelMemory.setThinking(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                            enabled,
+                          );
+                        } else if (!deviceLinkDeviceId) {
+                          setProviderModelThinking(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                            enabled,
+                          );
+                        }
                       }
                       if (sessionId) {
-                        await window.electronAPI.maker.setThinkingEnabled(sessionId, enabled);
+                        const api = deviceLinkDeviceId
+                          ? makerApiForDevice(deviceLinkDeviceId)
+                          : window.electronAPI.maker;
+                        await api.setThinkingEnabled(sessionId, enabled);
                       }
                     }}
                     modelMemory={modelMemory}

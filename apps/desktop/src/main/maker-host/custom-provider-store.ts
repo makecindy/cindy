@@ -71,14 +71,14 @@ function isPiModelApi(value: unknown): value is PiModelApi {
   return typeof value === 'string' && (PI_MODEL_APIS as readonly string[]).includes(value);
 }
 
-function parseStoredPiReasoningCapability(
+function parseStoredReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
-  if (agent !== 'pi' || model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
+  if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
-  const efforts = model.reasoningEfforts.filter(isPiReasoningEffort);
+  const efforts = model.reasoningEfforts.filter((item) => isReasoningEffortForAgent(agent, item));
   if (
     efforts.length === 0 ||
     efforts.length !== model.reasoningEfforts.length ||
@@ -87,13 +87,13 @@ function parseStoredPiReasoningCapability(
     return {};
   }
   const defaultEffort =
-    isPiReasoningEffort(model.reasoningDefaultEffort) &&
-    efforts.includes(model.reasoningDefaultEffort)
-      ? model.reasoningDefaultEffort
+    isReasoningEffortForAgent(agent, model.reasoningDefaultEffort) &&
+    efforts.includes(model.reasoningDefaultEffort as string)
+      ? (model.reasoningDefaultEffort as ProviderRuntimeModelConfig['reasoningDefaultEffort'])
       : undefined;
   return {
     reasoning: true,
-    reasoningEfforts: efforts,
+    reasoningEfforts: efforts as NonNullable<ProviderRuntimeModelConfig['reasoningEfforts']>,
     ...(defaultEffort ? { reasoningDefaultEffort: defaultEffort } : {}),
   };
 }
@@ -694,7 +694,8 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                 : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-              ...parseStoredPiReasoningCapability(agent, m),
+              ...parseStoredReasoningCapability(agent, m),
+              ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
             };
           })
       : [];

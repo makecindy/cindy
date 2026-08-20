@@ -193,6 +193,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:set-effort',
   'maker:set-permission-mode',
   'maker:set-fast-mode',
+  // Pi 本机模型思考开关。runtime-only，无 session 列；老被控端无 handler →
+  // CHANNEL_NOT_ALLOWED，控制端按 capabilities.thinkingToggle 隐藏入口。
+  'maker:set-thinking-enabled',
   // 计划模式一级开关(runtime-only, 持久化经 dispatch persistRemoteSetting 回流)。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',

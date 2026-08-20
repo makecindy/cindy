@@ -41,15 +41,25 @@ describe('migrateLocalConnectProvider', () => {
     });
   });
 
-  it('adds Codex Chat to default llama.cpp and vLLM rows, but not Claude Code', () => {
-    for (const baseUrl of [LLAMACPP_OPENAI_BASE_URL, VLLM_OPENAI_BASE_URL]) {
-      const next = migrateLocalConnectProvider(piOnly('user-local', baseUrl));
+  it('adds Codex Chat to llama.cpp and vLLM preset ids, but not Claude Code', () => {
+    for (const [id, baseUrl] of [
+      ['llamacpp', LLAMACPP_OPENAI_BASE_URL],
+      ['vllm', VLLM_OPENAI_BASE_URL],
+    ] as const) {
+      const next = migrateLocalConnectProvider(piOnly(id, baseUrl));
       expect(next?.runtimes['claude-code']).toBeUndefined();
       expect(next?.runtimes.codex).toMatchObject({
         baseUrl,
         wireProtocol: 'openai-chat',
       });
     }
+  });
+
+  it('does not infer a preset from a matching loopback URL alone', () => {
+    expect(
+      migrateLocalConnectProvider(piOnly('user-local', LLAMACPP_OPENAI_BASE_URL)),
+    ).toBeNull();
+    expect(migrateLocalConnectProvider(piOnly('user-local', VLLM_OPENAI_BASE_URL))).toBeNull();
   });
 
   it('rewrites a stored Codex Responses runtime to the Chat bridge', () => {

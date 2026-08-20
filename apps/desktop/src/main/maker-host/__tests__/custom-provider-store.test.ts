@@ -716,6 +716,41 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ]);
   });
 
+  it('round-trips Claude Code thinking toggle and reasoning efforts', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'thinking-cc',
+      name: 'Thinking CC',
+      auth: { method: 'none' },
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'http://127.0.0.1:11434',
+          wireProtocol: 'anthropic-messages',
+          models: [
+            {
+              id: 'qwen3.8:27b-mxfp8',
+              name: 'Qwen 3.8',
+              reasoning: true,
+              reasoningEfforts: ['high', 'max'],
+              reasoningDefaultEffort: 'high',
+              thinkingToggle: true,
+            },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('thinking-cc'))?.runtimes['claude-code']?.models).toEqual([
+      {
+        id: 'qwen3.8:27b-mxfp8',
+        name: 'Qwen 3.8',
+        reasoning: true,
+        reasoningEfforts: ['high', 'max'],
+        reasoningDefaultEffort: 'high',
+        thinkingToggle: true,
+      },
+    ]);
+  });
+
   it('round-trips a per-model Pi protocol correction', async () => {
     mountDb();
     await createCustomProvider({
