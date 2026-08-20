@@ -41,6 +41,15 @@ describe('mobile message text selection', () => {
 
     // 列表内正文只有原生渲染路径:无选择 WebView、无全屏选择查看器。
     expect(markdownBodySource).toContain('testID="message.markdownBody"');
+    // Agent 回复二次测宽:stretch 量到像素宽后钉死,避免 UITextView 首帧偏矮被列表裁切。
+    expect(markdownBodySource).toContain('nextSettledContentWidth');
+    expect(markdownBodySource).toContain('collapsable={false}');
+    expect(markdownBodySource).toContain('onLayout={handleSettledWidthLayout}');
+    expect(markdownBodySource).toContain('pinContentWidth');
+    expect(markdownBodySource).toContain('pinSettledWidth');
+    expect(markdownBodySource).toContain(
+      "key={`${group.key}:${pinSettledWidth ? contentWidth : 'hug'}`}",
+    );
     expect(markdownBodySource).not.toContain('SelectableMarkdownWebView');
     expect(source).not.toContain('SelectableMarkdownWebView');
     expect(source).not.toContain('MessageTextSelectionModal');

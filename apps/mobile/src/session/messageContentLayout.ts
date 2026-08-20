@@ -72,3 +72,13 @@ export function buildMessageContentLayout(input: MessageContentLayoutInput): Mes
 function normalizeDimension(value: number | undefined, fallback: number): number {
   return Number.isFinite(value) && typeof value === 'number' && value > 0 ? value : fallback;
 }
+
+/**
+ * Agent 回复正文的二次测宽:stretch 首帧量到像素宽后钉死,避免 iOS UITextView
+ * 在不确定宽度下只报出部分高度,LegendList 按偏矮值裁切消息。1px 内抖动忽略,
+ * 防止分享勾选栏出现/旋转时来回改宽把公式 WebView 打进重挂循环。
+ */
+export function nextSettledContentWidth(current: number, next: number): number {
+  if (!(next > 0) || Math.abs(current - next) <= 1) return current;
+  return next;
+}
