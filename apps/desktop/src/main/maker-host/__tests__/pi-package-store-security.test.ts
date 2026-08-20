@@ -600,13 +600,14 @@ describe('Pi package executable-code boundary', () => {
     expect(installed.packages.every((pkg) => pkg.requiresExtensionApproval !== true)).toBe(true);
   });
 
-  it('does not reapprove a stale sibling Extension when another package is installed', async () => {
-    const firstSource = 'npm:stale-shared-extension';
+  it('does not reapprove a sibling whose scoped hoisted dependency changes during install', async () => {
+    const firstSource = 'npm:@scope/stale-shared-extension';
     const secondSource = 'npm:new-shared-extension';
     const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
     const nodeModulesRoot = path.join(npmRoot, 'node_modules');
-    const firstRoot = path.join(nodeModulesRoot, 'stale-shared-extension');
+    const firstRoot = path.join(nodeModulesRoot, '@scope', 'stale-shared-extension');
     const secondRoot = path.join(nodeModulesRoot, 'new-shared-extension');
+    const dependencyRoot = path.join(nodeModulesRoot, '@scope', 'node_modules', 'shared-runtime-dependency');
     const writeExtension = async (packageRoot: string, name: string) => {
       await fs.mkdir(path.join(packageRoot, 'extensions'), { recursive: true });
       await fs.writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({
@@ -620,6 +621,18 @@ describe('Pi package executable-code boundary', () => {
       );
     };
     await writeExtension(firstRoot, 'stale-shared-extension');
+    await fs.writeFile(path.join(firstRoot, 'package.json'), JSON.stringify({
+      name: '@scope/stale-shared-extension', version: '1.0.0',
+      dependencies: { 'shared-runtime-dependency': '^1.0.0' },
+      pi: { extensions: ['./extensions/index.js'] },
+    }));
+    await fs.writeFile(
+      path.join(firstRoot, 'extensions', 'index.js'),
+      "require('shared-runtime-dependency');\nmodule.exports = function setupStale() {};\n",
+    );
+    await fs.mkdir(dependencyRoot, { recursive: true });
+    await fs.writeFile(path.join(dependencyRoot, 'package.json'), JSON.stringify({ name: 'shared-runtime-dependency', version: '1.0.0', main: './index.js' }));
+    await fs.writeFile(path.join(dependencyRoot, 'index.js'), 'module.exports = "approved";\n');
     runtime.listOutput = `User packages:\n  ${firstSource}\n    ${firstRoot}\n`;
     const store = await import('../pi-package-store.js');
     await mutateAuthorized(store, {
@@ -627,11 +640,6 @@ describe('Pi package executable-code boundary', () => {
       source: firstSource,
       enabled: true,
     });
-    await fs.writeFile(
-      path.join(firstRoot, 'extensions', 'index.js'),
-      'module.exports = function changedWithoutApproval() {};\n',
-    );
-
     runtime.holdMutationCommand = true;
     const installing = mutateAuthorized(store, {
       action: 'install',
@@ -642,6 +650,10 @@ describe('Pi package executable-code boundary', () => {
         expect.arrayContaining(['install', secondSource]),
       );
     });
+    await fs.writeFile(
+      path.join(dependencyRoot, 'index.js'),
+      'module.exports = "changed-during-sibling-install";\n',
+    );
     await writeExtension(secondRoot, 'new-shared-extension');
     runtime.listOutput = [
       'User packages:',

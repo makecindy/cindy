@@ -206,6 +206,8 @@ interface PackageManifest {
   name?: string;
   version?: string;
   pi?: Partial<Record<'extensions' | 'skills' | 'prompts' | 'themes', unknown>>;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   scripts?: Record<string, unknown>;
 }
@@ -249,6 +251,12 @@ interface InspectedPackage {
 interface PackageSourceProjection {
   displaySource: string;
   unsafe: boolean;
+}
+
+interface FreshExtensionApprovalIdentity {
+  closureFingerprint: string;
+  installedRoot: string;
+  snapshotRoot: string;
 }
 
 interface InspectionBudget {
@@ -2446,6 +2454,123 @@ function mutationCommandSource(
     : requestedSource;
 }
 
+async function resolveClosureDependency(
+  packageRoot: string,
+  name: string,
+  nodeModulesRoot: string,
+): Promise<string | undefined> {
+  if (!/^(?:@[^/\\\0]+\/)?[^/\\\0]+$/.test(name)
+    || name.split('/').some((part) => part === '.' || part === '..')) {
+    throw new Error('Invalid npm dependency name');
+  }
+  const candidates = new Set<string>();
+  let cursor = packageRoot;
+  for (;;) {
+    candidates.add(path.basename(cursor) === 'node_modules'
+      ? path.join(cursor, name)
+      : path.join(cursor, 'node_modules', name));
+    if (cursor === nodeModulesRoot) break;
+    const parent = path.dirname(cursor);
+    if (parent === cursor || !isWithinConfinement(nodeModulesRoot, parent)) break;
+    cursor = parent;
+  }
+  for (const candidate of candidates) {
+    try {
+      const { canonicalPath, stat } = await resolveStablePackagePath(candidate,
+        'Pi extension dependency changed while proving approval identity');
+      if (!stat.isDirectory() || !isWithinConfinement(nodeModulesRoot, canonicalPath)) {
+        throw new Error('Pi extension dependency escaped the shared npm root');
+      }
+      return canonicalPath;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return undefined;
+}
+
+async function fingerprintExtensionClosure(
+  installedRoot: string,
+  snapshotRoot: string,
+): Promise<string> {
+  const nodeModulesRoot = await fs.realpath(path.join(snapshotRoot, 'node_modules'));
+  if (!isWithinConfinement(nodeModulesRoot, installedRoot)) {
+    throw new Error('Pi extension escaped the shared npm root');
+  }
+  const pending = [installedRoot];
+  const roots = new Set<string>();
+  let metadataBytes = 0;
+  while (pending.length > 0) {
+    if (roots.size >= MAX_INSPECTION_ENTRIES) throw new PiPackageInspectionLimitError();
+    const root = await fs.realpath(pending.shift()!);
+    if (roots.has(root)) continue;
+    roots.add(root);
+    const manifestResult = await readUtf8FileBounded(
+      path.join(root, 'package.json'), MAX_PACKAGE_JSON_BYTES, root);
+    metadataBytes += manifestResult.bytes;
+    if (metadataBytes > MAX_INSPECTION_METADATA_BYTES) throw new PiPackageInspectionLimitError();
+    const manifest = JSON.parse(manifestResult.text) as PackageManifest;
+    const dependencyNames = new Set(Object.keys({ ...manifest.peerDependencies,
+      ...manifest.optionalDependencies, ...manifest.dependencies }));
+    for (const name of [...dependencyNames].sort()) {
+      const dependency = await resolveClosureDependency(root, name, nodeModulesRoot);
+      if (dependency && !roots.has(dependency)) pending.push(dependency);
+    }
+  }
+
+  const selectedRoots: string[] = [];
+  for (const root of [...roots].sort((left, right) => left.length - right.length)) {
+    if (!selectedRoots.some((ancestor) => isWithinConfinement(ancestor, root))) selectedRoots.push(root);
+  }
+  const aggregate = createSnapshotBudgetCounters(DEFAULT_SNAPSHOT_LIMITS);
+  const hash = createHash('sha256');
+  updatePackageFingerprintField(hash, 'cindy-pi-extension-closure-v1');
+  for (const root of selectedRoots.sort()) {
+    updatePackageFingerprintField(hash, path.relative(snapshotRoot, root));
+    updatePackageFingerprintField(hash, await fingerprintPiPackageTree(
+      root, DEFAULT_SNAPSHOT_LIMITS, aggregate));
+  }
+  return hash.digest('hex');
+}
+
+async function captureExtensionApprovalIdentities(
+  packages: InspectedPackage[],
+): Promise<Map<string, FreshExtensionApprovalIdentity>> {
+  const identities = new Map<string, FreshExtensionApprovalIdentity>();
+  for (const pkg of packages) {
+    if (!pkg.contentFingerprint || !pkg.installedRoot) continue;
+    try {
+      const snapshotRoot = await snapshotRootForInstalledPackage(pkg.rawSource, pkg.installedRoot);
+      const closureFingerprint = snapshotRoot === pkg.installedRoot
+        ? pkg.contentFingerprint
+        : await fingerprintExtensionClosure(pkg.installedRoot, snapshotRoot);
+      if (await fingerprintPiPackageTree(snapshotRoot) !== pkg.contentFingerprint) continue;
+      identities.set(pkg.rawSource, {
+        closureFingerprint,
+        installedRoot: pkg.installedRoot,
+        snapshotRoot,
+      });
+    } catch {
+      // Unprovable closures are not eligible for rebasing.
+    }
+  }
+  return identities;
+}
+
+async function unchangedExtensionClosureSources(
+  before: ReadonlyMap<string, FreshExtensionApprovalIdentity>,
+  inspectedAfter: InspectedPackage[],
+): Promise<Set<string>> {
+  const after = await captureExtensionApprovalIdentities(
+    inspectedAfter.filter((pkg) => before.has(pkg.rawSource)));
+  return new Set([...before].filter(([source, identity]) => {
+    const current = after.get(source);
+    return current?.installedRoot === identity.installedRoot
+      && current.snapshotRoot === identity.snapshotRoot
+      && current.closureFingerprint === identity.closureFingerprint;
+  }).map(([source]) => source));
+}
+
 export async function mutatePiPackage(
   request: PiPackageMutationRequest,
   grant?: PiPackageMutationGrant,
@@ -2473,14 +2598,11 @@ export async function mutatePiPackage(
     // process populated its cache; no mutation may persist decisions derived
     // from that lock-external snapshot.
     const inspectedBeforeMutation = await inspectAllPackagesFreshUnderMutationLock();
-    const preMutationFreshApprovalSources = new Set(
-      inspectedBeforeMutation
-        .filter((pkg) => (
-          pkg.contentFingerprint
-          && pkg.view.requiresExtensionApproval !== true
-          && pkg.view.resources.some((resource) => resource.kind === 'extension')
-        ))
-        .map((pkg) => pkg.rawSource),
+    const preMutationFreshApprovals = await captureExtensionApprovalIdentities(
+      inspectedBeforeMutation.filter((pkg) => (
+        pkg.view.requiresExtensionApproval !== true
+        && pkg.view.resources.some((resource) => resource.kind === 'extension')
+      )),
     );
     let affectedSource: string | undefined;
     if (request.action === 'install') {
@@ -2502,7 +2624,10 @@ export async function mutatePiPackage(
       affectedSource = affected?.rawSource;
       await persistEnabledExtensionApprovals({
         inspected: inspectedAfterInstall,
-        rebaseSources: preMutationFreshApprovalSources,
+        rebaseSources: await unchangedExtensionClosureSources(
+          preMutationFreshApprovals,
+          inspectedAfterInstall,
+        ),
         ...(affected ? { enable: affected } : {}),
       });
     } else if (request.action === 'remove') {
@@ -2554,7 +2679,10 @@ export async function mutatePiPackage(
       // user had already turned this package off.
       await persistEnabledExtensionApprovals({
         inspected: inspectedAfterUpdate,
-        rebaseSources: preMutationFreshApprovalSources,
+        rebaseSources: await unchangedExtensionClosureSources(
+          preMutationFreshApprovals,
+          inspectedAfterUpdate,
+        ),
         ...(!wasExplicitlyDisabled && affected ? { enable: affected } : {}),
       });
     } else if (request.action === 'set-enabled') {
