@@ -785,6 +785,7 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
     parentSessionId: parentSessionId,
     runtimeOwnerId: runtimeOwnerId,
     parentPid: process.pid,
+    parentStartTimeSec: Math.round(Date.now() / 1000 - process.uptime()),
     interactiveOwner: interactiveOwner,
     runDir: runDir,
     cwd: process.cwd(),

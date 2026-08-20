@@ -335,6 +335,7 @@ setTimeout(() => process.exit(0), 20000).unref();
 const fs = require('node:fs');
 const path = require('node:path');
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+fs.writeFileSync(path.join(config.runDir, 'started'), '1');
 const timer = setInterval(() => {
   let files = [];
   try { files = fs.readdirSync(path.join(config.runDir, 'controls')); } catch {}
@@ -383,7 +384,20 @@ setTimeout(() => process.exit(2), 5000).unref();
           () => undefined,
           { sessionManager: { getBranch: () => [] } },
         );
-        setTimeout(() => controller.abort(), 50);
+        // Abort only after the runner is up. A 50ms timer races spawn and the
+        // parent reports "Durable runner exited" instead of the stop status.
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          try {
+            const runId = (await readdir(f.runRoot))[0];
+            if (runId) await readFile(path.join(f.runRoot, runId, 'started'));
+            if (runId) break;
+          } catch {
+            /* not yet */
+          }
+          if (attempt === 99) throw new Error('runner did not publish started sentinel');
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        controller.abort();
         await expect(execution).rejects.toThrow(/stopped before first status/i);
       } finally {
         for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];

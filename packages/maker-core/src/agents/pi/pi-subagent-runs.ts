@@ -1062,11 +1062,15 @@ function parseElapsedSeconds(text: string): number | null {
 function probeProcessStartTimeSec(pid: number, now: number): number | null {
   try {
     if (process.platform === 'win32') {
+      // Get-Process StartTime is the reliable Windows identity; Win32_Process
+      // CreationDate via CIM is often empty or unparsable on CI runners, which
+      // made a live-but-foreign claim look like a still-held one (probe null →
+      // conservative "alive").
       const probe = spawnSync(
         'powershell.exe',
         [
           '-NoProfile', '-NonInteractive', '-Command',
-          `[int64](Get-Date (Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate -UFormat %s)`,
+          `[int64]((Get-Process -Id ${pid}).StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds`,
         ],
         { encoding: 'utf8', timeout: 5_000, windowsHide: true },
       );

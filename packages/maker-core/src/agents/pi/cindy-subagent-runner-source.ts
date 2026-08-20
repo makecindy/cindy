@@ -994,11 +994,56 @@ function main() {
     }
   }
 
+  function parseElapsedSeconds(text) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return null;
+    const dash = trimmed.indexOf('-');
+    const days = dash > 0 ? Number(trimmed.slice(0, dash)) : 0;
+    const parts = (dash > 0 ? trimmed.slice(dash + 1) : trimmed).split(':').map(Number);
+    if (!Number.isFinite(days) || days < 0) return null;
+    if (parts.length < 2 || parts.length > 3 || parts.some(function (part) { return !Number.isFinite(part) || part < 0; })) {
+      return null;
+    }
+    const hours = parts.length === 3 ? parts[0] : 0;
+    const minutes = parts.length === 3 ? parts[1] : parts[0];
+    const seconds = parts.length === 3 ? parts[2] : parts[1];
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds;
+  }
+
+  function probeProcessStartTimeSec(pid) {
+    const now = Date.now();
+    try {
+      if (process.platform === 'win32') {
+        const probe = spawnSync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          '[int64]((Get-Process -Id ' + pid + ').StartTime.ToUniversalTime() - [datetime]\'1970-01-01\').TotalSeconds',
+        ], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+        if (probe.error || probe.status !== 0) return null;
+        const seconds = Number(String(probe.stdout || '').trim());
+        return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
+      }
+      const probe = spawnSync('ps', ['-p', String(pid), '-o', 'etime='], { encoding: 'utf8', timeout: 5000 });
+      if (probe.error || probe.status !== 0) return null;
+      const elapsed = parseElapsedSeconds(probe.stdout);
+      return elapsed === null ? null : Math.round(now / 1000 - elapsed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function parentInstanceAlive() {
+    let alive = true;
+    try { process.kill(config.parentPid, 0); } catch (error) { alive = error && error.code === 'EPERM'; }
+    if (!alive) return false;
+    if (typeof config.parentStartTimeSec !== 'number') return true;
+    const liveStart = probeProcessStartTimeSec(config.parentPid);
+    if (liveStart === null) return true;
+    return Math.abs(liveStart - config.parentStartTimeSec) <= 5;
+  }
+
   if (config.interactiveOwner === 'extension' && Number.isFinite(config.parentPid)) {
     state.parentWatchdogTimer = setInterval(function () {
-      let alive = true;
-      try { process.kill(config.parentPid, 0); } catch (error) { alive = error && error.code === 'EPERM'; }
-      if (!alive) {
+      if (!parentInstanceAlive()) {
         state.stopRequested = true;
         for (const task of tasks) requestStop(task);
         scheduleStatus();

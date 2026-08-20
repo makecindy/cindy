@@ -439,6 +439,17 @@ describe('cindy-subagent extension source', () => {
     );
   });
 
+  it('records parent start time and checks process identity in the runner watchdog', () => {
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('parentStartTimeSec: Math.round(Date.now() / 1000 - process.uptime())');
+    const runner = CINDY_SUBAGENT_RUNNER_SOURCE;
+    expect(runner).toContain('function parentInstanceAlive()');
+    expect(runner).toContain('function probeProcessStartTimeSec(pid)');
+    expect(runner).toContain('if (!parentInstanceAlive())');
+    expect(runner).not.toMatch(
+      /parentWatchdogTimer = setInterval\(function \(\) \{\s*let alive = true;\s*try \{ process\.kill\(config\.parentPid, 0\);/,
+    );
+  });
+
   it('does not let a truncation marker push the transcript past the cap', () => {
     const runner = CINDY_SUBAGENT_RUNNER_SOURCE;
     const fn = runner.indexOf('function safeAppendTranscript');

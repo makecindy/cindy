@@ -501,10 +501,11 @@ describe('PI durable subagent run store', () => {
      * outright when null.
      *
      * Answers in each platform's own dialect, because the probe parses them
-     * differently: `ps -o etime=` yields *elapsed* time, the Windows CIM query
-     * yields an *absolute* epoch second. A stub that returned one shape for
-     * both made this suite pass on POSIX and fail on Windows, where the elapsed
-     * seconds were read as an epoch and every comparison mismatched.
+     * differently: `ps -o etime=` yields *elapsed* time, the Windows
+     * Get-Process StartTime query yields an *absolute* epoch second. A stub
+     * that returned one shape for both made this suite pass on POSIX and fail
+     * on Windows, where the elapsed seconds were read as an epoch and every
+     * comparison mismatched.
      */
     function stubStartProbe(startTimeSec: number | null): void {
       childProcess.spawnSync.mockImplementation((...args: unknown[]) => {
