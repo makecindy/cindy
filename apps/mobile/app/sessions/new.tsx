@@ -25,10 +25,8 @@ import {
   StyleSheet,
   View,
   useWindowDimensions,
-  type StyleProp,
   type TextInputContentSizeChangeEvent,
   type TextLayoutEvent,
-  type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import type { TextInput as NativeTextInput } from 'react-native';
@@ -3462,7 +3460,7 @@ export default function NewRemoteSessionScreen() {
     </ScrollView>
   ) : null;
 
-  const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
+  const renderComposerVoiceButton = () => (
     <Pressable
       accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
       accessibilityRole="button"
@@ -3487,8 +3485,7 @@ export default function NewRemoteSessionScreen() {
       }}
       style={({ pressed }) => [
         styles.composerIconButton,
-        buttonStyle,
-        // 锚点外壳(MobileComposerInputRow 的 Reanimated 锚点)负责动画宽度,
+        // MobileComposerInputRow 的 Reanimated 外壳负责定位和宽度动画,
         // 按钮自身铺满外壳:胶囊只向左生长,右缘锚定不动。
         { width: '100%' },
         // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。

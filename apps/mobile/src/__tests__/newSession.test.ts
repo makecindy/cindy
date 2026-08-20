@@ -1550,7 +1550,7 @@ describe('new session composer surface', () => {
     const sendButtonDisabledStart = newSource.indexOf('sendButtonDisabled: {');
     const sendButtonDisabledEnd = newSource.indexOf('sendButtonPressed:', sendButtonDisabledStart);
     const sendButtonDisabledStyle = newSource.slice(sendButtonDisabledStart, sendButtonDisabledEnd);
-    const voiceButtonStart = newSource.indexOf('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
+    const voiceButtonStart = newSource.indexOf('const renderComposerVoiceButton = () => (');
     const voiceButtonEnd = newSource.indexOf('// 切 agent:', voiceButtonStart);
     const voiceButtonSource = newSource.slice(voiceButtonStart, voiceButtonEnd);
     const storedAgentStart = newSource.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');

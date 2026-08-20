@@ -14,7 +14,7 @@ import { TextInput } from '@/components/AppText';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import Reanimated, { interpolate, useAnimatedStyle, type AnimatedStyle } from 'react-native-reanimated';
 import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
@@ -111,7 +111,7 @@ export interface MobileComposerInputRowProps {
    * 定位走 resolveMobileComposerVoiceButtonAnchorStyle，两态都写全 top /
    * bottom / transform，避免 RN 合并残留把麦克风停在卡片中部。
    */
-  floatingVoiceButton?: (style?: StyleProp<ViewStyle>) => ReactNode;
+  floatingVoiceButton?: () => ReactNode;
   floatingVoiceButtonStyle?: StyleProp<ViewStyle | AnimatedStyle<ViewStyle>>;
   /**
    * 输入区（inputFrame）的显式高度：拖拽跟手时传 Animated 值、manual 定高时传数值，
@@ -256,6 +256,15 @@ export function MobileComposerInputRow({
     height: cardTransition.value * MOBILE_COMPOSER_TOOLBAR_SECTION_HEIGHT,
     opacity: cardTransition.value,
   }));
+  // 附件托盘不能跟 cardActive 一起硬挂载/卸载:缩略图卡本身有真实高度,
+  // 直接切换会把整段高度跳变带回 composer。保持内容挂载,由同一份 card progress
+  // 驱动高度/透明度,并用自然布局高度作为插值终点。父容器收起到 0 高时子 View
+  // 仍保留自然测量,所以下一次展开不会丢失高度。
+  const [accessoryContentHeight, setAccessoryContentHeight] = useState(0);
+  const accessoryRevealStyle = useAnimatedStyle(() => ({
+    height: cardTransition.value * accessoryContentHeight,
+    opacity: cardTransition.value,
+  }), [accessoryContentHeight]);
   // RN 里显式 height 压过 minHeight:manual 定高(用户拖过高度)时 frameHeight 可能小于
   // inputFrameMinHeight,直接铺开会把听写停止命中区又压回不足 44pt。数值高度在这里
   // 先 clamp;拖拽中的 Animated 值无法在 JS 侧 clamp(会打断跟手),那一瞬保持动画值,
@@ -319,7 +328,22 @@ export function MobileComposerInputRow({
       testID={testID}
     >
       {resizeHandle}
-      {cardLayout ? accessoryAbove : null}
+      {accessoryAbove != null ? (
+        <Reanimated.View
+          pointerEvents={cardLayout ? 'auto' : 'none'}
+          style={[styles.accessoryReveal, accessoryRevealStyle]}
+        >
+          <View
+            collapsable={false}
+            onLayout={(event) => {
+              const nextHeight = event.nativeEvent.layout.height;
+              setAccessoryContentHeight((current) => current === nextHeight ? current : nextHeight);
+            }}
+          >
+            {accessoryAbove}
+          </View>
+        </Reanimated.View>
+      ) : null}
       <Reanimated.View
         style={[
           styles.mainRow,
@@ -360,13 +384,19 @@ export function MobileComposerInputRow({
         </Reanimated.View>
       ) : null}
       {voicePlacement?.inline || voicePlacement?.floating
-        ? floatingVoiceButton?.([
-          resolveMobileComposerVoiceButtonAnchorStyle({
-            cardLayout,
-            floating: voicePlacement.floating,
-          }),
-          floatingVoiceButtonStyle as StyleProp<ViewStyle>,
-        ])
+        ? (
+          <Reanimated.View
+            style={[
+              resolveMobileComposerVoiceButtonAnchorStyle({
+                cardLayout,
+                floating: voicePlacement.floating,
+              }),
+              floatingVoiceButtonStyle as StyleProp<ViewStyle>,
+            ]}
+          >
+            {floatingVoiceButton?.()}
+          </Reanimated.View>
+        )
         : null}
     </Reanimated.View>
   );
@@ -618,6 +648,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   },
   // 工具排常驻挂载的外壳:高度/透明度由 progress 驱动,折叠时 0 高裁掉内容。
   toolbarReveal: {
+    overflow: 'hidden',
+  },
+  accessoryReveal: {
     overflow: 'hidden',
   },
   toolbarSpacer: {

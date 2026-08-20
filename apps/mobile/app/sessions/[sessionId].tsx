@@ -2856,7 +2856,7 @@ export default function SessionScreen() {
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
-      {renderComposerSendSlot()}
+      {renderComposerSendSlot({ measureTarget: composerCardActive })}
     </>
   );
   const renderComposerInputOverlay = () => voiceIsListening ? (
@@ -5428,7 +5428,7 @@ export default function SessionScreen() {
       });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
-  const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
+  const renderComposerVoiceButton = () => (
     <RouteActionButton
       accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
       accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
@@ -5485,8 +5485,7 @@ export default function SessionScreen() {
       }}
       style={[
         styles.composerInlineToolButton,
-        buttonStyle,
-        // 锚点外壳(MobileComposerInputRow 的 Reanimated 锚点)负责动画宽度,
+        // MobileComposerInputRow 的 Reanimated 外壳负责定位和宽度动画,
         // 按钮自身铺满外壳:胶囊只向左生长,右缘锚定不动。
         { width: '100%' },
         // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
@@ -7074,18 +7073,18 @@ export default function SessionScreen() {
   // 生长,「原地再点一下」永远是停止录音,不会误停任务。
   const renderComposerInlineStop = () => composerShowInlineStop ? renderComposerStopButton() : null;
 
-  const renderComposerSendSlot = () => (
+  const renderComposerSendSlot = ({ measureTarget = false }: { measureTarget?: boolean } = {}) => (
     <>
       {composerSendSlotIsStop ? (
         renderComposerStopButton()
       ) : composerShowSendButton ? (
         <RouteActionButton
-          ref={sendButtonRef}
+          ref={measureTarget ? sendButtonRef : undefined}
           accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-          onLayout={measureSendButtonTarget}
+          onLayout={measureTarget ? measureSendButtonTarget : undefined}
           onPress={send}
           pressedStyle={styles.sendButtonPressed}
           style={[
@@ -7117,7 +7116,7 @@ export default function SessionScreen() {
       {composerShowInlineStop && composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
-      {renderComposerSendSlot()}
+      {renderComposerSendSlot({ measureTarget: true })}
     </>
   );
 
