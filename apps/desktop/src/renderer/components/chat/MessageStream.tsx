@@ -4322,17 +4322,24 @@ export function MessageStream({
   // Composer send is an explicit "show me the result" intent. Don't wait for
   // the tail render item to be a user message — assistant / tool cards often
   // land in the same commit and used to hide the send from pin detection.
+  // This is the only force-follow path: inference must not pin, because an
+  // optimistic row can appear after the user already scrolled away.
   useLayoutEffect(() => {
     if (followLatestRequestKey === undefined || followLatestRequestKey === null) return;
     if (prevFollowLatestRequestKeyRef.current === followLatestRequestKey) return;
     prevFollowLatestRequestKeyRef.current = followLatestRequestKey;
+    cancelFocusJump({ consumeDeferredDelete: true });
+    const chipJumpGeneration = chipJumpGenerationRef.current;
+    if (chipJumpGeneration !== null) {
+      finishChipJump(chipJumpGeneration, { consumeDeferredDelete: true });
+    }
     setFirstVisibleItemKey(null);
     restoringRef.current = false;
     isNearBottomRef.current = true;
     setIsNearBottom(true);
     setUnreadCount(0);
     pinToBottom();
-  }, [followLatestRequestKey, pinToBottom]);
+  }, [cancelFocusJump, finishChipJump, followLatestRequestKey, pinToBottom]);
 
   // F3: 平滑滚到底的按钮回调。
   //   - 乐观更新 unreadCount / isNearBottom / isNearBottomRef → 按钮同一 tick fade-out
@@ -4466,10 +4473,9 @@ export function MessageStream({
   // ResizeObserver below is a safety net for async height growth *after* paint
   // (markdown render finish, image/code-highlight completion).
   //
-  // Special case: when the user hits send, a fresh user-role message appears
-  // at the tail. We force auto-follow back on regardless of whether the user
-  // had scrolled up — committing a new turn is an explicit intent to see the
-  // result land.
+  // Local send force-follow is only followLatestRequestKey. Inference here
+  // must not pin or steal the window: attachment prep can insert the
+  // optimistic row after the user already unpinned.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
     const tailUserMessageId = selectTailUserMessageId({
@@ -4510,15 +4516,12 @@ export function MessageStream({
     lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
-      newUserSend: userMessageObservation.isNewUserSend,
+      newUserSend: false,
       sentFromThisRenderer,
       nearBottom: isNearBottomRef.current,
     });
-    // 本端发送必须离开锚定历史窗，回到默认尾窗。只清「未覆盖末尾」的锚会漏掉
-    // 「发送时窗口仍盖住末尾、随后 assistant/工具卡把尾部顶出窗口」——视口已经
-    // 钉到最新，下一轮新消息却不再跟随。
     const windowHandoff = resolveSendWindowHandoff({
-      isNewUserSend: userMessageObservation.isNewUserSend,
+      isNewUserSend: false,
       sentFromThisRenderer,
       hasWindowAnchor: firstVisibleItemKey !== null,
       windowCoversEnd,

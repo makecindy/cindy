@@ -608,6 +608,8 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain(
       'useNavigationKeyListener(clearChipJumpSuppression, ownsHardwareScrollActions)',
     );
+    expect(source).toContain('newUserSend: false');
+    expect(source).toContain('cancelFocusJump({ consumeDeferredDelete: true });');
   });
 
   it('session view commits follow-latest only after accept and unchanged scroll generation', () => {
