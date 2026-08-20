@@ -476,8 +476,15 @@ describe('mobile session composer desktop-first surface', () => {
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
     expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
     expect(sharedSource).toContain('floating: voicePlacement.floating,');
-    expect(sharedSource).toContain('pointerEvents="box-none"\n          style={resolveMobileComposerVoiceButtonAnchorStyle({');
+    expect(sharedSource).toContain('pointerEvents="box-none"\n          style={[\n            styles.voiceButtonTouchTarget,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
     expect(sharedSource).toContain('{floatingVoiceButton?.(floatingVoiceButtonStyle)}');
+    const voiceButtonHitAreaStyleStart = sharedSource.indexOf('voiceButtonTouchTarget: {');
+    const voiceButtonHitAreaStyleEnd = sharedSource.indexOf('\n  },', voiceButtonHitAreaStyleStart);
+    const voiceButtonHitAreaStyle = sharedSource.slice(voiceButtonHitAreaStyleStart, voiceButtonHitAreaStyleEnd);
+    expect(voiceButtonHitAreaStyleStart).toBeGreaterThan(-1);
+    expect(voiceButtonHitAreaStyle).toContain('minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
+    expect(voiceButtonHitAreaStyle).not.toContain('width: MOBILE_COMPOSER_MIN_TOUCH_TARGET');
     expect(sharedSource).toContain('export function ComposerToolbarLeftGroup');
     expect(sharedSource).toContain('toolbarLeftGroup: {');
     expect(sharedSource).toContain('justifyContent: \'flex-start\'');
