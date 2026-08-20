@@ -7474,7 +7474,6 @@ export class CodexAgent extends BaseAgent {
     // 由 renderer 显示最新一条, react batch 自然消化中间抖动。
     let lastStatusText = 'Working…';
     let lastUsageRefreshAt = 0;
-    let lastUsageIngestAt = 0;
     const USAGE_REFRESH_MIN_MS = 500;
 
     function pushStatus(text: string): void {
@@ -7487,20 +7486,13 @@ export class CodexAgent extends BaseAgent {
       });
     }
 
-    function maybePushUsageRefresh(force = false): void {
+    function maybePushUsageRefresh(): void {
       const now = Date.now();
       // No UI status yet: a refresh would invent a Working… frame and steal the
       // next event from tests / terminal error sequences. Real turns always
       // pushStatus or send() first, which stamps lastUsageRefreshAt.
       if (lastUsageRefreshAt === 0) return;
-      if (force) {
-        // Only emit an extra running frame when usage arrived after the last
-        // published status. Blind force-flush re-plays lastStatusText and
-        // steals sequential Done consumers (spawnAgent running… vs Done).
-        if (lastUsageIngestAt <= lastUsageRefreshAt) return;
-      } else if (now - lastUsageRefreshAt < USAGE_REFRESH_MIN_MS) {
-        return;
-      }
+      if (now - lastUsageRefreshAt < USAGE_REFRESH_MIN_MS) return;
       lastUsageRefreshAt = now;
       eventQueue.push({
         type: 'status',
@@ -8248,10 +8240,6 @@ export class CodexAgent extends BaseAgent {
       // 必须在 endTurn 之前取: endTurn 会用降级 aggregate 覆盖后 reset。
       const realTurnUsage = usageTracker.getTurnUsage();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
-      // tokenUsageUpdated inside the 500ms window is dropped. Fast turns often
-      // land that last usage after itemCompleted's Generating… frame, so force
-      // one live snapshot before the turn bucket is reset. No extra timer.
-      if (!suppressTerminalUi) maybePushUsageRefresh(true);
       usageTracker.endTurn({
         inputTokens: lastSnap.contextTokens ?? 0,
         outputTokens: 0,
@@ -9415,7 +9403,6 @@ export class CodexAgent extends BaseAgent {
           cacheReadTokens: cached,
           cacheCreateTokens: 0,
         });
-        lastUsageIngestAt = Date.now();
         maybePushUsageRefresh();
         // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
         if (memoryFlushController) {

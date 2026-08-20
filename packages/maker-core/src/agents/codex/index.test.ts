@@ -15212,7 +15212,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  it('flushes throttled token usage onto the last running status before Done', async () => {
+  it('attaches throttled token usage to the Done snapshot without an extra running frame', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
@@ -15255,13 +15255,13 @@ describe('CodexAgent MCP thread context hooks', () => {
       await sendPromise;
       await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
 
-      const runningLive = events.filter(
+      const extraRunningLive = events.filter(
         (event) =>
           event.type === 'status'
           && (event.data as { isRunning?: boolean }).isRunning === true
           && (event.data as { outputTokens?: number }).outputTokens === 40,
       );
-      expect(runningLive.length).toBeGreaterThan(0);
+      expect(extraRunningLive).toHaveLength(0);
       const doneStatus = events.find(
         (event) =>
           event.type === 'status'

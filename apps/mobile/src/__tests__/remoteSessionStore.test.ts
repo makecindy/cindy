@@ -2232,6 +2232,28 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('clears leftover tok/s when activity restores wide running before the next maker status', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', {
+      isRunning: true,
+      outputTokens: 40,
+      generationDurationMs: 800,
+      generationActive: true,
+      generationReliable: true,
+    });
+    pushMakerStatus('s1', { isRunning: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').outputTokens).toBe(40);
+
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      outputTokens: 0,
+      generationDurationMs: 0,
+      generationActive: false,
+      generationReliable: true,
+    });
+  });
+
   it('clears leftover task updates on a real turn start, scoped to that session', () => {
     // Turn 1 on s1 spawns a sub-agent, then the turn ends — the live update lingers.
     pushMakerStatus('s1', { isRunning: true });
