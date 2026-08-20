@@ -2865,6 +2865,8 @@ const permissionResponseInFlight = new Set<string>();
 const PERMISSION_RESPONSE_GUARD_WINDOW_MS = 300;
 /** 每个 session 的防重释放定时器(供 purge / dismissal 清理,防止迟到释放误伤新会话)。 */
 const permissionResponseGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** 每个 session 的 guard 代次——每次重新武装时递增，finally 回调用它确认自己是否仍拥有 guard。 */
+const permissionResponseGuardGeneration = new Map<string, number>();
 
 /** 立即释放某 session 的权限防重 guard(双击窗口未结束也照放,幂等)。 */
 function releasePermissionResponseGuard(sessionId: string): void {
@@ -2872,6 +2874,7 @@ function releasePermissionResponseGuard(sessionId: string): void {
   if (timer !== undefined) clearTimeout(timer);
   permissionResponseGuardTimers.delete(sessionId);
   permissionResponseInFlight.delete(sessionId);
+  permissionResponseGuardGeneration.delete(sessionId);
 }
 
 /**
@@ -2886,6 +2889,9 @@ function rearmPermissionResponseGuard(sessionId: string): void {
   if (!permissionResponseInFlight.has(sessionId)) return;
   const timer = permissionResponseGuardTimers.get(sessionId);
   if (timer !== undefined) clearTimeout(timer);
+  // 递增代次——迟到的 finally 回调会检查代次，不再误删新 guard。
+  const gen = (permissionResponseGuardGeneration.get(sessionId) ?? 0) + 1;
+  permissionResponseGuardGeneration.set(sessionId, gen);
   const next = setTimeout(
     () => releasePermissionResponseGuard(sessionId),
     PERMISSION_RESPONSE_GUARD_WINDOW_MS,
@@ -13647,6 +13653,10 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   // Send to maker (InteractionDecision kind: 'permission'). Keep the guard
   // until the IPC request settles: a duplicate click/key-repeat must not read
   // the newly promoted queue head and reuse the previous decision for it.
+  //
+  // 捕获 guard 代次:dismissal 重新武装时会递增代次;迟到的 finally 必须
+  // 校验代次一致才启动释放窗口,避免 A 的 settle 删除 B 的 guard。
+  const guardGenAtArm = permissionResponseGuardGeneration.get(sessionId) ?? 0;
   let response: Promise<unknown>;
   try {
     response = makerApiFor(sessionId).resolveInteraction(requestId, {
@@ -13666,13 +13676,16 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   void response
     .catch((err) => log.error('Failed to respond to permission:', err))
     .finally(() => {
+      // 代次不一致说明 guard 已被 dismissal 重新武装 belongs to a newer request;
+      // 迟到的 settle 不应启动释放窗口,否则会删掉新 guard。
+      if ((permissionResponseGuardGeneration.get(sessionId) ?? 0) !== guardGenAtArm) return;
       // IPC 已 settle,但同一手势的第二次输入(双击第二击 / 键重复)可能还没到:
       // 保持 guard 到窗口结束,窗口内任何新响应都被挡下,不会误批推广后的新卡。
-  const timer = setTimeout(
-    () => releasePermissionResponseGuard(sessionId),
-    PERMISSION_RESPONSE_GUARD_WINDOW_MS,
-  );
-  permissionResponseGuardTimers.set(sessionId, timer);
+      const timer = setTimeout(
+        () => releasePermissionResponseGuard(sessionId),
+        PERMISSION_RESPONSE_GUARD_WINDOW_MS,
+      );
+      permissionResponseGuardTimers.set(sessionId, timer);
     });
 }
 
