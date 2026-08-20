@@ -17,6 +17,7 @@ import {
   createSwipeRowRegistry,
   pickWriteFields,
   retryPatchWhileLatest,
+  statusToggleAction,
   swipeActionPatch,
   writeGuardFields,
   type SessionSwipeAction,
@@ -157,7 +158,7 @@ export function useSessionListActions() {
   }, [runSwipeAction]);
 
   const archiveSession = useCallback((session: RemoteSession) => {
-    runSwipeAction(session, 'archive');
+    runSwipeAction(session, statusToggleAction(session.status).action);
   }, [runSwipeAction]);
 
   const showSessionOptions = useCallback((session: RemoteSession) => {

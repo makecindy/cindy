@@ -39,6 +39,16 @@ describe('project order key remap', () => {
     ]);
     expect(remapControllerOrderToHost(deviceId, controller, host)).toEqual(host);
   });
+
+  it('folds worktree host paths to the grouping key and restores the host spelling', () => {
+    const deviceId = 'dev-1';
+    const host = ['local:/repo/.cindy-worktrees/serene-lovelace'];
+    const controller = remapHostOrderToController(deviceId, host);
+    expect(controller).toEqual([
+      `device:${encodeURIComponent(deviceId)}:/repo`,
+    ]);
+    expect(remapControllerOrderToHost(deviceId, controller, host)).toEqual(host);
+  });
 });
 
 describe('parseSyncedProjectOrderSnapshot', () => {

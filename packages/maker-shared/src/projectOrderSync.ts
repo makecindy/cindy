@@ -1,3 +1,5 @@
+import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+
 export type SyncedProjectOrderMode = 'activity' | 'custom';
 
 export interface SyncedProjectOrderOwnerStamp {
@@ -216,13 +218,25 @@ function isWindowsStyleProjectPath(value: string): boolean {
   return /^[a-z]:[\/]/i.test(value) || value.startsWith('\\') || value.startsWith('//') || value.includes('\\');
 }
 
-/** 与手机首页 projectGroupKey 同一套 Windows 折径:正斜杠 + 小写。POSIX 保持原样。 */
-export function normalizeProjectOrderPath(path: string): string {
-  const normalized = path.trim().replaceAll('\\', '/');
-  if (isWindowsStyleProjectPath(path.trim()) || isWindowsStyleProjectPath(normalized)) {
-    return normalized.toLowerCase();
+function stripTrailingProjectSlashes(path: string): string {
+  let end = path.length;
+  while (end > 1 && path[end - 1] === '/') {
+    if (/^[A-Za-z]:\/$/.test(path.slice(0, end))) break;
+    end -= 1;
   }
-  return normalized;
+  return path.slice(0, end);
+}
+
+/**
+ * 与两端项目分组同一套折径:Windows 正斜杠+小写,worktree 折到 base repo。
+ * POSIX 路径里的反斜杠是文件名,不得先改写成分隔符。
+ */
+export function normalizeProjectOrderPath(path: string): string {
+  const trimmed = path.trim();
+  const windows = isWindowsStyleProjectPath(trimmed);
+  const slashNormalized = windows ? trimmed.replaceAll('\\', '/') : trimmed;
+  const collapsed = collapseWorktreeDirForGrouping(stripTrailingProjectSlashes(slashNormalized));
+  return windows || isWindowsStyleProjectPath(collapsed) ? collapsed.toLowerCase() : collapsed;
 }
 
 export function foldProjectOrderKey(key: string): string {

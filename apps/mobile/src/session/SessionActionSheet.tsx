@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import {
   Archive,
+  ArchiveRestore,
   Pencil,
   Pin,
   PinOff,
@@ -45,6 +46,7 @@ const ACTION_ICONS: Record<SessionSwipeAction, LucideIcon> = {
   delete: Trash2,
   pin: Pin,
   rename: Pencil,
+  restore: ArchiveRestore,
   unpin: PinOff,
 };
 
@@ -53,6 +55,7 @@ export function SessionActionSheet({
   onClose,
   onClosed,
   pinnedAt,
+  status,
   visible,
 }: {
   /** 点菜单项:父级负责关 sheet 并串后续(删除 Alert / 重命名弹窗 / 直接执行)。 */
@@ -61,6 +64,7 @@ export function SessionActionSheet({
   /** 关闭动画完成、Modal 真正卸载后触发(兄弟 Modal 时序,同 DeviceMenuModal.onClosed)。 */
   onClosed?(): void;
   pinnedAt: string | null | undefined;
+  status?: string | null;
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -106,7 +110,7 @@ export function SessionActionSheet({
     inputRange: [0, 1],
     outputRange: [CARD_SLIDE_DISTANCE, 0],
   });
-  const menu = buildSessionActionMenu(pinnedAt);
+  const menu = buildSessionActionMenu(pinnedAt, status);
 
   return (
     <Modal animationType="none" onRequestClose={onClose} transparent visible={mounted}>

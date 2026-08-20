@@ -1151,6 +1151,7 @@ function SessionListActionOverlays({
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}
         pinnedAt={actionSheetSession?.pinnedAt}
+        status={actionSheetSession?.status}
         visible={actionSheetSession !== null}
       />
       <RenameSessionModal
