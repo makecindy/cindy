@@ -2811,6 +2811,9 @@ export function CCAgentSessionView({
                 )
               : undefined;
           const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
+          // Follow at dispatch, not after await: the optimistic row can already
+          // be on screen, and a user scroll-up during IPC must not be yanked back.
+          requestFollowLatest(sessionId);
           const accepted = await dispatch(
             slashDispatch.message,
             pending.model,
@@ -2849,7 +2852,6 @@ export function CCAgentSessionView({
           );
           if (accepted) {
             pending.onDeferredAccepted?.();
-            requestFollowLatest(sessionId);
             const resumedSessionId = sessionId;
             if (resumedSessionId) {
               void dispatchDeferredUiAssignment(resumedSessionId, undefined).catch((err) => {
@@ -3127,6 +3129,7 @@ export function CCAgentSessionView({
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
       };
       if (deliveryMode === 'steer') {
+        requestFollowLatest(sessionId);
         const accepted = await steerMessage(
           message,
           model,
@@ -3138,7 +3141,6 @@ export function CCAgentSessionView({
           sendOptions,
         );
         if (accepted && sessionId) {
-          requestFollowLatest(sessionId);
           void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
             log.error('recover deferred Worker assignment after user message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3146,6 +3148,7 @@ export function CCAgentSessionView({
         }
         return accepted;
       }
+      requestFollowLatest(sessionId);
       const accepted = await sendMessage(
         message,
         model,
@@ -3157,7 +3160,6 @@ export function CCAgentSessionView({
         sendOptions,
       );
       if (accepted && sessionId) {
-        requestFollowLatest(sessionId);
         void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
           log.error('recover deferred Worker assignment after user message failed', err);
           toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3649,6 +3651,7 @@ export function CCAgentSessionView({
             : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
+        requestFollowLatest(sessionId);
         const delivered = await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
             pendingText,
@@ -3680,7 +3683,6 @@ export function CCAgentSessionView({
           ),
         );
         if (delivered) {
-          requestFollowLatest(sessionId);
           void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment).catch((err) => {
             log.error('deferred Worker assignment after first message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));

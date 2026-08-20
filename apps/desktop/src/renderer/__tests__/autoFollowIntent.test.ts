@@ -491,7 +491,7 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('pinToBottom();');
   });
 
-  it('session view asks the stream to follow latest after an accepted send', () => {
+  it('session view asks the stream to follow latest at dispatch, not after await', () => {
     const source = readFileSync(
       resolve(__dirname, '../features/cc-agent/CCAgentSessionView.tsx'),
       'utf8',
@@ -499,5 +499,11 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('followLatestRequestKey={followLatestRequestKey}');
     expect(source).toContain('requestFollowLatest(sessionId)');
     expect(source).toContain('shouldApplyFollowLatestRequest(sourceSessionId, sessionIdRef.current)');
+    expect(source).toContain(
+      'requestFollowLatest(sessionId);\n      const accepted = await sendMessage(',
+    );
+    expect(source).toContain(
+      'requestFollowLatest(sessionId);\n        const accepted = await steerMessage(',
+    );
   });
 });
