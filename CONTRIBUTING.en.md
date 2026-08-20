@@ -66,6 +66,24 @@ explain why any highly relevant check was not run.
    including scope, verification, risks, and rollback information.
 5. Wait for CI and review; do not push directly to `main`.
 
+Before opening a pull request, commit your local changes first, then run
+`pnpm check:git-hygiene` (it scans the committed `base..head` history, not
+uncommitted working-tree files). It scans the full commit history relative to
+`main` and rejects `tmp/` (at any path depth), review/CI exports, and blobs
+larger than 50 MiB, executables, or archives that do not have an exact path,
+blob SHA, and reason in `.github/git-hygiene-allowlist.json`. Temporary
+artifacts cannot be allowlisted. Deleting a file in a later commit does not
+remove its historical blob; rebase or squash the branch before merge. Prefer
+rebasing long-lived branches onto `main`. Use a cleaned-up rebase merge when
+atomic commits matter; otherwise prefer squash merge instead of preserving
+repeated merge-from-main commits.
+
+A checker failure (not a content violation) exits with code 2 and reports
+`checker error, not a violation`. Only when a checker fault blocks CI may a
+maintainer temporarily set the `SKIP_GIT_HYGIENE=1` repository variable to
+unblock; this is not an opening for violating PRs, and it should be cleared
+once the gate is fixed.
+
 Small documentation fixes are welcome as pull requests. For larger changes to
 architecture, protocols, database migrations, permissions, or user data,
 please open an issue first to discuss scope and compatibility.
