@@ -3646,7 +3646,8 @@ function MarkdownBody({
   const chatFilePathContext = useContext(ChatFilePathContext);
   // iOS UITextView 在 stretch/百分比宽度下会偶发只量出部分高度,LegendList 按这次
   // 偏矮的 onLayout 裁切 agent 回复;点分享会换上确定宽度的容器从而完整显示。
-  // 先 stretch 量到像素宽,再钉死,复现同一次二次布局,且不重挂 mermaid/公式 WebView。
+  // 外层始终 stretch 测可用宽,内层再钉像素宽:测宽不能钉在自己身上,否则旋转/
+  // 分屏变宽后 onLayout 仍报旧值。1px 内抖动忽略,避免公式 WebView 重挂。
   const [contentWidth, setContentWidth] = useState(0);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
     if (!pinContentWidth) return;
@@ -3798,14 +3799,14 @@ function MarkdownBody({
       style={[
         styles.markdownBody,
         { maxWidth: '100%' },
-        pinSettledWidth
-          ? { width: contentWidth }
-          : pinContentWidth
-            ? { alignSelf: 'stretch' }
-            : null,
+        pinContentWidth ? { alignSelf: 'stretch' } : null,
       ]}
       testID="message.markdownBody"
     >
+      <View
+        collapsable={false}
+        style={pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null}
+      >
       {groups.flatMap((group, groupIndex) => {
         const renderedGroup = (() => {
           if (group.type === 'text_run') {
@@ -3998,6 +3999,7 @@ function MarkdownBody({
           renderedGroup,
         ];
       })}
+      </View>
     </View>
   );
 }

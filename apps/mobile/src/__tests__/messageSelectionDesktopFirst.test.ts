@@ -47,6 +47,10 @@ describe('mobile message text selection', () => {
     expect(markdownBodySource).toContain('onLayout={handleSettledWidthLayout}');
     expect(markdownBodySource).toContain('pinContentWidth');
     expect(markdownBodySource).toContain('pinSettledWidth');
+    expect(markdownBodySource).toContain("pinContentWidth ? { alignSelf: 'stretch' } : null");
+    expect(markdownBodySource).toContain(
+      'style={pinSettledWidth ? { width: contentWidth, maxWidth: \'100%\' } : null}',
+    );
     expect(markdownBodySource).toContain(
       "key={`${group.key}:${pinSettledWidth ? contentWidth : 'hug'}`}",
     );
