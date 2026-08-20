@@ -605,6 +605,9 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('knownUserMessageIds: knownUserMessageIdsRef.current');
     expect(source).toContain('collectKnownUserMessageIds(messages,');
     expect(source).toContain('if (!ownsHardwareScrollActions) return;');
+    expect(source).toContain(
+      'useNavigationKeyListener(clearChipJumpSuppression, ownsHardwareScrollActions)',
+    );
   });
 
   it('session view commits follow-latest only after accept and unchanged scroll generation', () => {

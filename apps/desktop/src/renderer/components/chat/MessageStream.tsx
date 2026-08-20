@@ -4301,7 +4301,7 @@ export function MessageStream({
     triggerUserIntentFill,
     unpinAutoFollowForUserUpIntent,
   ]);
-  useNavigationKeyListener(clearChipJumpSuppression);
+  useNavigationKeyListener(clearChipJumpSuppression, ownsHardwareScrollActions);
 
   const pinToBottom = useCallback(() => {
     const el = scrollRef.current;
