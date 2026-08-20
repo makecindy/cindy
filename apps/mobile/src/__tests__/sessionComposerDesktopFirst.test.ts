@@ -58,11 +58,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('opticalPadding={composerCardActive}');
     expect(source).not.toContain('opticalPadding={composerCardActive || composerInputIsMultiline}');
     const composerInputRowStart = sharedSource.indexOf('row: {', sharedStyleStart);
-    const composerInputRowEnd = sharedSource.indexOf('rowMultiline:', composerInputRowStart);
+    const composerInputRowEnd = sharedSource.indexOf('rowCompact:', composerInputRowStart);
     const composerInputRowStyle = sharedSource.slice(composerInputRowStart, composerInputRowEnd);
-    const composerInputRowMultilineStart = sharedSource.indexOf('rowMultiline: {');
-    const composerInputRowMultilineEnd = sharedSource.indexOf('rowCompact:', composerInputRowMultilineStart);
-    const composerInputRowMultilineStyle = sharedSource.slice(composerInputRowMultilineStart, composerInputRowMultilineEnd);
     const inlineButtonStart = source.indexOf('composerInlineToolButton: {');
     const inlineButtonEnd = source.indexOf('composerToolButtonActive:', inlineButtonStart);
     const inlineButtonStyle = source.slice(inlineButtonStart, inlineButtonEnd);
@@ -213,17 +210,24 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputRowStyle).toContain("alignItems: 'stretch'");
     expect(composerInputRowStyle).toContain("flexDirection: 'column'");
     expect(sharedSource).toContain('mainRow: {');
-    expect(sharedSource).toContain('cardLayout && toolbar != null');
+    // 工具排常驻挂载(卡片过渡是 Reanimated 局部动画,不再用全局 LayoutAnimation):
+    // 折叠态靠 toolbarReveal 外壳的高度/透明度收起,并同步关掉命中与无障碍。
+    expect(sharedSource).toContain('toolbar != null ? (');
+    expect(sharedSource).toContain('styles.toolbarReveal');
+    expect(sharedSource).toContain("importantForAccessibility={cardLayout ? undefined : 'no-hide-descendants'}");
     expect(composerInputRowStyle).toContain('backgroundColor: colors.chatCodeSurface');
     expect(composerInputRowStyle).toContain('borderColor: colors.sheetActionBorder');
     expect(composerInputRowStyle).toContain('borderRadius: radius.pill');
     expect(composerInputRowStyle).toContain('borderWidth: StyleSheet.hairlineWidth');
     expect(composerInputRowStyle).toContain('minHeight: 50');
     expect(composerInputRowStyle).toContain('paddingHorizontal: spacing.md');
-    expect(composerInputRowStyle).toContain('paddingVertical: 10');
+    // 上下内边距是卡片过渡插值端点,常量与静态样式同源。
+    expect(composerInputRowStyle).toContain('paddingVertical: ROW_PADDING_VERTICAL');
+    expect(sharedSource).toContain('const ROW_PADDING_VERTICAL = 10;');
     expect(composerInputRowStyle).toContain("position: 'relative'");
     expect(sharedSource).toContain("mainRowMultiline: {\n    alignItems: 'flex-end',");
-    expect(composerInputRowMultilineStyle).toContain('borderRadius: 30');
+    // 多行圆角 30 从静态样式挪为插值端点常量(卡片态与 pill 圆角互插)。
+    expect(sharedSource).toContain('const MOBILE_COMPOSER_ROW_RADIUS_MULTILINE = 30;');
     expect(inputStyle).toContain("backgroundColor: 'transparent'");
     expect(inputStyle).toContain('borderWidth: 0');
     expect(inputStyle).not.toContain('borderColor: colors.border');
@@ -470,7 +474,8 @@ describe('mobile session composer desktop-first surface', () => {
     );
     expect(finishVoiceSource).toContain('voiceStopInFlightRef.current = false;');
     expect(composerInputSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    expect(composerInputSource).not.toContain('floatingVoiceButtonStyle=');
+    // 录音胶囊的动画宽度经锚点外壳下发(全局 LayoutAnimation 已移除)。
+    expect(composerInputSource).toContain('floatingVoiceButtonStyle={voicePillWidthStyle}');
     expect(composerInputSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
     expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
@@ -684,7 +689,11 @@ describe('mobile session composer desktop-first surface', () => {
     // 手势被系统/滚动打断时撤销按下即录(review P1)。
     expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');
-    expect(source).toContain('{ width: voiceRecordingTimer.pillWidth }');
+    // 胶囊宽度换档走局部动画:页面把动画 width style 交给锚点外壳,按钮铺满外壳,
+    // 不再在按钮上写死 { width: pillWidth }(全局 LayoutAnimation 已移除)。
+    expect(source).toContain('floatingVoiceButtonStyle={voicePillWidthStyle}');
+    expect(source).toContain("{ width: '100%' }");
+    expect(source).not.toContain('{ width: voiceRecordingTimer.pillWidth }');
     expect(source).not.toContain('voiceDuration');
     expect(source).not.toContain('recordingDuration');
     expect(source).not.toContain('formatVoiceDuration');

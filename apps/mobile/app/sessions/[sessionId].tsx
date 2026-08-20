@@ -331,8 +331,8 @@ import {
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
-import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { useComposerResize } from '@/session/useComposerResize';
+import { useVoiceRecordingPillWidthStyle } from '@/session/useComposerControlMotion';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';
 import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUpload';
@@ -2478,6 +2478,9 @@ export default function SessionScreen() {
     expanded: voiceIsListening || voiceStartPending,
     counting: voiceIsListening,
   });
+  // 语音胶囊宽度换档(34 → 72 / 80)的局部动画 style:由 MobileComposerInputRow
+  // 的 Reanimated 锚点外壳消费;工具排占位 slot 用同一份时长/曲线,两处同段运动。
+  const voicePillWidthStyle = useVoiceRecordingPillWidthStyle(voiceRecordingTimer.pillWidth);
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
@@ -2640,7 +2643,6 @@ export default function SessionScreen() {
     || permissionSheetOpen
     || voiceIsBusy
     || composerVoiceHoldActive;
-  useComposerCardTransition(composerCardActive);
   const composerChromeHeight = useMemo(() => {
     const statusReserve = voiceStatusVisible
       ? COMPOSER_STATUS_ROW_RESERVED_HEIGHT + COMPOSER_STACK_GAP_HEIGHT
@@ -5484,10 +5486,12 @@ export default function SessionScreen() {
       style={[
         styles.composerInlineToolButton,
         buttonStyle,
+        // 锚点外壳(MobileComposerInputRow 的 Reanimated 锚点)负责动画宽度,
+        // 按钮自身铺满外壳:胶囊只向左生长,右缘锚定不动。
+        { width: '100%' },
         // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
         // 否则按下瞬间胶囊已展开、底色却要等 ASR 连上才变,闪一次半成品态。
         voiceRecordingTimer.label !== null && styles.composerToolButtonPrimary,
-        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
       ]}
       testID="session.voiceButton"
     >
@@ -9586,6 +9590,7 @@ export default function SessionScreen() {
                     compact={compactComposer && !composerCardActive}
                     editable={!composerLayout.input.disabled}
                     floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
+                    floatingVoiceButtonStyle={voicePillWidthStyle}
                     cursorColor={colors.inputCaret}
                     inputFrameHeight={composerResize.frameHeight}
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,

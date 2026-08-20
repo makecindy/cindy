@@ -7,6 +7,11 @@ const workspaceNodeModules = path.join(workspaceRoot, 'node_modules');
 const appNodeModules = path.join(__dirname, 'node_modules');
 const sharedArrayBufferPolyfill = path.join(__dirname, 'src/polyfills/sharedArrayBuffer.js');
 
+// Region endpoint manifests live at the repository root and are imported by
+// the mobile runtime config. Keep that root in Metro's file map so all three
+// region branches resolve consistently (including the gitignored dev manifest).
+config.watchFolders = [...(config.watchFolders ?? []), workspaceRoot];
+
 // mobile 直接吃 TS 源码的 workspace 包(见下方 .js→.ts resolveRequest 分流)。
 const workspaceTsSourcePackages = [
   'auth-client',

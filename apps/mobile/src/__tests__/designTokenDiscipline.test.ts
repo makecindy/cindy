@@ -36,11 +36,6 @@ const COLOR_EXEMPT = [/Html\.ts$/i, /src\/session\/ImageLightbox\.tsx$/];
 /** 组件几何 / 特殊语义的登记豁免:file 后缀匹配 + 行内容包含 snippet 即放行。 */
 const ALLOWLIST: Array<{ file: string; snippet: string; reason: string }> = [
   {
-    file: 'src/session/MobileComposerInputRow.tsx',
-    snippet: 'borderRadius: 30',
-    reason: 'composer 多行形态组件几何(desktop-first 测试钉死)',
-  },
-  {
     file: 'app/devices/index.tsx',
     snippet: 'size={9}',
     reason: 'Pencil 微徽标,徽标容器几何依赖 9px',

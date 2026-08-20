@@ -16,8 +16,11 @@ import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import Reanimated, { interpolate, useAnimatedStyle, type AnimatedStyle } from 'react-native-reanimated';
 import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
+import { useComposerCardTransition } from '@/session/useComposerCardTransition';
+import { useVoiceRecordingPillWidthStyle } from '@/session/useComposerControlMotion';
 import {
   COMPOSER_SINGLE_LINE_HEIGHT,
   COMPOSER_TEXT_HORIZONTAL_PADDING,
@@ -66,6 +69,14 @@ export const MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT = COMPOSER_SINGLE_LINE_HEI
 export const MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES = 12;
 export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIGHT * MOBILE_COMPOSER_INPUT_MAX_VISIBLE_LINES)
   + (MOBILE_COMPOSER_INPUT_VERTICAL_PADDING * 2);
+/** 卡片态工具排整体占用高度:toolbarRow 的 marginTop + 控件高度。 */
+const MOBILE_COMPOSER_TOOLBAR_SECTION_HEIGHT = 8 + MOBILE_COMPOSER_CONTROL_SIZE;
+/** 简洁态多行草稿的圆角(rowMultiline 几何);卡片态插值端点需要数字常量。 */
+const MOBILE_COMPOSER_ROW_RADIUS_MULTILINE = 30;
+/** 外壳(简洁态)上下内边距与卡片态上/下内边距——过渡插值的四个端点。 */
+const ROW_PADDING_VERTICAL = 10;
+const ROW_CARD_PADDING_TOP = 26;
+const ROW_CARD_PADDING_BOTTOM = 8;
 /**
  * 触控目标下限(mobile-design-guide「主操作命中区 ≥ 44×44」,iOS HIG 同值)。
  * 语音听写期间「点输入区停止听写」的命中层用它撑起 inputFrame(见 inputFrameMinHeight)。
@@ -100,8 +111,8 @@ export interface MobileComposerInputRowProps {
    * 定位走 resolveMobileComposerVoiceButtonAnchorStyle，两态都写全 top /
    * bottom / transform，避免 RN 合并残留把麦克风停在卡片中部。
    */
-  floatingVoiceButton?: (style: StyleProp<ViewStyle>) => ReactNode;
-  floatingVoiceButtonStyle?: StyleProp<ViewStyle>;
+  floatingVoiceButton?: (style?: StyleProp<ViewStyle>) => ReactNode;
+  floatingVoiceButtonStyle?: StyleProp<ViewStyle | AnimatedStyle<ViewStyle>>;
   /**
    * 输入区（inputFrame）的显式高度：拖拽跟手时传 Animated 值、manual 定高时传数值，
    * null / undefined 走内容自动增长（现状行为）。
@@ -222,6 +233,29 @@ export function MobileComposerInputRow({
   // 但 mode/manual 与多行草稿判定仍会让 multilineShape 为 true;若据此关掉几何居中,
   // 收起态文字会继续走 iOS 6/0 光学偏移,对不齐新增的 34pt +。
   const geometricSingleLine = !cardLayout;
+  // 卡片过渡是 Reanimated 局部动画(不用 LayoutAnimation,竞态会冻结无关视图,
+  // 见 useComposerCardTransition 注释)。progress 驱动外壳形变:常驻的语音
+  // absolute 锚点不需要单独动画,跟随容器形变逐帧重排自然滑到工具排位置。
+  const cardTransition = useComposerCardTransition(cardLayout);
+  const compactRowRadius = multilineShape ? MOBILE_COMPOSER_ROW_RADIUS_MULTILINE : radius.pill;
+  const rowCardTransitionStyle = useAnimatedStyle(() => ({
+    borderRadius: interpolate(cardTransition.value, [0, 1], [compactRowRadius, radius.control]),
+    paddingBottom: interpolate(cardTransition.value, [0, 1], [ROW_PADDING_VERTICAL, ROW_CARD_PADDING_BOTTOM]),
+    paddingTop: interpolate(cardTransition.value, [0, 1], [ROW_PADDING_VERTICAL, ROW_CARD_PADDING_TOP]),
+  }), [compactRowRadius]);
+  // 语音让位(简洁态 inline 时右侧 40pt)随 progress 收放;卡片态恒为 0。
+  const voiceInlineInset = !cardLayout && voicePlacement?.inline
+    ? MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP
+    : 0;
+  const mainRowCardTransitionStyle = useAnimatedStyle(() => ({
+    paddingRight: (1 - cardTransition.value) * voiceInlineInset,
+  }), [voiceInlineInset]);
+  // 工具排常驻挂载、高度/透明度随 progress 展开(抽屉滑出 + 原地渐显,
+  // 对齐旧 LayoutAnimation update/create 两段的观感)。
+  const toolbarRevealStyle = useAnimatedStyle(() => ({
+    height: cardTransition.value * MOBILE_COMPOSER_TOOLBAR_SECTION_HEIGHT,
+    opacity: cardTransition.value,
+  }));
   // RN 里显式 height 压过 minHeight:manual 定高(用户拖过高度)时 frameHeight 可能小于
   // inputFrameMinHeight,直接铺开会把听写停止命中区又压回不足 44pt。数值高度在这里
   // 先 clamp;拖拽中的 Animated 值无法在 JS 侧 clamp(会打断跟手),那一瞬保持动画值,
@@ -273,25 +307,26 @@ export function MobileComposerInputRow({
     />
   );
   return (
-    <View
+    <Reanimated.View
       style={[
         styles.row,
         compact && styles.rowCompact,
         geometricSingleLine && styles.rowCollapsedTouch,
         !geometricSingleLine && multilineShape && styles.rowMultiline,
-        cardLayout && styles.rowCard,
+        rowCardTransitionStyle,
         rowStyle,
       ]}
       testID={testID}
     >
       {resizeHandle}
       {cardLayout ? accessoryAbove : null}
-      <View
+      <Reanimated.View
         style={[
           styles.mainRow,
           geometricSingleLine && styles.mainRowCollapsedTouch,
           !geometricSingleLine && multilineShape && styles.mainRowMultiline,
           !cardLayout && voicePlacement?.inline && styles.mainRowVoiceInset,
+          mainRowCardTransitionStyle,
         ]}
       >
         {cardLayout ? null : leading}
@@ -312,14 +347,17 @@ export function MobileComposerInputRow({
           {inputOverlay}
         </Animated.View>
         {cardLayout ? null : trailing}
-      </View>
-      {cardLayout && toolbar != null ? (
-        <View
-          style={styles.toolbarRow}
+      </Reanimated.View>
+      {toolbar != null ? (
+        <Reanimated.View
+          accessibilityElementsHidden={!cardLayout}
+          importantForAccessibility={cardLayout ? undefined : 'no-hide-descendants'}
+          pointerEvents={cardLayout ? 'auto' : 'none'}
+          style={[styles.toolbarReveal, toolbarRevealStyle]}
           testID={testID ? `${testID}.toolbar` : undefined}
         >
-          {toolbar}
-        </View>
+          <View style={styles.toolbarRow}>{toolbar}</View>
+        </Reanimated.View>
       ) : null}
       {voicePlacement?.inline || voicePlacement?.floating
         ? floatingVoiceButton?.([
@@ -327,10 +365,10 @@ export function MobileComposerInputRow({
             cardLayout,
             floating: voicePlacement.floating,
           }),
-          floatingVoiceButtonStyle,
+          floatingVoiceButtonStyle as StyleProp<ViewStyle>,
         ])
         : null}
-    </View>
+    </Reanimated.View>
   );
 }
 
@@ -349,7 +387,12 @@ export function ComposerToolbarSpacer() {
  */
 export function ComposerToolbarVoiceSlot({ width }: { width?: number }) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
-  return <View style={[styles.toolbarVoiceSlot, width != null && { width }]} />;
+  // 宽度换档走局部动画(与语音按钮共用同一份时长/曲线,保持同段运动),
+  // 不再用全局 LayoutAnimation(与键盘竞态会冻结无关视图)。
+  const pillWidthStyle = useVoiceRecordingPillWidthStyle(width);
+  return (
+    <Reanimated.View style={[styles.toolbarVoiceSlot, width != null && pillWidthStyle]} />
+  );
 }
 
 export interface ComposerResizeGrabberProps {
@@ -509,7 +552,7 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     minHeight: 50,
     overflow: 'visible',
     paddingHorizontal: spacing.md,
-    paddingVertical: 10,
+    paddingVertical: ROW_PADDING_VERTICAL,
     position: 'relative',
   },
   // 收起态给 leading 的 44pt 热区留出父边界,避免溢出子节点点不到。
@@ -518,7 +561,7 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingVertical: 3,
   },
   rowMultiline: {
-    borderRadius: 30, // 组件几何:composer 聚焦形态专用,非通用圆角档
+    borderRadius: MOBILE_COMPOSER_ROW_RADIUS_MULTILINE, // 组件几何:composer 聚焦形态专用,非通用圆角档
   },
   rowCompact: {
     gap: MOBILE_COMPOSER_TOOL_GAP,
@@ -527,8 +570,8 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   // （grabber 横条距顶约 8pt、距输入内容约 14pt，参考 Cursor 移动端）。
   rowCard: {
     borderRadius: radius.control,
-    paddingBottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
-    paddingTop: 26,
+    paddingBottom: ROW_CARD_PADDING_BOTTOM,
+    paddingTop: ROW_CARD_PADDING_TOP,
   },
   // 水平输入行：简洁态装 [输入][发送]，card 态只剩全宽输入区；
   // 语音按钮不在流内（absolute 锚点），简洁态无发送时给它留出右侧空间。
@@ -572,6 +615,10 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     flexDirection: 'row',
     gap: MOBILE_COMPOSER_TOOL_GAP,
     marginTop: 8,
+  },
+  // 工具排常驻挂载的外壳:高度/透明度由 progress 驱动,折叠时 0 高裁掉内容。
+  toolbarReveal: {
+    overflow: 'hidden',
   },
   toolbarSpacer: {
     flex: 1,

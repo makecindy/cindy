@@ -220,8 +220,8 @@ import {
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
 import { VoiceRecordingPillContent, useMobileVoiceRecordingTimer } from '@/session/VoiceRecordingPill';
-import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { useComposerResize } from '@/session/useComposerResize';
+import { useVoiceRecordingPillWidthStyle } from '@/session/useComposerControlMotion';
 import { useMobileKeyboardState } from '@/session/useMobileKeyboardState';
 import {
   isMobileVoiceMicPermissionError,
@@ -1430,6 +1430,9 @@ export default function NewRemoteSessionScreen() {
     expanded: voiceIsListening || voiceStartPending,
     counting: voiceIsListening,
   });
+  // 语音胶囊宽度换档(34 → 72 / 80)的局部动画 style:由 MobileComposerInputRow
+  // 的 Reanimated 锚点外壳消费;工具排占位 slot 用同一份时长/曲线,两处同段运动。
+  const voicePillWidthStyle = useVoiceRecordingPillWidthStyle(voiceRecordingTimer.pillWidth);
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
@@ -1465,7 +1468,6 @@ export default function NewRemoteSessionScreen() {
     || permissionSheetOpen
     || voiceIsBusy
     || composerVoiceHoldActive;
-  useComposerCardTransition(composerCardActive);
   // 下拉收起 = 退出聚焦激活态(模型浮窗已是独立 Modal,拖拽手势够不到它,无需在此关闭)。
   // 语音结束 hold 态未聚焦,blur 是 no-op,需显式解除 hold 才能收回简洁态。
   const handleComposerSnapToAuto = useCallback(() => {
@@ -3486,9 +3488,11 @@ export default function NewRemoteSessionScreen() {
       style={({ pressed }) => [
         styles.composerIconButton,
         buttonStyle,
+        // 锚点外壳(MobileComposerInputRow 的 Reanimated 锚点)负责动画宽度,
+        // 按钮自身铺满外壳:胶囊只向左生长,右缘锚定不动。
+        { width: '100%' },
         // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
         voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
-        voiceRecordingTimer.label !== null && { width: voiceRecordingTimer.pillWidth },
         (creating || voiceIsProcessing) && styles.disabled,
         pressed && styles.pressed,
       ]}
@@ -5725,6 +5729,7 @@ export default function NewRemoteSessionScreen() {
                   value={draft.firstMessage}
                   voicePlacement={composerVoicePlacement}
                   floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
+                  floatingVoiceButtonStyle={voicePillWidthStyle}
                 />
               </View>
             </View>

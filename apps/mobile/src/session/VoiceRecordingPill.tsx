@@ -1,17 +1,10 @@
-import { Animated, Easing, LayoutAnimation, Platform, UIManager, View } from 'react-native';
+import { Animated, Easing, View } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Text } from '@/components/AppText';
-import { getCachedReduceMotionEnabled, useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, typeScale } from '@/theme/tokens';
 import { MOBILE_COMPOSER_CONTROL_SIZE } from '@/session/MobileComposerInputRow';
-
-// 旧架构 Android 需要显式开启 LayoutAnimation;新架构(Fabric)下该开关是 no-op。
-// 与 useComposerCardTransition / collapseAnimation 相同的模块级开关——本模块可能
-// 在两者都未加载时独立使用,不能依赖别处的副作用(review 反馈)。
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 /**
  * 录音中语音按钮的胶囊宽度(对齐桌面 VoiceInputButton 的红点+计时展开形态)。
@@ -51,9 +44,10 @@ export interface MobileVoiceRecordingTimer {
 
 /**
  * 录音计时状态。counting 翻 true 时从 0 重新计时,expanded 翻 false 清零。
- * 同时在展开态翻转与宽度换档的下一帧布局注册一次 LayoutAnimation
- * (一次性瞬态、用户触发、有明确结束,符合动效红线;240ms 对齐桌面胶囊
- * 展开时长),让胶囊展开/收回与左邻按钮的让位在同一段运动里完成。
+ * 胶囊宽度换档(34 → 72 / 80)的展开动画不再在这里注册全局 LayoutAnimation
+ * (与键盘竞态会冻结无关视图,见 useComposerCardTransition 注释),改由消费方
+ * (语音按钮锚点 + ComposerToolbarVoiceSlot)用 useVoiceRecordingPillWidthStyle
+ * 做局部动画,同一份时长/曲线,展开/收回与左邻按钮让位仍是同一段运动。
  */
 export function useMobileVoiceRecordingTimer(
   { expanded, counting }: MobileVoiceRecordingTimerInput,
@@ -78,20 +72,6 @@ export function useMobileVoiceRecordingTimer(
     : label.length > 4
       ? MOBILE_VOICE_RECORDING_PILL_WIDTH_WIDE
       : MOBILE_VOICE_RECORDING_PILL_WIDTH;
-
-  const prevWidthRef = useRef(pillWidth);
-  if (prevWidthRef.current !== pillWidth) {
-    prevWidthRef.current = pillWidth;
-    // reduce-motion 降级为直切,对齐桌面 prefers-reduced-motion 下
-    // pillTransition = undefined 的行为。按 useReduceMotion 的约定,null
-    // (首帧未查到)也按不播处理——缓存模块加载即预热,实际命中窗口极小。
-    if (getCachedReduceMotionEnabled() === false) {
-      LayoutAnimation.configureNext({
-        duration: 240,
-        update: { type: 'easeInEaseOut' },
-      });
-    }
-  }
 
   return { label, pillWidth };
 }
