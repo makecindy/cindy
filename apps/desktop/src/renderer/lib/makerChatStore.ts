@@ -2874,7 +2874,9 @@ function releasePermissionResponseGuard(sessionId: string): void {
   if (timer !== undefined) clearTimeout(timer);
   permissionResponseGuardTimers.delete(sessionId);
   permissionResponseInFlight.delete(sessionId);
-  permissionResponseGuardGeneration.delete(sessionId);
+  // 注意:不删除 generation——让它保持单调递增,防止 ABA 碰撞
+  // (释放后重新武装时 generation 会递增,迟到的 finally 捕获的旧 generation
+  //  与新 generation 不同,校验自然失败)。
 }
 
 /**
