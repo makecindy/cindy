@@ -482,6 +482,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(sharedSource).toContain('floating: voicePlacement.floating,');
     expect(sharedSource).toContain('accessoryAbove != null ? (');
     expect(sharedSource).toContain('styles.accessoryReveal');
+    expect(sharedSource).toContain('maxHeight: cardTransition.value * MOBILE_COMPOSER_INPUT_MAX_HEIGHT');
+    expect(sharedSource).toContain('height: MOBILE_COMPOSER_CONTROL_SIZE');
+    expect(sharedSource).toContain('width: MOBILE_COMPOSER_CONTROL_SIZE');
     expect(sharedSource).toContain('{floatingVoiceButton?.()}');
     expect(sharedSource).not.toContain('cardLayout && styles.voiceButtonAnchorCard,');
     // 录音中语音按钮以「红色停止方块」可见,禁止任何 opacity:0 隐藏样式回归
