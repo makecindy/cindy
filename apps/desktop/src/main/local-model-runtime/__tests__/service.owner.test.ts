@@ -88,4 +88,32 @@ describe('owner change during pull', () => {
     await service.list();
     expect(upsertManagedOllamaModels).not.toHaveBeenCalled();
   });
+
+  it('does not upsert if the account switches while describing the pulled model', async () => {
+    let checks = 0;
+    const service = createLocalModelService({
+      streamPull: async () => undefined,
+      pausedPullStore: {
+        read: async () => null,
+        readSync: () => null,
+        readAll: async () => [],
+        readAllSync: () => [],
+        write: async () => undefined,
+        remove: async () => null,
+        clear: async () => undefined,
+      },
+      fetchImpl: readyFetch(),
+    });
+    await expect(
+      service.pull('gpt-oss:20b', {
+        owner: { dataOwnerId: 'alice', generation: 1 },
+        ownerStillActive: () => {
+          checks += 1;
+          return checks < 2;
+        },
+      }),
+    ).rejects.toBeInstanceOf(OwnerChangedError);
+    expect(upsertManagedOllamaModel).not.toHaveBeenCalled();
+    expect(checks).toBeGreaterThanOrEqual(2);
+  });
 });

@@ -609,22 +609,26 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
             op.abort.signal,
           );
         }
-        const ownerOk = opts?.ownerStillActive?.() ?? true;
-        if (!ownerOk) {
-          if (opts?.owner) unclaimedByName.set(name, opts.owner);
-          disarmCheckpoint();
-          await forgetPaused(name);
-          throw new OwnerChangedError();
-        }
-        if (managedOllamaRemovalGeneration() !== removalGeneration) {
-          log.info('skip managed upsert after provider removed during pull', { name });
-          disarmCheckpoint();
-          await forgetPaused(name);
-          return;
-        }
+        const ensureWritable = async (forget: boolean): Promise<boolean> => {
+          if (!(opts?.ownerStillActive?.() ?? true)) {
+            if (opts?.owner) unclaimedByName.set(name, opts.owner);
+            disarmCheckpoint();
+            if (forget) await forgetPaused(name);
+            throw new OwnerChangedError();
+          }
+          if (managedOllamaRemovalGeneration() !== removalGeneration) {
+            log.info('skip managed upsert after provider removed during pull', { name });
+            disarmCheckpoint();
+            if (forget) await forgetPaused(name);
+            return false;
+          }
+          return true;
+        };
+        if (!(await ensureWritable(true))) return;
         disarmCheckpoint();
         await forgetPaused(name);
         const { model, agents } = await describePulledModel(name);
+        if (!(await ensureWritable(false))) return;
         const upserted = await upsertManagedOllamaModel(model, agents);
         if (!upserted.ok) {
           throw new Error('MANAGED_ID_CONFLICT');

@@ -11,6 +11,7 @@ import {
   matchesLegacyPiOnlyOllamaFingerprint,
   matchesManagedOllamaFingerprint,
   matchesManagedOllamaV2Fingerprint,
+  ollamaModelRefsEqual,
   OLLAMA_ANTHROPIC_BASE_URL,
   OLLAMA_OPENAI_BASE_URL,
 } from '../../shared/localModelRuntime.js';
@@ -293,7 +294,7 @@ function applyModelToAgents(
   };
   for (const agent of agents) {
     const current = runtimes[agent];
-    const without = current.models.filter((entry) => entry.id !== model.id);
+    const without = current.models.filter((entry) => !ollamaModelRefsEqual(entry.id, model.id));
     runtimes[agent] = {
       ...current,
       models: mode === 'remove' ? without : [...without, toAgentModel(model, agent)],

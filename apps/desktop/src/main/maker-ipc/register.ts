@@ -13897,6 +13897,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof sessionId !== 'string' || typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'sessionId + enabled required');
       }
+      await assertReviewSettingsUnlocked(sessionId);
       const sess = maker.getSession(sessionId);
       if (!sess) return;
       await sess.setThinkingEnabled(enabled);
