@@ -15062,12 +15062,16 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('excludes a server-resolved approval wait from the completed turn duration', async () => {
+  it('starts response-first generation timing at turn/started and excludes an approval wait', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
       const agent = new CodexAgent(createDeps());
-      const host = installFakeHost(agent);
+      const turnStartResponse = deferred<{ turn: { id: string } }>();
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return turnStartResponse.promise;
+        return undefined;
+      });
       const handle = await agent.startSession({
         sessionId: 'session-approval-generation-timing',
         model: 'gpt-5.4',
@@ -15090,8 +15094,24 @@ describe('CodexAgent MCP thread context hooks', () => {
       const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
       handle.setInteractionResolver(interactionResolver);
 
+      const sendPromise = handle.send({ type: 'user', content: 'run pwd' });
+      await waitForExpectation(() => {
+        expect(host.request).toHaveBeenCalledWith(
+          Method.TurnStart,
+          expect.any(Object),
+          expect.any(Object),
+        );
+      });
+      now = 5_000;
+      turnStartResponse.resolve({ turn: { id: 'turn-1' } });
+      await sendPromise;
+
+      // The RPC response only establishes ownership. Generation timing starts
+      // from the later turn/started notification, matching the real app-server
+      // response-first sequence.
+      now = 7_000;
       handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
-      now = 2_000;
+      now = 8_000;
       const approvalPromise = handlers.commandExecutionApproval({
         threadId: 'start-thread-id',
         turnId: 'turn-1',
@@ -15101,17 +15121,17 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
       await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
 
-      now = 10_000;
+      now = 16_000;
       handlers.serverRequestResolved({
         threadId: 'start-thread-id',
         requestId: 'approval-item-1',
       });
       await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
 
-      now = 12_000;
+      now = 18_000;
       handlers.turnCompleted({
         threadId: 'start-thread-id',
-        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+        turn: { id: 'turn-1', status: 'completed', durationMs: 17_000 },
       });
       await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
       const done = events.find((event) => event.type === 'done');
@@ -23422,6 +23442,77 @@ describe('CodexAgent context window reporting', () => {
     expect((lastDiff?.data as { diff: string }).diff).toContain('root.txt');
     expect((lastDiff?.data as { diff: string }).diff).toContain('child.txt');
     expect((lastDiff?.data as { diff: string }).diff).toContain('grandchild.txt');
+
+    await handle.close();
+  });
+
+  it('clears prior descendant diffs when each new turn is adopted by its response first', async () => {
+    const turnIds = ['turn-response-first-1', 'turn-response-first-2'];
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        const turnId = turnIds.shift();
+        if (!turnId) throw new Error('unexpected extra turn/start');
+        return { turn: { id: turnId } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-response-first-diff-isolation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+    const handlers = host.getThreadHandlers();
+    if (
+      !handlers?.turnStarted
+      || !handlers.turnCompleted
+      || !handlers.turnDiffUpdated
+      || !handlers.descendantThreadStarted
+      || !handlers.descendantNotification
+    ) {
+      throw new Error('expected turn and descendant handlers');
+    }
+
+    await handle.send({ type: 'user', content: 'first turn' });
+    handlers.turnStarted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-response-first-1' },
+    });
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-response-first-diff', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-response-first-diff', 'turn/diff/updated', {
+      threadId: 'child-response-first-diff',
+      turnId: 'child-response-first-turn',
+      diff: 'diff --git a/previous-child.txt b/previous-child.txt\n--- a/previous-child.txt\n+++ b/previous-child.txt\n@@ -1 +1 @@\n-old\n+previous-child\n',
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-response-first-1', status: 'completed' },
+    });
+
+    await handle.send({ type: 'user', content: 'second turn' });
+    handlers.turnStarted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-response-first-2' },
+    });
+    handlers.turnDiffUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-response-first-2',
+      diff: 'diff --git a/current-root.txt b/current-root.txt\n--- a/current-root.txt\n+++ b/current-root.txt\n@@ -1 +1 @@\n-old\n+current-root\n',
+    });
+
+    await vi.waitFor(() => {
+      const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+      const diff = (last?.data as { diff?: string } | undefined)?.diff ?? '';
+      expect(last?.data).toMatchObject({ turnId: 'turn-response-first-2' });
+      expect(diff).toContain('+current-root');
+      expect(diff).not.toContain('+previous-child');
+    });
 
     await handle.close();
   });
