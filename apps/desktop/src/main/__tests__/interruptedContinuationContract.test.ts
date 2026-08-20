@@ -244,6 +244,11 @@ describe('interrupted continuation enqueue contract', () => {
     const drainImmediate = coordinatorSource.indexOf("void this.drain(sessionId, 'enqueue-immediate');");
     expect(enqueuePreview).toBeGreaterThan(-1);
     expect(drainImmediate).toBeGreaterThan(enqueuePreview);
+    const queueHeadContinueReturn = coordinatorSource.indexOf(
+      "this.scheduleDrain(sessionId, 'ui-continue-queue-head-unlock')",
+    );
+    expect(queueHeadContinueReturn).toBeGreaterThan(-1);
+    expect(enqueuePreview).toBeGreaterThan(queueHeadContinueReturn);
   });
 
   it('rolls back Agent Island enqueue preview when the queued item is discarded, rejected, or blocked', () => {

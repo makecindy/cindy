@@ -3653,6 +3653,7 @@ export function NewMakerDraftRoute() {
               nowIso: new Date().toISOString(),
               logTag: 'draft send',
             });
+            markedStartingSessionId = remoteSessionId;
             // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。锚点是
             // **控制端的 UI 态**,与被控端无关:按对端会话 id 记在本机即可,不进任何 payload。
             // 用 createArgs 里**实际提交**的 model / providerId(远程分支会按被控端目录校准)。
@@ -4463,6 +4464,7 @@ export function NewMakerDraftRoute() {
           if (!remoteSessionId) {
             throw new Error(t('ccAgent.draft.createSessionFailed'));
           }
+          goalSessionId = remoteSessionId;
           {
             const optimisticGoalTitle = normalizeAutoTitle(objective);
             if (optimisticGoalTitle) {
@@ -4752,6 +4754,7 @@ export function NewMakerDraftRoute() {
         // 预览在 createSession 之前登记。worktree 建议名 / 建树 / 回滚失败都走这里,
         // 不撤回会让空会话或未建成的 goalSessionId 一直顶着目标原文。
         if (goalSessionId && optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
+        if (goalSessionId) clearSessionStarting(goalSessionId);
         if (isLocalGoalWorktreeCleanupPendingError(error)) {
           log.error('[draft goal] incomplete local worktree session cleanup failed', {
             setupError: error.setupError,

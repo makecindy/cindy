@@ -1429,12 +1429,10 @@ export class AgentInputCoordinator {
       if (state.recovery?.kind !== 'queue-head') {
         this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
       }
-      this.deps.previewQueuedUserTurn?.(sessionId, item);
     } else if (automaticOrigin && !schedulerOrigin) {
       this.deps.onAutomaticEnqueue?.(sessionId);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
-      this.deps.previewQueuedUserTurn?.(sessionId, item);
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
@@ -1530,6 +1528,9 @@ export class AgentInputCoordinator {
     // 而静默顺延(PR #972 review P2)。侧栏排序的 bump 语义保留在派发时刻 ——
     // runner 的 accepted 回调按直发路径同款调 touchUserSendInDb(ctx.firedAt)。
     if (!automaticOrigin) {
+      // 合成 Continue 在 queue-head 特判里已经 return,不会走到这里。
+      // 只预览真正留下的排队项,避免内部 Continue prompt 进灵动岛。
+      this.deps.previewQueuedUserTurn?.(sessionId, item);
       this.touchUserSend(sessionId, opts?.sendAtMs);
     }
     // 视觉连续性: 当这条入队后立即可派发(agent 空闲、队列此前为空、无暂停/锁/恢复

@@ -74,7 +74,7 @@ import {
   getRemoteSessionActivity,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
-import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+import { absorbSessionStarting, getStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { SectionCollapse } from '../SectionCollapse';
@@ -402,14 +402,19 @@ export function ProjectsSection({
     for (const [sessionId, kind] of attentionKinds) {
       if (kind === 'awaiting' || kind === 'error') settled.add(sessionId);
     }
+    const starting = getStartingSessionIds();
     const considerRemote = (session: Session) => {
       const activity = getRemoteSessionActivity(session.id);
       if (!activity) return;
+      if (activity.phase === 'running' || activity.phase === 'needs-interaction') {
+        settled.add(session.id);
+        return;
+      }
+      // 上一轮 completed/error 镜像不能吸收刚发送的 starting,否则新 turn 的
+      // 运行中指示会被旧终态立刻清掉。
       if (
-        activity.phase === 'running' ||
-        activity.phase === 'needs-interaction' ||
-        activity.phase === 'error' ||
-        activity.phase === 'completed'
+        (activity.phase === 'error' || activity.phase === 'completed') &&
+        !starting.has(session.id)
       ) {
         settled.add(session.id);
       }

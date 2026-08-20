@@ -2941,6 +2941,7 @@ describe('AgentInputCoordinator send transaction', () => {
     // text 是 CONTINUE_AFTER_ERROR_PROMPT → enqueue 入口 captureOriginalSyntheticTrigger
     // 自动识别为 'continue'(isUiContinuationItem 判定),无需也不能显式赋值。
     const continueItem = makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT);
+    h.previewQueuedUserTurn.mockClear();
     h.coordinator.enqueue(sid, continueItem);
     await flush();
 
@@ -2955,6 +2956,7 @@ describe('AgentInputCoordinator send transaction', () => {
     });
     // queue-head 从不发 onUiRetry(与 retryLastError 语义一致)。
     expect(h.onUiRetry).not.toHaveBeenCalled();
+    expect(h.previewQueuedUserTurn).not.toHaveBeenCalled();
   });
 
   it('queue-head retry never substitutes the continue prompt and redrains the original head', async () => {
