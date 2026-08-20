@@ -31,7 +31,9 @@ describe('deleteInstalled', () => {
       ok: true,
     });
     expect(deleteModel).toHaveBeenCalledWith('qwen3.8:27b-mxfp8');
-    expect(removeManagedOllamaModel).toHaveBeenCalledWith('qwen3.8:27b-mxfp8');
+    expect(removeManagedOllamaModel).toHaveBeenCalledWith('qwen3.8:27b-mxfp8', {
+      stillActive: undefined,
+    });
   });
 
   it('keeps the Cindy entry when Ollama delete fails', async () => {
@@ -101,7 +103,9 @@ describe('deleteInstalled', () => {
       service.deleteInstalled('https://huggingface.co/unsloth/Qwen3.8-27B-GGUF'),
     ).resolves.toMatchObject({ ok: true });
     expect(deleteModel).toHaveBeenCalledWith('hf.co/unsloth/Qwen3.8-27B-GGUF');
-    expect(removeManagedOllamaModel).toHaveBeenCalledWith('hf.co/unsloth/Qwen3.8-27B-GGUF');
+    expect(removeManagedOllamaModel).toHaveBeenCalledWith('hf.co/unsloth/Qwen3.8-27B-GGUF', {
+      stillActive: undefined,
+    });
   });
 });
 
