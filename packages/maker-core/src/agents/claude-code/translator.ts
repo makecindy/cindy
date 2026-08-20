@@ -1825,6 +1825,8 @@ function handleResult(
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,
   // 这里先转成 turn delta; tracker.endTurn 内部覆盖 currentTurn 然后返回 snapshot 再 reset。
   finalizeClaudeGeneration(ctx.rt.generation);
+  const liveTurnOutput = resultUsage?.outputTokens ?? ctx.tracker.getTurnUsage().output;
+  const liveGeneration = ctx.rt.generation;
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -2065,7 +2067,12 @@ function handleResult(
     type: 'status',
     data: {
       status: 'Done',
-      ...endSnapshot,
+      ...attachLiveGeneration(endSnapshot, {
+        outputTokens: liveTurnOutput,
+        closedDurationMs: liveGeneration.durationMs,
+        openStartedAt: null,
+        reliable: liveGeneration.reliable,
+      }),
       isRunning: false,
     },
     source: 'claude-code',
