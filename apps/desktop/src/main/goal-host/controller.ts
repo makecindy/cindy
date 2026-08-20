@@ -371,6 +371,8 @@ function freshTurn(
 // ── 控制器 ──────────────────────────────────────────────────────────────────
 
 export class GoalController {
+  /** Once disposed at an account/process boundary, this controller can never resume work. */
+  private disposed = false;
   private readonly unsubscribers = new Map<string, () => void>();
   /**
    * 每个 goal listener 当前绑定的 SessionLike 对象引用。deferred agent switch 落实后
@@ -1459,11 +1461,14 @@ export class GoalController {
    */
   async resumeActiveGoals(): Promise<void> {
     const active = await this.deps.storage.listActive();
+    if (this.disposed) return;
     let resumed = 0;
     for (const snapshot of active) {
+      if (this.disposed) return;
       // listActive 是启动扫描快照；并发 Stop 可能已经立 cancelled boundary 或写成 paused。
       if (this.turns.has(snapshot.sessionId)) continue;
       const state = await this.deps.storage.get(snapshot.sessionId);
+      if (this.disposed) return;
       if (!state || state.status !== 'active' || this.turns.has(snapshot.sessionId)) continue;
       // 保守:只对**已经活着**的会话重挂 + 续跑;不在启动时强行 spawn agent
       //(开机就偷偷跑目标过于激进)。没活的留 dormant,等用户重发 /goal 时由
@@ -1475,6 +1480,7 @@ export class GoalController {
         });
         continue;
       }
+      if (this.disposed) return;
       this.turns.set(state.sessionId, freshTurn());
       this.attachListener(state.sessionId);
       this.emit(state);
@@ -1495,8 +1501,10 @@ export class GoalController {
     // usageLimited 行:重启后 timer 丢了,按存档的 usageResetAt 重排自动续跑
     //(已过点 → delay 0 触发;未知 resetAt → 不排,留待手动 resume)。
     const limited = await this.deps.storage.listUsageLimited();
+    if (this.disposed) return;
     let rescheduled = 0;
     for (const g of limited) {
+      if (this.disposed) return;
       if (g.usageResetAt == null) continue;
       this.scheduleUsageResume(g.sessionId, g.usageResetAt);
       rescheduled += 1;
@@ -1508,6 +1516,7 @@ export class GoalController {
 
   /** 关停所有监听 + 计时器(测试 / 进程退出)。 */
   dispose(): void {
+    this.disposed = true;
     for (const sessionId of [...this.unsubscribers.keys()]) {
       this.stopSession(sessionId);
     }
