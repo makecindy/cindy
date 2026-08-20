@@ -41,6 +41,7 @@ import { Spinner } from '@/components/ui/spinner';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { AgentActionRow } from './AgentActionRow';
 import { ThinkingCard, formatDuration } from './ThinkingCard';
@@ -168,7 +169,8 @@ function ThinkingActivityRow({
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
       className={cn(
-        'flex w-full min-w-0 gap-[6px] rounded-[6px] px-2 py-[3px] text-left outline-none',
+        'flex w-full min-w-0 gap-[6px] px-2 py-[3px] text-left outline-none',
+        ACTIVITY_ROW_RADIUS_CLASS,
         expanded ? 'items-start' : 'items-center',
         canExpand
           ? [

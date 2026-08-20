@@ -68,6 +68,7 @@ import { useChatSessionFile } from './ChatSessionFileContext';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
@@ -898,7 +899,8 @@ export function AgentActionRow({
         }
         className={cn(
           'group flex w-full items-center gap-[6px]',
-          'rounded-[6px] px-2 py-[3px]',
+          ACTIVITY_ROW_RADIUS_CLASS,
+          'px-2 py-[3px]',
           ACTIVITY_ROW_HOVER_SURFACE_CLASS,
           'transition-colors',
           'cursor-pointer select-none outline-none',

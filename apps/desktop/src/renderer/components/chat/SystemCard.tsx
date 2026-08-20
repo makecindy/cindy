@@ -32,6 +32,7 @@ import {
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
@@ -942,7 +943,8 @@ function AutoResumeActionRow({
         disabled={!canExpand}
         className={cn(
           'group flex w-full items-center gap-[6px]',
-          'rounded-[6px] px-2 py-[3px]',
+          ACTIVITY_ROW_RADIUS_CLASS,
+          'px-2 py-[3px]',
           'text-left outline-none transition-colors',
           canExpand
             ? cn(
