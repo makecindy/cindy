@@ -6,12 +6,17 @@ vi.mock('../../maker-host/custom-provider-store.js', () => ({
   updateCustomProvider: vi.fn(),
 }));
 
-import { getCustomProvider, updateCustomProvider } from '../../maker-host/custom-provider-store.js';
+import {
+  createCustomProvider,
+  getCustomProvider,
+  updateCustomProvider,
+} from '../../maker-host/custom-provider-store.js';
 import {
   buildEmptyManagedOllamaProvider,
   emptyClaudeRuntime,
   emptyCodexRuntime,
   emptyPiRuntime,
+  ensureManagedOllamaProvider,
   upsertManagedOllamaModel,
   upsertManagedOllamaModels,
 } from '../managedOllamaProvider.js';
@@ -32,6 +37,7 @@ describe('managed Ollama model identity', () => {
   beforeEach(() => {
     vi.mocked(getCustomProvider).mockReset();
     vi.mocked(updateCustomProvider).mockReset();
+    vi.mocked(createCustomProvider).mockReset();
   });
 
   it('replaces an untagged model with its :latest alias instead of duplicating', async () => {
@@ -76,5 +82,19 @@ describe('managed Ollama model identity', () => {
     );
     expect(result).toEqual({ ok: false, code: 'OWNER_CHANGED' });
     expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+
+  it('does not create a managed provider after the captured owner is gone', async () => {
+    let checks = 0;
+    vi.mocked(getCustomProvider).mockResolvedValue(null);
+    const result = await ensureManagedOllamaProvider({
+      stillActive: () => {
+        checks += 1;
+        return checks < 2;
+      },
+    });
+    expect(result).toEqual({ ok: false, code: 'OWNER_CHANGED' });
+    expect(getCustomProvider).toHaveBeenCalled();
+    expect(createCustomProvider).not.toHaveBeenCalled();
   });
 });

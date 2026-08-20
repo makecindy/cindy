@@ -69,6 +69,9 @@ import {
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
+import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
+import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
+import { migrateLocalConnectProvider } from '../../shared/localConnectHarness.js';
 import {
   setCustomProviderKeyReader,
   setOAuthTokenReader,
@@ -748,13 +751,6 @@ export async function refreshCustomProvidersIntoCatalog(
       log.info('discarded stale custom provider catalog refresh');
       return;
     }
-    const { migrateManagedOllamaProvider } = await import(
-      '../local-model-runtime/managedOllamaProvider.js'
-    );
-    const { migrateLocalConnectProvider } = await import(
-      '../../shared/localConnectHarness.js'
-    );
-    const { updateCustomProviderIfUnchanged } = await import('./custom-provider-store.js');
     const next = configs.map((config) => {
       const migrated =
         migrateManagedOllamaProvider(config) ?? migrateLocalConnectProvider(config);

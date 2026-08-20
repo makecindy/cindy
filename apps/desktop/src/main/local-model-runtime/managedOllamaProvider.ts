@@ -228,8 +228,10 @@ export async function readManagedOllamaProvider(): Promise<CustomProviderConfig 
   return fingerprintOf(existing) ? existing : null;
 }
 
-export async function ensureManagedOllamaProvider(): Promise<ManagedEnsureResult> {
-  return enqueueManaged(ensureManagedOllamaProviderUnlocked);
+export async function ensureManagedOllamaProvider(
+  opts?: ManagedOllamaWriteOpts,
+): Promise<ManagedEnsureResult> {
+  return enqueueManaged(() => ensureManagedOllamaProviderUnlocked(opts));
 }
 
 export async function upsertManagedOllamaModel(
@@ -249,7 +251,7 @@ export async function upsertManagedOllamaModels(
 ): Promise<ManagedEnsureResult> {
   return enqueueManaged(async () => {
     if (opts?.stillActive && !opts.stillActive()) return { ok: false, code: 'OWNER_CHANGED' };
-    const ensured = await ensureManagedOllamaProviderUnlocked();
+    const ensured = await ensureManagedOllamaProviderUnlocked(opts);
     if (!ensured.ok) return ensured;
     const latest = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
     if (!latest || !fingerprintOf(latest)) {
@@ -339,8 +341,16 @@ function applyModelToAgents(
   return { ...provider, runtimes };
 }
 
-async function ensureManagedOllamaProviderUnlocked(): Promise<ManagedEnsureResult> {
+function ownerChanged(opts?: ManagedOllamaWriteOpts): boolean {
+  return Boolean(opts?.stillActive && !opts.stillActive());
+}
+
+async function ensureManagedOllamaProviderUnlocked(
+  opts?: ManagedOllamaWriteOpts,
+): Promise<ManagedEnsureResult> {
+  if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
   const existing = await getCustomProvider(MANAGED_OLLAMA_PROVIDER_ID);
+  if (ownerChanged(opts)) return { ok: false, code: 'OWNER_CHANGED' };
   if (!existing) {
     try {
       const created = await createCustomProvider(buildEmptyManagedOllamaProvider());

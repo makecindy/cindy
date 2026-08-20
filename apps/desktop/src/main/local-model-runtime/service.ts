@@ -889,7 +889,9 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
       owner?: LocalModelOwnerScope | null;
       ownerStillActive?: () => boolean;
     }) => {
-      const ensured = await ensureManagedOllamaProvider();
+      const ensured = await ensureManagedOllamaProvider({
+        stillActive: opts?.ownerStillActive,
+      });
       if (ensured.ok) {
         try {
           const tags = await fetchOllamaTags(fetchImpl);
