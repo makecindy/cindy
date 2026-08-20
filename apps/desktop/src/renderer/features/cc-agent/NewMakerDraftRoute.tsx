@@ -127,7 +127,7 @@ import {
 import { showWorktreeError } from '@/lib/worktreeToast';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
-import { markSessionStarting } from '@/lib/sessionStartingStore';
+import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared } from '@/lib/sessionsBus';
 import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
@@ -3391,6 +3391,7 @@ export function NewMakerDraftRoute() {
       // (PR #1031 review P1;worktree 与 goal 两条路径各有自己的撤回点)。
       let optimisticTitleSessionId: string | null = null;
       let remoteOptimisticTitleSessionId: string | null = null;
+      let markedStartingSessionId: string | null = null;
       const autoTitleLabels = {
         image: t('ccAgent.autoTitle.image'),
         file: t('ccAgent.autoTitle.file'),
@@ -3799,6 +3800,7 @@ export function NewMakerDraftRoute() {
               updatedAt: sendAt.toISOString(),
             });
             markSessionStarting(newSession.id);
+            markedStartingSessionId = newSession.id;
             sessionService.touchUserSend(newSession.id, sendAt.getTime()).catch((err) => {
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
@@ -3844,6 +3846,8 @@ export function NewMakerDraftRoute() {
                 // 会话永久显示一句**没发出去**的话(PR #1031 review P1)。
                 // 放在这里而不是各 return 前:所有「交接失败 → 还原草稿」的分支都过这一处。
                 emitAutoTitlePreviewCleared(newSession.id);
+                // 首条没发出去:撤销发送当下的 starting,避免未开始的任务钉在运行中档。
+                clearSessionStarting(newSession.id);
               };
               try {
                 rehomedFiles = await rehomeDraftAttachments(files, newSession.id);
@@ -4053,6 +4057,7 @@ export function NewMakerDraftRoute() {
             const iso = new Date().toISOString();
             sessionsStore.patchLocal(newSession.id, { userSendAt: iso, updatedAt: iso });
             markSessionStarting(newSession.id);
+            markedStartingSessionId = newSession.id;
           }
 
           // F-COLLAB: draft 阶段开了协同模式 → createSession 之后立刻 enableOrca
@@ -4129,6 +4134,7 @@ export function NewMakerDraftRoute() {
           if (remoteOptimisticTitleSessionId) {
             remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
           }
+          if (markedStartingSessionId) clearSessionStarting(markedStartingSessionId);
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           log.error('[draft send]', err);
           toast.error(
@@ -4727,6 +4733,7 @@ export function NewMakerDraftRoute() {
           // 不撤回的话标题预览会永久盖着 DB 里的哨兵(理由同 worktree 分支的
           // restoreFirstMessageDraft)。异常照旧抛给调用方展示。
           if (optimisticGoalTitle) emitAutoTitlePreviewCleared(newSession.id);
+          clearSessionStarting(newSession.id);
           if (deferredUiAssignment) {
             toast.error(t('newChat.collaboration.assignmentFailed'));
           }

@@ -2286,7 +2286,9 @@ describe('AgentIslandService native publishing', () => {
     const meta = { sessionId: 's1', agentKind: 'codex' as const };
 
     service.handleUserPrompt(meta, 'first preview', { clientId: 'c1' });
+    playSound.mockClear();
     service.handleUserPrompt(meta, 'persist preview', { clientId: 'c1' });
+    expect(playSound).not.toHaveBeenCalled();
     service.rollbackUserPrompt(meta.sessionId, 'c1');
 
     expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);

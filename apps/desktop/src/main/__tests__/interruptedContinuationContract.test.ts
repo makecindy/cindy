@@ -246,6 +246,18 @@ describe('interrupted continuation enqueue contract', () => {
     expect(drainImmediate).toBeGreaterThan(enqueuePreview);
   });
 
+  it('rolls back Agent Island enqueue preview when the queued item is discarded, rejected, or blocked', () => {
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'discarded')",
+    );
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected')",
+    );
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked')",
+    );
+  });
+
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
     const userEnqueueStart = registerSource.indexOf('onUserEnqueue:');
     const userEnqueueEnd = registerSource.indexOf('onDiscardedQueuedMessage:', userEnqueueStart);

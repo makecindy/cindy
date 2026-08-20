@@ -11674,6 +11674,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiSessionIntervention(sessionId);
     },
     onRejectedUserTurn: (sessionId, item) => {
+      rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       // Auto-resume items have an exact-token cleanup boundary below. Keep
       // their attempt lease until that boundary can restore recovery and
       // finalize the suppressed error; releasing it here would make a later
@@ -11683,6 +11684,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
+      rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'discarded');
       discardQueuedAttachmentOwnership(sessionId, item.clientId);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
       // Auto-resume cleanup must run before generic claimed-retry release:
@@ -11732,13 +11734,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         screenGhostUserMessage(sessionId, agentFacingText),
       );
     },
-    onUserMessageBlocked: (sessionId, item, verdict) =>
+    onUserMessageBlocked: (sessionId, item, verdict) => {
+      rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked');
       broadcastGhostMessageBlocked({
         sessionId,
         clientId: item.clientId,
         text: item.text,
         ...verdict,
-      }),
+      });
+    },
     onUserMessageRewritten: (sessionId, item, info) =>
       broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info }),
     beforeDispatchUserTurn: async (sessionId, item) => {
