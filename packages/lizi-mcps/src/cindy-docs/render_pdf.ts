@@ -20,6 +20,12 @@ import type { DocsMcpSessionCtx, DocsPdfPageSize, RenderHtmlToPdfFn } from './ty
 
 /** 与设计一致的渲染硬超时。加载卡死的页面不能拖着任务不放。 */
 export const RENDER_PDF_TIMEOUT_MS = 30_000;
+/**
+ * 等 webfont 就绪的子超时。Chromium 不会自己等 @font-face,字体没加载完就打印会被
+ * 静默替换成系统字体。这里单独给一小段时间等 document.fonts.ready;等不到就照常
+ * 出片并告警,不占满总超时(字体只是"可能不对",而不是"渲染失败")。
+ */
+export const RENDER_PDF_FONT_TIMEOUT_MS = 5_000;
 /** 空/超小 PDF 的告警阈值:低于这个字节数几乎必然是白页,值得让模型自查。 */
 const SUSPICIOUS_PDF_BYTES = 2_048;
 
@@ -39,8 +45,13 @@ const DESCRIPTION = [
   'printBackground 默认 true(否则深色底、色块全部不打印)。',
   '分页控制在 HTML 里用 CSS: page-break-after / break-inside: avoid。',
   '',
-  '【自检】返回里带 bytes。PDF 只有一两 KB 通常意味着渲染出了白页 ——',
-  '这时应检查 HTML 是否真有内容、外部资源是否加载失败,重做一次,而不是直接交付。',
+  '【字体】渲染前会等 @font-face 加载完(最多 5 秒)。等不到会照常出片,但返回里',
+  'fontsReady=false —— 那说明 PDF 里的字体很可能被换成了系统默认字体。要么把字体',
+  '改成 base64 内联进 HTML,要么接受回退,别不看这个字段就交付。',
+  '',
+  '【自检】出片后**务必再调 inspect_pdf 回读一次**:整页空白的 PDF 字节数看着完全',
+  '正常,只看 bytes 判断不出来。inspect_pdf 会直接告诉你哪几页是白的、总共几页、',
+  '纸张对不对。返回里的 bytes 只能筛掉最极端的情况。',
   '',
   '【输出】outPath 必须在本任务的工作目录内。同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
 ].join('\n');
@@ -103,7 +114,7 @@ export function registerRenderPdfTool(
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
 
-        const buffer = await renderHtmlToPdf({
+        const { buffer, fontsReady } = await renderHtmlToPdf({
           ...(sourcePath ? { htmlPath: sourcePath } : { html: html! }),
           pageSize,
           landscape,
@@ -115,6 +126,7 @@ export function registerRenderPdfTool(
             right: margins?.right ?? DEFAULT_MARGIN_INCHES,
           },
           timeoutMs: RENDER_PDF_TIMEOUT_MS,
+          fontTimeoutMs: RENDER_PDF_FONT_TIMEOUT_MS,
         });
 
         if (!buffer || buffer.length === 0) {
@@ -127,17 +139,25 @@ export function registerRenderPdfTool(
         await fs.writeFile(abs, buffer);
 
         const described = await describeOutput(root, abs);
+        const warnings: string[] = [];
+        if (described.bytes < SUSPICIOUS_PDF_BYTES) {
+          warnings.push(
+            'PDF 字节数异常小,很可能渲染成了白页。用 inspect_pdf 回读确认,必要时检查 HTML 与外部资源后重做,不要直接交付。',
+          );
+        }
+        if (!fontsReady) {
+          warnings.push(
+            '等字体加载超时,PDF 里的字体可能已被换成系统默认字体。若排版对字体有要求,请把字体 base64 内联进 HTML 后重做。',
+          );
+        }
         return okPayload({
           ...described,
           format: 'pdf',
           pageSize,
           landscape,
-          ...(described.bytes < SUSPICIOUS_PDF_BYTES
-            ? {
-                warning:
-                  'PDF 字节数异常小,很可能渲染成了白页。请打开确认内容,必要时检查 HTML 与外部资源后重做,不要直接交付。',
-              }
-            : {}),
+          fontsReady,
+          nextStep: '用 inspect_pdf 回读这份 PDF,确认页数、纸张与是否有空白页,再交付。',
+          ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
         });
       } catch (err) {
         if (err instanceof DocsPathError) {

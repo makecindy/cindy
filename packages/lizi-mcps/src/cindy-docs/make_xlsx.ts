@@ -32,14 +32,69 @@ const DESCRIPTION = [
   'rows 里的每个单元格可以是字符串、数字、布尔或 null(留空)。',
   '数字请传数字类型而不是字符串,否则 Excel 里不能参与求和。',
   '',
+  '【公式】要写公式就传 { formula, result },例如',
+  '{ "formula": "SUM(B2:B4)", "result": 3060 }。',
+  '**result(算好的值)必填**:xlsx 文件本身不存公式的计算结果,少了它,用户在',
+  'Excel 里点开重算之前那一格是空的,预览、Numbers 和各种解析库也全读到空值。',
+  '你既然写得出这个公式,就把结果一并算出来填上。',
+  '',
   '【输出】outPath 必须在本任务的工作目录内。目录不存在会自动创建;',
   '同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
 ].join('\n');
 
-const CellSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+/**
+ * 公式单元格。**result 是刻意必填的**:xlsx 只存公式文本,不存值 —— 缓存值要写文件
+ * 的人自己填。少了它,Excel/WPS 打开重算前那一格是空的,而 Numbers、预览、大多数
+ * 解析库(含本工具的 read_sheet)直接读到 null。业界绕这个坑的常见做法是「写完再拿
+ * LibreOffice 重算一遍」,那等于给文档功能绑一个系统级依赖 —— 我们不走那条路,
+ * 改成让调用方把算好的值一起给过来。模型本来就知道这个数,写下来是零成本的。
+ */
+const FormulaCellSchema = z.object({
+  formula: z
+    .string()
+    .min(1)
+    .describe('Excel 公式,不带开头的等号,如 "SUM(B2:B10)"。'),
+  result: z
+    .union([z.string(), z.number(), z.boolean(), z.null()])
+    .describe('公式的计算结果(缓存值)。必填 —— 没有它,打开文件重算前这格是空的。'),
+});
+
+const CellSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  FormulaCellSchema,
+]);
+
+type FormulaCell = z.infer<typeof FormulaCellSchema>;
+
+function isFormulaCell(value: unknown): value is FormulaCell {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { formula?: unknown }).formula === 'string'
+  );
+}
+
+/** 公式文本允许带或不带前导 '='(模型两种都会写),统一剥掉再交给 exceljs。 */
+function normalizeFormula(formula: string): string {
+  return formula.startsWith('=') ? formula.slice(1) : formula;
+}
+
+/** 落到 exceljs 的实际单元格值。公式格走 { formula, result } 形态(原生支持缓存值)。 */
+function toExcelValue(cell: unknown): unknown {
+  if (isFormulaCell(cell)) {
+    return { formula: normalizeFormula(cell.formula), result: cell.result ?? undefined };
+  }
+  return cell === null ? null : cell;
+}
 
 function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';
+  // 列宽按「用户会看到的东西」估:公式格显示的是结果,不是公式文本。
+  if (isFormulaCell(value)) return value.result === null ? '' : String(value.result);
   return String(value);
 }
 
@@ -133,7 +188,7 @@ export function registerMakeXlsxTool(
             ws.views = [{ state: 'frozen', ySplit: 1 }];
           }
           for (const row of sheet.rows) {
-            ws.addRow(row.map((cell) => (cell === null ? null : cell)));
+            ws.addRow(row.map(toExcelValue));
           }
 
           const columnCount = Math.max(

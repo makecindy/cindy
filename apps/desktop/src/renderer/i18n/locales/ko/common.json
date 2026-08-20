@@ -2948,7 +2948,7 @@
         },
         "docs": {
           "name": "문서 공방",
-          "description": "내용을 실제 파일로 — PDF / Word / Excel / PowerPoint 생성과 기존 스프레드시트 읽기"
+          "description": "내용을 실제 파일로 — PDF·Word·Excel·PowerPoint 생성과 결과 확인용 읽기. 추가 소프트웨어 설치가 필요 없습니다."
         },
         "xdt_helper": {
           "name": "Cindy Helper",

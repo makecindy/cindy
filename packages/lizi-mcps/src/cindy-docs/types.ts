@@ -38,26 +38,77 @@ export interface DocsPdfRenderInput {
   landscape: boolean;
   printBackground: boolean;
   margins: DocsPdfMargins;
-  /** 单次渲染的硬超时(含建窗、加载与 printToPDF)。 */
+  /** 单次渲染的硬超时(含建窗、加载、字体等待与 printToPDF)。 */
   timeoutMs: number;
+  /**
+   * 等 webfont 就绪的子超时。Chromium **不会**自己等 @font-face 加载完再打印,
+   * 字体没就位就静默回退到系统字体 —— 这是「我指定的字体没生效」的头号成因。
+   * 超过这个时间就照常渲染,并在结果里把 fontsReady 置 false 告警,不拖满总超时。
+   */
+  fontTimeoutMs: number;
+}
+
+/** 渲染结果:PDF 字节 + 字体是否在打印前真的就绪。 */
+export interface DocsPdfRenderOutput {
+  buffer: Buffer;
+  /**
+   * false = 等 document.fonts.ready 超时或探测失败,这份 PDF 里的字体可能被
+   * Chromium 换成了系统默认字体。工具层据此给出可执行的告警。
+   */
+  fontsReady: boolean;
 }
 
 /**
- * HTML → PDF 渲染回调。返回 PDF 字节;失败必须 throw(工具层统一翻成
- * RENDER_FAILED / RENDER_TIMEOUT)。host 侧实现见
+ * HTML → PDF 渲染回调。失败必须 throw(工具层统一翻成 RENDER_FAILED /
+ * RENDER_TIMEOUT)。host 侧实现见
  * apps/desktop/src/main/doc-tools/htmlPdfRenderer.ts。
  */
-export type RenderHtmlToPdfFn = (input: DocsPdfRenderInput) => Promise<Buffer>;
+export type RenderHtmlToPdfFn = (input: DocsPdfRenderInput) => Promise<DocsPdfRenderOutput>;
+
+/** 单页结构快照。宽高单位是 PDF point(1/72 英寸)。 */
+export interface DocsPdfPageInspection {
+  page: number;
+  width: number;
+  height: number;
+  rotation: number;
+  textChars: number;
+  textPreview: string;
+  /** null = 算子表读取失败,不参与空白判定。 */
+  drawOps: number | null;
+  imageOps: number | null;
+  blank: boolean;
+}
+
+export interface DocsPdfInspection {
+  numPages: number;
+  pagesInspected: number;
+  pages: DocsPdfPageInspection[];
+}
+
+/**
+ * 读 PDF 结构的 host 回调。与 renderHtmlToPdf 同理由外置:桌面宿主把 pdfjs 放在
+ * 一次性 utility process 里跑(正式包关闭 RunAsNode,且解析不可信 PDF 不该在
+ * Electron main 里进行),那条链路依赖 electron.utilityProcess,本包不能碰。
+ */
+export type InspectPdfFn = (input: {
+  data: Uint8Array;
+  /** 1 起的页码;空数组 = 从头顺序取 maxPages 页。 */
+  pages: number[];
+  maxPages: number;
+  previewChars: number;
+  timeoutMs: number;
+}) => Promise<DocsPdfInspection>;
 
 /**
  * cindy_docs MCP server 工厂参数。
  *
- * renderHtmlToPdf 缺省 = host 没接渲染能力(如纯 Node 宿主复用本包)→ render_pdf
- * 工具不注册,与 memory 的 session_search / contacts 的系统通讯录同模式:能力不
- * 具备就不出现在 list_tools 里,而不是注册了再运行期报错。
+ * renderHtmlToPdf / inspectPdf 缺省 = host 没接该能力(如纯 Node 宿主复用本包)→
+ * 对应工具不注册,与 memory 的 session_search / contacts 的系统通讯录同模式:
+ * 能力不具备就不出现在 list_tools 里,而不是注册了再运行期报错。
  */
 export interface DocsMcpDeps {
   renderHtmlToPdf?: RenderHtmlToPdfFn;
+  inspectPdf?: InspectPdfFn;
   logger?: LiziMcpLogger;
 }
 

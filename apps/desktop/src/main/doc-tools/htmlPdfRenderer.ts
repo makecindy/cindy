@@ -39,7 +39,11 @@ import path from 'node:path';
 
 import { BrowserWindow, app } from 'electron';
 
-import type { DocsPdfRenderInput } from '@cindy/mcps';
+import type {
+  DocsPdfRenderInput,
+  DocsPdfRenderOutput,
+  RenderHtmlToPdfFn,
+} from '@cindy/mcps';
 
 import { createLogger } from '../logger.js';
 
@@ -134,8 +138,41 @@ function lockNavigation(win: BrowserWindow): void {
   });
 }
 
+/**
+ * 等页面的 webfont 全部就绪。
+ *
+ * 为什么必须显式等:Chromium **不会**在打印前自己等 `@font-face` 下载完 —— 字体还没
+ * 到位就排版,会静默回退到系统默认字体。这是「我指定的字体在 PDF 里没生效」最常见的
+ * 原因,而且它不报任何错,只能靠等。
+ *
+ * `document.fonts.ready` 是标准 FontFaceSet API,在没有 preload 的 sandbox 窗口里
+ * 同样可用:`executeJavaScript` 由主进程发起、在页面主世界求值,不依赖任何页面桥。
+ *
+ * 单独给一个小超时(而不是拖满总超时):字体等不到只是"排版可能不是你要的",
+ * 不是"渲染失败" —— 该出片还得出片,只是把 fontsReady=false 带回去让上层告警。
+ */
+async function waitForFonts(win: BrowserWindow, timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const ready = win.webContents.executeJavaScript(
+      'document.fonts.ready.then(() => true)',
+    );
+    const timeout = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    return (await Promise.race([ready, timeout])) === true;
+  } catch (err) {
+    // 页面没有 document.fonts(极老的内容)或求值被拒:按"没等到"处理,继续渲染。
+    log.warn('font readiness probe failed', err);
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 interface RenderAttemptResult {
   buffer: Buffer;
+  fontsReady: boolean;
 }
 
 async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResult> {
@@ -148,7 +185,7 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
     const target = win;
     lockNavigation(target);
 
-    const work = (async (): Promise<Buffer> => {
+    const work = (async (): Promise<RenderAttemptResult> => {
       // 加载失败与 Renderer 崩溃都要把这次渲染判死,否则 printToPDF 会在一个空白
       // 或已死的 webContents 上返回一份「合法但全白」的 PDF —— 那正是最坏的结果:
       // 用户拿到一个看着像成功的坏文件。
@@ -165,6 +202,12 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
       });
 
       await Promise.race([target.loadFile(source.fileUrlPath), failure]);
+      // 顺序是硬要求:加载完成 → 等字体就绪 → 才允许 printToPDF。
+      // 提前打印会拿到字体回退后的排版,而且不会有任何报错。
+      const fontsReady = await Promise.race([
+        waitForFonts(target, input.fontTimeoutMs),
+        failure,
+      ]);
       const pdf = await Promise.race([
         target.webContents.printToPDF({
           landscape: input.landscape,
@@ -180,7 +223,10 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
         }),
         failure,
       ]);
-      return Buffer.isBuffer(pdf) ? pdf : Buffer.from(pdf as Uint8Array);
+      return {
+        buffer: Buffer.isBuffer(pdf) ? pdf : Buffer.from(pdf as Uint8Array),
+        fontsReady,
+      };
     })();
 
     const timeout = new Promise<never>((_resolve, reject) => {
@@ -189,8 +235,7 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
       }, input.timeoutMs);
     });
 
-    const buffer = await Promise.race([work, timeout]);
-    return { buffer };
+    return await Promise.race([work, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
     // 即用即毁。超时路径下 work 那条 promise 可能还挂在加载上,destroy 会把它一起
@@ -215,12 +260,11 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
  * HTML → PDF。串行执行(同刻 1 个渲染窗),失败抛错由 MCP 工具层翻成
  * RENDER_TIMEOUT / RENDER_FAILED。
  */
-export function renderHtmlToPdf(input: DocsPdfRenderInput): Promise<Buffer> {
-  const start = async (): Promise<Buffer> => {
+export const renderHtmlToPdf: RenderHtmlToPdfFn = (input) => {
+  const start = async (): Promise<DocsPdfRenderOutput> => {
     activeRenders += 1;
     try {
-      const { buffer } = await renderOnce(input);
-      return buffer;
+      return await renderOnce(input);
     } finally {
       activeRenders -= 1;
     }
@@ -231,4 +275,4 @@ export function renderHtmlToPdf(input: DocsPdfRenderInput): Promise<Buffer> {
   // 这条内部链会变成一个没人处理的 rejection。
   renderChain = run.catch(() => undefined);
   return run;
-}
+};

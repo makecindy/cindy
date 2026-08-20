@@ -9,26 +9,15 @@ export { registerMakeDocxTool } from './make_docx.js';
 export { registerMakePptxTool, PPTX_THEMES, isSupportedPptxImage } from './make_pptx.js';
 export { registerMakeXlsxTool } from './make_xlsx.js';
 export { registerReadSheetTool } from './read_sheet.js';
-export { registerRenderPdfTool, RENDER_PDF_TIMEOUT_MS } from './render_pdf.js';
 export {
-  registerOfficeToPdfTool,
-  OFFICE_CONVERT_TIMEOUT_MS,
-  type OfficeToPdfToolOptions,
-} from './office_to_pdf.js';
+  registerRenderPdfTool,
+  RENDER_PDF_TIMEOUT_MS,
+  RENDER_PDF_FONT_TIMEOUT_MS,
+} from './render_pdf.js';
+export { registerInspectPdfTool, INSPECT_PDF_TIMEOUT_MS } from './inspect_pdf.js';
 
 export { markdownToDocxBuffer, type MarkdownToDocxOptions } from './markdownToDocx.js';
 export { parseDelimited, delimiterForExtension, type ParseDelimitedOptions } from './csv.js';
-export {
-  findSoffice,
-  installHintForPlatform,
-  runSofficeConvert,
-  OFFICE_INPUT_EXTENSIONS,
-  SOFFICE_INSTALL_HINT,
-  __resetSofficeCache,
-  type SofficeConvertOptions,
-  type SofficeLookupOptions,
-} from './soffice.js';
-
 export {
   DocsPathError,
   describeOutput,
@@ -41,8 +30,12 @@ export { okPayload, errorPayload, type DocsPayloadResult } from './_payload.js';
 export type {
   DocsMcpDeps,
   DocsMcpSessionCtx,
+  DocsPdfInspection,
   DocsPdfMargins,
+  DocsPdfPageInspection,
   DocsPdfPageSize,
   DocsPdfRenderInput,
+  DocsPdfRenderOutput,
+  InspectPdfFn,
   RenderHtmlToPdfFn,
 } from './types.js';

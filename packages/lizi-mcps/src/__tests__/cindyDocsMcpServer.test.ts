@@ -2,14 +2,17 @@
  * cindy_docs MCP server 测试:真 McpServer + InMemoryTransport,真文件往返。
  *
  * 覆盖:
- *  - list_tools 渐进披露(类目概览 / 按类目列表)
- *  - render_pdf 的注册门(host 没注入渲染回调时工具不出现)
+ *  - list_tools 渐进披露(类目概览 / 按类目列表)与工具面收敛后的全量工具名
+ *  - render_pdf / inspect_pdf 的注册门(host 没注入对应回调时工具不出现)
+ *  - office_to_pdf 已彻底下线(裁决:不保留任何依赖系统级 LibreOffice 的路径)
  *  - make_docx / make_pptx / make_xlsx 的真文件产出(解包断言 XML / exceljs 读回)
+ *  - make_xlsx 的公式纪律:公式文本 + 缓存值一起落盘,回读拿到算好的值而不是 null
  *  - read_sheet 的 xlsx / csv / tsv 与截断标注
+ *  - inspect_pdf 的判读结论(纸张名 / 空白页 / verdict)与失败归类
  *  - 路径边界:.. 穿越、绝对路径越界、symlink 逃逸
  *  - overwrite 语义
  *  - 无 workingDir 时 fail closed
- *  - render_pdf 的空产物 / 超时归类
+ *  - render_pdf 的空产物 / 超时归类 / fontsReady 透传
  */
 
 import { promises as fs } from 'node:fs';
@@ -24,7 +27,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
 import { isSupportedPptxImage, PPTX_THEMES } from '../cindy-docs/make_pptx.js';
-import type { DocsMcpDeps, DocsMcpSessionCtx, DocsPdfRenderInput } from '../cindy-docs/types.js';
+import type {
+  DocsMcpDeps,
+  DocsMcpSessionCtx,
+  DocsPdfInspection,
+  DocsPdfPageInspection,
+  DocsPdfRenderInput,
+} from '../cindy-docs/types.js';
 
 let workdir: string;
 const created: string[] = [];
@@ -88,12 +97,43 @@ describe('cindy_docs 入口工具', () => {
   });
 
   it('list_tools 不传 category 返回三个类目', async () => {
-    const client = await connect({ renderHtmlToPdf: async () => Buffer.from('%PDF-') });
+    const client = await connect({
+      renderHtmlToPdf: async () => ({ buffer: Buffer.from('%PDF-'), fontsReady: true }),
+      inspectPdf: async () => ({ numPages: 1, pagesInspected: 0, pages: [] }),
+    });
     const result = payload(await client.callTool({ name: 'list_tools', arguments: {} }));
     const categories = (result.categories as Array<{ name: string; tool_count: number }>);
     expect(categories.map((c) => c.name).sort()).toEqual(['author', 'convert', 'read']);
     expect(categories.find((c) => c.name === 'author')?.tool_count).toBe(3);
-    expect(categories.find((c) => c.name === 'convert')?.tool_count).toBe(2);
+    // 工具面收成 5 个:convert 只剩 render_pdf(office_to_pdf 已按裁决整体删除 ——
+    // 不保留任何依赖系统级 LibreOffice 的路径)。
+    expect(categories.find((c) => c.name === 'convert')?.tool_count).toBe(1);
+    expect(categories.find((c) => c.name === 'read')?.tool_count).toBe(2);
+    const all = (
+      await Promise.all(
+        (['author', 'convert', 'read'] as const).map(async (category) =>
+          payload(await client.callTool({ name: 'list_tools', arguments: { category } })),
+        ),
+      )
+    ).flatMap((r) => (r.tools as Array<{ name: string }>).map((t) => t.name));
+    expect(all.sort()).toEqual([
+      'inspect_pdf',
+      'make_docx',
+      'make_pptx',
+      'make_xlsx',
+      'read_sheet',
+      'render_pdf',
+    ]);
+  });
+
+  it('office_to_pdf 已彻底下线,连工具名都不存在', async () => {
+    const client = await connect({
+      renderHtmlToPdf: async () => ({ buffer: Buffer.from('%PDF-'), fontsReady: true }),
+      inspectPdf: async () => ({ numPages: 1, pagesInspected: 0, pages: [] }),
+    });
+    const called = await callTool(client, 'office_to_pdf', { path: 'a.docx', outPath: 'a.pdf' });
+    expect(called.errorCode).toBe('UNKNOWN_TOOL');
+    expect((called.data as { available: string[] }).available).not.toContain('office_to_pdf');
   });
 
   it('host 没注入渲染回调时 render_pdf 不注册', async () => {
@@ -102,7 +142,7 @@ describe('cindy_docs 入口工具', () => {
       await client.callTool({ name: 'list_tools', arguments: { category: 'convert' } }),
     );
     const names = (result.tools as Array<{ name: string }>).map((t) => t.name);
-    expect(names).toEqual(['office_to_pdf']);
+    expect(names).toEqual([]);
 
     const called = await callTool(client, 'render_pdf', { html: '<p>x</p>', outPath: 'a.pdf' });
     expect(called.errorCode).toBe('UNKNOWN_TOOL');
@@ -265,6 +305,64 @@ describe('make_xlsx', () => {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(result.path as string);
     expect(wb.worksheets.map((w) => w.name)).toEqual(['a_b_c', 'a_b_c_2']);
+  });
+
+  // 公式纪律:xlsx 只存公式文本,不存值。缓存值(result)必须一起写进去,否则
+  // Excel 重算之前那格是空的,而 read_sheet / 预览 / Numbers 直接读到 null。
+  // 这是「不引入 LibreOffice 重算」这条裁决的零依赖等价物,必须被测试钉死。
+  it('公式单元格连同缓存值一起落盘,回读拿到的是算好的值而不是空', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_xlsx', {
+      sheets: [
+        {
+          name: '汇总',
+          header: ['区域', '收入'],
+          rows: [
+            ['华东', 1200],
+            ['华南', 860],
+            ['合计', { formula: 'SUM(B2:B3)', result: 2060 }],
+            // 模型经常带上等号,两种写法都要能落对。
+            ['均值', { formula: '=AVERAGE(B2:B3)', result: 1030 }],
+            ['备注', { formula: 'IF(B4>2000,"达标","未达标")', result: '达标' }],
+          ],
+        },
+      ],
+      outPath: 'formula.xlsx',
+    });
+    expect(result.ok).toBe(true);
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(result.path as string);
+    const ws = wb.getWorksheet('汇总')!;
+
+    const sum = ws.getRow(4).getCell(2).value as { formula: string; result: number };
+    expect(sum.formula).toBe('SUM(B2:B3)');
+    expect(sum.result).toBe(2060);
+
+    // 前导等号被剥掉:xlsx 里存的公式本来就不带 '='。
+    const avg = ws.getRow(5).getCell(2).value as { formula: string; result: number };
+    expect(avg.formula).toBe('AVERAGE(B2:B3)');
+    expect(avg.result).toBe(1030);
+
+    const text = ws.getRow(6).getCell(2).value as { formula: string; result: string };
+    expect(text.result).toBe('达标');
+
+    // 而且 read_sheet 回读时看到的是缓存值,不是公式文本、更不是 null ——
+    // 这正是「不靠 LibreOffice 重算」要保住的那个性质。
+    const readBack = await callTool(client, 'read_sheet', { path: 'formula.xlsx' });
+    const rows = readBack.rows as unknown[][];
+    expect(rows[3]![1]).toBe(2060);
+    expect(rows[4]![1]).toBe(1030);
+    expect(rows[5]![1]).toBe('达标');
+  });
+
+  it('公式缺 result 直接判参数错,不给"打开才发现是空格"的机会', async () => {
+    const client = await connect();
+    const bad = await callTool(client, 'make_xlsx', {
+      sheets: [{ name: 'S', rows: [[{ formula: 'SUM(A1:A2)' }]] }],
+      outPath: 'bad.xlsx',
+    });
+    expect(bad.errorCode).toBe('INVALID_ARGS');
   });
 });
 
@@ -495,7 +593,7 @@ describe('render_pdf', () => {
     const client = await connect({
       renderHtmlToPdf: async (input) => {
         seen.push(input);
-        return pdfBytes;
+        return { buffer: pdfBytes, fontsReady: true };
       },
     });
     const result = await callTool(client, 'render_pdf', {
@@ -516,6 +614,7 @@ describe('render_pdf', () => {
       printBackground: true,
       margins: { top: 1, bottom: 1, left: 0.5, right: 0.5 },
       timeoutMs: 30_000,
+      fontTimeoutMs: 5_000,
     });
   });
 
@@ -525,7 +624,7 @@ describe('render_pdf', () => {
     const client = await connect({
       renderHtmlToPdf: async (input) => {
         seen.push(input);
-        return pdfBytes;
+        return { buffer: pdfBytes, fontsReady: true };
       },
     });
     const result = await callTool(client, 'render_pdf', {
@@ -537,7 +636,9 @@ describe('render_pdf', () => {
   });
 
   it('htmlPath 与 html 必须二选一', async () => {
-    const client = await connect({ renderHtmlToPdf: async () => pdfBytes });
+    const client = await connect({
+      renderHtmlToPdf: async () => ({ buffer: pdfBytes, fontsReady: true }),
+    });
     expect((await callTool(client, 'render_pdf', { outPath: 'a.pdf' })).errorCode).toBe(
       'INVALID_ARGS',
     );
@@ -553,12 +654,16 @@ describe('render_pdf', () => {
   });
 
   it('空产物报 RENDER_EMPTY,超小产物带回验告警', async () => {
-    const empty = await connect({ renderHtmlToPdf: async () => Buffer.alloc(0) });
+    const empty = await connect({
+      renderHtmlToPdf: async () => ({ buffer: Buffer.alloc(0), fontsReady: true }),
+    });
     expect((await callTool(empty, 'render_pdf', { html: '<p/>', outPath: 'a.pdf' })).errorCode).toBe(
       'RENDER_EMPTY',
     );
 
-    const tiny = await connect({ renderHtmlToPdf: async () => Buffer.from('%PDF-1.7') });
+    const tiny = await connect({
+      renderHtmlToPdf: async () => ({ buffer: Buffer.from('%PDF-1.7'), fontsReady: true }),
+    });
     const result = await callTool(tiny, 'render_pdf', { html: '<p/>', outPath: 'b.pdf' });
     expect(result.ok).toBe(true);
     expect(result.warning).toContain('白页');
@@ -591,6 +696,137 @@ describe('render_pdf', () => {
     });
     await callTool(client, 'render_pdf', { html: '<p/>', outPath: 'a.pdf' });
     await expect(fs.stat(path.join(workdir, 'a.pdf'))).rejects.toThrow();
+  });
+});
+
+describe('inspect_pdf', () => {
+  const page = (over: Partial<DocsPdfPageInspection> = {}): DocsPdfPageInspection => ({
+    page: 1,
+    width: 595.28,
+    height: 841.89,
+    rotation: 0,
+    textChars: 120,
+    textPreview: '季度经营回顾',
+    drawOps: 42,
+    imageOps: 1,
+    blank: false,
+    ...over,
+  });
+
+  async function withPdf(
+    inspection: DocsPdfInspection,
+    bytes = Buffer.from(`%PDF-1.7\n${'x'.repeat(5000)}`),
+  ) {
+    const client = await connect({ inspectPdf: async () => inspection });
+    await fs.writeFile(path.join(workdir, 'out.pdf'), bytes);
+    return client;
+  }
+
+  it('把结构翻译成可判读的结论:纸张名 + 空白页 + verdict', async () => {
+    const client = await withPdf({
+      numPages: 2,
+      pagesInspected: 2,
+      pages: [page(), page({ page: 2, textChars: 0, drawOps: 0, imageOps: 0, blank: true })],
+    });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.ok).toBe(true);
+    expect(result.numPages).toBe(2);
+    expect(result.blankPages).toEqual([2]);
+    expect(result.verdict).toBe('partial-blank');
+    expect(result.warning).toContain('第 2 页');
+    const pages = result.pages as Array<Record<string, unknown>>;
+    expect(pages[0]!.paper).toBe('A4');
+  });
+
+  it('整份全空白给出"不能交付"的结论', async () => {
+    const client = await withPdf({
+      numPages: 1,
+      pagesInspected: 1,
+      pages: [page({ textChars: 0, drawOps: 0, imageOps: 0, blank: true })],
+    });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.verdict).toBe('blank');
+    expect(result.warning).toContain('不能交付');
+  });
+
+  it('全部正常时 verdict=ok 且没有告警', async () => {
+    const client = await withPdf({ numPages: 1, pagesInspected: 1, pages: [page()] });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.verdict).toBe('ok');
+    expect(result.warning).toBeUndefined();
+    expect(result.blankPages).toEqual([]);
+  });
+
+  it('横向与非标准纸张都翻译成人能对照的说法', async () => {
+    const client = await withPdf({
+      numPages: 2,
+      pagesInspected: 2,
+      pages: [
+        page({ width: 841.89, height: 595.28 }),
+        page({ page: 2, width: 300, height: 300 }),
+      ],
+    });
+    const pages = (await callTool(client, 'inspect_pdf', { path: 'out.pdf' })).pages as Array<
+      Record<string, unknown>
+    >;
+    expect(pages[0]!.paper).toBe('A4 landscape');
+    expect(pages[1]!.paper).toBe('4.17×4.17 in');
+  });
+
+  it('页码与上限原样透传给 host', async () => {
+    const seen: unknown[] = [];
+    const client = await connect({
+      inspectPdf: async (input) => {
+        seen.push(input);
+        return { numPages: 9, pagesInspected: 0, pages: [] };
+      },
+    });
+    await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from('%PDF-1.7 body'));
+    await callTool(client, 'inspect_pdf', { path: 'out.pdf', pages: [1, 5], maxPages: 3 });
+    expect(seen[0]).toMatchObject({ pages: [1, 5], maxPages: 3, timeoutMs: 15_000 });
+  });
+
+  it('0 字节的 PDF 直接判定生成失败', async () => {
+    const client = await withPdf(
+      { numPages: 0, pagesInspected: 0, pages: [] },
+      Buffer.alloc(0),
+    );
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.errorCode).toBe('EMPTY_FILE');
+  });
+
+  it('非 pdf 扩展名与越界路径都被拒', async () => {
+    const client = await connect({
+      inspectPdf: async () => ({ numPages: 0, pagesInspected: 0, pages: [] }),
+    });
+    await fs.writeFile(path.join(workdir, 'a.txt'), 'x');
+    expect((await callTool(client, 'inspect_pdf', { path: 'a.txt' })).errorCode).toBe(
+      'UNSUPPORTED_FORMAT',
+    );
+    expect((await callTool(client, 'inspect_pdf', { path: '../x.pdf' })).errorCode).toBe(
+      'PATH_NOT_ALLOWED',
+    );
+  });
+
+  it('解析超时与解析失败分开归类', async () => {
+    await fs.writeFile(path.join(workdir, 'out.pdf'), Buffer.from('%PDF-1.7 body'));
+    const timeout = await connect({
+      inspectPdf: async () => {
+        throw new Error('PDF extraction timed out in the isolated process');
+      },
+    });
+    expect((await callTool(timeout, 'inspect_pdf', { path: 'out.pdf' })).errorCode).toBe(
+      'INSPECT_TIMEOUT',
+    );
+
+    const broken = await connect({
+      inspectPdf: async () => {
+        throw new Error('InvalidPDFException');
+      },
+    });
+    const failed = await callTool(broken, 'inspect_pdf', { path: 'out.pdf' });
+    expect(failed.errorCode).toBe('INSPECT_FAILED');
+    expect((failed.data as Record<string, string>).hint).toContain('重做');
   });
 });
 

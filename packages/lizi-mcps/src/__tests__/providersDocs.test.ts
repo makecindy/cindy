@@ -83,8 +83,11 @@ describe('createLiziMcpProviders — cindy_docs', () => {
     expect(getSessionContext).toHaveBeenCalled();
   });
 
-  it('render_pdf 的注册取决于 host 是否注入了渲染回调', async () => {
-    async function toolNames(deps: Parameters<typeof createLiziMcpProviders>[0]['docs']) {
+  it('render_pdf / inspect_pdf 的注册取决于 host 是否注入了对应回调', async () => {
+    async function toolNames(
+      deps: Parameters<typeof createLiziMcpProviders>[0]['docs'],
+      category: 'convert' | 'read' = 'convert',
+    ) {
       const provider = createLiziMcpProviders({ docs: deps }).find(
         (p) => p.name === 'cindy_docs',
       )!;
@@ -96,7 +99,7 @@ describe('createLiziMcpProviders — cindy_docs', () => {
       await Promise.all([config.instance.connect(serverTx), client.connect(clientTx)]);
       const result = await client.callTool({
         name: 'list_tools',
-        arguments: { category: 'convert' },
+        arguments: { category },
       });
       const body = JSON.parse(
         (result as { content: Array<{ text: string }> }).content[0]!.text,
@@ -104,10 +107,20 @@ describe('createLiziMcpProviders — cindy_docs', () => {
       return body.tools.map((t) => t.name).sort();
     }
 
-    expect(await toolNames({})).toEqual(['office_to_pdf']);
-    expect(await toolNames({ renderHtmlToPdf: async () => Buffer.alloc(0) })).toEqual([
-      'office_to_pdf',
-      'render_pdf',
-    ]);
+    expect(await toolNames({})).toEqual([]);
+    expect(
+      await toolNames({
+        renderHtmlToPdf: async () => ({ buffer: Buffer.alloc(0), fontsReady: true }),
+      }),
+    ).toEqual(['render_pdf']);
+
+    // read 类目:read_sheet 恒在(纯 JS),inspect_pdf 要 host 注入 pdfjs 通道。
+    expect(await toolNames({}, 'read')).toEqual(['read_sheet']);
+    expect(
+      await toolNames(
+        { inspectPdf: async () => ({ numPages: 0, pagesInspected: 0, pages: [] }) },
+        'read',
+      ),
+    ).toEqual(['inspect_pdf', 'read_sheet']);
   });
 });

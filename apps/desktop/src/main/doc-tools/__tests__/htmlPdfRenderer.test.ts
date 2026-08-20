@@ -26,7 +26,15 @@ interface FakeWindowOptions {
 class FakeWebContents extends EventEmitter {
   windowOpenHandler: ((details: unknown) => unknown) | undefined;
 
-  printToPDF = vi.fn(async (_opts: unknown) => FakeBrowserWindow.pdfResult());
+  printToPDF = vi.fn(async (_opts: unknown) => {
+    FakeBrowserWindow.calls.push('printToPDF');
+    return FakeBrowserWindow.pdfResult();
+  });
+
+  executeJavaScript = vi.fn(async (script: string) => {
+    FakeBrowserWindow.calls.push(`executeJavaScript:${script}`);
+    return FakeBrowserWindow.fontsBehavior();
+  });
 
   setWindowOpenHandler(handler: (details: unknown) => unknown): void {
     this.windowOpenHandler = handler;
@@ -35,7 +43,10 @@ class FakeWebContents extends EventEmitter {
 
 class FakeBrowserWindow extends EventEmitter {
   static instances: FakeBrowserWindow[] = [];
+  /** 调用顺序流水,用来断言「加载 → 等字体 → 打印」这条硬顺序。 */
+  static calls: string[] = [];
   static pdfResult: () => Promise<Buffer> | Buffer = () => Buffer.from('%PDF-ok');
+  static fontsBehavior: () => Promise<unknown> | unknown = () => true;
   static loadBehavior: (win: FakeBrowserWindow, file: string) => Promise<void> = async () => {};
 
   readonly webContents = new FakeWebContents();
@@ -52,6 +63,7 @@ class FakeBrowserWindow extends EventEmitter {
 
   async loadFile(file: string): Promise<void> {
     this.loadedFile = file;
+    FakeBrowserWindow.calls.push('loadFile');
     await FakeBrowserWindow.loadBehavior(this, file);
   }
 
@@ -94,12 +106,15 @@ const BASE_INPUT = {
   printBackground: true,
   margins: { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 },
   timeoutMs: 30_000,
+  fontTimeoutMs: 5_000,
 };
 
 beforeEach(async () => {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-renderer-'));
   FakeBrowserWindow.instances = [];
+  FakeBrowserWindow.calls = [];
   FakeBrowserWindow.pdfResult = () => Buffer.from('%PDF-ok');
+  FakeBrowserWindow.fontsBehavior = () => true;
   FakeBrowserWindow.loadBehavior = async () => {};
 });
 
@@ -155,8 +170,8 @@ describe('渲染主流程', () => {
     FakeBrowserWindow.loadBehavior = async (_win, file) => {
       loadedContent = await fs.readFile(file, 'utf-8');
     };
-    const pdf = await renderHtmlToPdf({ ...BASE_INPUT, html: '<h1>hello</h1>' });
-    expect(pdf.toString()).toBe('%PDF-ok');
+    const { buffer } = await renderHtmlToPdf({ ...BASE_INPUT, html: '<h1>hello</h1>' });
+    expect(buffer.toString()).toBe('%PDF-ok');
     expect(loadedContent).toBe('<h1>hello</h1>');
 
     const tempFile = FakeBrowserWindow.instances[0]!.loadedFile!;
@@ -199,6 +214,66 @@ describe('渲染主流程', () => {
     await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>2</p>' });
     expect(FakeBrowserWindow.instances).toHaveLength(2);
     expect(FakeBrowserWindow.instances[0]).not.toBe(FakeBrowserWindow.instances[1]);
+  });
+});
+
+// Chromium 不会自己等 @font-face —— 字体没加载完就打印会被静默换成系统字体,
+// 而且不报任何错。这组用例把「加载 → 等字体 → 打印」的顺序和超时降级钉死。
+describe('字体就绪等待', () => {
+  it('顺序硬约束:加载完成 → 等 document.fonts.ready → 才打印', async () => {
+    const { fontsReady } = await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>x</p>' });
+    expect(fontsReady).toBe(true);
+    expect(FakeBrowserWindow.calls).toEqual([
+      'loadFile',
+      'executeJavaScript:document.fonts.ready.then(() => true)',
+      'printToPDF',
+    ]);
+  });
+
+  it('等字体超时时照常出片,但把 fontsReady=false 带回去', async () => {
+    FakeBrowserWindow.fontsBehavior = () =>
+      new Promise(() => {
+        /* 永不 resolve:字体一直加载不完 */
+      });
+    const started = Date.now();
+    const { buffer, fontsReady } = await renderHtmlToPdf({
+      ...BASE_INPUT,
+      html: '<p>x</p>',
+      fontTimeoutMs: 60,
+    });
+    // 关键:字体等不到不能拖满总超时,也不能让整次渲染失败。
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(buffer.toString()).toBe('%PDF-ok');
+    expect(fontsReady).toBe(false);
+    expect(FakeBrowserWindow.calls).toContain('printToPDF');
+  });
+
+  it('页面没有 document.fonts(求值抛错)时降级为 fontsReady=false,不影响出片', async () => {
+    FakeBrowserWindow.fontsBehavior = () =>
+      Promise.reject(new Error('document.fonts is undefined'));
+    const { buffer, fontsReady } = await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>x</p>' });
+    expect(buffer.toString()).toBe('%PDF-ok');
+    expect(fontsReady).toBe(false);
+  });
+
+  it('字体探测返回非 true 也按未就绪处理(不猜)', async () => {
+    FakeBrowserWindow.fontsBehavior = () => undefined;
+    const { fontsReady } = await renderHtmlToPdf({ ...BASE_INPUT, html: '<p>x</p>' });
+    expect(fontsReady).toBe(false);
+  });
+
+  it('等字体期间页面崩溃仍然判这次渲染失败,不会打印出半成品', async () => {
+    FakeBrowserWindow.fontsBehavior = () => new Promise(() => {});
+    FakeBrowserWindow.loadBehavior = async (win) => {
+      setTimeout(() => {
+        win.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+      }, 10);
+    };
+    await expect(renderHtmlToPdf({ ...BASE_INPUT, html: '<p>x</p>' })).rejects.toThrow(
+      /渲染进程异常退出/,
+    );
+    expect(FakeBrowserWindow.calls).not.toContain('printToPDF');
+    expect(FakeBrowserWindow.instances[0]!.destroyed).toBe(true);
   });
 });
 
@@ -253,7 +328,7 @@ describe('故障隔离', () => {
     const following = renderHtmlToPdf({ ...BASE_INPUT, html: '<p>2</p>' });
 
     await expect(failing).rejects.toThrow('boom');
-    expect((await following).toString()).toBe('%PDF-second');
+    expect((await following).buffer.toString()).toBe('%PDF-second');
   });
 });
 

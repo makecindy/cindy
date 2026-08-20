@@ -176,12 +176,16 @@ function skipsRoutelessDeviceApproval(args: unknown): boolean {
  * 按 `<server>::<tool>` 精确匹配永远命中不到它，登记进去只会变成一条骗人的死规则
  * （还会派生出一个不存在的 `mcp__cindy_docs__read_sheet` allowedTools 条目）。
  *
- * read_sheet 只读工作目录内的表格文件：路径由 @cindy/mcps 的 cindy-docs/_paths.ts
- * 确定性钳制在会话 workingDir 内，不写盘、不出境，符合「有没有携带内容出境」的判据。
- * 其余五个工具都会落盘（make_* / render_pdf / office_to_pdf），一律不在此表，
- * 继续走常规审批链。
+ * read_sheet / inspect_pdf 都只读工作目录内的文件：路径由 @cindy/mcps 的
+ * cindy-docs/_paths.ts 确定性钳制在会话 workingDir 内，不写盘、不出境，符合
+ * 「有没有携带内容出境」的判据。inspect_pdf 尤其需要免审批 —— 它是「出完 PDF 回读
+ * 自检」闭环里的那一步，每次生成后都要跑；卡在审批上，模型就会跳过自检直接交付，
+ * 那正是这个工具要防的事。
+ *
+ * 其余四个工具都会落盘（make_docx / make_pptx / make_xlsx / render_pdf），一律不在
+ * 此表，继续走常规审批链。
  */
-const READ_ONLY_DOCS_INNER_TOOLS: ReadonlySet<string> = new Set(['read_sheet']);
+const READ_ONLY_DOCS_INNER_TOOLS: ReadonlySet<string> = new Set(['read_sheet', 'inspect_pdf']);
 
 /** 取 cindy_docs progressive 调用的内层工具名。 */
 function readDocsInnerToolName(context: McpToolApprovalContext): string | undefined {

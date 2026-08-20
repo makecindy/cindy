@@ -450,9 +450,9 @@ export type SessionSearchFn = (
 // 'cindy_slack'(与老 lizi_slack_bot 无关)2026-07-19 上线: Slack 网关工具,
 // 经 hook 通道由 slack-hook-server 以托管 user token 调 Slack 官方 MCP,
 // 接替退役的 cindy-slack 意识。
-// 'cindy_docs'(文档工坊)2026-08-19 上线: PDF / Word / Excel / PPT 的格式转换
-// 原语。零系统依赖(office_to_pdf 是唯一的增强层,靠 LibreOffice),对应可关
-// 插件 id 'docs'。
+// 'cindy_docs'(文档工坊)2026-08-19 上线: PDF / Word / Excel / PPT 的生成与
+// 检查原语。**零系统依赖**——不走任何需要用户先装 LibreOffice / Office 的路径,
+// 对应可关插件 id 'docs'。
 export type LiziMcpId =
   | 'android'
   | 'ios_simulator'

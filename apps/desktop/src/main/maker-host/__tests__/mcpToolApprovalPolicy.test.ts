@@ -107,19 +107,22 @@ describe('desktop MCP approval policy', () => {
     );
   });
 
-  // cindy_docs 是渐进披露 server:对外只有 list_tools / call_tool。read_sheet 只读
-  // 会话工作目录内的表格(路径由 @cindy/mcps 确定性钳制),免审批;其余五个工具都会
-  // 落盘,必须继续走常规审批链 —— 一次"同意 call_tool"不能变成写盘的通行证。
-  it('auto-approves only the docs read-only inner tool', () => {
-    expect(
-      getDesktopMcpToolApprovalPolicy({
-        serverName: 'cindy_docs',
-        toolName: 'call_tool',
-        toolParams: { name: 'read_sheet', args: { path: 'a.csv' } },
-      }),
-    ).toBe('auto-approve');
+  // cindy_docs 是渐进披露 server:对外只有 list_tools / call_tool。read_sheet 与
+  // inspect_pdf 只读会话工作目录内的文件(路径由 @cindy/mcps 确定性钳制),免审批;
+  // 四个落盘工具必须继续走常规审批链 —— 一次"同意 call_tool"不能变成写盘的通行证。
+  it('auto-approves only the docs read-only inner tools', () => {
+    for (const inner of ['read_sheet', 'inspect_pdf']) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_docs',
+          toolName: 'call_tool',
+          toolParams: { name: inner, args: { path: 'a.pdf' } },
+        }),
+        `${inner} should be auto-approved`,
+      ).toBe('auto-approve');
+    }
 
-    for (const inner of ['make_docx', 'make_pptx', 'make_xlsx', 'render_pdf', 'office_to_pdf']) {
+    for (const inner of ['make_docx', 'make_pptx', 'make_xlsx', 'render_pdf']) {
       expect(
         getDesktopMcpToolApprovalPolicy({
           serverName: 'cindy_docs',
@@ -143,7 +146,7 @@ describe('desktop MCP approval policy', () => {
       getDesktopMcpToolApprovalPolicy({
         serverName: 'cindy_docs',
         toolName: 'call_tool',
-        toolParams: JSON.stringify({ name: 'read_sheet', args: { path: 'a.csv' } }),
+        toolParams: JSON.stringify({ name: 'inspect_pdf', args: { path: 'a.pdf' } }),
       }),
     ).toBe('auto-approve');
   });

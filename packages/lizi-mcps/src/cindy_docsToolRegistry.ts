@@ -8,7 +8,7 @@
  *
  * Category 分三类:
  *  - 'author'  : 从结构化输入直接生成 Office 文件 (make_docx / make_pptx / make_xlsx)
- *  - 'convert' : 把已有内容转成 PDF (render_pdf / office_to_pdf)
+ *  - 'convert' : 把已有内容转成 PDF (render_pdf)
  *  - 'read'    : 只读解析已有表格文件 (read_sheet)
  *
  * 拆成三类而不是一锅端,是因为模型的意图天然分这三种:「我有内容要出文件」、

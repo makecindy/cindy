@@ -2948,7 +2948,7 @@
         },
         "docs": {
           "name": "ドキュメント工房",
-          "description": "内容を実ファイルにする — PDF / Word / Excel / PowerPoint の生成と、既存スプレッドシートの読み取り"
+          "description": "内容を実ファイルに — PDF / Word / Excel / PowerPoint を生成し、読み返して仕上がりを確認。追加ソフトのインストールは不要。"
         },
         "xdt_helper": {
           "name": "Cindy Helper",

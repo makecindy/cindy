@@ -2922,7 +2922,7 @@
         },
         "docs": {
           "name": "Document Toolkit",
-          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint, plus reading existing spreadsheets"
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install."
         },
         "xdt_helper": {
           "name": "Cindy Helper",

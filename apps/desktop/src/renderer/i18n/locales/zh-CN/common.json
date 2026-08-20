@@ -2921,7 +2921,7 @@
         },
         "docs": {
           "name": "文档工坊",
-          "description": "把内容做成真文件 —— PDF、Word、Excel、PPT，也能读取已有的表格文件"
+          "description": "把内容做成真文件 —— PDF、Word、Excel、PPT，并能回读核对产出。不需要另装任何软件。"
         },
         "xdt_helper": {
           "name": "Cindy Helper",

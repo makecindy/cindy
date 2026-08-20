@@ -9,8 +9,8 @@
  *
  * 用法: node scratch/docs-probe.mjs [输出目录]
  *
- * 注:render_pdf 不在探针范围内 —— 它需要 Electron 的 BrowserWindow,
- * 只能在真实客户端里验。
+ * 注:render_pdf 不在探针范围内 —— 它需要 Electron 的 BrowserWindow,只能在真实
+ * 客户端里验。inspect_pdf 的解析内核(pdfjs)在这里用手搓 PDF 验过。
  */
 
 import { promises as fs } from 'node:fs';
@@ -132,6 +132,8 @@ header.font = { bold: true };
 ws.views = [{ state: 'frozen', ySplit: 1 }];
 ws.addRow(['华东', 1200, true]);
 ws.addRow(['华南', 860, false]);
+// 公式格必须连缓存值一起写:xlsx 不存计算结果,少了它 Excel 重算前那格是空的。
+ws.addRow(['合计', { formula: 'SUM(B2:B3)', result: 2060 }, true]);
 const xlsxPath = path.join(outDir, 'probe.xlsx');
 await fs.writeFile(xlsxPath, Buffer.from(await wb.xlsx.writeBuffer()));
 
@@ -143,6 +145,9 @@ check('表头加粗', rb.getRow(1).font?.bold === true);
 check('冻结首行', rb.views?.[0]?.state === 'frozen' && rb.views?.[0]?.ySplit === 1);
 check('数字仍是数字', rb.getRow(2).getCell(2).value === 1200);
 check('布尔仍是布尔', rb.getRow(2).getCell(3).value === true);
+const formulaCell = rb.getRow(4).getCell(2).value;
+check('公式文本落盘', formulaCell?.formula === 'SUM(B2:B3)', JSON.stringify(formulaCell));
+check('公式缓存值落盘(不靠 LibreOffice 重算)', formulaCell?.result === 2060);
 
 // ── csv ─────────────────────────────────────────────────────────────────────
 console.log('\n[csv] RFC4180 解析');
