@@ -33,6 +33,7 @@ describe('resolveMobileComposerVoiceButtonAnchorStyle', () => {
       right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
       top: 0,
       bottom: 0,
+      paddingBottom: 0,
       justifyContent: 'center',
       alignItems: 'flex-end',
       zIndex: 2,
@@ -41,7 +42,7 @@ describe('resolveMobileComposerVoiceButtonAnchorStyle', () => {
     expect(style.bottom).toBe(0);
   });
 
-  it('卡片态同样 top:0,靠 bottom + flex-end 钉在工具排,不写 auto', () => {
+  it('卡片态壳延伸到底边,靠 paddingBottom + flex-end 保持按钮位置与纵向 hitSlop', () => {
     const style = resolveMobileComposerVoiceButtonAnchorStyle({
       cardLayout: true,
       floating: false,
@@ -50,12 +51,15 @@ describe('resolveMobileComposerVoiceButtonAnchorStyle', () => {
       position: 'absolute',
       right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
       top: 0,
-      bottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
+      bottom: 0,
+      paddingBottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
       justifyContent: 'flex-end',
       alignItems: 'flex-end',
       zIndex: 2,
     });
     expect(style.top).toBe(0);
+    expect(style.bottom).toBe(0);
+    expect(style.paddingBottom).toBe(MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM);
     expect(style.justifyContent).toBe('flex-end');
     expect(Object.prototype.hasOwnProperty.call(style, 'top')).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(style, 'bottom')).toBe(true);
@@ -67,7 +71,8 @@ describe('resolveMobileComposerVoiceButtonAnchorStyle', () => {
       for (const floating of [false, true]) {
         const style = resolveMobileComposerVoiceButtonAnchorStyle({ cardLayout, floating });
         expect(style.top).toBe(0);
-        expect(typeof style.bottom).toBe('number');
+        expect(style.bottom).toBe(0);
+        expect(typeof style.paddingBottom).toBe('number');
         expect(style).not.toHaveProperty('transform');
       }
     }
