@@ -6605,6 +6605,7 @@
         "title": "This model can't fit the current conversation",
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
         "overflowDescription": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
+        "overflowDescriptionRemote": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). On a remote session Cindy cannot rebuild a fresh agent context, so the next request may still fail. You can switch anyway, or keep this model.",
         "confirmSwitch": "Switch and continue",
         "cancelSwitch": "Keep this model"
       },

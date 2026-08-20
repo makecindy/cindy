@@ -452,10 +452,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     );
     if (!lastError && !pressure) return false;
     let lastUser: OverflowSourceMessage | undefined;
+    let lastUserIndex = -1;
     for (let i = source.length - 1; i >= 0; i -= 1) {
       const message = source[i];
       if (message && message.role === 'user' && !isSyntheticUser(message)) {
         lastUser = message;
+        lastUserIndex = i;
         break;
       }
     }
@@ -463,14 +465,12 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const rebuildReason = isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
-    const handoffMessages = source.filter((message) => {
-      if (message.role === 'error') return false;
-      // timeout 的失败 user 会由 Retry 再 wire 一次，交接里不能再带一遍。
-      if (rebuildReason === 'pi-prompt-timeout' && message.clientId === lastUser.clientId) {
-        return false;
-      }
-      return true;
-    });
+    // 待发出/失败的 user 还会由本次 send 或 Retry 再 wire 一次，交接里不能带。
+    // 已完成的最后一轮（后面有非 error）要留在交接里。
+    const pendingOutbound = source.slice(lastUserIndex + 1).every((message) => message.role === 'error');
+    const handoffMessages = (pendingOutbound ? source.slice(0, lastUserIndex) : source).filter(
+      (message) => message.role !== 'error',
+    );
     const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
     // 关掉当前 live handle。调用方必须在解析发送目标之前调用 prepare,
     // 再 getSession / createSession;peek 之后对旧对象 send 会打到已关闭实例。

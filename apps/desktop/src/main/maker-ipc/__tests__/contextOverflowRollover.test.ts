@@ -453,6 +453,53 @@ describe('createContextOverflowRollover', () => {
     );
   });
 
+  it('omits a still-pending last user from prepare handoff', async () => {
+    const deps = makeDeps([
+      msg('user', '先做 A', 'u1'),
+      msg('assistant', '好', 'a1'),
+      msg('user', 'IM 待发', 'u-pending'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'pi',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead.jsonl',
+      contextTokens: 400_000,
+      contextWindow: 500_000,
+      model: 'x-ai/grok-4.6',
+      providerId: 'xai',
+    });
+    deps.getAutoCompactThresholdPct = vi.fn(() => 75);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    const handoff = String(deps.setPendingHandoff.mock.calls[0]?.[1] ?? '');
+    expect(handoff).toContain('先做 A');
+    expect(handoff).not.toContain('IM 待发');
+  });
+
+  it('keeps a completed last user in prepare handoff', async () => {
+    const deps = makeDeps([
+      msg('user', '先做 A', 'u1'),
+      msg('assistant', '已完成', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'pi',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead.jsonl',
+      contextTokens: 400_000,
+      contextWindow: 500_000,
+      model: 'x-ai/grok-4.6',
+      providerId: 'xai',
+    });
+    deps.getAutoCompactThresholdPct = vi.fn(() => 75);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(String(deps.setPendingHandoff.mock.calls[0]?.[1] ?? '')).toContain('先做 A');
+  });
+
   it('does not auto-replay a prompt RPC timeout as context-overflow', async () => {
     const deps = makeDeps([
       msg('user', '还有建议吗', 'u1'),

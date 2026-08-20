@@ -6031,12 +6031,17 @@ export function ChatInput({
       // 期望用户先取消回去压缩(点上下文圆环)或新开会话, "仍然切换"是次选。
       return confirmDialog({
         title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-        description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', vars),
+        description: t(
+          remoteHostId
+            ? 'newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote'
+            : 'newChat.chatInput.modelSwitchContextGuard.overflowDescription',
+          vars,
+        ),
         confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
         cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
       });
     },
-    [sessionId, confirmDialog, t],
+    [sessionId, remoteHostId, confirmDialog, t],
   );
 
   // session-agent-switch 意图制:选中「只属于另一家引擎」的模型 → 只向 main 登记
