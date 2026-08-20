@@ -730,6 +730,15 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
   return out;
 }
 
+/**
+ * #3105：custom_providers 未启用 STRICT，updated_at（INTEGER）可能存了文本（如 ISO 字符串），
+ * 直接参与 `+ 1` 运算会得 NaN，写入 NOT NULL 列违反约束，导致该行永久保存失败。
+ * 只有有限数值是合法旧时间戳，其余一律回退为 now。
+ */
+function previousUpdatedAt(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 function rowToConfig(row: typeof customProviders.$inferSelect): CustomProviderConfig {
   const auth = parseAuth(row.auth);
   const runtimes = parseRuntimes(row.runtimes);
@@ -812,7 +821,7 @@ export async function updateCustomProvider(
       name: c.name,
       runtimes: JSON.stringify(c.runtimes),
       auth: c.auth ? JSON.stringify(c.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: Math.max(now, previousUpdatedAt(existing.updatedAt, now) + 1),
     })
     .where(eq(customProviders.id, id));
   return c;
@@ -850,7 +859,7 @@ export async function updateCustomProviderIfUnchanged(
       name: nextConfig.name,
       runtimes: JSON.stringify(nextConfig.runtimes),
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
-      updatedAt: Math.max(now, existing.updatedAt + 1),
+      updatedAt: Math.max(now, previousUpdatedAt(existing.updatedAt, now) + 1),
     })
     .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));
   return result.changes === 1;

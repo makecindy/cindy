@@ -933,6 +933,47 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(await updateCustomProvider('ghost', valid)).toBeNull();
   });
 
+  it('recovers when updated_at holds non-numeric text (#3105)', async () => {
+    mountDb();
+    // 非 STRICT 表允许 INTEGER 列存文本；历史脏数据让 updated_at 变成 ISO 字符串。
+    raw!.prepare(
+      `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 0, 1786000000000, '2026-08-19T01:45:07Z')`,
+    ).run('openrouter', 'OpenRouter', JSON.stringify(valid.runtimes));
+
+    const updated = await updateCustomProvider('openrouter', valid, 1_786_500_000_000);
+    expect(updated?.name).toBe('OpenRouter');
+    const row = raw!
+      .prepare('SELECT updated_at FROM custom_providers WHERE id = ?')
+      .get('openrouter') as { updated_at: unknown };
+    expect(typeof row.updated_at).toBe('number');
+    expect(Number.isFinite(row.updated_at)).toBe(true);
+  });
+
+  it('recovers in the conditional update when updated_at holds non-numeric text (#3105)', async () => {
+    mountDb();
+    raw!.prepare(
+      `INSERT INTO custom_providers
+        (id, name, runtimes, auth, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 0, 1786000000000, '2026-08-19T01:45:07Z')`,
+    ).run('openrouter', 'OpenRouter', JSON.stringify(valid.runtimes));
+    const snapshot = (await getCustomProvider('openrouter'))!;
+
+    expect(
+      await updateCustomProviderIfUnchanged(
+        'openrouter',
+        snapshot,
+        { ...snapshot, name: 'OR v2' },
+        1_786_500_000_000,
+      ),
+    ).toBe(true);
+    const row = raw!
+      .prepare('SELECT updated_at FROM custom_providers WHERE id = ?')
+      .get('openrouter') as { updated_at: unknown };
+    expect(typeof row.updated_at).toBe('number');
+  });
+
   it('isolates data per db file (account switch = new db)', async () => {
     mountDb();
     await createCustomProvider(valid);
