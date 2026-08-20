@@ -6238,7 +6238,9 @@
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
-      "sourceTooltip": "Worktree source branch"
+      "sourceTooltip": "Worktree source branch",
+      "searchPlaceholder": "Search branches",
+      "noMatch": "No matching branches"
     },
     "folderPicker": {
       "selectFolder": "Select folder",

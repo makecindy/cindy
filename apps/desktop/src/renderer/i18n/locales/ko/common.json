@@ -6263,7 +6263,9 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치"
+      "sourceTooltip": "worktree 소스 브랜치",
+      "searchPlaceholder": "브랜치 검색",
+      "noMatch": "일치하는 브랜치가 없습니다"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",

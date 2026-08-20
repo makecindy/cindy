@@ -27,7 +27,7 @@
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { GitBranch, ChevronDown, Folder, MessageCircle } from 'lucide-react';
+import { GitBranch, ChevronDown, Folder, MessageCircle, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -451,6 +451,14 @@ function BranchWorktreeChip({
 }) {
   const { t } = useTranslation();
 
+  // 分支菜单内搜索词(2026-08-20 用户裁决:对齐 Codex 分支选择器,菜单顶部加搜索框)。
+  // 菜单关闭即清空——搜索只是本次挑选的临时过滤,不是需要记忆的偏好。
+  const [branchQuery, setBranchQuery] = useState('');
+  const normalizedBranchQuery = branchQuery.trim().toLowerCase();
+  const visibleBranches = normalizedBranchQuery
+    ? branches.filter((b) => b.toLowerCase().includes(normalizedBranchQuery))
+    : branches;
+
   const branchSegment = (
     <button
       type="button"
@@ -501,6 +509,7 @@ function BranchWorktreeChip({
     <DropdownMenu
       onOpenChange={(open) => {
         if (open) onOpenRequested();
+        else setBranchQuery('');
       }}
     >
       <DropdownMenuTrigger asChild>{branchTipped}</DropdownMenuTrigger>
@@ -526,19 +535,67 @@ function BranchWorktreeChip({
             {t('newChat.branchChip.loadFailed')}
           </DropdownMenuItem>
         ) : (
-          branches.map((b) => (
-            <DropdownMenuItem
-              key={b}
-              onSelect={() => onPick(b)}
-              className={cn(
-                'cursor-pointer rounded-[8px] px-3 py-1.5 text-13 text-foreground',
-                'focus:bg-accent focus:text-accent-foreground',
-                b === branchLabel && 'bg-accent/60',
-              )}
-            >
-              {b}
-            </DropdownMenuItem>
-          ))
+          <>
+            <div className="sticky top-0 z-10 bg-popover pb-1">
+              <div className="relative">
+                <Search
+                  size={12}
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                />
+                <input
+                  // 打开菜单的下一个动作几乎总是输入过滤:等 Radix 的 open
+                  // autofocus(rAF 之前的 layout effect)落定后,再把焦点让进输入框。
+                  // 已聚焦时(用户在输入)不重抢。
+                  ref={(el) => {
+                    if (el && document.activeElement !== el) {
+                      requestAnimationFrame(() => el.focus());
+                    }
+                  }}
+                  value={branchQuery}
+                  onChange={(e) => setBranchQuery(e.target.value)}
+                  // Radix 菜单对可打印字符做 item typeahead,会吃掉输入;
+                  // 导航键(箭头/Enter/Escape)放行冒泡,保持键盘可选分支。
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === 'ArrowDown'
+                      || e.key === 'ArrowUp'
+                      || e.key === 'Enter'
+                      || e.key === 'Escape'
+                    ) {
+                      return;
+                    }
+                    e.stopPropagation();
+                  }}
+                  placeholder={t('newChat.branchChip.searchPlaceholder')}
+                  aria-label={t('newChat.branchChip.searchPlaceholder')}
+                  className={cn(
+                    'h-8 w-full rounded-[8px] border border-border bg-transparent',
+                    'pl-7 pr-2 text-13 text-foreground outline-none',
+                    'placeholder:text-muted-foreground focus:border-primary/50',
+                  )}
+                />
+              </div>
+            </div>
+            {visibleBranches.length === 0 ? (
+              <div className="px-3 py-1.5 text-13 text-muted-foreground">
+                {t('newChat.branchChip.noMatch')}
+              </div>
+            ) : (
+              visibleBranches.map((b) => (
+                <DropdownMenuItem
+                  key={b}
+                  onSelect={() => onPick(b)}
+                  className={cn(
+                    'cursor-pointer rounded-[8px] px-3 py-1.5 text-13 text-foreground',
+                    'focus:bg-accent focus:text-accent-foreground',
+                    b === branchLabel && 'bg-accent/60',
+                  )}
+                >
+                  {b}
+                </DropdownMenuItem>
+              ))
+            )}
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
