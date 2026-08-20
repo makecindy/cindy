@@ -152,12 +152,6 @@ export interface RuntimeState {
     string,
     { tag: string; errorMessage: string; projected: boolean }
   >;
-  /**
-   * 本 turn 内已观察到「重试耗尽」的 SDK error tag。api_retry 不带
-   * parent_tool_use_id，只能把标签作为后续、具体 sidechain error envelope 的辅助
-   * 证据；不能在 api_retry 到达时反向把耗尽投影给所有同 tag 的 open sidechain。
-   */
-  exhaustedApiErrorTags: Set<string>;
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
   subagentParentToolUseIdByTaskId: Map<string, string>;
   /**
@@ -198,7 +192,6 @@ export function newRuntimeState(): RuntimeState {
     publishedSubagentModelByParentToolUseId: new Map(),
     subagentStatusByParentToolUseId: new Map(),
     subagentRetryStateByParentToolUseId: new Map(),
-    exhaustedApiErrorTags: new Set(),
     subagentParentToolUseIdByTaskId: new Map(),
     confirmedSubagentTaskIds: new Set(),
     excludedSubagentTaskIds: new Set(),
@@ -241,9 +234,7 @@ function resetTurnState(turn: TurnState, rt: RuntimeState): void {
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
   turn.lastAssistantRequestId = undefined;
-  // api_retry 不携带 parent_tool_use_id，只能在当前 turn 内按 error tag 辅助判断。
-  // 终态到达后必须丢弃本轮耗尽证据及未决 sidechain，避免下一 turn 收口陈旧任务。
-  rt.exhaustedApiErrorTags.clear();
+  // 终态到达后必须丢弃本轮未决 sidechain，避免下一 turn 收口陈旧任务。
   rt.subagentRetryStateByParentToolUseId.clear();
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
@@ -907,17 +898,10 @@ function handleSystem(
       retryAttempt: msg.attempt,
       maxRetries: msg.max_retries,
     };
-    // api_retry 不带 parent_tool_use_id，不能把耗尽事件归属给任何一个 sidechain。
-    // 这里只记录当前 turn 的 tag；后续具体 sidechain error envelope 到达时再用它
-    // 辅助判断。绝不能在这里遍历并投影所有同 tag 的 open sidechain——同 tag 的
-    // 并发 sidechain 或主链请求都可能触发这条 api_retry，误投影会锁死可自愈任务。
-    if (
-      typeof msg.attempt === 'number' &&
-      typeof msg.max_retries === 'number' &&
-      msg.attempt >= msg.max_retries
-    ) {
-      ctx.rt.exhaustedApiErrorTags.add(msg.error ?? 'unknown');
-    }
+    // api_retry 不带 parent_tool_use_id，不能证明任何一个具体 sidechain 已耗尽。
+    // 因此它只更新主 turn 的诊断信息，不改变 sidechain 的终态；否则主链或并发
+    // sidechain A 的耗尽会被错误套到之后同 tag 的 sidechain B 上。
+    // sidechain 只能由带 parent_tool_use_id 的权威生命周期事件收口。
     ctx.log.info('SDK API request retrying', {
       attempt: msg.attempt,
       maxRetries: msg.max_retries,
@@ -1339,10 +1323,7 @@ function handleAssistant(
     // 看不到失败任务、也没有终态通知（#2967）。这里把它规范化为父会话可见的 failed
     // 任务。已有 taskId 的执行期失败由 task_notification:failed 收口，不重复上报。
     // 可重试的 tag（rate_limit / server_error / unknown）SDK 会自己退避重试并可能
-    // 自愈，立即投影 failed 会把自愈任务锁死成失败；但重试**耗尽**后 SDK 不再有
-    // task_id 可补，不投影会退回 #2967 的「No task found」。耗尽判定用 per-sidechain
-    // 收口状态 + turn 级 exhaustedApiErrorTags（api_retry 不带 parent_tool_use_id，
-    // 只能按 tag 近似归属），据此区分「仍在重试」与「已耗尽」。
+    // 自愈，立即投影 failed 会把自愈任务锁死成失败。由于 api_retry 不携带 parent_tool_use_id，重试耗尽也不能安全归属到某一个 sidechain；
     if (sidechainParentToolUseId) {
       let knownTaskId: string | undefined;
       for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
@@ -1351,17 +1332,14 @@ function handleAssistant(
         break;
       }
       const retryable = RETRYABLE_SDK_ERROR_TAGS.has(msg.error ?? '');
-      // 用 per-sidechain 收口状态 + turn 级 exhausted tag 集合判定终态，而非单个
-      // turn 级 pendingApiError：api_retry 不带 parent_tool_use_id，单个共享槽在
-      // 并发 subagent 之间会串（一个 sidechain 的耗尽会误锁另一个仍在重试的
-      // sidechain；反之任意正常 assistant 又会清掉它）。
-      const retriesExhausted = ctx.rt.exhaustedApiErrorTags.has(msg.error ?? '');
+      // 只读取该 sidechain 自己的状态；不能读取一个没有身份的全局 retry tag。
+      // api_retry 不带 parent_tool_use_id，因此不会把它当成该 sidechain 的终态证据。
       const state = ctx.rt.subagentRetryStateByParentToolUseId.get(sidechainParentToolUseId);
       if (state?.projected) {
         // 已投影过失败终态；幂等，不再重复上报也不清状态（防迟到 envelope 重投）。
         return;
       }
-      if (!knownTaskId && (!retryable || retriesExhausted)) {
+      if (!knownTaskId && !retryable) {
         projectSubagentLaunchFailure(queue, ctx, sidechainParentToolUseId, {
           errorMessage: redactSensitiveText(errorMessage),
           model:

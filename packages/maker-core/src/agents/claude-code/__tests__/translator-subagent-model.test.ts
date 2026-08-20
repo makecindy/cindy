@@ -1421,10 +1421,10 @@ describe('Claude Code sidechain launch failure projection', () => {
     expect(ctx.turn.pendingApiError).toBeNull();
   });
 
-  it('projects a retryable sidechain error once the SDK retries are exhausted (api_retry before envelope)', async () => {
+  it('does not infer a sidechain failure from an identity-less exhausted api_retry', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
-    // api_retry 先到且已耗尽（attempt === max_retries）：记下本 turn 已耗尽的 tag。
+    // api_retry 没有 parent_tool_use_id，不能把它归给后续到达的 sidechain。
     translateSdkMessage(
       {
         type: 'system',
@@ -1438,7 +1438,7 @@ describe('Claude Code sidechain launch failure projection', () => {
       queue,
       ctx,
     );
-    // 终态 error envelope 随后到达：tag 已耗尽 → 投影失败终态（#2967 收口）。
+    // 即使随后收到同 tag 的 sidechain envelope，也只能等待带身份的生命周期事件。
     translateSdkMessage(
       {
         type: 'assistant',
@@ -1456,12 +1456,7 @@ describe('Claude Code sidechain launch failure projection', () => {
     const taskUpdates = (await collect(queue)).filter(
       (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
     );
-    expect(taskUpdates).toHaveLength(1);
-    expect(taskUpdates[0].data).toMatchObject({
-      taskId: 'toolu_retry_exhausted',
-      parentToolUseId: 'toolu_retry_exhausted',
-      status: 'failed',
-    });
+    expect(taskUpdates).toHaveLength(0);
   });
 
   it('does not project every open sidechain when api_retry exhausts after an envelope', async () => {
@@ -1561,8 +1556,8 @@ describe('Claude Code sidechain launch failure projection', () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
 
-    // 第一轮耗尽 rate_limit；api_retry 没有 parent_tool_use_id，只能把标签
-    // 暂存在 RuntimeState。轮次正常结束后，该证据不能污染下一轮。
+    // 第一轮 api_retry 没有 parent_tool_use_id，不能形成 sidechain 终态证据。
+    // 轮次正常结束后，未决 sidechain 状态也不能污染下一轮。
     translateSdkMessage(
       {
         type: 'stream_event',
@@ -1586,7 +1581,6 @@ describe('Claude Code sidechain launch failure projection', () => {
       queue,
       ctx,
     );
-    expect(ctx.rt.exhaustedApiErrorTags.has('rate_limit')).toBe(true);
     // 建立一个未决 sidechain，验证 turn 收尾时 retry map 也不会残留。
     translateSdkMessage(
       {
@@ -1616,7 +1610,6 @@ describe('Claude Code sidechain launch failure projection', () => {
       queue,
       ctx,
     );
-    expect(ctx.rt.exhaustedApiErrorTags.size).toBe(0);
 
     // 第二轮第一次收到同标签错误时，仍应等待 SDK 重试，而不能直接投影 failed。
     translateSdkMessage(

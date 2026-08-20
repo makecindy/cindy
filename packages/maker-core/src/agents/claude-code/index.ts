@@ -2358,6 +2358,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       turnState.hasEmittedText = false;
       turnState.uiEmittedText = '';
       runtimeState.streamStopTokenByKey.clear();
+      // A turn can end through abort, SDK failure, or query rebuild without producing
+      // a result event. Retry state is turn-scoped, so clear it at the next turn boundary
+      // as well as in the translator's normal result cleanup path.
+      runtimeState.subagentRetryStateByParentToolUseId.clear();
       turnState.pendingApiError = null;
       turnState.lastAssistantRequestId = undefined;
       turnState.lastAssistantMsgHadSubstance = true;
