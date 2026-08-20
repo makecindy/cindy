@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   })),
   tapWindowBroadcast: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
+  setPinnedSectionCardMode: vi.fn(),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
@@ -58,6 +59,10 @@ vi.mock('../../../device-link/broadcast-tap.js', () => ({
 }));
 vi.mock('../../../sessionTaskSummary.js', () => ({
   maybeGenerateSessionTaskSummary: h.summarizeSession,
+  setPinnedSectionCardMode: h.setPinnedSectionCardMode,
+}));
+vi.mock('../../../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent: vi.fn(),
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
@@ -68,6 +73,7 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
 
 import { registerSessionIpc } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
+import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
 function createDb(): void {
   const sqlite = new Database(':memory:');
@@ -240,7 +246,7 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 'codex-local',
       patch: { pinnedAt, status: 'active' },
     });
-    expect(h.summarizeSession).toHaveBeenCalledWith('codex-local');
+    expect(h.summarizeSession).toHaveBeenCalledWith('codex-local', { force: true });
 
     h.tapWindowBroadcast.mockClear();
     h.summarizeSession.mockClear();
@@ -340,5 +346,35 @@ describe('local-db:sessions:update handler wiring', () => {
   it('does nothing for remote sessions', async () => {
     await invokeUpdate('cc-remote', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
+  });
+});
+
+async function invokeSetPinnedCardSummaries(event: unknown, enabled: unknown): Promise<unknown> {
+  const handler = h.handlers.get('local-db:sessions:set-pinned-card-summaries');
+  if (!handler) throw new Error('set-pinned-card-summaries handler not registered');
+  return handler(event, enabled);
+}
+
+describe('local-db:sessions:set-pinned-card-summaries', () => {
+  it('boolean 主路径先校验 sender 再通知摘要开关', async () => {
+    await invokeSetPinnedCardSummaries({ senderFrame: { url: 'cindy://app' } }, true);
+    await vi.dynamicImportSettled();
+
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(1);
+    expect(h.setPinnedSectionCardMode).toHaveBeenCalledWith(true);
+  });
+
+  it('非 boolean 走 INVALID_PARAMS,不改摘要开关', async () => {
+    await expect(invokeSetPinnedCardSummaries({}, 'yes')).rejects.toThrow(/INVALID_PARAMS/);
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledTimes(1);
+    expect(h.setPinnedSectionCardMode).not.toHaveBeenCalled();
+  });
+
+  it('sender 守卫失败时不加载摘要模块', async () => {
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementationOnce(() => {
+      throw new Error('UNTRUSTED_RENDERER');
+    });
+    await expect(invokeSetPinnedCardSummaries({}, true)).rejects.toThrow('UNTRUSTED_RENDERER');
+    expect(h.setPinnedSectionCardMode).not.toHaveBeenCalled();
   });
 });
