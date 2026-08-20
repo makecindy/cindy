@@ -62,7 +62,7 @@ export function isSearchRitualTool(toolName: string): boolean {
   const name = normalizeSearchToolName(toolName);
   if (SEARCH_RITUAL_TOOLS.has(name)) return true;
   if (SEARCH_RITUAL_PREFIXES.some((prefix) => name.startsWith(prefix))) return true;
-  if (name.startsWith('mcp__') && !isSearchLookupTool(toolName)) return true;
+  if (name.startsWith('mcp__')) return true;
   if (name.includes('get_capabilities') || name.includes('list_tools')) return true;
   return false;
 }
