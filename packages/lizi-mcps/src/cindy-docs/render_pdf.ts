@@ -16,6 +16,11 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import { describeOutput, DocsPathError, prepareInputPath, prepareOutputPath, resolveSessionRoot } from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
+import {
+  applyReportTemplate,
+  htmlHasRelativeResources,
+} from './pdfTemplate.js';
+import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsThemeName } from './themes.js';
 import type { DocsMcpSessionCtx, DocsPdfPageSize, RenderHtmlToPdfFn } from './types.js';
 
 /** 与设计一致的渲染硬超时。加载卡死的页面不能拖着任务不放。 */
@@ -41,7 +46,12 @@ const DESCRIPTION = [
   '【输入】htmlPath(工作目录内的 .html 文件)与 html(内联源码)二选一,必须给且只给一个。',
   'HTML 里可以引用网络资源(图片、字体);相对路径资源只有在用 htmlPath 时才解析得到。',
   '',
-  '【排版】pageSize 默认 A4;margins 单位是英寸,默认四边 0.4;',
+  '【模板】template 默认 auto:没有 <style> / 外链 CSS 的裸 HTML 会自动套内置报告模板',
+  '(系统字体、标题层级、表格斑马纹、打印页边距)。已经自己写了样式的原样透传。',
+  'template:"none" 关闭;theme: light / dark / navy 只影响自动套上的模板。',
+  '',
+  '【排版】pageSize 默认 A4;margins 单位是英寸,默认四边 0.4。',
+  '自动套模板且未显式传 margins 时,Electron 边距归零,改由 CSS @page 管边距,避免双边距。',
   'printBackground 默认 true(否则深色底、色块全部不打印)。',
   '分页控制在 HTML 里用 CSS: page-break-after / break-inside: avoid。',
   '',
@@ -94,9 +104,28 @@ export function registerRenderPdfTool(
         })
         .optional()
         .describe('页边距(英寸)。不传时四边都是 0.4。'),
+      template: z
+        .enum(['auto', 'report', 'none'])
+        .default('auto')
+        .describe('auto=无样式时套内置报告模板;report=同样只套无样式 HTML;none=不套。'),
+      theme: z
+        .enum(['light', 'dark', 'navy'])
+        .default('light')
+        .describe('自动套模板时使用的色板。已有样式的 HTML 不受影响。'),
       overwrite: z.boolean().default(false).describe('目标文件已存在时是否覆盖。默认 false。'),
     },
-    handler: async ({ htmlPath, html, outPath, pageSize, landscape, printBackground, margins, overwrite }) => {
+    handler: async ({
+      htmlPath,
+      html,
+      outPath,
+      pageSize,
+      landscape,
+      printBackground,
+      margins,
+      template,
+      theme,
+      overwrite,
+    }) => {
       const hasPath = typeof htmlPath === 'string' && htmlPath.length > 0;
       const hasInline = typeof html === 'string' && html.length > 0;
       if (hasPath === hasInline) {
@@ -113,18 +142,33 @@ export function registerRenderPdfTool(
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareOutputPath(root, outPath, overwrite);
         const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
+        const sourceHtml = sourcePath ? await fs.readFile(sourcePath, 'utf8') : html!;
+        const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
+        const wrapped = applyReportTemplate(sourceHtml, palette, template);
+        const userSetMargins = margins !== undefined;
+        const effectiveMargins = userSetMargins
+          ? {
+              top: margins.top ?? DEFAULT_MARGIN_INCHES,
+              bottom: margins.bottom ?? DEFAULT_MARGIN_INCHES,
+              left: margins.left ?? DEFAULT_MARGIN_INCHES,
+              right: margins.right ?? DEFAULT_MARGIN_INCHES,
+            }
+          : wrapped.applied
+            ? { top: 0, bottom: 0, left: 0, right: 0 }
+            : {
+                top: DEFAULT_MARGIN_INCHES,
+                bottom: DEFAULT_MARGIN_INCHES,
+                left: DEFAULT_MARGIN_INCHES,
+                right: DEFAULT_MARGIN_INCHES,
+              };
 
         const { buffer, fontsReady } = await renderHtmlToPdf({
-          ...(sourcePath ? { htmlPath: sourcePath } : { html: html! }),
+          // 套了模板就必须走内联 html:不能改用户的源文件,相对路径也会因此失效。
+          ...(wrapped.applied || !sourcePath ? { html: wrapped.html } : { htmlPath: sourcePath }),
           pageSize,
           landscape,
           printBackground,
-          margins: {
-            top: margins?.top ?? DEFAULT_MARGIN_INCHES,
-            bottom: margins?.bottom ?? DEFAULT_MARGIN_INCHES,
-            left: margins?.left ?? DEFAULT_MARGIN_INCHES,
-            right: margins?.right ?? DEFAULT_MARGIN_INCHES,
-          },
+          margins: effectiveMargins,
           timeoutMs: RENDER_PDF_TIMEOUT_MS,
           fontTimeoutMs: RENDER_PDF_FONT_TIMEOUT_MS,
         });
@@ -140,6 +184,11 @@ export function registerRenderPdfTool(
 
         const described = await describeOutput(root, abs);
         const warnings: string[] = [];
+        if (wrapped.applied && htmlHasRelativeResources(sourceHtml)) {
+          warnings.push(
+            '已套用内置报告模板。原文含相对路径资源,套模板后按内联 HTML 渲染,这些相对路径可能失效;请改成绝对/内联资源,或先自己写 <style> 再用 htmlPath。',
+          );
+        }
         if (described.bytes < SUSPICIOUS_PDF_BYTES) {
           warnings.push(
             'PDF 字节数异常小,很可能渲染成了白页。用 inspect_pdf 回读确认,必要时检查 HTML 与外部资源后重做,不要直接交付。',
@@ -156,6 +205,9 @@ export function registerRenderPdfTool(
           pageSize,
           landscape,
           fontsReady,
+          template,
+          theme,
+          templateApplied: wrapped.applied,
           nextStep: '用 inspect_pdf 回读这份 PDF,确认页数、纸张与是否有空白页,再交付。',
           ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
         });

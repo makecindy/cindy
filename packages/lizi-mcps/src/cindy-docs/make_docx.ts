@@ -27,6 +27,10 @@ const DESCRIPTION = [
   '',
   '【分页】需要强制分页时,在 Markdown 里单独写一行 `<!-- pagebreak -->`。',
   '',
+  '【版式】给了 title 默认出独立封面(可用 cover:false 关掉);subtitle 写在封面强调线上方。',
+  'theme: "light"(默认) / "dark" / "navy"。标题层级、表格色带/斑马纹、正文页脚页码都已内置,',
+  '不需要为了好看去写 HTML。',
+  '',
   '【输出】outPath 必须在本任务的工作目录内(建议 documents/ 子目录,文件名带日期)。',
   '目录不存在会自动创建;同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
 ].join('\n');
@@ -48,21 +52,39 @@ export function registerMakeDocxTool(
       title: z
         .string()
         .optional()
-        .describe('可选文档标题:写进 Word 文档属性,并在正文最前加一个标题段。'),
+        .describe('可选文档标题:写进 Word 文档属性;默认再生成一页封面。'),
+      subtitle: z.string().optional().describe('封面副题 / 密级 / 来源一行。没给 title 时无效。'),
+      cover: z
+        .boolean()
+        .optional()
+        .describe('是否生成独立封面页。给了 title 时默认 true;没给 title 时无效。'),
+      theme: z
+        .enum(['light', 'dark', 'navy'])
+        .default('light')
+        .describe('配色主题:light / dark / navy。影响标题色、表头色带和斑马纹。'),
       overwrite: z
         .boolean()
         .default(false)
         .describe('目标文件已存在时是否覆盖。默认 false(存在即报 FILE_EXISTS)。'),
     },
-    handler: async ({ markdown, outPath, title, overwrite }) => {
+    handler: async ({ markdown, outPath, title, subtitle, cover, theme, overwrite }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareOutputPath(root, outPath, overwrite);
-        const buffer = await markdownToDocxBuffer(markdown, title ? { title } : {});
+        const trimmedTitle = title?.trim() ?? '';
+        const useCover = trimmedTitle.length > 0 && (cover ?? true);
+        const buffer = await markdownToDocxBuffer(markdown, {
+          theme,
+          cover: useCover,
+          ...(trimmedTitle.length > 0 ? { title: trimmedTitle } : {}),
+          ...(subtitle ? { subtitle } : {}),
+        });
         await fs.writeFile(abs, buffer);
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'docx',
+          theme,
+          cover: useCover,
         });
       } catch (err) {
         if (err instanceof DocsPathError) {

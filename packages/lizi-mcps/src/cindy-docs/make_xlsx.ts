@@ -13,6 +13,13 @@ import { z } from 'zod';
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import { describeOutput, DocsPathError, prepareOutputPath, resolveSessionRoot } from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
+import {
+  DEFAULT_DOCS_THEME,
+  resolveDocsTheme,
+  themeToArgb,
+  type DocsTheme,
+  type DocsThemeName,
+} from './themes.js';
 import type { DocsMcpSessionCtx } from './types.js';
 
 /** 列宽估算上下限:太窄看不全,太宽一屏放不下几列。 */
@@ -20,7 +27,7 @@ const MIN_COL_WIDTH = 8;
 const MAX_COL_WIDTH = 60;
 /** 只用前若干行估宽 —— 万行表逐格量宽既慢又没必要。 */
 const WIDTH_SAMPLE_ROWS = 200;
-const HEADER_FILL = 'FFF2F3F5';
+const BORDER_ROW_CAP = 2000;
 
 const DESCRIPTION = [
   '把结构化数据生成为 Excel 工作簿(.xlsx),支持多个工作表。',
@@ -28,7 +35,9 @@ const DESCRIPTION = [
   '【何时用】用户要 Excel / 表格文件 / 对账表 / 可以自己排序筛选的数据。',
   '数据本身要是二维的(行 × 列);一段叙述性文字应该用 make_docx 而不是本工具。',
   '',
-  '【格式】每张表的 header 会加粗 + 浅色底 + 冻结首行,列宽按内容自适应。',
+  '【格式】每张表的 header 会加粗 + 主题强调色带 + 冻结首行,列宽按内容自适应。',
+  '数据行默认斑马纹;整数列自动千分位,0–1 的占比列(表头含 % / 率 / 占比)自动百分号。',
+  'theme: "light"(默认) / "dark" / "navy";zebra 默认 true。',
   'rows 里的每个单元格可以是字符串、数字、布尔或 null(留空)。',
   '数字请传数字类型而不是字符串,否则 Excel 里不能参与求和。',
   '',
@@ -98,6 +107,61 @@ function cellText(value: unknown): string {
   return String(value);
 }
 
+function numericSamples(values: unknown[]): number[] {
+  const out: number[] = [];
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      out.push(value);
+      continue;
+    }
+    if (isFormulaCell(value) && typeof value.result === 'number' && Number.isFinite(value.result)) {
+      out.push(value.result);
+    }
+  }
+  return out;
+}
+
+/** 按表头语义 + 列里的数推断一种对人友好的默认数字格式。 */
+export function inferNumberFormat(header: string | undefined, values: unknown[]): string | undefined {
+  const nums = numericSamples(values);
+  if (nums.length === 0) return undefined;
+  const label = header ?? '';
+  const looksPercent = /[%％]|占比|比率|百分|percent|rate/i.test(label);
+  if (looksPercent && nums.every((n) => n >= 0 && n <= 1)) return '0.0%';
+  if (nums.every((n) => Number.isInteger(n))) return '#,##0';
+  return '#,##0.00';
+}
+
+function paintRow(
+  row: ExcelJS.Row,
+  fillArgb: string,
+  font?: Partial<ExcelJS.Font>,
+): void {
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: fillArgb },
+    };
+    if (font) cell.font = { ...(cell.font ?? {}), ...font };
+  });
+}
+
+function applyThinBorder(ws: ExcelJS.Worksheet, theme: DocsTheme, rows: number, cols: number): void {
+  if (rows === 0 || cols === 0 || rows * cols > BORDER_ROW_CAP * 8) return;
+  const border = {
+    style: 'thin' as const,
+    color: { argb: themeToArgb(theme.line) },
+  };
+  const box = { top: border, bottom: border, left: border, right: border };
+  const limit = Math.min(rows, BORDER_ROW_CAP);
+  for (let r = 1; r <= limit; r += 1) {
+    for (let c = 1; c <= cols; c += 1) {
+      ws.getCell(r, c).border = box;
+    }
+  }
+}
+
 /** 估算显示宽度:CJK 与全角字符占两格,其余占一格。 */
 function displayWidth(text: string): number {
   let width = 0;
@@ -136,7 +200,7 @@ export function registerMakeXlsxTool(
             header: z
               .array(z.string())
               .optional()
-              .describe('可选表头行。给了就会加粗 + 冻结首行。'),
+              .describe('可选表头行。给了就会加粗 + 主题色带 + 冻结首行。'),
             rows: z
               .array(z.array(CellSchema))
               .describe('数据行,每行是一个单元格数组。数字请用数字类型。'),
@@ -148,15 +212,21 @@ export function registerMakeXlsxTool(
         .string()
         .min(1)
         .describe('输出 .xlsx 路径,工作目录内的相对路径或绝对路径。'),
+      theme: z
+        .enum(['light', 'dark', 'navy'])
+        .default('light')
+        .describe('配色主题:light / dark / navy。影响表头色带和斑马纹。'),
+      zebra: z.boolean().default(true).describe('数据行是否打斑马纹。默认 true。'),
       overwrite: z
         .boolean()
         .default(false)
         .describe('目标文件已存在时是否覆盖。默认 false。'),
     },
-    handler: async ({ sheets, outPath, overwrite }) => {
+    handler: async ({ sheets, outPath, theme, zebra, overwrite }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareOutputPath(root, outPath, overwrite);
+        const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
 
         const workbook = new ExcelJS.Workbook();
         workbook.creator = 'Cindy';
@@ -179,16 +249,20 @@ export function registerMakeXlsxTool(
           const ws = workbook.addWorksheet(unique);
           if (sheet.header && sheet.header.length > 0) {
             const headerRow = ws.addRow(sheet.header);
-            headerRow.font = { bold: true };
-            headerRow.fill = {
-              type: 'pattern',
-              pattern: 'solid',
-              fgColor: { argb: HEADER_FILL },
-            };
+            headerRow.font = { bold: true, color: { argb: themeToArgb(palette.accentOn) } };
+            paintRow(
+              headerRow,
+              themeToArgb(palette.accent),
+              { bold: true, color: { argb: themeToArgb(palette.accentOn) } },
+            );
+            headerRow.alignment = { vertical: 'middle' };
             ws.views = [{ state: 'frozen', ySplit: 1 }];
           }
-          for (const row of sheet.rows) {
-            ws.addRow(row.map(toExcelValue));
+          for (const [rowIndex, row] of sheet.rows.entries()) {
+            const excelRow = ws.addRow(row.map(toExcelValue));
+            if (zebra && rowIndex % 2 === 1) {
+              paintRow(excelRow, themeToArgb(palette.zebra));
+            }
           }
 
           const columnCount = Math.max(
@@ -202,11 +276,24 @@ export function registerMakeXlsxTool(
             for (const row of sampled) {
               width = Math.max(width, displayWidth(cellText(row[col])));
             }
-            ws.getColumn(col + 1).width = Math.min(
-              MAX_COL_WIDTH,
-              Math.max(MIN_COL_WIDTH, width + 2),
+            const column = ws.getColumn(col + 1);
+            column.width = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, width + 2));
+            const numFmt = inferNumberFormat(
+              sheet.header?.[col],
+              sheet.rows.map((row) => row[col]),
             );
+            if (numFmt) {
+              column.numFmt = numFmt;
+              column.alignment = { horizontal: 'right' };
+            }
           }
+          if (sheet.header && sheet.header.length > 0) {
+            ws.autoFilter = {
+              from: { row: 1, column: 1 },
+              to: { row: ws.rowCount, column: columnCount },
+            };
+          }
+          applyThinBorder(ws, palette, ws.rowCount, columnCount);
         }
 
         const arrayBuffer = await workbook.xlsx.writeBuffer();
@@ -214,6 +301,8 @@ export function registerMakeXlsxTool(
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'xlsx',
+          theme,
+          zebra,
           sheets: sheets.map((s) => ({ name: s.name, rows: s.rows.length })),
         });
       } catch (err) {

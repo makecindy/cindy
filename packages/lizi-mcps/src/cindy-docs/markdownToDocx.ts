@@ -23,21 +23,28 @@ import {
   PageBreak,
   Paragraph,
   Table,
-  TableCell,
   TableRow,
   TextRun,
-  WidthType,
   ExternalHyperlink,
   type IParagraphOptions,
   type ParagraphChild,
 } from 'docx';
 import { marked, type Token, type Tokens } from 'marked';
 
+import {
+  docxBodyFooter,
+  docxBodySectionProperties,
+  docxCoverSection,
+  docxDocumentStyles,
+  styledDocxBodyCell,
+  styledDocxHeaderCell,
+  styledDocxTable,
+} from './docxStyles.js';
+import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsTheme, type DocsThemeName } from './themes.js';
+
 /** 有序列表用的 numbering reference;每个顶层有序列表分配一个 instance 以便重新从 1 开始。 */
 const ORDERED_REF = 'cindy-docs-ordered';
 const MONO_FONT = 'Courier New';
-const CODE_FILL = 'F2F3F5';
-const QUOTE_COLOR = '5C6470';
 
 const HEADING_BY_DEPTH = [
   HeadingLevel.HEADING_1,
@@ -55,36 +62,41 @@ interface InlineStyle {
   bold?: boolean;
   italics?: boolean;
   strike?: boolean;
+  color?: string;
 }
 
 /** 把 marked 的 inline token 递归摊成 docx run。未知类型降级为纯文本,不丢内容。 */
-function inlineRuns(tokens: Token[] | undefined, style: InlineStyle = {}): ParagraphChild[] {
+function inlineRuns(
+  tokens: Token[] | undefined,
+  theme: DocsTheme,
+  style: InlineStyle = {},
+): ParagraphChild[] {
   if (!tokens || tokens.length === 0) return [];
   const out: ParagraphChild[] = [];
   for (const token of tokens) {
     switch (token.type) {
       case 'strong':
-        out.push(...inlineRuns((token as Tokens.Strong).tokens, { ...style, bold: true }));
+        out.push(...inlineRuns((token as Tokens.Strong).tokens, theme, { ...style, bold: true }));
         break;
       case 'em':
-        out.push(...inlineRuns((token as Tokens.Em).tokens, { ...style, italics: true }));
+        out.push(...inlineRuns((token as Tokens.Em).tokens, theme, { ...style, italics: true }));
         break;
       case 'del':
-        out.push(...inlineRuns((token as Tokens.Del).tokens, { ...style, strike: true }));
+        out.push(...inlineRuns((token as Tokens.Del).tokens, theme, { ...style, strike: true }));
         break;
       case 'codespan':
         out.push(
           new TextRun({
             text: (token as Tokens.Codespan).text,
             font: MONO_FONT,
-            shading: { fill: CODE_FILL },
+            shading: { fill: theme.surface },
             ...style,
           }),
         );
         break;
       case 'link': {
         const link = token as Tokens.Link;
-        const children = inlineRuns(link.tokens, style);
+        const children = inlineRuns(link.tokens, theme, style);
         out.push(
           new ExternalHyperlink({
             link: link.href,
@@ -110,7 +122,7 @@ function inlineRuns(tokens: Token[] | undefined, style: InlineStyle = {}): Parag
       default: {
         const nested = (token as { tokens?: Token[] }).tokens;
         if (nested && nested.length > 0) {
-          out.push(...inlineRuns(nested, style));
+          out.push(...inlineRuns(nested, theme, style));
           break;
         }
         const text = (token as { text?: string; raw?: string }).text
@@ -131,15 +143,17 @@ function inlineRuns(tokens: Token[] | undefined, style: InlineStyle = {}): Parag
  */
 interface BlockContext {
   instance: number;
+  theme: DocsTheme;
 }
 
-/** 引用块内的段落样式:左侧竖线 + 缩进 + 灰字。 */
-const QUOTE_PARAGRAPH_STYLE = {
-  indent: { left: 360 },
-  border: {
-    left: { style: BorderStyle.SINGLE, size: 12, space: 8, color: QUOTE_COLOR },
-  },
-} as const;
+function quoteParagraphStyle(theme: DocsTheme) {
+  return {
+    indent: { left: 360 },
+    border: {
+      left: { style: BorderStyle.SINGLE, size: 12, space: 8, color: theme.muted },
+    },
+  } as const;
+}
 
 function listParagraphs(
   list: Tokens.List,
@@ -160,7 +174,7 @@ function listParagraphs(
       : undefined;
     out.push(
       new Paragraph({
-        children: inlineRuns(inline),
+        children: inlineRuns(inline, ctx.theme),
         ...(numbering ? { numbering } : { bullet: { level } }),
         spacing: { after: 60 },
       }),
@@ -172,7 +186,7 @@ function listParagraphs(
   return out;
 }
 
-function codeParagraphs(code: Tokens.Code): Paragraph[] {
+function codeParagraphs(code: Tokens.Code, theme: DocsTheme): Paragraph[] {
   const lines = code.text.split('\n');
   return lines.map(
     (line, index) =>
@@ -185,7 +199,7 @@ function codeParagraphs(code: Tokens.Code): Paragraph[] {
             size: 20,
           }),
         ],
-        shading: { fill: CODE_FILL },
+        shading: { fill: theme.surface },
         spacing: {
           before: index === 0 ? 120 : 0,
           after: index === lines.length - 1 ? 120 : 0,
@@ -201,46 +215,31 @@ function alignmentFor(align: 'center' | 'left' | 'right' | null): (typeof Alignm
   return undefined;
 }
 
-function tableBlock(table: Tokens.Table): Table {
+function tableBlock(table: Tokens.Table, theme: DocsTheme): Table {
   const headerRow = new TableRow({
     tableHeader: true,
-    children: table.header.map(
-      (cell, col) =>
-        new TableCell({
-          shading: { fill: CODE_FILL },
-          children: [
-            new Paragraph({
-              children: inlineRuns(cell.tokens, { bold: true }),
-              ...(alignmentFor(table.align?.[col] ?? null)
-                ? { alignment: alignmentFor(table.align?.[col] ?? null) }
-                : {}),
-            }),
-          ],
-        }),
+    children: table.header.map((cell, col) =>
+      styledDocxHeaderCell(
+        theme,
+        inlineRuns(cell.tokens, theme, { bold: true, color: theme.accentOn }),
+        alignmentFor(table.align?.[col] ?? null),
+      ),
     ),
   });
   const bodyRows = table.rows.map(
-    (row) =>
+    (row, rowIndex) =>
       new TableRow({
-        children: row.map(
-          (cell, col) =>
-            new TableCell({
-              children: [
-                new Paragraph({
-                  children: inlineRuns(cell.tokens),
-                  ...(alignmentFor(table.align?.[col] ?? null)
-                    ? { alignment: alignmentFor(table.align?.[col] ?? null) }
-                    : {}),
-                }),
-              ],
-            }),
+        children: row.map((cell, col) =>
+          styledDocxBodyCell(
+            theme,
+            rowIndex % 2 === 1,
+            inlineRuns(cell.tokens, theme),
+            alignmentFor(table.align?.[col] ?? null),
+          ),
         ),
       }),
   );
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: [headerRow, ...bodyRows],
-  });
+  return styledDocxTable(theme, [headerRow, ...bodyRows]);
 }
 
 /** inQuote 单独传参而不是塞进 ctx:它是随递归深度变化的位置信息,不是文档级状态。 */
@@ -249,7 +248,7 @@ function blocksFromTokens(
   ctx: BlockContext,
   inQuote = false,
 ): Array<Paragraph | Table> {
-  const quoteStyle = inQuote ? QUOTE_PARAGRAPH_STYLE : {};
+  const quoteStyle = inQuote ? quoteParagraphStyle(ctx.theme) : {};
   const out: Array<Paragraph | Table> = [];
   for (const token of tokens) {
     switch (token.type) {
@@ -259,7 +258,7 @@ function blocksFromTokens(
         out.push(
           new Paragraph({
             heading: level,
-            children: inlineRuns(heading.tokens),
+            children: inlineRuns(heading.tokens, ctx.theme),
             spacing: { before: 240, after: 120 },
             ...quoteStyle,
           }),
@@ -271,7 +270,7 @@ function blocksFromTokens(
         // blockquote 内的单行会被 marked 归成 'text' 而不是 'paragraph',
         // 两者同构处理,否则引用块只剩空段。
         const paragraph = token as Tokens.Paragraph;
-        const children = inlineRuns(paragraph.tokens);
+        const children = inlineRuns(paragraph.tokens, ctx.theme);
         out.push(
           new Paragraph({
             children:
@@ -290,10 +289,10 @@ function blocksFromTokens(
         break;
       }
       case 'code':
-        out.push(...codeParagraphs(token as Tokens.Code));
+        out.push(...codeParagraphs(token as Tokens.Code, ctx.theme));
         break;
       case 'table':
-        out.push(tableBlock(token as Tokens.Table));
+        out.push(tableBlock(token as Tokens.Table, ctx.theme));
         // Word 里表格紧跟正文会粘在一起,补一个空段落当间距。
         out.push(new Paragraph({ children: [], spacing: { after: 120 } }));
         break;
@@ -305,7 +304,7 @@ function blocksFromTokens(
           new Paragraph({
             children: [],
             border: {
-              bottom: { style: BorderStyle.SINGLE, size: 6, space: 1, color: 'C4C8CF' },
+              bottom: { style: BorderStyle.SINGLE, size: 6, space: 1, color: ctx.theme.line },
             },
             spacing: { before: 120, after: 120 },
           }),
@@ -336,8 +335,13 @@ function blocksFromTokens(
 }
 
 export interface MarkdownToDocxOptions {
-  /** 文档标题:同时写进 docx core properties,并在正文最前插入一个 Title 段。 */
+  /** 文档标题:写进 core properties;cover=true 时做独立封面,否则插在正文最前。 */
   title?: string;
+  /** 封面副题 / 密级 / 来源一行。 */
+  subtitle?: string;
+  /** 是否生成独立封面页。给了 title 时默认 true。 */
+  cover?: boolean;
+  theme?: DocsThemeName;
 }
 
 /** 把 Markdown 编成 .docx 字节。纯函数,不碰文件系统。 */
@@ -345,16 +349,19 @@ export async function markdownToDocxBuffer(
   markdown: string,
   options: MarkdownToDocxOptions = {},
 ): Promise<Buffer> {
+  const theme = resolveDocsTheme(options.theme ?? DEFAULT_DOCS_THEME);
+  const title = options.title?.trim() ?? '';
+  const useCover = Boolean(title) && (options.cover ?? true);
   const tokens = marked.lexer(markdown ?? '');
-  const ctx: BlockContext = { instance: 0 };
+  const ctx: BlockContext = { instance: 0, theme };
   const body = blocksFromTokens(tokens, ctx);
 
   const children: Array<Paragraph | Table> = [];
-  if (options.title && options.title.trim().length > 0) {
+  if (title.length > 0 && !useCover) {
     children.push(
       new Paragraph({
         heading: HeadingLevel.TITLE,
-        children: [new TextRun({ text: options.title.trim() })],
+        children: [new TextRun({ text: title, color: theme.title })],
         spacing: { after: 240 },
       }),
     );
@@ -364,10 +371,15 @@ export async function markdownToDocxBuffer(
     children.push(new Paragraph({ children: [] }));
   }
 
+  const bodySection = {
+    properties: docxBodySectionProperties(),
+    footers: { default: docxBodyFooter(theme) },
+    children,
+  };
+
   const doc = new Document({
-    ...(options.title && options.title.trim().length > 0
-      ? { title: options.title.trim() }
-      : {}),
+    ...(title.length > 0 ? { title } : {}),
+    styles: docxDocumentStyles(theme),
     numbering: {
       config: [
         {
@@ -384,7 +396,15 @@ export async function markdownToDocxBuffer(
         },
       ],
     },
-    sections: [{ children }],
+    sections: useCover
+      ? [
+          docxCoverSection(theme, {
+            title,
+            ...(options.subtitle ? { subtitle: options.subtitle } : {}),
+          }),
+          bodySection,
+        ]
+      : [bodySection],
   });
   return Packer.toBuffer(doc);
 }

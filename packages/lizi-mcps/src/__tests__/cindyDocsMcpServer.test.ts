@@ -601,6 +601,7 @@ describe('render_pdf', () => {
       outPath: 'out/a.pdf',
       pageSize: 'Letter',
       landscape: true,
+      template: 'none',
       margins: { top: 1, bottom: 1, left: 0.5, right: 0.5 },
     });
     expect(result.ok).toBe(true);
@@ -630,6 +631,7 @@ describe('render_pdf', () => {
     const result = await callTool(client, 'render_pdf', {
       htmlPath: 'src.html',
       outPath: 'a.pdf',
+      template: 'none',
     });
     expect(result.ok).toBe(true);
     expect(seen[0]!.htmlPath).toBe(path.join(workdir, 'src.html'));

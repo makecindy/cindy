@@ -6,7 +6,15 @@
  */
 
 export { registerMakeDocxTool } from './make_docx.js';
-export { registerMakePptxTool, PPTX_THEMES, isSupportedPptxImage } from './make_pptx.js';
+export {
+  registerMakePptxTool,
+  PPTX_THEMES,
+  PPTX_LAYOUT_IDS,
+  PPTX_LAYOUT_NAMES,
+  DEFAULT_PPTX_LAYOUT,
+  isSupportedPptxImage,
+} from './make_pptx.js';
+export { DOCS_THEMES, resolveDocsTheme, formatDocsDate } from './themes.js';
 export { registerMakeXlsxTool } from './make_xlsx.js';
 export { registerReadSheetTool } from './read_sheet.js';
 export {
@@ -17,6 +25,12 @@ export {
 export { registerInspectPdfTool, INSPECT_PDF_TIMEOUT_MS } from './inspect_pdf.js';
 
 export { markdownToDocxBuffer, type MarkdownToDocxOptions } from './markdownToDocx.js';
+export {
+  applyReportTemplate,
+  htmlLooksUnstyled,
+  htmlHasRelativeResources,
+} from './pdfTemplate.js';
+export { inferNumberFormat } from './make_xlsx.js';
 export { parseDelimited, delimiterForExtension, type ParseDelimitedOptions } from './csv.js';
 export {
   DocsPathError,
