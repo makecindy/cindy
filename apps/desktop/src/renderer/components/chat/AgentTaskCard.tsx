@@ -12,7 +12,10 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { deriveAgentTaskStatus } from '@cindy/maker-shared/agent-task';
+import {
+  deriveAgentTaskStatus,
+  type AgentTaskTerminalStatus,
+} from '@cindy/maker-shared/agent-task';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
@@ -44,6 +47,7 @@ interface AgentTaskCardProps {
   toolCall?: ChatMessage;
   update?: AgentTaskUpdate;
   result?: string;
+  persistedStatus?: AgentTaskTerminalStatus;
   /**
    * subagent-model-chip: 子代理实际跑的模型 raw id,由 MessageStream 用
    * parentToolUseId→model 映射(从子消息 agentMeta 反查)解析后传入,作为
@@ -148,6 +152,7 @@ export function AgentTaskCard({
   toolCall,
   update,
   result,
+  persistedStatus,
   subagentModel,
   sessionId,
   sessionAgentKind,
@@ -226,6 +231,7 @@ export function AgentTaskCard({
   const status = isWorkflow
     ? (update?.status ?? historyFileStatus ?? (result ? 'completed' : 'running'))
     : deriveAgentTaskStatus(update?.status, result, {
+        persistedStatus,
         resultIsLaunchReceipt:
           subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
           || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
