@@ -63,7 +63,7 @@ export function shouldRebuildPiNativeSession(data: unknown): boolean {
 
 const GROK_4_CONTEXT_CAP = 500_000;
 
-export function effectivePiContextWindow(
+export function effectiveContextWindow(
   model: string | null | undefined,
   reportedWindow: number,
   verifiedWindow?: number | null,
@@ -76,18 +76,30 @@ export function effectivePiContextWindow(
   return reported;
 }
 
+/** @deprecated Kept for callers/tests that still use the old PI-specific name. */
+export const effectivePiContextWindow = effectiveContextWindow;
+
 export function lookupVerifiedContextWindow(
-  resolve: ((modelId: string, providerId: string | null) => number | null) | undefined,
+  resolve:
+    | ((agentKind: string, modelId: string, providerId: string | null) => number | null)
+    | undefined,
   model: string | null | undefined,
   providerId?: string | null,
+  agentKind?: string,
 ): number | null {
   if (!resolve || !model) return null;
   const ids = [model];
   const slash = model.lastIndexOf('/');
   if (slash >= 0) ids.push(model.slice(slash + 1));
   if (model.startsWith('x-ai/')) ids.push(`xai/${model.slice(5)}`);
+  // A missing provider is an unresolved route, not permission to borrow the
+  // xAI catalog entry. The Grok model-level cap below remains the only generic
+  // fallback; directory lookup must stay scoped to this session's provider.
+  const providerIds = [providerId ?? null];
   for (const id of [...new Set(ids)]) {
-    const hit = resolve(id, providerId ?? null) ?? resolve(id, 'xai');
+    const callResolve = (pid: string | null): number | null =>
+      resolve(agentKind ?? 'pi', id, pid);
+    const hit = providerIds.map(callResolve).find((value) => typeof value === 'number' && value > 0);
     if (typeof hit === 'number' && hit > 0) return hit;
   }
   return null;
@@ -217,14 +229,19 @@ export function errorContentToData(content: unknown): unknown {
   return content;
 }
 
-/** 最近一条终态若是超限/prompt 超时，则原生会话已死，发送前不要再 resume。 */
-export function findLatestRebuildableError(messages: OverflowSourceMessage[]): unknown | null {
+/** 最近一条终态若是超限，或（PI 专属）prompt 超时，则原生会话已死，发送前不要再 resume。 */
+export function findLatestRebuildableError(
+  messages: OverflowSourceMessage[],
+  allowPiPromptTimeout = true,
+): unknown | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (!message) continue;
     if (message.role === 'error') {
       const data = errorContentToData(message.content);
-      return shouldRebuildPiNativeSession(data) ? data : null;
+      if (isContextOverflowErrorData(data)) return data;
+      if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
+      return null;
     }
     if (message.role === 'assistant' && extractPlainText(message.content).trim().length > 0) {
       return null;
@@ -245,7 +262,11 @@ export interface ContextOverflowRolloverDeps {
     model?: string | null;
     providerId?: string | null;
   } | null>;
-  resolveVerifiedWindow?(modelId: string, providerId: string | null): number | null;
+  resolveVerifiedWindow?(
+    agentKind: string,
+    modelId: string,
+    providerId: string | null,
+  ): number | null;
   getAutoCompactThresholdPct?(): number | undefined;
   listMessages(sessionId: string): Promise<OverflowSourceMessage[]>;
   findLatestRebuildMeta(
@@ -293,7 +314,6 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     if (sessionRow.remoteHostId) return false;
-    if (sessionRow.agentKind !== 'pi') return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
@@ -352,18 +372,19 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     if (!sessionRow || sessionRow.status === 'deleted') return false;
-    if (sessionRow.remoteHostId || sessionRow.agentKind !== 'pi') return false;
+    if (sessionRow.remoteHostId) return false;
     if (!sessionRow.sdkSessionId) return false;
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning()) return false;
     const source = await deps.listMessages(sessionId);
-    const lastError = findLatestRebuildableError(source);
+    const lastError = findLatestRebuildableError(source, sessionRow.agentKind === 'pi');
     const verified = lookupVerifiedContextWindow(
       deps.resolveVerifiedWindow,
       sessionRow.model,
       sessionRow.providerId,
+      sessionRow.agentKind,
     );
-    const window = effectivePiContextWindow(
+    const window = effectiveContextWindow(
       sessionRow.model,
       typeof sessionRow.contextWindow === 'number' ? sessionRow.contextWindow : 0,
       verified,
@@ -411,7 +432,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     });
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     deps.onRebuilt?.(sessionId);
-    deps.log.info('unhealthy PI native session rebuilt before send; skip compact/resume', {
+    deps.log.info('unhealthy native session rebuilt before send; skip compact/resume', {
       sessionId,
       sourceUserClientId: lastUser.clientId,
     });
@@ -448,11 +469,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       try {
         return await deps.withCloseSuppressed(sessionId, () => runPrepare(sessionId));
       } catch (error) {
-        deps.log.warn('unhealthy PI session prepare failed', {
+        deps.log.warn('unhealthy native session prepare failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),
         });
-        return false;
+        // A failed pre-send rebuild must not fall through to the caller's
+        // stale resume/fork/thread options. Let the send boundary fail closed.
+        throw error;
       } finally {
         inFlight.delete(sessionId);
       }

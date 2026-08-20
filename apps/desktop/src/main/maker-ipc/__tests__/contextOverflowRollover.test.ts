@@ -59,9 +59,12 @@ describe('shouldRebuildPiNativeSession', () => {
   it('treats Grok 4 remaining-window pressure as a rebuild even if the DB window is inflated', () => {
     expect(effectivePiContextWindow('x-ai/grok-4.6', 1_050_000)).toBe(500_000);
     expect(effectivePiContextWindow('x-ai/grok-4.6', 1_050_000, 500_000)).toBe(500_000);
-    expect(lookupVerifiedContextWindow((id) => (id === 'grok-4.6' ? 500_000 : null), 'x-ai/grok-4.6')).toBe(
-      500_000,
-    );
+    expect(
+      lookupVerifiedContextWindow(
+        (_agentKind, id) => (id === 'grok-4.6' ? 500_000 : null),
+        'x-ai/grok-4.6',
+      ),
+    ).toBe(500_000);
     expect(shouldRebuildForContextPressure(553_582, 1_050_000)).toBe(false);
     expect(shouldRebuildForContextPressure(553_582, effectivePiContextWindow('x-ai/grok-4.6', 1_050_000))).toBe(
       true,
@@ -69,6 +72,30 @@ describe('shouldRebuildPiNativeSession', () => {
     expect(shouldRebuildForContextPressure(400_000, 500_000)).toBe(false);
     expect(shouldRebuildForContextPressure(400_000, 500_000, 75)).toBe(true);
     expect(shouldRebuildForContextPressure(450_000, 500_000)).toBe(true);
+  });
+
+  it('resolves a verified window with the session agent and explicit provider', () => {
+    const resolve = vi.fn(
+      (agentKind: string, modelId: string, providerId: string | null) =>
+        agentKind === 'codex' && modelId === 'gpt-5.6' && providerId === 'xd'
+          ? 372_000
+          : null,
+    );
+
+    expect(lookupVerifiedContextWindow(resolve, 'gpt-5.6', 'xd', 'codex')).toBe(372_000);
+    expect(resolve).toHaveBeenCalledWith('codex', 'gpt-5.6', 'xd');
+    expect(resolve).not.toHaveBeenCalledWith('codex', 'gpt-5.6', 'xai');
+  });
+
+  it('does not borrow the xAI route when the session provider is unresolved', () => {
+    const resolve = vi.fn(
+      (_agentKind: string, _modelId: string, providerId: string | null) =>
+        providerId === 'xai' ? 500_000 : null,
+    );
+
+    expect(lookupVerifiedContextWindow(resolve, 'grok-4.6')).toBeNull();
+    expect(resolve).toHaveBeenCalledWith('pi', 'grok-4.6', null);
+    expect(resolve).not.toHaveBeenCalledWith('pi', 'grok-4.6', 'xai');
   });
 
   it('does not rebuild on other PI RPC timeouts', () => {
@@ -89,6 +116,12 @@ describe('shouldRebuildPiNativeSession', () => {
         msg('user', '还有建议吗', 'u1'),
         msg('assistant', '这是回答', 'a1'),
       ]),
+    ).toBeNull();
+    expect(
+      findLatestRebuildableError(
+        [msg('user', '继续', 'u1'), msg('error', { message: 'pi rpc timeout after 30000ms: prompt' }, 'e1')],
+        false,
+      ),
     ).toBeNull();
   });
 });
@@ -151,7 +184,7 @@ describe('createContextOverflowRollover', () => {
       getSessionRow: vi.fn(async () => ({
         status: 'active',
         agentKind: 'pi',
-        remoteHostId: null,
+        remoteHostId: null as string | null,
         clearedAt: null,
         sdkSessionId: '/tmp/dead.jsonl',
         contextTokens: 0,
@@ -258,6 +291,52 @@ describe('createContextOverflowRollover', () => {
     expect(deps.commitRebuild).toHaveBeenCalled();
   });
 
+  it('uses the same pressure guard for Claude Code and Codex before send', async () => {
+    for (const agentKind of ['cc', 'codex'] as const) {
+      const deps = makeDeps([
+        msg('user', '继续', 'u1'),
+        msg('assistant', '好', 'a1'),
+      ]);
+      deps.getSessionRow.mockResolvedValue({
+        status: 'active',
+        agentKind,
+        remoteHostId: null,
+        clearedAt: null,
+        sdkSessionId: `/tmp/dead-${agentKind}`,
+        contextTokens: 400_000,
+        contextWindow: 500_000,
+        model: 'model',
+        providerId: 'xd',
+      });
+      deps.getAutoCompactThresholdPct = vi.fn(() => 75);
+      const rollover = createContextOverflowRollover(deps);
+
+      await expect(rollover.prepareUnhealthySession(`session-${agentKind}`)).resolves.toBe(true);
+      expect(deps.commitRebuild).toHaveBeenCalled();
+      deps.commitRebuild.mockClear();
+    }
+  });
+
+  it('fails closed when a pre-send rebuild cannot commit', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: 'dead-thread',
+      contextTokens: 400_000,
+      contextWindow: 500_000,
+      model: 'gpt-5.6',
+      providerId: 'xd',
+    });
+    deps.getAutoCompactThresholdPct = vi.fn(() => 75);
+    deps.commitRebuild.mockRejectedValue(new Error('db unavailable'));
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(rollover.prepareUnhealthySession('s1')).rejects.toThrow('db unavailable');
+  });
+
   it('drains persist queue before reading messages on prepare', async () => {
     const order: string[] = [];
     const deps = makeDeps([
@@ -324,14 +403,14 @@ describe('createContextOverflowRollover', () => {
     ).resolves.toBe(false);
   });
 
-  it('does not rollover a non-Pi session', async () => {
+  it('rolls over a local Claude Code session on explicit overflow', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
       status: 'active',
       agentKind: 'cc',
       remoteHostId: null,
       clearedAt: null,
-      sdkSessionId: '',
+      sdkSessionId: '/tmp/dead-claude.jsonl',
       contextTokens: 0,
       contextWindow: 0,
       model: '',
@@ -341,8 +420,53 @@ describe('createContextOverflowRollover', () => {
     rollover.claim('s1');
     await expect(
       rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+    ).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('rolls over a local Codex session on explicit overflow', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead-codex-thread',
+      contextTokens: 0,
+      contextWindow: 0,
+      model: '',
+      providerId: '',
+    });
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+    ).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('keeps remote sessions out of automatic rollover', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'codex',
+      remoteHostId: 'remote-1',
+      clearedAt: null,
+      sdkSessionId: 'thread-1',
+      contextTokens: 500_000,
+      contextWindow: 500_000,
+      model: 'gpt-5.6',
+      providerId: 'xd',
+    });
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+
+    await expect(
+      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
     ).resolves.toBe(false);
     expect(deps.closeSession).not.toHaveBeenCalled();
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
   });
 });
 
