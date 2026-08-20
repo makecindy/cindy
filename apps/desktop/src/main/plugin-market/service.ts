@@ -62,7 +62,10 @@ import {
   isBuiltinGhostRemovedByUser,
   uninstallGhostAndCleanup,
 } from '../cindy-brain/index.js';
-import { isCindyOfficialTrustInfo } from '../cindy-brain/GhostManager.js';
+import {
+  hasCindyOfficialTrustMetadata,
+  isCindyOfficialTrustInfo,
+} from '../cindy-brain/GhostManager.js';
 import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
@@ -454,7 +457,10 @@ function canBackfillOfficialCindyGithubTrust(
     record.source === 'market' &&
     record.manifestDigest !== undefined &&
     installed.approval.state === 'approved' &&
-    !isCindyOfficialTrustInfo(installed.trust) &&
+    (
+      !isCindyOfficialTrustInfo(installed.trust) ||
+      !hasCindyOfficialTrustMetadata(installed.dir)
+    ) &&
     serverRecordMatchesInstalledGhost(record.pluginId, installed, record)
   );
 }
