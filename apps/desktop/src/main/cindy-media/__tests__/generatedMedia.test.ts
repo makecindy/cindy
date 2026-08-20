@@ -145,7 +145,7 @@ describe('createBlobVideoStorage.saveVideo(生成视频入仓)', () => {
   });
 });
 
-describe('materializeGeneratedImage(codex 生成图物化,thin adapter 的逻辑本体)', () => {
+describe('materializeOutputImage(Agent 图片输出物化,thin adapter 的逻辑本体)', () => {
   const deps = {
     ingestFromPath: vi.fn(async ({ originalName }: { sourcePath: string; originalName?: string }) => ({
       url: `cindy-media://blobs/${'b'.repeat(64)}.png`,
@@ -155,20 +155,22 @@ describe('materializeGeneratedImage(codex 生成图物化,thin adapter 的逻辑
       url: `cindy-media://blobs/${'c'.repeat(64)}.png`,
       filename: `${'c'.repeat(64)}.png`,
     })),
+    fetchRemoteImage: vi.fn(async () => ({ buffer: PNG_BYTES })),
   };
 
   beforeEach(() => {
     deps.ingestFromPath.mockClear();
     deps.ingestBuffer.mockClear();
+    deps.fetchRemoteImage.mockClear();
   });
 
   it('托管地址(老 xdt-image / 新 cindy-media)原样透传,不重复入仓', async () => {
-    const legacy = await generatedMedia.materializeGeneratedImage(
+    const legacy = await generatedMedia.materializeOutputImage(
       { url: 'xdt-image://sess-1/pic.png' },
       deps,
     );
     expect(legacy).toEqual({ url: 'xdt-image://sess-1/pic.png', filename: 'pic.png' });
-    const blob = await generatedMedia.materializeGeneratedImage(
+    const blob = await generatedMedia.materializeOutputImage(
       { url: `cindy-media://blobs/${'d'.repeat(64)}.png` },
       deps,
     );
@@ -179,24 +181,105 @@ describe('materializeGeneratedImage(codex 生成图物化,thin adapter 的逻辑
   });
 
   it('本地路径 → ingestFromPath;data: base64 → ingestBuffer(mime 从 data url 头取)', async () => {
-    await generatedMedia.materializeGeneratedImage({ path: '/tmp/gen.png' }, deps);
+    await generatedMedia.materializeOutputImage({ path: '/tmp/gen.png' }, deps);
     expect(deps.ingestFromPath).toHaveBeenCalledWith({ sourcePath: '/tmp/gen.png', originalName: 'gen.png' });
 
     const b64 = PNG_BYTES.toString('base64');
-    await generatedMedia.materializeGeneratedImage({ url: `data:image/png;base64,${b64}` }, deps);
+    await generatedMedia.materializeOutputImage({ url: `data:image/png;base64,${b64}` }, deps);
     expect(deps.ingestBuffer).toHaveBeenCalledTimes(1);
     const bufferCalls = deps.ingestBuffer.mock.calls as unknown as Array<[{ mimeType: string }]>;
     expect(bufferCalls[0][0]).toMatchObject({ mimeType: 'image/png' });
   });
 
-  it('认不出的形状返回 null;ingest 抛错向上传播(调用方决定丢图)', async () => {
-    await expect(generatedMedia.materializeGeneratedImage({}, deps)).resolves.toBeNull();
+  it('https 输出经 SSRF 防护下载后按图片魔数入仓，http 不下载', async () => {
+    await generatedMedia.materializeOutputImage(
+      { url: 'https://cdn.example/generated.png' },
+      deps,
+    );
+    expect(deps.fetchRemoteImage).toHaveBeenCalledWith(
+      'https://cdn.example/generated.png',
+      20 * 1024 * 1024,
+    );
+    expect(deps.ingestBuffer).toHaveBeenCalledWith({
+      buffer: PNG_BYTES,
+      mimeType: 'image/png',
+    });
+
     await expect(
-      generatedMedia.materializeGeneratedImage({ url: 'data:text/plain;base64,aGk=' }, deps),
+      generatedMedia.materializeOutputImage(
+        { url: 'http://insecure.example/generated.png' },
+        deps,
+      ),
+    ).resolves.toBeNull();
+    expect(deps.fetchRemoteImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('provider-neutral 输出要求稳定 outputId;相对路径与 SSH 路径拒绝本机读盘', async () => {
+    const output = {
+      outputId: 'output-1',
+      path: '/tmp/qr.png',
+    } as const;
+    expect(generatedMedia.isMaterializableImageOutput(output)).toBe(true);
+    await generatedMedia.materializeOutputImage({ path: '/tmp/qr.png' }, deps, {
+      allowLocalPath: true,
+    });
+    expect(deps.ingestFromPath).toHaveBeenCalledWith({
+      sourcePath: '/tmp/qr.png',
+      originalName: 'qr.png',
+    });
+
+    await expect(
+      generatedMedia.materializeOutputImage({ path: 'relative/qr.png' }, deps),
+    ).resolves.toBeNull();
+    await expect(
+      generatedMedia.materializeOutputImage(
+        { path: '/home/remote/qr.png' },
+        deps,
+        { allowLocalPath: false },
+      ),
+    ).resolves.toBeNull();
+    expect(deps.ingestFromPath).toHaveBeenCalledTimes(1);
+    expect(generatedMedia.isMaterializableImageOutput({ path: '/tmp/no-id.png' })).toBe(false);
+  });
+
+  it('显式图片输出统一使用 imagegen 展示契约', () => {
+    const presentation = generatedMedia.createImageOutputToolPresentation(
+      {
+        outputId: 'gen-1',
+        path: '/tmp/generated.png',
+        prompt: 'draw a cat',
+        status: 'completed',
+      },
+      {
+        url: `cindy-media://blobs/${'f'.repeat(64)}.png`,
+        filename: 'generated.png',
+      },
+    );
+    expect(presentation.toolName).toBe('imagegen');
+    expect(presentation.toolInput).toEqual({ prompt: 'draw a cat', status: 'completed' });
+    expect(JSON.parse(presentation.fullText)).toMatchObject({
+      kind: 'output',
+      text: 'image generated',
+      xdt_image_url: `cindy-media://blobs/${'f'.repeat(64)}.png`,
+      prompt: 'draw a cat',
+    });
+  });
+
+  it('认不出的形状返回 null;ingest 抛错向上传播(调用方决定丢图)', async () => {
+    expect(generatedMedia.isMaterializableImageOutput({ outputId: 'missing-source' })).toBe(false);
+    await expect(generatedMedia.materializeOutputImage({}, deps)).resolves.toBeNull();
+    await expect(
+      generatedMedia.materializeOutputImage({ url: 'data:text/plain;base64,aGk=' }, deps),
+    ).resolves.toBeNull();
+    await expect(
+      generatedMedia.materializeOutputImage(
+        { url: `data:image/png;base64,${Buffer.from('not an image').toString('base64')}` },
+        deps,
+      ),
     ).resolves.toBeNull();
     deps.ingestFromPath.mockRejectedValueOnce(new Error('unsupported image extension'));
     await expect(
-      generatedMedia.materializeGeneratedImage({ path: '/tmp/gen.avif' }, deps),
+      generatedMedia.materializeOutputImage({ path: '/tmp/gen.avif' }, deps),
     ).rejects.toThrow(/unsupported/);
   });
 });

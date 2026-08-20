@@ -20,7 +20,7 @@ export type AgentEventType =
   | 'tool_result'           // 工具调用结果（精简，UI 内嵌显示）
   | 'tool_result_full'      // 工具调用结果（完整，UI 详情面板用）
   | 'agent_task_update'     // 子 agent / task 状态更新（Claude Code task_* + Codex collab agent）
-  | 'image'                 // 模型查看 / 生成的图片 (codex 独有, claude SDK 不会发)
+  | 'image_output'          // Agent 明确交付给用户的图片输出
   | 'account_usage'         // vendor-specific 账号级用量 (codex rateLimits 等); data shape 由 emit 端自定, renderer 按 source/字段嗅探
   | 'turn_diff'             // provider 对本轮工作区变更的累计 unified diff
   | 'interaction_request'   // 需要用户决策(permission / ask_user_question / plan_review)
@@ -326,26 +326,19 @@ export interface UsageSnapshot {
 }
 
 /**
- * 'image' event 的 data 形状 — codex 独有 (claude-code SDK 没有图像生成能力)。
- *
- * 两种 kind:
- *  - 'view':       模型读了一张图 (codex ImageView item, 只有 path)
- *  - 'generation': 模型生成了一张图 (codex ImageGeneration item)
- *
- * path / url 至少有一个 — view 一律走 path; generation 落盘了走 path, 否则 url
- * (codex 偶尔返 base64 data URL, renderer 自己识别协议头处理)。
+ * Agent 明确交付给用户的图片输出。Provider adapter 只在 vendor 事件本身表达
+ * “这是输出产物”时发出；模型为推理读取图片、截图或附件不属于本事件。
  */
-export interface ImageEventData {
-  kind: 'view' | 'generation';
-  /** ThreadItem id, 同一 item 的 started→completed 复用同一个 blockId 让 UI 合并。 */
-  blockId: string;
-  /** 本地绝对路径 (imageView 一定有, imageGeneration.savedPath 才有)。 */
+export interface ImageOutputEventData {
+  /** Provider item id，用于持久化与展示去重。 */
+  outputId: string;
+  /** 本地绝对路径。主机仍须校验会话来源与允许的路径边界。 */
   path?: string;
-  /** 远程 url 或 data URL (imageGeneration.result 没落盘时)。 */
+  /** 托管 URL、远程 URL 或 data URL。主机负责最终可接受协议校验。 */
   url?: string;
-  /** generation 才有: 模型实际用的 prompt (常被 OpenAI 改写过)。 */
-  revisedPrompt?: string;
-  /** generation 状态 (codex 不固定枚举, 透传字符串)。 */
+  /** Provider 实际使用的生成提示词（若提供）。 */
+  prompt?: string;
+  /** Provider 输出状态（若提供）。 */
   status?: string;
 }
 

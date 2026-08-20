@@ -63,6 +63,7 @@ import {
 } from '@cindy/maker-shared/agent-task';
 import { normalizeSubagentObservation } from '@cindy/maker-shared/subagent-observation';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { materializeMarkdownImages } from './cindy-media/markdownImages.js';
 import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
 
@@ -124,12 +125,26 @@ type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>
  */
 const dbAgentKindBySession = new Map<string, 'cc' | 'codex' | 'pi'>();
 
+interface SessionMarkdownImageContext {
+  workingDir: string;
+  allowLocalPaths: boolean;
+}
+
+const markdownImageContextBySession = new Map<string, SessionMarkdownImageContext>();
+
 export function noteSessionAgentKind(sessionId: string, dbAgentKind: 'cc' | 'codex' | 'pi'): void {
   dbAgentKindBySession.set(sessionId, dbAgentKind);
 }
 
 export function getSessionDbAgentKind(sessionId: string): 'cc' | 'codex' | 'pi' | null {
   return dbAgentKindBySession.get(sessionId) ?? null;
+}
+
+export function noteSessionMarkdownImageContext(
+  sessionId: string,
+  context: { workingDir: string; allowLocalPaths: boolean },
+): void {
+  markdownImageContextBySession.set(sessionId, { ...context });
 }
 
 function withAgentKindStamp(sessionId: string, body: CreateDbMessageBody): CreateDbMessageBody {
@@ -500,6 +515,11 @@ function enqueuePersistAssistant(
     agentMeta: agentMeta ?? null,
     createdAt,
   });
+  scheduleAssistantMarkdownImageMaterialization({
+    sessionId,
+    clientId,
+    content,
+  });
   notePersistedMessage(sessionId, 'assistant', clientId, content);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
   if (
@@ -510,6 +530,61 @@ function enqueuePersistAssistant(
   ) {
     lastTopLevelAssistantPersistIdBySession.set(sessionId, clientId);
   }
+}
+
+function scheduleAssistantMarkdownImageMaterialization(params: {
+  sessionId: string;
+  clientId: string;
+  content: string;
+}): void {
+  if (!params.content.includes('![')) return;
+  const context = markdownImageContextBySession.get(params.sessionId);
+  if (!context) return;
+  const ownerScope = captureOwnerScope();
+
+  void materializeMarkdownImages({
+    text: params.content,
+    workingDir: context.workingDir,
+    sessionId: params.sessionId,
+    maxImages: 4,
+    allowLocalPaths: context.allowLocalPaths,
+  })
+    .then((materialized) => {
+      if (materialized.managedText === params.content) return;
+      if (markdownImageContextBySession.get(params.sessionId) !== context) return;
+      if (!isOwnerScopeCurrent(ownerScope)) return;
+
+      enqueueWrite(
+        `assistant_media:${params.sessionId}:${params.clientId}`,
+        async (writeOwnerScope) => {
+          if (markdownImageContextBySession.get(params.sessionId) !== context) return;
+          const updated = await updateDbMessageContent(
+            params.sessionId,
+            params.clientId,
+            materialized.managedText,
+            { onlyVisible: true },
+          );
+          if (!updated) return;
+          const clearBoundary = clearBoundaryBySession.get(params.sessionId);
+          const updatedAt = Date.parse(updated.createdAt);
+          if (
+            clearBoundary !== undefined &&
+            Number.isFinite(updatedAt) &&
+            updatedAt <= clearBoundary
+          ) {
+            return;
+          }
+          broadcastMessageRow(params.sessionId, updated, writeOwnerScope);
+        },
+      );
+    })
+    .catch((err) => {
+      log.warn('assistant markdown image materialization failed', {
+        sessionId: params.sessionId,
+        clientId: params.clientId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 }
 
 /**
@@ -1155,47 +1230,54 @@ export function persistCodexPlanOnTerminalError(sessionId: string, turnId?: stri
 }
 
 /**
- * Main 侧合成 tool 事件也必须遵守 renderer 的展示契约:
- * tool_result / tool_result_full 只有带 persistId + resolvedContent 才会渲染。
+ * Persist a host-produced tool exchange without borrowing mutable provider-turn state.
  *
- * 普通 agent 事件在 maker-ipc/register.ts 的 session.onEvent 热路径里逐类调用
- * onToolUseEvent / onToolResultFullEvent / onToolResultEvent 后再 broadcast；但 Codex
- * imageGeneration、Mivo button action 等本地合成事件不一定经过那段分支。这个 helper
- * 把同一套持久化 / 内容归并逻辑暴露给合成事件,避免直接 broadcast 后 renderer no-op。
+ * Image materialization can finish after `done` has reset the live tool maps. Stable
+ * client ids and the captured source-event timestamp keep this exchange durable and
+ * correctly ordered without replaying synthetic AgentEvents through the turn pipeline.
  */
-export function prepareSyntheticToolEventForBroadcast(
-  sessionId: string,
-  event: { type: 'tool_use' | 'tool_result' | 'tool_result_full'; data: unknown },
-  agentMeta: AgentMeta | null,
-): { persistId?: string; resolvedContent?: string } {
-  if (agentMeta) noteAgentMeta(sessionId, agentMeta);
+export function persistSyntheticToolExchange(params: {
+  sessionId: string;
+  toolUseId: string;
+  toolName: string;
+  toolInput: unknown;
+  resultContent: string;
+  agentMeta: AgentMeta | null;
+  createdAt: number;
+}): { toolUseClientId: string; toolResultClientId: string } {
+  const toolUseClientId = createId();
+  const toolResultClientId = createId();
+  const meta = params.agentMeta ?? lastAgentMetaBySession.get(params.sessionId) ?? null;
+  const toolUseBody = withAgentKindStamp(params.sessionId, {
+    clientId: toolUseClientId,
+    role: 'tool_use',
+    content: {
+      toolUseId: params.toolUseId,
+      toolName: params.toolName,
+      input: params.toolInput,
+    },
+    toolUseId: params.toolUseId,
+    agentMeta: meta,
+    createdAt: params.createdAt,
+  });
+  const toolResultBody = withAgentKindStamp(params.sessionId, {
+    clientId: toolResultClientId,
+    role: 'tool_result',
+    content: params.resultContent,
+    toolUseId: params.toolUseId,
+    agentMeta: meta,
+    createdAt: params.createdAt + 1,
+  });
 
-  if (event.type === 'tool_use') {
-    flushAssistantBlock(sessionId, agentMeta);
-    return {
-      persistId: onToolUseEvent(
-        sessionId,
-        event.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown },
-        agentMeta,
-      ),
-    };
-  }
-
-  if (event.type === 'tool_result_full') {
-    const r = onToolResultFullEvent(
-      sessionId,
-      event.data as { toolUseId?: unknown; fullText?: unknown },
-      agentMeta,
-    );
-    return { persistId: r?.persistId, resolvedContent: r?.content };
-  }
-
-  const r = onToolResultEvent(
-    sessionId,
-    event.data as { summary?: unknown; toolUseIds?: unknown },
-    agentMeta,
+  enqueueWrite(
+    `synthetic_tool_exchange:${params.sessionId}:${params.toolUseId}`,
+    async (ownerScope) => {
+      await createVisibleDbMessage(params.sessionId, toolUseBody, ownerScope);
+      await createVisibleDbMessage(params.sessionId, toolResultBody, ownerScope);
+    },
   );
-  return { persistId: r?.persistId, resolvedContent: r?.content };
+
+  return { toolUseClientId, toolResultClientId };
 }
 
 /**
@@ -1947,6 +2029,7 @@ export function clearSessionPersistState(sessionId: string): void {
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
+  markdownImageContextBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
   _turnAttemptTokenBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);

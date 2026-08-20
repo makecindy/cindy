@@ -1177,7 +1177,7 @@ function isRevisionTurnActivityEvent(ev: { type: string; data?: unknown }): bool
     ev.type === 'tool_result' ||
     ev.type === 'tool_result_full' ||
     ev.type === 'agent_task_update' ||
-    ev.type === 'image' ||
+    ev.type === 'image_output' ||
     ev.type === 'interaction_request' ||
     ev.type === 'compact_boundary'
   );
