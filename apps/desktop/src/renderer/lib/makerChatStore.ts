@@ -2852,6 +2852,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 // ---------------------------------------------------------------------------
 
 const sessions = new Map<string, SessionChatState>();
+/** Prevent one gesture from resolving the newly promoted permission head. */
+const permissionResponseInFlight = new Set<string>();
 const listeners = new Map<string, Set<() => void>>();
 const lightSnapshotCache = new Map<string, SessionChatLightState>();
 
@@ -3330,6 +3332,7 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
+  permissionResponseInFlight.delete(sessionId);
   clearWakeBridgeReconcileTimer(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
@@ -13577,11 +13580,12 @@ function respondToPluginSetup(
  * F-PERM-2: Send a permission decision to the main process and clear pendingPermission.
  */
 function respondToPermission(sessionId: string, result: CCAgentPermissionResult): void {
-  if (!sessionId) return;
+  if (!sessionId || permissionResponseInFlight.has(sessionId)) return;
   const state = getOrCreateState(sessionId);
   if (!state.pendingPermission) return;
 
   const { requestId } = state.pendingPermission;
+  permissionResponseInFlight.add(sessionId);
   bumpInteractionReconcileEpoch(sessionId);
 
   // Clear the displayed permission immediately and promote the next parallel
@@ -13596,9 +13600,12 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
     };
   });
 
-  // Send to maker (InteractionDecision kind: 'permission')
-  makerApiFor(sessionId)
-    .resolveInteraction(requestId, {
+  // Send to maker (InteractionDecision kind: 'permission'). Keep the guard
+  // until the IPC request settles: a duplicate click/key-repeat must not read
+  // the newly promoted queue head and reuse the previous decision for it.
+  let response: Promise<unknown>;
+  try {
+    response = makerApiFor(sessionId).resolveInteraction(requestId, {
       kind: 'permission',
       behavior: result.behavior,
       updatedInput: (result as { updatedInput?: Record<string, unknown> }).updatedInput,
@@ -13606,8 +13613,15 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
       permissionUpdates: Array.isArray(result.updatedPermissions)
         ? result.updatedPermissions
         : undefined,
-    })
-    .catch((err) => log.error('Failed to respond to permission:', err));
+    });
+  } catch (err) {
+    permissionResponseInFlight.delete(sessionId);
+    log.error('Failed to respond to permission:', err);
+    return;
+  }
+  void response
+    .catch((err) => log.error('Failed to respond to permission:', err))
+    .finally(() => permissionResponseInFlight.delete(sessionId));
 }
 
 /**

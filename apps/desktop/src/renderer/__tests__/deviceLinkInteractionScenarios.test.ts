@@ -291,6 +291,31 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 
+  it('duplicate permission response cannot authorize the promoted queue head', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'duplicate-first',
+      toolName: 'Read',
+      input: { file_path: '/first.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'duplicate-second',
+      toolName: 'Read',
+      input: { file_path: '/second.txt' },
+    });
+    await flush();
+
+    // Two synchronous approval commands model a double-click / key repeat.
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    makerChatStore.respondToPermission(s, { behavior: 'deny', message: 'duplicate' });
+    await flush();
+
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['duplicate-first']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('duplicate-second');
+  });
+
   it('permission deny 同样经隧道回传 behavior=deny', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, {
