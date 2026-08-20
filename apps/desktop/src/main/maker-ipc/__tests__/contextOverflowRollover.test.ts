@@ -238,9 +238,21 @@ describe('createContextOverflowRollover', () => {
     expect(deps.setPendingHandoff.mock.calls[0]?.[1]).not.toContain('再做 B');
     expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '再做 B');
     expect(deps.onRebuilt).toHaveBeenCalledWith('s1');
-    expect(deps.onRebuilt.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.replayUserMessage.mock.invocationCallOrder[0],
+    expect(deps.replayUserMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.onRebuilt.mock.invocationCallOrder[0],
     );
+  });
+
+  it('keeps coordinator recovery when replay is rejected', async () => {
+    const deps = makeDeps([msg('user', '再做 B', 'u2')]);
+    deps.replayUserMessage.mockResolvedValue({ accepted: false });
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(
+      rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' }),
+    ).resolves.toBe(false);
+    expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.onRebuilt).not.toHaveBeenCalled();
   });
 
   it('does not replay when the failed turn already had tool side effects', async () => {

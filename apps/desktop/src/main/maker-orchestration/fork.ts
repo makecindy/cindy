@@ -111,6 +111,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   sessionId: string;
   rows: ForkTimelineMessage[];
   agentKind: DbAgentKind;
+  model: string;
+  providerId: string | null;
   reason: 'context-overflow' | 'pi-prompt-timeout';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
@@ -136,6 +138,9 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   await commitContextRebuild(opts.sessionId, handoff, {
     reason: opts.reason,
     sourceUserClientId: lastUser?.clientId ?? null,
+    sourceAgentKind: opts.agentKind,
+    sourceModel: opts.model,
+    sourceProviderId: opts.providerId,
   });
   await createMessage(opts.sessionId, {
     clientId: `context-rebuild-card:${createId()}`,
@@ -829,6 +834,8 @@ export async function forkSessionAtMessage(
       sessionId: newSessionId,
       rows: sourceMessages,
       agentKind: forkSource.agentKind,
+      model: forkSource.model,
+      providerId: forkSource.providerId,
       reason: forkSource.rebuildReason,
     });
   }

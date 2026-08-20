@@ -1003,6 +1003,7 @@ export function createMakerHookSessionRunner(deps: {
                   content: req.replacementPrompt,
                   createdAt: previousMessages[0].createdAt - 1,
                   agentMeta: null,
+                  toolUseId: null,
                 },
                 ...previousMessages,
               ];
@@ -1022,6 +1023,7 @@ export function createMakerHookSessionRunner(deps: {
                   content: req.replacementPrompt,
                   createdAt: startedAt,
                   agentMeta: null,
+                  toolUseId: null,
                 },
               ];
             } else {

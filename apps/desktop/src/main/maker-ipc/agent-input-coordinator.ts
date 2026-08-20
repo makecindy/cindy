@@ -3609,7 +3609,7 @@ export class AgentInputCoordinator {
         persistUserMessage: {
           clientId: head.clientId,
           content: head.persistedContent,
-          ...(referenceContexts.length > 0 ? { agentFacingWireContent: makerUserMessage } : {}),
+          agentFacingWireContent: makerUserMessage,
           sdkSessionId,
           delivery: active.delivery,
           expectedClearBoundaryMs: active.clearBoundaryMs,

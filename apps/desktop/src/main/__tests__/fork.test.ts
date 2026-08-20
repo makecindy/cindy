@@ -669,7 +669,12 @@ describe('forkSessionAtMessage', () => {
     expect(commitContextRebuildMock).toHaveBeenCalledWith(
       expect.any(String),
       expect.stringContaining("exceeded the model's context window"),
-      expect.objectContaining({ reason: 'context-overflow' }),
+      expect.objectContaining({
+        reason: 'context-overflow',
+        sourceAgentKind: 'pi',
+        sourceModel: 'claude-sonnet-4-6',
+        sourceProviderId: 'xd',
+      }),
     );
     expect(createMessageMock).toHaveBeenCalled();
   });

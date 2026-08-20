@@ -378,7 +378,6 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         expectedClearedAt: sessionRow.clearedAt,
       });
       deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
-      deps.onRebuilt?.(sessionId);
       const replay =
         plan.sourceUserAgentFacingWireContent !== undefined
           ? await deps.replayUserMessage(
@@ -394,6 +393,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         });
         return false;
       }
+      // 重放被接受后再清 recovery：失败时要保留 Retry，不能先 clearError。
+      deps.onRebuilt?.(sessionId);
       deps.log.info('context overflow rollover replayed user message', {
         sessionId,
         sourceUserClientId: plan.sourceUserClientId,
