@@ -164,8 +164,11 @@ export interface ResolveLastUserMessageObservationArgs {
   tailUserMessageId: string | null;
   /** The last tail user message already observed by the mounted stream. */
   previousTailUserMessageId: string | null;
-  /** User ids already seen as a tail on this mount, including seeded restore. */
-  knownTailUserMessageIds?: ReadonlySet<string>;
+  /**
+   * Every user message id already loaded on this mount. Receding the tail to
+   * any of these (rollback, rewind, remount) is not a send.
+   */
+  knownUserMessageIds?: ReadonlySet<string>;
 }
 
 export interface ResolveLastUserMessageObservation {
@@ -175,23 +178,34 @@ export interface ResolveLastUserMessageObservation {
   isNewUserSend: boolean;
 }
 
+/** Collect every user message id currently present. */
+export function collectKnownUserMessageIds<T>(
+  items: readonly T[],
+  userMessageId: (item: T) => string | null,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const item of items) {
+    const id = userMessageId(item);
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
 /**
- * Distinguish restored history hydration from a user send at the tail.
- *
- * A restored stream can mount before its first history batch arrives. If that
- * batch ends in a user message, it must establish the baseline rather than
- * taking ownership from the restored viewport as a new send.
+ * A tail-user change follows as a send only when that user id is new to this
+ * mount. Rollback, rewind, remount, and history hydration re-expose ids that
+ * were already loaded — those only move the baseline.
  */
 export function resolveLastUserMessageObservation({
   restoring,
   tailUserMessageId,
   previousTailUserMessageId,
-  knownTailUserMessageIds,
+  knownUserMessageIds,
 }: ResolveLastUserMessageObservationArgs): ResolveLastUserMessageObservation {
   if (
     tailUserMessageId !== null &&
     tailUserMessageId !== previousTailUserMessageId &&
-    knownTailUserMessageIds?.has(tailUserMessageId)
+    knownUserMessageIds?.has(tailUserMessageId)
   ) {
     return { baselineUserMessageId: tailUserMessageId, isNewUserSend: false };
   }

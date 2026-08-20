@@ -281,6 +281,7 @@ import {
 } from './viewportFillDetect';
 import {
   bumpSendFollowCancelGeneration,
+  collectKnownUserMessageIds,
   findLastMatching,
   findLastMatchingId,
   resolveEffectiveNearBottom,
@@ -2885,8 +2886,10 @@ export function MessageStream({
   const lastUserMsgIdRef = useRef<string | null>(
     findLastMatchingId(messages, (message) => (message.role === 'user' ? message.clientId : null)),
   );
-  const knownTailUserIdsRef = useRef<Set<string>>(
-    new Set(lastUserMsgIdRef.current ? [lastUserMsgIdRef.current] : []),
+  const knownUserMessageIdsRef = useRef<Set<string>>(
+    collectKnownUserMessageIds(messages, (message) =>
+      message.role === 'user' ? message.clientId : null,
+    ),
   );
   const prevFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
 
@@ -4497,9 +4500,13 @@ export function MessageStream({
       restoring: restoringRef.current,
       tailUserMessageId,
       previousTailUserMessageId: lastUserMsgIdRef.current,
-      knownTailUserMessageIds: knownTailUserIdsRef.current,
+      knownUserMessageIds: knownUserMessageIdsRef.current,
     });
-    if (tailUserMessageId) knownTailUserIdsRef.current.add(tailUserMessageId);
+    for (const id of collectKnownUserMessageIds(allRenderItems, (item) =>
+      item.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
+    )) {
+      knownUserMessageIdsRef.current.add(id);
+    }
     lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,

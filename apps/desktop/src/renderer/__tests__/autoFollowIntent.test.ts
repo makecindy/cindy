@@ -11,6 +11,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  collectKnownUserMessageIds,
   findLastMatching,
   findLastMatchingId,
   resolveEffectiveNearBottom,
@@ -555,7 +556,30 @@ describe('resolveLastUserMessageObservation', () => {
         restoring: false,
         tailUserMessageId: 'user-1',
         previousTailUserMessageId: 'user-2',
-        knownTailUserMessageIds: new Set(['user-1', 'user-2']),
+        knownUserMessageIds: new Set(['user-1', 'user-2']),
+      }),
+    ).toEqual({
+      baselineUserMessageId: 'user-1',
+      isNewUserSend: false,
+    });
+  });
+
+  it('does not treat remount rewind to an older already-loaded user as a send', () => {
+    const messages = [
+      { role: 'user' as const, clientId: 'user-1' },
+      { role: 'assistant' as const, clientId: 'a1' },
+      { role: 'user' as const, clientId: 'user-2' },
+    ];
+    const known = collectKnownUserMessageIds(messages, (message) =>
+      message.role === 'user' ? message.clientId : null,
+    );
+    expect(known).toEqual(new Set(['user-1', 'user-2']));
+    expect(
+      resolveLastUserMessageObservation({
+        restoring: false,
+        tailUserMessageId: 'user-1',
+        previousTailUserMessageId: 'user-2',
+        knownUserMessageIds: known,
       }),
     ).toEqual({
       baselineUserMessageId: 'user-1',
@@ -578,7 +602,8 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('pinToBottom();');
     expect(source).toContain('bumpSendFollowCancelGeneration(sessionId)');
     expect(source).toContain('shouldBumpSendFollowCancelOnScroll({');
-    expect(source).toContain('knownTailUserMessageIds: knownTailUserIdsRef.current');
+    expect(source).toContain('knownUserMessageIds: knownUserMessageIdsRef.current');
+    expect(source).toContain('collectKnownUserMessageIds(messages,');
     expect(source).toContain('if (!ownsHardwareScrollActions) return;');
   });
 
