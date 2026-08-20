@@ -533,6 +533,13 @@ export function applyAgentIslandEvent(
     const data = asRecord(event.data);
     const isRunning = data?.isRunning;
     const status = typeof data?.status === 'string' ? data.status : null;
+    if (event.turnScope === 'background') {
+      if (status && !session.currentToolUseId && !session.toolDetailUntil) {
+        session.detail = status;
+        session.detailSource = 'status';
+      }
+      return true;
+    }
     if (isRunning === true) {
       markSessionRunning(state, session, now);
       if (session.pendingInteractionIds.size === 0) {

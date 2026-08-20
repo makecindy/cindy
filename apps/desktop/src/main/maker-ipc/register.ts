@@ -3853,7 +3853,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           contextTokens?: number;
           contextWindow?: number;
         };
-        if (data.isRunning === true) {
+        // Idle compact / late background work may still send isRunning for UI
+        // copy. It must not latch the product turn tracker or idle bookkeeping.
+        if (data.isRunning === true && event.turnScope !== 'background') {
           // replacement 已进入 vendor 后，running 是新 attempt 的权威起点。不要依赖
           // sendToAgent 返回后的 onDispatched 回调：provider 可同步发事件并先清 activeTurn。
           autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);
@@ -3897,7 +3899,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           ) {
             turnModelPromiseBySession.set(session.id, readSessionModelForUsage(session.id));
           }
-        } else if (data.isRunning === false && !isContinuationBoundary) {
+        } else if (
+          data.isRunning === false &&
+          !isContinuationBoundary &&
+          event.turnScope !== 'background'
+        ) {
           shouldMarkTurnStatusIdleAfterBroadcast = true;
         }
         if (
@@ -11519,6 +11525,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isTurnRunning: (sessionId) => {
       const sess = getStableSessionForTurnBoundary(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
+    },
+    isLiveTurnRunning: (sessionId) => {
+      try {
+        const sess = getStableSessionForTurnBoundary(sessionId);
+        if (!sess) return undefined;
+        return sess.isTurnRunning();
+      } catch {
+        return undefined;
+      }
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,

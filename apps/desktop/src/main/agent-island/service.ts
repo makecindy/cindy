@@ -2619,7 +2619,7 @@ function getAgentIslandSoundEventForTransition(
 }
 
 function isCompletionDoneEvent(event: AgentEvent): boolean {
-  return isProductTurnCompletionTailEvent(event);
+  return event.turnScope !== 'background' && isProductTurnCompletionTailEvent(event);
 }
 
 function isCancelledTerminalEvent(event: AgentEvent): boolean {
@@ -2630,7 +2630,7 @@ function isCancelledTerminalEvent(event: AgentEvent): boolean {
 }
 
 function isRunningStatusEvent(event: AgentEvent): boolean {
-  if (event.type !== 'status') return false;
+  if (event.type !== 'status' || event.turnScope === 'background') return false;
   const data = event.data as { isRunning?: unknown } | undefined;
   return data?.isRunning === true;
 }

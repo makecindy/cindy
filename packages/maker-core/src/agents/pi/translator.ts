@@ -227,12 +227,19 @@ function pushStatus(
   ctx: PiTranslateContext,
   text: string,
   isRunning: boolean,
+  extras?: Pick<AgentEvent, 'turnScope'>,
 ): void {
   queue.push({
     type: 'status',
     data: { status: text, ...usageSnapshotOf(ctx), isRunning },
     source: 'pi',
+    ...(extras?.turnScope ? { turnScope: extras.turnScope } : {}),
   });
+}
+
+/** Idle compact is not a product turn; mark it background so host/UI do not latch busy. */
+function idleCompactScope(ctx: PiTranslateContext): Pick<AgentEvent, 'turnScope'> | undefined {
+  return ctx.isStreaming ? undefined : { turnScope: 'background' };
 }
 
 function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined): void {
@@ -697,7 +704,9 @@ export function translatePiEvent(
     }
 
     case 'compaction_start': {
-      pushStatus(queue, ctx, 'Compacting context…', true);
+      // Host auto-compact 发在 agent_settled 之后(isStreaming=false)。若这里
+      // 无条件 isRunning=true 而不标 background，desktop tracker 会当成新一轮产品 turn。
+      pushStatus(queue, ctx, 'Compacting context…', true, idleCompactScope(ctx));
       return;
     }
 
@@ -705,7 +714,7 @@ export function translatePiEvent(
       if (isFailedOrAbortedPiCompaction(event)) {
         // 失败/取消不是压缩边界。手动压缩仍要收口 Compacting 状态，避免圆环卡 running。
         if (event.reason === 'manual' && !ctx.isStreaming) {
-          pushStatus(queue, ctx, 'Done', false);
+          pushStatus(queue, ctx, 'Done', false, idleCompactScope(ctx));
         }
         return;
       }
@@ -718,6 +727,7 @@ export function translatePiEvent(
           postTokens: result?.estimatedTokensAfter,
         },
         source: 'pi',
+        ...idleCompactScope(ctx),
       });
       if (result && typeof result.estimatedTokensAfter === 'number') {
         ctx.contextTokens = result.estimatedTokensAfter;
@@ -726,8 +736,9 @@ export function translatePiEvent(
       // 若不收口,renderer 圆环会永久卡 running、新 contextTokens 也送不回去。
       // 仅 manual 收口:auto 压缩发生在活跃 turn 内(turn 结束经 agent_settled 自然收口),
       // 且若压缩期间用户已开始新 turn(ctx.isStreaming)也不能收口,否则会误杀新 turn。
+      // idle compact 的 status 带 turnScope=background，产品 turn 位不再闪。
       if (event.reason === 'manual' && !ctx.isStreaming) {
-        pushStatus(queue, ctx, 'Done', false);
+        pushStatus(queue, ctx, 'Done', false, idleCompactScope(ctx));
       }
       return;
     }

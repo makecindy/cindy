@@ -266,13 +266,16 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  /** Live Session only — must not OR the desktop tracker. undefined = probe unavailable. */
+  isLiveTurnRunning?: (sessionId: string) => boolean | undefined;
   /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
   getTurnGeneration?: (sessionId: string) => number | null;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
   /**
-   * Reconcile the host's live session/tracker view after an abort or a
-   * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
+   * Reconcile the host's live session/tracker view after an abort, a
+   * maker-core NO_ACTIVE_TURN, or a drain blocked on a stale tracker while the
+   * live Session is idle. The event-driven tracker can stay stale when a
    * turn dies without a terminal event, leaving the queue behind a false busy
    * boundary. Returns true only when it actually cleared that stale boundary;
    * a normal status=closed cleanup returning false must not make Codex release
@@ -3385,6 +3388,38 @@ export class AgentInputCoordinator {
     );
   }
 
+  /**
+   * Live Session idle + host tracker/activeTurn still busy is an invariant break.
+   * Reconcile and optionally synthesize done so queued input can drain without
+   * a user Stop / steer. Do not call this while a send is still in flight, a
+   * permission card is up, or abort/steer already owns the boundary.
+   */
+  private tryReconcileStaleDispatchBoundary(
+    sessionId: string,
+    state: SessionInputState,
+  ): boolean {
+    if (state.abortBoundaryToken) return false;
+    if (state.queueAbortPending) return false;
+    if (state.queueInteractionLocks.length > 0) return false;
+    if (state.steeringQueueClientIds.length > 0) return false;
+    if (state.pendingExternalTerminalDone) return false;
+    if (this.deps.hasPendingInteraction(sessionId)) return false;
+    if (state.activeTurn && !isActiveTurnDispatched(state.activeTurn)) return false;
+    // Missing live probe fail-closed: do not steal abort/live-turn reconcile.
+    if (this.deps.isLiveTurnRunning?.(sessionId) !== false) return false;
+
+    const trackerOrLiveBusy = this.deps.isTurnRunning(sessionId);
+    const zombieDispatched = Boolean(
+      state.activeTurn && isActiveTurnDispatched(state.activeTurn),
+    );
+    if (!trackerOrLiveBusy && !zombieDispatched) return false;
+
+    const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
+    if (!reconciled) return false;
+    if (zombieDispatched) this.onTurnEvent(sessionId, 'done');
+    return true;
+  }
+
   private isTurnSteerable(sessionId: string, state: SessionInputState): boolean {
     return state.activeTurn !== null || this.deps.isTurnRunning(sessionId);
   }
@@ -3473,6 +3508,17 @@ export class AgentInputCoordinator {
     }
     const head = this.getDrainableHead(sessionId, state);
     if (!head) {
+      const hasRunnableWork =
+        state.pendingQueue.length > 0 ||
+        state.pendingCompacts.some((item) => item.waitForClientIds.length === 0);
+      if (
+        hasRunnableWork &&
+        this.isDispatchBoundaryBusy(sessionId, state) &&
+        this.tryReconcileStaleDispatchBoundary(sessionId, state)
+      ) {
+        this.scheduleDrain(sessionId, 'reconcile-stale-idle');
+        return;
+      }
       // #2506 结果级诊断:排队输入被 gate 挡住时留痕(此前零日志,gate-clear
       // 到成功 drain 之间的静默滞留无从定位)。只记 id / 布尔 / 枚举,不记正文;
       // 空队列的例行 drain 不记,避免每次 turn-done 都产生噪音。
@@ -4100,6 +4146,10 @@ export class AgentInputCoordinator {
       if (latest.generation !== generation) return;
       if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
+        if (this.tryReconcileStaleDispatchBoundary(sessionId, latest)) {
+          this.scheduleDrain(sessionId, 'session-running-retry-reconciled');
+          return;
+        }
         this.scheduleSessionRunningRetry(sessionId, reason);
         return;
       }

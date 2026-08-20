@@ -186,6 +186,19 @@ describe('maker:event hot path ordering', () => {
     expect(coordinatorSource).toContain(
       "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
     );
+    expect(coordinatorSource).toContain('isLiveTurnRunning: (sessionId) =>');
+    expect(coordinatorSource).toContain('if (!sess) return undefined;');
+  });
+
+  it('does not latch product-turn bookkeeping on background status events', () => {
+    const statusStart = source.indexOf('if (event.type === \'status\') {');
+    const statusEnd = source.indexOf("if (event.type === 'done')", statusStart);
+    const statusSource = source.slice(statusStart, statusEnd);
+    expect(statusStart).toBeGreaterThanOrEqual(0);
+    expect(statusEnd).toBeGreaterThan(statusStart);
+    expect(statusSource).toContain("data.isRunning === true && event.turnScope !== 'background'");
+    expect(statusSource).toContain("event.turnScope !== 'background'");
+    expect(statusSource).toContain('sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning)');
   });
 
   it('persists a terminal Codex plan before clearing its turn-owned lookup maps', () => {

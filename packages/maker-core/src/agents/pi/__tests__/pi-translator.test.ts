@@ -505,6 +505,7 @@ describe('pi translator', () => {
       (e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === true,
     );
     expect(startStatus).toBeDefined();
+    expect(startStatus?.turnScope).toBe('background');
 
     translatePiEvent(
       ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 100, estimatedTokensAfter: 20 } }),
@@ -520,6 +521,30 @@ describe('pi translator', () => {
     const endData = endStatus!.data as { status: string; contextTokens?: number };
     expect(endData.status).toBe('Done');
     expect(endData.contextTokens).toBe(20);
+    expect(endStatus?.turnScope).toBe('background');
+  });
+
+  it('marks idle/host auto-compact status as background so it cannot latch a product turn', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = false;
+    ctx.hostAutoCompactInFlight = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    const start = events.find((e) => e.type === 'status');
+    expect(start).toMatchObject({
+      turnScope: 'background',
+      data: expect.objectContaining({ isRunning: true, status: 'Compacting context…' }),
+    });
+  });
+
+  it('does not mark in-turn compaction_start as background', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    const start = events.find((e) => e.type === 'status');
+    expect(start).toBeDefined();
+    expect(start?.turnScope).toBeUndefined();
   });
 
   it('#1933 review:auto compaction 在活跃 turn 内不补发 status(false)(不得误收口 turn)', () => {
