@@ -2885,6 +2885,9 @@ export function MessageStream({
   const lastUserMsgIdRef = useRef<string | null>(
     findLastMatchingId(messages, (message) => (message.role === 'user' ? message.clientId : null)),
   );
+  const knownTailUserIdsRef = useRef<Set<string>>(
+    new Set(lastUserMsgIdRef.current ? [lastUserMsgIdRef.current] : []),
+  );
   const prevFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
 
   // ── render-window state ──
@@ -4271,6 +4274,7 @@ export function MessageStream({
   }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
   useEffect(() => {
     const onHistoryNavigationKey = (event: KeyboardEvent) => {
+      if (!ownsHardwareScrollActions) return;
       if (event.defaultPrevented) return;
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
       if (isEditableKeyboardTarget(event.target)) return;
@@ -4288,7 +4292,12 @@ export function MessageStream({
     return () => {
       window.removeEventListener('keydown', onHistoryNavigationKey);
     };
-  }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
+  }, [
+    clearChipJumpSuppression,
+    ownsHardwareScrollActions,
+    triggerUserIntentFill,
+    unpinAutoFollowForUserUpIntent,
+  ]);
   useNavigationKeyListener(clearChipJumpSuppression);
 
   const pinToBottom = useCallback(() => {
@@ -4488,7 +4497,9 @@ export function MessageStream({
       restoring: restoringRef.current,
       tailUserMessageId,
       previousTailUserMessageId: lastUserMsgIdRef.current,
+      knownTailUserMessageIds: knownTailUserIdsRef.current,
     });
+    if (tailUserMessageId) knownTailUserIdsRef.current.add(tailUserMessageId);
     lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,

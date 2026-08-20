@@ -164,6 +164,8 @@ export interface ResolveLastUserMessageObservationArgs {
   tailUserMessageId: string | null;
   /** The last tail user message already observed by the mounted stream. */
   previousTailUserMessageId: string | null;
+  /** User ids already seen as a tail on this mount, including seeded restore. */
+  knownTailUserMessageIds?: ReadonlySet<string>;
 }
 
 export interface ResolveLastUserMessageObservation {
@@ -184,7 +186,15 @@ export function resolveLastUserMessageObservation({
   restoring,
   tailUserMessageId,
   previousTailUserMessageId,
+  knownTailUserMessageIds,
 }: ResolveLastUserMessageObservationArgs): ResolveLastUserMessageObservation {
+  if (
+    tailUserMessageId !== null &&
+    tailUserMessageId !== previousTailUserMessageId &&
+    knownTailUserMessageIds?.has(tailUserMessageId)
+  ) {
+    return { baselineUserMessageId: tailUserMessageId, isNewUserSend: false };
+  }
   const baselineUserMessageId =
     restoring && previousTailUserMessageId === null && tailUserMessageId !== null
       ? tailUserMessageId

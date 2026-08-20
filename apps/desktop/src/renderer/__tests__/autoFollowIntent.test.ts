@@ -548,6 +548,20 @@ describe('resolveLastUserMessageObservation', () => {
       isNewUserSend: true,
     });
   });
+
+  it('treats a rollback to a previously seen user tail as baseline, not a new send', () => {
+    expect(
+      resolveLastUserMessageObservation({
+        restoring: false,
+        tailUserMessageId: 'user-1',
+        previousTailUserMessageId: 'user-2',
+        knownTailUserMessageIds: new Set(['user-1', 'user-2']),
+      }),
+    ).toEqual({
+      baselineUserMessageId: 'user-1',
+      isNewUserSend: false,
+    });
+  });
 });
 
 describe('MessageStream send-window handoff wiring', () => {
@@ -564,6 +578,8 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('pinToBottom();');
     expect(source).toContain('bumpSendFollowCancelGeneration(sessionId)');
     expect(source).toContain('shouldBumpSendFollowCancelOnScroll({');
+    expect(source).toContain('knownTailUserMessageIds: knownTailUserIdsRef.current');
+    expect(source).toContain('if (!ownsHardwareScrollActions) return;');
   });
 
   it('session view commits follow-latest only after accept and unchanged scroll generation', () => {
