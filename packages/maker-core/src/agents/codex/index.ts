@@ -10507,6 +10507,7 @@ export class CodexAgent extends BaseAgent {
                 ...(turnModel ? { model: turnModel } : {}),
               });
               currentTurnId = resp.turn.id;
+              beginCodexGenerationTurn(translatorRt, resp.turn.id);
               isTurnInFlight = true;
               turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
               if (reconnectStallTimer && reconnectStallTurnId === resp.turn.id) {

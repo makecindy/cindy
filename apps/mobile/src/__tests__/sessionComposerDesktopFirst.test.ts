@@ -183,11 +183,12 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('{!sideTaskRunning && showUsageMeta ? (');
     expect(source).toContain('generationActive={remoteSessionRunStatus.generationActive}');
     expect(source).toContain('const showUsageMeta = Boolean(rateText) || tokenUsage > 0;');
-    expect(source).toContain('return `${formatted} tok/s`;');
-    expect(source).toContain("const unit = options?.compact === false ? 'tokens' : 'tok';");
+    expect(source).toContain("t('session.screen.tokenCount'");
+    expect(source).toContain("t('session.screen.tokenCountFull'");
+    expect(source).toContain("t('session.screen.tokenRate'");
     expect(source).toContain('function formatComposerActivityElapsed');
-    expect(source).toContain('function formatComposerActivityTokens');
-    expect(source).toContain('function formatComposerActivityRate');
+    expect(source).toContain('function formatComposerActivityTokenCount');
+    expect(source).toContain('function formatComposerActivityRateValue');
     expect(source).toContain('composerActivityPrimary');
     expect(source).toContain('composerActivityMeta');
     expect(source).toContain('composerActivityMetaText');

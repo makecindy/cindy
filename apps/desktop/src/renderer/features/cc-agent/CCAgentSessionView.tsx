@@ -4164,7 +4164,6 @@ export function CCAgentSessionView({
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
-                  generationActive={agentStatus.generationActive ?? false}
                   startedAt={agentStatus.startedAt}
                   visible={!pendingPlanReview && (agentStatus.isRunning || backgroundTasksActive)}
                   inputWidth={inputWidth}
@@ -4918,7 +4917,6 @@ function RunningStatusBar({
   outputTokens = 0,
   generationDurationMs = 0,
   generationReliable = true,
-  generationActive = false,
   startedAt,
   visible,
   inputWidth,
@@ -4936,7 +4934,6 @@ function RunningStatusBar({
   outputTokens?: number;
   generationDurationMs?: number;
   generationReliable?: boolean;
-  generationActive?: boolean;
   startedAt: number | null;
   visible: boolean;
   inputWidth?: number;
