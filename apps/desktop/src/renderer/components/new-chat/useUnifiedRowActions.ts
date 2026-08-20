@@ -94,6 +94,8 @@ export interface UnifiedRowActionsOptions {
   sessionEngineFilter?:
     | {
         currentAgent: AgentKind;
+        /** 任务正在跑的引擎;缺省 = currentAgent。跨引擎确认路由必须用这个,不能用意图目标。 */
+        runtimeAgent?: AgentKind;
         onCrossEngineSelect: (args: {
           providerId: string;
           modelId: string;
@@ -212,6 +214,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 无损,直接写回草稿即可。两个字段必须同时具备:少了任一个,跨引擎行就没有落点。
    */
   const inSession = sessionEngineFilter !== undefined && sessionAgent !== undefined;
+  /** 跨引擎确认 / 切换路由只认任务正在跑的引擎,不认挂着的意图目标。 */
+  const runtimeAgent = sessionEngineFilter?.runtimeAgent ?? sessionAgent;
 
   /**
    * 把一次 live 写入的结果归一成「成功了没有」:只有明确的 `false` 与抛错算失败,
@@ -495,7 +499,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       const next = resolveEngineConfig?.(entry, engine);
       if (sessionEngineFilter && sessionAgent !== undefined) {
         const targetAgent = agentKindOfEngine(engine);
-        if (targetAgent === sessionAgent) return; // 已在该引擎上,无事可做。
+        if (targetAgent === runtimeAgent) return; // 已在该引擎上,无事可做。
         // 会话内改选中行的引擎 = 一次跨引擎切换:交给 performAgentSwitch 事务(确认弹窗
         // + 上下文重建)。**不预写全局 override**:用户取消确认时不该留下任何痕迹。
         sessionEngineFilter.onCrossEngineSelect({
@@ -768,7 +772,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 会话 + 默认引擎 == 当前引擎:无损,两个 live 回调把深度 / Fast 复位即可。
     // 与跨引擎分支同一条顺序(2026-08-17 review 第三轮 G2):**live 真写成了才**删记录 ——
     // 收藏是用户手存的东西,不可逆,写穿失败时必须原样留着。
-    if (fallback.agent === sessionAgent) {
+    if (fallback.agent === runtimeAgent) {
       void applyDefaultsLive(fallback.effort).then((applied) => {
         if (applied) commit();
       });
@@ -799,7 +803,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 交出去的一律是**该引擎的 wire id**(建会话 / 切模型 / 写 draft 都用它);
     // 行的归一化身份另放在 config.rowModelId 里,调用方要记 override / 收藏时用那个。
     const wireModelId = config.wireModelId ?? anchor.modelId;
-    if (sessionEngineFilter && sessionAgent !== undefined && config.agent !== sessionAgent) {
+    if (sessionEngineFilter && runtimeAgent !== undefined && config.agent !== runtimeAgent) {
       // 收藏锚点一并交出去:会话侧要在事务**真成功后**才把它记成「当前选中的收藏」
       // (取消 / 失败时什么都没换,锚点当然不能动)。同引擎那一路由 onSelect 的 config 带走。
       sessionEngineFilter.onCrossEngineSelect({

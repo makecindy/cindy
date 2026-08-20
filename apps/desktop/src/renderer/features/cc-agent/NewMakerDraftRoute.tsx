@@ -2026,12 +2026,11 @@ export function NewMakerDraftRoute() {
   // (本地草稿 × 远程草稿)共用同一引擎槽时也会互删。派生「不符不亮」已保证不会勾错;
   // 显式选择(选普通模型行 → handleUnifiedDraftSelect 写 null)仍会清槽。留下的休眠锚点
   // 只在 (模型, 来源) 改回那一刻重新亮起 —— 那本来就是用户对该配置最后一次显式选中的副本。
-  const selectedFavoriteUid =
-    draftFavoriteAnchor &&
-    draftFavoriteAnchor.wireModelId === draftInitialModel &&
-    draftFavoriteAnchor.providerId === chatInitialProviderId
-      ? draftFavoriteAnchor.uid
-      : null;
+  // 收藏是独立选中项(Chris 2026-08-20):勾选身份就是 uid,不拿草稿当前模型/来源去对
+  // 快照 —— 对不上就不勾,等于让下面同名模型行把焦点抢走。草稿模型被 coerce / seed
+  // 改走时收藏行仍是用户点过的那一条;显式点普通模型行才会经 handleUnifiedDraftSelect
+  // 把槽写成 null。条目被删 / 换账号由面板 activeFavoriteUid 兜底。
+  const selectedFavoriteUid = draftFavoriteAnchor?.uid ?? null;
 
   /**
    * 草稿锚点 → 会话锚点的**延续**(Chris 2026-08-19):草稿里选了收藏第 3 条、发出去建会话,

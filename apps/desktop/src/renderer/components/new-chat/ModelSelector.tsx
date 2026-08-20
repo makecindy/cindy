@@ -3175,11 +3175,14 @@ export function ModelSelector({
   // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰,收尾时才按结果决定收还是留
   // —— 中途没有可以插进来的关闭窗口。
   //
-  // ★ 因此 open 的表达式必须是 `(open && !disabled) || keepOpenForAgentConfirmation`,
-  // 不能是 `(open || keepOpen) && !disabled`(Chris 2026-08-19 实测「面板原地刷新一下」的
-  // 根因):事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled
-  // 拉高,后一种写法会连保命锁一起压掉 —— 面板当场收合,收尾时 setOpenWithoutAutoRefresh(true)
-  // 又把它弹回来。保命锁的意义就是「这段时间里别关」,disabled 不该有权否决它。
+  // ★ open 的表达式必须是 `open || keepOpenForAgentConfirmation`,disabled **不能**参与
+  // 开关(Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」):
+  // 事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled 拉高。
+  // `(open && !disabled) || keepOpen` 只保住确认框那条路,改思维 / 同引擎重登记不走
+  // keepOpen,选单照关。disabled 只该让面板置灰(interactionDisabled),不该有权把窗口关掉。
+  // 收起只认 setOpenWithoutAutoRefresh(applied === false) 这条收尾。
+  // 不能写成 `(open || keepOpen) && !disabled` —— 那是 08-19 的原症状。
+  // 不能写成 `(open && !disabled) || keepOpen` —— 那是 08-20 改思维仍闪关。
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
@@ -3795,7 +3798,7 @@ export function ModelSelector({
   if (morphEnabled) {
     return (
       <MorphPopover
-        open={(open && !disabled) || keepOpenForAgentConfirmation}
+        open={open || keepOpenForAgentConfirmation}
         onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
@@ -3822,7 +3825,7 @@ export function ModelSelector({
 
   return (
     <Popover
-      open={(open && !disabled) || keepOpenForAgentConfirmation}
+      open={open || keepOpenForAgentConfirmation}
       onOpenChange={handleOpenChange}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>

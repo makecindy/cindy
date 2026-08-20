@@ -2006,6 +2006,33 @@ describe('统一面板 · 新会话选中直通', () => {
       [...selected].every((el) => el.getAttribute('data-unified-anchor')?.startsWith('model::')),
     ).toBe(true);
   });
+
+  it('收藏是独立选中项:live 思维/引擎对不上副本,勾仍在收藏行,不落到下面同名模型', () => {
+    const uid = addModelFavorite({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      agent: 'codex',
+      effort: 'high',
+    });
+    render(
+      React.createElement(ModelSelectorContent, {
+        modelId: 'gpt-5.5',
+        vendorKey: 'cc',
+        effort: 'low',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        currentProviderId: 'xd',
+        onProviderChange,
+        unifiedPanel: true,
+        selectedFavoriteUid: uid,
+      }),
+    );
+    const selected = screen
+      .getByRole('listbox')
+      .querySelectorAll('[data-model-selected="true"]');
+    expect(selected).toHaveLength(1);
+    expect(selected[0].getAttribute('data-unified-anchor')).toBe(`fav::${uid}`);
+  });
 });
 
 /**
