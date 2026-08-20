@@ -1384,6 +1384,61 @@ describe('remoteSessionStore', () => {
     }
   });
 
+  it('does not finish a live turn when a background compact_boundary arrives', () => {
+    remoteSessionStore.setMessages('s1', [{
+      ...messageAt('live-after-idle-compact', 's1', '2026-01-01T00:00:01.000Z'),
+      content: { text: '正在回答', isStreaming: true, streaming: true },
+      agentMeta: { isStreaming: true, streaming: true },
+    }]);
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'compact_boundary',
+      turnScope: 'background',
+      data: { boundaryId: 'idle-compact', trigger: 'auto' },
+    });
+
+    const stored = remoteSessionStore.getMessages('s1');
+    expect(stored.find((item) => item.id === 'live-after-idle-compact')).toMatchObject({
+      agentMeta: { isStreaming: true, streaming: true },
+      content: { text: '正在回答', isStreaming: true, streaming: true },
+    });
+    expect(stored.at(-1)).toMatchObject({
+      id: 'mobile-system-compact:idle-compact',
+      systemCardType: 'compact',
+    });
+  });
+
+  it('does not flip product isRunning for background compact status', () => {
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'status',
+      data: { isRunning: true, status: 'Thinking…', tokenUsage: 80 },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(true);
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'status',
+      turnScope: 'background',
+      data: { isRunning: true, status: 'Compacting context…' },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      status: 'Compacting context…',
+      tokenUsage: 80,
+    });
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+
+    remoteSessionStore.applyMakerEvent('s1', {
+      type: 'status',
+      turnScope: 'background',
+      data: { isRunning: false, status: 'Done' },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      status: 'Compacting context…',
+    });
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
+  });
+
   it('increments message version when searchable message windows change', () => {
     const initialVersion = remoteSessionStore.getMessageVersion();
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
