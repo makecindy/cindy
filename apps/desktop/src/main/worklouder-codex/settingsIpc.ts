@@ -22,6 +22,7 @@ import { WORKLOUDER_CODEX_TASK_OPTION_LIMIT } from './taskSlots.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 const SETTING_KEYS = [
+  'deviceEnabled',
   'lightingBrightness',
   'lightingAutoDim',
   'agentSource',
@@ -86,6 +87,12 @@ function parseSettingsPatch(value: unknown): WorkLouderCodexSettingsPatch {
       throwIpcError('INVALID_PARAMS', 'customAgentKeys must contain six assignments');
     }
     patch.customAgentKeys = record.customAgentKeys.map((action) => parseAction(action, true));
+  }
+  if ('deviceEnabled' in record) {
+    if (typeof record.deviceEnabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'deviceEnabled must be a boolean');
+    }
+    patch.deviceEnabled = record.deviceEnabled;
   }
   if ('singleTapAgentKeys' in record) {
     if (typeof record.singleTapAgentKeys !== 'boolean') {

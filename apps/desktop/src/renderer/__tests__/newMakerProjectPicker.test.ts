@@ -1753,9 +1753,51 @@ describe('New Maker 草稿的 wire model id 口径', () => {
     // 收藏条目按**归一化行 id** 存(那是行的稳定身份),草稿里放的是 wire id ——
     // 直接比 favorite.modelId 与 draftInitialModel,像 chatgpt/gpt-5.6-luna 这类两者本就
     // 不相等的模型会每次都判成失配,刚点上的收藏立刻掉勾。
-    expect(newMakerDraftRouteSource).toContain('selectedFavoriteAnchor.wireModelId !== draftInitialModel');
+    //
+    // **有意变更**(Chris 2026-08-19):锚点从组件态改成按引擎分槽持久化
+    // (favoriteAnchorMemory),变量名随之从 selectedFavoriteAnchor 变成 draftFavoriteAnchor,
+    // 「vendor 也要对得上」那一维由槽键承担(读的永远是当前引擎那一格)。**比的仍然是
+    // wire id**,这条锁不变。
+    expect(newMakerDraftRouteSource).toContain(
+      'draftFavoriteAnchor.wireModelId === draftInitialModel',
+    );
+    // 来源也是锚点身份(2026-08-19 review P1):同 wire model 跨来源不得误恢复。
+    expect(newMakerDraftRouteSource).toContain(
+      'draftFavoriteAnchor.providerId === chatInitialProviderId',
+    );
     expect(newMakerDraftRouteSource).not.toContain('favorite.modelId !== draftInitialModel');
-    // 快照在选中那一刻记下本次写进草稿的 wire id。
+    // 快照在选中那一刻记下本次写进草稿的 (wire id, 来源)。
     expect(newMakerDraftRouteSource).toContain('wireModelId: selection.modelId,');
+    expect(newMakerDraftRouteSource).toContain('providerId: selection.providerId,');
+  });
+
+  it('草稿锚点不做「不符即删槽」的清理 effect(持久化后瞬态失配会永久误删)', () => {
+    // 2026-08-19 预审 P2-7:draftInitialModel 在 device-link seed 到达前有瞬态窗口,
+    // 清理 effect 会拿暂用值把持久化槽永久删掉;派生「不符不亮」已足够,显式选择仍清槽。
+    expect(newMakerDraftRouteSource).not.toContain(
+      "setDraftFavoriteAnchor(normalizeDbAgentKind(draft.vendor), null)",
+    );
+  });
+
+  it('六条建会话成功路径都把草稿锚点延续到会话槽,且用各分支实际提交的 model/providerId', () => {
+    // carryDraftFavoriteAnchorToSession(Chris 2026-08-19):草稿选了收藏、发送建会话后,
+    // 会话面板必须还勾在那一条上。调用点 = SSH / device-link 远程发送 / 本地发送 /
+    // 新建目标(本地) / Goal(本地) / **Goal(device-link 远端)**,共 6 处;
+    // 少一处 = 那条路建出来的会话锚点丢失(远端 Goal 正是 review 抓到的遗漏)。
+    const carryCalls =
+      newMakerDraftRouteSource.match(/carryDraftFavoriteAnchorToSession\(/g) ?? [];
+    // 恰好 6 处调用(定义是 `= useCallback(`,不带同名左括号,不计入)。
+    expect(carryCalls.length).toBe(6);
+    // SSH 分支用 ssh 侧解析的提交值(≠ draftInitialModel)。
+    expect(newMakerDraftRouteSource).toContain(
+      'carryDraftFavoriteAnchorToSession(newSession.id, draftVendor, sshModel, sshProviderId)',
+    );
+    // 两条 device-link 远程分支(发送 / Goal)都用 createArgs 里实际提交的 model
+    // (被控端目录校准后的值),各自出现在 remoteSessionId 之后。
+    expect(
+      (newMakerDraftRouteSource.match(
+        /carryDraftFavoriteAnchorToSession\(\s*remoteSessionId,\s*persistedAgentKind,\s*createArgs\.model,/g,
+      ) ?? []).length,
+    ).toBe(2);
   });
 });

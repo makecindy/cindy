@@ -38,6 +38,7 @@ export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupColla
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
 export const SORT_BY_KEY = 'cc-agent.sidebar.filter.sortBy';
+export const PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.projectOrder';
 export const TASK_INFO_KEY = 'cc-agent.sidebar.filter.taskInfo';
 export const MANUAL_PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.manualProjectOrder';
 export const MANUAL_PINNED_ORDER_KEY = 'cc-agent.sidebar.pinnedSessionOrder';
@@ -61,24 +62,18 @@ export type FilterVendor = 'all' | 'cc' | 'codex';
 export type FilterGroupBy = 'project' | 'flat';
 /** 最近活跃范围筛选。默认 all。 */
 export type FilterLastActivity = 'all' | '1d' | '3d' | '7d' | '30d';
-/** Sidebar 主列表排序方式。默认 recency(菜单文案「按时间排序」= 最近活动在前)。
- *  manual 只用于 Project 分组;priority = 等待处理 > 运行中 > 其余按最近活动(D 期新增)。
- *  （侧边栏重设计裁决：alphabetic 与 time(旧「最早优先」)已删除，存量值回退到
- *  recency——时间排序只保留最近优先一档。） */
-export type FilterSortBy = 'recency' | 'manual' | 'priority';
-
-/** 切到平铺时,手动排序失去项目行载体,回落到按时间;其它档位保持。 */
-export function nextSortByAfterGroupByChange(
-  groupBy: FilterGroupBy,
-  sortBy: FilterSortBy,
-): FilterSortBy {
-  return groupBy === 'flat' && sortBy === 'manual' ? 'recency' : sortBy;
-}
+/** Sidebar 主列表任务排序。默认 recency(菜单文案「按时间排序」= 最近活动在前)。
+ *  priority = 等待处理 > 运行中 > 其余按最近活动。
+ *  旧值 'manual' 已从排序里拆出,存量回退 recency,并迁移到 projectOrder=custom。
+ *  alphabetic / time(旧「最早优先」)同样回退 recency。 */
+export type FilterSortBy = 'recency' | 'priority';
+/** 按项目分组时的项目行顺序。activity = 跟任务排序走;custom = 拖拽持久序。 */
+export type FilterProjectOrder = 'activity' | 'custom';
 /**
  * 任务行右侧信息项（复选）。存储数组的顺序 = 用户勾选先后(nextTaskInfoAfterToggle
- * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里四个选项的排列另有固定顺序。
+ * 按序追加),列表行据此渲染(2026-08-12 用户裁决);菜单里选项的排列另有固定顺序。
  */
-export type TaskInfoField = 'time' | 'pr' | 'tokens' | 'cost';
+export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
@@ -460,15 +455,15 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
 
 /* ============================== sortBy load/persist ============================== */
 
-const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>([
-  'recency',
-  'manual',
-  'priority',
+const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>(['recency', 'priority']);
+const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
+  'activity',
+  'custom',
 ]);
 
 /**
- * 读 sortBy。已删除的 'alphabetic' / 'time'(旧「最早优先」)存量值不在合法集合内，
- * 自动回退 'recency'——时间排序现在只保留「最近优先」一档,菜单里就叫「按时间排序」。
+ * 读 sortBy。已删除的 'alphabetic' / 'time' / 'manual' 存量值不在合法集合内，
+ * 自动回退 'recency'。旧 'manual' 的项目序由 loadProjectOrder / migrateLegacyManualSort 接手。
  */
 export function loadSortBy(): FilterSortBy {
   const storage = safeStorage();
@@ -494,11 +489,66 @@ export function persistSortBy(sortBy: FilterSortBy): void {
   }
 }
 
+export function loadProjectOrder(): FilterProjectOrder {
+  const storage = safeStorage();
+  if (!storage) return 'activity';
+  let raw: string | null = null;
+  let legacySort: string | null = null;
+  try {
+    raw = storage.getItem(PROJECT_ORDER_KEY);
+    legacySort = storage.getItem(SORT_BY_KEY);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read projectOrder:', err);
+    return 'activity';
+  }
+  if (raw && PROJECT_ORDER_VALUES.has(raw)) return raw as FilterProjectOrder;
+  // 旧「手动排序」是 sortBy 的一档,拆开后对应自定义项目顺序。
+  if (legacySort === 'manual') return 'custom';
+  return 'activity';
+}
+
+export function persistProjectOrder(projectOrder: FilterProjectOrder): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    storage.setItem(PROJECT_ORDER_KEY, projectOrder);
+    return storage.getItem(PROJECT_ORDER_KEY) === projectOrder;
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist projectOrder:', err);
+    return false;
+  }
+}
+
+/** 把存量 sortBy=manual 写成 recency + projectOrder=custom,只在存储里还是旧值时写一次。 */
+export function migrateLegacyManualSort(): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  let raw: string | null = null;
+  let existingProjectOrder: string | null = null;
+  try {
+    raw = storage.getItem(SORT_BY_KEY);
+    existingProjectOrder = storage.getItem(PROJECT_ORDER_KEY);
+  } catch {
+    return;
+  }
+  if (raw !== 'manual') return;
+  // 不变量:没把 projectOrder=custom 落到盘上之前,不得清掉 sortBy=manual。
+  // persistProjectOrder 失败会吞异常;若这时仍写 recency,下次启动既不会重试,
+  // leftover 映射也丢了,已有手动序会被当成 activity。
+  if (existingProjectOrder && PROJECT_ORDER_VALUES.has(existingProjectOrder)) {
+    persistSortBy('recency');
+    return;
+  }
+  if (!persistProjectOrder('custom')) return;
+  persistSortBy('recency');
+}
+
 /* ============================== taskInfo load/persist ============================== */
 
 const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'time',
   'pr',
+  'worktree',
   'tokens',
   'cost',
 ]);
@@ -766,6 +816,18 @@ export function mergeVisibleReorder(
   // visibleNewOrder 里不在 currentFullOrder 的新置顶 id(刚 pin)→ 追加末尾。
   for (const id of queue) result.push(id);
   return result;
+}
+
+/**
+ * 第一次切到手动项目顺序:用切换前的可见视觉序填回全量 baseline 的可见槽位。
+ * 隐藏项(其它机器 / 筛选)原位保留,不能把可见子集当成完整序再把其余甩到末尾。
+ */
+export function snapshotManualProjectOrder(
+  visualVisibleKeys: readonly string[],
+  baselineKeys: readonly string[],
+): string[] {
+  const fullOrder = normalizeManualProjectOrder([], baselineKeys);
+  return mergeVisibleReorder(fullOrder, visualVisibleKeys);
 }
 
 /**

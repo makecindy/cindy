@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
@@ -170,6 +171,11 @@ export async function confirmAndInstallGhost(
   // 升级为「立即开启并打开面板」——面板收束后页签面板只住在插件页,
   // 不再创建右侧栏 ghost 页签;入口给不出面板宿主就不许诺"打开"。
   const willOpenPanel = manifest.panel?.position === 'tab' && deps.openPluginPanel !== undefined;
+  // library 槽(持久作品库):装入确认里提供「存储位置」行——默认预选系统
+  // 管理位置(不点更改 = 零额外步骤),点「更改…」由宿主弹原生选择器并做
+  // 候选校验;装入成功后才落 binding(取消装入不留孤儿 binding)。
+  const libraryChoice: { candidate: string | null; warnings: string[] } = { candidate: null, warnings: [] };
+  const librarySlots = manifest.slots.includes('library');
   const { ok, checked: enable } = await confirmWithCheckbox({
     title: t('settings.ghosts.installConfirm.title', { name: manifest.name }),
     content: (
@@ -179,6 +185,9 @@ export async function confirmAndInstallGhost(
         trust={trust}
         items={ghostPermissionItems(manifest)}
         manualCount={manifest.manual?.items.length ?? 0}
+        extra={librarySlots ? (
+          <LibraryInstallLocationRow ghostId={manifest.id} choice={libraryChoice} />
+        ) : undefined}
       />
     ),
     maxWidth: GHOST_CONFIRM_MAX_WIDTH,
@@ -192,6 +201,19 @@ export async function confirmAndInstallGhost(
     checkboxDefaultChecked: true,
   });
   if (!ok) return;
+
+  // 2.5) 用户在确认框里选了自定义位置 → **装入前**先落 binding(keyed by
+  // ghostId,与安装顺序无关):否则「立即开启」的常驻插件会在 install 返回
+  // 前被拉起、以默认根开库(review:spawn 早于 bind)。装入失败会留一份无
+  // 数据的 binding,行为等价「记住位置」,下次装同 id 直接用上。
+  if (librarySlots && libraryChoice.candidate) {
+    const bound = await window.electronAPI.ghosts.libraryBind(manifest.id, libraryChoice.candidate);
+    if (!bound.ok) {
+      toast.error(`${t('settings.ghosts.library.bindAfterInstallFailed')}:${bound.message ?? ''}`);
+    } else if (bound.warnings && bound.warnings.length > 0) {
+      toast.warning(t('settings.ghosts.library.cloudWarningToast'));
+    }
+  }
 
   // 3) 真装(main 侧同一主体:来源校验 + 落盘 + 停靠)。Node 高风险提示
   // 已在上面的权限清单里如实展示,不再有 Main 原生二次确认。
@@ -335,5 +357,64 @@ export async function pickAndUpdateGhost(expectedId: string, deps: InstallFlowDe
     packageSha256,
     installed,
     deps,
+  );
+}
+
+/**
+ * 装入确认框里的「存储位置」行(library 槽专用):默认预选系统管理位置,
+ * 点「更改…」由宿主弹原生选择器(插件无权发起)并做候选校验(可写探针/
+ * 受管根排斥/网络盘拒/云盘警告)。选择结果写回外层 choice 对象(ReactNode
+ * content 与外层 async 流程之间的通信桥),装入成功后才落 binding。
+ */
+function LibraryInstallLocationRow({
+  ghostId,
+  choice,
+}: {
+  ghostId: string;
+  choice: { candidate: string | null; warnings: string[] };
+}): ReactNode {
+  const { t } = useTranslation();
+  const [candidate, setCandidate] = useState<string | null>(choice.candidate);
+  const [warnings, setWarnings] = useState<string[]>(choice.warnings);
+  const pick = async () => {
+    const picked = await window.electronAPI.ghosts.libraryPickLocation(ghostId);
+    if (!picked.ok) {
+      if (!picked.cancelled) {
+        toast.error(picked.message ?? t('settings.ghosts.library.pickFailed'));
+      }
+      return;
+    }
+    choice.candidate = picked.candidate ?? null;
+    choice.warnings = picked.warnings ?? [];
+    setCandidate(choice.candidate);
+    setWarnings(choice.warnings);
+  };
+  return (
+    <div className="rounded-xl border border-[var(--border-default)] bg-[var(--surface)] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-13 font-medium leading-5 text-[var(--text-primary)]">
+            {t('settings.ghosts.library.installLocationLabel')}
+          </p>
+          <p className="mt-0.5 break-all text-12 leading-[1.5] text-[var(--text-secondary)]">
+            {candidate
+              ? `${t('settings.ghosts.library.installLocationPickedPrefix')} ${candidate}`
+              : t('settings.ghosts.library.installLocationDefault')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void pick()}
+          className="shrink-0 rounded-lg text-13 font-medium text-[var(--accent)] transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        >
+          {t('settings.ghosts.library.installLocationChange')}
+        </button>
+      </div>
+      {warnings.map((warning) => (
+        <p key={warning} className="mt-2 text-12 leading-[1.5] text-[var(--warning-fg)]">
+          {warning}
+        </p>
+      ))}
+    </div>
   );
 }

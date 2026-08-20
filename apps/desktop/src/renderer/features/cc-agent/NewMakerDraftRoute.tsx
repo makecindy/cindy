@@ -93,6 +93,12 @@ import {
   type CollabDraft,
 } from '@/state/newMakerDraft';
 import {
+  setDraftFavoriteAnchor,
+  setSessionFavoriteAnchor,
+  useDraftFavoriteAnchor,
+  type DraftFavoriteAnchor,
+} from '@/state/favoriteAnchorMemory';
+import {
   getProviderModelEffort,
   getProviderModelFast,
   setProviderModelFast,
@@ -686,22 +692,28 @@ export function NewMakerDraftRoute() {
   // 当前 vendor 对应的 prefs(切 vendor 后这里自动重算 → 透传到 ChatInput initial*)
   const currentPrefs = draft.lastByVendor[draft.vendor];
   const chatPrefs = currentPrefs;
-  // 统一模型选择器里选中的收藏锚点(规格 §1.5)。组件态:它描述「这次草稿选中的是哪一条
-  // 副本」,不是要跨重启保留的偏好 —— 详见 handleUnifiedDraftSelect 里的取舍说明。
-  //
-  // 存的是**选中那一刻的快照**(uid + 当时写进草稿的 wire model id + 引擎),不是只存 uid 再
-  // 回头查收藏表。数据层把行合并成「归一化 id + 每引擎 wireModelId」之后,收藏条目按**归一化
-  // id** 存(那是行的稳定身份),而草稿里放的是 **wire id**(那才是发得出去的那个)——直接拿
-  // favorite.modelId 去比 draftInitialModel,像 `chatgpt/gpt-5.6-luna` 这类两者本就不相等的
-  // 模型会**每次都判成失配**,刚点上的收藏立刻掉勾。快照比的是「草稿现在还是不是我当初写下的
-  // 那一份」,两边都是 wire id,与收藏表用哪套 id 无关。
-  const [selectedFavoriteAnchor, setSelectedFavoriteAnchor] = useState<{
-    uid: string;
-    /** 选中时写进草稿的 wire model id(≠ 收藏条目里的归一化行 id)。 */
-    wireModelId: string;
-    vendor: MakerVendor;
-  } | null>(null);
-  const selectedFavoriteUid = selectedFavoriteAnchor?.uid ?? null;
+  /**
+   * 统一模型选择器里选中的收藏锚点(规格 §1.5)。
+   *
+   * 它曾经是**组件态**(随路由卸载即忘),理由是「只是这次草稿选中哪一条副本,不属于要跨
+   * 重启保留的偏好」。Chris 2026-08-19 实测推翻:收藏区置顶、模型行在下面,锚点一忘,面板
+   * 就回落到模型行打勾并把列表滚到那一行 ——「我明明选了收藏第 3 个,打开选单,默认焦点
+   * 永远在下面不在收藏」。现在按**引擎**分槽持久化到 `favoriteAnchorMemory`(renderer
+   * localStorage,按 owner 分区),与草稿模型选择本身的 `lastByVendor` 同一个分槽维度:
+   * 切引擎再切回来,勾的还是那一条。
+   *
+   * 槽里存的是**选中那一刻的快照**(uid + 当时写进草稿的 wire model id),不是只存 uid 再
+   * 回头查收藏表。数据层把行合并成「归一化 id + 每引擎 wireModelId」之后,收藏条目按**归一化
+   * id** 存(那是行的稳定身份),而草稿里放的是 **wire id**(那才是发得出去的那个)——直接拿
+   * favorite.modelId 去比 draftInitialModel,像 `chatgpt/gpt-5.6-luna` 这类两者本就不相等的
+   * 模型会**每次都判成失配**,刚点上的收藏立刻掉勾。快照比的是「草稿现在还是不是我当初写下的
+   * 那一份」,两边都是 wire id,与收藏表用哪套 id 无关。
+   *
+   * 「vendor 也要对得上」这一维不再由快照字段承担:槽本身就按引擎分,读的永远是当前引擎那
+   * 一格。改动前把 vendor 塞进快照再在失效效应里比,切走引擎会把**上一个引擎**的锚点判失效
+   * 并清掉 —— 持久化之后那等于一切引擎只能记住最后一次选择。
+   */
+  const draftFavoriteAnchor = useDraftFavoriteAnchor(normalizeDbAgentKind(draft.vendor));
   const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
   const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
@@ -1998,22 +2010,63 @@ export function NewMakerDraftRoute() {
     capabilityAgentKind,
   ]);
 
-  // 收藏锚点的失效兜底:选中一条收藏后,如果草稿的 (模型, 引擎) 又被别的路径改掉
-  // (引擎不可用 coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 ——
-  // 留着它面板会在一条不相干的收藏上打勾。锚点本身被删 / 换账号后查无此条的情形,
-  // 由面板侧的 activeFavoriteUid 兜底,这里只管「还在,但已经不是它了」。
+  // 收藏锚点的失效兜底:选中一条收藏后,如果草稿的 (模型, 来源) 又被别的路径改掉(引擎
+  // 不可用 coerce、模型校准、浮层里换来源…),这个锚点就不再描述当前选择了 —— 靠**派生**让
+  // 它不亮:比的是快照里的 (wire id, providerId) 与草稿当前值。wire id 不查收藏条目(它按
+  // 归一化行 id 存,与草稿的 wire id 天生可能不等,见 draftFavoriteAnchor 的说明);
+  // **来源必须比**(2026-08-19 review P1):同一 wire model 可来自多家供应商,只比 wire id,
+  // device-link seed / 另一窗口把草稿从来源 A 切到同 wire model 的来源 B 后,旧锚点会继续
+  // 勾着 A 的收藏并抑制 B 模型行的勾,之后编辑 / 删除的也是错误副本。引擎维度不必比:槽按
+  // 引擎分,读到的本来就是当前引擎那一格。锚点指向的收藏被删 / 换账号后查无此条的情形,
+  // 由面板侧 activeFavoriteUid 兜底。
   //
-  // 比的是**快照里的 wire id** 与草稿当前的 wire id —— 不去查收藏条目(它按归一化行 id 存,
-  // 与草稿的 wire id 天生可能不等,见 selectedFavoriteAnchor 的说明)。
-  useEffect(() => {
-    if (!selectedFavoriteAnchor) return;
-    if (
-      selectedFavoriteAnchor.wireModelId !== draftInitialModel ||
-      selectedFavoriteAnchor.vendor !== draft.vendor
-    ) {
-      setSelectedFavoriteAnchor(null);
-    }
-  }, [selectedFavoriteAnchor, draftInitialModel, draft.vendor]);
+  // ★ 刻意**不做**「不符就把槽删掉」的清理 effect(2026-08-19 预审 P2-7):槽是持久化数据,
+  // 而 draftInitialModel / chatInitialProviderId 存在瞬态窗口 —— device-link 草稿在被控端
+  // seed 到达前暂用本地 chatPrefs 值,那一帧的失配会把用户真实的锚点**永久**删掉;两个窗口
+  // (本地草稿 × 远程草稿)共用同一引擎槽时也会互删。派生「不符不亮」已保证不会勾错;
+  // 显式选择(选普通模型行 → handleUnifiedDraftSelect 写 null)仍会清槽。留下的休眠锚点
+  // 只在 (模型, 来源) 改回那一刻重新亮起 —— 那本来就是用户对该配置最后一次显式选中的副本。
+  const selectedFavoriteUid =
+    draftFavoriteAnchor &&
+    draftFavoriteAnchor.wireModelId === draftInitialModel &&
+    draftFavoriteAnchor.providerId === chatInitialProviderId
+      ? draftFavoriteAnchor.uid
+      : null;
+
+  /**
+   * 草稿锚点 → 会话锚点的**延续**(Chris 2026-08-19):草稿里选了收藏第 3 条、发出去建会话,
+   * 会话侧的面板必须还勾在那一条上,否则「刚发完第一条消息,打开选单焦点又跑回模型行」——
+   * 与本次要修的草稿侧症状是同一个,只是换了个时刻发生。
+   *
+   * 只在**有显式来源**时延续:会话侧的锚点校验拿
+   * `sessionFavoriteAnchor.providerId === activeProviderId` 比,而跟随默认路由的会话
+   * activeProviderId 为 null,与任何显式来源都不相等 —— 那种锚点存下去永远打不上勾,不如不存。
+   * 模型也必须与本次真正提交的那一个逐字相等(各建会话路径提交的 model 未必等于
+   * draftInitialModel,如 SSH 分支会另行解析)。
+   */
+  const draftFavoriteAnchorRef = useRef<DraftFavoriteAnchor | null>(null);
+  draftFavoriteAnchorRef.current = selectedFavoriteUid ? draftFavoriteAnchor : null;
+  const carryDraftFavoriteAnchorToSession = useCallback(
+    (
+      newSessionId: string,
+      engine: 'cc' | 'codex' | 'pi',
+      model: string,
+      providerId: string | null,
+    ): void => {
+      const anchor = draftFavoriteAnchorRef.current;
+      if (!anchor || !providerId) return;
+      // (wire id, 来源) 都必须与**本次实际提交值**逐字相等(2026-08-19 review P1:来源也是
+      // 锚点身份 —— 提交前的校准 / 重路由把来源换掉时,收藏副本描述的已不是提交出去的那份)。
+      if (anchor.wireModelId !== model || anchor.providerId !== providerId) return;
+      setSessionFavoriteAnchor(newSessionId, {
+        uid: anchor.uid,
+        wireModelId: anchor.wireModelId,
+        engine,
+        providerId,
+      });
+    },
+    [],
+  );
 
   /**
    * 把草稿转移到一个新的运行目标(设备 + 工作区)——**四条路径唯一的转移动作**。
@@ -2355,6 +2408,8 @@ export function NewMakerDraftRoute() {
         if (!newSession) {
           throw new Error('createSession returned null');
         }
+        // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
+        carryDraftFavoriteAnchorToSession(newSession.id, draftVendor, sshModel, sshProviderId);
         if (effectivePlanMode) patchCurrentVendorPrefs({ planMode: false });
         makerChatStore.setSessionRuntime(newSession.id, {
           agentKind: dbToMakerAgentKind(draftVendor),
@@ -2441,6 +2496,7 @@ export function NewMakerDraftRoute() {
       attachmentState,
       applyDraftTarget,
       createSession,
+      carryDraftFavoriteAnchorToSession,
       navigate,
       t,
     ],
@@ -2623,17 +2679,19 @@ export function NewMakerDraftRoute() {
       fast: boolean;
       favoriteUid: string | null;
     }) => {
-      // 收藏锚点是**组件态**:它描述的是「这次草稿选中的是哪一条副本」,不属于要跨重启
-      // 保留的偏好(重进首页从模型行重新开始即可)。放这里天然随路由卸载失效,也不必为
-      // 切账号 / 切设备再补一条清理 —— 面板侧另有一道兜底:uid 在当前 owner 的收藏里
-      // 查不到就自动回落模型行(UnifiedModelPanel.activeFavoriteUid)。
-      // 锚点连同**本次写进草稿的 wire id** 一起记,失效判定才有可比的同类值。
-      setSelectedFavoriteAnchor(
+      // 收藏锚点写进**目标引擎的槽**(Chris 2026-08-19 起持久化,见 draftFavoriteAnchor 的
+      // 说明):记的是 uid + **本次写进草稿的 wire id**,失效判定才有可比的同类值。
+      // 换账号 / 换设备不必在这里补清理 —— 槽本身按 dataOwnerId 分区,面板侧另有一道兜底:
+      // uid 在当前 owner 的收藏里查不到就自动回落模型行(UnifiedModelPanel.activeFavoriteUid)。
+      // 选普通模型行(favoriteUid 为 null)= 清掉该引擎的槽。
+      setDraftFavoriteAnchor(
+        normalizeDbAgentKind(selection.vendor),
         selection.favoriteUid
           ? {
               uid: selection.favoriteUid,
               wireModelId: selection.modelId,
-              vendor: selection.vendor,
+              // 来源也是锚点身份(2026-08-19 review P1):同 wire model 换来源后旧锚点不得再亮。
+              providerId: selection.providerId,
             }
           : null,
       );
@@ -3593,6 +3651,15 @@ export function NewMakerDraftRoute() {
               nowIso: new Date().toISOString(),
               logTag: 'draft send',
             });
+            // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。锚点是
+            // **控制端的 UI 态**,与被控端无关:按对端会话 id 记在本机即可,不进任何 payload。
+            // 用 createArgs 里**实际提交**的 model / providerId(远程分支会按被控端目录校准)。
+            carryDraftFavoriteAnchorToSession(
+              remoteSessionId,
+              persistedAgentKind,
+              createArgs.model,
+              createArgs.providerId ?? null,
+            );
             // 可恢复副本紧贴提交点落下,**排在下面的附件迁移 await 之前**(codex P2 第五轮)。
             // 提交点之后每多一次 await,「对端会话已建好、正文却还没有第二份」的窗口就长一分;
             // rehomeDraftAttachments 是本机 IPC,但含 base64 / 草稿缓存图片时并不快,期间
@@ -3718,6 +3785,8 @@ export function NewMakerDraftRoute() {
               toastCreateSessionFailed();
               return;
             }
+            // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
+            carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
             // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭,
             // 下一次 New Maker 不延续。
             if (effectivePlanMode) patchActivePrefs({ planMode: false });
@@ -3957,6 +4026,8 @@ export function NewMakerDraftRoute() {
             toastCreateSessionFailed();
             return;
           }
+          // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
+          carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
           // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭。
           if (effectivePlanMode) patchActivePrefs({ planMode: false });
           // 首条消息经 setPending → SessionView 自动发送,createOpts 读 chat store 的
@@ -4110,6 +4181,7 @@ export function NewMakerDraftRoute() {
       localProvidersLoading,
       vendorAuthGate,
       createSession,
+      carryDraftFavoriteAnchorToSession,
       navigate,
       crossAgentDialog.runMigrationFlow,
       attachmentState,
@@ -4403,6 +4475,16 @@ export function NewMakerDraftRoute() {
             nowIso: new Date().toISOString(),
             logTag: 'draft goal',
           });
+          // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。远端 Goal
+          // 与远端普通发送同口径:锚点是**控制端的 UI 态**,按对端会话 id 记在本机 renderer
+          // localStorage,不进任何 payload;model / providerId 用 createArgs 里**实际提交**的值
+          // (经被控端目录校准,与 draftInitialModel 可能不同)。
+          carryDraftFavoriteAnchorToSession(
+            remoteSessionId,
+            persistedAgentKind,
+            createArgs.model,
+            createArgs.providerId ?? null,
+          );
           // setGoal 不在这里发:重 topic session:<id> 订阅要等 CCAgentSessionView
           // mount 才建立,在 /cc-agent/new 就起 goal 首轮会让 maker:event/status 推送
           // 掉在订阅建立前的窗口里(Codex review #548)。与首条消息同款交接 ——
@@ -4557,6 +4639,13 @@ export function NewMakerDraftRoute() {
           if (optimisticGoalTitle) emitAutoTitlePreviewCleared(goalSessionId);
           throw new Error(t('ccAgent.draft.createSessionFailed'));
         }
+        // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
+        carryDraftFavoriteAnchorToSession(
+          newSession.id,
+          persistedAgentKind,
+          draftInitialModel,
+          chatInitialProviderId ?? null,
+        );
         if (useLocalGoalWorktree) {
           const baseRepo = selectedWorktree.baseRepo!;
           await prepareLocalGoalWorktree({
@@ -4686,6 +4775,7 @@ export function NewMakerDraftRoute() {
       effectiveWorkingDir,
       dataOwnerId,
       createSession,
+      carryDraftFavoriteAnchorToSession,
       persistedAgentKind,
       draftInitialModel,
       draftInitialEffort,

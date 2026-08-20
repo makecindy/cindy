@@ -11,7 +11,7 @@ const source = readFileSync(
 describe('AuthContext xd org beta wiring', () => {
   it('shares beta migration before cold start or login uses a device id', () => {
     const preparation = source.indexOf(
-      'const prepareBetaChannelForCurrentDevice = useCallback',
+      'const prepareBetaChannelForCurrentDevice',
     );
     const hasDevice = source.indexOf('await hasStoredDeviceId()', preparation);
     const ensureDevice = source.indexOf('await ensureDeviceId()', hasDevice);
@@ -26,7 +26,9 @@ describe('AuthContext xd org beta wiring', () => {
       'await prepareBetaChannelForCurrentDevice()',
       coldStart + 1,
     );
-    const readSession = source.indexOf('let storedSession = await readPersistedAuthSession()');
+    const readSession = source.indexOf(
+      'let storedSession = await readPersistedAuthSession()',
+    );
 
     expect(preparation).toBeGreaterThan(-1);
     expect(hasDevice).toBeGreaterThan(-1);
@@ -38,31 +40,51 @@ describe('AuthContext xd org beta wiring', () => {
   });
 
   it('waits for device migration before trying the xd default', () => {
-    const schedule = source.indexOf('const scheduleXdOrgBetaDefault = useCallback');
+    const schedule = source.indexOf(
+      'const scheduleXdOrgBetaDefault = useCallback',
+    );
     const waitForPreparation = source.indexOf(
       'await prepareBetaChannelForCurrentDevice();',
       schedule,
     );
-    const applyDefault = source.indexOf('await maybeEnableXdOrgBetaDefault(', schedule);
+    const applyDefault = source.indexOf(
+      'await maybeEnableXdOrgBetaDefault(',
+      schedule,
+    );
 
     expect(waitForPreparation).toBeGreaterThan(schedule);
     expect(applyDefault).toBeGreaterThan(waitForPreparation);
   });
 
   it('schedules the xd default after both login and refresh identity are applied', () => {
-    expect(source.match(/scheduleXdOrgBetaDefault\([^)]*generation\);/g)).toHaveLength(2);
+    expect(
+      source.match(/scheduleCanaryChannelSync\([^)]*generation\);/g),
+    ).toHaveLength(2);
+    expect(
+      source.match(/scheduleXdOrgBetaDefault\([^)]*generation\);/g),
+    ).toHaveLength(2);
 
-    const loginApply = source.indexOf('mergeMembershipWithExisting(outcome.membership');
+    const loginApply = source.indexOf(
+      'mergeMembershipWithExisting(outcome.membership',
+    );
     const loginSchedule = source.indexOf(
-      'scheduleXdOrgBetaDefault(outcome.accessToken, generation);',
+      'scheduleCanaryChannelSync(outcome.accessToken, generation);',
     );
     expect(loginSchedule).toBeGreaterThan(loginApply);
 
-    const refreshApply = source.indexOf('mergeMembershipWithExisting(pair.membership');
+    const refreshApply = source.indexOf(
+      'mergeMembershipWithExisting(pair.membership',
+    );
     const refreshSchedule = source.indexOf(
-      'scheduleXdOrgBetaDefault(pair.accessToken, generation);',
+      'scheduleCanaryChannelSync(pair.accessToken, generation);',
     );
     expect(refreshSchedule).toBeGreaterThan(refreshApply);
+    const canarySync = source.indexOf('syncCanaryChannelAfterAuth(');
+    const canaryThen = source.indexOf(
+      'scheduleNonXdOrgBetaDefault(',
+      canarySync,
+    );
+    expect(canaryThen).toBeGreaterThan(canarySync);
   });
 
   it('rechecks generation and user id before the automatic write', () => {

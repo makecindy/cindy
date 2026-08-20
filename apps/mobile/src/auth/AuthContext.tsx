@@ -10,10 +10,12 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState, Linking, Platform } from 'react-native';
+import { AppState, Keyboard, Linking, Platform } from 'react-native';
 import {
   AuthApiError,
+  CAPTCHA_CHALLENGE_PAGE_PATH,
   CindyAuthClient,
+  captchaRequiredActionForVerificationKind,
   discoverSsoOrgRealm,
   parseAccountDeletionReceiptRecord,
   parseAuthSessionRecord,
@@ -30,6 +32,7 @@ import {
   type AccountDeletionAvailability,
   type AccountDeletionChallenge,
   type AccountDeletionStatus,
+  type CaptchaConfig,
   type LoginOutcome,
   type SocialProvider,
   type SsoOrgDiscovery,
@@ -61,8 +64,12 @@ import {
 import { syncCanaryChannelAfterAuth } from '@/auth/canaryChannelSync';
 import { ensureDeviceId, hasStoredDeviceId } from '@/auth/deviceId';
 import { decodeJwtOrgSlug, isAccessTokenExpiring } from '@/auth/jwt';
-import { maybeEnableXdOrgBetaDefault } from '@/auth/xdOrgBetaDefault';
-import { getAuthLocale } from '@/auth/loginMessages';
+import {
+  maybeEnableNonXdOrgBetaDefault,
+  maybeEnableXdOrgBetaDefault,
+  shouldAttemptOrgBetaDefault,
+} from '@/auth/xdOrgBetaDefault';
+import { getAuthLocale, getLoginLanguage } from '@/auth/loginMessages';
 import { acquireNativeSocialCredential } from '@/auth/nativeSocial';
 import {
   matchesOAuthCallbackUrl,
@@ -186,6 +193,13 @@ export interface AuthContextValue {
   clearAuthError(): void;
   consumeAccountDeletionRestored(): void;
   dispatchLoginAction(action: MobileLoginAction): Promise<boolean>;
+  /**
+   * 登录人机验证挑战(global 邮箱发码前置闸):非空时登录页渲染 WebView Modal
+   * 装载该托管挑战页;结果经 resolveCaptchaChallenge 回到挂起的发码动作
+   * (token = 通过,null = 用户取消/挑战失败)。
+   */
+  captchaChallenge: { url: string } | null;
+  resolveCaptchaChallenge(token: string | null): void;
   completeOAuthCallback(callbackUrl: string): Promise<void>;
   logout(): Promise<void>;
   /** 认证服务已明确拒绝当前会话时，单飞执行完整本地退登。 */
@@ -222,6 +236,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAuthError: () => undefined,
       consumeAccountDeletionRestored: () => undefined,
       dispatchLoginAction: async () => true,
+      captchaChallenge: null,
+      resolveCaptchaChallenge: () => undefined,
       completeOAuthCallback: async () => undefined,
       logout: async () => undefined,
       terminateSession: async () => undefined,
@@ -317,28 +333,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDeferredSessionRecovery(false);
   }, []);
 
-  /** 登录态落地后异步刷新灰度标记；失败保留旧值，迟到响应按 auth generation 丢弃。 */
-  const scheduleCanaryChannelSync = useCallback(
-    (token: string, expectedAuthGeneration: number) => {
-      // EAS/TestFlight 仍走 Expo 官方更新通道，不参与自建线 canary flag 请求；
-      // 这样自建灰度新增的状态机不会改变 EAS 登录/发版流程。
-      if (!IS_OTA_SELFHOST) return;
-      void syncCanaryChannelAfterAuth(
-        { token, expectedAuthGeneration },
-        {
-          fetchFeatureFlags: (accessToken) =>
-            apiFetchRaw('/api/user/feature-flags', {
-              baseUrl: OAUTH_BROKER_API_BASE_URL,
-              token: accessToken,
-            }),
-          readCurrentAuthGeneration: () => authGenerationRef.current,
-          persistFlag: syncCanaryChannel,
-        },
-      ).catch(() => undefined);
-    },
-    [],
-  );
-
   const prepareBetaChannelForCurrentDevice = useCallback((): Promise<string> => {
     const existing = betaChannelPreparationRef.current;
     if (existing) return existing;
@@ -360,6 +354,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return run;
   }, []);
 
+  const orgBetaDefaultDeps = useCallback(
+    (expectedAuthGeneration: number, expectedUserId: string) => ({
+      readCurrentAuthIdentity: () => ({
+        authGeneration: authGenerationRef.current,
+        userId: userRef.current?.id ?? null,
+      }),
+      readChannelState: readBetaChannelState,
+      probeBetaManifest: () =>
+        probeBetaChannel(Platform.OS === 'android' ? 'android' : 'ios'),
+      enableBeta: () =>
+        enableUncustomizedBetaChannel(
+          () =>
+            authGenerationRef.current === expectedAuthGeneration &&
+            userRef.current?.id === expectedUserId,
+        ),
+    }),
+    [],
+  );
+
   /** 登录态落地后为 xd 组织尝试打开设备级 beta；不阻塞主界面。 */
   const scheduleXdOrgBetaDefault = useCallback(
     (token: string, expectedAuthGeneration: number) => {
@@ -379,25 +392,80 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               orgName: currentUser.orgName,
             },
           },
-          {
-            readCurrentAuthIdentity: () => ({
-              authGeneration: authGenerationRef.current,
-              userId: userRef.current?.id ?? null,
-            }),
-            readChannelState: readBetaChannelState,
-            probeBetaManifest: () =>
-              probeBetaChannel(Platform.OS === 'android' ? 'android' : 'ios'),
-            enableBeta: () =>
-              enableUncustomizedBetaChannel(
-                () =>
-                  authGenerationRef.current === expectedAuthGeneration &&
-                  userRef.current?.id === expectedUserId,
-              ),
-          },
+          orgBetaDefaultDeps(expectedAuthGeneration, expectedUserId),
         );
       })().catch(() => undefined);
     },
-    [prepareBetaChannelForCurrentDevice],
+    [orgBetaDefaultDeps, prepareBetaChannelForCurrentDevice],
+  );
+
+  /** feature-flags 返回后，仅为非 xd 组织尝试打开设备级 beta。 */
+  const scheduleNonXdOrgBetaDefault = useCallback(
+    (
+      token: string,
+      expectedAuthGeneration: number,
+      defaultEnableBeta?: boolean,
+    ) => {
+      if (!IS_OTA_SELFHOST || defaultEnableBeta !== true) return;
+      const currentUser = userRef.current;
+      if (!currentUser) return;
+      const expectedUserId = currentUser.id;
+      const request = {
+        expectedAuthGeneration,
+        expectedUserId,
+        user: {
+          membershipKind: currentUser.membershipKind,
+          orgSlug: decodeJwtOrgSlug(token),
+          orgName: currentUser.orgName,
+        },
+      } as const;
+      if (
+        shouldAttemptOrgBetaDefault({
+          user: request.user,
+          defaultEnableBeta,
+        }) !== 'flag-enable'
+      ) {
+        return;
+      }
+      void (async () => {
+        await prepareBetaChannelForCurrentDevice();
+        await maybeEnableNonXdOrgBetaDefault(
+          request,
+          orgBetaDefaultDeps(expectedAuthGeneration, expectedUserId),
+        );
+      })().catch(() => undefined);
+    },
+    [orgBetaDefaultDeps, prepareBetaChannelForCurrentDevice],
+  );
+
+  /** 登录态落地后异步刷新灰度标记；失败保留旧值，迟到响应按 auth generation 丢弃。 */
+  const scheduleCanaryChannelSync = useCallback(
+    (token: string, expectedAuthGeneration: number) => {
+      // EAS/TestFlight 仍走 Expo 官方更新通道，不参与自建线 canary flag 请求；
+      // 这样自建灰度新增的状态机不会改变 EAS 登录/发版流程。
+      if (!IS_OTA_SELFHOST) return;
+      void syncCanaryChannelAfterAuth(
+        { token, expectedAuthGeneration },
+        {
+          fetchFeatureFlags: (accessToken) =>
+            apiFetchRaw('/api/user/feature-flags', {
+              baseUrl: OAUTH_BROKER_API_BASE_URL,
+              token: accessToken,
+            }),
+          readCurrentAuthGeneration: () => authGenerationRef.current,
+          persistFlag: syncCanaryChannel,
+        },
+      )
+        .then((outcome) => {
+          scheduleNonXdOrgBetaDefault(
+            token,
+            expectedAuthGeneration,
+            outcome.defaultEnableBeta,
+          );
+        })
+        .catch(() => undefined);
+    },
+    [scheduleNonXdOrgBetaDefault],
   );
 
   const serializeRefreshTokenMutation = useCallback(
@@ -457,10 +525,105 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  /* ── 登录人机验证(Turnstile 托管挑战页,按 requiredFor 控制邮箱/短信发码)── */
+  const captchaConfigRef = useRef<CaptchaConfig | null>(null);
+  const [captchaChallenge, setCaptchaChallenge] = useState<{ url: string } | null>(null);
+  const captchaResolveRef = useRef<((token: string | null) => void) | null>(null);
+
   const updateLoginState = useCallback((next: AuthFlowState | null) => {
+    // providers.captcha 只随 identifier/realm-confirmation 步下发,发码动作发生在
+    // 后续步骤,进 ref 存续(登录流必经 identifier,ref 必然先就位);cn 构建 /
+    // 服务端未开启时字段缺席,captcha 闸整体 no-op。
+    if (next?.step === 'identifier' || next?.step === 'realm-confirmation') {
+      captchaConfigRef.current = next.providers.captcha ?? null;
+    }
     loginStateRef.current = next;
     setLoginState(next);
   }, []);
+
+  /** 登录页 WebView Modal 的结果回传口(token = 通过,null = 取消/失败)。 */
+  const resolveCaptchaChallenge = useCallback((token: string | null) => {
+    const resolve = captchaResolveRef.current;
+    captchaResolveRef.current = null;
+    setCaptchaChallenge(null);
+    resolve?.(token);
+  }, []);
+
+  /** 出题并等结果。有效登录主题由 ThemeOverrideProvider 内的 WebView 补入 URL。 */
+  const runCaptchaChallenge = useCallback((kind: VerificationKind): Promise<string | null> => {
+    let base = getMobileEndpointForRealm(BUILD_AUTH_REGION, 'authApiBaseUrl');
+    while (base.endsWith('/')) base = base.slice(0, -1);
+    const action = captchaRequiredActionForVerificationKind(kind);
+    const url = `${base}${CAPTCHA_CHALLENGE_PAGE_PATH}?action=${encodeURIComponent(action)}&lang=${encodeURIComponent(getLoginLanguage())}`;
+    return new Promise<string | null>((resolve) => {
+      // 单飞:dispatchLoginAction 本身串行,这里不会出现并发挑战。
+      captchaResolveRef.current = resolve;
+      // 验证码浮层不是原生 Modal，也不做键盘避让；先收键盘，避免 iOS 小屏上
+      // 挑战内容与取消动作被仍聚焦的 identifier 输入框键盘遮挡。
+      Keyboard.dismiss();
+      setCaptchaChallenge({ url });
+    });
+  }, []);
+
+  /** 按发码类型执行前置闸:未启用 → 放行;启用 → 出题;取消 → 不发码。 */
+  const ensureCaptchaGate = useCallback(
+    async (
+      kind: VerificationKind,
+    ): Promise<
+      { proceed: true; captchaToken?: string } | { proceed: false }
+    > => {
+      if (
+        captchaConfigRef.current?.requiredFor.includes(
+          captchaRequiredActionForVerificationKind(kind),
+        ) !== true
+      ) {
+        return { proceed: true };
+      }
+      const token = await runCaptchaChallenge(kind);
+      return token === null
+        ? { proceed: false }
+        : { proceed: true, captchaToken: token };
+    },
+    [runCaptchaChallenge],
+  );
+
+  /**
+   * 发验证码 + 错误驱动兜底:服务端返回 CAPTCHA_REQUIRED/CAPTCHA_INVALID
+   * (providers 缓存旧于服务端开关,或 token 恰好过期)时重新出题一次后重试,
+   * 仅一次防循环;重试被取消或再失败则抛原错误走统一错误链路。
+   */
+  const requestCodeWithCaptchaFallback = useCallback(
+    async (
+      did: string,
+      kind: VerificationKind,
+      identifier: string,
+      captchaToken: string | undefined,
+    ): Promise<void> => {
+      try {
+        await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+          kind,
+          identifier,
+          {
+            captchaToken,
+          },
+        );
+      } catch (error) {
+        const code = authErrorCode(error);
+        if (code !== 'CAPTCHA_REQUIRED' && code !== 'CAPTCHA_INVALID')
+          throw error;
+        const retryToken = await runCaptchaChallenge(kind);
+        if (retryToken === null) throw error;
+        await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+          kind,
+          identifier,
+          {
+            captchaToken: retryToken,
+          },
+        );
+      }
+    },
+    [runCaptchaChallenge],
+  );
 
   const setToken = useCallback((token: string | null) => {
     accessTokenRef.current = token;
@@ -1154,9 +1317,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               });
             }
             if (sole?.type === 'email_code') {
-              await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+              // 人机验证前置闸(覆盖 discovery→发码的自动串发路径):取消则不
+              // 串发,落 method-choice,用户可从个人行再次发起(会重新过闸)。
+              const gate = await ensureCaptchaGate('email');
+              if (!gate.proceed) {
+                updateLoginState(
+                  reduceAuthFlow(currentState, {
+                    type: 'discovery-loaded',
+                    email,
+                    methods,
+                  }),
+                );
+                return true;
+              }
+              await requestCodeWithCaptchaFallback(
+                did,
                 'email',
                 email,
+                gate.captchaToken,
               );
               updateLoginState(
                 reduceAuthFlow(currentState, {
@@ -1250,9 +1428,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           if (action.type === 'request-code') {
             const identifier = action.identifier.trim();
-            await authClientFor(did, BUILD_AUTH_REGION).requestCode(
+            const gate = await ensureCaptchaGate(action.kind);
+            // 取消:不发码、不改状态、不报错(用户可再点发送/重发)。
+            if (!gate.proceed) return false;
+            await requestCodeWithCaptchaFallback(
+              did,
               action.kind,
               identifier,
+              gate.captchaToken,
             );
             updateLoginState(
               reduceAuthFlow(loginStateRef.current, {
@@ -1433,6 +1616,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       acceptOutcome,
       completeOAuthCallback,
+      ensureCaptchaGate,
+      requestCodeWithCaptchaFallback,
       prepareBetaChannelForCurrentDevice,
       suspendSessionRecoveryForLogin,
       updateLoginState,
@@ -1727,6 +1912,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAuthError,
       consumeAccountDeletionRestored,
       dispatchLoginAction,
+      captchaChallenge,
+      resolveCaptchaChallenge,
       completeOAuthCallback,
       logout,
       terminateSession,
@@ -1744,6 +1931,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountDeletionReceipt,
       accountDeletionRestored,
       authError,
+      captchaChallenge,
       clearAccountDeletionReceipt,
       clearAuthError,
       completeOAuthCallback,
@@ -1760,6 +1948,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginState,
       logout,
       requestAccountDeletionChallenge,
+      resolveCaptchaChallenge,
       terminateSession,
       user,
     ],

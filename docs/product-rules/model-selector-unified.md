@@ -57,8 +57,26 @@
 ### 1.6 会话内(切换有损)
 
 - rail 顶部(★下)多一个**同引擎过滤**(图标=当前会话引擎),**默认选中**;该视图只显示 引擎匹配的收藏 + 同引擎模型;组标题旁 ⓘ 悬停说明(自绘即时 tooltip,原生 title 会被重渲染打断)。
+- **「同引擎」的判据是「生效引擎 = 当前引擎」,不只是「候选里有当前引擎」**(Chris 2026-08-19 裁决):
+  候选里有当前引擎、但**默认落点在别家**的行(主场明确在别处的行、用户把引擎 override 显式指到别家的行)
+  在该视图里**不显示**。裁决是「不显示」而不是「转换成当前引擎」——用户的设置摆明了没打算在本引擎用它,
+  要跨引擎就去「全部/供应商」视图显式选。理由:这类行此前会以**外引擎形态**混进「仅 Claude」视图,点下去还
+  弹跨引擎确认,与该视图「这里选什么都无损」的承诺直接冲突。
+  与 §2.1 pinnedEngine 规则(2026-08-14)的关系:pinned 例外**保持不变** —— 无主场的行本就落在当前引擎上,
+  自然通过这道过滤;**过滤口径与行落点必须保持同构**(实现上是同一份 `resolveUnifiedRowConfig` 结果,
+  见 `unifiedModelSelection.buildUnifiedListSections` 的注释)。收藏行同理:条目存的引擎掉出候选、解析回落到
+  别家时同样不显示。
 - 跨引擎:点「全部/供应商」显式切换,列表顶部一行警示「⚠ 跨引擎切换会重建上下文,有丢失风险」。
 - 切引擎执行仍走既有 `performAgentSwitch` 链路(确认弹窗、fastMode 不跨引擎带入等语义保留)。
+- **风险确认按目标引擎判重**(Chris 2026-08-19):「已确认过、不再重复弹」的条件是会话上已有**指向本次目标
+  引擎**的切换意图;换一个目标引擎是一次新的上下文重建风险,必须重新确认。
+- **切换事务的「成功」= 本端请求的完整配置原样落地**(2026-08-19 review 收口):main 先广播意图回声、后回
+  ack,回声身份匹配只比 target/model/provider 三元组(effort/Fast 可能被 main 归一化,providerId 传 null 时
+  跟随默认路由解析)。因此三元组匹配、但权威回声里的 effort/Fast 与本端请求不一致(device-link 往返期间另一
+  控制端只改了同一意图的档位/Fast)时,事务按**未完整应用**上报 false:面板挂在成功上的持久化收尾
+  (清 override、提交/删除收藏编辑、写收藏锚点)一律不做,旧锚点由派生校验自然失效;意图展示与偏好同步照用
+  **权威快照**的值(缺字段的维不写)。判据的宽严取向(权威快照缺维放行、本端未指定的维放行、双方有值逐字比)
+  见 `agentSwitchConfirmation.isAgentSwitchEchoConfigConsistent` 头注。
 
 ### 1.7 i18n / 主题
 
@@ -102,7 +120,7 @@
 - `resolveVerifiedContextWindow` 目前仅接 codex——本版为 cc/pi 补接 `AgentDeps`(实现清单 M6)。
 - efforts / defaultEffort / supportsFastMode:按 (provider, agent) 嵌套条目取,已是现状。
 
-### 2.3 新增存储(两个,均只存 override;renderer localStorage,按既有命名约定)
+### 2.3 新增存储(前两个只存 override;renderer localStorage,按既有命名约定)
 
 1. `xdt:modelEnginePrefs:v1:<dataOwnerId>` —— 每模型引擎 override:
    `{ "<providerId>:<modelId>": { agent: AgentKind } }`
@@ -111,6 +129,20 @@
 2. `xdt:modelFavorites:v1:<dataOwnerId>` —— 收藏配置副本:
    `{ uidSeq, items: [{ uid, providerId, modelId, agent, effort, fast }] }`
    - 深度/Fast 存**档位 key**(low/medium/...)不存显示文案(防语言串档,Maximum 混中文的教训)。
+3. `xdt:favoriteAnchorMemory:v1:<dataOwnerId>` —— **收藏锚点记忆**(「面板上哪一行打勾」),
+   Chris 2026-08-19 实测后从内存态改为持久化:
+   `{ drafts: { <cc|codex|pi>: { uid, wireModelId, providerId } }, sessions: [{ sessionId, uid, wireModelId, engine, providerId }] }`
+   - 草稿槽按引擎分(与 `lastByVendor` 同一分槽维度);会话槽按 sessionId,**LRU 上限 100**(队首=最近一次写)。
+   - 存的是**选中那一刻的快照**,消费方与当前 (模型/引擎/来源) 逐项比对后才打勾,对不上就回落模型行 —— 过期
+     锚点永远不会让面板勾一份已经不生效的配置。
+   - 快照只含**身份**维;深度/Fast **不进锚点记录**,而在消费点校验(2026-08-19 review):统一面板派生选中收藏时,
+     把该收藏**当前副本的解析结果**与正在跑的完整配置(引擎/深度/Fast)比对,任一维不等即回落模型行 —— 覆盖
+     device-link seed / 另一窗口 / 另一控制端只改同一模型深度或 Fast 的全部路径(草稿槽、会话槽、storage 回读、
+     建会话锚点携带都汇到这一个派生点)。不把 effort/Fast 抄进锚点:那是第二份会过期的副本,编辑选中收藏的每条
+     路径都得同步它,漏一处就误杀刚编辑完的选中态。逐维宽严见 `resolveActiveFavoriteAnchorUid` 头注。
+   - 仍**不是用户配置**:不落库、不进 device-link payload、写失败静默吞;丢了只是回落模型行。
+   - 草稿发送建会话时,仍有效且**有显式来源**的草稿锚点写进该 sessionId 的会话槽(跟随默认路由的会话
+     `providerId` 为 null,与显式来源的锚点永不相等,存了也打不上勾,故不延续)。
 - 深度/Fast 的每模型记忆**沿用** `providerModelMemory` `<agent>:*` 槽(不迁移不改形——它同时是 device-link wire 形状)。
 
 ### 2.4 选中态与会话创建

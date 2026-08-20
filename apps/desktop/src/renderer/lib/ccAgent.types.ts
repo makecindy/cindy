@@ -4,6 +4,7 @@ import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
+import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -66,6 +67,8 @@ export interface CcMeta {
   durationApiMs?: number;
   totalCostUsd?: number;
   fastModeState?: string;
+  /** Host-persisted terminal lifecycle for the originating Agent/Task tool call. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
 
   /**
    * Host-side delivery marker. SDKs generally do not echo user steer messages in

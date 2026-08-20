@@ -39,8 +39,10 @@ import {
   wireModelIdOf,
   buildUnifiedListSections,
   buildUnifiedRail,
+  computeSelectedRowScrollTop,
   priceTierOf,
   railItemKey,
+  resolveActiveFavoriteAnchorUid,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
   sameAnchor,
@@ -52,8 +54,11 @@ import {
 
 /** ☆ 点亮反馈时长(规格 §1.5「点亮 0.7s 反馈后恢复」)。 */
 const FAVORITE_FEEDBACK_MS = 700;
-/** badge 样式的固定视图 —— 模块级常量保证引用稳定,不打穿 sections 的 useMemo。 */
-const BADGE_RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
+/**
+ * 「全部」视图的固定 rail —— 模块级常量保证引用稳定,不打穿 sections 的 useMemo。
+ * 两个消费方:badge 样式的固定视图、定宽 sizer 的全量量宽(同一个值,不重复声明)。
+ */
+const RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
 /**
  * 鼠标离开行到收起浮层之间的 grace period。
  *
@@ -64,6 +69,8 @@ const BADGE_RAIL_ALL: UnifiedRailFilter = { kind: 'all' };
 const FLYOUT_CLOSE_GRACE_MS = 240;
 /** 鼠标是朝浮层那一侧离开行的 —— 明显的「我要去浮层」意图,给更长的窗口。 */
 const FLYOUT_CLOSE_GRACE_TOWARD_MS = 600;
+/** 定宽 sizer 的行不接任何交互(见 widthSizerSections)—— 模块级常量避免每帧新建闭包。 */
+const noop = (): void => {};
 
 /**
  * badge 样式滚动题头的**一套位形**(下面三处必须同源派生,拆开写过就漂过:横幅本身的
@@ -236,6 +243,12 @@ export interface UnifiedModelPanelProps {
   /** 面板容器元素(浮层按它的左 / 右外侧定位)。 */
   panelElement: HTMLElement | null;
   overlayClassName?: string;
+  /**
+   * 面板宽度是**绑在 trigger 上**的(field 形态,DESIGN.md §4 宽度铁则)。
+   * 传 true 时关掉定宽 sizer —— 宽度由外部决定,量一份最宽视图既无用也白渲染一遍行
+   * (见 widthSizerSections)。composer 的 `w-max` 面板不传 = 开启。
+   */
+  panelWidthFluid?: boolean;
 }
 
 /**
@@ -282,6 +295,7 @@ export function UnifiedModelPanel({
   onFastModeChangeLive,
   panelElement,
   overlayClassName,
+  panelWidthFluid = false,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
   const favorites = useModelFavorites();
@@ -384,7 +398,172 @@ export function UnifiedModelPanel({
   // badge 样式:左侧快捷跳转栏整条拿掉(Chris 2026-08-16),视图恒为「全部」——
   // 引擎与渠道已在行内(徽标 + 渠道签),渠道归属再由分栏题头上的供应商图标承担,
   // 快捷跳转的职责就地消化;行内星标仍可收藏。classic 样式的 rail 行为保持不变。
-  const effectiveRail = pickerLayout === 'badge' ? BADGE_RAIL_ALL : rail;
+  const effectiveRail = pickerLayout === 'badge' ? RAIL_ALL : rail;
+
+  // ── 行配置合成 ────────────────────────────────────────────────────────────
+  // 「正在用的引擎」的口径 = 上面推 keepModel 时用的那一个(liveEngineAgent),不另起一份。
+  // ★ 位置在 sections **之前**是硬要求:同引擎视图的过滤要注入 configOf 解析出的生效引擎
+  // (见 sections 的 effectiveEngineOf),声明在后面会在首帧 TDZ 里炸掉。
+  /** 这一行是不是**当前会话 / 草稿正在用的那一行**(来源 + 模型 + 引擎三者都对上)。 */
+  const isLiveRow = useCallback(
+    (entry: UnifiedModelEntry, config: UnifiedRowConfig): boolean =>
+      // 外部给的是会话 / 草稿里存的 **wire id**,行身份是归一化 id —— 两头都认
+      // (entryMatchesModelId),否则合并行之后选中的模型在列表里不高亮。
+      entryMatchesModelId(entry, selected.modelId) &&
+      (selected.providerId === null || selected.providerId === entry.providerId) &&
+      (liveEngineAgent == null || liveEngineAgent === config.agent),
+    [liveEngineAgent, selected.modelId, selected.providerId],
+  );
+
+  // 选中的收藏锚点**必须仍然存在**才算数(规格 §1.5「删除选中条目时选中回落到对应模型
+  // 默认」)。同一条兜底也覆盖切账号:收藏 store 按 dataOwnerId 分区,换号后旧 uid 在新
+  // 分区里查无此条 —— 不做这层解析就会两头落空(收藏行没了、模型行的勾又被抑制)。
+  // 存在之外还要**完整配置仍然相等**(2026-08-19 review P2):上游锚点校验只比身份三维
+  // (模型/来源/引擎),外部(device-link seed / 另一窗口 / 另一控制端)只改同一模型的
+  // 深度或 Fast 时,身份照样全对 —— 副本 ≠ live 的收藏不能再勾住。逐维口径与误杀
+  // 分析见 resolveActiveFavoriteAnchorUid 头注;所有锚点入口都汇到这一个派生点。
+  const activeFavoriteUid = useMemo(
+    () =>
+      resolveActiveFavoriteAnchorUid({
+        selectedFavoriteUid,
+        favorites,
+        entries,
+        liveEffort: selectedEffort,
+        liveFast: fastMode,
+        liveAgent: liveEngineAgent,
+        agentFastModeCapable,
+      }),
+    [
+      agentFastModeCapable,
+      entries,
+      fastMode,
+      favorites,
+      liveEngineAgent,
+      selectedEffort,
+      selectedFavoriteUid,
+    ],
+  );
+
+  // ★ 引擎那一半(engineOverride / pinnedEngine / forceEngine 的合成与 isSelectedModelRow
+  // 判据)在下方 effectiveEngineOf 里有一份**同构副本**(供 sections 过滤,避免把深度 / Fast
+  // 的依赖打进列表重建)——改这里的引擎合成必须同步改那边。
+  const configOf = useCallback(
+    (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedRowConfig => {
+      // 收藏条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
+      if (favorite) {
+        return resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable });
+      }
+      // 两个版本号只作重算触发器:store 是模块级单例,值本身不进依赖。
+      void enginePrefsVersion;
+      void memoryVersion;
+      // 当前草稿 / 会话**实际在用**的模型行:引擎显示强制与事实一致(正在跑什么就画
+      // 什么),不受推荐 / override / pinned 摆布 —— 2026-08-14 实测抓到草稿在 pi 上跑
+      // DeepSeek,行上却按推荐回落显示「Claude」。收藏被选中时不强制(live 的是那条收藏)。
+      const isSelectedModelRow =
+        !activeFavoriteUid &&
+        entryMatchesModelId(entry, selected.modelId) &&
+        (selected.providerId === null || selected.providerId === entry.providerId);
+      const base = resolveUnifiedRowConfig({
+        entry,
+        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
+        memoryEffort: (agent) =>
+          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+        memoryFast: (agent) =>
+          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+        agentFastModeCapable,
+        // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上(无损
+        // 直切);主场在别处的行保持主场显示。用户显式 override 仍然优先(见
+        // resolveUnifiedRowConfig 的 pinnedEngine 注释)。
+        ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
+        ...(isSelectedModelRow && liveEngineAgent
+          ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
+          : {}),
+      });
+      // **选中行读 live 值**,不读全局记忆:已建会话的深度 / Fast 由 DB / runtime 权威,
+      // 其它对话改同一个模型的全局预设不该改写正在跑的这一条(与旧版 rowEffortOf /
+      // fastOnOf 的选中行分支同语义)。
+      if (!isLiveRow(entry, base)) return base;
+      const efforts: readonly string[] = base.efforts;
+      const liveEffort =
+        selectedEffort && efforts.includes(selectedEffort) ? selectedEffort : base.effort;
+      const liveFast = base.fastCapable ? fastMode : false;
+      if (liveEffort === base.effort && liveFast === base.fast) return base;
+      return {
+        ...base,
+        effort: liveEffort,
+        fast: liveFast,
+        customized:
+          base.customized ||
+          liveFast ||
+          (liveEffort !== null &&
+            base.capability?.defaultEffort != null &&
+            liveEffort !== base.capability.defaultEffort),
+      };
+    },
+    [
+      activeFavoriteUid,
+      agentFastModeCapable,
+      enginePrefsVersion,
+      fastMode,
+      isLiveRow,
+      liveEngineAgent,
+      memoryVersion,
+      modelMemory,
+      selected.modelId,
+      selected.providerId,
+      selectedEffort,
+      sessionAgent,
+    ],
+  );
+
+  /**
+   * 同引擎视图的第二道判据(Chris 2026-08-19 裁决,详见 buildUnifiedListSections 里的
+   * `visible` 注释):行的**生效引擎**必须就是当前会话引擎,否则不显示。
+   *
+   * 这是 `configOf` 的**引擎那一半的同构副本**(2026-08-19 预审 P2-4):不能直接用
+   * configOf —— 它的依赖里有 fastMode / selectedEffort / memoryVersion / agentFastModeCapable,
+   * 进了 sections 的 useMemo 之后,hover 开浮层、拖档、Fast 开关的每一次 render 都会重建
+   * 整张联合列表(连同定宽 sizer 与浮层 repositionKey),正是本文件 predicatesRef 注释里
+   * 写在案的那类坑。引擎解析在 resolveUnifiedRowConfig / resolveFavoriteRowConfig 里只由
+   * 候选 ⊕ override ⊕ pinned ⊕ 主场 ⊕ forceEngine(以及收藏副本自存的引擎)决定,与深度 /
+   * Fast 记忆完全无关 —— 所以这里不传 memoryEffort / memoryFast / agentFastModeCapable,
+   * 依赖只收引擎真正相关的几项。
+   *
+   * ★ 与 configOf 的 engineOverride / pinnedEngine / forceEngine 三路合成**必须逐字同构**
+   * (含 isSelectedModelRow 的判据),改一处必须改另一处 —— 漂了就会「过滤掉了却还画着」
+   * 或反过来。正在跑的那一行因 forceEngine = 当前引擎必然通过过滤,不会被自己滤没。
+   */
+  const effectiveEngineOf = useCallback(
+    (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedEngine => {
+      if (favorite) {
+        // 收藏行引擎 = 副本自存引擎(掉出候选回落推荐)。不传 agentFastModeCapable:
+        // 它只影响 fast/fastCapable,不影响 engine。
+        return resolveFavoriteRowConfig({ entry, item: favorite }).engine;
+      }
+      void enginePrefsVersion;
+      const isSelectedModelRow =
+        !activeFavoriteUid &&
+        entryMatchesModelId(entry, selected.modelId) &&
+        (selected.providerId === null || selected.providerId === entry.providerId);
+      return resolveUnifiedRowConfig({
+        entry,
+        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
+        ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
+        ...(isSelectedModelRow && liveEngineAgent
+          ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
+          : {}),
+      }).engine;
+    },
+    [
+      activeFavoriteUid,
+      enginePrefsVersion,
+      liveEngineAgent,
+      selected.modelId,
+      selected.providerId,
+      sessionAgent,
+    ],
+  );
 
   const sections = useMemo(
     () =>
@@ -393,14 +572,17 @@ export function UnifiedModelPanel({
         favorites,
         query,
         rail: effectiveRail,
+        effectiveEngineOf,
         providerOrder,
       }),
-    [entries, favorites, query, effectiveRail, providerOrder],
+    [entries, favorites, query, effectiveRail, effectiveEngineOf, providerOrder],
   );
 
-  // 列表变化时只在选中行跑出可视区时做**最小滚动**(与既有面板同一条规则):
-  // 选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;**只有视图
-  // 本身变化**(rail 切换 / 搜索词变化 / 首次打开)才做「确保选中项可见」——数据刷新
+  // 列表变化时把选中行对齐到**可视区中部**(Chris 2026-08-19 实测反馈,详见
+  // computeSelectedRowScrollTop 的头注:此前是「最小滚动进可视区」,首开那一帧列表极矮,
+  // 等价于把选中行顶到最上沿,收藏 1、2 条被顶出去)。
+  // 触发面不变:选中项自身变化(用户刚点了一行)不做任何对齐,否则点完列表会当场跳位;
+  // **只有视图本身变化**(rail 切换 / 搜索词变化 / 首次打开)才对齐 —— 数据刷新
   // (目录轮询 / 收藏增删)不夺走用户的滚动位置(2026-08-13 实测:浏览到列表深处时,
   // 后台目录刷新重建 sections 会把人拽回顶部的选中行)。
   const viewKey = `${railItemKey(effectiveRail)}::${query.trim().toLowerCase()}`;
@@ -424,46 +606,49 @@ export function UnifiedModelPanel({
     const listRect = el.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
     // badge 样式的滚动题头是**不透明实底**覆盖层,恒盖住列表视口顶部 SOLID 那一带
-    // (见 BADGE_HEADER_* 头注)。上界仍按 listRect.top 算的话,自动对齐会把选中行
-    // 正好滚进题头背后 —— 用户看到的就是「当前模型没露出来」。
+    // (见 BADGE_HEADER_* 头注)。不把它从可视高度里扣掉的话,居中算出来的位置会整体
+    // 偏上半条题头,选中行有一截压在题头背后。
     const headerInset = pickerLayout === 'badge' ? BADGE_HEADER_SOLID_PX : 0;
-    const listTopVisible = listRect.top + headerInset;
-    // 上界目标:行是所在组第一行时把**组标题**一起露出来(贴顶只见行不见组名,
-    // 像被裁了一刀 —— 2026-08-14 实机自查);否则给 8px 呼吸余量。下界恒 8px。
-    const group = row.closest('[role="group"]');
-    const header = group?.firstElementChild;
-    const isFirstRowOfGroup =
-      header instanceof HTMLElement && row.previousElementSibling === header;
-    const topBoundary = isFirstRowOfGroup
-      ? header.getBoundingClientRect().top - 4
-      : rowRect.top - 8;
-    // 上下两条余量约束装不进可视区(极矮面板)时按顶对齐一次并收工,防止上下修正
-    // 相互触发的振荡。题头带不算可视高度。
-    if (rowRect.bottom + 8 - topBoundary > el.clientHeight - headerInset) {
-      const forced = Math.max(0, el.scrollTop + (topBoundary - listTopVisible));
-      if (Math.abs(forced - el.scrollTop) > 1) {
+    // 「行是所在组第一行时把组标题一起露出来」的老逻辑已随居中一并去掉:居中天然在行上方
+    // 留出半屏内容,组标题不会再被裁在视口外,多一条特例只会让收敛条件更难对。
+    const alignment = computeSelectedRowScrollTop({
+      scrollTop: el.scrollTop,
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+      headerInset,
+      rowTop: rowRect.top - listRect.top + el.scrollTop,
+      rowBottom: rowRect.bottom - listRect.top + el.scrollTop,
+    });
+    if (alignment.oversized) {
+      // 行比可视区还高:此刻只能顶对齐,但**保持在途**(2026-08-19 预审 P1-3)——morph 生长
+      // 途中的一串中间尺寸都可能暂时「装不下一行」,在这里收工的话面板长开后不再复核,
+      // 选中行就钉在顶部、上方收藏被顶出,正是要修的原症状。不会振荡:顶对齐目标随尺寸
+      // 单调稳定、写入有 >1 阈值,长开后自然改走下面的居中并按其条件收工;真正的极矮
+      // 面板不再有尺寸回调,标记挂着也没有下一次工作。
+      if (Math.abs(alignment.scrollTop - el.scrollTop) > 1) {
         suppressScrollDismissRef.current = true;
-        el.scrollTop = forced;
+        el.scrollTop = alignment.scrollTop;
       }
+      return;
+    }
+    if (Math.abs(alignment.scrollTop - el.scrollTop) <= 1) {
+      // 已经居中(容器也有真实高度)→ 收工。
       needsEnsureVisibleRef.current = false;
       return;
     }
-    const delta =
-      topBoundary < listTopVisible
-        ? topBoundary - listTopVisible
-        : rowRect.bottom > listRect.bottom - 8
-          ? rowRect.bottom - (listRect.bottom - 8)
-          : 0;
-    if (Math.abs(delta) > 1) {
-      const next = Math.max(0, el.scrollTop + delta);
-      if (next !== el.scrollTop) {
-        suppressScrollDismissRef.current = true;
-        el.scrollTop = next;
-      }
-      return; // 生长期间可能还会变,保持在途,交给下一次尺寸回调复核。
+    const before = el.scrollTop;
+    suppressScrollDismissRef.current = true;
+    el.scrollTop = alignment.scrollTop;
+    // 夹紧后位置基本不动(已经贴着列表头 / 尾,没得再滚)→ 收工。少了这一条,短列表里
+    // 目标与实际永远差一截,ResizeObserver 每次回调都会重试一遍。判据带 1px 容差
+    // (2026-08-19 预审 P2-9):HiDPI 下 scrollTop 是小数,写整数读回小数,严格相等永远
+    // 不成立,在途标记就摘不下来,还会一直占用 suppressScrollDismiss 吞掉用户滚动。
+    if (Math.abs(el.scrollTop - before) <= 1) {
+      suppressScrollDismissRef.current = false;
+      needsEnsureVisibleRef.current = false;
+      return;
     }
-    // 行已完整可见且容器有真实高度 → 收工。
-    needsEnsureVisibleRef.current = false;
+    // morph 生长期间尺寸还会变,保持在途,交给下一次尺寸回调复核。
   }, [pickerLayout]);
   useEffect(() => {
     const el = listRef.current;
@@ -565,101 +750,6 @@ export function UnifiedModelPanel({
   useEffect(() => {
     if (interactionDisabled) closeFlyout();
   }, [closeFlyout, interactionDisabled]);
-
-  // ── 行配置合成 ────────────────────────────────────────────────────────────
-  // 「正在用的引擎」的口径 = 上面推 keepModel 时用的那一个(liveEngineAgent),不另起一份。
-
-  /** 这一行是不是**当前会话 / 草稿正在用的那一行**(来源 + 模型 + 引擎三者都对上)。 */
-  const isLiveRow = useCallback(
-    (entry: UnifiedModelEntry, config: UnifiedRowConfig): boolean =>
-      // 外部给的是会话 / 草稿里存的 **wire id**,行身份是归一化 id —— 两头都认
-      // (entryMatchesModelId),否则合并行之后选中的模型在列表里不高亮。
-      entryMatchesModelId(entry, selected.modelId) &&
-      (selected.providerId === null || selected.providerId === entry.providerId) &&
-      (liveEngineAgent == null || liveEngineAgent === config.agent),
-    [liveEngineAgent, selected.modelId, selected.providerId],
-  );
-
-  // 选中的收藏锚点**必须仍然存在**才算数(规格 §1.5「删除选中条目时选中回落到对应模型
-  // 默认」)。同一条兜底也覆盖切账号:收藏 store 按 dataOwnerId 分区,换号后旧 uid 在新
-  // 分区里查无此条 —— 不做这层解析就会两头落空(收藏行没了、模型行的勾又被抑制)。
-  const activeFavoriteUid = useMemo(
-    () =>
-      selectedFavoriteUid && favorites.some((item) => item.uid === selectedFavoriteUid)
-        ? selectedFavoriteUid
-        : null,
-    [favorites, selectedFavoriteUid],
-  );
-
-  const configOf = useCallback(
-    (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem): UnifiedRowConfig => {
-      // 收藏条目只读它自己存的副本(规格 §1.5),不掺模型默认与记忆。
-      if (favorite) {
-        return resolveFavoriteRowConfig({ entry, item: favorite, agentFastModeCapable });
-      }
-      // 两个版本号只作重算触发器:store 是模块级单例,值本身不进依赖。
-      void enginePrefsVersion;
-      void memoryVersion;
-      // 当前草稿 / 会话**实际在用**的模型行:引擎显示强制与事实一致(正在跑什么就画
-      // 什么),不受推荐 / override / pinned 摆布 —— 2026-08-14 实测抓到草稿在 pi 上跑
-      // DeepSeek,行上却按推荐回落显示「Claude」。收藏被选中时不强制(live 的是那条收藏)。
-      const isSelectedModelRow =
-        !activeFavoriteUid &&
-        entryMatchesModelId(entry, selected.modelId) &&
-        (selected.providerId === null || selected.providerId === entry.providerId);
-      const base = resolveUnifiedRowConfig({
-        entry,
-        engineOverride: getModelEngineOverride(entry.providerId, entry.modelId),
-        // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
-        memoryEffort: (agent) =>
-          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
-        memoryFast: (agent) =>
-          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
-        agentFastModeCapable,
-        // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上(无损
-        // 直切);主场在别处的行保持主场显示。用户显式 override 仍然优先(见
-        // resolveUnifiedRowConfig 的 pinnedEngine 注释)。
-        ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
-        ...(isSelectedModelRow && liveEngineAgent
-          ? { forceEngine: engineOfAgentKind(liveEngineAgent) }
-          : {}),
-      });
-      // **选中行读 live 值**,不读全局记忆:已建会话的深度 / Fast 由 DB / runtime 权威,
-      // 其它对话改同一个模型的全局预设不该改写正在跑的这一条(与旧版 rowEffortOf /
-      // fastOnOf 的选中行分支同语义)。
-      if (!isLiveRow(entry, base)) return base;
-      const efforts: readonly string[] = base.efforts;
-      const liveEffort =
-        selectedEffort && efforts.includes(selectedEffort) ? selectedEffort : base.effort;
-      const liveFast = base.fastCapable ? fastMode : false;
-      if (liveEffort === base.effort && liveFast === base.fast) return base;
-      return {
-        ...base,
-        effort: liveEffort,
-        fast: liveFast,
-        customized:
-          base.customized ||
-          liveFast ||
-          (liveEffort !== null &&
-            base.capability?.defaultEffort != null &&
-            liveEffort !== base.capability.defaultEffort),
-      };
-    },
-    [
-      activeFavoriteUid,
-      agentFastModeCapable,
-      enginePrefsVersion,
-      fastMode,
-      isLiveRow,
-      liveEngineAgent,
-      memoryVersion,
-      modelMemory,
-      selected.modelId,
-      selected.providerId,
-      selectedEffort,
-      sessionAgent,
-    ],
-  );
 
   const isSelectedRow = useCallback(
     (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
@@ -803,6 +893,97 @@ export function UnifiedModelPanel({
 
   const rows = sections.flatMap((section) => section.rows);
   const hasRows = rows.length > 0;
+
+  /**
+   * 行内价格 / 订阅签的派生(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
+   * 折后价比例填充并尾随 ↓X%;限免显示淡染小徽标;无报价不渲染节点。
+   * 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
+   *
+   * 抽成函数是因为定宽 sizer 也要画一份**逐像素等价**的行(见 widthSizerSections):价格
+   * 节点参与行宽,两边各算一遍必然漂成「量出来的宽度不是真视图的宽度」。
+   */
+  const priceDisplayOf = useCallback(
+    (
+      entry: UnifiedModelEntry,
+      config: UnifiedRowConfig,
+    ): {
+      priceDisplay: NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']> | null;
+      subscriptionRow: boolean;
+    } => {
+      const price = priceOf(entry.providerId, config.wireModelId ?? entry.modelId, config.agent);
+      // 订阅接入且拿不到按量报价的行:画「订阅」小签,不画 $ 档串(那类模型走套餐额度,
+      // 画钱会被读成按量计费)。判定用 provider.access.kind + 报价来源
+      // (subscription-reference = 只是价值估算,不是账单价)。
+      const rowProvider = providers.find((item) => item.id === entry.providerId);
+      const subscriptionRow =
+        rowProvider?.access?.kind === 'subscription' &&
+        (price === null ||
+          price.kind !== 'priced' ||
+          price.current.source === 'subscription-reference');
+      if (subscriptionRow) return { priceDisplay: null, subscriptionRow: true };
+      if (price?.kind === 'free') return { priceDisplay: { kind: 'free' }, subscriptionRow: false };
+      if (price?.kind !== 'priced') return { priceDisplay: null, subscriptionRow: false };
+      // 符号个数按**标准价**判(original;折扣不改变模型的价格档),点亮几格按折扣比例
+      // 取整;颜色只由点亮格数决定(见 UnifiedModelRow priceDisplay 头注)。
+      const basis = price.original ?? price.current;
+      const discountPct = price.discount !== undefined ? Math.round(price.discount * 100) : 0;
+      return {
+        subscriptionRow: false,
+        priceDisplay: {
+          kind: 'tier',
+          tier: priceTierOf(basis.outputPerMtok, basis.currency),
+          // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
+          symbol: basis.currency === 'CNY' ? '¥' : '$',
+          ...(discountPct > 0 && discountPct < 100
+            ? {
+                discountPct,
+                paidPct: 100 - discountPct,
+                title: t(
+                  'newChat.modelSelector.pricing.discount',
+                  modelPriceDiscountLabelValues(price.discount ?? 0),
+                ),
+              }
+            : {}),
+        },
+      };
+    },
+    [priceOf, providers, t],
+  );
+
+  /**
+   * 定宽 sizer 的内容:**rail = 全部 + 空搜索**的完整 sections(Chris 2026-08-19 实测:
+   * 「一次打开内切 rail 视图,面板弹开一些,感觉有点怪」)。
+   *
+   * 病根:面板容器是 `w-max`(按最宽内容量宽),而 MorphPopover 的 stickyWidth 只进不退。
+   * 会话内默认停在「同引擎」视图 —— 那是**最窄**的一份内容;用户切到「全部 / 供应商」时
+   * 多出跨引擎警示行与更宽的行集,面板于是在一次打开内二次撑宽。
+   *
+   * 修法:打开的第一帧就渲染一份**不可见**的全量视图交给 `w-max` 量宽,面板从此按最宽视图
+   * 定宽,切 rail 只换可见内容、不再改宽度。取舍写明:代价是一次打开多渲染一份静态行
+   * (无交互、无 hover、不进 listbox),换来宽度稳定。
+   *
+   * 只在**有 rail 的形态**(非 badge)下挂:badge 拿掉了 rail、视图恒为「全部」,压根切不出
+   * 第二种宽度;`fluidWidth` 的 field 形态宽度绑 trigger,量了也没人听;当前已经是全量视图
+   * 时更不必量自己一遍。
+   */
+  const widthSizerActive =
+    pickerLayout !== 'badge' &&
+    !panelWidthFluid &&
+    (effectiveRail.kind !== 'all' || query.trim() !== '');
+  const widthSizerSections = useMemo(
+    () =>
+      widthSizerActive
+        ? buildUnifiedListSections({
+            entries,
+            favorites,
+            query: '',
+            rail: RAIL_ALL,
+            effectiveEngineOf,
+            providerOrder,
+          })
+        : [],
+    [widthSizerActive, entries, favorites, effectiveEngineOf, providerOrder],
+  );
 
   // badge 样式:滚动中的「继承目录题头」—— 覆盖层常驻列表视口顶部,显示当前滚过的
   // 组名。不用 sticky:它钉在滚动容器 padding 之下,上沿必漏一条行;覆盖层整条不透明
@@ -967,7 +1148,15 @@ export function UnifiedModelPanel({
             role="note"
             data-cross-engine-warning
             title={t('newChat.modelSelector.unified.crossEngineWarning')}
-            className="flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]"
+            className={cn(
+              'flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]',
+              // 警示行**不参与撑宽**(Chris 2026-08-19:切到「全部」时面板又弹开一截)。
+              // `truncate` 只管画的时候截断,`max-content` 布局(面板是 w-max)算的却是
+              // 全文宽度 —— 这一行因此成了整块面板里最宽的内容。`w-0 min-w-full` 是经典
+              // 手法:宽度基数取 0(对 max-content 贡献 0),再用 min-width:100% 在终局
+              // 吃满已经定下来的可用宽,视觉上仍是整行。
+              'w-0 min-w-full',
+            )}
           >
             <TriangleAlert size={12} className="shrink-0" />
             <span className="truncate">
@@ -1020,51 +1209,7 @@ export function UnifiedModelPanel({
               {section.rows.map((row) => {
                 const config = configOf(row.entry, row.favorite);
                 const key = anchorKey(row.anchor);
-                // 行内价格(设计稿 v4 定稿 F 样式):付费行显示 $ 档串,折扣行亮段按
-                // 折后价比例填充并尾随 ↓X%;限免显示淡染小徽标;无报价不渲染节点。
-                // 价格按**该行生效引擎的 wire id**查(同一逻辑模型换引擎可能换一条报价)。
-                const price = priceOf(
-                  row.entry.providerId,
-                  config.wireModelId ?? row.entry.modelId,
-                  config.agent,
-                );
-                let priceDisplay:
-                  | NonNullable<Parameters<typeof UnifiedModelRow>[0]['priceDisplay']>
-                  | null = null;
-                // 订阅接入且拿不到按量报价的行:画「订阅」小签,不画 $ 档串(那类模型
-                // 走套餐额度,画钱会被读成按量计费)。判定用 provider.access.kind +
-                // 报价来源(subscription-reference = 只是价值估算,不是账单价)。
-                const rowProvider = providers.find((item) => item.id === row.entry.providerId);
-                const subscriptionRow =
-                  rowProvider?.access?.kind === 'subscription' &&
-                  (price === null || price.kind !== 'priced' || price.current.source === 'subscription-reference');
-                if (subscriptionRow) {
-                  priceDisplay = null;
-                } else if (price?.kind === 'free') {
-                  priceDisplay = { kind: 'free' };
-                } else if (price?.kind === 'priced') {
-                  // 符号个数按**标准价**判(original;折扣不改变模型的价格档),点亮几格按
-                  // 折扣比例取整;颜色只由点亮格数决定(见 UnifiedModelRow priceDisplay 头注)。
-                  const basis = price.original ?? price.current;
-                  const discountPct =
-                    price.discount !== undefined ? Math.round(price.discount * 100) : 0;
-                  priceDisplay = {
-                    kind: 'tier',
-                    tier: priceTierOf(basis.outputPerMtok, basis.currency),
-                    // 档串符号跟**报价币种**走(设计稿:中文报价是 ¥¥¥)。
-                    symbol: basis.currency === 'CNY' ? '¥' : '$',
-                    ...(discountPct > 0 && discountPct < 100
-                      ? {
-                          discountPct,
-                          paidPct: 100 - discountPct,
-                          title: t(
-                            'newChat.modelSelector.pricing.discount',
-                            modelPriceDiscountLabelValues(price.discount ?? 0),
-                          ),
-                        }
-                      : {}),
-                  };
-                }
+                const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
                 return (
                   <UnifiedModelRow
                     key={key}
@@ -1123,6 +1268,61 @@ export function UnifiedModelPanel({
           ))
         )}
       </div>
+      {/* 定宽 sizer(见 widthSizerSections 的说明):不可见、零高度、不进 listbox,
+          只为让 `w-max` 从第一帧起就按**最宽视图**(rail=all + 空搜索)量宽。
+          行复用 `<UnifiedModelRow>` 以求零漂移:handler 全 noop、selected=false
+          (不带 data-model-selected,自动对齐永远不会挑中它)、interactionDisabled。
+          横向 padding / scrollbar-gutter 与真列表逐字一致,量出来的才是同一条宽度;
+          **纵向 padding 一点不能带**(2026-08-19 预审 P1-2):border-box 下 h-0 只把内容盒
+          钳到 0,纵向 padding 仍占真实高度 —— 带上真列表的 p-2 pb-3 会让 sizer 占 20px,
+          把「切视图宽度抖」换成「切视图高度抖」。纵向本来就与量宽无关。 */}
+      {widthSizerActive && (
+        <div
+          aria-hidden
+          role="presentation"
+          data-width-sizer
+          className="invisible h-0 overflow-hidden px-2 [scrollbar-gutter:stable]"
+        >
+          {widthSizerSections.map((section) => (
+            <div key={section.key}>
+              {/* 组头也要量:供应商名可能比它组里最长的行还宽。 */}
+              <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-11">
+                <span className="truncate">{sectionLabel(section)}</span>
+              </div>
+              {section.rows.map((row) => {
+                const config = configOf(row.entry, row.favorite);
+                const { priceDisplay, subscriptionRow } = priceDisplayOf(row.entry, config);
+                return (
+                  <UnifiedModelRow
+                    key={anchorKey(row.anchor)}
+                    entry={row.entry}
+                    anchor={row.anchor}
+                    config={config}
+                    selected={false}
+                    active={false}
+                    isFavoriteRow={!!row.favorite}
+                    justFavorited={false}
+                    {...(priceDisplay ? { priceDisplay } : {})}
+                    {...(subscriptionRow
+                      ? { subscriptionLabel: t('settings.providers.models.subscription') }
+                      : {})}
+                    interactionDisabled
+                    effortLabelOf={effortLabelOf}
+                    providers={providers}
+                    layout={pickerLayout}
+                    onReveal={noop}
+                    onRevealForKeyboard={noop}
+                    onLeave={noop}
+                    onBlurAway={noop}
+                    onSelect={noop}
+                    onStar={noop}
+                  />
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
       </div>
 
       {flyTarget && configurationEnabled && (

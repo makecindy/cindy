@@ -66,6 +66,27 @@ const withPanelHost = (
   });
 
 describe('AgentTaskCard', () => {
+  it.each([
+    ['failed', 'chat.agentTask.status.failed'],
+    ['stopped', 'chat.agentTask.status.stopped'],
+  ] as const)('keeps a persisted %s status when replaying a non-empty result', (status, label) => {
+    const { container } = render(
+      React.createElement(AgentTaskCard, {
+        result: 'terminal task output',
+        persistedStatus: status,
+        toolCall: {
+          clientId: `tool-${status}`,
+          role: 'tool_use',
+          content: '',
+          toolName: 'Agent',
+        },
+      }),
+    );
+
+    expect(container.textContent).toContain(label);
+    expect(container.textContent).not.toContain('Completed');
+  });
+
   it('renders the full expanded task result instead of truncating it', () => {
     const tail = 'TAIL_MARKER_KEPT_VISIBLE';
     const longResult = `Summary start\n\n${'x'.repeat(500)}\n${tail}`;

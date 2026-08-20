@@ -732,8 +732,14 @@ interface ModelSelectorProps {
    */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
-    /** 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。 */
-    confirmBrowseSwitch?: () => Promise<boolean>;
+    /**
+     * 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。
+     *
+     * ★ 必须把**本次目标引擎**交出去(Chris 2026-08-19):调用方的「已确认过就不再问」
+     * 判据是「会话上已有**指向该目标**的切换意图」。不传目标,它只能判「有没有意图」,
+     * 于是先切 Codex 再选 Pi 时确认框永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
+     */
+    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
@@ -914,7 +920,8 @@ interface ModelSelectorContentProps {
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
-    confirmBrowseSwitch?: () => Promise<boolean>;
+    /** 语义同 ModelSelectorProps.agentSwitch.confirmBrowseSwitch(带本次目标引擎)。 */
+    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
@@ -1089,7 +1096,7 @@ function ModelSelectorContentView({
     if (agentSwitch && next !== agentSwitch.currentVendor && agentSwitch.confirmBrowseSwitch) {
       browseSwitchPendingRef.current = true;
       try {
-        if (!(await agentSwitch.confirmBrowseSwitch())) return;
+        if (!(await agentSwitch.confirmBrowseSwitch(next))) return;
       } finally {
         browseSwitchPendingRef.current = false;
       }
@@ -2532,6 +2539,42 @@ function ModelSelectorContentView({
       </div>
     ) : null;
 
+  // 统一面板的三个标签 / 能力回调(2026-08-19 预审 P2-4):包 useCallback 免得 render body
+  // 裸函数每帧换引用,把面板内 useCallback / useMemo 的缓存全部打穿。
+  // ★ 位置必须在下面 `if (emptyState) return` 这个**提前返回之前**:hooks 数量在空态与
+  // 正常态之间必须一致(2026-08-19 实测:放在 emptyState 之后,providers 从空到有的那一次
+  // 渲染直接 "Rendered more hooks" 崩溃)。
+  const unifiedProviderLabel = useCallback(
+    (providerId: string): string => {
+      const provider = providers.find((entry) => entry.id === providerId);
+      return provider ? providerDisplayName(provider, t) : providerId;
+    },
+    [providers, t],
+  );
+  // 档名多语言按**该行自己的引擎**取 capabilities 兜底名(不同 agent 的同名档可能有
+  // 各自的英文名),优先仍是 i18n 词表 effortLevels.*。
+  const unifiedEffortLabel = useCallback(
+    (agent: AgentKind, value: Effort): string => {
+      const levels =
+        agent === 'claude-code'
+          ? (cc.capabilities?.effortLevels ?? [])
+          : agent === 'codex'
+            ? (codex.capabilities?.effortLevels ?? [])
+            : (pi.capabilities?.effortLevels ?? []);
+      return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
+    },
+    [cc.capabilities, codex.capabilities, pi.capabilities, t],
+  );
+  const unifiedAgentFastCapable = useCallback(
+    (agent: AgentKind): boolean =>
+      agent === 'claude-code'
+        ? !!cc.capabilities?.hasFastMode
+        : agent === 'codex'
+          ? !!codex.capabilities?.hasFastMode
+          : !!pi.capabilities?.hasFastMode,
+    [cc.capabilities, codex.capabilities, pi.capabilities],
+  );
+
   if (emptyState) return emptyState;
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
@@ -2584,30 +2627,11 @@ function ModelSelectorContentView({
   // ── 统一模型选择器面板(opt-in,M3 / M4)────────────────────────────────────
   // 联合列表的可见性 / 排除口径必须与既有面板**逐条对齐**(否则「统一面板里能看到、
   // 切回旧面板就没了」),故这里复用同一批判定函数,只是补上 agent 维度。
+  // unifiedProviderLabel / unifiedEffortLabel / unifiedAgentFastCapable 三个回调声明在
+  // emptyState 提前返回之前(hooks 数量恒定的硬要求,见彼处注释)。
   if (unifiedPanel) {
     // 可见性 / 排除谓词与 scope 一律从组件作用域取(见 unifiedIsVisible 的定义处):
     // 种子收藏 effect 用的是同一份,两边不能各写一遍。
-    const unifiedProviderLabel = (providerId: string): string => {
-      const provider = providers.find((entry) => entry.id === providerId);
-      return provider ? providerDisplayName(provider, t) : providerId;
-    };
-    // 档名多语言按**该行自己的引擎**取 capabilities 兜底名(不同 agent 的同名档可能有
-    // 各自的英文名),优先仍是 i18n 词表 effortLevels.*。
-    const unifiedEffortLabel = (agent: AgentKind, value: Effort): string => {
-      const levels =
-        agent === 'claude-code'
-          ? (cc.capabilities?.effortLevels ?? [])
-          : agent === 'codex'
-            ? (codex.capabilities?.effortLevels ?? [])
-            : (pi.capabilities?.effortLevels ?? []);
-      return modelEffortLabel(t, null, value, levels.find((e) => e.id === value)?.displayName);
-    };
-    const unifiedAgentFastCapable = (agent: AgentKind): boolean =>
-      agent === 'claude-code'
-        ? !!cc.capabilities?.hasFastMode
-        : agent === 'codex'
-          ? !!codex.capabilities?.hasFastMode
-          : !!pi.capabilities?.hasFastMode;
     return (
       // 外层多包一层「百分比钳制」:面板列自身的 max-h 公式(560px/100vh)不知道宿主
       // popover 实际给了多少纵向空间 —— morph 弹层按锚点位置算出的可用高度可能更小,
@@ -2677,6 +2701,8 @@ function ModelSelectorContentView({
             remoteProviders.modelVisibilityOverrides ? 'ov' : 'no-ov',
           ].join('|')}
           query={query}
+          // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
+          panelWidthFluid={fluidWidth}
           selected={{ providerId: activeSourceId, modelId }}
           selectedFavoriteUid={selectedFavoriteUid}
           liveAgentKind={currentAgentKind}
@@ -3125,10 +3151,10 @@ export function ModelSelector({
     if (!confirmBrowseSwitch) return agentSwitch;
     return {
       ...agentSwitch,
-      confirmBrowseSwitch: async () => {
+      confirmBrowseSwitch: async (targetVendor: 'cc' | 'codex' | 'pi') => {
         setKeepOpenForAgentConfirmation(true);
         try {
-          return await confirmBrowseSwitch();
+          return await confirmBrowseSwitch(targetVendor);
         } finally {
           setOpenWithoutAutoRefresh(true);
           setKeepOpenForAgentConfirmation(false);
@@ -3146,8 +3172,14 @@ export function ModelSelector({
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
   // 不再只是确认框那一下。保命锁刻意**覆盖整个 await 期**:事务在途时面板被 Popover 的
   // 外点判定收掉,收尾再把 open 设回 true,就成了「面板闪一下又自己弹回来」。锁按住期间
-  // 面板恒可见(open || keepOpenForAgentConfirmation),切换 in-flight 由 interactionDisabled
-  // 置灰,收尾时才按结果决定收还是留 —— 中途没有可以插进来的关闭窗口。
+  // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰,收尾时才按结果决定收还是留
+  // —— 中途没有可以插进来的关闭窗口。
+  //
+  // ★ 因此 open 的表达式必须是 `(open && !disabled) || keepOpenForAgentConfirmation`,
+  // 不能是 `(open || keepOpen) && !disabled`(Chris 2026-08-19 实测「面板原地刷新一下」的
+  // 根因):事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled
+  // 拉高,后一种写法会连保命锁一起压掉 —— 面板当场收合,收尾时 setOpenWithoutAutoRefresh(true)
+  // 又把它弹回来。保命锁的意义就是「这段时间里别关」,disabled 不该有权否决它。
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
@@ -3763,7 +3795,7 @@ export function ModelSelector({
   if (morphEnabled) {
     return (
       <MorphPopover
-        open={(open || keepOpenForAgentConfirmation) && !disabled}
+        open={(open && !disabled) || keepOpenForAgentConfirmation}
         onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
@@ -3790,7 +3822,7 @@ export function ModelSelector({
 
   return (
     <Popover
-      open={(open || keepOpenForAgentConfirmation) && !disabled}
+      open={(open && !disabled) || keepOpenForAgentConfirmation}
       onOpenChange={handleOpenChange}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>

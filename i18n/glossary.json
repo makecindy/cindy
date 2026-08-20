@@ -69,6 +69,18 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "captcha",
+      "status": "proposed",
+      "en": "Security check",
+      "translations": {
+        "zh-CN": "安全验证",
+        "zh-TW": "安全驗證",
+        "ja": "セキュリティチェック",
+        "ko": "보안 확인"
+      },
+      "note": "登录邮箱发码前的 CAPTCHA(Cloudflare Turnstile)挑战。中文用「安全验证」(腾讯/阿里系产品的通行叫法,2026-08-19 用户反馈弃用「人机验证」;与「验证码」= verification code 消歧——后者已被 login.codePlaceholder 占用指 6 位数字码);en 用 Security check 而非品牌词 Turnstile 或缩写 CAPTCHA。消费处:login.captcha.* 与 login.errors.CAPTCHA_*(desktop 五语 + mobile 影子 catalog)。"
+    },
+    {
       "id": "passkey",
       "status": "proposed",
       "en": "Passkey",

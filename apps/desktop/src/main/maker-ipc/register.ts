@@ -473,6 +473,7 @@ import {
   noteSessionClearBoundary,
   noteTurnStarted,
   onAssistantTextEvent,
+  onAgentTaskUpdateEvent,
   onInteractionMessage,
   onInteractionResolved,
   clearCodexPlanRowsForSession,
@@ -4416,6 +4417,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         );
       }
       if (event.type === 'agent_task_update') {
+        onAgentTaskUpdateEvent(session.id, event.data);
         // Subagent workspace is an observer only: normalize the existing
         // harness event into Cindy's durable record on the same FIFO as chat
         // messages. No launch/control path or provider payload is modified.
@@ -5992,7 +5994,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.LIST_SESSION_BACKGROUND_TASKS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     const live = maker.getSession(sessionId);
-    return { tasks: live ? live.listBackgroundTasks() : [] };
+    // pendingContinuations:「任务已终态、wake turn 尚未启动或仍在跑」的
+    // continuation claim 数。tasks 在任务终态后立即不含该任务,renderer 的
+    // 唤醒桥接对账不能拿空 tasks 当「无后续」—— 必须本字段为 0 才允许收口。
+    return {
+      tasks: live ? live.listBackgroundTasks() : [],
+      pendingContinuations: live ? live.countPendingWakeContinuations() : 0,
+    };
   });
 
   // workflow 逐 agent 进度树(只读)。从活跃会话拿 workDir + sdkSessionId → 推导 Claude Code

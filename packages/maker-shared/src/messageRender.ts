@@ -1,4 +1,5 @@
 import {
+  type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
@@ -97,6 +98,8 @@ export interface MessageRenderNormalizedMessage<
    * `createdAt`。
    */
   settledAt?: string;
+  /** Durable terminal lifecycle for an Agent/Task tool call. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
   turnCompleted?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
@@ -618,10 +621,12 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     // 普通 user turn 也是所有权边界:用户开了新话题,旧的未完成计划不得把新计划
     // 吞成"续期"(历史病 §3.1.2/3.1.3——串号后新计划复用旧 key、Task 状态跨
     // turn 拼接)。task source 例外:显式指向已有任务的操作(TaskUpdate/TaskGet
-    // 带已知 id)仍是同一份清单的合法续写。
+    // 带已知 id)仍是同一份清单的合法续写,但不能因此把 session 的所有权锚点
+    // 搬进新 turn:后续 TaskCreate 仍应另起清单,否则一个长期未完成项会把跨阶段
+    // 新任务持续吸进来,最终出现几十步历史与陈旧 active 项混在一张卡里。
     const crossesUserBoundary =
       Boolean(previous)
-      && lastUserIndex > (previous?.lastIndex ?? -1)
+      && lastUserIndex > (previous?.userBoundaryIndex ?? -1)
       && !(source === 'task' && taskToolTargetsExistingTask(message, resultText, taskState));
     const startsNewSession =
       !previous
@@ -1718,6 +1723,7 @@ function isRunningAgentTaskItem<
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
+    persistedStatus: item.toolCall?.agentTaskStatus,
     resultIsLaunchReceipt:
       item.toolCall !== undefined &&
       (subagentSpawnReceiptName(

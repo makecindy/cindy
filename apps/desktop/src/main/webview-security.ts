@@ -24,9 +24,14 @@
 
 import path from 'node:path';
 
-import { app, type BrowserWindow, type WebContents } from 'electron';
+import { app, session, type BrowserWindow, type Session, type WebContents } from 'electron';
 
-import { BROWSER_PARTITION } from '../shared/webviewPartition';
+import {
+  BROWSER_PARTITION,
+  LOGIN_CAPTCHA_CANCEL_HASH,
+  LOGIN_CAPTCHA_PAGE_PATH,
+  LOGIN_CAPTCHA_PARTITION,
+} from '../shared/webviewPartition';
 import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
 import {
   matchesElectronInput,
@@ -158,6 +163,122 @@ export function applyGhostWebviewHardening(
   webPreferences.webviewTag = false;
   webPreferences.plugins = false;
   delete webPreferences.preload;
+}
+
+/**
+ * 登录页人机验证(Turnstile 托管挑战页)webview 的加固:与意识面板同一套锁死集——
+ * 零弹窗、零 preload、保留调用方已验证的专属内存分区。挑战页是我们自己的
+ * auth-server 托管页,token 回传只靠 location.hash(did-navigate-in-page),
+ * 不需要任何注入面。
+ */
+export function applyLoginCaptchaWebviewHardening(
+  webPreferences: Record<string, unknown>,
+  params: Record<string, string>,
+): void {
+  delete params.disablewebsecurity;
+  delete params.webpreferences;
+  delete params.allowpopups;
+  // 分区不动:调用方(will-attach listener)已验证过 partition ↔ src。
+
+  webPreferences.sandbox = true;
+  webPreferences.devTools = true;
+  webPreferences.nodeIntegration = false;
+  webPreferences.nodeIntegrationInSubFrames = false;
+  webPreferences.nodeIntegrationInWorker = false;
+  webPreferences.contextIsolation = true;
+  webPreferences.webSecurity = true;
+  webPreferences.allowRunningInsecureContent = false;
+  webPreferences.webviewTag = false;
+  webPreferences.plugins = false;
+  delete webPreferences.preload;
+}
+
+/**
+ * CAPTCHA guest 使用独立 session，但 session 默认安全策略不能依赖 Electron
+ * 版本的隐式行为。挑战只需要网络、脚本与 iframe，不需要任何设备/系统权限，
+ * 也不应向本机写入下载，因此权限与下载通道都显式 fail-closed。
+ */
+const hardenedLoginCaptchaSessions = new WeakSet<object>();
+
+export function hardenLoginCaptchaSession(
+  captchaSession: Pick<
+    Session,
+    'setPermissionRequestHandler' | 'setPermissionCheckHandler' | 'on'
+  >,
+): void {
+  // partition session 会跨多次挑战复用；不要为每次 webview attach 累加监听器。
+  if (hardenedLoginCaptchaSessions.has(captchaSession)) return;
+  captchaSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  captchaSession.setPermissionCheckHandler(() => false);
+  captchaSession.on('will-download', (event) => {
+    event.preventDefault();
+  });
+  hardenedLoginCaptchaSessions.add(captchaSession);
+}
+
+/**
+ * 登录 captcha webview 允许加载的 auth 服务端 origin 集合的解析钩子。
+ * 与 popupOpenerResolver 同模式注入(保持本模块单向解耦):bootstrap 在 auth
+ * 初始化处用 clientEndpointsService 的 authApiBaseUrl(两 realm + dev)接线。
+ * 未注入(启动早期 / 单测未接线)时 fail-closed:一律拒附加。
+ */
+export type LoginCaptchaOriginResolver = () => readonly string[];
+
+let loginCaptchaOriginResolver: LoginCaptchaOriginResolver | null = null;
+
+export function setLoginCaptchaOriginResolver(
+  resolver: LoginCaptchaOriginResolver | null,
+): void {
+  loginCaptchaOriginResolver = resolver;
+}
+
+/**
+ * captcha webview 的附加与顶层导航白名单:协议(https,或 loopback 上的 http,
+ * 兼容本地 dev auth-server)+ origin 命中注入集合 + 路径精确等于托管挑战页。
+ * fragment 变更(token 回传通道)不产生导航事件,天然不受本闸约束。
+ */
+export function isAllowedLoginCaptchaUrl(rawUrl: string | undefined): boolean {
+  if (!rawUrl || !loginCaptchaOriginResolver) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  const loopback = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    return false;
+  }
+  if (parsed.pathname !== LOGIN_CAPTCHA_PAGE_PATH) return false;
+  let origins: readonly string[];
+  try {
+    origins = loginCaptchaOriginResolver();
+  } catch {
+    return false;
+  }
+  return origins.includes(parsed.origin);
+}
+
+/** CAPTCHA guest 的 popup 与顶层导航闸；重定向和普通导航必须走同一白名单。 */
+export function installLoginCaptchaGuestHandlers(guestContents: WebContents): void {
+  guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const guardTopLevelNavigation = (event: Electron.Event, url: string) => {
+    if (isAllowedLoginCaptchaUrl(url)) return;
+    event.preventDefault();
+  };
+  guestContents.on('will-navigate', guardTopLevelNavigation);
+  guestContents.on('will-redirect', guardTopLevelNavigation);
+  // guest 获得焦点后键盘事件不会冒泡到宿主 Renderer。Main 只拦 Esc，并通过
+  // 静态 location.hash 复用既有无日志回传通道，让模态层仍可被键盘取消。
+  guestContents.on('before-input-event', (event, input) => {
+    if (!isGuestShortcutKeyDownType(input.type) || input.key !== 'Escape') return;
+    event.preventDefault();
+    void guestContents
+      .executeJavaScript(`location.hash = ${JSON.stringify(LOGIN_CAPTCHA_CANCEL_HASH)}`, true)
+      .catch(() => undefined);
+  });
 }
 
 /** Renderer 接收 popup 路由消息的 IPC channel。main → renderer。 */
@@ -688,10 +809,12 @@ export function installGhostGuestNavigationHandlers(
 export function installWebviewHardener(): void {
   app.on('web-contents-created', (_event, contents) => {
     // will-attach → did-attach 对同一个 guest 同步成对触发;用闭包变量把
-    // will 阶段的意识判定带给 did 阶段(意识 guest 走独立接线,不装浏览器
-    // 的 popup 路由与快捷键转发)。
+    // will 阶段的意识/captcha 判定带给 did 阶段(这两类 guest 走独立接线,
+    // 不装浏览器的 popup 路由与快捷键转发)。
     let pendingGhostAttach: { id: string } | null = null;
+    let pendingCaptchaAttach = false;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
+      pendingCaptchaAttach = false;
       // 意识面板分支:声明了意识分区的 webview 必须验明正身——
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
       // (绝不回落到浏览器分区,那会让 cindy-ghost:// 内容跑进错误 session)。
@@ -707,6 +830,29 @@ export function installWebviewHardener(): void {
         return;
       }
       pendingGhostAttach = null;
+      // 登录 captcha 分支:同意识分区一样"验明正身否则拒附加",绝不回落到
+      // 浏览器分区(那会把挑战页装进 RSB 持久 session 并注入页面评论 preload)。
+      // src 必须命中 auth origin 白名单 + 托管页固定路径(fail-closed)。
+      if (params.partition === LOGIN_CAPTCHA_PARTITION) {
+        if (!isAllowedLoginCaptchaUrl(params.src)) {
+          e.preventDefault();
+          return;
+        }
+        try {
+          // 在 guest 获准附加前先锁死专属 session 的权限请求与权限检查；
+          // 任一初始化异常都拒绝附加，不能让远程内容落到默认权限策略。
+          hardenLoginCaptchaSession(session.fromPartition(LOGIN_CAPTCHA_PARTITION));
+        } catch {
+          e.preventDefault();
+          return;
+        }
+        applyLoginCaptchaWebviewHardening(
+          webPreferences as unknown as Record<string, unknown>,
+          params,
+        );
+        pendingCaptchaAttach = true;
+        return;
+      }
       applyWebviewHardening(
         webPreferences as unknown as Record<string, unknown>,
         params,
@@ -716,6 +862,14 @@ export function installWebviewHardener(): void {
       );
     });
     contents.on('did-attach-webview', (_e, guestContents) => {
+      if (pendingCaptchaAttach) {
+        pendingCaptchaAttach = false;
+        // 挑战页零弹窗;顶层导航只允许停留在托管挑战页白名单内(Turnstile 的
+        // 挑战 UI 活在子 iframe 里,顶层不应发生任何跨源导航)。token 回传走
+        // location.hash → did-navigate-in-page,不经过 will-navigate。
+        installLoginCaptchaGuestHandlers(guestContents);
+        return;
+      }
       if (pendingGhostAttach) {
         const ghostId = pendingGhostAttach.id;
         pendingGhostAttach = null;

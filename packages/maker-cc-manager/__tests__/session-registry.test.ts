@@ -333,6 +333,52 @@ describe('SessionRegistry', () => {
     }
   });
 
+  // 无工作区策略的会话:createWorkspacePolicyHooks 返回 undefined 被 mergeSdkHooks
+  // 跳过,所以 PreToolUse[0] 仍是工具闸门组,下面按 hooks[0] 取到的就是它。
+  it('enforces subagent model access in remote Full access sessions', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    let accessStatus: 'denied' | 'unknown' = 'denied';
+    const onSubagentModelAccessRequest = vi.fn(async () => ({ status: accessStatus }));
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+      onSubagentModelAccessRequest,
+    });
+    registry.create({
+      sessionId: 's-subagent-model',
+      cwd: '/x',
+      model: 'codex/gpt-5.6-sol',
+      env: {},
+      permissionMode: 'bypassPermissions',
+    });
+
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    await expect(preToolUse!({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'sonnet', run_in_background: true },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('sonnet'),
+      },
+    });
+    expect(onSubagentModelAccessRequest).toHaveBeenCalledWith(
+      's-subagent-model',
+      { sessionId: 's-subagent-model', model: 'sonnet' },
+    );
+    accessStatus = 'unknown';
+    await expect(preToolUse!({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Task',
+      tool_input: { model: 'haiku' },
+    })).resolves.toEqual({ continue: true });
+  });
+
   it('allows the exact Orca report tool for the root and denies nested Claude agents', async () => {
     const { factory: baseFactory } = buildFakeFactory();
     let captured: SdkQueryFactoryOptions | undefined;

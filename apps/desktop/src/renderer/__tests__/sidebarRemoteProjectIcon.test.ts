@@ -54,13 +54,17 @@ describe('sidebar remote project icon', () => {
     expect(sessionHeaderSource).toContain('connectionStatus={remoteIconConnectionStatus}');
   });
 
+  it('does not let nested card controls keyboard-activate the session row', () => {
+    expect(sessionCardSource).toContain('if (e.target !== e.currentTarget) return');
+  });
+
   it('keeps remote session icons next to titles instead of in the right-side time slots', () => {
     expect(sessionItemSource).toMatch(
       /<span[\s\S]*?className="min-w-0 flex flex-1 items-center gap-1\.5"[\s\S]*?<SidebarTitleMarquee[\s\S]*?\{remoteIconKind && \([\s\S]*?<RemoteProjectIcon/,
     );
     // C 期起右侧时间槽由 SessionInfoMeta 承担(任务信息复选),仍在同一让位容器内。
     expect(sessionItemSource).toMatch(
-      /<div className="group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">[\s\S]*?<WorktreeBadge[\s\S]*?<SessionInfoMeta/,
+      /<div className="group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">[\s\S]*?<SessionInfoMeta[\s\S]*?worktree=\{infoWorktree \?\? undefined\}/,
     );
     expect(sessionCardSource).toContain('function TimeActionsSlot');
     expect(sessionCardSource).not.toMatch(/function TimeActionsSlot[\s\S]*?remoteIconKind/);

@@ -4,8 +4,9 @@ import path from 'node:path';
 import { BrowserWindow, ipcMain, shell, utilityProcess } from 'electron';
 
 import { createLogger } from '../logger.js';
-import { openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowSession, sendMainWindowMessage } from '../deepLink.js';
 import { registerInputDevice } from '../input-devices/registry.js';
+import { isSecondaryAppWindow } from '../secondary-windows.js';
 import {
   WORKLOUDER_CODEX_ACTION_CHANNEL,
   WORKLOUDER_CODEX_DEVICE,
@@ -32,6 +33,8 @@ import {
 } from './WorkLouderCodexHostClient.js';
 import { WorkLouderCodexLightingController } from './WorkLouderCodexLightingController.js';
 import { createWorkLouderCodexSettingsIpc } from './settingsIpc.js';
+import { createWorkLouderCodexActiveWindowRouter } from './actionWindow.js';
+import { createWorkLouderCodexSystemFrontmostInput } from './systemFrontmostInput.js';
 import {
   createWorkLouderCodexWindowRevealGate,
   noteWorkLouderCodexWindowVisibility,
@@ -45,6 +48,7 @@ import {
   resetWorkLouderCodexSettings,
   writeWorkLouderCodexSettingsPatch,
 } from './settingsStore.js';
+import { listWorkersByLeads } from '../localDb/orcaTeamStore.js';
 import {
   buildWorkLouderCodexTaskCatalog,
   listWorkLouderCodexTaskCatalog,
@@ -149,6 +153,16 @@ export const workLouderCodexLightingController = new WorkLouderCodexLightingCont
   },
   dispatchRendererAction,
   dispatchPreviewInput,
+  async (leadSessionIds) => {
+    if (leadSessionIds.length === 0) return {};
+    const grouped = await listWorkersByLeads(leadSessionIds);
+    return Object.fromEntries(
+      Object.entries(grouped).map(([leadId, workers]) => [
+        leadId,
+        workers.map((worker) => worker.sessionId),
+      ]),
+    );
+  },
 );
 
 let settingsIpcRegistered = false;
@@ -187,8 +201,8 @@ export function registerWorkLouderCodexSettingsIpc(): void {
   if (settingsIpcRegistered) return;
   settingsIpcRegistered = true;
 
-  workLouderCodexLightingController.start();
   workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());
+  workLouderCodexLightingController.start();
   const handlers = createWorkLouderCodexSettingsIpc({
     assertTrustedSender: (event) => assertTrustedAppRendererEvent(event as never),
     getState: () => workLouderCodexLightingController.getState(),
@@ -235,6 +249,23 @@ export function registerWorkLouderCodexSettingsIpc(): void {
   });
 }
 
+const actionWindowRouter = createWorkLouderCodexActiveWindowRouter({
+  getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
+  getMainWindow: getDeepLinkMainWindow,
+  isActionWindow: (win) => {
+    if (!win) return false;
+    const main = getDeepLinkMainWindow();
+    return win === main || isSecondaryAppWindow(win);
+  },
+});
+const systemFrontmostInput = createWorkLouderCodexSystemFrontmostInput();
+
+function sendWindowMessage(win: BrowserWindow, channel: string, payload: unknown): boolean {
+  if (win.webContents.isDestroyed() || win.webContents.isLoading()) return false;
+  win.webContents.send(channel, payload);
+  return true;
+}
+
 function dispatchRendererAction(action: WorkLouderCodexRendererAction): void {
   if (action.type === 'external-url') {
     void shell.openExternal(action.url).catch((error: unknown) => {
@@ -244,11 +275,12 @@ function dispatchRendererAction(action: WorkLouderCodexRendererAction): void {
     });
     return;
   }
-  if (!sendMainWindowMessage(WORKLOUDER_CODEX_ACTION_CHANNEL, action)) {
-    log.debug('Codex Micro action skipped because the main renderer is not ready', {
-      type: action.type,
-    });
-  }
+  const win = actionWindowRouter.resolve(action);
+  if (win && sendWindowMessage(win, WORKLOUDER_CODEX_ACTION_CHANNEL, action)) return;
+  if (systemFrontmostInput.handle(action)) return;
+  log.debug('Codex Micro action skipped because no ready Cindy window can receive it', {
+    type: action.type,
+  });
 }
 
 function dispatchPreviewInput(input: WorkLouderCodexPreviewInput): void {

@@ -4,6 +4,7 @@ import {
   PROTOCOL_VERSION,
   METHODS,
   NOTIFICATIONS,
+  SERVER_METHODS,
   isRpcMessage,
   isRpcRequest,
   isRpcResponse,
@@ -17,8 +18,10 @@ describe('protocol constants', () => {
     expect(PROTOCOL_VERSION).toBeGreaterThan(0);
   });
 
-  it('requires v4 so old daemons cannot ignore host Bot workspace policies', () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+  // v4(subagent 模型准入)与 v5(Bot 工作区策略)在两条分支并行开发、各自取号 4,
+  // 合并时后者顺延为 v5。两条不兼容变更都要求旧 daemon 拒连,断言锁最新号。
+  it('requires v5 so old daemons cannot ignore subagent model preflight or host Bot workspace policies', () => {
+    expect(PROTOCOL_VERSION).toBe(5);
   });
 
   it('METHODS has expected method names', () => {
@@ -35,6 +38,10 @@ describe('protocol constants', () => {
     expect(NOTIFICATIONS.QUERY_EVENT).toBe('query/event');
     expect(NOTIFICATIONS.SESSION_CLOSED).toBe('session/closed');
     expect(NOTIFICATIONS.CLIENT_REPLACED).toBe('client/replaced');
+  });
+
+  it('declares the live subagent model access reverse request', () => {
+    expect(SERVER_METHODS.SUBAGENT_MODEL_ACCESS).toBe('subagent/model-access');
   });
 });
 

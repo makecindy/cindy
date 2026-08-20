@@ -321,7 +321,7 @@ describe("mobile account deletion", () => {
       "const realmConsentOpen = realmConfirmation !== null;",
     );
     expect(login).toContain(
-      "const deletionBubbleA11yHidden =\n    consentDialogOpen || realmConsentOpen || handoffPhase !== 'done';",
+      "const deletionBubbleA11yHidden =\n    consentDialogOpen || realmConsentOpen || captchaChallengeOpen || handoffPhase !== 'done';",
     );
     expect(gate).toContain(
       "accessibilityElementsHidden={deletionBubbleA11yHidden}",
@@ -331,7 +331,7 @@ describe("mobile account deletion", () => {
     );
     // 登录组那层仍按弹窗条件隐藏(它本身在入场动画容器内,不需要入场条件)。
     expect(login).toContain(
-      "consentDialogOpen || realmConsentOpen ? 'no-hide-descendants' : 'auto'",
+      "consentDialogOpen || realmConsentOpen || captchaChallengeOpen\n            ? 'no-hide-descendants'\n            : 'auto'",
     );
   });
 });

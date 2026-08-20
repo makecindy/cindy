@@ -20,6 +20,7 @@ const sidebarUpperSource = readFileSync(
   resolvePath(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
   'utf8',
 );
+const sessionItemSource = readFileSync(resolvePath(sidebarDir, 'SessionItem.tsx'), 'utf8');
 
 const sessions = (ids: string[]) => ids.map((id) => ({ id }));
 
@@ -111,13 +112,28 @@ describe('collapsed project attention tone', () => {
 });
 
 describe('collapsed project attention wiring', () => {
-  it('renders the aggregate dot only while the project is collapsed', () => {
+  it('renders the aggregate status on the trailing slot while the project is collapsed', () => {
+    const slotChrome = 'group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end';
+    const gridChrome = 'grid h-6 grid-cols-[max-content] items-center justify-items-end';
+    expect(projectNodeSource).toContain('isCollapsed && collapsedAttentionTone ? (');
     expect(projectNodeSource).toContain(
-      '!isEditingName && isCollapsed && collapsedAttentionTone ? (',
+      '<SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />',
     );
-    expect(projectNodeSource).toContain(
-      '<AttentionDot size={6} tone={collapsedAttentionTone} className="shrink-0" />',
+    expect(projectNodeSource).not.toContain('AttentionDot');
+    expect(projectNodeSource).toContain(slotChrome);
+    expect(sessionItemSource).toContain(slotChrome);
+    expect(projectNodeSource).toContain(gridChrome);
+    expect(sessionItemSource).toContain(gridChrome);
+    const nameSpan = projectNodeSource.indexOf(
+      '<span className="min-w-0 max-w-full shrink truncate">{project.displayName}</span>',
     );
+    const trailingSlot = projectNodeSource.indexOf(slotChrome);
+    const indicator = projectNodeSource.indexOf(
+      '<SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />',
+    );
+    expect(nameSpan).toBeGreaterThan(0);
+    expect(trailingSlot).toBeGreaterThan(nameSpan);
+    expect(indicator).toBeGreaterThan(trailingSlot);
   });
 
   it('feeds both regular and pinned project rows from their displayed children', () => {

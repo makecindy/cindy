@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
+import { isDeepLinkProviderConnectId } from '../shared/deepLinkSchemes';
 import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
@@ -1282,6 +1283,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
+    // Library(持久作品库)设置面:概览/选位置(宿主弹原生选择器)/绑定/
+    // 迁移/回默认/解绑/删除。删除的破坏性确认在 Renderer 完成。
+    libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
+      ipcRenderer.invoke('ghosts:library-overview', id),
+    libraryPickLocation: (
+      id: string,
+    ): Promise<{ ok: boolean; cancelled?: boolean; candidate?: string; warnings?: string[]; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-pick-location', id),
+    libraryBind: (id: string, candidate: string): Promise<{ ok: boolean; message?: string; warnings?: string[] }> =>
+      ipcRenderer.invoke('ghosts:library-bind', id, candidate),
+    libraryRelocate: (id: string, candidate: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-relocate', id, candidate),
+    libraryRevertDefault: (id: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-revert-default', id),
+    libraryUnbind: (id: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-unbind', id),
+    libraryDelete: (id: string): Promise<{ ok: boolean; cancelled?: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-delete', id),
     legacyRecoveryStatus: (): Promise<
       import('../shared/legacyGhostRecovery').LegacyGhostRecoveryStatus
     > => ipcRenderer.invoke('ghosts:legacy-recovery-status'),
@@ -1771,6 +1790,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('auth:get-login-state'),
   authDispatchLoginAction: (action: DesktopLoginAction): Promise<DesktopLoginActionResult> =>
     ipcRenderer.invoke('auth:dispatch-login-action', action),
+  // 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。
+  authGetCaptchaChallengeUrl: (): Promise<string> =>
+    ipcRenderer.invoke('auth:get-captcha-challenge-url'),
   authLogout: (): Promise<void> => ipcRenderer.invoke('auth:logout'),
   authEnterLocal: () => ipcRenderer.invoke('auth:enter-local'),
   authExitLocal: () => ipcRenderer.invoke('auth:exit-local'),
@@ -2328,8 +2350,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     enableBeta: boolean;
     isCustomized?: boolean;
   }> => ipcRenderer.invoke('update-channel-settings-reset'),
-  relaunchForChannelChange: (): Promise<void> =>
-    ipcRenderer.invoke('update-channel-relaunch'),
+  relaunchForChannelChange: (): Promise<void> => ipcRenderer.invoke('update-channel-relaunch'),
   probeBetaChannel: (): Promise<{ available: boolean }> =>
     ipcRenderer.invoke('update-channel-probe-beta'),
   setUpdateRelaunchTheme: (theme: 'light' | 'dark'): void => {
@@ -3338,6 +3359,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   //   - { type: 'project', workingDir }    : 聚焦已有 project 节点
   //   - { type: 'new-session', workingDir }: 新建对话且预填 workingDir (右键 "通过 Cindy 打开")
   //   - { type: 'share-import', filePath } : 打开 .cshare/.xdtshare 会话导入向导
+  //   - { type: 'settings', tab, connect? }: 打开设置页 (connect 为可选 provider / preset id,
+  //     来自 cindy://settings/providers?connect=<providerId> 深链, per-type 白名单再校验)
   onDeepLinkNavigate: (
     callback: (
       payload:
@@ -3345,7 +3368,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => void,
   ): (() => void) =>
     fanOutDeepLinkNavigate((payload) => {
@@ -3356,6 +3379,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         workingDir?: unknown;
         filePath?: unknown;
         tab?: unknown;
+        connect?: unknown;
         messageClientId?: unknown;
       };
       if (p.type === 'session' && typeof p.id === 'string' && p.id.length > 0) {
@@ -3367,7 +3391,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
             : {}),
         });
       } else if (p.type === 'settings' && (p.tab === 'voice-input' || p.tab === 'providers')) {
-        callback({ type: 'settings', tab: p.tab });
+        // connect 只对 providers 页有意义;主进程已做 id 白名单,这里按纵深防御
+        // 原样复用同一规则。字段存在但不合法时丢弃整个 payload,不降级成半执行。
+        if (
+          p.connect !== undefined
+          && (p.tab !== 'providers' || !isDeepLinkProviderConnectId(p.connect))
+        ) return;
+        callback({
+          type: 'settings',
+          tab: p.tab,
+          ...(p.tab === 'providers' && p.connect !== undefined ? { connect: p.connect } : {}),
+        });
       } else if (
         p.type === 'project' &&
         typeof p.workingDir === 'string' &&
@@ -3397,7 +3431,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
     | null
   > => ipcRenderer.invoke('deep-link:take-pending'),
 
@@ -4454,6 +4488,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       worktreePath: string | null;
       remoteHostId?: string | null;
     }): Promise<unknown> => ipcRenderer.invoke('git-context:get-for-session', input),
+    /** 本机:任务遥测里仍活着的 linked worktree。远程/未找到返回 null。 */
+    findLinkedWorktree: (input: { sessionId: string }): Promise<unknown> =>
+      ipcRenderer.invoke('git-context:find-linked-worktree', input),
     /** 开始监听该 workdir 的 HEAD 变化(refcount;变化经 onChanged 推送)。 */
     watch: (workdir: string): Promise<void> => ipcRenderer.invoke('git-context:watch', workdir),
     unwatch: (workdir: string): Promise<void> => ipcRenderer.invoke('git-context:unwatch', workdir),
@@ -5347,6 +5384,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string,
     ): Promise<{
       tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>;
+      /** 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数(桥接对账收口权威依据)。 */
+      pendingContinuations?: number;
     }> => ipcRenderer.invoke('maker:session-background-tasks:list', sessionId),
     /** 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）登录 / 登出 / 取消。 */
     providerOAuthLogin: (
@@ -6485,8 +6524,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       messages: Array<{ role: string; content: string }>;
       workingDir?: string;
       turnGen: number;
-    }): Promise<{ prompt: string | null }> =>
-      ipcRenderer.invoke('maker:predict-prompt', request),
+    }): Promise<{ prompt: string | null }> => ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>

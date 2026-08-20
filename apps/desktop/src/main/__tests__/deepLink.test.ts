@@ -207,6 +207,54 @@ describe('parseDeepLink', () => {
   it('returns null for focus without a source value', () => {
     expect(parseDeepLink('xdt-maker://focus/')).toBeNull();
   });
+
+  it('parses settings/providers payload with and without a connect target', () => {
+    expect(parseDeepLink('cindy://settings/providers')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+    });
+    expect(parseDeepLink('cindy://settings/providers/')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+    });
+    expect(parseDeepLink('cindy://settings/providers?connect=openrouter')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'openrouter',
+    });
+    // connect 同时覆盖 provider id 与 preset id 的字符契约;其它 query 参数忽略。
+    expect(parseDeepLink('cindy://settings/providers?foo=bar&connect=Vendor_2')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'Vendor_2',
+    });
+    // 历史 scheme 同样可用
+    expect(parseDeepLink('xdt-maker://settings/providers?connect=deepseek')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'deepseek',
+    });
+  });
+
+  it('rejects settings deep links outside the providers tab', () => {
+    // voice-input 仍是主进程内部专用 payload,不开放给外部 URL 注入
+    expect(parseDeepLink('cindy://settings/voice-input')).toBeNull();
+    expect(parseDeepLink('cindy://settings/anything-else')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers/anything-else')).toBeNull();
+    expect(parseDeepLink('cindy://settings/')).toBeNull();
+  });
+
+  it('rejects settings deep links whose connect value fails the shared id whitelist', () => {
+    // 深链是不可信输入:非法 connect 整条拒绝,不做"半执行"。
+    expect(parseDeepLink('cindy://settings/providers?connect=')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=a.b')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=a%20b')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=%3Cscript%3E')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=%E4%ZZ')).toBeNull();
+    expect(
+      parseDeepLink(`cindy://settings/providers?connect=${'a'.repeat(129)}`),
+    ).toBeNull();
+  });
 });
 
 // 双 scheme 收敛(2026-07 品牌翻转):解析 cindy 主 + 历史 xdt-maker 都认,

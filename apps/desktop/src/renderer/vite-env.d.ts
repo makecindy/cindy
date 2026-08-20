@@ -1559,6 +1559,16 @@ interface ElectronAPI {
     runtimeStates: () => Promise<{ states: Record<string, string> }>;
     /** 面板错误态「重载意识」:清熔断记账 + 重新拉起沙箱。 */
     reload: (id: string) => Promise<{ state: string }>;
+    /** Library(持久作品库)设置面:概览/选位置/绑定/迁移/回默认/解绑/删除。 */
+    libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    libraryPickLocation: (
+      id: string,
+    ) => Promise<{ ok: boolean; cancelled?: boolean; candidate?: string; warnings?: string[]; message?: string }>;
+    libraryBind: (id: string, candidate: string) => Promise<{ ok: boolean; message?: string; warnings?: string[] }>;
+    libraryRelocate: (id: string, candidate: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryRevertDefault: (id: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryUnbind: (id: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryDelete: (id: string) => Promise<{ ok: boolean; cancelled?: boolean; message?: string }>;
     legacyRecoveryStatus: () => Promise<
       import('../shared/legacyGhostRecovery').LegacyGhostRecoveryStatus
     >;
@@ -2001,6 +2011,8 @@ interface ElectronAPI {
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
+  /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */
+  authGetCaptchaChallengeUrl: () => Promise<string>;
   authLogout: () => Promise<void>;
   authEnterLocal: () => Promise<AuthStateChangePayload>;
   authExitLocal: () => Promise<AuthStateChangePayload>;
@@ -2731,7 +2743,7 @@ interface ElectronAPI {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => void,
   ) => () => void;
 
@@ -2746,7 +2758,7 @@ interface ElectronAPI {
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
     | null
   >;
 
@@ -3971,6 +3983,10 @@ interface ElectronAPI {
       worktreePath: string | null;
       remoteHostId?: string | null;
     }) => Promise<import('@/lib/gitContext.types').SessionGitDirResult>;
+    findLinkedWorktree: (input: { sessionId: string }) => Promise<{
+      workdir: string;
+      branch: string | null;
+    } | null>;
     watch: (workdir: string) => Promise<void>;
     unwatch: (workdir: string) => Promise<void>;
     listPrRefs: (sessionId: string) => Promise<import('@/lib/gitContext.types').SessionPrRef[]>;
@@ -5028,6 +5044,8 @@ interface ElectronAPI {
     /** 会话仍在运行的后台任务快照(挂载 / 重载后补回存量;实时增量走事件流)。 */
     listSessionBackgroundTasks: (sessionId: string) => Promise<{
       tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>;
+      /** 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数(桥接对账收口权威依据)。 */
+      pendingContinuations?: number;
     }>;
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。

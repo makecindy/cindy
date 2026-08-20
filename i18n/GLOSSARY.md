@@ -175,6 +175,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
 
+### Security check
+
+登录邮箱发码前的 CAPTCHA(Cloudflare Turnstile)挑战。中文用「安全验证」(腾讯/阿里系产品的通行叫法,2026-08-19 用户反馈弃用「人机验证」;与「验证码」= verification code 消歧——后者已被 login.codePlaceholder 占用指 6 位数字码);en 用 Security check 而非品牌词 Turnstile 或缩写 CAPTCHA。消费处:login.captcha.* 与 login.errors.CAPTCHA_*(desktop 五语 + mobile 影子 catalog)。
+
 ### China
 
 模型目录中由服务端显式 group:"china" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。

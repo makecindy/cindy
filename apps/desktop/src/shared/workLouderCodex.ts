@@ -196,6 +196,8 @@ export interface WorkLouderCodexLayout {
 }
 
 export interface WorkLouderCodexSettings {
+  /** When false, this Cindy instance does not occupy the HID device. */
+  deviceEnabled: boolean;
   /** Overall lighting intensity, in percent. Zero keeps HID input active with LEDs off. */
   lightingBrightness: number;
   lightingAutoDim: WorkLouderCodexAutoDim;
@@ -209,7 +211,12 @@ export interface WorkLouderCodexSettings {
 export type WorkLouderCodexSettingsPatch = Partial<WorkLouderCodexSettings>;
 
 export type WorkLouderCodexConnectionStatus =
-  'connecting' | 'connected' | 'not-detected' | 'error' | 'unavailable';
+  | 'connecting'
+  | 'connected'
+  | 'not-detected'
+  | 'disabled'
+  | 'error'
+  | 'unavailable';
 
 export type WorkLouderCodexConnectionReason =
   'connection-timeout' | 'connection-failed' | 'permission-required' | 'sdk-unavailable' | null;
@@ -239,6 +246,8 @@ export interface WorkLouderCodexAgentSlotState {
 export interface WorkLouderCodexState {
   connectionStatus: WorkLouderCodexConnectionStatus;
   connectionReason: WorkLouderCodexConnectionReason;
+  /** USB/Bluetooth presence, independent of whether this Cindy occupies HID. */
+  devicePresent: boolean | null;
   device: WorkLouderCodexDeviceState;
   settings: WorkLouderCodexSettings;
   agentSlots: WorkLouderCodexAgentSlotState[];
@@ -307,11 +316,12 @@ export const WORKLOUDER_CODEX_DEFAULT_LAYOUT: WorkLouderCodexLayout = {
 };
 
 export const WORKLOUDER_CODEX_DEFAULT_SETTINGS: WorkLouderCodexSettings = {
+  deviceEnabled: false,
   lightingBrightness: 100,
   lightingAutoDim: '3-minutes',
-  agentSource: 'sidebar',
+  agentSource: 'last-sent',
   customAgentKeys: Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, () => null),
-  singleTapAgentKeys: false,
+  singleTapAgentKeys: true,
   layout: WORKLOUDER_CODEX_DEFAULT_LAYOUT,
 };
 

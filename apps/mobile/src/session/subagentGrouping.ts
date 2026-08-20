@@ -142,7 +142,11 @@ function buildSubagentGroup(
   const subagentType = readString(input?.subagent_type);
   const summary = agent.secondaryBody && agent.secondaryBody.trim() ? agent.secondaryBody : null;
   const result = id ? resultMeta.get(id) : undefined;
-  const status = computeStatus(!!result, options.isSessionStreaming === true);
+  const status = computeStatus(
+    agent.agentTaskStatus,
+    !!result,
+    options.isSessionStreaming === true,
+  );
   const startMs = Date.parse(agent.createdAt);
   const durationMs = result && Number.isFinite(startMs) && result.createdAtMs >= startMs
     ? result.createdAtMs - startMs
@@ -158,15 +162,13 @@ function buildSubagentGroup(
   };
 }
 
-// status:有 closing tool_result → 完成;无 result → 仍流式则运行中,否则按完成兜底。
-// 不再产出 'failed':坐实自被控机 local DB —— Agent 的 tool_result 既无 is_error 结构化列、content 也是
-// 纯总结字符串(833 条 0 个 JSON 对象 / 0 个结构化 isError),没有可靠的失败信号。此前用关键词扫总结正文
-// 判失败会把 code-review/research 类(正文天然讨论 error/失败)误判成失败(规则 9:别靠正文启发式猜状态)。
-// 桌面同样不判失败。宁可不标失败,也绝不假阳性。
+// 精确结构化终态优先；存量历史缺字段时保留原有 result/streaming 兼容兜底。
 function computeStatus(
+  persistedStatus: MobileSubagentGroupItem['status'] | undefined,
   hasResult: boolean,
   streaming: boolean,
 ): MobileSubagentGroupItem['status'] {
+  if (persistedStatus) return persistedStatus;
   if (hasResult) return 'completed';
   return streaming ? 'running' : 'completed';
 }

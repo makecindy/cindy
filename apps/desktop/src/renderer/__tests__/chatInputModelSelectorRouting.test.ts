@@ -137,8 +137,10 @@ describe('ChatInput model source switching wiring', () => {
     const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
-    // 确认弹窗照旧(同一份 confirmAgentBrowseSwitch,含「不再提示」偏好);
-    expect(block).toContain('confirmAgentBrowseSwitch()');
+    // 确认弹窗照旧(同一份 confirmAgentBrowseSwitch,含「不再提示」偏好);**有意变更**
+    // (Chris 2026-08-19):现在把**本次目标引擎**交给确认门 —— 「已确认过就不再问」的判据
+    // 收窄成「已有指向该目标的意图」,否则任何残留意图都会让确认框永久静默。
+    expect(block).toContain('confirmAgentBrowseSwitch(targetAgent)');
     // 切换事务照旧;effort 显式带上(用户看着点下去的档)。
     expect(block).toContain('performAgentSwitchRef.current(');
     expect(block).toContain('...(effort ? { effort } : {})');

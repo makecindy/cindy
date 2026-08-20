@@ -66,14 +66,11 @@ describe('mobile session composer desktop-first surface', () => {
     const inlineButtonStart = source.indexOf('composerInlineToolButton: {');
     const inlineButtonEnd = source.indexOf('composerToolButtonActive:', inlineButtonStart);
     const inlineButtonStyle = source.slice(inlineButtonStart, inlineButtonEnd);
-    const floatingButtonStart = sharedSource.indexOf('voiceButtonAnchor: {', sharedStyleStart);
-    const floatingButtonEnd = sharedSource.indexOf('voiceButtonAnchorWithTrailing:', floatingButtonStart);
-    const floatingButtonStyle = sharedSource.slice(floatingButtonStart, floatingButtonEnd);
     const sendButtonStart = source.indexOf('sendButton: {');
     const sendButtonEnd = source.indexOf('sendButtonInactive:', sendButtonStart);
     const sendButtonStyle = source.slice(sendButtonStart, sendButtonEnd);
     const inputStart = sharedSource.indexOf('input: {', sharedStyleStart);
-    const inputEnd = sharedSource.indexOf('voiceButtonAnchor:', inputStart);
+    const inputEnd = sharedSource.indexOf('resizeGrabberTouch:', inputStart);
     const inputStyle = sharedSource.slice(inputStart, inputEnd);
     const composerStyleStart = source.indexOf('composer: {');
     const composerStyleEnd = source.indexOf('composerScroll:', composerStyleStart);
@@ -240,8 +237,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inputStyle).toContain('paddingHorizontal: COMPOSER_TEXT_HORIZONTAL_PADDING');
     expect(inputStyle).toContain('paddingTop: COMPOSER_TEXT_PADDING_TOP');
     expect(inputStyle).toContain("textAlignVertical: 'top'");
-    expect(floatingButtonStyle).toContain("top: '50%'");
-    expect(floatingButtonStyle).toContain('translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
+    expect(sharedSource).toContain('cardLayout,');
+    expect(sharedSource).toContain('floating: voicePlacement.floating,');
+    expect(sharedSource).not.toContain('styles.voiceButtonAnchor');
+    expect(sharedSource).not.toContain('voiceButtonAnchorCard');
     // Composer input is a single stable, always-multiline, always-inline instance (no compact↔expanded
     // swap that remounts the native input) so the first tap reliably opens the keyboard — guards the
     // "two taps to focus" regression. Compact rest look kept via minHeight (no fixed height that clips).
@@ -473,9 +473,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).not.toContain('floatingVoiceButtonStyle=');
     expect(composerInputSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
-    expect(sharedSource).toContain('styles.voiceButtonAnchor,');
-    expect(sharedSource).toContain('voicePlacement.floating && styles.voiceButtonAnchorWithTrailing,');
-    expect(sharedSource).toContain('cardLayout && styles.voiceButtonAnchorCard,');
+    expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
+    expect(sharedSource).toContain('floating: voicePlacement.floating,');
+    expect(sharedSource).not.toContain('cardLayout && styles.voiceButtonAnchorCard,');
     // 录音中语音按钮以「红色停止方块」可见,禁止任何 opacity:0 隐藏样式回归
     // (旧 gestureAnchor 设计曾把听写中的按钮隐藏,会让停止录音无可见控件)。
     expect(source).not.toContain('composerInlineToolButtonGestureAnchor');
@@ -512,12 +512,8 @@ describe('mobile session composer desktop-first surface', () => {
     expect(inlineButtonStyle).not.toContain('width: 36');
     expect(inlineButtonStyle).not.toContain('height: 42');
     expect(inlineButtonStyle).not.toContain('width: 42');
-    expect(floatingButtonStyle).toContain("position: 'absolute'");
-    expect(floatingButtonStyle).toContain('right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT');
-    expect(floatingButtonStyle).toContain("top: '50%'");
-    expect(floatingButtonStyle).toContain('translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2');
-    expect(floatingButtonStyle).toContain('zIndex: 2');
-    expect(sharedSource).toContain('right: spacing.md + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP');
+    expect(sharedSource).toContain("from '@/session/composerVoiceButtonAnchor'");
+    expect(sharedSource).toContain('MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM');
     expect(sendButtonStyle).toContain('height: 34');
     expect(sendButtonStyle).toContain('width: 34');
     expect(sendButtonStyle).not.toContain('height: 36');
