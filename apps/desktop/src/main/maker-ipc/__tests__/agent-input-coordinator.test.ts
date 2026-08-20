@@ -2830,10 +2830,6 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, makeItem('q-normal', '顺手问个别的'));
     await flush();
     expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
-    expect(h.previewQueuedUserTurn).toHaveBeenCalledWith(
-      sid,
-      expect.objectContaining({ clientId: 'q-normal', text: '顺手问个别的' }),
-    );
   });
 
   it('previews a user enqueue to Agent Island before sendToAgent starts', async () => {
@@ -2852,6 +2848,25 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.previewQueuedUserTurn.mock.invocationCallOrder[0]).toBeLessThan(
       h.sendToAgent.mock.invocationCallOrder[0],
     );
+
+    sendStarted.resolve(sendSuccess());
+    await flush();
+  });
+
+  it('does not preview a user enqueue that stays queued behind an active turn', async () => {
+    const h = createHarness();
+    const sid = 'island-preview-queued-behind';
+    const sendStarted = deferred<AgentInputSendResult>();
+    h.sendToAgent.mockImplementationOnce(async () => sendStarted.promise);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'first'));
+    await flush();
+    expect(h.previewQueuedUserTurn).toHaveBeenCalledTimes(1);
+    h.previewQueuedUserTurn.mockClear();
+
+    h.coordinator.enqueue(sid, makeItem('q-second', 'second'));
+    await flush();
+    expect(h.previewQueuedUserTurn).not.toHaveBeenCalled();
 
     sendStarted.resolve(sendSuccess());
     await flush();

@@ -1528,9 +1528,6 @@ export class AgentInputCoordinator {
     // 而静默顺延(PR #972 review P2)。侧栏排序的 bump 语义保留在派发时刻 ——
     // runner 的 accepted 回调按直发路径同款调 touchUserSendInDb(ctx.firedAt)。
     if (!automaticOrigin) {
-      // 合成 Continue 在 queue-head 特判里已经 return,不会走到这里。
-      // 只预览真正留下的排队项,避免内部 Continue prompt 进灵动岛。
-      this.deps.previewQueuedUserTurn?.(sessionId, item);
       this.touchUserSend(sessionId, opts?.sendAtMs);
     }
     // 视觉连续性: 当这条入队后立即可派发(agent 空闲、队列此前为空、无暂停/锁/恢复
@@ -1541,6 +1538,11 @@ export class AgentInputCoordinator {
     // 仍有 getDrainableHead 幂等校验, 不会与既有 wake 点重复派发。agent 忙 / 队列
     // 已有积压时走 else, 维持原排队语义(emit 中间态 + 异步 drain)。
     if (this.getDrainableHead(sessionId, state) === item) {
+      // 只预览马上要派发的队首。排队项若也预览,删除较早项会把整份岛快照滚回去,
+      // 抹掉后来的预览和期间事件。合成 Continue 同样不预览内部 prompt。
+      if (!automaticOrigin && !isUiContinuationItem(item)) {
+        this.deps.previewQueuedUserTurn?.(sessionId, item);
+      }
       void this.drain(sessionId, 'enqueue-immediate');
     } else {
       this.emit(sessionId);

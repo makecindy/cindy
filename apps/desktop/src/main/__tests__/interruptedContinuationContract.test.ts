@@ -242,15 +242,15 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toContain("source: 'enqueue'");
     expect(registerSource).toContain('item.text || item.persistedContent');
     expect(registerSource).toContain('extractPlainText(content)');
+    const drainableHead = coordinatorSource.indexOf(
+      'if (this.getDrainableHead(sessionId, state) === item)',
+    );
     const enqueuePreview = coordinatorSource.indexOf('this.deps.previewQueuedUserTurn?.(sessionId, item);');
     const drainImmediate = coordinatorSource.indexOf("void this.drain(sessionId, 'enqueue-immediate');");
-    expect(enqueuePreview).toBeGreaterThan(-1);
+    expect(drainableHead).toBeGreaterThan(-1);
+    expect(enqueuePreview).toBeGreaterThan(drainableHead);
     expect(drainImmediate).toBeGreaterThan(enqueuePreview);
-    const queueHeadContinueReturn = coordinatorSource.indexOf(
-      "this.scheduleDrain(sessionId, 'ui-continue-queue-head-unlock')",
-    );
-    expect(queueHeadContinueReturn).toBeGreaterThan(-1);
-    expect(enqueuePreview).toBeGreaterThan(queueHeadContinueReturn);
+    expect(coordinatorSource).toContain('!automaticOrigin && !isUiContinuationItem(item)');
   });
 
   it('rolls back Agent Island enqueue preview when the queued item is discarded, rejected, or blocked', () => {
