@@ -7,9 +7,27 @@ import {
 } from '../../maker-host/session-provider-store.js';
 import { applyRuntimeSetModelChange, type RuntimeSetModelMaker } from '../runtimeSetModel.js';
 
+const sessionProviderWriteObserver = vi.hoisted(() => ({
+  current: null as ((sessionId: string, providerId: string | null) => void) | null,
+}));
+
+vi.mock('../../maker-host/session-provider-store.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../maker-host/session-provider-store.js')
+  >();
+  return {
+    ...actual,
+    setSessionProvider: (sessionId: string, providerId: string | null) => {
+      actual.setSessionProvider(sessionId, providerId);
+      sessionProviderWriteObserver.current?.(sessionId, providerId);
+    },
+  };
+});
+
 const touchedSessions = new Set<string>();
 
 afterEach(() => {
+  sessionProviderWriteObserver.current = null;
   for (const sessionId of touchedSessions) {
     clearSessionProvider(sessionId);
   }
@@ -744,6 +762,9 @@ describe('applyRuntimeSetModelChange', () => {
       order.push('close');
       expect(getSessionProvider(sessionId)).toBe('openai');
     });
+    sessionProviderWriteObserver.current = (writtenSessionId, providerId) => {
+      if (writtenSessionId === sessionId && providerId === 'xd') order.push('route');
+    };
     const wakeSessionInputQueue = vi.fn(() => {
       order.push('wake');
       expect(getSessionProvider(sessionId)).toBe('xd');
@@ -772,7 +793,7 @@ describe('applyRuntimeSetModelChange', () => {
       wakeSessionInputQueue,
     })).resolves.toEqual({ status: 'applied' });
 
-    expect(order).toEqual(['close', 'wake']);
+    expect(order).toEqual(['close', 'route', 'wake']);
     expect(closeSession).toHaveBeenCalledOnce();
     expect(wakeSessionInputQueue).toHaveBeenCalledOnce();
   });
