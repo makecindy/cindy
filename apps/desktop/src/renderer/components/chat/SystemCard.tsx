@@ -29,6 +29,10 @@ import {
   reviewFailureCodeFromLegacyError,
   type ReviewFailureCode,
 } from '../../../shared/reviewRun';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+} from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface SystemCardProps {
@@ -941,7 +945,10 @@ function AutoResumeActionRow({
           'rounded-[6px] px-2 py-[3px]',
           'text-left outline-none transition-colors',
           canExpand
-            ? 'cursor-pointer select-none hover:bg-[var(--msg-code-inline-bg)] focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40'
+            ? cn(
+                'cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
+                ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+              )
             : 'cursor-default select-none',
         )}
       >
@@ -975,14 +982,7 @@ function AutoResumeActionRow({
         )}
         <span className="flex-1" />
         {canExpand && (
-          <span
-            aria-hidden="true"
-            className={cn(
-              'flex h-[18px] w-[18px] items-center justify-center rounded-[4px] shrink-0',
-              'text-[var(--msg-tool-card-chevron)]',
-              'transition-colors group-hover:bg-[var(--cmd-palette-item-hover)]',
-            )}
-          >
+          <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
             {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </span>
         )}
