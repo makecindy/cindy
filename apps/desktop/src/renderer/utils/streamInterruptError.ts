@@ -19,17 +19,29 @@ export function isStreamInterruptedErrorMessage(
 const OPENAI_API_ERROR_PREFIX = /^(?:Azure )?OpenAI API error \(\d+\):\s*/i;
 const LITELLM_ERROR_PREFIX = /^litellm\.\w+Error:\s*/;
 
+function isLiteLlmEnvelope(text: string): boolean {
+  return /litellm\./i.test(text) || LITELLM_ERROR_PREFIX.test(text);
+}
+
+function unwrapLiteLlmInner(text: string): string {
+  const stripped = text.replace(LITELLM_ERROR_PREFIX, '').trim();
+  return stripped.length > 0 ? stripped : text;
+}
+
 /**
- * 兜底展示时剥掉协议客户端前缀。Pi 的 Responses 客户端不分厂商,
- * 一律写成 `OpenAI API error`;LiteLLM 再套一层 JSON。只改展示,不改落盘。
+ * 兜底展示时剥掉 **LiteLLM 套在 OpenAI Responses 客户端上的协议外壳**。
+ * Pi 的 Responses 客户端不分厂商,一律写成 `OpenAI API error`;LiteLLM 再套 JSON。
+ * 真 OpenAI / Azure OpenAI 错误保留前缀与状态码。只改展示,不改落盘。
  */
 export function unwrapProviderErrorDisplay(message: string): string {
-  let text = message.trim();
-  const hadOpenAiPrefix = OPENAI_API_ERROR_PREFIX.test(text);
-  text = text.replace(OPENAI_API_ERROR_PREFIX, '');
-  if (hadOpenAiPrefix && text.startsWith('{')) {
+  const text = message.trim();
+  const prefixMatch = text.match(OPENAI_API_ERROR_PREFIX);
+  if (!prefixMatch) return text.length > 0 ? text : message;
+
+  const rest = text.slice(prefixMatch[0].length).trim();
+  if (rest.startsWith('{')) {
     try {
-      const parsed: unknown = JSON.parse(text);
+      const parsed: unknown = JSON.parse(rest);
       if (
         parsed &&
         typeof parsed === 'object' &&
@@ -37,14 +49,15 @@ export function unwrapProviderErrorDisplay(message: string): string {
         typeof (parsed as { message: unknown }).message === 'string'
       ) {
         const inner = (parsed as { message: string }).message.trim();
-        if (inner.length > 0) text = inner;
+        if (inner.length > 0 && isLiteLlmEnvelope(inner)) {
+          return unwrapLiteLlmInner(inner);
+        }
       }
     } catch {
-      // 不是 JSON 就保留剥前缀后的原文。
+      // 不是 JSON 就落到下面的 litellm.XxxError 直配。
     }
   }
-  // 只剥 OpenAI 协议外壳里套的 litellm.XxxError,不要动裸的 LiteLLM 文案
-  // (例如余额不足仍要让 ErrorBanner 按原文分类)。
-  if (hadOpenAiPrefix) text = text.replace(LITELLM_ERROR_PREFIX, '');
-  return text.length > 0 ? text : message;
+
+  if (isLiteLlmEnvelope(rest)) return unwrapLiteLlmInner(rest);
+  return message;
 }

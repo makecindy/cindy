@@ -266,6 +266,7 @@ export function ErrorBanner({
   // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
   const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
   const isStreamInterrupted = isStreamInterruptedErrorMessage(error, errorReason);
+  const unwrappedDisplay = unwrapProviderErrorDisplay(error);
   const overloadRetryProgress = parseOverloadRetryProgress(error);
   const errorReasonI18nKey = errorReason ? ERROR_REASON_I18N_KEYS[errorReason] : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
@@ -429,11 +430,10 @@ export function ErrorBanner({
     // the final fallback uses the stable reason map, so auth/network/overload
     // recovery behavior keeps its existing priority while generic maker-core
     // English fallbacks are localized in both the live and tail banner.
-    displayError = errorReasonI18nKey
-      ? t(errorReasonI18nKey)
-      : unwrapProviderErrorDisplay(error);
+    displayError = errorReasonI18nKey ? t(errorReasonI18nKey) : unwrappedDisplay;
     hasSpecialGuidance = false;
   }
+  const showUnwrappedRaw = !hasSpecialGuidance && !errorReasonI18nKey && unwrappedDisplay !== error;
 
   // 折扣版 GPT (budget, `codex/` 前缀) 走 gateway, 偶发限流 / 后端不可用时, 普通版
   // 往往能正常出。仅在通用错误分支 (上面没命中任何特殊分支) 追加一句切普通版的引导
@@ -571,6 +571,7 @@ export function ErrorBanner({
         {(isNetworkishError ||
           isOverloadError ||
           isStreamInterrupted ||
+          showUnwrappedRaw ||
           isCodexUsageLimitError ||
           terminalRateLimitRetryProgress ||
           isClaudeGatewayOpusPlanMismatch ||

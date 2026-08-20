@@ -50,4 +50,16 @@ describe('unwrapProviderErrorDisplay', () => {
       unwrapProviderErrorDisplay('litellm.BadRequestError: insufficient_quota for this key'),
     ).toBe('litellm.BadRequestError: insufficient_quota for this key');
   });
+
+  it('keeps genuine OpenAI / Azure OpenAI provenance and HTTP status', () => {
+    expect(unwrapProviderErrorDisplay('OpenAI API error (400): invalid_prompt')).toBe(
+      'OpenAI API error (400): invalid_prompt',
+    );
+    expect(
+      unwrapProviderErrorDisplay('Azure OpenAI API error (401): invalid_api_key'),
+    ).toBe('Azure OpenAI API error (401): invalid_api_key');
+    expect(
+      unwrapProviderErrorDisplay('OpenAI API error (400): {"message":"invalid_prompt"}'),
+    ).toBe('OpenAI API error (400): {"message":"invalid_prompt"}');
+  });
 });
