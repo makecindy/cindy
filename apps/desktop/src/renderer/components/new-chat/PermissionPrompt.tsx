@@ -206,6 +206,24 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
           </kbd>
         </button>
 
+        {/* Allow once (primary) */}
+        <button
+          type="button"
+          onClick={handleAllowOnce}
+          className={cn(
+            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
+            'border-[var(--chat-input-border)]',
+            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
+            'text-13 font-medium',
+            'transition-colors hover:opacity-90',
+          )}
+        >
+          <span>{t('agentIsland.native.allowOnce')}</span>
+          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+            Enter
+          </kbd>
+        </button>
+
         {canAlwaysAllowForSession && (
           // 有具体规则就把范围写进按钮(`本对话都允许 Bash(curl:*)`),没有则退回原文案。
           // tooltip 补两件按钮里放不下的事:完整规则(长命令会被 truncate)、以及
@@ -246,24 +264,6 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
             </button>
           </Tip>
         )}
-
-        {/* Allow once (primary) */}
-        <button
-          type="button"
-          onClick={handleAllowOnce}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)]',
-            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-            'text-13 font-medium',
-            'transition-colors hover:opacity-90',
-          )}
-        >
-          <span>{t('agentIsland.native.allowOnce')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
-            Enter
-          </kbd>
-        </button>
       </div>
     </div>
   );

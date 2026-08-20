@@ -148,6 +148,23 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     expect(screen.getByText('agentIsland.native.deny')).toBeTruthy();
   });
 
+  it('三个按钮按拒绝、允许一次、始终允许本次会话排列', () => {
+    render(
+      <PermissionPrompt
+        permission={permission([{ type: 'codexSessionApproval', destination: 'session' }])}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getAllByRole('button').map((button) => button.querySelector('span')?.textContent),
+    ).toEqual([
+      'agentIsland.native.deny',
+      'agentIsland.native.allowOnce',
+      'agentIsland.native.alwaysAllowForSession',
+    ]);
+  });
+
   // 文案是展示层的事,授权载荷必须原样转发 agent 的建议 —— 改文案不许改语义。
   it('点击后原样转发 agent 建议作为授权载荷', () => {
     const onRespond = vi.fn();

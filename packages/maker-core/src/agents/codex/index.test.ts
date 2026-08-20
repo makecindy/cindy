@@ -13823,6 +13823,76 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('offers session approval for remote command requests even when the server only advertises one-time choices', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-remote-one-time-choices',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      remoteHostId: 'remote-cat',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    handle.setInteractionResolver(async (request) => {
+      expect(request).toMatchObject({
+        kind: 'permission',
+        suggestions: [{ type: 'codexSessionApproval', destination: 'session' }],
+      });
+      return {
+        kind: 'permission',
+        behavior: 'allow',
+        permissionUpdates: [{ type: 'codexSessionApproval', destination: 'session' }],
+      };
+    });
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-remote-one-time-choices',
+      itemId: 'cmd-remote-one-time-choices',
+      command: 'cat CLAUDE.md',
+      cwd: '/repo',
+      availableDecisions: ['decline', 'accept'],
+    })).resolves.toEqual({ decision: 'acceptForSession' });
+    await handle.close();
+  });
+
+  it('keeps acceptForSession compatibility when an older server omits availableDecisions', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-command-legacy-session-approval',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+      remoteHostId: 'remote-cat',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+
+    handle.setInteractionResolver(async (request) => {
+      expect(request).toMatchObject({
+        kind: 'permission',
+        suggestions: [{ type: 'codexSessionApproval', destination: 'session' }],
+      });
+      return {
+        kind: 'permission',
+        behavior: 'allow',
+        permissionUpdates: [{ type: 'codexSessionApproval', destination: 'session' }],
+      };
+    });
+
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-legacy-session-approval',
+      itemId: 'cmd-legacy-session-approval',
+      command: 'git status',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'acceptForSession' });
+    await handle.close();
+  });
+
   it('applies a host shell-command denial before Full access auto-approval', async () => {
     const { logger, warn } = createLoggerSpy();
     const policy = vi.fn(() => ({

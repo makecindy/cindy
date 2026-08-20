@@ -6521,7 +6521,11 @@ export class CodexAgent extends BaseAgent {
         input: commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
         title: 'Allow Codex to run this command?',
         description: params.reason ?? undefined,
-        suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
+        // Cindy 的第三个按钮语义是当前会话授权。新版 Codex 可能只在
+        // availableDecisions 中建议更宽的 exec/network policy amendment；
+        // 该列表是上游 UI 建议而非响应校验。为统一本地/远程体验，我们不把
+        // 持久规则伪装成会话授权，也不据此隐藏会话项，仍明确回传 acceptForSession。
+        suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
       }, {
         autoReviewAction: {
@@ -6582,11 +6586,6 @@ export class CodexAgent extends BaseAgent {
     function stringFromMeta(meta: Record<string, unknown> | null, key: string): string | undefined {
       const value = meta?.[key];
       return typeof value === 'string' && value.trim() ? value : undefined;
-    }
-
-    function commandSupportsAcceptForSession(params: CommandExecutionRequestApprovalParams): boolean {
-      const availableDecisions = params.availableDecisions;
-      return !Array.isArray(availableDecisions) || availableDecisions.includes('acceptForSession');
     }
 
     function metaContainsSessionPersist(meta: Record<string, unknown> | null): boolean {
