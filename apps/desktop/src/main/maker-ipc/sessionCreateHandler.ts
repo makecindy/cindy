@@ -32,7 +32,7 @@ function remoteRouteErrorCode(err: unknown): IpcErrorCode | null {
   // 走 logic.errors.remoteError.REMOTE_LOCAL_ONLY_PROVIDER 文案(引导换网关或
   // 远端可达的 BYOM 端点)。
   if (msg.includes('[REMOTE_LOCAL_ONLY_PROVIDER]')) return 'REMOTE_LOCAL_ONLY_PROVIDER';
-  if (msg.includes('[LOCAL_OLLAMA_NOT_READY]')) return 'PRECONDITION_FAILED';
+  if (msg.includes('[LOCAL_OLLAMA_NOT_READY]')) return 'LOCAL_OLLAMA_NOT_READY';
   return null;
 }
 

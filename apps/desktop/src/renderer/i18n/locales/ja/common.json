@@ -7428,6 +7428,7 @@
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
+      "LOCAL_OLLAMA_NOT_READY": "ローカル Ollama の準備ができていません。設定 → モデルプロバイダー → Ollama を開いてください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
     },

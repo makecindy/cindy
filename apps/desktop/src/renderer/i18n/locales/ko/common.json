@@ -7428,6 +7428,7 @@
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "원격 Claude Code 세션은 로컬 호환 프록시를 통해 라우팅할 수 없습니다(내부 오류).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 자격 증명이 아직 준비되지 않았습니다(로그인 후 자동 발급됩니다). 잠시 후 다시 시도해 주세요. 계속되면 설정 → 모델 제공자에서 Cindy AI 연결 상태를 확인하세요.",
       "REMOTE_LOCAL_ONLY_PROVIDER": "이 모델 제공자는 로컬 전용 서비스(예: Ollama)라서 SSH 원격 작업에서 접근할 수 없습니다. Cindy AI 게이트웨이로 전환하거나 원격 호스트에서 접근 가능한 제공자를 선택하세요.",
+      "LOCAL_OLLAMA_NOT_READY": "로컬 Ollama가 아직 준비되지 않았습니다. 설정 → 모델 제공자 → Ollama를 여세요.",
       "DEVICE_LINK_CONTROL_DISABLED": "이 기기의 제어가 꺼져 있어 메시지가 전송되지 않았습니다.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "첨부 파일 전송에 실패했습니다. 메시지가 전송되지 않았습니다. 다시 시도하세요."
     },

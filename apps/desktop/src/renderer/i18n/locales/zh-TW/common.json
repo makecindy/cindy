@@ -7427,6 +7427,7 @@
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "此模型供應商是本機專屬服務（如 Ollama），SSH 遠端任務無法存取本機位址。請改用 Cindy AI 閘道，或選擇遠端主機可達的模型供應商。",
+      "LOCAL_OLLAMA_NOT_READY": "本機 Ollama 尚未就緒。請打開設定 → 模型供應商 → Ollama。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。"
     },

@@ -658,7 +658,9 @@ export function NewMakerDraftRoute() {
               // toast, 隐藏「换网关/远端可达 BYOM」的行动指引。
               : code === 'REMOTE_LOCAL_ONLY_PROVIDER'
                 ? 'logic.errors.remoteError.REMOTE_LOCAL_ONLY_PROVIDER'
-                : 'ccAgent.draft.createSessionFailed';
+                : code === 'LOCAL_OLLAMA_NOT_READY'
+                  ? 'logic.errors.remoteError.LOCAL_OLLAMA_NOT_READY'
+                  : 'ccAgent.draft.createSessionFailed';
     toast.error(t(key));
   };
 
