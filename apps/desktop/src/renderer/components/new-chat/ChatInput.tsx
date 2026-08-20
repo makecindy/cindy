@@ -308,6 +308,9 @@ import {
   setProviderModelEffort,
   getProviderModelFast,
   setProviderModelFast,
+  getProviderModelThinking,
+  setProviderModelThinking,
+  useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
 import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
@@ -1972,6 +1975,7 @@ export function ChatInput({
   //     该会话切走后再切回此模型,才会采用最新全局预设。
   //   - 首页草稿无 live 会话,NewMakerDraftRoute 会把当前显示模型的 props 也从全局预设派生。
   //   - device-link 必须使用被控端镜像 override;旧被控端拿不到镜像时宁可无记忆,也不掺控制端本机。
+  useProviderModelMemoryVersion();
   const modelMemory = useMemo<ModelMemoryAccessors | undefined>(() => {
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
     if (modelMemoryOverride) return modelMemoryOverride;
@@ -1982,6 +1986,8 @@ export function ChatInput({
       setChoice: setProviderModelChoice,
       getFast: getProviderModelFast,
       setFast: setProviderModelFast,
+      getThinking: getProviderModelThinking,
+      setThinking: setProviderModelThinking,
       // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
       // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
       clearEffort: clearProviderModelEffort,
@@ -8167,6 +8173,28 @@ export function ChatInput({
                     // 意图期显示目标引擎下解析出的 fast(apply 时才落库),无意图走真实态。
                     fastMode={agentSwitchIntent?.fastMode ?? fastMode}
                     onFastModeChange={handleFastModeChange}
+                    thinkingEnabled={
+                      currentModelAgentKind && effectiveSourceId
+                        ? (getProviderModelThinking(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                          ) ?? true)
+                        : true
+                    }
+                    onThinkingChange={async (enabled) => {
+                      if (currentModelAgentKind && effectiveSourceId) {
+                        setProviderModelThinking(
+                          currentModelAgentKind,
+                          effectiveSourceId,
+                          activeModel,
+                          enabled,
+                        );
+                      }
+                      if (sessionId) {
+                        await window.electronAPI.maker.setThinkingEnabled(sessionId, enabled);
+                      }
+                    }}
                     modelMemory={modelMemory}
                     vendorKey={vendorKey}
                     // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成

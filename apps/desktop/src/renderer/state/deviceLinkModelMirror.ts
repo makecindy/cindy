@@ -22,7 +22,6 @@ import { useSyncExternalStore } from 'react';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
-import { MODEL_PRESET_SLOT_ID } from '@/state/providerModelMemory';
 
 /** 单槽:被控端某 (agent, 来源) 下每个模型的 effort/fast 镜像。 */
 interface Slot {
@@ -115,8 +114,7 @@ export function getMirrorEffort(
   model: string,
 ): Effort | undefined {
   if (!scopeKey || !providerId || !model) return undefined;
-  return getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, false)?.effortByModel[model]
-    ?? getSlot(scopeKey, agent, providerId, false)?.effortByModel[model];
+  return getSlot(scopeKey, agent, providerId, false)?.effortByModel[model];
 }
 
 export function getMirrorFast(
@@ -126,8 +124,7 @@ export function getMirrorFast(
   model: string,
 ): boolean | undefined {
   if (!scopeKey || !providerId || !model) return undefined;
-  return getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, false)?.fastByModel[model]
-    ?? getSlot(scopeKey, agent, providerId, false)?.fastByModel[model];
+  return getSlot(scopeKey, agent, providerId, false)?.fastByModel[model];
 }
 
 /** 乐观本地写镜像(控制端编辑时 snappy 显示 / 被控端 push 回流时刷新)。同值短路。 */
@@ -140,10 +137,8 @@ export function setMirrorEffort(
 ): void {
   if (!scopeKey || !providerId || !model || !effort) return;
   const providerSlot = getSlot(scopeKey, agent, providerId, true)!;
-  const presetSlot = getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, true)!;
-  if (providerSlot.effortByModel[model] === effort && presetSlot.effortByModel[model] === effort) return;
+  if (providerSlot.effortByModel[model] === effort) return;
   providerSlot.effortByModel[model] = effort;
-  presetSlot.effortByModel[model] = effort;
   scopeSerial.delete(scopeKey); // 直接改了 slot → 失效 replaceScope 同值缓存,下次全量 echo 必重新比对/应用
   emit();
 }
@@ -157,10 +152,8 @@ export function setMirrorFast(
 ): void {
   if (!scopeKey || !providerId || !model) return;
   const providerSlot = getSlot(scopeKey, agent, providerId, true)!;
-  const presetSlot = getSlot(scopeKey, agent, MODEL_PRESET_SLOT_ID, true)!;
-  if (providerSlot.fastByModel[model] === enabled && presetSlot.fastByModel[model] === enabled) return;
+  if (providerSlot.fastByModel[model] === enabled) return;
   providerSlot.fastByModel[model] = enabled;
-  presetSlot.fastByModel[model] = enabled;
   scopeSerial.delete(scopeKey); // 同 setMirrorEffort:失效同值缓存
   emit();
 }

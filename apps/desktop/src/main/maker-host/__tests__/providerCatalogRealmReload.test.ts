@@ -162,6 +162,12 @@ vi.mock('../model-discovery/anthropic.js', () => ({
 vi.mock('../custom-provider-header-secrets.js', () => ({
   listCustomProvidersWithSecureHeaders: () => h.customProviderRead(),
 }));
+vi.mock('../../local-model-runtime/managedOllamaProvider.js', () => ({
+  migrateManagedOllamaOnCatalogLoad: async () => false,
+}));
+vi.mock('../../local-model-runtime/localConnectHarness.js', () => ({
+  migrateLocalConnectPresetsOnCatalogLoad: async () => 0,
+}));
 
 import {
   BUNDLED_CATALOG,

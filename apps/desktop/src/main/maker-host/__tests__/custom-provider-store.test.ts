@@ -341,6 +341,17 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
           'codex',
         ),
       ).ok,
+    ).toBe(true);
+    expect(
+      validateCustomProviderConfig(
+        config(
+          {
+            reasoning: true,
+            reasoningEfforts: ['minimal'],
+          },
+          'codex',
+        ),
+      ).ok,
     ).toBe(false);
   });
 

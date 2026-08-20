@@ -739,13 +739,49 @@ export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
   try {
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh');
+      return;
+    }
     const configs = await listCustomProvidersWithSecureHeaders();
     if (!shouldApply()) {
       log.info('discarded stale custom provider catalog refresh');
       return;
     }
-    setCustomProviderConfigs(configs);
-    log.info('custom providers merged into active catalog', { count: configs.length });
+    const { migrateManagedOllamaProvider } = await import(
+      '../local-model-runtime/managedOllamaProvider.js'
+    );
+    const { migrateLocalConnectProvider } = await import(
+      '../../shared/localConnectHarness.js'
+    );
+    const { updateCustomProvider } = await import('./custom-provider-store.js');
+    const next = configs.map((config) => {
+      const migrated =
+        migrateManagedOllamaProvider(config) ?? migrateLocalConnectProvider(config);
+      return migrated ?? config;
+    });
+    await Promise.all(
+      next.flatMap((config, index) => {
+        const previous = configs[index];
+        if (!previous || JSON.stringify(config.runtimes) === JSON.stringify(previous.runtimes)) {
+          return [];
+        }
+        return [
+          updateCustomProvider(config.id, config).catch((err: unknown) => {
+            log.warn('persist migrated custom provider failed', {
+              id: config.id,
+              err: String(err),
+            });
+          }),
+        ];
+      }),
+    );
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh after migration');
+      return;
+    }
+    setCustomProviderConfigs(next);
+    log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
     if (!shouldApply()) {
       log.info('discarded stale custom provider catalog refresh failure', {
