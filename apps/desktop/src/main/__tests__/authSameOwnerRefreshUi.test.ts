@@ -24,7 +24,13 @@ describe('same-owner token refresh keeps the signed-in shell', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(body).toContain('if (ownerChanged) {\n          notifyRendererAuthBoundaryPending();');
+    expect(body).toContain('enterOwnerChangeShellPending();');
+    expect(body).toContain('heldOwnerChangeShell = true;');
+    expect(body).toContain('if (heldOwnerChangeShell) leaveOwnerChangeShellPending();');
     expect(body).toContain('releaseBoundary = beginAppSessionBoundary();');
+    expect(body.indexOf('notifyRendererAuthBoundaryPending();')).toBeLessThan(
+      body.indexOf('enterOwnerChangeShellPending();'),
+    );
     expect(body.indexOf('if (ownerChanged)')).toBeLessThan(body.indexOf('notifyRendererAuthBoundaryPending();'));
     expect(body.indexOf('notifyRendererAuthBoundaryPending();')).toBeLessThan(
       body.indexOf('releaseBoundary = beginAppSessionBoundary();'),
@@ -35,12 +41,14 @@ describe('same-owner token refresh keeps the signed-in shell', () => {
     );
   });
 
-  it('keeps canEnterApp true while an owner boundary is pending', () => {
+  it('keeps canEnterApp true for IPC pending, but not a real owner-change shell', () => {
     const start = authSource.indexOf('function snapshotAuthState(): AuthState {');
     const end = authSource.indexOf('function snapshotLoggedOutAuthState', start);
     const body = authSource.slice(start, end);
 
-    expect(body).toContain("canEnterApp: appSession.mode !== 'signed-out'");
+    expect(body).toContain(
+      "canEnterApp: appSession.mode !== 'signed-out' && !isOwnerChangeShellPending()",
+    );
     expect(body).not.toContain('!isAppSessionBoundaryPending()');
   });
 

@@ -43,7 +43,19 @@ describe('ProtectedRoute', () => {
     };
   });
 
-  it('keeps the shell mounted during a same-owner pending window', () => {
+  it('keeps the shell mounted while same-owner refresh still allows entry', () => {
+    authState.current = {
+      mode: 'cloud',
+      isInitializing: false,
+      dataOwnerId: 'user-1',
+      canEnterApp: true,
+    };
+    renderAt('/');
+    expect(screen.getByTestId('app-shell')).toBeTruthy();
+    expect(screen.queryByTestId('login-page')).toBeNull();
+  });
+
+  it('leaves the shell during a real owner-change window', () => {
     authState.current = {
       mode: 'cloud',
       isInitializing: false,
@@ -51,8 +63,8 @@ describe('ProtectedRoute', () => {
       canEnterApp: false,
     };
     renderAt('/');
-    expect(screen.getByTestId('app-shell')).toBeTruthy();
-    expect(screen.queryByTestId('login-page')).toBeNull();
+    expect(screen.getByTestId('login-page')).toBeTruthy();
+    expect(screen.queryByTestId('app-shell')).toBeNull();
   });
 
   it('sends a real signed-out session to login', () => {
