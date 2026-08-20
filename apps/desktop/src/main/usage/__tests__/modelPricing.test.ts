@@ -575,6 +575,24 @@ describe('reference pricing helpers', () => {
       modelId: 'chatgpt/gpt-5.5',
       source: 'subscription-reference',
     });
+    // Pi SuperGrok 目录 id 是裸 grok-*,报价户口是 xai/grok-*。两条都要能取到参考价,
+    // 否则消息 tooltip 会落到「本轮费用暂不可用」。
+    expect(getSubscriptionDirectValuePrice('grok-4.6')).toMatchObject({
+      providerId: 'xai',
+      modelId: 'grok-4.6',
+      source: 'subscription-reference',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+    });
+    expect(getSubscriptionDirectValuePrice('xai/grok-4.6')).toMatchObject({
+      providerId: 'xai',
+      modelId: 'xai/grok-4.6',
+      source: 'subscription-reference',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+    });
     expect(
       getSubscriptionDirectValuePrice('chatgpt/gpt-5.5', 'claude-code', {
         openai: {

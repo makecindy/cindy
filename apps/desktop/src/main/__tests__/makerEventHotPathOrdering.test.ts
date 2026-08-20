@@ -917,6 +917,19 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain('const rawDelta = Math.max(0, cumulative - prevReportedCost);');
   });
 
+  it('pi subscription turns estimate value from the shared reference-price helper', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'pi'");
+    expect(piDoneIndex).toBeGreaterThanOrEqual(0);
+    const piDoneSource = wireSessionSource.slice(piDoneIndex);
+    expect(piDoneSource).toContain('const pricing = isCustomProviderRoute');
+    expect(piDoneSource).toContain('? getReferenceModelPricing()');
+    expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', pricingModel, pricing)");
+    expect(piDoneSource).not.toMatch(/getModelPriceQuote\(\s*null\s*,\s*effectiveProvider/);
+    expect(piDoneSource).toContain('if (!isSubscriptionValue)');
+    expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
+  });
+
   it('refreshes Claude credential cache before dropping mismatched header snapshots', () => {
     const listenerSource = usageSource.match(
       /setClaudeRateLimitHeadersListener\(\(snapshot, requestBearerToken\) => \{[\s\S]*?\n {2}\}\);/,

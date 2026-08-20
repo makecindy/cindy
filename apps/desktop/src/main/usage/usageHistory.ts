@@ -368,7 +368,7 @@ export function piSubscriptionUsageModelKey(model: string): string {
  *   - claude-code → Anthropic registry 参考价
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
-function getSubscriptionValuePriceFor(
+export function getSubscriptionValuePriceFor(
   agentKind: 'claude-code' | 'codex' | 'pi',
   model: string,
   pricing: ModelPricingMap | null,

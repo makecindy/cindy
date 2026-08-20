@@ -492,6 +492,7 @@ import {
   claudeSubscriptionUsageModelKey,
   codexApiUsageModelKey,
   codexSubscriptionUsageModelKey,
+  getSubscriptionValuePriceFor,
   piSubscriptionUsageModelKey,
 } from '../usage/usageHistory.js';
 import {
@@ -5094,20 +5095,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               // 自定义(source:'user')provider——本地 Ollama / 用户自付费兼容端点——即便
               // 模型 id 与 XD 目录重名,也不能套用 XD 网关定价当作 Cindy 消费入账;只记 token
               // (上方已入库),不写 money(codex review)。仅 xd / 默认网关与订阅路由计费。
-              const pricing =
-                isSubscriptionValue || isCustomProviderRoute
-                  ? null
+              // 订阅估值必须走参考价目录 + getSubscriptionValuePriceFor,与仪表盘同口径:
+              // 裸 grok-4.6 会先映射到 xai/grok-4.6。旧实现把 catalog 置 null 再
+              // getModelPriceQuote(null, 'xai', 'grok-4.6'),报价永远 miss,消息上就只剩用量。
+              const pricing = isCustomProviderRoute
+                ? null
+                : isSubscriptionValue
+                  ? getReferenceModelPricing()
                   : await getGatewayModelPricingForModel();
-              const price =
-                isCustomProviderRoute
-                  ? null
-                  : effectiveProvider === 'openai' ||
-                      effectiveProvider === 'anthropic' ||
-                      effectiveProvider === 'xai'
-                    ? getModelPriceQuote(null, effectiveProvider, pricingModel)
-                    : isSubscriptionDirectRoute(pricingModel)
-                      ? getSubscriptionDirectValuePrice(pricingModel)
-                      : getModelPriceQuote(pricing, 'xd', pricingModel);
+              const price = isCustomProviderRoute
+                ? null
+                : isSubscriptionValue
+                  ? getSubscriptionValuePriceFor('pi', pricingModel, pricing)
+                  : getModelPriceQuote(pricing, 'xd', pricingModel);
               const money = computePriceQuoteTurnMoney(
                 tokens,
                 price ?? undefined,
@@ -5116,7 +5116,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               if (money && money.amount > 0) {
                 if (!isSubscriptionValue) {
                   // token 已在上方入库；这里只补真实 API/gateway 费用，
-                  // 避免重复累加 token。订阅价值则由 #billing=subscription 读时估算。
+                  // 避免重复累加 token。订阅价值挂到消息(value-estimate),不进 daily_spend。
                   await recordModelTurnUsage({
                     agentKind: 'pi',
                     model: modelUsageKey,
