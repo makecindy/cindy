@@ -3397,10 +3397,12 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * Live Session idle + host tracker/activeTurn still busy is an invariant break.
-   * Reconcile and optionally synthesize done so queued input can drain without
-   * a user Stop / steer. Do not call this while a send is still in flight, a
-   * permission card is up, or abort/steer already owns the boundary.
+   * Live Session idle + host tracker still busy is an invariant break.
+   * Reconcile the tracker so queued input can drain without a user Stop / steer.
+   * Do not call this while a send is in flight, an activeTurn still owns the
+   * generation, a permission card is up, or abort/steer already owns the boundary.
+   * Dispatched-but-not-started turns (Pi may accept a prompt before agent_start)
+   * must wait for real lifecycle events — do not synthesize done.
    */
   private tryReconcileStaleDispatchBoundary(
     sessionId: string,
@@ -3413,7 +3415,7 @@ export class AgentInputCoordinator {
       state.steeringQueueClientIds.length > 0 ||
       state.pendingExternalTerminalDone ||
       this.deps.hasPendingInteraction(sessionId) ||
-      (state.activeTurn && !isActiveTurnDispatched(state.activeTurn))
+      state.activeTurn !== null
     ) {
       state.staleLiveIdleSinceMs = null;
       return false;
@@ -3424,11 +3426,7 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    const trackerOrLiveBusy = this.deps.isTurnRunning(sessionId);
-    const zombieDispatched = Boolean(
-      state.activeTurn && isActiveTurnDispatched(state.activeTurn),
-    );
-    if (!trackerOrLiveBusy && !zombieDispatched) {
+    if (!this.deps.isTurnRunning(sessionId)) {
       state.staleLiveIdleSinceMs = null;
       return false;
     }
@@ -3445,7 +3443,6 @@ export class AgentInputCoordinator {
     const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
     if (!reconciled) return false;
     state.staleLiveIdleSinceMs = null;
-    if (zombieDispatched) this.onTurnEvent(sessionId, 'done');
     return true;
   }
 
