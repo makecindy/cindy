@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -81,5 +84,14 @@ describe('sessionStartingStore', () => {
     expect([...getStartingSessionIds()]).toEqual(['stuck']);
     vi.advanceTimersByTime(1);
     expect([...getStartingSessionIds()]).toEqual([]);
+  });
+
+  it('clears starting from asynchronous remote optimistic failure settlement', () => {
+    const source = readFileSync(resolve(__dirname, '..', 'lib', 'makerChatStore.ts'), 'utf8');
+    const start = source.indexOf('function settleRemoteOptimisticFailure');
+    const end = source.indexOf('async function pumpRemoteOptimisticSends', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(source.slice(start, end)).toContain('clearSessionStarting(sessionId)');
   });
 });

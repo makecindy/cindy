@@ -157,8 +157,6 @@ interface AgentIslandSessionState {
 export interface AgentIslandUserPromptRollbackToken {
   sessionId: string;
   session: AgentIslandSessionState | null;
-  activeTransientSessionId: string | null;
-  transientRevealQueue: string[];
 }
 
 /**
@@ -478,8 +476,6 @@ export function createAgentIslandUserPromptRollbackToken(
   return {
     sessionId,
     session: session ? cloneSession(session) : null,
-    activeTransientSessionId: state.activeTransientSessionId,
-    transientRevealQueue: [...state.transientRevealQueue],
   };
 }
 
@@ -487,13 +483,14 @@ export function rollbackAgentIslandUserPrompt(
   state: AgentIslandState,
   token: AgentIslandUserPromptRollbackToken,
 ): void {
+  // 只还原该 session 自己的条目。全局 reveal 是岛级共享状态,回滚时不能
+  // 用入队时的快照覆盖,否则会把期间其它 session 的 reveal 一起抹掉。
   if (token.session) {
     state.sessions.set(token.sessionId, cloneSession(token.session));
-  } else {
-    state.sessions.delete(token.sessionId);
+    return;
   }
-  state.activeTransientSessionId = token.activeTransientSessionId;
-  state.transientRevealQueue = [...token.transientRevealQueue];
+  state.sessions.delete(token.sessionId);
+  removeQueuedTransientReveal(state, token.sessionId);
 }
 
 export function applyAgentIslandEvent(

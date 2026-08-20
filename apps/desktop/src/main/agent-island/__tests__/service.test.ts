@@ -2294,6 +2294,35 @@ describe('AgentIslandService native publishing', () => {
     expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
   });
 
+  it('does not rewind another session reveal when rolling back a blocked preview', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+
+    service.handleUserPrompt({ sessionId: 'session-a', agentKind: 'codex' }, 'task a', {
+      clientId: 'client-a',
+    });
+    service.handleUserPrompt({ sessionId: 'session-b', agentKind: 'codex' }, 'task b', {
+      clientId: 'client-b',
+    });
+    service.rollbackUserPrompt('session-a', 'client-a');
+
+    const sessionIds = (publish.mock.calls.at(-1)?.[0].sessions ?? []).map(
+      (session) => session.sessionId,
+    );
+    expect(sessionIds).toContain('session-b');
+    expect(sessionIds).not.toContain('session-a');
+  });
+
   it('removes user-stopped sessions and ignores provider completion tails without playing completion sound', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
