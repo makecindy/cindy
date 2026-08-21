@@ -551,8 +551,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
    * supervisor's 24h ceiling, and this pins why:
    *
    *  - `classifyRunnerPresenceSync` answers `gone` for a missing/invalid pid
-   *    (`pi-subagent-runs.ts`), so once the 15s heartbeat window lapses
-   *    `isPiSubagentRunStale` is true;
+   *    (`pi-subagent-runs.ts`) once the owner process is also gone, so after
+   *    the 15s heartbeat window `isPiSubagentRunStale` is true;
    *  - `listPiSubagentRuns` drops stale records, so the supervisor's `active`
    *    is false;
    *  - its release also needs one of `directoryCount === 0` /
@@ -576,7 +576,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       runId,
       taskId: 'tool-orphan',
       parentSessionId: 's1',
-      runtimeOwnerId: ownerId(),
+      runtimeOwnerId: piSubagentRuns.piSubagentRuntimeOwnerId(4_194_303, 'pi-instance-1'),
       runnerInstanceId: `launch-pending-${runId}`,
       state: 'queued',
       startedAt: Date.now() - 60_000,

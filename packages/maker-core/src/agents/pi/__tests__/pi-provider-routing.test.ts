@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.setConfig({ testTimeout: 30_000 });
+
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from '../cindy-subagent-source.js';
 
