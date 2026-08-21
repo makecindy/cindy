@@ -359,6 +359,56 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
     expect(grid).not.toBeNull();
     expect(screen.getByTestId('restored-panel')).not.toBeNull();
   });
+
+  it('插件 manifest 更新但布局树未变化时，刷新已挂载面板定义', () => {
+    registerPanelKind({
+      kind: 'ghost:updated',
+      Component: () => <div data-testid="updated-panel">before</div>,
+      collapseMemory: 'global',
+    });
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          {
+            fraction: 0.7,
+            node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 },
+          },
+          {
+            fraction: 0.3,
+            node: { type: 'pane', id: 'updated', panelKind: 'ghost:updated' },
+          },
+        ],
+      },
+    };
+
+    const rendered = renderLayoutRoot();
+    expect(screen.getByTestId('updated-panel').textContent).toBe('before');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    registerPanelKind({
+      kind: 'ghost:updated',
+      Component: () => <div data-testid="updated-panel">after</div>,
+      collapseMemory: 'global',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      '[panels] duplicate registration overwrites kind: ghost:updated',
+    );
+    warn.mockRestore();
+    ghostPanelSyncMock.version += 1;
+    rendered.rerender(
+      <BuiltinPanelBridgeProvider value={bridge}>
+        <div data-testid="row">
+          <LayoutRoot />
+        </div>
+      </BuiltinPanelBridgeProvider>,
+    );
+
+    expect(screen.getByTestId('updated-panel').textContent).toBe('after');
+  });
 });
 
 describe('normalizeSubMinFractions', () => {

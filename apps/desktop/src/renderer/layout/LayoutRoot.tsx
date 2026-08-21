@@ -22,7 +22,7 @@ import { ensureGhostPanelsRegistered, useGhostPanelsSync } from '../cindy-brain/
 import { isGhostPanelKindMinimized, useGhostPanelBubbleState } from '../lib/ghostPanelBubbleState';
 import { isGhostPanelKindDetached, useGhostPanelWindowsState } from '../lib/ghostPanelWindowState';
 import { registerBuiltinPanels } from '../panels/builtinPanels';
-import { getPanelKind } from '../panels/registry';
+import { getPanelKind, type PanelDefinition } from '../panels/registry';
 import { installLayoutDevTools } from './layoutDevTools';
 import { PanelMaximizeContext, type PanelMaximizeState } from './panelMaximize';
 import { PaneAtWindowTopProvider, PaneFillProvider } from './panePlacement';
@@ -87,16 +87,19 @@ function isPanelKindVisible(kind: string): boolean {
 /** 单个 pane 的挂载点:查注册表渲染;不可见 kind = 隐藏(数据保留在树里)。 */
 const PanelHost = memo(function PanelHost({
   node,
+  definition,
+  visible,
   fill = false,
   atWindowTop = true,
 }: {
   node: PaneNode;
+  definition: PanelDefinition | null;
+  visible: boolean;
   fill?: boolean;
   atWindowTop?: boolean;
 }): ReactNode {
-  const def = getPanelKind(node.panelKind);
-  if (!def || !isPanelKindVisible(node.panelKind)) return null;
-  const Component = def.Component;
+  if (!definition || !visible) return null;
+  const Component = definition.Component;
   return (
     <PaneAtWindowTopProvider value={atWindowTop}>
       <PaneFillProvider value={fill}>
@@ -297,7 +300,15 @@ function NodeView({
 }: NodeViewProps): ReactNode {
   const splitRef = useRef<HTMLDivElement>(null);
   if (node.type === 'pane') {
-    return <PanelHost node={node} fill={fillPane} atWindowTop={atWindowTop} />;
+    return (
+      <PanelHost
+        node={node}
+        definition={getPanelKind(node.panelKind)}
+        visible={isPanelKindVisible(node.panelKind)}
+        fill={fillPane}
+        atWindowTop={atWindowTop}
+      />
+    );
   }
   const ledger = activeSplitLedger(node.children);
   const visible = ledger.entries;
