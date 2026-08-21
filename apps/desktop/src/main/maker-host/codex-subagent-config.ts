@@ -55,13 +55,45 @@ export function codexSubagentRouteUsesChatGptOAuth(
   providerViews: ProviderView[] | undefined,
 ): boolean {
   if (!route) return false;
-  const provider = providerViews?.find((candidate) => candidate.id === route.providerId);
+  return providerViews?.some((provider) =>
+    provider.id === route.providerId
+    && providerViewUsesChatGptOAuth(provider)
+  ) ?? false;
+}
+
+function providerViewUsesChatGptOAuth(provider: ProviderView | undefined): boolean {
   return provider?.id === 'openai'
     && provider.source === 'builtin'
     && provider.auth.method === 'oauth'
     && provider.access?.kind === 'subscription'
     && provider.access.product === 'ChatGPT'
     && provider.routing.codex?.authStrategy === 'oauth-passthrough';
+}
+
+/**
+ * Route resolution intentionally filters disconnected/suspended sources. Keep a
+ * persisted OpenAI selection recognizable when that filtering makes the route
+ * unavailable, so a ChatGPT OAuth conflict falls back to the native subagent
+ * route instead of disabling all subagents.
+ */
+function codexSubagentSelectionUsesChatGptOAuth(
+  settings: SubagentModelSettings,
+  providerViews: ProviderView[] | undefined,
+): boolean {
+  const providerId = settings.codexProviderId?.trim();
+  if (providerId === 'openai') {
+    const provider = providerViews?.find((candidate) => candidate.id === 'openai');
+    // `openai` is the stable built-in provider id. If the catalog is temporarily
+    // unavailable, the persisted explicit source is still enough to identify the
+    // ChatGPT OAuth conflict. A visible non-ChatGPT replacement must win.
+    return provider === undefined || providerViewUsesChatGptOAuth(provider);
+  }
+  if (!providerViews || !settings.codex?.trim()) return false;
+  const model = settings.codex.trim();
+  return providerViews.some((provider) =>
+    providerViewUsesChatGptOAuth(provider)
+    && provider.models.codex?.some((candidate) => candidate.id === model) === true,
+  );
 }
 
 function shouldUseDefaultCodexSubagent(
@@ -72,7 +104,8 @@ function shouldUseDefaultCodexSubagent(
 ): boolean {
   if (!hasCodexSubagentOverride(settings)) return false;
   return mainTaskCredentialMode === 'oauth-bearer'
-    || codexSubagentRouteUsesChatGptOAuth(configuredRoute, providerViews);
+    || codexSubagentRouteUsesChatGptOAuth(configuredRoute, providerViews)
+    || (!configuredRoute && codexSubagentSelectionUsesChatGptOAuth(settings, providerViews));
 }
 
 /**
@@ -112,6 +145,7 @@ export function resolveCodexSubagentRoutingProfile(
   if (!hasCodexSubagentOverride(settings)) return 'default';
   if (mainTaskCredentialMode === 'oauth-bearer') return 'oauth-default';
   return codexSubagentRouteUsesChatGptOAuth(configuredRoute, providerViews)
+    || (!configuredRoute && codexSubagentSelectionUsesChatGptOAuth(settings, providerViews))
     ? 'default'
     : 'configured';
 }

@@ -187,6 +187,60 @@ describe('resolveEffectiveCodexSubagentSettings', () => {
     },
   );
 
+  it.each(['gateway-key', 'provider-oauth'] as const)(
+    'uses the main-task default when the saved ChatGPT OAuth source is temporarily unavailable (%s)',
+    (credentialMode) => {
+      const configured = settings({
+        codex: 'gpt-5.6-terra',
+        codexProviderId: 'openai',
+        codexEffort: 'high',
+      });
+      const effective = resolveEffectiveCodexSubagentSettings(
+        configured,
+        credentialMode,
+        undefined,
+        [],
+      );
+
+      expect(effective).toEqual({
+        ...configured,
+        codex: null,
+        codexProviderId: null,
+        codexEffort: null,
+      });
+      expect(resolveCodexSubagentRoutingProfile(
+        configured,
+        credentialMode,
+        undefined,
+        [],
+      )).toBe('default');
+    },
+  );
+
+  it('uses the main-task default when the saved ChatGPT OAuth source is disconnected', () => {
+    const configured = settings({
+      codex: 'gpt-5.6-terra',
+      codexProviderId: null,
+      codexEffort: 'high',
+    });
+    const providers = [providerView('openai', configured.codex!, { connected: false })];
+    const route = resolveCodexSubagentRouteSnapshot(configured, undefined, providers);
+
+    expect(route).toBeUndefined();
+    expect(resolveEffectiveCodexSubagentSettings(
+      configured,
+      'provider-oauth',
+      route,
+      providers,
+    ).codex).toBeNull();
+    expect(resolveCodexSubagentRoutingProfile(
+      configured,
+      'provider-oauth',
+      route,
+      providers,
+    )).toBe('default');
+  });
+
   it('also removes an effort-only override from a ChatGPT OAuth main task', () => {
     const effortOnly = settings({ codexEffort: 'high' });
     const effective = resolveEffectiveCodexSubagentSettings(effortOnly, 'oauth-bearer');
