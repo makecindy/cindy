@@ -198,11 +198,12 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
     }
   });
 
-  it('unblocks on transient reprobe failure so it does not consume the reprobe budget (PR #2288 Codex P1)', async () => {
-    // After TTL expiry the model gets reprobed. If the reprobe fails with a
-    // recoverable error (NETWORK_ERROR / RATE_LIMITED / 5xx), the block must
-    // be lifted so the next tick retries via the normal backoff instead of
-    // wasting the model's already-spent probe budget.
+  it('preserves probeCount across a transient reprobe failure (PR #2288 Greptile P1)', async () => {
+    // TTL-expired reprobe hits a transient error: block entry stays (blockedAt
+    // refreshed) but probeCount is NOT reset. If the next reprobe after TTL
+    // returns INVALID_MODEL, probeCount must accumulate so the max-reprobe
+    // cap can still be reached — otherwise the budget never exhausts and a
+    // permanently invalid model gets probed forever.
     vi.useFakeTimers();
     try {
       let now = new Date('2026-08-21T12:00:00Z').getTime();
@@ -212,8 +213,15 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
       const tx = vi.fn(async () => ({ failCount: 0 }));
       const embed = vi
         .fn()
+        // Tick 1: initial INVALID_MODEL
         .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
+        // TTL 1: first reprobe — transient error
         .mockRejectedValueOnce(new EmbeddingError('connection reset', 'NETWORK_ERROR'))
+        // TTL 2: second reprobe — INVALID_MODEL (probeCount should be 1)
+        .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
+        // TTL 3: third reprobe — INVALID_MODEL (probeCount should be 2, at cap)
+        .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
+        // After cap exhausted, should NOT call embed again
         .mockResolvedValueOnce({ embeddings: [[0.1]], tokensUsed: 0, cacheHits: 0 });
 
       registerProvider({
@@ -230,19 +238,29 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
       });
       const tick = (worker as unknown as { tick: () => Promise<void> }).tick.bind(worker);
 
+      // Tick 1: initial block.
       await tick();
       expect(embed).toHaveBeenCalledTimes(1);
 
-      // TTL elapses; first reprobe hits a transient error and must unblock.
+      // TTL 1: first reprobe (probeCount 0→1) returns transient error.
       now += 31 * 60_000;
       vi.setSystemTime(now);
       await tick();
       expect(embed).toHaveBeenCalledTimes(2);
 
-      // Block should now be gone — next tick calls embed() immediately without
-      // waiting another TTL window.
+      // TTL 2: second reprobe (probeCount should still be 1, increments to 2)
+      // returns INVALID_MODEL.
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
       await tick();
       expect(embed).toHaveBeenCalledTimes(3);
+
+      // TTL 3: probeCount is now 2 (== MAX_REPROBES), so embed must NOT be
+      // called — the batch is snoozed without a network call.
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(3); // still 3, not 4
     } finally {
       vi.useRealTimers();
     }

@@ -1161,4 +1161,22 @@ describe('EmbeddingClient · mapStatusToCode (INVALID_MODEL 熔断信号)', () =
       clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
+
+  it('"model input is unsupported" 参数错误不误判 → BAD_REQUEST (PR #2288 Codex P2)', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: 'model input is unsupported for this endpoint' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('"model parameter x is unsupported" 参数错误不误判 → BAD_REQUEST', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: "model parameter 'dimensions' is unsupported" },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
 });
