@@ -3183,12 +3183,14 @@
           "copyLink": "复制链接",
           "copied": "链接已复制",
           "state": {
-            "denied": "在 Slack 授权页取消了授权",
+            "denied": "Slack 授权已取消，账号尚未绑定",
             "expired": "授权超时，请重新连接",
             "failed": "绑定失败",
             "revoked": "绑定已解除"
           },
-          "retryHint": "重新打开开关即可再次连接并绑定。"
+          "reauthorize": "重新授权 Slack",
+          "reauthorizing": "正在重新授权 Slack…",
+          "retryHint": "重新授权 Slack 即可再次连接并绑定。"
         },
         "toast": {
           "saveFailed": "保存失败",
@@ -3198,6 +3200,8 @@
         "loginRequired": "需要先登录 {{appName}} 账号，连接会在登录后自动恢复。",
         "standbyHint": "本机另一 Cindy 实例正在使用 Slack 连接。关闭它后，重新打开此开关即可接管。",
         "authorizing": "授权中…",
+        "transportStatus": "传输连接：{{status}}",
+        "accountStatus": "Slack 账号：{{status}}",
         "statusBound": "已绑定 @{{name}}",
         "statusBoundTeam": "已绑定 {{team}} @{{name}}",
         "statusUnbound": "未绑定",

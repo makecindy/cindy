@@ -1,9 +1,9 @@
 /**
  * PinnedPlanPanel —— agent 计划清单的常驻胶囊(composer 上方)。
  *
- * 对齐 Codex IDE 扩展的交互模型:计划不进聊天流(MessageStream 已把 plan 工具
- * 调用整体吞掉),唯一呈现就是这里 —— 输入框上方一枚居中小胶囊(Step N / M),
- * 鼠标悬停时完整清单以浮层向上展开,原地实时更新,不会被后续消息冲走。
+ * 计划的主呈现在聊天流内；当最新计划卡滚出可见区域后，这里以输入框上方一枚
+ * 居中小胶囊(Step N / M)接力。鼠标悬停时完整清单以浮层向上展开，原地实时
+ * 更新；滚回流内计划卡后胶囊再次隐藏。
  * 数据从会话消息派生(findLatestMessageTodoInsertion):跨 source(TodoWrite /
  * update_plan / Task*)取最近更新的 plan session 快照;历史 session 不再逐张
  * 展示。无计划时返回 null,不占位。
@@ -11,16 +11,19 @@
  * **退场条件是 host 的终态章,不是"步骤全勾完"**(`insertion.sealed`,来源见
  * maker-shared 的 `terminalPlanSnapshot`)。agent 收尾时漏勾最后几步是常态,
  * 以"全勾完"为退场条件会让干完的活儿永远挂在屏幕上;而中断、失败、断线自动
- * 续跑都不盖章,那种情况计划必须留着——任务还活着,用户正要接着指挥。
+ * 续跑都不盖章,那种情况在用户尚未继续指挥时留着。后续真实 user turn
+ * 是所有权边界:旧计划退场,除非 agent 在新 turn 再次 update_plan 明确认领。
  *
- * 盖章后同样保留 2 秒再收起,时刻锚在章上(章落库,所以重载/新窗口看到的是
- * 同一个时刻,不会重新数 2 秒)。旧数据没有章,按"全勾完"兜底,行为不变。
- * 兜底只属于旧数据:turn 还在流式时,未盖章的 codex 计划正在等 host 的终态章,
- * 这时候按"全勾完"抢跑退场,会在章晚到(>2s)时先消失再被章复活闪回 2 秒。
+ * 未接入流内卡的旧调用方仍沿用“盖章后保留 2 秒再收起”。接入
+ * `inlinePlanVisibility` 后，进行中的计划由卡片可见性控制；完成后流内卡片
+ * 继续留在聊天记录里，但胶囊立即永久退场。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getLatestMessageTodoState } from '@cindy/maker-shared/message-render';
+import {
+  getLatestMessageTodoState,
+  isPlanUserBoundary,
+} from '@cindy/maker-shared/message-render';
 
 import { TodoListCard } from '@/components/chat/TodoListCard';
 import type { ChatMessage } from '@/lib/makerChatStore';
@@ -36,6 +39,7 @@ export function PinnedPlanPanel({
   taskHistoryMayBeIncomplete = false,
   visible = true,
   streaming = false,
+  inlinePlanVisibility,
   className,
 }: {
   sessionId: string | null;
@@ -52,6 +56,11 @@ export function PinnedPlanPanel({
   visible?: boolean;
   /** turn 还在流式:未盖章的 codex 计划正在等终态章,不走"全勾完"兜底退场。 */
   streaming?: boolean;
+  /**
+   * 同一计划在消息流中的可见状态。undefined 表示调用方未接入观察器（保持旧行为）；
+   * null 表示观察器已接入但消息树尚未就绪；key 匹配且 visible 时由流内卡独家呈现。
+   */
+  inlinePlanVisibility?: { key: string; visible: boolean } | null;
   className?: string;
 }): React.ReactElement | null {
   const todoState = useMemo(
@@ -59,18 +68,19 @@ export function PinnedPlanPanel({
     [messages, taskHistoryMayBeIncomplete],
   );
   const insertion = todoState.insertion;
-  // `streaming` is session-wide, but a legacy plan can outlive its turn. Only
-  // suppress the legacy all-done fallback while the latest normal user turn
-  // still owns this plan; steer rows do not start a new turn.
-  const latestNormalUserIndex = useMemo(() => {
+  // `streaming` is session-wide, but a plan belongs to the user turn that last
+  // updated it. A later real user turn supersedes the old snapshot unless the
+  // agent explicitly calls update_plan again. Steer, scheduler/auto-resume, and
+  // subagent user rows are continuations rather than ownership boundaries.
+  const latestPlanUserBoundaryIndex = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message.role === 'user' && message.delivery !== 'steer') return index;
+      if (isPlanUserBoundary(messages[index])) return index;
     }
     return -1;
   }, [messages]);
   const planBelongsToLatestTurn =
-    todoState.latestInsertionIndex < 0 || latestNormalUserIndex <= todoState.latestInsertionIndex;
+    todoState.latestInsertionIndex < 0 ||
+    latestPlanUserBoundaryIndex <= todoState.latestInsertionIndex;
   const allDone = Boolean(
     insertion &&
     insertion.todos.length > 0 &&
@@ -80,16 +90,22 @@ export function PinnedPlanPanel({
   // - turn 流式中且未盖章:正在等 host 的终态章,agent 提前勾完不算数——按
   //   allDone 抢跑会在章晚到时产生"消失再闪回";
   // - host 给该行盖了 turnCompleted:false(中断/失败终态,见 persistCodexPlanOnDone):
-  //   按设计不盖章,计划必须留在屏幕上供用户继续指挥,哪怕步骤恰好全勾完。
+  //   在用户尚未继续指挥时留在屏幕上,哪怕步骤恰好全勾完。后续真实
+  //   user turn 一旦开始,旧失败印记不能继续冒充"当前计划";若确实继续,
+  //   agent 会在新 turn 再次 update_plan 明确认领。
   // TodoWrite / Task 永远不会有这两种印记,codex 旧历史数据也不会再有,它们照旧
   // 走全勾完兜底——否则旧会话的计划会永远挂着。
   const codexPlanAlive =
     insertion?.source === 'codex' &&
     insertion.sealed !== true &&
-    ((streaming && planBelongsToLatestTurn) || insertion.turnFailed === true);
-  // 退场 = host 盖了终态章(权威),或计划自己勾完了(没有章的旧数据兜底)。
+    planBelongsToLatestTurn &&
+    (streaming || insertion.turnFailed === true);
+  const supersededPlan = !planBelongsToLatestTurn;
+  // 退场 = host 盖了终态章(权威),或后续 user turn 已取代这份
+  // 计划(所有权边界),或计划自己勾完了(没有章的旧数据兜底)。
   const retired =
-    Boolean(insertion) && (insertion?.sealed === true || (allDone && !codexPlanAlive));
+    Boolean(insertion) &&
+    (insertion?.sealed === true || supersededPlan || (allDone && !codexPlanAlive));
   const completedAtMs =
     insertion?.sealedAtMs ?? insertion?.updatedAtMs ?? Date.parse(insertion?.createdAt ?? '');
   // 章的时刻来自执行端时钟;device-link 被控场景下本机时钟可能与其偏差任意大。
@@ -144,6 +160,8 @@ export function PinnedPlanPanel({
   const completedPlanExpired = Boolean(
     completionDeadlineMs !== null && completionDeadlineMs <= Date.now(),
   );
+  const completionRetirementEnabled = inlinePlanVisibility === undefined;
+  const completedInlinePlan = !completionRetirementEnabled && retired;
   const [hiddenInsertionKey, setHiddenInsertionKey] = useState<string | null>(null);
   const [dismissedSnapshotIdentity, setDismissedSnapshotIdentity] = useState<string | null>(null);
 
@@ -176,12 +194,18 @@ export function PinnedPlanPanel({
     return () => window.clearTimeout(timer);
   }, [retired, completionDeadlineMs, completionIdentity, insertion?.key]);
 
+  const hiddenByInlinePlan =
+    inlinePlanVisibility === null ||
+    (inlinePlanVisibility?.key === insertion?.key && inlinePlanVisibility?.visible === true);
+
   if (
     !visible ||
+    hiddenByInlinePlan ||
     !insertion ||
     insertion.todos.length < 2 ||
-    completedPlanExpired ||
-    hiddenInsertionKey === insertion.key ||
+    completedInlinePlan ||
+    (completionRetirementEnabled &&
+      (completedPlanExpired || hiddenInsertionKey === insertion.key)) ||
     dismissedSnapshotIdentity === snapshotIdentity
   )
     return null;

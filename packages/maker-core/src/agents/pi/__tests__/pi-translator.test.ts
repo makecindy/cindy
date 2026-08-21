@@ -5,6 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
@@ -568,6 +569,60 @@ describe('pi translator', () => {
     const full = events.find((event) => event.type === 'tool_result_full');
     expect(full).toMatchObject({ data: { fullText: wire }, source: 'pi' });
     expect(JSON.parse((full!.data as { fullText: string }).fullText).content).toBe(content);
+  });
+
+  it('rewrites context-mode doctor tool results to the Cindy-managed package path', () => {
+    const root = '/tmp/cindy/managed-packages/0/node_modules/context-mode';
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.rewriteToolResultText = (text) => rewriteContextModeDoctorPath(text, root);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'doctor-1',
+        toolName: 'ctx_doctor',
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: '[OK] Hook support: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+            },
+          ],
+        },
+      }),
+      queue,
+      ctx,
+    );
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({
+      data: {
+        fullText: `[OK] Hook support: (${root}/), not via JSON-stdio.`,
+      },
+    });
+  });
+
+  it('leaves non-doctor tool results containing the stale path unchanged', () => {
+    const root = '/tmp/cindy/managed-packages/0/node_modules/context-mode';
+    const stale = '[OK] Hook support: (~/.pi/extensions/context-mode/), not via JSON-stdio.';
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.rewriteToolResultText = (text) => rewriteContextModeDoctorPath(text, root);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read', args: {} }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'read-1',
+        result: { content: [{ type: 'text', text: stale }] },
+      }),
+      queue,
+      ctx,
+    );
+    const full = events.find((event) => event.type === 'tool_result_full');
+    expect(full).toMatchObject({ data: { fullText: stale } });
   });
 
   it('maps compaction_end (threshold) → compact_boundary with token deltas + updates contextTokens', () => {

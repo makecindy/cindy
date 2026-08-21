@@ -780,6 +780,140 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('rewrites context-mode doctor notify paths to the managed package root', async () => {
+    const packageRoot = path.join(agentHome, 'managed-context-mode');
+    const extensionPath = path.join(packageRoot, 'extension.js');
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(extensionPath, '// extension');
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'context-mode' }));
+    captured.commandCatalog = [
+      {
+        name: 'ctx-doctor',
+        description: 'Run context-mode diagnostics',
+        source: 'extension',
+        sourceInfo: { path: extensionPath, source: 'extension' },
+      },
+    ];
+    captured.onPrompt = (command) => {
+      if (command.message !== '/ctx-doctor') return;
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'other-ext-notify',
+        method: 'notify',
+        notifyType: 'warning',
+        message: 'other-ext: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+      });
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'ctx-doctor-notify',
+        method: 'notify',
+        notifyType: 'info',
+        message: [
+          'context-mode doctor',
+          '',
+          '[OK] Hook support: Pi hooks are wired via the context-mode Pi extension (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+        ].join('\n'),
+      });
+    };
+    const deps = buildDeps();
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [extensionPath],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [packageRoot],
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-doctor-path-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+    try {
+      const deadline = Date.now() + 2_000;
+      while (handle.getRuntimeCapabilities?.()?.status !== 'loaded') {
+        if (Date.now() > deadline) throw new Error('managed command catalog did not load');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await handle.send({ type: 'user', content: '/ctx-doctor' });
+      await new Promise((resolve) => setImmediate(resolve));
+      await flush();
+      const texts = events
+        .filter((event) => event.type === 'text')
+        .map((event) => (event.data as { text?: string }).text ?? '');
+      expect(texts.some((text) => text.includes('other-ext') && text.includes('~/.pi/extensions/context-mode'))).toBe(true);
+      expect(texts.some((text) => text.includes('Hook support') && text.includes(packageRoot))).toBe(true);
+      expect(texts.some((text) => text.includes('Hook support') && text.includes('~/.pi/extensions/context-mode'))).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('leaves non-doctor extension notify text containing the stale path unchanged', async () => {
+    const packageRoot = path.join(agentHome, 'managed-context-mode');
+    const extensionPath = path.join(packageRoot, 'extension.js');
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(extensionPath, '// extension');
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'context-mode' }));
+    captured.commandCatalog = [
+      {
+        name: 'ctx-stats',
+        description: 'Show context-mode stats',
+        source: 'extension',
+        sourceInfo: { path: extensionPath, source: 'extension' },
+      },
+    ];
+    const stale = '[OK] Hook support: (~/.pi/extensions/context-mode/), not via JSON-stdio.';
+    captured.onPrompt = (command) => {
+      if (command.message !== '/ctx-stats') return;
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'ctx-stats-notify',
+        method: 'notify',
+        message: stale,
+      });
+    };
+    const deps = buildDeps();
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [extensionPath],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [packageRoot],
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-stats-path-unchanged-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+    try {
+      const deadline = Date.now() + 2_000;
+      while (handle.getRuntimeCapabilities?.()?.status !== 'loaded') {
+        if (Date.now() > deadline) throw new Error('managed command catalog did not load');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await handle.send({ type: 'user', content: '/ctx-stats' });
+      await new Promise((resolve) => setImmediate(resolve));
+      await flush();
+      const texts = events
+        .filter((event) => event.type === 'text')
+        .map((event) => (event.data as { text?: string }).text ?? '');
+      expect(texts).toContain(stale);
+      expect(texts.some((text) => text.includes(packageRoot) && text.includes('Hook support'))).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('keeps an accepted extension command alive when the idle-state probe fails', async () => {
     const packageRoot = path.join(agentHome, 'managed-context-mode-probe-failure');
     const extensionPath = path.join(packageRoot, 'extension.js');

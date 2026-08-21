@@ -3183,12 +3183,14 @@
           "copyLink": "링크 복사",
           "copied": "링크를 복사했습니다",
           "state": {
-            "denied": "Slack 인증 페이지에서 인증이 취소되었습니다",
+            "denied": "Slack 인증이 취소되어 계정이 아직 연동되지 않았습니다",
             "expired": "인증 시간이 초과되었습니다. 다시 연결하세요",
             "failed": "연동에 실패했습니다",
             "revoked": "연동이 해제되었습니다"
           },
-          "retryHint": "스위치를 다시 켜면 재연결하여 다시 연동합니다."
+          "reauthorize": "Slack 재인증",
+          "reauthorizing": "Slack 재인증 중…",
+          "retryHint": "Slack을 재인증하면 다시 연결하고 계정을 연동합니다."
         },
         "toast": {
           "saveFailed": "저장 실패",
@@ -3198,6 +3200,8 @@
         "loginRequired": "먼저 {{appName}} 계정에 로그인하세요. 로그인 후 연결이 자동으로 복구됩니다.",
         "standbyHint": "이 컴퓨터의 다른 Cindy 인스턴스가 Slack 연결을 사용 중입니다. 해당 인스턴스를 닫은 뒤 이 스위치를 다시 켜면 연결을 이어받을 수 있습니다.",
         "authorizing": "인증 중…",
+        "transportStatus": "전송 연결: {{status}}",
+        "accountStatus": "Slack 계정: {{status}}",
         "statusBound": "연동됨 @{{name}}",
         "statusBoundTeam": "{{team}}에 연동됨 @{{name}}",
         "statusUnbound": "미연동",

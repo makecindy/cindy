@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { TodoListCard } from '../TodoListCard';
+import { InlinePlanCard, TodoListCard } from '../TodoListCard';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -227,5 +227,42 @@ describe('TodoListCard flyout interaction', () => {
 
     expect(document.getElementById(flyoutId)).toBe(positioner);
     expect(animatedContent.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('InlinePlanCard', () => {
+  it('shows the shared focus ring when the collapse control is keyboard-focused', () => {
+    render(<InlinePlanCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button');
+    expect(trigger.classList.contains('focus-visible:outline-none')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-2')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-[var(--focus-ring)]')).toBe(true);
+  });
+
+  it('starts expanded and can collapse back to a compact summary', () => {
+    const { container } = render(<InlinePlanCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('[data-inline-plan-step-active="true"]')).not.toBeNull();
+
+    fireEvent.click(trigger);
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[data-inline-plan-step-active="true"]')).toBeNull();
+  });
+
+  it('breathes the active inline step only while the session is running', () => {
+    const view = render(<InlinePlanCard todos={TODOS} animated />);
+    const active = view.container.querySelector('[data-inline-plan-step-active="true"]');
+
+    expect(active?.getAttribute('data-inline-plan-step-breathing')).toBe('true');
+    expect(active?.classList.contains('session-status-breathing')).toBe(true);
+
+    view.rerender(<InlinePlanCard todos={TODOS} animated={false} />);
+    const idle = view.container.querySelector('[data-inline-plan-step-active="true"]');
+    expect(idle?.getAttribute('data-inline-plan-step-breathing')).toBe('false');
+    expect(idle?.classList.contains('session-status-breathing')).toBe(false);
   });
 });

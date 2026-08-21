@@ -3184,12 +3184,14 @@
           "copyLink": "Copy link",
           "copied": "Link copied",
           "state": {
-            "denied": "Authorization was cancelled on the Slack page",
+            "denied": "Slack authorization was cancelled; the account is not linked",
             "expired": "Authorization timed out, please reconnect",
             "failed": "Binding failed",
             "revoked": "Binding revoked"
           },
-          "retryHint": "Turn the switch back on to reconnect and link again."
+          "reauthorize": "Reauthorize Slack",
+          "reauthorizing": "Reauthorizing Slack…",
+          "retryHint": "Reauthorize Slack to reconnect and link the account."
         },
         "toast": {
           "saveFailed": "Failed to save",
@@ -3199,6 +3201,8 @@
         "loginRequired": "Sign in to your {{appName}} account first; the connection resumes automatically after login.",
         "standbyHint": "Another Cindy instance on this computer is using the Slack connection. Close it, then turn this switch back on to take over.",
         "authorizing": "Authorizing…",
+        "transportStatus": "Transport: {{status}}",
+        "accountStatus": "Slack Account: {{status}}",
         "statusBound": "Linked as @{{name}}",
         "statusBoundTeam": "Linked to {{team}} as @{{name}}",
         "statusUnbound": "Not linked",

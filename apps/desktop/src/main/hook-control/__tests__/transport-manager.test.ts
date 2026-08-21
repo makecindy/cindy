@@ -3540,6 +3540,35 @@ describe('多 workspace 绑定(multi-team)', () => {
     expect(manager.snapshot().pendingBind).toMatchObject({ state: 'pending', teamId: 'T1' });
   });
 
+  it('重连/重启后回放带 teamId 的终止态: intent 回退为 add, 不被误判为定向重绑', async () => {
+    // 场景: 进程重启或重连使内存 pendingBind 丢失, server 回放一个 add 流
+    // 的 denied 终止态(带用户所选 team 的 teamId)。此时无法知道原发起意图,
+    // fallback 必须保守取 add —— 否则重试会 rebindTeam(teamId) 把授权页固定
+    // 到旧 workspace, 用户无法切换完成新增。
+    const { manager, sock } = await connectMulti();
+    sock.send(serializeHookMessage(makeBindState({ bindings: [T1] })));
+    await expect.poll(() => manager.snapshot().bindings.length, { timeout: 3000 }).toBe(1);
+    expect(manager.snapshot().pendingBind).toBeNull(); // 本地无在途授权(重启后)
+
+    sock.send(
+      serializeHookMessage(
+        makeBindUpdate({
+          state: 'denied',
+          slackUserId: null,
+          slackUserName: null,
+          message: 'user cancelled',
+          teamId: 'T1',
+        }),
+      ),
+    );
+    await expect
+      .poll(() => manager.snapshot().pendingBind?.state, { timeout: 3000 })
+      .toBe('denied');
+    // 关键断言: teamId 只描述冲突/所选 team, 不携带重绑意图
+    expect(manager.snapshot().pendingBind?.intent).toBe('add');
+    expect(manager.snapshot().pendingBind?.teamId).toBe('T1');
+  });
+
   it('revoked(teamId, reason=superseded): 行保留标注 displaced, 不弹开关不掉线', async () => {
     const { manager, store, sock } = await connectMulti();
     sock.send(serializeHookMessage(makeBindState({ bindings: [T1, T2] })));

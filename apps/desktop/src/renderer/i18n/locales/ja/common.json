@@ -3183,12 +3183,14 @@
           "copyLink": "リンクをコピー",
           "copied": "リンクをコピーしました",
           "state": {
-            "denied": "Slack の認可ページで認可がキャンセルされました",
+            "denied": "Slack の認可はキャンセルされ、アカウントはまだ連携されていません",
             "expired": "認可がタイムアウトしました。再接続してください",
             "failed": "連携に失敗しました",
             "revoked": "連携が解除されました"
           },
-          "retryHint": "スイッチをもう一度オンにすると再接続して連携し直せます。"
+          "reauthorize": "Slack を再認可",
+          "reauthorizing": "Slack を再認可しています…",
+          "retryHint": "Slack を再認可すると再接続して連携し直せます。"
         },
         "toast": {
           "saveFailed": "保存に失敗しました",
@@ -3198,6 +3200,8 @@
         "loginRequired": "先に {{appName}} アカウントにログインしてください。ログイン後、接続は自動的に復旧します。",
         "standbyHint": "このコンピューター上の別の Cindy インスタンスが Slack 接続を使用しています。それを閉じてから、このスイッチをもう一度オンにすると引き継げます。",
         "authorizing": "認可中…",
+        "transportStatus": "通信接続：{{status}}",
+        "accountStatus": "Slack アカウント：{{status}}",
         "statusBound": "連携済み @{{name}}",
         "statusBoundTeam": "{{team}} に連携済み @{{name}}",
         "statusUnbound": "未連携",

@@ -114,7 +114,7 @@ const CINDY_SUBAGENT_EXTENSION_BODY = String.raw`/**
  */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import path, { join, isAbsolute } from 'node:path';
 
 const TOOL_NAME = 'subagent';
 const MARKER = '__cindySubagent';
@@ -124,6 +124,8 @@ const RUNTIME_FILE_ENV = 'CINDY_PI_SUBAGENT_RUNTIME_FILE';
 const CONFIG_HOME_ENV = 'PI_CODING_AGENT_DIR';
 // cindy-bridge 用它决定要不要连 MCP server;子代理不需要,spawn 时剥掉(见 runTask)。
 const MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
+// 父 bridge 已消费此 env;runTask 在 spawn 前从 configHome 重新派生写回(#3132)。
+const BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 // PARENT_PID_ENV 与 PARENT_WATCHDOG_INTERVAL_MS 由末尾追加的看门狗段声明(那段要能独立
 // 跑起来受测)。**别在这里重复声明** —— 同名 const 会让拼接后的模块直接 SyntaxError,
 // 整个扩展加载失败。有测试守这条。
@@ -392,6 +394,13 @@ function runTask(binary, task, runtime, signal, onProgress) {
     // 最小凭证继承 —— 子代理只保留跑模型需要的 auth/native env。
     for (const key of Object.keys(childEnv)) {
       if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];
+    }
+    // 父 bridge 已消费并删除 CINDY_PI_BASH_PACKAGE_HOME；写回派生值让子 bridge
+    // 能解析 bash 隔离 home。子 bridge 仍会在首次加载时删除它(withoutPiSecrets)。
+    // path.posix.join 与 bridge derivedBashPackageHome 保持一致(Windows 下 path.join
+    // 产生反斜杠路径，bridge reload 时 stash 与 posix 派生值不匹配会 fail-closed)。
+    if (isAbsolute(configHome)) {
+      childEnv[BASH_PACKAGE_HOME_ENV] = path.posix.join(configHome, 'bash-package-home');
     }
 
     let child;
