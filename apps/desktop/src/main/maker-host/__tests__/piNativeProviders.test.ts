@@ -280,6 +280,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       modelIdAliases: { 'grok-4.6': 'xai/grok-4.6' },
     });
     expect(providers[0]?.models.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      wireId: 'grok-4.6',
       api: 'openai-responses',
       contextWindow: 500_000,
       maxTokens: 500_000,
@@ -316,6 +317,10 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         remotePort: PI_XAI_COMPAT_FORWARD_PORT,
       },
     });
+    expect(providers[0]?.models.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
+      wireId: 'grok-4.6',
+      api: 'openai-responses',
+    });
   });
 
   it('adds a private conservative xAI descriptor only when resuming a historical namespaced id', async () => {
@@ -323,6 +328,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const { providers } = await buildXaiPiNativeProvider('xai/grok-retired', true);
     expect(providers[0]?.models.find((model) => model.id === 'xai/grok-retired')).toEqual({
       id: 'xai/grok-retired',
+      wireId: 'grok-retired',
       name: 'xai/grok-retired',
       api: 'openai-responses',
     });

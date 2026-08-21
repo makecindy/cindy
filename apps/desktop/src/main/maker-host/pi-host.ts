@@ -1396,6 +1396,7 @@ export async function buildXaiPiNativeProvider(
         ),
       })),
     id: `xai/${catalogModel.id}`,
+    wireId: catalogModel.id,
     // Keep the exact API from Pi's catalog. The host forwarder authenticates and forwards both
     // native shapes without sending the request through the Claude Messages bridge.
     api: catalogModel.piApi ?? officialById.get(catalogModel.id)?.api ?? 'openai-responses',
@@ -1414,7 +1415,12 @@ export async function buildXaiPiNativeProvider(
       }
       // Resume compatibility only: preserve the historical id and route it through the same
       // proxy without asserting unverified vision/reasoning capabilities or publishing it.
-      models.push({ id: namespacedModel, name: namespacedModel, api: 'openai-responses' });
+      models.push({
+        id: namespacedModel,
+        wireId: piNativeModelId('xai', namespacedModel),
+        name: namespacedModel,
+        api: 'openai-responses',
+      });
       aliases[model] = namespacedModel;
       aliases[piNativeModelId('xai', model)] = namespacedModel;
     }
