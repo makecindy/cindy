@@ -659,6 +659,20 @@ describe('automation-generated sessions', () => {
       ]);
       expect(view.totalCount).toBe(7);
     });
+
+    it('does not let a leftover collapsed showAll dump the whole history on expand', () => {
+      // 收起态点过「显示全部」后,showAll 仍为 true;若展开分支把 collapsed 短路排在
+      // showAll 之后,会一次渲染全部历史运行。组件切折叠时会清 showAll,本断言钉住
+      // childView 自己也不依赖那次复位。
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(),
+        showAll: true,
+        collapsed: false,
+        alertSessionIds: new Set(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5']),
+      });
+      expect(view.visibleSessions).toHaveLength(7);
+      expect(view.totalCount).toBe(7);
+    });
   });
 
   it('keeps unread automation runs visible past the collapse cap', () => {
@@ -797,6 +811,9 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('useAutomationGroupCollapsed(');
     expect(source).toContain('group.legacyId');
     expect(source).toContain('toggleCollapsed()');
+    // 切折叠必须复位轴 2:showAll 被收起告警列表和展开历史列表共用。复位挂在
+    // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
+    expect(source).toContain('useLayoutEffect(() => {\n    setShowAll(false);\n  }, [collapsed]);');
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
     // 轴 1 收起时只留组头 + 被提上来的未处理告警行,取舍统一由 childView 决定

@@ -235,7 +235,9 @@ export function getAutomationGroupChildView(
   });
 
   // 收起:只提告警行。必须排在 frozen 之前 —— 冻结快照是展开态"前 N 条"防跳动用的,
-  // 收起态套上去会把非告警运行一起带回来。
+  // 收起态套上去会把非告警运行一起带回来。也必须排在下方的 showAll 短路之前:
+  // showAll 是两套列表共用的轴 2 状态,漏排会让收起态点过的「显示全部」把展开态
+  // 直接渲染成整组历史(见 AutomationSessionGroupItem 切折叠时的复位注释)。
   if (options.collapsed) {
     const alertIds = options.alertSessionIds;
     const alertRuns = alertIds?.size ? allRuns.filter((session) => alertIds.has(session.id)) : [];

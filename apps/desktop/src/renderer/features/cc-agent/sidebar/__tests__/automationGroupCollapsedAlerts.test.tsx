@@ -14,8 +14,8 @@
  * 都从同一份判据(resolveCollapsedAttention)出发,所以不可能再「汇总说有、列表没有」。
  */
 
-import { createElement } from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { createElement, useState } from 'react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
@@ -103,40 +103,64 @@ function makeRun(index: number): Session {
 }
 
 const RUNS = [makeRun(0), makeRun(1), makeRun(2), makeRun(3)];
-const ALL_IDS = RUNS.map((run) => run.id);
+const MANY_RUNS = Array.from({ length: 8 }, (_, index) => makeRun(index));
+const ALL_IDS = MANY_RUNS.map((run) => run.id);
 const noop = () => {};
 
+function GroupHarness({
+  sessions,
+  notifications,
+  urgentSessionIds,
+  initialCollapsed,
+}: {
+  sessions: Session[];
+  notifications: string[];
+  urgentSessionIds: ReadonlySet<string>;
+  initialCollapsed: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
+  return createElement(SessionAttentionUrgencyProvider, {
+    urgentSessionIds,
+    children: createElement(AutomationSessionGroupItem, {
+      group: {
+        id: 'schedule:sched-1',
+        scheduleId: 'sched-1',
+        scheduleStatus: 'active',
+        title: '产品决策巡检',
+        sessions,
+        attentionSessionIds: notifications,
+      },
+      runningSessionIds: new Set<string>(),
+      attachedSessionIds: new Set<string>(),
+      notifications: new Set(notifications),
+      collapsed,
+      onCollapsedChange: setCollapsed,
+      onSessionClick: noop,
+      onAction: noop,
+      onRename: noop,
+      onTogglePin: noop,
+      onScheduleAction: noop,
+    }),
+  });
+}
+
 function renderGroup({
+  sessions = RUNS,
   notifications = [],
   urgentSessionIds = new Set<string>(),
+  collapsed = true,
 }: {
+  sessions?: Session[];
   notifications?: string[];
   urgentSessionIds?: ReadonlySet<string>;
+  collapsed?: boolean;
 } = {}) {
   return render(
-    createElement(SessionAttentionUrgencyProvider, {
+    createElement(GroupHarness, {
+      sessions,
+      notifications,
       urgentSessionIds,
-      children: createElement(AutomationSessionGroupItem, {
-        group: {
-          id: 'schedule:sched-1',
-          scheduleId: 'sched-1',
-          scheduleStatus: 'active',
-          title: '产品决策巡检',
-          sessions: RUNS,
-          attentionSessionIds: notifications,
-        },
-        runningSessionIds: new Set<string>(),
-        attachedSessionIds: new Set<string>(),
-        notifications: new Set(notifications),
-        // 受控收起:本测试只关心收起态,不依赖 localStorage 里的持久化偏好。
-        collapsed: true,
-        onCollapsedChange: noop,
-        onSessionClick: noop,
-        onAction: noop,
-        onRename: noop,
-        onTogglePin: noop,
-        onScheduleAction: noop,
-      }),
+      initialCollapsed: collapsed,
     }),
   );
 }
@@ -198,5 +222,30 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
     expect(screen.queryByLabelText('Awaiting your input')).toBeNull();
     expect(childRunIds(container)).toEqual([]);
+  });
+
+  it('收起态点过显示全部后再展开,不会把整组历史一次摊开', () => {
+    // 运行全部 >24h,展开态没有 24h 豁免;告警 6 条超过收起上限 5,所以能点「显示全部」。
+    // 收起态靠 urgent 提行,展开态既无 24h 也无未读 —— 只有残留 showAll 才会把第 8 条带出来。
+    const staleRuns = Array.from({ length: 8 }, (_, index) => {
+      const iso = new Date(
+        Date.parse('2026-08-10T12:00:00.000Z') - index * 3_600_000,
+      ).toISOString();
+      return { ...makeRun(index), createdAt: iso, updatedAt: iso, userSendAt: iso };
+    });
+    const alerts = staleRuns.slice(2).map((run) => run.id);
+    const { container } = renderGroup({
+      sessions: staleRuns,
+      urgentSessionIds: new Set(alerts),
+    });
+
+    expect(childRunIds(container)).toHaveLength(5);
+    fireEvent.click(screen.getByText(/ccAgent\.sidebar\.showAllSessions/));
+    expect(childRunIds(container)).toEqual(alerts);
+
+    fireEvent.click(screen.getByLabelText('ccAgent.sidebar.automationGroup.expand'));
+    const expandedIds = childRunIds(container);
+    expect(expandedIds).toEqual(['run-0', 'run-1', 'run-2', 'run-3', 'run-4']);
+    expect(expandedIds).not.toContain('run-7');
   });
 });

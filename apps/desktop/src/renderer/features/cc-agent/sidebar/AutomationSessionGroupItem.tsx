@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, EllipsisVertical, Play } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -131,8 +131,15 @@ export function AutomationSessionGroupItem({
     }
     toggleStoredCollapsed();
   }, [collapsed, onCollapsedChange, toggleStoredCollapsed]);
-  // 轴 2:展开后运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
+  // 轴 2:运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
+  // 收起告警列表和展开历史列表共用这一份状态,所以切折叠必须复位 —— 否则
+  // 收起态点过「显示全部」再展开会一次摊开整组历史(Codex #3184),对称地,
+  // 展开态点过「显示全部」再收起也会把整组历史带进告警列表。复位挂在
+  // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
   const [showAll, setShowAll] = useState(false);
+  useLayoutEffect(() => {
+    setShowAll(false);
+  }, [collapsed]);
   const [frozen, setFrozen] = useState<FrozenGroupState | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [rowTooltipOpen, setRowTooltipOpen] = useState(false);
@@ -525,8 +532,6 @@ export function AutomationSessionGroupItem({
                 // 阻止冒泡到行级 onClick(否则一次点击既切展开又打开会话)。
                 event.stopPropagation();
                 setFrozen(null);
-                // 收起文件夹时顺手复位轴 2,下次展开从「前 5 条」开始,而不是停在「显示全部」。
-                if (!collapsed) setShowAll(false);
                 toggleCollapsed();
               }}
               aria-expanded={!collapsed}
