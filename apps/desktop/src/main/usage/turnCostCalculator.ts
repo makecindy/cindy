@@ -49,6 +49,22 @@ export function billingRouteForExplicitProvider(
   return 'provider-api';
 }
 
+/**
+ * Preserve an explicit provider's billing semantics for local and SSH sessions. Without an
+ * explicit provider, remote credentials cannot be inferred from the local host.
+ */
+export function billingRouteForClaudeSession(args: {
+  remote: boolean;
+  explicitProviderRoute: BillingRoute | null;
+  subscriptionSession: boolean;
+  observedRoute: 'subscription' | 'gateway' | null;
+}): BillingRoute {
+  if (args.explicitProviderRoute) return args.explicitProviderRoute;
+  if (args.remote) return 'unknown';
+  if (args.subscriptionSession) return 'subscription';
+  return args.observedRoute === 'gateway' ? 'xd-gateway' : 'unknown';
+}
+
 export interface TurnPricingContext {
   providerId: string | null;
   billingRoute: BillingRoute;
