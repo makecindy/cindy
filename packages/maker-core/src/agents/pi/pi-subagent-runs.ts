@@ -2,6 +2,7 @@ import { execFile, spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   createReadStream,
+  lstatSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -80,6 +81,16 @@ export async function writePiSubagentDeletedTombstone(
     await fs.rename(staging, file);
   } finally {
     await fs.rm(staging, { force: true }).catch(() => undefined);
+  }
+}
+
+export function isPiSubagentDeletedTombstonePresent(agentHome: string, sessionId: string): boolean {
+  try {
+    lstatSync(piSubagentDeletedTombstonePath(agentHome, sessionId));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    return true;
   }
 }
 
@@ -2466,8 +2477,12 @@ async function resumeClaimedPiSubagentRun(
         status: 'queued',
       })),
     });
-    if (isPiSubagentLaunchFenceActive(piSubagentAgentHomeFromRunRoot(root), process.pid)) {
+    const agentHome = piSubagentAgentHomeFromRunRoot(root);
+    if (isPiSubagentLaunchFenceActive(agentHome, process.pid)) {
       throw new Error('Cindy is restarting for an update; retry this resume shortly.');
+    }
+    if (isPiSubagentDeletedTombstonePresent(agentHome, path.basename(root))) {
+      throw new Error('The parent task was deleted; this resume will not start.');
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
@@ -2532,8 +2547,12 @@ export async function resumePiSubagentRun(
   // Resume is the Host's own way of putting a new runner on disk, so it obeys
   // the same fence the in-Pi launcher does. `root` is the per-session run
   // directory; the fence lives one level up, next to every session's runs.
-  if (isPiSubagentLaunchFenceActive(piSubagentAgentHomeFromRunRoot(root), process.pid)) {
+  const agentHome = piSubagentAgentHomeFromRunRoot(root);
+  if (isPiSubagentLaunchFenceActive(agentHome, process.pid)) {
     throw new Error('Cindy is restarting for an update; retry this resume shortly.');
+  }
+  if (isPiSubagentDeletedTombstonePresent(agentHome, path.basename(root))) {
+    throw new Error('The parent task was deleted; this resume will not start.');
   }
   return serializePiSubagentResume(root, () => resumePiSubagentRunUnlocked(
     root,

@@ -1,5 +1,5 @@
 import { appendFile, chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -206,6 +206,35 @@ describe('PI durable subagent run store', () => {
     roots.push(agentHome);
     await writePiSubagentDeletedTombstone(agentHome, 'session-1');
     expect(existsSync(piSubagentDeletedTombstonePath(agentHome, 'session-1'))).toBe(true);
+  });
+
+  it('refuses host resume after a deleted-task tombstone is published', async () => {
+    const agentHome = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-resume-tombstone-'));
+    roots.push(agentHome);
+    const root = piSubagentRunRoot(agentHome, 'session-1');
+    const runId = '123e4567-e89b-42d3-a456-4266141740aa';
+    await writeStatus(root, status(runId, { state: 'completed' }));
+    await writePiSubagentDeletedTombstone(agentHome, 'session-1');
+    await expect(resumePiSubagentRun(root, 'tool-1', 'continue', {
+      nodeExecutable: process.execPath,
+      runtimeOwnerId: 'owner-a',
+      permissionSnapshot: { mode: 'ask', readOnlyRoots: [] },
+    })).rejects.toThrow(/parent task was deleted/i);
+  });
+
+  it('checks the deleted-task tombstone after publishing queued on host resume', () => {
+    const source = readFileSync(new URL('../pi-subagent-runs.ts', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const claimed = source.indexOf('async function resumeClaimedPiSubagentRun(');
+    const publish = source.indexOf("state: 'queued'", claimed);
+    const tombstone = source.indexOf(
+      'isPiSubagentDeletedTombstonePresent(agentHome, path.basename(root))',
+      claimed,
+    );
+    const spawned = source.indexOf('spawn(launch.nodeExecutable', claimed);
+    expect(publish).toBeGreaterThan(claimed);
+    expect(tombstone).toBeGreaterThan(publish);
+    expect(spawned).toBeGreaterThan(tombstone);
   });
 
   it('reports UUID-contained corrupt runs without trusting disk PIDs', async () => {
