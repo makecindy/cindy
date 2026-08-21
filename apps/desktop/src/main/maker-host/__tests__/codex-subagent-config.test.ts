@@ -123,6 +123,32 @@ describe('resolveEffectiveCodexSubagentSettings', () => {
     },
   );
 
+  it('marks a non-ChatGPT fixed route as OAuth-only default for host reuse', () => {
+    const thirdParty = settings({
+      codex: 'xai/grok-4.3',
+      codexProviderId: 'xai',
+      codexEffort: 'high',
+    });
+    const providers = [providerView('xai', thirdParty.codex!, {
+      source: 'user',
+      authStrategy: 'oauth-token',
+    })];
+    const route = resolveCodexSubagentRouteSnapshot(thirdParty, undefined, providers);
+
+    expect(resolveCodexSubagentRoutingProfile(
+      thirdParty,
+      'oauth-bearer',
+      route,
+      providers,
+    )).toBe('oauth-default');
+    expect(resolveCodexSubagentRoutingProfile(
+      thirdParty,
+      'provider-oauth',
+      route,
+      providers,
+    )).toBe('configured');
+  });
+
   it.each(['api-key-header', 'gateway-key', 'oauth-token', 'oauth-passthrough'] as const)(
     'does not identify a third-party Codex/GPT proxy as ChatGPT OAuth (%s)',
     (authStrategy) => {
@@ -245,7 +271,7 @@ describe('resolveEffectiveCodexSubagentSettings', () => {
     const effortOnly = settings({ codexEffort: 'high' });
     const effective = resolveEffectiveCodexSubagentSettings(effortOnly, 'oauth-bearer');
     expect(effective.codexEffort).toBeNull();
-    expect(resolveCodexSubagentRoutingProfile(effortOnly, 'oauth-bearer')).toBe('default');
+    expect(resolveCodexSubagentRoutingProfile(effortOnly, 'oauth-bearer')).toBe('oauth-default');
   });
 
   it('does not create a mode-specific profile when the master switch is off', () => {

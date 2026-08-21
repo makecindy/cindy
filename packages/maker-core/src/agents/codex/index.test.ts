@@ -6292,6 +6292,41 @@ describe('CodexAgent MCP thread context hooks', () => {
     await agent.dispose();
   });
 
+  it('rebuilds an OAuth-default host when the next main task requires configured Subagent routing', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async (_providers, ctx) => ({
+        extraArgs: [],
+        extraEnv: {},
+        codexProxyActive: true,
+        codexSubagentRoutingProfile:
+          (ctx.requestedCredentialMode ?? ctx.credentialMode) === 'oauth-bearer'
+            ? 'oauth-default' as const
+            : 'configured' as const,
+      }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const oauth = await agent.startSession({
+      sessionId: 'session-profile-non-chatgpt-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    });
+    await oauth.close();
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-non-chatgpt-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(true);
+    expect(createdTransports[1].closed).toBe(false);
+    await thirdParty.close();
+    await agent.dispose();
+  });
+
   it('does not reuse a host whose Subagent routing profile belongs to the opposite main-task mode', async () => {
     const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
       vi.fn(async (_providers, ctx) => {

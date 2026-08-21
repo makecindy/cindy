@@ -1445,12 +1445,12 @@ export function getMaker(): Maker {
         if (
           !isReview
           && !ctx.remoteHostId
-          && mainTaskCredentialMode !== 'oauth-bearer'
           && storedSubagentModelSettings.codexSubagentsEnabled
           && storedSubagentModelSettings.codex?.trim()
         ) {
-          // 显式来源同样必须按当前目录严格校验；读取失败时保留空数组，令下面的路由
-          // 解析 fail-closed，而不是信任可能已经断连或删除模型的旧设置。
+          // OAuth 主任务也需要识别固定路由的来源，区分“ChatGPT 路由在两侧都回落默认”
+          // 与“其它路由只在 OAuth 侧临时回落”；读取失败时保留空数组，令显式 OpenAI
+          // 选择仍可按稳定来源 id 识别，其它路由继续 fail-closed。
           subagentProviderViews = [];
           try {
             subagentProviderViews = await getDesktopProviderService().listProviders({
