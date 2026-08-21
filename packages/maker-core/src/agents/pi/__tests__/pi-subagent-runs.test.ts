@@ -17,6 +17,7 @@ import {
   isPiSubagentLaunchFenceActive,
   piSubagentDeletedTombstonePath,
   writePiSubagentDeletedTombstone,
+  clearPiSubagentDeletedTombstone,
   isPiSubagentRunStale,
   piSubagentControlOwnership,
   piSubagentLaunchFencePath,
@@ -206,6 +207,9 @@ describe('PI durable subagent run store', () => {
     roots.push(agentHome);
     await writePiSubagentDeletedTombstone(agentHome, 'session-1');
     expect(existsSync(piSubagentDeletedTombstonePath(agentHome, 'session-1'))).toBe(true);
+    await clearPiSubagentDeletedTombstone(agentHome, 'session-1');
+    expect(existsSync(piSubagentDeletedTombstonePath(agentHome, 'session-1'))).toBe(false);
+    await expect(clearPiSubagentDeletedTombstone(agentHome, 'session-1')).resolves.toBeUndefined();
   });
 
   it('refuses host resume after a deleted-task tombstone is published', async () => {

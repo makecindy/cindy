@@ -12,6 +12,7 @@ import { ipcMain, app, BrowserWindow } from 'electron';
 import { eq, ne, and, desc, count, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 
 import {
+  clearPiSubagentDeletedTombstone,
   piSubagentRunRoot,
   stopAndRemovePiSubagentRuns,
   writePiSubagentDeletedTombstone,
@@ -22,6 +23,7 @@ import { getDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
+import { bindDeletedPiSubagentCleanupCancel } from './piSubagentDeletion';
 import { resolveBusinessSessionId } from '../../sessionIds';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
@@ -1813,8 +1815,23 @@ export async function setSessionsStatusInDb(
 }
 
 const piSubagentCleanupTimers = new Map<string, NodeJS.Timeout>();
+const piSubagentCleanupEpoch = new Map<string, number>();
 /** Longer than the adapter's own close budget, so a normal close is never cut short. */
 const PI_SUBAGENT_CLEANUP_CLOSE_TIMEOUT_MS = 15_000;
+
+function piSubagentCleanupCurrentEpoch(sessionId: string): number {
+  return piSubagentCleanupEpoch.get(sessionId) ?? 0;
+}
+
+function cancelDeletedPiSubagentCleanupImpl(sessionId: string): void {
+  piSubagentCleanupEpoch.set(sessionId, piSubagentCleanupCurrentEpoch(sessionId) + 1);
+  const timer = piSubagentCleanupTimers.get(sessionId);
+  if (!timer) return;
+  clearTimeout(timer);
+  piSubagentCleanupTimers.delete(sessionId);
+}
+
+bindDeletedPiSubagentCleanupCancel(cancelDeletedPiSubagentCleanupImpl);
 
 /**
  * Can this parent task still start a durable Subagent?
@@ -1892,11 +1909,15 @@ async function piSubagentLauncherProvenStopped(sessionId: string): Promise<boole
 
 function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void {
   if (piSubagentCleanupTimers.has(sessionId)) return;
+  const epoch = piSubagentCleanupCurrentEpoch(sessionId);
   const marker = setTimeout(() => undefined, 0);
   marker.unref?.();
   piSubagentCleanupTimers.set(sessionId, marker);
   void (async () => {
+    const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+    const superseded = (): boolean => piSubagentCleanupCurrentEpoch(sessionId) !== epoch;
     try {
+      if (superseded()) return;
       // Tombstone first, before asking whether *this* process still has a
       // launcher. Dev, packaged and --passive instances share userData, so a
       // parent PI in another process can still spawn after our local Maker
@@ -1904,7 +1925,6 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
       // publishing queued and before spawn — same opposite-order protocol as
       // the launch fence. Without it, stopAndRemove deleting an empty root is
       // not a proof.
-      const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
       try {
         await writePiSubagentDeletedTombstone(agentHome, sessionId);
       } catch (err) {
@@ -1914,10 +1934,18 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
         });
         throw err;
       }
+      if (superseded()) {
+        await clearPiSubagentDeletedTombstone(agentHome, sessionId);
+        return;
+      }
       // Every attempt, not just the first: the parent may still have been alive
       // when an earlier one gave up, and this is the only thing standing
       // between the conclusive scan and a launch that outruns it.
       if (await piSubagentLauncherProvenStopped(sessionId)) {
+        if (superseded()) {
+          await clearPiSubagentDeletedTombstone(agentHome, sessionId);
+          return;
+        }
         const removed = await stopAndRemovePiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
         if (removed) {
           piSubagentCleanupTimers.delete(sessionId);
@@ -1935,6 +1963,7 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
         err: err instanceof Error ? err.message : String(err),
       });
     }
+    if (superseded()) return;
     const delayMs = Math.min(60_000, 1_000 * (2 ** Math.min(attempt, 6)));
     const timer = setTimeout(() => {
       piSubagentCleanupTimers.delete(sessionId);

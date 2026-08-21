@@ -20,6 +20,7 @@ import { getDbClient } from '../../localDb/client/current';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { sessions } from '../../localDb/schema';
 import { withSessionRouteLock } from '../../localDb/sessionRouteLock';
+import { retireDeletedPiSubagentState } from '../../localDb/ipc/piSubagentDeletion';
 import { createLogger, maskPath } from '../../logger';
 import { setSessionProvider } from '../../maker-host/session-provider-store';
 import {
@@ -248,6 +249,11 @@ export function createImSessionRepo(
           // 复活由用户 IM 消息触发,一并 bump userSendAt:广播 created 后 renderer
           // 立即重拉,而稍后 turnRunner 的 touchUserSent 不再广播 patched,不在这里
           // 写的话 sidebar 会按旧活跃时间排序/分组,直到下次整页刷新。
+          if (row.status === 'deleted') {
+            // Durable Subagent 墓碑与进行中的删除清理必须在翻回 active 之前撤掉，
+            // 否则确定性 id 复活后每次 spawn 仍判父任务已删除。
+            await retireDeletedPiSubagentState(id);
+          }
           const now = Date.now();
           await db
             .update(sessions)
@@ -353,6 +359,14 @@ export function createImSessionRepo(
       const row = prepared ?? (await this.prepareNewSession(botContextId, userId, scopeKey));
       const now = Date.now();
       const persisted = await withSessionRouteLock(row.id, async () => {
+        const priorRows = await db
+          .select({ status: sessions.status })
+          .from(sessions)
+          .where(eq(sessions.id, row.id))
+          .limit(1);
+        if (priorRows[0]?.status === 'deleted') {
+          await retireDeletedPiSubagentState(row.id);
+        }
         await db
           .insert(sessions)
           .values({

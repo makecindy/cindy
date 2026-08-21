@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
   summarizeSession: vi.fn(async () => undefined),
   stopAndRemovePiSubagentRuns: vi.fn(async (_root: string) => true),
   writePiSubagentDeletedTombstone: vi.fn(async (_agentHome: string, _sessionId: string) => undefined),
+  clearPiSubagentDeletedTombstone: vi.fn(async (_agentHome: string, _sessionId: string) => undefined),
   getMakerIfReady: vi.fn((): {
     isSessionAlive: (id: string) => boolean;
     closeSession: (id: string) => Promise<void>;
@@ -58,6 +59,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
     path.join(agentHome, 'runtime', 'pi-subagent-runs', sessionId),
   stopAndRemovePiSubagentRuns: h.stopAndRemovePiSubagentRuns,
   writePiSubagentDeletedTombstone: h.writePiSubagentDeletedTombstone,
+  clearPiSubagentDeletedTombstone: h.clearPiSubagentDeletedTombstone,
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -95,6 +97,7 @@ vi.mock('../../../maker-host/index.js', () => ({
 }));
 
 import { registerSessionIpc, resumeDeletedPiSubagentCleanup } from '../sessions';
+import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
@@ -196,6 +199,8 @@ beforeEach(() => {
   h.stopAndRemovePiSubagentRuns.mockImplementation(async () => true);
   h.writePiSubagentDeletedTombstone.mockClear();
   h.writePiSubagentDeletedTombstone.mockImplementation(async () => undefined);
+  h.clearPiSubagentDeletedTombstone.mockClear();
+  h.clearPiSubagentDeletedTombstone.mockImplementation(async () => undefined);
   h.getMakerIfReady.mockReset();
   h.getMakerIfReady.mockReturnValue(null);
   createDb();
@@ -236,6 +241,22 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.writePiSubagentDeletedTombstone.mock.invocationCallOrder[0]!).toBeLessThan(
       h.stopAndRemovePiSubagentRuns.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('reviving a deleted IM session cancels pending cleanup and clears the tombstone', async () => {
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-revive-'));
+    const agentHome = path.join(h.userData, 'pi-agent-home');
+    h.writePiSubagentDeletedTombstone.mockImplementation(
+      async () => new Promise((resolve) => { setTimeout(resolve, 40); }),
+    );
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('pi-local');
+
+    await resumeDeletedPiSubagentCleanup();
+    await retireDeletedPiSubagentState('pi-local');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(h.clearPiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'pi-local');
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
   });
 
   it('recovers tombstones for deleted PI tasks that never grew a run root', async () => {

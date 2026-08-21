@@ -94,6 +94,25 @@ export function isPiSubagentDeletedTombstonePresent(agentHome: string, sessionId
   }
 }
 
+/**
+ * IM sessions reuse a deterministic id. After a soft-delete, an inbound
+ * message flips the same row back to active. Leave this marker in place and
+ * every later durable launch fails as "parent task was deleted". ENOENT means
+ * there is already nothing to retire.
+ */
+export async function clearPiSubagentDeletedTombstone(
+  agentHome: string,
+  sessionId: string,
+): Promise<void> {
+  const file = piSubagentDeletedTombstonePath(agentHome, sessionId);
+  try {
+    await fs.unlink(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+}
+
 export type PiSubagentRunState = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface PiSubagentTaskStatus {
