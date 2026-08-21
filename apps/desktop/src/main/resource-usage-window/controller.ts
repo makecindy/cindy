@@ -640,6 +640,7 @@ export class ResourceUsageWindowController {
     }
     this.automaticRecoveryAttempts += 1;
     this.pendingOpen = true;
+    this.unbindOwnerVisibility();
     this.lastOwner = owner && !owner.isDestroyed() ? owner : null;
     this.bindOwnerVisibility(this.lastOwner);
     const replacement = this.ensureWindow();

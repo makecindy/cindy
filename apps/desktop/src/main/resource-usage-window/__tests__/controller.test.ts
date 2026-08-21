@@ -785,6 +785,75 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[1]?.setFullScreen).toHaveBeenCalledWith(true);
   });
 
+  it('does not keep a leaked hide listener on the previous owner after automatic replacement', () => {
+    const windows: FakeWindow[] = [];
+    const firstSender = { id: 100 } as WebContents;
+    const secondSender = { id: 101 } as WebContents;
+    const firstOwnerListeners = new Map<string, Array<() => void>>();
+    const secondOwnerListeners = new Map<string, Array<() => void>>();
+    const firstOwner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      on: vi.fn((event: string, listener: () => void) => {
+        const list = firstOwnerListeners.get(event) ?? [];
+        list.push(listener);
+        firstOwnerListeners.set(event, list);
+      }),
+      off: vi.fn((event: string, listener: () => void) => {
+        firstOwnerListeners.set(
+          event,
+          (firstOwnerListeners.get(event) ?? []).filter((item) => item !== listener),
+        );
+      }),
+    };
+    const secondOwner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      on: vi.fn((event: string, listener: () => void) => {
+        const list = secondOwnerListeners.get(event) ?? [];
+        list.push(listener);
+        secondOwnerListeners.set(event, list);
+      }),
+      off: vi.fn((event: string, listener: () => void) => {
+        secondOwnerListeners.set(
+          event,
+          (secondOwnerListeners.get(event) ?? []).filter((item) => item !== listener),
+        );
+      }),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === firstSender || sender === secondSender,
+      getOwnerWindow: (sender) => (sender === secondSender ? secondOwner : firstOwner),
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(firstSender)).toBe(true);
+    windows[0]?.emitWindow('enter-full-screen');
+    windows[0]?.emitWebContents('render-process-gone', undefined, { reason: 'crashed' });
+    markPrewarmed(controller, windows[1]!);
+    expect(controller.open(secondSender)).toBe(true);
+    windows[1]?.hide.mockClear();
+    windows[1]?.setFullScreen.mockClear();
+
+    for (const listener of firstOwnerListeners.get('hide') ?? []) listener();
+    expect(windows[1]?.hide).not.toHaveBeenCalled();
+    expect(windows[1]?.setFullScreen).not.toHaveBeenCalledWith(false);
+  });
+
   it('bounds automatic replacement when renderer loading keeps failing', () => {
     const { controller, windows, mainSender } = makeHarness();
     controller.open(mainSender);
