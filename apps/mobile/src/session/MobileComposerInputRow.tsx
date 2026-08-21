@@ -16,9 +16,19 @@ import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import Reanimated, { interpolate, useAnimatedStyle, type AnimatedStyle } from 'react-native-reanimated';
+import Reanimated, {
+  Easing as ReanimatedEasing,
+  LinearTransition,
+  ReduceMotion,
+  interpolate,
+  useAnimatedStyle,
+  withTiming,
+  type AnimatedStyle,
+  type EntryAnimationsValues,
+  type ExitAnimationsValues,
+} from 'react-native-reanimated';
 import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
-import { radius, spacing } from '@/theme/tokens';
+import { motionDuration, motionEasing, radius, spacing } from '@/theme/tokens';
 import { useComposerCardTransition } from '@/session/useComposerCardTransition';
 import { useVoiceRecordingPillWidthStyle } from '@/session/useComposerControlMotion';
 import {
@@ -73,10 +83,51 @@ export const MOBILE_COMPOSER_INPUT_MAX_HEIGHT = (MOBILE_COMPOSER_INPUT_LINE_HEIG
 const MOBILE_COMPOSER_TOOLBAR_SECTION_HEIGHT = 8 + MOBILE_COMPOSER_CONTROL_SIZE;
 /** 简洁态多行草稿的圆角(rowMultiline 几何);卡片态插值端点需要数字常量。 */
 const MOBILE_COMPOSER_ROW_RADIUS_MULTILINE = 30;
-/** 外壳(简洁态)上下内边距与卡片态上/下内边距——过渡插值的四个端点。 */
-const ROW_PADDING_VERTICAL = 10;
+/** 外壳默认/收起态上下内边距与卡片态上/下内边距——过渡插值端点。 */
+const ROW_BASE_PADDING_VERTICAL = 10;
+const ROW_COLLAPSED_PADDING_VERTICAL = 3;
 const ROW_CARD_PADDING_TOP = 26;
 const ROW_CARD_PADDING_BOTTOM = 8;
+const ACCESSORY_LAYOUT_TRANSITION = LinearTransition
+  .duration(motionDuration.base)
+  .easing(ReanimatedEasing.bezier(...motionEasing.move))
+  .reduceMotion(ReduceMotion.System);
+const accessoryEntering = (values: EntryAnimationsValues) => {
+  'worklet';
+  return {
+    initialValues: { height: 0, opacity: 0 },
+    animations: {
+      height: withTiming(values.targetHeight, {
+        duration: motionDuration.base,
+        easing: ReanimatedEasing.bezier(...motionEasing.move),
+        reduceMotion: ReduceMotion.System,
+      }),
+      opacity: withTiming(1, {
+        duration: motionDuration.fast,
+        easing: ReanimatedEasing.bezier(...motionEasing.out),
+        reduceMotion: ReduceMotion.System,
+      }),
+    },
+  };
+};
+const accessoryExiting = (values: ExitAnimationsValues) => {
+  'worklet';
+  return {
+    initialValues: { height: values.currentHeight, opacity: 1 },
+    animations: {
+      height: withTiming(0, {
+        duration: motionDuration.base,
+        easing: ReanimatedEasing.bezier(...motionEasing.move),
+        reduceMotion: ReduceMotion.System,
+      }),
+      opacity: withTiming(0, {
+        duration: motionDuration.fast,
+        easing: ReanimatedEasing.bezier(...motionEasing.in),
+        reduceMotion: ReduceMotion.System,
+      }),
+    },
+  };
+};
 /**
  * 触控目标下限(mobile-design-guide「主操作命中区 ≥ 44×44」,iOS HIG 同值)。
  * 语音听写期间「点输入区停止听写」的命中层用它撑起 inputFrame(见 inputFrameMinHeight)。
@@ -240,11 +291,11 @@ export function MobileComposerInputRow({
   const compactRowRadius = multilineShape ? MOBILE_COMPOSER_ROW_RADIUS_MULTILINE : radius.pill;
   const rowCardTransitionStyle = useAnimatedStyle(() => ({
     borderRadius: interpolate(cardTransition.value, [0, 1], [compactRowRadius, radius.control]),
-    paddingBottom: interpolate(cardTransition.value, [0, 1], [ROW_PADDING_VERTICAL, ROW_CARD_PADDING_BOTTOM]),
-    paddingTop: interpolate(cardTransition.value, [0, 1], [ROW_PADDING_VERTICAL, ROW_CARD_PADDING_TOP]),
+    paddingBottom: interpolate(cardTransition.value, [0, 1], [ROW_COLLAPSED_PADDING_VERTICAL, ROW_CARD_PADDING_BOTTOM]),
+    paddingTop: interpolate(cardTransition.value, [0, 1], [ROW_COLLAPSED_PADDING_VERTICAL, ROW_CARD_PADDING_TOP]),
   }), [compactRowRadius]);
   // 语音让位(简洁态 inline 时右侧 40pt)随 progress 收放;卡片态恒为 0。
-  const voiceInlineInset = !cardLayout && voicePlacement?.inline
+  const voiceInlineInset = voicePlacement?.inline
     ? MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP
     : 0;
   const mainRowCardTransitionStyle = useAnimatedStyle(() => ({
@@ -319,7 +370,16 @@ export function MobileComposerInputRow({
       testID={testID}
     >
       {resizeHandle}
-      {cardLayout ? accessoryAbove : null}
+      {cardLayout && accessoryAbove != null ? (
+        <Reanimated.View
+          entering={accessoryEntering}
+          exiting={accessoryExiting}
+          layout={ACCESSORY_LAYOUT_TRANSITION}
+          style={styles.accessoryReveal}
+        >
+          {accessoryAbove}
+        </Reanimated.View>
+      ) : null}
       <Reanimated.View
         style={[
           styles.mainRow,
@@ -552,13 +612,13 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     minHeight: 50,
     overflow: 'visible',
     paddingHorizontal: spacing.md,
-    paddingVertical: ROW_PADDING_VERTICAL,
+    paddingVertical: ROW_BASE_PADDING_VERTICAL,
     position: 'relative',
   },
   // 收起态给 leading 的 44pt 热区留出父边界,避免溢出子节点点不到。
   rowCollapsedTouch: {
     minHeight: MOBILE_COMPOSER_MIN_TOUCH_TARGET + 6,
-    paddingVertical: 3,
+    paddingVertical: ROW_COLLAPSED_PADDING_VERTICAL,
   },
   rowMultiline: {
     borderRadius: MOBILE_COMPOSER_ROW_RADIUS_MULTILINE, // 组件几何:composer 聚焦形态专用,非通用圆角档
@@ -618,6 +678,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
   },
   // 工具排常驻挂载的外壳:高度/透明度由 progress 驱动,折叠时 0 高裁掉内容。
   toolbarReveal: {
+    overflow: 'hidden',
+  },
+  accessoryReveal: {
     overflow: 'hidden',
   },
   toolbarSpacer: {

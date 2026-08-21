@@ -1764,7 +1764,10 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('onReadyForEndCue: credential.settings?.playInteractionSound ? playMobileVoiceInputEndCue : undefined,');
     // Touch-down warm-up: the mic button prewarms the audio session + ASR
     // connection at pressIn, and voice startup claims that connection when fresh.
-    expect(newSource).toContain('onPressIn={handleVoiceButtonPressIn}');
+    expect(newSource).toContain('const AnimatedPressable = Reanimated.createAnimatedComponent(Pressable);');
+    expect(newSource).toContain('<AnimatedPressable');
+    expect(newSource).toContain('handleVoiceButtonPressIn();');
+    expect(newSource).not.toContain("{ width: '100%' }");
     // 托管预热:凭登录态提前拿 voice-server 票据(BYOK/穿透路径已删除,
     // 手机语音只保留 Cindy 官方托管路径)。
     expect(newSource).toContain('prewarmMobileVoiceStart(selectedDeviceId, {');

@@ -62,6 +62,7 @@ import {
   type TextLayoutEvent,
   type ViewStyle,
 } from 'react-native';
+import Reanimated from 'react-native-reanimated';
 import { Text, TextInput } from '@/components/AppText';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
 import type { TextInput as NativeTextInput } from 'react-native';
@@ -2478,8 +2479,8 @@ export default function SessionScreen() {
     expanded: voiceIsListening || voiceStartPending,
     counting: voiceIsListening,
   });
-  // 语音胶囊宽度换档(34 → 72 / 80)的局部动画 style:由 MobileComposerInputRow
-  // 的 Reanimated 锚点外壳消费;工具排占位 slot 用同一份时长/曲线,两处同段运动。
+  // 语音胶囊宽度换档(34 → 72 / 80)的局部动画 style:由语音按钮自身消费;
+  // 工具排占位 slot 用同一份时长/曲线,两处同段运动。
   const voicePillWidthStyle = useVoiceRecordingPillWidthStyle(voiceRecordingTimer.pillWidth);
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
@@ -2856,7 +2857,7 @@ export default function SessionScreen() {
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
-      {renderComposerSendSlot()}
+      {renderComposerSendSlot({ measureTarget: composerCardActive })}
     </>
   );
   const renderComposerInputOverlay = () => voiceIsListening ? (
@@ -5429,7 +5430,7 @@ export default function SessionScreen() {
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <RouteActionButton
+    <AnimatedRouteActionButton
       accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.screen.voiceStartInput')}
       accessibilityHint={composerLayout.voice.disabledReason ?? composerSendUnavailableReason ?? undefined}
       active={composerLayout.voice.active}
@@ -5486,9 +5487,8 @@ export default function SessionScreen() {
       style={[
         styles.composerInlineToolButton,
         buttonStyle,
-        // 锚点外壳(MobileComposerInputRow 的 Reanimated 锚点)负责动画宽度,
-        // 按钮自身铺满外壳:胶囊只向左生长,右缘锚定不动。
-        { width: '100%' },
+        // 现有按钮自身就是 Reanimated host:宽度只向左生长,右缘锚定不动,
+        // 不增加会改变 composer 几何的中间外壳。
         // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening——
         // 否则按下瞬间胶囊已展开、底色却要等 ASR 连上才变,闪一次半成品态。
         voiceRecordingTimer.label !== null && styles.composerToolButtonPrimary,
@@ -5504,7 +5504,7 @@ export default function SessionScreen() {
       ) : (
         <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       )}
-    </RouteActionButton>
+    </AnimatedRouteActionButton>
   );
 
   const removeRemoteFileAttachment = useCallback((id: string) => {
@@ -7074,18 +7074,18 @@ export default function SessionScreen() {
   // 生长,「原地再点一下」永远是停止录音,不会误停任务。
   const renderComposerInlineStop = () => composerShowInlineStop ? renderComposerStopButton() : null;
 
-  const renderComposerSendSlot = () => (
+  const renderComposerSendSlot = ({ measureTarget = false }: { measureTarget?: boolean } = {}) => (
     <>
       {composerSendSlotIsStop ? (
         renderComposerStopButton()
       ) : composerShowSendButton ? (
         <RouteActionButton
-          ref={sendButtonRef}
+          ref={measureTarget ? sendButtonRef : undefined}
           accessibilityLabel={voiceIsListening ? t('session.screen.voiceStopAndSend') : t('session.screen.sendMessage')}
           accessibilityHint={composerLayout.send.disabledReason ?? composerLayout.guidanceText}
           disabled={composerSendDisabled}
           hitSlop={COMPOSER_CONTROL_HIT_SLOP}
-          onLayout={measureSendButtonTarget}
+          onLayout={measureTarget ? measureSendButtonTarget : undefined}
           onPress={send}
           pressedStyle={styles.sendButtonPressed}
           style={[
@@ -7117,7 +7117,7 @@ export default function SessionScreen() {
       {composerShowInlineStop && composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}
-      {renderComposerSendSlot()}
+      {renderComposerSendSlot({ measureTarget: true })}
     </>
   );
 
@@ -9636,7 +9636,7 @@ export default function SessionScreen() {
                     inputTestID="session.composerInput"
                     leading={renderComposerCompactLeading()}
                     maxHeight={composerResize.inputMaxHeight}
-                    multilineShape={!composerCardActive && composerInputIsMultiline}
+                    multilineShape={composerInputIsMultiline}
                     onBlur={() => {
                       setComposerFocused(false);
                       // 失焦收起与「点别处收键盘」同语义:语音结束 hold 一并解除。
@@ -10281,6 +10281,8 @@ const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function Rout
     </Pressable>
   );
 });
+
+const AnimatedRouteActionButton = Reanimated.createAnimatedComponent(RouteActionButton);
 
 function ComposerRuntimePill({
   disabled = false,

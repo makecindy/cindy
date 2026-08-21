@@ -30,6 +30,7 @@ import {
   type TextLayoutEvent,
   type ViewStyle,
 } from 'react-native';
+import Reanimated from 'react-native-reanimated';
 import { Text } from '@/components/AppText';
 import type { TextInput as NativeTextInput } from 'react-native';
 import {
@@ -324,6 +325,8 @@ import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftMod
 import { rowFastEditable } from '@/session/modelPickerRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+
+const AnimatedPressable = Reanimated.createAnimatedComponent(Pressable);
 
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
 const COMPOSER_VOICE_CARET_GAP = 2;
@@ -1384,6 +1387,7 @@ export default function NewRemoteSessionScreen() {
   // 「按下即录」的乐观反馈(与会话页/桌面同款,详见 [sessionId].tsx 同名状态注释)。
   // 声明在 composerShowCreateButton 之前:pending 期就要占住创建槽。
   const [voiceStartPending, setVoiceStartPending] = useState(false);
+  const [voiceButtonPressed, setVoiceButtonPressed] = useState(false);
   const voiceStartPendingSeqRef = useRef(0);
   const voiceStartedOnPressInRef = useRef(false);
   // 语音生命周期内创建按钮常驻(与会话页发送槽同理,对齐桌面):录音中点创建
@@ -1430,8 +1434,8 @@ export default function NewRemoteSessionScreen() {
     expanded: voiceIsListening || voiceStartPending,
     counting: voiceIsListening,
   });
-  // 语音胶囊宽度换档(34 → 72 / 80)的局部动画 style:由 MobileComposerInputRow
-  // 的 Reanimated 锚点外壳消费;工具排占位 slot 用同一份时长/曲线,两处同段运动。
+  // 语音胶囊宽度换档(34 → 72 / 80)的局部动画 style:由语音按钮自身消费;
+  // 工具排占位 slot 用同一份时长/曲线,两处同段运动。
   const voicePillWidthStyle = useVoiceRecordingPillWidthStyle(voiceRecordingTimer.pillWidth);
   // 手机语音只保留官方托管路径,错误引导仅剩系统麦克风权限一条。
   const canOpenVoiceSettings = isMobileVoiceMicPermissionError(voiceError);
@@ -3463,7 +3467,7 @@ export default function NewRemoteSessionScreen() {
   ) : null;
 
   const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (
-    <Pressable
+    <AnimatedPressable
       accessibilityLabel={voiceIsListening ? t('session.common.voiceStopRecording') : t('session.new.voiceInput')}
       accessibilityRole="button"
       accessibilityState={{ busy: voiceIsProcessing || undefined, disabled: creating || undefined }}
@@ -3477,24 +3481,28 @@ export default function NewRemoteSessionScreen() {
         }
         toggleVoiceRecording();
       }}
-      onPressIn={handleVoiceButtonPressIn}
+      onPressIn={() => {
+        setVoiceButtonPressed(true);
+        handleVoiceButtonPressIn();
+      }}
+      onPressOut={() => setVoiceButtonPressed(false)}
       onTouchCancel={() => {
+        setVoiceButtonPressed(false);
         // 手势被系统/滚动打断:撤销这次按下误触发的录音(与会话页同语义,
         // 正常松手不触发;cancelVoiceForDeviceSwitch 会作废在途启动并释放音频)。
         if (!voiceStartedOnPressInRef.current) return;
         voiceStartedOnPressInRef.current = false;
         cancelVoiceForDeviceSwitch();
       }}
-      style={({ pressed }) => [
+      style={[
         styles.composerIconButton,
         buttonStyle,
-        // 锚点外壳(MobileComposerInputRow 的 Reanimated 锚点)负责动画宽度,
-        // 按钮自身铺满外壳:胶囊只向左生长,右缘锚定不动。
-        { width: '100%' },
+        // 现有按钮自身就是 Reanimated host:宽度只向左生长,右缘锚定不动,
+        // 不增加会改变 composer 几何的中间外壳。
         // 胶囊底色跟随计时内容(含 pressIn 乐观 pending 期),不只 listening。
         voiceRecordingTimer.label !== null && styles.composerIconButtonActive,
         (creating || voiceIsProcessing) && styles.disabled,
-        pressed && styles.pressed,
+        voiceButtonPressed && styles.pressed,
       ]}
       testID="newSession.voiceButton"
     >
@@ -3506,7 +3514,7 @@ export default function NewRemoteSessionScreen() {
       ) : (
         <Mic color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
       )}
-    </Pressable>
+    </AnimatedPressable>
   );
 
   // 切 agent:跟随该 agent 的最近会话 → 否则该 agent 列表最上面 → 否则内置默认(见 pickAgentDefaultRuntime),
@@ -5703,7 +5711,7 @@ export default function NewRemoteSessionScreen() {
                   inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
                   inputTestID="newSession.firstMessageInput"
                   maxHeight={composerResize.inputMaxHeight}
-                  multilineShape={!composerCardActive && composerInputIsMultiline}
+                  multilineShape={composerInputIsMultiline}
                   onBlur={() => {
                     setFirstMessageInputFocused(false);
                     // 失焦收起与「点别处收键盘」同语义:语音结束 hold 一并解除。

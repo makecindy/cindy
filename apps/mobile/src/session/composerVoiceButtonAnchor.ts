@@ -5,7 +5,7 @@ export const MOBILE_COMPOSER_TOOL_GAP = 6;
 /** 语音按钮 absolute 锚点距 composer 内容区右缘的距离。
  * 消息列表的「跳到底部」浮标按同一常量推导麦克风所在列,保持两者圆心同列。 */
 export const MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT = spacing.md;
-/** 卡片态麦克风贴工具排底边的距离,与 rowCard.paddingBottom 同源。 */
+/** 麦克风贴 composer 底边的距离,与收起态居中及 rowCard.paddingBottom 同源。 */
 export const MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM = spacing.sm;
 
 export interface MobileComposerVoiceButtonPlacement {
@@ -38,10 +38,10 @@ export type MobileComposerVoiceButtonAnchorStyle = {
 };
 
 /**
- * 语音按钮的完整定位。必须一次性写出 top / bottom / transform 三套互斥键,
- * 不能靠 StyleSheet 数组后项写 `undefined` 去覆盖前项:
- * RN 扁平化会跳过 undefined,卡片态就会残留收起态的 `top: '50%'`,麦克风停在
- * 卡片中部(工具排占位空着)。漏写的键在原生侧也可能继续沿用上一帧的 inset。
+ * 语音按钮的完整定位。收起态 50pt 高、按钮 34pt 高,bottom=8 正好垂直居中;
+ * 卡片态同样贴 8pt 底边。因此两态共用一套 top / bottom / transform,
+ * cardLayout 翻转时不再把互斥定位键从 `top: 50%` 硬切到 `bottom: 8`,
+ * 避免原生样式合并或动画中断留下半帧纵向偏移。
  */
 export function resolveMobileComposerVoiceButtonAnchorStyle(input: {
   cardLayout: boolean;
@@ -51,23 +51,12 @@ export function resolveMobileComposerVoiceButtonAnchorStyle(input: {
     ? MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP
     : MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT;
 
-  if (input.cardLayout) {
-    return {
-      position: 'absolute',
-      right,
-      top: 'auto',
-      bottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
-      transform: [],
-      zIndex: 2,
-    };
-  }
-
   return {
     position: 'absolute',
     right,
-    top: '50%',
-    bottom: 'auto',
-    transform: [{ translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2 }],
+    top: 'auto',
+    bottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
+    transform: [],
     zIndex: 2,
   };
 }

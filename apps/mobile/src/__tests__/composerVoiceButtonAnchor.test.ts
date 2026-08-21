@@ -23,7 +23,7 @@ describe('resolveMobileComposerVoiceButtonPlacement', () => {
 });
 
 describe('resolveMobileComposerVoiceButtonAnchorStyle', () => {
-  it('收起态按行垂直居中,不写 bottom 数值', () => {
+  it('收起态与卡片态共用 bottom 锚点,切态不改纵向定位键', () => {
     const style = resolveMobileComposerVoiceButtonAnchorStyle({
       cardLayout: false,
       floating: false,
@@ -31,13 +31,13 @@ describe('resolveMobileComposerVoiceButtonAnchorStyle', () => {
     expect(style).toEqual({
       position: 'absolute',
       right: MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
-      top: '50%',
-      bottom: 'auto',
-      transform: [{ translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2 }],
+      top: 'auto',
+      bottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
+      transform: [],
       zIndex: 2,
     });
-    expect(style.bottom).toBe('auto');
-    expect(style.top).not.toBe('auto');
+    expect(style.bottom).toBe(MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM);
+    expect(style.top).toBe('auto');
   });
 
   it('卡片态钉在工具排底边,显式清掉 top 与 translateY', () => {
@@ -73,6 +73,16 @@ describe('resolveMobileComposerVoiceButtonAnchorStyle', () => {
       floating: true,
     }).right).toBe(inset);
     expect(inset).toBe(spacing.md + 34 + 6);
+  });
+
+  it('切换 cardLayout 只改变父容器形态,语音按钮锚点保持完全一致', () => {
+    expect(resolveMobileComposerVoiceButtonAnchorStyle({
+      cardLayout: false,
+      floating: false,
+    })).toEqual(resolveMobileComposerVoiceButtonAnchorStyle({
+      cardLayout: true,
+      floating: false,
+    }));
   });
 
   it('卡片底边与间距 token 同源,避免再写 8 与 paddingBottom 对不齐', () => {

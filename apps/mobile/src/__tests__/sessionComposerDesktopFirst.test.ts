@@ -221,9 +221,12 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputRowStyle).toContain('borderWidth: StyleSheet.hairlineWidth');
     expect(composerInputRowStyle).toContain('minHeight: 50');
     expect(composerInputRowStyle).toContain('paddingHorizontal: spacing.md');
-    // 上下内边距是卡片过渡插值端点,常量与静态样式同源。
-    expect(composerInputRowStyle).toContain('paddingVertical: ROW_PADDING_VERTICAL');
-    expect(sharedSource).toContain('const ROW_PADDING_VERTICAL = 10;');
+    // 静态默认值与收起态过渡端点分开:收起态必须落到 3pt,避免首帧 10pt 偏移。
+    expect(composerInputRowStyle).toContain('paddingVertical: ROW_BASE_PADDING_VERTICAL');
+    expect(sharedSource).toContain('const ROW_BASE_PADDING_VERTICAL = 10;');
+    expect(sharedSource).toContain('const ROW_COLLAPSED_PADDING_VERTICAL = 3;');
+    expect(sharedSource).toContain('[ROW_COLLAPSED_PADDING_VERTICAL, ROW_CARD_PADDING_BOTTOM]');
+    expect(sharedSource).toContain('[ROW_COLLAPSED_PADDING_VERTICAL, ROW_CARD_PADDING_TOP]');
     expect(composerInputRowStyle).toContain("position: 'relative'");
     expect(sharedSource).toContain("mainRowMultiline: {\n    alignItems: 'flex-end',");
     // 多行圆角 30 从静态样式挪为插值端点常量(卡片态与 pill 圆角互插)。
@@ -319,7 +322,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(composerInputSource).toContain('resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}');
     expect(sharedSource).toContain('{ maxHeight },');
     expect(source).not.toContain('{ height: composerInputVisibleHeight');
-    expect(composerInputSource).toContain('multilineShape={!composerCardActive && composerInputIsMultiline}');
+    expect(composerInputSource).toContain('multilineShape={composerInputIsMultiline}');
     expect(source).toContain("position: 'absolute'");
     expect(source).toContain('bottom: 0');
     expect(source).toContain('safeAreaBottomInset: insets.bottom');
@@ -474,13 +477,26 @@ describe('mobile session composer desktop-first surface', () => {
     );
     expect(finishVoiceSource).toContain('voiceStopInFlightRef.current = false;');
     expect(composerInputSource).toContain('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
-    // 录音胶囊的动画宽度经锚点外壳下发(全局 LayoutAnimation 已移除)。
+    // 录音胶囊的动画宽度下发给现有按钮本身,不增加改变几何的中间外壳。
     expect(composerInputSource).toContain('floatingVoiceButtonStyle={voicePillWidthStyle}');
     expect(composerInputSource).toContain('voicePlacement={composerVoicePlacement}');
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
     expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
     expect(sharedSource).toContain('floating: voicePlacement.floating,');
     expect(sharedSource).not.toContain('cardLayout && styles.voiceButtonAnchorCard,');
+    expect(source).toContain('const AnimatedRouteActionButton = Reanimated.createAnimatedComponent(RouteActionButton);');
+    expect(voiceButtonSource).toContain('<AnimatedRouteActionButton');
+    expect(voiceButtonSource).not.toContain("{ width: '100%' }");
+    expect(sharedSource).toContain('const voiceInlineInset = voicePlacement?.inline');
+    expect(sharedSource).not.toContain('const voiceInlineInset = !cardLayout');
+    // 附件按真实自然高度做局部进出场和换行动画,不使用零高测量链或固定 maxHeight 裁剪。
+    expect(sharedSource).toContain('entering={accessoryEntering}');
+    expect(sharedSource).toContain('exiting={accessoryExiting}');
+    expect(sharedSource).toContain('layout={ACCESSORY_LAYOUT_TRANSITION}');
+    expect(sharedSource).toContain('height: withTiming(values.targetHeight');
+    expect(sharedSource).toContain('height: values.currentHeight');
+    expect(sharedSource).not.toContain('setAccessoryContentHeight');
+    expect(sharedSource).not.toContain('maxHeight: cardTransition.value * MOBILE_COMPOSER_INPUT_MAX_HEIGHT');
     // 录音中语音按钮以「红色停止方块」可见,禁止任何 opacity:0 隐藏样式回归
     // (旧 gestureAnchor 设计曾把听写中的按钮隐藏,会让停止录音无可见控件)。
     expect(source).not.toContain('composerInlineToolButtonGestureAnchor');
@@ -494,7 +510,7 @@ describe('mobile session composer desktop-first surface', () => {
     const toolbarSource = source.slice(toolbarStart, toolbarEnd);
     const toolbarInlineStopIndex = toolbarSource.indexOf('{renderComposerInlineStop()}');
     const toolbarVoiceSlotIndex = toolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
-    const toolbarSendSlotIndex = toolbarSource.indexOf('{renderComposerSendSlot()}');
+    const toolbarSendSlotIndex = toolbarSource.indexOf('{renderComposerSendSlot({ measureTarget: composerCardActive })}');
     expect(toolbarInlineStopIndex).toBeGreaterThan(-1);
     expect(toolbarVoiceSlotIndex).toBeGreaterThan(toolbarInlineStopIndex);
     expect(toolbarSendSlotIndex).toBeGreaterThan(toolbarVoiceSlotIndex);
@@ -503,10 +519,12 @@ describe('mobile session composer desktop-first surface', () => {
     const trailingFragmentSource = source.slice(trailingFragmentStart, trailingFragmentEnd);
     const trailingInlineStopIndex = trailingFragmentSource.indexOf('{renderComposerInlineStop()}');
     const trailingVoiceSlotIndex = trailingFragmentSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
-    const trailingSendSlotIndex = trailingFragmentSource.indexOf('{renderComposerSendSlot()}');
+    const trailingSendSlotIndex = trailingFragmentSource.indexOf('{renderComposerSendSlot({ measureTarget: true })}');
     expect(trailingInlineStopIndex).toBeGreaterThan(-1);
     expect(trailingVoiceSlotIndex).toBeGreaterThan(trailingInlineStopIndex);
     expect(trailingSendSlotIndex).toBeGreaterThan(trailingVoiceSlotIndex);
+    expect(source).toContain('ref={measureTarget ? sendButtonRef : undefined}');
+    expect(source).toContain('onLayout={measureTarget ? measureSendButtonTarget : undefined}');
     expect(voiceButtonSource).toContain('buttonStyle');
     expect(floatingVoiceIndex).toBeGreaterThan(-1);
     expect(sendIndex).toBeGreaterThan(-1);
@@ -636,6 +654,9 @@ describe('mobile session composer desktop-first surface', () => {
     const voiceStart = source.indexOf('const startVoiceRecording = useCallback(async () => {');
     const voiceEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceStart);
     const voiceSource = source.slice(voiceStart, voiceEnd);
+    const voiceButtonStart = source.indexOf('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
+    const voiceButtonEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceButtonStart);
+    const voiceButtonSource = source.slice(voiceButtonStart, voiceButtonEnd);
     const composerInputStart = source.indexOf('<MobileComposerInputRow');
     const composerInputEnd = source.indexOf('/>', source.indexOf('value={draft}', composerInputStart)) + 2;
     const composerInputSource = source.slice(composerInputStart, composerInputEnd);
@@ -689,10 +710,11 @@ describe('mobile session composer desktop-first surface', () => {
     // 手势被系统/滚动打断时撤销按下即录(review P1)。
     expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');
-    // 胶囊宽度换档走局部动画:页面把动画 width style 交给锚点外壳,按钮铺满外壳,
-    // 不再在按钮上写死 { width: pillWidth }(全局 LayoutAnimation 已移除)。
+    // 胶囊宽度换档走局部动画:页面把动画 width style 交给现有按钮本身,
+    // 不再增加外壳或写死 width(全局 LayoutAnimation 已移除)。
     expect(source).toContain('floatingVoiceButtonStyle={voicePillWidthStyle}');
-    expect(source).toContain("{ width: '100%' }");
+    expect(source).toContain('const AnimatedRouteActionButton = Reanimated.createAnimatedComponent(RouteActionButton);');
+    expect(voiceButtonSource).not.toContain("{ width: '100%' }");
     expect(source).not.toContain('{ width: voiceRecordingTimer.pillWidth }');
     expect(source).not.toContain('voiceDuration');
     expect(source).not.toContain('recordingDuration');
