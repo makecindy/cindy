@@ -1021,6 +1021,49 @@ describe('removeWorktreeForSession', () => {
     }
   });
 
+  it('discard pre-created: cleans the generated quarantine path from global safe.directory', async () => {
+    const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-safedir-'));
+    try {
+      const base = path.join(tmpRoot, 'repo');
+      const worktreePath = path.join(base, '.xdt-worktrees', 's1');
+      fsSync.mkdirSync(worktreePath, { recursive: true });
+      const meta: WorktreeMeta = { ...makeMeta('s1'), baseRepo: base, path: worktreePath };
+      storeMap.set('s1', meta);
+
+      await expect(manager.discardPrecreatedWorktree('s1', worktreePath)).resolves.toEqual({
+        status: 'discarded',
+        branchDeleted: false,
+      });
+
+      // 本轮 preserveDirty 现场生成的 .xdt-removing-* 路径
+      const moveCalls = gitExecMock.mock.calls.filter(
+        ([args]) => Array.isArray(args) && args[0] === 'worktree' && args[1] === 'move',
+      );
+      expect(moveCalls).toHaveLength(1);
+      const quarantinePath = moveCalls[0][0][3] as string;
+
+      // 原路径与本轮生成路径都要从全局 safe.directory 精确清理(#2627)
+      expect(gitExecMock).toHaveBeenCalledWith([
+        'config',
+        '--global',
+        '--unset-all',
+        '--fixed-value',
+        'safe.directory',
+        worktreePath,
+      ]);
+      expect(gitExecMock).toHaveBeenCalledWith([
+        'config',
+        '--global',
+        '--unset-all',
+        '--fixed-value',
+        'safe.directory',
+        quarantinePath,
+      ]);
+    } finally {
+      fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it('does not move a worktree when quarantine state cannot be persisted', async () => {
     const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-quarantine-persist-'));
     try {

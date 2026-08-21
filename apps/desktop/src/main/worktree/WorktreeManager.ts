@@ -106,14 +106,17 @@ function activeWorktreePath(meta: WorktreeMeta): string {
 
 /**
  * 删除/归档成功后, 清理该 worktree 路径残留在全局 git config 里的 safe.directory
- * 条目(#2627)。只按精确值移除(meta.path + quarantinePath), 不触碰用户其它仓库的
- * 手动配置; 失败仅日志, 不影响删除主流程。
+ * 条目(#2627)。只按精确值移除, 不触碰用户其它仓库的手动配置; 失败仅日志, 不影响
+ * 删除主流程。传入本次删除涉及的所有候选路径:原始 path + 已持久化的 quarantinePath
+ * + 本轮实际 removalPath —— 其中 removalPath 可能是 preserveDirty 现场生成的
+ * `.xdt-removing-*` 目录, 它在 ignored-file 扫描 / 所有权复核时触发过 gitExec 的
+ * 按需 safe.directory, 必须一并清理, 否则会永久残留。
  */
-async function removeWorktreeSafeDirectory(meta: WorktreeMeta): Promise<void> {
+async function removeWorktreeSafeDirectory(
+  ...paths: (string | null | undefined)[]
+): Promise<void> {
   const candidates = new Set(
-    [meta.path, meta.quarantinePath].filter(
-      (p): p is string => typeof p === 'string' && p.length > 0,
-    ),
+    paths.filter((p): p is string => typeof p === 'string' && p.length > 0),
   );
   for (const target of candidates) {
     try {
@@ -1314,7 +1317,7 @@ async function removeWorktreeForSessionInner(
 
     if (removedByGit) {
       store.del(sessionId);
-      await removeWorktreeSafeDirectory(meta);
+      await removeWorktreeSafeDirectory(meta.path, meta.quarantinePath, removalPath);
     } else if (snapshotted) {
       // Both removal paths failed: put WIP back before restoring the live registration. If apply
       // also fails, keep it unregistered so the send-time restore gate retries the snapshot.

@@ -13,8 +13,11 @@
  */
 
 import { execFile, type ExecFileOptions } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util';
+import { withCrossProcessLock } from '../device-link/crossProcessLock';
 
 export interface GitExecResult {
   stdout: string;
@@ -448,7 +451,24 @@ function extractDubiousPath(stderr: string): string | null {
 }
 
 /**
- * 读取当前全局 safe.directory 的值列表。从未配置过时 git 返回非零, 按空列表处理。
+ * safe.directory 全局配置「读改写」的跨进程锁文件路径。
+ *
+ * 读(get-all)与写(add)是两条独立的 git config 命令,本身不互斥:两个 Cindy 实例
+ * 并发触发同一仓库的 dubious-ownership 时可能都读到「不存在」再各加一条,堆积出
+ * 重复条目(#2627)。用跨进程锁把这两步圈成原子区。锁文件用 os.tmpdir() 落地;
+ * Linux 的 /tmp 多用户共享,用 uid(Windows 无 uid 时退回 0)区分用户,避免不同用户
+ * 串扰同一把锁。
+ */
+function globalSafeDirectoryLockPath(): string {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  return path.join(os.tmpdir(), `cindy-git-safe-directory-${uid}.lock`);
+}
+
+/**
+ * 读取当前全局 safe.directory 的值列表。仅当「键不存在」(git config --get-all 对
+ * 缺失键返回退出码 1)时按空列表处理;其余读取错误(配置锁冲突/权限/配置损坏/spawn
+ * 失败)必须向上抛,否则会把「读不到」误判成「未配置」而重复 --add,反而制造出
+ * 本条修复要避免的重复条目。
  */
 async function readGlobalSafeDirectories(): Promise<string[]> {
   try {
@@ -457,20 +477,30 @@ async function readGlobalSafeDirectories(): Promise<string[]> {
       .split('\n')
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-  } catch {
-    return [];
+  } catch (err) {
+    if (err instanceof GitExecError && err.exitCode === 1) return [];
+    throw err;
   }
 }
 
 /**
  * 幂等地把 targetPath 加入全局 safe.directory: 已存在则不再 --add, 避免同一路径
  * 因多个 git 操作反复触发 dubious-ownership 而用 --add 堆积出重复记录(#2627)。
- * 用底层 execFileOnce 而非 gitExec, 防止递归进入 dubious-ownership 分支。
+ *
+ * 读+写放在 withCrossProcessLock 里保证跨进程原子;拿不到锁(罕见:别的实例长期持锁
+ * 或锁基础设施不可用)时退化为无锁的 read+add —— 保证 dubious-ownership 仍被处理,
+ * 最坏只是产生一条无害的重复条目。用底层 execFileOnce 而非 gitExec, 防止递归进入
+ * dubious-ownership 分支。
  */
 async function ensureGlobalSafeDirectory(targetPath: string): Promise<void> {
-  const existing = await readGlobalSafeDirectories();
-  if (existing.some((p) => p === targetPath)) return;
-  await execFileOnce(['config', '--global', '--add', 'safe.directory', targetPath]);
+  await withCrossProcessLock(
+    globalSafeDirectoryLockPath(),
+    { label: 'git-safe-directory', waitMs: 1_000 },
+    async () => {
+      if ((await readGlobalSafeDirectories()).some((p) => p === targetPath)) return;
+      await execFileOnce(['config', '--global', '--add', 'safe.directory', targetPath]);
+    },
+  );
 }
 
 /**

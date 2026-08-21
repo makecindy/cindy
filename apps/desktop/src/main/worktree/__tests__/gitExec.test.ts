@@ -14,10 +14,14 @@ type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
   killProcessTree: vi.fn(),
+  withCrossProcessLock: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({ execFile: mocks.execFile }));
 vi.mock('../../scheduler-host/proc-util', () => ({ killProcessTree: mocks.killProcessTree }));
+vi.mock('../../device-link/crossProcessLock', () => ({
+  withCrossProcessLock: mocks.withCrossProcessLock,
+}));
 
 import { gitExec, GitExecError } from '../gitExec';
 
@@ -146,6 +150,13 @@ beforeEach(() => {
   vi.useFakeTimers();
   mocks.execFile.mockReset();
   mocks.killProcessTree.mockReset();
+  mocks.withCrossProcessLock.mockReset();
+  // 默认按「持锁成功」直通, 让 dubious-ownership 的 read+add 序列可逐步驱动;
+  // 需要验证锁被使用时单独断言 mock 调用即可。
+  mocks.withCrossProcessLock.mockImplementation(
+    (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+      task({ held: true }),
+  );
 });
 
 afterEach(() => {
@@ -573,9 +584,12 @@ describe('gitExec dubious-ownership safe.directory', () => {
     cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
     await flushDeep();
 
+    // read+add 必须包在跨进程锁里, 保证并发实例下仍是原子的
+    expect(mocks.withCrossProcessLock).toHaveBeenCalledTimes(1);
+
     // 读取现有 safe.directory → 未配置(exit 1)按空处理
     expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
-    cbs[1](new Error('exit 1'), '', '');
+    cbs[1](Object.assign(new Error('exit 1'), { code: 1 }), '', '');
     await flushDeep();
 
     // 尚不存在 → 幂等 add 一次
@@ -605,5 +619,25 @@ describe('gitExec dubious-ownership safe.directory', () => {
     cbs[2](null, 'ok', '');
     await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
     expect(calls.some((a) => a.includes('--add'))).toBe(false);
+  });
+
+  it('--get-all 读取失败(非「键不存在」) → 不 --add, 原错误上抛', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    // 读取错误(exit 3 = 配置文件损坏/锁冲突)不得被当成「未配置」,后续 --add 不得发生
+    const readErr = Object.assign(new Error('bad config'), { code: 3 });
+    cbs[1](readErr, '', 'error: could not lock config file');
+    await flushDeep();
+
+    expect(calls.some((a) => a.includes('--add'))).toBe(false);
+    // 原 dubious-ownership 错误上抛(不再重试)
+    await expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('dubious ownership'),
+    });
   });
 });
