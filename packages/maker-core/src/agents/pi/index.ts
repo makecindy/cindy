@@ -426,10 +426,6 @@ function managedExtensionSlashCommandName(
   return match[1];
 }
 
-function isManagedPiExtensionSlashCommand(text: string, manifest: PiRuntimeCapabilityManifest | undefined): boolean {
-  return managedExtensionSlashCommandName(text, manifest) !== undefined;
-}
-
 function escapeLeadingSlashCommand(text: string, manifest: PiRuntimeCapabilityManifest | undefined): string {
   const trimmed = text.trimStart();
   if (trimmed.startsWith('/') && !isExecutablePiSlashCommand(text, manifest)) return ' ' + text;
