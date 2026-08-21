@@ -1937,6 +1937,34 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('embedding.recordFailures honors explicit snoozeUntil for circuit-breaker short-circuit batches', async () => {
+    await withClient(async (client) => {
+      // 熔断窗口始于 now 之前,短路批应排到窗口结束时刻,而不是 now + 30min,
+      // 否则临到期的任务会被反复推迟到下一窗口 (PR #2288 Codex P1)。
+      const rowid = await insertJob(client, { sourceId: 'short-circuit', attempts: 0 });
+      const windowEnd = 5_000 + 30 * 60_000;
+      const result = await client.tx('embedding.recordFailures', {
+        jobs: [{ rowid, attempts: 0 }],
+        errMsg: '[INVALID_MODEL] unsupported model',
+        now: 25 * 60_000,
+        terminal: true,
+        snoozeUntil: windowEnd,
+      });
+
+      expect(result).toEqual({ failCount: 0 });
+      await expect(
+        client.queryOne(
+          'SELECT status, attempts, scheduled_at FROM embedding_jobs WHERE rowid = ?',
+          [rowid],
+        ),
+      ).resolves.toEqual({
+        status: 'pending',
+        attempts: 0,
+        scheduled_at: windowEnd,
+      });
+    });
+  });
+
   it('embedding.enqueue inserts only new natural-key jobs', async () => {
     await withClient(async (client) => {
       const result = await client.tx('embedding.enqueue', {

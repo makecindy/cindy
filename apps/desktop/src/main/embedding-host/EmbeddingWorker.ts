@@ -340,8 +340,11 @@ export class EmbeddingWorker {
           const age = Date.now() - blocked.blockedAt;
           if (age < MODEL_BLOCK_TTL_MS || blocked.probeCount >= MODEL_BLOCK_MAX_REPROBES) {
             // 熔断 TTL 内,或已耗尽自动重探次数:snooze 这批,不出网。
-            // 重启会清空 blockedModels,届时再给一轮新的探测预算。
-            await this.recordFailureBatch(modelJobs, blocked.error, true);
+            // 按当前窗口结束时刻排程(而不是 now + 30min),否则第 29 分钟到达的
+            // 任务会被排到第 59 分钟,即使第 30 分钟探测已成功也不会提前恢复
+            // (PR #2288 Codex P1)。
+            const snoozeUntil = blocked.blockedAt + MODEL_BLOCK_TTL_MS;
+            await this.recordFailureBatch(modelJobs, blocked.error, true, snoozeUntil);
             if (this.aborted) return;
             this.opts.log.debug?.(
               JSON.stringify({
@@ -514,6 +517,7 @@ export class EmbeddingWorker {
     jobs: JobRow[],
     errMsg: string,
     terminal = false,
+    snoozeUntil?: number,
   ): Promise<number> {
     const now = Date.now();
     const result = await this.opts.getDbClient().tx('embedding.recordFailures', {
@@ -521,6 +525,7 @@ export class EmbeddingWorker {
       errMsg: truncate(errMsg, 2000),
       now,
       terminal,
+      snoozeUntil,
     });
     return result.failCount;
   }

@@ -178,6 +178,13 @@ export interface EmbeddingRecordFailuresArgs {
   now: number;
   /** Deterministic failures can bypass retry scheduling and fail this batch immediately. */
   terminal?: boolean;
+  /**
+   * When terminal, the absolute timestamp (ms) at which the snooze should expire.
+   * Defaults to `now + TERMINAL_SNOOZE_MS`; callers that already hold a block
+   * window should pass its end time so short-circuit batches don't repeatedly
+   * push `scheduled_at` a full 30 minutes into the future (PR #2288 Codex P1).
+   */
+  snoozeUntil?: number;
 }
 
 export interface EmbeddingEnqueueArgs {

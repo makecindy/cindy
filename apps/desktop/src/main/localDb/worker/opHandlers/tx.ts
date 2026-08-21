@@ -1428,6 +1428,10 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
     throw invalidArgs('terminal must be boolean');
   }
   const terminal = payload.terminal === true;
+  const snoozeUntil =
+    typeof payload.snoozeUntil === 'number'
+      ? payload.snoozeUntil
+      : now + TERMINAL_SNOOZE_MS;
   const updReschedule = db.prepare(
     `UPDATE embedding_jobs
         SET attempts = ?, last_error = ?, scheduled_at = ?
@@ -1451,7 +1455,7 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
       const currentAttempts = expectNumber(job.attempts, 'job.attempts');
       if (terminal) {
         // Snooze, don't fail — blockedModels handles the process-lifetime block.
-        updSnooze.run(errMsg, now + TERMINAL_SNOOZE_MS, rowid);
+        updSnooze.run(errMsg, snoozeUntil, rowid);
       } else if (currentAttempts + 1 >= MAX_ATTEMPTS) {
         updFail.run(currentAttempts + 1, errMsg, rowid);
         failCount++;
