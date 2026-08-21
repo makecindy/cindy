@@ -7,26 +7,33 @@ import { isAppThemeMode, type AppThemeMode } from './resolved-app-theme.js';
 
 const log = desktopMakerLogger.child('window-theme-mode-store');
 
-// Renderer localStorage remains the source of truth. This small main-side mirror exists only so
+// Renderer localStorage remains the source of truth. This small main-side snapshot exists only so
 // Windows can choose the matching Acrylic backing before the first BrowserWindow is created.
 
-interface WindowThemeModeSettings {
+export interface WindowThemeSnapshot {
   mode: AppThemeMode;
+  resolvedIsDark?: boolean;
 }
 
-const DEFAULTS: WindowThemeModeSettings = { mode: 'system' };
+const DEFAULTS: WindowThemeSnapshot = { mode: 'system' };
 
-function normalize(raw: unknown): WindowThemeModeSettings {
+function normalize(raw: unknown): WindowThemeSnapshot {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
-  const mode = (raw as Record<string, unknown>).mode;
-  return { mode: isAppThemeMode(mode) ? mode : DEFAULTS.mode };
+  const value = raw as Record<string, unknown>;
+  const normalized: WindowThemeSnapshot = {
+    mode: isAppThemeMode(value.mode) ? value.mode : DEFAULTS.mode,
+  };
+  if (typeof value.resolvedIsDark === 'boolean') {
+    normalized.resolvedIsDark = value.resolvedIsDark;
+  }
+  return normalized;
 }
 
 function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'window-theme-mode.json');
 }
 
-const store = createOverrideSettingsFile<WindowThemeModeSettings>({
+const store = createOverrideSettingsFile<WindowThemeSnapshot>({
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -36,14 +43,15 @@ const store = createOverrideSettingsFile<WindowThemeModeSettings>({
   preserveUnreadableFile: true,
 });
 
-export function readWindowThemeMode(): AppThemeMode {
-  return store.read().mode;
+export function readWindowThemeSnapshot(): WindowThemeSnapshot {
+  return store.read();
 }
 
-export function writeWindowThemeMode(mode: AppThemeMode): void {
+export function writeWindowThemeSnapshot(mode: AppThemeMode, resolvedIsDark: boolean): void {
   try {
-    if (store.read().mode === mode) return;
-    store.writePatch({ mode });
+    const current = store.read();
+    if (current.mode === mode && current.resolvedIsDark === resolvedIsDark) return;
+    store.writePatch({ mode, resolvedIsDark });
   } catch (error) {
     // Theme rendering must remain available even if the best-effort restart mirror cannot persist.
     log.warn('window theme mode write failed', {

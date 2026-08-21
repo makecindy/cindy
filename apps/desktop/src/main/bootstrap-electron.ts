@@ -25,7 +25,7 @@ import {
   resolveAppThemeIsDark,
   type AppThemeMode,
 } from './resolved-app-theme';
-import { readWindowThemeMode, writeWindowThemeMode } from './window-theme-mode-store';
+import { readWindowThemeSnapshot, writeWindowThemeSnapshot } from './window-theme-mode-store';
 import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -3193,10 +3193,14 @@ const createWindow = () => {
   // Windows uses the renderer theme-mode mirror before the first BrowserWindow exists;
   // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
   // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
-  const isDark =
-    process.platform === 'win32'
-      ? resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors, readWindowThemeMode())
-      : nativeTheme.shouldUseDarkColors;
+  const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
+  const isDark = process.platform === 'win32'
+    ? resolveAppThemeIsDark(
+        nativeTheme.shouldUseDarkColors,
+        persistedTheme?.mode,
+        persistedTheme?.resolvedIsDark,
+      )
+    : nativeTheme.shouldUseDarkColors;
   const bgColor =
     process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig('cindy', isDark, process.platform);
@@ -3733,7 +3737,7 @@ const registerIpcHandlers = () => {
       },
     ) => {
       if (process.platform === 'win32' && isAppThemeMode(payload.mode)) {
-        writeWindowThemeMode(payload.mode);
+        writeWindowThemeSnapshot(payload.mode, payload.isDark);
       }
       rememberResolvedAppTheme(payload.isDark);
       applyWindowVibrancy(payload.familyId, payload.isDark);

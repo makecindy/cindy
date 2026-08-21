@@ -11,12 +11,14 @@ export function rememberResolvedAppTheme(isDark: boolean): void {
   lastResolvedIsDark = isDark;
 }
 
-/** Fall back to the persisted mode until the renderer resolves this run's preference. */
+/** Fall back to the persisted theme snapshot until the renderer resolves this run's preference. */
 export function resolveAppThemeIsDark(
   systemIsDark: boolean,
   persistedMode: AppThemeMode = 'system',
+  persistedResolvedIsDark?: boolean,
 ): boolean {
   if (lastResolvedIsDark !== undefined) return lastResolvedIsDark;
+  if (persistedResolvedIsDark !== undefined) return persistedResolvedIsDark;
   if (persistedMode === 'dark') return true;
   if (persistedMode === 'light') return false;
   return systemIsDark;

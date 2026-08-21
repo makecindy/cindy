@@ -12,6 +12,8 @@ describe('resolved app theme snapshot', () => {
     expect(resolveAppThemeIsDark(true)).toBe(true);
     expect(resolveAppThemeIsDark(false, 'dark')).toBe(true);
     expect(resolveAppThemeIsDark(true, 'light')).toBe(false);
+    expect(resolveAppThemeIsDark(false, 'light', true)).toBe(true);
+    expect(resolveAppThemeIsDark(true, 'dark', false)).toBe(false);
   });
 
   it('uses the latest renderer-resolved theme for windows created later', async () => {
