@@ -78,15 +78,15 @@ describe('pi translator', () => {
     translatePiEvent(
       ev({
         type: 'tool_execution_start',
-        toolCallId: 'sa-doctor',
+        toolCallId: 'sa-list',
         toolName: 'subagent',
-        args: { action: 'doctor' },
+        args: { action: 'list' },
       }),
       queue,
       ctx,
     );
     translatePiEvent(
-      ev({ type: 'tool_execution_end', toolCallId: 'sa-doctor', result: 'PASS', isError: false }),
+      ev({ type: 'tool_execution_end', toolCallId: 'sa-list', result: 'PASS', isError: false }),
       queue,
       ctx,
     );

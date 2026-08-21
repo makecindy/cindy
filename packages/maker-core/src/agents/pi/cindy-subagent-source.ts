@@ -156,7 +156,6 @@ const MAX_TOTAL_OUTPUT_CHARS = 32000;
 const MAX_TASK_CHARS = 32000;
 const MAX_MODEL_CHARS = 500;
 const MAX_TITLE_CHARS = 120;
-const MAX_PROFILE_PROMPT_CHARS = 16000;
 const MAX_PARENT_CONTEXT_CHARS = 32000;
 // 兜底超时:卡死的子代理不能把父 turn 永久挂住。
 const TASK_TIMEOUT_MS = 10 * 60 * 1000;
@@ -201,21 +200,6 @@ const PROFILES = {
     tools: 'read,grep,find,ls',
     prompt: 'You are a worker subagent. Implement the assigned task with the smallest correct change, validate it, '
       + 'and report the changed files and verification. Do not expand scope or spawn another subagent.',
-  },
-  oracle: {
-    tools: 'read,grep,find,ls',
-    prompt: 'You are an oracle subagent. Challenge the current assumptions and give an evidence-backed second opinion. '
-      + 'Do not edit files. State what would falsify your conclusion.',
-  },
-  researcher: {
-    tools: 'read,grep,find,ls',
-    prompt: 'You are a researcher subagent. Gather evidence from the local codebase and readable documentation. '
-      + 'Cite file and line anchors, distinguish facts from open questions, and do not edit files.',
-  },
-  delegate: {
-    tools: 'read,grep,find,ls',
-    prompt: 'You are a delegate subagent. Complete the assigned slice independently, stay within its boundary, '
-      + 'and return a concise result with evidence. Do not spawn another subagent.',
   },
 };
 
@@ -427,9 +411,7 @@ function toolsFor(agent, permission) {
 }
 
 function toolsForTask(task, permission) {
-  if (!task.customProfile) return toolsFor(task.agent, permission);
-  if (task.customTools !== 'write') return 'read,grep,find,ls';
-  return WRITE_TOOLS;
+  return toolsFor(task.agent, permission);
 }
 
 function sleepSync(ms) {
@@ -525,31 +507,10 @@ function writeDurableControl(status, action, message) {
 
 function managementResult(params) {
   const action = params.action;
-  if (!['list', 'get', 'stop', 'steer', 'follow_up', 'doctor', 'guide'].includes(action)) {
+  if (!['list', 'get', 'stop', 'steer', 'follow_up'].includes(action)) {
     throw new Error('subagent: unknown management action');
   }
   const statuses = durableStatuses();
-  if (action === 'guide') {
-    // 只列这个工具真能做的动作:白名单里没有 resume,终态分支还会直接报 already
-    // terminal,宣称支持等于让模型反复撞一堵墙。继续跑一个已结束的 run 是 UI 能力。
-    return 'PI Subagent supports built-in and inline custom roles, fresh/fork context, foreground or durable async runs, '
-      + 'parallel fan-out, result-fed chains, dependency workflows, model/thinking overrides, linked-worktree enforcement, transcript, stop, steer, '
-      + 'follow-up, and Cindy approval forwarding. Resuming a finished run is done from the Cindy sidebar UI, not via this tool. '
-      + 'For recurring missions, use Cindy Scheduler to schedule a '
-      + 'parent task whose prompt invokes subagent with the desired workflow.';
-  }
-  if (action === 'doctor') {
-    const runtime = readRuntimeSnapshot();
-    const checks = [
-      ['binary', !!process.env[BINARY_ENV]],
-      ['run root', !!process.env[RUN_ROOT_ENV]],
-      ['runner', !!process.env[RUNNER_FILE_ENV]],
-      ['node runtime', !!process.env[NODE_EXECUTABLE_ENV]],
-      ['provider route', !!runtime.provider && !runtime.pending],
-      ['model catalog', !!process.env[CONFIG_HOME_ENV]],
-    ];
-    return checks.map(function (check) { return (check[1] ? 'PASS' : 'FAIL') + ': ' + check[0]; }).join('\n');
-  }
   if (action === 'list') {
     if (statuses.length === 0) return 'No durable PI Subagent runs.';
     return statuses.map(function (status) {
@@ -807,7 +768,7 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
     bridgeExtension: bridgeExtension,
     permissionFile: permissionFile,
     depth: readDepth() + 1,
-    mode: mode === 'workflow' ? 'workflow' : mode === 'chain' ? 'chain' : tasks.length > 1 ? 'parallel' : 'single',
+    mode: tasks.length > 1 ? 'parallel' : 'single',
     context: context,
     title: typeof displayTitle === 'string' && displayTitle.trim()
       ? displayTitle.trim().slice(0, MAX_TITLE_CHARS)
@@ -1069,7 +1030,7 @@ function fitSectionsToBudget(sections) {
   });
 }
 
-/** Validate one parallel fan-out, sequential chain, or dependency graph. */
+/** Validate one task or a parallel fan-out. */
 function normalizeInvocation(params) {
   const input = params && typeof params === 'object' ? params : {};
   const raw = Array.isArray(input.tasks) && input.tasks.length > 0
@@ -1078,32 +1039,21 @@ function normalizeInvocation(params) {
         agent: input.agent,
         task: input.task,
         title: input.title,
-        prompt: input.prompt,
-        tools: input.tools,
       }];
   if (raw.length > MAX_TASKS) {
     throw new Error('subagent: at most ' + MAX_TASKS + ' tasks per call (got ' + raw.length + ')');
   }
-  const requestedMode = input.mode === 'chain' || input.mode === 'workflow' ? input.mode : 'parallel';
   const tasks = raw.map(function (entry, index) {
     const item = entry && typeof entry === 'object' ? entry : {};
     const agent = typeof item.agent === 'string' ? item.agent.trim() : '';
     const task = typeof item.task === 'string' ? item.task.trim() : '';
     const title = typeof item.title === 'string' ? item.title.trim() : '';
     const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : 'step-' + String(index + 1);
-    const customPrompt = typeof item.prompt === 'string' ? item.prompt.trim() : '';
-    const customProfile = !Object.prototype.hasOwnProperty.call(PROFILES, agent);
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
       throw new Error('subagent: task ' + (index + 1) + ' has an invalid id');
     }
-    if (!agent || !/^[A-Za-z0-9_-]{1,64}$/.test(agent)) {
-      throw new Error('subagent: task ' + (index + 1) + ' has an invalid agent name');
-    }
-    if (customProfile && !customPrompt) {
-      throw new Error('subagent: unknown agent "' + agent + '"; a custom role must include prompt');
-    }
-    if (customPrompt.length > MAX_PROFILE_PROMPT_CHARS) {
-      throw new Error('subagent: custom role prompt exceeds ' + MAX_PROFILE_PROMPT_CHARS + ' characters');
+    if (!Object.prototype.hasOwnProperty.call(PROFILES, agent)) {
+      throw new Error('subagent: unknown agent "' + agent + '" (available: ' + profileNames() + ')');
     }
     if (!task) {
       throw new Error('subagent: task ' + (index + 1) + ' is missing a task description');
@@ -1130,49 +1080,23 @@ function normalizeInvocation(params) {
     if (thinking && ('|' + THINKING_LEVELS + '|').indexOf('|' + thinking + '|') < 0) {
       throw new Error('subagent: unsupported thinking level "' + thinking + '".');
     }
-    const dependsOn = requestedMode === 'chain' && index > 0
-      ? ['step-' + String(index)]
-      : requestedMode === 'workflow' && Array.isArray(item.dependsOn)
-        ? item.dependsOn.map(function (value) { return typeof value === 'string' ? value.trim() : ''; }).filter(Boolean)
-        : [];
     return {
       id: id,
-      dependsOn: dependsOn,
+      dependsOn: [],
       agent: agent,
       title: title,
       task: task,
       model: model,
       thinking: thinking,
-      customProfile: customProfile,
-      customTools: item.tools === 'write' ? 'write' : 'read',
-      profilePrompt: customPrompt || PROFILES[agent].prompt,
+      customProfile: false,
+      customTools: 'read',
+      profilePrompt: PROFILES[agent].prompt,
     };
   });
-  if (requestedMode === 'chain') {
-    for (let index = 0; index < tasks.length; index += 1) {
-      tasks[index].dependsOn = index > 0 ? [tasks[index - 1].id] : [];
-    }
-  }
   const ids = new Set();
   for (const task of tasks) {
     if (ids.has(task.id)) throw new Error('subagent: duplicate task id "' + task.id + '"');
     ids.add(task.id);
-  }
-  for (const task of tasks) {
-    for (const dependency of task.dependsOn) {
-      if (!ids.has(dependency)) throw new Error('subagent: unknown dependency "' + dependency + '"');
-      if (dependency === task.id) throw new Error('subagent: task "' + task.id + '" depends on itself');
-    }
-  }
-  const complete = new Set();
-  while (complete.size < tasks.length) {
-    const before = complete.size;
-    for (const task of tasks) {
-      if (!complete.has(task.id) && task.dependsOn.every(function (id) { return complete.has(id); })) {
-        complete.add(task.id);
-      }
-    }
-    if (complete.size === before) throw new Error('subagent: workflow dependencies contain a cycle');
   }
   const timeoutSeconds = input.timeoutSeconds === undefined
     ? DEFAULT_TIMEOUT_SECONDS
@@ -1188,7 +1112,7 @@ function normalizeInvocation(params) {
     );
   }
   return {
-    mode: requestedMode,
+    mode: tasks.length > 1 ? 'parallel' : 'single',
     context: input.context === 'fork' ? 'fork' : 'fresh',
     timeoutMs: timeoutSeconds * 1000,
     tasks: tasks,
@@ -1224,20 +1148,17 @@ export default async function cindySubagent(pi: any) {
     name: TOOL_NAME,
     label: 'Subagent',
     description: 'Delegate work to a PI child with its own context and durable session. '
-      + 'Available built-ins: ' + profileNames() + '. A custom agent name must include prompt and defaults read-only. '
-      + 'Read-only roles cannot edit. worker or a custom tools:write role uses the parent permission mode; '
-      + 'Ask/Auto requests are forwarded to Cindy approval. Pass model/thinking to override the '
+      + 'Available roles: ' + profileNames() + '. Read-only roles cannot edit. worker uses the parent '
+      + 'permission mode; Ask/Auto requests are forwarded to Cindy approval. Pass model/thinking to override the '
       + 'parent model for a child. Pass async:true for a detached background run that survives parent navigation. '
-      + 'Pass {agent, task} for one, or {tasks:[{agent, task}, ...]} to fan out. mode:chain feeds each '
-      + 'result to the next task; mode:workflow honors task id/dependsOn as a bounded DAG. '
-      + 'Use action:list/get/stop/steer/follow_up for durable runs, action:doctor for diagnostics, and action:guide '
-      + 'for the Cindy-native capability guide. Children cannot spawn further subagents.',
+      + 'Pass {agent, task} for one, or {tasks:[{agent, task}, ...]} to fan out in parallel. '
+      + 'Use action:list/get/stop/steer/follow_up for durable runs. Children cannot spawn further subagents.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['run', 'list', 'get', 'stop', 'steer', 'follow_up', 'doctor', 'guide'],
+          enum: ['run', 'list', 'get', 'stop', 'steer', 'follow_up'],
           description: 'Default run; other actions inspect or control durable runs.',
         },
         taskId: { type: 'string', description: 'Durable run id (or opaque task id) for get/stop/steer/follow_up.' },
@@ -1250,8 +1171,6 @@ export default async function cindySubagent(pi: any) {
         title: { type: 'string', description: 'Optional user-facing name describing the task value.' },
         model: { type: 'string', description: 'Optional exact child model id.' },
         thinking: { type: 'string', description: 'Optional thinking level: ' + THINKING_LEVELS },
-        prompt: { type: 'string', description: 'Required system prompt when agent names a custom role.' },
-        tools: { type: 'string', enum: ['read', 'write'], description: 'Custom role tool class.' },
         async: { type: 'boolean', description: 'Run in Cindy durable background mode.' },
         timeoutSeconds: {
           type: 'integer',
@@ -1269,30 +1188,17 @@ export default async function cindySubagent(pi: any) {
           enum: ['fresh', 'fork'],
           description: 'fresh isolates the assignment; fork adds an immutable parent conversation snapshot.',
         },
-        mode: {
-          type: 'string',
-          enum: ['parallel', 'chain', 'workflow'],
-          description: 'Parallel fan-out, sequential result-fed chain, or dependency workflow.',
-        },
         tasks: {
           type: 'array',
           description: 'Run several subagents in parallel (max ' + MAX_TASKS + ').',
           items: {
             type: 'object',
             properties: {
-              id: { type: 'string', description: 'Stable workflow step id.' },
-              dependsOn: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Workflow step ids that must complete first.',
-              },
               agent: { type: 'string', description: 'Agent profile: ' + profileNames() },
               title: { type: 'string', description: 'Optional user-facing name for this task.' },
               task: { type: 'string' },
               model: { type: 'string' },
               thinking: { type: 'string' },
-              prompt: { type: 'string', description: 'Required system prompt for a custom agent name.' },
-              tools: { type: 'string', enum: ['read', 'write'] },
             },
             required: ['agent', 'task'],
           },
