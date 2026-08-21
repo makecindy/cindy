@@ -424,6 +424,25 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(localMessages.estimatedSessionValueBatch).not.toHaveBeenCalled();
   });
 
+  it('customProviderBillingGetFor: remote GET plus fail-closed old remotes', async () => {
+    const { invoke } = stubElectron();
+    invoke.mockResolvedValueOnce({ showSdkCostForCustomProviders: true, isCustomized: true });
+    const { customProviderBillingGetFor } = await import('@/lib/makerTransport');
+    await expect(customProviderBillingGetFor('dev-1')).resolves.toEqual({
+      showSdkCostForCustomProviders: true,
+      isCustomized: true,
+    });
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:custom-provider-billing:get', []);
+
+    invoke.mockRejectedValueOnce(
+      new Error("[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel 'maker:custom-provider-billing:get' not allowed remotely"),
+    );
+    await expect(customProviderBillingGetFor('dev-old')).resolves.toEqual({
+      showSdkCostForCustomProviders: false,
+      isCustomized: false,
+    });
+  });
+
   // issue #1170 codex P2:协同 mutation 在 relay 瞬时重连清空注册表的窗口内若退回本机,
   // 会在**控制端**建出或销毁一个 team —— 与「入口按粘滞归属渲染」直接矛盾。
   it('makerApiForSticky:注册表被清空后仍走隧道,不退回本机', async () => {

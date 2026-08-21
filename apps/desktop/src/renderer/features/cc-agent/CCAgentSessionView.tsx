@@ -1624,7 +1624,7 @@ export function CCAgentSessionView({
   const { mode: authMode, user: authUser } = useAuth();
   const { providers: deviceProviders } = useDeviceProviders(remoteDeviceId);
   const providers = remoteDeviceId ? deviceProviders : localProviders;
-  const { showSdkCostForCustomProviders } = useCustomProviderBillingSettings();
+  const { showSdkCostForCustomProviders } = useCustomProviderBillingSettings(remoteDeviceId);
   const customProviderCostPresentation = useMemo(
     () =>
       resolveCustomProviderCostPresentation(

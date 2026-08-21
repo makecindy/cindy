@@ -29,6 +29,7 @@ import {
 import { importExternalCodexMessagesForSession } from '../../maker-host/codex-local-sessions';
 import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/claude-local-sessions';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
@@ -439,11 +440,12 @@ export function registerMessageIpc(): void {
   ipcMain.handle(
     'local-db:messages:estimatedSessionValue',
     async (
-      _e,
+      event,
       sessionId: unknown,
       presentationValue?: unknown,
       showSdkEstimateValue?: unknown,
     ) => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       const sid = requireString(sessionId, 'sessionId');
       const { presentation, showSdkEstimate } = parseEstimatedSessionValuePresentation(
         presentationValue,
@@ -485,7 +487,8 @@ export function registerMessageIpc(): void {
    */
   ipcMain.handle(
     'local-db:messages:estimatedSessionValueBatch',
-    async (_e, body: unknown) => {
+    async (event, body: unknown) => {
+      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       const payload = requireObject(body, 'payload');
       const sessionIds = parseEstimatedSessionValueBatchIds(payload.sessionIds);
       if (sessionIds.length === 0) return {};

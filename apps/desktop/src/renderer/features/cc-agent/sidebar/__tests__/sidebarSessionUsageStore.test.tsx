@@ -19,8 +19,11 @@ import {
 } from '../sidebarSessionUsageStore';
 
 describe('useSidebarSessionUsageMoney', () => {
+  let turnCostListener: ((payload: { sessionId: string }) => void) | undefined;
+
   beforeEach(() => {
     __resetSidebarSessionUsageStoreForTests();
+    turnCostListener = undefined;
     estimatedSessionValueBatchFor.mockReset();
     estimatedSessionValueBatchFor.mockResolvedValue({
       's-1': {
@@ -35,7 +38,10 @@ describe('useSidebarSessionUsageMoney', () => {
     vi.stubGlobal('window', {
       electronAPI: {
         onUsageSessionSpendChanged: vi.fn(() => () => undefined),
-        onUsageMessageTurnCost: vi.fn(() => () => undefined),
+        onUsageMessageTurnCost: vi.fn((cb: (payload: { sessionId: string }) => void) => {
+          turnCostListener = cb;
+          return () => undefined;
+        }),
       },
     });
   });
@@ -79,5 +85,48 @@ describe('useSidebarSessionUsageMoney', () => {
       await vi.runAllTimersAsync();
     });
     expect(estimatedSessionValueBatchFor).not.toHaveBeenCalled();
+  });
+
+  it('keeps a refresh that arrives while a batch query is in flight', async () => {
+    vi.useFakeTimers();
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    estimatedSessionValueBatchFor
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        's-1': {
+          estimatedValueMoney: { amount: 0.99, currency: 'USD', approximate: true, kind: 'value-estimate' },
+          excludedActualMoney: null,
+        },
+      });
+
+    const hook = renderHook(() =>
+      useSidebarSessionUsageMoney('s-1', { amount: 1, currency: 'USD', kind: 'actual-cost' }, 1, 'regular', false),
+    );
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(estimatedSessionValueBatchFor).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      turnCostListener?.({ sessionId: 's-1' });
+    });
+    await act(async () => {
+      resolveFirst?.({
+        's-1': {
+          estimatedValueMoney: { amount: 0.12, currency: 'USD', approximate: true, kind: 'value-estimate' },
+          excludedActualMoney: null,
+        },
+      });
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+    });
+
+    expect(estimatedSessionValueBatchFor).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.estimatedValueMoney?.amount).toBeCloseTo(0.99);
   });
 });

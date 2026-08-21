@@ -146,7 +146,7 @@ function scheduleFlush(): void {
 
 async function flushPending(): Promise<void> {
   const sessionIds = [...pending].filter((sessionId) => !inflight.has(sessionId));
-  pending.clear();
+  for (const sessionId of sessionIds) pending.delete(sessionId);
   if (sessionIds.length === 0) return;
   for (const sessionId of sessionIds) inflight.add(sessionId);
   const requests = sessionIds.flatMap((sessionId) => {
@@ -178,6 +178,7 @@ async function flushPending(): Promise<void> {
     // Sidebar cost is decorative; keep the last snapshot / ledger amount.
   } finally {
     for (const sessionId of sessionIds) inflight.delete(sessionId);
+    if (pending.size > 0) scheduleFlush();
   }
 }
 

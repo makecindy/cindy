@@ -1127,7 +1127,7 @@ describe('maker:event hot path ordering', () => {
     expect(piDoneSource).toContain('? getReferenceModelPricing()');
     expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', pricingModel, pricing)");
     expect(piDoneSource).not.toMatch(/getModelPriceQuote\(\s*null\s*,\s*effectiveProvider/);
-    expect(piDoneSource).toContain('if (!isSubscriptionValue)');
+    expect(piDoneSource).toContain('if (!isSubscriptionValue && money.kind === \'actual-cost\')');
     expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
   });
 

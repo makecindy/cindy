@@ -623,7 +623,24 @@ export async function estimatedSessionValueBatchFor(
   return merged;
 }
 
-
+export async function customProviderBillingGetFor(
+  deviceId: string | null | undefined,
+): Promise<{ showSdkCostForCustomProviders: boolean; isCustomized: boolean }> {
+  if (!deviceId) {
+    return window.electronAPI.maker.customProviderBillingGet();
+  }
+  try {
+    return (await invokeRemote(deviceId, 'maker:custom-provider-billing:get', [])) as {
+      showSdkCostForCustomProviders: boolean;
+      isCustomized: boolean;
+    };
+  } catch (err) {
+    if (extractIpcError(err)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+      return { showSdkCostForCustomProviders: false, isCustomized: false };
+    }
+    throw err;
+  }
+}
 
 /**
  * 插件启停状态(只读):**按目标设备**读项目级 / 用户级 collab 等开关。
