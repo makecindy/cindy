@@ -11,7 +11,6 @@ import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
 import {
   getSsoOrgHistorySnapshot,
   hydrateSsoOrgHistory,
-  rememberSsoOrgIdentifier,
 } from '@/auth/ssoOrgHistory';
 import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import {
@@ -432,9 +431,8 @@ export default function LoginScreen() {
             type: 'discover-sso-org',
             org: value,
           })
-          .then(async (success) => {
-            if (!success) return;
-            setSsoOrgHistory(await rememberSsoOrgIdentifier(value));
+          .finally(() => {
+            setSsoOrgHistory(getSsoOrgHistorySnapshot());
           });
       };
       const openSsoOrgHistory = () => {

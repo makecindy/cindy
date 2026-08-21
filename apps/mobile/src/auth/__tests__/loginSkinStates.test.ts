@@ -187,8 +187,9 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
 
   it('sso-org-filled:企业 ID 直接发现，仅在状态机判定跨区后确认', () => {
     expect(loginSource).toContain("type: 'discover-sso-org'");
-    expect(loginSource).toContain('if (!success) return;');
-    expect(loginSource).toContain('rememberSsoOrgIdentifier(value)');
+    expect(loginSource).toContain(
+      'setSsoOrgHistory(getSsoOrgHistorySnapshot())',
+    );
     expect(loginSource).toContain("auth.loginState?.step === 'realm-confirmation'");
     expect(loginSource).toContain("type: 'confirm-sso-realm'");
     expect(loginSource).toContain("type: 'cancel-sso-realm'");

@@ -70,7 +70,7 @@ import {
 } from './loginDesignTokens';
 import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
-import { getSsoOrgHistory, rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
+import { getSsoOrgHistory } from '@/state/ssoOrgHistory';
 
 /**
  * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
@@ -610,9 +610,8 @@ export function LoginPage() {
     setSsoOrgHistoryActiveIndex(-1);
     // 组织区域先静默发现；仅当结果与安装包区域不一致时，main 状态机进入
     // realm-confirmation，由下方弹窗在继续 SSO 前向用户确认。
-    void dispatch({ type: 'discover-sso-org', org: value }).then((success) => {
-      if (!success) return;
-      setSsoOrgHistory(rememberSsoOrgIdentifier(value));
+    void dispatch({ type: 'discover-sso-org', org: value }).finally(() => {
+      setSsoOrgHistory(getSsoOrgHistory());
     });
   };
 

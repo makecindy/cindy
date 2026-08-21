@@ -399,8 +399,17 @@ describe('ssoOrgMode 子视图', () => {
     expect(screen.queryByTestId('login-sso-org-history-list')).toBeNull();
   });
 
-  it('只有 discovery 成功才把组织标识写入历史', async () => {
-    const dispatch = vi.fn(async () => true);
+  it('action 结束后刷新 AuthContext 在 discovery 成功点写入的历史', async () => {
+    const dispatch = vi.fn(async () => {
+      window.localStorage.setItem(
+        ssoOrgHistoryTesting.storageKey,
+        JSON.stringify({
+          version: 1,
+          entries: ['Example-Corp', 'older-corp'],
+        }),
+      );
+      return false;
+    });
     mount(await identifierState('providers:both'), { dispatch });
     fireEvent.click(screen.getByTestId('login-social-sso'));
     fireEvent.change(screen.getByTestId('login-sso-org-input'), {
@@ -408,24 +417,10 @@ describe('ssoOrgMode 子视图', () => {
     });
     fireEvent.click(screen.getByTestId('login-sso-org-continue'));
     await waitFor(() => {
-      expect(window.localStorage.getItem(ssoOrgHistoryTesting.storageKey)).toContain(
+      fireEvent.focus(screen.getByTestId('login-sso-org-input'));
+      expect(screen.getByTestId('login-sso-org-history-option-0').textContent).toBe(
         'Example-Corp',
       );
-    });
-
-    cleanup();
-    window.localStorage.clear();
-    ssoOrgHistoryTesting.reset();
-    mount(await identifierState('providers:both'), {
-      dispatch: vi.fn(async () => false),
-    });
-    fireEvent.click(screen.getByTestId('login-social-sso'));
-    fireEvent.change(screen.getByTestId('login-sso-org-input'), {
-      target: { value: 'missing-corp' },
-    });
-    fireEvent.click(screen.getByTestId('login-sso-org-continue'));
-    await waitFor(() => {
-      expect(window.localStorage.getItem(ssoOrgHistoryTesting.storageKey)).toBeNull();
     });
   });
 
