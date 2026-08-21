@@ -1133,9 +1133,13 @@ export function GhostPluginPage({
       const selected = selectedDetail;
       if (!selected?.hasMainView) return;
       const owner = currentMainViewVisibilityOwner();
-      if (!writeMainViewSidebarVisible(owner, selected.id, visible)) {
-        toast.error(t('settings.ghosts.errors.generic'));
-      }
+      void writeMainViewSidebarVisible(owner, selected.id, visible)
+        .then((persisted) => {
+          if (!persisted) toast.error(t('settings.ghosts.errors.generic'));
+        })
+        .catch(() => {
+          toast.error(t('settings.ghosts.errors.generic'));
+        });
     },
     [selectedDetail, t],
   );

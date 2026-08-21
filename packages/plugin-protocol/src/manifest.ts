@@ -96,7 +96,6 @@ export const GHOST_SLOTS = [
   'badge',
   'confirm',
   'fs',
-  'library',
   'session-context',
   'pick',
   'preview',

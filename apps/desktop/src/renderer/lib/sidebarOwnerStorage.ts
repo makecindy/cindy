@@ -345,106 +345,23 @@ export function writeSidebarOwnerStorage(
   baseKey: string,
   ownerId: string | null,
   value: string,
-  expectedGeneration?: number,
 ): boolean {
   if (!ownerId) return false;
   const storage = safeStorage();
-  const fenced = expectedGeneration !== undefined;
-  if (fenced && (!Number.isInteger(expectedGeneration) || expectedGeneration < 0)) return false;
-  const authority = readOwnerAuthority(ownerId, fenced);
+  const authority = readOwnerAuthority(ownerId);
   if (!storage || !authority) return false;
-  if (fenced && authority.ownerGeneration !== expectedGeneration) return false;
-  const scopedKey = sidebarOwnerStorageKey(baseKey, ownerId);
-  let previous: string | null = null;
-  let wrote = false;
   try {
     const state = readClaimState(storage);
-    previous = storage.getItem(scopedKey);
-    const hasScopedValue = previous !== null;
+    const scopedKey = sidebarOwnerStorageKey(baseKey, ownerId);
+    const hasScopedValue = storage.getItem(scopedKey) !== null;
     const plan = scopedWritePlan(state, ownerId, authority, hasScopedValue);
     if (plan === 'blocked') return false;
     if (plan === 'initialize-envelope' && getLegacyEnvelope(storage, ownerId, authority) === null) {
       return false;
     }
     storage.setItem(scopedKey, value);
-    wrote = true;
-    if (fenced) {
-      const authorityAfter = readOwnerAuthority(ownerId, true);
-      if (
-        authorityAfter?.ownerGeneration !== expectedGeneration ||
-        !sameAuthority(authority, authorityAfter) ||
-        storage.getItem(scopedKey) !== value
-      ) {
-        // Do not overwrite a concurrent writer. Roll back only our exact bytes.
-        if (storage.getItem(scopedKey) === value) {
-          if (previous === null) storage.removeItem(scopedKey);
-          else storage.setItem(scopedKey, previous);
-        }
-        return false;
-      }
-    }
     return true;
   } catch {
-    if (fenced && wrote) {
-      try {
-        if (storage.getItem(scopedKey) === value) {
-          if (previous === null) storage.removeItem(scopedKey);
-          else storage.setItem(scopedKey, previous);
-        }
-      } catch {
-        /* best-effort rollback */
-      }
-    }
-    return false;
-  }
-}
-
-/**
- * Remove one owner-scoped value without ever touching the legacy/shared root.
- *
- * Callers pass the renderer generation captured for the active data owner. We
- * compare it with fresh Main authority before and after the mutation so an
- * auth boundary cannot turn "restore the default" into a cross-owner delete.
- */
-export function removeSidebarOwnerStorage(
-  baseKey: string,
-  ownerId: string | null,
-  expectedGeneration: number,
-): boolean {
-  if (!ownerId || !Number.isInteger(expectedGeneration) || expectedGeneration < 0) return false;
-  const storage = safeStorage();
-  const authorityBefore = readOwnerAuthority(ownerId, true);
-  if (!storage || authorityBefore?.ownerGeneration !== expectedGeneration) return false;
-
-  const scopedKey = sidebarOwnerStorageKey(baseKey, ownerId);
-  let previous: string | null = null;
-  try {
-    previous = storage.getItem(scopedKey);
-    storage.removeItem(scopedKey);
-
-    const authorityAfter = readOwnerAuthority(ownerId, true);
-    if (
-      authorityAfter?.ownerGeneration === expectedGeneration &&
-      sameAuthority(authorityBefore, authorityAfter) &&
-      storage.getItem(scopedKey) === null
-    ) {
-      return true;
-    }
-
-    // A concurrent writer wins. Otherwise restore the bytes this operation
-    // removed; this is best-effort because localStorage has no compare-and-swap.
-    if (previous !== null && storage.getItem(scopedKey) === null) {
-      storage.setItem(scopedKey, previous);
-    }
-    return false;
-  } catch {
-    try {
-      if (previous !== null && storage.getItem(scopedKey) === null) {
-        storage.setItem(scopedKey, previous);
-      }
-    } catch {
-      /* best-effort rollback */
-    }
     return false;
   }
 }

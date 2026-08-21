@@ -45,10 +45,14 @@
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
-- `ghost.json` 的字段、slot 与枚举属于 Ghost manifest 协议，客户端正本位于
+- `ghost.json` 的跨消费者字段、slot 与枚举属于 Ghost manifest 协议，客户端正本位于
   `packages/plugin-protocol/src/manifest.ts`；Desktop 在
-  `apps/desktop/src/shared/ghost.ts` 维护完整镜像。两份实现及相同的有效／无效 fixture
-  必须同步，作者契约同时写入 `FORGE_GUIDE`。
+  `apps/desktop/src/shared/ghost.ts` 维护运行时 validator。除明确登记的 Desktop-only
+  能力外，两份实现及相同的有效／无效 fixture 必须同步，作者契约同时写入
+  `FORGE_GUIDE`。
+- 当前唯一登记的 Desktop-only 例外是尚未进入跨消费者发布契约的 `library` 槽；在其
+  首个正式支持版本确定并完成分发端兼容设计前，不得把它加入
+  `packages/plugin-protocol`。`main-view` 是跨消费者字段，不属于该例外。
 - `main-view` / `mainView` 是通用的 Cindy Host 界面能力，不是 `xd-sites` 专用 API，协议中
   不出现 `xd-sites` 的端点、OIDC 流程或业务模型。具体插件可在它已获批准的其它 slot 内调用
   自己的服务，基座只负责声明校验、授权、导航和沙箱承载。

@@ -32,7 +32,6 @@ const validManifest = {
 
 describe('Ghost manifest contract', () => {
   it('keeps host-owned application slots in the public contract', () => {
-    expect(GHOST_SLOTS).toContain('library');
     expect(GHOST_SLOTS).toContain('main-view');
     expect(GHOST_MAIN_VIEW_ICONS).toEqual([
       'puzzle',

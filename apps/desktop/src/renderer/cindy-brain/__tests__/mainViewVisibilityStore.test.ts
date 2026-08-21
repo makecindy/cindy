@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -5,120 +8,158 @@ import {
   getDataOwnerGeneration,
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
-import {
-  __testing as ownerStorageTesting,
-  sidebarOwnerStorageKey,
-} from '@/lib/sidebarOwnerStorage';
+import type { DataOwnerPushStamp } from '../../../shared/dataOwnerPush';
+import type { SidebarSettingsSnapshot } from '../../../shared/sidebarSettings';
 import {
   __testing,
   readMainViewSidebarVisible,
+  useMainViewVisibilityRevision,
   writeMainViewSidebarVisible,
 } from '../mainViewVisibilityStore';
 
-class MemStorage implements Storage {
-  private readonly values = new Map<string, string>();
-  get length(): number {
-    return this.values.size;
-  }
-  clear(): void {
-    this.values.clear();
-  }
-  getItem(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-  key(index: number): string | null {
-    return Array.from(this.values.keys())[index] ?? null;
-  }
-  removeItem(key: string): void {
-    this.values.delete(key);
-  }
-  setItem(key: string, value: string): void {
-    this.values.set(key, String(value));
-  }
+type VisibilityListener = (ghostIds: string[], ownerStamp: DataOwnerPushStamp) => void;
+
+let currentSnapshot: SidebarSettingsSnapshot;
+let visibilityListeners: VisibilityListener[];
+let setMainViewHidden: ReturnType<typeof vi.fn>;
+
+function snapshot(
+  dataOwnerId: string | null,
+  ownerGeneration: number,
+  hiddenMainViewGhostIds: string[] = [],
+): SidebarSettingsSnapshot {
+  return {
+    dataOwnerId,
+    ownerGeneration,
+    pinnedOrderIsAuthoritative: false,
+    pinnedOrder: [],
+    hiddenProjectKeys: [],
+    hiddenMainViewGhostIds,
+  };
 }
 
 beforeEach(() => {
-  vi.stubGlobal('localStorage', new MemStorage());
   setDataOwnerGeneration('owner-a', 4);
-  ownerStorageTesting.setOwnerAuthorityReader((ownerId) =>
-    ownerId === 'owner-a'
-      ? {
-          dataOwnerId: ownerId,
-          ownerGeneration: 4,
-          claimed: true,
-          canInitialize: true,
-          pinnedLegacyConsumed: false,
+  currentSnapshot = snapshot('owner-a', 4);
+  visibilityListeners = [];
+  setMainViewHidden = vi
+    .fn()
+    .mockImplementation(
+      async (ghostId: string, hidden: boolean, ownerStamp: DataOwnerPushStamp) => {
+        currentSnapshot = snapshot(
+          ownerStamp.dataOwnerId,
+          ownerStamp.ownerGeneration,
+          hidden
+            ? [...currentSnapshot.hiddenMainViewGhostIds, ghostId]
+            : currentSnapshot.hiddenMainViewGhostIds.filter((id) => id !== ghostId),
+        );
+        for (const listener of visibilityListeners) {
+          listener(Array.from(currentSnapshot.hiddenMainViewGhostIds), ownerStamp);
         }
-      : null,
-  );
+        return Array.from(currentSnapshot.hiddenMainViewGhostIds);
+      },
+    );
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    sidebarSettings: {
+      loadSnapshot: () => ({
+        ...currentSnapshot,
+        hiddenMainViewGhostIds: Array.from(currentSnapshot.hiddenMainViewGhostIds),
+      }),
+      setMainViewHidden,
+      onHiddenMainViewGhostIdsChanged: (listener: VisibilityListener) => {
+        visibilityListeners.push(listener);
+        return () => {
+          visibilityListeners = visibilityListeners.filter((entry) => entry !== listener);
+        };
+      },
+    },
+  };
 });
 
 afterEach(() => {
   __testing.reset();
-  ownerStorageTesting.setOwnerAuthorityReader(null);
   ownerGenerationTesting.reset();
   vi.unstubAllGlobals();
 });
 
 describe('main-view sidebar visibility', () => {
-  it('defaults unknown and malformed values to visible', () => {
+  it('defaults to visible and persists only the hidden override in Main', async () => {
     expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(true);
-    const scopedKey = sidebarOwnerStorageKey(__testing.storageKey('workspace'), 'owner-a');
-    localStorage.setItem(scopedKey, 'broken');
-    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(true);
-  });
 
-  it('persists only explicit hidden and removes it when restoring the default', () => {
-    const owner = getDataOwnerGeneration();
-    const scopedKey = sidebarOwnerStorageKey(__testing.storageKey('workspace'), 'owner-a');
-
-    expect(writeMainViewSidebarVisible(owner, 'workspace', false)).toBe(true);
-    expect(localStorage.getItem(scopedKey)).toBe('false');
+    await expect(
+      writeMainViewSidebarVisible(getDataOwnerGeneration(), 'workspace', false),
+    ).resolves.toBe(true);
+    expect(setMainViewHidden).toHaveBeenLastCalledWith('workspace', true, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 4,
+    });
     expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(false);
 
-    expect(writeMainViewSidebarVisible(owner, 'workspace', true)).toBe(true);
-    expect(localStorage.getItem(scopedKey)).toBeNull();
+    await expect(
+      writeMainViewSidebarVisible(getDataOwnerGeneration(), 'workspace', true),
+    ).resolves.toBe(true);
+    expect(setMainViewHidden).toHaveBeenLastCalledWith('workspace', false, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 4,
+    });
     expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(true);
   });
 
-  it('rejects writes captured before an owner-generation boundary', () => {
+  it('rejects a write captured before an owner-generation boundary', async () => {
     const staleOwner = getDataOwnerGeneration();
     setDataOwnerGeneration('owner-a', 5);
+    currentSnapshot = snapshot('owner-a', 5);
 
-    expect(writeMainViewSidebarVisible(staleOwner, 'workspace', false)).toBe(false);
-    expect(
-      localStorage.getItem(sidebarOwnerStorageKey(__testing.storageKey('workspace'), 'owner-a')),
-    ).toBeNull();
+    await expect(writeMainViewSidebarVisible(staleOwner, 'workspace', false)).resolves.toBe(false);
+    expect(setMainViewHidden).not.toHaveBeenCalled();
   });
 
-  it('keeps the same plugin preference isolated between data owners', () => {
-    expect(writeMainViewSidebarVisible(getDataOwnerGeneration(), 'workspace', false)).toBe(true);
+  it('ignores a completed write after the same owner advances generation', async () => {
+    let resolveWrite!: (ids: string[]) => void;
+    setMainViewHidden.mockReturnValueOnce(
+      new Promise<string[]>((resolve) => {
+        resolveWrite = resolve;
+      }),
+    );
+    const oldOwner = getDataOwnerGeneration();
+    const writing = writeMainViewSidebarVisible(oldOwner, 'workspace', false);
+
+    setDataOwnerGeneration('owner-a', 5);
+    currentSnapshot = snapshot('owner-a', 5);
+    resolveWrite(['workspace']);
+
+    await expect(writing).resolves.toBe(false);
+    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(true);
+  });
+
+  it('reacts to current-owner broadcasts and ignores stale-owner broadcasts', () => {
+    const view = renderHook(() => useMainViewVisibilityRevision());
+    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(true);
+
+    act(() => {
+      visibilityListeners[0]?.(['workspace'], {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 4,
+      });
+    });
+    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(false);
+
+    act(() => {
+      visibilityListeners[0]?.([], {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 3,
+      });
+    });
+    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(false);
+    view.unmount();
+  });
+
+  it('loads the new owner snapshot instead of retaining the previous owner state', () => {
+    currentSnapshot = snapshot('owner-a', 4, ['workspace']);
+    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(false);
 
     setDataOwnerGeneration('owner-b', 7);
-    ownerStorageTesting.setOwnerAuthorityReader((ownerId) =>
-      ownerId === 'owner-a'
-        ? {
-            dataOwnerId: ownerId,
-            ownerGeneration: 4,
-            claimed: true,
-            canInitialize: true,
-            pinnedLegacyConsumed: false,
-          }
-        : ownerId === 'owner-b'
-          ? {
-              dataOwnerId: ownerId,
-              ownerGeneration: 7,
-              claimed: false,
-              canInitialize: false,
-              pinnedLegacyConsumed: false,
-            }
-          : null,
-    );
-
-    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(false);
+    currentSnapshot = snapshot('owner-b', 7);
     expect(readMainViewSidebarVisible('owner-b', 'workspace')).toBe(true);
-    expect(writeMainViewSidebarVisible(getDataOwnerGeneration(), 'workspace', false)).toBe(true);
-    expect(readMainViewSidebarVisible('owner-a', 'workspace')).toBe(false);
-    expect(readMainViewSidebarVisible('owner-b', 'workspace')).toBe(false);
   });
 });

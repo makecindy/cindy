@@ -5,7 +5,6 @@ import {
   clearClaimedLegacySidebarStorage,
   readClaimedLegacySidebarStorage,
   readSidebarOwnerStorage,
-  removeSidebarOwnerStorage,
   sidebarOwnerStorageKey,
   writeSidebarOwnerStorage,
 } from '@/lib/sidebarOwnerStorage';
@@ -375,64 +374,6 @@ describe('sidebar owner-scoped renderer storage', () => {
     expect(readSidebarOwnerStorage(PROJECTS_KEY, 'owner-a')).toBe('{broken-scoped');
     expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["new"]')).toBe(true);
     expect(readSidebarOwnerStorage(PROJECTS_KEY, 'owner-a')).toBe('["new"]');
-  });
-
-  it('removes only the matching owner-scoped value at the expected generation', () => {
-    const ownerAKey = sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a');
-    const ownerBKey = sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-b');
-    localStorage.setItem(PROJECTS_KEY, '["legacy"]');
-    localStorage.setItem(ownerAKey, '["owner-a"]');
-    localStorage.setItem(ownerBKey, '["owner-b"]');
-
-    expect(removeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', 1)).toBe(true);
-    expect(localStorage.getItem(ownerAKey)).toBeNull();
-    expect(localStorage.getItem(ownerBKey)).toBe('["owner-b"]');
-    expect(localStorage.getItem(PROJECTS_KEY)).toBe('["legacy"]');
-  });
-
-  it('refuses a scoped removal when the expected owner generation is stale', () => {
-    const ownerAKey = sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a');
-    localStorage.setItem(ownerAKey, '["owner-a"]');
-
-    expect(removeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', 0)).toBe(false);
-    expect(localStorage.getItem(ownerAKey)).toBe('["owner-a"]');
-  });
-
-  it('supports an optional generation fence for scoped writes', () => {
-    const ownerAKey = sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a');
-
-    expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["stale"]', 0)).toBe(false);
-    expect(localStorage.getItem(ownerAKey)).toBeNull();
-    expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["current"]', 1)).toBe(true);
-    expect(localStorage.getItem(ownerAKey)).toBe('["current"]');
-  });
-
-  it('rolls back a fenced scoped write when Main changes generation during the mutation', () => {
-    const ownerAKey = sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a');
-    localStorage.setItem(ownerAKey, '["old"]');
-    let reads = 0;
-    __testing.setOwnerAuthorityReader((ownerId) => {
-      if (ownerId !== 'owner-a') return null;
-      reads += 1;
-      return reads === 1 ? OWNER_A : { ...OWNER_A, ownerGeneration: 2 };
-    });
-
-    expect(writeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', '["new"]', 1)).toBe(false);
-    expect(localStorage.getItem(ownerAKey)).toBe('["old"]');
-  });
-
-  it('rolls back a scoped removal when Main changes generation during the mutation', () => {
-    const ownerAKey = sidebarOwnerStorageKey(PROJECTS_KEY, 'owner-a');
-    localStorage.setItem(ownerAKey, '["owner-a"]');
-    let reads = 0;
-    __testing.setOwnerAuthorityReader((ownerId) => {
-      if (ownerId !== 'owner-a') return null;
-      reads += 1;
-      return reads === 1 ? OWNER_A : { ...OWNER_A, ownerGeneration: 2 };
-    });
-
-    expect(removeSidebarOwnerStorage(PROJECTS_KEY, 'owner-a', 1)).toBe(false);
-    expect(localStorage.getItem(ownerAKey)).toBe('["owner-a"]');
   });
 
   it('keeps pinned bytes staged until Main durably consumes them', () => {
