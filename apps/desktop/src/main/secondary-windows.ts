@@ -33,6 +33,7 @@ import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.j
 import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow } from './appearance-settings-ipc.js';
+import { resolveAppThemeIsDark } from './resolved-app-theme.js';
 
 const log = createLogger('secondary-windows');
 
@@ -100,12 +101,9 @@ export function openSessionInNewWindow(
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
       : { frame: false };
-  const bgColor = nativeTheme.shouldUseDarkColors ? '#1f1f1e' : '#f8f8f6';
-  const winBackdropConfig = resolveVibrancyConfig(
-    'cindy',
-    nativeTheme.shouldUseDarkColors,
-    process.platform,
-  );
+  const isDark = resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors);
+  const bgColor = isDark ? '#1f1f1e' : '#f8f8f6';
+  const winBackdropConfig = resolveVibrancyConfig('cindy', isDark, process.platform);
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base

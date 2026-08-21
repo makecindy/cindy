@@ -19,6 +19,7 @@ import {
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
+import { rememberResolvedAppTheme } from './resolved-app-theme';
 import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -3720,6 +3721,7 @@ const registerIpcHandlers = () => {
   }
 
   ipcMain.on('theme:apply-vibrancy', (_event, payload: { familyId: string; isDark: boolean }) => {
+    rememberResolvedAppTheme(payload.isDark);
     applyWindowVibrancy(payload.familyId, payload.isDark);
   });
 
