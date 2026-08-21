@@ -96,7 +96,7 @@ import {
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
-import { AutoCompactController } from '../shared/auto-compact-controller.js';
+import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
 import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palette-scanner.js';
 // scanClaudeSlashCommands 仍是 listAgentSkills 的实际数据源, 名字保留(它扫的是 commands+skills 两类)。
@@ -1266,13 +1266,6 @@ export class ClaudeCodeAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'claude-code',
             getThresholdPct: getAutoCompactThresholdPct,
-            // 远端没有 overflow rollover;关掉 /compact 会让会话只能硬超限。
-            ...(opts.remoteHostId
-              ? {}
-              : {
-                  shouldHandoffAfterContextAssessment:
-                    this.deps.runtimeConfig.shouldHandoffAfterContextAssessment,
-                }),
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。
@@ -2652,7 +2645,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       const snapshot = autoCompactController?.getLatestSnapshot();
       const threshold = autoCompactController?.getCurrentThresholdPct();
       return snapshot !== null && snapshot !== undefined &&
-        threshold !== undefined && snapshot.ratio >= threshold / 100;
+        threshold !== undefined &&
+        snapshot.ratio >= threshold / 100 &&
+        snapshot.ratio < 1 &&
+        autoCompactController?.needsRollover() !== true;
     }
 
     function queueAutoCompactBridge(kind: ActiveBridgeKind, resumeAt?: string): boolean {
@@ -4187,7 +4183,15 @@ export class ClaudeCodeAgent extends BaseAgent {
               queuedBridgeTurns,
             });
             restoreBridgeAutoCompactSnapshot('bridge_compact_failed');
-            autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            const compactError =
+              typeof (e.data as { message?: unknown }).message === 'string'
+                ? (e.data as { message: string }).message
+                : '';
+            if (!opts.remoteHostId && isDeterministicHostCompactFailure(compactError)) {
+              autoCompactController?.markNeedsRollover('bridge_compact_failed');
+            } else {
+              autoCompactController?.onCompactCanceled('bridge_compact_failed');
+            }
             return true;
           }
         }
@@ -6006,7 +6010,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 走 tracker —— translator 在 message_delta 时 ingest, result 时 endTurn 锁定;
         // 这里读到的就是最新值 (mid-turn 反映累加, turn end 后 reset 前是 turn aggregate,
         // 下一 turn beginTurn 后 reset 为 0)。
-        return usageTracker.snapshot();
+        return {
+          ...usageTracker.snapshot(),
+          ...(autoCompactController?.needsRollover() ? { needsRollover: true } : {}),
+        };
       },
 
       async getContextUsage() {

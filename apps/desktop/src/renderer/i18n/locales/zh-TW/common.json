@@ -131,7 +131,7 @@
       "memory": "記憶",
       "subagentModels": "Subagent",
       "visionBridge": "視覺橋",
-      "compaction": "上下文佔用",
+      "compaction": "上下文壓縮",
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
       "linkOpen": "連結開啟方式",
@@ -2527,14 +2527,14 @@
       }
     },
     "compaction": {
-      "title": "上下文佔用",
-      "description": "本機上的 Claude Code 和 Pi 在佔用達到該百分比後，下次傳送會換乾淨上下文。遠端任務仍會自動壓縮。此設定不影響 Codex。",
+      "title": "上下文壓縮",
+      "description": "控制 Claude Code 和 Pi 何時自動壓縮上下文。此設定不影響 Codex；Codex 單獨管理上下文壓縮。",
       "card": {
-        "label": "佔用閾值",
+        "label": "壓縮觸發閾值",
         "badge": "Claude Code 與 Pi",
-        "description": "佔用達到該百分比後，本機下次傳送會換乾淨上下文。調低會更早換、保留更多餘量；調高會更晚換、單輪上下文更滿。",
-        "hint": "修改即時生效。本機在下一輪結束或切換到更小視窗時按新比例判斷；遠端任務仍按該比例自動壓縮。",
-        "sliderAria": "調整上下文佔用閾值"
+        "description": "上下文佔用達到該百分比時自動壓縮。調低會更早壓縮、保留更多餘量；調高會更晚壓縮、單輪上下文更滿。",
+        "hint": "上下文佔用達到該比例時自動壓縮。修改即時生效；下一輪結束或切換到更小視窗時按新比例判斷。",
+        "sliderAria": "調整自動壓縮觸發閾值"
       }
     },
     "terminalShell": {

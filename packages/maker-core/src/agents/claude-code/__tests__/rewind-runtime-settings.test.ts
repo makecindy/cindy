@@ -690,11 +690,10 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
-  it('skips idle auto-compact on local sessions when host will rebuild context', async () => {
-    const shouldHandoff = vi.fn(() => true);
+  it('injects host auto-compact at 75% even when the model-switch handoff callback would fire', async () => {
     const { handle, firstQuery, infoCalls } = await startRewindableSession({
       autoCompactThresholdPct: 50,
-      shouldHandoffAfterContextAssessment: shouldHandoff,
+      shouldHandoffAfterContextAssessment: () => true,
     });
     void (async () => {
       try {
@@ -719,17 +718,17 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
     await handle.setModel?.('claude-sonnet-5');
     expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
-    expect(shouldHandoff).toHaveBeenCalled();
-    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+      'auto-compact triggered',
+    ]);
 
     await handle.close();
   });
 
-  it('skips host auto-compact at the 0.1.57 Grok occupancy that previously injected /compact', async () => {
+  it('injects host auto-compact at the 0.1.57 Grok occupancy that is below a full window', async () => {
     const { handle, firstQuery, infoCalls } = await startRewindableSession({
       model: 'claude-sonnet-5',
       autoCompactThresholdPct: 80,
-      shouldHandoffAfterContextAssessment: (tokens, window) => tokens / window >= 0.8,
     });
     void (async () => {
       try {
@@ -749,30 +748,45 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       usage: { input_tokens: 437_712, output_tokens: 20 },
     });
     await vi.waitFor(() => {
-      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
     });
-
     expect(handle.getUsageSnapshot().contextTokens).toBe(437_712);
     expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
-    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
 
     await handle.close();
   });
 
-  it('disables SDK auto-compact on local sessions and leaves remote sessions enabled', async () => {
-    const local = await startRewindableSession();
-    const localEnv = (sdkMock.query.mock.calls[0]?.[0] as { options?: { env?: Record<string, string> } })
-      .options?.env;
-    expect(localEnv?.DISABLE_AUTO_COMPACT).toBe('1');
-    expect(localEnv?.DISABLE_COMPACT).toBeUndefined();
-    await local.handle.close();
+  it('does not inject host auto-compact when occupancy is already full', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
 
-    sdkMock.query.mockClear();
-    const remote = await startRewindableSession({ remoteHostId: 'remote-1' });
-    const remoteEnv = remote.remoteStartParams[0]?.env as Record<string, string> | undefined;
-    expect(remoteEnv?.DISABLE_AUTO_COMPACT).toBeUndefined();
-    expect(remoteEnv?.DISABLE_COMPACT).toBeUndefined();
-    await remote.handle.close();
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
+
+    await handle.close();
   });
 
   it('keeps idle auto-compact on remote sessions because overflow rollover is local-only', async () => {

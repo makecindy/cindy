@@ -65,6 +65,7 @@ export {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from './shared/context-overflow-error.js';
+export { isDeterministicHostCompactFailure } from './shared/auto-compact-controller.js';
 // ErrorBanner 用人话替换 LiteLLM / Responses 空壳流中断,不驱动自动续跑。
 export {
   UPSTREAM_STREAM_INTERRUPTED_REASON,

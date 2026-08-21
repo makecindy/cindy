@@ -131,7 +131,7 @@
       "memory": "Memory",
       "subagentModels": "Subagents",
       "visionBridge": "Vision Bridge",
-      "compaction": "Context occupancy",
+      "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "composer": "Message input",
       "linkOpen": "Link open behavior",
@@ -2528,14 +2528,14 @@
       }
     },
     "compaction": {
-      "title": "Context occupancy",
-      "description": "On this computer, Claude Code and Pi start a clean context the next time you send once usage reaches this percentage. Remote sessions still auto-compact. This setting does not affect Codex.",
+      "title": "Context compaction",
+      "description": "Control when Claude Code and Pi automatically compact context. This setting does not affect Codex; Codex manages context compaction separately.",
       "card": {
-        "label": "Occupancy threshold",
+        "label": "Compaction trigger threshold",
         "badge": "Claude Code and Pi",
-        "description": "When usage reaches this percentage, the next send starts a clean context on this computer. Lower values switch earlier and keep more headroom; higher values wait longer and allow fuller turns.",
-        "hint": "Changes take effect immediately. Local sessions are checked after the next turn ends or after switching to a smaller window; remote sessions still auto-compact at this percentage.",
-        "sliderAria": "Adjust context occupancy threshold"
+        "description": "Automatically compact when context usage reaches this percentage. Lower values compact earlier and keep more headroom; higher values compact later and allow fuller turns.",
+        "hint": "Automatically compact when context usage reaches this percentage. Changes take effect immediately and are checked after the next turn ends or after switching to a smaller window.",
+        "sliderAria": "Adjust auto-compaction trigger threshold"
       }
     },
     "personalization": {

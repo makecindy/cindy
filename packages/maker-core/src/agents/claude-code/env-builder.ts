@@ -365,17 +365,6 @@ export async function buildClaudeEnv(
   // 当前 SDK 会话；这会污染正在处理的用户任务。host-managed 会话必须强制关闭。
   env.CLAUDE_CODE_DISABLE_CRON = '1';
 
-  // 本地会话的上下文压力由 host rollover 接管(#3114):到线后下次 send 换干净原生
-  // 窗口,不先让 SDK 自己 /compact。只关自动压缩,手动 `/compact` 仍可用,所以只
-  // 设 DISABLE_AUTO_COMPACT,绝不设 DISABLE_COMPACT。远端没有本地换窗,保留 SDK
-  // 自动压缩;并从字典里删掉可能被 behaviorFlags / 继承带进来的同名键。
-  delete env.DISABLE_COMPACT;
-  if (mode === 'remote') {
-    delete env.DISABLE_AUTO_COMPACT;
-  } else {
-    env.DISABLE_AUTO_COMPACT = '1';
-  }
-
   const modelContextWindows = serializeModelContextWindows(options.modelContextWindows);
   if (modelContextWindows) {
     env[MAKER_MODEL_CONTEXT_WINDOWS_ENV] = modelContextWindows;
