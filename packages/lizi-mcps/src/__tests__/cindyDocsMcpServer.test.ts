@@ -2,7 +2,7 @@
  * cindy_docs MCP server 测试:真 McpServer + InMemoryTransport,真文件往返。
  *
  * 覆盖:
- *  - list_tools 渐进披露(类目概览 / 按类目列表)与工具面收敛后的全量工具名
+ *  - 六个工具顶层暴露(防回退:曾藏在二级分派后导致模型从不调用)
  *  - render_pdf / inspect_pdf 的注册门(host 没注入对应回调时工具不出现)
  *  - office_to_pdf 已彻底下线(裁决:不保留任何依赖系统级 LibreOffice 的路径)
  *  - make_docx / make_pptx / make_xlsx 的真文件产出(解包断言 XML / exceljs 读回)
@@ -72,14 +72,13 @@ function payload(result: unknown): Record<string, unknown> {
   return JSON.parse(content[0]!.text) as Record<string, unknown>;
 }
 
+/** 六个工具顶层直接调用(2026-08-21 起不再经 call_tool 二级分派)。 */
 async function callTool(
   client: Client,
   name: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return payload(
-    await client.callTool({ name: 'call_tool', arguments: { name, args } }),
-  );
+  return payload(await client.callTool({ name, arguments: args }));
 }
 
 async function unzip(file: string, entry: string): Promise<string> {
@@ -90,33 +89,15 @@ async function unzip(file: string, entry: string): Promise<string> {
 }
 
 describe('cindy_docs 入口工具', () => {
-  it('只暴露 list_tools / call_tool 两个入口', async () => {
-    const client = await connect();
-    const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['call_tool', 'list_tools']);
-  });
-
-  it('list_tools 不传 category 返回三个类目', async () => {
+  // 防回退:六个工具必须顶层可见。曾经它们藏在 list_tools/call_tool 二级分派
+  // 后面,真机上模型因此从未调用过任何一个(make_pptx 调用数 0),回了句「做不了」。
+  it('六个工具全部顶层暴露,没有二级分派入口', async () => {
     const client = await connect({
       renderHtmlToPdf: async () => ({ buffer: Buffer.from('%PDF-'), fontsReady: true }),
       inspectPdf: async () => ({ numPages: 1, pagesInspected: 0, pages: [] }),
     });
-    const result = payload(await client.callTool({ name: 'list_tools', arguments: {} }));
-    const categories = (result.categories as Array<{ name: string; tool_count: number }>);
-    expect(categories.map((c) => c.name).sort()).toEqual(['author', 'convert', 'read']);
-    expect(categories.find((c) => c.name === 'author')?.tool_count).toBe(3);
-    // 工具面收成 5 个:convert 只剩 render_pdf(office_to_pdf 已按裁决整体删除 ——
-    // 不保留任何依赖系统级 LibreOffice 的路径)。
-    expect(categories.find((c) => c.name === 'convert')?.tool_count).toBe(1);
-    expect(categories.find((c) => c.name === 'read')?.tool_count).toBe(2);
-    const all = (
-      await Promise.all(
-        (['author', 'convert', 'read'] as const).map(async (category) =>
-          payload(await client.callTool({ name: 'list_tools', arguments: { category } })),
-        ),
-      )
-    ).flatMap((r) => (r.tools as Array<{ name: string }>).map((t) => t.name));
-    expect(all.sort()).toEqual([
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([
       'inspect_pdf',
       'make_docx',
       'make_pptx',
@@ -124,6 +105,26 @@ describe('cindy_docs 入口工具', () => {
       'read_sheet',
       'render_pdf',
     ]);
+    expect(tools.map((t) => t.name)).not.toContain('list_tools');
+    expect(tools.map((t) => t.name)).not.toContain('call_tool');
+  });
+
+  it('顶层描述自解释:说清什么时候用,并带上路径与错误码约束', async () => {
+    const client = await connect({
+      renderHtmlToPdf: async () => ({ buffer: Buffer.from('%PDF-'), fontsReady: true }),
+      inspectPdf: async () => ({ numPages: 1, pagesInspected: 0, pages: [] }),
+    });
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map((t) => [t.name, t.description ?? '']));
+    // 顶层描述是模型唯一的选型依据 —— 触发词必须写在里面。
+    expect(byName.get('make_pptx')).toContain('PPT');
+    expect(byName.get('make_docx')).toContain('Word');
+    expect(byName.get('make_xlsx')).toContain('Excel');
+    expect(byName.get('render_pdf')).toContain('PDF');
+    expect(byName.get('inspect_pdf')).toContain('自检');
+    for (const description of byName.values()) {
+      expect(description).toContain('PATH_NOT_ALLOWED');
+    }
   });
 
   it('office_to_pdf 已彻底下线,连工具名都不存在', async () => {
@@ -131,39 +132,45 @@ describe('cindy_docs 入口工具', () => {
       renderHtmlToPdf: async () => ({ buffer: Buffer.from('%PDF-'), fontsReady: true }),
       inspectPdf: async () => ({ numPages: 1, pagesInspected: 0, pages: [] }),
     });
-    const called = await callTool(client, 'office_to_pdf', { path: 'a.docx', outPath: 'a.pdf' });
-    expect(called.errorCode).toBe('UNKNOWN_TOOL');
-    expect((called.data as { available: string[] }).available).not.toContain('office_to_pdf');
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain('office_to_pdf');
+    // 顶层化后不存在的工具由 MCP 协议层直接拒绝(不再有 call_tool 的
+    // UNKNOWN_TOOL payload) —— 断言"调用会失败"即可。
+    const called = await client.callTool({
+      name: 'office_to_pdf',
+      arguments: { path: 'a.docx', outPath: 'a.pdf' },
+    });
+    expect((called as { isError?: boolean }).isError).toBe(true);
   });
 
-  it('host 没注入渲染回调时 render_pdf 不注册', async () => {
+  it('host 没注入渲染回调时 render_pdf / inspect_pdf 不注册', async () => {
     const client = await connect({});
-    const result = payload(
-      await client.callTool({ name: 'list_tools', arguments: { category: 'convert' } }),
-    );
-    const names = (result.tools as Array<{ name: string }>).map((t) => t.name);
-    expect(names).toEqual([]);
-
-    const called = await callTool(client, 'render_pdf', { html: '<p>x</p>', outPath: 'a.pdf' });
-    expect(called.errorCode).toBe('UNKNOWN_TOOL');
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name);
+    expect(names).not.toContain('render_pdf');
+    expect(names).not.toContain('inspect_pdf');
+    // 三个 author 工具与 read_sheet 不依赖 host 回调,恒在。
+    expect(names.sort()).toEqual(['make_docx', 'make_pptx', 'make_xlsx', 'read_sheet']);
   });
 
-  it('未知工具名与非法参数都返回可自纠的结构化错误', async () => {
+  it('缺必填参数被 schema 拦下,错误里带得出哪个字段', async () => {
     const client = await connect();
-    expect((await callTool(client, 'nope', {})).errorCode).toBe('UNKNOWN_TOOL');
-    const bad = await callTool(client, 'make_docx', { markdown: 'x' });
-    expect(bad.errorCode).toBe('INVALID_ARGS');
-    expect((bad.data as Record<string, unknown>).schema).toBeDefined();
+    // outPath 必填。顶层工具的入参校验由 MCP SDK 用同一份 zod shape 执行,
+    // 失败信息里含字段名,模型据此自纠。
+    const called = await client.callTool({ name: 'make_docx', arguments: { markdown: 'x' } });
+    expect((called as { isError?: boolean }).isError).toBe(true);
+    expect(JSON.stringify(called)).toContain('outPath');
   });
 
   it('未知字段不被静默忽略', async () => {
     const client = await connect();
-    const bad = await callTool(client, 'make_docx', {
-      markdown: 'x',
-      outPath: 'a.docx',
-      tittle: '拼错的字段',
+    const called = await client.callTool({
+      name: 'make_docx',
+      arguments: { markdown: 'x', outPath: 'a.docx', tittle: '拼错的字段' },
     });
-    expect(bad.errorCode).toBe('INVALID_ARGS');
+    // 拼错的字段不被静默剥掉:SDK 用同一份 zod shape 严格校验,直接判失败。
+    expect((called as { isError?: boolean }).isError).toBe(true);
+    expect(JSON.stringify(called)).toContain('tittle');
   });
 });
 
@@ -358,11 +365,12 @@ describe('make_xlsx', () => {
 
   it('公式缺 result 直接判参数错,不给"打开才发现是空格"的机会', async () => {
     const client = await connect();
-    const bad = await callTool(client, 'make_xlsx', {
-      sheets: [{ name: 'S', rows: [[{ formula: 'SUM(A1:A2)' }]] }],
-      outPath: 'bad.xlsx',
+    const called = await client.callTool({
+      name: 'make_xlsx',
+      arguments: { sheets: [{ name: 'S', rows: [[{ formula: 'SUM(A1:A2)' }]] }], outPath: 'bad.xlsx' },
     });
-    expect(bad.errorCode).toBe('INVALID_ARGS');
+    expect((called as { isError?: boolean }).isError).toBe(true);
+    expect(JSON.stringify(called)).toContain('result');
   });
 });
 

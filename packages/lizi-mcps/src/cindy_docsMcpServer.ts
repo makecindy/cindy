@@ -7,9 +7,13 @@
  * 设计:
  *  - server name = `cindy_docs`,对应可关插件 id 'docs'(不是 essential —— 不做文档的
  *    用户应该能关掉,省下入口工具的那点上下文)。
- *  - 所有工具走 `list_tools` / `call_tool` 两个入口,渐进式发现,与 cindy_helper 同款
- *    二级分派:六个工具的完整描述加起来不短,不该在每个会话的系统提示里常驻。
- *  - 三个类目:
+ *  - **六个工具全部顶层直接注册**,不做渐进式发现(2026-08-21 真机实证后改回):
+ *    伙伴会话里 cindy_docs 挂载成功、日志 instance_resolved,但 make_pptx 与
+ *    list_tools 的调用次数都是 0 —— 模型看见的只是一个泛泛的 `list_tools` 入口,
+ *    没有把「做个 PPT」和它联系起来,转头去找 python 库、没找到、回了句做不了。
+ *    渐进披露适合 cindy_helper 那种几十个工具的大工具面;六个名字自解释的文档
+ *    工具藏在二级分派后面,省下的上下文远不抵「能力等于不存在」的代价。
+ *  - 三个类目(仍保留在 registry 里,供工具描述与测试分组用):
  *    - 'author'  : make_docx / make_pptx / make_xlsx —— 从结构化内容直接出 Office 文件
  *    - 'convert' : render_pdf                       —— 出 PDF
  *    - 'read'    : read_sheet / inspect_pdf         —— 读已有表格 / 回读 PDF 做产出自检
@@ -28,7 +32,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
-import { jsonObjectArg } from './json-object-arg.js';
 import { DocsToolRegistry } from './cindy_docsToolRegistry.js';
 import {
   registerInspectPdfTool,
@@ -43,106 +46,80 @@ import { resolveLiziMcpSessionContext } from './session-context.js';
 import { logToolResultErrorCode } from './tool-error-telemetry.js';
 import type { LiziMcpLogger } from './types.js';
 
-const D_LIST_TOOLS =
-  '探索 cindy_docs(文档工坊)可用工具(渐进式发现入口)。用户要把内容做成 ' +
-  'PDF / Word / Excel / PPT 这类真文件时先来这里。全部能力零系统依赖,' +
-  '不需要用户预先装 LibreOffice / Office 或任何外部程序。' +
-  '不传 category → 返回所有类目 + 每个类目工具数量。' +
-  '传 category=author → 从结构化内容直接生成 Office 文件(make_docx 出 Word、' +
-  'make_pptx 出演示文稿、make_xlsx 出 Excel);' +
-  '传 category=convert → 出 PDF(render_pdf 把 HTML 用内置 Chromium 排版成 PDF);' +
-  '传 category=read → 读已有文件做核对(read_sheet 读 xlsx / csv / tsv;' +
-  'inspect_pdf 回读 PDF 的页数/尺寸/空白页 —— 交付 PDF 前务必用它自检一次)。' +
-  '获取工具名后用 call_tool({name, args}) 执行。' +
-  '所有输入输出路径都必须在当前任务的工作目录内。';
+/**
+ * 每个工具描述末尾都带的共同约束。顶层暴露后没有 call_tool 那段总说明可挂,
+ * 这些错误码与纪律必须跟着每个工具走 —— 模型不会为了看约束去调另一个工具。
+ */
+const D_COMMON_TAIL =
+  ' 全部能力零系统依赖,不需要用户预先装 LibreOffice / Office 或任何外部程序。' +
+  '所有输入输出路径必须在当前任务的工作目录内(建议放 documents/,文件名用「日期-主题」)。' +
+  '错误码:`PATH_NOT_ALLOWED` 路径越界;`FILE_EXISTS` 目标已存在(确认覆盖再加 overwrite:true);' +
+  '`NOT_A_FILE` 输入找不到;`NO_SESSION_CONTEXT` 本次调用没绑定工作目录。';
 
-const D_CALL_TOOL =
-  '调用 cindy_docs 中的某个具体工具(render_pdf / make_docx / make_pptx / make_xlsx / ' +
-  'read_sheet / inspect_pdf)。先用 list_tools 拿工具名 + 完整参数说明。' +
-  '错误码:`UNKNOWN_TOOL` = 工具名不存在;`INVALID_ARGS` = 参数 schema 校验失败(返回 schema 自纠);' +
-  '`PATH_NOT_ALLOWED` = 路径不在会话工作目录内(改用工作目录内的相对路径);' +
-  '`FILE_EXISTS` = 目标文件已存在(确认要覆盖就加 overwrite:true,否则换文件名);' +
-  '`NOT_A_FILE` = 输入文件找不到;`NO_SESSION_CONTEXT` = 本次调用没绑定工作目录。' +
-  '生成类工具成功后返回 path / relativePath / bytes。' +
-  '**出完 PDF 一定要用 inspect_pdf 回读一次再交付** —— 整页空白的 PDF 字节数看着完全正常,' +
-  '只看 bytes 判断不出来;inspect_pdf 的 blankPages / verdict 才是确定性证据。';
+/**
+ * 顶层工具的对外描述。registry 里那份 description 讲的是参数细节,这里讲的是
+ * **什么时候该调它** —— 顶层描述是模型唯一的选型依据,必须自解释。
+ */
+const TOP_LEVEL_DESCRIPTIONS: Record<string, string> = {
+  make_pptx:
+    '做 PPT 演示文稿(.pptx)。用户说「做个 PPT / 幻灯片 / 汇报稿 / slides / deck」时用这个,' +
+    '传 slides 数组直接出真文件,自带封面/分节/内容三套版式与配色主题。' +
+    '不要去找 python-pptx 之类的外部库,也不要只给文字大纲。',
+  make_docx:
+    '做 Word 文档(.docx)。用户说「做个 Word / 文档 / 报告 / 说明书」且需要对方可编辑时用这个,' +
+    '内容整理成 Markdown 传进来,标题层级、表格、封面会自动排好。',
+  make_xlsx:
+    '做 Excel 表格(.xlsx)。用户说「做个表 / 表格 / Excel / 统计表」时用这个,传 sheets + rows,' +
+    '表头加粗冻结与数字格式自动处理;写公式要连缓存值一起给,否则很多阅读器打开是空白。',
+  render_pdf:
+    '出 PDF。用户要「PDF / 正式文档 / 可打印的东西」时用这个:先写一份自包含 HTML(内联样式)' +
+    '把版式定下来,再用它渲染成 PDF。宿主用内置 Chromium 排版,不需要任何外部工具。',
+  read_sheet:
+    '读已有表格(xlsx / csv / tsv)。用户丢来一个表要你分析、汇总、回答其中数据时用这个,' +
+    '别让用户手工把内容贴进对话。也用于生成表格后回读核对。',
+  inspect_pdf:
+    '回读 PDF 做产出自检:页数、纸型、旋转、每页文字量与是否空白。' +
+    '**出完 PDF 交付前一定要调它一次** —— 整页空白的 PDF 字节数看着完全正常,' +
+    '只看文件大小判断不出来,blankPages / verdict 才是确定性证据。',
+};
 
-const CATEGORY_ENUM = ['author', 'convert', 'read'] as const;
-
-function registerListToolsEntry(server: McpServer, registry: DocsToolRegistry): void {
-  server.tool(
-    'list_tools',
-    D_LIST_TOOLS,
-    {
-      category: z
-        .enum(CATEGORY_ENUM)
-        .optional()
-        .describe('工具类目。不传时返回所有类目概览。'),
-    },
-    async ({ category }) => {
-      if (category) {
-        const tools = registry.list(category);
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                ok: true,
-                category,
-                tools: tools.map((t) => ({ name: t.name, description: t.description })),
-                hint: '调用具体工具用 call_tool({name, args})。',
-              }),
-            },
-          ],
-        };
-      }
-      const counts: Record<string, number> = {};
-      for (const t of registry.list()) {
-        counts[t.category] = (counts[t.category] ?? 0) + 1;
-      }
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify({
-              ok: true,
-              categories: registry.listCategories().map((c) => ({
-                name: c,
-                tool_count: counts[c] ?? 0,
-              })),
-              hint: '用 list_tools({category}) 查看某类目下的工具列表',
-            }),
-          },
-        ],
-      };
-    },
-  );
-}
-
-function registerCallToolEntry(
+/**
+ * 把 registry 里的工具逐个注册成顶层 MCP 工具。参数 schema 直接复用 registry
+ * 的 inputShape(单一事实源),执行仍走 registry.call 以保留 strict 校验、
+ * 统一错误码与 telemetry。
+ */
+function registerTopLevelTools(
   server: McpServer,
   registry: DocsToolRegistry,
   telemetry: { logger?: LiziMcpLogger; getSessionId: () => string | undefined },
 ): void {
-  server.tool(
-    'call_tool',
-    D_CALL_TOOL,
-    {
-      name: z.string().describe('工具名,从 list_tools 获取(如 make_docx)'),
-      args: jsonObjectArg('工具参数(JSON 对象)。不确定 schema 时可先传 {} 触发错误反馈。'),
-    },
-    async ({ name, args }) => {
-      const result = await registry.call(name, args);
-      logToolResultErrorCode({
-        logger: telemetry.logger,
-        server: 'cindy_docs',
-        tool: name,
-        result,
-        sessionId: telemetry.getSessionId(),
-      });
-      return result;
-    },
-  );
+  for (const summary of registry.list()) {
+    const def = registry.get(summary.name);
+    if (!def) continue;
+    const description = `${TOP_LEVEL_DESCRIPTIONS[def.name] ?? def.description}${D_COMMON_TAIL}`;
+    server.registerTool(
+      def.name,
+      {
+        description,
+        // **strict()**:拼错的字段必须报错,不能被静默剥掉。用 server.tool(rawShape)
+        // 时 SDK 会按非严格对象解析,`tittle` 这种笔误会被悄悄丢掉、生成一份没有
+        // 标题的文档 —— 用户要打开才发现。registerTool 收完整 schema,所以这里
+        // 显式收严,与 registry.call 内部的 strict 口径保持一致。
+        inputSchema: z.object(def.inputShape).strict(),
+      },
+      async (args: Record<string, unknown>) => {
+        const result = await registry.call(def.name, args);
+        logToolResultErrorCode({
+          logger: telemetry.logger,
+          server: 'cindy_docs',
+          tool: def.name,
+          result,
+          sessionId: telemetry.getSessionId(),
+        });
+        return result;
+      },
+    );
+  }
 }
 
 export function createCindyDocsMcpServer(
@@ -165,8 +142,7 @@ export function createCindyDocsMcpServer(
     registerInspectPdfTool(registry, sessionCtx, deps.inspectPdf);
   }
 
-  registerListToolsEntry(server, registry);
-  registerCallToolEntry(server, registry, {
+  registerTopLevelTools(server, registry, {
     ...(deps.logger ? { logger: deps.logger } : {}),
     // per-call 解析:Codex / Pi 的 HTTP bridge 在 server factory 阶段 ctx 是空的,
     // tool-call 阶段才由 AsyncLocalStorage 恢复。
