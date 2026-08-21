@@ -115,8 +115,9 @@ import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../
 import { scanPiCustomizations } from './customization-scanner.js';
 import {
   findContextModePackageRoot,
-  isContextModeDoctorUiEvent,
+  isContextModeDoctorCommandName,
   rewriteContextModeDoctorPath,
+  shouldRewriteContextModeDoctorNotification,
 } from './context-mode-doctor-path.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
@@ -2364,6 +2365,7 @@ export class PiAgent extends BaseAgent {
     let runtimeCapabilityGeneration = 0;
     let piAgentLifecycleSequence = 0;
     let activeExtensionCommandNotifications: string[] | null = null;
+    let capturingDoctorCommand = false;
     const unsupportedExtensionUiMethods = new Set<string>();
     const runtimeCapabilityListeners = new Set<(manifest: PiRuntimeCapabilityManifest | undefined) => void>();
     const notifyRuntimeCapabilityListener = (
@@ -2563,7 +2565,11 @@ export class PiAgent extends BaseAgent {
               allowPiPackageManagement,
               piPackageManagementToken,
               emitExtensionNotification: (message, event) => {
-                const text = isContextModeDoctorUiEvent(event)
+                const text = shouldRewriteContextModeDoctorNotification(
+                  message,
+                  event,
+                  capturingDoctorCommand,
+                )
                   ? rewriteContextModeDoctorPath(message, contextModeRoot)
                   : message;
                 if (activeExtensionCommandNotifications) {
@@ -3619,8 +3625,10 @@ export class PiAgent extends BaseAgent {
           const managedExtensionCommand = managedExtensionCommandName !== undefined;
           const lifecycleSequenceBeforePrompt = piAgentLifecycleSequence;
           const capturedExtensionNotifications: string[] | null = managedExtensionCommand ? [] : null;
+          const previousCapturingDoctorCommand = capturingDoctorCommand;
           if (capturedExtensionNotifications) {
             activeExtensionCommandNotifications = capturedExtensionNotifications;
+            capturingDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
           }
           const command: Record<string, unknown> = {
             type: 'prompt',
@@ -3768,6 +3776,7 @@ export class PiAgent extends BaseAgent {
           } finally {
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
+              capturingDoctorCommand = previousCapturingDoctorCommand;
             }
           }
         } catch (err) {
@@ -3828,7 +3837,18 @@ export class PiAgent extends BaseAgent {
           message: escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest),
         };
         if (images.length > 0) command.images = images;
-        const resp = await runExclusivePiRpc(() => proc.request(command));
+        const previousCapturingDoctorCommand = capturingDoctorCommand;
+        if (managedExtensionCommand) {
+          capturingDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
+        }
+        let resp: Awaited<ReturnType<typeof proc.request>>;
+        try {
+          resp = await runExclusivePiRpc(() => proc.request(command));
+        } finally {
+          if (managedExtensionCommand) {
+            capturingDoctorCommand = previousCapturingDoctorCommand;
+          }
+        }
         if (!resp.success) {
           if (managedPackageRoute.accepted) {
             // The host-owned mutation already completed and its deterministic

@@ -800,14 +800,19 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         type: 'extension_ui_request',
         id: 'other-ext-notify',
         method: 'notify',
-        message: '[OK] other-ext: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+        notifyType: 'warning',
+        message: 'other-ext: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
       });
       captured.onEvent!({
         type: 'extension_ui_request',
         id: 'ctx-doctor-notify',
         method: 'notify',
-        commandName: 'ctx-doctor',
-        message: '[OK] Hook support: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+        notifyType: 'info',
+        message: [
+          'context-mode doctor',
+          '',
+          '[OK] Hook support: Pi hooks are wired via the context-mode Pi extension (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+        ].join('\n'),
       });
     };
     const deps = buildDeps();

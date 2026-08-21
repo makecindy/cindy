@@ -7,8 +7,10 @@ import { describe, expect, it } from 'vitest';
 import {
   CONTEXT_MODE_STALE_EXTENSION_PATH,
   findContextModePackageRoot,
+  isContextModeDoctorNotifyMessage,
   isContextModeDoctorUiEvent,
   rewriteContextModeDoctorPath,
+  shouldRewriteContextModeDoctorNotification,
 } from '../context-mode-doctor-path.js';
 
 const DOCTOR = [
@@ -62,6 +64,31 @@ describe('isContextModeDoctorUiEvent', () => {
     })).toBe(false);
     expect(isContextModeDoctorUiEvent({ source: 'extension' })).toBe(false);
     expect(isContextModeDoctorUiEvent(undefined)).toBe(false);
+  });
+});
+
+describe('shouldRewriteContextModeDoctorNotification', () => {
+  const doctorBody = [
+    'context-mode doctor',
+    '',
+    `[OK] Hook support: Pi hooks are wired via the context-mode Pi extension (${CONTEXT_MODE_STALE_EXTENSION_PATH}/), not via JSON-stdio.`,
+  ].join('\n');
+  const realNotify = { id: 'uuid-5', method: 'notify', message: doctorBody, notifyType: 'info' };
+  const otherNotify = {
+    id: 'uuid-6',
+    method: 'notify',
+    message: `other-ext: (${CONTEXT_MODE_STALE_EXTENSION_PATH}/)`,
+    notifyType: 'warning',
+  };
+
+  it('rewrites a real notify payload while /ctx-doctor is active', () => {
+    expect(shouldRewriteContextModeDoctorNotification(doctorBody, realNotify, true)).toBe(true);
+    expect(isContextModeDoctorNotifyMessage(doctorBody)).toBe(true);
+  });
+
+  it('does not rewrite concurrent ordinary notify payloads', () => {
+    expect(shouldRewriteContextModeDoctorNotification(otherNotify.message, otherNotify, true)).toBe(false);
+    expect(shouldRewriteContextModeDoctorNotification(doctorBody, realNotify, false)).toBe(false);
   });
 });
 

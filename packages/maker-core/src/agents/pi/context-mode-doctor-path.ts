@@ -34,6 +34,24 @@ export function isContextModeDoctorUiEvent(event: Record<string, unknown> | unde
   return false;
 }
 
+/** Real /ctx-doctor notify text from context-mode, not a generic stale-path mention. */
+export function isContextModeDoctorNotifyMessage(message: string): boolean {
+  if (!message.includes(CONTEXT_MODE_STALE_EXTENSION_PATH)) return false;
+  return /(?:^|\n)## ctx-doctor\b/.test(message)
+    || /(?:^|\n)context-mode doctor\b/.test(message)
+    || /Hook support:\s+Pi hooks are wired via the context-mode Pi extension/.test(message);
+}
+
+/** Rewrite doctor notify when the event is identified, or when /ctx-doctor is active and the body is doctor output. */
+export function shouldRewriteContextModeDoctorNotification(
+  message: string,
+  event: Record<string, unknown> | undefined,
+  doctorCommandActive: boolean,
+): boolean {
+  if (isContextModeDoctorUiEvent(event)) return true;
+  return doctorCommandActive && isContextModeDoctorNotifyMessage(message);
+}
+
 function isContextModePackageRoot(dir: string): boolean {
   try {
     const raw = readFileSync(path.join(dir, 'package.json'), 'utf8');
