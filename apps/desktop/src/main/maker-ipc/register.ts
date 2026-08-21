@@ -557,6 +557,10 @@ import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindCo
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import {
+  clearPromptPredictionSessionStopped,
+  notePromptPredictionSessionStopped,
+} from './promptPredictionStopLedger.js';
+import {
   estimateReferenceTokens,
   MAX_REFERENCE_MESSAGES,
   MAX_REFERENCE_TOKENS,
@@ -3891,6 +3895,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // 「疑似中断」纯读判定(设计总述见 localDb/sessionActiveTurn.ts 文件头)。
             // SSH remote 会话同样记录:session 行在本地 DB、事件流走本进程,只是
             // agent 跑在远端;device-link 被控会话不进本进程 maker-core,天然不经过。
+            clearPromptPredictionSessionStopped(session.id);
             markSessionTurnStarted(session.id);
           }
           if (
@@ -13154,6 +13159,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
     const sid = requireSessionId(sessionId);
     await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+    // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
+    // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
+    notePromptPredictionSessionStopped(sid);
     // 这三类续跑撤销都是同步操作，必须早于 goal/DB await；
     // 否则退避 timer 能在用户已点 Stop 后抢先发出下一轮。
     resetAutomaticRecoveryForExplicitStop(sid);

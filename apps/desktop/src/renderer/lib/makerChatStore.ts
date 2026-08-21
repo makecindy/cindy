@@ -5194,12 +5194,16 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
         | null
         | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
+      const terminalCancelled =
+        terminalData?.cancelled === true ||
+        terminalData?.reason === 'turn_continuation_cancelled' ||
+        terminalData?.reason === 'user_stop_unconfirmed_wake_tasks';
       const doneMessages =
         event.source === 'codex'
           ? applyCodexPlanSnapshotOnDone(
@@ -5208,7 +5212,7 @@ export function handleStreamEvent(
               terminalTurnId,
               terminalTurnStatus,
               Date.now(),
-              terminalData?.cancelled === true,
+              terminalCancelled,
             ).messages
           : cleanedMessages;
 
@@ -5241,6 +5245,9 @@ export function handleStreamEvent(
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
+        // cancelled terminal 会广播到同一 session 的所有窗口；把它投影成 session 级
+        // Stop 标记，避免非发起窗口把不完整回复误当正常完成并触发付费推荐。
+        turnStoppedByUser: state.turnStoppedByUser || terminalCancelled,
         agentStatus: {
           ...state.agentStatus,
           isRunning: false,
@@ -8298,6 +8305,39 @@ function getSnapshot(sessionId: string): SessionChatState {
 function hasPausedQueue(sessionId: string): boolean {
   const state = sessions.get(sessionId);
   return state ? isQueuePausedWithPending(state) : false;
+}
+
+/**
+ * 输入框推荐提示词在全局 running→stopped 边沿后读取的终态资格快照。
+ * 必须是 non-creating read：后台会话可能已被 demote / LRU，不能为了补推荐
+ * materialize 空 state 并把 Stop / error 等守卫误读成默认值。
+ */
+export interface PromptRecommendationCompletionStatus {
+  turnStoppedByUser: boolean;
+  hasTerminalError: boolean;
+  sideTask: boolean;
+  hasBackgroundAgentWork: boolean;
+  hasAutoDrainingQueue: boolean;
+}
+
+function getPromptRecommendationRunStartedAt(sessionId: string): number | null {
+  return sessions.get(sessionId)?.agentStatus.startedAt ?? null;
+}
+
+function getPromptRecommendationCompletionStatus(
+  sessionId: string,
+): PromptRecommendationCompletionStatus | null {
+  const state = sessions.get(sessionId);
+  if (!state) return null;
+  return {
+    turnStoppedByUser: state.turnStoppedByUser,
+    hasTerminalError: !!state.error && !state.lastStopWasSideTask,
+    sideTask: state.lastStopWasSideTask,
+    hasBackgroundAgentWork: hasBackgroundAgentWork(sessionId, state),
+    // 与 useCCAgentChat.isAgentBusy 对齐：暂停队列允许当前完成轮展示推荐，
+    // 自动续跑队列则等最终一轮结束后再生成。
+    hasAutoDrainingQueue: state.pendingQueue.length > 0 && !state.queuePaused,
+  };
 }
 
 /**
@@ -14504,6 +14544,10 @@ export const makerChatStore = {
   /** F-SB-7: Authoritative terminal-error read, immune to snapshot-generation races. */
   hasSessionTerminalError,
   wasLastStopSideTask,
+  /** 输入框推荐后台完成配对用的 non-creating turn 起点。 */
+  getPromptRecommendationRunStartedAt,
+  /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
+  getPromptRecommendationCompletionStatus,
   ensureInitialMessages,
   reloadMessages,
   /** 消息菜单:本地移除一次删除动作覆盖的整轮记录。 */
