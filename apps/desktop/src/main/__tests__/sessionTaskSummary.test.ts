@@ -4,6 +4,8 @@
  * sessionTaskSummary.ts;这里锁住档位选择 / sanitize 截断 / 定时识别 / 素材判定 /
  * 内容抽取这些后续最容易被改坏、而 typecheck·db-validate 覆盖不到的判定。
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   STALE_DEMOTE_MS,
@@ -22,6 +24,7 @@ import {
   shouldGeneratePinnedCardSummary,
   shouldVoidSummaryAfterGenerationAttempt,
   nonCardTurnDisplayPatch,
+  sessionListPreviewPatch,
   shouldForceGenerateOnClear,
   shouldScheduleForceGenerateAfterInFlight,
 } from '../sessionTaskSummary.logic';
@@ -225,6 +228,26 @@ describe('nonCardTurnDisplayPatch', () => {
       summary: null,
       preview: null,
     });
+  });
+});
+
+describe('sessionListPreviewPatch', () => {
+  it('只补最近消息,不动摘要', () => {
+    expect(sessionListPreviewPatch('那就对上了')).toEqual({ preview: '那就对上了' });
+    expect(sessionListPreviewPatch(null)).toEqual({ preview: null });
+  });
+});
+
+describe('turn-done list preview refresh', () => {
+  it('回合结束后先刷新列表预览,再按需生成置顶摘要', () => {
+    const registerSource = readFileSync(resolve(__dirname, '..', 'maker-ipc', 'register.ts'), 'utf8');
+    const summarySource = readFileSync(resolve(__dirname, '..', 'sessionTaskSummary.ts'), 'utf8');
+    expect(registerSource).toContain('await refreshSessionListPreview(session.id);');
+    expect(registerSource).toContain('await maybeGenerateSessionTaskSummary(session.id, { force: true });');
+    expect(registerSource.indexOf('await refreshSessionListPreview(session.id);')).toBeLessThan(
+      registerSource.indexOf('await maybeGenerateSessionTaskSummary(session.id, { force: true });'),
+    );
+    expect(summarySource).toContain('export async function refreshSessionListPreview');
   });
 });
 

@@ -556,7 +556,7 @@ const LATEST_MSG_CONTENT_SQL = sql<string | null>`(
     AND m.rewind_at IS NULL
     AND (m.agent_meta IS NULL OR json_extract(m.agent_meta, '$.autoResume') IS NOT 1)
     AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-  ORDER BY m.created_at DESC LIMIT 1
+  ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
 )`.as('latest_message_content');
 const LATEST_MSG_ROLE_SQL = sql<string | null>`(
   SELECT m.role FROM messages m
@@ -565,7 +565,7 @@ const LATEST_MSG_ROLE_SQL = sql<string | null>`(
     AND m.rewind_at IS NULL
     AND (m.agent_meta IS NULL OR json_extract(m.agent_meta, '$.autoResume') IS NOT 1)
     AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-  ORDER BY m.created_at DESC LIMIT 1
+  ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
 )`.as('latest_message_role');
 
 /**

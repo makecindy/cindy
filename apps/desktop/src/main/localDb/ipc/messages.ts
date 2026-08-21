@@ -98,6 +98,66 @@ function ownerStampForBroadcast(
   return getSafeOwnerPushStamp();
 }
 
+function broadcastOwnedPayload(
+  channel: string,
+  payload: unknown,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  const ownerStamp = ownerStampForBroadcast(ownerScope);
+  if (ownerStamp === null) return;
+  if (ownerScope !== undefined && ownerScope !== null) {
+    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+  } else if (ownerStamp === undefined) {
+    broadcastTap.tapWindowBroadcast(channel, payload);
+  } else {
+    broadcastTap.tapWindowBroadcast(channel, payload, ownerStamp);
+  }
+  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    try {
+      if (hasCapturedScope) {
+        win.webContents.send(channel, payload, ownerStamp);
+      } else if (ownerStamp === undefined) {
+        win.webContents.send(channel, payload);
+      } else {
+        win.webContents.send(channel, payload, ownerStamp);
+      }
+    } catch {
+      /* swallow per-window broadcast failures */
+    }
+  }
+}
+
+/** 可见 user/assistant 落库后立刻刷新侧栏 preview,不等 turn-done / 全量 reseed。 */
+function maybeBroadcastSessionListPreview(
+  sessionId: string,
+  row: MessageRow,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  if (row.role !== 'user' && row.role !== 'assistant') return;
+  if (row.rewindAt != null) return;
+  if (row.role === 'user' && isAutoResumeUserRow(row.agentMeta)) return;
+  const preview = extractMessagePreview(row.content, row.role);
+  if (!preview) return;
+  broadcastOwnedPayload('local-db:sessions:patched', { sessionId, patch: { preview } }, ownerScope);
+}
+
+function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
+  if (!agentMetaJson) return false;
+  try {
+    const parsed: unknown = JSON.parse(agentMetaJson);
+    return Boolean(
+      parsed &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        (parsed as { autoResume?: unknown }).autoResume === true,
+    );
+  } catch {
+    return false;
+  }
+}
+
 // DbClient uses better-sqlite3 `.all()`: never return whole message bodies for
 // retention bookkeeping. JSON1 extracts only the distinct paths that startup
 // cleanup needs, while LIKE avoids invoking json_each for unrelated history.
@@ -612,38 +672,7 @@ export function broadcastMessageRow(
   msg: Message,
   ownerScope?: DataOwnerBroadcastScope | null,
 ): void {
-  const ownerStamp = ownerStampForBroadcast(ownerScope);
-  if (ownerStamp === null) return;
-  if (ownerScope !== undefined && ownerScope !== null) {
-    broadcastTap.tapWindowBroadcast(
-      'local-db:messages:created',
-      { sessionId, message: msg },
-      ownerStamp,
-    );
-  } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
-  } else {
-    broadcastTap.tapWindowBroadcast(
-      'local-db:messages:created',
-      { sessionId, message: msg },
-      ownerStamp,
-    );
-  }
-  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      if (hasCapturedScope) {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
-      } else if (ownerStamp === undefined) {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg });
-      } else {
-        win.webContents.send('local-db:messages:created', { sessionId, message: msg }, ownerStamp);
-      }
-    } catch {
-      /* swallow per-window broadcast failures */
-    }
-  }
+  broadcastOwnedPayload('local-db:messages:created', { sessionId, message: msg }, ownerScope);
 }
 
 export interface MessageDeletedPayload {
@@ -1554,6 +1583,7 @@ export async function createMessage(
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
   if (opts?.shouldBroadcast?.() !== false) {
     broadcastMessageRow(sessionId, msg, opts?.broadcastOwnerScope);
+    maybeBroadcastSessionListPreview(sessionId, row, opts?.broadcastOwnerScope);
   }
   // chat-history-embedder hook (Phase 1.2) —— fire-and-forget, 不 await。
   // 内部已有 enabled / cutoff / role / size 守卫; 关闭状态下零成本直接 return。

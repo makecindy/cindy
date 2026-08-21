@@ -46,6 +46,7 @@ import {
   shouldGeneratePinnedCardSummary,
   shouldVoidSummaryAfterGenerationAttempt,
   nonCardTurnDisplayPatch,
+  sessionListPreviewPatch,
   shouldForceGenerateOnClear,
   shouldScheduleForceGenerateAfterInFlight,
 } from './sessionTaskSummary.logic.js';
@@ -108,6 +109,27 @@ async function latestVisiblePreview(sessionId: string): Promise<string | null> {
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(1);
   return extractMessagePreview(latestRow?.content, latestRow?.role);
+}
+
+/** 把已知的列表预览立刻推给侧栏。不 bump updatedAt,也不碰 summary。 */
+export function broadcastSessionListPreview(sessionId: string, preview: string | null): void {
+  broadcastPatched(sessionId, sessionListPreviewPatch(preview));
+}
+
+/**
+ * 列表预览的权威刷新:读最近一条可见 user/assistant,广播 session.preview。
+ * 与置顶卡片摘要无关——无论置顶区是不是卡片、这条有没有置顶,都要更新。
+ * 失败 swallow,不能挡住 turn-done 收尾。
+ */
+export async function refreshSessionListPreview(sessionId: string): Promise<void> {
+  try {
+    broadcastSessionListPreview(sessionId, await latestVisiblePreview(sessionId));
+  } catch (err) {
+    log.warn('refresh session list preview failed (swallowed)', {
+      sessionId,
+      error: String(err),
+    });
+  }
 }
 
 /** 已切回卡片:绝不继续写 null。没有生成在飞才 force 再生成;在飞则交给那次结算,避免自等待。 */

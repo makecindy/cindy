@@ -21,7 +21,7 @@
  * DraggableCardColumns 错落瀑布(每列独立 SortableJS 实例 + 跨列 group,多列也可整卡拖拽)。
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type {
   DragEvent as ReactDragEvent,
   MouseEvent as ReactMouseEvent,
@@ -59,6 +59,7 @@ import {
 import { toast } from '@/lib/toast';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
+import { emitPatch } from '@/lib/sessionsBus';
 import type { Session } from '@/lib/ccAgent.types';
 import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
 import { buildSessionInfoPieces, SessionInfoMeta, type SessionInfoPiece } from './SessionInfoMeta';
@@ -80,7 +81,7 @@ import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
-import { resolveSessionCardBody } from './sessionCardPreview';
+import { resolveSessionCardBody, shouldPromoteLivePreviewToSession } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -233,7 +234,25 @@ export function SessionCard({
     islandActivity?.phase === 'running' && islandActivity.compactDetail
       ? islandActivity.compactDetail
       : null;
-  const listPreview = awaitingText ?? runningDetail ?? bodyPreview;
+  const livePreview = awaitingText ?? runningDetail;
+  const runningDetailRef = useRef({ sessionId: session.id, detail: runningDetail });
+  useLayoutEffect(() => {
+    const previous = runningDetailRef.current;
+    runningDetailRef.current = { sessionId: session.id, detail: runningDetail };
+    if (
+      !shouldPromoteLivePreviewToSession({
+        previousSessionId: previous.sessionId,
+        nextSessionId: session.id,
+        previousLivePreview: previous.detail,
+        nextLivePreview: runningDetail,
+        currentPreview: session.preview,
+      })
+    ) {
+      return;
+    }
+    emitPatch(session.id, { preview: previous.detail });
+  }, [runningDetail, session.id, session.preview]);
+  const listPreview = livePreview ?? bodyPreview;
   const cardPreview = awaitingText ?? bodyPreview;
   const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
   const cardPreviewLineClamp = usesPinnedCardSummary

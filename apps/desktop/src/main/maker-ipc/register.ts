@@ -268,8 +268,11 @@ import {
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
 } from '../localDb/ipc/sessions.js';
-// sidebar-card-mode: turn-done 后触发任务现状摘要生成
-import { maybeGenerateSessionTaskSummary } from '../sessionTaskSummary.js';
+// sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
+import {
+  maybeGenerateSessionTaskSummary,
+  refreshSessionListPreview,
+} from '../sessionTaskSummary.js';
 import {
   addOrUpdateWorker,
   archiveSingleWorkerSession,
@@ -4446,6 +4449,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (event.type === 'done' && !isContinuationBoundary) {
           void (async () => {
             await drainPersistQueue();
+            // 列表预览与置顶卡片摘要解耦:无论置顶区是不是卡片、这条有没有置顶,
+            // 都要把最近一条可见消息立刻写回 session.preview。摘要生成失败也不能
+            // 让侧栏停在进入本轮前的旧句子。
+            await refreshSessionListPreview(session.id);
             // force:turn-done 是权威刷新点(本轮 assistant 已落库),必须以最新内容覆盖
             // 任何 pin 触发 / 上一轮残留的摘要——绕过 in-flight 早返与 20s 节流
             // (codex review:pin during running turn 会让卡片停在部分/旧摘要)。

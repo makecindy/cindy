@@ -190,6 +190,13 @@ export function nonCardTurnDisplayPatch(preview: string | null): {
   return { summary: null, preview };
 }
 
+/** 列表预览与置顶卡片摘要解耦:只补最近消息,不动 summary。 */
+export function sessionListPreviewPatch(preview: string | null): {
+  preview: string | null;
+} {
+  return { preview };
+}
+
 /** clear 若发现已切回卡片,只在该 session 没有生成在飞时才 force 再生成。
  *  generateSummaryOnce.finally → clear → maybeGenerate 会 await 尚未 settle 的同一条 inFlight,死锁。 */
 export function shouldForceGenerateOnClear(args: {
