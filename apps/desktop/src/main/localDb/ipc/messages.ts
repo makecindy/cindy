@@ -1308,6 +1308,7 @@ export async function updateMessageContent(
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    maybeBroadcastSessionListPreview(sessionId, row);
   }
   return row ? messageToCamel(row) : null;
 }

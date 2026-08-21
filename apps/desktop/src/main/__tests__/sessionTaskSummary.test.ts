@@ -254,6 +254,17 @@ describe('turn-done list preview refresh', () => {
       'broadcastSessionListPreview(sessionId, preview, ownerScope);',
     );
   });
+
+  it('助手正文被改写后也刷新列表预览', () => {
+    const messagesSource = readFileSync(
+      resolve(__dirname, '..', 'localDb', 'ipc', 'messages.ts'),
+      'utf8',
+    );
+    const updateStart = messagesSource.indexOf('export async function updateMessageContent');
+    const updateEnd = messagesSource.indexOf('function clampLimit', updateStart);
+    const updateBlock = messagesSource.slice(updateStart, updateEnd);
+    expect(updateBlock).toContain('maybeBroadcastSessionListPreview(sessionId, row);');
+  });
 });
 
 describe('sanitize — 去噪 + 句界截断', () => {

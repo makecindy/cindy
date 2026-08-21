@@ -42,8 +42,9 @@ describe('SessionCard review regressions', () => {
   });
 
   it('keeps awaiting text in list mode previews', () => {
-    expect(sessionCardSource).toContain('const livePreview = awaitingText ?? runningDetail;');
-    expect(sessionCardSource).toContain('const listPreview = livePreview ?? bodyPreview;');
+    expect(sessionCardSource).toContain(
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
+    );
     expect(sessionCardSource).toContain('{listPreview}');
   });
 
@@ -233,8 +234,9 @@ describe('SessionCard review regressions', () => {
   });
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
-    expect(sessionCardSource).toContain('const livePreview = awaitingText ?? runningDetail;');
-    expect(sessionCardSource).toContain('const listPreview = livePreview ?? bodyPreview;');
+    expect(sessionCardSource).toContain(
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
+    );
     expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? bodyPreview');
     expect(sessionCardSource).not.toContain(
       'const cardPreview = awaitingText ?? runningDetail ?? bodyPreview',
