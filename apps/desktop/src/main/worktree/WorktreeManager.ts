@@ -867,8 +867,8 @@ export async function copyClaudeSiviDirs(
  *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
  *   8. applyWorktreeIncludeFile
  *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
- *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
- *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
+ *   (不再无条件写全局 safe.directory；dubious-ownership 时由 gitExec
+ *    按需写入 Cindy 共享配置，条目持久保留，见 #2627)
  */
 export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => createWorktreeInner(req));

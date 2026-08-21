@@ -4,8 +4,7 @@
  * 职责:
  *   - 用 child_process.execFile 调用 git, 保留 stderr/stdout/exitCode
  *   - 自动处理 dubious-ownership: 若 stderr 含 "dubious ownership", 提取路径,
- *     幂等地 `git config --global --add safe.directory <path>`(已存在则不重复添加),
- *     重试**一次**原命令
+ *     写入 Cindy 独立 Git config 并确保全局 include, 重试**一次**原命令
  *   - 抛出 GitExecError 让上层 errorClassifier 解析为 WorktreeError
  *
  * 不在这里做 errorClassifier — 那是上层 createWorktree/removeWorktree 的职责,
@@ -16,6 +15,8 @@ import { execFile, type ChildProcess, type ExecFileOptions } from 'node:child_pr
 import os from 'node:os';
 import path from 'node:path';
 
+import { app } from 'electron';
+
 import { killProcessTree } from '../scheduler-host/proc-util';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { createLogger } from '../logger';
@@ -23,6 +24,7 @@ import {
   beginExecFileDiagnostic,
   execFileWithDiagnostics,
 } from '../utils/execFileDiagnostics';
+import { ensureCindySafeDirectory } from './safeDirectory';
 
 const log = createLogger('gitExec');
 
@@ -578,7 +580,11 @@ export async function gitExec(
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {
-          await ensureGlobalSafeDirectory(dubiousPath);
+          await ensureCindySafeDirectory({
+            appDataPath: app.getPath('appData'),
+            directory: path.resolve(dubiousPath),
+            executeGitConfig: (configArgs) => execFileOnce(configArgs),
+          });
           // 配完 safe.directory 后重试原命令
           return await execFileOnce(args, cwd, opts);
         } catch (cause) {
