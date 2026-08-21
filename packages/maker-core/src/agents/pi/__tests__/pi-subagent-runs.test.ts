@@ -309,6 +309,22 @@ describe('PI durable subagent run store', () => {
     ]);
   });
 
+  it('does not treat a live-owner launch-pending record as stale before a runner pid exists', async () => {
+    const root = await makeRoot();
+    const runId = '123e4567-e89b-42d3-a456-426614174014';
+    await writeStatus(root, status(runId, {
+      runnerInstanceId: `launch-pending-${runId}`,
+      runnerPid: undefined,
+      runtimeOwnerId: piSubagentRuntimeOwnerId(process.pid, 'session-1'),
+      state: 'queued',
+      startedAt: Date.now() - 60_000,
+      updatedAt: Date.now() - 30_000,
+    }));
+    await expect(listPiSubagentRuns(root)).resolves.toEqual([
+      expect.objectContaining({ runId, state: 'queued' }),
+    ]);
+  });
+
   it('detects and synchronously requests stop for active runners on force exit', async () => {
     const agentHome = await makeRoot();
     const root = piSubagentRunRoot(agentHome, 'session-1');

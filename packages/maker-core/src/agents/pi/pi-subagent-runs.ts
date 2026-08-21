@@ -1247,6 +1247,19 @@ export function isPiSubagentRunStale(
   // Hot path: this runs for every run on every list read (the panel polls once
   // a second). A live heartbeat is proof enough — never probe here.
   if (now - status.updatedAt <= STALE_HEARTBEAT_MS) return false;
+  // A launch that published queued but has not written runnerPid yet is still
+  // the in-process launcher copying runtime files. That can take longer than
+  // the heartbeat. Treating it as stale hides it from fence sweeps, which then
+  // exit while the already-admitted launcher can still spawn. Only the owner
+  // process going away makes this an abandoned launch.
+  if (
+    status.state === 'queued'
+    && status.runnerInstanceId.startsWith('launch-pending-')
+    && !Number.isSafeInteger(status.runnerPid)
+  ) {
+    const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
+    if (identity !== null && isOwnerInstanceAlive(identity)) return false;
+  }
   // The heartbeat expired but the pid may be live. Three answers, not two:
   //
   //  - `gone`: no process, or the pid now runs something else. Stale — a
