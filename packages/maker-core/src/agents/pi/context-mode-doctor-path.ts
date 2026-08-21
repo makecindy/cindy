@@ -52,6 +52,23 @@ export function shouldRewriteContextModeDoctorNotification(
   return doctorCommandActive && isContextModeDoctorNotifyMessage(message);
 }
 
+/** Refcount of in-flight /ctx-doctor commands so overlapping send/steer cannot clobber a boolean. */
+export class DoctorCommandActivity {
+  #count = 0;
+
+  get active(): boolean {
+    return this.#count > 0;
+  }
+
+  enter(isDoctor: boolean): void {
+    if (isDoctor) this.#count += 1;
+  }
+
+  leave(isDoctor: boolean): void {
+    if (isDoctor && this.#count > 0) this.#count -= 1;
+  }
+}
+
 function isContextModePackageRoot(dir: string): boolean {
   try {
     const raw = readFileSync(path.join(dir, 'package.json'), 'utf8');

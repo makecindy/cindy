@@ -114,6 +114,7 @@ import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
 import { scanPiCustomizations } from './customization-scanner.js';
 import {
+  DoctorCommandActivity,
   findContextModePackageRoot,
   isContextModeDoctorCommandName,
   rewriteContextModeDoctorPath,
@@ -2365,7 +2366,7 @@ export class PiAgent extends BaseAgent {
     let runtimeCapabilityGeneration = 0;
     let piAgentLifecycleSequence = 0;
     let activeExtensionCommandNotifications: string[] | null = null;
-    let capturingDoctorCommand = false;
+    const doctorCommandActivity = new DoctorCommandActivity();
     const unsupportedExtensionUiMethods = new Set<string>();
     const runtimeCapabilityListeners = new Set<(manifest: PiRuntimeCapabilityManifest | undefined) => void>();
     const notifyRuntimeCapabilityListener = (
@@ -2568,7 +2569,7 @@ export class PiAgent extends BaseAgent {
                 const text = shouldRewriteContextModeDoctorNotification(
                   message,
                   event,
-                  capturingDoctorCommand,
+                  doctorCommandActivity.active,
                 )
                   ? rewriteContextModeDoctorPath(message, contextModeRoot)
                   : message;
@@ -3625,10 +3626,9 @@ export class PiAgent extends BaseAgent {
           const managedExtensionCommand = managedExtensionCommandName !== undefined;
           const lifecycleSequenceBeforePrompt = piAgentLifecycleSequence;
           const capturedExtensionNotifications: string[] | null = managedExtensionCommand ? [] : null;
-          const previousCapturingDoctorCommand = capturingDoctorCommand;
+          const isDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
           if (capturedExtensionNotifications) {
             activeExtensionCommandNotifications = capturedExtensionNotifications;
-            capturingDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
           }
           const command: Record<string, unknown> = {
             type: 'prompt',
@@ -3643,6 +3643,7 @@ export class PiAgent extends BaseAgent {
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           promptRequestStarted = true;
           try {
+            doctorCommandActivity.enter(isDoctorCommand);
             const resp = await runExclusivePiRpc(() => proc.request(command, {
               timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
               // Prompt acceptance may legitimately span multiple compaction
@@ -3776,8 +3777,8 @@ export class PiAgent extends BaseAgent {
           } finally {
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
-              capturingDoctorCommand = previousCapturingDoctorCommand;
             }
+            doctorCommandActivity.leave(isDoctorCommand);
           }
         } catch (err) {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表
@@ -3837,17 +3838,13 @@ export class PiAgent extends BaseAgent {
           message: escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest),
         };
         if (images.length > 0) command.images = images;
-        const previousCapturingDoctorCommand = capturingDoctorCommand;
-        if (managedExtensionCommand) {
-          capturingDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
-        }
+        const isDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
+        doctorCommandActivity.enter(isDoctorCommand);
         let resp: Awaited<ReturnType<typeof proc.request>>;
         try {
           resp = await runExclusivePiRpc(() => proc.request(command));
         } finally {
-          if (managedExtensionCommand) {
-            capturingDoctorCommand = previousCapturingDoctorCommand;
-          }
+          doctorCommandActivity.leave(isDoctorCommand);
         }
         if (!resp.success) {
           if (managedPackageRoute.accepted) {

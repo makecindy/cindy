@@ -11,6 +11,7 @@ import {
   isContextModeDoctorUiEvent,
   rewriteContextModeDoctorPath,
   shouldRewriteContextModeDoctorNotification,
+  DoctorCommandActivity,
 } from '../context-mode-doctor-path.js';
 
 const DOCTOR = [
@@ -89,6 +90,34 @@ describe('shouldRewriteContextModeDoctorNotification', () => {
   it('does not rewrite concurrent ordinary notify payloads', () => {
     expect(shouldRewriteContextModeDoctorNotification(otherNotify.message, otherNotify, true)).toBe(false);
     expect(shouldRewriteContextModeDoctorNotification(doctorBody, realNotify, false)).toBe(false);
+  });
+});
+
+describe('DoctorCommandActivity', () => {
+  it('stays active when a non-doctor command overlaps a doctor command', () => {
+    const activity = new DoctorCommandActivity();
+    activity.enter(true);
+    activity.enter(false);
+    expect(activity.active).toBe(true);
+    expect(shouldRewriteContextModeDoctorNotification(
+      'context-mode doctor\nHook support: Pi hooks are wired via the context-mode Pi extension (~/.pi/extensions/context-mode/)',
+      { id: 'n1', method: 'notify' },
+      activity.active,
+    )).toBe(true);
+    activity.leave(false);
+    expect(activity.active).toBe(true);
+    activity.leave(true);
+    expect(activity.active).toBe(false);
+  });
+
+  it('keeps nested doctor commands active until the last leave', () => {
+    const activity = new DoctorCommandActivity();
+    activity.enter(true);
+    activity.enter(true);
+    activity.leave(true);
+    expect(activity.active).toBe(true);
+    activity.leave(true);
+    expect(activity.active).toBe(false);
   });
 });
 
