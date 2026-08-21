@@ -1324,6 +1324,37 @@ describe('DeviceLinkClient', () => {
     await tick();
     off();
 
+    // 确认尚未完成时再次收到同方向 open:新 confirmation 替换旧对象,但必须继承
+    // 旧对象记录的 outbound ready 状态。
+    const replacementId = 'inbound-confirmation-revoke-replacement';
+    const offReplacement = h.client.onFrame((env) => {
+      if (env.kind !== 'link-open' || env.id !== replacementId || !env.src) return;
+      h.client.sendLinkAccept(env.src, env.id, {
+        appVersion: '1',
+        allowlistHash: 'hash',
+      });
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-open',
+      id: replacementId,
+      src: 'dev-b',
+      payload: {
+        controllerName: 'Remote',
+        protocolVersion: 1,
+        appVersion: '1',
+        capabilities: [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ],
+        transportStreamId: 'inbound-remote-stream',
+        transportBaseSeq: 1,
+      },
+    });
+    await tick();
+    offReplacement();
+
     const socket = h.current();
     h.client.closeLink('dev-b', 'revoked', 'inbound');
     await tick(30);
@@ -1334,6 +1365,10 @@ describe('DeviceLinkClient', () => {
       env.kind === 'link-close'
       && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
     ))).toHaveLength(0);
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string }>;
+    };
+    expect(internals.peerTransport.get('dev-b')?.sendPhase).toBe('ready');
 
     // 原有出站控制方向仍可继续写可靠帧,而不是被 pending confirmation 留在 awaiting。
     const depthBefore = h.client.getReliableSendQueueDepth('dev-b');

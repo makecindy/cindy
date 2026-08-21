@@ -3158,10 +3158,15 @@ export class DeviceLinkClient {
     requestId: string,
     resume: ReliableResumePlan,
   ): void {
-    if (peer.pendingLinkConfirmation?.timer) {
-      clearTimeout(peer.pendingLinkConfirmation.timer);
+    const previousConfirmation = peer.pendingLinkConfirmation;
+    if (previousConfirmation?.timer) {
+      clearTimeout(previousConfirmation.timer);
     }
-    const previousSendPhase: 'down' | 'ready' = peer.sendPhase === 'ready' ? 'ready' : 'down';
+    // 连续的 inbound open 可能在上一代仍 awaiting-confirm 时替换确认对象。
+    // 此时 sendPhase 不能代表替换前的健康 outbound 方向,应沿用旧确认保存的
+    // previousSendPhase,否则撤销新一代 inbound 时会把原本 ready 的方向降成 down。
+    const previousSendPhase: 'down' | 'ready' = previousConfirmation?.previousSendPhase
+      ?? (peer.sendPhase === 'ready' ? 'ready' : 'down');
     peer.sendPhase = 'awaiting-confirm';
     const confirmation: PendingLinkConfirmation = {
       requestId,
