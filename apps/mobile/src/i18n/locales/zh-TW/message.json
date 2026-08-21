@@ -199,6 +199,8 @@
     "learnFailed": "技能學習未能啟動",
     "learnBusyBody": "已有一個學習任務在執行中，等它完成後再試。",
     "learnFailedBody": "啟動失敗：{{detail}}",
+    "sdkEstimateTitle": "SDK 估算",
+    "estimatedValueTitle": "工作階段估算值",
     "unknownError": "未知錯誤"
   },
   "quote": {

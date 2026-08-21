@@ -150,6 +150,7 @@ const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
 const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // provider 目录是设备级快照；控制端订阅 sessions 后按来源 deviceId 精确刷新。
   'maker:provider:changed',
+  'maker:custom-provider-billing:changed',
   'maker:schedule:event',
   'maker:project-automation:event',
   // 被控端「当前 New Maker 草稿」全量变更:账号 / 全局级(无 sessionId),并入 `sessions` topic

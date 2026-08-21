@@ -204,6 +204,30 @@ describe('buildTurnUsageTooltipLines — 无金额 (token 回退) tooltip', () =
   });
 });
 
+describe('buildTurnUsageTooltipLines — 估算来源', () => {
+  const details = buildTurnUsageDetails({ inputTokens: 1_000, outputTokens: 100 })!;
+
+  it('把 SDK 估算与普通 token 价值估算区分开', () => {
+    const sdk = buildTurnUsageTooltipLines({
+      details,
+      t,
+      costUsd: 0.42,
+      isEstimate: true,
+      estimateKind: 'sdk',
+    });
+    const value = buildTurnUsageTooltipLines({
+      details,
+      t,
+      costUsd: 0.42,
+      isEstimate: true,
+    });
+
+    expect(sdk.some((line) => line.startsWith('usageDetails.sdkEstimateLine'))).toBe(true);
+    expect(sdk.some((line) => line.startsWith('usageDetails.valueLine'))).toBe(false);
+    expect(value.some((line) => line.startsWith('usageDetails.valueLine'))).toBe(true);
+  });
+});
+
 describe('buildTurnUsageTooltipLines — 输出速度', () => {
   it('有输出 token 和有效耗时时显示平均 TPS', () => {
     const details = buildTurnUsageDetails({

@@ -19,6 +19,7 @@ import { QuotaBar, quotaSeverity, type QuotaSeverity } from './QuotaBar';
 export interface QuotaHoverCardTurnUsage {
   costText?: string | null;
   costIsEstimate?: boolean;
+  costIsSdkEstimate?: boolean;
   isUserTurnTotal?: boolean;
   totalTokensText?: string | null;
   inputTokensText?: string | null;
@@ -37,8 +38,10 @@ export interface QuotaHoverCardTurnUsage {
 export interface QuotaHoverCardSessionUsage {
   costText: string;
   costIsEstimate?: boolean;
+  costIsSdkEstimate?: boolean;
   actualCostText?: string | null;
   estimatedValueText?: string | null;
+  estimatedValueIsSdkEstimate?: boolean;
 }
 
 export interface QuotaHoverCardProps {
@@ -256,11 +259,19 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
   const renderCostLine = (
     costText: string | null | undefined,
     isEstimate: boolean | undefined,
+    isSdkEstimate: boolean | undefined,
     unavailableKey: string,
   ) => (
     <div className="text-sm font-medium text-[var(--text-primary)]">
       {costText != null
-        ? t(isEstimate ? 'quotaCard.valueLine' : 'quotaCard.costLine', { cost: costText })
+        ? t(
+            isSdkEstimate
+              ? 'quotaCard.sdkEstimateLine'
+              : isEstimate
+                ? 'quotaCard.valueLine'
+                : 'quotaCard.costLine',
+            { cost: costText },
+          )
         : t(unavailableKey)}
     </div>
   );
@@ -276,6 +287,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
         {renderCostLine(
           turnUsage.costText,
           turnUsage.costIsEstimate,
+          turnUsage.costIsSdkEstimate,
           'quotaCard.turnCostUnavailable',
         )}
       </div>
@@ -379,9 +391,11 @@ function SessionUsageSection({
   const hasMixedBreakdown = Boolean(sessionUsage.actualCostText && sessionUsage.estimatedValueText);
   const totalKey = hasMixedBreakdown
     ? 'todaySpend.sessionCostLabel'
-    : sessionUsage.costIsEstimate
-      ? 'todaySpend.codex.sessionValueLabel'
-      : 'todaySpend.tooltip.sessionUsed';
+    : sessionUsage.costIsSdkEstimate
+      ? 'todaySpend.sessionSdkEstimateLabel'
+      : sessionUsage.costIsEstimate
+        ? 'todaySpend.codex.sessionValueLabel'
+        : 'todaySpend.tooltip.sessionUsed';
 
   return (
     <section data-testid="quota-session-usage" className="px-4 pb-1 pt-2 tabular-nums">
@@ -392,9 +406,14 @@ function SessionUsageSection({
         <div className="mt-1 space-y-0.5 text-xs text-[var(--text-secondary)]">
           <div>{t('todaySpend.tooltip.sessionUsed', { cost: sessionUsage.actualCostText })}</div>
           <div>
-            {t('todaySpend.codex.sessionValueLabel', {
-              cost: sessionUsage.estimatedValueText,
-            })}
+            {t(
+              sessionUsage.estimatedValueIsSdkEstimate
+                ? 'todaySpend.sessionSdkEstimateLabel'
+                : 'todaySpend.codex.sessionValueLabel',
+              {
+                cost: sessionUsage.estimatedValueText,
+              },
+            )}
           </div>
         </div>
       ) : null}
@@ -418,11 +437,10 @@ export function QuotaHoverCard({
   const planLabel = formatPlanType(snapshot?.subscriptionType);
   // utilization 是 updatedAt 时刻的观测值，用观测时刻算节奏，避免旧快照随渲染时间自漂移；
   // 缺有效观测时刻则不算节奏——回退渲染时刻会让趋势随倒计时重渲染无新数据自跳档。
-  const paceNowMs = snapshot
-    && typeof snapshot.updatedAt === 'number'
-    && Number.isFinite(snapshot.updatedAt)
-    ? snapshot.updatedAt
-    : null;
+  const paceNowMs =
+    snapshot && typeof snapshot.updatedAt === 'number' && Number.isFinite(snapshot.updatedAt)
+      ? snapshot.updatedAt
+      : null;
 
   const windows: DisplayWindow[] = [];
   if (isDisplayableWindow(snapshot?.fiveHour)) {

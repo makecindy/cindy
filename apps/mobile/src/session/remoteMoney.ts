@@ -1,4 +1,11 @@
 export type RemoteMoneyCurrency = 'CNY' | 'USD';
+export type RemoteMoneyEstimateReason =
+  | 'fixed-fx'
+  | 'legacy-usd'
+  | 'subscription-value'
+  | 'reference-price'
+  | 'inferred-currency'
+  | 'sdk-estimate';
 
 /** Desktop 经 device-link 下发的结构化金额。 */
 export interface RemoteMoney {
@@ -6,6 +13,7 @@ export interface RemoteMoney {
   currency: RemoteMoneyCurrency;
   approximate: boolean;
   kind: 'actual-cost' | 'value-estimate';
+  estimateReasons?: RemoteMoneyEstimateReason[];
 }
 
 export function normalizeRemoteMoney(value: unknown): RemoteMoney | null {
@@ -21,11 +29,23 @@ export function normalizeRemoteMoney(value: unknown): RemoteMoney | null {
   ) {
     return null;
   }
+  const estimateReasons = Array.isArray(raw.estimateReasons)
+    ? raw.estimateReasons.filter(
+        (reason): reason is RemoteMoneyEstimateReason =>
+          reason === 'fixed-fx' ||
+          reason === 'legacy-usd' ||
+          reason === 'subscription-value' ||
+          reason === 'reference-price' ||
+          reason === 'inferred-currency' ||
+          reason === 'sdk-estimate',
+      )
+    : undefined;
   return {
     amount: raw.amount,
     currency: raw.currency,
     approximate: raw.approximate,
     kind: raw.kind,
+    ...(estimateReasons?.length ? { estimateReasons: [...new Set(estimateReasons)] } : {}),
   };
 }
 

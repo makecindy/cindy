@@ -392,6 +392,7 @@ import {
   pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
@@ -645,6 +646,11 @@ import {
   resetGitSafetySettings,
   writeGitSafetyAutoSnapshotEnabled,
 } from './maker-host/git-safety-settings-store.js';
+import {
+  customProviderBillingWire,
+  resetCustomProviderBillingSettings,
+  writeCustomProviderShowSdkCostEnabled,
+} from './maker-host/custom-provider-billing-settings-store.js';
 import {
   CHAT_EMBED_MODEL_ID,
   setupChatHistoryEmbedder,
@@ -3779,6 +3785,40 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.GIT_SAFETY_RESET, async () => {
     resetGitSafetySettings();
     return gitSafetyWire();
+  });
+
+  const broadcastCustomProviderBillingChanged = (): void => {
+    const payload = customProviderBillingWire();
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.CUSTOM_PROVIDER_BILLING_CHANGED, payload);
+      } catch {
+        // window torn down mid-broadcast
+      }
+    }
+    broadcastTap.tapWindowBroadcast(MAKER_PUSH.CUSTOM_PROVIDER_BILLING_CHANGED, payload);
+  };
+
+  // Custom provider billing: default off records token usage only, hides SDK cost.
+  ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_GET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return customProviderBillingWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_SET, async (event, enabled: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'custom provider billing enabled required (boolean)');
+    }
+    writeCustomProviderShowSdkCostEnabled(enabled);
+    broadcastCustomProviderBillingChanged();
+    return customProviderBillingWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_RESET, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    resetCustomProviderBillingSettings();
+    broadcastCustomProviderBillingChanged();
+    return customProviderBillingWire();
   });
 
   // Codex runtime route GET —— 右下角用量 chip 读 app-server 当前 spawn 冻结的鉴权注入方式

@@ -199,6 +199,8 @@
     "learnFailed": "Skill learning couldn't start",
     "learnBusyBody": "A learning task is already running. Try again after it finishes.",
     "learnFailedBody": "Failed to start: {{detail}}",
+    "sdkEstimateTitle": "SDK estimate",
+    "estimatedValueTitle": "Estimated session value",
     "unknownError": "Unknown error"
   },
   "quote": {

@@ -4,8 +4,14 @@ import { CURRENT_CINDY_REGION } from './brandRegion.js';
 
 export type MoneyCurrency = 'CNY' | 'USD';
 export type MoneyKind = 'actual-cost' | 'value-estimate';
+export type SdkCostPresentation = 'regular' | 'hidden' | 'estimate';
 export type MoneyEstimateReason =
-  'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency';
+  | 'fixed-fx'
+  | 'legacy-usd'
+  | 'subscription-value'
+  | 'reference-price'
+  | 'inferred-currency'
+  | 'sdk-estimate';
 
 /**
  * 用量/费用金额始终携带币种。当前构建的本地账本使用区域币种:
@@ -25,11 +31,7 @@ export interface ModelPriceQuote {
   providerId: string;
   modelId: string;
   currency: MoneyCurrency;
-  source:
-    | 'gateway'
-    | 'provider-reference'
-    | 'subscription-reference'
-    | 'user-override';
+  source: 'gateway' | 'provider-reference' | 'subscription-reference' | 'user-override';
   approximate: boolean;
   inputPerMtok: number;
   outputPerMtok: number;
@@ -84,6 +86,11 @@ function uniqueReasons(
   return out.length > 0 ? out : undefined;
 }
 
+function valueEstimateReasons(reason?: MoneyEstimateReason): MoneyEstimateReason[] {
+  const hasIndependentReason = reason === 'sdk-estimate' || reason === 'reference-price';
+  return uniqueReasons([reason, hasIndependentReason ? undefined : 'subscription-value']) ?? [];
+}
+
 /** Gateway 金额币种由显式 region 决定。 */
 export function gatewayCurrency(region: CindyRegion): MoneyCurrency {
   return gatewayCurrencyForRegion(region);
@@ -111,7 +118,7 @@ export function usdMoney(
 ): RegionalMoney {
   assertAmount(amountUsd);
   const approximate = kind === 'value-estimate';
-  const estimateReasons = approximate ? uniqueReasons([reason, 'subscription-value']) : undefined;
+  const estimateReasons = approximate ? valueEstimateReasons(reason) : undefined;
   return {
     amount: amountUsd,
     currency: 'USD',
@@ -243,11 +250,14 @@ export function addCompatibleRegionalMoney(
 
 export function asValueEstimateMoney(money: RegionalMoney): RegionalMoney {
   assertAmount(money.amount);
+  const reasons = money.estimateReasons ?? [];
+  const hasIndependentReason =
+    reasons.includes('sdk-estimate') || reasons.includes('reference-price');
   return {
     ...money,
     approximate: true,
     kind: 'value-estimate',
-    estimateReasons: uniqueReasons([...(money.estimateReasons ?? []), 'subscription-value']),
+    estimateReasons: uniqueReasons([...reasons, hasIndependentReason ? undefined : 'subscription-value']),
   };
 }
 
@@ -270,7 +280,8 @@ export function normalizeRegionalMoney(value: unknown): RegionalMoney | undefine
             reason === 'legacy-usd' ||
             reason === 'subscription-value' ||
             reason === 'reference-price' ||
-            reason === 'inferred-currency',
+            reason === 'inferred-currency' ||
+            reason === 'sdk-estimate',
         ),
       )
     : undefined;

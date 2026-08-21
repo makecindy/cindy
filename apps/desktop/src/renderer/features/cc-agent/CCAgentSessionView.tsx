@@ -115,6 +115,11 @@ import { SessionContentHeaderRegistration } from './SessionContentHeader';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
+import { useCustomProviderBillingSettings } from '@/hooks/useCustomProviderBillingSettings';
+import {
+  projectCustomProviderMessages,
+  resolveCustomProviderCostPresentation,
+} from '@/lib/customProviderCostPresentation';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   getDataOwnerGeneration,
@@ -1643,6 +1648,36 @@ export function CCAgentSessionView({
   const { mode: authMode, user: authUser } = useAuth();
   const { providers: deviceProviders } = useDeviceProviders(remoteDeviceId);
   const providers = remoteDeviceId ? deviceProviders : localProviders;
+  const { showSdkCostForCustomProviders } = useCustomProviderBillingSettings(remoteDeviceId);
+  const customProviderCostPresentation = useMemo(
+    () =>
+      resolveCustomProviderCostPresentation(
+        session?.providerId,
+        providers,
+        showSdkCostForCustomProviders,
+      ),
+    [providers, remoteDeviceId, session?.providerId, showSdkCostForCustomProviders],
+  );
+  const displayMessages = useMemo(
+    () =>
+      projectCustomProviderMessages(
+        messages,
+        customProviderCostPresentation,
+        showSdkCostForCustomProviders,
+      ),
+    [customProviderCostPresentation, messages, showSdkCostForCustomProviders],
+  );
+  const displayChatSnapshot = useMemo(
+    () => ({
+      ...chatDisplaySnapshot,
+      messages: projectCustomProviderMessages(
+        chatDisplaySnapshot.messages,
+        customProviderCostPresentation,
+        showSdkCostForCustomProviders,
+      ),
+    }),
+    [chatDisplaySnapshot, customProviderCostPresentation, showSdkCostForCustomProviders],
+  );
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (remoteDeviceId || session?.remoteHostId || session?.agentKind !== 'cc' || !session.model) {
       return false;
@@ -3968,7 +4003,7 @@ export function CCAgentSessionView({
       // The spec guarantees `session.workingDir` is set; `?? ''` is purely
       // a TS-narrowing fallback, never expected to fire at runtime.
       workingDir={session?.workingDir ?? ''}
-      messages={messages}
+      messages={displayMessages}
       historyLoaded={historyLoaded}
       taskUpdates={taskUpdates}
       isSessionStreaming={isStreaming}
@@ -4791,6 +4826,8 @@ export function CCAgentSessionView({
                     sessionInitialMoney={session?.totalMoney ?? null}
                     sessionInitialCostUsd={session?.totalCostUsd ?? null}
                     sessionInitialTokens={session?.totalTokenUsage ?? null}
+                    customProviderCostPresentation={customProviderCostPresentation}
+                    showCustomProviderSdkEstimate={showSdkCostForCustomProviders}
                     remoteHostId={session?.remoteHostId ?? null}
                     deviceLinkDeviceId={remoteDeviceId ?? null}
                   />
@@ -4862,7 +4899,7 @@ export function CCAgentSessionView({
           ownsRoute || navigationMode === 'split-pane' ? sessionId : undefined
         }
       >
-        <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
+        <ChatDisplaySnapshotProvider value={displayChatSnapshot}>
           <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
         </ChatDisplaySnapshotProvider>
       </SessionNavigationModeProvider>

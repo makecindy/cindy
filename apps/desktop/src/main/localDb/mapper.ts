@@ -740,7 +740,12 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
           currency: row.costCurrency,
           approximate: true,
           kind: 'value-estimate',
-          estimateReasons: ['subscription-value'],
+          estimateReasons:
+            row.sdkEstimatedValueAmount > 0
+              ? row.sdkEstimatedValueAmount >= row.estimatedValueAmount
+                ? ['sdk-estimate']
+                : ['subscription-value', 'sdk-estimate']
+              : ['subscription-value'],
         })
       : undefined;
   const estimatedValueMoney =
@@ -751,6 +756,16 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
       : (currentEstimate ??
         legacyEstimate ??
         zeroUsageMoney('value-estimate'));
+  const sdkEstimatedValueMoney =
+    row.costCurrency && row.sdkEstimatedValueAmount > 0
+      ? normalizeRegionalMoney({
+          amount: Math.min(row.sdkEstimatedValueAmount, row.estimatedValueAmount),
+          currency: row.costCurrency,
+          approximate: true,
+          kind: 'value-estimate',
+          estimateReasons: ['sdk-estimate'],
+        })
+      : undefined;
   return {
     id: row.id,
     scheduleId: row.scheduleId,
@@ -763,6 +778,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     estimatedValueUsd: row.estimatedValueUsd,
     costMoney,
     estimatedValueMoney,
+    ...(sdkEstimatedValueMoney ? { sdkEstimatedValueMoney } : {}),
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
@@ -785,6 +801,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     estimatedValueUsd: r.estimatedValueUsd ?? 0,
     costAmount: r.costMoney?.amount ?? 0,
     estimatedValueAmount: r.estimatedValueMoney?.amount ?? 0,
+    sdkEstimatedValueAmount: r.sdkEstimatedValueMoney?.amount ?? 0,
     costCurrency: r.costMoney?.currency ?? r.estimatedValueMoney?.currency ?? null,
     costIsApproximate: r.costMoney?.approximate ?? false,
     // 新写入的 run 从创建起就带 runId origin；迁移前旧行由列默认值标为 legacy。
@@ -823,6 +840,10 @@ export function scheduleRunPatchToRow(patch: Partial<ScheduleRun>): Partial<Sche
   if (hasKey(patch, 'estimatedValueMoney')) {
     out.estimatedValueAmount = patch.estimatedValueMoney?.amount ?? 0;
     out.costCurrency = patch.estimatedValueMoney?.currency ?? out.costCurrency ?? null;
+  }
+  if (hasKey(patch, 'sdkEstimatedValueMoney')) {
+    out.sdkEstimatedValueAmount = patch.sdkEstimatedValueMoney?.amount ?? 0;
+    out.costCurrency = patch.sdkEstimatedValueMoney?.currency ?? out.costCurrency ?? null;
   }
   if (hasKey(patch, 'costAttribution')) {
     out.costAttribution = patch.costAttribution ?? 'legacy';

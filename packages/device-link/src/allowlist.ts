@@ -242,6 +242,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
+  // 自定义 Provider SDK 费用展示偏好(只读)。被控端 dispatch 在三道 gate 后直接返回安全投影,
+  // 不复用要求真实 renderer sender 的本机 IPC handler；SET/RESET 不放行,控制端不能改全局偏好。
+  'maker:custom-provider-billing:get',
   // Git safety 设置(只读):远程 Codex Rewind 入口必须按被控端是否会创建 safety snapshot
   // 决定显隐。SET/RESET 不放行,控制端不能改被控端全局偏好。
   'maker:git-safety:get',
@@ -269,6 +272,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 必须查被控端(查本机是空库恒 0);老被控端无此 channel → CHANNEL_NOT_ALLOWED →
   // 控制端吞错,仅靠已加载消息 + 实时 turn-cost 推送呈现部分值。
   'local-db:messages:estimatedSessionValue',
+  // Sidebar cost field: one read-only aggregation over many sessions. Same
+  // safety class as estimatedSessionValue; older controlled clients reject it
+  // and the controller falls back to the per-session channel.
+  'local-db:messages:estimatedSessionValueBatch',
   'local-db:recent-workdirs:list',
   // 窄口径写:从被控端「最近项目」列表移除一条(专用 handler,path 归一后按主键删,
   // 幂等,不动 sessions / 磁盘)。控制端项目选择器的删除入口与本机语义对等;
@@ -556,6 +563,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'maker:interaction-dismissed',
   // Claude Auto classifier 故障后降级到 ask;payload 带 sessionId,控制端显示同款提示。
   'maker:auto-permission:fallback',
+  // 被控端自定义 Provider SDK 展示偏好变化：控制端按设备重拉只读设置。
+  'maker:custom-provider-billing:changed',
   // 被控端 active-catalog revision 变化：控制端按 deviceId 驱逐并重拉 provider 目录。
   'maker:provider:changed',
   // 注:maker:auth:state-changed 曾在此 —— 但发射点不 tap、控制端也不消费(被控端 agent 鉴权

@@ -79,7 +79,9 @@ import {
   broadcastMessageAgentMetaUpdate,
   extractEstimatedSessionValueEntries,
   findVisibleToolUseMessageByAliases,
+  mergeEstimatedSessionValueEntriesWithLifetimeExclusions,
   patchMessageAgentMeta,
+  summarizeEstimatedSessionValuesBySession,
 } from '../localDb/ipc/messages.js';
 
 beforeEach(() => {
@@ -285,5 +287,382 @@ describe('extractEstimatedSessionValueEntries', () => {
       legacyEstimatedEntry('estimate-legacy-fallback-recomputed', 2.011),
       legacyEstimatedEntry('estimate-live-pricing-preserved', 3.14),
     ]);
+  });
+
+  it('hides legacy SDK costs while preserving reference estimates for custom providers', () => {
+    const rows = [
+      {
+        clientId: 'legacy-sdk',
+        agentMeta: JSON.stringify({
+          turnCostUsd: 0.42,
+          turnCostIsEstimate: false,
+        }),
+      },
+      {
+        clientId: 'sdk-estimate',
+        agentMeta: JSON.stringify({
+          turnCost: {
+            amount: 0.21,
+            currency: 'USD',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['sdk-estimate'],
+          },
+          turnCostIsEstimate: true,
+        }),
+      },
+      {
+        clientId: 'reference-estimate',
+        agentMeta: JSON.stringify({
+          turnCost: {
+            amount: 0.08,
+            currency: 'USD',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['reference-price'],
+          },
+          turnCostIsEstimate: true,
+        }),
+      },
+    ];
+
+    const hidden = extractEstimatedSessionValueEntries(rows, 'hidden');
+    expect(hidden).toHaveLength(2);
+    expect(hidden).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          clientId: 'legacy-sdk',
+          excludedActualMoney: expect.objectContaining({ amount: 0.42, kind: 'actual-cost' }),
+        }),
+        expect.objectContaining({
+          clientId: 'reference-estimate',
+          money: expect.objectContaining({ amount: 0.08, kind: 'value-estimate' }),
+        }),
+      ]),
+    );
+    expect(hidden.find((entry) => entry.clientId === 'legacy-sdk')).not.toHaveProperty('money');
+    expect(extractEstimatedSessionValueEntries(rows, 'estimate')).toEqual([
+      expect.objectContaining({
+        clientId: 'legacy-sdk',
+        money: expect.objectContaining({
+          amount: 0.42,
+          kind: 'value-estimate',
+          estimateReasons: ['sdk-estimate'],
+        }),
+      }),
+      expect.objectContaining({
+        clientId: 'sdk-estimate',
+        money: expect.objectContaining({
+          amount: 0.21,
+          kind: 'value-estimate',
+          estimateReasons: ['sdk-estimate'],
+        }),
+      }),
+      expect.objectContaining({
+        clientId: 'reference-estimate',
+        money: expect.objectContaining({ amount: 0.08, kind: 'value-estimate' }),
+      }),
+    ]);
+  });
+
+  it('projects historical custom-provider SDK amounts without exposing them as actual cost', () => {
+    const rows = [
+      {
+        clientId: 'historical-actual',
+        agentMeta: JSON.stringify({
+          turnCost: {
+            amount: 0.42,
+            currency: 'USD',
+            approximate: false,
+            kind: 'actual-cost',
+          },
+          turnCostIsEstimate: false,
+        }),
+      },
+      {
+        clientId: 'sdk-estimate',
+        agentMeta: JSON.stringify({
+          turnCost: {
+            amount: 0.24,
+            currency: 'USD',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['sdk-estimate'],
+          },
+          turnCostIsEstimate: true,
+        }),
+      },
+      {
+        clientId: 'reference-estimate',
+        agentMeta: JSON.stringify({
+          turnCost: {
+            amount: 0.18,
+            currency: 'USD',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['reference-price'],
+          },
+          turnCostIsEstimate: true,
+        }),
+      },
+    ];
+
+    const hidden = extractEstimatedSessionValueEntries(rows, 'hidden');
+    expect(hidden).toHaveLength(2);
+    expect(hidden).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          clientId: 'historical-actual',
+          excludedActualMoney: expect.objectContaining({ amount: 0.42, kind: 'actual-cost' }),
+        }),
+        expect.objectContaining({
+          clientId: 'reference-estimate',
+          money: expect.objectContaining({
+            amount: 0.18,
+            kind: 'value-estimate',
+            estimateReasons: expect.arrayContaining(['reference-price']),
+          }),
+        }),
+      ]),
+    );
+    expect(hidden.find((entry) => entry.clientId === 'historical-actual')).not.toHaveProperty(
+      'money',
+    );
+
+    const shown = extractEstimatedSessionValueEntries(rows, 'estimate');
+    expect(shown).toHaveLength(3);
+    expect(shown.find((entry) => entry.clientId === 'historical-actual')?.money).toEqual({
+      amount: 0.42,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['sdk-estimate'],
+    });
+  });
+
+  it('uses per-turn custom-provider attribution after the session provider changes', () => {
+    const rows = [
+      {
+        clientId: 'custom-before-switch',
+        agentMeta: JSON.stringify({
+          turnCost: {
+            amount: 0.42,
+            currency: 'USD',
+            approximate: false,
+            kind: 'actual-cost',
+          },
+          turnCostIsEstimate: false,
+          turnCostIsCustomProvider: true,
+          turnCostProviderId: 'my-provider',
+        }),
+      },
+      {
+        clientId: 'custom-reference',
+        agentMeta: JSON.stringify({
+          turnCost: {
+            amount: 0.18,
+            currency: 'USD',
+            approximate: true,
+            kind: 'value-estimate',
+            estimateReasons: ['reference-price'],
+          },
+          turnCostIsEstimate: true,
+          turnCostIsCustomProvider: true,
+          turnCostProviderId: 'my-provider',
+        }),
+      },
+    ];
+
+    const hidden = extractEstimatedSessionValueEntries(rows, 'regular', false);
+    expect(hidden).toHaveLength(2);
+    expect(hidden).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          clientId: 'custom-before-switch',
+          turnCostIsCustomProvider: true,
+          turnCostProviderId: 'my-provider',
+          excludedActualMoney: expect.objectContaining({ amount: 0.42, kind: 'actual-cost' }),
+        }),
+        expect.objectContaining({
+          clientId: 'custom-reference',
+          turnCostIsCustomProvider: true,
+          turnCostProviderId: 'my-provider',
+          money: expect.objectContaining({ amount: 0.18, estimateReasons: ['reference-price'] }),
+        }),
+      ]),
+    );
+    expect(hidden.find((entry) => entry.clientId === 'custom-before-switch')).not.toHaveProperty(
+      'money',
+    );
+    expect(extractEstimatedSessionValueEntries(rows, 'regular', true)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          clientId: 'custom-before-switch',
+          money: expect.objectContaining({
+            amount: 0.42,
+            kind: 'value-estimate',
+            estimateReasons: ['sdk-estimate'],
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('keeps the reference-priced portion of a mixed SDK/reference estimate', () => {
+    const [entry] = extractEstimatedSessionValueEntries(
+      [
+        {
+          clientId: 'mixed-estimate',
+          agentMeta: JSON.stringify({
+            turnCost: {
+              amount: 5,
+              currency: 'USD',
+              approximate: true,
+              kind: 'value-estimate',
+              estimateReasons: ['reference-price', 'sdk-estimate'],
+            },
+            turnCostIsEstimate: true,
+            turnCostIsCustomProvider: true,
+            turnUsageDetails: {
+              inputTokens: 10,
+              outputTokens: 5,
+              cacheReadTokens: 0,
+              cacheCreateTokens: 0,
+              perModelCost: [
+                {
+                  model: 'sdk-model',
+                  money: {
+                    amount: 2,
+                    currency: 'USD',
+                    approximate: true,
+                    kind: 'value-estimate',
+                    estimateReasons: ['sdk-estimate'],
+                  },
+                },
+                {
+                  model: 'quoted-model',
+                  money: {
+                    amount: 3,
+                    currency: 'USD',
+                    approximate: true,
+                    kind: 'value-estimate',
+                    estimateReasons: ['reference-price'],
+                  },
+                },
+              ],
+            },
+          }),
+        },
+      ],
+      'regular',
+      false,
+    );
+
+    expect(entry.money).toMatchObject({
+      amount: 3,
+      kind: 'value-estimate',
+      estimateReasons: ['reference-price'],
+    });
+  });
+});
+
+describe('mergeEstimatedSessionValueEntriesWithLifetimeExclusions', () => {
+  it('keeps cleared and rewound SDK exclusions without restoring their estimates', () => {
+    const actual = {
+      amount: 0.42,
+      currency: 'USD' as const,
+      approximate: false,
+      kind: 'actual-cost' as const,
+    };
+    expect(
+      mergeEstimatedSessionValueEntriesWithLifetimeExclusions(
+        [
+          {
+            clientId: 'visible-reference',
+            money: {
+              amount: 0.18,
+              currency: 'USD',
+              approximate: true,
+              kind: 'value-estimate',
+              estimateReasons: ['reference-price'],
+            },
+          },
+        ],
+        [
+          {
+            clientId: 'hidden-sdk',
+            money: {
+              amount: 0.42,
+              currency: 'USD',
+              approximate: true,
+              kind: 'value-estimate',
+              estimateReasons: ['sdk-estimate'],
+            },
+            excludedActualMoney: actual,
+          },
+        ],
+      ),
+    ).toEqual([
+      expect.objectContaining({ clientId: 'visible-reference' }),
+      { clientId: 'hidden-sdk', excludedActualMoney: actual },
+    ]);
+  });
+});
+
+
+describe('summarizeEstimatedSessionValuesBySession', () => {
+  it('batches per-session estimates and lifetime SDK exclusions', () => {
+    const rows = [
+      {
+        sessionId: 's-estimate',
+        clientId: 'e1',
+        createdAt: 20,
+        rewindAt: null,
+        agentMeta: JSON.stringify({ turnCostUsd: 0.12, turnCostIsEstimate: true }),
+      },
+      {
+        sessionId: 's-hidden',
+        clientId: 'h1',
+        createdAt: 20,
+        rewindAt: null,
+        agentMeta: JSON.stringify({
+          turnCostUsd: 0.42,
+          turnCostIsEstimate: false,
+          turnCostIsCustomProvider: true,
+        }),
+      },
+      {
+        sessionId: 's-cleared',
+        clientId: 'old-estimate',
+        createdAt: 5,
+        rewindAt: null,
+        agentMeta: JSON.stringify({ turnCostUsd: 0.99, turnCostIsEstimate: true }),
+      },
+    ];
+    const result = summarizeEstimatedSessionValuesBySession(
+      rows,
+      new Map([
+        ['s-estimate', null],
+        ['s-hidden', null],
+        ['s-cleared', 10],
+      ]),
+      ['s-estimate', 's-hidden', 's-cleared', 's-empty'],
+      new Map([
+        ['s-estimate', 'regular'],
+        ['s-hidden', 'hidden'],
+        ['s-cleared', 'regular'],
+      ]),
+      false,
+    );
+
+    expect(result['s-estimate']?.estimatedValueMoney?.amount).toBeCloseTo(0.12);
+    expect(result['s-hidden']?.estimatedValueMoney).toBeNull();
+    expect(result['s-hidden']?.excludedActualMoney?.amount).toBeCloseTo(0.42);
+    expect(result['s-cleared']?.estimatedValueMoney).toBeNull();
+    expect(result['s-empty']).toEqual({
+      estimatedValueMoney: null,
+      excludedActualMoney: null,
+      totalValueUsd: 0,
+    });
   });
 });

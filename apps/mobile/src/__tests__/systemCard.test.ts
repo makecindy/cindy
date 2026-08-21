@@ -119,6 +119,45 @@ describe('systemCard', () => {
       body: 'Context ok',
     });
   });
+
+  it('keeps SDK and other projected values out of the actual-spend wording', () => {
+    const sdkData = buildMobileSystemCardData('cost', {
+      session: session({
+        totalCostUsd: 99,
+        totalTokenUsage: 1200,
+        totalMoney: {
+          amount: 2.81,
+          currency: 'CNY',
+          approximate: true,
+          kind: 'value-estimate',
+          estimateReasons: ['sdk-estimate'],
+        },
+      }),
+    });
+    const sdkCard = formatMobileSystemCard('cost', sdkData);
+    expect(sdkCard.title).toBe(
+      i18n.t('message.systemCard.sdkEstimateTitle'),
+    );
+    expect(sdkCard.body).toContain('¥2.81');
+    expect(sdkCard.body).toContain('1.2k tokens');
+    expect(sdkCard.body).not.toContain('$99');
+
+    const referenceData = buildMobileSystemCardData('cost', {
+      session: session({
+        totalCostUsd: 0.18,
+        totalMoney: {
+          amount: 0.18,
+          currency: 'USD',
+          approximate: true,
+          kind: 'value-estimate',
+          estimateReasons: ['reference-price'],
+        },
+      }),
+    });
+    expect(formatMobileSystemCard('cost', referenceData).title).toBe(
+      i18n.t('message.systemCard.estimatedValueTitle'),
+    );
+  });
 });
 
 describe('formatMobileSystemCard — goal 续跑卡按原因分说法', () => {

@@ -24,12 +24,19 @@ vi.mock('react-i18next', () => ({
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
       if (key === 'quotaCard.timeLabel') return '耗时';
-      if (key === 'quotaCard.timeAndRateValue') return `${options.duration} 速度：${options.rate} token/秒`;
+      if (key === 'quotaCard.timeAndRateValue')
+        return `${options.duration} 速度：${options.rate} token/秒`;
       if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
       if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
       if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
+      if (key === 'todaySpend.sessionSdkEstimateLabel') {
+        return `本任务 SDK 估算（非供应商账单）${options.cost}`;
+      }
       if (key === 'quotaCard.costLine') return `本轮消耗：${options.cost}`;
       if (key === 'quotaCard.valueLine') return `本轮 token 价值：${options.cost}`;
+      if (key === 'quotaCard.sdkEstimateLine') {
+        return `本轮 SDK 估算（非供应商账单）：${options.cost}`;
+      }
       if (key === 'quotaCard.noBilledCost') return '本轮费用暂不可用，仅显示用量';
       if (key === 'usageDetails.costBreakdownHeader') return '按模型拆分：';
       if (key === 'usageDetails.modelCostLine') return `· ${options.model} ${options.cost}`;
@@ -436,6 +443,30 @@ describe('QuotaHoverCard', () => {
     expect(screen.queryByText('本轮明细')).toBeNull();
   });
 
+  it('labels SDK estimates as non-bill values for both turn and session totals', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={null}
+        nowMs={NOW_MS}
+        turnUsage={{
+          costText: '$0.46',
+          costIsEstimate: true,
+          costIsSdkEstimate: true,
+        }}
+        sessionUsage={{
+          costText: '$0.50',
+          costIsEstimate: true,
+          costIsSdkEstimate: true,
+          estimatedValueText: '$0.50',
+          estimatedValueIsSdkEstimate: true,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('本轮 SDK 估算（非供应商账单）：$0.46')).toBeTruthy();
+    expect(screen.getByText('本任务 SDK 估算（非供应商账单）$0.50')).toBeTruthy();
+  });
+
   it('多模型分段逐模型展示费用，不再重复笼统模型行', () => {
     render(
       <QuotaHoverCard
@@ -717,7 +748,10 @@ describe('QuotaHoverCard', () => {
   ])('renders the $label weekly pace trend', ({ utilization, expected }) => {
     render(
       <QuotaHoverCard
-        snapshot={makeSnapshot({ updatedAt: NOW_MS, sevenDay: weeklyAtProgress(utilization, 0.25) })}
+        snapshot={makeSnapshot({
+          updatedAt: NOW_MS,
+          sevenDay: weeklyAtProgress(utilization, 0.25),
+        })}
         nowMs={NOW_MS}
       />,
     );
@@ -760,9 +794,7 @@ describe('QuotaHoverCard', () => {
     const { rerender } = render(<QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS} />);
     const originalText = screen.getByTestId('quota-pace').textContent;
 
-    rerender(
-      <QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS + 30 * 60_000} />,
-    );
+    rerender(<QuotaHoverCard snapshot={snapshot} nowMs={NOW_MS + 30 * 60_000} />);
 
     expect(originalText).toBe('按当前平均速度偏快（粗略趋势）');
     expect(screen.getByTestId('quota-pace').textContent).toBe(originalText);
@@ -791,10 +823,12 @@ describe('QuotaHoverCard', () => {
     render(
       <QuotaHoverCard
         snapshot={makeSnapshot({
-          scoped: [{
-            modelDisplayName: 'Opus',
-            ...weeklyAtProgress(93, 0.25),
-          }],
+          scoped: [
+            {
+              modelDisplayName: 'Opus',
+              ...weeklyAtProgress(93, 0.25),
+            },
+          ],
         })}
         nowMs={NOW_MS}
       />,

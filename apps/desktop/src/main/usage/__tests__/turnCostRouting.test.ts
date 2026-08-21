@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  __resetActiveLedgerCurrencyForTesting,
-  setActiveLedgerCurrency,
-} from '../ledgerCurrency';
+import { __resetActiveLedgerCurrencyForTesting, setActiveLedgerCurrency } from '../ledgerCurrency';
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import { resolveClaudeTurnCostSinks } from '../turnCostCalculator';
-import type {
-  ModelPriceQuote,
-  ModelPricingCatalog,
-} from '../../../shared/regionalMoney';
+import type { ModelPriceQuote, ModelPricingCatalog } from '../../../shared/regionalMoney';
 
 function delta(values: Partial<ModelUsageDeltaEntry> & { model: string }): ModelUsageDeltaEntry {
   return {
@@ -56,10 +50,7 @@ describe('turn cost routing regression', () => {
           inputTokensDelta: 1_000_000,
         }),
       ],
-      pricing(
-        quote('gpt-5.5', 2, 8),
-        quote('claude-opus-4-8', 5, 25),
-      ),
+      pricing(quote('gpt-5.5', 2, 8), quote('claude-opus-4-8', 5, 25)),
       {
         providerId: 'xd',
         billingRoute: 'xd-gateway',
@@ -104,6 +95,82 @@ describe('turn cost routing regression', () => {
       expect(result.perModel.map((item) => item.source)).toEqual(['sdk', 'sdk']);
     } finally {
       __resetActiveLedgerCurrencyForTesting();
+    }
+  });
+
+  it('keeps custom provider SDK cost outside actual spend while honoring estimate display', () => {
+    const suppressed = resolveClaudeTurnCostSinks(
+      [
+        delta({
+          model: 'gpt-4o',
+          costUsdDelta: 2,
+          inputTokensDelta: 1_000,
+          outputTokensDelta: 100,
+        }),
+      ],
+      null,
+      {
+        providerId: 'custom-openrouter',
+        billingRoute: 'provider-api',
+        region: 'global',
+        customProviderSdkEstimate: 'hidden',
+      },
+    );
+    expect(suppressed.turnMoney).toBeNull();
+    expect(suppressed.perModel[0]).toMatchObject({ source: 'sdk', money: null });
+
+    const shown = resolveClaudeTurnCostSinks(
+      [
+        delta({
+          model: 'gpt-4o',
+          costUsdDelta: 2,
+          inputTokensDelta: 1_000,
+          outputTokensDelta: 100,
+        }),
+      ],
+      null,
+      {
+        providerId: 'custom-openrouter',
+        billingRoute: 'provider-api',
+        region: 'global',
+        customProviderSdkEstimate: 'shown',
+      },
+    );
+    expect(shown.turnMoney).toBeNull();
+    expect(shown.estimatedTurnMoney).toMatchObject({
+      amount: 2,
+      kind: 'value-estimate',
+    });
+    expect(shown.estimatedTurnMoney?.estimateReasons).toContain('sdk-estimate');
+    expect(shown.estimatedTurnMoney?.estimateReasons).not.toContain('subscription-value');
+  });
+
+  it('keeps remote custom-provider SDK fallback estimate-only when the route is unknown', () => {
+    for (const model of ['remote-model', 'xai/custom-grok']) {
+      const result = resolveClaudeTurnCostSinks(
+        [
+          delta({
+            model,
+            costUsdDelta: 1.25,
+            inputTokensDelta: 1_000,
+            outputTokensDelta: 100,
+          }),
+        ],
+        null,
+        {
+          providerId: 'remote-custom-provider',
+          billingRoute: 'unknown',
+          region: 'global',
+          customProviderSdkEstimate: 'shown',
+        },
+      );
+
+      expect(result.turnMoney).toBeNull();
+      expect(result.estimatedTurnMoney).toMatchObject({
+        amount: 1.25,
+        kind: 'value-estimate',
+        estimateReasons: ['sdk-estimate'],
+      });
     }
   });
 });

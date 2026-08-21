@@ -5,7 +5,10 @@ import {
   shouldApplyEstimatedValueEntry,
   syncEstimatedValueCostsFromStoreSnapshot,
 } from '@/hooks/useSessionEstimatedValue';
-import { combineSessionUsageMoney } from '@/hooks/useSessionUsageMoney';
+import {
+  combineSessionUsageMoney,
+  subtractExcludedActualMoney,
+} from '@/hooks/useSessionUsageMoney';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
@@ -30,10 +33,17 @@ function legacyCnyEstimate(amount: number): RegionalMoney {
   };
 }
 
-function assistantMessage(
-  clientId: string,
-  costUsd?: number,
-): ChatMessage {
+function sdkEstimate(amount: number): RegionalMoney {
+  return {
+    amount,
+    currency: 'USD',
+    approximate: true,
+    kind: 'value-estimate',
+    estimateReasons: ['sdk-estimate'],
+  };
+}
+
+function assistantMessage(clientId: string, costUsd?: number): ChatMessage {
   return {
     clientId,
     role: 'assistant',
@@ -59,16 +69,16 @@ if (!GPT_DETAILS) {
 describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
   it('preserves DB-backed costs before chat history has loaded', () => {
     const current = new Map([['persisted', usdEstimate(0.12)]]);
-    const result = syncEstimatedValueCostsFromStoreSnapshot(
-      current,
-      new Set(),
-      { messages: [], historyLoaded: false, hasMoreMessages: true },
-    );
+    const result = syncEstimatedValueCostsFromStoreSnapshot(current, new Set(), {
+      messages: [],
+      historyLoaded: false,
+      hasMoreMessages: true,
+    });
 
     expect(result).toBeNull();
   });
 
-  it('clears all costs when /clear leaves an authoritative empty transcript', () => {
+  it('clears visible estimates but preserves lifetime ledger exclusions after /clear', () => {
     const result = syncEstimatedValueCostsFromStoreSnapshot(
       new Map([
         ['persisted', usdEstimate(0.12)],
@@ -76,9 +86,18 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
       ]),
       new Set(['visible']),
       { messages: [], historyLoaded: true, hasMoreMessages: false },
+      'hidden',
+      false,
+      new Map([
+        [
+          'historical-sdk',
+          { amount: 0.42, currency: 'USD', approximate: false, kind: 'actual-cost' },
+        ],
+      ]),
     );
 
     expect(result?.costs.size).toBe(0);
+    expect(result?.excludedActualCosts.get('historical-sdk')?.amount).toBe(0.42);
     expect(result?.storeClientIds.size).toBe(0);
   });
 
@@ -90,10 +109,7 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
       ]),
       new Set(['old-visible']),
       {
-        messages: [
-          assistantMessage('new-visible', 0.04),
-          assistantMessage('visible-no-cost'),
-        ],
+        messages: [assistantMessage('new-visible', 0.04), assistantMessage('visible-no-cost')],
         historyLoaded: true,
         hasMoreMessages: true,
       },
@@ -104,85 +120,222 @@ describe('syncEstimatedValueCostsFromStoreSnapshot', () => {
     expect(result?.costs.has('old-visible')).toBe(false);
     expect(result?.costs.has('visible-no-cost')).toBe(false);
   });
+
+  it('hides historical SDK costs while preserving reference estimates', () => {
+    const actual = {
+      ...assistantMessage('historical-actual'),
+      turnMoney: {
+        amount: 0.42,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      } satisfies RegionalMoney,
+      turnCostIsEstimate: false,
+    };
+    const reference = {
+      ...assistantMessage('reference-estimate'),
+      turnMoney: {
+        amount: 0.18,
+        currency: 'USD',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['reference-price'],
+      } satisfies RegionalMoney,
+      turnCostIsEstimate: true,
+    };
+
+    const hidden = syncEstimatedValueCostsFromStoreSnapshot(
+      new Map(),
+      new Set(),
+      {
+        messages: [actual, reference],
+        historyLoaded: true,
+        hasMoreMessages: false,
+      },
+      'hidden',
+    );
+    expect(hidden?.costs.has('historical-actual')).toBe(false);
+    expect(hidden?.excludedActualCosts.get('historical-actual')?.amount).toBe(0.42);
+    expect(hidden?.costs.get('reference-estimate')?.amount).toBe(0.18);
+
+    const shown = syncEstimatedValueCostsFromStoreSnapshot(
+      new Map(),
+      new Set(),
+      {
+        messages: [actual],
+        historyLoaded: true,
+        hasMoreMessages: false,
+      },
+      'estimate',
+    );
+    expect(shown?.costs.get('historical-actual')).toEqual({
+      amount: 0.42,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['sdk-estimate'],
+    });
+    expect(shown?.excludedActualCosts.get('historical-actual')?.amount).toBe(0.42);
+  });
+
+  it('drops visible SDK estimates when custom-provider presentation is hidden', () => {
+    const sdkMessage = assistantMessage('sdk-visible');
+    sdkMessage.turnMoney = sdkEstimate(0.42);
+    sdkMessage.turnCostIsEstimate = true;
+
+    const result = syncEstimatedValueCostsFromStoreSnapshot(
+      new Map([
+        ['sdk-visible', sdkEstimate(0.42)],
+        ['reference-visible', usdEstimate(0.07)],
+      ]),
+      new Set(['sdk-visible', 'reference-visible']),
+      {
+        messages: [sdkMessage, assistantMessage('reference-visible', 0.07)],
+        historyLoaded: true,
+        hasMoreMessages: false,
+      },
+      'hidden',
+    );
+
+    expect(result?.costs.has('sdk-visible')).toBe(false);
+    expect(result?.costs.get('reference-visible')?.amount).toBe(0.07);
+  });
 });
 
 describe('resolveEstimatedValueTurnCostEntry', () => {
   it('corrects realtime stale full-cache estimates before merging session value', () => {
-    expect(resolveEstimatedValueTurnCostEntry({
-      clientId: 'stale',
-      turnMoney: usdEstimate(8.76),
-      turnCostIsEstimate: true,
-      turnUsageDetails: GPT_DETAILS,
-    })?.money.amount).toBeCloseTo(2.011);
+    expect(
+      resolveEstimatedValueTurnCostEntry({
+        clientId: 'stale',
+        turnMoney: usdEstimate(8.76),
+        turnCostIsEstimate: true,
+        turnUsageDetails: GPT_DETAILS,
+      })?.money.amount,
+    ).toBeCloseTo(2.011);
   });
 
   it('corrects stale legacy estimates after their CN fixed-FX projection', () => {
-    expect(resolveEstimatedValueTurnCostEntry({
-      clientId: 'stale-cn',
-      turnMoney: legacyCnyEstimate(8.76 * 6.7),
-      turnCostIsEstimate: true,
-      turnUsageDetails: GPT_DETAILS,
-    })?.money.amount).toBeCloseTo(2.011 * 6.7);
+    expect(
+      resolveEstimatedValueTurnCostEntry({
+        clientId: 'stale-cn',
+        turnMoney: legacyCnyEstimate(8.76 * 6.7),
+        turnCostIsEstimate: true,
+        turnUsageDetails: GPT_DETAILS,
+      })?.money.amount,
+    ).toBeCloseTo(2.011 * 6.7);
   });
 
   it('preserves realtime live pricing estimates that do not match stale full-cache formulas', () => {
-    expect(resolveEstimatedValueTurnCostEntry({
-      clientId: 'live',
-      turnMoney: usdEstimate(3.14),
-      turnCostIsEstimate: true,
-      turnUsageDetails: GPT_DETAILS,
-    })?.money.amount).toBe(3.14);
+    expect(
+      resolveEstimatedValueTurnCostEntry({
+        clientId: 'live',
+        turnMoney: usdEstimate(3.14),
+        turnCostIsEstimate: true,
+        turnUsageDetails: GPT_DETAILS,
+      })?.money.amount,
+    ).toBe(3.14);
   });
 
   it('ignores non-estimate realtime entries', () => {
-    expect(resolveEstimatedValueTurnCostEntry({
-      clientId: 'api-cost',
+    expect(
+      resolveEstimatedValueTurnCostEntry({
+        clientId: 'api-cost',
+        turnCostUsd: 0.42,
+        turnCostIsEstimate: false,
+        turnUsageDetails: GPT_DETAILS,
+      }),
+    ).toBeNull();
+  });
+
+  it('relabels historical custom-provider actual entries as SDK estimates when enabled', () => {
+    expect(
+      resolveEstimatedValueTurnCostEntry(
+        {
+          clientId: 'historical-actual',
+          turnMoney: {
+            amount: 0.42,
+            currency: 'USD',
+            approximate: false,
+            kind: 'actual-cost',
+          },
+          turnCostIsEstimate: false,
+          turnUsageDetails: GPT_DETAILS,
+        },
+        'estimate',
+      )?.money,
+    ).toEqual({
+      amount: 0.42,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+      estimateReasons: ['sdk-estimate'],
+    });
+  });
+
+  it('relabels legacy custom-provider actual costs only when SDK estimates are enabled', () => {
+    const payload = {
+      clientId: 'legacy-sdk',
       turnCostUsd: 0.42,
       turnCostIsEstimate: false,
       turnUsageDetails: GPT_DETAILS,
-    })).toBeNull();
+    };
+
+    expect(resolveEstimatedValueTurnCostEntry(payload, 'hidden')).toBeNull();
+    expect(resolveEstimatedValueTurnCostEntry(payload, 'estimate')?.money).toMatchObject({
+      amount: 0.42,
+      kind: 'value-estimate',
+      estimateReasons: ['sdk-estimate'],
+    });
   });
 });
 
 describe('shouldApplyEstimatedValueEntry', () => {
   it('ignores delayed entries after an authoritative /clear snapshot', () => {
-    expect(shouldApplyEstimatedValueEntry(
-      { messages: [], historyLoaded: true, hasMoreMessages: false },
-      'stale-assistant',
-      true,
-    )).toBe(false);
+    expect(
+      shouldApplyEstimatedValueEntry(
+        { messages: [], historyLoaded: true, hasMoreMessages: false },
+        'stale-assistant',
+        true,
+      ),
+    ).toBe(false);
   });
 
   it('allows entries for visible messages after a clear', () => {
-    expect(shouldApplyEstimatedValueEntry(
-      {
-        messages: [assistantMessage('new-assistant')],
-        historyLoaded: true,
-        hasMoreMessages: false,
-      },
-      'new-assistant',
-      true,
-    )).toBe(true);
+    expect(
+      shouldApplyEstimatedValueEntry(
+        {
+          messages: [assistantMessage('new-assistant')],
+          historyLoaded: true,
+          hasMoreMessages: false,
+        },
+        'new-assistant',
+        true,
+      ),
+    ).toBe(true);
   });
 
   it('keeps ignoring stale entries after a new transcript starts', () => {
-    expect(shouldApplyEstimatedValueEntry(
-      {
-        messages: [assistantMessage('new-assistant')],
-        historyLoaded: true,
-        hasMoreMessages: false,
-      },
-      'stale-assistant',
-      true,
-    )).toBe(false);
+    expect(
+      shouldApplyEstimatedValueEntry(
+        {
+          messages: [assistantMessage('new-assistant')],
+          historyLoaded: true,
+          hasMoreMessages: false,
+        },
+        'stale-assistant',
+        true,
+      ),
+    ).toBe(false);
   });
 
   it('allows DB-backed entries before any clear marker exists', () => {
-    expect(shouldApplyEstimatedValueEntry(
-      { messages: [], historyLoaded: false, hasMoreMessages: true },
-      'persisted-history',
-      false,
-    )).toBe(true);
+    expect(
+      shouldApplyEstimatedValueEntry(
+        { messages: [], historyLoaded: false, hasMoreMessages: true },
+        'persisted-history',
+        false,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -231,5 +384,34 @@ describe('combineSessionUsageMoney', () => {
 
     expect(result.estimatedValueMoney).toBeNull();
     expect(result.totalMoney).toMatchObject({ amount: 1, currency: 'CNY' });
+  });
+});
+
+describe('subtractExcludedActualMoney', () => {
+  it('keeps built-in spend when a mixed session also contains legacy custom-provider SDK cost', () => {
+    expect(
+      subtractExcludedActualMoney(
+        { amount: 3, currency: 'USD', approximate: false, kind: 'actual-cost' },
+        { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+      ),
+    ).toEqual({ amount: 1, currency: 'USD', approximate: false, kind: 'actual-cost' });
+  });
+
+  it('does not guess across currencies and never returns a negative balance', () => {
+    const actual = { amount: 1, currency: 'CNY', approximate: false, kind: 'actual-cost' } as const;
+    expect(
+      subtractExcludedActualMoney(actual, {
+        amount: 2,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      }),
+    ).toBe(actual);
+    expect(
+      subtractExcludedActualMoney(
+        { amount: 1, currency: 'USD', approximate: false, kind: 'actual-cost' },
+        { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' },
+      ),
+    ).toBeNull();
   });
 });

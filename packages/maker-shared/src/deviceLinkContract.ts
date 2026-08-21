@@ -254,6 +254,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:create-session',
   'maker:get-capabilities',
   'maker:provider:list',
+  // 自定义 Provider SDK 费用展示偏好(只读):Mobile 与被控 Desktop 共用同一默认关闭开关。
+  // 老被控端不支持时控制端 fail closed,仅显示 Token。
+  'maker:custom-provider-billing:get',
   'local-db:sessions:get',
   'local-db:sessions:patch-meta',
   // error-tail / interrupted 收尾入口(对齐桌面 error-tail banner / InterruptedTurnBanner):
@@ -265,6 +268,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // 同一 handler;老被控端 CHANNEL_NOT_ALLOWED → 手机端展示失败提示,不阻塞手动改名)。
   'maker:regenerate-title',
   'local-db:messages:list',
+  // Session-wide billing projection used by Mobile menus and the local /cost card. Older
+  // controlled desktops reject it and Mobile remains token-only.
+  'local-db:messages:estimatedSessionValue',
   'local-db:messages:around',
   'local-db:messages:around-client-id',
   'maker:send',

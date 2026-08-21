@@ -79,6 +79,7 @@ import {
   formatXaiProductLabel,
   isXaiWeeklyUsageCurrent,
 } from '../../../shared/xaiSubscriptionUsage';
+import { CustomProviderBillingSection } from './CustomProviderBillingSection';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
@@ -2353,6 +2354,9 @@ export function ProvidersSection() {
           高度跟随视口(减去标题栏 + 设置页 chrome + section 标题的约 14rem),窗口越大
           卡片越高、能显示越多模型;min-h 保底小窗口不塌陷。左右栏各自内部滚动。
           原来写死 560px 会在大窗口下截断模型列表(不随框体撑高)。 */}
+      {/* Custom provider billing: default records token only, optionally shows SDK cost */}
+      <CustomProviderBillingSection />
+
       {!loading && (
         <div
           className="flex h-[calc(100vh-14rem)] min-h-[460px] overflow-hidden rounded-xl border"

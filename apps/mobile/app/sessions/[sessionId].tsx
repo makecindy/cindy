@@ -498,6 +498,7 @@ import {
   sessionMetaWriteQueue,
   sessionPendingWrites,
   type RemoteSessionRunStatus,
+  useCustomProviderBillingRevision,
   useRemoteSessions,
   useSessionGoalStatus,
   useSessionInputProjection,
@@ -555,6 +556,14 @@ import {
   summarizeSessionOverview,
   type SessionActionStripActionId,
 } from '@/session/sessionOverview';
+import {
+  billingSessionForRevision,
+  mobileSessionBillingRevision,
+  projectSessionBilling,
+  resolveMobileSdkCostPresentation,
+  type MobileMessageBillingProjection,
+  withoutSessionMoney,
+} from '@/session/sessionBillingProjection';
 import {
   buildMobileSystemCardData,
   commandNeedsRemoteSession,
@@ -2263,6 +2272,109 @@ export default function SessionScreen() {
   );
   // 被控端供应商目录 → provider-aware 模型分段(与新建会话页同逻辑;0 供应商回退扁平 modelOptions)。
   const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
+  const sessionBillingRevision = useMemo(
+    () => currentSession ? mobileSessionBillingRevision(currentSession, messages) : '',
+    [currentSession, messages],
+  );
+  const sessionBillingProviderRevision = useMemo(
+    () => JSON.stringify(
+      composerDeviceProviders.providers.map((provider) => [provider.id, provider.source]),
+    ),
+    [composerDeviceProviders.providers],
+  );
+
+  const customProviderBillingRevision = useCustomProviderBillingRevision(deviceId);
+  const sessionBillingRequestKey = [
+    deviceId,
+    connectionEpoch,
+    customProviderBillingRevision,
+    sessionBillingRevision,
+    sessionBillingProviderRevision,
+  ].join('\n');
+  const [sessionBillingProjection, setSessionBillingProjection] = useState<{
+    entries: MobileMessageBillingProjection['entries'];
+    presentation: MobileMessageBillingProjection['presentation'];
+    requestKey: string;
+    session: RemoteSession;
+    showSdkEstimate: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!currentSession || !deviceId) return undefined;
+    let cancelled = false;
+    const sessionSnapshot = currentSession;
+    const requestKey = sessionBillingRequestKey;
+    void (async () => {
+      const showSdkEstimate = await maker.getCustomProviderBillingSettings()
+        .then((settings) => settings.showSdkCostForCustomProviders === true)
+        .catch(() => false);
+      const presentation = resolveMobileSdkCostPresentation(
+        sessionSnapshot.providerId,
+        composerDeviceProviders.providers,
+        showSdkEstimate,
+      );
+      const snapshot = await maker.estimatedSessionValue(
+        sessionSnapshot.id,
+        presentation,
+        showSdkEstimate,
+      );
+      if (cancelled) return;
+      setSessionBillingProjection({
+        entries: snapshot.entries,
+        presentation,
+        requestKey,
+        session: projectSessionBilling(sessionSnapshot, snapshot),
+        showSdkEstimate,
+      });
+    })().catch(() => {
+      // Older hosts and transient remote failures stay token-only. Never reuse a stale
+      // projection because it may have been produced while the SDK estimate opt-in was on.
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    composerDeviceProviders.providers,
+    currentSession,
+    deviceId,
+    maker,
+    sessionBillingRequestKey,
+  ]);
+
+  const billingDisplaySession = useMemo(() => {
+    if (!currentSession) return null;
+    if (sessionBillingProjection?.requestKey !== sessionBillingRequestKey) {
+      return withoutSessionMoney(currentSession);
+    }
+    return sessionBillingProjection.session;
+  }, [
+    currentSession,
+    sessionBillingProjection,
+    sessionBillingRequestKey,
+  ]);
+  const messageBillingProjection = useMemo<MobileMessageBillingProjection>(() => {
+    if (sessionBillingProjection?.requestKey === sessionBillingRequestKey) {
+      return {
+        entries: sessionBillingProjection.entries,
+        presentation: sessionBillingProjection.presentation,
+        showSdkEstimate: sessionBillingProjection.showSdkEstimate,
+      };
+    }
+    return {
+      entries: [],
+      presentation: resolveMobileSdkCostPresentation(
+        currentSession?.providerId,
+        composerDeviceProviders.providers,
+        false,
+      ),
+      showSdkEstimate: false,
+    };
+  }, [
+    composerDeviceProviders.providers,
+    currentSession?.providerId,
+    sessionBillingProjection,
+    sessionBillingRequestKey,
+  ]);
   const composerModelSections = useMemo(
     () => currentSession
       ? buildMobileModelSections({
@@ -4503,7 +4615,13 @@ export default function SessionScreen() {
         // remoteSessionRunning(activity 推送 / 活跃快照会先置 true,重连场景渲染先于清理)。
         buildMobileMessageRenderItems(
           messages,
-          { autoResumePending: inputProjection.autoResumePending, isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning, sessionId },
+          {
+            autoResumePending: inputProjection.autoResumePending,
+            billingProjection: messageBillingProjection,
+            isSessionStreaming,
+            renderOrphanTaskUpdates: makerTurnRunning,
+            sessionId,
+          },
           taskUpdates,
         ),
         forkOrigin,
@@ -4519,7 +4637,7 @@ export default function SessionScreen() {
       const reconciled = reconcileMobileMessageRenderItems(previous, items);
       return reconciled;
     },
-    [errorTailClientId, forkOrigin, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messageBillingProjection, messages, sessionId, taskUpdates],
   );
   // 只在本次 render 真正 commit 后更新 reconcile 基准。写入 useMemo/ref 会让
   // Concurrent Mode 下被丢弃的 render 泄漏成下一轮的 previous,破坏尾行 memo 的稳定性。
@@ -6664,6 +6782,14 @@ export default function SessionScreen() {
         return;
       }
       if (localSystemCommand) {
+        const localCommandSession = localSystemCommand === 'cost'
+          ? billingSessionForRevision(
+              sessionAtSend,
+              messages,
+              billingDisplaySession,
+              sessionBillingRevision,
+            )
+          : sessionAtSend;
         let data: Record<string, unknown>;
         if (localSystemCommand === 'context') {
           setContextLoading(true);
@@ -6677,14 +6803,14 @@ export default function SessionScreen() {
               contextUsage: usage,
               projection: inputProjection,
               remoteCommands: slashCommands,
-              session: sessionAtSend,
+              session: localCommandSession,
             });
           } catch (err) {
             data = buildMobileSystemCardData(localSystemCommand, {
               contextError: formatRemoteError(err),
               projection: inputProjection,
               remoteCommands: slashCommands,
-              session: sessionAtSend,
+              session: localCommandSession,
             });
           } finally {
             setContextLoading(false);
@@ -6693,7 +6819,7 @@ export default function SessionScreen() {
           data = buildMobileSystemCardData(localSystemCommand, {
             projection: inputProjection,
             remoteCommands: slashCommands,
-            session: sessionAtSend,
+            session: localCommandSession,
           });
         }
         remoteSessionStore.appendLocalSystemCard(sessionId, localSystemCommand, data);
@@ -8924,7 +9050,7 @@ export default function SessionScreen() {
             onToggleExtraDirBrowser={toggleExtraDirBrowser}
             onTogglePinned={() => patchSessionMeta({ pinnedAt: currentSession.pinnedAt ? null : new Date().toISOString() })}
             readOnlyReason={collaborationReadOnlyReason}
-            session={currentSession}
+            session={billingDisplaySession ?? withoutSessionMoney(currentSession)}
             visible={settingsOpen}
           />
         ) : null}

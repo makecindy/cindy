@@ -41,6 +41,10 @@ import {
   normalizeRemoteMoney,
   type RemoteMoney,
 } from '@/session/remoteMoney';
+import {
+  projectMobileMessageBilling,
+  type MobileMessageBillingProjection,
+} from '@/session/sessionBillingProjection';
 
 export type NormalizedRemoteMessageKind =
   | 'user'
@@ -170,12 +174,18 @@ interface ToolUsePayload extends MessageNormalizeToolUse {
   diff?: NormalizedToolDiff;
 }
 
-export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): NormalizedRemoteMessage[] {
+export function normalizeRemoteMessages(
+  messages: readonly RemoteMessage[],
+  billingProjection?: MobileMessageBillingProjection,
+): NormalizedRemoteMessage[] {
   const sorted = sortMessagesByCreatedAt(messages);
-  const toolResultPairing = buildMessageToolResultPairing(sorted);
+  const projected = billingProjection
+    ? projectMobileMessageBilling(sorted, billingProjection)
+    : sorted;
+  const toolResultPairing = buildMessageToolResultPairing(projected);
 
   const result: NormalizedRemoteMessage[] = [];
-  for (const message of sorted) {
+  for (const message of projected) {
     if (message.role === 'tool_result') continue;
 
     if (message.role === 'tool_use') {
@@ -371,7 +381,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     const rawBody = userContent ? userContent.text : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     const body = hookSource?.userText ?? rawBody;
-    const turnCost = readTurnCost(message);
+    const turnCost = readTurnCost(message, billingProjection === undefined);
     result.push({
       key: messageNormalizeKey(message),
       source: message,
@@ -721,9 +731,18 @@ function projectTurnMoney(
   money: unknown,
   legacyUsd: unknown,
   isEstimateFlag: boolean,
+  isCustomProviderCost: boolean,
+  hideCustomSdkCost: boolean,
 ): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd'> | null {
   const normalized = normalizeRemoteMoney(money);
   if (normalized && normalized.amount > 0) {
+    if (
+      hideCustomSdkCost &&
+      isCustomProviderCost &&
+      (normalized.kind === 'actual-cost' || normalized.estimateReasons?.includes('sdk-estimate'))
+    ) {
+      return null;
+    }
     const isEstimate = isEstimateFlag || normalized.kind === 'value-estimate';
     // NormalizedRemoteMessage is a display projection, not the accounting record. Fold the
     // separate wire flag into turnMoney so visible text and accessibility cannot choose
@@ -738,6 +757,9 @@ function projectTurnMoney(
   }
   const cost = readNumber(legacyUsd);
   if (cost === null || cost <= 0) return null;
+  // Legacy custom-provider SDK amounts were persisted as actual-cost. Keep them out of the
+  // mobile display by default; independently sourced legacy estimates remain visible.
+  if (hideCustomSdkCost && isCustomProviderCost && !isEstimateFlag) return null;
   return {
     turnMoney: {
       amount: cost,
@@ -751,6 +773,7 @@ function projectTurnMoney(
 
 function readTurnCost(
   message: RemoteMessage,
+  hideCustomSdkCost: boolean = true,
 ): Pick<
   NormalizedRemoteMessage,
   'turnMoney' | 'turnCostUsd' | 'turnTotalTokens'
@@ -760,6 +783,7 @@ function readTurnCost(
   const totalTokens = readNumber(readRecord(message.agentMeta?.turnUsageDetails)?.totalTokens);
   const usage: Pick<NormalizedRemoteMessage, 'turnTotalTokens'> =
     totalTokens !== null && totalTokens > 0 ? { turnTotalTokens: totalTokens } : {};
+  const isCustomProviderCost = message.agentMeta?.turnCostIsCustomProvider === true;
   // 整轮累计优先于当前 segment(与桌面 MessageActionBar 的 displayedMoney 同口径):
   // 一次用户请求含多个自动续跑 segment 时,操作行只挂在收尾正文上,而它要承载整轮总额;
   // 收尾 segment 缺报价的轮次更是只有 userTurnCost。两者独立判定,不互为前提
@@ -769,11 +793,15 @@ function readTurnCost(
       message.agentMeta?.userTurnCost,
       message.agentMeta?.userTurnCostUsd,
       message.agentMeta?.userTurnCostIsEstimate === true,
+      isCustomProviderCost,
+      hideCustomSdkCost,
     ) ??
     projectTurnMoney(
       message.agentMeta?.turnCost,
       message.agentMeta?.turnCostUsd,
       message.agentMeta?.turnCostIsEstimate === true,
+      isCustomProviderCost,
+      hideCustomSdkCost,
     );
   return projected ? { ...usage, ...projected } : usage;
 }

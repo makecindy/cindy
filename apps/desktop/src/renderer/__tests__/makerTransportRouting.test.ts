@@ -43,6 +43,7 @@ function stubElectron() {
   };
   const localMessages = {
     estimatedSessionValue: vi.fn().mockResolvedValue({ totalValueUsd: 0, entries: [] }),
+    estimatedSessionValueBatch: vi.fn().mockResolvedValue({}),
   };
   const invoke = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal('window', {
@@ -93,7 +94,10 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     ]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:set-extra-dirs', ['rs', ['/a']]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:close-session', ['rs']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:compact-session', ['rs', 'focus on API design']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:compact-session', [
+      'rs',
+      'focus on API design',
+    ]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:enable-orca', [
       'rs',
       { workerAgent: 'codex' },
@@ -324,13 +328,119 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
       totalValueUsd: 1.5,
       entries: [{ clientId: 'a', costUsd: 1.5 }],
     });
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:messages:estimatedSessionValue', ['rs']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:messages:estimatedSessionValue', [
+      'rs',
+      'regular',
+      false,
+    ]);
     expect(localMessages.estimatedSessionValue).not.toHaveBeenCalled();
 
     invoke.mockClear();
     await estimatedSessionValueFor('local-sess');
-    expect(localMessages.estimatedSessionValue).toHaveBeenCalledWith('local-sess');
+    expect(localMessages.estimatedSessionValue).toHaveBeenCalledWith(
+      'local-sess',
+      'regular',
+      false,
+    );
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('estimatedSessionValueBatchFor: local batch plus remote tunnel', async () => {
+    const { localMessages, invoke } = stubElectron();
+    localMessages.estimatedSessionValueBatch.mockResolvedValue({
+      'local-a': { estimatedValueMoney: { amount: 0.1, currency: 'USD' }, excludedActualMoney: null },
+      'local-b': { estimatedValueMoney: { amount: 0.2, currency: 'USD' }, excludedActualMoney: null },
+    });
+    invoke.mockResolvedValue({
+      rs: { estimatedValueMoney: { amount: 1.5, currency: 'USD' }, excludedActualMoney: null },
+    });
+    const { estimatedSessionValueBatchFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+
+    await expect(
+      estimatedSessionValueBatchFor(
+        [
+          { sessionId: 'local-a', presentation: 'regular' },
+          { sessionId: 'local-b', presentation: 'hidden' },
+          { sessionId: 'rs', presentation: 'regular' },
+        ],
+        false,
+      ),
+    ).resolves.toEqual({
+      'local-a': { estimatedValueMoney: { amount: 0.1, currency: 'USD' }, excludedActualMoney: null },
+      'local-b': { estimatedValueMoney: { amount: 0.2, currency: 'USD' }, excludedActualMoney: null },
+      rs: { estimatedValueMoney: { amount: 1.5, currency: 'USD' }, excludedActualMoney: null },
+    });
+    expect(localMessages.estimatedSessionValueBatch).toHaveBeenCalledTimes(1);
+    expect(localMessages.estimatedSessionValueBatch).toHaveBeenCalledWith({
+      sessionIds: ['local-a', 'local-b'],
+      showSdkEstimate: false,
+      presentations: { 'local-a': 'regular', 'local-b': 'hidden' },
+    });
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:messages:estimatedSessionValueBatch', [
+      {
+        sessionIds: ['rs'],
+        showSdkEstimate: false,
+        presentations: { rs: 'regular' },
+      },
+    ]);
+  });
+
+  it('estimatedSessionValueBatchFor: older remotes fall back to per-session reads', async () => {
+    const { localMessages, invoke } = stubElectron();
+    invoke
+      .mockRejectedValueOnce(
+        new Error("[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel 'local-db:messages:estimatedSessionValueBatch' not allowed remotely"),
+      )
+      .mockResolvedValueOnce({
+        totalValueMoney: { amount: 1.5, currency: 'USD', kind: 'value-estimate' },
+        entries: [],
+      });
+    const { estimatedSessionValueBatchFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
+
+    await expect(
+      estimatedSessionValueBatchFor([{ sessionId: 'rs', presentation: 'regular' }], false),
+    ).resolves.toEqual({
+      rs: {
+        estimatedValueMoney: { amount: 1.5, currency: 'USD', kind: 'value-estimate' },
+        excludedActualMoney: null,
+      },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(1, 'dev-1', 'local-db:messages:estimatedSessionValueBatch', [
+      {
+        sessionIds: ['rs'],
+        showSdkEstimate: false,
+        presentations: { rs: 'regular' },
+      },
+    ]);
+    expect(invoke).toHaveBeenNthCalledWith(2, 'dev-1', 'local-db:messages:estimatedSessionValue', [
+      'rs',
+      'regular',
+      false,
+    ]);
+    expect(localMessages.estimatedSessionValueBatch).not.toHaveBeenCalled();
+  });
+
+  it('customProviderBillingGetFor: remote GET plus fail-closed old remotes', async () => {
+    const { invoke } = stubElectron();
+    invoke.mockResolvedValueOnce({ showSdkCostForCustomProviders: true, isCustomized: true });
+    const { customProviderBillingGetFor } = await import('@/lib/makerTransport');
+    await expect(customProviderBillingGetFor('dev-1')).resolves.toEqual({
+      showSdkCostForCustomProviders: true,
+      isCustomized: true,
+    });
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:custom-provider-billing:get', []);
+
+    invoke.mockRejectedValueOnce(
+      new Error("[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel 'maker:custom-provider-billing:get' not allowed remotely"),
+    );
+    await expect(customProviderBillingGetFor('dev-old')).resolves.toEqual({
+      showSdkCostForCustomProviders: false,
+      isCustomized: false,
+    });
   });
 
   // issue #1170 codex P2:协同 mutation 在 relay 瞬时重连清空注册表的窗口内若退回本机,

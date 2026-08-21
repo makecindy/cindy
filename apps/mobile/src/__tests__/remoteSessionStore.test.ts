@@ -2800,17 +2800,23 @@ describe('remoteSessionStore', () => {
       turnMoney: {
         amount: 0.29,
         currency: 'CNY',
-        approximate: false,
-        kind: 'actual-cost',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['sdk-estimate'],
       },
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'custom-provider',
     });
 
     expect(remoteSessionStore.getMessages('s1')[0].agentMeta).toMatchObject({
       turnCost: {
         amount: 0.29,
         currency: 'CNY',
+        estimateReasons: ['sdk-estimate'],
       },
-      turnCostIsEstimate: false,
+      turnCostIsEstimate: true,
+      turnCostIsCustomProvider: true,
+      turnCostProviderId: 'custom-provider',
     });
   });
 
@@ -3632,5 +3638,19 @@ describe('任务消息内存治理', () => {
     expect(remoteSessionStore.isSessionMessageWindowSynced('s1', row)).toBe(false);
     expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
     expect(remoteSessionStore.isSessionMessageAuthorityCurrent(authority)).toBe(true);
+  });
+
+  it('tracks custom-provider billing preference push revisions per device', () => {
+    let notifications = 0;
+    const unsubscribe = remoteSessionStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    expect(remoteSessionStore.getCustomProviderBillingRevision('dev-1')).toBe(0);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:custom-provider-billing:changed', {});
+
+    expect(remoteSessionStore.getCustomProviderBillingRevision('dev-1')).toBe(1);
+    expect(notifications).toBe(1);
+    unsubscribe();
   });
 });

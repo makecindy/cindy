@@ -31,6 +31,7 @@ import {
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
 import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { bootstrapChatEmbeddingFromMain } from './lib/chatEmbeddingStore';
+import { bootstrapCustomProviderBillingFromMain } from './lib/customProviderBillingSettingsStore';
 import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore';
 import { bootstrapLspModeFromMain } from './lib/lspModeStore';
 import { bootstrapSilentEncryptedRetryFromMain } from './lib/silentEncryptedRetryStore';
@@ -73,6 +74,7 @@ void bootstrapChatEmbeddingFromMain();
 // LSP Beta 开关 (Phase 1) — admin-only, 默认 false; 同款镜像同步方式。
 void bootstrapLspModeFromMain();
 // Git safety workflow 开关 — 默认 false; Codex rewind 入口同步依赖此镜像。
+void bootstrapCustomProviderBillingFromMain();
 void bootstrapGitSafetySettingsFromMain();
 
 const view = new URLSearchParams(window.location.search).get('view');

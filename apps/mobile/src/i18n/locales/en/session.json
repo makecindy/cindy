@@ -217,6 +217,7 @@
     "aiRenameProviderUnsupported": "The current provider doesn't support auto-naming. Switch providers and try again.",
     "aiRenameFailed": "Auto-naming failed. Try again.",
     "contextUsageSummary": "Context {{percent}}%",
+    "estimatedUsageSummary": "Est. {{amount}}",
     "copied": "Copied",
     "copyFailed": "Copy failed",
     "deleteConfirmTitle": "Delete session?",

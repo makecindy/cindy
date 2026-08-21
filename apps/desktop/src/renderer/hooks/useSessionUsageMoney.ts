@@ -12,6 +12,7 @@ import {
   addCompatibleRegionalMoney,
   DEFAULT_USAGE_CURRENCY,
   type RegionalMoney,
+  type SdkCostPresentation,
 } from '../../shared/regionalMoney';
 import { useSessionEstimatedValue } from './useSessionEstimatedValue';
 import { useSessionSpend } from './useSessionSpend';
@@ -22,6 +23,18 @@ export interface SessionUsageMoney {
   totalMoney: RegionalMoney | null;
 }
 
+export function subtractExcludedActualMoney(
+  actualMoney: RegionalMoney | null,
+  excludedActualMoney: RegionalMoney | null,
+): RegionalMoney | null {
+  if (!actualMoney || actualMoney.amount <= 0) return null;
+  if (!excludedActualMoney || excludedActualMoney.currency !== actualMoney.currency) {
+    return actualMoney;
+  }
+  const amount = Math.max(0, actualMoney.amount - excludedActualMoney.amount);
+  return amount > 0 ? { ...actualMoney, amount } : null;
+}
+
 export function combineSessionUsageMoney(
   actualMoney: RegionalMoney | null,
   estimatedValueMoney: RegionalMoney | null,
@@ -30,19 +43,14 @@ export function combineSessionUsageMoney(
   // 只兼容与当前会话账本同币种的值；无法确定换算关系时直接丢弃，不猜测或强转。
   const preferredCurrency = actualMoney?.currency ?? DEFAULT_USAGE_CURRENCY;
   const compatibleEstimatedValueMoney =
-    estimatedValueMoney?.currency === preferredCurrency
-      ? estimatedValueMoney
-      : null;
+    estimatedValueMoney?.currency === preferredCurrency ? estimatedValueMoney : null;
   const values = [actualMoney, compatibleEstimatedValueMoney].filter(
     (money): money is RegionalMoney => Boolean(money && money.amount > 0),
   );
   return {
     actualMoney,
     estimatedValueMoney: compatibleEstimatedValueMoney,
-    totalMoney:
-      values.length > 0
-        ? addCompatibleRegionalMoney(values, preferredCurrency)
-        : null,
+    totalMoney: values.length > 0 ? addCompatibleRegionalMoney(values, preferredCurrency) : null,
   };
 }
 
@@ -50,9 +58,17 @@ export function useSessionUsageMoney(
   sessionId: string | undefined,
   initialMoney: RegionalMoney | null | undefined,
   initialCostUsd: number | null | undefined,
+  presentation: SdkCostPresentation = 'regular',
+  showSdkEstimate: boolean = presentation === 'estimate',
 ): SessionUsageMoney {
-  const actualMoney = useSessionSpend(sessionId, initialMoney, initialCostUsd);
-  const estimatedValueMoney = useSessionEstimatedValue(sessionId, Boolean(sessionId));
+  const persistedActualMoney = useSessionSpend(sessionId, initialMoney, initialCostUsd);
+  const { estimatedValueMoney, excludedActualMoney } = useSessionEstimatedValue(
+    sessionId,
+    Boolean(sessionId),
+    presentation,
+    showSdkEstimate,
+  );
+  const actualMoney = subtractExcludedActualMoney(persistedActualMoney, excludedActualMoney);
 
   return useMemo(
     () => combineSessionUsageMoney(actualMoney, estimatedValueMoney),

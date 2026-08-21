@@ -3,7 +3,9 @@ import type { Schedule, SchedulerEvent } from '@cindy/maker-scheduler';
 
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { useCustomProviderBillingSettings } from '@/hooks/useCustomProviderBillingSettings';
 import type { RegionalMoney } from '../../../../shared/regionalMoney';
+import { subtractSdkEstimatedValue } from '../lib/projectScheduleCost';
 
 const log = createLogger('ScheduleCostSummaries');
 
@@ -12,6 +14,7 @@ export interface ScheduleCostSummary {
   scheduleId: string;
   totalMoney: RegionalMoney;
   totalEstimatedValueMoney: RegionalMoney;
+  totalSdkEstimatedValueMoney?: RegionalMoney;
   totalCostUsd?: number;
   totalEstimatedValueUsd?: number;
   /** 至少一轮自动化无法取得可靠费用。 */
@@ -25,6 +28,7 @@ export interface ScheduleSessionCostSummary {
   sessionId: string;
   totalMoney: RegionalMoney;
   totalEstimatedValueMoney: RegionalMoney;
+  totalSdkEstimatedValueMoney?: RegionalMoney;
   totalCostUsd?: number;
   totalEstimatedValueUsd?: number;
 }
@@ -46,6 +50,7 @@ export function useScheduleCostSummaries(
     () => new Map(),
   );
   const [loaded, setLoaded] = useState(false);
+  const { showSdkCostForCustomProviders } = useCustomProviderBillingSettings();
   const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -67,7 +72,37 @@ export function useScheduleCostSummaries(
       const next = new Map<string, ScheduleCostSummary>();
       for (const row of rows) {
         if (!visibleScheduleIds.has(row.scheduleId)) continue;
-        next.set(row.scheduleId, row);
+        const projectEstimatedValue = (
+          estimatedValueMoney: RegionalMoney,
+          sdkEstimatedValueMoney: RegionalMoney | undefined,
+        ): RegionalMoney =>
+          subtractSdkEstimatedValue(
+            estimatedValueMoney,
+            sdkEstimatedValueMoney,
+            showSdkCostForCustomProviders,
+          ) ?? {
+            ...estimatedValueMoney,
+            amount: 0,
+            estimateReasons: undefined,
+          };
+        next.set(row.scheduleId, {
+          ...row,
+          totalEstimatedValueMoney: projectEstimatedValue(
+            row.totalEstimatedValueMoney,
+            row.totalSdkEstimatedValueMoney,
+          ),
+          ...(row.sessions
+            ? {
+                sessions: row.sessions.map((session) => ({
+                  ...session,
+                  totalEstimatedValueMoney: projectEstimatedValue(
+                    session.totalEstimatedValueMoney,
+                    session.totalSdkEstimatedValueMoney,
+                  ),
+                })),
+              }
+            : {}),
+        });
       }
       setSummaries(next);
       setLoaded(true);
@@ -76,7 +111,7 @@ export function useScheduleCostSummaries(
         error: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [scheduleIdsKey]);
+  }, [scheduleIdsKey, showSdkCostForCustomProviders]);
 
   useEffect(() => {
     void refresh();
