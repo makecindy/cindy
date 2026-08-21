@@ -49,8 +49,9 @@ import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
  *   fraction 一字不动(位置与宽度记忆保留,重装/合并/恢复即原位复活,
  *   architecture-invariants §3)。
  *
- * 实现细节 —— root split 扁平化:根分割不产生容器 div,children(含分割线)
- * 直接吐进父容器(MainLayout 的 row flex div)。嵌套 split 走通用容器渲染,
+ * 实现细节 —— root split 在专属的内容区 flex 容器内扁平化:根分割自身不再额外
+ * 产生容器 div,children(含分割线)直接作为内容区容器的 flex 子项。该容器把百分比
+ * 解析口径钉在“窗口减去左侧栏”的剩余宽度；嵌套 split 走通用容器渲染,
  * 其分割线暂为静态(嵌套布局今天不存在,交互化随真实需求补)。
  */
 
@@ -58,6 +59,8 @@ import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
 const AVAILABLE_WIDTH_FALLBACK = 1200;
 /** chat-main 的最小像素宽(与 <main> 的 min-w-[400px] 对齐)。 */
 const CHAT_MIN_PX = 400;
+/** live resize 停稳后再校正 clamp 与份额账本，避免把连续像素变化回灌 React。 */
+const ROOT_WIDTH_SELF_HEAL_SETTLE_MS = 120;
 /**
  * 非 chat 面板的兜底最小宽(2026-07-09 Lizi 定案:**只有聊天区有硬下限,
  * 其它面板一律自由拉**)。这个值不是产品下限,只防"拖到窄得抓不住把手/
@@ -801,6 +804,39 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     () => window.electronAPI.layout.getStateSync().layout,
   );
   useEffect(() => window.electronAPI.layout.onChanged(({ layout: next }) => setLayout(next)), []);
+  const layoutRootRef = useRef<HTMLDivElement>(null);
+
+  // CSS clamp 负责 live resize 的即时画面；这里不发布连续宽度 state，只在内容区
+  // 停稳后检查一次份额账本。确实有非 chat 面板被 120px floor 托起时才写 React/IPC，
+  // 让下一次分割线起拖从眼前宽度开始，不出现“空拖一段再跳大”。
+  useEffect(() => {
+    const root = layoutRootRef.current;
+    if (!root || suppressNonChatPanels) return;
+    let timer: number | null = null;
+    const heal = () => {
+      timer = null;
+      const available = root.getBoundingClientRect().width;
+      if (!(available > 0)) return;
+      const fixed = normalizeSubMinFractions(layout, available, isPanelKindVisible);
+      if (fixed === null) return;
+      setLayout(fixed);
+      void window.electronAPI.layout.set(fixed).catch(() => undefined);
+    };
+    const schedule = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(heal, ROOT_WIDTH_SELF_HEAL_SETTLE_MS);
+    };
+
+    schedule();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    observer?.observe(root);
+    if (observer === null) window.addEventListener('resize', schedule);
+    return () => {
+      observer?.disconnect();
+      if (observer === null) window.removeEventListener('resize', schedule);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [ghostBubbleState, ghostSyncVersion, ghostWindowsState, layout, suppressNonChatPanels]);
 
   // 撑满态(panelMaximize.tsx):会话级视图态,树账本不动。同 kind 再点还原。
   const [maximizedKind, setMaximizedKind] = useState<string | null>(null);
@@ -888,7 +924,15 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
       );
       return (
         <PanelMaximizeContext.Provider value={maximizeCtx}>
-          <PaneWidthProvider value={rootWidths.panelWidths}>{body}</PaneWidthProvider>
+          <PaneWidthProvider value={rootWidths.panelWidths}>
+            <div
+              ref={layoutRootRef}
+              data-testid="layout-root-content"
+              className="flex min-w-0 flex-1 overflow-hidden"
+            >
+              {body}
+            </div>
+          </PaneWidthProvider>
         </PanelMaximizeContext.Provider>
       );
     }
@@ -965,7 +1009,15 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
   }
   return (
     <PanelMaximizeContext.Provider value={maximizeCtx}>
-      <PaneWidthProvider value={rootWidths.panelWidths}>{body}</PaneWidthProvider>
+      <PaneWidthProvider value={rootWidths.panelWidths}>
+        <div
+          ref={layoutRootRef}
+          data-testid="layout-root-content"
+          className="flex min-w-0 flex-1 overflow-hidden"
+        >
+          {body}
+        </div>
+      </PaneWidthProvider>
     </PanelMaximizeContext.Provider>
   );
 }

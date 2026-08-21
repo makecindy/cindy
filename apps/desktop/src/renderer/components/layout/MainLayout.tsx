@@ -1382,8 +1382,8 @@ export function MainLayout() {
             (renderer/panels)。两大块 JSX 原样保留在 bridge 里 —— 构造与状态
             所有权仍在 MainLayout(绞杀式重构 Step A:只换骨架不动组件;尺寸/
             折叠仍由既有 props 驱动,树上 fraction 暂不参与渲染)。LayoutRoot 的
-            root split 扁平化保证 DOM 与重构前一致；稳态窗口 resize 的 pane 宽度
-            由 CSS 百分比直接响应，不再把连续窗口宽度发布进 React)。 */}
+            root split 在专属内容区 flex 容器内扁平化；稳态窗口 resize 的 pane 宽度
+            由 CSS 百分比相对剩余内容宽直接响应，不再把连续窗口宽度发布进 React)。 */}
         <BuiltinPanelBridgeProvider
           value={{
             // 会话列表是树外全高固定柱,由上方 <Sidebar/> 直接渲染,此槽 Step A 不消费。
