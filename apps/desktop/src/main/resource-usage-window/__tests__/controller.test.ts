@@ -17,6 +17,7 @@ interface FakeWindow {
   focus: ReturnType<typeof vi.fn>;
   restore: ReturnType<typeof vi.fn>;
   setFullScreen: ReturnType<typeof vi.fn>;
+  setTitle: ReturnType<typeof vi.fn>;
   isFullScreen: () => boolean;
   isMinimized: () => boolean;
   isVisible: () => boolean;
@@ -76,9 +77,8 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     }),
     focus: vi.fn(),
     restore: vi.fn(),
-    setFullScreen: vi.fn((next: boolean) => {
-      fullScreen = next;
-    }),
+    setFullScreen: vi.fn(),
+    setTitle: vi.fn(),
     isFullScreen: () => fullScreen,
     isMinimized: () => minimized,
     isVisible: () => visible,
@@ -144,6 +144,7 @@ describe('ResourceUsageWindowController', () => {
     expect(windows).toHaveLength(1);
     expect(windows[0]?.show).not.toHaveBeenCalled();
     expect(windows[0]?.focus).not.toHaveBeenCalled();
+    expect(windows[0]?.setTitle).toHaveBeenCalled();
     expect(windows[0]?.send).toHaveBeenLastCalledWith(
       RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
       false,
@@ -271,6 +272,7 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.show).toHaveBeenCalledOnce();
     expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(true);
     expect(owner.isFullScreen()).toBe(true);
+    windows[0]?.emitWindow('enter-full-screen');
 
     expect(controller.close(windows[0]!.webContents)).toBe(true);
     expect(windows[0]?.setFullScreen).toHaveBeenLastCalledWith(false);
@@ -307,6 +309,7 @@ describe('ResourceUsageWindowController', () => {
     controller.prewarm();
     markPrewarmed(controller, windows[0]!);
     expect(controller.open(mainSender)).toBe(true);
+    windows[0]?.emitWindow('enter-full-screen');
     expect(controller.close(windows[0]!.webContents)).toBe(true);
     expect(windows[0]?.hide).not.toHaveBeenCalled();
 
@@ -344,6 +347,67 @@ describe('ResourceUsageWindowController', () => {
 
     expect(controller.open(mainSender)).toBe(true);
     expect(windows[0]?.setFullScreen).not.toHaveBeenCalled();
+  });
+
+  it('updates the native window title when the application locale changes', () => {
+    const windows: FakeWindow[] = [];
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: () => true,
+      resolveNativeTitle: (locale) =>
+        locale === 'zh-CN' ? '资源监视器' : 'Activity Monitor',
+    });
+    controller.prewarm();
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('Activity Monitor');
+    windows[0]?.setTitle.mockClear();
+    controller.setLocale('zh-CN');
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('资源监视器');
+  });
+
+  it('cancels a pending macOS fullscreen entry if the monitor is closed before enter-full-screen', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+
+    expect(controller.open(mainSender)).toBe(true);
+    expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(true);
+    expect(windows[0]?.isFullScreen()).toBe(false);
+
+    expect(controller.close(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.setFullScreen).toHaveBeenLastCalledWith(false);
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+
+    windows[0]?.emitWindow('enter-full-screen');
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+    expect(windows[0]?.setFullScreen).toHaveBeenLastCalledWith(false);
+
+    windows[0]?.emitWindow('leave-full-screen');
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    expect(owner.show).toHaveBeenCalledOnce();
+    expect(owner.focus).toHaveBeenCalledOnce();
   });
 
   it('does not fullscreen the monitor on non-macOS even if the owner is fullscreen', () => {

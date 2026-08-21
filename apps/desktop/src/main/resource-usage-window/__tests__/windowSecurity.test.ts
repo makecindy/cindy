@@ -11,6 +11,7 @@ const preloadSource = fs.readFileSync(
 describe('resource usage BrowserWindow security contract', () => {
   it('stays hidden and uses the dedicated preload with Electron isolation enabled', () => {
     expect(source).toContain('show: false');
+    expect(source).toContain("t('titleBar.menuItems.resourceUsage')");
     expect(source).not.toMatch(/\bparent\s*:/);
     expect(source).toContain("path.join(__dirname, 'resourceUsagePreload.js')");
     expect(source).toContain('sandbox: true');

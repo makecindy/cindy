@@ -17,6 +17,7 @@ import { markAppContentWindow } from '../windowFocusClassifier.js';
 import { installExternalLinkGuards } from '../secondary-windows.js';
 import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
+import { t } from '../i18n.js';
 import { markResourceUsageWebContentsId } from './registry.js';
 
 const log = createLogger('resource-usage-window');
@@ -33,7 +34,7 @@ export function createResourceUsageWindow(): BrowserWindow {
     height: 520,
     minWidth: 380,
     minHeight: 320,
-    title: 'Activity Monitor',
+    title: t('titleBar.menuItems.resourceUsage'),
     icon: app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png'),

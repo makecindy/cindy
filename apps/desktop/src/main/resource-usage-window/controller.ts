@@ -12,6 +12,7 @@ import {
   RESOURCE_USAGE_WINDOW_SAMPLING_ACTIVE_CHANNEL,
 } from '../../shared/resourceUsageWindow.js';
 
+import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('resource-usage-window-controller');
@@ -29,6 +30,8 @@ export interface ResourceUsageOwnerWindow {
   focus(): void;
 }
 
+type FullscreenTransition = 'idle' | 'entering' | 'entered' | 'leaving';
+
 export interface ResourceUsageWindowControllerDeps {
   createWindow: () => BrowserWindow;
   isOpenSender: (sender: WebContents) => boolean;
@@ -36,6 +39,8 @@ export interface ResourceUsageWindowControllerDeps {
   getOwnerWindow?: (sender: WebContents) => ResourceUsageOwnerWindow | null;
   /** 测试注入；默认 process.platform。仅 darwin 会把监视器送进独立全屏 Space。 */
   platform?: NodeJS.Platform;
+  /** 测试注入；默认走 main i18n 的当前 locale。 */
+  resolveNativeTitle?: (locale: SupportedLocale | null) => string;
   openTimeoutMs?: number;
   prewarmTimeoutMs?: number;
   recoveryStabilityMs?: number;
@@ -59,6 +64,7 @@ export class ResourceUsageWindowController {
   /** 递增代次：关闭全屏时记下当前值，leave-full-screen 迟到时对照，避免把刚重新打开的窗口藏掉。 */
   private fullscreenGeneration = 0;
   private pendingLeaveGeneration: number | null = null;
+  private fullscreenTransition: FullscreenTransition = 'idle';
 
   constructor(private readonly deps: ResourceUsageWindowControllerDeps) {}
 
@@ -136,7 +142,17 @@ export class ResourceUsageWindowController {
     this.locale = locale;
     const win = this.winRef;
     if (!win || win.isDestroyed()) return;
+    this.applyNativeTitle(win);
     this.sendLocale(win, locale);
+  }
+
+  private applyNativeTitle(win: BrowserWindow): void {
+    if (win.isDestroyed()) return;
+    win.setTitle(this.nativeTitle());
+  }
+
+  private nativeTitle(): string {
+    return this.deps.resolveNativeTitle?.(this.locale) ?? t('titleBar.menuItems.resourceUsage');
   }
 
   private sendLocale(win: BrowserWindow, locale: SupportedLocale): void {
@@ -190,6 +206,8 @@ export class ResourceUsageWindowController {
     this.visible = false;
     this.samplingActive = true;
     this.destroyingWindow = false;
+    this.fullscreenTransition = 'idle';
+    this.applyNativeTitle(win);
     if (this.locale) this.sendLocale(win, this.locale);
     win.on('close', (event) => {
       if (this.destroyingWindow || this.disposed) return;
@@ -201,6 +219,8 @@ export class ResourceUsageWindowController {
     win.on('restore', () => this.onNativeVisibilityChanged(win, true));
     win.on('hide', () => this.onNativeVisibilityChanged(win, false));
     win.on('minimize', () => this.onNativeVisibilityChanged(win, false));
+    win.on('enter-full-screen', () => this.onEnteredFullScreen(win));
+    win.on('leave-full-screen', () => this.onLeftFullScreen(win));
     win.webContents.on('did-start-loading', () => this.onRendererReloadStarted(win));
     win.webContents.on(
       'did-fail-load',
@@ -265,36 +285,64 @@ export class ResourceUsageWindowController {
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
     this.setSamplingActive(win, false);
-    const finishHide = (generation: number): void => {
-      if (this.pendingLeaveGeneration !== generation) {
-        // 关闭动画还在走时用户又打开了：系统仍会把这扇窗送出全屏。
-        // pendingLeaveGeneration 已清空表示这次 leave 属于上一轮关闭；
-        // 若监视器已经重新显示，再送回独立全屏 Space。新一轮关闭进行中则忽略过期事件。
-        if (
-          this.pendingLeaveGeneration === null &&
-          !win.isDestroyed() &&
-          (this.visible || this.pendingOpen)
-        ) {
-          this.syncFullscreenWithOwner(win);
-        }
-        return;
-      }
-      this.pendingLeaveGeneration = null;
-      if (win.isDestroyed()) return;
-      if (win.isVisible()) win.hide();
-      this.visible = false;
-      this.focusOwnerWindow();
-    };
     if (this.pendingLeaveGeneration !== null) return;
-    if (this.platform() === 'darwin' && win.isFullScreen()) {
-      const generation = this.fullscreenGeneration;
+    const generation = this.fullscreenGeneration;
+    if (this.platform() === 'darwin' && this.needsFullscreenExit(win)) {
       this.pendingLeaveGeneration = generation;
-      win.once('leave-full-screen', () => finishHide(generation));
+      this.fullscreenTransition = 'leaving';
       win.setFullScreen(false);
       return;
     }
-    this.pendingLeaveGeneration = this.fullscreenGeneration;
-    finishHide(this.fullscreenGeneration);
+    this.pendingLeaveGeneration = generation;
+    this.finishHide(win, generation);
+  }
+
+  private needsFullscreenExit(win: BrowserWindow): boolean {
+    return (
+      win.isFullScreen() ||
+      this.fullscreenTransition === 'entering' ||
+      this.fullscreenTransition === 'entered' ||
+      this.fullscreenTransition === 'leaving'
+    );
+  }
+
+  private finishHide(win: BrowserWindow, generation: number): void {
+    if (this.pendingLeaveGeneration !== generation) {
+      if (
+        this.pendingLeaveGeneration === null &&
+        !win.isDestroyed() &&
+        (this.visible || this.pendingOpen)
+      ) {
+        this.syncFullscreenWithOwner(win);
+      }
+      return;
+    }
+    this.pendingLeaveGeneration = null;
+    this.fullscreenTransition = 'idle';
+    if (win.isDestroyed()) return;
+    if (win.isVisible()) win.hide();
+    this.visible = false;
+    this.focusOwnerWindow();
+  }
+
+  private onEnteredFullScreen(win: BrowserWindow): void {
+    if (win !== this.winRef || win.isDestroyed()) return;
+    if (this.pendingLeaveGeneration !== null) {
+      this.fullscreenTransition = 'leaving';
+      win.setFullScreen(false);
+      return;
+    }
+    this.fullscreenTransition = 'entered';
+  }
+
+  private onLeftFullScreen(win: BrowserWindow): void {
+    if (win !== this.winRef || win.isDestroyed()) return;
+    if (this.pendingLeaveGeneration !== null) {
+      this.finishHide(win, this.pendingLeaveGeneration);
+      return;
+    }
+    this.fullscreenTransition = 'idle';
+    if (this.visible || this.pendingOpen) this.syncFullscreenWithOwner(win);
   }
 
   private rememberOwner(sender: WebContents): void {
@@ -324,8 +372,15 @@ export class ResourceUsageWindowController {
     if (this.platform() !== 'darwin') return;
     const owner = this.ownerWindow();
     const shouldBeFullScreen = Boolean(owner?.isFullScreen());
-    if (win.isFullScreen() === shouldBeFullScreen) return;
-    win.setFullScreen(shouldBeFullScreen);
+    if (shouldBeFullScreen) {
+      if (win.isFullScreen() || this.fullscreenTransition === 'entering') return;
+      this.fullscreenTransition = 'entering';
+      win.setFullScreen(true);
+      return;
+    }
+    if (!win.isFullScreen() && this.fullscreenTransition === 'idle') return;
+    this.fullscreenTransition = 'leaving';
+    win.setFullScreen(false);
   }
 
   private focusOwnerWindow(): void {
@@ -374,6 +429,7 @@ export class ResourceUsageWindowController {
     this.destroyingWindow = false;
     this.lastOwner = null;
     this.pendingLeaveGeneration = null;
+    this.fullscreenTransition = 'idle';
   }
 
   private clearOpenTimeout(): void {
