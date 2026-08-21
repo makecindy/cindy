@@ -26,9 +26,11 @@ export interface ResourceUsageOwnerWindow {
   isDestroyed(): boolean;
   isFullScreen(): boolean;
   isMinimized(): boolean;
+  isVisible?(): boolean;
   restore(): void;
   show(): void;
   focus(): void;
+  on?(event: 'hide' | 'minimize' | 'closed', listener: () => void): unknown;
 }
 
 type FullscreenTransition = 'idle' | 'entering' | 'entered' | 'leaving';
@@ -65,9 +67,12 @@ export class ResourceUsageWindowController {
   private disposed = false;
   private locale: SupportedLocale | null = null;
   private lastOwner: ResourceUsageOwnerWindow | null = null;
+  private ownerHideUnsubscribers: Array<() => void> = [];
   /** 递增代次：关闭全屏时记下当前值，leave-full-screen 迟到时对照，避免把刚重新打开的窗口藏掉。 */
   private fullscreenGeneration = 0;
   private pendingLeaveGeneration: number | null = null;
+  private pendingLeaveRestoresOwner = true;
+  private requestedFullscreenGeneration: number | null = null;
   private fullscreenTransition: FullscreenTransition = 'idle';
 
   constructor(private readonly deps: ResourceUsageWindowControllerDeps) {}
@@ -138,6 +143,14 @@ export class ResourceUsageWindowController {
     const win = this.windowForSender(sender);
     if (!win) return false;
     this.hideWindow(win);
+    return true;
+  }
+
+  /** 主窗口隐藏到 Dock / 托盘时一并收起监视器，且不再把焦点交回已隐藏的 owner。 */
+  hideWithOwner(): boolean {
+    const win = this.winRef;
+    if (!win || win.isDestroyed()) return false;
+    this.hideWindow(win, { restoreOwner: false });
     return true;
   }
 
@@ -224,8 +237,12 @@ export class ResourceUsageWindowController {
     win.on('restore', () => this.onNativeVisibilityChanged(win, true));
     win.on('hide', () => this.onNativeVisibilityChanged(win, false));
     win.on('minimize', () => this.onNativeVisibilityChanged(win, false));
-    win.on('enter-full-screen', () => this.onEnteredFullScreen(win));
-    win.on('leave-full-screen', () => this.onLeftFullScreen(win));
+    win.on('enter-full-screen', () => {
+      this.reconcileFullscreenEvent(win, 'entered', this.requestedFullscreenGeneration);
+    });
+    win.on('leave-full-screen', () => {
+      this.reconcileFullscreenEvent(win, 'left', this.requestedFullscreenGeneration);
+    });
     // index.html 的 <title>Cindy</title> 会在每次导航发出 page-title-updated，
     // 不拦截的话 Mission Control / 任务栏会把本地化标题盖回 Cindy。
     win.webContents.on('page-title-updated', (event) => {
@@ -292,17 +309,21 @@ export class ResourceUsageWindowController {
     this.syncFullscreenWithOwner(win);
   }
 
-  private hideWindow(win: BrowserWindow): void {
+  private hideWindow(win: BrowserWindow, options: { restoreOwner?: boolean } = {}): void {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
     this.setSamplingActive(win, false);
-    if (this.pendingLeaveGeneration !== null) return;
+    if (this.pendingLeaveGeneration !== null) {
+      if (options.restoreOwner === false) this.pendingLeaveRestoresOwner = false;
+      return;
+    }
     const generation = this.fullscreenGeneration;
+    this.pendingLeaveRestoresOwner = options.restoreOwner !== false;
     if (this.platform() === 'darwin' && this.needsFullscreenExit(win)) {
       this.pendingLeaveGeneration = generation;
       this.fullscreenTransition = 'leaving';
-      win.setFullScreen(false);
+      this.requestFullscreen(win, false);
       this.scheduleLeaveFallback(win, generation);
       return;
     }
@@ -332,21 +353,13 @@ export class ResourceUsageWindowController {
     }
     this.clearLeaveTimeout();
     this.pendingLeaveGeneration = null;
+    const restoreOwner = this.pendingLeaveRestoresOwner;
+    this.pendingLeaveRestoresOwner = true;
     this.fullscreenTransition = 'idle';
     if (win.isDestroyed()) return;
     if (win.isVisible()) win.hide();
     this.visible = false;
-    this.focusOwnerWindow();
-  }
-
-  private onEnteredFullScreen(win: BrowserWindow): void {
-    if (win !== this.winRef || win.isDestroyed()) return;
-    this.reconcileFullscreenEvent(win, 'entered');
-  }
-
-  private onLeftFullScreen(win: BrowserWindow): void {
-    if (win !== this.winRef || win.isDestroyed()) return;
-    this.reconcileFullscreenEvent(win, 'left');
+    if (restoreOwner) this.focusOwnerWindow();
   }
 
   /**
@@ -354,34 +367,92 @@ export class ResourceUsageWindowController {
    * 当前代次要关窗时一律走退出；当前代次仍可见时按 owner 对账；
    * 其它迟到事件不得把已结束的一轮重新拉活。
    */
-  private reconcileFullscreenEvent(win: BrowserWindow, event: 'entered' | 'left'): void {
+  private reconcileFullscreenEvent(
+    win: BrowserWindow,
+    event: 'entered' | 'left',
+    eventGeneration: number | null = this.fullscreenGeneration,
+  ): void {
+    if (win !== this.winRef || win.isDestroyed()) return;
+    if (eventGeneration == null || eventGeneration !== this.fullscreenGeneration) {
+      if (this.pendingLeaveGeneration !== null) {
+        if (event === 'left') this.finishHide(win, this.pendingLeaveGeneration);
+        return;
+      }
+      if (this.visible || this.pendingOpen) {
+        this.syncFullscreenWithOwner(win);
+        return;
+      }
+      if (event === 'entered') {
+        this.pendingLeaveGeneration = this.fullscreenGeneration;
+        this.pendingLeaveRestoresOwner = false;
+        this.fullscreenTransition = 'leaving';
+        this.requestFullscreen(win, false);
+        this.scheduleLeaveFallback(win, this.fullscreenGeneration);
+      }
+      return;
+    }
     if (this.pendingLeaveGeneration !== null) {
       if (event === 'left') {
         this.finishHide(win, this.pendingLeaveGeneration);
         return;
       }
       this.fullscreenTransition = 'leaving';
-      win.setFullScreen(false);
+      this.requestFullscreen(win, false);
       this.scheduleLeaveFallback(win, this.pendingLeaveGeneration);
       return;
     }
     if (this.visible || this.pendingOpen) {
-      this.fullscreenTransition = event === 'entered' ? 'entered' : 'idle';
+      if (event === 'entered') this.fullscreenTransition = 'entered';
+      else if (this.fullscreenTransition !== 'entering') this.fullscreenTransition = 'idle';
       this.syncFullscreenWithOwner(win);
       return;
     }
     if (event === 'entered') {
       const generation = this.fullscreenGeneration;
       this.pendingLeaveGeneration = generation;
+      this.pendingLeaveRestoresOwner = false;
       this.fullscreenTransition = 'leaving';
-      win.setFullScreen(false);
+      this.requestFullscreen(win, false);
       this.scheduleLeaveFallback(win, generation);
     }
   }
 
   private rememberOwner(sender: WebContents): void {
     const owner = this.deps.getOwnerWindow?.(sender) ?? null;
+    this.unbindOwnerVisibility();
     this.lastOwner = owner && !owner.isDestroyed() ? owner : null;
+    this.bindOwnerVisibility(this.lastOwner);
+  }
+
+  private bindOwnerVisibility(owner: ResourceUsageOwnerWindow | null): void {
+    if (!owner?.on) return;
+    const hide = () => this.hideWithOwner();
+    owner.on('hide', hide);
+    owner.on('minimize', hide);
+    owner.on('closed', hide);
+    this.ownerHideUnsubscribers = [
+      () => this.safeOff(owner, 'hide', hide),
+      () => this.safeOff(owner, 'minimize', hide),
+      () => this.safeOff(owner, 'closed', hide),
+    ];
+  }
+
+  private unbindOwnerVisibility(): void {
+    for (const unsubscribe of this.ownerHideUnsubscribers) unsubscribe();
+    this.ownerHideUnsubscribers = [];
+  }
+
+  private safeOff(
+    owner: ResourceUsageOwnerWindow,
+    event: 'hide' | 'minimize' | 'closed',
+    listener: () => void,
+  ): void {
+    const removable = owner as ResourceUsageOwnerWindow & {
+      off?(event: 'hide' | 'minimize' | 'closed', listener: () => void): unknown;
+      removeListener?(event: 'hide' | 'minimize' | 'closed', listener: () => void): unknown;
+    };
+    removable.off?.(event, listener);
+    removable.removeListener?.(event, listener);
   }
 
   private ownerWindow(): ResourceUsageOwnerWindow | null {
@@ -409,18 +480,24 @@ export class ResourceUsageWindowController {
     if (shouldBeFullScreen) {
       if (win.isFullScreen() || this.fullscreenTransition === 'entering') return;
       this.fullscreenTransition = 'entering';
-      win.setFullScreen(true);
+      this.requestFullscreen(win, true);
       return;
     }
     if (!win.isFullScreen() && this.fullscreenTransition === 'idle') return;
     this.fullscreenTransition = 'leaving';
-    win.setFullScreen(false);
+    this.requestFullscreen(win, false);
+  }
+
+  private requestFullscreen(win: BrowserWindow, fullScreen: boolean): void {
+    this.requestedFullscreenGeneration = this.fullscreenGeneration;
+    win.setFullScreen(fullScreen);
   }
 
   private focusOwnerWindow(): void {
     const owner = this.ownerWindow();
     if (!owner) return;
-    if (owner.isMinimized()) owner.restore();
+    if (owner.isMinimized()) return;
+    if (owner.isVisible && !owner.isVisible()) return;
     owner.show();
     owner.focus();
   }
@@ -462,8 +539,11 @@ export class ResourceUsageWindowController {
     this.pendingOpen = false;
     this.samplingActive = true;
     this.destroyingWindow = false;
+    this.unbindOwnerVisibility();
     this.lastOwner = null;
     this.pendingLeaveGeneration = null;
+    this.pendingLeaveRestoresOwner = true;
+    this.requestedFullscreenGeneration = null;
     this.fullscreenTransition = 'idle';
   }
 

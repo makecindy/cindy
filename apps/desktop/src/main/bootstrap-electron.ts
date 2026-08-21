@@ -3022,6 +3022,7 @@ const createWindow = () => {
     // can restore it without remounting the renderer.
     if (process.platform === 'darwin') {
       event.preventDefault();
+      resourceUsageWindowController.hideWithOwner();
       if (mainWindow.isFullScreen()) {
         mainWindow.once('leave-full-screen', () => {
           if (!mainWindow.isDestroyed()) mainWindow.hide();
