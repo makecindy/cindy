@@ -362,18 +362,23 @@ async function stageManagedRipgrep(configHome: string, sourcePath: string | unde
   return targetPath;
 }
 
-/** cindy Effort → pi thinking level(pi 无 ultra;cindy 无 off)。 */
+/** cindy Effort → pi thinking level(pi 无 ultra)。思考开关走 setThinkingEnabled / thinkingEnabled。 */
 function effortToPiThinkingLevel(effort: Effort): string {
   return effort === 'ultra' ? 'max' : effort;
 }
 
-const PI_NATIVE_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
   if (!model) return undefined;
   if (model.thinkingLevelMap) {
-    return PI_NATIVE_THINKING_LEVELS.filter((effort) => model.thinkingLevelMap?.[effort] != null);
+    const efforts: Effort[] = [];
+    for (const effort of PI_NATIVE_THINKING_LEVELS) {
+      if (effort === 'off') continue;
+      if (model.thinkingLevelMap?.[effort] != null) efforts.push(effort);
+    }
+    return efforts;
   }
   // writeModelsJson 对缺省 reasoning 同样序列化为 false；因此缺省与显式 false
   // 都必须冻结为空能力，不能把 renderer 后续热刷出的 effort 放行给旧进程。
@@ -2923,7 +2928,15 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      if (startupEffort) {
+      if (opts.thinkingEnabled === false) {
+        const resp = await proc.request({
+          type: 'set_thinking_level',
+          level: 'off',
+        });
+        if (!resp.success) {
+          this.deps.logger.warn('pi set_thinking_level rejected', { effort: 'off', error: resp.error });
+        }
+      } else if (startupEffort) {
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(startupEffort),
@@ -3901,6 +3914,15 @@ export class PiAgent extends BaseAgent {
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(effort),
         }));
+        if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
+      },
+
+      async setThinkingEnabled(enabled: boolean): Promise<void> {
+        if (reviewMode) return;
+        const resp = await proc.request({
+          type: 'set_thinking_level',
+          level: enabled ? 'xhigh' : 'off',
+        });
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
       },
 

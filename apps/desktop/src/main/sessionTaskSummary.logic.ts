@@ -39,7 +39,8 @@ export const TIER_DIRECTIVE: Record<SummaryTier, string> = {
   short: '本任务使用短档:不超过12字。',
   long: '本任务是重度使用的会话,优先使用长档(18~26字);例外:如果会话本质是重复的单次简单操作(如反复生图、批量翻译),仍用短档。',
   auto: '请按上面的档位说明,根据会话内容自行判断用短档还是长档。',
-  stale: '本任务很久没有活动了:用超短档,不超过8字,几个词点出任务即可(如"生成海报。""术语表方案。")。',
+  stale:
+    '本任务很久没有活动了:用超短档,不超过8字,几个词点出任务即可(如"生成海报。""术语表方案。")。',
 };
 
 /** 档位 → sanitize 硬上限。短档也硬截,保证时间衰减回填的"length > 16 才重生成"条件能收敛。 */
@@ -160,4 +161,48 @@ export function pickTier(args: {
 /** 有无可总结素材——空草稿被置顶时 user/assistant 文本皆空,没东西可总结,跳过。 */
 export function hasSummarizableMaterial(userMsg: string, assistantMsg: string): boolean {
   return Boolean(userMsg || assistantMsg);
+}
+
+/** 摘要只在「置顶 + 置顶段是卡片模式」时生成。列表/文字模式不花 oneShot。 */
+export function shouldGeneratePinnedCardSummary(args: {
+  status: string;
+  pinnedAt: number | string | null | undefined;
+  pinnedSectionIsCard: boolean;
+}): boolean {
+  return args.status === 'active' && args.pinnedAt != null && args.pinnedSectionIsCard;
+}
+
+/** 一次生成尝试结算后:没写出新摘要、且已经不在卡片模式 → 必须作废库里的旧句子。
+ *  成功写回的本轮摘要留下;失败 / 空结果 / 写回放弃 / 中途抛错都走这条。 */
+export function shouldVoidSummaryAfterGenerationAttempt(args: {
+  wroteFresh: boolean;
+  pinnedSectionIsCard: boolean;
+}): boolean {
+  return !args.wroteFresh && !args.pinnedSectionIsCard;
+}
+
+/** 列表/文字 turn-done:摘要必须清空,同时带上最新消息 preview。
+ *  列表不再展示 summary,若只广播 summary:null,侧栏会停在进入本轮前的旧 preview。 */
+export function nonCardTurnDisplayPatch(preview: string | null): {
+  summary: null;
+  preview: string | null;
+} {
+  return { summary: null, preview };
+}
+
+/** clear 若发现已切回卡片,只在该 session 没有生成在飞时才 force 再生成。
+ *  generateSummaryOnce.finally → clear → maybeGenerate 会 await 尚未 settle 的同一条 inFlight,死锁。 */
+export function shouldForceGenerateOnClear(args: {
+  pinnedSectionIsCard: boolean;
+  sessionGenerateInFlight: boolean;
+}): boolean {
+  return args.pinnedSectionIsCard && !args.sessionGenerateInFlight;
+}
+
+/** 切回卡片时若同 session 仍在飞:不能 await 自己,但必须在结算后 force 一次。 */
+export function shouldScheduleForceGenerateAfterInFlight(args: {
+  pinnedSectionIsCard: boolean;
+  sessionGenerateInFlight: boolean;
+}): boolean {
+  return args.pinnedSectionIsCard && args.sessionGenerateInFlight;
 }

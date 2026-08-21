@@ -5,7 +5,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createPiTranslateContext, translatePiEvent, usageSnapshotOf } from '../translator.js';
+import {
+  createPiTranslateContext,
+  disposePiTranslateContext,
+  translatePiEvent,
+  usageSnapshotOf,
+} from '../translator.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { AsyncQueue } from '../../shared/async-queue.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -500,6 +505,7 @@ describe('pi translator', () => {
       (e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === true,
     );
     expect(startStatus).toBeDefined();
+    expect(startStatus?.turnScope).toBe('background');
 
     translatePiEvent(
       ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 100, estimatedTokensAfter: 20 } }),
@@ -515,6 +521,78 @@ describe('pi translator', () => {
     const endData = endStatus!.data as { status: string; contextTokens?: number };
     expect(endData.status).toBe('Done');
     expect(endData.contextTokens).toBe(20);
+    expect(endStatus?.turnScope).toBe('background');
+  });
+
+  it('marks idle/host auto-compact status as background so it cannot latch a product turn', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = false;
+    ctx.hostAutoCompactInFlight = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    const start = events.find((e) => e.type === 'status');
+    expect(start).toMatchObject({
+      turnScope: 'background',
+      data: expect.objectContaining({ isRunning: true, status: 'Compacting context…' }),
+    });
+  });
+
+  it('does not mark in-turn compaction_start as background', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    const start = events.find((e) => e.type === 'status');
+    expect(start).toBeDefined();
+    expect(start?.turnScope).toBeUndefined();
+  });
+
+  it('keeps idle compact_boundary background after a new turn starts mid-compact', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = false;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    expect(events.find((e) => e.type === 'status')?.turnScope).toBe('background');
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.isStreaming).toBe(true);
+
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { tokensBefore: 150000, estimatedTokensAfter: 32000 },
+      }),
+      queue,
+      ctx,
+    );
+    const boundary = events.find((e) => e.type === 'compact_boundary');
+    expect(boundary?.turnScope).toBe('background');
+    expect(
+      events.filter(
+        (e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('does not relabel an in-turn compact_boundary as background if streaming later stops', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    ctx.isStreaming = false;
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { tokensBefore: 150000, estimatedTokensAfter: 32000 },
+      }),
+      queue,
+      ctx,
+    );
+    const boundary = events.find((e) => e.type === 'compact_boundary');
+    expect(boundary).toBeDefined();
+    expect(boundary?.turnScope).toBeUndefined();
   });
 
   it('#1933 review:auto compaction 在活跃 turn 内不补发 status(false)(不得误收口 turn)', () => {
@@ -602,6 +680,10 @@ describe('pi translator', () => {
     expect(usage.turnDurationMs).toBeGreaterThanOrEqual(0);
     // 快照累计 input+output。
     expect(usageSnapshotOf(ctx).tokenUsage).toBe(120);
+    expect(usageSnapshotOf(ctx).outputTokens).toBe(20);
+    expect(usageSnapshotOf(ctx).generationReliable).toBe(true);
+    expect(usageSnapshotOf(ctx).generationDurationMs).toBe(1_200);
+    expect(usageSnapshotOf(ctx).generationActive).toBe(false);
     // done.data.result 带上最终回复文本 —— register.ts 的 will-assistant-message 出口钩子
     // 与 Orca worker 终态 finalText 都读它,不带上就对 Pi 静默跳过(codex review P1)。
     expect((done!.data as { result?: unknown }).result).toBe('hi');
@@ -609,6 +691,28 @@ describe('pi translator', () => {
       type: 'status',
       data: expect.objectContaining({ status: 'Done', isRunning: false }),
     }));
+  });
+
+  it('marks generation active on message_start so the UI can tick live TPS', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    expect(usageSnapshotOf(ctx).generationActive).toBe(true);
+    expect(usageSnapshotOf(ctx).generationReliable).toBe(true);
+    expect(events.filter((e) => e.type === 'status')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'status',
+          data: expect.objectContaining({
+            status: 'Working…',
+            isRunning: true,
+            generationActive: true,
+          }),
+        }),
+      ]),
+    );
+    disposePiTranslateContext(ctx);
   });
 
   it('reads Pi v0.83 generation duration from timestamp with a live heartbeat', () => {
@@ -793,11 +897,12 @@ describe('pi translator', () => {
       ctx,
     );
 
-    expect(events).toEqual([{
+    expect(events.filter((e) => e.type === 'thinking')).toEqual([{
       type: 'thinking',
       data: { stage: 'redacted', blockId: 'pi-think-1' },
       source: 'pi',
     }]);
+    disposePiTranslateContext(ctx);
   });
 
   it('cleans up a visible placeholder when redaction is only known at thinking_end', () => {

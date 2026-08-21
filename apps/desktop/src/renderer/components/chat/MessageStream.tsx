@@ -280,11 +280,19 @@ import {
   NO_SCROLL_TOLERANCE_PX,
 } from './viewportFillDetect';
 import {
+  bumpSendFollowCancelGeneration,
+  collectKnownUserMessageIds,
+  findLastMatching,
+  findLastMatchingId,
+  resolveEffectiveNearBottom,
   resolveNearBottomOnScroll,
   resolveLastUserMessageObservation,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
   selectTailUserMessageId,
+  readFollowLatestRequestKey,
+  shouldBumpSendFollowCancelOnScroll,
+  subscribeFollowLatestRequests,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
@@ -2870,10 +2878,20 @@ export function MessageStream({
   const [deleteCompensationReplay, setDeleteCompensationReplay] = useState(0);
   /** clientId of the last user-role message we've already observed. Used to
    *  detect a NEW user send → force pin regardless of prior scroll state. */
-  const lastUserMsg = messages[messages.length - 1];
   const lastUserMsgIdRef = useRef<string | null>(
-    lastUserMsg?.role === 'user' ? lastUserMsg.clientId : null,
+    findLastMatchingId(messages, (message) => (message.role === 'user' ? message.clientId : null)),
   );
+  const knownUserMessageIdsRef = useRef<Set<string>>(
+    collectKnownUserMessageIds(messages, (message) =>
+      message.role === 'user' ? message.clientId : null,
+    ),
+  );
+  const followLatestRequestKey = useSyncExternalStore(
+    subscribeFollowLatestRequests,
+    () => readFollowLatestRequestKey(sessionId),
+    () => 0,
+  );
+  const prevFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
 
   // ── render-window state ──
   // null = 默认窗口(取末尾 RENDER_WINDOW_INITIAL_ITEMS 个 item);非 null = 锚定到
@@ -3982,10 +4000,11 @@ export function MessageStream({
   // shouldUnpinOnUpIntent),本回调只负责翻转:ref 与 state 同步更新(F2 不
   // 变量);unreadCount 不动 — 它只在回底时清零。
   const unpinAutoFollowForUserUpIntent = useCallback(() => {
+    bumpSendFollowCancelGeneration(sessionId);
     if (!isNearBottomRef.current) return;
     isNearBottomRef.current = false;
     setIsNearBottom(false);
-  }, []);
+  }, [sessionId]);
 
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
@@ -4258,6 +4277,7 @@ export function MessageStream({
   }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
   useEffect(() => {
     const onHistoryNavigationKey = (event: KeyboardEvent) => {
+      if (!ownsHardwareScrollActions) return;
       if (event.defaultPrevented) return;
       if (!HISTORY_NAVIGATION_KEYS.has(event.key)) return;
       if (isEditableKeyboardTarget(event.target)) return;
@@ -4275,8 +4295,13 @@ export function MessageStream({
     return () => {
       window.removeEventListener('keydown', onHistoryNavigationKey);
     };
-  }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
-  useNavigationKeyListener(clearChipJumpSuppression);
+  }, [
+    clearChipJumpSuppression,
+    ownsHardwareScrollActions,
+    triggerUserIntentFill,
+    unpinAutoFollowForUserUpIntent,
+  ]);
+  useNavigationKeyListener(clearChipJumpSuppression, ownsHardwareScrollActions);
 
   const pinToBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -4293,6 +4318,27 @@ export function MessageStream({
       }
     });
   }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
+
+  // Composer send is an explicit "show me the result" intent. Don't wait for
+  // the tail render item to be a user message — assistant / tool cards often
+  // land in the same commit and used to hide the send from pin detection.
+  // This is the only force-follow path: inference must not pin, because an
+  // optimistic row can appear after the user already scrolled away.
+  useLayoutEffect(() => {
+    if (prevFollowLatestRequestKeyRef.current === followLatestRequestKey) return;
+    prevFollowLatestRequestKeyRef.current = followLatestRequestKey;
+    cancelFocusJump({ consumeDeferredDelete: true });
+    const chipJumpGeneration = chipJumpGenerationRef.current;
+    if (chipJumpGeneration !== null) {
+      finishChipJump(chipJumpGeneration, { consumeDeferredDelete: true });
+    }
+    setFirstVisibleItemKey(null);
+    restoringRef.current = false;
+    isNearBottomRef.current = true;
+    setIsNearBottom(true);
+    setUnreadCount(0);
+    pinToBottom();
+  }, [cancelFocusJump, finishChipJump, followLatestRequestKey, pinToBottom]);
 
   // F3: 平滑滚到底的按钮回调。
   //   - 乐观更新 unreadCount / isNearBottom / isNearBottomRef → 按钮同一 tick fade-out
@@ -4426,30 +4472,26 @@ export function MessageStream({
   // ResizeObserver below is a safety net for async height growth *after* paint
   // (markdown render finish, image/code-highlight completion).
   //
-  // Special case: when the user hits send, a fresh user-role message appears
-  // at the tail. We force auto-follow back on regardless of whether the user
-  // had scrolled up — committing a new turn is an explicit intent to see the
-  // result land.
+  // Local send force-follow is only followLatestRequestKey. Inference here
+  // must not pin or steal the window: attachment prep can insert the
+  // optimistic row after the user already unpinned.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
-    const visibleLastItem = visibleRenderItems[visibleRenderItems.length - 1];
-    const realLastItem = allRenderItems[allRenderItems.length - 1];
     const tailUserMessageId = selectTailUserMessageId({
       windowCoversEnd,
-      visibleLastItem,
-      realLastItem,
+      visibleItems: visibleRenderItems,
+      allItems: allRenderItems,
       userMessageId: (item) =>
         item?.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
     });
     const lastUserMsg =
       tailUserMessageId === null
         ? null
-        : realLastItem?.type === 'message' && realLastItem.message.clientId === tailUserMessageId
-          ? realLastItem.message
-          : visibleLastItem?.type === 'message' &&
-              visibleLastItem.message.clientId === tailUserMessageId
-            ? visibleLastItem.message
-            : null;
+        : findLastMatching(allRenderItems, (item) =>
+            item.type === 'message' && item.message.clientId === tailUserMessageId
+              ? item.message
+              : null,
+          );
 
     // #2194: 未提供回调时按既有语义视为本端发送（测试 / 其它消费方不变）；
     // 提供了回调就严格以其返回值为准——实现方误返回 undefined（如被 as any
@@ -4461,21 +4503,24 @@ export function MessageStream({
       : false;
     const userMessageObservation = resolveLastUserMessageObservation({
       restoring: restoringRef.current,
-      tailUserMessageId: lastUserMsg?.clientId ?? null,
+      tailUserMessageId,
       previousTailUserMessageId: lastUserMsgIdRef.current,
+      knownUserMessageIds: knownUserMessageIdsRef.current,
     });
+    for (const id of collectKnownUserMessageIds(allRenderItems, (item) =>
+      item.type === 'message' && item.message.role === 'user' ? item.message.clientId : null,
+    )) {
+      knownUserMessageIdsRef.current.add(id);
+    }
     lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
     const decision = resolveRenderPinDecision({
       restoring: restoringRef.current,
-      newUserSend: userMessageObservation.isNewUserSend,
+      newUserSend: false,
       sentFromThisRenderer,
       nearBottom: isNearBottomRef.current,
     });
-    // 本端发送必须离开锚定历史窗，回到默认尾窗。只清「未覆盖末尾」的锚会漏掉
-    // 「发送时窗口仍盖住末尾、随后 assistant/工具卡把尾部顶出窗口」——视口已经
-    // 钉到最新，下一轮新消息却不再跟随。
     const windowHandoff = resolveSendWindowHandoff({
-      isNewUserSend: userMessageObservation.isNewUserSend,
+      isNewUserSend: false,
       sentFromThisRenderer,
       hasWindowAnchor: firstVisibleItemKey !== null,
       windowCoversEnd,
@@ -4909,9 +4954,23 @@ export function MessageStream({
         thresholdPx: threshold,
         directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
       });
-      // render-window-bidirectional 要点 3: 窗口未覆盖末尾时强制判为非贴底。
-      // 否则 DOM 距底 <100px 会被误判成"贴底"，auto-follow 拽回底部、jump-down chip 不出现。
-      const effectiveNearBottom = !windowCoversEnd ? false : nowNearBottom;
+      // 历史切片滚到自己的底 ≠ 会话末尾，不能从这里开始跟随。已经在跟
+      // (本端发送 / 跳底)时，窗口还没切回尾窗的迟到 scroll 不得把跟随掐死。
+      const effectiveNearBottom = resolveEffectiveNearBottom({
+        windowCoversEnd,
+        nowNearBottom,
+        wasNearBottom: isNearBottomRef.current,
+      });
+      if (
+        shouldBumpSendFollowCancelOnScroll({
+          wasNearBottom: isNearBottomRef.current,
+          effectiveNearBottom,
+          scrollDelta: delta,
+          directionDeadZonePx: SCROLL_DIRECTION_DEAD_ZONE_PX,
+        })
+      ) {
+        bumpSendFollowCancelGeneration(sessionId);
+      }
       if (effectiveNearBottom !== isNearBottomRef.current) {
         isNearBottomRef.current = effectiveNearBottom;
         setIsNearBottom(effectiveNearBottom);
@@ -5026,6 +5085,7 @@ export function MessageStream({
     allRenderItems.length,
     setFirstVisibleItemKey,
     setAnchoredForwardItems,
+    sessionId,
   ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"

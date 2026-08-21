@@ -145,6 +145,42 @@ export function extractPlainText(content: unknown): string {
   return '';
 }
 
+function isStringifyUserContentEnvelope(
+  value: unknown,
+): value is { text: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.text === 'string'
+    && Array.isArray(record.images)
+    && Array.isArray(record.files);
+}
+
+/** 岛上预览正文:只解开 stringifyUserContent 信封,JSON 原文提示保持原样。 */
+export function extractAgentIslandPromptText(content: unknown): string | null {
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('{')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (isStringifyUserContentEnvelope(parsed)) {
+          const text = parsed.text.trim();
+          return text || null;
+        }
+      } catch {
+        // 用户原文就是 JSON 形字符串。
+      }
+    }
+    return trimmed;
+  }
+  if (isStringifyUserContentEnvelope(content)) {
+    const text = content.text.trim();
+    return text || null;
+  }
+  const text = extractPlainText(content).trim();
+  return text || null;
+}
+
 interface Turn {
   userText: string;
   /** 轮内按序的展示行(assistant 文本 / 工具行 / 错误行)。 */

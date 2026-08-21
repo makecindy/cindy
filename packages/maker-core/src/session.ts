@@ -1333,6 +1333,12 @@ export class Session {
     await this.handle.setFastMode(enabled);
   }
 
+  async setThinkingEnabled(enabled: boolean): Promise<void> {
+    this.ensureActive();
+    if (!this.handle.setThinkingEnabled) return;
+    await this.handle.setThinkingEnabled(enabled);
+  }
+
   /** 运行时开关计划模式（capability 见 Capabilities.planMode）。 */
   async setPlanMode(enabled: boolean): Promise<void> {
     this.ensureActive();

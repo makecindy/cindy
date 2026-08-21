@@ -27,6 +27,7 @@ import {
 } from '@/state/modelEnginePrefs';
 import {
   addModelFavorite,
+  getModelFavorite,
   removeModelFavorite,
   updateModelFavorite,
   type ModelFavoriteConfig,
@@ -53,10 +54,17 @@ export interface UnifiedRowActionsOptions {
    * 正在跑的那一份的**实时深度**(会话 = live effort;草稿 = 调用方派生的同一个值 ——
    * 与 `onEffortChangeLive` 写的是同一个格子)。
    *
-   * 只用于**回滚**:两笔实时写入(深度 + Fast)里第二笔失败时,拿它把第一笔写回原值
-   * (见 applyDefaultsLive)。拿不到 = 没有可回滚的原值,那一路按注释里的说明处理。
+   * 两处用它:① 回滚 —— 两笔实时写入(深度 + Fast)里第二笔失败时,拿它把第一笔写回原值
+   * (见 applyDefaultsLive);② 收藏副本是否仍是正在跑的完整配置(与 liveFast 一起,
+   * 见 favoriteCopyIsLive)。拿不到 = 没有可回滚的原值,那一路按注释里的说明处理。
    */
   liveEffort?: Effort | undefined;
+  /**
+   * 正在跑的那一份的**实时 Fast**(与 `onFastModeChangeLive` 写的同一个格子)。
+   * 收藏 live 判定必须拿它和副本比:composer / 另一窗口只改了 Fast 时,uid 还在,
+   * 但副本已经不是正在跑的配置。缺省按关(与行配置合成一致)。
+   */
+  liveFast?: boolean | undefined;
   modelMemory?: ModelMemoryAccessors | undefined;
   /**
    * live 选中行改深度。返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;
@@ -94,6 +102,8 @@ export interface UnifiedRowActionsOptions {
   sessionEngineFilter?:
     | {
         currentAgent: AgentKind;
+        /** 任务正在跑的引擎;缺省 = currentAgent。跨引擎确认路由必须用这个,不能用意图目标。 */
+        runtimeAgent?: AgentKind;
         onCrossEngineSelect: (args: {
           providerId: string;
           modelId: string;
@@ -187,6 +197,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     interactionDisabled,
     isLiveRow,
     liveEffort,
+    liveFast,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,
@@ -212,6 +223,38 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
    * 无损,直接写回草稿即可。两个字段必须同时具备:少了任一个,跨引擎行就没有落点。
    */
   const inSession = sessionEngineFilter !== undefined && sessionAgent !== undefined;
+  /**
+   * 任务**正在跑**的引擎。只认调用方显式给的 `runtimeAgent`,缺省**不**回落 sessionAgent:
+   * 那是面板展示 / 意图目标。冷加载 runtime 未到时回落,会把意图目标当成真实引擎,
+   * 点它就绕过确认(2026-08-20 review)。
+   */
+  const runtimeAgent = sessionEngineFilter?.runtimeAgent;
+  /** 面板展示的是待发送意图,不是正在跑的引擎。真实引擎未知时不算「已在意图上」。 */
+  const pendingSwitch =
+    inSession &&
+    runtimeAgent !== undefined &&
+    sessionEngineFilter.currentAgent !== runtimeAgent;
+  const shouldCrossEngine = (target: AgentKind): boolean => {
+    if (sessionEngineFilter === undefined) return false;
+    // 真实引擎还没确认:一律走切换确认,不能当同引擎放行。
+    if (runtimeAgent === undefined) return true;
+    return target !== runtimeAgent || pendingSwitch;
+  };
+  /**
+   * 这条收藏副本是不是**正在跑的完整配置**(来源 + 模型 + 引擎 + 思维 + Fast)。
+   * `isLiveRow` 只比身份三元组,给模型行的引擎胶囊 / 实时写入用;收藏的删除回落与
+   * 编辑写回必须再比思维 / Fast —— composer、另一窗口或控制端只改了这两格时,
+   * uid 还在,但不能把后来的选择覆盖成旧副本(2026-08-20 review)。
+   */
+  const favoriteCopyIsLive = (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
+    if (anchor.kind !== 'fav') return false;
+    const item = getModelFavorite(anchor.uid);
+    if (!item || !resolveFavoriteConfig) return false;
+    const copy = resolveFavoriteConfig(entry, item);
+    if (!isLiveRow(entry, copy)) return false;
+    if ((copy.effort ?? null) !== (liveEffort ?? null)) return false;
+    return copy.fast === (liveFast ?? false);
+  };
 
   /**
    * 把一次 live 写入的结果归一成「成功了没有」:只有明确的 `false` 与抛错算失败,
@@ -471,8 +514,8 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
             })
           : undefined;
       // 改的不是当前选中的那条收藏(或引擎没变 / 没注入解析器)→ 它只描述「下次选它用什么」,
-      // 行为不变:只改副本。
-      if (!target) {
+      // 行为不变:只改副本。副本已不再是正在跑的配置时同样只改记录,不隐式写回运行态。
+      if (!target || !favoriteCopyIsLive(anchor, entry)) {
         commit();
         return;
       }
@@ -495,7 +538,9 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       const next = resolveEngineConfig?.(entry, engine);
       if (sessionEngineFilter && sessionAgent !== undefined) {
         const targetAgent = agentKindOfEngine(engine);
-        if (targetAgent === sessionAgent) return; // 已在该引擎上,无事可做。
+        // 已在真实引擎上、也没有待发送意图 → 无事可做。真实引擎未知、或挂着意图时
+        // 点回正在跑的引擎,都走切换事务(未知 fail-closed;意图由 same-engine 路径清掉)。
+        if (!shouldCrossEngine(targetAgent)) return;
         // 会话内改选中行的引擎 = 一次跨引擎切换:交给 performAgentSwitch 事务(确认弹窗
         // + 上下文重建)。**不预写全局 override**:用户取消确认时不该留下任何痕迹。
         sessionEngineFilter.onCrossEngineSelect({
@@ -534,7 +579,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       const commit = (): void => updateModelFavorite(anchor.uid, { effort });
       // 改的不是当前选中的那条收藏(或压根没有 live 深度通道)→ 它只描述「下次选它用什么」,
       // 行为不变:只改副本。
-      if (selectedFavoriteUid !== anchor.uid || !onEffortChangeLive) {
+      if (selectedFavoriteUid !== anchor.uid || !onEffortChangeLive || !favoriteCopyIsLive(anchor, entry)) {
         commit();
         return;
       }
@@ -579,7 +624,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     if (anchor.kind === 'fav') {
       const commit = (): void => updateModelFavorite(anchor.uid, { fast: enabled });
       // 同 applyEffort:非选中收藏(或没有 live Fast 通道)只改副本,不动正在跑的那一份。
-      if (selectedFavoriteUid !== anchor.uid || !onFastModeChangeLive) {
+      if (selectedFavoriteUid !== anchor.uid || !onFastModeChangeLive || !favoriteCopyIsLive(anchor, entry)) {
         commit();
         return;
       }
@@ -743,9 +788,13 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       onBeforeRemoveFavorite(anchor);
       removeModelFavorite(anchor.uid);
     };
-    // 删的不是当前选中锚点 → 它不影响「正在跑什么」,行为不变:只删记录。
+    // 勾选身份只认 uid(收藏是独立条目);**回落正在跑的配置**必须另过一关:
+    // 副本仍是正在跑的那一份。用户选中收藏后又从别的入口改了模型/思维,uid 还在,
+    // 但不能把后来的选择覆盖成这条旧收藏的默认(2026-08-20 review P1)。
     const fallback =
-      selectedFavoriteUid && selectedFavoriteUid === anchor.uid
+      selectedFavoriteUid &&
+      selectedFavoriteUid === anchor.uid &&
+      favoriteCopyIsLive(anchor, entry)
         ? resolveDefaultRowConfig?.(entry)
         : undefined;
     if (!fallback) {
@@ -765,27 +814,28 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
       commit();
       return;
     }
-    // 会话 + 默认引擎 == 当前引擎:无损,两个 live 回调把深度 / Fast 复位即可。
-    // 与跨引擎分支同一条顺序(2026-08-17 review 第三轮 G2):**live 真写成了才**删记录 ——
-    // 收藏是用户手存的东西,不可逆,写穿失败时必须原样留着。
-    if (fallback.agent === sessionAgent) {
-      void applyDefaultsLive(fallback.effort).then((applied) => {
-        if (applied) commit();
+    // 会话内回落:默认引擎 ≠ 正在跑的引擎,或正挂着待发送意图,都走切换事务。
+    // 挂着 Pi 意图、默认却回到 Claude 时,只复位深度 / Fast 清不掉意图,下一条消息
+    // 仍会切到 Pi —— 与引擎胶囊 / 普通行的 same-engine 取消同一条 shouldCrossEngine。
+    if (shouldCrossEngine(fallback.agent)) {
+      runCrossEngineSwitch({
+        providerId: anchor.providerId,
+        wireModelId,
+        targetAgent: fallback.agent,
+        effort: fallback.effort,
+        // 默认配置的 Fast(resolveDefaultRowConfig 给的是「无收藏语境」的那一份,恒为关)——
+        // 与恢复推荐同族:显式交给事务,不留给目标记忆重解析。
+        fast: fallback.fast,
+        // 这条收藏马上就没了 → 清锚点(留着会让面板在一条已删的收藏上打勾)。
+        favoriteUid: null,
+        onApplied: commit,
       });
       return;
     }
-    // 会话 + 默认引擎 ≠ 当前引擎:有损,走跨引擎切换事务;真成功才删收藏。
-    runCrossEngineSwitch({
-      providerId: anchor.providerId,
-      wireModelId,
-      targetAgent: fallback.agent,
-      effort: fallback.effort,
-      // 默认配置的 Fast(resolveDefaultRowConfig 给的是「无收藏语境」的那一份,恒为关)——
-      // 与恢复推荐同族:显式交给事务,不留给目标记忆重解析。
-      fast: fallback.fast,
-      // 这条收藏马上就没了 → 清锚点(留着会让面板在一条已删的收藏上打勾)。
-      favoriteUid: null,
-      onApplied: commit,
+    // 会话 + 默认引擎 == 正在跑的引擎,且没有待发送意图:无损,两个 live 回调把深度 / Fast 复位。
+    // 与跨引擎分支同一条顺序:**live 真写成了才**删记录。
+    void applyDefaultsLive(fallback.effort).then((applied) => {
+      if (applied) commit();
     });
   };
 
@@ -799,7 +849,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     // 交出去的一律是**该引擎的 wire id**(建会话 / 切模型 / 写 draft 都用它);
     // 行的归一化身份另放在 config.rowModelId 里,调用方要记 override / 收藏时用那个。
     const wireModelId = config.wireModelId ?? anchor.modelId;
-    if (sessionEngineFilter && sessionAgent !== undefined && config.agent !== sessionAgent) {
+    if (sessionEngineFilter && shouldCrossEngine(config.agent)) {
       // 收藏锚点一并交出去:会话侧要在事务**真成功后**才把它记成「当前选中的收藏」
       // (取消 / 失败时什么都没换,锚点当然不能动)。同引擎那一路由 onSelect 的 config 带走。
       sessionEngineFilter.onCrossEngineSelect({

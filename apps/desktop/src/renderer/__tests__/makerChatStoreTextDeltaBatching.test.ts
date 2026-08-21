@@ -2116,6 +2116,59 @@ describe('makerChatStore text delta batching', () => {
     expect(snap.messages.some((m) => m.role === 'user' && m.content === 'next')).toBe(false);
   });
 
+  it('does not flip product isRunning for background compact status', () => {
+    emitStatus({ status: 'Done', isRunning: false });
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(false);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'status',
+        source: 'pi',
+        turnScope: 'background',
+        data: {
+          status: 'Compacting context…',
+          isRunning: true,
+          tokenUsage: 0,
+          contextTokens: 415010,
+          contextWindow: 500000,
+        },
+      },
+    });
+
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.agentStatus.isRunning).toBe(false);
+    expect(snap.agentStatus.status).toBe('Compacting context…');
+    expect(snap.agentStatus.contextTokens).toBe(415010);
+    expect(snap.agentStatus.contextWindow).toBe(500000);
+  });
+
+  it('does not paint a live turn as Done when a late background compact status arrives', () => {
+    emitStatus({ status: 'Thinking…', isRunning: true });
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(true);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'status',
+        source: 'pi',
+        turnScope: 'background',
+        data: {
+          status: 'Done',
+          isRunning: false,
+          tokenUsage: 0,
+          contextTokens: 20000,
+          contextWindow: 500000,
+        },
+      },
+    });
+
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.agentStatus.isRunning).toBe(true);
+    expect(snap.agentStatus.status).toBe('Thinking…');
+    expect(snap.agentStatus.contextTokens).toBe(20000);
+  });
+
   // 本地 only 迁移后,网关 key 无服务器副本,401 不再触发"从服务器重拉 key"。
   // 原先验证 refreshApiKeyFromServer 调用次数的两个用例(terminal → 重拉、recoverable
   // → 不重拉)随该行为一并移除。非 remote 会话的 401 直接把 error 浮现给用户。

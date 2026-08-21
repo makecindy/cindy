@@ -977,6 +977,58 @@ describe('maker SEND transaction', () => {
     expect(lazySession.send).toHaveBeenCalled();
   });
 
+  it('activates a forked Pi business session once with the latest DB route on its first send', async () => {
+    const lazySession = createSession({
+      id: 'forked-pi-session',
+      agentKind: 'pi',
+      workDir: 'D:\\forked-pi',
+    });
+    const reconcileCreateOptsWithDb = vi.fn(async (_sessionId, createOpts) => {
+      createOpts.agentKind = 'pi';
+      createOpts.model = 'gpt-5.5';
+      createOpts.providerId = 'xd';
+      createOpts.resumeSessionId = 'pi-fork-jsonl';
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      reconcileCreateOptsWithDb,
+      bootstrapSession: vi.fn(async () => ({
+        session: lazySession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const staleCreateOpts: MakerSessionCreateOpts = {
+      id: 'forked-pi-session',
+      agentKind: 'pi',
+      workingDir: 'D:\\forked-pi',
+      model: 'chatgpt/gpt-5.5',
+      providerId: 'openai',
+      resumeSessionId: 'stale-pi-session',
+    };
+
+    await expect(
+      transaction.sendToAgentAccepted('forked-pi-session', 'first fork message', staleCreateOpts),
+    ).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(reconcileCreateOptsWithDb).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'forked-pi-session',
+      agentKind: 'pi',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      resumeSessionId: 'pi-fork-jsonl',
+    }));
+    expect(deps.broadcastSessionCreated).toHaveBeenCalledOnce();
+    expect(lazySession.send).toHaveBeenCalledOnce();
+    expect(lazySession.send).toHaveBeenCalledWith('first fork message', expect.anything());
+  });
+
   it('returns lazy-create failure without dispatching when bootstrap fails', async () => {
     const { deps } = createDeps({
       getSession: vi.fn(() => undefined),

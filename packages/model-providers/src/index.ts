@@ -131,6 +131,7 @@ export type {
 export {
   modelDisableKey,
   isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
 } from './disableOverrides.js';
 export type { ModelDisableOverrides } from './disableOverrides.js';

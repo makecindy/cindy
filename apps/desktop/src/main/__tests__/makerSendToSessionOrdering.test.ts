@@ -555,11 +555,12 @@ describe('sendToSession ordering', () => {
     const promptPreviewBlock = extractBetween(
       source,
       'function notifyAgentIslandUserPrompt',
-      'function extractAgentIslandPromptText',
+      'function dispatchAgentIslandUserPrompt',
     );
 
     expect(promptPreviewBlock).toContain('try {');
-    expect(promptPreviewBlock).toContain('getAgentIslandService()?.handleUserPrompt');
+    expect(promptPreviewBlock).toContain('getAgentIslandService()');
+    expect(promptPreviewBlock).toContain('service.handleUserPrompt');
     expect(promptPreviewBlock).toContain('log.warn(\'Agent Island prompt preview update failed after user message persistence\'');
     expect(promptPreviewBlock).toContain('clientId: options.clientId');
     expect(promptPreviewBlock).toContain('error: error instanceof Error ? error.message : String(error)');

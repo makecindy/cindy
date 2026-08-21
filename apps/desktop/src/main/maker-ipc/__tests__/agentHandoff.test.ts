@@ -5,6 +5,7 @@ import {
   composeForkOriginHandoff,
   buildHandoffText,
   createAgentHandoffPendingRegistry,
+  extractAgentIslandPromptText,
   extractPlainText,
   prependHandoffToUserMessage,
   type HandoffSourceMessage,
@@ -59,6 +60,21 @@ describe('extractPlainText', () => {
   it('DB user envelope preserves a hand-written marker without quotesEncoded', () => {
     const text = '> <!-- cindy-composer-quote -->\n> hand written';
     expect(extractPlainText({ text, quotesEncoded: false })).toBe(text);
+  });
+});
+
+describe('extractAgentIslandPromptText', () => {
+  it('keeps literal JSON prompts instead of treating them as envelopes', () => {
+    expect(extractAgentIslandPromptText('{"foo":"bar"}')).toBe('{"foo":"bar"}');
+    expect(extractAgentIslandPromptText('[1,2]')).toBe('[1,2]');
+    expect(extractAgentIslandPromptText('{"text":"hello"}')).toBe('{"text":"hello"}');
+  });
+
+  it('unwraps stringifyUserContent envelopes only', () => {
+    expect(
+      extractAgentIslandPromptText(JSON.stringify({ text: 'hello', images: [], files: [] })),
+    ).toBe('hello');
+    expect(extractAgentIslandPromptText({ text: 'hello', images: [], files: [] })).toBe('hello');
   });
 });
 

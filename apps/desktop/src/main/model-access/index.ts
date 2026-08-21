@@ -15,6 +15,7 @@ import {
   markXdGatewayModelAccessUnknown,
   setXdGatewayModels,
 } from '../maker-host/active-catalog.js';
+import { migrateLegacyNamespacedModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { replaceGatewayModelPricing, trackGatewayModelPricingSync } from '../usage/modelPricing.js';
 import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -178,6 +179,22 @@ function applyGatewayModels(
   // 一次归一化成 contextWindow / agents / efforts / supportsFastMode / modalities,
   // 同一含义只下发一个字段。这里直接用下发值，唯一事实源在服务端。
   // active-catalog 统一收口会原地刷新 Maker capabilities，再广播同一 revision。
+  try {
+    migrateLegacyNamespacedModelDisableOverrides(
+      'xd',
+      models
+        .filter(
+          (model) =>
+            model.mode === 'image_generation' || model.mode === 'video_generation',
+        )
+        .map((model) => model.id),
+    );
+  } catch (error) {
+    // 偏好迁移失败不能拖垮权威模型目录；读路径仍保留唯一 basename 兼容判定。
+    log.warn('legacy media model disable override migration failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   resetExecutableMediaModelCache();
   setXdGatewayModels(models, { authoritative });
 }

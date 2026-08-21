@@ -121,6 +121,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
+import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   markSessionAutomaticHistoryLoadCompleted,
@@ -630,6 +631,14 @@ export interface AgentStatus {
   contextWindow: number;
   isRunning: boolean;
   startedAt: number | null;
+  /** Turn-cumulative output tokens for live TPS. */
+  outputTokens?: number;
+  /** Generation-only milliseconds including any open interval at emit time. */
+  generationDurationMs?: number;
+  /** True while the model currently owns the turn. */
+  generationActive?: boolean;
+  /** False hides live TPS. Omitted on placeholder status frames. */
+  generationReliable?: boolean;
   /**
    * Side-channel running (mivo MJ 按钮等不走 LLM 的后台任务)。
    * RunningStatusBar 据此把 token 计数行隐藏掉, 避免显示"上一轮残留 718 tokens"
@@ -5740,11 +5749,14 @@ export function handleStreamEvent(
       if (boundaryId && state.messages.some((message) => message.clientId === clientId)) {
         return state;
       }
-      const finalized = finalizeStreamingInState(state);
+      // Background compact belongs to the previous idle cycle. Finalizing here
+      // would seal a product turn that started after compaction_start.
+      const nextState =
+        event.turnScope === 'background' ? state : finalizeStreamingInState(state);
       return {
-        ...finalized,
+        ...nextState,
         messages: [
-          ...finalized.messages,
+          ...nextState.messages,
           {
             clientId,
             role: 'assistant' as const,
@@ -5879,6 +5891,94 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
   };
 }
 
+function mergeLiveGenerationStatus(
+  isTurnStart: boolean,
+  update: CCAgentStatusUpdate,
+  previous: AgentStatus,
+): Pick<
+  AgentStatus,
+  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable'
+> {
+  // Turn start drops leftover metrics from the previous turn, then keeps any
+  // live fields carried by this same status. A reconnect-shaped first event
+  // (isRunning false→true with output / duration already present) must not
+  // zero the values that just arrived.
+  const baseline = isTurnStart
+    ? {
+        outputTokens: 0,
+        generationDurationMs: 0,
+        generationActive: false,
+        generationReliable: true,
+      }
+    : previous;
+  const hasLiveFields =
+    typeof update.outputTokens === 'number' ||
+    typeof update.generationDurationMs === 'number' ||
+    typeof update.generationActive === 'boolean' ||
+    typeof update.generationReliable === 'boolean';
+  if (!hasLiveFields) {
+    return {
+      outputTokens: baseline.outputTokens,
+      generationDurationMs: baseline.generationDurationMs,
+      generationActive: update.isRunning ? baseline.generationActive : false,
+      generationReliable: baseline.generationReliable,
+    };
+  }
+  const merged = {
+    outputTokens:
+      typeof update.outputTokens === 'number' ? update.outputTokens : baseline.outputTokens,
+    generationDurationMs:
+      typeof update.generationDurationMs === 'number'
+        ? update.generationDurationMs
+        : baseline.generationDurationMs,
+    generationActive:
+      typeof update.generationActive === 'boolean'
+        ? update.generationActive
+        : baseline.generationActive,
+    generationReliable:
+      typeof update.generationReliable === 'boolean'
+        ? update.generationReliable
+        : baseline.generationReliable,
+  };
+  if (!update.isRunning) {
+    return { ...merged, generationActive: false };
+  }
+  return merged;
+}
+
+/** Idle compact / late background status may refresh copy and context tokens without flipping the product turn. */
+function applyBackgroundStatus(
+  state: SessionChatState,
+  data: Record<string, unknown>,
+): SessionChatState {
+  const rawStatus = typeof data.status === 'string' ? data.status.trim() : '';
+  // A late idle-compact Done must not paint the product turn as finished.
+  const status =
+    !rawStatus || (rawStatus === 'Done' && state.agentStatus.isRunning)
+      ? state.agentStatus.status
+      : rawStatus;
+  let contextTokens = state.agentStatus.contextTokens;
+  let contextWindow = state.agentStatus.contextWindow;
+  if (
+    typeof data.contextWindow === 'number' &&
+    data.contextWindow > 0 &&
+    typeof data.contextTokens === 'number' &&
+    data.contextTokens >= 0
+  ) {
+    contextTokens = data.contextTokens;
+    contextWindow = data.contextWindow;
+  }
+  return {
+    ...state,
+    agentStatus: {
+      ...state.agentStatus,
+      status,
+      contextTokens,
+      contextWindow,
+    },
+  };
+}
+
 function handleStatusUpdate(
   state: SessionChatState,
   update: CCAgentStatusUpdate,
@@ -5992,6 +6092,7 @@ function handleStatusUpdate(
       contextWindow: cw,
       isRunning: update.isRunning,
       startedAt,
+      ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
     continuationTurnClientId: update.isRunning ? state.continuationTurnClientId : null,
@@ -6039,6 +6140,7 @@ type MakerEventPayload = {
     source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
+    turnScope?: 'turn' | 'background';
   };
   persistId?: string;
   resolvedContent?: string;
@@ -6222,6 +6324,7 @@ function dispatchStreamEventPayload(
     ...(event.turnContinuationId !== undefined
       ? { turnContinuationId: event.turnContinuationId }
       : {}),
+    ...(event.turnScope !== undefined ? { turnScope: event.turnScope } : {}),
     persistId,
     resolvedContent,
   } as CCAgentStreamEvent;
@@ -6602,9 +6705,14 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // 持久化 (totalCostUsd / contextTokens / contextWindow → sessions 表) 已搬到 main 端的
     // sessionSpendBroadcaster, renderer 只更新 in-memory agentStatus, 不再 IPC 写库 (避免多 window 竞写)。
     if (event.type === 'status') {
+      const data = event.data as Record<string, unknown>;
+      if (event.turnScope === 'background') {
+        setState(sessionId, (s) => applyBackgroundStatus(s, data));
+        return;
+      }
       const update = {
         sessionId,
-        ...(event.data as Record<string, unknown>),
+        ...data,
         ...(event.turnContinuationId !== undefined
           ? { turnContinuationId: event.turnContinuationId }
           : {}),
@@ -9210,6 +9318,10 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
   // Retire the outbox ref afterwards so media protection transfers without a
   // cleanup-eligible gap in main's renderer registry.
   clearRemoteOptimisticSend(sessionId, clientId);
+  // 同会话还有其它乐观发送在飞时不能清 starting,否则后一条会提前退出运行中档。
+  if (!remoteOptimisticSendRecords(sessionId)?.size) {
+    clearSessionStarting(sessionId);
+  }
   setState(sessionId, (s) => ({
     ...s,
     pendingQueue: s.pendingQueue.filter((item) => item.clientId !== clientId),
@@ -11333,6 +11445,8 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       ? { workingDir, userSendAt: userSendAtIso, updatedAt: userSendAtIso }
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
+  // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
+  markSessionStarting(sessionId);
 }
 
 /**
@@ -11830,6 +11944,15 @@ function sendMessage(
           ),
       );
     },
+  ).then(
+    (ok) => {
+      if (!ok) clearSessionStarting(sessionId);
+      return ok;
+    },
+    (err) => {
+      clearSessionStarting(sessionId);
+      throw err;
+    },
   );
 }
 
@@ -12007,6 +12130,16 @@ async function sendMessageCore(
       }
       const applied = applyInputProjectionOperationResponse(sessionId, operation, projection);
       if (applied) markSessionHasUserMessage(sessionId);
+      // 暂停 / 输入锁 / 凭证切换等待只把消息收下,不会马上派发。starting
+      // 表示「预期会跑」,不能把明确未派发的任务标成运行中。
+      if (
+        projection.pendingQueue.some((item) => item.clientId === queued.clientId)
+        && (projection.queuePaused
+          || Boolean(projection.credentialSwitchWait)
+          || projection.queueInteractionLocks.length > 0)
+      ) {
+        clearSessionStarting(sessionId);
+      }
       return true;
     })
     .catch((err) => {

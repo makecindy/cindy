@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import type { ChildProcess } from 'node:child_process';
 
 import { createLogger } from '../logger.js';
+import { ShortcutHoldPhaseController } from '../voice-input/ShortcutHoldPhaseController.js';
 import {
   runMacTextInsertionHelperCommand,
   spawnMacTextInsertionHelper,
@@ -279,6 +280,7 @@ export function createWorkLouderCodexSystemFrontmostInput(deps?: {
   runner?: SystemFrontmostInputRunner;
   triggerVoice?: (phase: 'start' | 'tap' | 'end') => void;
   now?: () => number;
+  holdDelayMs?: number;
   createScrollPump?: (runner: SystemFrontmostInputRunner) => SystemFrontmostScrollPump;
   spawnHoldScroll?: () => Promise<HoldScrollChild>;
 }) {
@@ -292,22 +294,23 @@ export function createWorkLouderCodexSystemFrontmostInput(deps?: {
       ? createMacHoldScrollPump(fallbackPump, deps?.spawnHoldScroll)
       : fallbackPump);
   let scrolling = false;
-  let voicePressed = false;
+  // Outside Cindy the microphone key must feel like the system shortcut: a short
+  // tap leaves the overlay recording (a second tap submits), and only a real
+  // hold submits on release. Sending `end` on every release made the key look
+  // broken unless it was held.
+  //
+  // No separate suspend/wake reset here: unlike the native shortcut listeners,
+  // the keypad owner forces a `release` when the layout stops owning the key or
+  // its task slots are suspended (`releaseHeldHardwareGestures`).
+  const voicePhases = new ShortcutHoldPhaseController({
+    holdDelayMs: deps?.holdDelayMs,
+    onTrigger: triggerVoice,
+  });
 
   return {
     handle(action: WorkLouderCodexRendererAction): boolean {
       if (action.type === 'voice') {
-        if (action.phase === 'press') {
-          if (!voicePressed) {
-            voicePressed = true;
-            triggerVoice('start');
-          }
-          return true;
-        }
-        if (voicePressed) {
-          voicePressed = false;
-          triggerVoice('end');
-        }
+        voicePhases.setPressed(action.phase === 'press');
         return true;
       }
       if (action.type === 'command' && action.commandId === 'composer.submit') {

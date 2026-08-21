@@ -26,6 +26,9 @@
   },
   "screen": {
     "thinking": "Thinking…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "Reconnecting…",
     "modelBusyRetrying": "Model service busy — retrying…",
     "rateLimitRetrying": "Request rate limited — retrying…",

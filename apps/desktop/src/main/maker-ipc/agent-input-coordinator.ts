@@ -266,13 +266,16 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  /** Live Session only — must not OR the desktop tracker. undefined = probe unavailable. */
+  isLiveTurnRunning?: (sessionId: string) => boolean | undefined;
   /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
   getTurnGeneration?: (sessionId: string) => number | null;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
   /**
-   * Reconcile the host's live session/tracker view after an abort or a
-   * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
+   * Reconcile the host's live session/tracker view after an abort, a
+   * maker-core NO_ACTIVE_TURN, or a drain blocked on a stale tracker while the
+   * live Session is idle. The event-driven tracker can stay stale when a
    * turn dies without a terminal event, leaving the queue behind a false busy
    * boundary. Returns true only when it actually cleared that stale boundary;
    * a normal status=closed cleanup returning false must not make Codex release
@@ -470,6 +473,11 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  /**
+   * 真人消息刚进队、尚未 drain / sendToAgent。灵动岛用它在 agent 进程拉起前
+   * 就进入 running 并播开始音效,避免「任务开始」跟着 isRunning 一起晚响。
+   */
+  previewQueuedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /** 自动输入推进了会话，但不构成真人介入，也不能重置自动恢复预算。 */
   onAutomaticEnqueue?: (sessionId: string) => void;
   /**
@@ -615,6 +623,12 @@ interface SessionInputState {
   /** 保护新 generation 的 timer 不被旧 generation 的迟到 callback 清掉。 */
   sessionRunningRetryToken: symbol | null;
   /**
+   * First time we saw live-idle + tracker-busy while queued work was blocked.
+   * Terminal events may still be in Session's AsyncQueue after the handle
+   * flips idle; reconcile only after SESSION_RUNNING_RETRY_DELAY_MS.
+   */
+  staleLiveIdleSinceMs: number | null;
+  /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
    * 消息 —— 队列可拖拽重排,等待态必须跟消息走而不是跟"队首"这个位置走。null = 无等待。
@@ -677,6 +691,7 @@ function createInitialInputState(
     sessionRunningRetryOwnerKey: null,
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
+    staleLiveIdleSinceMs: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -1533,6 +1548,11 @@ export class AgentInputCoordinator {
     // 仍有 getDrainableHead 幂等校验, 不会与既有 wake 点重复派发。agent 忙 / 队列
     // 已有积压时走 else, 维持原排队语义(emit 中间态 + 异步 drain)。
     if (this.getDrainableHead(sessionId, state) === item) {
+      // 只预览马上要派发的队首。排队项若也预览,删除较早项会把整份岛快照滚回去,
+      // 抹掉后来的预览和期间事件。合成 Continue 同样不预览内部 prompt。
+      if (!automaticOrigin && !isUiContinuationItem(item)) {
+        this.deps.previewQueuedUserTurn?.(sessionId, item);
+      }
       void this.drain(sessionId, 'enqueue-immediate');
     } else {
       this.emit(sessionId);
@@ -2940,6 +2960,7 @@ export class AgentInputCoordinator {
   ): void {
     const state = this.getState(sessionId);
     const active = state.activeTurn;
+    state.staleLiveIdleSinceMs = null;
     this.clearAbortReconcileRetry(state);
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
@@ -3385,6 +3406,56 @@ export class AgentInputCoordinator {
     );
   }
 
+  /**
+   * Live Session idle + host tracker still busy is an invariant break.
+   * Reconcile the tracker so queued input can drain without a user Stop / steer.
+   * Do not call this while a send is in flight, an activeTurn still owns the
+   * generation, a permission card is up, or abort/steer already owns the boundary.
+   * Dispatched-but-not-started turns (Pi may accept a prompt before agent_start)
+   * must wait for real lifecycle events — do not synthesize done.
+   */
+  private tryReconcileStaleDispatchBoundary(
+    sessionId: string,
+    state: SessionInputState,
+  ): boolean {
+    if (
+      state.abortBoundaryToken ||
+      state.queueAbortPending ||
+      state.queueInteractionLocks.length > 0 ||
+      state.steeringQueueClientIds.length > 0 ||
+      state.pendingExternalTerminalDone ||
+      this.deps.hasPendingInteraction(sessionId) ||
+      state.activeTurn !== null
+    ) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
+    // Missing live probe fail-closed: do not steal abort/live-turn reconcile.
+    if (this.deps.isLiveTurnRunning?.(sessionId) !== false) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
+
+    if (!this.deps.isTurnRunning(sessionId)) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
+
+    // Handle may already be idle while status/done is still queued in Session.
+    // Extra drains in this window must not confirm; wait the existing 250ms retry.
+    if (state.staleLiveIdleSinceMs == null) {
+      state.staleLiveIdleSinceMs = Date.now();
+    }
+    if (Date.now() - state.staleLiveIdleSinceMs < SESSION_RUNNING_RETRY_DELAY_MS) {
+      return false;
+    }
+
+    const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
+    if (!reconciled) return false;
+    state.staleLiveIdleSinceMs = null;
+    return true;
+  }
+
   private isTurnSteerable(sessionId: string, state: SessionInputState): boolean {
     return state.activeTurn !== null || this.deps.isTurnRunning(sessionId);
   }
@@ -3467,12 +3538,29 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const compact = this.getDrainableCompact(sessionId, state);
     if (compact) {
+      state.staleLiveIdleSinceMs = null;
       state.pendingCompacts = state.pendingCompacts.slice(1);
       await this.dispatchCompact(sessionId, compact, reason);
       return;
     }
     const head = this.getDrainableHead(sessionId, state);
     if (!head) {
+      const hasRunnableWork =
+        state.pendingQueue.length > 0 ||
+        state.pendingCompacts.some((item) => item.waitForClientIds.length === 0);
+      if (
+        hasRunnableWork &&
+        this.isDispatchBoundaryBusy(sessionId, state) &&
+        this.tryReconcileStaleDispatchBoundary(sessionId, state)
+      ) {
+        this.scheduleDrain(sessionId, 'reconcile-stale-idle');
+        return;
+      }
+      if (hasRunnableWork && state.staleLiveIdleSinceMs != null) {
+        this.scheduleSessionRunningRetry(sessionId, 'stale-live-idle-confirm');
+      } else if (!hasRunnableWork) {
+        state.staleLiveIdleSinceMs = null;
+      }
       // #2506 结果级诊断:排队输入被 gate 挡住时留痕(此前零日志,gate-clear
       // 到成功 drain 之间的静默滞留无从定位)。只记 id / 布尔 / 枚举,不记正文;
       // 空队列的例行 drain 不记,避免每次 turn-done 都产生噪音。
@@ -3502,6 +3590,7 @@ export class AgentInputCoordinator {
       this.scheduleExternalTurnRetryIfNeeded(sessionId, state, `drain-blocked:${reason}`);
       return;
     }
+    state.staleLiveIdleSinceMs = null;
     state.pendingQueue = state.pendingQueue.slice(1);
     this.removePendingCompactWaitClientId(state, head.clientId);
     if (!state.stickyError) {
@@ -4100,6 +4189,10 @@ export class AgentInputCoordinator {
       if (latest.generation !== generation) return;
       if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
+        if (this.tryReconcileStaleDispatchBoundary(sessionId, latest)) {
+          this.scheduleDrain(sessionId, 'session-running-retry-reconciled');
+          return;
+        }
         this.scheduleSessionRunningRetry(sessionId, reason);
         return;
       }
@@ -4422,6 +4515,7 @@ export class AgentInputCoordinator {
       if (!isSchedulerOriginItem(item)) this.deps.onAutomaticEnqueue?.(sessionId);
     } else if (!isUiContinuationItem(item)) {
       this.deps.onUserEnqueue?.(sessionId);
+      this.deps.previewQueuedUserTurn?.(sessionId, item);
     }
     this.abandonActiveTurnRecoveryForUserAction(state);
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);

@@ -204,6 +204,7 @@ export const MAKER_INVOKE = {
   SET_EFFORT: 'maker:set-effort',
   SET_PERMISSION_MODE: 'maker:set-permission-mode',
   SET_FAST_MODE: 'maker:set-fast-mode',
+  SET_THINKING_ENABLED: 'maker:set-thinking-enabled',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
   /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
@@ -488,6 +489,19 @@ export const MAKER_INVOKE = {
   PROVIDER_CUSTOM_CREATE: 'maker:provider:custom:create',
   PROVIDER_CUSTOM_UPDATE: 'maker:provider:custom:update',
   PROVIDER_CUSTOM_DELETE: 'maker:provider:custom:delete',
+  /** 本机模型（Ollama）探测 / 后台启动 / 列表 / 拉取。renderer 不传 URL 或路径。 */
+  LOCAL_MODEL_STATUS: 'maker:local-model:status',
+  LOCAL_MODEL_START: 'maker:local-model:start',
+  LOCAL_MODEL_LIST: 'maker:local-model:list',
+  LOCAL_MODEL_PULL: 'maker:local-model:pull',
+  LOCAL_MODEL_ABORT: 'maker:local-model:abort',
+  LOCAL_MODEL_ENSURE: 'maker:local-model:ensure',
+  LOCAL_MODEL_SET_IN_PICKER: 'maker:local-model:set-in-picker',
+  LOCAL_MODEL_DELETE: 'maker:local-model:delete',
+  LOCAL_MODEL_DISCARD_PAUSED: 'maker:local-model:discard-paused',
+  /** 在 Cindy 数据目录安装官方 Ollama 运行时。renderer 只传 consent=true，不传 URL。 */
+  LOCAL_MODEL_INSTALL: 'maker:local-model:install',
+  LOCAL_MODEL_INSTALL_ABORT: 'maker:local-model:install-abort',
   /**
    * 自定义 MCP 服务器 CRUD（配置入 localDb，可选 bearer token 另走通用 safe-storage IPC）。
    * list 无入参；create/update 入参 = CustomMcpConfig；delete 入参 = mcpId。
@@ -794,6 +808,12 @@ export const MAKER_PUSH = {
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。
    */
   PROVIDER_CHANGED: 'maker:provider:changed',
+  /** 本机 Ollama 运行态变化（设置页右栏 + 发消息前就绪）。 */
+  LOCAL_MODEL_STATUS: 'maker:local-model:status',
+  /** 本机 Ollama /api/pull 进度。 */
+  LOCAL_MODEL_PULL_PROGRESS: 'maker:local-model:pull-progress',
+  /** 官方 Ollama sidecar 安装进度。 */
+  LOCAL_MODEL_INSTALL_PROGRESS: 'maker:local-model:install-progress',
   /** 通用 OAuth Device Grant 的短期验证码进度（仅 renderer 展示，不落盘/不进日志）。 */
   PROVIDER_OAUTH_PROGRESS: 'maker:provider:oauth:progress',
   /**
