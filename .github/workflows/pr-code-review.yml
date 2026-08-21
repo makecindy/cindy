@@ -78,7 +78,7 @@ jobs:
     # 真正的修法在上游:让 krosdai/.github 把内部 action 钉到 SHA,本仓再 re-pin
     # 到新的上游 SHA。届时删掉本段注释。
     # 背景见 PR #985 与安全门 issue #999。
-    uses: krosdai/.github/.github/workflows/code-review.yml@2dd773f8a3e85c10f09286053850e453de64bbe3 # v1
+    uses: krosdai/.github/.github/workflows/code-review.yml@a472c759c4636be01bb4a2adabae8ff12bd6a5f7 # v1
     with:
       pr_number: ${{ github.event.pull_request.number }}
       is_draft: ${{ github.event.pull_request.draft }}
