@@ -1943,7 +1943,7 @@
                 "high",
                 "max"
               ],
-              "reasoningDefaultEffort": "high"
+              "reasoningDefaultEffort": "medium"
             },
             {
               "id": "glm-5.2-highspeed",
@@ -2018,7 +2018,7 @@
                 "high",
                 "max"
               ],
-              "reasoningDefaultEffort": "high"
+              "reasoningDefaultEffort": "medium"
             },
             {
               "id": "glm-5.2-highspeed",
