@@ -2589,7 +2589,15 @@ export function hasActivePiSubagentRunsSync(
 ): boolean {
   const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
   let sessionEntries: import('node:fs').Dirent[];
-  try { sessionEntries = readdirSync(parentRoot, { withFileTypes: true }); } catch { return false; }
+  try {
+    sessionEntries = readdirSync(parentRoot, { withFileTypes: true });
+  } catch (error) {
+    // Only a missing directory proves there is nothing to reclaim. EACCES /
+    // EPERM / a transient I/O error must not look like "no active runs", or
+    // the updater proceeds to exit while an unreadable runner is still going.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    return true;
+  }
   for (const sessionEntry of sessionEntries) {
     if (!sessionEntry.isDirectory()) continue;
     let runEntries: import('node:fs').Dirent[];

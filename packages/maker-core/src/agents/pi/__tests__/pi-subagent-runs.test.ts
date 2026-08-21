@@ -339,6 +339,19 @@ describe('PI durable subagent run store', () => {
     expect(control.action).toBe('stop');
   });
 
+  it('only treats a missing runs directory as idle; other scan failures stay active', () => {
+    expect(hasActivePiSubagentRunsSync(path.join(os.tmpdir(), 'cindy-pi-no-such-home'))).toBe(false);
+    const source = readFileSync(new URL('../pi-subagent-runs.ts', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const fn = source.slice(
+      source.indexOf('export function hasActivePiSubagentRunsSync('),
+      source.indexOf('export function requestStopAllPiSubagentRunsSync('),
+    );
+    expect(fn).toContain("code === 'ENOENT') return false");
+    expect(fn).toContain('return true;');
+    expect(fn).not.toMatch(/readdirSync\(parentRoot[\s\S]*?catch \{ return false; \}/);
+  });
+
   /**
    * An expired heartbeat plus a live pid is not evidence the runner is alive —
    * only that *something* holds that pid. A recycled one makes the record read
