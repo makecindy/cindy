@@ -1256,6 +1256,54 @@ describe('MakerScheduleRunner model selection', () => {
       );
     });
 
+    it('heartbeat 修复 Codex thread/store 错配时只关闭目标会话，不受其它忙会话阻塞', async () => {
+      mocks.getSessionRowSnapshot.mockResolvedValue({
+        status: 'active',
+        providerId: 'deepseek',
+      });
+      mocks.getSessionProvider.mockReturnValue('deepseek');
+      const h = createSessionHarness();
+      Object.defineProperties(h.session, {
+        agentKind: { value: 'codex' },
+        model: { value: 'deepseek/deepseek-v4-pro', writable: true },
+        codexProxyActive: { value: true },
+        codexThreadModelProviderId: { value: 'cindy_openai' },
+      });
+      const unrelatedBusyCodex = {
+        id: 'unrelated-busy-codex',
+        agentKind: 'codex',
+        remoteHostId: null,
+        isTurnRunning: () => true,
+      } as unknown as Session;
+      const harness = createRunnerHarness(
+        h,
+        {
+          model: 'deepseek/deepseek-v4-pro',
+          workDir: '/work',
+          sdkSessionId: 'sdk-1',
+        },
+        { sessionAlive: true, activeSessions: [h.session, unrelatedBusyCodex] },
+      );
+
+      await fireToCompletion(
+        harness,
+        h,
+        baseSchedule({
+          agentKind: 'codex',
+          model: 'deepseek/deepseek-v4-pro',
+          providerId: 'deepseek',
+          targetSessionId: 'scheduler-session',
+        }),
+      );
+
+      expect(harness.closeSession).toHaveBeenCalledTimes(1);
+      expect(harness.closeSession).toHaveBeenCalledWith('scheduler-session');
+      expect(harness.closeSession).not.toHaveBeenCalledWith('unrelated-busy-codex');
+      expect(harness.closeSession.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.createSession.mock.invocationCallOrder[0],
+      );
+    });
+
     it('heartbeat 复用本地 Codex 且其它本地 Codex 正忙 → 顺延且不关闭任何会话', async () => {
       mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', providerId: 'xd' });
       const h = createSessionHarness();

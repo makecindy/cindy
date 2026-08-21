@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  isCodexThreadModelProviderIdentityMismatch,
   prepareLocalSessionCredentialModeSwitch,
   prepareLocalCodexCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
@@ -72,7 +73,7 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
   it('closes when the live thread is still OpenAI even if the provider store already says DeepSeek', () => {
     // 现场回归:provider store 已被选择器提前写成新来源,仅比较 current/next 会误判为
     // 同一家族；thread/start 的实际响应仍是 cindy_openai,必须以它为准重建。
-    expect(shouldCloseSessionForCredentialSwitch({
+    const input = {
       agentKind: 'codex',
       currentProviderId: 'deepseek',
       nextProviderId: 'deepseek',
@@ -80,11 +81,13 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       nextModel: 'deepseek/deepseek-v4-pro',
       currentCodexProxyActive: true,
       currentCodexThreadModelProviderId: 'cindy_openai',
-    })).toBe(true);
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(true);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(true);
   });
 
   it('keeps a matching gateway thread when the provider store already says DeepSeek', () => {
-    expect(shouldCloseSessionForCredentialSwitch({
+    const input = {
       agentKind: 'codex',
       currentProviderId: 'deepseek',
       nextProviderId: 'deepseek',
@@ -92,7 +95,9 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       nextModel: 'deepseek/deepseek-v4-pro',
       currentCodexProxyActive: true,
       currentCodexThreadModelProviderId: 'cindy_gateway',
-    })).toBe(false);
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
   });
 
   it('still closes a gateway Codex session when switching to OAuth on a proxy-active host', () => {
