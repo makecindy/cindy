@@ -556,6 +556,12 @@ function BranchWorktreeChip({
                   // Radix 菜单对可打印字符做 item typeahead,会吃掉输入;
                   // 导航键(箭头/Enter/Escape)放行冒泡,保持键盘可选分支。
                   onKeyDown={(e) => {
+                    // IME 组合中的 Escape 是"取消候选",不是"关菜单"——留在输入框里,
+                    // 冒泡出去会让 Radix 关掉菜单并清空刚输的搜索词(CJK 高频路径)。
+                    if (e.nativeEvent.isComposing) {
+                      e.stopPropagation();
+                      return;
+                    }
                     if (
                       e.key === 'ArrowDown'
                       || e.key === 'ArrowUp'
