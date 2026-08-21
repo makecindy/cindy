@@ -14,6 +14,8 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
+import { columnPercents } from '../cindy-docs/docxStyles.js';
+import { inferNumberFormat, isSummaryRow } from '../cindy-docs/make_xlsx.js';
 import { PPTX_LAYOUT_IDS, PPTX_THEMES } from '../cindy-docs/make_pptx.js';
 import { layoutSlots, SLIDE_H, SLIDE_W } from '../cindy-docs/pptxMasters.js';
 import { applyReportTemplate, htmlLooksUnstyled } from '../cindy-docs/pdfTemplate.js';
@@ -185,10 +187,22 @@ describe('Word 封面 / 标题层级 / 表格', () => {
     const documentXml = await unzip(result.path as string, 'word/document.xml');
     expect(documentXml).toContain('季度经营回顾');
     expect(documentXml).toContain('内部稿');
-    expect(documentXml).toContain(formatDocsDate());
     expect(documentXml).toContain('摘要');
     // 封面是独立节,后面正文另起一节
     expect(documentXml.match(/<w:sectPr[\s>]/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+
+    /*
+      日期在**封面页脚**里,不在正文流里。原来它跟在标题下面,靠段间距悬在半空,
+      标题一长就跟着往下挪、位置永远不稳;现在沉到页脚才真的贴着页底。
+      这里断言的是位置,不只是「出现过」—— 只查 document.xml 含不含日期,
+      恰恰是搬回正文流也能通过的那种弱断言。
+    */
+    expect(documentXml).not.toContain(formatDocsDate());
+    const coverFooter = await unzip(result.path as string, 'word/footer1.xml');
+    expect(coverFooter).toContain(formatDocsDate());
+
+    // 封面顶部那条实心强调带:用段落底纹画,不是边框 —— 边框只有线,填不出面积。
+    expect(documentXml).toContain(`<w:shd w:fill="${DOCS_THEMES.navy.accent}"`);
 
     const stylesXml = await unzip(result.path as string, 'word/styles.xml');
     expect(stylesXml).toContain('Heading1');
@@ -382,6 +396,60 @@ describe('页面尺寸与几何常量对齐', () => {
       const h = Number(m[4]) / EMU;
       if (h === 0) continue; // pptxgenjs 写的空组占位
       expect(y + h).toBeLessThanOrEqual(SLIDE_H + 0.01);
+    }
+  });
+});
+
+/*
+ * 下面三组只比数字,不靠人眼 —— 每一条都对应一个目检真看出来、而「XML 里有这个
+ * 字符串」那种自检永远看不出来的毛病。
+ */
+describe('表格与版式的数值不变量', () => {
+  it('单字「率」也要认成百分比列 —— 工具描述承诺过', () => {
+    // 这条就是目检里那一列显示 0.03 而不是 3.3% 的直接原因:老正则写的是「比率」,
+    // 于是「退款率」「转化率」「完成率」这些最常见的百分比表头一个都匹配不上。
+    for (const header of ['退款率', '转化率', '完成率', '占比', '毛利率 %', 'Refund rate']) {
+      expect(inferNumberFormat(header, [0.0325, 0.064])).toBe('0.0%');
+    }
+    // 大于 1 的「率」不套百分号:汇率、频率这类不是占比。
+    expect(inferNumberFormat('汇率', [7.12, 7.3])).toBe('#,##0.00');
+    // 没有语义信号的整数列照旧走千分位。
+    expect(inferNumberFormat('订单数', [1284, 3921])).toBe('#,##0');
+  });
+
+  it('汇总行按结构判定 —— 公式占多数,不查「合计 / Total」词表', () => {
+    const f = (formula: string) => ({ formula, result: 1 });
+    expect(isSummaryRow(['合计', '', f('SUM(A1:A9)'), f('SUM(B1:B9)')])).toBe(true);
+    // 换任何语言都成立:判据是「这一行的数是算出来的」,不是它叫什么。
+    expect(isSummaryRow(['Gesamt', f('SUM(A1:A9)'), f('SUM(B1:B9)')])).toBe(true);
+    // 普通数据行不算,哪怕里面夹了一个计算列。
+    expect(isSummaryRow(['7月', '直营门店', 1284, 986400, f('D2-E2')])).toBe(false);
+    expect(isSummaryRow([])).toBe(false);
+  });
+
+  it('表格列宽按内容分,且总和仍是 100%', () => {
+    // 「严重度」放两个字,「建议」放一整句 —— 等分会让一边空一片、一边挤三行。
+    const pcts = columnPercents([8, 12, 6, 24]);
+    expect(pcts.length).toBe(4);
+    expect(Math.round(pcts.reduce((a, b) => a + b, 0))).toBe(100);
+    // 内容多的列必须比内容少的列宽。
+    expect(pcts[3]).toBeGreaterThan(pcts[2]!);
+    expect(pcts[1]).toBeGreaterThan(pcts[2]!);
+    // 极端值不许把某一列压到没法看。
+    const extreme = columnPercents([1, 1, 400]);
+    expect(Math.min(...extreme)).toBeGreaterThanOrEqual(7.9);
+    expect(Math.round(extreme.reduce((a, b) => a + b, 0))).toBe(100);
+  });
+
+  it('斑马纹必须和底色拉开肉眼可辨的差', () => {
+    // 原来 light/navy 的斑马纹与白底只差 2%,整张表看不出隔行 —— 打了等于没打。
+    const lum = (hex: string) =>
+      parseInt(hex.slice(0, 2), 16) * 0.299 +
+      parseInt(hex.slice(2, 4), 16) * 0.587 +
+      parseInt(hex.slice(4, 6), 16) * 0.114;
+    for (const name of ['light', 'dark', 'navy'] as const) {
+      const t = DOCS_THEMES[name];
+      expect(Math.abs(lum(t.background) - lum(t.zebra))).toBeGreaterThan(6);
     }
   });
 });

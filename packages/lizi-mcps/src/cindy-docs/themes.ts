@@ -16,7 +16,13 @@ export interface DocsTheme {
   background: string;
   /** 卡片、表头浅底、引用底。 */
   surface: string;
-  /** 斑马纹浅底。 */
+  /**
+   * 斑马纹底色。
+   *
+   * 必须和 `background` 拉开肉眼可辨的差(约 4–6%)。原来只差 2%,实机目检下来
+   * 整张表看不出隔行 —— 打了跟没打一样,而它存在的唯一目的就是让眼睛横着扫
+   * 一行不串到下一行。
+   */
   zebra: string;
   /** 主标题、H1。 */
   title: string;
@@ -36,7 +42,7 @@ export const DOCS_THEMES: Record<DocsThemeName, DocsTheme> = {
   light: {
     background: 'FFFFFF',
     surface: 'F2F3F5',
-    zebra: 'F7F8FA',
+    zebra: 'F0F2F6',
     title: '1B1F24',
     body: '2E3440',
     accent: '2F6FEB',
@@ -47,7 +53,7 @@ export const DOCS_THEMES: Record<DocsThemeName, DocsTheme> = {
   dark: {
     background: '14181D',
     surface: '1E242C',
-    zebra: '1A1F26',
+    zebra: '1D242D',
     title: 'F5F7FA',
     body: 'D6DBE3',
     accent: '6AA6FF',
@@ -58,7 +64,7 @@ export const DOCS_THEMES: Record<DocsThemeName, DocsTheme> = {
   navy: {
     background: 'FFFFFF',
     surface: 'EEF2F7',
-    zebra: 'F7F9FB',
+    zebra: 'EDF2F8',
     title: '0F2744',
     body: '243040',
     accent: '1F4E79',

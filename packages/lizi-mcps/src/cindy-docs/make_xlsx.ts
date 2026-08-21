@@ -126,10 +126,55 @@ export function inferNumberFormat(header: string | undefined, values: unknown[])
   const nums = numericSamples(values);
   if (nums.length === 0) return undefined;
   const label = header ?? '';
-  const looksPercent = /[%％]|占比|比率|百分|percent|rate/i.test(label);
+  /*
+    单字「率」必须在里面。原来写的是「比率」,于是「退款率」「转化率」「完成率」
+    这些最常见的百分比列一个都匹配不上 —— 而工具描述明明白白承诺了「表头含
+    % / 率 / 占比 自动百分号」。目检一眼看穿:那一列显示的是 0.03,不是 3.3%。
+
+    放宽到单字不会误伤:下面那道 0–1 区间闸把「汇率」「频率」这类大于 1 的挡在
+    外面,匹配上了也不会套百分号。
+  */
+  const looksPercent = /[%％]|率|占比|比例|百分|percent|rate|ratio|share/i.test(label);
   if (looksPercent && nums.every((n) => n >= 0 && n <= 1)) return '0.0%';
   if (nums.every((n) => Number.isInteger(n))) return '#,##0';
   return '#,##0.00';
+}
+
+/**
+ * 列宽要按**用户看到的字符数**算,不是按原始值。
+ *
+ * 原来量的是 `String(986400)`(6 字),而单元格实际显示 `986,400`(7 字);百分比列
+ * 更离谱:量 `0.0325`(6 字),显示 `3.3%`(4 字)。前者让金额列偏窄 —— Excel 放不下
+ * 就显示一整格 `#####`,这是「表格很破」最直接的一种。
+ *
+ * 只做宽度估算用,不追求和 Excel 的渲染逐像素一致。
+ */
+export function formattedWidthSample(text: string, numFmt: string | undefined): string {
+  if (!numFmt) return text;
+  const n = Number(text);
+  if (!Number.isFinite(n) || text.trim() === '') return text;
+  if (numFmt.includes('%')) return `${(n * 100).toFixed(1)}%`;
+  const digits = numFmt.includes('.00') ? 2 : 0;
+  return n.toLocaleString('en-US', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+/**
+ * 汇总行判定 —— **按结构判,不按字眼判**。
+ *
+ * 「最后一行的非空格里公式格占多数」就是汇总行:它的数是**算出来的**,不是录入的。
+ * 这条规则不需要维护一张「合计 / 总计 / 小计 / Total / 合計 / 합계…」的词表,
+ * 换任何语言都成立,也不会因为某张表把汇总行叫「本季累计」就漏判。
+ *
+ * 只看最后一行:整表都是公式的场景(比如一张纯计算表)不该每行都被强调。
+ */
+export function isSummaryRow(row: readonly unknown[]): boolean {
+  const filled = row.filter((cell) => cell !== null && cell !== undefined && cell !== '');
+  if (filled.length === 0) return false;
+  const formulas = filled.filter((cell) => isFormulaCell(cell)).length;
+  return formulas * 2 > filled.length;
 }
 
 function paintRow(
@@ -258,9 +303,28 @@ export function registerMakeXlsxTool(
             headerRow.alignment = { vertical: 'middle' };
             ws.views = [{ state: 'frozen', ySplit: 1 }];
           }
+          // 最后一行是不是汇总行,决定它不打斑马纹、而是单独强调(见 isSummaryRow)。
+          const lastIndex = sheet.rows.length - 1;
+          const summaryIndex =
+            lastIndex >= 0 && isSummaryRow(sheet.rows[lastIndex]!) ? lastIndex : -1;
+
           for (const [rowIndex, row] of sheet.rows.entries()) {
             const excelRow = ws.addRow(row.map(toExcelValue));
-            if (zebra && rowIndex % 2 === 1) {
+            if (rowIndex === summaryIndex) {
+              /*
+                汇总行必须一眼能和数据行分开。原来它混在斑马纹里,和普通一行长得
+                一模一样 —— 一张表最重要的那一行反而最不显眼。给的是加粗 + 一条
+                上边框(会计里表示「以上求和」的那条线)+ 一层浅底,不换字色,
+                免得在三套主题下有一套对比度翻车。
+              */
+              paintRow(excelRow, themeToArgb(palette.surface), { bold: true });
+              excelRow.eachCell({ includeEmpty: true }, (cell) => {
+                cell.border = {
+                  ...(cell.border ?? {}),
+                  top: { style: 'thin', color: { argb: themeToArgb(palette.accent) } },
+                };
+              });
+            } else if (zebra && rowIndex % 2 === 1) {
               paintRow(excelRow, themeToArgb(palette.zebra));
             }
           }
@@ -271,17 +335,22 @@ export function registerMakeXlsxTool(
             1,
           );
           for (let col = 0; col < columnCount; col += 1) {
-            let width = displayWidth(cellText(sheet.header?.[col]));
-            const sampled = sheet.rows.slice(0, WIDTH_SAMPLE_ROWS);
-            for (const row of sampled) {
-              width = Math.max(width, displayWidth(cellText(row[col])));
-            }
-            const column = ws.getColumn(col + 1);
-            column.width = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, width + 2));
+            // 先定数字格式,再按**格式化后的样子**量宽 —— 反过来会让千分位金额列
+            // 偏窄,用户打开看到一整格 `#####`(见 formattedWidthSample)。
             const numFmt = inferNumberFormat(
               sheet.header?.[col],
               sheet.rows.map((row) => row[col]),
             );
+            let width = displayWidth(cellText(sheet.header?.[col]));
+            const sampled = sheet.rows.slice(0, WIDTH_SAMPLE_ROWS);
+            for (const row of sampled) {
+              width = Math.max(
+                width,
+                displayWidth(formattedWidthSample(cellText(row[col]), numFmt)),
+              );
+            }
+            const column = ws.getColumn(col + 1);
+            column.width = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, width + 2));
             if (numFmt) {
               column.numFmt = numFmt;
               column.alignment = { horizontal: 'right' };

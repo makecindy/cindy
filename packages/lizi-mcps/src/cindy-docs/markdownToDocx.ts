@@ -39,6 +39,7 @@ import {
   styledDocxBodyCell,
   styledDocxHeaderCell,
   styledDocxTable,
+  columnPercents,
 } from './docxStyles.js';
 import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsTheme, type DocsThemeName } from './themes.js';
 
@@ -215,6 +216,24 @@ function alignmentFor(align: 'center' | 'left' | 'right' | null): (typeof Alignm
   return undefined;
 }
 
+/** 估算一格占多宽:CJK 与全角记两格,其余一格。与 make_xlsx 的口径一致。 */
+function cellDisplayWidth(text: string): number {
+  let width = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    const wide =
+      (code >= 0x1100 && code <= 0x115f) ||
+      (code >= 0x2e80 && code <= 0xa4cf) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe30 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6);
+    width += wide ? 2 : 1;
+  }
+  return width;
+}
+
 function tableBlock(table: Tokens.Table, theme: DocsTheme): Table {
   const headerRow = new TableRow({
     tableHeader: true,
@@ -239,7 +258,16 @@ function tableBlock(table: Tokens.Table, theme: DocsTheme): Table {
         ),
       }),
   );
-  return styledDocxTable(theme, [headerRow, ...bodyRows]);
+  /*
+    列宽按这一列真正要放的字数分。量的是**纯文本**长度(CJK 记两格),不含加粗、
+    链接这些不影响占位的修饰;表头也算进去,免得一个长表头被自己那列挤成两行。
+  */
+  const columnTextWidths = table.header.map((cell, col) => {
+    const widths = [cellDisplayWidth(cell.text)];
+    for (const row of table.rows) widths.push(cellDisplayWidth(row[col]?.text ?? ''));
+    return Math.max(...widths);
+  });
+  return styledDocxTable(theme, [headerRow, ...bodyRows], columnPercents(columnTextWidths));
 }
 
 /** inQuote 单独传参而不是塞进 ctx:它是随递归深度变化的位置信息,不是文档级状态。 */
