@@ -8,6 +8,8 @@ import {
 import {
   buildCodexSubagentSpawnArgs,
   codexSubagentRouteResolutionFailed,
+  resolveCodexSubagentRoutingProfile,
+  resolveEffectiveCodexSubagentSettings,
   resolveCodexSubagentHostCredentialPlan,
   resolveCodexSubagentModelFallback,
   resolveCodexSubagentRouteSnapshot,
@@ -21,19 +23,27 @@ function settings(partial: Partial<SubagentModelSettings> = {}): SubagentModelSe
 function providerView(
   id: string,
   modelId: string,
-  options: { connected?: boolean; source?: 'builtin' | 'user' } = {},
+  options: {
+    connected?: boolean;
+    source?: 'builtin' | 'user';
+    authStrategy?: 'api-key-header' | 'gateway-key' | 'oauth-passthrough' | 'oauth-token';
+  } = {},
 ): ProviderView {
+  const isChatGptSubscription = id === 'openai' && (options.source ?? 'builtin') === 'builtin';
   return {
     id,
     name: id,
     source: options.source ?? 'builtin',
     connected: options.connected ?? true,
     agents: ['codex'],
-    auth: { method: 'none' },
+    auth: { method: isChatGptSubscription ? 'oauth' : 'none' },
+    ...(isChatGptSubscription
+      ? { access: { kind: 'subscription', product: 'ChatGPT' } }
+      : {}),
     routing: {
       codex: {
         upstream: `https://${id}.invalid/v1`,
-        authStrategy: 'oauth-passthrough',
+        authStrategy: options.authStrategy ?? 'oauth-passthrough',
       },
     },
     models: {
@@ -62,6 +72,138 @@ function withoutDelegationArgs(args: string[]): string[] {
   }
   return out;
 }
+
+describe('resolveEffectiveCodexSubagentSettings', () => {
+  const configured = settings({
+    codex: 'gpt-5.6-terra',
+    codexProviderId: 'openai',
+    codexEffort: 'high',
+    codexMaxConcurrentSubagents: 4,
+    codexAllowNestedSubagents: true,
+  });
+
+  it('uses Codex defaults for a ChatGPT OAuth main task while preserving ordinary guardrails', () => {
+    const effective = resolveEffectiveCodexSubagentSettings(configured, 'oauth-bearer');
+    expect(effective).toEqual({
+      ...configured,
+      codex: null,
+      codexProviderId: null,
+      codexEffort: null,
+    });
+    expect(resolveCodexSubagentRoutingProfile(configured, 'oauth-bearer')).toBe('oauth-default');
+    expect(resolveCodexSubagentRouteSnapshot(effective)).toBeUndefined();
+    expect(resolveCodexSubagentModelFallback(effective)).toBeUndefined();
+    expect(withoutDelegationArgs(buildCodexSubagentSpawnArgs(effective))).toEqual([
+      '-c',
+      'agents.max_concurrent_threads_per_session=4',
+      '-c',
+      'agents.max_depth=2',
+    ]);
+  });
+
+  it.each(['gateway-key', 'provider-oauth'] as const)(
+    'keeps a third-party configured route for a %s main task',
+    (credentialMode) => {
+      const providers = [providerView('openai', configured.codex!, {
+        authStrategy: 'gateway-key',
+      })];
+      const route = resolveCodexSubagentRouteSnapshot(configured, undefined, providers);
+      expect(resolveEffectiveCodexSubagentSettings(
+        configured,
+        credentialMode,
+        route,
+        providers,
+      )).toBe(configured);
+      expect(resolveCodexSubagentRoutingProfile(
+        configured,
+        credentialMode,
+        route,
+        providers,
+      )).toBe('configured');
+    },
+  );
+
+  it.each(['api-key-header', 'gateway-key', 'oauth-token', 'oauth-passthrough'] as const)(
+    'does not identify a third-party Codex/GPT proxy as ChatGPT OAuth (%s)',
+    (authStrategy) => {
+      const thirdParty = settings({
+        codex: 'codex/gpt-5.6-luna',
+        codexProviderId: 'third-party-codex-proxy',
+        codexEffort: 'high',
+      });
+      const providers = [providerView(
+        'third-party-codex-proxy',
+        thirdParty.codex!,
+        { source: 'user', authStrategy },
+      )];
+      const route = resolveCodexSubagentRouteSnapshot(thirdParty, undefined, providers);
+
+      expect(resolveEffectiveCodexSubagentSettings(
+        thirdParty,
+        'provider-oauth',
+        route,
+        providers,
+      )).toBe(thirdParty);
+      expect(resolveCodexSubagentRoutingProfile(
+        thirdParty,
+        'provider-oauth',
+        route,
+        providers,
+      )).toBe('configured');
+    },
+  );
+
+  it.each(['gateway-key', 'provider-oauth'] as const)(
+    'uses the main-task default when a %s main task selects a ChatGPT OAuth Subagent',
+    (credentialMode) => {
+      const providers = [providerView('openai', configured.codex!)];
+      const route = resolveCodexSubagentRouteSnapshot(configured, undefined, providers);
+      const effective = resolveEffectiveCodexSubagentSettings(
+        configured,
+        credentialMode,
+        route,
+        providers,
+      );
+      expect(effective).toEqual({
+        ...configured,
+        codex: null,
+        codexProviderId: null,
+        codexEffort: null,
+      });
+      expect(resolveCodexSubagentRoutingProfile(
+        configured,
+        credentialMode,
+        route,
+        providers,
+      )).toBe('default');
+      expect(resolveCodexSubagentRouteSnapshot(effective, undefined, providers)).toBeUndefined();
+      expect(resolveCodexSubagentModelFallback(effective)).toBeUndefined();
+      expect(withoutDelegationArgs(buildCodexSubagentSpawnArgs(effective))).toEqual([
+        '-c',
+        'agents.max_concurrent_threads_per_session=4',
+        '-c',
+        'agents.max_depth=2',
+      ]);
+    },
+  );
+
+  it('also removes an effort-only override from a ChatGPT OAuth main task', () => {
+    const effortOnly = settings({ codexEffort: 'high' });
+    const effective = resolveEffectiveCodexSubagentSettings(effortOnly, 'oauth-bearer');
+    expect(effective.codexEffort).toBeNull();
+    expect(resolveCodexSubagentRoutingProfile(effortOnly, 'oauth-bearer')).toBe('oauth-default');
+  });
+
+  it('does not create a mode-specific profile when the master switch is off', () => {
+    const disabled = settings({
+      codex: 'gpt-5.6-terra',
+      codexProviderId: 'openai',
+      codexSubagentsEnabled: false,
+    });
+    expect(resolveEffectiveCodexSubagentSettings(disabled, 'oauth-bearer')).toBe(disabled);
+    expect(resolveCodexSubagentRoutingProfile(disabled, 'oauth-bearer')).toBe('default');
+  });
+});
 
 describe('buildCodexSubagentSpawnArgs', () => {
   it('emits only the delegation defaults for all-default settings', () => {
@@ -494,5 +636,23 @@ describe('resolveCodexSubagentHostCredentialPlan', () => {
       'provider-oauth',
       false,
     )).toEqual({ forceDisableSubagents: true });
+  });
+
+  it('does not request ChatGPT credentials for a third-party oauth-passthrough proxy', () => {
+    const route = {
+      providerId: 'third-party-codex-proxy',
+      catalogModel: 'codex/gpt-5.6-luna',
+      reasoningEffort: null,
+    };
+    expect(resolveCodexSubagentHostCredentialPlan(
+      route,
+      [providerView(
+        'third-party-codex-proxy',
+        route.catalogModel,
+        { source: 'user', authStrategy: 'oauth-passthrough' },
+      )],
+      'provider-oauth',
+      false,
+    )).toEqual({ forceDisableSubagents: false });
   });
 });

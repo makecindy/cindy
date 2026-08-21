@@ -45,6 +45,77 @@ export interface CodexSubagentHostCredentialPlan {
   requiredSpawnCredentialMode?: 'oauth-bearer';
 }
 
+function hasCodexSubagentOverride(settings: SubagentModelSettings): boolean {
+  return settings.codexSubagentsEnabled
+    && Boolean(settings.codex?.trim() || settings.codexEffort !== null);
+}
+
+export function codexSubagentRouteUsesChatGptOAuth(
+  route: CodexSubagentRouteSnapshot | undefined,
+  providerViews: ProviderView[] | undefined,
+): boolean {
+  if (!route) return false;
+  const provider = providerViews?.find((candidate) => candidate.id === route.providerId);
+  return provider?.id === 'openai'
+    && provider.source === 'builtin'
+    && provider.auth.method === 'oauth'
+    && provider.access?.kind === 'subscription'
+    && provider.access.product === 'ChatGPT'
+    && provider.routing.codex?.authStrategy === 'oauth-passthrough';
+}
+
+function shouldUseDefaultCodexSubagent(
+  settings: SubagentModelSettings,
+  mainTaskCredentialMode: 'gateway-key' | 'oauth-bearer' | 'provider-oauth',
+  configuredRoute: CodexSubagentRouteSnapshot | undefined,
+  providerViews: ProviderView[] | undefined,
+): boolean {
+  if (!hasCodexSubagentOverride(settings)) return false;
+  return mainTaskCredentialMode === 'oauth-bearer'
+    || codexSubagentRouteUsesChatGptOAuth(configuredRoute, providerViews);
+}
+
+/**
+ * ChatGPT OAuth 与其它 Provider 的锁定 Subagent 路由不能安全混用：OAuth 主任务上的
+ * 任意锁定路由会关闭 OpenAI WebSocket；反向把 OAuth Subagent 锁到第三方主任务上则会
+ * 把子线程降到不兼容的 HTTP 流。两种情况都只忽略锁定模型、Provider 与 effort，让
+ * Codex 使用原生默认 Subagent；总开关、策略、并发和嵌套等普通编排设置仍然保留。
+ */
+export function resolveEffectiveCodexSubagentSettings(
+  settings: SubagentModelSettings,
+  mainTaskCredentialMode: 'gateway-key' | 'oauth-bearer' | 'provider-oauth',
+  configuredRoute?: CodexSubagentRouteSnapshot,
+  providerViews?: ProviderView[],
+): SubagentModelSettings {
+  if (!shouldUseDefaultCodexSubagent(
+    settings,
+    mainTaskCredentialMode,
+    configuredRoute,
+    providerViews,
+  )) {
+    return settings;
+  }
+  return {
+    ...settings,
+    codex: null,
+    codexProviderId: null,
+    codexEffort: null,
+  };
+}
+
+export function resolveCodexSubagentRoutingProfile(
+  settings: SubagentModelSettings,
+  mainTaskCredentialMode: 'gateway-key' | 'oauth-bearer' | 'provider-oauth',
+  configuredRoute?: CodexSubagentRouteSnapshot,
+  providerViews?: ProviderView[],
+): 'default' | 'configured' | 'oauth-default' {
+  if (!hasCodexSubagentOverride(settings)) return 'default';
+  if (mainTaskCredentialMode === 'oauth-bearer') return 'oauth-default';
+  return codexSubagentRouteUsesChatGptOAuth(configuredRoute, providerViews)
+    ? 'default'
+    : 'configured';
+}
+
 /**
  * OpenAI/ChatGPT 路由依赖 Codex 原生 OAuth passthrough。父任务可能使用另一家
  * Provider OAuth，因此锁定子代理必须要求带 ChatGPT OAuth 的 app-server；不能接受
@@ -57,10 +128,7 @@ export function resolveCodexSubagentHostCredentialPlan(
   hasCodexOAuthLogin: boolean,
 ): CodexSubagentHostCredentialPlan {
   if (!route) return { forceDisableSubagents: false };
-  const routing = providerViews
-    ?.find((provider) => provider.id === route.providerId)
-    ?.routing.codex;
-  if (routing?.authStrategy !== 'oauth-passthrough') {
+  if (!codexSubagentRouteUsesChatGptOAuth(route, providerViews)) {
     return { forceDisableSubagents: false };
   }
   if (!hasCodexOAuthLogin) {
