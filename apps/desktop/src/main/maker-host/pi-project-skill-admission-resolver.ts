@@ -63,6 +63,12 @@ interface ProjectSkillScanDeps {
   resolveWindowsCaseComparison?: (candidate: string) => Promise<WindowsCaseComparison>;
 }
 
+interface WindowsCaseProbeDeps {
+  readdir: (candidate: string) => Promise<Array<{ name: string }>>;
+  openDirectory?: (candidate: string) => Promise<AsyncIterable<{ name: string }>>;
+  lstat: (candidate: string) => Promise<{ dev?: number | bigint; ino?: number | bigint }>;
+}
+
 export const MAX_PI_PROJECT_SKILL_DISCOVERY_ENTRIES = 10_000;
 export const PI_PROJECT_SKILL_DISCOVERY_DEADLINE_MS = 30_000;
 
@@ -103,8 +109,8 @@ async function awaitProjectSkillDiscoveryStep<T>(
   }
 }
 
-function closeProjectSkillDirectoryIterator(
-  iterator: AsyncIterator<FsDirentLike>,
+function closeProjectSkillDirectoryIterator<T>(
+  iterator: AsyncIterator<T>,
 ): void {
   if (!iterator.return) return;
   try {
@@ -261,35 +267,78 @@ function swapAsciiCase(value: string): string | null {
 
 async function detectWindowsCaseComparison(
   canonicalWorkingDir: string,
-  dependencies: {
-    readdir: (candidate: string) => Promise<Array<{ name: string }>>;
-    lstat: (candidate: string) => Promise<{ dev?: number | bigint; ino?: number | bigint }>;
-  } = {
+  dependencies: WindowsCaseProbeDeps = {
     readdir: (candidate) => fsp.readdir(candidate, { withFileTypes: true }),
+    openDirectory: async (candidate) => fsp.opendir(candidate),
     lstat: (candidate) => fsp.lstat(candidate),
   },
+  suppliedBudget?: ProjectSkillDiscoveryBudget,
 ): Promise<WindowsCaseComparison> {
   // Windows case sensitivity is a per-directory property. Changing the
   // spelling of workingDir itself probes its parent, not the lookup semantics
   // used for Skill children. Probe one existing child without mutating the
   // project; an empty/non-ASCII-only directory cannot provide this proof.
   try {
-    const entries = await dependencies.readdir(canonicalWorkingDir);
+    const budget = suppliedBudget ?? {
+      remainingEntries: MAX_PI_PROJECT_SKILL_DISCOVERY_ENTRIES,
+      deadlineAtMs: Date.now() + PI_PROJECT_SKILL_DISCOVERY_DEADLINE_MS,
+    };
     const foldedNames = new Set<string>();
-    for (const entry of entries) {
+    let probeName: string | null = null;
+    const inspectEntry = (entry: { name: string }): WindowsCaseComparison | null => {
       const folded = entry.name.replace(/[A-Z]/g, (character) => character.toLowerCase());
       if (foldedNames.has(folded)) return 'case-sensitive';
       foldedNames.add(folded);
+      if (!probeName) {
+        const alternateName = swapAsciiCase(entry.name);
+        if (alternateName && alternateName !== entry.name) probeName = entry.name;
+      }
+      return null;
+    };
+
+    if (dependencies.openDirectory) {
+      const directory = await awaitProjectSkillDiscoveryStep(
+        () => dependencies.openDirectory!(canonicalWorkingDir),
+        budget,
+      );
+      const iterator = directory[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const result = await awaitProjectSkillDiscoveryStep(() => iterator.next(), budget);
+          if (result.done) break;
+          assertProjectSkillDiscoveryBudget(budget);
+          budget.remainingEntries -= 1;
+          const comparison = inspectEntry(result.value);
+          if (comparison) return comparison;
+        }
+      } finally {
+        closeProjectSkillDirectoryIterator(iterator);
+      }
+    } else {
+      // Compatibility seam for focused tests. Production always uses the
+      // streaming reader so an oversized directory cannot be materialized.
+      const entries = await awaitProjectSkillDiscoveryStep(
+        () => dependencies.readdir(canonicalWorkingDir),
+        budget,
+      );
+      if (Date.now() >= budget.deadlineAtMs || entries.length > budget.remainingEntries) {
+        throw new Error('project skill discovery budget exhausted');
+      }
+      budget.remainingEntries -= entries.length;
+      for (const entry of entries) {
+        const comparison = inspectEntry(entry);
+        if (comparison) return comparison;
+      }
     }
-    for (const entry of entries) {
-      const alternateName = swapAsciiCase(entry.name);
-      if (!alternateName || alternateName === entry.name) continue;
-      const originalPath = path.win32.join(canonicalWorkingDir, entry.name);
+
+    if (probeName) {
+      const alternateName = swapAsciiCase(probeName)!;
+      const originalPath = path.win32.join(canonicalWorkingDir, probeName);
       const alternatePath = path.win32.join(canonicalWorkingDir, alternateName);
       try {
         const [original, probe] = await Promise.all([
-          dependencies.lstat(originalPath),
-          dependencies.lstat(alternatePath),
+          awaitProjectSkillDiscoveryStep(() => dependencies.lstat(originalPath), budget),
+          awaitProjectSkillDiscoveryStep(() => dependencies.lstat(alternatePath), budget),
         ]);
         if (
           original.dev === undefined
@@ -320,16 +369,17 @@ function defaultIdentityDeps(): DesktopPiProjectIdentityDeps {
     platform: process.platform === 'win32' ? 'win32' : 'posix',
     stat: (candidate) => fsp.stat(candidate),
     realpath: (candidate) => fsp.realpath(candidate),
-    resolveWindowsCaseComparison: detectWindowsCaseComparison,
   };
 }
 
 export async function resolveDesktopPiProjectIdentity(
   workingDir: string,
-  dependenciesOrDeadline: DesktopPiProjectIdentityDeps | number = defaultIdentityDeps(),
+  dependenciesOrDeadline?: DesktopPiProjectIdentityDeps | number,
   suppliedDeadlineAtMs?: number,
 ): Promise<PiProjectIdentityResolution | null> {
-  const dependencies = typeof dependenciesOrDeadline === 'number'
+  const usingDefaultDependencies = dependenciesOrDeadline === undefined
+    || typeof dependenciesOrDeadline === 'number';
+  const dependencies = usingDefaultDependencies
     ? defaultIdentityDeps()
     : dependenciesOrDeadline;
   const deadlineAtMs = typeof dependenciesOrDeadline === 'number'
@@ -379,7 +429,9 @@ export async function resolveDesktopPiProjectIdentity(
             () => dependencies.resolveWindowsCaseComparison!(canonicalWorkingDir),
             budget,
           )
-        : 'unavailable';
+        : usingDefaultDependencies
+          ? await detectWindowsCaseComparison(canonicalWorkingDir, undefined, budget)
+          : 'unavailable';
       if (windowsCaseComparison === 'unavailable') return null;
       identity = {
         workingDir: requestedWorkingDir,
@@ -522,7 +574,6 @@ const defaultScanDeps = (): ProjectSkillScanDeps => ({
   lstat: (candidate) => fsp.lstat(candidate),
   stat: (candidate) => fsp.stat(candidate),
   realpath: (candidate) => fsp.realpath(candidate),
-  resolveWindowsCaseComparison: detectWindowsCaseComparison,
 });
 
 async function windowsDirectoryChainMatchesIdentity(
@@ -534,18 +585,30 @@ async function windowsDirectoryChainMatchesIdentity(
 ): Promise<boolean> {
   if (identity.platform !== 'win32') return true;
   const expected = identity.windowsCaseComparison;
-  const resolve = dependencies.resolveWindowsCaseComparison;
   const repoRoot = identity.canonicalRepoRoot;
-  if (!repoRoot || !expected || !resolve) return false;
+  if (!repoRoot || !expected) return false;
+  const resolve = async (candidate: string): Promise<WindowsCaseComparison> => {
+    if (dependencies.resolveWindowsCaseComparison) {
+      return budget
+        ? await awaitProjectSkillDiscoveryStep(
+            () => dependencies.resolveWindowsCaseComparison!(candidate),
+            budget,
+          )
+        : dependencies.resolveWindowsCaseComparison(candidate);
+    }
+    return detectWindowsCaseComparison(candidate, {
+      readdir: dependencies.readdir,
+      openDirectory: dependencies.openDirectory,
+      lstat: dependencies.lstat,
+    }, budget);
+  };
   let current = canonicalDirectory;
   for (let depth = 0; depth < 1024; depth += 1) {
     const comparison = comparisonPath(identity, current);
     if (!comparison || !canonicalPathIsWithin(identity, repoRoot, current)) return false;
     let matches = checked.get(comparison);
     if (matches === undefined) {
-      matches = (budget
-        ? await awaitProjectSkillDiscoveryStep(() => resolve(current), budget)
-        : await resolve(current)) === expected;
+      matches = await resolve(current) === expected;
       checked.set(comparison, matches);
     }
     if (!matches) return false;
@@ -560,9 +623,7 @@ async function windowsDirectoryChainMatchesIdentity(
       if (!parentComparison) return false;
       let parentMatches = checked.get(parentComparison);
       if (parentMatches === undefined) {
-        parentMatches = (budget
-          ? await awaitProjectSkillDiscoveryStep(() => resolve(boundaryParent), budget)
-          : await resolve(boundaryParent)) === expected;
+        parentMatches = await resolve(boundaryParent) === expected;
         checked.set(parentComparison, parentMatches);
       }
       return parentMatches;
@@ -576,10 +637,11 @@ async function windowsDirectoryChainMatchesIdentity(
 
 export async function scanContainedDesktopPiProjectSkills(
   identity: PiProjectIdentityResolution,
-  dependenciesOrDeadline: ProjectSkillScanDeps | number = defaultScanDeps(),
+  dependenciesOrDeadline?: ProjectSkillScanDeps | number,
   suppliedDeadlineAtMs?: number,
 ): Promise<PiProjectCanonicalPathEvidence[] | null> {
-  const dependencies = typeof dependenciesOrDeadline === 'number'
+  const dependencies = dependenciesOrDeadline === undefined
+    || typeof dependenciesOrDeadline === 'number'
     ? defaultScanDeps()
     : dependenciesOrDeadline;
   const deadlineAtMs = typeof dependenciesOrDeadline === 'number'
@@ -625,15 +687,16 @@ export async function scanContainedDesktopPiProjectSkills(
   }
 }
 
-const defaultResolverDeps = (): PiProjectSkillAdmissionResolverDeps => ({
-  resolveIdentity: (workingDir, deadlineAtMs) => resolveDesktopPiProjectIdentity(
+const defaultResolverDeps = (
+  identityImplementation: typeof resolveDesktopPiProjectIdentity = resolveDesktopPiProjectIdentity,
+  scanImplementation: typeof scanContainedDesktopPiProjectSkills = scanContainedDesktopPiProjectSkills,
+): PiProjectSkillAdmissionResolverDeps => ({
+  resolveIdentity: (workingDir, deadlineAtMs) => identityImplementation(
     workingDir,
-    defaultIdentityDeps(),
     deadlineAtMs,
   ),
-  scanProjectSkills: (identity, deadlineAtMs) => scanContainedDesktopPiProjectSkills(
+  scanProjectSkills: (identity, deadlineAtMs) => scanImplementation(
     identity,
-    defaultScanDeps(),
     deadlineAtMs,
   ),
 });
@@ -742,6 +805,7 @@ export const __testing = {
   canonicalPathIsWithin,
   canonicalPathsEqual,
   comparisonPath,
+  defaultResolverDeps,
   detectWindowsCaseComparison,
   nearestGitRoot,
   projectSkillSourceRoots,

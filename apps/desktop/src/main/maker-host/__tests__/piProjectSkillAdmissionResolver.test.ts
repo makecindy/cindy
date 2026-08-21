@@ -182,6 +182,41 @@ describe('canonical Windows comparison', () => {
     })).resolves.toBe('unavailable');
   });
 
+  it('streams Windows case probes through the shared discovery budget', async () => {
+    let reads = 0;
+    const close = vi.fn(async (): Promise<IteratorResult<{ name: string }>> => ({
+      done: true,
+      value: undefined,
+    }));
+    const next = vi.fn(async (): Promise<IteratorResult<{ name: string }>> => {
+      reads += 1;
+      return {
+        done: false,
+        value: { name: `entry-${reads}` },
+      };
+    });
+    const readdir = vi.fn(async () => []);
+    const lstat = vi.fn(async () => ({ dev: 1, ino: 2 }));
+    const budget = {
+      remainingEntries: 2,
+      deadlineAtMs: Date.now() + PI_PROJECT_SKILL_DISCOVERY_DEADLINE_MS,
+    };
+
+    await expect(__testing.detectWindowsCaseComparison('C:\\Repo', {
+      readdir,
+      openDirectory: async () => ({
+        [Symbol.asyncIterator]: () => ({ next, return: close }),
+      }),
+      lstat,
+    }, budget)).resolves.toBe('unavailable');
+
+    expect(reads).toBe(3);
+    expect(budget.remainingEntries).toBe(0);
+    expect(readdir).not.toHaveBeenCalled();
+    expect(lstat).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('fails closed when any participating Windows directory has different comparison semantics', async () => {
     const resolveWindowsCaseComparison = vi.fn(async (candidate: string) => (
       candidate === 'C:\\Repo\\packages'
@@ -405,6 +440,30 @@ describe('scanContainedDesktopPiProjectSkills', () => {
 });
 
 describe('resolveDesktopPiProjectTrustInput', () => {
+  it('wires production identity and scan through their shared-deadline overloads', async () => {
+    const identityImplementation = vi.fn(async () => null);
+    const scanImplementation = vi.fn(async () => null);
+    const dependencies = __testing.defaultResolverDeps(
+      identityImplementation,
+      scanImplementation,
+    );
+    const identity = {
+      workingDir: 'C:\\Repo',
+      canonicalWorkingDir: 'C:\\Repo',
+      canonicalRepoRoot: 'C:\\Repo',
+      repoRootStatus: 'resolved' as const,
+      platform: 'win32' as const,
+      canonicalPathEncoding: 'utf16-lossless' as const,
+      windowsCaseComparison: 'ordinal-insensitive' as const,
+    };
+
+    await dependencies.resolveIdentity('C:\\Repo', 1234);
+    await dependencies.scanProjectSkills(identity, 1234);
+
+    expect(identityImplementation).toHaveBeenCalledWith('C:\\Repo', 1234);
+    expect(scanImplementation).toHaveBeenCalledWith(identity, 1234);
+  });
+
   it('automatically admits contained skills and hard-empties every non-skill surface', async () => {
     const project = makeProject();
 
