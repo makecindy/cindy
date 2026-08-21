@@ -443,12 +443,11 @@ function whichRgOnPath(): string {
   return '';
 }
 
-// bash 隔离 home 的跨重载解析(#3070)。CINDY_PI_BASH_PACKAGE_HOME 由 host 在
-// spawn 时注入一次,bridge 首次加载后即从 process.env 删除(防止进程内其它代码
-// 改写)。但 Pi 会重载扩展:同一进程里 bridge 文件被再次执行时 env 已被删,重载
-// 实例拿到 undefined —— bash 从此永久 fail-closed。解法:首次加载把值 stash 进
-// globalThis 上的 non-configurable / non-writable 属性(语言层面不可替换、不可
-// 删除),重载实例取回时再做双重验证。
+// bash 隔离 home 的跨重载/升级恢复解析(#3070/#3164)。
+// CINDY_PI_BASH_PACKAGE_HOME 由 host 在 spawn 时注入一次,bridge 首次加载后即从
+// process.env 删除(防止进程内其它代码改写)。Pi 重载扩展时从不可变 stash 恢复;
+// 若存量进程里的旧 bridge 已经消费 env、却没有建立新版 stash,则从仍由 host
+// 注入的 PI_CODING_AGENT_DIR 固定派生 bash-package-home,补建 stash 后继续使用。
 //
 // 威胁模型:本进程内会加载用户安装的第三方托管扩展,它们与 bridge 共享同一
 // realm,能触碰 globalThis 与 process.env。因此:
@@ -461,9 +460,9 @@ function whichRgOnPath(): string {
 //    扩展先于 bridge 首次加载执行)也得同时锚定 PI_CODING_AGENT_DIR 才可能一致,
 //    与「抢跑改写注入 env」在原实现下同级别,不新增面。
 //  - env 值在已消费(stash 已建立)后再次出现,视为进程内写入:删除并忽略。
-//  - stash 缺失(非 Cindy 初始化的进程,如手工把 bridge 拷进用户 ~/.pi)或双重
-//    验证失败 → 返回 undefined,下游 isolatedBashEnvironment 保持原 fail-closed,
-//    不猜外来 runtime 的路径。
+//  - 旧 bridge 没有 stash 时只接受 Cindy runtime 的固定目录布局:configHome 必须
+//    位于 <agentHome>/run-tmp,权限文件必须位于同一 <agentHome>/runtime;手工把 bridge
+//    拷进用户 ~/.pi 或跨 runtime 路径仍返回 undefined,保持 fail-closed。
 //
 // 凭证不走本机制:CINDY_PI_PACKAGE_MANAGEMENT 是 host 签发的 bearer token,
 // 保持读一次即删、仅闭包持有(见入口注释)。
@@ -503,15 +502,57 @@ function derivedBashPackageHome(): string | undefined {
   return path.posix.join(configHome, 'bash-package-home');
 }
 
+function legacyBashPackageHome(): string | undefined {
+  const configHome = process.env.PI_CODING_AGENT_DIR;
+  const permissionFile = process.env.CINDY_PI_PERMISSION_FILE;
+  const derived = derivedBashPackageHome();
+  if (!configHome || !permissionFile || !derived || !path.isAbsolute(permissionFile)) {
+    return undefined;
+  }
+  // Host 的 runtime 结构固定为 <agentHome>/run-tmp/<instance> 与
+  // <agentHome>/runtime/perm-*.json。两者必须同属一个 agentHome,不能只凭一个
+  // 可改写的 PI_CODING_AGENT_DIR 猜路径。
+  // 归属校验必须用当前平台 path 语义:Windows 的反斜杠与上级引用也要被
+  // 规范化/拦截;只有最终 bash home 的派生式必须保持 host 的 posix.join。
+  const runTmpDir = path.dirname(configHome);
+  if (path.basename(runTmpDir) !== 'run-tmp') return undefined;
+  const agentHome = path.dirname(runTmpDir);
+  const runtimeDir = path.join(agentHome, 'runtime');
+  const relativePermission = path.relative(runtimeDir, permissionFile);
+  if (
+    !relativePermission ||
+    relativePermission === '..' ||
+    relativePermission.startsWith('..' + path.sep) ||
+    path.isAbsolute(relativePermission) ||
+    !path.basename(permissionFile).startsWith('perm-') ||
+    !path.basename(permissionFile).endsWith('.json')
+  ) {
+    return undefined;
+  }
+  try {
+    if (!statSync(permissionFile).isFile() || !statSync(derived).isDirectory()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return derived;
+}
+
 function resolveBashPackageHome(): string | undefined {
   const injected = process.env[PI_BASH_PACKAGE_HOME_ENV];
   if (injected !== undefined) delete process.env[PI_BASH_PACKAGE_HOME_ENV];
   const stashed = readStashedBashPackageHome();
   if (stashed === undefined) {
-    // 本进程首次加载:host 注入的 env 是权威,stash 供重载实例取回。
-    if (injected !== undefined) {
-      stashBashPackageHome(injected);
-      return injected;
+    // 攻击者抢跑占用了 stash 名时不能退回派生路径,否则会把不可信属性形态
+    // 静默“修复”为受信 stash。只有属性确实缺失才允许兼容旧 bridge。
+    if (Object.prototype.hasOwnProperty.call(globalThis, BRIDGE_RELOAD_STASH_GLOBAL)) {
+      return undefined;
+    }
+    // 本进程首次加载:host 注入的 env 是权威。升级 attach 的存量进程可能已被
+    // 旧 bridge 消费 env 且没有 stash;此时从 host 的 configHome 固定派生。
+    const resolved = injected ?? legacyBashPackageHome();
+    if (resolved !== undefined) {
+      stashBashPackageHome(resolved);
+      return resolved;
     }
     return undefined;
   }

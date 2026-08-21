@@ -79,7 +79,7 @@ function loadBashIsolationHelper(
   ) => Record<string, string | undefined>;
 }
 
-function loadBashPackageHomeHelper(): {
+function loadBashPackageHomeHelper(pathImpl: typeof path = path): {
   resolveBashPackageHome: () => string | undefined;
   env: Record<string, string | undefined>;
   globalThis: Record<string, unknown>;
@@ -101,7 +101,8 @@ function loadBashPackageHomeHelper(): {
   }).outputText;
   const context: Record<string, unknown> = {
     process: { env: {} },
-    path,
+    path: pathImpl,
+    statSync,
   };
   // runInNewContext 的 context 即该 realm 的 globalThis,stash 会落在上面。
   runInNewContext(compiled, context);
@@ -111,7 +112,7 @@ function loadBashPackageHomeHelper(): {
   }
   return {
     resolveBashPackageHome,
-    env: context.process.env as Record<string, string | undefined>,
+    env: (context.process as { env: Record<string, string | undefined> }).env,
     globalThis: context,
   };
 }
@@ -1085,6 +1086,55 @@ describe('cindy-bridge extension source', () => {
     helper.env.PI_CODING_AGENT_DIR = '/host/agent-home/run-tmp/abc';
     expect(helper.resolveBashPackageHome()).toBe(injected);
 
+    // 升级 attach:旧 bridge 已消费专用 env 且未建立 stash。只有 configHome 与
+    // permission file 同属 Cindy runtime 固定布局、且 host 创建的文件/目录仍在时,
+    // 才派生并补建 stash。
+    const legacyRoot = mkdtempSync(path.join(tmpdir(), 'cindy-legacy-bash-home-'));
+    const otherRoot = mkdtempSync(path.join(tmpdir(), 'cindy-other-runtime-'));
+    try {
+      const legacyConfigHome = path.join(legacyRoot, 'run-tmp', 'legacy');
+      const legacyRuntimeDir = path.join(legacyRoot, 'runtime');
+      const legacyDerived = path.posix.join(legacyConfigHome, 'bash-package-home');
+      mkdirSync(legacyDerived, { recursive: true });
+      mkdirSync(legacyRuntimeDir, { recursive: true });
+      const legacyPermission = path.join(legacyRuntimeDir, 'perm-legacy.json');
+      writeFileSync(legacyPermission, '{}');
+      const legacy = loadBashPackageHomeHelper();
+      legacy.env.PI_CODING_AGENT_DIR = legacyConfigHome;
+      legacy.env.CINDY_PI_PERMISSION_FILE = legacyPermission;
+      expect(legacy.resolveBashPackageHome()).toBe(legacyDerived);
+      expect(legacy.resolveBashPackageHome()).toBe(legacyDerived);
+      const legacyDescriptor = Object.getOwnPropertyDescriptor(
+        legacy.globalThis,
+        '__cindyBridgeBashPackageHome',
+      );
+      expect(legacyDescriptor?.writable).toBe(false);
+      expect(legacyDescriptor?.configurable).toBe(false);
+
+      // 只有 configHome、或 permission file 跨 agentHome 时不构成 Cindy runtime 归属证明。
+      const unowned = loadBashPackageHomeHelper();
+      unowned.env.PI_CODING_AGENT_DIR = legacyConfigHome;
+      expect(unowned.resolveBashPackageHome()).toBeUndefined();
+      const otherRuntime = path.join(otherRoot, 'runtime');
+      mkdirSync(otherRuntime, { recursive: true });
+      const otherPermission = path.join(otherRuntime, 'perm-other.json');
+      writeFileSync(otherPermission, '{}');
+      unowned.env.CINDY_PI_PERMISSION_FILE = otherPermission;
+      expect(unowned.resolveBashPackageHome()).toBeUndefined();
+
+      // Windows 使用原生分隔符做 runtime 归属/遍历判断;最终派生仍匹配 host 的
+      // posix.join 约定。statSync 在当前平台无法访问 Windows 夹具,所以这里只覆盖
+      // 路径拒绝分支(在 fs 检查之前完成)。
+      const windowsTraversal = loadBashPackageHomeHelper(path.win32);
+      windowsTraversal.env.PI_CODING_AGENT_DIR = 'D:\\agent\\run-tmp\\legacy';
+      windowsTraversal.env.CINDY_PI_PERMISSION_FILE =
+        'D:\\agent\\runtime\\..\\other\\perm-legacy.json';
+      expect(windowsTraversal.resolveBashPackageHome()).toBeUndefined();
+    } finally {
+      rmSync(legacyRoot, { recursive: true, force: true });
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
+
     // stash 属性被替换成 plain 赋值(可写可配置)→ 不被信任 → fail-closed。
     // (defineProperty 定义 non-configurable 属性后无法 redefine,这里用一个
     // fresh context 模拟「攻击者抢跑预置了 plain stash」的形态。)
@@ -1096,7 +1146,7 @@ describe('cindy-bridge extension source', () => {
       configurable: true,
       enumerable: false,
     });
-    // 攻击者形态 stash 不被信任 → 走首次加载路径;env 未注入 → fail-closed。
+    // 攻击者形态 stash 不被信任,且存在该属性时禁止兼容派生 → fail-closed。
     expect(hostile.resolveBashPackageHome()).toBeUndefined();
 
     // 非 Cindy 初始化的进程(env 从未注入、无 stash)保持 fail-closed 语义:
