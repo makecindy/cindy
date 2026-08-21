@@ -127,6 +127,7 @@ import {
   markSessionAutomaticHistoryLoadCompleted,
   resetSessionAutomaticHistoryLoadCompletion,
 } from '@/lib/sessionScrollStore';
+import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import { extractIpcError } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
@@ -3395,17 +3396,40 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
   );
 }
 
+/**
+ * 已加载窗口里最新连续段的最老一行。
+ *
+ * `messages` 是 oldest-first。窗口可能是「更老的孤岛 + 缺口 + 最新连续尾段」，
+ * 此时 `messages[0]` 是孤岛边缘，不是向上翻页该用的游标。切段尺子与渲染层相同
+ * (`HISTORY_GAP_SPLIT_MS`)；没有超过该阈值的空洞时，整窗都算最新连续段。
+ */
+function oldestMessageOfNewestContiguousRun(messages: ChatMessage[]): ChatMessage | null {
+  if (messages.length === 0) return null;
+  let runStart = 0;
+  for (let i = 1; i < messages.length; i++) {
+    const prev = messageTime(messages[i - 1].createdAt);
+    const next = messageTime(messages[i].createdAt);
+    if (!Number.isFinite(prev) || !Number.isFinite(next)) continue;
+    if (next - prev > HISTORY_GAP_SPLIT_MS) runStart = i;
+  }
+  return messages[runStart] ?? null;
+}
+
+function retainedWindowHasLoadedGap(messages: ChatMessage[]): boolean {
+  const oldestOfRun = oldestMessageOfNewestContiguousRun(messages);
+  return oldestOfRun != null && oldestOfRun !== messages[0];
+}
+
 function _trimMessagesIfNeeded(sessionId: string): void {
   const state = sessions.get(sessionId);
   if (!state || state.messages.length <= TRIM_THRESHOLD) return;
   if (_isSessionBusy(sessionId, state)) return;
   if (_activeViewSessions.has(sessionId)) return;
 
-  // 裁剪等于一次代际重置:它砍掉窗口中段、把 oldestMessageId 清空,in-flight 的翻页 /
-  // 跳转补齐若仍按 pre-trim 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉
-  // 的区间成了新的空洞,而补齐还可能据此判 covered 并清掉孤岛标记(#676 review)。
-  // 所以照 reloadMessages / clear / edit-last 同一规矩:bump epoch 作废 in-flight,并由
-  // 本次重置自己释放分页锁。
+  // 裁剪等于一次代际重置:它砍掉窗口中段。in-flight 的翻页 / 跳转补齐若仍按 pre-trim
+  // 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉的区间成了新的空洞,
+  // 而补齐还可能据此判 covered 并清掉孤岛标记(#676 review)。所以照 reloadMessages /
+  // clear / edit-last 同一规矩:bump epoch 作废 in-flight,并由本次重置自己释放分页锁。
   bumpMessagesEpoch(sessionId);
   setState(sessionId, (s) => {
     // 兜底早返(当前不可达:上面三道守卫都在 bump 之前,而 setState 是同步的、拿到的就是
@@ -3414,11 +3438,22 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
+    const retained = s.messages.slice(-TRIM_TARGET);
+    // 连续尾段被裁短、孤岛已不在保留窗口里:游标清成 null,loadOlderMessages 走
+    // beforeTs(messages[0]),从新的窗口下沿接着往更早翻。
+    // 保留窗口里还夹着孤岛(最新连续尾段不足 200 行):必须留下「最新连续段最老一行」
+    // 的精确游标。清成 null 后空闲恢复会拿 messages[0](孤岛)当 beforeTs,向更老处
+    // 翻页,填不了孤岛与尾段之间的缺口,未解析计划会一直缺席到整窗重载。
+    const keepGapCursor =
+      s.historyWindowHasIsland === true &&
+      typeof s.oldestMessageId === 'string' &&
+      s.oldestMessageId.length > 0 &&
+      retainedWindowHasLoadedGap(retained);
     return {
       ...s,
-      messages: s.messages.slice(-TRIM_TARGET),
+      messages: retained,
       hasMoreMessages: true,
-      oldestMessageId: null,
+      oldestMessageId: keepGapCursor ? s.oldestMessageId : null,
       isLoadingMore: false,
       // 孤岛标记**保持原值**:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
       // 连续 —— 若先前几次深跳留下多个孤岛、而真正连续的尾段不足 200 行,裁剪结果里就还夹着
@@ -3427,8 +3462,6 @@ function _trimMessagesIfNeeded(sessionId: string): void {
       //
       // 代价是出现过孤岛的会话在裁剪后仍会多做补齐尝试;方向上是安全的那一侧。
       // 真正清零只发生在"整窗从最新重建"的路径(reloadMessages / clear / demote / purge)。
-      // 注意游标被清成 null:此时补齐会从最新页重新起翻(见 backfillHistoryUntil 的首页分支),
-      // 恰好能穿过缺失区间自愈。
     };
   });
 }
@@ -10680,7 +10713,12 @@ function loadOlderMessages(
   if (state.oldestMessageId) {
     firstPageOpts = { limit: 50, before: state.oldestMessageId };
   } else if (state.messages.length > 0) {
-    const oldest = state.messages[0];
+    // 无 ID 时默认用 messages[0]。有孤岛时那是孤岛最老行,beforeTs 会翻到缺口
+    // 更早的一侧;改用最新连续段下沿,才能填孤岛与尾段之间的洞。
+    const oldest =
+      state.historyWindowHasIsland === true
+        ? (oldestMessageOfNewestContiguousRun(state.messages) ?? state.messages[0])
+        : state.messages[0];
     if (!oldest.createdAt) return Promise.resolve(false);
     const ts = new Date(oldest.createdAt).getTime();
     if (!Number.isFinite(ts)) return Promise.resolve(false);
