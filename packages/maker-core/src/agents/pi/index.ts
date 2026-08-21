@@ -5080,6 +5080,7 @@ export class PiAgent extends BaseAgent {
             taskType: 'pi_subagent',
             toolUseId: status.taskId,
             title: status.title ?? status.description,
+            provider: 'pi' as const,
           }));
       },
 

@@ -659,36 +659,63 @@ describe('Cindy durable PI Subagent runner', () => {
     });
 
     it('takes over a claim whose pid is live but belongs to another process', async () => {
-      // The pid is alive (it is our parent), but the claim says its holder
-      // started at the epoch — so the pid was recycled and the real holder is
-      // gone. Without the start time this reads as a live holder and resume is
-      // wedged forever. The preceding case pins the other half: a claim with no
-      // recorded start time stays conservative and is still refused.
+      // The pid is alive, but the claim says its holder started at the epoch —
+      // so the pid was recycled and the real holder is gone. Without the start
+      // time this reads as a live holder and resume is wedged forever.
+      // Spawn a same-user child rather than probing process.ppid: GHA Windows
+      // often cannot read the runner parent's StartTime (probe null →
+      // conservative "still held"), which is not the product contract.
       const { fixture, first } = await resumableFixture();
-      const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
-      await writeFile(
-        claimPath,
-        `${JSON.stringify({
-          version: 1,
-          hostPid: process.ppid,
-          hostStartTimeSec: 1,
-          claimedAt: Date.now(),
-        })}\n`,
-        { mode: 0o600 },
-      );
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      const childPid = child.pid;
+      try {
+        if (!Number.isSafeInteger(childPid) || !childPid) {
+          throw new Error('failed to spawn a live foreign process for the claim');
+        }
+        const claimPath = path.join(fixture.root, first.runId, 'resume.claim');
+        await writeFile(
+          claimPath,
+          `${JSON.stringify({
+            version: 1,
+            hostPid: childPid,
+            hostStartTimeSec: 1,
+            claimedAt: Date.now(),
+          })}\n`,
+          { mode: 0o600 },
+        );
 
-      const resumedRunId = await resumePiSubagentRun(
-        fixture.root, first.runId, 'continue', resumeLaunch(fixture),
-      );
-      expect(typeof resumedRunId).toBe('string');
-      await waitFor(
-        async () => {
-          const runs = await listPiSubagentRuns(fixture.root);
-          return runs.find((run) => run.runId === resumedRunId && isPiSubagentTerminal(run.state)) ?? null;
-        },
-        undefined,
-        'the resumed generation to settle',
-      );
+        const resumedRunId = await resumePiSubagentRun(
+          fixture.root, first.runId, 'continue', resumeLaunch(fixture),
+        );
+        expect(typeof resumedRunId).toBe('string');
+        await waitFor(
+          async () => {
+            const runs = await listPiSubagentRuns(fixture.root);
+            return runs.find((run) => run.runId === resumedRunId && isPiSubagentTerminal(run.state)) ?? null;
+          },
+          undefined,
+          'the resumed generation to settle',
+        );
+      } finally {
+        child.kill();
+        await new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) {
+            resolve();
+            return;
+          }
+          const timer = setTimeout(() => {
+            child.kill('SIGKILL');
+            resolve();
+          }, 2_000);
+          child.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      }
     });
 
     it('takes over a claim left behind by a dead instance', async () => {

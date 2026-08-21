@@ -1542,6 +1542,12 @@ export interface BackgroundTaskSnapshot {
   taskType?: string;
   toolUseId?: string;
   title?: string;
+  /**
+   * Agent that produced this task. Renderer hydration must preserve it so a
+   * durable Pi Subagent is not synthesized as claude-code after reload.
+   * Omitted snapshots default to claude-code.
+   */
+  provider?: 'pi' | 'claude-code';
 }
 
 /**

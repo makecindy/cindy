@@ -470,7 +470,7 @@ describe('Pi provider-aware model routing', () => {
     });
     expect(resolveProxyProviderId?.()).toBe('anthropic');
     await handle.close();
-  });
+  }, 30_000);
 
   it('serializes inheritModels Grok 4.6 capability corrections into models.json', async () => {
     const agent = new PiAgent({

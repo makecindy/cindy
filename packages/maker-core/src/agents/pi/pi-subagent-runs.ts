@@ -1072,10 +1072,11 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
           '-NoProfile', '-NonInteractive', '-Command',
           `[int64]((Get-Process -Id ${pid}).StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds`,
         ],
-        { encoding: 'utf8', timeout: 5_000, windowsHide: true },
+        { encoding: 'utf8', timeout: 15_000, windowsHide: true },
       );
       if (probe.error || probe.status !== 0) return null;
-      const seconds = Number((typeof probe.stdout === 'string' ? probe.stdout : '').trim());
+      const match = (typeof probe.stdout === 'string' ? probe.stdout : '').match(/-?\d+/);
+      const seconds = match ? Number(match[0]) : NaN;
       return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
     }
     const probe = spawnSync('ps', ['-p', String(pid), '-o', 'etime='], {

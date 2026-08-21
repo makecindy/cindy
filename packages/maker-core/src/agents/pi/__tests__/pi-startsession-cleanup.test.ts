@@ -534,6 +534,17 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(boundaryStop).toBeGreaterThan(firstAwait);
   });
 
+  it('stamps Pi as the provider on durable background-task snapshots', () => {
+    const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const listed = source.slice(
+      source.indexOf('listBackgroundTasks() {'),
+      source.indexOf('async requestGracefulStop()'),
+    );
+    expect(listed).toContain("taskType: 'pi_subagent'");
+    expect(listed).toContain("provider: 'pi' as const");
+  });
+
   /**
    * A parent that dies between publishing the `queued` status and spawning the
    * runner leaves a record with no `runnerPid`. That is not a lease held to the

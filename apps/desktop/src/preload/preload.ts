@@ -5217,7 +5217,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listSessionBackgroundTasks: (
       sessionId: string,
     ): Promise<{
-      tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>;
+      tasks: Array<{
+        taskId: string;
+        taskType?: string;
+        toolUseId?: string;
+        title?: string;
+        provider?: 'pi' | 'claude-code';
+      }>;
       /** 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数(桥接对账收口权威依据)。 */
       pendingContinuations?: number;
     }> => ipcRenderer.invoke('maker:session-background-tasks:list', sessionId),
