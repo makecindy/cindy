@@ -2852,50 +2852,53 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 // ---------------------------------------------------------------------------
 
 const sessions = new Map<string, SessionChatState>();
-/** Prevent one gesture from resolving the newly promoted permission head. */
-const permissionResponseInFlight = new Set<string>();
 /**
- * 防重窗口:本机 resolve-interaction handler 同步返回,IPC Promise 往往在双击的
- * 第二个 click / 键重复事件到达之前就 settle;若 finally 随即解除 guard,第二次
- * 输入会读到刚推广的下一条权限卡并误批(Codex review P1)。因此 guard 必须保持
- * 到重复输入窗口结束再释放。300ms 对齐项目先例 swallowActivationClick 的
- * RELEASE_GUARD_MS,并兼顾 Greptile 反馈(窗口过长会把用户对新卡的真实响应
- * 误判为重复输入而丢弃)。
+ * Request-scoped permission response guard.
+ * Keyed by sessionId → requestId. A guard only belongs to the specific permission
+ * card it was armed for. When the snapshot advances (A promoted, B displayed),
+ * the old A guard is invalidated and B can respond immediately.
  */
+const permissionResponseInFlight = new Map<string, string>();
+/** Gesture dedupe window: prevents double-click from approving the newly promoted card. */
 const PERMISSION_RESPONSE_GUARD_WINDOW_MS = 300;
-/** 每个 session 的防重释放定时器(供 purge / dismissal 清理,防止迟到释放误伤新会话)。 */
+/** Timer per session for gesture dedupe release (purge / dismissal cleanup). */
 const permissionResponseGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
-/** 每个 session 的 guard 代次——每次重新武装时递增，finally 回调用它确认自己是否仍拥有 guard。 */
-const permissionResponseGuardGeneration = new Map<string, number>();
 
-/** 立即释放某 session 的权限防重 guard(双击窗口未结束也照放,幂等)。 */
-function releasePermissionResponseGuard(sessionId: string): void {
+/**
+ * Invalidate any active guard for this session when the displayed permission changes.
+ * Called when pendingPermission transitions from A to B (promotion or snapshot advance).
+ * A's guard becomes stale — B can respond immediately without waiting for A's RPC.
+ */
+function invalidatePermissionGuardForPromotion(sessionId: string): void {
   const timer = permissionResponseGuardTimers.get(sessionId);
   if (timer !== undefined) clearTimeout(timer);
   permissionResponseGuardTimers.delete(sessionId);
   permissionResponseInFlight.delete(sessionId);
-  // 注意:不删除 generation——让它保持单调递增,防止 ABA 碰撞
-  // (释放后重新武装时 generation 会递增,迟到的 finally 捕获的旧 generation
-  //  与新 generation 不同,校验自然失败)。
 }
 
 /**
- * dismissal 到达时重新武装防重窗口(仅当 guard 仍在场)。不能无条件释放:本端
- * resolve A 时 main 会在 invoke reply settle 前同步广播 INTERACTION_DISMISSED,
- * 若此时清除 guard,双击第二击 / 键重复会读到刚推广的 B 并误批(security P1)。
- * 重新武装 = 从 dismissal 时刻起保留整个 gesture 窗口 —— 既挡住 A 的迟到输入,
- * 又不再依赖旧 RPC settle(可达 ~30s 隧道超时)才释放,用户对新卡 B 的真实响应
- * 在窗口结束后即可送达。guard 不在场(远端撤回,本端从未武装)时 no-op。
+ * Release the gesture-dedupe timer after IPC settle.
+ * Only releases if the guard still belongs to the same requestId (no ABA).
  */
-function rearmPermissionResponseGuard(sessionId: string): void {
-  if (!permissionResponseInFlight.has(sessionId)) return;
+function releasePermissionResponseGuard(sessionId: string, guardRequestId: string): void {
+  // If guard has already been replaced by a newer request, don't touch it.
+  if (permissionResponseInFlight.get(sessionId) !== guardRequestId) return;
   const timer = permissionResponseGuardTimers.get(sessionId);
   if (timer !== undefined) clearTimeout(timer);
-  // 递增代次——迟到的 finally 回调会检查代次，不再误删新 guard。
-  const gen = (permissionResponseGuardGeneration.get(sessionId) ?? 0) + 1;
-  permissionResponseGuardGeneration.set(sessionId, gen);
+  permissionResponseGuardTimers.delete(sessionId);
+  permissionResponseInFlight.delete(sessionId);
+}
+
+/**
+ * Arm gesture-dedupe window after IPC settle.
+ * Only arms if the guard still belongs to the same requestId.
+ */
+function armPermissionResponseGuard(sessionId: string, guardRequestId: string): void {
+  if (permissionResponseInFlight.get(sessionId) !== guardRequestId) return;
+  const timer = permissionResponseGuardTimers.get(sessionId);
+  if (timer !== undefined) clearTimeout(timer);
   const next = setTimeout(
-    () => releasePermissionResponseGuard(sessionId),
+    () => releasePermissionResponseGuard(sessionId, guardRequestId),
     PERMISSION_RESPONSE_GUARD_WINDOW_MS,
   );
   permissionResponseGuardTimers.set(sessionId, next);
@@ -3378,7 +3381,10 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
-  releasePermissionResponseGuard(sessionId);
+  permissionResponseInFlight.delete(sessionId);
+  const purgeTimer = permissionResponseGuardTimers.get(sessionId);
+  if (purgeTimer !== undefined) clearTimeout(purgeTimer);
+  permissionResponseGuardTimers.delete(sessionId);
   clearWakeBridgeReconcileTimer(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
@@ -7348,7 +7354,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // 会让双击第二击误批新推广的 B(security P1)。重新武装 gesture 窗口:
     // 既挡住 A 的迟到输入,又不依赖旧 RPC settle(可达 ~30s)才放行 B 的真实
     // 响应。guard 不在场时(远端撤回)no-op,不影响新卡即时响应。
-    rearmPermissionResponseGuard(sessionId);
+    // Dismissal: invalidate old guard so next permission can respond immediately.
+    invalidatePermissionGuardForPromotion(sessionId);
     setState(sessionId, (s) =>
       handleStreamEvent(s, { sessionId, type: 'permission_dismissed', data }),
     );
@@ -13632,12 +13639,17 @@ function respondToPluginSetup(
  * F-PERM-2: Send a permission decision to the main process and clear pendingPermission.
  */
 function respondToPermission(sessionId: string, result: CCAgentPermissionResult): void {
-  if (!sessionId || permissionResponseInFlight.has(sessionId)) return;
+  if (!sessionId) return;
   const state = getOrCreateState(sessionId);
   if (!state.pendingPermission) return;
 
   const { requestId } = state.pendingPermission;
-  permissionResponseInFlight.add(sessionId);
+
+  // Request-scoped guard: only block if THIS specific requestId is already in flight.
+  // If the guard belongs to a different (stale) requestId, it's safe to proceed.
+  if (permissionResponseInFlight.get(sessionId) === requestId) return;
+
+  permissionResponseInFlight.set(sessionId, requestId);
   bumpInteractionReconcileEpoch(sessionId);
 
   // Clear the displayed permission immediately and promote the next parallel
@@ -13652,13 +13664,8 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
     };
   });
 
-  // Send to maker (InteractionDecision kind: 'permission'). Keep the guard
-  // until the IPC request settles: a duplicate click/key-repeat must not read
-  // the newly promoted queue head and reuse the previous decision for it.
-  //
-  // 捕获 guard 代次:dismissal 重新武装时会递增代次;迟到的 finally 必须
-  // 校验代次一致才启动释放窗口,避免 A 的 settle 删除 B 的 guard。
-  const guardGenAtArm = permissionResponseGuardGeneration.get(sessionId) ?? 0;
+  // Send to maker (InteractionDecision kind: 'permission').
+  // Capture requestId for gesture-dedupe: only arm if guard still belongs to this request.
   let response: Promise<unknown>;
   try {
     response = makerApiFor(sessionId).resolveInteraction(requestId, {
@@ -13678,16 +13685,8 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   void response
     .catch((err) => log.error('Failed to respond to permission:', err))
     .finally(() => {
-      // 代次不一致说明 guard 已被 dismissal 重新武装 belongs to a newer request;
-      // 迟到的 settle 不应启动释放窗口,否则会删掉新 guard。
-      if ((permissionResponseGuardGeneration.get(sessionId) ?? 0) !== guardGenAtArm) return;
-      // IPC 已 settle,但同一手势的第二次输入(双击第二击 / 键重复)可能还没到:
-      // 保持 guard 到窗口结束,窗口内任何新响应都被挡下,不会误批推广后的新卡。
-      const timer = setTimeout(
-        () => releasePermissionResponseGuard(sessionId),
-        PERMISSION_RESPONSE_GUARD_WINDOW_MS,
-      );
-      permissionResponseGuardTimers.set(sessionId, timer);
+      // Request-scoped: only arm dedupe if this guard still owns the session.
+      armPermissionResponseGuard(sessionId, requestId);
     });
 }
 
