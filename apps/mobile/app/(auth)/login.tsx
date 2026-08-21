@@ -49,6 +49,7 @@ import {
   LOGIN_GROUP,
   LOGIN_LOADING_RING,
   LOGIN_METHOD_ROW,
+  LOGIN_SSO_ORG_HISTORY,
   LOGIN_SSO_ORG_HINT_TOP,
   LOGIN_SUBTITLE,
   LOGIN_TITLE,
@@ -464,33 +465,50 @@ export default function LoginScreen() {
         Keyboard.dismiss();
       };
       return (
-        <LoginPanel testID="login.panel.ssoOrg">
-          {backNode}
-          <LoginTitleBlock
-            title={loginText('ssoOrgTitle')}
-            subtitle={loginText('ssoOrgSubtitle')}
-          />
-          <LoginSkinInput
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect={false}
-            accessibilityRole="combobox"
-            accessibilityState={{ expanded: ssoOrgHistoryOpen }}
-            editable={!disabled}
-            error={!!error}
-            maxLength={253}
-            onBlur={closeSsoOrgHistorySoon}
-            onChangeText={(value) => {
-              ssoOrgEditedRef.current = true;
-              setSsoOrg(value);
-            }}
-            onFocus={openSsoOrgHistory}
-            onSubmitEditing={submitSsoOrg}
-            placeholder={loginText('ssoOrgPlaceholder')}
-            returnKeyType="go"
-            testID="login.ssoOrgInput"
-            value={ssoOrg}
-          />
+        <>
+          <LoginPanel testID="login.panel.ssoOrg">
+            {backNode}
+            <LoginTitleBlock
+              title={loginText('ssoOrgTitle')}
+              subtitle={loginText('ssoOrgSubtitle')}
+            />
+            <LoginSkinInput
+              autoCapitalize="none"
+              autoComplete="off"
+              autoCorrect={false}
+              accessibilityRole="combobox"
+              accessibilityState={{ expanded: ssoOrgHistoryOpen }}
+              editable={!disabled}
+              error={!!error}
+              maxLength={253}
+              onBlur={closeSsoOrgHistorySoon}
+              onChangeText={(value) => {
+                ssoOrgEditedRef.current = true;
+                setSsoOrg(value);
+              }}
+              onFocus={openSsoOrgHistory}
+              onSubmitEditing={submitSsoOrg}
+              placeholder={loginText('ssoOrgPlaceholder')}
+              returnKeyType="go"
+              testID="login.ssoOrgInput"
+              value={ssoOrg}
+            />
+            <LoginTextLinkSlot
+              align="top"
+              tone="secondary"
+              top={LOGIN_SSO_ORG_HINT_TOP}
+            >
+              {loginText('ssoOrgHint')}
+            </LoginTextLinkSlot>
+            <LoginPrimaryButton
+              busy={auth.isBusy}
+              disabled={disabled || !ssoOrg.trim()}
+              label={loginText('continue')}
+              onPress={submitSsoOrg}
+              testID="login.ssoOrgContinueButton"
+            />
+            {errorNode}
+          </LoginPanel>
           {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 ? (
             <LoginSsoOrgHistoryList
               entries={ssoOrgHistory}
@@ -498,22 +516,7 @@ export default function LoginScreen() {
               value={ssoOrg}
             />
           ) : null}
-          <LoginTextLinkSlot
-            align="top"
-            tone="secondary"
-            top={LOGIN_SSO_ORG_HINT_TOP}
-          >
-            {loginText('ssoOrgHint')}
-          </LoginTextLinkSlot>
-          <LoginPrimaryButton
-            busy={auth.isBusy}
-            disabled={disabled || !ssoOrg.trim()}
-            label={loginText('continue')}
-            onPress={submitSsoOrg}
-            testID="login.ssoOrgContinueButton"
-          />
-          {errorNode}
-        </LoginPanel>
+        </>
       );
     }
     const submit = () => {
@@ -1225,6 +1228,14 @@ export default function LoginScreen() {
       stage.viewportHeight > prev ? stage.viewportHeight : prev,
     );
   }, [stage.viewportHeight]);
+  const ssoOrgInteractiveBottom =
+    ssoOrgMode && ssoOrgHistoryOpen && ssoOrgHistory.length > 1
+      ? LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight
+      : loginSizes.panelHeight;
+  const controlsUnionBottom = Math.max(
+    LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height,
+    ssoOrgInteractiveBottom,
+  );
   const shiftResult = useMemo(() => {
     if (groupBaseline == null) {
       return { shift: 0, mode: 'hidden' as const };
@@ -1233,18 +1244,14 @@ export default function LoginScreen() {
       platform: Platform.OS === 'android' ? 'android' : 'ios',
       visible: keyboard.visible,
       keyboard: keyboard.rect,
-      // 停靠贴附锚 = 面板底(Step 5b.1:panelBottom + 10 - keyboardTop)
-      panelBottomY: groupBaseline.y + loginSizes.panelHeight * groupScale,
-      // 悬浮相交判定锚 = 当前输入框 ∪ 主按钮(U-8b;输入框顶到主按钮底)
+      // 历史列表展开时停靠锚延伸到列表底，保证面板外候选项不被键盘盖住。
+      panelBottomY: groupBaseline.y + ssoOrgInteractiveBottom * groupScale,
+      // 悬浮相交判定锚 = 当前输入框、主按钮与展开后的历史列表并集。
       controlsUnion: {
         x: groupBaseline.x + LOGIN_CONTROL.x * groupScale,
         y: groupBaseline.y + LOGIN_CONTROL.inputY * groupScale,
         width: LOGIN_CONTROL.width * groupScale,
-        height:
-          (LOGIN_CONTROL.buttonY +
-            LOGIN_CONTROL.height -
-            LOGIN_CONTROL.inputY) *
-          groupScale,
+        height: (controlsUnionBottom - LOGIN_CONTROL.inputY) * groupScale,
       },
       viewportWidth: stage.viewportWidth,
       viewportHeight: stage.viewportHeight,
@@ -1256,6 +1263,8 @@ export default function LoginScreen() {
     groupBaseline,
     keyboard,
     groupScale,
+    ssoOrgInteractiveBottom,
+    controlsUnionBottom,
     stage.viewportWidth,
     stage.viewportHeight,
     insets.top,

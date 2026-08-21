@@ -56,6 +56,28 @@ describe("mobile SSO organization history", () => {
     });
   });
 
+  it("retries a failed read before persisting a new identifier", async () => {
+    storage.values.set(
+      __testing.storageKey,
+      JSON.stringify({ version: 1, entries: ["saved-corp"] }),
+    );
+    storage.getItem.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(rememberSsoOrgIdentifier("new-corp")).resolves.toEqual([]);
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(
+      JSON.parse(storage.values.get(__testing.storageKey) ?? "{}"),
+    ).toEqual({
+      version: 1,
+      entries: ["saved-corp"],
+    });
+
+    await expect(rememberSsoOrgIdentifier("new-corp")).resolves.toEqual([
+      "new-corp",
+      "saved-corp",
+    ]);
+  });
+
   it("keeps the in-memory result when persistence fails", async () => {
     storage.setItem.mockRejectedValueOnce(new Error("storage unavailable"));
     await expect(rememberSsoOrgIdentifier("memory-corp")).resolves.toEqual([

@@ -448,14 +448,17 @@ export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20
 /** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
 export const LOGIN_SSO_ORG_HINT_TOP = 244;
 /**
- * 最近组织浮层：覆盖后续控件而不改登录面板几何。88 设计px 在常见 phone
- * 0.5 缩放下提供约 44pt 行高；最多露出两行，其余在浮层内滚动。
+ * 最近组织浮层：放在登录面板下方的组内空白区，不覆盖主按钮。88 设计px 在
+ * 常见 phone 0.5 缩放下提供约 44pt 行高；露出一行及下一行提示，其余在无
+ * 可见滚动条的浮层内滚动。
  */
 export const LOGIN_SSO_ORG_HISTORY = {
   x: LOGIN_CONTROL.x,
-  y: LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8,
+  y: LOGIN_ERROR_TEXT.y + LOGIN_ERROR_TEXT.height + 8,
   width: LOGIN_CONTROL.width,
-  maxHeight: 176,
+  maxHeight:
+    LOGIN_GROUP.height -
+    (LOGIN_ERROR_TEXT.y + LOGIN_ERROR_TEXT.height + 8),
   rowMinHeight: 88,
   radius: 22,
   rowRadius: 16,

@@ -331,6 +331,7 @@ describe('ssoOrgMode 子视图', () => {
     expect(screen.getByText('login.ssoOrgTitle')).toBeTruthy();
     const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
     expect(input.placeholder).toBe('login.ssoOrgPlaceholder');
+    expect(document.activeElement).toBe(input);
     expect((screen.getByTestId('login-sso-org-continue') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('login.ssoOrgHint')).toBeTruthy();
   });
@@ -379,9 +380,17 @@ describe('ssoOrgMode 子视图', () => {
     fireEvent.click(screen.getByTestId('login-social-sso'));
     const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
     expect(input.value).toBe('recent-corp');
+    expect(document.activeElement).not.toBe(input);
     expect(screen.queryByTestId('login-sso-org-history-list')).toBeNull();
     fireEvent.focus(input);
     const historyList = screen.getByTestId('login-sso-org-history-list');
+    const panel = screen.getByTestId('login-panel-sso-org');
+    const continueButton = screen.getByTestId('login-sso-org-continue');
+    expect(panel.contains(historyList)).toBe(false);
+    expect(Number.parseFloat(historyList.style.top)).toBeGreaterThanOrEqual(
+      Number.parseFloat(continueButton.style.top) +
+        Number.parseFloat(continueButton.style.height),
+    );
     expect(historyList.className).toContain('overflow-y-auto');
     expect(historyList.className).toContain('[scrollbar-width:none]');
     expect(historyList.className).toContain('[&::-webkit-scrollbar]:hidden');

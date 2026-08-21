@@ -788,83 +788,86 @@ export function LoginPage() {
 
   /* ── 企业 SSO 入口子视图(sso-org empty/filled;面板 680×500,无跳过入口) ── */
   const renderSsoOrg = () => (
-    <LoginPanel testId="login-panel-sso-org">
-      <form onSubmit={submitSsoOrg} noValidate>
-        <LoginBackButton
-          disabled={isLoading}
-          label={t('login.back')}
-          onClick={() => {
-            clearError();
-            setSsoOrgHistoryOpen(false);
-            setSsoOrgHistoryActiveIndex(-1);
-            setSsoOrgMode(false);
-          }}
-        />
-        <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
-        <LoginInput
-          disabled={isLoading}
-          maxLength={253}
-          autoComplete="off"
-          value={ssoOrg}
-          onChange={(value) => {
-            setSsoOrg(value);
-            setSsoOrgHistoryActiveIndex(-1);
-          }}
-          onFocus={openSsoOrgHistory}
-          onClick={openSsoOrgHistory}
-          onBlur={() => {
-            setSsoOrgHistoryOpen(false);
-            setSsoOrgHistoryActiveIndex(-1);
-          }}
-          onKeyDown={handleSsoOrgHistoryKeyDown}
-          role="combobox"
-          ariaControls="login-sso-org-history-list"
-          ariaExpanded={ssoOrgHistoryOpen}
-          ariaActiveDescendant={
-            ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0
-              ? ssoOrgHistoryOptionId(ssoOrgHistoryActiveIndex)
-              : undefined
-          }
-          placeholder={t('login.ssoOrgPlaceholder')}
-          error={!!errorCode}
-          testId="login-sso-org-input"
-        />
-        {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 && (
-          <LoginSsoOrgHistoryList
-            entries={ssoOrgHistory}
-            value={ssoOrg}
-            activeIndex={ssoOrgHistoryActiveIndex}
-            onActiveIndexChange={setSsoOrgHistoryActiveIndex}
-            onSelect={selectSsoOrgHistory}
-            listId="login-sso-org-history-list"
+    <>
+      <LoginPanel testId="login-panel-sso-org">
+        <form onSubmit={submitSsoOrg} noValidate>
+          <LoginBackButton
+            disabled={isLoading}
+            label={t('login.back')}
+            onClick={() => {
+              clearError();
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+              setSsoOrgMode(false);
+            }}
           />
-        )}
-        {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
-        <span
-          className="absolute line-clamp-2 text-center"
-          style={{
-            left: SSO_ORG_HINT.x,
-            top: SSO_ORG_HINT.y,
-            width: SSO_ORG_HINT.width,
-            height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
-            lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
-            fontSize: SSO_ORG_HINT.fontSize,
-            color: LOGIN_COLORS.secondaryText,
-          }}
-        >
-          {t('login.ssoOrgHint')}
-        </span>
-        <LoginPrimaryButton
-          type="submit"
-          disabled={!ssoOrg.trim()}
-          loading={isLoading}
-          testId="login-sso-org-continue"
-        >
-          {isLoading ? t('login.working') : t('login.continue')}
-        </LoginPrimaryButton>
-        {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
-      </form>
-    </LoginPanel>
+          <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
+          <LoginInput
+            autoFocus={ssoOrgHistory.length <= 1}
+            disabled={isLoading}
+            maxLength={253}
+            autoComplete="off"
+            value={ssoOrg}
+            onChange={(value) => {
+              setSsoOrg(value);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onFocus={openSsoOrgHistory}
+            onClick={openSsoOrgHistory}
+            onBlur={() => {
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onKeyDown={handleSsoOrgHistoryKeyDown}
+            role="combobox"
+            ariaControls="login-sso-org-history-list"
+            ariaExpanded={ssoOrgHistoryOpen}
+            ariaActiveDescendant={
+              ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0
+                ? ssoOrgHistoryOptionId(ssoOrgHistoryActiveIndex)
+                : undefined
+            }
+            placeholder={t('login.ssoOrgPlaceholder')}
+            error={!!errorCode}
+            testId="login-sso-org-input"
+          />
+          {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
+          <span
+            className="absolute line-clamp-2 text-center"
+            style={{
+              left: SSO_ORG_HINT.x,
+              top: SSO_ORG_HINT.y,
+              width: SSO_ORG_HINT.width,
+              height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
+              lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
+              fontSize: SSO_ORG_HINT.fontSize,
+              color: LOGIN_COLORS.secondaryText,
+            }}
+          >
+            {t('login.ssoOrgHint')}
+          </span>
+          <LoginPrimaryButton
+            type="submit"
+            disabled={!ssoOrg.trim()}
+            loading={isLoading}
+            testId="login-sso-org-continue"
+          >
+            {isLoading ? t('login.working') : t('login.continue')}
+          </LoginPrimaryButton>
+          {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
+        </form>
+      </LoginPanel>
+      {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 && (
+        <LoginSsoOrgHistoryList
+          entries={ssoOrgHistory}
+          value={ssoOrg}
+          activeIndex={ssoOrgHistoryActiveIndex}
+          onActiveIndexChange={setSsoOrgHistoryActiveIndex}
+          onSelect={selectSsoOrgHistory}
+          listId="login-sso-org-history-list"
+        />
+      )}
+    </>
   );
 
   /* ── method-choice(含 sso-org-list 来源变体) ── */

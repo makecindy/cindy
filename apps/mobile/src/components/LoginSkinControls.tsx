@@ -592,7 +592,10 @@ export function LoginSsoOrgHistoryList({
       }}
       testID="login.ssoOrgHistoryList"
     >
-      <ScrollView keyboardShouldPersistTaps="handled">
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         {entries.map((entry, index) => {
           const selected = entry.toLowerCase() === selectedKey;
           return (

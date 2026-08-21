@@ -23,13 +23,13 @@ export function hydrateSsoOrgHistory(): Promise<string[]> {
     .then((raw) => {
       cache = parseSsoOrgHistory(raw);
       hydrated = true;
-      hydrating = null;
       return getSsoOrgHistorySnapshot();
     })
     .catch(() => {
-      hydrated = true;
-      hydrating = null;
       return getSsoOrgHistorySnapshot();
+    })
+    .finally(() => {
+      hydrating = null;
     });
   return hydrating;
 }
@@ -41,6 +41,12 @@ export function rememberSsoOrgIdentifier(
   let result: string[] = [];
   const operation = writeChain.then(async () => {
     await hydrateSsoOrgHistory();
+    // A failed read leaves hydration retryable and must not turn an empty cache
+    // into an authoritative record that overwrites previously saved entries.
+    if (!hydrated) {
+      result = getSsoOrgHistorySnapshot();
+      return;
+    }
     cache = mergeSsoOrgIdentifier(cache, identifier);
     result = getSsoOrgHistorySnapshot();
     await AsyncStorage.setItem(

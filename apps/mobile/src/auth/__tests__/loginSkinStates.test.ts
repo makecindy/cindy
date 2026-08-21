@@ -10,6 +10,11 @@ import {
   type AuthRegion,
 } from '@cindy/auth-client';
 import { createScenarioFetch } from '@cindy/auth-client/fixtures';
+import {
+  LOGIN_CONTROL,
+  LOGIN_GROUP,
+  LOGIN_SSO_ORG_HISTORY,
+} from '../loginSkinLayout';
 
 /**
  * PR4a 全登录态测试(SC-1 harness 真链 + SC-7 slice pr4a 状态行)。
@@ -169,6 +174,13 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
     expect(loginSource).toContain("loginText('ssoOrgTitle')");
     expect(loginSource).toContain("loginText('ssoOrgPlaceholder')");
     expect(loginSource).toContain("loginText('ssoOrgHint')");
+    expect(LOGIN_SSO_ORG_HISTORY.y).toBeGreaterThanOrEqual(
+      LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height,
+    );
+    expect(
+      LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight,
+    ).toBeLessThanOrEqual(LOGIN_GROUP.height);
+    expect(controlsSource).toContain('showsVerticalScrollIndicator={false}');
     // 返回钮:子视图退回首屏输入(不整体 reset)
     expect(loginSource).toContain('setSsoOrgMode(false);');
   });
