@@ -297,6 +297,7 @@ export class ResourceUsageWindowController {
     this.clearLeaveTimeout();
     this.pendingOpen = false;
     this.pendingLeaveGeneration = null;
+    this.pendingFullscreenRequests = [];
     this.fullscreenGeneration += 1;
     this.setSamplingActive(win, true);
     if (win.isMinimized()) win.restore();
@@ -353,6 +354,7 @@ export class ResourceUsageWindowController {
     }
     this.clearLeaveTimeout();
     this.pendingLeaveGeneration = null;
+    this.pendingFullscreenRequests = [];
     const restoreOwner = this.pendingLeaveRestoresOwner;
     this.pendingLeaveRestoresOwner = true;
     this.fullscreenTransition = 'idle';

@@ -354,6 +354,44 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.hide).not.toHaveBeenCalled();
   });
 
+  it('drops leftover fullscreen request generations when the monitor is reopened', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+      leaveTimeoutMs: 1000,
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(mainSender)).toBe(true);
+    expect(controller.close(windows[0]!.webContents)).toBe(true);
+    windows[0]?.emitWindow('enter-full-screen');
+    vi.advanceTimersByTime(1000);
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+
+    expect(controller.open(mainSender)).toBe(true);
+    windows[0]?.setFullScreen.mockClear();
+    windows[0]?.hide.mockClear();
+    windows[0]?.emitWindow('enter-full-screen');
+    expect(windows[0]?.setFullScreen).not.toHaveBeenCalledWith(false);
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+  });
+
   it('ignores a stale enter-full-screen after a newer fullscreen request has started', () => {
     const windows: FakeWindow[] = [];
     const mainSender = { id: 100 } as WebContents;
