@@ -166,6 +166,7 @@ function createDb(): void {
   `);
   insert.run('cc-local', '/old/dir', 'cc', null, 'dialogue');
   insert.run('codex-local', '/old/dir', 'codex', null, 'dialogue');
+  insert.run('pi-local', '/old/dir', 'pi', null, 'dialogue');
   insert.run('cc-remote', '/remote/dir', 'cc', 'host-1', 'project');
   sqlite
     .prepare(
@@ -235,6 +236,21 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.writePiSubagentDeletedTombstone.mock.invocationCallOrder[0]!).toBeLessThan(
       h.stopAndRemovePiSubagentRuns.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('recovers tombstones for deleted PI tasks that never grew a run root', async () => {
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-no-root-'));
+    const agentHome = path.join(h.userData, 'pi-agent-home');
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('pi-local');
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'pi-local');
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledWith(
+        path.join(agentHome, 'runtime', 'pi-subagent-runs', 'pi-local'),
+      );
+    });
+    expect(h.writePiSubagentDeletedTombstone).not.toHaveBeenCalledWith(agentHome, 'cc-local');
   });
 
   it('writes the deleted-task tombstone even while this process never loaded the parent', async () => {

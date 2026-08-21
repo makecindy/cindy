@@ -1947,22 +1947,36 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
 
 export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
   const parentRoot = path.join(app.getPath('userData'), 'pi-agent-home', 'runtime', 'pi-subagent-runs');
-  let entries: import('node:fs').Dirent[];
+  let idsFromDisk: string[] = [];
   try {
-    entries = await fs.readdir(parentRoot, { withFileTypes: true });
+    const entries = await fs.readdir(parentRoot, { withFileTypes: true });
+    idsFromDisk = entries
+      .filter((entry) => entry.isDirectory() && entry.name && !/[\\/\0]/.test(entry.name))
+      .map((entry) => entry.name);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
-  const ids = entries
-    .filter((entry) => entry.isDirectory() && entry.name && !/[\\/\0]/.test(entry.name))
-    .map((entry) => entry.name);
-  if (ids.length === 0) return;
-  const deleted = await getDbClient().drizzle
+
+  const db = getDbClient().drizzle;
+  // Deleted PI parents must get a tombstone even when they never grew a run
+  // root. Crash between the delete commit and the fire-and-forget write would
+  // otherwise leave another shared-userData process free to launch later.
+  const deletedPi = await db
     .select({ id: sessions.id })
     .from(sessions)
-    .where(and(inArray(sessions.id, ids), eq(sessions.status, 'deleted')));
-  for (const row of deleted) scheduleDeletedPiSubagentCleanup(row.id);
+    .where(and(eq(sessions.status, 'deleted'), eq(sessions.agentKind, 'pi')));
+
+  const diskDeleted = idsFromDisk.length === 0
+    ? []
+    : await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(and(inArray(sessions.id, idsFromDisk), eq(sessions.status, 'deleted')));
+
+  const ids = new Set<string>();
+  for (const row of deletedPi) ids.add(row.id);
+  for (const row of diskDeleted) ids.add(row.id);
+  for (const id of ids) scheduleDeletedPiSubagentCleanup(id);
 }
 
 /**
