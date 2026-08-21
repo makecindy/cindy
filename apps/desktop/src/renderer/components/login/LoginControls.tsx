@@ -370,6 +370,11 @@ export function LoginSsoOrgHistoryList({
   listId: string;
 }) {
   const selectedKey = value.trim().toLowerCase();
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [activeIndex]);
   return (
     <div
       id={listId}
@@ -392,6 +397,9 @@ export function LoginSsoOrgHistoryList({
           <button
             id={ssoOrgHistoryOptionId(index)}
             key={entry.toLowerCase()}
+            ref={(node) => {
+              optionRefs.current[index] = node;
+            }}
             type="button"
             role="option"
             aria-selected={entry.toLowerCase() === selectedKey}

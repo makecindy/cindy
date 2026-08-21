@@ -32,6 +32,7 @@ const loginHook = vi.hoisted(() => ({
     clearError: vi.fn(),
   },
 }));
+const scrollIntoViewMock = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -116,6 +117,11 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
 beforeEach(() => {
   window.localStorage.clear();
   ssoOrgHistoryTesting.reset();
+  scrollIntoViewMock.mockClear();
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: scrollIntoViewMock,
+  });
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     // acceptPrivacyConsent:协议门放行时记录「已同意」(TapDB 采集的前置条件)。
@@ -424,10 +430,13 @@ describe('ssoOrgMode 子视图', () => {
     });
   });
 
-  it('多条历史支持方向键选择并用 Escape 关闭', async () => {
+  it('多条历史支持方向键选择、保持高亮项可见并用 Escape 关闭', async () => {
     window.localStorage.setItem(
       ssoOrgHistoryTesting.storageKey,
-      JSON.stringify({ version: 1, entries: ['recent-corp', 'older.example'] }),
+      JSON.stringify({
+        version: 1,
+        entries: ['recent-corp', 'older.example', 'third-corp', 'fourth-corp'],
+      }),
     );
     ssoOrgHistoryTesting.reset();
     mount(await identifierState('providers:both'));
@@ -435,8 +444,13 @@ describe('ssoOrgMode 子视图', () => {
     const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
     fireEvent.keyDown(input, { key: 'ArrowDown' });
     fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: 'nearest' });
+    expect(scrollIntoViewMock.mock.instances.at(-1)).toBe(
+      screen.getByTestId('login-sso-org-history-option-2'),
+    );
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(input.value).toBe('older.example');
+    expect(input.value).toBe('third-corp');
     fireEvent.focus(input);
     expect(screen.getByTestId('login-sso-org-history-list')).toBeTruthy();
     fireEvent.keyDown(input, { key: 'Escape' });
