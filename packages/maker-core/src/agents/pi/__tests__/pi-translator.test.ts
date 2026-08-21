@@ -382,6 +382,59 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('classifies LiteLLM Response API in-stream errors without auto-retry markers', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError =
+      'OpenAI API error (500): {"message":"litellm.APIError: Response API in-stream error","type":null,"param":null,"code":"500"}';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: rawError,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          message: rawError,
+          isTerminal: true,
+          reason: 'upstream-stream-interrupted',
+        }),
+      }),
+    ]);
+  });
+
+  it('keeps LiteLLM in-stream auto-retries silent instead of reusing the overload marker', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_start',
+        attempt: 2,
+        maxAttempts: 3,
+        errorMessage: 'litellm.APIError: Response API in-stream error',
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+  });
+
   it('keeps unclassified Pi auto-retries silent instead of reusing the overload marker', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

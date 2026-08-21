@@ -730,6 +730,13 @@ export interface AgentDeps {
   ) => Promise<CodexExtraSpawnConfig>;
 
   /**
+   * Codex-only host policy: disable local app-server plugin runtimes even when
+   * dynamic spawn configuration degrades after a non-fatal preparation error.
+   * Remote transports own their runtime and ignore this local policy.
+   */
+  disableCodexPluginRuntime?: boolean;
+
+  /**
    * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
    * 返回 disposer 时会跟随 transport close 调用；远端 SSH transport 不触发。
    */

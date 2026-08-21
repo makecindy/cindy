@@ -6979,6 +6979,8 @@
       "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
       "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. \"재시도\"를 누르거나 다른 모델로 바꿔 보세요",
       "overloadBusyNoRetry": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 바꿔 보세요",
+      "streamInterrupted": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. \"재시도\"를 눌러 주세요",
+      "streamInterruptedNoRetry": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. 잠시 후 다시 시도해 주세요",
       "networkShowRaw": "원본 오류 보기",
       "networkHideRaw": "원본 오류 숨기기",
       "silentStopContinue": "계속",

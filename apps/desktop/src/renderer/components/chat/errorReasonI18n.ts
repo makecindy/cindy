@@ -3,6 +3,7 @@ import {
   CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON,
 } from '../../../shared/claudeGatewayError';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
+import { UPSTREAM_STREAM_INTERRUPTED_REASON } from '@/utils/streamInterruptError';
 
 /**
  * Stable maker-core error reason -> renderer i18n key.
@@ -30,6 +31,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   'context-overflow': 'chat.errorBanner.contextOverflow',
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',
+  [UPSTREAM_STREAM_INTERRUPTED_REASON]: 'chat.errorBanner.streamInterruptedNoRetry',
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
   [CLAUDE_SUBSCRIPTION_OPUS_PLAN_MISMATCH_REASON]:
     'chat.errorBanner.claudeSubscriptionOpusPlanMismatch',

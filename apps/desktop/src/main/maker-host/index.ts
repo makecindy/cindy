@@ -1228,6 +1228,7 @@ export function getMaker(): Maker {
       runtimeConfig: desktopCodexRuntimeConfig,
       binaryPath: codexPath,
       logger: desktopMakerLogger,
+      disableCodexPluginRuntime: true,
       registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig

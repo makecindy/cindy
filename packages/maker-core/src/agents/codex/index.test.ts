@@ -244,13 +244,17 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
 
   const createdTransports: MockCodexTransport[] = [];
   const createdStdioOptions: Array<{
+    extraArgs?: string[];
     onProcessSpawned?: (pid: number) => void | (() => void);
   }> = [];
   return { MockCodexTransport, createdTransports, createdStdioOptions };
 });
 
 vi.mock('./app-server/stdioTransport.js', () => ({
-  createStdioTransport: (opts: { onProcessSpawned?: (pid: number) => void | (() => void) }) => {
+  createStdioTransport: (opts: {
+    extraArgs?: string[];
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
     createdStdioOptions.push(opts);
     opts.onProcessSpawned?.(7_000 + createdStdioOptions.length);
     const transport = new MockCodexTransport();
@@ -336,6 +340,33 @@ function createDeps(
     ...overrides,
   };
 }
+
+describe('CodexAgent spawn configuration', () => {
+  it('keeps host-enforced plugin disabling when dynamic spawn preparation fails', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => {
+      throw new Error('bridge unavailable');
+    });
+    const agent = new CodexAgent(createDeps({}, {
+      disableCodexPluginRuntime: true,
+      prepareCodexExtraSpawnConfig,
+    }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-plugin-runtime-fallback',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(createdStdioOptions[0]?.extraArgs).toEqual([
+      '--disable',
+      'plugins',
+      '--disable',
+      'remote_plugin',
+    ]);
+    await handle.close();
+    await agent.dispose();
+  });
+});
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

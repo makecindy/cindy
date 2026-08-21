@@ -6979,6 +6979,8 @@
       "rateLimitRetrying": "请求受到限流，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "模型服务繁忙，上游暂时没有可用容量。可点击「重试」，或换一个模型。",
       "overloadBusyNoRetry": "模型服务繁忙，上游暂时没有可用容量。可稍后重试，或换一个模型。",
+      "streamInterrupted": "模型输出中途中断了。通常是上游暂时故障，可点击「重试」。",
+      "streamInterruptedNoRetry": "模型输出中途中断了。通常是上游暂时故障，请稍后重试。",
       "networkShowRaw": "查看原始错误",
       "networkHideRaw": "收起原始错误",
       "silentStopContinue": "继续",

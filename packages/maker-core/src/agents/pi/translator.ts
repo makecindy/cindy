@@ -38,6 +38,10 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
+import {
+  UPSTREAM_STREAM_INTERRUPTED_REASON,
+  isStreamInterruptedErrorMessage,
+} from '../shared/stream-interrupt-error.js';
 import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
@@ -68,7 +72,7 @@ interface PiPendingAssistantError {
   sdkError: string;
   errorStatus?: 401 | 429 | 529;
   usageLimit?: true;
-  reason?: typeof CONTEXT_OVERFLOW_REASON;
+  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON;
 }
 
 interface PiThinkingBlock {
@@ -353,7 +357,9 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
     ...(signals.usageLimit ? { usageLimit: true } : {}),
     ...(isContextOverflowErrorMessage(redactedError)
       ? { reason: CONTEXT_OVERFLOW_REASON }
-      : {}),
+      : isStreamInterruptedErrorMessage(redactedError)
+        ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+        : {}),
   };
 }
 

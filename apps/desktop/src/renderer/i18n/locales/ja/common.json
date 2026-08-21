@@ -6979,6 +6979,8 @@
       "rateLimitRetrying": "リクエストがレート制限されました。自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "モデルサービスが混雑しています。上流に空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください",
       "overloadBusyNoRetry": "モデルサービスが混雑しています。上流に空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください",
+      "streamInterrupted": "モデル出力が途中で中断されました。一時的な上流障害であることが多いので、「再試行」を押してください",
+      "streamInterruptedNoRetry": "モデル出力が途中で中断されました。一時的な上流障害であることが多いので、しばらくしてから再試行してください",
       "networkShowRaw": "元のエラーを表示",
       "networkHideRaw": "元のエラーを隠す",
       "silentStopContinue": "続行",

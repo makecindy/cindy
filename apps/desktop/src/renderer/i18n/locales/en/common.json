@@ -6982,6 +6982,8 @@
       "rateLimitRetrying": "Request rate limited — retrying automatically ({{attempt}}/{{maxAttempts}})…",
       "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click \"Retry\", or switch to another model.",
       "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
+      "streamInterrupted": "The model stream was interrupted. This is usually a temporary upstream issue — click Retry.",
+      "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "silentStopContinue": "Continue",
