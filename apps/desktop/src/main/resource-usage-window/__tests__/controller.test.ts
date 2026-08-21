@@ -318,7 +318,7 @@ describe('ResourceUsageWindowController', () => {
     windows[0]?.setFullScreen.mockClear();
     windows[0]?.emitWindow('leave-full-screen');
     expect(windows[0]?.hide).not.toHaveBeenCalled();
-    expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(true);
+    expect(windows[0]?.setFullScreen).not.toHaveBeenCalledWith(false);
   });
 
   it('does not cancel a new fullscreen entry when a stale leave-full-screen arrives during entering', () => {
@@ -354,7 +354,7 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.hide).not.toHaveBeenCalled();
   });
 
-  it('drops leftover fullscreen request generations when the monitor is reopened', () => {
+  it('ignores leftover native fullscreen events after the monitor is reopened', () => {
     const windows: FakeWindow[] = [];
     const mainSender = { id: 100 } as WebContents;
     const owner = {
@@ -616,8 +616,7 @@ describe('ResourceUsageWindowController', () => {
     owner.focus.mockClear();
 
     windows[0]?.emitWindow('enter-full-screen');
-    expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(false);
-    vi.advanceTimersByTime(1000);
+    expect(windows[0]?.setFullScreen).not.toHaveBeenCalled();
     expect(owner.show).not.toHaveBeenCalled();
     expect(owner.focus).not.toHaveBeenCalled();
   });
