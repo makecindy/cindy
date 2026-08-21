@@ -88,6 +88,9 @@ function codexSubagentSelectionUsesChatGptOAuth(
     // ChatGPT OAuth conflict. A visible non-ChatGPT replacement must win.
     return provider === undefined || providerViewUsesChatGptOAuth(provider);
   }
+  // An explicit third-party source remains authoritative when unavailable;
+  // a same-id OpenAI model must not silently replace it.
+  if (providerId) return false;
   if (!providerViews || !settings.codex?.trim()) return false;
   const model = settings.codex.trim();
   return providerViews.some((provider) =>

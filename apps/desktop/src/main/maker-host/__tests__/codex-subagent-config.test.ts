@@ -179,6 +179,31 @@ describe('resolveEffectiveCodexSubagentSettings', () => {
     },
   );
 
+  it('does not infer ChatGPT OAuth by model id when an explicit third-party source is unavailable', () => {
+    const thirdParty = settings({
+      codex: 'gpt-5.6-terra',
+      codexProviderId: 'third-party-codex-proxy',
+      codexEffort: 'high',
+    });
+    const providers = [providerView('openai', thirdParty.codex!)];
+    const route = resolveCodexSubagentRouteSnapshot(thirdParty, undefined, providers);
+
+    expect(route).toBeUndefined();
+    expect(resolveEffectiveCodexSubagentSettings(
+      thirdParty,
+      'provider-oauth',
+      route,
+      providers,
+    )).toBe(thirdParty);
+    expect(resolveCodexSubagentRoutingProfile(
+      thirdParty,
+      'provider-oauth',
+      route,
+      providers,
+    )).toBe('configured');
+    expect(codexSubagentRouteResolutionFailed(thirdParty, route)).toBe(true);
+  });
+
   it.each(['gateway-key', 'provider-oauth'] as const)(
     'uses the main-task default when a %s main task selects a ChatGPT OAuth Subagent',
     (credentialMode) => {
