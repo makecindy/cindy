@@ -30,7 +30,11 @@ import {
   getSentAttachmentThumbUri,
   useSentAttachmentThumbsVersion,
 } from '@/session/sentAttachmentThumbStore';
-import { pendingSendSpins, type MobilePendingSendItem } from '@/session/pendingSendItems';
+import {
+  isPendingSendItemSelected,
+  pendingSendSpins,
+  type MobilePendingSendItem,
+} from '@/session/pendingSendItems';
 import {
   isDesktopLocalMediaUrl,
   type ResolveRemoteMediaFn,
@@ -191,7 +195,7 @@ export function PendingSendBubble({
   const editing = item.phase === 'editing';
   const failed = item.phase === 'failed';
   const interactive = item.actions !== null || failed;
-  const selected = interactive && actions.selectedClientId === item.clientId;
+  const selected = isPendingSendItemSelected(item, actions.selectedClientId);
   const bubbleLabel = item.text || t('message.queue.attachmentMessage');
   const uploadsPending = item.phase === 'uploading';
   const rendersSentInlineBody = item.sentInlineTokens.some((token) => token.kind !== 'text');
