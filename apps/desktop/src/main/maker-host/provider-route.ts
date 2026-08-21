@@ -797,12 +797,28 @@ async function connectedDefaultProviderForModel(modelId: string, agent: AgentKin
   return providers.find((provider) => provider.id === defaultId) ?? null;
 }
 
+/**
+ * 隐式 bridge 的 wire 判定口径:目录条目未显式声明 wireProtocol 时按 agent 原生缺省
+ * 推断(claude-code=anthropic-messages,codex=openai-responses;与 resolveVisionBackendRoute
+ * 的缺省推断同源)。claude-code 的用户 Anthropic 兼容上游(如智谱)在目录里就是该 agent
+ * 的缺省 wire,buildUserProvider 按约定省略该字段 —— 不做缺省推断,这些来源会被整体
+ * 排除在隐式路由之外,裸 catalog id(如 glm-5.3)只能落默认网关吃 LiteLLM 模型校验层
+ * 的 400(Invalid model name)。
+ */
+function implicitBridgeWire(
+  routing: RoutingDescriptor | null,
+  agent: AgentKind,
+): RoutingDescriptor['wireProtocol'] {
+  if (routing?.wireProtocol) return routing.wireProtocol;
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'codex') return 'openai-responses';
+  return undefined;
+}
+
 function hasImplicitLocalBridgeCandidate(modelId: string, agent: AgentKind): boolean {
   return providersForModel(modelId, agent).some((provider) => {
-    const routing = providerRoutingForModel(provider, agent, modelId);
-    return (
-      routing?.wireProtocol === 'openai-chat' || routing?.wireProtocol === 'anthropic-messages'
-    );
+    const wire = implicitBridgeWire(providerRoutingForModel(provider, agent, modelId), agent);
+    return wire === 'openai-chat' || wire === 'anthropic-messages';
   });
 }
 
@@ -840,7 +856,8 @@ export function resolveImplicitLocalBridgeRoute(
   return connectedDefaultProviderForModel(catalogModelId, agent).then((provider) => {
     if (!provider) return null;
     const routing = providerRoutingForModel(provider, agent, modelId);
-    if (routing?.wireProtocol !== 'openai-chat' && routing?.wireProtocol !== 'anthropic-messages') {
+    const wire = implicitBridgeWire(routing, agent);
+    if (wire !== 'openai-chat' && wire !== 'anthropic-messages') {
       return null;
     }
     return resolveProviderRouteById(provider.id, agent, modelId);
