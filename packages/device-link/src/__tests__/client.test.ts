@@ -5326,6 +5326,97 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     h.client.stop();
   }, 10_000);
 
+  it('同连接同 stream 重复 link-open 确认后恢复 pending retry timer', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 20,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const capabilities = [
+      DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+      DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+      DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+    ];
+    const sendInboundOpen = async (id: string): Promise<void> => {
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || !env.src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Remote',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities,
+          transportStreamId: 'same-remote-stream',
+          transportBaseSeq: 1,
+        },
+      });
+      await tick();
+      off();
+    };
+    const confirmInboundOpen = (id: string): void => {
+      const accept = h.current().sent.filter((env) => (
+        env.kind === 'link-accept' && env.id === id
+      )).at(-1)!;
+      const payload = accept.payload as { transportStreamId?: string };
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: {
+            streamId: payload.transportStreamId,
+            ackSeq: 0,
+            linkRequestId: id,
+          },
+        },
+      });
+    };
+
+    await sendInboundOpen('duplicate-open-1');
+    confirmInboundOpen('duplicate-open-1');
+
+    h.client.sendInvokeResult('dev-b', 'pending-before-duplicate', {
+      ok: true,
+      result: 'pending',
+    });
+    const ws = h.current();
+    const first = ws.sent.filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    )).at(-1)!;
+    const firstMeta = parseTransportPayload(first.payload)!.meta;
+
+    // 在原 retry interval 到期前立刻处理同连接同 stream 的重复 open。
+    await sendInboundOpen('duplicate-open-2');
+    confirmInboundOpen('duplicate-open-2');
+
+    await vi.waitFor(() => {
+      const retries = ws.sent.filter((env) => {
+        const parsed = parseTransportPayload(env.payload);
+        return env.kind === 'invoke-result'
+          && parsed?.meta.seq === firstMeta.seq;
+      });
+      expect(retries.length).toBeGreaterThan(1);
+    }, { timeout: 500 });
+
+    h.client.stop();
+  }, 10_000);
+
   it('对端换 stream 视为真正恢复,按探测预算 replay', async () => {
     const h = makeHarness({
       timing: {

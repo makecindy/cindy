@@ -3216,6 +3216,10 @@ export class DeviceLinkClient {
     peer.pendingLinkConfirmation = null;
     this.cancelTimeoutCloseNotify(dst);
     if (resume.duplicateOpen) {
+      // 同连接同 stream 的重复 open 仍可能带着未确认的可靠帧。确认阶段
+      // 会先清掉旧 retryTimer;不能因为这是 duplicate open 就让 pending 永久
+      // 停在队列里。这里不做全量 replay,只恢复原有有界重试计时器。
+      if (peer.pending.size > 0) this.ensureRetryTimer(dst);
       this.logRecoverySend(dst, peer, 'link-replay', true);
       return;
     }
