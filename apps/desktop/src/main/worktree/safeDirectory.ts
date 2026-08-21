@@ -2,6 +2,10 @@
  * Persists Cindy-approved Git safe.directory entries in one Cindy-owned
  * config file. The user's global config only carries the stable include;
  * Git itself owns locking and atomic replacement for both files.
+ *
+ * This is OS-user-scoped Git integration state, not profile-scoped user data.
+ * Its narrow storage and lifecycle exception is registered in
+ * docs/dev-rules/credentials-and-local-storage.md.
  */
 
 import fs from 'node:fs/promises';
