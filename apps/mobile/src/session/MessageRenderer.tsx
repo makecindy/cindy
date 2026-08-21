@@ -606,6 +606,9 @@ export function MessageRenderer({
     screenHeight: windowDimensions.height,
     screenWidth: windowDimensions.width,
   }), [windowDimensions.height, windowDimensions.width]);
+  const wideContentInset = viewportLayout.wideViewport
+    ? Math.max(0, (windowDimensions.width - viewportLayout.contentMaxWidth) / 2)
+    : 0;
   const nearBottomRef = useRef(true);
   // ── 拖动手势追踪(贴底跟随的意图解除用)──
   // 拖动期间(onScrollBeginDrag ~ onScrollEndDrag)相对起点累计上移超过死区
@@ -841,11 +844,8 @@ export function MessageRenderer({
     const micCenterFromRight = touchLayout.composerPaddingHorizontal
       + MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT
       + MOBILE_COMPOSER_CONTROL_SIZE / 2;
-    const wideInset = viewportLayout.wideViewport
-      ? Math.max(0, (windowDimensions.width - viewportLayout.contentMaxWidth) / 2)
-      : 0;
-    return Math.round(wideInset + micCenterFromRight - SCROLL_TO_BOTTOM_FAB_SIZE / 2);
-  }, [viewportLayout.contentMaxWidth, viewportLayout.wideViewport, windowDimensions.width]);
+    return Math.round(wideContentInset + micCenterFromRight - SCROLL_TO_BOTTOM_FAB_SIZE / 2);
+  }, [wideContentInset, windowDimensions.width]);
   const loadEarlierAction = buildMessageLoadEarlierAction({
     hasOlderMessages: canLoadEarlier === true,
     loading: loadingEarlier === true,
@@ -854,9 +854,10 @@ export function MessageRenderer({
   const handleShareableMessageViewChange = useCallback((clientId: string, view: View | null) => {
     if (view) {
       shareableMessageViewsRef.current.set(clientId, view);
-      return;
+    } else {
+      shareableMessageViewsRef.current.delete(clientId);
     }
-    shareableMessageViewsRef.current.delete(clientId);
+    if (shareSelectionActiveRef.current) scheduleStickyShareCheckRef.current?.(true);
   }, []);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     onAddMessageToComposer,
@@ -940,7 +941,6 @@ export function MessageRenderer({
   shareSelectionActiveRef.current = shareSelectionActive;
   const topOverlayHeightRef = useRef(topOverlayHeight);
   topOverlayHeightRef.current = topOverlayHeight;
-  const firstShareableViewableClientIdRef = useRef<string | null>(null);
   const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
   const stickyCheckSeqRef = useRef(0);
   const stickyCheckLastRunAtRef = useRef(0);
@@ -951,27 +951,33 @@ export function MessageRenderer({
       setStickyShareClientId(null);
       return;
     }
-    const clientId = firstShareableViewableClientIdRef.current;
+    const shareableViews = Array.from(shareableMessageViewsRef.current.entries());
     const list = listRef.current;
-    const view = clientId ? shareableMessageViewsRef.current.get(clientId) : null;
-    if (!clientId || !list || !view) {
+    if (!list || shareableViews.length === 0) {
       setStickyShareClientId(null);
       return;
     }
-    const [listFrame, frame] = await Promise.all([
+    const [listFrame, candidates] = await Promise.all([
       measureInWindow(list.getNativeScrollRef()),
-      measureInWindow(view),
+      Promise.all(shareableViews.map(async ([clientId, view]) => ({
+        clientId,
+        frame: await measureInWindow(view),
+      }))),
     ]);
     if (seq !== stickyCheckSeqRef.current) return;
-    if (!listFrame || !frame || frame.height <= 0) {
+    if (!listFrame) {
       setStickyShareClientId(null);
       return;
     }
     const dockY = listFrame.y + (topOverlayHeightRef.current ?? 0) + spacing.sm;
-    const pinned =
-      frame.y < dockY && frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT;
+    candidates.sort((a, b) => (a.frame?.y ?? Number.POSITIVE_INFINITY)
+      - (b.frame?.y ?? Number.POSITIVE_INFINITY));
+    const pinned = candidates.find(({ frame }) => frame
+      && frame.height > 0
+      && frame.y + spacing.sm < dockY
+      && frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT);
     setStickyShareClientId((prev) => {
-      const next = pinned ? clientId : null;
+      const next = pinned?.clientId ?? null;
       return prev === next ? prev : next;
     });
   }, []);
@@ -995,7 +1001,7 @@ export function MessageRenderer({
   useEffect(() => {
     if (!shareSelectionActive) setStickyShareClientId(null);
     else scheduleStickyShareCheck(true);
-  }, [shareSelectionActive, scheduleStickyShareCheck]);
+  }, [shareSelectionActive, scheduleStickyShareCheck, topOverlayHeight]);
   useEffect(() => () => {
     if (stickyCheckTimerRef.current) clearTimeout(stickyCheckTimerRef.current);
   }, []);
@@ -1003,22 +1009,11 @@ export function MessageRenderer({
     viewableItems: ViewToken<MobileMessageRenderItem>[];
   }) => {
     let nextIndex: number | null = null;
-    let firstShareable: string | null = null;
-    let firstShareableIndex = Number.POSITIVE_INFINITY;
     for (const token of info.viewableItems) {
       if (typeof token.index !== 'number') continue;
       nextIndex = nextIndex === null ? token.index : Math.min(nextIndex, token.index);
-      if (token.item.type !== 'message' || !isShareableMessage(token.item.message)) continue;
-      const clientId = messageClientId(token.item);
-      if (clientId && token.index < firstShareableIndex) {
-        firstShareableIndex = token.index;
-        firstShareable = clientId;
-      }
     }
     if (nextIndex !== null) setFirstVisibleIndex(nextIndex);
-    const candidateChanged = firstShareableViewableClientIdRef.current !== firstShareable;
-    firstShareableViewableClientIdRef.current = firstShareable;
-    if (candidateChanged) scheduleStickyShareCheckRef.current?.(true);
   });
   const readActuallyVisibleShareableMessageIds = useCallback(async (
     viewport: ShareableMessageViewport,
@@ -1543,14 +1538,14 @@ export function MessageRenderer({
           style={[styles.stickyShareOverlay, { top: (topOverlayHeight ?? 0) + spacing.sm }]}
           testID="message.shareStickyCheck"
         >
-          <View style={styles.stickyShareRow}>
-            <View style={styles.stickyShareGutter}>
-              <ShareMessageCheckbox
-                clientId={stickyShareClientId}
-                disabled={shareSelectionBusy === true}
-              />
-            </View>
-            <View style={styles.stickyShareSpacer} />
+          <View
+            pointerEvents="box-none"
+            style={[styles.stickyShareControl, { marginLeft: wideContentInset + spacing.lg }]}
+          >
+            <ShareMessageCheckbox
+              clientId={stickyShareClientId}
+              disabled={shareSelectionBusy === true}
+            />
           </View>
         </View>
       ) : null}
@@ -2434,7 +2429,7 @@ function MessageBubble({
       disabled={actions.shareSelectionBusy === true}
       fill
     >
-      <View pointerEvents="none" style={styles.shareSelectionContent}>
+      <View style={styles.shareSelectionContent}>
         {messageNode}
       </View>
     </ShareMessageCheckbox>
@@ -6462,25 +6457,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minWidth: 0,
   },
   stickyShareOverlay: {
+    height: SHARE_STICKY_CHECK_HEIGHT,
     left: 0,
     position: 'absolute',
     right: 0,
     top: 0,
     zIndex: 5,
   },
-  // 与消息列表 padding 和分享行 gutter 同构。
-  stickyShareRow: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.lg,
-    paddingTop: 0,
-    width: '100%',
-  },
-  stickyShareGutter: {
+  stickyShareControl: {
     alignItems: 'center',
     width: spacing.xl * 2,
-  },
-  stickyShareSpacer: {
-    flex: 1,
   },
   sentInlineTextChunk: {
     flexBasis: '100%',

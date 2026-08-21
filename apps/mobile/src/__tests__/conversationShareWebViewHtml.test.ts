@@ -291,7 +291,8 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(selectAllSource).toContain('<ShareCheckboxMark checked={allSelected} />');
     expect(selectAllSource).not.toContain('backgroundColor: colors.surfaceChip');
     expect(messageCheckboxSource).toContain('fill ? styles.rowButton : styles.button');
-    expect(messageRendererSource).toContain(
+    expect(messageRendererSource).toContain('<View style={styles.shareSelectionContent}>');
+    expect(messageRendererSource).not.toContain(
       'pointerEvents="none" style={styles.shareSelectionContent}',
     );
     expect(messageRendererSource).toContain('fill');
@@ -299,14 +300,20 @@ describe('buildConversationShareHtml 富内容导出', () => {
       'testID="message.shareStickyCheck"',
     );
     expect(messageRendererSource).toContain(
-      'token.item.type !== \'message\' || !isShareableMessage(token.item.message)',
+      'const shareableViews = Array.from(shareableMessageViewsRef.current.entries())',
     );
     expect(messageRendererSource).toContain(
-      'token.index < firstShareableIndex',
+      'candidates.sort((a, b) => (a.frame?.y ?? Number.POSITIVE_INFINITY)',
+    );
+    expect(messageRendererSource).toContain(
+      'const pinned = candidates.find(({ frame }) => frame',
     );
     expect(messageRendererSource).toContain(
       'frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT',
     );
+    expect(messageRendererSource).toContain('pointerEvents="box-none"');
+    expect(messageRendererSource).toContain('marginLeft: wideContentInset + spacing.lg');
+    expect(messageRendererSource).not.toContain('styles.stickyShareSpacer');
     expect(webViewSource).toContain(
       'onShouldStartLoadWithRequest={interceptNavigation}',
     );
