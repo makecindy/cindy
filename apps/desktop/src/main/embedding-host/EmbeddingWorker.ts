@@ -41,9 +41,15 @@ const TICK_INTERVAL_MS = 5_000;
 const BATCH_SIZE = 32;
 /**
  * 熔断 TTL,必须与 DB 层 TERMINAL_SNOOZE_MS 保持一致。
- * 到期后放行一次探测:成功清熔断,失败重新阻断。
+ * 到期后放行一次探测:成功清熔断,失败重新阻断并递增 probeCount。
  */
 const MODEL_BLOCK_TTL_MS = 30 * 60_000;
+/**
+ * 自动重探上限:首次阻断后最多再放行这么多次探测,避免对永久无效模型
+ * 每 30 分钟无限出网 (PR #2288 Greptile P1)。达到上限后继续 snooze 但
+ * 不再调 embed(),直至应用重启清空 blockedModels。
+ */
+const MODEL_BLOCK_MAX_REPROBES = 2;
 
 /**
  * 只有 INVALID_MODEL 才触发永久熔断。
@@ -98,10 +104,14 @@ export class EmbeddingWorker {
    * INVALID_MODEL (错误体明确包含 model_not_found) 熔断表。
    *
    * TTL 与 DB 层 TERMINAL_SNOOZE_MS 一致 (30 分钟):阻断期间新 job snooze 不出网,
-   * TTL 到期后放行一次探测;探测成功则清除条目,失败则重新阻断。这样网关短暂误报或
-   * 模型恢复后无需重启应用即可自动续跑 (PR #2288 review)。
+   * TTL 到期且 probeCount < MAX_REPROBES 时放行一次探测;探测成功则清除条目,
+   * 失败则重新阻断并递增 probeCount。达到重探上限后停止出网,等重启再试,
+   * 避免对永久无效模型无限周期请求 (PR #2288 review)。
    */
-  private readonly blockedModels = new Map<string, { error: string; blockedAt: number }>();
+  private readonly blockedModels = new Map<
+    string,
+    { error: string; blockedAt: number; probeCount: number }
+  >();
   // 关闭 / 切账号时由 stop() 置 true。in-flight tick 在每个 await 点之后检查它,
   // 一旦为 true 就立刻放弃后续写库直接返回 —— 那批 job 保持 status='pending',
   // 下次启动自动续跑 (零丢失)。目的是退出时让 worker 立即让出 SQLite 写连接,
@@ -328,25 +338,31 @@ export class EmbeddingWorker {
         const blocked = this.blockedModels.get(modelId);
         if (blocked !== undefined) {
           const age = Date.now() - blocked.blockedAt;
-          if (age < MODEL_BLOCK_TTL_MS) {
-            // 熔断 TTL 内:snooze 这批,不出网。
+          if (age < MODEL_BLOCK_TTL_MS || blocked.probeCount >= MODEL_BLOCK_MAX_REPROBES) {
+            // 熔断 TTL 内,或已耗尽自动重探次数:snooze 这批,不出网。
+            // 重启会清空 blockedModels,届时再给一轮新的探测预算。
             await this.recordFailureBatch(modelJobs, blocked.error, true);
+            if (this.aborted) return;
             this.opts.log.debug?.(
               JSON.stringify({
                 event: 'embeddingWorker.batch.skip.invalidModel',
                 modelId,
                 count: modelJobs.length,
-                remainingMs: MODEL_BLOCK_TTL_MS - age,
+                remainingMs: age < MODEL_BLOCK_TTL_MS ? MODEL_BLOCK_TTL_MS - age : 0,
+                probeCount: blocked.probeCount,
               }),
             );
             continue;
           }
-          // TTL 到期:清除熔断,放行一次探测。成功则正常写入,失败会在 catch 中重新阻断。
-          this.blockedModels.delete(modelId);
+          // TTL 到期且仍有探测预算:重置阻断窗口、递增 probeCount,放行一次探测。
+          // 成功会在下面删除条目;失败 catch 会刷新 blockedAt 并保留 probeCount。
+          blocked.blockedAt = Date.now();
+          blocked.probeCount++;
           this.opts.log.info(
             JSON.stringify({
               event: 'embeddingWorker.model.blockExpired.reprobe',
               modelId,
+              probeCount: blocked.probeCount,
             }),
           );
         }
@@ -362,8 +378,19 @@ export class EmbeddingWorker {
           // 写事务 (这是保证 db.backup 无争用的关键)。该批 job 保持 pending, 下次续跑。
           if (this.aborted) return;
           if (isProviderSuspended(source)) break;
+          // 探测成功 — 若之前熔断过,清除条目恢复正常节奏。
+          if (this.blockedModels.has(modelId)) {
+            this.blockedModels.delete(modelId);
+            this.opts.log.info(
+              JSON.stringify({
+                event: 'embeddingWorker.model.unblocked',
+                modelId,
+              }),
+            );
+          }
           // 5. 同步事务: INSERT vec + UPDATE jobs
           await this.commitEmbeddings(modelJobs, res.embeddings);
+          if (this.aborted) return;
           doneCount += modelJobs.length;
           this.opts.log.info(
             JSON.stringify({
@@ -399,12 +426,19 @@ export class EmbeddingWorker {
           const errorText = `[${code}] ${msg}`;
           const terminal = isTerminalInvalidModelError(err);
           if (terminal) {
-            this.blockedModels.set(modelId, { error: errorText, blockedAt: Date.now() });
+            // 若是 TTL 到期后的重探失败,保留已累计的 probeCount;否则从 0 开始。
+            const prev = this.blockedModels.get(modelId);
+            this.blockedModels.set(modelId, {
+              error: errorText,
+              blockedAt: Date.now(),
+              probeCount: prev?.probeCount ?? 0,
+            });
             this.opts.log.warn(
               JSON.stringify({
                 event: 'embeddingWorker.model.blocked.invalidModel',
                 modelId,
                 reason: msg,
+                probeCount: prev?.probeCount ?? 0,
               }),
             );
           }

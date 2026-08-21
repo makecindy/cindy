@@ -101,7 +101,7 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
 
   it('re-probes the model after the block TTL expires instead of snoozing forever', async () => {
     // Tick 1: model returns INVALID_MODEL → blocked.
-    // After 30 min TTL: tick 2 should delete the block and call embed() again
+    // After 30 min TTL: tick 2 should allow a probe and call embed() again
     // instead of silently snoozing the batch (PR #2288 Codex P1).
     vi.useFakeTimers();
     try {
@@ -140,6 +140,59 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
       await tick();
 
       expect(embed).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops re-probing after the reprobe budget is exhausted (PR #2288 Greptile P1)', async () => {
+    // A genuinely invalid model should not be hit every 30 minutes forever.
+    // After MODEL_BLOCK_MAX_REPROBES failed reprobes, the worker keeps snoozing
+    // without calling embed() until restart.
+    vi.useFakeTimers();
+    try {
+      let now = new Date('2026-08-21T12:00:00Z').getTime();
+      vi.setSystemTime(now);
+      let rowid = 0;
+      const query = vi.fn(async () => [{ ...job(++rowid, `msg-${rowid}`) }]);
+      const tx = vi.fn(async () => ({ failCount: 0 }));
+      const embed = vi.fn(async () => {
+        throw new EmbeddingError('model not found', 'INVALID_MODEL', 404);
+      });
+
+      registerProvider({
+        source: 'chat',
+        getTextsForJobs: async (jobs) =>
+          jobs.map(({ rowid: r, sourceId }) => ({ rowid: r, text: sourceId })),
+      });
+
+      const worker = new EmbeddingWorker({
+        getDbClient: () => ({ query, tx }) as never,
+        getClient: () => ({ embed }) as never,
+        isVecAvailable: () => true,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+      });
+      const tick = (worker as unknown as { tick: () => Promise<void> }).tick.bind(worker);
+
+      // Tick 1: initial block.
+      await tick();
+      const callsAfterFirst = embed.mock.calls.length;
+
+      // Two TTL windows: each may use one reprobe attempt.
+      for (let i = 0; i < 2; i++) {
+        now += 31 * 60_000;
+        vi.setSystemTime(now);
+        await tick();
+      }
+      const callsAfterReprobes = embed.mock.calls.length;
+      // 1 initial + 2 reprobes = 3 calls.
+      expect(callsAfterReprobes).toBe(callsAfterFirst + 2);
+
+      // Third TTL window: reprobe budget exhausted, snooze only, no more embed().
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      await tick();
+      expect(embed.mock.calls.length).toBe(callsAfterReprobes);
     } finally {
       vi.useRealTimers();
     }
