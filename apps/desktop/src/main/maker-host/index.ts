@@ -78,6 +78,7 @@ import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js
 import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
+import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
 import {
@@ -1227,6 +1228,7 @@ export function getMaker(): Maker {
       runtimeConfig: desktopCodexRuntimeConfig,
       binaryPath: codexPath,
       logger: desktopMakerLogger,
+      disableCodexPluginRuntime: true,
       registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
@@ -1516,7 +1518,6 @@ export function getMaker(): Maker {
             };
           }
         }
-        const openAiWebSocketsEnabled = !subagentRoute;
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
@@ -1528,14 +1529,14 @@ export function getMaker(): Maker {
                   forceDisableSubagents,
                 })
               : []),
-            ...buildCodexProxySpawnArgs(endpoint, authInjection, { openAiWebSocketsEnabled }),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
           ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
-          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready && openAiWebSocketsEnabled,
+          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
           ...(browserCompanion?.status === 'ready'
             ? {
@@ -2050,6 +2051,14 @@ export function getMaker(): Maker {
             throw new Error('Account provider models are not ready for this app session; retry.');
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
+          if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
+            const thinkingEnabled = getThinkingEnabledFromMemory(
+              opts.agentKind,
+              opts.providerId,
+              opts.model,
+            );
+            if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
+          }
           if (opts.agentKind === 'codex') {
             const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(
               opts.workingDir,

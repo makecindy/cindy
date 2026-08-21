@@ -3091,14 +3091,18 @@ export const remoteSessionStore = {
         if (textFlushed || reconnectCleared) emit();
         return;
       }
-      // The compact boundary itself preserves the historical `streaming: false` marker
-      // on the rows (the renderer uses it for compact boundaries), so do not use the
-      // generic finalizer here. Only retire the live-row identity after de-duplication.
-      streamingAssistantClientIds.delete(sessionId);
-      const finalized = existing.map(finishMessageStreamingAtCompactBoundary);
+      const backgroundCompact = readString(event, 'turnScope') === 'background';
+      // Background compact belongs to the previous idle cycle. Finalizing here
+      // would seal a product turn that started after compaction_start.
+      if (!backgroundCompact) {
+        streamingAssistantClientIds.delete(sessionId);
+      }
+      const nextMessages = backgroundCompact
+        ? existing
+        : existing.map(finishMessageStreamingAtCompactBoundary);
       const createdAt = new Date().toISOString();
       messages.set(sessionId, normalizeMessages([
-        ...finalized,
+        ...nextMessages,
         {
           id: clientId,
           clientId,
@@ -3119,6 +3123,16 @@ export const remoteSessionStore = {
     if (type === 'status') {
       const data = isRecord(event.data) ? event.data : null;
       const current = readSessionRunStatus(sessionId);
+      if (readString(event, 'turnScope') === 'background') {
+        const rawStatus = readString(data, 'status') ?? '';
+        const status =
+          !rawStatus || (rawStatus === 'Done' && current.isRunning)
+            ? current.status
+            : rawStatus;
+        const changed = writeSessionRunStatus(sessionId, { ...current, status });
+        if (changed || textFlushed || reconnectCleared) emit();
+        return;
+      }
       const isRunning = typeof data?.isRunning === 'boolean' ? data.isRunning : current.isRunning;
       if (!isRunning && isTurnContinuationBoundaryEvent(event)) {
         // A claimed status(false) closes only the provider SDK segment. Keep the

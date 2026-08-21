@@ -81,10 +81,6 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain('Relay 未连接');
     expect(source).not.toContain('正在连接 Relay');
     expect(source).not.toContain('styles.connectionButton');
-    expect(source).not.toContain('Menu,');
-    expect(source).not.toContain('icon={Menu}');
-    expect(source).not.toContain('devices.menuButton');
-    expect(source).not.toContain('打开菜单');
     expect(source).not.toContain('fontSize: 28');
     expect(source).not.toContain('height: 50');
     expect(source).not.toContain('width: 50');
@@ -96,8 +92,53 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('const [deviceMenuOpen, setDeviceMenuOpen]');
     expect(source).toContain('const [groupByProject, setGroupByProject]');
     expect(source).toContain('testID="home.deviceMenu"');
+    expect(source).toContain('testID="home.chromeMenu"');
+    expect(source).toContain('testID="home.displaySettingsButton"');
+    expect(source).toContain('<HomeChromeDrawer');
+    expect(source).toContain('<HomeHeaderGlassButton');
+    const headerGlass = readSource('src/session/HomeHeaderGlassButton.tsx');
+    expect(headerGlass).toContain('from \'expo-glass-effect\'');
+    expect(headerGlass).toContain('glassEffectStyle="regular"');
+    expect(source).toContain('<HomeChromeFrost visible={headerFrosted} />');
+    expect(source).toContain('onProjectDragStart={displayedProjectOrder === \'custom\'');
+    expect(source).toContain('projectOrder={displayedProjectOrder}');
+    expect(source).toContain('resolveDisplayedProjectOrder(');
+    expect(source).not.toContain('projectOrder={selectedDeviceId ? hostProjectOrder : projectOrder}');
+    expect(source).toContain('<HomeGlassMenuPanel');
+    expect(source).toContain('<HomeMenuScrim');
+    const glassMenu = readSource('src/session/HomeGlassMenuPanel.tsx');
+    expect(glassMenu).toContain('from \'expo-glass-effect\'');
+    expect(glassMenu).toContain('<GlassView');
+    expect(glassMenu).toContain('glassEffectStyle="regular"');
+    expect(glassMenu).toContain('<View style={styles.body}>{children}</View>');
+    expect(glassMenu).toContain('style={styles.glass}');
+    expect(glassMenu).not.toMatch(/<GlassView[\s\S]*StyleSheet\.absoluteFill/);
+    expect(source).toContain('onScroll={onListScroll}');
+    const chromeFrost = readSource('src/session/HomeChromeFrost.tsx');
+    expect(chromeFrost).toContain('overlayColor={colors.surfaceTranslucent}');
+    expect(chromeFrost).toContain('backgroundColor: colors.surface');
+    expect(chromeFrost).not.toContain('expo-glass-effect');
+    expect(source).not.toContain("import { BlurView } from 'expo-blur';");
+    const chromeDrawer = readSource('src/session/HomeChromeDrawer.tsx');
+    expect(chromeDrawer).toContain('testID="devices.settingsButton"');
+    expect(chromeDrawer).toContain('testID="home.chromeDrawer.account"');
+    expect(chromeDrawer).toContain('openSettingsImmediately');
+    expect(chromeDrawer).toContain('closeInstant');
+    expect(chromeDrawer).not.toContain('remoteSettings');
+    expect(source).toContain("guardedPush('/settings')");
+    expect(source).toContain('setChromeMenuCloseInstant(true)');
+    expect(source).not.toContain("pendingMenuActionRef.current = () => guardedPush('/settings')");
+    const rootLayout = readSource('app/_layout.tsx');
+    expect(rootLayout).toContain('name="settings"');
+    expect(rootLayout).toContain("animation: 'slide_from_left'");
     expect(source).toContain("label={t('devices.list.allConversations')}");
     expect(source).toContain("label={t('devices.list.menu.groupByProject')}");
+    expect(source).toContain("label={t('devices.list.menu.groupDialogue')}");
+    expect(source).not.toContain('testID="home.deviceMenu.remoteSettings"');
+    expect(source).not.toContain('onOpenRemoteSettings');
+    expect(source).toContain('testID="home.deviceMenu.sort.priority"');
+    expect(source).toContain('testID="home.deviceMenu.projectOrder.custom"');
+    expect(source).toContain('testID="home.deviceMenu.status.archived"');
     // 注:首页分区构造逻辑(buildMixedHomeRows / buildGroupedHomeRows / buildHomeSections)
     // 已抽到 @/session/homeSections,并由 homeSections.test.ts 做行为测试,这里不再做源码字符串断言。
     expect(source).toContain('styles.sessionListRow');
@@ -197,7 +238,7 @@ describe('mobile home desktop-first surface', () => {
     expect(homeSource).not.toContain('<Puzzle');
     expect(homeSource).toContain('width: 24');
     expect(homeSource).toContain('width: iconSize.md');
-    expect(homeSource).toContain('size={cindyList ? iconSize.sm : isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}');
+    expect(homeSource).toContain('size={isClaudeCodeAgentKind(item.session.agentKind) ? 19 : iconSize.lg}');
     expect(homeSource).toContain("function isClaudeCodeAgentKind(agentKind: string): boolean");
     expect(homeSource).toContain("return agentKind === 'cc' || agentKind === 'claude-code';");
     expect(homeSource).not.toContain('sessionAttentionDot: {\n    backgroundColor: colors.statusAccent,\n    borderColor: colors.surface');
@@ -255,6 +296,7 @@ describe('mobile home desktop-first surface', () => {
     const localSmokeSource = readSource('scripts/local-device-link-smoke.mjs');
     const deviceDetailFlow = readSource('e2e/maestro/session_list_controls.yaml');
 
+    expect(source).toContain('item.deviceId !== null && item.available');
     expect(source).toContain('`home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}`');
     expect(source).toContain('function sanitizeDeviceChipTestId');
     expect(source).toContain("return value.replace(/[^A-Za-z0-9_-]/g, '_');");
@@ -323,7 +365,7 @@ describe('mobile home desktop-first surface', () => {
     // 折叠对齐桌面版:走共享 getRemoteSessionPreviewCollapse(24h 活动 / 需关注 / 运行中豁免),
     // 不再是 slice 硬截断。
     expect(projectRowSource).toContain('getRemoteSessionPreviewCollapse(');
-    expect(projectRowSource).toContain('limit: PROJECT_PREVIEW_LIMIT');
+    expect(projectRowSource).toContain('limit: showAll ? project.sessions.length : PROJECT_PREVIEW_LIMIT');
     expect(projectRowSource).not.toContain('project.sessions.slice(0, PROJECT_PREVIEW_LIMIT)');
     expect(projectRowSource).toContain('<Folder');
     expect(projectRowSource).toContain('project.sessionCount');
@@ -332,7 +374,8 @@ describe('mobile home desktop-first surface', () => {
     expect(projectRowSource).not.toContain('<Ellipsis');
     expect(projectRowSource).not.toContain('project.pendingInteractionCount');
     expect(projectRowSource).not.toContain('project.subtitle');
-    expect(sessionRowSource).toContain('testID={`home.sessionRowTitle.${item.session.id}`}');
+    expect(sessionRowSource).toContain('titleTestIDPrefix = \'home.sessionRowTitle\'');
+    expect(sessionRowSource).toContain('`home.sessionRowTitle.${item.session.id}`');
     expect(sessionRowSource).toContain('ellipsizeMode="tail"');
     expect(sessionRowSource).toContain('numberOfLines={1}');
     expect(sessionRowSource).toContain('buildRemoteSessionCardPreview(item, { running })');
@@ -363,20 +406,19 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).not.toContain('SessionBadge');
     expect(source).toContain('const HOME_SESSION_ROW_HEIGHT = 78;');
     expect(source).toContain('const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;');
-    expect(source).toContain('const CINDY_LIST_ROW_HEIGHT = 60;');
-    // 用户改稿 2026-07-21:列表首页回退 XD-MAKER 通栏样式(legacy 变体),色彩体系沿用 07-20 定稿。
-    expect(source).toContain('variant="legacy"');
+    // 列表行只保留通栏 legacy 一套皮,不再双轨 cindyList 变体。
+    expect(source).not.toContain('variant="legacy"');
     expect(source).not.toContain('variant="cindyList"');
-    expect(source).toContain("type HomeSessionRowVariant = 'legacy' | 'cindyList';");
+    expect(source).not.toContain('HomeSessionRowVariant');
+    expect(source).not.toContain('const CINDY_LIST_ROW_HEIGHT');
     expect(stylesSource).toContain('height: HOME_SESSION_ROW_HEIGHT');
     expect(stylesSource).toContain('height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT');
-    expect(stylesSource).toContain('height: CINDY_LIST_ROW_HEIGHT');
-    expect(stylesSource).toContain('height: lineHeight.micro');
-    // 通栏回退:项目子行回 surface 全宽底(用户改稿 2026-07-21)。
+    expect(stylesSource).not.toContain('height: CINDY_LIST_ROW_HEIGHT');
+    // 通栏:项目子行回 surface 全宽底(用户改稿 2026-07-21)。
     expect(stylesSource).toContain('projectChildren: {\n    backgroundColor: colors.surface,');
-    expect(stylesSource).toContain('sessionListRowIndentedCindy: {\n    backgroundColor: colors.surfaceListExpanded');
-    expect(stylesSource).toContain('sessionListRowDeepIndentedCindy: {\n    backgroundColor: colors.surfaceListExpanded');
-    expect(stylesSource).toContain('automationGroupChildrenCindy: {\n    backgroundColor: colors.surfaceListExpanded');
+    expect(stylesSource).not.toContain('sessionListRowIndentedCindy');
+    expect(stylesSource).not.toContain('sessionListRowDeepIndentedCindy');
+    expect(stylesSource).not.toContain('automationGroupChildrenCindy');
   });
 
   it('keeps presence updates local and refreshes full home sync on every reconnect', () => {
@@ -397,7 +439,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('mergeDeviceViewsWithFreshPresence(');
     expect(source).toContain('markPresenceFresh(presenceFreshnessRef.current, lastPresenceSnapshot.deviceId);');
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
-    expect(source).toContain('refreshControl={<RefreshControl refreshing={refreshing}');
+    expect(source).toContain('progressViewOffset={chromeHeight}');
     expect(source).toContain('onRefresh={() => void loadHome({ visible: true })}');
     expect(source).toContain('onPress={() => void loadHome({ visible: true })}');
     expect(source).toContain('patchDeviceViewsWithPresence(');

@@ -145,7 +145,12 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   ) => Promise<OrcaInterAgentSendToSessionInternalResult>;
   createDbMessage: (
     sessionId: string,
-    message: { clientId: string; role: 'user'; content: string },
+    message: {
+      clientId: string;
+      role: 'user';
+      content: string;
+      agentMeta?: Record<string, unknown>;
+    },
   ) => Promise<unknown>;
   beginDirectTurnChangeSet: (sessionId: string, clientId: string) => Promise<void>;
   abortDirectTurnChangeSet: (sessionId: string) => void;
@@ -346,6 +351,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     try {
       const live = deps.getLiveSession(params.targetSessionId);
       if (live) {
+        const senderLabel = await resolveSenderLabel();
         const result = await sendPersistedUserMessageToSession(deps, {
           session: live,
           dbContent: persistedContent,
@@ -353,6 +359,11 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           clientId,
           source: params.meta.source,
           context: params.meta.context,
+          origin: {
+            kind: 'orca',
+            senderLabel,
+            displayText: params.rawContent,
+          },
           onAccepted: runAccepted,
         });
         if (result.dispatched) {
@@ -426,10 +437,11 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
     clientId?: string;
     source: string;
     context: string;
+    origin?: AgentInputQueuedMessage['origin'];
     onAccepted?: () => void | Promise<void>;
   },
 ): Promise<CollabDirectDispatchResult> {
-  const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, onAccepted } = params;
+  const { session, dbContent, agentMessage, clientId = deps.createId(), source, context, origin, onAccepted } = params;
   let turnChangeSetStarted = false;
   const result = await resolveCollabDispatchResult(
     () => session.send(agentMessage, {
@@ -441,6 +453,7 @@ async function sendPersistedUserMessageToSession<TSessionMeta>(
           clientId,
           role: 'user',
           content: dbContent,
+          ...(origin ? { agentMeta: { origin } } : {}),
         });
         await deps.beginDirectTurnChangeSet(session.id, clientId);
         turnChangeSetStarted = true;

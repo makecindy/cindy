@@ -504,4 +504,20 @@ describe('cindy-subagent extension source', () => {
     expect(source).not.toContain('Resumed Subagent');
     expect(source).toContain('title: sourceConfig.title,');
   });
+
+  it('writes CINDY_PI_BASH_PACKAGE_HOME into the durable child env before spawn (#3132)', () => {
+    // 父 bridge 会消费并删除该 env。durable runner 才是真正 spawn Pi child 的地方，
+    // 必须在 spawn 前写回 posix 派生路径，否则子 bridge 无法解析 bash 隔离 home。
+    const src = CINDY_SUBAGENT_RUNNER_SOURCE;
+    expect(src).toContain(
+      "childEnv.CINDY_PI_BASH_PACKAGE_HOME = path.posix.join(config.childConfigHome, 'bash-package-home');",
+    );
+    expect(src).toContain('path.isAbsolute(config.childConfigHome)');
+    const writeBack = src.indexOf(
+      "childEnv.CINDY_PI_BASH_PACKAGE_HOME = path.posix.join(config.childConfigHome, 'bash-package-home')",
+    );
+    const spawnCall = src.indexOf('spawn(config.binary, childArgs');
+    expect(writeBack).toBeGreaterThan(-1);
+    expect(spawnCall).toBeGreaterThan(writeBack);
+  });
 });

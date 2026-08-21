@@ -128,6 +128,38 @@ describe('Agent Island display state', () => {
     expect(buildAgentIslandDisplayState(state, 1_201).sessions[0]?.phase).toBe('completed');
   });
 
+  it('does not start or complete a product turn from background compact status', () => {
+    const state = createAgentIslandState();
+    const meta = { sessionId: 'idle-compact', title: 'Idle compact', agentKind: 'pi' as const };
+
+    applyAgentIslandEvent(
+      state,
+      meta,
+      {
+        type: 'status',
+        source: 'pi',
+        turnScope: 'background',
+        data: { isRunning: true, status: 'Compacting context…' },
+      },
+      1_000,
+    );
+    const display = buildAgentIslandDisplayState(state, 1_001);
+    expect(display.sessions).toHaveLength(0);
+
+    applyAgentIslandEvent(
+      state,
+      meta,
+      {
+        type: 'status',
+        source: 'pi',
+        turnScope: 'background',
+        data: { isRunning: false, status: 'Done' },
+      },
+      1_100,
+    );
+    expect(buildAgentIslandDisplayState(state, 1_101).sessions).toHaveLength(0);
+  });
+
   it('keeps the notch visible even when there are no active sessions', () => {
     const state = createAgentIslandState();
 

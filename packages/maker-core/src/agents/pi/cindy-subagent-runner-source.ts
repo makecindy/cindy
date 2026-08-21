@@ -784,6 +784,14 @@ function main() {
       for (const key of Object.keys(childEnv)) {
         if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];
       }
+      // The parent bridge consumes and deletes CINDY_PI_BASH_PACKAGE_HOME on
+      // load. Write the derived path back so the child bridge can resolve the
+      // isolated bash home; it still deletes the env on first load. posix.join
+      // matches derivedBashPackageHome — path.join on Windows would fail-close
+      // the stash check with backslashes. (#3132)
+      if (path.isAbsolute(config.childConfigHome)) {
+        childEnv.CINDY_PI_BASH_PACKAGE_HOME = path.posix.join(config.childConfigHome, 'bash-package-home');
+      }
       const childArgs = Array.isArray(config.binaryPrefixArgs)
         ? config.binaryPrefixArgs.concat(args)
         : args;

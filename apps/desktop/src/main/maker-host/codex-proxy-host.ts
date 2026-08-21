@@ -45,6 +45,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { isCuratedQwen38Tag } from '../../shared/localModelRuntime.js';
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getActiveCatalog, getCatalogModelContextWindow } from './active-catalog.js';
@@ -310,6 +311,26 @@ function subagentRouteFromHeaders(
   const threadId = selectedThreadIdFromHeaders(headers);
   if (threadId === 'unknown') return undefined;
   return subagentRouteByThread.get(threadId);
+}
+
+/**
+ * Resolve only the independent Subagent route carried by this WS upgrade.
+ *
+ * A registered child already owns a frozen route snapshot. Its first
+ * collab_spawn upgrade can race thread/started, so fall back to the explicit
+ * parent header without mutating thread ownership from the handshake path.
+ */
+function subagentRouteForWebSocketUpgrade(
+  headers: Readonly<Record<string, string>>,
+): CodexSubagentRouteSnapshot | undefined {
+  const registeredRoute = subagentRouteFromHeaders(headers);
+  if (registeredRoute) return registeredRoute;
+  if (!isCollabSpawnRequest(headers)) return undefined;
+
+  const parentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
+  if (!parentThreadId) return undefined;
+  return subagentRouteByThread.get(parentThreadId)
+    ?? subagentRouteByParentThread.get(parentThreadId);
 }
 
 interface ProviderRequestContext {
@@ -832,11 +853,15 @@ function createChatBridgeDecision(
         googleThoughtSignaturePlaceholder: true,
     }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
-  const capabilities = chatBridgeCapabilitiesForRoute(
+  const routedCapabilities = chatBridgeCapabilitiesForRoute(
     route.routing.upstream,
     realModel,
     baseCapabilities,
   );
+  const capabilities =
+    route.providerId === 'cindy-local-ollama' && isCuratedQwen38Tag(realModel)
+      ? { ...routedCapabilities, systemMessagePolicy: 'coalesce-leading' as const }
+      : routedCapabilities;
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -2174,6 +2199,17 @@ export function createModelRoutingTransform(
         selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
       );
+    if (explicitProviderId === 'cindy-local-ollama') {
+      log.debug('codex managed ollama route', {
+        sessionId,
+        providerId: explicitProviderId,
+        wireProtocol: selectedRouting?.wireProtocol ?? null,
+        bridgeKind: selectedUsesLocalBridge ? 'local-bridge' : 'passthrough',
+        upstream: selectedRouting?.upstream ?? null,
+        method: ctx.method,
+        path: ctx.url.split('?', 1)[0],
+      });
+    }
 
     if (subagentRoute) {
       if (
@@ -2507,20 +2543,18 @@ function createCodexProxyHandle(
         });
         return null;
       }
-      // 独立子代理 Provider 路由的主防线是在 app-server spawn 配置里整体关闭 WS，
-      // 因为 startup-prewarm 的匿名共享连接无法按 thread 安全切分。这里保留线程级
-      // fail-closed 作为第二道防线：若旧调用方或配置漂移仍发来 upgrade，就回 null →
-      // 426，让 Codex 降到 HTTP，避免恢复 codex/ 折扣前缀、换鉴权与档位路由的整条
-      // transform 链被 socket 级透传绕过。
-      if (threadId !== 'unknown') {
-        const carriesSubagentRoute = subagentRouteByThread.has(threadId)
-          || subagentRouteByParentThread.has(threadId);
-        const isCollabSpawn = headerValue(headers, 'x-openai-subagent')
-          .toLowerCase() === CODEX_COLLAB_SPAWN_SUBAGENT;
-        if (carriesSubagentRoute || isCollabSpawn) {
-          log.info('codex websocket declined for subagent HTTP routing', { threadId });
-          return null;
-        }
+      // 独立 Subagent Provider 需要 HTTP body transform，但父 thread 不需要。
+      // bundled Codex 在每次 upgrade 都带 thread/session 身份，collab_spawn 还带
+      // parent thread id；只拒绝确实命中路由快照的子 thread，426 会让该子会话
+      // 自己降到 HTTP，不影响父 thread 的预热/复用 socket。
+      const subagentRoute = subagentRouteForWebSocketUpgrade(headers);
+      if (subagentRoute) {
+        log.info('codex websocket declined for subagent HTTP routing', {
+          threadId,
+          providerId: subagentRoute.providerId,
+          catalogModel: subagentRoute.catalogModel,
+        });
+        return null;
       }
       return CODEX_OAUTH_UPSTREAM;
     },

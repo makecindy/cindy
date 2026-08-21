@@ -34,6 +34,14 @@ import {
   formatOverloadRetryMessage,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import {
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '../shared/context-overflow-error.js';
+import {
+  UPSTREAM_STREAM_INTERRUPTED_REASON,
+  isStreamInterruptedErrorMessage,
+} from '../shared/stream-interrupt-error.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
@@ -63,6 +71,7 @@ interface PiPendingAssistantError {
   sdkError: string;
   errorStatus?: 401 | 429 | 529;
   usageLimit?: true;
+  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON;
 }
 
 interface PiThinkingBlock {
@@ -134,6 +143,12 @@ export interface PiTranslateContext {
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
   /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
   hostAutoCompactInFlight: boolean;
+  /**
+   * compaction_start 锁存的 turnScope。end/boundary 必须复用，不能按结束时的
+   * isStreaming 重判——idle compact 期间用户开了新 turn 时，重判会把后台边界
+   * 当成前台事件，截断正在流式的 assistant。
+   */
+  compactTurnScope: 'background' | 'turn' | null;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -163,6 +178,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     subagentToolCalls: new Map(),
     pendingAssistantError: null,
     hostAutoCompactInFlight: false,
+    compactTurnScope: null,
   };
 }
 
@@ -181,6 +197,7 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.isStreaming = false;
   ctx.pendingAssistantError = null;
+  ctx.compactTurnScope = null;
   ctx.subagentToolCalls.clear();
 }
 
@@ -227,12 +244,37 @@ function pushStatus(
   ctx: PiTranslateContext,
   text: string,
   isRunning: boolean,
+  extras?: Pick<AgentEvent, 'turnScope'>,
 ): void {
   queue.push({
     type: 'status',
     data: { status: text, ...usageSnapshotOf(ctx), isRunning },
     source: 'pi',
+    ...(extras?.turnScope ? { turnScope: extras.turnScope } : {}),
   });
+}
+
+/** Idle compact is not a product turn; mark it background so host/UI do not latch busy. */
+function idleCompactScope(ctx: PiTranslateContext): Pick<AgentEvent, 'turnScope'> | undefined {
+  return ctx.isStreaming ? undefined : { turnScope: 'background' };
+}
+
+function latchCompactTurnScope(
+  ctx: PiTranslateContext,
+): Pick<AgentEvent, 'turnScope'> | undefined {
+  const scope = idleCompactScope(ctx);
+  ctx.compactTurnScope = scope?.turnScope === 'background' ? 'background' : 'turn';
+  return scope;
+}
+
+function takeCompactTurnScope(
+  ctx: PiTranslateContext,
+): Pick<AgentEvent, 'turnScope'> | undefined {
+  const latched = ctx.compactTurnScope;
+  ctx.compactTurnScope = null;
+  if (latched === 'background') return { turnScope: 'background' };
+  if (latched === 'turn') return undefined;
+  return idleCompactScope(ctx);
 }
 
 function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined): void {
@@ -306,6 +348,11 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
     sdkError: redactedError,
     ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
+    ...(isContextOverflowErrorMessage(redactedError)
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : isStreamInterruptedErrorMessage(redactedError)
+        ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+        : {}),
   };
 }
 
@@ -717,15 +764,19 @@ export function translatePiEvent(
     }
 
     case 'compaction_start': {
-      pushStatus(queue, ctx, 'Compacting context…', true);
+      // Host auto-compact 发在 agent_settled 之后(isStreaming=false)。若这里
+      // 无条件 isRunning=true 而不标 background，desktop tracker 会当成新一轮产品 turn。
+      // 在 start 锁存 scope：end 时 isStreaming 可能已因新 turn 变 true。
+      pushStatus(queue, ctx, 'Compacting context…', true, latchCompactTurnScope(ctx));
       return;
     }
 
     case 'compaction_end': {
+      const compactScope = takeCompactTurnScope(ctx);
       if (isFailedOrAbortedPiCompaction(event)) {
         // 失败/取消不是压缩边界。手动压缩仍要收口 Compacting 状态，避免圆环卡 running。
         if (event.reason === 'manual' && !ctx.isStreaming) {
-          pushStatus(queue, ctx, 'Done', false);
+          pushStatus(queue, ctx, 'Done', false, compactScope);
         }
         return;
       }
@@ -738,6 +789,7 @@ export function translatePiEvent(
           postTokens: result?.estimatedTokensAfter,
         },
         source: 'pi',
+        ...compactScope,
       });
       if (result && typeof result.estimatedTokensAfter === 'number') {
         ctx.contextTokens = result.estimatedTokensAfter;
@@ -746,8 +798,9 @@ export function translatePiEvent(
       // 若不收口,renderer 圆环会永久卡 running、新 contextTokens 也送不回去。
       // 仅 manual 收口:auto 压缩发生在活跃 turn 内(turn 结束经 agent_settled 自然收口),
       // 且若压缩期间用户已开始新 turn(ctx.isStreaming)也不能收口,否则会误杀新 turn。
+      // idle compact 的 status 带 turnScope=background，产品 turn 位不再闪。
       if (event.reason === 'manual' && !ctx.isStreaming) {
-        pushStatus(queue, ctx, 'Done', false);
+        pushStatus(queue, ctx, 'Done', false, compactScope);
       }
       return;
     }

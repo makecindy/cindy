@@ -1966,9 +1966,9 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     let established = false;
     let settled = false;
     let upstreamReqForEarlyClose: ClientRequest | null = null;
-    // x-client-request-id 是每次握手唯一值，不能用来关联后续 recovery。startup-prewarm
-    // 发生在线程对宿主可见之前，通常没有稳定 header；保留空值，让宿主可在恢复时
-    // 显式逐出这些可能被目标 thread 复用的匿名预热连接。
+    // bundled Codex 0.145.0 的 startup-prewarm / reconnect 都带稳定 thread-id。
+    // 真正无 scope 的非 Codex / 通用 socket 仍保留空值隔离；不能把泛用的
+    // x-client-request-id 当作稳定 recovery key，误逐出其它 thread 的连接。
     const threadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS);
     const connection: LiveWebSocket = {
       threadId,

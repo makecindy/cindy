@@ -53,6 +53,7 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
 import {
@@ -154,6 +155,8 @@ export interface ModelMemoryAccessors {
   setChoice?: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  getThinking?: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
+  setThinking?: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
   /**
    * 「恢复推荐 / 回落默认」用的**删除**入口(2026-08-17 review H3)。
    *
@@ -448,6 +451,7 @@ interface RowModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Partial<Record<string, string>>;
   supportsFastMode?: boolean;
+  thinkingToggle?: boolean;
   /** 模型级 Codex bridge 协议；仅同一 Provider 内混合原生/桥接模型时存在。 */
   codexCompatibilityWireProtocol?: 'openai-chat' | 'anthropic-messages';
   /** 展示图标 id(AI Gateway / 目录设定,SectionModel.icon);flat 列表的 ModelDescriptor 无此字段。 */
@@ -620,6 +624,8 @@ interface ModelSelectorProps {
   fastMode?: boolean;
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  thinkingEnabled?: boolean;
+  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
@@ -766,6 +772,8 @@ interface ModelSelectorContentProps {
   fastMode?: boolean;
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  thinkingEnabled?: boolean;
+  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
@@ -1020,6 +1028,8 @@ function ModelSelectorContentView({
   onEffortChange,
   fastMode = false,
   onFastModeChange,
+  thinkingEnabled = true,
+  onThinkingChange,
   modelMemory,
   vendorKey,
   deviceId,
@@ -2011,7 +2021,10 @@ function ModelSelectorContentView({
     (editingIsActive || inactiveProviderHasMemory) &&
     !!editingModel &&
     fastEditable(editingProviderId, editingModel);
-  const editHasEfforts = canConfigure && (editingModel?.efforts.length ?? 0) > 0;
+  const editThinkingToggle =
+    canConfigure && currentAgentKind === 'pi' && editingModel?.thinkingToggle === true;
+  const editHasEfforts =
+    canConfigure && (editingModel?.efforts.length ?? 0) > 0 && !editThinkingToggle;
 
   // 配置列当前 effort 值(选中 → live;否则记忆/默认)。
   const editEffortValue: Effort | null = editingModel
@@ -2110,7 +2123,7 @@ function ModelSelectorContentView({
           </span>
         )}
       </div>
-      {(editShowFast || editHasEfforts) && (
+      {(editShowFast || editHasEfforts || editThinkingToggle) && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editShowFast && (
@@ -2125,7 +2138,39 @@ function ModelSelectorContentView({
           />
         </div>
       )}
-      {editShowFast && editHasEfforts && (
+      {editShowFast && (editHasEfforts || editThinkingToggle) && (
+        <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+      )}
+      {editThinkingToggle && editingModel && (
+        <div className="px-0.5">
+          <ThinkingToggle
+            enabled={
+              editingIsActive
+                ? thinkingEnabled
+                : (currentAgentKind && editingProviderId
+                    ? (modelMemory?.getThinking?.(currentAgentKind, editingProviderId, editingModel.id) ?? true)
+                    : true)
+            }
+            onToggle={() => {
+              const next = editingIsActive
+                ? !thinkingEnabled
+                : !(currentAgentKind && editingProviderId
+                    ? (modelMemory?.getThinking?.(currentAgentKind, editingProviderId, editingModel.id) ?? true)
+                    : true);
+              if (currentAgentKind && editingProviderId) {
+                modelMemory?.setThinking?.(currentAgentKind, editingProviderId, editingModel.id, next);
+              }
+              if (editingIsActive) void onThinkingChange?.(next);
+              bump();
+            }}
+            label={t('newChat.modelSelector.thinking')}
+            hideIcon
+            accentVar="var(--text-primary)"
+            thumbVar="var(--surface-on-card)"
+          />
+        </div>
+      )}
+      {editThinkingToggle && editHasEfforts && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editHasEfforts && (
@@ -3040,6 +3085,8 @@ export function ModelSelector({
   onEffortChange,
   fastMode,
   onFastModeChange,
+  thinkingEnabled,
+  onThinkingChange,
   modelMemory,
   vendorKey,
   agentIdentity,
@@ -3342,8 +3389,17 @@ export function ModelSelector({
     !providersLoading &&
     !hasConnectedSource;
   // trigger 上仍展示当前模型的 effort(模型支持时)。
-  const showEffort = !fallbackOption?.active && efforts.length > 0 && efforts.includes(effort);
-  const fullEffortLabel = showEffort ? labelOf(effort) : null;
+  const triggerProvider = providers.find((provider) => provider.id === activeSourceId);
+  const activeThinkingToggle =
+    currentAgentKind === 'pi' &&
+    !!triggerProvider &&
+    getModel(triggerProvider, modelId, currentAgentKind)?.thinkingToggle === true;
+  const showEffort = !fallbackOption?.active && efforts.length > 0 && efforts.includes(effort) && !activeThinkingToggle;
+  const fullEffortLabel = showEffort
+    ? labelOf(effort)
+    : activeThinkingToggle && thinkingEnabled
+      ? t('newChat.modelSelector.thinking')
+      : null;
   const effortLabel = showEffort
     ? modelCompactEffortLabel(
         resolvedTranslationLanguage(i18n),
@@ -3753,6 +3809,8 @@ export function ModelSelector({
       onEffortChange={onEffortChange}
       fastMode={fastMode}
       onFastModeChange={onFastModeChange}
+      thinkingEnabled={thinkingEnabled}
+      onThinkingChange={onThinkingChange}
       modelMemory={modelMemory}
       vendorKey={vendorKey}
       deviceId={deviceId}

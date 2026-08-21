@@ -476,6 +476,59 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('classifies LiteLLM Response API in-stream errors without auto-retry markers', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const rawError =
+      'OpenAI API error (500): {"message":"litellm.APIError: Response API in-stream error","type":null,"param":null,"code":"500"}';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: rawError,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const errors = events.filter((event) => event.type === 'error');
+    expect(errors).toEqual([
+      expect.objectContaining({
+        source: 'pi',
+        data: expect.objectContaining({
+          message: rawError,
+          isTerminal: true,
+          reason: 'upstream-stream-interrupted',
+        }),
+      }),
+    ]);
+  });
+
+  it('keeps LiteLLM in-stream auto-retries silent instead of reusing the overload marker', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({
+        type: 'auto_retry_start',
+        attempt: 2,
+        maxAttempts: 3,
+        errorMessage: 'litellm.APIError: Response API in-stream error',
+      }),
+      queue,
+      ctx,
+    );
+
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+  });
+
   it('keeps unclassified Pi auto-retries silent instead of reusing the overload marker', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
@@ -526,6 +579,69 @@ describe('pi translator', () => {
     );
     expect(terminalErrors).toHaveLength(1);
     expect(terminalErrors[0]?.data).toMatchObject({ message: 'final provider error' });
+  });
+
+  it('tags a terminal xAI prompt-length error as context-overflow', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const overflow =
+      'API Error: 400 litellm.BadRequestError: XaiException - {"code":"invalid-argument","error":"This model\'s maximum prompt length is 500000 but the request contains 637815 tokens."}';
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: overflow,
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const terminalErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        (event.data as { isTerminal?: boolean }).isTerminal === true,
+    );
+    expect(terminalErrors).toHaveLength(1);
+    expect(terminalErrors[0]?.data).toMatchObject({
+      isTerminal: true,
+      reason: 'context-overflow',
+    });
+  });
+
+  it('does not tag a generic invalid-argument as context-overflow', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage: '{"code":"invalid-argument","error":"unsupported field: foo"}',
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const terminalErrors = events.filter(
+      (event) =>
+        event.type === 'error' &&
+        (event.data as { isTerminal?: boolean }).isTerminal === true,
+    );
+    expect(terminalErrors).toHaveLength(1);
+    expect((terminalErrors[0]?.data as { reason?: string }).reason).toBeUndefined();
   });
 
   it('preserves a 64KB ghost_manual envelope only as tool_result data', () => {
@@ -600,6 +716,7 @@ describe('pi translator', () => {
       (e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === true,
     );
     expect(startStatus).toBeDefined();
+    expect(startStatus?.turnScope).toBe('background');
 
     translatePiEvent(
       ev({ type: 'compaction_end', reason: 'manual', result: { tokensBefore: 100, estimatedTokensAfter: 20 } }),
@@ -615,6 +732,78 @@ describe('pi translator', () => {
     const endData = endStatus!.data as { status: string; contextTokens?: number };
     expect(endData.status).toBe('Done');
     expect(endData.contextTokens).toBe(20);
+    expect(endStatus?.turnScope).toBe('background');
+  });
+
+  it('marks idle/host auto-compact status as background so it cannot latch a product turn', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = false;
+    ctx.hostAutoCompactInFlight = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    const start = events.find((e) => e.type === 'status');
+    expect(start).toMatchObject({
+      turnScope: 'background',
+      data: expect.objectContaining({ isRunning: true, status: 'Compacting context…' }),
+    });
+  });
+
+  it('does not mark in-turn compaction_start as background', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start' }), queue, ctx);
+    const start = events.find((e) => e.type === 'status');
+    expect(start).toBeDefined();
+    expect(start?.turnScope).toBeUndefined();
+  });
+
+  it('keeps idle compact_boundary background after a new turn starts mid-compact', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = false;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    expect(events.find((e) => e.type === 'status')?.turnScope).toBe('background');
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(ctx.isStreaming).toBe(true);
+
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { tokensBefore: 150000, estimatedTokensAfter: 32000 },
+      }),
+      queue,
+      ctx,
+    );
+    const boundary = events.find((e) => e.type === 'compact_boundary');
+    expect(boundary?.turnScope).toBe('background');
+    expect(
+      events.filter(
+        (e) => e.type === 'status' && (e.data as { status?: string }).status === 'Done',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('does not relabel an in-turn compact_boundary as background if streaming later stops', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    ctx.isStreaming = true;
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'compaction_start', reason: 'threshold' }), queue, ctx);
+    ctx.isStreaming = false;
+    translatePiEvent(
+      ev({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { tokensBefore: 150000, estimatedTokensAfter: 32000 },
+      }),
+      queue,
+      ctx,
+    );
+    const boundary = events.find((e) => e.type === 'compact_boundary');
+    expect(boundary).toBeDefined();
+    expect(boundary?.turnScope).toBeUndefined();
   });
 
   it('#1933 review:auto compaction 在活跃 turn 内不补发 status(false)(不得误收口 turn)', () => {

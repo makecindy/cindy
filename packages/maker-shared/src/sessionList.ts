@@ -142,11 +142,9 @@ export interface RemoteSessionListContext {
 }
 
 export type RemoteSessionStatusFilter = 'active' | 'waiting' | 'automation' | 'archived' | 'all';
-export type RemoteSessionGroupMode = 'project' | 'date';
 
 export interface RemoteSessionListOptions {
   statusFilter?: RemoteSessionStatusFilter;
-  groupMode?: RemoteSessionGroupMode;
   messagePreviewIndex?: ReadonlyMap<string, string>;
   liveActivityIndex?: ReadonlyMap<string, RemoteSessionLiveActivity>;
   pendingInteractionIndex?: ReadonlyMap<string, number>;
@@ -171,7 +169,6 @@ export function buildRemoteSessionSections(
   options: RemoteSessionListOptions = {},
 ): RemoteSessionSection[] {
   const statusFilter = options.statusFilter ?? 'all';
-  const groupMode = options.groupMode ?? 'project';
   const groupAutomations = options.groupAutomations ?? true;
   const query = normalizeSearchQuery(options.searchQuery);
   const items = [...sessions]
@@ -200,11 +197,6 @@ export function buildRemoteSessionSections(
 
   if (pinned.length > 0) {
     sections.push({ key: 'pinned', title: '置顶', data: pinned });
-  }
-
-  if (groupMode === 'date') {
-    sections.push(...buildDateSections(rest, now, groupAutomations));
-    return sections;
   }
 
   sections.push(...buildProjectSections(rest, now, groupAutomations));
@@ -268,26 +260,19 @@ export function remoteSessionFilterBaseLabel(value: RemoteSessionStatusFilter): 
   return '全部';
 }
 
-export function remoteSessionGroupModeLabel(value: RemoteSessionGroupMode): string {
-  return value === 'project' ? '项目' : '时间';
-}
-
 export function remoteSessionControlsSummary(
   statusFilter: RemoteSessionStatusFilter,
-  groupMode: RemoteSessionGroupMode,
   overview: RemoteSessionOverview,
 ): string {
-  return `${remoteSessionFilterLabel(statusFilter, overview)} · ${remoteSessionGroupModeLabel(groupMode)}分组`;
+  return `${remoteSessionFilterLabel(statusFilter, overview)} · 项目分组`;
 }
 
 export function buildRemoteSessionListContext({
-  groupMode,
   overview,
   searchQuery,
   sections,
   statusFilter,
 }: {
-  groupMode: RemoteSessionGroupMode;
   overview: RemoteSessionOverview;
   searchQuery: string;
   sections: readonly RemoteSessionSection[];
@@ -304,7 +289,7 @@ export function buildRemoteSessionListContext({
       : '当前筛选无结果';
   const rowCopy = rowCount > 0 && rowCount !== resultCount ? ` · ${rowCount} 行` : '';
   return {
-    detail: `${resultCopy}${rowCopy} · ${remoteSessionFilterLabel(statusFilter, overview)} · ${remoteSessionGroupModeLabel(groupMode)}分组`,
+    detail: `${resultCopy}${rowCopy} · ${remoteSessionFilterLabel(statusFilter, overview)} · 项目分组`,
     hint: remoteSessionListHint(statusFilter, normalizedQuery),
     resultCount,
     rowCount,
@@ -401,25 +386,6 @@ function buildProjectSections(
     });
   }
   return sections;
-}
-
-function buildDateSections(
-  items: readonly RemoteSessionListItem[],
-  now: number,
-  groupAutomations = true,
-): RemoteSessionSection[] {
-  const buckets = [
-    { key: 'date:today', title: '今天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:yesterday', title: '昨天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:last7', title: '最近 7 天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:earlier', title: '更早', data: [] as RemoteSessionListItem[] },
-  ];
-  for (const item of items) {
-    buckets[dateBucketIndex(item.lastActivityAt, now)].data.push(item);
-  }
-  return buckets
-    .map((section) => ({ ...section, data: groupAutomationListItems(section.data, now, groupAutomations) }))
-    .filter((section) => section.data.length > 0);
 }
 
 /**
@@ -738,23 +704,6 @@ function compareSessions(a: RemoteSession, b: RemoteSession): number {
 
 function normalizeSearchQuery(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? '';
-}
-
-function dateBucketIndex(iso: string, now: number): number {
-  const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return 3;
-  const start = startOfLocalDay(now);
-  const itemStart = startOfLocalDay(ts);
-  const diffDays = Math.floor((start - itemStart) / 86_400_000);
-  if (diffDays <= 0) return 0;
-  if (diffDays === 1) return 1;
-  if (diffDays < 7) return 2;
-  return 3;
-}
-
-function startOfLocalDay(ms: number): number {
-  const date = new Date(ms);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
 function isDialogueSession(session: RemoteSession): boolean {

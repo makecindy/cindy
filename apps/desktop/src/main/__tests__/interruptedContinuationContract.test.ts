@@ -237,6 +237,34 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toMatch(/supportsScheduleIntervalNullClear:\s*true/);
   });
 
+  it('previews user enqueues to Agent Island before drain/sendToAgent', () => {
+    expect(registerSource).toContain('previewQueuedUserTurn: (sessionId, item) => {');
+    expect(registerSource).toContain("source: 'enqueue'");
+    expect(registerSource).toContain('item.text || item.persistedContent');
+    expect(registerSource).toContain('extractAgentIslandPromptText(content)');
+    const drainableHead = coordinatorSource.indexOf(
+      'if (this.getDrainableHead(sessionId, state) === item)',
+    );
+    const enqueuePreview = coordinatorSource.indexOf('this.deps.previewQueuedUserTurn?.(sessionId, item);');
+    const drainImmediate = coordinatorSource.indexOf("void this.drain(sessionId, 'enqueue-immediate');");
+    expect(drainableHead).toBeGreaterThan(-1);
+    expect(enqueuePreview).toBeGreaterThan(drainableHead);
+    expect(drainImmediate).toBeGreaterThan(enqueuePreview);
+    expect(coordinatorSource).toContain('!automaticOrigin && !isUiContinuationItem(item)');
+  });
+
+  it('rolls back Agent Island enqueue preview when the queued item is discarded, rejected, or blocked', () => {
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'discarded')",
+    );
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected')",
+    );
+    expect(registerSource).toContain(
+      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked')",
+    );
+  });
+
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
     const userEnqueueStart = registerSource.indexOf('onUserEnqueue:');
     const userEnqueueEnd = registerSource.indexOf('onDiscardedQueuedMessage:', userEnqueueStart);

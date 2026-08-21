@@ -26,10 +26,21 @@ import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
+import {
+  isLocalRuntimeBetaProviderId,
+  LOCAL_ADVANCED_PRESET_IDS,
+  LOCAL_CONNECT_PRESET_IDS,
+  MANAGED_LMSTUDIO_PROVIDER_ID,
+  MANAGED_OLLAMA_PROVIDER_ID,
+} from '../../../shared/localModelRuntime';
+import { extractIpcError } from '@/utils/ipcError';
+import { pickWizardRecommend, type WizardRecommend } from './wizardRecommend';
+import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
 
@@ -70,7 +81,8 @@ type Selection =
   | { kind: 'oauth'; provider: ProviderView }
   | { kind: 'preset'; preset: ProviderPreset }
   /** 内置 API-key 供应商(如 Gemini 图像来源,2026-07):保存 key 即连接,无自定义供应商落库。 */
-  | { kind: 'builtinApiKey'; provider: ProviderView };
+  | { kind: 'builtinApiKey'; provider: ProviderView }
+  | { kind: 'ollama-onboarding' };
 
 type PresetBaseUrls = Partial<Record<AgentKind, string>>;
 
@@ -244,13 +256,16 @@ function ProviderRow({
   icon,
   name,
   meta,
+  beta,
   onClick,
 }: {
   icon: React.ReactNode;
   name: string;
   meta: string;
+  beta?: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
@@ -274,6 +289,11 @@ function ProviderRow({
       >
         {name}
       </span>
+      {beta && (
+        <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+          {t('settings.providers.local.beta')}
+        </span>
+      )}
       {/* meta 可收缩截断:en 等长文案在窄弹窗下不得把名称挤出(PR #1102 review)。 */}
       <span className="min-w-0 truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
         {meta}
@@ -328,6 +348,9 @@ export function AddProviderWizard({
   const [apiKey, setApiKey] = useState('');
   const [presetBaseUrls, setPresetBaseUrls] = useState<PresetBaseUrls>({});
   const [saving, setSaving] = useState(false);
+  const [ollamaCanInstall, setOllamaCanInstall] = useState(() =>
+    offersManagedOllamaInstall(window.electronAPI.platform),
+  );
   const [loggingIn, setLoggingIn] = useState(false);
   const genericOAuthProviderId =
     sel?.kind === 'oauth' && sel.provider.auth.oauth ? sel.provider.id : null;
@@ -355,6 +378,20 @@ export function AddProviderWizard({
    * 归属「实际返回它的那个端点的 runtime」——完成创建时按归属分发,**不**把统一列表复制进
    * 每个 runtime(双 runtime 预设两端模型集可以不同,cc-only 模型不能写进 codex,反之亦然)。
    */
+  const [localProbe, setLocalProbe] = useState<{
+    ready: boolean;
+    appInstalled: boolean;
+    modelCount: number;
+    memoryGb: number;
+    detectedLocalPresetIds: string[];
+  }>({
+    ready: false,
+    appInstalled: false,
+    modelCount: 0,
+    memoryGb: 0,
+    detectedLocalPresetIds: [],
+  });
+  const [cliDetections, setCliDetections] = useState<LocalCliDetection[]>([]);
   const [picks, setPicks] = useState<
     Map<
       string,
@@ -378,6 +415,41 @@ export function AddProviderWizard({
       .listProviderPresets()
       .then((r) => {
         if (!cancelled) setPresets(r.presets);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.maker
+      .localModelList()
+      .then((result) => {
+        if (cancelled) return;
+        setLocalProbe({
+          ready: true,
+          appInstalled: result.status.appInstalled,
+          modelCount: result.models.length,
+          memoryGb: result.memoryGb ?? 0,
+          detectedLocalPresetIds: result.detectedLocalPresetIds ?? [],
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setLocalProbe((current) => ({ ...current, ready: true }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.maker
+      .scanLocalCli()
+      .then((result) => {
+        if (!cancelled) setCliDetections(result.detections);
       })
       .catch(() => undefined);
     return () => {
@@ -419,14 +491,82 @@ export function AddProviderWizard({
   const filteredOauth = q
     ? oauthChoices.filter((p) => p.name.toLowerCase().includes(q))
     : oauthChoices;
-  const filteredPresets = q
-    ? sortedPresets.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.nameEn?.toLowerCase().includes(q) ?? false) ||
-          (p.nameZhTW?.toLowerCase().includes(q) ?? false),
-      )
-    : sortedPresets;
+  const isLocalPresetId = (id: string) =>
+    (LOCAL_CONNECT_PRESET_IDS as readonly string[]).includes(id) ||
+    (LOCAL_ADVANCED_PRESET_IDS as readonly string[]).includes(id);
+  const filteredPresets = (
+    q
+      ? sortedPresets.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            (p.nameEn?.toLowerCase().includes(q) ?? false) ||
+            (p.nameZhTW?.toLowerCase().includes(q) ?? false),
+        )
+      : sortedPresets
+  ).filter((p) => !isLocalPresetId(p.id));
+  const localConnectPresets = sortedPresets.filter((p) =>
+    (LOCAL_CONNECT_PRESET_IDS as readonly string[]).includes(p.id),
+  );
+  const localAdvancedPresets = sortedPresets.filter((p) =>
+    (LOCAL_ADVANCED_PRESET_IDS as readonly string[]).includes(p.id),
+  );
+  const filteredLocalConnect = q
+    ? localConnectPresets.filter((p) => p.name.toLowerCase().includes(q))
+    : localConnectPresets;
+  const filteredLocalAdvanced = q
+    ? localAdvancedPresets.filter((p) => p.name.toLowerCase().includes(q))
+    : localAdvancedPresets;
+  const filteredLocalPresets = [...filteredLocalConnect, ...filteredLocalAdvanced];
+
+  const ollamaAlreadyAdded = providers.some((p) => p.id === MANAGED_OLLAMA_PROVIDER_ID);
+  const oauthChoiceIds = new Set(oauthChoices.map((p) => p.id));
+  const connectedProviderIds = providers.filter((p) => p.connected).map((p) => p.id);
+  const cliCandidates = cliDetections
+    .filter((detection) => detection.installed && oauthChoiceIds.has(detection.providerId))
+    .map((detection) => ({
+      providerId: detection.providerId,
+      loggedIn: detection.loggedIn,
+      cli: detection.cli,
+    }));
+  const recommendations = localProbe.ready
+    ? pickWizardRecommend({
+        ollamaAlreadyAdded,
+        ollamaAppInstalled: localProbe.appInstalled,
+        installedLocalModelCount: localProbe.modelCount,
+        memoryGb: localProbe.memoryGb,
+        connectedProviderIds,
+        cliCandidates,
+        fallbackOauthProviderId: oauthChoices[0]?.id ?? null,
+      })
+    : [];
+  const recommendedOauthIds = new Set(
+    recommendations
+      .filter((item): item is Extract<WizardRecommend, { kind: 'oauth' }> => item.kind === 'oauth')
+      .map((item) => item.providerId),
+  );
+  const recommendsOllama = recommendations.some((item) => item.kind === 'ollama');
+  const ollamaMatchesQuery =
+    !q ||
+    t('settings.providers.local.title').toLowerCase().includes(q) ||
+    'ollama'.includes(q);
+  const showOllamaInList =
+    !ollamaAlreadyAdded &&
+    ollamaMatchesQuery &&
+    (Boolean(q) || (localProbe.ready && !recommendsOllama));
+  const listedOauth = q
+    ? filteredOauth
+    : filteredOauth.filter((p) => !recommendedOauthIds.has(p.id));
+  const detectedLocalPresets = filteredLocalPresets.filter((preset) =>
+    localProbe.detectedLocalPresetIds.includes(preset.id),
+  );
+  const undetectedLocalPresets = filteredLocalPresets.filter((preset) => {
+    if (localProbe.detectedLocalPresetIds.includes(preset.id)) return false;
+    if (preset.id === 'lmstudio' && providers.some((p) => p.id === MANAGED_LMSTUDIO_PROVIDER_ID)) {
+      return false;
+    }
+    return true;
+  });
+  const listedLocalPresets = q ? filteredLocalPresets : undetectedLocalPresets;
 
   /**
    * 拉取请求序号:防过期响应(与 CustomProviderDialog 的 fetchRequestSignature 同模式)。
@@ -449,6 +589,13 @@ export function AddProviderWizard({
   }, []);
   const pickPreset = useCallback(
     (preset: ProviderPreset) => {
+      if (
+        preset.id === 'lmstudio' &&
+        providers.some((p) => p.id === MANAGED_LMSTUDIO_PROVIDER_ID)
+      ) {
+        onDone(MANAGED_LMSTUDIO_PROVIDER_ID);
+        return;
+      }
       fetchSeqRef.current += 1;
       setManualModelIds({});
       setSel({ kind: 'preset', preset });
@@ -464,8 +611,45 @@ export function AddProviderWizard({
       );
       setStep(2);
     },
-    [i18n.language],
+    [i18n.language, onDone, providers],
   );
+
+  const connectOllama = useCallback(async () => {
+    setSaving(true);
+    try {
+      let status = await window.electronAPI.maker.localModelStatus();
+      if (status.kind === 'stopped' && status.appInstalled) {
+        status = await window.electronAPI.maker.localModelStart();
+      }
+      if (status.kind === 'absent') {
+        setOllamaCanInstall(
+          offersManagedOllamaInstall(window.electronAPI.platform, status.canInstallRuntime),
+        );
+        setSel({ kind: 'ollama-onboarding' });
+        setStep(2);
+        return;
+      }
+      if (status.kind === 'port-conflict') {
+        toast.error(t('settings.providers.local.conflict'));
+        return;
+      }
+      if (status.kind !== 'ready') {
+        toast.error(t(`settings.providers.local.status.${status.kind}`));
+        return;
+      }
+      await window.electronAPI.maker.localModelEnsure();
+      onDone(MANAGED_OLLAMA_PROVIDER_ID);
+    } catch (error) {
+      const code = extractIpcError(error)?.code;
+      toast.error(
+        code === 'PRECONDITION_FAILED'
+          ? t('settings.providers.local.notReady')
+          : t('settings.providers.local.connectFailed'),
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [onDone, t]);
 
   // entry(preset 直达):presets 异步载入,到位后消费;找不到该预设则留在目录页。
   // 按 presetId 记录已消费值(而非布尔):同一挂载期内 entry 换成另一个 preset
@@ -886,10 +1070,17 @@ export function AddProviderWizard({
     setSaving(true);
     try {
       const existing = new Set(providers.map((p) => p.id));
-      const id = uniqueCustomProviderId(
-        name.trim() || presetDisplayName(preset, i18n.language),
-        existing,
-      );
+      const id =
+        preset.id === 'lmstudio'
+          ? MANAGED_LMSTUDIO_PROVIDER_ID
+          : uniqueCustomProviderId(
+              name.trim() || presetDisplayName(preset, i18n.language),
+              existing,
+            );
+      if (preset.id === 'lmstudio' && existing.has(MANAGED_LMSTUDIO_PROVIDER_ID)) {
+        onDone(MANAGED_LMSTUDIO_PROVIDER_ID);
+        return;
+      }
       const runtimes: CustomProviderConfig['runtimes'] = {};
       const keys: RuntimeKeys = {};
       for (const agent of configuredPresetAgents(preset)) {
@@ -1058,7 +1249,9 @@ export function AddProviderWizard({
                   name:
                     sel.kind === 'preset'
                       ? presetDisplayName(sel.preset, i18n.language)
-                      : sel.provider.name,
+                      : sel.kind === 'ollama-onboarding'
+                        ? t('settings.providers.local.title')
+                        : sel.provider.name,
                 })
               : t('settings.providers.wizard.title')}
           </h3>
@@ -1145,10 +1338,70 @@ export function AddProviderWizard({
                 className="min-h-0 flex-1 overflow-y-auto border-y px-2 pb-2"
                 style={{ borderColor: 'var(--border-default)' }}
               >
-                {filteredOauth.length > 0 && (
+                {!q && recommendations.length > 0 && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.groupRecommend')}</GroupLabel>
+                    {recommendations.map((item) => {
+                      if (item.kind === 'ollama') {
+                        return (
+                          <ProviderRow
+                            key="ollama"
+                            icon={cardIcon({ providerId: 'ollama', name: 'Ollama' })}
+                            name={t('settings.providers.local.title')}
+                            meta={t(`settings.providers.wizard.recommendReason.${item.reason}`)}
+                            beta
+                            onClick={() => void connectOllama()}
+                          />
+                        );
+                      }
+                      const provider = oauthChoices.find((choice) => choice.id === item.providerId);
+                      if (!provider) return null;
+                      const reasonMeta =
+                        item.reason === 'subscription'
+                          ? t('settings.providers.wizard.recommendReason.subscription')
+                          : t(
+                              item.reason === 'cli-logged-in'
+                                ? 'settings.providers.detect.hintLoggedIn'
+                                : 'settings.providers.detect.hintInstalled',
+                              { cli: localCliDisplayName(item.cli) },
+                            );
+                      return (
+                        <ProviderRow
+                          key={provider.id}
+                          icon={cardIcon({
+                            providerId: provider.id,
+                            name: provider.name,
+                          })}
+                          name={provider.name}
+                          meta={reasonMeta}
+                          onClick={() => pickOauth(provider)}
+                        />
+                      );
+                    })}
+                  </>
+                )}
+                {!q && detectedLocalPresets.length > 0 && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.groupDetectedLocal')}</GroupLabel>
+                    {detectedLocalPresets.map((p) => (
+                      <ProviderRow
+                        key={p.id}
+                        icon={cardIcon({
+                          providerId: p.id,
+                          name: presetDisplayName(p, i18n.language),
+                        })}
+                        name={presetDisplayName(p, i18n.language)}
+                        meta={t('settings.providers.wizard.metaLocalConnect')}
+                        beta={isLocalRuntimeBetaProviderId(p.id)}
+                        onClick={() => pickPreset(p)}
+                      />
+                    ))}
+                  </>
+                )}
+                {listedOauth.length > 0 && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.groupSubscription')}</GroupLabel>
-                    {filteredOauth.map((p) => (
+                    {listedOauth.map((p) => (
                       <ProviderRow
                         key={p.id}
                         icon={cardIcon({ providerId: p.id, name: p.name })}
@@ -1164,9 +1417,20 @@ export function AddProviderWizard({
                   </>
                 )}
 
-                {(filteredPresets.length > 0 || builtinApiKeyChoices.length > 0) && (
+                {(filteredPresets.length > 0 ||
+                  builtinApiKeyChoices.length > 0 ||
+                  showOllamaInList) && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
+                    {showOllamaInList && (
+                      <ProviderRow
+                        icon={cardIcon({ providerId: 'ollama', name: 'Ollama' })}
+                        name={t('settings.providers.local.title')}
+                        meta={t('settings.providers.local.subtitle')}
+                        beta
+                        onClick={() => void connectOllama()}
+                      />
+                    )}
                     {builtinApiKeyChoices
                       .filter((p) => !q || p.name.toLowerCase().includes(q))
                       .map((p) => (
@@ -1191,6 +1455,29 @@ export function AddProviderWizard({
                             ? 'settings.providers.wizard.metaNoAuth'
                             : 'settings.providers.wizard.metaApiKey',
                         )}
+                        beta={isLocalRuntimeBetaProviderId(p.id)}
+                        onClick={() => pickPreset(p)}
+                      />
+                    ))}
+                  </>
+                )}
+                {listedLocalPresets.length > 0 && (
+                  <>
+                    <GroupLabel>{t('settings.providers.wizard.moreLocal')}</GroupLabel>
+                    {listedLocalPresets.map((p) => (
+                      <ProviderRow
+                        key={p.id}
+                        icon={cardIcon({
+                          providerId: p.id,
+                          name: presetDisplayName(p, i18n.language),
+                        })}
+                        name={presetDisplayName(p, i18n.language)}
+                        meta={t(
+                          (LOCAL_CONNECT_PRESET_IDS as readonly string[]).includes(p.id)
+                            ? 'settings.providers.wizard.metaLocalConnect'
+                            : 'settings.providers.wizard.metaNoAuth',
+                        )}
+                        beta={isLocalRuntimeBetaProviderId(p.id)}
                         onClick={() => pickPreset(p)}
                       />
                     ))}
@@ -1235,6 +1522,20 @@ export function AddProviderWizard({
             </>
           )}
 
+          {step === 2 && sel?.kind === 'ollama-onboarding' && (
+            <div className="flex flex-col gap-4">
+              <span
+                className="text-14 font-medium"
+                style={{ color: 'var(--settings-section-title)' }}
+              >
+                {t('settings.providers.local.onboardingTitle')}
+              </span>
+              <LocalOllamaInstall
+                canInstall={ollamaCanInstall}
+                onReady={() => connectOllama()}
+              />
+            </div>
+          )}
           {step === 2 && sel?.kind === 'oauth' && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center gap-3">

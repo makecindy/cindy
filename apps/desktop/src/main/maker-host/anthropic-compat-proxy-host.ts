@@ -85,6 +85,7 @@ import {
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { createOllamaAnthropicSystemTransform } from './ollamaAnthropicSystem.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import {
   createClaudeFastModeRequestTransform,
@@ -642,6 +643,12 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           strip: sanitizeXaiModelInputFromBody,
         }),
         createXaiModelInputSanitizeTransform(),
+        createOllamaAnthropicSystemTransform((headers) => {
+          const sdkSessionId = headers['x-claude-code-session-id'];
+          return sdkSessionId && _resolveCcSessionId
+            ? _resolveCcSessionId(sdkSessionId)
+            : null;
+        }),
         stripNonAnthropicFields,
       ],
       recoveryRules: [

@@ -39,6 +39,9 @@ describe('XD 网关权威模型清单重建', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     expect(xdModels('claude-code')).toEqual([]);
     expect(xdModels('codex')).toEqual([]);
+    const xd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+    expect(xd?.imageModels).toEqual([]);
+    expect(xd?.videoModels).toEqual([]);
   });
 
   it('显式空列表保持 XD 模型不可用', () => {
@@ -48,7 +51,7 @@ describe('XD 网关权威模型清单重建', () => {
     expect(xdModels('codex')).toEqual([]);
   });
 
-  it('current Catalog controls the XD media shell while /models controls chat membership', () => {
+  it('/models 同时控制 XD chat 与媒体成员，忽略 Catalog 里的旧媒体清单', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
     const catalogXd = catalog.providers.find((provider) => provider.id === 'xd');
     if (!catalogXd) throw new Error('missing XD provider fixture');
@@ -70,12 +73,42 @@ describe('XD 网关权威模型清单重建', () => {
     ];
 
     setActiveCatalog(catalog);
+    setXdGatewayModels([
+      {
+        id: 'openai/gpt-image-2',
+        name: 'GPT Image 2',
+        mode: 'image_generation',
+        agents: [],
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+      {
+        id: 'bytedance/seedance-2.5',
+        name: 'Seedance 2.5',
+        mode: 'video_generation',
+        agents: [],
+        modalities: { input: ['text', 'image'], output: ['video'] },
+      },
+    ]);
 
     const activeXd = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
     expect(activeXd?.name).toBe('Catalog-supplied XD');
-    expect(activeXd?.imageModels).toEqual([]);
+    expect(activeXd?.imageModels).toEqual([
+      {
+        id: 'openai/gpt-image-2',
+        name: 'GPT Image 2',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      },
+    ]);
+    expect(activeXd?.imageDefaults).toEqual({ standard: 'openai/gpt-image-2' });
     expect(activeXd?.embeddingModels).toEqual([]);
-    expect(activeXd?.videoModels).toEqual([{ id: 'seedance-fast', name: 'Seedance Fast' }]);
+    expect(activeXd?.videoModels).toEqual([
+      {
+        id: 'bytedance/seedance-2.5',
+        name: 'Seedance 2.5',
+        modalities: { input: ['text', 'image'], output: ['video'] },
+      },
+    ]);
+    expect(activeXd?.videoDefaults).toEqual({ standard: 'bytedance/seedance-2.5' });
     expect(xdModels('claude-code')).toEqual([]);
   });
 

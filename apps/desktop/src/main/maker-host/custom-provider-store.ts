@@ -56,22 +56,29 @@ function invalid(message: string): ValidationResult {
   return { ok: false, code: 'INVALID_PARAMS', message };
 }
 
+const CINDY_RUNTIME_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
 function isPiReasoningEffort(value: unknown): value is PiReasoningEffort {
   return typeof value === 'string' && (PI_REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
+function isReasoningEffortForAgent(agent: string, value: unknown): boolean {
+  if (agent === 'pi') return isPiReasoningEffort(value);
+  return typeof value === 'string' && (CINDY_RUNTIME_REASONING_EFFORTS as readonly string[]).includes(value);
 }
 
 function isPiModelApi(value: unknown): value is PiModelApi {
   return typeof value === 'string' && (PI_MODEL_APIS as readonly string[]).includes(value);
 }
 
-function parseStoredPiReasoningCapability(
+function parseStoredReasoningCapability(
   agent: AgentKind,
   model: Record<string, unknown>,
 ): Partial<ProviderRuntimeModelConfig> {
-  if (agent !== 'pi' || model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
+  if (model.reasoning !== true || !Array.isArray(model.reasoningEfforts)) {
     return {};
   }
-  const efforts = model.reasoningEfforts.filter(isPiReasoningEffort);
+  const efforts = model.reasoningEfforts.filter((item) => isReasoningEffortForAgent(agent, item));
   if (
     efforts.length === 0 ||
     efforts.length !== model.reasoningEfforts.length ||
@@ -80,13 +87,13 @@ function parseStoredPiReasoningCapability(
     return {};
   }
   const defaultEffort =
-    isPiReasoningEffort(model.reasoningDefaultEffort) &&
-    efforts.includes(model.reasoningDefaultEffort)
-      ? model.reasoningDefaultEffort
+    isReasoningEffortForAgent(agent, model.reasoningDefaultEffort) &&
+    efforts.includes(model.reasoningDefaultEffort as string)
+      ? (model.reasoningDefaultEffort as ProviderRuntimeModelConfig['reasoningDefaultEffort'])
       : undefined;
   return {
     reasoning: true,
-    reasoningEfforts: efforts,
+    reasoningEfforts: efforts as NonNullable<ProviderRuntimeModelConfig['reasoningEfforts']>,
     ...(defaultEffort ? { reasoningDefaultEffort: defaultEffort } : {}),
   };
 }
@@ -241,13 +248,6 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         return invalid(`runtime '${agent}' model.route.requestPath invalid`);
       }
     }
-    const hasReasoningCapability =
-      mm.reasoning !== undefined ||
-      mm.reasoningEfforts !== undefined ||
-      mm.reasoningDefaultEffort !== undefined;
-    if (hasReasoningCapability && agent !== 'pi') {
-      return invalid(`runtime '${agent}' reasoning capability is only supported for pi models`);
-    }
     if (mm.reasoning !== undefined && typeof mm.reasoning !== 'boolean') {
       return invalid(`runtime '${agent}' model.reasoning must be a boolean`);
     }
@@ -256,14 +256,14 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         return invalid(`runtime '${agent}' model.reasoningEfforts must be a non-empty array`);
       }
       if (
-        mm.reasoningEfforts.some((effort) => !isPiReasoningEffort(effort)) ||
+        mm.reasoningEfforts.some((effort) => !isReasoningEffortForAgent(agent, effort)) ||
         new Set(mm.reasoningEfforts).size !== mm.reasoningEfforts.length
       ) {
         return invalid(`runtime '${agent}' model.reasoningEfforts invalid`);
       }
       if (
         mm.reasoningDefaultEffort !== undefined &&
-        (!isPiReasoningEffort(mm.reasoningDefaultEffort) ||
+        (!isReasoningEffortForAgent(agent, mm.reasoningDefaultEffort) ||
           !mm.reasoningEfforts.includes(mm.reasoningDefaultEffort))
       ) {
         return invalid(`runtime '${agent}' model.reasoningDefaultEffort invalid`);
@@ -502,7 +502,7 @@ function normalizeRuntime(
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-      ...(agent === 'pi' && m.reasoning === true && m.reasoningEfforts?.length
+      ...(m.reasoning === true && m.reasoningEfforts?.length
         ? {
             reasoning: true,
             reasoningEfforts: [...m.reasoningEfforts],
@@ -510,7 +510,10 @@ function normalizeRuntime(
               ? { reasoningDefaultEffort: m.reasoningDefaultEffort }
               : {}),
           }
-        : {}),
+        : m.reasoning === false
+          ? { reasoning: false }
+          : {}),
+      ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
     }))
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
@@ -706,7 +709,8 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                 : {}),
               ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-              ...parseStoredPiReasoningCapability(agent, m),
+              ...parseStoredReasoningCapability(agent, m),
+              ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
             };
           })
       : [];

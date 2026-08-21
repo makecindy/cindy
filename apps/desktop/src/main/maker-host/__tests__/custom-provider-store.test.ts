@@ -341,6 +341,17 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
           'codex',
         ),
       ).ok,
+    ).toBe(true);
+    expect(
+      validateCustomProviderConfig(
+        config(
+          {
+            reasoning: true,
+            reasoningEfforts: ['minimal'],
+          },
+          'codex',
+        ),
+      ).ok,
     ).toBe(false);
   });
 
@@ -702,6 +713,41 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       },
       { id: 'legacy', name: 'Legacy' },
       { id: 'explicit-off', name: 'Explicit off' },
+    ]);
+  });
+
+  it('round-trips Claude Code thinking toggle and reasoning efforts', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'thinking-cc',
+      name: 'Thinking CC',
+      auth: { method: 'none' },
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'http://127.0.0.1:11434',
+          wireProtocol: 'anthropic-messages',
+          models: [
+            {
+              id: 'qwen3.8:27b-mxfp8',
+              name: 'Qwen 3.8',
+              reasoning: true,
+              reasoningEfforts: ['high', 'max'],
+              reasoningDefaultEffort: 'high',
+              thinkingToggle: true,
+            },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('thinking-cc'))?.runtimes['claude-code']?.models).toEqual([
+      {
+        id: 'qwen3.8:27b-mxfp8',
+        name: 'Qwen 3.8',
+        reasoning: true,
+        reasoningEfforts: ['high', 'max'],
+        reasoningDefaultEffort: 'high',
+        thinkingToggle: true,
+      },
     ]);
   });
 

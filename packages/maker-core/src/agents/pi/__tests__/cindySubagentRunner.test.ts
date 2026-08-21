@@ -298,6 +298,10 @@ if (Object.keys(process.env).some((key) =>
   key.startsWith('CINDY_PI_SUBAGENT_') && key !== 'CINDY_PI_SUBAGENT_RUN_DIR')) {
   process.exit(11);
 }
+if (!process.env.PI_CODING_AGENT_DIR ||
+    process.env.CINDY_PI_BASH_PACKAGE_HOME !== path.posix.join(process.env.PI_CODING_AGENT_DIR, 'bash-package-home')) {
+  process.exit(13);
+}
 const subagentRunDir = process.env.CINDY_PI_SUBAGENT_RUN_DIR;
 if (!subagentRunDir || path.dirname(subagentRunDir) !== ${JSON.stringify(root)} ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(path.basename(subagentRunDir))) {

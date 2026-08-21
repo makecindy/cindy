@@ -308,6 +308,9 @@ import {
   setProviderModelEffort,
   getProviderModelFast,
   setProviderModelFast,
+  getProviderModelThinking,
+  setProviderModelThinking,
+  useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
 import { useModelPickerLayout } from '@/state/modelPickerLayout';
 import {
@@ -1972,6 +1975,7 @@ export function ChatInput({
   //     该会话切走后再切回此模型,才会采用最新全局预设。
   //   - 首页草稿无 live 会话,NewMakerDraftRoute 会把当前显示模型的 props 也从全局预设派生。
   //   - device-link 必须使用被控端镜像 override;旧被控端拿不到镜像时宁可无记忆,也不掺控制端本机。
+  useProviderModelMemoryVersion();
   const modelMemory = useMemo<ModelMemoryAccessors | undefined>(() => {
     // device-link 远程草稿 / 会话:用纯显示镜像 override(读被控端全局预设、写穿被控端)。
     if (modelMemoryOverride) return modelMemoryOverride;
@@ -1982,6 +1986,8 @@ export function ChatInput({
       setChoice: setProviderModelChoice,
       getFast: getProviderModelFast,
       setFast: setProviderModelFast,
+      getThinking: getProviderModelThinking,
+      setThinking: setProviderModelThinking,
       // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
       // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
       clearEffort: clearProviderModelEffort,
@@ -5980,9 +5986,8 @@ export function ChatInput({
 
   /**
    * 切模型前的上下文容量护栏(大窗口 → 小窗口场景)。
-   * 为什么必须在**切换前**拦: `/compact` 自救本身是一次 LLM 调用, 要把全量历史喂给
-   * "当前模型" —— 切到小窗口模型之后连压缩请求都可能超限, 只有还没切走的大窗口模型
-   * 能读完整历史。分级语义见 shared/modelSwitchAssessment.ts。
+   * 分级语义见 shared/modelSwitchAssessment.ts。overflow 确认后由 host 交接换窗,
+   * 不要再建议用户先 /compact —— 小窗口模型压整段历史同样会失败。
    * 返回 false = 用户取消, 调用方直接放弃本次切换(无任何副作用)。
    * fail-open: 占用未知(0)/ 目标窗口未知 / 阈值读取失败都不拦。
    */
@@ -6026,12 +6031,17 @@ export function ChatInput({
       // 期望用户先取消回去压缩(点上下文圆环)或新开会话, "仍然切换"是次选。
       return confirmDialog({
         title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-        description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', vars),
+        description: t(
+          remoteHostId
+            ? 'newChat.chatInput.modelSwitchContextGuard.overflowDescriptionRemote'
+            : 'newChat.chatInput.modelSwitchContextGuard.overflowDescription',
+          vars,
+        ),
         confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
         cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
       });
     },
-    [sessionId, confirmDialog, t],
+    [sessionId, remoteHostId, confirmDialog, t],
   );
 
   // session-agent-switch 意图制:选中「只属于另一家引擎」的模型 → 只向 main 登记
@@ -8146,6 +8156,48 @@ export function ChatInput({
                     // 意图期显示目标引擎下解析出的 fast(apply 时才落库),无意图走真实态。
                     fastMode={agentSwitchIntent?.fastMode ?? fastMode}
                     onFastModeChange={handleFastModeChange}
+                    thinkingEnabled={
+                      currentModelAgentKind && effectiveSourceId
+                        ? (modelMemory?.getThinking?.(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                          ) ??
+                          (!deviceLinkDeviceId
+                            ? getProviderModelThinking(
+                                currentModelAgentKind,
+                                effectiveSourceId,
+                                activeModel,
+                              )
+                            : undefined) ??
+                          true)
+                        : true
+                    }
+                    onThinkingChange={async (enabled) => {
+                      if (currentModelAgentKind && effectiveSourceId) {
+                        if (modelMemory?.setThinking) {
+                          modelMemory.setThinking(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                            enabled,
+                          );
+                        } else if (!deviceLinkDeviceId) {
+                          setProviderModelThinking(
+                            currentModelAgentKind,
+                            effectiveSourceId,
+                            activeModel,
+                            enabled,
+                          );
+                        }
+                      }
+                      if (sessionId) {
+                        const api = deviceLinkDeviceId
+                          ? makerApiForDevice(deviceLinkDeviceId)
+                          : window.electronAPI.maker;
+                        await api.setThinkingEnabled(sessionId, enabled);
+                      }
+                    }}
                     modelMemory={modelMemory}
                     vendorKey={vendorKey}
                     // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成

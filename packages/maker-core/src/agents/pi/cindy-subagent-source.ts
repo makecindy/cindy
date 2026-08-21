@@ -124,7 +124,6 @@ import { createHmac } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-
 const TOOL_NAME = 'subagent';
 const MARKER = '__cindySubagent';
 const BINARY_ENV = 'CINDY_PI_SUBAGENT_BINARY';
@@ -1208,7 +1207,6 @@ function mergeUsage(target, source) {
     if (typeof value === 'number' && Number.isFinite(value) && value > 0) target[key] += value;
   }
 }
-
 
 export default async function cindySubagent(pi: any) {
   // depth > 0 = 本进程自己就是子代理:装上父存活看门狗,父进程(pi 会话)一消失就自杀。
