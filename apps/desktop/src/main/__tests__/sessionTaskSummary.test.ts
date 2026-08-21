@@ -263,7 +263,20 @@ describe('turn-done list preview refresh', () => {
     const updateStart = messagesSource.indexOf('export async function updateMessageContent');
     const updateEnd = messagesSource.indexOf('function clampLimit', updateStart);
     const updateBlock = messagesSource.slice(updateStart, updateEnd);
-    expect(updateBlock).toContain('maybeBroadcastSessionListPreview(sessionId, row);');
+    expect(updateBlock).toContain('const ownerScope = captureOwnerBroadcastScope();');
+    expect(updateBlock.indexOf('const ownerScope = captureOwnerBroadcastScope();')).toBeLessThan(
+      updateBlock.indexOf('.update(messages)'),
+    );
+    expect(updateBlock).toContain(
+      'await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);',
+    );
+    const latestStart = messagesSource.indexOf(
+      'async function isLatestVisibleSessionListPreviewRow',
+    );
+    const latestEnd = messagesSource.indexOf('function isAutoResumeUserRow', latestStart);
+    const latestBlock = messagesSource.slice(latestStart, latestEnd);
+    expect(latestBlock).toContain('.orderBy(desc(messages.createdAt), desc(messageRowid))');
+    expect(latestBlock).toContain('return latest?.clientId === row.clientId;');
   });
 });
 

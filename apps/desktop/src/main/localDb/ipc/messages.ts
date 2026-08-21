@@ -129,18 +129,72 @@ function broadcastOwnedPayload(
   }
 }
 
-/** 可见 user/assistant 落库后立刻刷新侧栏 preview,不等 turn-done / 全量 reseed。 */
-function maybeBroadcastSessionListPreview(
+function isVisibleSessionListPreviewRow(row: MessageRow): boolean {
+  if (row.role !== 'user' && row.role !== 'assistant') return false;
+  if (row.rewindAt != null) return false;
+  if (row.role === 'user' && isAutoResumeUserRow(row.agentMeta)) return false;
+  return true;
+}
+
+/**
+ * 可见 user/assistant 落库后立刻刷新侧栏 preview,不等 turn-done / 全量 reseed。
+ * 只广播当前仍是该会话最近可见消息的那一行:改写旧回复不得盖住已经更新的预览。
+ */
+async function maybeBroadcastSessionListPreview(
   sessionId: string,
   row: MessageRow,
   ownerScope?: DataOwnerBroadcastScope | null,
-): void {
-  if (row.role !== 'user' && row.role !== 'assistant') return;
-  if (row.rewindAt != null) return;
-  if (row.role === 'user' && isAutoResumeUserRow(row.agentMeta)) return;
+): Promise<void> {
+  if (!isVisibleSessionListPreviewRow(row)) return;
   const preview = extractMessagePreview(row.content, row.role);
   if (!preview) return;
+  try {
+    if (!(await isLatestVisibleSessionListPreviewRow(sessionId, row))) return;
+  } catch (err) {
+    log.warn('session list preview latest-row check failed (swallowed)', {
+      sessionId,
+      clientId: row.clientId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+  if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   broadcastOwnedPayload('local-db:sessions:patched', { sessionId, patch: { preview } }, ownerScope);
+}
+
+/** 与 sessions:list 同一口径:clearedAt / rewind / autoResume / (createdAt, rowid)。 */
+async function isLatestVisibleSessionListPreviewRow(
+  sessionId: string,
+  row: MessageRow,
+): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  const [sessionRow] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (sessionRow?.clearedAt != null && row.createdAt <= sessionRow.clearedAt) return false;
+  const visibleAfterClear =
+    sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
+  const [latest] = await db
+    .select({
+      clientId: messages.clientId,
+      createdAt: messages.createdAt,
+      rowid: messageRowid,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        sql`${messages.role} IN ('user', 'assistant')`,
+        isNull(messages.rewindAt),
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        visibleAfterClear,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  return latest?.clientId === row.clientId;
 }
 
 function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
@@ -1283,6 +1337,7 @@ export async function updateMessageContent(
   clientId: string,
   content: unknown,
 ): Promise<Message | null> {
+  const ownerScope = captureOwnerBroadcastScope();
   const db = getDbClient().drizzle;
   await db
     .update(messages)
@@ -1308,7 +1363,7 @@ export async function updateMessageContent(
         error: err instanceof Error ? err.message : String(err),
       });
     });
-    maybeBroadcastSessionListPreview(sessionId, row);
+    await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);
   }
   return row ? messageToCamel(row) : null;
 }
@@ -1584,7 +1639,7 @@ export async function createMessage(
   // 主动 push 过, 监听端按 (sessionId, clientId) dedupe 就不会重复显示。
   if (opts?.shouldBroadcast?.() !== false) {
     broadcastMessageRow(sessionId, msg, opts?.broadcastOwnerScope);
-    maybeBroadcastSessionListPreview(sessionId, row, opts?.broadcastOwnerScope);
+    await maybeBroadcastSessionListPreview(sessionId, row, opts?.broadcastOwnerScope);
   }
   // chat-history-embedder hook (Phase 1.2) —— fire-and-forget, 不 await。
   // 内部已有 enabled / cutoff / role / size 守卫; 关闭状态下零成本直接 return。
