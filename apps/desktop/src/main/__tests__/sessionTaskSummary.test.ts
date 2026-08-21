@@ -248,6 +248,11 @@ describe('turn-done list preview refresh', () => {
       registerSource.indexOf('await maybeGenerateSessionTaskSummary(session.id, { force: true });'),
     );
     expect(summarySource).toContain('export async function refreshSessionListPreview');
+    expect(summarySource).toContain('const ownerScope = captureOwnerScope();');
+    expect(summarySource).toContain('if (!isOwnerScopeCurrent(ownerScope)) return;');
+    expect(summarySource).toContain(
+      'broadcastSessionListPreview(sessionId, preview, ownerScope);',
+    );
   });
 });
 

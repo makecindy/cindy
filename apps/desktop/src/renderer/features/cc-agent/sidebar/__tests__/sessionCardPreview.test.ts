@@ -57,18 +57,20 @@ describe('shouldPromoteLivePreviewToSession', () => {
         previousLivePreview: '那就对上了——正是枚举到了但不发输入报告那个状态。',
         nextLivePreview: null,
         currentPreview: '不正常。但问题不在布局代码',
+        stalePreview: '不正常。但问题不在布局代码',
       }),
     ).toBe(true);
   });
 
-  it('权威 preview 已是这一帧或更完整版时不盖回去', () => {
+  it('权威 preview 已到且与运行态文案不同时不盖回去', () => {
     expect(
       shouldPromoteLivePreviewToSession({
         previousSessionId: 's1',
         nextSessionId: 's1',
-        previousLivePreview: '那就对上了',
+        previousLivePreview: '运行测试',
         nextLivePreview: null,
         currentPreview: '那就对上了——正是枚举到了但不发输入报告那个状态。',
+        stalePreview: '不正常。但问题不在布局代码',
       }),
     ).toBe(false);
   });

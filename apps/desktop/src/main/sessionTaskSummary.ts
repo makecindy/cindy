@@ -33,7 +33,12 @@ import { latestMessageText } from './localDb/latestMessageText.js';
 import { extractMessagePreview } from './localDb/mapper.js';
 import { messages, sessions } from './localDb/schema.js';
 import { createLogger } from './logger.js';
-import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import {
+  captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
+  tapWindowBroadcast,
+  type DataOwnerBroadcastScope,
+} from './device-link/broadcast-tap.js';
 import {
   STALE_SHORT_MS,
   SUMMARY_STALE_MAX_CHARS,
@@ -65,17 +70,50 @@ let backfillDone = false;
 const inFlight = new Map<string, Promise<void>>();
 const lastGeneratedAt = new Map<string, number>();
 
+function captureOwnerScope(): DataOwnerBroadcastScope | null {
+  try {
+    return captureDataOwnerBroadcastScope();
+  } catch {
+    return null;
+  }
+}
+
+function isOwnerScopeCurrent(scope: DataOwnerBroadcastScope | null): boolean {
+  if (scope === null) return true;
+  try {
+    return isDataOwnerBroadcastScopeCurrent(scope);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 广播 sessions:patched 到本机所有窗口 + device-link tap。tap 让该 patch 经 topic 路由
  * 转发给订阅了 `sessions` 的控制端(push 驱动:控制端 applyPatch 即时镜像 summary,无需
  * 等下一次全量 reseed)——与 localDb/ipc/sessions.ts broadcastSessionPatched 同口径。
+ * 异步路径必须传入查询前捕获的 ownerScope:切账号后不得把旧账号 preview 打到新界面。
  */
-function broadcastPatched(sessionId: string, patch: Record<string, unknown>): void {
-  tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+function broadcastPatched(
+  sessionId: string,
+  patch: Record<string, unknown>,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
+  const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : undefined;
+  if (hasCapturedScope) {
+    tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+  } else {
+    tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:patched', { sessionId, patch });
+      if (hasCapturedScope) {
+        win.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+      } else {
+        win.webContents.send('local-db:sessions:patched', { sessionId, patch });
+      }
     } catch {
       /* swallow */
     }
@@ -112,8 +150,12 @@ async function latestVisiblePreview(sessionId: string): Promise<string | null> {
 }
 
 /** 把已知的列表预览立刻推给侧栏。不 bump updatedAt,也不碰 summary。 */
-export function broadcastSessionListPreview(sessionId: string, preview: string | null): void {
-  broadcastPatched(sessionId, sessionListPreviewPatch(preview));
+export function broadcastSessionListPreview(
+  sessionId: string,
+  preview: string | null,
+  ownerScope?: DataOwnerBroadcastScope | null,
+): void {
+  broadcastPatched(sessionId, sessionListPreviewPatch(preview), ownerScope);
 }
 
 /**
@@ -122,8 +164,11 @@ export function broadcastSessionListPreview(sessionId: string, preview: string |
  * 失败 swallow,不能挡住 turn-done 收尾。
  */
 export async function refreshSessionListPreview(sessionId: string): Promise<void> {
+  const ownerScope = captureOwnerScope();
   try {
-    broadcastSessionListPreview(sessionId, await latestVisiblePreview(sessionId));
+    const preview = await latestVisiblePreview(sessionId);
+    if (!isOwnerScopeCurrent(ownerScope)) return;
+    broadcastSessionListPreview(sessionId, preview, ownerScope);
   } catch (err) {
     log.warn('refresh session list preview failed (swallowed)', {
       sessionId,

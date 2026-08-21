@@ -17,22 +17,20 @@ export function resolveSessionCardBody(args: {
 }
 
 /** 实时活动文案消失前,用最后一帧顶住列表预览,避免结束瞬间跳回上一轮。
- *  sessionId 必须相同:卡片复用时不能把上一任务的运行文案写到当前任务上。
- *  已有 preview 若已是这一帧(或它的更完整版),说明落库权威值先到了,不要用截短的
- *  compactDetail 盖回去。 */
+ *  只在能确认当前 preview 仍是旧轮内容时才写:卡片复用、权威值已到、或只是和
+ *  本轮文案不同,都不能把运行态盖上去。 */
 export function shouldPromoteLivePreviewToSession(args: {
   previousSessionId: string;
   nextSessionId: string;
   previousLivePreview: string | null;
   nextLivePreview: string | null;
   currentPreview?: string | null;
+  stalePreview?: string | null;
 }): boolean {
   if (args.previousSessionId !== args.nextSessionId) return false;
   if (!args.previousLivePreview || args.nextLivePreview != null) return false;
   const current = args.currentPreview?.trim() ?? '';
   if (!current) return true;
-  if (current === args.previousLivePreview) return false;
-  return !(
-    current.startsWith(args.previousLivePreview) || args.previousLivePreview.startsWith(current)
-  );
+  const stale = args.stalePreview?.trim() ?? '';
+  return Boolean(stale) && current === stale && current !== args.previousLivePreview;
 }

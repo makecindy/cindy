@@ -235,10 +235,18 @@ export function SessionCard({
       ? islandActivity.compactDetail
       : null;
   const livePreview = awaitingText ?? runningDetail;
-  const runningDetailRef = useRef({ sessionId: session.id, detail: runningDetail });
+  const runningDetailRef = useRef({
+    sessionId: session.id,
+    detail: runningDetail,
+    preview: session.preview ?? null,
+  });
   useLayoutEffect(() => {
     const previous = runningDetailRef.current;
-    runningDetailRef.current = { sessionId: session.id, detail: runningDetail };
+    runningDetailRef.current = {
+      sessionId: session.id,
+      detail: runningDetail,
+      preview: session.preview ?? null,
+    };
     if (
       !shouldPromoteLivePreviewToSession({
         previousSessionId: previous.sessionId,
@@ -246,6 +254,7 @@ export function SessionCard({
         previousLivePreview: previous.detail,
         nextLivePreview: runningDetail,
         currentPreview: session.preview,
+        stalePreview: previous.preview,
       })
     ) {
       return;
