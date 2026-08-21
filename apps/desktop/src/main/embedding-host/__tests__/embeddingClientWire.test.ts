@@ -1109,4 +1109,29 @@ describe('EmbeddingClient · mapStatusToCode (INVALID_MODEL 熔断信号)', () =
       clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
+
+  it('"unknown model parameter" 是参数错误而非模型不存在 → BAD_REQUEST (PR #2288 Codex P1)', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: 'unknown model parameter: dimensions' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('"model input field was not found" 是参数错误而非模型不存在 → BAD_REQUEST (PR #2288 Codex P1)', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: 'model input field was not found in request body' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('"unknown model" 后直接结束(无参数词) 仍是模型不存在 → INVALID_MODEL', async () => {
+    const fetchImpl = errorResponse(400, { error: { message: 'unknown model' } });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+  });
 });

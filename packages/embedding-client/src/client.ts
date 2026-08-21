@@ -811,16 +811,20 @@ export class EmbeddingClient {
  */
 const MODEL_NOT_FOUND_PATTERNS = [
   // "model_not_found", "model-not-found", "model not found"
+  // (model 与 not found 之间没有其它词,不会误伤 "model input field was not found")
   /model[_\s-]?not[_\s-]?found/i,
   // Anthropic 风格: "model: glm-5 not found" / "model 'glm-5' was not found"
-  /model[^\n]{0,40}not[_\s-]?found/i,
+  // 必须在 model 后紧跟冒号或引号(再跟模型 id),避免参数错误措辞命中。
+  /model\s*[:='"`][^\n]{0,80}not[_\s-]?found/i,
   /deployment[_\s-]?not[_\s-]?found/i,
-  /unknown[_\s-]?model/i,
+  // "unknown model" 独立出现 / 后接冒号引号模型 id;
+  // 不匹配 "unknown model parameter / field / input / key / argument" 这类参数错误。
+  /unknown[_\s-]?model(?!\s+(?:parameter|field|input|key|argument|property|option|setting|value|type))/i,
   /the model .* does not exist/i,
   // LiteLLM: "Invalid model name" (非存在模型);避免误伤 "invalid model input"
   // 这类输入/参数错误,只认 "invalid model name" 或后接冒号/引号模型 id 的措辞。
   /invalid[_\s-]?model[_\s-]?name/i,
-  /invalid[_\s-]?model\s*[:'"`]/i,
+  /invalid[_\s-]?model\s*[:='"`]/i,
 ];
 
 function looksLikeModelNotFound(rawBody: string, parsedMsg: string): boolean {
