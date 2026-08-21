@@ -1,3 +1,7 @@
+import * as path from 'node:path';
+import { runInNewContext } from 'node:vm';
+
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
@@ -10,6 +14,57 @@ import {
   CINDY_SUBAGENT_TOOL_NAME,
 } from '../cindy-subagent-source.js';
 import { PI_SUBAGENT_PROGRESS_MARKER } from '../subagent-progress.js';
+
+/**
+ * 提取 runTask 里的 childEnv 构造块并在 VM 里执行，返回可调用的测试辅助函数。
+ * 用于执行级断言：验证 childEnv 在 spawn 前确实被正确填充了各字段。
+ */
+function loadSubagentChildEnvHelper(): {
+  buildChildEnv: (configHome: string, extraEnv?: Record<string, string>) => Record<string, string | undefined>;
+} {
+  const source = CINDY_SUBAGENT_EXTENSION_SOURCE;
+  const start = source.indexOf('const childEnv = Object.assign({}, process.env);');
+  const end = source.indexOf('\n    let child;', start);
+  if (start < 0 || end <= start) throw new Error('childEnv construction block not found');
+  const childEnvBlock = source.slice(start, end);
+
+  const executableSource = [
+    // 复现 runTask 依赖的常量与辅助函数（不从 source 提取值，避免重命名后双盲）
+    "const DEPTH_ENV = 'CINDY_PI_SUBAGENT_DEPTH';",
+    "const PARENT_PID_ENV = 'CINDY_PI_SUBAGENT_PARENT_PID';",
+    "const MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';",
+    "const BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';",
+    'function readDepth(): number { return 0; }',
+    'function isAbsolute(p: string): boolean { return path.isAbsolute(p); }',
+    'function join(...args: string[]): string { return path.join(...args); }',
+    // configHome 在 runTask 里来自 process.env[CONFIG_HOME_ENV]（已校验非空）
+    '(globalThis as any).buildChildEnv = function(',
+    '  configHome: string,',
+    '  extraEnv?: Record<string, string>,',
+    '): Record<string, string | undefined> {',
+    '  process.env = Object.assign({ PI_CODING_AGENT_DIR: configHome }, extraEnv);',
+    childEnvBlock,
+    '  return childEnv;',
+    '};',
+  ].join('\n');
+
+  const compiled = ts.transpileModule(executableSource, {
+    compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  const context: Record<string, unknown> = {
+    process: { env: {}, pid: 99999 },
+    path,
+  };
+  runInNewContext(compiled, context);
+
+  const buildChildEnv = context.buildChildEnv as (
+    configHome: string,
+    extraEnv?: Record<string, string>,
+  ) => Record<string, string | undefined>;
+  if (typeof buildChildEnv !== 'function') throw new Error('buildChildEnv not loaded');
+  return { buildChildEnv };
+}
 
 /**
  * 注入源码是字符串常量,typecheck 与 vitest 都进不去,只能靠结构性断言守。这里守的是
@@ -313,5 +368,28 @@ describe('cindy-subagent extension source', () => {
     for (const list of allowlists) {
       expect(list.split(',').sort()).toEqual(['find', 'grep', 'ls', 'read']);
     }
+  });
+
+  it('actually sets CINDY_PI_BASH_PACKAGE_HOME in childEnv at execution time (guards against control-flow regression, #3132)', () => {
+    // 结构断言守文本契约；本测试执行真实 childEnv 构造逻辑并断言运行时结果，
+    // 防止 isAbsolute 分支或变量绑定出现回归而文本断言仍通过的漏检场景。
+    const { buildChildEnv } = loadSubagentChildEnvHelper();
+
+    // 绝对路径：CINDY_PI_BASH_PACKAGE_HOME 必须被设置。
+    const envAbs = buildChildEnv('/host/agent/run-tmp/abc');
+    expect(envAbs['CINDY_PI_BASH_PACKAGE_HOME']).toBe('/host/agent/run-tmp/abc/bash-package-home');
+
+    // 相对路径：不设置（fail-closed 语义不变）。
+    const envRel = buildChildEnv('relative/path');
+    expect(envRel['CINDY_PI_BASH_PACKAGE_HOME']).toBeUndefined();
+
+    // MCP bridge 仍被剥离；外部 MCP secret 也被剥离；写回不干扰这两条不变量。
+    const envFull = buildChildEnv('/abs/home', {
+      CINDY_PI_MCP_BRIDGE: 'http://localhost:3000',
+      CINDY_PI_REMOTE_MCP_SECRET_X: 'secret',
+    });
+    expect(envFull['CINDY_PI_MCP_BRIDGE']).toBeUndefined();
+    expect(envFull['CINDY_PI_REMOTE_MCP_SECRET_X']).toBeUndefined();
+    expect(envFull['CINDY_PI_BASH_PACKAGE_HOME']).toBe('/abs/home/bash-package-home');
   });
 });
