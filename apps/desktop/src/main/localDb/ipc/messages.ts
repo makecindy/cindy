@@ -53,8 +53,6 @@ const log = createLogger('localDb/messages');
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
-/** Local chat pages keep full structured content unless a single row is this large. */
-const LOCAL_HISTORY_CONTENT_CHAR_LIMIT = 32_000;
 const messageRowid = sql<number>`rowid`;
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
@@ -244,9 +242,7 @@ export function registerMessageIpc(): void {
       )
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
-    return hydrateLegacyUserTurnCosts(
-      capOversizedLocalHistoryRows(orderedRows.map(messageToCamelWithRowid)),
-    );
+    return hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
   });
 
   ipcMain.handle(
@@ -326,9 +322,7 @@ export function registerMessageIpc(): void {
         .limit(radius);
 
       return hydrateLegacyUserTurnCosts(
-        capOversizedLocalHistoryRows(
-          [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
-        ),
+        [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
       );
     },
   );
@@ -2053,26 +2047,6 @@ function compareHistoryTimeline(a: Message, b: Message): number {
     return aRowid - bRowid;
   }
   return 0;
-}
-
-function capOversizedLocalHistoryRows(history: Message[]): Message[] {
-  let capped: Message[] | null = null;
-  for (let index = 0; index < history.length; index += 1) {
-    const message = history[index];
-    if (typeof message.content !== 'string') continue;
-    if (message.content.length <= LOCAL_HISTORY_CONTENT_CHAR_LIMIT) continue;
-    capped ??= history.slice();
-    const priorMeta =
-      message.agentMeta && typeof message.agentMeta === 'object' && !Array.isArray(message.agentMeta)
-        ? message.agentMeta
-        : {};
-    capped[index] = {
-      ...message,
-      content: `…${message.content.slice(-(LOCAL_HISTORY_CONTENT_CHAR_LIMIT - 1))}`,
-      agentMeta: { ...priorMeta, remoteContentTruncated: true },
-    };
-  }
-  return capped ?? history;
 }
 
 /** DB content 可为 JSON string、含 text 的对象，或迁移前遗留的裸文本。 */

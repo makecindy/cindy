@@ -480,10 +480,11 @@ describe('local-db:messages:list cursor', () => {
     });
   });
 
-  it('caps oversized local history rows before returning them', async () => {
+  it('returns oversized local history rows intact', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    insertMessage(sqlite, { id: 'huge', createdAt: 1_000, content: 'x'.repeat(40_000) });
+    const huge = 'x'.repeat(40_000);
+    insertMessage(sqlite, { id: 'huge', createdAt: 1_000, content: huge });
 
     registerMessageIpc();
     const listHandler = h.handlers.get('local-db:messages:list');
@@ -493,11 +494,29 @@ describe('local-db:messages:list cursor', () => {
       agentMeta: Record<string, unknown> | null;
     }>;
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.content.length).toBe(32_000);
-    expect(rows[0]?.agentMeta).toMatchObject({ remoteContentTruncated: true });
+    expect(rows[0]?.content).toBe(huge);
+    expect(rows[0]?.agentMeta).toBeNull();
   });
 
-  it('keeps structured local user content below the oversized-row cap', async () => {
+  it('returns oversized around windows intact', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const huge = 'y'.repeat(40_000);
+    insertMessage(sqlite, { id: 'huge', createdAt: 1_000, content: huge });
+
+    registerMessageIpc();
+    const aroundHandler = h.handlers.get('local-db:messages:around');
+    const rows = (await aroundHandler?.({}, 's1', 'huge', { radius: 0 })) as Array<{
+      id: string;
+      content: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.content).toBe(huge);
+    expect(rows[0]?.agentMeta).toBeNull();
+  });
+
+  it('keeps structured local user content instead of slicing it', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
     sqlite
