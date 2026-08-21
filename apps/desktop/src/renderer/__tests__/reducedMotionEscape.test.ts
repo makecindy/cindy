@@ -101,7 +101,7 @@ describe('RunningStatusBar cadenced shimmer 的运行期 reduced-motion 切换',
     expect(sessionViewSource).toContain('shimmerPlayingRef.current = false;');
     expect(sessionViewSource).toContain('shimmerPendingRef.current = false;');
     expect(sessionViewSource).toContain(
-      '}, [visible, suppressContent, reducedMotion, status, tokenUsage]);',
+      '}, [visible, suppressContent, reducedMotion, status, tokenUsage, outputTokens, generationDurationMs]);',
     );
   });
 });

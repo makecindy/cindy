@@ -19,6 +19,11 @@ import {
   pickTier,
   maxCharsForTier,
   hasSummarizableMaterial,
+  shouldGeneratePinnedCardSummary,
+  shouldVoidSummaryAfterGenerationAttempt,
+  nonCardTurnDisplayPatch,
+  shouldForceGenerateOnClear,
+  shouldScheduleForceGenerateAfterInFlight,
 } from '../sessionTaskSummary.logic';
 
 describe('pickTier — 距今时间为主轴的档位选择', () => {
@@ -98,6 +103,131 @@ describe('hasSummarizableMaterial — 空草稿跳过', () => {
   });
 });
 
+describe('shouldGeneratePinnedCardSummary', () => {
+  it('只在置顶 + 活跃 + 卡片模式时生成', () => {
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: 1,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: 1,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'active',
+        pinnedAt: null,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldGeneratePinnedCardSummary({
+        status: 'archived',
+        pinnedAt: 1,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldVoidSummaryAfterGenerationAttempt', () => {
+  it('成功写回则留下,即使随后切出卡片', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: true,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(false);
+  });
+  it('仍在卡片模式则不因失败作废', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: false,
+        pinnedSectionIsCard: true,
+      }),
+    ).toBe(false);
+  });
+  it('未写回且已切出卡片 → 作废旧句子', () => {
+    expect(
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh: false,
+        pinnedSectionIsCard: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('shouldForceGenerateOnClear', () => {
+  it('切回卡片且没有生成在飞 → 可以 force 再生成', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(true);
+  });
+  it('仍在列表 → 不生成', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: false,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(false);
+  });
+  it('生成尚未 settle 时不得再入,否则 await 同一条 inFlight 死锁', () => {
+    expect(
+      shouldForceGenerateOnClear({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldScheduleForceGenerateAfterInFlight', () => {
+  it('切回卡片且生成仍在飞 → 结算后再 force,不在当前栈 await', () => {
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(true);
+  });
+  it('空闲或仍在列表 → 不预约', () => {
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: true,
+        sessionGenerateInFlight: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldScheduleForceGenerateAfterInFlight({
+        pinnedSectionIsCard: false,
+        sessionGenerateInFlight: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('nonCardTurnDisplayPatch', () => {
+  it('列表结算必须同时清摘要并带上最新 preview', () => {
+    expect(nonCardTurnDisplayPatch('刚完成的回复')).toEqual({
+      summary: null,
+      preview: '刚完成的回复',
+    });
+    expect(nonCardTurnDisplayPatch(null)).toEqual({
+      summary: null,
+      preview: null,
+    });
+  });
+});
+
 describe('sanitize — 去噪 + 句界截断', () => {
   it('短文本原样(去引号/折叠空白)', () => {
     expect(sanitize('"生成海报。"', SUMMARY_MAX_CHARS)).toBe('生成海报。');
@@ -151,15 +281,17 @@ describe('extractText — messages.content JSON → 纯文本', () => {
     const raw = JSON.stringify({
       text,
       quotesEncoded: true,
-      agentReferences: [{
-        kind: 'message',
-        start: text.indexOf(href),
-        end: text.indexOf(href) + href.length,
-        href,
-        sessionId: 'session-a',
-        messageClientId: 'message-a',
-        text: 'Target message body',
-      }],
+      agentReferences: [
+        {
+          kind: 'message',
+          start: text.indexOf(href),
+          end: text.indexOf(href) + href.length,
+          href,
+          sessionId: 'session-a',
+          messageClientId: 'message-a',
+          text: 'Target message body',
+        },
+      ],
     });
 
     const projected = extractText(raw, 'user');

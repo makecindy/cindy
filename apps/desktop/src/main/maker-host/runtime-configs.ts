@@ -28,6 +28,10 @@ import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { shouldKeepSubagentOverrideForParent } from './subagent-override-route.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
+import {
+  assessModelSwitchContext,
+  shouldHandoffAfterContextAssessment,
+} from '../../shared/modelSwitchAssessment.js';
 
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
 // Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
@@ -200,6 +204,18 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
   });
   Object.defineProperty(config, 'autoCompactThresholdPct', {
     get: () => readCompactionPct(),
+    enumerable: true,
+    configurable: false,
+  });
+  Object.defineProperty(config, 'shouldHandoffAfterContextAssessment', {
+    value: (contextTokens: number, contextWindow: number) =>
+      shouldHandoffAfterContextAssessment(
+        assessModelSwitchContext({
+          contextTokens,
+          targetContextWindow: contextWindow,
+          autoCompactThresholdPct: readCompactionPct(),
+        }),
+      ),
     enumerable: true,
     configurable: false,
   });

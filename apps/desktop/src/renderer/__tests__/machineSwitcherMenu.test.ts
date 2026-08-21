@@ -667,4 +667,22 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     );
     expect(filterSource).toContain('collisionPadding={8}');
   });
+
+  it('项目顺序菜单勾选跟 resolveDisplayedProjectOrder,不回退查看端偏好', () => {
+    const filterSource = read('features', 'cc-agent', 'sidebar', 'SidebarFilterPopover.tsx');
+    expect(filterSource).toContain('resolveDisplayedProjectOrder(');
+    expect(filterSource).toContain('scopedProjectOrder: FilterProjectOrder = resolveDisplayedProjectOrder(');
+    expect(filterSource).not.toContain('hostCustom ? \'custom\' : projectOrder');
+  });
+
+  it('远程 GET 用 fetch fence,本机播种只在成功后按 owner 锁定', () => {
+    const hookSource = read('features', 'cc-agent', 'hooks', 'useRemoteHostProjectOrders.ts');
+    expect(hookSource).toContain('createProjectOrderFetchFence');
+    expect(hookSource).toContain('shouldApplyFetch');
+    expect(hookSource).toContain('shouldSeedLocalHostProjectOrder');
+    expect(hookSource).toContain('seededLocalHostOwners.add');
+    expect(hookSource).not.toContain('localHostSeedStarted = true');
+    expect(hookSource).toContain('void load(1)');
+    expect(hookSource).toContain('attempt < 3 && entries.some(([, result]) => result.kind === \'transient\')');
+  });
 });

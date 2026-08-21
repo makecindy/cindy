@@ -54,7 +54,7 @@ vi.mock('../../secrets/providerSecretStore', () => ({
 }));
 
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
-import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
+import { modelPricingKey, providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
 import { getActiveCatalog } from '../../maker-host/active-catalog';
 import {
   applyModelPriceOverrides,
@@ -574,6 +574,62 @@ describe('reference pricing helpers', () => {
       providerId: 'openai',
       modelId: 'chatgpt/gpt-5.5',
       source: 'subscription-reference',
+    });
+    // Pi SuperGrok 目录 id 是裸 grok-*,报价户口是 xai/grok-*。两条都要能取到参考价,
+    // 否则消息 tooltip 会落到「本轮费用暂不可用」。
+    expect(getSubscriptionDirectValuePrice('grok-4.6')).toMatchObject({
+      providerId: 'xai',
+      modelId: 'grok-4.6',
+      source: 'subscription-reference',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+    });
+    expect(getSubscriptionDirectValuePrice('xai/grok-4.6')).toMatchObject({
+      providerId: 'xai',
+      modelId: 'xai/grok-4.6',
+      source: 'subscription-reference',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+    });
+    expect(
+      getSubscriptionDirectValuePrice('grok-4.6', 'pi', {
+        xai: {
+          [modelPricingKey('grok-4.6', 'pi')]: {
+            providerId: 'xai',
+            modelId: 'grok-4.6',
+            currency: 'USD',
+            source: 'user-override',
+            approximate: true,
+            inputPerMtok: 9,
+            outputPerMtok: 27,
+          },
+        },
+      }),
+    ).toMatchObject({
+      modelId: 'grok-4.6',
+      source: 'user-override',
+      inputPerMtok: 9,
+      outputPerMtok: 27,
+    });
+    expect(
+      getSubscriptionDirectValuePrice('grok-4.6', undefined, {
+        xai: {
+          [modelPricingKey('grok-4.6', 'pi')]: {
+            providerId: 'xai',
+            modelId: 'grok-4.6',
+            currency: 'USD',
+            source: 'user-override',
+            approximate: true,
+            inputPerMtok: 9,
+            outputPerMtok: 27,
+          },
+        },
+      }),
+    ).toMatchObject({
+      source: 'subscription-reference',
+      inputPerMtok: 2,
     });
     expect(
       getSubscriptionDirectValuePrice('chatgpt/gpt-5.5', 'claude-code', {

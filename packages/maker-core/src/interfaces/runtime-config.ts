@@ -104,6 +104,16 @@ export interface AgentRuntimeConfig {
   autoCompactThresholdPct?: number;
 
   /**
+   * Host-owned context switch assessment. When true, skip host auto-compact
+   * because the host will rebuild the native session before the next send.
+   * Do not install this on sessions the host cannot rebuild (remoteHostId).
+   */
+  shouldHandoffAfterContextAssessment?: (
+    contextTokens: number,
+    contextWindow: number,
+  ) => boolean;
+
+  /**
    * Host-managed executable directories to prepend to agent subprocess PATH.
    *
    * Only agents whose executable lookup is safe for PATH-based discovery should consume this.

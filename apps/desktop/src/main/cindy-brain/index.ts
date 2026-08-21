@@ -50,6 +50,7 @@ import {
   type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
+  type GhostLibraryOverview,
 } from '../../shared/ghost.js';
 import type {
   PluginMarketItemSource,
@@ -277,6 +278,14 @@ import {
 } from './connectionAudienceResolver.js';
 import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
+import { GhostLibrarySlot } from './librarySlot.js';
+import { LibraryBindingStore, validateLibraryCandidateLocation } from './libraryBinding.js';
+import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
+import { LibrarySqlService, defaultLibraryDbWorkerPath } from './librarySqlService.js';
+import { trashGhostLibrary } from './libraryTrash.js';
+import { migrateGhostLibrary } from './libraryMigrate.js';
+import { setGhostLibraryFileResolver } from './runtime/electronSandboxAdapter.js';
+import { createBetterSqliteDatabase, resolveBetterSqliteModuleEntry } from '../localDb/betterSqliteFactory.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
 import { getSessionFsSnapshot, getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore.js';
@@ -323,6 +332,7 @@ import {
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import {
   isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
   type MediaCapability,
 } from '@cindy/model-providers';
@@ -384,6 +394,7 @@ import { isModelAccessReady } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
+  isMediaModelExecutableForGuide,
   listExecutableMediaModels,
   supportsMediaCapability,
 } from '../model-access/mediaModels.js';
@@ -949,6 +960,9 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   getGhostConfirmDialogBridge()?.cancelAll();
   runtimeSingleton?.destroyAll();
   resetNodeRuntimeBrokerForAccountBoundary();
+  // Library 会话一并作废:关 db worker + 作废 handle——在途写入已在串行链上
+  // 归属原 owner 完成或随 vault.invalidate 作废,新 owner 解析到全新根。
+  await getGhostLibrarySlot().disposeAll();
   await getGhostSetupCoordinator()?.waitForActionsIdle();
 }
 
@@ -3063,14 +3077,24 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
 function getVideoProviderRegistry() {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
   if (!registry) return null;
-  const xaiAliases =
-    getActiveCatalog()
-      .providers.find((provider) => provider.id === 'xai')
-      ?.videoModels?.map((model) => model.id) ?? [];
-  if (xaiAliases.some((alias) => !registry.hasAlias(alias))) {
+  const xaiCatalogProvider = getActiveCatalog().providers.find(
+    (provider) => provider.id === 'xai',
+  );
+  const xaiCatalogProviderId = xaiCatalogProvider?.id;
+  const xaiAliases = xaiCatalogProvider?.videoModels?.map((model) => model.id) ?? [];
+  const routableXaiAliases = xaiCatalogProviderId
+    ? xaiAliases.filter(
+        (alias) =>
+          !registry.hasAlias(alias) || registry.hasAlias(alias, xaiCatalogProviderId),
+      )
+    : [];
+  if (
+    xaiCatalogProviderId &&
+    routableXaiAliases.some((alias) => !registry.hasAlias(alias))
+  ) {
     registry.registerOrExtend(
       createXaiVideoProvider({
-        modelAliases: xaiAliases,
+        modelAliases: routableXaiAliases,
         hasOAuthLogin: () => hasGrokOAuthLogin(),
         getAccessToken: () => getGrokAccessToken(),
         getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
@@ -3080,6 +3104,7 @@ function getVideoProviderRegistry() {
         beforeDispatch: (model) => assertMediaModelStillEnabled('video', model),
         onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
       }),
+      xaiCatalogProviderId,
     );
   }
   return registry;
@@ -3094,10 +3119,55 @@ function isVideoCatalogProviderReady(providerId: string): boolean {
   return false;
 }
 
+const LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID = 'openai-images-v1';
+type LegacyCindyMediaAction = 'generate' | 'edit';
+
+/** 旧 cindy-request 类目清单只保留其固定通道对当前动作真正可执行的 XD 模型。 */
+function isXdMediaModelExecutableForCatalog(
+  kind: CindyCapabilityKind,
+  modelId: string,
+  action?: LegacyCindyMediaAction,
+): boolean {
+  if (kind === 'image') {
+    if (action) {
+      return isMediaModelExecutableForGuide(
+        modelId,
+        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
+        action === 'edit' ? 'image.edit' : 'image.generate',
+      );
+    }
+    return (
+      isMediaModelExecutableForGuide(
+        modelId,
+        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
+        'image.generate',
+      ) ||
+      isMediaModelExecutableForGuide(
+        modelId,
+        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
+        'image.edit',
+      )
+    );
+  }
+  if (kind === 'video') {
+    if (action) {
+      return isMediaModelExecutable(
+        modelId,
+        action === 'edit' ? 'video.image_to_video' : 'video.generate',
+      );
+    }
+    return (
+      isMediaModelExecutable(modelId, 'video.generate') ||
+      isMediaModelExecutable(modelId, 'video.image_to_video')
+    );
+  }
+  return true;
+}
+
 /**
  * 当前媒体能力配置(图像/视频同一套推导)——与会话模型列表**同一获取
- * 来源**:providers.json 运行时目录(getActiveCatalog,OSS 热更 + 内置兜底),
- * 汇总各供应商的 imageModels/imageDefaults 或 videoModels/videoDefaults。
+ * 来源**:active catalog。XD 媒体由 Gateway `/models` 动态投影，第三方媒体
+ * 保留各 Provider 的 imageModels/imageDefaults 或 videoModels/videoDefaults。
  * 清单与默认/档位选型全部来自目录,主机代码零
  * 模型字面量;派生规则见 cindyMediaCatalog.ts。
  *
@@ -3106,18 +3176,51 @@ function isVideoCatalogProviderReady(providerId: string): boolean {
  * (与聊天侧「无可用性证明不展示」同口径)。下游如实降级:详情页那几行显示
  * 灰字而不是下拉,cindySlot 早拒而不是拿不在册的型号下单。
  */
-function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConfig {
+function getCatalogMediaConfig(
+  kind: CindyCapabilityKind,
+  action?: LegacyCindyMediaAction,
+  selectedProviderId?: string,
+): CindyMediaCatalogConfig {
   try {
     // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
     // (与对话模型的准入口径同源,见 model-disable-store)。
     const access = readModelDisableOverrides();
     const catalog = getActiveCatalog();
+    const xdMediaModelIds = getXdGatewayModels()
+      .filter(
+        (model) =>
+          model.mode === 'image_generation' || model.mode === 'video_generation',
+      )
+      .map((model) => model.id);
+    // 旧 cindy-request 偏好不携带 providerId；同一完整 modelId 同时来自 XD 与
+    // 第三方时必须让托管默认来源先参与 first-wins，避免静默改用第三方凭证计费。
+    const orderedProviders =
+      kind === 'embed'
+        ? catalog.providers
+        : [
+            ...catalog.providers.filter((provider) => provider.id === 'xd'),
+            ...catalog.providers.filter((provider) => provider.id !== 'xd'),
+          ];
+    const providers = selectedProviderId
+      ? orderedProviders.filter((provider) => provider.id === selectedProviderId)
+      : orderedProviders;
+    const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
     return deriveCindyMediaConfig(
-      catalog.providers,
+      providers,
       kind,
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
-        isModelDisabled(access, providerId, modelId) ||
+        (providerId === 'xd' && kind !== 'embed'
+          ? isModelDisabledWithUniqueLegacyBasename(
+              access,
+              providerId,
+              modelId,
+              xdMediaModelIds,
+            )
+          : isModelDisabled(access, providerId, modelId)) ||
+        // active catalog 保留 Gateway 原始媒体事实源；旧 cindy-request 的同步目录
+        // 必须在消费边界复用已缓存的 Guide 预检结果，不能暴露这版客户端不可执行的型号。
+        (providerId === 'xd' && !isXdMediaModelExecutableForCatalog(kind, modelId, action)) ||
         // 向量:目录是热更的,可能给出客户端还不认识的型号 id(比 EmbeddingModelId
         // 这个静态联合更新)。不在这里滤掉的话,它会照常展示、可被钉选、甚至成为
         // 目录默认 —— 而执行侧 isKnownEmbeddingModel 那道纵深防御会把每一次请求
@@ -3128,7 +3231,7 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
         (kind === 'embed' && !isKnownEmbeddingModel(modelId)) ||
         // 视频目录可能比当前客户端通道先热更。执行 registry 不认识的型号
         // 必须先过滤，不能把“目录有”冒充成“这版客户端能下单”。
-        (kind === 'video' && !(getVideoProviderRegistry()?.hasAlias(modelId) ?? false)),
+        (kind === 'video' && !(videoRegistry?.hasAlias(modelId, providerId) ?? false)),
       // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
       // 头注)。视频按目录 provider 归属分别检查：xd 要求账号网关能力与 endpoint
       // 同时在场，xai 要求 SuperGrok OAuth 已连接；未知来源 fail closed。
@@ -3153,10 +3256,12 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
   }
 }
 
-const getCatalogImageConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
-  getCatalogMediaConfig('image');
-const getCatalogVideoConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
-  getCatalogMediaConfig('video');
+const getCatalogImageConfig = (
+  action?: LegacyCindyMediaAction,
+): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image', action);
+const getCatalogVideoConfig = (
+  action?: LegacyCindyMediaAction,
+): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video', action);
 const getCatalogEmbedConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
   getCatalogMediaConfig('embed');
 
@@ -3198,6 +3303,7 @@ function getMediaPreferenceConfig(
   capability: GhostMediaCapability,
 ): CindyMediaPreferenceConfig {
   const kind = capability.startsWith('image.') ? 'image' : 'video';
+  const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
   const coreCapability: MediaCapability =
     capability === 'video.edit' ? 'video.image_to_video' : capability;
   const providers = new Map(
@@ -3207,7 +3313,9 @@ function getMediaPreferenceConfig(
     .filter(
       (model) =>
         model.mode === (kind === 'image' ? 'image_generation' : 'video_generation') &&
-        supportsMediaCapability(model.modalities, coreCapability),
+        supportsMediaCapability(model.modalities, coreCapability) &&
+        (kind !== 'video' ||
+          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
     )
     .map((model) => {
       const provider = providers.get(model.providerId);
@@ -3229,7 +3337,11 @@ function getMediaPreferenceConfig(
     coreCapability,
     readModelDisableOverrides(),
   )
-    .filter((model) => isMediaModelExecutable(model.id, coreCapability))
+    .filter(
+      (model) =>
+        isMediaModelExecutable(model.id, coreCapability) &&
+        (kind !== 'video' || (videoRegistry?.hasAlias(model.id, 'xd') ?? false)),
+    )
     .map((model) => {
       const provider = providers.get('xd');
       const providerName = provider?.name ?? 'Cindy AI';
@@ -3265,11 +3377,107 @@ function resolveMediaPreferenceModel(
   const exact = config.models.find((model) => model.id === preference);
   if (exact) return exact;
   if (decodeMediaPreference(preference)) return null;
+  if (!preference.includes('/')) {
+    const legacyXdMatches = config.models.filter(
+      (model) =>
+        model.providerId === 'xd' &&
+        model.modelId.slice(model.modelId.lastIndexOf('/') + 1) === preference,
+    );
+    if (legacyXdMatches.length === 1) return legacyXdMatches[0]!;
+  }
   return (
     config.models.find((model) => model.providerId === 'xd' && model.modelId === preference) ??
     config.models.find((model) => model.modelId === preference) ??
     null
   );
+}
+
+function resolveMediaPreferenceOrDefault(
+  config: CindyMediaPreferenceConfig,
+  preference: string | undefined,
+): CindyMediaPreferenceModel | null {
+  return (
+    resolveMediaPreferenceModel(config, preference) ??
+    resolveMediaPreferenceModel(config, config.defaults?.standard)
+  );
+}
+
+/**
+ * Art 1.12.5–1.13.2 已经走 Core media，但还不会在 prepare 时传
+ * providerId。这段兼容窗口对同名模型选择一个可用来源并优先 Cindy AI；
+ * 1.13.3 起插件会传完整来源，恢复全部 Provider 选择。
+ */
+function isProviderBlindCoreArt(ghost: InstalledGhost): boolean {
+  return (
+    ghost.manifest.id === 'cindy-art' &&
+    supportsCindyVersion(ghost.manifest.version, '1.12.5') &&
+    !supportsCindyVersion(ghost.manifest.version, '1.13.3')
+  );
+}
+
+/** 旧插件无法区分同 modelId 的来源：冲突时优先 XD，否则保留第一个可用来源。 */
+function collapseProviderBlindMediaModels<T extends { providerId: string }>(
+  models: readonly T[],
+  modelId: (model: T) => string,
+): T[] {
+  const grouped = new Map<string, T[]>();
+  for (const model of models) {
+    const id = modelId(model);
+    const group = grouped.get(id) ?? [];
+    group.push(model);
+    grouped.set(id, group);
+  }
+  const selected: T[] = [];
+  for (const group of grouped.values()) {
+    const xd = group.find((model) => model.providerId === 'xd');
+    selected.push(xd ?? group[0]!);
+  }
+  return selected;
+}
+
+function getGhostMediaPreferenceConfig(
+  ghostId: string,
+  capability: GhostMediaCapability,
+): CindyMediaPreferenceConfig {
+  const config = getMediaPreferenceConfig(capability);
+  const ghost = getGhostManager().list().find((candidate) => candidate.manifest.id === ghostId);
+  if (!ghost || !isProviderBlindCoreArt(ghost)) return config;
+  const models = collapseProviderBlindMediaModels(config.models, (model) => model.modelId);
+  const standard = models[0]?.id;
+  return {
+    models,
+    defaults: standard ? { standard, draft: standard, best: standard } : null,
+  };
+}
+
+/** 存量钉定已失效或旧插件无法表达时，一次性升级为当前可用选型。 */
+function resolveAndMigrateGhostMediaPreference(
+  ghostId: string,
+  capability: GhostMediaCapability,
+  config: CindyMediaPreferenceConfig,
+  preference: string | undefined,
+): CindyMediaPreferenceModel | null {
+  const selected = resolveMediaPreferenceOrDefault(config, preference);
+  if (preference && selected && preference !== selected.id) {
+    try {
+      writeGhostCindyOverride(ghostId, capability, selected.id);
+      log.info('migrating stale ghost media preference to available model', {
+        ghostId,
+        capability,
+        previousPreference: preference,
+        nextPreference: selected.id,
+      });
+    } catch (error) {
+      log.warn('persisting migrated ghost media preference failed; using runtime fallback', {
+        ghostId,
+        capability,
+        previousPreference: preference,
+        fallbackPreference: selected.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return selected;
 }
 
 /**
@@ -3297,7 +3505,16 @@ async function getGhostConfigurableMediaModels(
     // Gateway modalities 透传给插件判断，不能把插件声明的多个动作取交集。
     const availability = await listExecutableMediaModels();
     const mode = type === 'image' ? 'image_generation' : 'video_generation';
-    const models = availability.models.filter((model) => model.mode === mode);
+    const videoRegistry = type === 'video' ? getVideoProviderRegistry() : null;
+    const candidates = availability.models.filter(
+      (model) =>
+        model.mode === mode &&
+        (type !== 'video' ||
+          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
+    );
+    const models = isProviderBlindCoreArt(ghost)
+      ? collapseProviderBlindMediaModels(candidates, (model) => model.id)
+      : candidates;
     if (
       models.length === 0 &&
       availability.unavailable.some((model) => model.retryable)
@@ -3349,8 +3566,8 @@ async function getGhostConfigurableMediaModels(
 
 /**
  * 读取插件在 Host「Cindy 能力」中的现有媒体选型。
- * 这里只投影当前有效值，不复制或迁移配置；用户已明确配置的精确来源失效时直接报错，
- * 不能静默回落到另一个 Provider 或默认模型。
+ * 已配置模型失效，或旧插件无法表达完整来源时，回落到当前第一个
+ * 可用模型，并一次性迁移存量配置，保证页面展示与实际执行一致。
  */
 function getGhostConfiguredMediaModel(
   ghostId: string,
@@ -3377,16 +3594,19 @@ function getGhostConfiguredMediaModel(
     };
   }
 
-  const config = getMediaPreferenceConfig(mediaCapability);
+  const config = getGhostMediaPreferenceConfig(ghostId, mediaCapability);
   const override = readGhostCindyOverrides(ghostId)[mediaCapability];
-  const selected = override
-    ? resolveMediaPreferenceModel(config, override)
-    : resolveMediaPreferenceModel(config, config.defaults?.standard);
+  const selected = resolveAndMigrateGhostMediaPreference(
+    ghostId,
+    mediaCapability,
+    config,
+    override,
+  );
   if (!selected) {
     return {
       ok: false,
       errorCode: 'NOT_AVAILABLE',
-      message: override ? '已配置的媒体模型当前不可用' : '当前没有可用的媒体模型',
+      message: '当前没有可用的媒体模型',
     };
   }
   return {
@@ -3407,12 +3627,18 @@ function assertMediaModelStillEnabled(
   kind: 'image' | 'video',
   model: string,
   providerId?: string,
+  action: LegacyCindyMediaAction = 'generate',
 ): void {
-  const available = providerId
-    ? getMediaPreferenceConfig(kind === 'image' ? 'image.generate' : 'video.generate').models.some(
-        (candidate) => candidate.providerId === providerId && candidate.modelId === model,
-      )
-    : getCatalogMediaConfig(kind).models.some((candidate) => candidate.id === model);
+  const capability: GhostMediaCapability = `${kind}.${action}`;
+  const available =
+    providerId && kind === 'image' && providerId !== 'xd'
+      ? getMediaPreferenceConfig(capability).models.some(
+          (candidate) => candidate.providerId === providerId && candidate.modelId === model,
+        )
+      : getCatalogMediaConfig(kind, action, providerId).models.some(
+          (candidate) =>
+            candidate.id === model && (!providerId || candidate.providerId === providerId),
+        );
   if (!available) {
     throw new Error(
       kind === 'image'
@@ -3471,8 +3697,16 @@ async function runGhostVideo(
   if (!registry || !registry.hasAny()) {
     throw new Error('视频能力不可用:主机未配置视频通道');
   }
+  if (params.providerId && !registry.hasAlias(params.alias, params.providerId)) {
+    throw new Error('视频模型与所选来源不匹配,本次生成已取消');
+  }
   // 提交紧前重查(第二十一轮):参考图 data URI 准备是 await,窗口内被停用即拒。
-  assertMediaModelStillEnabled('video', params.alias, params.providerId);
+  assertMediaModelStillEnabled(
+    'video',
+    params.alias,
+    params.providerId,
+    params.imageDataUris ? 'edit' : 'generate',
+  );
   const r = await submitAndAwaitVideo(registry, params);
   return {
     buffer: r.buffer,
@@ -3507,6 +3741,7 @@ function getGhostVideoCapabilities(
     }
     const registry = getVideoProviderRegistry();
     if (!registry || !registry.hasAny()) return null;
+    if (providerId && !registry.hasAlias(model, providerId)) return null;
     const caps = registry.resolveByAlias(model).provider.capabilities;
     return {
       durations: caps.supportedDurations,
@@ -3792,7 +4027,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, providerId, aspectRatio }) => {
         try {
-          assertMediaModelStillEnabled('image', model, providerId);
+          assertMediaModelStillEnabled('image', model, providerId, 'generate');
           const channel = resolveImageChannelForModel(model, 'generate', providerId);
           return decodeImageResponse(
             await channel.generateImage({
@@ -3807,7 +4042,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       editImage: async ({ prompt, model, providerId, imagePaths, aspectRatio }) => {
         try {
-          assertMediaModelStillEnabled('image', model, providerId);
+          assertMediaModelStillEnabled('image', model, providerId, 'edit');
           const channel = resolveImageChannelForModel(model, 'edit', providerId);
           return decodeImageResponse(
             await channel.editImage({
@@ -3823,7 +4058,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       generateVideo: async ({ prompt, model, providerId, ...videoParams }) => {
         try {
-          assertMediaModelStillEnabled('video', model, providerId);
+          assertMediaModelStillEnabled('video', model, providerId, 'generate');
           return await runGhostVideo({ alias: model, providerId, prompt, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
@@ -3831,7 +4066,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       editVideo: async ({ prompt, model, providerId, imagePaths, refMode, ...videoParams }) => {
         try {
-          assertMediaModelStillEnabled('video', model, providerId);
+          assertMediaModelStillEnabled('video', model, providerId, 'edit');
           // 先算总量再读(闸按 refMode 分档:存量首尾帧不设闸,原样)。闸与
           // 读取绑在一个入口里,顺序是那边的结构保证、不是这里的约定;结果
           // 保序——顺序即语义:首/尾帧,或提示词里 [Image 1]… 的序号。
@@ -3858,16 +4093,20 @@ export function getGhostCindySlot(): GhostCindySlot {
       getMediaOverride: (ghostId, capability) => {
         const value = readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
         if (!value) return null;
-        const decoded = decodeMediaPreference(value);
-        if (!decoded) return null;
-        const selected = getMediaPreferenceConfig(capability as GhostMediaCapability).models.find(
-          (candidate) =>
-            candidate.providerId === decoded.providerId && candidate.modelId === decoded.modelId,
+        const mediaCapability = capability as GhostMediaCapability;
+        const selected = resolveAndMigrateGhostMediaPreference(
+          ghostId,
+          mediaCapability,
+          getGhostMediaPreferenceConfig(ghostId, mediaCapability),
+          value,
         );
-        return {
-          ...decoded,
-          ...(selected ? { label: selected.label } : {}),
-        };
+        return selected
+          ? {
+              providerId: selected.providerId,
+              modelId: selected.modelId,
+              label: selected.label,
+            }
+          : null;
       },
       getOverride: (ghostId, capability) => {
         const value = readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
@@ -4636,6 +4875,225 @@ export function getGhostFsSlot(): GhostFsSlot {
   return fsSlotSingleton;
 }
 
+let librarySlotSingleton: GhostLibrarySlot | null = null;
+
+/**
+ * library 槽单例(持久作品库,2026-08-20):与 fs 槽同款懒取现查——根目录经
+ * binding store 解析(默认 = ownerScopedUserDataPath('libraries', id);自定义
+ * 位置带漂移判定),owner scope 每请求比对(切换后旧会话作废重解)。SQL 执行
+ * 在 per-plugin worker(语句门见 libraryDbCore);本进程只组包与映射结果。
+ */
+export function getGhostLibrarySlot(): GhostLibrarySlot {
+  if (!librarySlotSingleton) {
+    const bindingStore = new LibraryBindingStore({
+      getFile: () => ownerScopedUserDataPath('libraries-binding.json'),
+      // 受管根 = 整个 userData(owners 树/cindy-brain/ghost-* 都在其内),
+      // 自定义库根不得落在宿主数据区里。
+      getManagedRoots: () => [app.getPath('userData')],
+      getDefaultRoot: (ghostId) => ownerScopedUserDataPath('libraries', ghostId),
+      log,
+    });
+    librarySlotSingleton = new GhostLibrarySlot({
+      getGhost: findAvailableGhost,
+      bindingStore,
+      getDefaultRoot: (ghostId) => ownerScopedUserDataPath('libraries', ghostId),
+      captureOwnerScope: () => activeOwnerScopeKey(),
+      createVault: (deps) => new LibraryVault(deps),
+      createSqlService: (deps) => new LibrarySqlService(deps),
+      getDiskFreeBytes: (root) => statfsFreeBytes(root),
+      workerScriptPath: defaultLibraryDbWorkerPath,
+      betterSqliteModulePath: () => resolveBetterSqliteModuleEntry() ?? 'better-sqlite3',
+      log,
+    });
+    // 面板只读投影(cindy-ghost://<id>/library/<relPath>)的解析器:与电子脑
+    // read 同源校验(binding 根 + vault 路径纪律),失败折叠 404。
+    setGhostLibraryFileResolver((ghostId, relPath) =>
+      librarySlotSingleton ? librarySlotSingleton.resolvePanelFilePath(ghostId, relPath) : Promise.resolve(null),
+    );
+  }
+  return librarySlotSingleton;
+}
+
+/**
+ * 迁移执行体(relocate / revert-default 共用):置迁移只读闸 → dispose 会话 →
+ * 无数据直改 binding / 有数据走完整状态机 → 再 dispose 让下一请求用新根。
+ * 全程持 owner mutation 租约(账号切换在途即抛,不跨 owner 写 binding)。
+ */
+async function relocateGhostLibraryTo(
+  id: string,
+  candidate: string,
+  opts?: { allowInsideManagedRoot?: boolean },
+): Promise<{ ok: boolean; message?: string }> {
+  const releaseMutation = beginGhostMutation();
+  const slot = getGhostLibrarySlot();
+  slot.setRelocating(id, true);
+  try {
+    await slot.disposeGhost(id);
+    const resolution = await getGhostLibraryBindingStore().resolveLibraryRoot(id);
+    const fromRoot = resolution.kind === 'custom' && resolution.root !== null
+      ? resolution.root
+      : ownerScopedUserDataPath('libraries', id);
+    let fromExists = true;
+    try {
+      await fs.promises.stat(fromRoot);
+    } catch {
+      fromExists = false;
+    }
+    if (!fromExists) {
+      // 无数据迁移:直接改 binding(等价 bind)。
+      const set = await getGhostLibraryBindingStore().setBinding(id, candidate, (root) => statfsFreeBytes(root), {
+        allowInsideManagedRoot: opts?.allowInsideManagedRoot,
+      });
+      await slot.disposeGhost(id);
+      return set.ok ? { ok: true } : { ok: false, message: set.message };
+    }
+    const result = await migrateGhostLibrary({
+      ghostId: id,
+      fromRoot,
+      candidate,
+      deps: {
+        getFile: () => ownerScopedUserDataPath('libraries-binding.json'),
+        getManagedRoots: () => [app.getPath('userData')],
+        getDefaultRoot: (gid) => ownerScopedUserDataPath('libraries', gid),
+        getDiskFreeBytes: (root) => statfsFreeBytes(root),
+        // sqlite 走在线 backup/quick_check(主进程受控打开,只读)。
+        copySqlite: async (from, to) => {
+          const db = createBetterSqliteDatabase(from, { readonly: true });
+          try {
+            await db.backup(to);
+          } finally {
+            db.close();
+          }
+        },
+        checkSqliteHealthy: async (abs) => {
+          const db = createBetterSqliteDatabase(abs, { readonly: true });
+          try {
+            const row = db.prepare('PRAGMA quick_check').get() as { quick_check?: string } | undefined;
+            return row?.quick_check === 'ok';
+          } finally {
+            db.close();
+          }
+        },
+        log,
+      },
+      applyBinding: async (c) => {
+        const set = await getGhostLibraryBindingStore().setBinding(id, c, undefined, {
+          allowInsideManagedRoot: opts?.allowInsideManagedRoot,
+        });
+        return set.ok ? { ok: true } : { ok: false, message: set.message };
+      },
+      allowInsideManagedRoot: opts?.allowInsideManagedRoot,
+    });
+    await slot.disposeGhost(id);
+    return result.ok ? { ok: true } : { ok: false, message: result.message };
+  } finally {
+    slot.setRelocating(id, false);
+    releaseMutation();
+  }
+}
+
+/**
+ * Library 概览(设置页插件详情的数据源):轻量直读 meta/usage(不建会话、
+ * 不触发 open 的目录创建),漂移/未声明都给结构化结果,渲染层据此出横幅。
+ */
+export async function getGhostLibraryOverview(ghostId: string): Promise<GhostLibraryOverview> {
+  const ghost = findAvailableGhost(ghostId);
+  const supported = ghost?.manifest.slots.includes('library') === true;
+  const store = getGhostLibraryBindingStore();
+  const binding = await store.getBinding(ghostId);
+  const resolution = await store.resolveLibraryRoot(ghostId);
+  const root = resolution.kind === 'custom' && resolution.root !== null
+    ? resolution.root
+    : ownerScopedUserDataPath('libraries', ghostId);
+  let usedBytes = 0;
+  let fileCount = 0;
+  let orphaned = false;
+  let state: GhostLibraryOverview['state'] = 'ready';
+  let reason: string | null = null;
+  if (resolution.kind === 'custom' && resolution.root === null) {
+    state = 'unavailable';
+    reason = resolution.drift;
+  } else {
+    try {
+      const meta = JSON.parse(await fs.promises.readFile(path.join(root, '.cindy-library', 'meta.json'), 'utf8')) as {
+        orphaned?: unknown;
+      };
+      orphaned = meta.orphaned !== undefined;
+      try {
+        const usage = JSON.parse(await fs.promises.readFile(path.join(root, '.cindy-library', 'usage.json'), 'utf8')) as {
+          files?: number;
+          bytes?: number;
+        };
+        usedBytes = Number(usage.bytes ?? 0);
+        fileCount = Number(usage.files ?? 0);
+      } catch {
+        /* 账本缺失按 0 计;设置页可触发重扫 */
+      }
+    } catch {
+      /* 尚未创建过 Library = 全零;不是错误 */
+    }
+  }
+  let diskFreeBytes: number | null = null;
+  try {
+    diskFreeBytes = await statfsFreeBytes(root);
+  } catch {
+    diskFreeBytes = null;
+  }
+  return {
+    supported,
+    state,
+    reason,
+    location: binding !== null ? 'custom' : 'default',
+    customCandidate: binding?.root ?? null,
+    usedBytes,
+    fileCount,
+    diskFreeBytes,
+    softLimitBytes: DEFAULT_LIBRARY_LIMITS.softLimitBytes,
+    softLimitExceeded: usedBytes > DEFAULT_LIBRARY_LIMITS.softLimitBytes,
+    orphaned,
+  };
+}
+
+/**
+ * 删除 Library(设置页独立确认后的执行体;与卸载是两个操作):作废运行会话,
+ * 库根 rename 进 owner 级回收站(30 天回滚窗),撤销 binding。调用方(设置页
+ * IPC,后续 commit 接线)必须先取得用户对「删除作品数据」的独立破坏性确认。
+ */
+export async function deleteGhostLibraryForActiveOwner(ghostId: string): Promise<{ ok: boolean; message?: string }> {
+  if (!isValidGhostId(ghostId)) return { ok: false, message: '非法插件 id' };
+  await getGhostLibrarySlot().disposeGhost(ghostId);
+  const result = await trashGhostLibrary(ghostId, {
+    // 默认根与自定义根都经 binding store 的解析口径(漂移时返回 null → 上层
+    // 引导恢复位置,不误删)。
+    resolveLibraryRoot: async (id) => {
+      const resolution = await getGhostLibraryBindingStore().resolveLibraryRoot(id);
+      return resolution.kind === 'custom' ? resolution.root : ownerScopedUserDataPath('libraries', id);
+    },
+    trashRoot: () => ownerScopedUserDataPath('libraries-trash'),
+    removeBinding: async (id) => {
+      await getGhostLibraryBindingStore().removeBinding(id);
+    },
+    log,
+  });
+  if (result.ok) return { ok: true };
+  return { ok: false, message: result.message };
+}
+
+let libraryBindingStoreSingleton: LibraryBindingStore | null = null;
+
+/** library 槽的 binding store(单例:读-改-写互斥要落在同一实例链上)。 */
+export function getGhostLibraryBindingStore(): LibraryBindingStore {
+  if (!libraryBindingStoreSingleton) {
+    libraryBindingStoreSingleton = new LibraryBindingStore({
+      getFile: () => ownerScopedUserDataPath('libraries-binding.json'),
+      getManagedRoots: () => [app.getPath('userData')],
+      getDefaultRoot: (ghostId) => ownerScopedUserDataPath('libraries', ghostId),
+      log,
+    });
+  }
+  return libraryBindingStoreSingleton;
+}
+
 /**
  * 官方保留前缀守门(docs/dev-rules/plugin-security-and-authoring.md):packaged 版本上,用户装入
  * 通道(install/update/inspect 三个 IPC,即拖入/选文件/forge 转交的共同出口)
@@ -5124,6 +5582,9 @@ async function uninstallGhostAndCleanupLocked(
         : (prepareGhostUninstallLedgerCompletion?.(id) ?? null);
     const manager = getGhostManager();
     const runtime = getGhostRuntime();
+    // Library 的 orphaned 标记要在 uninstall 之前取显示名(收走后 list 里就没了)。
+    const libraryDisplayName =
+      manager.list().find((g) => g.manifest.id === id)?.manifest.name ?? id;
     runtime.stop(id);
     getGhostNodeRuntimeBroker().stop(id);
     getGhostAgentSlot().clearGhost(id);
@@ -5152,6 +5613,29 @@ async function uninstallGhostAndCleanupLocked(
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    // Library(持久作品库)与 ghost-fs 语义相反:**卸载不删**。只标 orphaned
+    // (设置页可见、重装自动重挂)并作废运行会话;删除必须走设置页独立确认
+    // (deleteGhostLibraryForActiveOwner)。binding 同样保留——用户亲选的
+    // 存储位置不因重装消失(对齐 pick-grants 先例)。best-effort:失败只
+    // warn,不把卸载报成失败(与上面清账同纪律)。
+    try {
+      await getGhostLibrarySlot().disposeGhost(id);
+      const vault = new LibraryVault({
+        rootDir: () => ownerScopedUserDataPath('libraries', id),
+        ghostId: id,
+        log,
+      });
+      await vault.open();
+      const orphanFailure = await vault.markOrphaned(libraryDisplayName);
+      if (orphanFailure) {
+        log.warn('library 卸载标记失败', { id, errorCode: orphanFailure.errorCode });
+      }
+    } catch (err) {
+      log.warn('library 卸载收口失败(数据不受影响)', {
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
     // 寄存物(#784)随意识回收:删掉本意识的 ghost-deposit 引用行,字节由
     // recycler 按"引用归零"统一处理(用户已发进聊天的那几张有 message ref
@@ -5779,6 +6263,11 @@ export function registerGhostIpc(): void {
     if (type === 'fs-request') {
       return getGhostFsSlot().handleFsRequest(id, payload);
     }
+    // library-request = library 槽持久作品库(资格审/binding 根解析/owner scope
+    // 复核/SQL 语句门在 librarySlot;结果结构化 errorCode,永不 reject)。
+    if (type === 'library-request') {
+      return getGhostLibrarySlot().handleLibraryRequest(id, payload);
+    }
     // agent-request = 让 Cindy Agent 开始一个普通 user 回合；插件文本绝不
     // 进入 system prompt。票据、会话归属、模板和后台权限都在 agentSlot。
     if (type === 'agent-request') {
@@ -6093,7 +6582,20 @@ export function registerGhostIpc(): void {
   // 读走 sendSync:详情页首帧要和其它信息同帧渲染(规则 7 无跳变),
   // 文件读取极小。写走 invoke,白名单在此校验(存储层不感知模型清单)。
   ipcMain.on('ghosts:cindy-prefs', (event, ghostId: unknown) => {
-    const overrides = typeof ghostId === 'string' ? readGhostCindyOverrides(ghostId) : {};
+    const storedOverrides = typeof ghostId === 'string' ? readGhostCindyOverrides(ghostId) : {};
+    const overrides = { ...storedOverrides };
+    for (const capability of GHOST_MEDIA_CAPABILITIES) {
+      const value = storedOverrides[capability];
+      if (!value) continue;
+      const selected = resolveAndMigrateGhostMediaPreference(
+        ghostId as string,
+        capability,
+        getGhostMediaPreferenceConfig(ghostId as string, capability),
+        value,
+      );
+      if (selected) overrides[capability] = selected.id;
+      else delete overrides[capability];
+    }
     // 每类目一份 options + defaultModel(当前包含 image/video 两类;下拉按
     // 能力键的类目取对应清单)。defaultModel:目录默认选型的展示信息
     // ("默认(GPT Image 2)"),让用户看得见"跟随"当下跟的是谁;
@@ -6138,10 +6640,10 @@ export function registerGhostIpc(): void {
       : null;
     event.returnValue = {
       overrides,
-      image: byKind(getMediaPreferenceConfig('image.generate')),
-      imageEdit: byKind(getMediaPreferenceConfig('image.edit')),
-      video: byKind(getMediaPreferenceConfig('video.generate')),
-      videoEdit: byKind(getMediaPreferenceConfig('video.edit')),
+      image: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'image.generate')),
+      imageEdit: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'image.edit')),
+      video: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'video.generate')),
+      videoEdit: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'video.edit')),
       text: {
         options: textOptions,
         defaultModel:
@@ -6214,10 +6716,12 @@ export function registerGhostIpc(): void {
       // fail-closed 兜底,不在这层把「暂时没配 key」当成非法值。
       if (
         !isCindyOverrideModelAllowed(capability as string, model, {
-          image: getMediaPreferenceConfig(
+          image: getGhostMediaPreferenceConfig(
+            ghostId,
             capability === 'image.edit' ? 'image.edit' : 'image.generate',
           ).models,
-          video: getMediaPreferenceConfig(
+          video: getGhostMediaPreferenceConfig(
+            ghostId,
             capability === 'video.edit' ? 'video.edit' : 'video.generate',
           ).models,
           embed: getCatalogEmbedConfig().models,
@@ -6818,6 +7322,9 @@ export function registerGhostIpc(): void {
         // 重新启用后从干净状态开始。
         getGhostAgentSlot().clearGhost(id);
         getGhostErrandSlot().clearGhost(id);
+        // 停用即熄灯 Library 会话:db worker 终止、handle 作废——被禁用的插件
+        // 不得继续后台读写(数据本体不动,重新启用后重开)。
+        await getGhostLibrarySlot().disposeGhost(id);
       }
       const result = await manager.setEnabled(id, enabled);
       if ('rejection' in result) throwUninstallError(result.rejection);
@@ -6844,6 +7351,131 @@ export function registerGhostIpc(): void {
 
   // 运行时状态快照(面板错误接管态的首帧数据源;广播只覆盖后续变化)。
   ipcMain.handle('ghosts:runtime-states', () => ({ states: runtime.listStates() }));
+
+  /* ── Library(持久作品库)设置面 IPC ─────────────────────────────────
+   * 目录选择永远由**宿主**弹(pick 同款),插件无权发起;装入确认与设置页
+   * 共用同一裁决链(原生选择器 → 候选校验 → binding/迁移)。 */
+  ipcMain.handle('ghosts:library-overview', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    return getGhostLibraryOverview(id);
+  });
+  ipcMain.handle('ghosts:library-pick-location', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const picked = win
+      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return { ok: false as const, cancelled: true as const };
+    }
+    const candidate = picked.filePaths[0];
+    const validation = await validateLibraryCandidateLocation({
+      candidate,
+      ghostId: id,
+      deps: {
+        getFile: () => ownerScopedUserDataPath('libraries-binding.json'),
+        getManagedRoots: () => [app.getPath('userData')],
+        getDefaultRoot: (gid) => ownerScopedUserDataPath('libraries', gid),
+      },
+      getDiskFreeBytes: (root) => statfsFreeBytes(root),
+    });
+    if (!validation.ok) return { ok: false as const, cancelled: false as const, message: validation.message };
+    return { ok: true as const, candidate, warnings: validation.warnings };
+  });
+  // 装入确认时的「更改位置」:空库(或首次启用),直接记 binding,无需迁移。
+  // 持 owner 租约:binding 写的是 owner-scoped 文件,切换在途不得跨 owner。
+  ipcMain.handle('ghosts:library-bind', async (event, id: unknown, candidate: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id) || typeof candidate !== 'string') {
+      throwIpcError('INVALID_PARAMS', '参数非法');
+    }
+    const releaseMutation = beginGhostMutation();
+    try {
+      const set = await getGhostLibraryBindingStore().setBinding(id, candidate, (root) => statfsFreeBytes(root));
+      if (!set.ok) return { ok: false as const, message: set.message };
+      await getGhostLibrarySlot().disposeGhost(id); // 作废会话,下一请求用新根
+      return { ok: true as const, warnings: set.warnings };
+    } finally {
+      releaseMutation();
+    }
+  });
+  // 设置页「更改位置」(带数据迁移):precheck→copying→verifying→switching→grace。
+  ipcMain.handle('ghosts:library-relocate', async (event, id: unknown, candidate: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id) || typeof candidate !== 'string') {
+      throwIpcError('INVALID_PARAMS', '参数非法');
+    }
+    return relocateGhostLibraryTo(id, candidate);
+  });
+  // 撤销自定义位置:迁回系统默认并清 binding(反向同一状态机)。
+  ipcMain.handle('ghosts:library-revert-default', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    const defaultParent = path.dirname(ownerScopedUserDataPath('libraries', id));
+    try {
+      await fs.promises.mkdir(defaultParent, { recursive: true });
+    } catch {
+      /* 校验阶段会再探 */
+    }
+    // 默认根在宿主数据区内:豁免受管根排斥(那道闸拦的是用户自选数据区)。
+    const res = await relocateGhostLibraryTo(id, defaultParent, { allowInsideManagedRoot: true });
+    if (!res.ok) return res;
+    await getGhostLibraryBindingStore().removeBinding(id);
+    await getGhostLibrarySlot().disposeGhost(id);
+    return { ok: true as const };
+  });
+  // 漂移恢复(位置失效):解除 binding 回默认(原自定义目录数据原样保留,
+  // 用户可手工找回;不自动猜测)。
+  ipcMain.handle('ghosts:library-unbind', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    const releaseMutation = beginGhostMutation();
+    try {
+      await getGhostLibraryBindingStore().removeBinding(id);
+      await getGhostLibrarySlot().disposeGhost(id);
+      return { ok: true as const };
+    } finally {
+      releaseMutation();
+    }
+  });
+  ipcMain.handle('ghosts:library-delete', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isValidGhostId(id)) throwIpcError('INVALID_PARAMS', '非法插件 id');
+    // **唯一有效的删除确认在 Main**:preload 即使被其它 trusted renderer
+    // 调用也绕不过用户点击(review:Renderer 确认可被内部调用方绕过)。文案走
+    // main i18n(与 Renderer 五语同一资源),壳由系统绘制；取消不取得 mutation
+    // 租约、不触碰 binding/数据。
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const ghostName = findAvailableGhost(id)?.manifest.name ?? id;
+    const options = {
+      type: 'warning' as const,
+      title: t('settings.ghosts.library.deleteConfirmTitle'),
+      message: t('settings.ghosts.library.deleteConfirmTitle'),
+      detail: `${ghostName}\n\n${t('settings.ghosts.library.deleteConfirmDescription')}`,
+      buttons: [
+        t('settings.ghosts.library.deleteConfirmText'),
+        t('settings.ghosts.library.cancel'),
+      ],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    };
+    const decision = parent
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options);
+    if (decision.response !== 0) return { ok: false as const, cancelled: true as const };
+    const releaseMutation = beginGhostMutation();
+    try {
+      const res = await deleteGhostLibraryForActiveOwner(id);
+      return res.ok
+        ? { ok: true as const }
+        : { ok: false as const, cancelled: false as const, message: res.message };
+    } finally {
+      releaseMutation();
+    }
+  });
 
   // 面板错误态的「重载意识」:清熔断记账 + 重新拉起沙箱。
   ipcMain.handle('ghosts:reload', async (event, id: unknown) => {

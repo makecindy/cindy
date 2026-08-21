@@ -46,6 +46,10 @@ export type MainListEntry =
 
 /** 优先级排序的运行时上下文(组装层的运行中 / 需关注集合)。 */
 export interface MainListPriorityContext {
+  /**
+   * 运行中档。组装层会把「刚发送、agent 还没 isRunning」的 starting 会话并进来,
+   * 让新任务立刻排在运行中档顶,而不是先沉到其余档再跳上来。
+   */
   runningSessionIds: ReadonlySet<string>;
   /** 需关注(等待确认 / 完成未读等 attention 通知)的 sessionIds。 */
   attentionSessionIds: ReadonlySet<string>;

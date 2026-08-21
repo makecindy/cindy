@@ -31,6 +31,8 @@ export type IpcErrorCode =
   // 远端 Pi 会话选了 baseUrl 指向本机 loopback 的 BYOM provider(Ollama 等):
   // 远端进程连不到本机服务, 创建时拒绝并引导换网关/远端可达 BYOM。
   | 'REMOTE_LOCAL_ONLY_PROVIDER'
+  // 本机托管 Ollama sidecar 尚未就绪:引导去设置 → 模型供应商 → Ollama。
+  | 'LOCAL_OLLAMA_NOT_READY'
   // 远端切模/切来源需要不同路由(claude-code setModel 守卫):提示重建会话。
   | 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE'
   | 'NO_LIVE_QUERY'
@@ -256,6 +258,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
   'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE',
   'REMOTE_LOCAL_ONLY_PROVIDER',
+  'LOCAL_OLLAMA_NOT_READY',
   'REMOTE_MODEL_SWITCH_ROUTE_CHANGE',
   'NO_LIVE_QUERY',
   'STALE_DIFF',

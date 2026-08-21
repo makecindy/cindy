@@ -355,17 +355,6 @@ describe('codex gateway config', () => {
     expect(args).toContain('features.enable_request_compression=false');
   });
 
-  it('oauth-bearer 模式: 子代理有独立 Provider 路由时从 app-server 启动起关闭 WS', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
-    const args = buildCodexProxySpawnArgs(
-      'http://127.0.0.1:12345',
-      'oauth-bearer',
-      { openAiWebSocketsEnabled: false },
-    );
-
-    expect(args).toContain('model_providers.cindy_openai.supports_websockets=false');
-  });
-
   it('env-key / provider-oauth 模式: 不定义 OpenAI 身份 provider', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
 
@@ -2494,10 +2483,9 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it('fails closed on a subagent websocket upgrade if host-level WS disabling is bypassed', async () => {
-    // 正常路径已在 app-server spawn 时整体关闭 WS；这里验证第二道防线。若旧调用方
-    // 或配置漂移仍发来 upgrade，带 subagentRoute 的线程与 collab_spawn 首请求必须
-    // 回 null（426 → Codex 降到 HTTP），不能绕过模型恢复、鉴权与档位路由。
+  it('keeps the parent websocket while routing configured subagents over HTTP', async () => {
+    // cindy_openai 保持 WS 能力；只有命中独立 subagentRoute 的 child upgrade 回 null
+    //（426 → Codex 按子会话降到 HTTP），父线程及无该路由的子线程继续走原生 WS。
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
@@ -2529,17 +2517,36 @@ describe('codex proxy host', () => {
         url: '/v1/responses',
         headers: { 'thread-id': threadId, ...extra },
       });
+      const ctxForCodex145ChildPrewarm = (
+        threadId: string,
+        sessionId: string,
+        parentThreadId: string,
+      ) => ctxForThread(threadId, {
+        'session-id': sessionId,
+        'x-client-request-id': threadId,
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': parentThreadId,
+      });
 
-      // 已登记 subagentRoute 的父线程与其（经血缘继承快照的）子线程：拒绝 WS。
-      expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-ws-parent'))).toBeNull();
+      expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-ws-parent'))).toBe(
+        'https://chatgpt.com/backend-api/codex',
+      );
+      // 经血缘继承了 route 快照的已登记子线程拒绝 WS。
       host.registerChildThread('thread-ws-parent', 'thread-ws-child');
       expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-ws-child'))).toBeNull();
-      // collab_spawn 首请求（懒注册时 thread 尚未登记）也拒绝。
-      expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-ws-child-2', {
-        'x-openai-subagent': 'collab_spawn',
-      }))).toBeNull();
-      // guard 只拒绝带子代理路由上下文的 upgrade；未配置该路由的 host 仍可走 WS。
-      expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-openai-main'))).toBe(
+      // 0.145.0 child startup prewarm 可能早于 thread/started；完整握手 metadata
+      // 通过显式 parent header 命中路由快照，null 由 proxy 映射为 426。
+      expect(proxyOpts.resolveWebSocketUpstream(ctxForCodex145ChildPrewarm(
+        'thread-ws-child-2',
+        'session-ws-child-2',
+        'thread-ws-parent',
+      ))).toBeNull();
+      // 未配置独立 route 的 collab child 不应被全局降级。
+      expect(proxyOpts.resolveWebSocketUpstream(ctxForCodex145ChildPrewarm(
+        'thread-openai-child',
+        'session-openai-child',
+        'thread-openai-main',
+      ))).toBe(
         'https://chatgpt.com/backend-api/codex',
       );
     } finally {

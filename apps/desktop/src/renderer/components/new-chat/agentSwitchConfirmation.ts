@@ -17,17 +17,12 @@ export interface AgentSwitchConfirmationCopy {
 
 export interface ConfirmAgentSwitchRiskParams {
   /**
-   * 「这一次不必再问」——调用方按**两条**出口置位(任一成立即为 true):
+   * 「这一次不必再问」——**只有**本次目标就是会话正在跑的真实引擎时才为 true
+   * (撤销 / 回原引擎:main 侧 same-engine no-op,不重建上下文)。
    *
-   * 1. 会话上已有**指向本次目标引擎**的切换意图:用户此前已对这个方向确认过,后续在同一
-   *    目标里改选模型 / 来源 / 深度 / Fast 都不重复提示。
-   * 2. 本次目标**就是会话的真实引擎**(撤销 / 回原引擎):main 侧走 same-engine no-op,
-   *    不重建上下文、零风险。判它必须用不跟随意图的事实值,详见 ChatInput 的调用点。
-   *
-   * ★ 第 1 条必须带上「目标相同」这一维(Chris 2026-08-19 实测反馈)。只判「有没有意图」会
-   * 让确认框在会话上挂着**任何**残留意图之后永久静默:用户先切了 Codex(意图挂上),再去
-   * 选 Pi 的模型,风险确认一声不吭就直接改道了另一个引擎 —— 而每一次换目标都是一次新的
-   * 上下文重建风险,必须重新确认。
+   * 挂着的切换意图**不能**当作已经确认过(Chris 2026-08-20):Claude 任务里点了 Pi 收藏、
+   * 意图挂上但还没发消息,再点另一条非当前引擎的模型/收藏,仍然是一次新的上下文重建,
+   * 必须再问。判据只认 runtime,不认意图目标,详见 ChatInput 的调用点。
    */
   hasSwitchIntent: boolean;
   confirm: (options: ConfirmOptions) => Promise<boolean>;
@@ -37,10 +32,8 @@ export interface ConfirmAgentSwitchRiskParams {
 /**
  * Agent 切换确认门。
  *
- * 首次进入另一 Agent(顶部分段浏览态,或统一面板里点中一条跨引擎行)时提示；已有**同目标**
- * 切换意图代表用户已经对这个方向确认过,后续改选模型/来源/effort/Fast 都直接放行;**返回
- * 原引擎**(目标 = 会话真实引擎)同样放行 —— 那是 same-engine no-op,不重建上下文。
- * 换一个目标引擎 = 一次新的风险,重新提示(两条出口见 hasSwitchIntent 的说明)。
+ * 用户只要选的是**不是当前真实引擎**的模型或收藏,一律提示。返回原引擎(目标 = 会话
+ * 真实引擎)放行 —— 那是 same-engine no-op,不重建上下文。挂着的意图不算已经确认过。
  */
 export async function confirmAgentSwitchRisk({
   hasSwitchIntent,

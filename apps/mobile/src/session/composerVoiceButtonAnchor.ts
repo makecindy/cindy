@@ -31,17 +31,24 @@ export function resolveMobileComposerVoiceButtonPlacement(input: {
 export type MobileComposerVoiceButtonAnchorStyle = {
   position: 'absolute';
   right: number;
-  top: '50%' | 'auto';
-  bottom: number | 'auto';
-  transform: Array<{ translateY: number }>;
+  top: 0;
+  bottom: 0;
+  paddingBottom: number;
+  justifyContent: 'center' | 'flex-end';
+  alignItems: 'flex-end';
   zIndex: number;
 };
 
 /**
- * 语音按钮的完整定位。必须一次性写出 top / bottom / transform 三套互斥键,
- * 不能靠 StyleSheet 数组后项写 `undefined` 去覆盖前项:
- * RN 扁平化会跳过 undefined,卡片态就会残留收起态的 `top: '50%'`,麦克风停在
- * 卡片中部(工具排占位空着)。漏写的键在原生侧也可能继续沿用上一帧的 inset。
+ * 语音按钮定位壳的样式。壳铺在整张输入卡上，按钮是壳的 in-flow 子节点：
+ * 收起态垂直居中，卡片态贴底（工具排）。
+ *
+ * 两态都写数字 top / bottom / paddingBottom，禁止 `top: '50%'` / `'auto'` /
+ * `undefined`：
+ * RN 扁平化会跳过 undefined，Yoga 也清不掉已经生效的百分比 top，麦克风会
+ * 停在卡片中部挡住文字（#3053 用 `top: 'auto'` 仍失败）。justifyContent
+ * 负责垂直落点，不靠 transform / 百分比。卡片态让壳延伸到卡片底边，再用
+ * paddingBottom 保持按钮视觉位置：直接父层在按钮下方仍有空间，不会裁掉 hitSlop。
  */
 export function resolveMobileComposerVoiceButtonAnchorStyle(input: {
   cardLayout: boolean;
@@ -51,23 +58,14 @@ export function resolveMobileComposerVoiceButtonAnchorStyle(input: {
     ? MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT + MOBILE_COMPOSER_CONTROL_SIZE + MOBILE_COMPOSER_TOOL_GAP
     : MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT;
 
-  if (input.cardLayout) {
-    return {
-      position: 'absolute',
-      right,
-      top: 'auto',
-      bottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
-      transform: [],
-      zIndex: 2,
-    };
-  }
-
   return {
     position: 'absolute',
     right,
-    top: '50%',
-    bottom: 'auto',
-    transform: [{ translateY: -MOBILE_COMPOSER_CONTROL_SIZE / 2 }],
+    top: 0,
+    bottom: 0,
+    paddingBottom: input.cardLayout ? MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM : 0,
+    justifyContent: input.cardLayout ? 'flex-end' : 'center',
+    alignItems: 'flex-end',
     zIndex: 2,
   };
 }

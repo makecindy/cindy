@@ -120,6 +120,14 @@ export function applyRemoteSessionActivity(deviceId: string, payload: unknown): 
   emit();
 }
 
+/** 刚发送时丢掉上一轮 completed/error 镜像。running / needs-interaction 是本轮活档,保留。 */
+export function dropStaleRemoteTerminalActivity(sessionId: string): void {
+  const activity = activityMap.get(sessionId);
+  if (!activity) return;
+  if (activity.phase !== 'completed' && activity.phase !== 'error') return;
+  removeRemoteSessionActivityEntry(sessionId);
+}
+
 /** 单会话清除(被控端删除 / 归档该会话时由 sessions:patched 路由调用)。 */
 export function removeRemoteSessionActivityEntry(sessionId: string): void {
   sessionDeviceIndex.delete(sessionId);

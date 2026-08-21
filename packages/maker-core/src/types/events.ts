@@ -323,6 +323,14 @@ export interface UsageSnapshot {
   contextTokens: number;
   contextWindow: number;
   costUsd: number;
+  /** Turn-cumulative output tokens (includes reasoning). */
+  outputTokens?: number;
+  /** Generation-only milliseconds for this turn, including any open interval. */
+  generationDurationMs?: number;
+  /** True while the model currently owns the turn (renderer may tick locally). */
+  generationActive?: boolean;
+  /** False when live TPS must be hidden. Omitted on placeholder status frames. */
+  generationReliable?: boolean;
 }
 
 /**
