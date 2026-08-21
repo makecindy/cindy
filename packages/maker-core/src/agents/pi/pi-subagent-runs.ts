@@ -2946,6 +2946,9 @@ export async function stopAndRemovePiSubagentRuns(
     killUnresponsiveRunners: true,
   });
   if (!reclaimed) return false;
-  await fs.rm(root, { recursive: true, force: true });
+  // Windows: a just-killed runner still holds cwd/open handles, so the first
+  // rmdir comes back EBUSY/EPERM. Node's own retry is the same remedy the
+  // test teardown uses; a throw here would leave deleted-task files behind.
+  await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   return true;
 }
