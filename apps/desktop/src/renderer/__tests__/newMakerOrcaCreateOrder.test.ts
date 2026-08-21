@@ -225,6 +225,36 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(normalBranch).toContain('pendingAgentSkillInvocation = resolvedInvocation;');
   });
 
+  it('keeps normal Pi Skill rollback armed until the first message is handed off', () => {
+    const normalFlow = source.slice(
+      source.indexOf('let rollbackUnclaimedPiSkillHandoff:'),
+      source.indexOf('} finally {\n          setWtCreating(false);'),
+    );
+    const projectArm = normalFlow.indexOf('rollbackUnclaimedPiSkillHandoff = () =>');
+    const userArm = normalFlow.indexOf(
+      'rollbackUnclaimedPiSkillHandoff = () =>',
+      projectArm + 1,
+    );
+    const attachmentRehome = normalFlow.indexOf(
+      'await rehomeDraftAttachments(files, newSession.id)',
+      userArm,
+    );
+    const pendingHandoff = normalFlow.indexOf('setPending(newSession.id, {', attachmentRehome);
+    const disarm = normalFlow.indexOf('rollbackUnclaimedPiSkillHandoff = null;', pendingHandoff);
+    const outerCatch = normalFlow.indexOf('} catch (err) {', disarm);
+    const rollbackAfterFailure = normalFlow.indexOf(
+      'await rollbackUnclaimedPiSkillHandoffIfNeeded();',
+      outerCatch,
+    );
+
+    expect(projectArm).toBeGreaterThan(-1);
+    expect(userArm).toBeGreaterThan(projectArm);
+    expect(attachmentRehome).toBeGreaterThan(userArm);
+    expect(pendingHandoff).toBeGreaterThan(attachmentRehome);
+    expect(disarm).toBeGreaterThan(pendingHandoff);
+    expect(rollbackAfterFailure).toBeGreaterThan(outerCatch);
+  });
+
   it('rebinds a selected Pi project Skill to the created worktree before sending', () => {
     const worktreeBranch = source.slice(
       source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)'),

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   AgentSkillCommand,
   PiRuntimeCapabilityManifest,
@@ -10,6 +10,7 @@ import type {
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { capturePiRuntimeCapabilityManifest } from '../../../../../../packages/maker-core/src/agents/pi/runtime-capabilities.js';
+import { fingerprintPiProjectSkillEntrypoint } from '../../../../../../packages/maker-core/src/agents/pi/project-resource-assembly.js';
 import {
   assertCurrentPiSkillInvocationSession,
   isCurrentPiSkillInvocation,
@@ -23,6 +24,16 @@ const localPathComparisonIdentity = process.platform === 'win32'
   ? ({ platform: 'win32', windowsCaseComparison: 'case-sensitive' } as const)
   : ({ platform: 'posix' } as const);
 fs.mkdirSync(sourcePath, { recursive: true });
+fs.writeFileSync(path.join(sourcePath, 'SKILL.md'), '# demo\n');
+
+let projectFingerprint: Awaited<ReturnType<typeof fingerprintPiProjectSkillEntrypoint>>;
+
+beforeAll(async () => {
+  projectFingerprint = await fingerprintPiProjectSkillEntrypoint(sourcePath, repoRoot, {
+    pathComparisonIdentity: localPathComparisonIdentity,
+  });
+  if (!projectFingerprint) throw new Error('failed to fingerprint project Skill test fixture');
+});
 
 afterAll(() => {
   fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -75,6 +86,8 @@ function manifest(
         sourcePath,
         runtimePath: '/snapshot/demo',
         commandName: 'skill:demo',
+        snapshotDigest: projectFingerprint?.contentDigest,
+        sourceFingerprint: projectFingerprint?.sourceStateDigest,
         canonicalRepoRoot: repoRoot,
         pathComparisonIdentity: localPathComparisonIdentity,
       }],
@@ -108,11 +121,19 @@ describe('Pi Skill invocation validation', () => {
     try {
       fs.mkdirSync(physicalSource);
       fs.mkdirSync(otherSource);
+      fs.writeFileSync(path.join(physicalSource, 'SKILL.md'), '# physical demo\n');
+      fs.writeFileSync(path.join(otherSource, 'SKILL.md'), '# other demo\n');
       fs.symlinkSync(
         physicalSource,
         linkedSource,
         process.platform === 'win32' ? 'junction' : 'dir',
       );
+      const linkedFingerprint = await fingerprintPiProjectSkillEntrypoint(
+        physicalSource,
+        repoRoot,
+        { pathComparisonIdentity: localPathComparisonIdentity },
+      );
+      expect(linkedFingerprint).not.toBeNull();
 
       expect(await isCurrentPiSkillInvocation(
         item({ sourcePath: linkedSource }),
@@ -123,6 +144,8 @@ describe('Pi Skill invocation validation', () => {
               sourcePath: physicalSource,
               runtimePath: '/snapshot/demo',
               commandName: 'skill:demo',
+              snapshotDigest: linkedFingerprint!.contentDigest,
+              sourceFingerprint: linkedFingerprint!.sourceStateDigest,
               canonicalRepoRoot: repoRoot,
               pathComparisonIdentity: localPathComparisonIdentity,
             }],
@@ -146,6 +169,8 @@ describe('Pi Skill invocation validation', () => {
               sourcePath: physicalSource,
               runtimePath: '/snapshot/demo',
               commandName: 'skill:demo',
+              snapshotDigest: linkedFingerprint!.contentDigest,
+              sourceFingerprint: linkedFingerprint!.sourceStateDigest,
               canonicalRepoRoot: repoRoot,
               pathComparisonIdentity: localPathComparisonIdentity,
             }],
@@ -157,6 +182,114 @@ describe('Pi Skill invocation validation', () => {
       fs.rmSync(linkedSource, { recursive: true, force: true });
       fs.rmSync(physicalSource, { recursive: true, force: true });
       fs.rmSync(otherSource, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a project Skill whose source tree changes after runtime discovery', async () => {
+    const changingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-skill-changing-'));
+    const changingSource = path.join(changingRoot, '.pi', 'skills', 'demo');
+    try {
+      fs.mkdirSync(changingSource, { recursive: true });
+      fs.writeFileSync(path.join(changingSource, 'SKILL.md'), '# changing demo\n');
+      fs.writeFileSync(path.join(changingSource, 'reference.txt'), 'before\n');
+      const fingerprint = await fingerprintPiProjectSkillEntrypoint(
+        changingSource,
+        changingRoot,
+        { pathComparisonIdentity: localPathComparisonIdentity },
+      );
+      expect(fingerprint).not.toBeNull();
+      const changingItem = item({ sourcePath: changingSource });
+      const changingSkills = skills({ path: changingSource });
+      const changingManifest = manifest({
+        projectResources: {
+          ...manifest().projectResources!,
+          loadedSkills: [{
+            sourcePath: changingSource,
+            runtimePath: '/snapshot/demo',
+            commandName: 'skill:demo',
+            snapshotDigest: fingerprint!.contentDigest,
+            sourceFingerprint: fingerprint!.sourceStateDigest,
+            canonicalRepoRoot: changingRoot,
+            pathComparisonIdentity: localPathComparisonIdentity,
+          }],
+        },
+      });
+
+      await expect(isCurrentPiSkillInvocation(
+        changingItem,
+        changingManifest,
+        changingSkills,
+      )).resolves.toBe(true);
+
+      fs.writeFileSync(path.join(changingSource, 'reference.txt'), 'after\n');
+      await expect(isCurrentPiSkillInvocation(
+        changingItem,
+        changingManifest,
+        changingSkills,
+      )).resolves.toBe(false);
+    } finally {
+      fs.rmSync(changingRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fingerprints the unique project Skill only after later candidates are canonicalized', async () => {
+    const changingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-skill-final-fence-'));
+    const selectedSource = path.join(changingRoot, '.pi', 'skills', 'demo');
+    const laterSource = path.join(changingRoot, '.pi', 'skills', 'other');
+    try {
+      fs.mkdirSync(selectedSource, { recursive: true });
+      fs.mkdirSync(laterSource, { recursive: true });
+      fs.writeFileSync(path.join(selectedSource, 'SKILL.md'), '# selected demo\n');
+      fs.writeFileSync(path.join(selectedSource, 'reference.txt'), 'before\n');
+      fs.writeFileSync(path.join(laterSource, 'SKILL.md'), '# later demo\n');
+      const fingerprint = await fingerprintPiProjectSkillEntrypoint(
+        selectedSource,
+        changingRoot,
+        { pathComparisonIdentity: localPathComparisonIdentity },
+      );
+      expect(fingerprint).not.toBeNull();
+      let mutated = false;
+      const realpath = vi.fn(async (candidate: string) => {
+        if (!mutated && path.resolve(candidate) === laterSource) {
+          mutated = true;
+          fs.writeFileSync(path.join(selectedSource, 'reference.txt'), 'after\n');
+        }
+        return fs.promises.realpath(candidate);
+      });
+
+      await expect(isCurrentPiSkillInvocation(
+        item({ sourcePath: selectedSource }),
+        manifest({
+          projectResources: {
+            ...manifest().projectResources!,
+            loadedSkills: [
+              {
+                sourcePath: selectedSource,
+                runtimePath: '/snapshot/demo',
+                commandName: 'skill:demo',
+                snapshotDigest: fingerprint!.contentDigest,
+                sourceFingerprint: fingerprint!.sourceStateDigest,
+                canonicalRepoRoot: changingRoot,
+                pathComparisonIdentity: localPathComparisonIdentity,
+              },
+              {
+                sourcePath: laterSource,
+                runtimePath: '/snapshot/other',
+                commandName: 'skill:demo',
+                snapshotDigest: 'unused',
+                sourceFingerprint: 'unused',
+                canonicalRepoRoot: changingRoot,
+                pathComparisonIdentity: localPathComparisonIdentity,
+              },
+            ],
+          },
+        }),
+        skills({ path: selectedSource }),
+        { realpath },
+      )).resolves.toBe(false);
+      expect(mutated).toBe(true);
+    } finally {
+      fs.rmSync(changingRoot, { recursive: true, force: true });
     }
   });
 

@@ -863,6 +863,31 @@ export async function fingerprintPiProjectSkillEntrypoint(
   }
 }
 
+/** Revalidate one launch-time project Skill proof within the caller's deadline. */
+export async function piProjectSkillSourceFingerprintMatches(params: {
+  sourcePath: string;
+  canonicalRepoRoot: string;
+  expectedSnapshotDigest: string;
+  expectedSourceFingerprint: string;
+  pathComparisonIdentity: PiProjectPathComparisonIdentity;
+  deadlineAtMs: number;
+}): Promise<boolean> {
+  const fingerprint = await fingerprintPiProjectSkillEntrypoint(
+    params.sourcePath,
+    params.canonicalRepoRoot,
+    {
+      budget: {
+        remainingEntries: MAX_PI_PROJECT_SKILL_FINGERPRINT_ENTRIES * 2,
+        deadlineAtMs: params.deadlineAtMs,
+        maxFileBytes: MAX_PI_PROJECT_SKILL_SNAPSHOT_FILE_BYTES,
+      },
+      pathComparisonIdentity: params.pathComparisonIdentity,
+    },
+  );
+  return fingerprint?.contentDigest === params.expectedSnapshotDigest
+    && fingerprint.sourceStateDigest === params.expectedSourceFingerprint;
+}
+
 async function materializeSkillEntry(
   sourcePath: string,
   targetPath: string,

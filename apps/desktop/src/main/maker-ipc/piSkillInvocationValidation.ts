@@ -9,6 +9,7 @@ import type {
 import {
   piCanonicalPathIsWithin,
   piCanonicalPathsEqual,
+  piProjectSkillSourceFingerprintMatches,
 } from '@cindy/maker-core';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
@@ -379,7 +380,9 @@ export async function isCurrentPiSkillInvocation(
     : Date.now();
 
   if (invocation.scope === 'repo') {
-    let loadedMatches = 0;
+    let loadedMatch: NonNullable<NonNullable<
+      PiRuntimeCapabilityManifest['projectResources']
+    >['loadedSkills']>[number] | null = null;
     for (const skill of manifest.projectResources?.loadedSkills ?? []) {
       if (
         skill.commandName === invocation.runtimeCommandName
@@ -389,10 +392,33 @@ export async function isCurrentPiSkillInvocation(
           dependencies,
           deadlineAtMs,
         )
-      ) loadedMatches += 1;
-      if (loadedMatches > 1) return false;
+      ) {
+        if (loadedMatch) return false;
+        loadedMatch = skill;
+      }
     }
-    return loadedMatches === 1;
+    const identity = loadedMatch?.pathComparisonIdentity;
+    const canonicalRepoRoot = loadedMatch?.canonicalRepoRoot;
+    const snapshotDigest = loadedMatch?.snapshotDigest;
+    const sourceFingerprint = loadedMatch?.sourceFingerprint;
+    if (
+      !loadedMatch
+      || !identity
+      || !canonicalRepoRoot
+      || !snapshotDigest
+      || !sourceFingerprint
+    ) return false;
+    // This is deliberately the last awaited repo-Skill proof. Candidate
+    // canonicalization above establishes uniqueness first, so no later
+    // filesystem operation can reopen the source-mutation window.
+    return piProjectSkillSourceFingerprintMatches({
+      sourcePath: loadedMatch.sourcePath,
+      canonicalRepoRoot,
+      expectedSnapshotDigest: snapshotDigest,
+      expectedSourceFingerprint: sourceFingerprint,
+      pathComparisonIdentity: identity,
+      deadlineAtMs,
+    });
   }
   let runtimeMatches = 0;
   const matchedUserProofs = new Set<FrozenUserSkillSourceProof>();

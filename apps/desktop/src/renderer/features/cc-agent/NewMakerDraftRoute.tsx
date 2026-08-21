@@ -3407,6 +3407,12 @@ export function NewMakerDraftRoute() {
       let optimisticTitleSessionId: string | null = null;
       let remoteOptimisticTitleSessionId: string | null = null;
       let markedStartingSessionId: string | null = null;
+      let rollbackUnclaimedPiSkillHandoff: (() => Promise<void>) | null = null;
+      const rollbackUnclaimedPiSkillHandoffIfNeeded = async () => {
+        const rollback = rollbackUnclaimedPiSkillHandoff;
+        rollbackUnclaimedPiSkillHandoff = null;
+        await rollback?.();
+      };
       const autoTitleLabels = {
         image: t('ccAgent.autoTitle.image'),
         file: t('ccAgent.autoTitle.file'),
@@ -4141,8 +4147,8 @@ export function NewMakerDraftRoute() {
 
           let pendingAgentSkillInvocation: AgentSkillInvocation | undefined;
           if (persistedAgentKind === 'pi' && opts?.pendingProjectSkillName) {
-            const rollbackUnclaimedSession = async () => {
-              await rollbackUnclaimedPiProjectSkillSession({
+            rollbackUnclaimedPiSkillHandoff = () =>
+              rollbackUnclaimedPiProjectSkillSession({
                 sessionId: newSession.id,
                 closeRuntime: () => window.electronAPI.maker.closeSession(
                   newSession.id,
@@ -4158,9 +4164,8 @@ export function NewMakerDraftRoute() {
                 ),
                 purgeRuntimeState: () => makerChatStore.purgeSession(newSession.id),
               });
-            };
             if (!workingDir || !opts.pendingProjectSkillPath || !opts.pendingProjectSkillRoot) {
-              await rollbackUnclaimedSession();
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
               toast.warning(t('commandPalette.projectSkillUnavailableForNewTask'));
               return;
             }
@@ -4203,11 +4208,11 @@ export function NewMakerDraftRoute() {
                 },
               });
             } catch (error) {
-              await rollbackUnclaimedSession();
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
               throw error;
             }
             if (!resolvedInvocation) {
-              await rollbackUnclaimedSession();
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
               toast.warning(t('commandPalette.projectSkillUnavailableForNewTask'));
               return;
             }
@@ -4216,8 +4221,8 @@ export function NewMakerDraftRoute() {
             persistedAgentKind === 'pi'
             && opts?.pendingAgentSkillInvocation?.scope === 'user'
           ) {
-            const rollbackUnclaimedSession = async () => {
-              await rollbackUnclaimedPiProjectSkillSession({
+            rollbackUnclaimedPiSkillHandoff = () =>
+              rollbackUnclaimedPiProjectSkillSession({
                 sessionId: newSession.id,
                 closeRuntime: () => window.electronAPI.maker.closeSession(
                   newSession.id,
@@ -4233,10 +4238,9 @@ export function NewMakerDraftRoute() {
                 ),
                 purgeRuntimeState: () => makerChatStore.purgeSession(newSession.id),
               });
-            };
             const runtimeWorkingDir = newSession.workingDir;
             if (!runtimeWorkingDir) {
-              await rollbackUnclaimedSession();
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
               toast.warning(t('commandPalette.skillUnavailableForNewTask'));
               return;
             }
@@ -4273,11 +4277,11 @@ export function NewMakerDraftRoute() {
                 },
               });
             } catch (error) {
-              await rollbackUnclaimedSession();
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
               throw error;
             }
             if (!resolvedInvocation) {
-              await rollbackUnclaimedSession();
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
               toast.warning(t('commandPalette.skillUnavailableForNewTask'));
               return;
             }
@@ -4354,6 +4358,7 @@ export function NewMakerDraftRoute() {
               : {}),
             ...(deferredUiAssignment ? { deferredUiAssignment } : {}),
           });
+          rollbackUnclaimedPiSkillHandoff = null;
           opts?.onAccepted?.();
           // 草稿已经成功移交给新会话(setPending),清掉 NEW_MAKER_DRAFT_KEY
           // 下的 store 条目,防止下次回到 /cc-agent/new 还看到本次刚发送的内容。
@@ -4373,6 +4378,11 @@ export function NewMakerDraftRoute() {
               : undefined,
           });
         } catch (err) {
+          try {
+            await rollbackUnclaimedPiSkillHandoffIfNeeded();
+          } catch (rollbackError) {
+            log.error('[draft send] roll back unclaimed Pi Skill handoff failed', rollbackError);
+          }
           // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
           // 归属切换也会提前 return,必须先撤;否则已建、未发出首条的空会话会一直顶着原文。
           if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
