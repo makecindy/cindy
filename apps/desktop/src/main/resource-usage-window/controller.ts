@@ -341,25 +341,42 @@ export class ResourceUsageWindowController {
 
   private onEnteredFullScreen(win: BrowserWindow): void {
     if (win !== this.winRef || win.isDestroyed()) return;
-    if (this.pendingLeaveGeneration !== null || !this.visible) {
-      const generation = this.pendingLeaveGeneration ?? this.fullscreenGeneration;
-      this.pendingLeaveGeneration = generation;
-      this.fullscreenTransition = 'leaving';
-      win.setFullScreen(false);
-      this.scheduleLeaveFallback(win, generation);
-      return;
-    }
-    this.fullscreenTransition = 'entered';
+    this.reconcileFullscreenEvent(win, 'entered');
   }
 
   private onLeftFullScreen(win: BrowserWindow): void {
     if (win !== this.winRef || win.isDestroyed()) return;
+    this.reconcileFullscreenEvent(win, 'left');
+  }
+
+  /**
+   * 全屏事件的唯一入口。macOS 的 enter/leave 可能迟到、乱序或丢失。
+   * 当前代次要关窗时一律走退出；当前代次仍可见时按 owner 对账；
+   * 其它迟到事件不得把已结束的一轮重新拉活。
+   */
+  private reconcileFullscreenEvent(win: BrowserWindow, event: 'entered' | 'left'): void {
     if (this.pendingLeaveGeneration !== null) {
-      this.finishHide(win, this.pendingLeaveGeneration);
+      if (event === 'left') {
+        this.finishHide(win, this.pendingLeaveGeneration);
+        return;
+      }
+      this.fullscreenTransition = 'leaving';
+      win.setFullScreen(false);
+      this.scheduleLeaveFallback(win, this.pendingLeaveGeneration);
       return;
     }
-    this.fullscreenTransition = 'idle';
-    if (this.visible || this.pendingOpen) this.syncFullscreenWithOwner(win);
+    if (this.visible || this.pendingOpen) {
+      this.fullscreenTransition = event === 'entered' ? 'entered' : 'idle';
+      this.syncFullscreenWithOwner(win);
+      return;
+    }
+    if (event === 'entered') {
+      const generation = this.fullscreenGeneration;
+      this.pendingLeaveGeneration = generation;
+      this.fullscreenTransition = 'leaving';
+      win.setFullScreen(false);
+      this.scheduleLeaveFallback(win, generation);
+    }
   }
 
   private rememberOwner(sender: WebContents): void {
