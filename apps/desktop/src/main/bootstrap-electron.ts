@@ -843,7 +843,11 @@ import {
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
 import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
-import { startGoalController, getGoalController } from './goal-host/index.js';
+import {
+  startGoalController,
+  getGoalController,
+  resetGoalController,
+} from './goal-host/index.js';
 import { startLearnHost, getLearnController, resetLearnController } from './learn-host/index.js';
 import { fetchHubSkillReference } from './learn-host/hubReference.js';
 import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.js';
@@ -852,6 +856,9 @@ import { createLogger as createSchedulerLogger } from './logger.js';
 
 let makerProviderRefreshConfigured = false;
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
+// Async readiness callbacks must not commit hosts after an account boundary.
+// Incremented synchronously before teardown awaits any drains.
+let accountRuntimeGeneration = 0;
 
 function markMakerProviderRefreshConfigured(): void {
   makerProviderRefreshConfigured = true;
@@ -901,6 +908,14 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
  * resetScheduler 把 _scheduler 置 null，新实例不在 WeakSet 里，会重新 attach 一次。
  */
 async function attemptStartScheduler(): Promise<void> {
+  const schedulerStartGeneration = accountRuntimeGeneration;
+  const schedulerStartOwnerScopeKey = activeOwnerScopeKey();
+  const isCurrentSchedulerStart = (): boolean =>
+    schedulerStartGeneration === accountRuntimeGeneration &&
+    !isAppSessionBoundaryPending() &&
+    schedulerStartOwnerScopeKey === activeOwnerScopeKey();
+
+  if (!isCurrentSchedulerStart()) return;
   // 两个前置条件必须满足才能启动：
   //   1. maker 单例已构造 (splash check-environment 完成 → registerMakerIpcsAfterSplash)
   //   2. DbClient 已 smoke 通过 (user login → renderer 触发 'local-db:ensure-ready' IPC)
@@ -929,6 +944,7 @@ async function attemptStartScheduler(): Promise<void> {
   // await，确保第一个 scheduler tick 能看到用户已保存的自定义 MCP 配置。
   // 若 Maker 已被 registerMakerIpcsAfterSplash 构造过，promise 早已 resolve，no-op。
   await waitForInitialCustomMcpRefresh();
+  if (!isCurrentSchedulerStart()) return;
   const automationGitBaselineHooks = createAutomationUserTurnGitBaselineHooks();
   try {
     const scheduler = await startScheduler({
@@ -939,6 +955,7 @@ async function attemptStartScheduler(): Promise<void> {
       logger: createSchedulerLogger('scheduler-host'),
       ...automationGitBaselineHooks,
     });
+    if (!isCurrentSchedulerStart()) return;
     // scheduler 真正 ready 后挂 listener + 喂入 readiness holder。WeakSet 按实例
     // 去重:localDb onReady 重试可能再次拿到同实例，此时 no-op；
     // 切账号后新实例不在 set 里，会重新 attach。
@@ -953,6 +970,7 @@ async function attemptStartScheduler(): Promise<void> {
   } catch (err) {
     console.error('[bootstrap-electron] startScheduler failed (non-fatal):', err);
   }
+  if (!isCurrentSchedulerStart()) return;
   // GoalController 与 scheduler 同就绪点启动(maker + localDb 均 ready):内部幂等
   // (_controller 已存在则直接返回),启动时 resume 所有 active goal。失败非致命。
   try {
@@ -1227,6 +1245,7 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  accountRuntimeGeneration += 1;
   const blockingFailures: unknown[] = [];
   // Hardware must stop before the long async drain. Otherwise a held stick or
   // microphone keeps acting on the outgoing account while caches and IM stop.
@@ -1314,6 +1333,10 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // 路径同构,这里关掉 teardown 路径的对偶窗口)。
   // 不 reject _pending — 让在途请求继续等下次 setSchedulerReady,30s 超时兜底。
   resetSchedulerReady();
+  // GoalController closes over the outgoing Maker and owner DB. Dispose it at
+  // the boundary so the next readiness pass creates a controller for the new
+  // account instead of reusing a shutdown Maker.
+  resetGoalController();
   const agentIslandService = getAgentIslandService();
   agentIslandService?.resetRuntimeState();
   // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在

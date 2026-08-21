@@ -3180,6 +3180,28 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(0);
   });
 
+  it('does not let dispose revive a startup active snapshot after an async storage read', async () => {
+    const active = seededGoal({ sessionId: 's1', objective: 'stay disposed' });
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    const get = vi.spyOn(h.storage, 'get').mockReturnValueOnce(blockedGet);
+    const onEvent = vi.spyOn(h.session, 'onEvent');
+
+    await h.storage.set(active);
+    const startupResume = h.controller.resumeActiveGoals();
+    await vi.waitFor(() => expect(get).toHaveBeenCalledWith('s1'));
+
+    h.controller.dispose();
+    releaseGet(active);
+    await startupResume;
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(h.session.sends).toHaveLength(0);
+    expect(h.updates).toHaveLength(0);
+  });
+
   it('resumeOnOpen 在释放 route 锁前挂 listener，并在会话随即关闭后迁移到重建会话', async () => {
     const firstSession = new FakeSession('s1', 'claude-code');
     const recreatedSession = new FakeSession('s1', 'claude-code');
