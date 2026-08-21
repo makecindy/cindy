@@ -50,12 +50,14 @@ describe('buildLinuxUpdateScript structure', () => {
     expect(script).toContain('"$PKEXEC" /usr/bin/dpkg --install');
   });
 
-  it('revalidates the staged .deb sha256 immediately before pkexec', () => {
-    const shaIdx = script.indexOf('staged .deb sha256 revalidated');
-    const aptIdx = script.indexOf('"$PKEXEC" /usr/bin/apt-get install');
-    expect(shaIdx).toBeGreaterThan(-1);
+  it('copies the staged .deb next to the script and hashes that private copy before pkexec', () => {
+    const copyIdx = script.indexOf('INSTALL_DEB=');
+    const shaIdx = script.indexOf('private .deb copy sha256 revalidated');
+    const aptIdx = script.indexOf('"$PKEXEC" /usr/bin/apt-get install --yes --allow-downgrades "$INSTALL_DEB"');
+    expect(copyIdx).toBeGreaterThan(-1);
+    expect(shaIdx).toBeGreaterThan(copyIdx);
     expect(aptIdx).toBeGreaterThan(shaIdx);
-    expect(script).toContain(`ACTUAL_SHA=$(sha256sum '/tmp/cindy-0.0.2-amd64.deb'`);
+    expect(script).toContain(`cp -f '/tmp/cindy-0.0.2-amd64.deb' "$INSTALL_DEB"`);
     expect(script).toContain(`if [ "$ACTUAL_SHA" != '${STAGED_SHA}' ]; then`);
   });
 
