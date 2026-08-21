@@ -2679,6 +2679,9 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
       const row = await screen.findByRole('option', { name: /GPT-5\.5/ });
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
+      // 确认门收**本次目标引擎**(Chris 2026-08-19):调用方靠它判「已有指向该目标的意图」,
+      // 不传目标会让确认框在任何残留意图之后永久静默。
+      expect(confirmBrowseSwitch).toHaveBeenCalledWith('codex');
       // 来源 mark 存在说明目标 Agent 仍走 provider sections，而不是退化成 flat。
       expect(row.textContent).toContain('Z');
       // 行尾与悬浮面板同读目标 Agent 的 per-(来源,模型) 记忆，不落模型默认 medium。

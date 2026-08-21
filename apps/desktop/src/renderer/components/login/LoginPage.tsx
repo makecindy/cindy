@@ -9,11 +9,17 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
-import { isValidEmail } from '@cindy/auth-client';
+import type {
+  AccountDeletionStatus,
+  CaptchaConfig,
+  SocialProvider,
+  VerificationKind,
+} from '@cindy/auth-client';
+import { captchaRequiredActionForVerificationKind, isValidEmail } from '@cindy/auth-client';
 
 import { cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
+import { setLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useLogin } from '@/hooks/useLogin';
 import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
@@ -29,6 +35,7 @@ import ssoIcon from '@/assets/login/icons/sso.svg';
 import ssoIconDark from '@/assets/login/icons/sso-dark.svg';
 
 import { LoginStage } from './LoginStage';
+import { LoginCaptchaOverlay } from './LoginCaptchaOverlay';
 import {
   LoginBackButton,
   LoginConsentDialog,
@@ -110,6 +117,7 @@ export function LoginPage() {
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
     dispatch,
+    dispatchWithResult,
     clearError,
   } = useLogin();
   const { t } = useTranslation();
@@ -438,11 +446,126 @@ export function LoginPage() {
     void dispatch({ type: 'reset' });
   };
 
+  /* ── 人机验证前置闸(邮箱/短信发码防批量注册)──
+     providers.captcha 只随 identifier/realm-confirmation 步的 state 下发,而发码
+     动作发生在后续步骤(method-choice 个人行 / 验证码页重发),进 ref 存续——
+     登录流必经 identifier,ref 必然先就位。cn 构建 / 服务端未开启时字段缺席,
+     整条闸是 no-op；当前服务端只下发邮箱动作，未来下发短信动作即可启用。 */
+  const captchaConfigRef = useRef<CaptchaConfig | null>(null);
+  useEffect(() => {
+    if (loginState?.step === 'identifier' || loginState?.step === 'realm-confirmation') {
+      captchaConfigRef.current = loginState.providers.captcha ?? null;
+    }
+  }, [loginState]);
+  const [captchaChallenge, setCaptchaChallenge] = useState<{
+    baseUrl: string;
+    resolve: (token: string | null) => void;
+  } | null>(null);
+  // 挑战创建必须单飞：React 提交 overlay 前的快速重复触发不能覆盖 resolver。
+  // 后续并发调用按取消处理，避免同一枚单次 token 被两个发码请求重复消费。
+  const captchaChallengePendingRef = useRef(false);
+  /** 打开挑战 overlay 并等结果:token = 通过;null = 用户取消或挑战页地址不可得。 */
+  const obtainCaptchaToken = async (kind: VerificationKind): Promise<string | null> => {
+    if (captchaChallengePendingRef.current) return null;
+    captchaChallengePendingRef.current = true;
+    try {
+      let baseUrl: string;
+      try {
+        baseUrl = await window.electronAPI.authGetCaptchaChallengeUrl();
+        const target = new URL(baseUrl);
+        target.searchParams.set('action', captchaRequiredActionForVerificationKind(kind));
+        baseUrl = target.toString();
+      } catch (error) {
+        // IPC 面缺失/异常:视同取消(不发码,用户可重试);错误细节只进日志。
+        log.error('resolve captcha challenge url failed', error);
+        return null;
+      }
+      return await new Promise((resolve) => {
+        setCaptchaChallenge({
+          baseUrl,
+          resolve: (token) => {
+            setCaptchaChallenge(null);
+            resolve(token);
+          },
+        });
+      });
+    } finally {
+      captchaChallengePendingRef.current = false;
+    }
+  };
+  const captchaRequiredFor = (kind: VerificationKind) =>
+    captchaConfigRef.current?.requiredFor.includes(
+      captchaRequiredActionForVerificationKind(kind),
+    ) === true;
+
+  // AuthContext「唯一邮箱方式自动发码」快捷链的前置闸:那条链不经过下面的
+  // dispatchRequestCode,借用本组件的挑战 overlay。latest-ref 模式:注册一次,
+  // 回调恒取最新一帧的闸函数。
+  const captchaGateRef = useRef<() => Promise<string | null | undefined>>(() =>
+    Promise.resolve(undefined),
+  );
+  captchaGateRef.current = () =>
+    captchaRequiredFor('email') ? obtainCaptchaToken('email') : Promise.resolve(undefined);
+  useEffect(() => {
+    setLoginEmailCaptchaGate(() => captchaGateRef.current());
+    return () => setLoginEmailCaptchaGate(null);
+  }, []);
+
+  /**
+   * 邮箱 identifier 提交:discover(AuthContext 可能内联自动发码)+ captcha
+   * 错误兜底。providers 缓存旧于服务端开关时,自动链的闸拿不到 captcha 配置、
+   * 不带 token 发码吃到 CAPTCHA_REQUIRED——在此出题后带 token 直接重发发码
+   * (成功即进输码页,倒计时由 step 沿 effect 起算)。
+   */
+  const submitEmailDiscover = async (email: string) => {
+    const result = await dispatchWithResult({ type: 'discover', email });
+    if (
+      result.success ||
+      (result.code !== 'CAPTCHA_REQUIRED' && result.code !== 'CAPTCHA_INVALID')
+    ) {
+      return;
+    }
+    const token = await obtainCaptchaToken('email');
+    if (token === null) return;
+    await dispatchWithResult({
+      type: 'request-code',
+      kind: 'email',
+      identifier: email,
+      captchaToken: token,
+    });
+  };
+
   // request-code 类动作统一走这里:成功返回时刻 = 倒计时起算点(Step 3a);
   // 失败(含重发失败)不 arm → 保持当前 deadline。
   const dispatchRequestCode = async (kind: VerificationKind, value: string) => {
-    const ok = await dispatch({ type: 'request-code', kind, identifier: value });
-    if (ok) armResendCountdown();
+    let captchaToken: string | undefined;
+    if (captchaRequiredFor(kind)) {
+      const token = await obtainCaptchaToken(kind);
+      if (token === null) return; // 取消:不发码、不 arm、不报错
+      captchaToken = token;
+    }
+    let result = await dispatchWithResult({
+      type: 'request-code',
+      kind,
+      identifier: value,
+      captchaToken,
+    });
+    // 错误驱动兜底(providers 缓存旧于服务端开关,或 token 恰好过期):
+    // 重新出题一次后原参重试,仅一次防循环。
+    if (
+      !result.success &&
+      (result.code === 'CAPTCHA_REQUIRED' || result.code === 'CAPTCHA_INVALID')
+    ) {
+      const retryToken = await obtainCaptchaToken(kind);
+      if (retryToken === null) return;
+      result = await dispatchWithResult({
+        type: 'request-code',
+        kind,
+        identifier: value,
+        captchaToken: retryToken,
+      });
+    }
+    if (result.success) armResendCountdown();
   };
 
   const submitIdentifier = (event: FormEvent) => {
@@ -460,7 +583,7 @@ export function LoginPage() {
       setIdentifierFormatError(null);
       // 邮箱提交先过协议门(产品拍板 2026-07-24 二次:手机号/邮箱提交一律先弹协议
       // 弹窗,压过审查侧「discover 纯查询可放行」的建议;显式企业 SSO 入口仍豁免)
-      requireConsent(() => void dispatch({ type: 'discover', email: value }));
+      requireConsent(() => void submitEmailDiscover(value));
     } else {
       // 手机号:桌面不做客户端 +86/号段校验(#223 仅移动端做 cnPhone 本地拦截),
       // 输入原样透传服务端 request-code,由服务端校验号段合法性。
@@ -1152,6 +1275,14 @@ export function LoginPage() {
           onDisagree={() => void dispatch({ type: 'cancel-sso-realm' })}
           onOpenTerms={() => undefined}
           onOpenPrivacy={() => undefined}
+        />
+      )}
+      {/* 人机验证挑战层(global 邮箱发码前置闸):独立分区 webview 装载
+          auth-server 托管的 Turnstile 页,结果经 resolve 回到 dispatchRequestCode。 */}
+      {captchaChallenge && (
+        <LoginCaptchaOverlay
+          challengeBaseUrl={captchaChallenge.baseUrl}
+          onResult={captchaChallenge.resolve}
         />
       )}
     </div>

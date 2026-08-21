@@ -46,6 +46,9 @@ import {
   resolveSubagentModelDefault,
   type ResolveSubagentModelDefaultResult,
 } from './subagent-model-default.js';
+import {
+  buildClaudeSubagentModelGuardHooks,
+} from './subagent-model-access.js';
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
 import {
@@ -140,6 +143,7 @@ import { findClaudeSessionJsonl } from './claude-projects-fs.js';
 import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
+import { resetClaudeGenerationTiming } from './generation-timing.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
 import type {
   ScanAtResourcesOptions,
@@ -678,6 +682,13 @@ function isInvalidCompactPreservedSegmentForkError(err: unknown): boolean {
  * 少停不误停,启发式后台活动检测兜底)。
  */
 const WAKE_BACKGROUND_TASK_TYPES: ReadonlySet<string> = new Set(['local_agent', 'local_workflow']);
+/**
+ * Wake 契约对账宽限:claim 内全部 wake 任务到终态(completed/failed)后,留给 SDK
+ * 启动自动续跑段的窗口。健康路径里 dequeue → 顶层活动只需数秒;宽限内没有任何
+ * 激活即判定契约失守(CLI 在「子代理于主 turn 运行中完成」时会把通知当 mid-turn
+ * 附件消费,续跑段永远不会来),取消 claim 收口产品 turn。只影响终态低频路径。
+ */
+export const WAKE_CONTRACT_GRACE_MS = 60_000;
 
 // ── 能力声明 ──────────────────────────────────────────────────────────────────
 
@@ -1090,6 +1101,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     );
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
       credentialMode,
+      sessionProviderId: opts.providerId ?? null,
       modelContextWindows: providerRoutedModels,
       // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
       // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
@@ -1156,12 +1168,23 @@ export class ClaudeCodeAgent extends BaseAgent {
     }
     // 判定落到 env(唯一写入点,见 env-builder.applySubagentModelEnv)。
     applySubagentModelEnv(env, subagentDefault.envSubagentModel ?? null);
+    // 每次 Agent/Task 调用都重新读取 host 的当前账号与路由事实。静态 capabilities
+    // 只负责展示，不参与 deny；账号切换时 resolver 会立即看到新快照或 unknown。
+    const resolveSubagentModelAccess = this.deps.resolveClaudeSubagentModelAccess
+      ? (model: string) => this.deps.resolveClaudeSubagentModelAccess!({
+          providerId: opts.providerId ?? null,
+          parentModel: opts.model,
+          credentialMode: effectiveCredentialMode,
+          model,
+        })
+      : undefined;
     // 远端单独一份 env:用 'remote' 模式从空字典起(不继承 desktop OS env),否则
     // Windows HOME=C:\Users\Lizi 之类污染远端 cc CLI 的 ~ 展开(session/memory
     // 落怪路径)。详见 env-builder.ts buildClaudeEnv 文档。
     const remoteEnv = opts.remoteHostId
       ? await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
           credentialMode,
+          sessionProviderId: opts.providerId ?? null,
           mode: 'remote',
           modelContextWindows: providerRoutedModels,
           // 远端不做本地扫描(见上),这里的值就是路由感知后的设置值 —— 保持 env 强制覆盖语义。
@@ -1243,6 +1266,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'claude-code',
             getThresholdPct: getAutoCompactThresholdPct,
+            // 远端没有 overflow rollover;关掉 /compact 会让会话只能硬超限。
+            ...(opts.remoteHostId
+              ? {}
+              : {
+                  shouldHandoffAfterContextAssessment:
+                    this.deps.runtimeConfig.shouldHandoffAfterContextAssessment,
+                }),
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。
@@ -1521,6 +1551,15 @@ export class ClaudeCodeAgent extends BaseAgent {
     const localClaudeHooks = reviewMode
       ? { PreToolUse: [{ hooks: [reviewReadOnlyHook] }] }
       : mergeClaudeHookSets(
+          // 账号/模型准入是执行前提，不是用户工具权限。放在 PreToolUse，确保
+          // Full access 也无法绕过。
+          buildClaudeSubagentModelGuardHooks(
+            resolveSubagentModelAccess,
+            subagentDefault.envSubagentModel,
+            (model) => {
+              log.warn('subagent model denied by account access preflight', { model });
+            },
+          ),
           buildClaudeLocalToolGuardHooks(
             this.deps.capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -2318,6 +2357,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
+      resetClaudeGenerationTiming(runtimeState.generation);
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
@@ -3115,6 +3155,18 @@ export class ClaudeCodeAgent extends BaseAgent {
               reason: decision.reason,
             };
           },
+          onSubagentModelAccessRequest: async (rawParams: unknown) => {
+            const params = typeof rawParams === 'object' && rawParams !== null
+              ? rawParams as Record<string, unknown>
+              : {};
+            const model = typeof params.model === 'string' ? params.model : '';
+            if (!model || !resolveSubagentModelAccess) return { status: 'unknown' };
+            try {
+              return await resolveSubagentModelAccess(model);
+            } catch {
+              return { status: 'unknown' };
+            }
+          },
           // 订阅 token 到期续命(远端版,对齐本地 SDK options 的 getOAuthToken 回调,
           // 见 buildQuery 本地分支):远端 cc 中途 401 → daemon 发 oauth/refresh 反向
           // RPC → 这里向 host 要新 token。接线条件与本地同款:env 实际带订阅 token 且
@@ -3396,6 +3448,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     function teardownDeadHandle(logLabel: string): void {
       // Provider death is not a successful user cancellation. Session status
       // and the queued terminal error/done must decide observer settlement.
+      resetClaudeGenerationTiming(runtimeState.generation);
       discardActiveContinuation(logLabel);
       turnInFlight = false;
       // handle 死透 → 后续没有排队 turn 可跑, counter 归零避免残留污染下一 handle 重建
@@ -3563,6 +3616,14 @@ export class ClaudeCodeAgent extends BaseAgent {
      */
     let stopTerminalEmittedGeneration: number | null = null;
     let continuationCancellationRequiresQueryRebuild = false;
+    // Wake 契约对账定时器:见 WAKE_CONTRACT_GRACE_MS。claim 激活 / 取消 / 结算 /
+    // 丢弃 / query 换代时必须清掉,防止陈旧定时器误杀后继 claim。
+    let wakeContractReconcileTimer: NodeJS.Timeout | null = null;
+    const clearWakeContractReconciliation = (): void => {
+      if (!wakeContractReconcileTimer) return;
+      clearTimeout(wakeContractReconcileTimer);
+      wakeContractReconcileTimer = null;
+    };
     const continuationClaims = new Map<number, ContinuationClaim>();
     const continuationListeners = new Set<(
       continuationId: number,
@@ -3600,6 +3661,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       claim.state = 'cancelled';
       claim.settled = true;
       activeContinuationId = null;
+      clearWakeContractReconciliation();
       log.info('turn continuation cancelled', { reason, continuationId: claim.id });
       emitContinuationState(claim.id, 'cancelled');
       releaseSettledContinuationClaim(claim);
@@ -3610,6 +3672,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (!claim || claim.state !== 'active') return;
       claim.settled = true;
       activeContinuationId = null;
+      clearWakeContractReconciliation();
       log.info('turn continuation settled without a follow-up turn', {
         reason,
         continuationId: claim.id,
@@ -3617,6 +3680,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       releaseSettledContinuationClaim(claim);
     };
     const discardActiveContinuation = (reason: string, forceRelease = false): void => {
+      clearWakeContractReconciliation();
       if (continuationClaims.size > 0) {
         log.debug('discarding turn continuation claims', {
           reason,
@@ -3705,6 +3769,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       continuationClaims.set(claim.id, claim);
       activeContinuationId = claim.id;
       event.turnContinuationId = claim.id;
+      // 从 active 前任 carry 出来的 completed/failed 任务可能已全部终态 —— 下一
+      // 个 continuation 段同样受 wake 契约保护,创建即武装对账。
+      armWakeContractReconciliation(claim);
       // 探针:claim 创建是「continuation 悬挂」vs「done 未到达」的关键区分点。
       // 只记 id / taskId / state 枚举,不记消息文本与 task prompt(脱敏红线)。
       log.info('turn continuation claim created', {
@@ -3723,6 +3790,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       const states = [...claim.tasks.values()];
       // A completed/failed wake task still has the SDK continuation contract;
       // only an all-stopped group proves that a second `done` cannot arrive.
+      // (All-terminal-but-not-stopped groups fall through here and rely on the
+      // timed WAKE_CONTRACT_GRACE_MS reconciliation above: no continuation
+      // activity within the grace window means the contract is broken.)
       // Authority model: q.interrupt ACK is required when user Stop has no
       // provider confirmation and must revoke a completed/failed continuation
       // contract itself. An all-stopped snapshot is already provider-confirmed
@@ -3818,7 +3888,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           (prev?.wake || claim.tasks.has(taskId))
         ) {
           claim.tasks.set(taskId, status);
-          if (claim.state === 'awaiting') return reconcileActiveContinuation();
+          if (claim.state === 'awaiting') {
+            const cancelledClaim = reconcileActiveContinuation();
+            if (!cancelledClaim) armWakeContractReconciliation(claim);
+            return cancelledClaim;
+          }
         }
       }
       return null;
@@ -3843,6 +3917,43 @@ export class ClaudeCodeAgent extends BaseAgent {
         continuationCancellationGeneration = turnState.generation;
         continuationCancellationRequiresQueryRebuild = true;
       }
+    };
+    const claimTasksAllTerminal = (claim: ContinuationClaim): boolean => {
+      if (claim.tasks.size === 0) return false;
+      for (const state of claim.tasks.values()) {
+        if (state === 'running') return false;
+      }
+      return true;
+    };
+    /**
+     * Wake 契约对账:awaiting claim 的全部任务都到终态后,按 task_notification 续跑
+     * 契约顶层 continuation 段应随即开始。起表等待 WAKE_CONTRACT_GRACE_MS,期间
+     * claim 激活/结算/取消/换代都会清表;超时仍未激活即判定契约失守,走与用户 Stop
+     * 相同的取消路径(合成 turn_continuation_cancelled 终态 + cancelled-tail fence),
+     * 让宿主侧收口产品 turn,不再无限等待。
+     */
+    const armWakeContractReconciliation = (claim: ContinuationClaim): void => {
+      if (claim.state !== 'awaiting' || !claimTasksAllTerminal(claim)) return;
+      clearWakeContractReconciliation();
+      wakeContractReconcileTimer = setTimeout(() => {
+        wakeContractReconcileTimer = null;
+        const current = activeContinuationClaim();
+        if (
+          !current ||
+          current.id !== claim.id ||
+          current.state !== 'awaiting' ||
+          !claimTasksAllTerminal(current)
+        ) {
+          return;
+        }
+        log.info('wake contract unfulfilled: all wake tasks terminal without continuation activity', {
+          continuationId: current.id,
+          tasks: [...current.tasks.entries()],
+        });
+        cancelActiveContinuation('wake_contract_unfulfilled');
+        emitCancelledContinuationBoundary(current, 'wake_contract_unfulfilled');
+      }, WAKE_CONTRACT_GRACE_MS);
+      (wakeContractReconcileTimer as unknown as { unref?: () => void }).unref?.();
     };
 
     const releaseEventAccounting = (event: AgentEvent): void => {
@@ -3882,6 +3993,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         continuationClaims.clear();
         continuationListeners.clear();
         pendingContinuationTerminalBoundaries = 0;
+        clearWakeContractReconciliation();
       }
     };
     // 逐个发起 stopTask,但不在这里等待 RPC:interrupt 必须先按控制通道顺序发出。
@@ -4338,6 +4450,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 consumeTaskNotificationsForActiveSegment(claim);
                 claim.state = 'active';
                 emitContinuationState(claim.id, 'active');
+                clearWakeContractReconciliation();
               }
               log.debug('SDK ▶ turn activity without send — marking auto-continued turn in-flight', {
                 rawType,
@@ -5787,6 +5900,22 @@ export class ClaudeCodeAgent extends BaseAgent {
         }));
       },
 
+      countPendingWakeContinuations() {
+        // 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+        // runningBackgroundTasks 在任务终态时立即出表(noteBackgroundTaskEvent),
+        // 因此 listBackgroundTasks() 的空快照**不能**证明后续没有 wake turn ——
+        // renderer 的唤醒桥接对账必须以本计数为权威依据(为 0 才允许收口),
+        // 而不是把「没有仍在运行的任务」当成「没有待启动的 continuation」。
+        // cancelled 不计(不会再有 wake turn 跟进);awaiting / active 都计
+        // (active 期间主 turn isRunning 本就为 true,双重保护)。
+        if (closed) return 0;
+        let n = 0;
+        for (const claim of continuationClaims.values()) {
+          if (claim.state === 'awaiting' || claim.state === 'active') n += 1;
+        }
+        return n;
+      },
+
       beginTurnContinuationWait(continuationId?: number) {
         if (continuationId === undefined) return null;
         return continuationClaims.get(continuationId)?.state ?? null;
@@ -5806,6 +5935,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (closed) return;
         // Closing/dead sessions settle through Session status (or their queued
         // terminal event), never through the successful task-stop path.
+        resetClaudeGenerationTiming(runtimeState.generation);
         discardActiveContinuation('session_closed');
         clearUpstreamResponseIdle();
         pendingToolIds.clear();
@@ -5841,6 +5971,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? {
             async detach() {
               if (closed) return;
+              resetClaudeGenerationTiming(runtimeState.generation);
               discardActiveContinuation('session_detached', true);
               clearUpstreamResponseIdle();
               pendingToolIds.clear();

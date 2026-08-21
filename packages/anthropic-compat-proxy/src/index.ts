@@ -48,6 +48,7 @@ export {
   repairToolExchangeAdjacency,
   repairToolExchangeAdjacencyFromBody,
   repairToolExchangeStructureFromBody,
+  replaceToolResultImagesWithNotice,
   stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,

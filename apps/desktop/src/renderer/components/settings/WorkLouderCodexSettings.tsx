@@ -116,7 +116,8 @@ interface WorkLouderCodexEntryProps {
 
 export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodexEntryProps) {
   const { t } = useTranslation();
-  const status = state?.connectionStatus ?? 'connecting';
+  const enabled = state?.settings.deviceEnabled ?? false;
+  const status = enabled ? (state?.connectionStatus ?? 'connecting') : 'disabled';
   return (
     <button
       type="button"
@@ -143,7 +144,12 @@ export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodex
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-2">
-        <ConnectionStatus status={status} loading={loading} compact />
+        <ConnectionStatus
+          status={status}
+          present={state?.devicePresent ?? null}
+          loading={loading}
+          compact
+        />
         <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
       </span>
     </button>
@@ -151,7 +157,7 @@ export function WorkLouderCodexEntry({ state, loading, onOpen }: WorkLouderCodex
 }
 
 export function WorkLouderCodexEntryContainer({ onOpen }: { onOpen(): void }) {
-  const { state, loading } = useWorkLouderCodex();
+  const { state, loading } = useWorkLouderCodex({ watchConnection: true });
   return <WorkLouderCodexEntry state={state} loading={loading} onOpen={onOpen} />;
 }
 
@@ -166,8 +172,6 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     resetSettings,
     openInputMonitoringSettings,
     reload,
-    // This page shows a live connection status, so it is the one place that
-    // polls the device — the entry row above it does not.
   } = useWorkLouderCodex({ watchConnection: true });
   const { skills, bootstrapped, refresh: refreshSkills } = useSkillhub();
   const [brightnessDraft, setBrightnessDraft] = useState(100);
@@ -190,8 +194,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
     [skills],
   );
   const isDefault =
-    state !== null &&
-    JSON.stringify(state.settings) === JSON.stringify(WORKLOUDER_CODEX_DEFAULT_SETTINGS);
+    state !== null && workLouderCodexSettingsMatchRestoreDefaults(state.settings);
 
   useEffect(() => {
     if (state) setBrightnessDraft(state.settings.lightingBrightness);
@@ -400,14 +403,32 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-13 font-medium text-[var(--text-primary)]">
-              {t('settings.shortcuts.workLouderCodex.connection.label')}
+              {t('settings.shortcuts.workLouderCodex.connection.toggle.label')}
             </p>
-            <ConnectionStatus status={state?.connectionStatus ?? 'connecting'} loading={loading} />
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={settings.deviceEnabled}
+                disabled={!state || saving}
+                onCheckedChange={(checked) => void setSettings({ deviceEnabled: checked })}
+                aria-label={t('settings.shortcuts.workLouderCodex.connection.toggle.aria')}
+              />
+              <ConnectionStatus
+                status={
+                  settings.deviceEnabled
+                    ? (state?.connectionStatus ?? 'connecting')
+                    : 'disabled'
+                }
+                present={state?.devicePresent ?? null}
+                loading={loading}
+              />
+            </div>
           </div>
           <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {connectionDescription(t, state)}
+            {settings.deviceEnabled ? connectionDescription(t, state) : presenceDescription(t)}
           </p>
-          {state?.connectionStatus === 'connected' && state.device.deviceType && (
+          {((settings.deviceEnabled && state?.connectionStatus === 'connected') ||
+            state?.devicePresent === true) &&
+            state?.device.deviceType && (
             <div className="flex flex-wrap gap-2 pt-1">
               <DeviceChip icon={<Keyboard size={12} />}>
                 {state.device.deviceType === 'creator-micro-2' ? 'Creator Micro 2' : 'Codex Micro'}
@@ -712,7 +733,7 @@ export function WorkLouderCodexSettings({ onBack }: { onBack(): void }) {
         </div>
       )}
 
-      {state?.device.inputMonitoringPermission !== 'not-required' && (
+      {state?.device.inputMonitoringPermission === 'denied' && (
         <SettingsGroup title={t('settings.shortcuts.workLouderCodex.device.title')}>
           <SettingsRow
             label={t('settings.shortcuts.workLouderCodex.device.inputMonitoring.label')}
@@ -1086,17 +1107,27 @@ function DeviceChip({ icon, children }: { icon?: ReactNode; children: ReactNode 
 
 function ConnectionStatus({
   status,
+  present = null,
   loading,
   compact = false,
 }: {
   status: WorkLouderCodexConnectionStatus;
+  present?: boolean | null;
   loading: boolean;
   compact?: boolean;
 }) {
   const { t } = useTranslation();
-  const effectiveStatus = loading ? 'connecting' : status;
+  const effectiveStatus = loading && status !== 'disabled' ? 'connecting' : status;
+  const label =
+    effectiveStatus === 'disabled'
+      ? present === true
+        ? t('settings.shortcuts.workLouderCodex.connection.status.connected')
+        : present === false
+          ? t('settings.shortcuts.workLouderCodex.connection.status.not-detected')
+          : t('settings.shortcuts.workLouderCodex.connection.status.disabled')
+      : t(`settings.shortcuts.workLouderCodex.connection.status.${effectiveStatus}`);
   const dotClass =
-    effectiveStatus === 'connected'
+    effectiveStatus === 'connected' || (effectiveStatus === 'disabled' && present === true)
       ? 'bg-[var(--settings-badge-connected)]'
       : effectiveStatus === 'error' || effectiveStatus === 'unavailable'
         ? 'bg-[var(--error-fg)]'
@@ -1111,7 +1142,7 @@ function ConnectionStatus({
       )}
     >
       <span className={cn('size-1.5 rounded-full', dotClass)} aria-hidden="true" />
-      {t(`settings.shortcuts.workLouderCodex.connection.status.${effectiveStatus}`)}
+      {label}
     </span>
   );
 }
@@ -1178,6 +1209,19 @@ function connectionDescription(
 ): string {
   const key = state?.connectionReason ?? state?.connectionStatus ?? 'connecting';
   return t(`settings.shortcuts.workLouderCodex.connection.descriptions.${key}`);
+}
+
+function presenceDescription(t: ReturnType<typeof useTranslation>['t']): string {
+  return t('settings.shortcuts.workLouderCodex.connection.descriptions.disabled');
+}
+
+function workLouderCodexSettingsMatchRestoreDefaults(
+  settings: WorkLouderCodexState['settings'],
+): boolean {
+  return (
+    JSON.stringify({ ...settings, deviceEnabled: false }) ===
+    JSON.stringify({ ...WORKLOUDER_CODEX_DEFAULT_SETTINGS, deviceEnabled: false })
+  );
 }
 
 /**

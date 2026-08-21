@@ -489,7 +489,7 @@ describe('anthropic-compat-proxy websocket upgrades', () => {
     expect(proxy.disconnectWebSocketsForThread?.('thread-missing')).toBe(0);
   });
 
-  it('does not evict unscoped startup-prewarm sockets for another thread', async () => {
+  it('does not evict a genuinely unscoped generic socket for another thread', async () => {
     const upstream = await startUpgradeUpstream();
     proxy = await createAnthropicCompatProxy({
       upstream: 'http://unused.invalid',

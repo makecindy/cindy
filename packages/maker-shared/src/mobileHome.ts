@@ -10,6 +10,7 @@ import {
   type RemoteSessionStatusFilter,
 } from './sessionList.js';
 import { stripTrailingPathSeparators } from './pathText.js';
+import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
 
 export const MOBILE_HOME_ALL_DEVICES = 'all';
@@ -580,9 +581,7 @@ function normalizeSearchQuery(value: string): string {
 }
 
 function normalizePathKey(value: string): string {
-  const normalized = normalizeProjectWorkingDir(value);
-  if (isWindowsStylePath(normalized)) return normalized.replaceAll('\\', '/').toLowerCase();
-  return normalized;
+  return normalizeProjectOrderPath(value);
 }
 
 function normalizeProjectWorkingDir(value: string | null | undefined): string {

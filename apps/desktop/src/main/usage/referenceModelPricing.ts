@@ -6,6 +6,7 @@
  */
 
 import { BrowserWindow } from 'electron';
+import type { AgentKind } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
@@ -117,7 +118,7 @@ export function getClaudeSubscriptionValuePrice(
 
 export function getSubscriptionDirectValuePrice(
   modelId: string,
-  agent?: 'claude-code' | 'codex',
+  agent?: AgentKind,
   pricing?: ModelPricingCatalog | null,
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,

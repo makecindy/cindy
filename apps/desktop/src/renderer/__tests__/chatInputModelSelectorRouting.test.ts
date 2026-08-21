@@ -137,8 +137,10 @@ describe('ChatInput model source switching wiring', () => {
     const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
-    // 确认弹窗照旧(同一份 confirmAgentBrowseSwitch,含「不再提示」偏好);
-    expect(block).toContain('confirmAgentBrowseSwitch()');
+    // 确认弹窗照旧(同一份 confirmAgentBrowseSwitch,含「不再提示」偏好);**有意变更**
+    // (Chris 2026-08-19):现在把**本次目标引擎**交给确认门 —— 「已确认过就不再问」的判据
+    // 收窄成「已有指向该目标的意图」,否则任何残留意图都会让确认框永久静默。
+    expect(block).toContain('confirmAgentBrowseSwitch(targetAgent)');
     // 切换事务照旧;effort 显式带上(用户看着点下去的档)。
     expect(block).toContain('performAgentSwitchRef.current(');
     expect(block).toContain('...(effort ? { effort } : {})');
@@ -157,6 +159,15 @@ describe('ChatInput model source switching wiring', () => {
    * 档位集合,而意图期的回调(performAgentSwitch(intent.target, …))按目标能力校验,
    * 用户点的档位被静默回落。
    */
+  it('passes unresolved runtime identity through instead of falling back to the intent target', () => {
+    const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
+    expect(start).toBeGreaterThan(-1);
+    const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
+    expect(block).toContain('runtimeAgent: runtimeAgentKind ?? undefined');
+    expect(block).not.toContain('runtimeAgentKind ?? currentAgent');
+    expect(block).not.toContain('runtimeAgentKind ?? vendorKeyToAgentKind');
+  });
+
   it('prefers the pending switch intent target as the unified panel session agent', () => {
     expect(chatInputSource).toContain(
       'const intentTargetAgent = agentSwitchIntent?.target ?? null;',
@@ -186,9 +197,9 @@ describe('ChatInput model source switching wiring', () => {
     expect(block).toContain('wireModelId: modelId,');
     expect(block).toContain('engine: agentKindToVendor(targetAgent),');
     expect(block).toContain('providerId,');
-    // 派生校验必须比对来源:仅来源被切走(wire id / 引擎不变)时锚点失效
-    // (2026-08-17 review:跨窗口 / 外部 patch 切来源后不得继续勾旧来源的收藏)。
-    expect(chatInputSource).toContain(
+    // 勾选只认 uid(Chris 2026-08-20):不拿正在跑的来源去对副本。
+    expect(chatInputSource).toContain('sessionFavoriteAnchor?.uid ?? null');
+    expect(chatInputSource).not.toContain(
       'sessionFavoriteAnchor.providerId === activeProviderId &&',
     );
   });

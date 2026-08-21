@@ -34,6 +34,17 @@ import {
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
 import type { UsageTracker } from '../shared/usage-tracker.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
+import {
+  beginClaudeGeneration,
+  finalizeClaudeGeneration,
+  markClaudeGenerationUnreliable,
+  newClaudeGenerationState,
+  pauseClaudeGeneration,
+  resetClaudeGenerationTiming,
+  resumeClaudeGeneration,
+  type ClaudeGenerationState,
+} from './generation-timing.js';
 
 // ── 共享 turn / runtime 状态 ─────────────────────────────────────────────────
 //
@@ -158,6 +169,7 @@ export interface RuntimeState {
    * 发出可见正文，不能看整轮 `uiEmittedText`，也不能跨 text block 复用。
    */
   streamStopTokenByKey: Map<string, StandaloneStopTokenHold>;
+  generation: ClaudeGenerationState;
 }
 
 export function newRuntimeState(): RuntimeState {
@@ -174,6 +186,24 @@ export function newRuntimeState(): RuntimeState {
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
     streamStopTokenByKey: new Map(),
+    generation: newClaudeGenerationState(),
+  };
+}
+
+function ccLiveStatus(
+  ctx: TranslateContext,
+  status: string,
+  isRunning: boolean,
+): { status: string; isRunning: boolean } & ReturnType<UsageTracker['snapshot']> {
+  return {
+    status,
+    ...attachLiveGeneration(ctx.tracker.snapshot(), {
+      outputTokens: ctx.tracker.getTurnUsage().output,
+      closedDurationMs: ctx.rt.generation.durationMs,
+      openStartedAt: ctx.rt.generation.startedAt,
+      reliable: ctx.rt.generation.reliable,
+    }),
+    isRunning,
   };
 }
 
@@ -680,6 +710,7 @@ export function translateSdkMessage(
         }
       }
       for (const toolUseId of completedToolUseIds) {
+        resumeClaudeGeneration(ctx.rt.generation, toolUseId);
         ctx.rt.toolUseIdToName.delete(toolUseId);
       }
       return;
@@ -1223,6 +1254,9 @@ function handleAssistant(
   const parentToolUseId = typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
     ? msg.parent_tool_use_id
     : undefined;
+  // 子代理完整 assistant 没有 message_delta 时，result.usage 仍含其子输出，
+  // 而父级 Agent 工具区间已从分母排除。与 message_delta 路径同样 fail-closed。
+  if (parentToolUseId) markClaudeGenerationUnreliable(ctx.rt.generation);
   // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
   // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；
   // 同时保持 main 新增的 loop guard 按 parent scope 读取同一张 stream model 表。
@@ -1303,11 +1337,11 @@ function handleAssistant(
       //   toolUseId: block.id,
       //   turnToolUses: ctx.turn.toolUses,
       // });
-      if (typeof block.id === 'string' && block.id.length > 0) {
-        if (typeof block.name === 'string' && block.name.length > 0) {
-          ctx.rt.toolUseIdToName.set(block.id, block.name);
-        }
-        ctx.onToolUseStart?.(block.id, block.name, block.input, parentToolUseId);
+      const toolUseId = rememberClaudeToolUseId(ctx, block.id, block.name);
+      if (toolUseId) {
+        // 完整 assistant 消息已带工具参数,即使没有 stream_event 也可在此停表。
+        pauseClaudeGenerationForToolUse(ctx, toolUseId);
+        ctx.onToolUseStart?.(toolUseId, block.name, block.input, parentToolUseId);
       }
       queue.push({
         type: 'tool_use',
@@ -1342,6 +1376,36 @@ function handleAssistant(
   }
 }
 
+function rememberClaudeToolUseId(
+  ctx: TranslateContext,
+  toolUseId: unknown,
+  toolName: unknown,
+): string | null {
+  if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
+  const existingName = ctx.rt.toolUseIdToName.get(toolUseId);
+  ctx.rt.toolUseIdToName.set(
+    toolUseId,
+    typeof toolName === 'string' && toolName.length > 0
+      ? toolName
+      : (existingName ?? ''),
+  );
+  return toolUseId;
+}
+
+function pauseClaudeGenerationForToolUse(
+  ctx: TranslateContext,
+  toolUseId: unknown,
+): void {
+  if (typeof toolUseId !== 'string' || toolUseId.length === 0) return;
+  pauseClaudeGeneration(ctx.rt.generation, toolUseId);
+}
+
+function pauseClaudeGenerationForKnownTools(ctx: TranslateContext): void {
+  for (const toolUseId of ctx.rt.toolUseIdToName.keys()) {
+    pauseClaudeGenerationForToolUse(ctx, toolUseId);
+  }
+}
+
 // ── stream_event 子分支(content_block_delta / message_delta / message_start) ──
 
 function handleStreamEvent(
@@ -1373,11 +1437,15 @@ function handleStreamEvent(
       const blockIndex = typeof event.index === 'number' ? event.index : 0;
       ctx.rt.streamStopTokenByKey.delete(`${parentToolUseId ?? '__main__'}:${blockIndex}`);
     }
-    if (cb && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-      if (typeof cb.name === 'string' && cb.name.length > 0) {
-        ctx.rt.toolUseIdToName.set(cb.id, cb.name);
+    if (cb && cb.type === 'tool_use') {
+      const toolUseId = rememberClaudeToolUseId(ctx, cb.id, cb.name);
+      if (toolUseId) {
+        // watchdog / loop-guard 仍要立刻拿到 tool id。生成计时要等
+        // message_delta 或完整 assistant tool_use: content_block_start
+        // 早于参数 input_json_delta,这里停表会把参数生成时间从分母抠掉,
+        // 而后续 message_delta 仍把这些 token 加进 outputTokens。
+        ctx.onToolUseStart?.(toolUseId, cb.name, cb.input, parentToolUseId);
       }
-      ctx.onToolUseStart?.(cb.id, cb.name, cb.input, parentToolUseId);
     }
   }
 
@@ -1454,6 +1522,10 @@ function handleStreamEvent(
   }
 
   if (event.type === 'message_delta') {
+    // message_delta 是整条 assistant 消息(含工具参数 token)生成完毕后的
+    // 第一个事件。在此停表,才能排除工具执行/审批等待,又不把参数生成
+    // 区间从 tok/s 分母里抠掉。
+    pauseClaudeGenerationForKnownTools(ctx);
     const usage = event.usage;
     if (usage) {
       const dIn = usage.input_tokens ?? 0;
@@ -1468,6 +1540,7 @@ function handleStreamEvent(
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
       });
+      if (parentToolUseId && dOut > 0) markClaudeGenerationUnreliable(ctx.rt.generation);
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。
       ctx.log.debug('SDK ▷ token usage (message_delta)', {
@@ -1480,11 +1553,7 @@ function handleStreamEvent(
       const snap = ctx.tracker.snapshot();
       queue.push({
         type: 'status',
-        data: {
-          status: 'Generating...',
-          ...snap,
-          isRunning: true,
-        },
+        data: ccLiveStatus(ctx, 'Generating...', true),
         source: 'claude-code',
       });
       // Maker Memory flush 观察 (A 轻版: 只打日志). 缺省没注册时 no-op。
@@ -1521,13 +1590,10 @@ function handleStreamEvent(
 
     // 不清 tracker —— message_start 在 turn 中可能出现多次(工具循环每次 API call 都会触发),
     // 老链路 agentManager.ts:2400-2407 这里也是带 currentTurn 累计, 不重置。
+    beginClaudeGeneration(ctx.rt.generation);
     queue.push({
       type: 'status',
-      data: {
-        status: 'Generating...',
-        ...ctx.tracker.snapshot(),
-        isRunning: true,
-      },
+      data: ccLiveStatus(ctx, 'Generating...', true),
       source: 'claude-code',
     });
     return;
@@ -1761,6 +1827,9 @@ function handleResult(
 
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,
   // 这里先转成 turn delta; tracker.endTurn 内部覆盖 currentTurn 然后返回 snapshot 再 reset。
+  finalizeClaudeGeneration(ctx.rt.generation);
+  const liveTurnOutput = resultUsage?.outputTokens ?? ctx.tracker.getTurnUsage().output;
+  const liveGeneration = ctx.rt.generation;
   const endSnapshot = ctx.tracker.endTurn(
     resultUsage
       ? {
@@ -1930,6 +1999,7 @@ function handleResult(
     // 否则下一真实 turn 会从 0 起算、把整段历史 token 全算到那一轮(Codex P2)。
     ctx.rt.lastResultUsageAggregate = aggregateBeforeThisResult;
     resetTurnState(ctx.turn);
+    resetClaudeGenerationTiming(ctx.rt.generation);
     ctx.onTurnEnd?.();
     return;
   }
@@ -2000,7 +2070,12 @@ function handleResult(
     type: 'status',
     data: {
       status: 'Done',
-      ...endSnapshot,
+      ...attachLiveGeneration(endSnapshot, {
+        outputTokens: liveTurnOutput,
+        closedDurationMs: liveGeneration.durationMs,
+        openStartedAt: null,
+        reliable: liveGeneration.reliable,
+      }),
       isRunning: false,
     },
     source: 'claude-code',
@@ -2025,6 +2100,7 @@ function handleResult(
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)
   resetTurnState(ctx.turn);
+  resetClaudeGenerationTiming(ctx.rt.generation);
   // turn 结束钩子 — agent 用来清 turnInFlight 标记 (rewind preview/commit 前置守卫读它)
   ctx.onTurnEnd?.();
 }

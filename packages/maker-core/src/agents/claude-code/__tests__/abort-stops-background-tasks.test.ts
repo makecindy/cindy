@@ -78,7 +78,7 @@ vi.mock('../../shared/async-queue.js', async (importOriginal) => {
   };
 });
 
-import { ClaudeCodeAgent } from '../index.js';
+import { ClaudeCodeAgent, WAKE_CONTRACT_GRACE_MS } from '../index.js';
 import { Session } from '../../../session.js';
 
 const tempDirs: string[] = [];
@@ -593,6 +593,80 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
 
     stream.end();
     await handle.close().catch(() => undefined);
+  });
+
+  it('wake contract reconciliation cancels an awaiting claim whose tasks are all terminal without continuation activity', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, stream, events, fakeQuery } = await startSessionWithStream();
+
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      await vi.advanceTimersByTimeAsync(0);
+      stream.emit(turnResult('waiting'));
+      await vi.advanceTimersByTimeAsync(0);
+      const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+      expect(continuationId).toBeTypeOf('number');
+      stream.emit(taskNotification('task-agent', 'completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(taskEvents(events).length).toBeGreaterThanOrEqual(2);
+
+      // 宽限期内:claim 仍在按 task_notification 续跑契约等待,不得提前收口。
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+
+      // 快进越过宽限窗口且无任何续跑活动:契约失守 → 取消 claim 并补合成终态。
+      await vi.advanceTimersByTimeAsync(WAKE_CONTRACT_GRACE_MS + 1_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(events.filter(isProductTerminal).length).toBe(1);
+      expect(
+        events.find(
+          (event) => event.type === 'done' && event.turnContinuationId === undefined,
+        )?.data,
+      ).toMatchObject({ reason: 'turn_continuation_cancelled' });
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
+      expect(handle.isTurnRunning?.()).toBe(false);
+      // 对账不是用户 Stop:不得触碰 stopTask / interrupt。
+      expect(fakeQuery.stopTask).not.toHaveBeenCalled();
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+      stream.end();
+      await handle.close().catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('wake contract reconciliation stands down once the continuation activates', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, stream, events } = await startSessionWithStream();
+
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      await vi.advanceTimersByTimeAsync(0);
+      stream.emit(turnResult('waiting'));
+      await vi.advanceTimersByTimeAsync(0);
+      const continuationId = events.find((event) => event.type === 'done')?.turnContinuationId;
+      expect(continuationId).toBeTypeOf('number');
+      stream.emit(taskNotification('task-agent', 'completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('awaiting');
+
+      // 健康路径:续跑段在宽限期内激活,对账定时器随之解除。
+      stream.emit(assistantText('automatic continuation started'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('active');
+
+      await vi.advanceTimersByTimeAsync(WAKE_CONTRACT_GRACE_MS + 60_000);
+      expect(events.filter(isProductTerminal)).toHaveLength(0);
+      expect(handle.beginTurnContinuationWait?.(continuationId)).toBe('active');
+
+      stream.end();
+      await handle.close().catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('graceful stop lets an already active continuation finish through its interrupted result', async () => {

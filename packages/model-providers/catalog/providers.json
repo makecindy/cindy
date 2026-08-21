@@ -1639,6 +1639,72 @@
       }
     },
     {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "docsUrl": "https://lmstudio.ai/docs/app/api",
+      "authMethod": "none",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "http://127.0.0.1:1234",
+          "wireProtocol": "anthropic-messages",
+          "baseUrlEditable": true,
+          "models": []
+        },
+        "codex": {
+          "baseUrl": "http://127.0.0.1:1234/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true,
+          "models": []
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:1234/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true,
+          "models": []
+        }
+      }
+    },
+    {
+      "id": "llamacpp",
+      "name": "llama.cpp",
+      "docsUrl": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "authMethod": "none",
+      "runtimes": {
+        "codex": {
+          "baseUrl": "http://127.0.0.1:8080/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true,
+          "models": []
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:8080/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true,
+          "models": []
+        }
+      }
+    },
+    {
+      "id": "vllm",
+      "name": "vLLM",
+      "docsUrl": "https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html",
+      "authMethod": "none",
+      "runtimes": {
+        "codex": {
+          "baseUrl": "http://127.0.0.1:8000/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true,
+          "models": []
+        },
+        "pi": {
+          "baseUrl": "http://127.0.0.1:8000/v1",
+          "wireProtocol": "openai-chat",
+          "baseUrlEditable": true,
+          "models": []
+        }
+      }
+    },
+    {
       "id": "longcat",
       "name": "LongCat",
       "docsUrl": "https://longcat.chat/platform/docs/zh/",

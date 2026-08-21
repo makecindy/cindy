@@ -20,6 +20,7 @@ const loginHook = vi.hoisted(() => ({
     errorCode: null as string | null,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
   },
 }));
@@ -66,6 +67,7 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
     errorCode: null,
     loginState: state,
     dispatch: vi.fn(async () => true),
+    dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
     clearError: vi.fn(),
     ...extra,
   };
@@ -226,14 +228,16 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     fireEvent.change(screen.getByTestId('login-input'), { target: { value: '13800138000' } });
     fireEvent.click(screen.getByTestId('login-continue-button'));
     expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
-    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+    expect(loginHook.value.dispatchWithResult).not.toHaveBeenCalled();
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-consent-agree'));
     });
-    expect(loginHook.value.dispatch).toHaveBeenCalledWith({
+    // request-code 走 dispatchWithResult(captcha 兜底需要读失败码)
+    expect(loginHook.value.dispatchWithResult).toHaveBeenCalledWith({
       type: 'request-code',
       kind: 'phone',
       identifier: '13800138000',
+      captchaToken: undefined,
     });
   });
 

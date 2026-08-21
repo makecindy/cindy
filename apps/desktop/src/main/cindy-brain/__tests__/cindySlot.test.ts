@@ -221,16 +221,43 @@ describe('载荷校验', () => {
     ).toMatchObject({ ok: false });
   });
 
-  it('模型白名单:名单内放行并透传,名单外拒且不触发生成', async () => {
+  it('旧插件模型名:名单内透传,唯一 basename 升级,失效值回落当前默认', async () => {
     const { slot, generateImage } = makeSlot();
     const ok = await slot.handleModelRequest('art', { ...REQ, model: 'gemini-3-pro-image' });
     expect(ok).toMatchObject({ ok: true });
-    expect(generateImage).toHaveBeenCalledWith({ prompt: '一只猫', model: 'gemini-3-pro-image' });
+    expect(generateImage).toHaveBeenLastCalledWith({
+      prompt: '一只猫',
+      model: 'gemini-3-pro-image',
+    });
 
-    const bad = await slot.handleModelRequest('art', { ...REQ, model: 'dall-e-9' });
-    expect(bad).toMatchObject({ ok: false });
-    expect((bad as { message: string }).message).toContain('白名单');
-    expect(generateImage).toHaveBeenCalledTimes(1);
+    const namespaced = makeSlot({
+      getImageConfig: vi.fn(() => ({
+        models: [
+          {
+            id: 'openai/gpt-image-2',
+            label: 'GPT Image 2',
+            supportsEdit: true,
+          },
+        ],
+        defaults: {
+          standard: 'openai/gpt-image-2',
+          draft: 'openai/gpt-image-2',
+          best: 'openai/gpt-image-2',
+        },
+      })) as unknown as CindySlotDeps['getImageConfig'],
+    });
+    expect(await namespaced.slot.handleModelRequest('art', { ...REQ, model: 'gpt-image-2' })).toMatchObject({
+      ok: true,
+      model: 'openai/gpt-image-2',
+    });
+    expect(namespaced.generateImage).toHaveBeenCalledWith({
+      prompt: '一只猫',
+      model: 'openai/gpt-image-2',
+    });
+
+    const fallback = await slot.handleModelRequest('art', { ...REQ, model: 'dall-e-9' });
+    expect(fallback).toMatchObject({ ok: true, model: 'gpt-image-2' });
+    expect(generateImage).toHaveBeenLastCalledWith({ prompt: '一只猫', model: 'gpt-image-2' });
   });
 
   it('缺省模型 = gpt-image-2', async () => {
@@ -805,24 +832,28 @@ describe('视频代办(gen_video / edit_video)', () => {
   const VREQ = { type: 'cindy-request', kind: 'gen_video', prompt: '一只猫奔跑' };
 
   it('gen_video happy path:走视频白名单默认款,产物同一条落仓链路', async () => {
-    const { slot, generateVideo, saveGhostMedia } = makeSlot();
+    const { slot, generateVideo, getVideoConfig, saveGhostMedia } = makeSlot();
     const r = await slot.handleModelRequest('art', VREQ);
     expect(r).toMatchObject({ ok: true, model: 'seedance-fast', modelLabel: 'Seedance 快速' });
+    expect(getVideoConfig).toHaveBeenCalledWith('generate');
     expect(generateVideo).toHaveBeenCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
     expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'video/mp4' }));
   });
 
-  it('tier 档位查视频翻译表(best → seedance-pro);白名单外点名拒', async () => {
+  it('tier 档位查视频翻译表(best → seedance-pro);失效点名回落默认', async () => {
     const { slot, generateVideo } = makeSlot();
     await slot.handleModelRequest('art', { ...VREQ, tier: 'best' });
     expect(generateVideo).toHaveBeenLastCalledWith({ prompt: '一只猫奔跑', model: 'seedance-pro' });
-    // 图像白名单里的型号点给视频代办 → 拒(两类目白名单独立)。
-    const bad = await slot.handleModelRequest('art', { ...VREQ, model: 'gpt-image-2' });
-    expect(bad).toMatchObject({ ok: false });
+    const fallback = await slot.handleModelRequest('art', { ...VREQ, model: 'gpt-image-2' });
+    expect(fallback).toMatchObject({ ok: true, model: 'seedance-fast' });
+    expect(generateVideo).toHaveBeenLastCalledWith({
+      prompt: '一只猫奔跑',
+      model: 'seedance-fast',
+    });
   });
 
   it('edit_video:参考图归属校验后按路径注入;上限 2 张,超限拒', async () => {
-    const { slot, editVideo, resolveOwnedMedia } = makeSlot();
+    const { slot, editVideo, getVideoConfig, resolveOwnedMedia } = makeSlot();
     const r = await slot.handleModelRequest('art', {
       type: 'cindy-request',
       kind: 'edit_video',
@@ -830,6 +861,7 @@ describe('视频代办(gen_video / edit_video)', () => {
       hashes: [HASH_S],
     });
     expect(r).toMatchObject({ ok: true });
+    expect(getVideoConfig).toHaveBeenCalledWith('edit');
     expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:test-owner:1');
     expect(editVideo).toHaveBeenCalledWith({
       prompt: '让它动起来',

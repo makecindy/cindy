@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AuthApiError,
+  captchaRequiredActionForVerificationKind,
   CindyAuthClient,
   discoverSsoOrgRealm,
   parseAccountDeletionReceiptRecord,
@@ -63,6 +64,90 @@ describe("CindyAuthClient", () => {
     );
     await expect(client(fetch).getProviders()).rejects.toMatchObject({
       code: "REGION_MISMATCH",
+    });
+  });
+
+  it("parses the optional captcha config from providers", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, {
+        region: "cn",
+        attribution: "phone",
+        email: true,
+        phone: true,
+        social: [],
+        captcha: {
+          provider: "turnstile",
+          siteKey: "scenario-captcha-sitekey",
+          requiredFor: ["email_request_code"],
+        },
+      }),
+    );
+    await expect(client(fetch).getProviders()).resolves.toMatchObject({
+      captcha: { provider: "turnstile", requiredFor: ["email_request_code"] },
+    });
+    // 客户端预认短信发码动作；服务端以后仅需下发该值即可启用，无需客户端发版。
+    // 其他 append-only 未知动作仍忽略，不让整份 providers 解析失败。
+    const extendedFetch = vi.fn(async () =>
+      response(200, {
+        region: "cn",
+        attribution: "phone",
+        email: true,
+        phone: true,
+        social: [],
+        captcha: {
+          provider: "turnstile",
+          siteKey: "scenario-captcha-sitekey",
+          requiredFor: [
+            "email_request_code",
+            "phone_request_code",
+            "future_request_code",
+          ],
+        },
+      }),
+    );
+    const extended = await client(extendedFetch).getProviders();
+    expect(extended.captcha?.requiredFor).toEqual([
+      "email_request_code",
+      "phone_request_code",
+    ]);
+    expect(captchaRequiredActionForVerificationKind("email")).toBe(
+      "email_request_code",
+    );
+    expect(captchaRequiredActionForVerificationKind("phone")).toBe(
+      "phone_request_code",
+    );
+    // 旧 server 缺字段 → undefined(可选字段,不整份拒绝)
+    const legacyFetch = vi.fn(async () =>
+      response(200, {
+        region: "cn",
+        attribution: "phone",
+        email: true,
+        phone: true,
+        social: [],
+      }),
+    );
+    const legacy = await client(legacyFetch).getProviders();
+    expect(legacy.captcha).toBeUndefined();
+  });
+
+  it("carries captchaToken in the email request-code body only when provided", async () => {
+    const fetch = vi.fn(async () => response(200, { status: "sent" }));
+    await client(fetch).requestCode("email", "user@example.com");
+    const bare = JSON.parse((fetch.mock.calls[0]?.[1] as { body: string }).body) as Record<
+      string,
+      unknown
+    >;
+    expect(bare).toEqual({ email: "user@example.com", locale: "zh-CN" });
+    await client(fetch).requestCode("email", "user@example.com", {
+      captchaToken: "captcha-token-1",
+    });
+    const withToken = JSON.parse(
+      (fetch.mock.calls[1]?.[1] as { body: string }).body,
+    ) as Record<string, unknown>;
+    expect(withToken).toEqual({
+      email: "user@example.com",
+      locale: "zh-CN",
+      captchaToken: "captcha-token-1",
     });
   });
 

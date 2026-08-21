@@ -275,6 +275,11 @@ describe('sendToSession ordering', () => {
       'if (!targetSessionId) {',
       'const prev = sendToSessionLocks.get(targetSessionId);',
     );
+    expectOrder(
+      block,
+      'prepareUnhealthySession(targetSessionId)',
+      'live = maker.getSession(targetSessionId);',
+    );
     const liveBranch = extractBetween(
       block,
       'live = maker.getSession(targetSessionId);',
@@ -505,7 +510,8 @@ describe('sendToSession ordering', () => {
       'const release = await acquireSendToSessionLock(sessionId);',
       'applyPendingAgentSwitchIfIdle(',
     );
-    expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'return release;');
+    expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'prepareUnhealthySession');
+    expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', 'return release;');
   });
 
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
@@ -555,11 +561,12 @@ describe('sendToSession ordering', () => {
     const promptPreviewBlock = extractBetween(
       source,
       'function notifyAgentIslandUserPrompt',
-      'function extractAgentIslandPromptText',
+      'function dispatchAgentIslandUserPrompt',
     );
 
     expect(promptPreviewBlock).toContain('try {');
-    expect(promptPreviewBlock).toContain('getAgentIslandService()?.handleUserPrompt');
+    expect(promptPreviewBlock).toContain('getAgentIslandService()');
+    expect(promptPreviewBlock).toContain('service.handleUserPrompt');
     expect(promptPreviewBlock).toContain('log.warn(\'Agent Island prompt preview update failed after user message persistence\'');
     expect(promptPreviewBlock).toContain('clientId: options.clientId');
     expect(promptPreviewBlock).toContain('error: error instanceof Error ? error.message : String(error)');

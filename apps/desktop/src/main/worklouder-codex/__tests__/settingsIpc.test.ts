@@ -33,6 +33,7 @@ function makeIpc(options?: {
   const getState = vi.fn((): WorkLouderCodexState => ({
     connectionStatus: 'connected',
     connectionReason: null,
+    devicePresent: true,
     device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
     settings: { ...settings },
     agentSlots: Array.from({ length: 6 }, (_, slot) => ({
@@ -103,6 +104,7 @@ describe('Work Louder Codex settings IPC business body', () => {
     [{ lightingBrightness: -1 }, 'must be an integer'],
     [{ lightingBrightness: 101 }, 'must be an integer'],
     [{ lightingAutoDim: 'sometimes' }, 'lightingAutoDim is invalid'],
+    [{ deviceEnabled: 1 }, 'must be a boolean'],
     [{ singleTapAgentKeys: 1 }, 'must be a boolean'],
   ])('rejects invalid payload %j with INVALID_PARAMS', (value, messagePart) => {
     const { ipc, writeSettings, applySettings } = makeIpc();
@@ -125,9 +127,10 @@ describe('Work Louder Codex settings IPC business body', () => {
 
     expect(writeSettings).toHaveBeenCalledWith(patch);
     expect(applySettings).toHaveBeenCalledWith({
+      deviceEnabled: false,
       lightingBrightness: 40,
       lightingAutoDim: 'off',
-      agentSource: 'sidebar',
+      agentSource: 'last-sent',
       customAgentKeys: [null, null, null, null, null, null],
       singleTapAgentKeys: false,
       layout: DEFAULT_SETTINGS.layout,
@@ -199,6 +202,13 @@ describe('Work Louder Codex settings IPC business body', () => {
     expect(source).toContain('if (rendererTaskCatalogScope !== currentTaskCatalogScope())');
     expect(source).toContain('if (!scope) return;');
     expect(source).toContain('workLouderCodexLightingController.applySettings(readWorkLouderCodexSettings());');
+    expect(source).toContain('workLouderCodexLightingController.start();');
+    expect(source).toContain('const win = actionWindowRouter.resolve(action);');
+    expect(source).toContain('if (systemFrontmostInput.handle(action)) return;');
+    expect(source).toContain('return win === main || isSecondaryAppWindow(win);');
+    expect(source.indexOf('applySettings(readWorkLouderCodexSettings())')).toBeLessThan(
+      source.indexOf('workLouderCodexLightingController.start();'),
+    );
   });
 
   it('still accepts a layout saved before voiceButtonMode was removed', () => {

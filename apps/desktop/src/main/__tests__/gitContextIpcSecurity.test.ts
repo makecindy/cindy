@@ -9,7 +9,7 @@ describe('git-context remote IPC security contract', () => {
     const guard = ipcSource.indexOf('assertTrustedAppRendererEvent(event);');
     const remoteLookup = ipcSource.indexOf('if (deviceLinkInvoke || requestedRemoteHostId)');
 
-    expect(ipcSource).toContain("if (requestedRemoteHostId !== null && !deviceLinkInvoke)");
+    expect(ipcSource).toContain('if (requestedRemoteHostId !== null && !deviceLinkInvoke)');
     expect(guard).toBeGreaterThanOrEqual(0);
     expect(remoteLookup).toBeGreaterThan(guard);
   });
@@ -17,6 +17,18 @@ describe('git-context remote IPC security contract', () => {
   it('keeps device-link invokes on their async-context authorization path', () => {
     expect(ipcSource).toContain('if (requestedRemoteHostId !== null && !deviceLinkInvoke)');
     expect(ipcSource).toContain('const deviceLinkInvoke = isDeviceLinkInvoke();');
+  });
+
+  it('keeps find-linked-worktree local-only, sender-guarded, and sessionId-validated', () => {
+    const handler = ipcSource.indexOf('GIT_CONTEXT_INVOKE.FIND_LINKED_WORKTREE');
+    const deviceNull = ipcSource.indexOf('if (isDeviceLinkInvoke()) return null;', handler);
+    const guard = ipcSource.indexOf('assertTrustedAppRendererEvent(event);', handler);
+    const requireId = ipcSource.indexOf("requireString(obj?.sessionId, 'sessionId')", handler);
+    expect(ipcSource).toContain("FIND_LINKED_WORKTREE: 'git-context:find-linked-worktree'");
+    expect(handler).toBeGreaterThanOrEqual(0);
+    expect(deviceNull).toBeGreaterThan(handler);
+    expect(guard).toBeGreaterThan(deviceNull);
+    expect(requireId).toBeGreaterThan(guard);
   });
 
   it('fails closed when device-link PR refs lookup is unavailable', () => {

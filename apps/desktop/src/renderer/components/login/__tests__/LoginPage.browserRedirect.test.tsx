@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loginHook = vi.hoisted(() => ({
   dispatch: vi.fn(),
+  dispatchWithResult: vi.fn(),
   value: {
     isLoading: false,
     errorCode: null,
     loginState: { step: 'browser-redirect' as const, label: 'Google' },
     dispatch: vi.fn(),
+    dispatchWithResult: vi.fn(),
     clearError: vi.fn(),
   },
 }));
@@ -43,11 +45,13 @@ import { LoginPage } from '../LoginPage';
 describe('LoginPage browser redirect waiting state', () => {
   beforeEach(() => {
     loginHook.dispatch = vi.fn().mockResolvedValue(true);
+    loginHook.dispatchWithResult = vi.fn().mockResolvedValue({ success: true, code: null });
     loginHook.value = {
       isLoading: false,
       errorCode: null,
       loginState: { step: 'browser-redirect', label: 'Google' },
       dispatch: loginHook.dispatch,
+      dispatchWithResult: loginHook.dispatchWithResult,
       clearError: vi.fn(),
     };
     Object.defineProperty(window, 'electronAPI', {

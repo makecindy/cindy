@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAgentTaskUpdateEvent,
   buildAgentTaskCardModel,
+  deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
   isSubagentSpawnToolName,
@@ -86,6 +87,23 @@ describe('normalizeAgentTaskUpdate', () => {
   it('falls back taskId to parentToolUseId when only the latter is present', () => {
     const update = normalizeAgentTaskUpdate({ parentToolUseId: 'tu-9', status: 'failed' });
     expect(update).toMatchObject({ taskId: 'tu-9', parentToolUseId: 'tu-9', status: 'failed' });
+  });
+});
+
+describe('deriveAgentTaskStatus', () => {
+  it('keeps a persisted failed or stopped terminal state when replaying a non-empty result', () => {
+    expect(deriveAgentTaskStatus(undefined, 'Error: child failed', {
+      persistedStatus: 'failed',
+    })).toBe('failed');
+    expect(deriveAgentTaskStatus('running', 'Interrupted by user', {
+      persistedStatus: 'stopped',
+    })).toBe('stopped');
+  });
+
+  it('ignores malformed persisted status and preserves the legacy replay fallback', () => {
+    expect(deriveAgentTaskStatus(undefined, 'done', {
+      persistedStatus: 'cancelled' as never,
+    })).toBe('completed');
   });
 });
 

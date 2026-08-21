@@ -1501,6 +1501,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/cindy-brain/libraryDbWorker.ts',
+          config: 'vite.library-db-worker.config.ts',
+          // 插件 Library SQLite 隔离在 per-plugin worker：恶意慢查询只饿死
+          // 自己的线程，宿主可 terminate（WAL 保证不损坏库）。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/im/wechat/silkWorker.ts',
           config: 'vite.silk-worker.config.ts',
           // SILK/WASM 解码隔离在线程中，避免阻塞 Electron main。

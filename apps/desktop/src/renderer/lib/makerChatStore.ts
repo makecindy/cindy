@@ -44,7 +44,9 @@ import {
   markCodexPlanTurnFailed,
 } from '@cindy/maker-shared/message-render';
 import {
+  normalizeAgentTaskTerminalStatus,
   normalizeWorkflowProgressEntries,
+  type AgentTaskTerminalStatus,
   type WorkflowProgressEntry,
 } from '@cindy/maker-shared/agent-task';
 import {
@@ -119,6 +121,7 @@ import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared, emitPatch } from '@/lib/sessionsBus';
+import { clearSessionStarting, markSessionStarting } from '@/lib/sessionStartingStore';
 import { createLogger } from '@/lib/logger';
 import {
   markSessionAutomaticHistoryLoadCompleted,
@@ -373,6 +376,8 @@ export interface ChatMessage {
   toolUseId?: string;
   toolName?: string;
   toolInput?: unknown;
+  /** Durable Agent/Task terminal state restored from the tool_use row. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /**
    * Renderer-local timestamp for the latest in-place `update_plan` payload.
    * `createdAt` remains the persisted message creation time and must not be
@@ -474,7 +479,8 @@ export interface ChatMessage {
      * 派生、重开会话仍在;这条只活在退避那几秒,补发一发出就撤掉。
      */
     | 'auto-resume-pending'
-    | 'agent-switch';
+    | 'agent-switch'
+    | 'context-rebuild';
   systemCardData?: Record<string, unknown>;
   /** FP-3: plan_review message fields */
   planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
@@ -626,6 +632,14 @@ export interface AgentStatus {
   contextWindow: number;
   isRunning: boolean;
   startedAt: number | null;
+  /** Turn-cumulative output tokens for live TPS. */
+  outputTokens?: number;
+  /** Generation-only milliseconds including any open interval at emit time. */
+  generationDurationMs?: number;
+  /** True while the model currently owns the turn. */
+  generationActive?: boolean;
+  /** False hides live TPS. Omitted on placeholder status frames. */
+  generationReliable?: boolean;
   /**
    * Side-channel running (mivo MJ 按钮等不走 LLM 的后台任务)。
    * RunningStatusBar 据此把 token 计数行隐藏掉, 避免显示"上一轮残留 718 tokens"
@@ -2587,6 +2601,21 @@ export interface SessionChatState {
    */
   pendingTaskWakeStarted: boolean;
   /**
+   * 唤醒桥接最近一次置位时刻(ms)。仅 wakesAfterTerminal 置位时刷新,清零路径
+   * 顺带置 null(残留旧值无害:所有读取方都以 pendingTaskWake > 0 为前置)。
+   * 用途:桥接对账收口的最小年龄闸 —— 距最近置位不足
+   * WAKE_BRIDGE_RECONCILE_MIN_AGE_MS 时不收口,防止把「合法但启动慢于对账
+   * 延迟的 wake 空窗」误判为泄漏(bot review:旧快照不得清新桥接)。
+   */
+  pendingTaskWakeArmedAt: number | null;
+  /**
+   * 唤醒桥接置位代次:仅 wakesAfterTerminal 置位时自增,消费 / 清零不动。
+   * 用途:桥接对账的代际标识 —— 收口要求「计数与代际捕获值一致 **且** 代次未变」。
+   * 只比计数会被 ABA 碰撞骗过(快照响应在飞超长时,旧桥接被消费、新终态又把
+   * 计数恢复到捕获值),代次单调递增使「期间有过新置位」必然可见(bot review P1)。
+   */
+  pendingTaskWakeGen: number;
+  /**
    * 用户主动 Stop 标记:会话级(非组件级),确保同一 session 在多窗口打开时
    * 任一窗口的 Stop 都能阻止其他窗口触发预测等后续行为。
    * 置位:stopSession(用户主动 Stop 时)。
@@ -2711,6 +2740,8 @@ function createInitialState(): SessionChatState {
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
     pendingTaskWakeStarted: false,
+    pendingTaskWakeArmedAt: null,
+    pendingTaskWakeGen: 0,
     turnStoppedByUser: false,
     lastAgentMeta: null,
   };
@@ -2782,6 +2813,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   pendingTaskWake: 0,
   pendingTaskWakeDuringTurn: 0,
   pendingTaskWakeStarted: false,
+  pendingTaskWakeArmedAt: null,
+  pendingTaskWakeGen: 0,
   turnStoppedByUser: false,
   lastAgentMeta: null,
 }) as SessionChatState;
@@ -3269,6 +3302,7 @@ function _purgeSession(sessionId: string): void {
   // 交接中的迟到 continuation，且不写入 /clear 的历史时间边界。
   bumpRendererClearGeneration(sessionId);
   cancelRemoteOptimisticSendsForSessionPurge(sessionId);
+  clearWakeBridgeReconcileTimer(sessionId);
   sessions.delete(sessionId);
   localSentUserMessageIds.delete(sessionId);
   pendingLocalRetryIntents.delete(sessionId);
@@ -3551,6 +3585,49 @@ function setState(
   // messages:created 的侧栏时间戳与 chat state 保持原有先后：先通知消息，再 patch 列表。
   flushPendingMessageCreatedPatch(sessionId);
   if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
+}
+
+/**
+ * 唤醒桥接对账(见 pendingTaskWake 字段注释):桥接在「wake 任务终态 → wake turn
+ * 启动」的窗口里撑住 running 快照,但上游 CLI 在「后台子 agent 于主 turn 运行中完成」
+ * 的时机会把 task-notification 当 mid-turn 附件消费掉,续跑 turn 永远不会来 —— 桥接
+ * 便在主 turn Done 之后无限期等待,sidebar 永久转圈。桥接挂起(计数 > 0 且会话非
+ * running)时起表:宽限期内 isTurnStart 照常消费计数(isRunning 翻 true 即解除);
+ * 超时仍未启动则清空桥接,让 running 快照收敛为事实 —— 任务卡早已显示终态,不丢信息。
+ */
+export const WAKE_BRIDGE_RECONCILE_MS = 60_000;
+const wakeBridgeReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearWakeBridgeReconcileTimer(sessionId: string): void {
+  const timer = wakeBridgeReconcileTimers.get(sessionId);
+  if (!timer) return;
+  clearTimeout(timer);
+  wakeBridgeReconcileTimers.delete(sessionId);
+}
+
+function scheduleWakeBridgeReconciliation(sessionId: string): void {
+  const state = sessions.get(sessionId);
+  if (!state || state.pendingTaskWake <= 0 || state.agentStatus.isRunning) {
+    clearWakeBridgeReconcileTimer(sessionId);
+    return;
+  }
+  // 已在计时:保持首次挂起时刻的截止线,后续无关事件不刷新窗口。
+  if (wakeBridgeReconcileTimers.has(sessionId)) return;
+  const timer = setTimeout(() => {
+    wakeBridgeReconcileTimers.delete(sessionId);
+    // slice 可能已被 clearSession / LRU 逐出;setState 会重建 slice,先探测再动。
+    if (!sessions.has(sessionId)) return;
+    setState(sessionId, (s) => {
+      if (s.pendingTaskWake <= 0 || s.agentStatus.isRunning) return s;
+      return {
+        ...s,
+        pendingTaskWake: 0,
+        pendingTaskWakeDuringTurn: 0,
+        pendingTaskWakeStarted: false,
+      };
+    });
+  }, WAKE_BRIDGE_RECONCILE_MS);
+  wakeBridgeReconcileTimers.set(sessionId, timer);
 }
 
 function notify(sessionId: string): void {
@@ -4927,6 +5004,18 @@ export function handleStreamEvent(
         !state.turnStoppedByUser &&
         (state.agentStatus.isRunning ||
           (state.agentStatus.status !== 'Done' && state.agentStatus.status !== ''));
+      // 主轮 Done 已越过后才置位的桥接:设计上等「wake turn 启动(isTurnStart 消费)」
+      // 或「wake turn 失败的 Done(终态分支消费)」收尾;但跨会话误投 / 重放的迟到
+      // 终态不会有任何后续事件跟进(fork 会话收到父会话任务的终态等),两条清除路径
+      // 都永远不来,桥接会永久撑住 running 快照(spinner 永转),且 pendingTaskWake
+      // 不在 reconcileStaleRunningTasks 的对账覆盖内(它只收 taskUpdates 的 running
+      // 残留,而迟到终态本身就是 completed)。这里按「活动熄灭延迟对账」同款机制补
+      // 一次权威对账兜底:到点后若 wake turn 已启动(桥接被消费)对账自然空转;只有
+      // 确认「无 turn 在跑 + main 权威表无 wake 任务」才收口(见
+      // seedBackgroundTaskSnapshots 的 reconcileWakeBridge)。
+      if (wakesAfterTerminal && !mainTurnDoneNotCrossed) {
+        scheduleBackgroundTaskReconcile(event.sessionId);
+      }
       return {
         ...state,
         lastAgentMeta: incomingMeta ?? state.lastAgentMeta,
@@ -4938,6 +5027,10 @@ export function handleStreamEvent(
           nextWake > 0
           ? (state.pendingTaskWakeDuringTurn + (wakesAfterTerminal && mainTurnDoneNotCrossed ? 1 : 0))
           : 0,
+        // 最小年龄闸的时钟起点:每次真实置位都刷新(见字段注释)。
+        pendingTaskWakeArmedAt: wakesAfterTerminal ? Date.now() : state.pendingTaskWakeArmedAt,
+        // 置位代次:对账收口的 ABA 防护(见字段注释)。
+        pendingTaskWakeGen: state.pendingTaskWakeGen + (wakesAfterTerminal ? 1 : 0),
       };
     }
 
@@ -5657,11 +5750,14 @@ export function handleStreamEvent(
       if (boundaryId && state.messages.some((message) => message.clientId === clientId)) {
         return state;
       }
-      const finalized = finalizeStreamingInState(state);
+      // Background compact belongs to the previous idle cycle. Finalizing here
+      // would seal a product turn that started after compaction_start.
+      const nextState =
+        event.turnScope === 'background' ? state : finalizeStreamingInState(state);
       return {
-        ...finalized,
+        ...nextState,
         messages: [
-          ...finalized.messages,
+          ...nextState.messages,
           {
             clientId,
             role: 'assistant' as const,
@@ -5785,11 +5881,101 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
     pendingTaskWakeStarted: false,
+    pendingTaskWakeArmedAt: null,
+    pendingTaskWakeGen: state.pendingTaskWakeGen,
     turnStoppedByUser: false,
     agentStatus: {
       ...finalized.agentStatus,
       isRunning: false,
       startedAt: null,
+    },
+  };
+}
+
+function mergeLiveGenerationStatus(
+  isTurnStart: boolean,
+  update: CCAgentStatusUpdate,
+  previous: AgentStatus,
+): Pick<
+  AgentStatus,
+  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable'
+> {
+  // Turn start drops leftover metrics from the previous turn, then keeps any
+  // live fields carried by this same status. A reconnect-shaped first event
+  // (isRunning false→true with output / duration already present) must not
+  // zero the values that just arrived.
+  const baseline = isTurnStart
+    ? {
+        outputTokens: 0,
+        generationDurationMs: 0,
+        generationActive: false,
+        generationReliable: true,
+      }
+    : previous;
+  const hasLiveFields =
+    typeof update.outputTokens === 'number' ||
+    typeof update.generationDurationMs === 'number' ||
+    typeof update.generationActive === 'boolean' ||
+    typeof update.generationReliable === 'boolean';
+  if (!hasLiveFields) {
+    return {
+      outputTokens: baseline.outputTokens,
+      generationDurationMs: baseline.generationDurationMs,
+      generationActive: update.isRunning ? baseline.generationActive : false,
+      generationReliable: baseline.generationReliable,
+    };
+  }
+  const merged = {
+    outputTokens:
+      typeof update.outputTokens === 'number' ? update.outputTokens : baseline.outputTokens,
+    generationDurationMs:
+      typeof update.generationDurationMs === 'number'
+        ? update.generationDurationMs
+        : baseline.generationDurationMs,
+    generationActive:
+      typeof update.generationActive === 'boolean'
+        ? update.generationActive
+        : baseline.generationActive,
+    generationReliable:
+      typeof update.generationReliable === 'boolean'
+        ? update.generationReliable
+        : baseline.generationReliable,
+  };
+  if (!update.isRunning) {
+    return { ...merged, generationActive: false };
+  }
+  return merged;
+}
+
+/** Idle compact / late background status may refresh copy and context tokens without flipping the product turn. */
+function applyBackgroundStatus(
+  state: SessionChatState,
+  data: Record<string, unknown>,
+): SessionChatState {
+  const rawStatus = typeof data.status === 'string' ? data.status.trim() : '';
+  // A late idle-compact Done must not paint the product turn as finished.
+  const status =
+    !rawStatus || (rawStatus === 'Done' && state.agentStatus.isRunning)
+      ? state.agentStatus.status
+      : rawStatus;
+  let contextTokens = state.agentStatus.contextTokens;
+  let contextWindow = state.agentStatus.contextWindow;
+  if (
+    typeof data.contextWindow === 'number' &&
+    data.contextWindow > 0 &&
+    typeof data.contextTokens === 'number' &&
+    data.contextTokens >= 0
+  ) {
+    contextTokens = data.contextTokens;
+    contextWindow = data.contextWindow;
+  }
+  return {
+    ...state,
+    agentStatus: {
+      ...state.agentStatus,
+      status,
+      contextTokens,
+      contextWindow,
     },
   };
 }
@@ -5907,6 +6093,7 @@ function handleStatusUpdate(
       contextWindow: cw,
       isRunning: update.isRunning,
       startedAt,
+      ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
     continuationTurnClientId: update.isRunning ? state.continuationTurnClientId : null,
@@ -5954,6 +6141,7 @@ type MakerEventPayload = {
     source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
     agentMeta?: Record<string, unknown>;
     turnContinuationId?: number;
+    turnScope?: 'turn' | 'background';
   };
   persistId?: string;
   resolvedContent?: string;
@@ -6013,6 +6201,14 @@ let textDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 // 事件 / wake turn 落地留窗口,到点后拉一次快照走 seed+对账;每会话至多一个
 // 待执行定时器(防抖),active:true 到达即取消。只在翻转沿触发,不轮询。
 const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
+
+/**
+ * 唤醒桥接对账收口的最小年龄:距最近一次桥接置位不足此时长时一律不收口
+ * (改为重新调度下一轮对账)。正常 wake 空窗是毫秒~秒级,10s 给慢机 / 高负载
+ * 下的合法 wake turn 留足启动余量;真泄漏(误投 / 重放,永远无 wake 跟进)
+ * 只是晚 ~10s 熄灭,仍远好于修复前的永久转圈。
+ */
+const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function cancelBackgroundTaskReconcile(sessionId: string): void {
@@ -6037,17 +6233,31 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
       // 已无 running 条目则无账可对,不发无谓 IPC。定时器只在 store 对象初始化
       // 之后才可能到点,前向引用 makerChatStore 安全。
       const staleRunningCandidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
-      if (staleRunningCandidates.size === 0) return;
+      // 桥接泄漏时 taskUpdates 里往往已无 running 条目(迟到终态本身就是 completed),
+      // 只看 running 候选会把桥接对账挡在门外 —— pendingTaskWake > 0 时同样放行。
+      // 桥接代际在请求发起前捕获(计数 + 置位代次):收口只在「响应落地时计数与
+      // 代际完全一致且代次未变」时发生 —— 请求在飞窗口内新置位的桥接绝不被旧快照
+      // 清除,代次单调另挡 ABA 碰撞(bot review:旧快照不得清新桥接 / P1 ABA)。
+      const capturedWakeBridge = makerChatStore.capturePendingWakeBridge(sessionId);
+      if (staleRunningCandidates.size === 0 && capturedWakeBridge.count === 0) return;
       const api = window.electronAPI?.maker;
       if (!api?.listSessionBackgroundTasks) return;
       void api
         .listSessionBackgroundTasks(sessionId)
-        .then(({ tasks }) => {
+        .then(({ tasks, pendingContinuations }) => {
           if (!Array.isArray(tasks)) return;
           // 响应落地前再复查一次:请求在飞期间远程注册表才完成会话水合的话,
           // 本机「查无此会话」的空表不可用于收口镜像任务。
           if (isRemoteSessionSticky(sessionId)) return;
-          makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, { staleRunningCandidates });
+          makerChatStore.seedBackgroundTaskSnapshots(sessionId, tasks, {
+            staleRunningCandidates,
+            reconcileWakeBridge: capturedWakeBridge,
+            // main 权威的「任务已终态、wake turn 尚未启动或仍在跑」continuation
+            // 计数。旧 main(字段缺失)按「信号不可用」处理 —— 不收口,只重试,
+            // 绝不退化回「拿空任务表当无后续」的旧判据。
+            authorityPendingContinuations:
+              typeof pendingContinuations === 'number' ? pendingContinuations : null,
+          });
         })
         .catch(() => {
           // 静默:与其余快照拉取失败同口径(失败不对账,下次翻转沿 / 挂载重试)。
@@ -6115,11 +6325,13 @@ function dispatchStreamEventPayload(
     ...(event.turnContinuationId !== undefined
       ? { turnContinuationId: event.turnContinuationId }
       : {}),
+    ...(event.turnScope !== undefined ? { turnScope: event.turnScope } : {}),
     persistId,
     resolvedContent,
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
   setState(sessionId, (s) => handleStreamEvent(s, streamEvent), { deferNotification });
+  scheduleWakeBridgeReconciliation(sessionId);
 }
 
 function clearTextDeltaFlushTimer(): void {
@@ -6494,9 +6706,14 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // 持久化 (totalCostUsd / contextTokens / contextWindow → sessions 表) 已搬到 main 端的
     // sessionSpendBroadcaster, renderer 只更新 in-memory agentStatus, 不再 IPC 写库 (避免多 window 竞写)。
     if (event.type === 'status') {
+      const data = event.data as Record<string, unknown>;
+      if (event.turnScope === 'background') {
+        setState(sessionId, (s) => applyBackgroundStatus(s, data));
+        return;
+      }
       const update = {
         sessionId,
-        ...(event.data as Record<string, unknown>),
+        ...data,
         ...(event.turnContinuationId !== undefined
           ? { turnContinuationId: event.turnContinuationId }
           : {}),
@@ -6505,6 +6722,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
       }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
+      scheduleWakeBridgeReconciliation(sessionId);
       return;
     }
 
@@ -7883,7 +8101,12 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       }
       if (isRemoteSessionSticky(p.sessionId)) return;
       // 调度前粗筛:没有 running 条目就不必挂定时器;到点后还会再次捕获候选集。
-      if (makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0) return;
+      // 唤醒桥接(pendingTaskWake)泄漏时 running 条目为空,同样需要对账,放行。
+      if (
+        makerChatStore.captureRunningClaudeTaskIds(p.sessionId).size === 0 &&
+        makerChatStore.capturePendingWakeBridge(p.sessionId).count === 0
+      )
+        return;
       scheduleBackgroundTaskReconcile(p.sessionId);
     },
     'session-background-activity-reconcile',
@@ -9096,6 +9319,10 @@ function settleRemoteOptimisticFailure(sessionId: string, clientId: string, erro
   // Retire the outbox ref afterwards so media protection transfers without a
   // cleanup-eligible gap in main's renderer registry.
   clearRemoteOptimisticSend(sessionId, clientId);
+  // 同会话还有其它乐观发送在飞时不能清 starting,否则后一条会提前退出运行中档。
+  if (!remoteOptimisticSendRecords(sessionId)?.size) {
+    clearSessionStarting(sessionId);
+  }
   setState(sessionId, (s) => ({
     ...s,
     pendingQueue: s.pendingQueue.filter((item) => item.clientId !== clientId),
@@ -11219,6 +11446,8 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
       ? { workingDir, userSendAt: userSendAtIso, updatedAt: userSendAtIso }
       : { userSendAt: userSendAtIso, updatedAt: userSendAtIso },
   );
+  // 侧栏优先级在真实 isRunning 之前先把刚发送的任务当成 running,避免先沉底再跳顶。
+  markSessionStarting(sessionId);
 }
 
 /**
@@ -11716,6 +11945,15 @@ function sendMessage(
           ),
       );
     },
+  ).then(
+    (ok) => {
+      if (!ok) clearSessionStarting(sessionId);
+      return ok;
+    },
+    (err) => {
+      clearSessionStarting(sessionId);
+      throw err;
+    },
   );
 }
 
@@ -11893,6 +12131,16 @@ async function sendMessageCore(
       }
       const applied = applyInputProjectionOperationResponse(sessionId, operation, projection);
       if (applied) markSessionHasUserMessage(sessionId);
+      // 暂停 / 输入锁 / 凭证切换等待只把消息收下,不会马上派发。starting
+      // 表示「预期会跑」,不能把明确未派发的任务标成运行中。
+      if (
+        projection.pendingQueue.some((item) => item.clientId === queued.clientId)
+        && (projection.queuePaused
+          || Boolean(projection.credentialSwitchWait)
+          || projection.queueInteractionLocks.length > 0)
+      ) {
+        clearSessionStarting(sessionId);
+      }
       return true;
     })
     .catch((err) => {
@@ -14375,6 +14623,19 @@ export const makerChatStore = {
     return out;
   },
   /**
+   * 捕获该会话当前的唤醒桥接代际(计数 + 置位代次)。
+   * 用途:活动熄灭延迟对账 —— ①粗筛放行:桥接泄漏时 taskUpdates 里往往已无
+   * running 条目(迟到终态本身就是 completed),只看 running 候选会把桥接对账
+   * 挡在门外;②桥接代际:必须在发起 listSessionBackgroundTasks **之前**捕获,
+   * 收口只在「响应落地时计数与代际一致且置位代次未变」时发生 —— 请求在飞窗口
+   * 内新置位 / 被 isTurnStart 消费过的桥接都不收;代次单调递增另挡「消费后又
+   * 置位恰好回到原计数」的 ABA 碰撞(见 seedBackgroundTaskSnapshots)。
+   */
+  capturePendingWakeBridge: (sessionId: string): { count: number; gen: number } => {
+    const s = sessions.get(sessionId);
+    return { count: s?.pendingTaskWake ?? 0, gen: s?.pendingTaskWakeGen ?? 0 };
+  },
+  /**
    * 后台任务快照水合:把 main 的 listSessionBackgroundTasks 结果补进 taskUpdates。
    * 只补「store 里完全没见过」的任务 —— 事件流是唯一实时源,快照可能落后于刚到
    * 的终态事件,已存在的条目(无论何状态)绝不用快照的 running 覆盖复活。
@@ -14386,14 +14647,41 @@ export const makerChatStore = {
    * running 且不在快照中的条目标 stopped(终态事件丢失的自愈,时序论证见
    * reconcileStaleRunningTasks)。仅本机会话可传:device-link 镜像会话的快照
    * 有降级空表窗口,不可当权威(与远程豁免 running 折算同口径)。
+   *
+   * opts.reconcileWakeBridge(可选):唤醒桥接对账收口 —— 仅活动熄灭延迟对账
+   * 路径可传(同 staleRunningCandidates 的本机会话口径),值为**发起快照请求前**
+   * 捕获的桥接代际(计数 + 置位代次)。快照落地后,同时满足以下全部条件才把
+   * 桥接清零,否则(计数仍 > 0 时)重新调度下一轮对账、留待复查:
+   *   1. 当前计数与代际捕获值完全一致 —— 在飞窗口内无新增置位、也无 isTurnStart
+   *      消费,旧快照绝不清新桥接、也不吞多 wake 场景里尚待依次消费的合法计数;
+   *   2. 置位代次未变 —— 单调代次挡「在飞窗口内先消费后置位、计数恰好回到捕获值」
+   *      的 ABA 碰撞(bot review P1);
+   *   3. 主 turn 不在跑;
+   *   4. 距最近一次置位已超过 WAKE_BRIDGE_RECONCILE_MIN_AGE_MS —— 给慢机 /
+   *      高负载下合法 wake turn 留足启动余量;
+   *   5. main 权威表里没有任何 wake 型任务;
+   *   6. opts.authorityPendingContinuations === 0 —— main 权威的「任务已终态、
+   *      wake turn 尚未启动或仍在跑」continuation claim 数。这是收口的**决定性
+   *      判据**:任务终态后立即从运行表出表,条件 5 的空表不能证明没有待启动的
+   *      continuation(bot review P2 两条);信号缺失(null,旧 main)按不可用
+   *      处理 —— 不收口,只重试。
+   * 全部满足时,仍挂着的桥接只能是「不会再有 wake turn 跟进」的迟到 / 误投终态
+   * 留下的泄漏(fork 会话收到父会话任务终态、重连重放等)—— 不清会永久撑住
+   * running 快照(spinner 永转)。wake turn 真要启动时 isTurnStart 本来就会消费
+   * 桥接,收口只影响空窗显示,不改变任何 turn 语义。
    */
   seedBackgroundTaskSnapshots: (
     sessionId: string,
     tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>,
-    opts?: { staleRunningCandidates?: ReadonlySet<string> },
+    opts?: {
+      staleRunningCandidates?: ReadonlySet<string>;
+      reconcileWakeBridge?: { count: number; gen: number };
+      authorityPendingContinuations?: number | null;
+    },
   ): void => {
     const candidates = opts?.staleRunningCandidates;
-    if (!tasks.length && !(candidates && candidates.size > 0)) return;
+    if (!tasks.length && !(candidates && candidates.size > 0) && !opts?.reconcileWakeBridge?.count)
+      return;
     setState(sessionId, (s) => {
       let next = s;
       for (const t of tasks) {
@@ -14419,6 +14707,41 @@ export const makerChatStore = {
       if (candidates && candidates.size > 0) {
         next = reconcileStaleRunningTasks(next, tasks, candidates);
       }
+      // 唤醒桥接对账收口(六条件语义见方法头注释的 reconcileWakeBridge 段)。
+      const capturedWakeBridge = opts?.reconcileWakeBridge;
+      if (capturedWakeBridge && capturedWakeBridge.count > 0 && next.pendingTaskWake > 0) {
+        const bridgeSettled =
+          next.pendingTaskWake === capturedWakeBridge.count &&
+          next.pendingTaskWakeGen === capturedWakeBridge.gen;
+        const bridgeAgedOut =
+          next.pendingTaskWakeArmedAt !== null &&
+          Date.now() - next.pendingTaskWakeArmedAt >= WAKE_BRIDGE_RECONCILE_MIN_AGE_MS;
+        const authorityHasWakeTask = tasks.some(
+          (t) => typeof t.taskType === 'string' && WAKE_AGENT_TASK_TYPES.has(t.taskType),
+        );
+        // 决定性判据:main 权威 continuation 计数明确为 0 才允许收口。
+        const authorityConfirmsNoContinuation = opts?.authorityPendingContinuations === 0;
+        if (
+          bridgeSettled &&
+          bridgeAgedOut &&
+          !next.agentStatus.isRunning &&
+          !authorityHasWakeTask &&
+          authorityConfirmsNoContinuation
+        ) {
+          next = {
+            ...next,
+            pendingTaskWake: 0,
+            pendingTaskWakeDuringTurn: 0,
+            pendingTaskWakeStarted: false,
+            pendingTaskWakeArmedAt: null,
+          };
+        } else {
+          // 条件未齐(在飞变动 / 年龄不足 / turn 在跑 / 权威表仍有 wake 任务):
+          // 本轮不动,重新调度下一轮对账复查。真泄漏最终会静止、超龄、表空,
+          // 收口收敛;合法 wake 则会经 isTurnStart 消费计数,后续对账自然空转。
+          scheduleBackgroundTaskReconcile(sessionId);
+        }
+      }
       return next;
     });
   },
@@ -14441,6 +14764,7 @@ export const makerChatStore = {
   __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void => {
     supersedeInputProjectionOnTerminalEvent(sessionId, event);
     setState(sessionId, (s) => handleStreamEvent(s, event));
+    scheduleWakeBridgeReconciliation(sessionId);
   },
   /** Exposed for tests only: 把 status update 打进真实 store。 */
   __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
@@ -14448,6 +14772,7 @@ export const makerChatStore = {
       supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
     }
     setState(sessionId, (s) => handleStatusUpdate(s, update));
+    scheduleWakeBridgeReconciliation(sessionId);
   },
   /** Exposed for tests only. */
   __hydratePersistedMessageForTest: hydratePersistedMessage,
@@ -14941,6 +15266,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const c = m.content as Record<string, unknown>;
       const toolName = typeof c.toolName === 'string' ? c.toolName : '';
       const toolInput = c.input ?? null;
+      const agentTaskStatus = normalizeAgentTaskTerminalStatus(m.agentMeta?.agentTaskStatus);
       // toolUseId 来源:DB 列(新数据) → fallback 旧数据存在 content.toolUseId 里
       const toolUseId =
         (typeof m.toolUseId === 'string' && m.toolUseId.length > 0 ? m.toolUseId : undefined) ??
@@ -14952,6 +15278,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         toolUseId,
         toolName,
         toolInput,
+        ...(agentTaskStatus ? { agentTaskStatus } : {}),
         ...(toolName === 'update_plan' && c.terminalPlanSnapshot === true
           ? {
               terminalPlanSnapshot: true,
@@ -15121,6 +15448,25 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(errorProviderId ? { errorProviderId } : {}),
         // interrupted-turn-resume:「忽略」的持久化标记(updateContent 写入)。
         ...(c.dismissed === true ? { errorDismissed: true } : {}),
+      };
+    }
+    // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
+    const contextRebuild =
+      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
+        ? (m.agentMeta as { contextRebuild?: unknown }).contextRebuild
+        : undefined;
+    if (contextRebuild && typeof contextRebuild === 'object') {
+      const c = contextRebuild as Record<string, unknown>;
+      return {
+        clientId: m.clientId,
+        role: 'assistant' as const,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'context-rebuild' as const,
+        systemCardData: {
+          reason: typeof c.reason === 'string' ? c.reason : 'context-overflow',
+          handoff: typeof c.handoff === 'string' ? c.handoff : '',
+        },
       };
     }
     // session-agent-switch:引擎切换边界行 → 'agent-switch' system card(与

@@ -242,6 +242,12 @@ function renderWizard(presetId: string) {
 beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
+      localModelList: vi.fn(async () => ({
+        status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
+        models: [],
+        memoryGb: 0,
+      })),
+      scanLocalCli: vi.fn(async () => ({ detections: [] })),
       listProviderPresets: vi.fn(async () => ({
         presets: [
           deepseekPreset,
