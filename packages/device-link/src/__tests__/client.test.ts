@@ -4715,6 +4715,75 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     controller.stop();
   }, 10_000);
 
+  it('新确认阶段:旧帧执行完才提交的新基线会刷新确认 ACK,不复用首次 stale ackSeq', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 1_000,
+        transportRetryIntervalMs: 50,
+        transportMaxRetryAttempts: 3,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const openLink = async (transportBaseSeq: number): Promise<string> => {
+      const opening = h.client.openLink('dev-b', {
+        controllerName: 'Test iPhone',
+        protocolVersion: 1,
+        appVersion: '1',
+      }, 500);
+      const requestId = h.current().sent.filter((env) => env.kind === 'link-open').at(-1)!.id!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: requestId,
+        src: 'dev-b',
+        payload: {
+          appVersion: '1',
+          allowlistHash: 'hash',
+          capabilities: [
+            DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+            DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          ],
+          transportStreamId: 'remote-stream',
+          transportBaseSeq,
+        },
+      });
+      await opening;
+      return requestId;
+    };
+
+    await openLink(1);
+    let release: (() => void) | undefined;
+    h.client.onFrame((env) => {
+      if (env.kind !== 'push') return;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    h.current().push(encodeReliableFrames({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-b',
+      payload: { channel: 'maker:event', payload: { text: 'old-running-frame' } },
+    }, 'remote-stream', 1)[0]);
+    await tick();
+    expect(release).toBeTypeOf('function');
+
+    const reopenedRequestId = await openLink(2);
+    const confirmationAcks = () => h.current().sent
+      .map((env) => parseTransportAck(env))
+      .filter((ack) => ack?.linkRequestId === reopenedRequestId);
+    expect(confirmationAcks().at(-1)).toMatchObject({ ackSeq: 0 });
+
+    release?.();
+    await tick();
+    expect(confirmationAcks().at(-1)).toMatchObject({ ackSeq: 1 });
+
+    h.client.stop();
+  }, 10_000);
+
   it('新确认阶段:确认重试全部丢失后超时重置 peer,通知控制端重开而非永久等待', async () => {
     const relay = new MemoryRelay();
     const host = makeRelayClient(relay, 'desktop', {

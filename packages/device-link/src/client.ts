@@ -439,7 +439,6 @@ interface PendingLinkConfirmation {
 interface OutboundLinkConfirmationAck {
   requestId: string;
   streamId: string;
-  ackSeq: number;
   attempts: number;
   timer: ReturnType<typeof setTimeout> | null;
 }
@@ -2746,8 +2745,14 @@ export class DeviceLinkClient {
     ackSeq: number,
     linkRequestId?: string,
   ): void {
+    const pendingConfirmation = this.peerTransport.get(dst)?.outboundLinkConfirmationAck;
+    const effectiveLinkRequestId = linkRequestId ?? (
+      pendingConfirmation?.streamId === streamId
+        ? pendingConfirmation.requestId
+        : undefined
+    );
     try {
-      this.sendEnvelope(makeTransportAck(dst, streamId, ackSeq, linkRequestId));
+      this.sendEnvelope(makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId));
     } catch (err) {
       this.log.debug('reliable transport ACK send failed', err);
     }
@@ -2759,14 +2764,13 @@ export class DeviceLinkClient {
     peer: PeerTransportState,
   ): void {
     if (!peer.receiveReady || !peer.remoteStreamId) return;
-    const stream = this.getReceiveStream(peer, peer.remoteStreamId, peer.remoteBaseSeq);
+    this.getReceiveStream(peer, peer.remoteStreamId, peer.remoteBaseSeq);
     if (peer.outboundLinkConfirmationAck?.timer) {
       clearTimeout(peer.outboundLinkConfirmationAck.timer);
     }
     peer.outboundLinkConfirmationAck = {
       requestId,
       streamId: peer.remoteStreamId,
-      ackSeq: stream.lastDeliveredSeq,
       attempts: 0,
       timer: null,
     };
@@ -2784,11 +2788,15 @@ export class DeviceLinkClient {
     ) {
       return;
     }
+    // link-accept 可能在旧可靠帧仍执行时推进 requestedBaseSeq；此时
+    // applyReceiveStreamBase 会延迟提交，首次确认看到的 lastDeliveredSeq
+    // 不是最终基线。每次重试必须从活动 stream 重新读取，不能复用快照。
+    const stream = this.getReceiveStream(peer, confirmation.streamId, peer.remoteBaseSeq);
     confirmation.attempts += 1;
     this.sendTransportAck(
       dst,
       confirmation.streamId,
-      confirmation.ackSeq,
+      stream.lastDeliveredSeq,
       confirmation.requestId,
     );
     if (confirmation.attempts >= normalizeTransportRetryAttempts(this.timing.transportMaxRetryAttempts)) {
