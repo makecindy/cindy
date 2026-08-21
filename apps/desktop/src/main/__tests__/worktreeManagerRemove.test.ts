@@ -14,6 +14,7 @@ import type { WorktreeMeta } from '../worktree/types';
 import { withWorktreeRestoreMutation } from '../worktree/restoreLock';
 
 const gitExecMock = vi.fn();
+const crossProcessLockMock = vi.fn();
 const isWorktreeDirtyMock = vi.fn();
 const autoStashMock = vi.fn();
 const restoreAutoStashMock = vi.fn();
@@ -33,6 +34,11 @@ let liveSessionLookupError: Error | null = null;
 vi.mock('../worktree/gitExec', () => ({
   gitExec: (...args: unknown[]) => gitExecMock(...args),
   GitExecError: class GitExecError extends Error {},
+  globalSafeDirectoryLockPath: () => '/tmp/cindy-git-safe-directory.lock',
+}));
+
+vi.mock('../device-link/crossProcessLock', () => ({
+  withCrossProcessLock: (...args: unknown[]) => crossProcessLockMock(...args),
 }));
 
 vi.mock('../worktree/dirty', () => ({
@@ -111,6 +117,10 @@ describe('removeWorktreeForSession', () => {
       }
       return { stdout: '', stderr: '' };
     });
+    crossProcessLockMock.mockReset().mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: true }),
+    );
     isWorktreeDirtyMock.mockReset().mockResolvedValue(false);
     autoStashMock.mockReset().mockResolvedValue(true);
     restoreAutoStashMock.mockReset().mockResolvedValue(true);

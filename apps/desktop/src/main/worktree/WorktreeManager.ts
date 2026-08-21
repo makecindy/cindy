@@ -26,7 +26,8 @@ import {
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { classifyError, type ClassifyInput } from './errorClassifier';
-import { gitExec, GitExecError } from './gitExec';
+import { gitExec, GitExecError, globalSafeDirectoryLockPath } from './gitExec';
+import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
 import {
@@ -111,6 +112,12 @@ function activeWorktreePath(meta: WorktreeMeta): string {
  * + 本轮实际 removalPath —— 其中 removalPath 可能是 preserveDirty 现场生成的
  * `.xdt-removing-*` 目录, 它在 ignored-file 扫描 / 所有权复核时触发过 gitExec 的
  * 按需 safe.directory, 必须一并清理, 否则会永久残留。
+ *
+ * 与 gitExec 的 ensureGlobalSafeDirectory(--add)共用同一把跨进程锁:一个实例删
+ * worktree、另一个实例同时给某仓库按需加 safe.directory 时,两种写操作必须串行,
+ * 否则并发写全局 config 会因 .gitconfig.lock 冲突失败(清理侧吞掉失败留残项 /
+ * add 侧失败让原 git 操作继续报 dubious ownership)。拿不到锁时**跳过**清理(留待
+ * 下次),绝不做无锁 --unset-all。
  */
 async function removeWorktreeSafeDirectory(
   ...paths: (string | null | undefined)[]
@@ -118,25 +125,36 @@ async function removeWorktreeSafeDirectory(
   const candidates = new Set(
     paths.filter((p): p is string => typeof p === 'string' && p.length > 0),
   );
-  for (const target of candidates) {
-    try {
-      await gitExec([
-        'config',
-        '--global',
-        '--unset-all',
-        '--fixed-value',
-        'safe.directory',
-        target,
-      ]);
-    } catch (err) {
-      // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
-      if (err instanceof GitExecError && err.exitCode === 5) continue;
-      log.warn(
-        `[worktree] remove safe.directory entry for ${target} failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-  }
+  if (candidates.size === 0) return;
+  await withCrossProcessLock(
+    globalSafeDirectoryLockPath(),
+    { label: 'git-safe-directory', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) {
+        log.warn('[worktree] skip safe.directory cleanup: global lock not acquired');
+        return;
+      }
+      for (const target of candidates) {
+        try {
+          await gitExec([
+            'config',
+            '--global',
+            '--unset-all',
+            '--fixed-value',
+            'safe.directory',
+            target,
+          ]);
+        } catch (err) {
+          // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
+          if (err instanceof GitExecError && err.exitCode === 5) continue;
+          log.warn(
+            `[worktree] remove safe.directory entry for ${target} failed:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+    },
+  );
 }
 
 async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {

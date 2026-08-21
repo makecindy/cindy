@@ -640,4 +640,21 @@ describe('gitExec dubious-ownership safe.directory', () => {
       stderr: expect.stringContaining('dubious ownership'),
     });
   });
+
+  it('未持锁(held:false) → 不做无锁 read+add, 原错误上抛', async () => {
+    const { calls, cbs } = installSequenceMock();
+    mocks.withCrossProcessLock.mockImplementation((_lp, _opts, task) =>
+      task({ held: false, reason: 'busy' }),
+    );
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    // 锁未拿到 → 不得执行任何 config 读写, 原 dubious-ownership 错误上抛
+    expect(calls).toEqual([['status']]);
+    await expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('dubious ownership'),
+    });
+  });
 });

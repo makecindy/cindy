@@ -459,7 +459,7 @@ function extractDubiousPath(stderr: string): string | null {
  * Linux 的 /tmp 多用户共享,用 uid(Windows 无 uid 时退回 0)区分用户,避免不同用户
  * 串扰同一把锁。
  */
-function globalSafeDirectoryLockPath(): string {
+export function globalSafeDirectoryLockPath(): string {
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   return path.join(os.tmpdir(), `cindy-git-safe-directory-${uid}.lock`);
 }
@@ -487,16 +487,19 @@ async function readGlobalSafeDirectories(): Promise<string[]> {
  * 幂等地把 targetPath 加入全局 safe.directory: 已存在则不再 --add, 避免同一路径
  * 因多个 git 操作反复触发 dubious-ownership 而用 --add 堆积出重复记录(#2627)。
  *
- * 读+写放在 withCrossProcessLock 里保证跨进程原子;拿不到锁(罕见:别的实例长期持锁
- * 或锁基础设施不可用)时退化为无锁的 read+add —— 保证 dubious-ownership 仍被处理,
- * 最坏只是产生一条无害的重复条目。用底层 execFileOnce 而非 gitExec, 防止递归进入
- * dubious-ownership 分支。
+ * 读+写放在 withCrossProcessLock 里保证跨进程原子。**未持锁绝不无锁读改写**:其它
+ * 实例长期持锁 / 锁基础设施不可用时 fail-closed 抛错,让 gitExec 把原始
+ * dubious-ownership 错误还给调用方,而不是退化成并发写入重复条目。用底层
+ * execFileOnce 而非 gitExec, 防止递归进入 dubious-ownership 分支。
  */
 async function ensureGlobalSafeDirectory(targetPath: string): Promise<void> {
   await withCrossProcessLock(
     globalSafeDirectoryLockPath(),
     { label: 'git-safe-directory', waitMs: 1_000 },
-    async () => {
+    async (status) => {
+      if (!status.held) {
+        throw new Error('could not acquire the global safe.directory lock');
+      }
       if ((await readGlobalSafeDirectories()).some((p) => p === targetPath)) return;
       await execFileOnce(['config', '--global', '--add', 'safe.directory', targetPath]);
     },
