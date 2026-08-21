@@ -148,7 +148,7 @@ export function resolveCodexSubagentRoutingProfile(
   if (!hasCodexSubagentOverride(settings)) return 'default';
   const configuredForChatGptOAuth =
     codexSubagentRouteUsesChatGptOAuth(configuredRoute, providerViews)
-    || codexSubagentSelectionUsesChatGptOAuth(settings, providerViews);
+    || (!configuredRoute && codexSubagentSelectionUsesChatGptOAuth(settings, providerViews));
   // 固定 ChatGPT OAuth 时，两类主任务都会因冲突回落默认配置，可以复用同一 host。
   // 其它固定路由只在 OAuth 主任务上临时回落；第三方主任务仍需重建为 configured host。
   if (mainTaskCredentialMode === 'oauth-bearer') {

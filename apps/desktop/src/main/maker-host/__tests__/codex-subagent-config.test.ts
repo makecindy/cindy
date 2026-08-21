@@ -204,6 +204,36 @@ describe('resolveEffectiveCodexSubagentSettings', () => {
     expect(codexSubagentRouteResolutionFailed(thirdParty, route)).toBe(true);
   });
 
+  it('does not infer ChatGPT OAuth when an implicit route resolved to an available third party', () => {
+    const implicit = settings({
+      codex: 'gpt-5.6-terra',
+      codexProviderId: null,
+      codexEffort: 'high',
+    });
+    const providers = [
+      providerView('openai', implicit.codex!, { connected: false }),
+      providerView('third-party-codex-proxy', implicit.codex!, {
+        source: 'user',
+        authStrategy: 'oauth-token',
+      }),
+    ];
+    const route = resolveCodexSubagentRouteSnapshot(implicit, undefined, providers);
+
+    expect(route?.providerId).toBe('third-party-codex-proxy');
+    expect(resolveEffectiveCodexSubagentSettings(
+      implicit,
+      'provider-oauth',
+      route,
+      providers,
+    )).toBe(implicit);
+    expect(resolveCodexSubagentRoutingProfile(
+      implicit,
+      'provider-oauth',
+      route,
+      providers,
+    )).toBe('configured');
+  });
+
   it.each(['gateway-key', 'provider-oauth'] as const)(
     'uses the main-task default when a %s main task selects a ChatGPT OAuth Subagent',
     (credentialMode) => {
