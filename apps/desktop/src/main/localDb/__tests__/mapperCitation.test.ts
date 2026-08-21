@@ -61,4 +61,16 @@ describe('message mapper internal citation compatibility', () => {
     expect(parsed.text.length).toBe(4096);
     expect(extractMessagePreview(bounded, 'user')).toBe(parsed.text.slice(0, 140));
   });
+
+  it('keeps short text valid when structured attachments make the payload oversized', () => {
+    const raw = JSON.stringify({
+      text: 'see this file',
+      images: [],
+      files: [{ path: '/tmp/notes.md', data: 'x'.repeat(5000) }],
+    });
+    const bounded = boundSerializedMessageContent(raw);
+    const parsed = JSON.parse(bounded as string) as { text: string; files: unknown[] };
+    expect(parsed.text).toBe('see this file');
+    expect(extractMessagePreview(bounded, 'user')).toBe('see this file');
+  });
 });

@@ -483,6 +483,67 @@ describe('makerChatStore active view tracking', () => {
     expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
   });
 
+  it('continues idle discovery into plan resolution when the extra page is unresolved', async () => {
+    const sessionId = sid('idle-plan-resolution');
+    enter(sessionId);
+    vi.mocked(messageService.list).mockClear();
+    const latest = Array.from({ length: 50 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (2000 + i) * 1000).toISOString(),
+      ),
+    );
+    const unresolvedPage = [
+      ...Array.from({ length: 49 }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `mid-${String(i).padStart(2, '0')}`,
+          `mid message ${i}`,
+          new Date(BASE_TIME.getTime() + (1000 + i) * 1000).toISOString(),
+        ),
+      ),
+      dbToolUseMessage(
+        sessionId,
+        'latest-task-update',
+        'TaskUpdate',
+        { taskId: 'abc', status: 'completed' },
+        new Date(BASE_TIME.getTime() + 1_500_000).toISOString(),
+      ),
+    ];
+    const resolvedPage = [
+      dbToolUseMessage(
+        sessionId,
+        'task-create',
+        'TaskCreate',
+        { subject: 'Collect logs' },
+        new Date(BASE_TIME.getTime() - 2_000).toISOString(),
+      ),
+      dbToolResultMessage(
+        sessionId,
+        'task-create-result',
+        'tool-task-create',
+        'Task #abc created successfully: Collect logs',
+        new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+      ),
+    ];
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latest)
+      .mockResolvedValueOnce(unresolvedPage)
+      .mockResolvedValueOnce(resolvedPage);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(20);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises(20);
+
+    expect(messageService.list).toHaveBeenCalledTimes(3);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('task-create');
+  });
+
   it('schedules idle plan discovery when a prefetched session later mounts', async () => {
     const sessionId = sid('prefetch-then-enter');
     vi.mocked(messageService.list).mockClear();

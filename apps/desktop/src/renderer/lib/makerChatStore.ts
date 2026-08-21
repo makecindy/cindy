@@ -10075,9 +10075,29 @@ function loadOneOlderPageForPlanDiscovery(sessionId: string): Promise<boolean> {
     return Promise.resolve(false);
   }
   if (getLatestMessageTodoState(state.messages).hasPlanEvent) return Promise.resolve(false);
-  // 只要一页:真有深历史 plan 时胶囊晚一拍出现,没有 plan 的长任务不再付打开税。
-  // automatic=false:这页不是视口自动补载,不能把跨 mount 的 viewport 预算标成耗尽。
-  return loadOlderMessages(sessionId, false, 1);
+  // 先只翻 1 页。若这一页首次露出未解析完的 plan,再转入与首拉相同的有界 resolution
+  // 回填;没有 plan 的长任务仍只付这一页。automatic=false:不消耗视口自动补载预算。
+  return loadOlderMessages(sessionId, false, 1).then(async (advanced) => {
+    if (!advanced) return false;
+    await continuePlanResolutionAfterIdleDiscovery(sessionId);
+    return advanced;
+  });
+}
+
+const MAX_IDLE_PLAN_RESOLUTION_PAGES = 10;
+
+async function continuePlanResolutionAfterIdleDiscovery(sessionId: string): Promise<void> {
+  for (let page = 0; page < MAX_IDLE_PLAN_RESOLUTION_PAGES; page += 1) {
+    if (!_activeViewSessions.has(sessionId)) return;
+    const state = sessions.get(sessionId);
+    if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) return;
+    const planState = getLatestMessageTodoState(state.messages, {
+      taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+    });
+    if (!planState.hasPlanEvent || planState.isResolved) return;
+    const advanced = await loadOlderMessages(sessionId, false, 1);
+    if (!advanced) return;
+  }
 }
 
 /**

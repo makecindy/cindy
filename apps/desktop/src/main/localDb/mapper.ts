@@ -140,8 +140,11 @@ export function boundSerializedMessageContent(
     }
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const record = parsed as { text?: unknown };
-      if (typeof record.text === 'string' && record.text.length > maxChars) {
-        return JSON.stringify({ ...record, text: record.text.slice(0, maxChars) });
+      if (typeof record.text === 'string') {
+        return JSON.stringify({
+          ...record,
+          text: record.text.length > maxChars ? record.text.slice(0, maxChars) : record.text,
+        });
       }
     }
   } catch {

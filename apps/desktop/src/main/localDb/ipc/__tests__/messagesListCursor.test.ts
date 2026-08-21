@@ -570,6 +570,41 @@ describe('local-db:messages:list cursor', () => {
     });
     expect(prepareSpy.mock.calls.some((call) => String(call[0]).includes('later-19'))).toBe(false);
   });
+
+  it('projects legacy turn cost when an older user row has malformed agent_meta', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (
+        'broken-user', 'broken-user', 's1', 'user', '""', NULL, '{not-json', 900, NULL
+      )
+    `,
+      )
+      .run();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 2 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const final = rows.find((row) => row.id === 'final');
+    expect(final?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+  });
 });
 
 describe('findPendingForkOrigin 来源标记重建', () => {

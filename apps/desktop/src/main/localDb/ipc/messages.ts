@@ -1924,7 +1924,7 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
         isNull(messages.rewindAt),
         ...visibleAfterClear,
         olderThanOldestOnPage,
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        sql`(${messages.agentMeta} IS NULL OR json_valid(${messages.agentMeta}) = 0 OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid))
