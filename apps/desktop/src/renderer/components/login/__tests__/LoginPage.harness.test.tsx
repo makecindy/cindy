@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { vi } from 'vitest';
 
@@ -11,6 +11,7 @@ import {
   type AuthFlowState,
 } from '@cindy/auth-client';
 import { createScenarioFetch } from '@cindy/auth-client/fixtures';
+import { __testing as ssoOrgHistoryTesting } from '@/state/ssoOrgHistory';
 
 /**
  * PR1 harness 场景驱动渲染单测(implementation-plan Step 2 WHAT3 + 附录 A)。
@@ -113,6 +114,8 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
+  ssoOrgHistoryTesting.reset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     // acceptPrivacyConsent:协议门放行时记录「已同意」(TapDB 采集的前置条件)。
@@ -339,12 +342,101 @@ describe('ssoOrgMode 子视图', () => {
     fireEvent.change(input, { target: { value: 'example-corp' } });
     const continueBtn = screen.getByTestId('login-sso-org-continue') as HTMLButtonElement;
     expect(continueBtn.disabled).toBe(false);
-    fireEvent.click(continueBtn);
+    await act(async () => {
+      fireEvent.click(continueBtn);
+    });
     expect(loginHook.value.dispatch).toHaveBeenCalledWith({
       type: 'discover-sso-org',
       org: 'example-corp',
     });
     expect(screen.queryByText('login.realmConsent.title')).toBeNull();
+  });
+
+  it('单条成功历史进入 SSO 子视图时直接回填', async () => {
+    window.localStorage.setItem(
+      ssoOrgHistoryTesting.storageKey,
+      JSON.stringify({ version: 1, entries: ['remembered-corp'] }),
+    );
+    ssoOrgHistoryTesting.reset();
+    mount(await identifierState('providers:both'));
+    fireEvent.click(screen.getByTestId('login-social-sso'));
+    expect((screen.getByTestId('login-sso-org-input') as HTMLInputElement).value).toBe(
+      'remembered-corp',
+    );
+    expect(screen.queryByTestId('login-sso-org-history-list')).toBeNull();
+  });
+
+  it('多条成功历史默认折叠，激活输入框后展示列表并支持选择', async () => {
+    window.localStorage.setItem(
+      ssoOrgHistoryTesting.storageKey,
+      JSON.stringify({
+        version: 1,
+        entries: ['recent-corp', 'older.example'],
+      }),
+    );
+    ssoOrgHistoryTesting.reset();
+    mount(await identifierState('providers:both'));
+    fireEvent.click(screen.getByTestId('login-social-sso'));
+    const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
+    expect(input.value).toBe('recent-corp');
+    expect(screen.queryByTestId('login-sso-org-history-list')).toBeNull();
+    fireEvent.focus(input);
+    const historyList = screen.getByTestId('login-sso-org-history-list');
+    expect(historyList.className).toContain('overflow-y-auto');
+    expect(historyList.className).toContain('[scrollbar-width:none]');
+    expect(historyList.className).toContain('[&::-webkit-scrollbar]:hidden');
+    fireEvent.click(screen.getByTestId('login-sso-org-history-option-1'));
+    expect(input.value).toBe('older.example');
+    expect(screen.queryByTestId('login-sso-org-history-list')).toBeNull();
+  });
+
+  it('只有 discovery 成功才把组织标识写入历史', async () => {
+    const dispatch = vi.fn(async () => true);
+    mount(await identifierState('providers:both'), { dispatch });
+    fireEvent.click(screen.getByTestId('login-social-sso'));
+    fireEvent.change(screen.getByTestId('login-sso-org-input'), {
+      target: { value: 'Example-Corp' },
+    });
+    fireEvent.click(screen.getByTestId('login-sso-org-continue'));
+    await waitFor(() => {
+      expect(window.localStorage.getItem(ssoOrgHistoryTesting.storageKey)).toContain(
+        'Example-Corp',
+      );
+    });
+
+    cleanup();
+    window.localStorage.clear();
+    ssoOrgHistoryTesting.reset();
+    mount(await identifierState('providers:both'), {
+      dispatch: vi.fn(async () => false),
+    });
+    fireEvent.click(screen.getByTestId('login-social-sso'));
+    fireEvent.change(screen.getByTestId('login-sso-org-input'), {
+      target: { value: 'missing-corp' },
+    });
+    fireEvent.click(screen.getByTestId('login-sso-org-continue'));
+    await waitFor(() => {
+      expect(window.localStorage.getItem(ssoOrgHistoryTesting.storageKey)).toBeNull();
+    });
+  });
+
+  it('多条历史支持方向键选择并用 Escape 关闭', async () => {
+    window.localStorage.setItem(
+      ssoOrgHistoryTesting.storageKey,
+      JSON.stringify({ version: 1, entries: ['recent-corp', 'older.example'] }),
+    );
+    ssoOrgHistoryTesting.reset();
+    mount(await identifierState('providers:both'));
+    fireEvent.click(screen.getByTestId('login-social-sso'));
+    const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input.value).toBe('older.example');
+    fireEvent.focus(input);
+    expect(screen.getByTestId('login-sso-org-history-list')).toBeTruthy();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByTestId('login-sso-org-history-list')).toBeNull();
   });
 
   it('组织区域与安装区域不一致时才显示确认，确认或取消走独立 action', async () => {

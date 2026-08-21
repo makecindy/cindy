@@ -447,6 +447,23 @@ export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size
 export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20, lineHeight: LOGIN_COPY_LINE_HEIGHT } as const;
 /** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
 export const LOGIN_SSO_ORG_HINT_TOP = 244;
+/**
+ * 最近组织浮层：覆盖后续控件而不改登录面板几何。88 设计px 在常见 phone
+ * 0.5 缩放下提供约 44pt 行高；最多露出两行，其余在浮层内滚动。
+ */
+export const LOGIN_SSO_ORG_HISTORY = {
+  x: LOGIN_CONTROL.x,
+  y: LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8,
+  width: LOGIN_CONTROL.width,
+  maxHeight: 176,
+  rowMinHeight: 88,
+  radius: 22,
+  rowRadius: 16,
+  font: 20,
+  lineHeight: LOGIN_COPY_LINE_HEIGHT,
+  paddingX: LOGIN_CONTROL.textPadLeft,
+  paddingY: 16,
+} as const;
 
 /**
  * 协议同意行(consent PR;figma 600:660「服务条款」行,与桌面 CONSENT_ROW 同参数源):

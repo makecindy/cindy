@@ -161,6 +161,11 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
 
   it('sso-org-empty:企业 ID 子视图空态接线(placeholder/hint/返回)', () => {
     expect(loginSource).toContain('testID="login.ssoOrgInput"');
+    expect(loginSource).toContain('hydrateSsoOrgHistory()');
+    expect(loginSource).toContain('<LoginSsoOrgHistoryList');
+    expect(loginSource).toContain('accessibilityRole="combobox"');
+    expect(loginSource).not.toContain('setSsoOrgHistoryOpen(history.length > 1)');
+    expect(loginSource).not.toContain('setSsoOrgHistoryOpen(ssoOrgHistory.length > 1)');
     expect(loginSource).toContain("loginText('ssoOrgTitle')");
     expect(loginSource).toContain("loginText('ssoOrgPlaceholder')");
     expect(loginSource).toContain("loginText('ssoOrgHint')");
@@ -170,6 +175,8 @@ describe('loginSkin 全登录态(harness 真链 + 渲染层接线)', () => {
 
   it('sso-org-filled:企业 ID 直接发现，仅在状态机判定跨区后确认', () => {
     expect(loginSource).toContain("type: 'discover-sso-org'");
+    expect(loginSource).toContain('if (!success) return;');
+    expect(loginSource).toContain('rememberSsoOrgIdentifier(value)');
     expect(loginSource).toContain("auth.loginState?.step === 'realm-confirmation'");
     expect(loginSource).toContain("type: 'confirm-sso-realm'");
     expect(loginSource).toContain("type: 'cancel-sso-realm'");
