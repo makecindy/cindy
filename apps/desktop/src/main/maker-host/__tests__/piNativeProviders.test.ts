@@ -373,7 +373,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const anthropicModels = [...(catalog?.get('anthropic')?.values() ?? [])];
     expect(anthropicModels.length).toBeGreaterThan(0);
     expect(anthropicModels.every((model) => model.api === 'anthropic-messages')).toBe(true);
-    expect(resolvePiBundledApiByModelId(catalog ?? undefined, 'glm-5.2')).toBeUndefined();
+    expect(resolvePiBundledApiByModelId(catalog ?? undefined, 'glm-5.2')).toBe('openai-completions');
     expect(catalog?.get('zai')?.get('glm-5.2')).toMatchObject({
       api: 'openai-completions',
       baseUrl: 'https://api.z.ai/api/coding/paas/v4',
