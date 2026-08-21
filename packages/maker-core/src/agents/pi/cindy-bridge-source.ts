@@ -462,8 +462,9 @@ function whichRgOnPath(): string {
 //    与「抢跑改写注入 env」在原实现下同级别,不新增面。
 //  - env 值在已消费(stash 已建立)后再次出现,视为进程内写入:删除并忽略。
 //  - stash 缺失(非 Cindy 初始化的进程,如手工把 bridge 拷进用户 ~/.pi)或双重
-//    验证失败 → 返回 undefined,下游 isolatedBashEnvironment 保持原 fail-closed,
-//    不猜外来 runtime 的路径。
+//    验证失败,但 env 同样未注入 → 尝试 PI_CODING_AGENT_DIR 派生(#3132:subagent
+//    子进程正是此路径);PI_CODING_AGENT_DIR 非绝对路径或缺失时 fail-closed。
+//    PI_CODING_AGENT_DIR 本就常驻可写,控制它与控制注入 env 同级,不新增威胁面。
 //
 // 凭证不走本机制:CINDY_PI_PACKAGE_MANAGEMENT 是 host 签发的 bearer token,
 // 保持读一次即删、仅闭包持有(见入口注释)。
@@ -513,7 +514,9 @@ function resolveBashPackageHome(): string | undefined {
       stashBashPackageHome(injected);
       return injected;
     }
-    return undefined;
+    // env 与 stash 均不可用(subagent 子进程:父 bridge 已消费并删除 env,
+    // 子进程无 stash)—— 从 PI_CODING_AGENT_DIR 派生;非绝对路径时 fail-closed。
+    return derivedBashPackageHome();
   }
   // 重载(env 已被消费;或 env 值又被进程内写入 —— 上面的 delete 已顺手清掉):
   // stash 与 PI_CODING_AGENT_DIR 派生值双重一致才信任,否则 fail-closed。

@@ -293,4 +293,25 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("process.on('SIGTERM'");
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain("process.on('SIGINT'");
   });
+
+  it('writes CINDY_PI_BASH_PACKAGE_HOME into childEnv before spawn when configHome is absolute (#3132)', () => {
+    // 父 bridge 在初始化时消费并删除 CINDY_PI_BASH_PACKAGE_HOME；子进程继承的 env 里没有它，
+    // 导致子 bridge 无法解析 bash 隔离 home 而 fail-closed。runTask 在 spawn 前写回派生值。
+    const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    expect(src).toContain("const BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';");
+    expect(src).toContain("childEnv[BASH_PACKAGE_HOME_ENV] = join(configHome, 'bash-package-home');");
+    expect(src).toContain('isAbsolute(configHome)');
+    // 写回必须在 spawn 之前，否则子 bridge 在加载时仍读不到该变量。
+    const writeBack = src.indexOf('childEnv[BASH_PACKAGE_HOME_ENV] = join(configHome');
+    const spawnCall = src.indexOf('child = spawn(binary, args');
+    expect(writeBack).toBeGreaterThan(-1);
+    expect(spawnCall).toBeGreaterThan(-1);
+    expect(writeBack).toBeLessThan(spawnCall);
+    // 子 bridge 仍会在首次加载时把它从 bash spawn env 剥离（withoutPiSecrets）。
+    // 不把 bash 加入子代理白名单：子代理仍是只读的。
+    const allowlists = [...src.matchAll(/tools: '([^']+)'/g)].map((m) => m[1]);
+    for (const list of allowlists) {
+      expect(list.split(',').sort()).toEqual(['find', 'grep', 'ls', 'read']);
+    }
+  });
 });
