@@ -59,7 +59,7 @@ import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSideb
 import type { TaskInfoField } from '../hooks/useTaskInfoFields';
 import type { SessionWorktreeInfo } from './sessionWorktreeInfo';
 import type { SdkCostPresentation } from '../../../../shared/regionalMoney';
-import { useSessionUsageMoney } from '@/hooks/useSessionUsageMoney';
+import { useSidebarSessionUsageMoney } from './sidebarSessionUsageStore';
 
 const log = createLogger('SessionInfoMeta');
 
@@ -163,7 +163,7 @@ export function useProjectedSessionInfoPieces(
   // per-turn provider classification, so always rebuild the cost projection when
   // the field is visible; the current provider is only the fallback for legacy rows.
   const needsMoneyProjection = fields.includes('cost');
-  const usage = useSessionUsageMoney(
+  const usage = useSidebarSessionUsageMoney(
     needsMoneyProjection ? session.id : undefined,
     needsMoneyProjection ? (session.totalMoney ?? null) : null,
     needsMoneyProjection ? session.totalCostUsd : null,

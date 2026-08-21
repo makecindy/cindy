@@ -25,6 +25,19 @@ export function isCustomProviderForBilling(
   return providers.find((provider) => provider.id === providerId)?.source !== 'builtin';
 }
 
+/**
+ * New rows persist an explicit per-turn flag. Pre-upgrade rows omit it, so fall
+ * back to the session/schedule provider: unknown non-builtin ids fail closed.
+ */
+export function resolveCustomProviderCostFlag(
+  explicit: unknown,
+  fallbackProviderId?: string | null,
+): boolean {
+  if (explicit === true) return true;
+  if (explicit === false) return false;
+  return isCustomProviderForBilling(fallbackProviderId, []);
+}
+
 export function isSdkEstimateMoney(money: RegionalMoney | null | undefined): boolean {
   return money?.estimateReasons?.includes('sdk-estimate') === true;
 }

@@ -4484,6 +4484,21 @@ interface ElectronAPI {
           turnUsageDetails?: unknown;
         }>;
       }>;
+      estimatedSessionValueBatch: (payload: {
+        sessionIds: string[];
+        presentation?: import('../shared/regionalMoney').SdkCostPresentation;
+        showSdkEstimate?: boolean;
+        presentations?: Record<string, import('../shared/regionalMoney').SdkCostPresentation>;
+      }) => Promise<
+        Record<
+          string,
+          {
+            estimatedValueMoney: import('../shared/regionalMoney').RegionalMoney | null;
+            excludedActualMoney: import('../shared/regionalMoney').RegionalMoney | null;
+            totalValueUsd?: number;
+          }
+        >
+      >;
       around: (
         sessionId: string,
         messageId: string,

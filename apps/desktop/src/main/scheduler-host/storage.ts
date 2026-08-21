@@ -39,7 +39,10 @@ import {
   type RegionalMoney,
   zeroUsageMoney,
 } from '../../shared/regionalMoney.js';
-import { sdkEstimatedValuePart } from '../../shared/customProviderBilling.js';
+import {
+  resolveCustomProviderCostFlag,
+  sdkEstimatedValuePart,
+} from '../../shared/customProviderBilling.js';
 import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
@@ -236,7 +239,10 @@ function scheduleOriginFromAgentMeta(agentMeta: string | null): PersistedSchedul
   }
 }
 
-function turnCostFromAgentMeta(agentMeta: string | null): {
+function turnCostFromAgentMeta(
+  agentMeta: string | null,
+  fallbackProviderId?: string | null,
+): {
   costMoney: RegionalMoney | null;
   estimatedValueMoney: RegionalMoney | null;
   sdkEstimatedValueMoney: RegionalMoney | null;
@@ -278,7 +284,10 @@ function turnCostFromAgentMeta(agentMeta: string | null): {
     const sdkEstimatedValueMoney = sdkEstimatedValuePart(
       money,
       turnUsageDetails?.perModelCost?.map((entry) => entry.money),
-      parsed.turnCostIsCustomProvider === true,
+      resolveCustomProviderCostFlag(
+        parsed.turnCostIsCustomProvider,
+        fallbackProviderId,
+      ),
     );
     const isHistoricalCustomProviderSdkCost =
       money.kind === 'actual-cost' && sdkEstimatedValueMoney !== null;
@@ -316,6 +325,84 @@ function chunkArray<T>(items: readonly T[], size: number): T[][] {
     chunks.push(items.slice(i, i + size));
   }
   return chunks;
+}
+
+async function sessionProviderIdsById(
+  db: SchedulerDrizzleDb,
+  sessionIds: Iterable<string>,
+): Promise<Map<string, string | null>> {
+  const ids = [...new Set(sessionIds)].filter((id) => id.length > 0);
+  const map = new Map<string, string | null>();
+  if (ids.length === 0) return map;
+  const rows = (
+    await Promise.all(
+      chunkArray(ids, SQLITE_IN_CHUNK_SIZE).map((chunk) =>
+        db
+          .select({ id: sessions.id, providerId: sessions.providerId })
+          .from(sessions)
+          .where(inArray(sessions.id, chunk)),
+      ),
+    )
+  ).flat();
+  for (const row of rows) map.set(row.id, row.providerId ?? null);
+  return map;
+}
+
+async function scheduleProviderIdsById(
+  db: SchedulerDrizzleDb,
+  scheduleIds: Iterable<string>,
+): Promise<Map<string, string | null>> {
+  const ids = [...new Set(scheduleIds)].filter((id) => id.length > 0);
+  const map = new Map<string, string | null>();
+  if (ids.length === 0) return map;
+  const rows = (
+    await Promise.all(
+      chunkArray(ids, SQLITE_IN_CHUNK_SIZE).map((chunk) =>
+        db
+          .select({ id: schedules.id, providerId: schedules.providerId })
+          .from(schedules)
+          .where(inArray(schedules.id, chunk)),
+      ),
+    )
+  ).flat();
+  for (const row of rows) map.set(row.id, row.providerId ?? null);
+  return map;
+}
+
+function reclassifyLegacyCustomProviderSnapshot(
+  costMoney: RegionalMoney | null | undefined,
+  estimatedValueMoney: RegionalMoney | null | undefined,
+  sdkEstimatedValueMoney: RegionalMoney | null | undefined,
+  fallbackProviderId?: string | null,
+): {
+  costMoney: RegionalMoney | null;
+  estimatedValueMoney: RegionalMoney | null;
+  sdkEstimatedValueMoney: RegionalMoney | null;
+} {
+  if (sdkEstimatedValueMoney && sdkEstimatedValueMoney.amount > 0) {
+    return {
+      costMoney: costMoney ?? null,
+      estimatedValueMoney: estimatedValueMoney ?? null,
+      sdkEstimatedValueMoney,
+    };
+  }
+  const sdkPart = sdkEstimatedValuePart(
+    costMoney,
+    null,
+    resolveCustomProviderCostFlag(undefined, fallbackProviderId),
+  );
+  if (!sdkPart) {
+    return {
+      costMoney: costMoney ?? null,
+      estimatedValueMoney: estimatedValueMoney ?? null,
+      sdkEstimatedValueMoney: sdkEstimatedValueMoney ?? null,
+    };
+  }
+  return {
+    costMoney: null,
+    estimatedValueMoney: estimatedValueMoney ?? sdkPart,
+    sdkEstimatedValueMoney: sdkPart,
+  };
 }
 
 function legacyRunFromSession(
@@ -532,11 +619,16 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       return runs;
     }
 
+    const providerBySessionId = await sessionProviderIdsById(db, sessionIds);
+    const providerByScheduleId = await scheduleProviderIdsById(
+      db,
+      runs.map((run) => run.scheduleId),
+    );
     const rows = (
       await Promise.all(
         chunkArray([...sessionIds], SQLITE_IN_CHUNK_SIZE).map((sessionIdChunk) =>
           db
-            .select({ agentMeta: messages.agentMeta })
+            .select({ sessionId: messages.sessionId, agentMeta: messages.agentMeta })
             .from(messages)
             .where(
               and(inArray(messages.sessionId, sessionIdChunk), eq(messages.role, 'assistant')),
@@ -555,7 +647,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     for (const row of rows) {
       const origin = scheduleOriginFromAgentMeta(row.agentMeta);
       if (!origin?.runId || !attributableRunIds.has(origin.runId)) continue;
-      const cost = turnCostFromAgentMeta(row.agentMeta);
+      const cost = turnCostFromAgentMeta(
+        row.agentMeta,
+        providerBySessionId.get(row.sessionId) ??
+          (origin.scheduleId ? providerByScheduleId.get(origin.scheduleId) : undefined),
+      );
       const current = ledger.get(origin.runId) ?? {
         costValues: [],
         estimatedValues: [],
@@ -573,21 +669,38 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
     return runs.map((run) => {
       const persisted = ledger.get(run.id);
-      if (!persisted) return run;
+      const fallbackProviderId =
+        (run.sessionId ? providerBySessionId.get(run.sessionId) : undefined) ??
+        providerByScheduleId.get(run.scheduleId);
+      if (!persisted) {
+        const reclassified = reclassifyLegacyCustomProviderSnapshot(
+          run.costMoney,
+          run.estimatedValueMoney,
+          run.sdkEstimatedValueMoney,
+          fallbackProviderId,
+        );
+        return { ...run, ...reclassified };
+      }
       if (run.costAttribution === 'direct') {
+        const snapshot = reclassifyLegacyCustomProviderSnapshot(
+          run.costMoney,
+          run.estimatedValueMoney,
+          run.sdkEstimatedValueMoney,
+          fallbackProviderId,
+        );
         const costValues = [
-          ...(run.costMoney && run.costMoney.amount > 0 ? [run.costMoney] : []),
+          ...(snapshot.costMoney && snapshot.costMoney.amount > 0 ? [snapshot.costMoney] : []),
           ...persisted.costValues,
         ];
         const estimatedValues = [
-          ...(run.estimatedValueMoney && run.estimatedValueMoney.amount > 0
-            ? [run.estimatedValueMoney]
+          ...(snapshot.estimatedValueMoney && snapshot.estimatedValueMoney.amount > 0
+            ? [snapshot.estimatedValueMoney]
             : []),
           ...persisted.estimatedValues,
         ];
         const sdkEstimatedValues = [
-          ...(run.sdkEstimatedValueMoney && run.sdkEstimatedValueMoney.amount > 0
-            ? [run.sdkEstimatedValueMoney]
+          ...(snapshot.sdkEstimatedValueMoney && snapshot.sdkEstimatedValueMoney.amount > 0
+            ? [snapshot.sdkEstimatedValueMoney]
             : []),
           ...persisted.sdkEstimatedValues,
         ];
@@ -773,6 +886,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       linkedScheduleIds.add(schedule.id);
     }
 
+    const providerBySessionId = await sessionProviderIdsById(db, scanSessionIds);
+    const providerByScheduleId = await scheduleProviderIdsById(db, linkedScheduleIds);
     const messageRows =
       scanSessionIds.size === 0
         ? []
@@ -821,7 +936,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         continue;
       }
       if (row.role !== 'assistant') continue;
-      const turnCost = turnCostFromAgentMeta(row.agentMeta);
+      const turnCost = turnCostFromAgentMeta(
+        row.agentMeta,
+        providerBySessionId.get(row.sessionId) ??
+          (activeScheduleId ? providerByScheduleId.get(activeScheduleId) : undefined),
+      );
       const cost = turnCost.costMoney?.amount ?? 0;
       const estimatedValue = turnCost.estimatedValueMoney?.amount ?? 0;
       if (cost <= 0 && estimatedValue <= 0) continue;
@@ -928,6 +1047,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       return amount > 0 ? { ...total, amount } : null;
     };
 
+    const snapshotFallbackProviderId = (run: (typeof runCostRows)[number]): string | null | undefined =>
+      (run.sessionId ? providerBySessionId.get(run.sessionId) : undefined) ??
+      providerByScheduleId.get(run.scheduleId);
+
     for (const run of runCostRows) {
       if (run.costAttribution === 'unavailable' && run.status !== 'running') {
         // 消息账本已经给出该 run 的费用时，以账本为准；schedule_runs 快照可由
@@ -951,22 +1074,28 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       }
       if (run.costAttribution === 'direct' || run.costAttribution === 'mixed') {
         const messageCost = messageCostByRunId.get(run.id);
+        const snapshot = reclassifyLegacyCustomProviderSnapshot(
+          run.costMoney,
+          run.estimatedValueMoney,
+          run.sdkEstimatedValueMoney,
+          snapshotFallbackProviderId(run),
+        );
         const costMoney =
           run.costAttribution === 'direct'
-            ? (run.costMoney ?? null)
-            : remainingMoney(run.costMoney, messageCost?.costValues ?? []);
+            ? snapshot.costMoney
+            : remainingMoney(snapshot.costMoney, messageCost?.costValues ?? []);
         const estimatedValueMoney =
           run.costAttribution === 'direct'
-            ? (run.estimatedValueMoney ?? null)
+            ? snapshot.estimatedValueMoney
             : remainingMoney(
-                run.estimatedValueMoney,
+                snapshot.estimatedValueMoney,
                 messageCost?.estimatedValueValues ?? [],
               );
         const sdkEstimatedValueMoney =
           run.costAttribution === 'direct'
-            ? (run.sdkEstimatedValueMoney ?? null)
+            ? snapshot.sdkEstimatedValueMoney
             : remainingMoney(
-                run.sdkEstimatedValueMoney,
+                snapshot.sdkEstimatedValueMoney,
                 messageCost?.sdkEstimatedValueValues ?? [],
               );
         const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
@@ -985,12 +1114,18 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       const messageCost = messageCostByRunId.get(run.id);
       if (messageCost) continue;
       const entry = bySchedule.get(run.scheduleId) ?? emptyScheduleTurnCostState();
+      const snapshot = reclassifyLegacyCustomProviderSnapshot(
+        run.costMoney,
+        run.estimatedValueMoney,
+        run.sdkEstimatedValueMoney,
+        snapshotFallbackProviderId(run),
+      );
       appendRunMoney(
         entry,
         run.sessionId,
-        run.costMoney ?? null,
-        run.estimatedValueMoney ?? null,
-        run.sdkEstimatedValueMoney ?? null,
+        snapshot.costMoney,
+        snapshot.estimatedValueMoney,
+        snapshot.sdkEstimatedValueMoney,
         run.firedAt,
       );
       bySchedule.set(run.scheduleId, entry);

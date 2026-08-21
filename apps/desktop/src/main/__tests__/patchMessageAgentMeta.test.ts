@@ -81,6 +81,7 @@ import {
   findVisibleToolUseMessageByAliases,
   mergeEstimatedSessionValueEntriesWithLifetimeExclusions,
   patchMessageAgentMeta,
+  summarizeEstimatedSessionValuesBySession,
 } from '../localDb/ipc/messages.js';
 
 beforeEach(() => {
@@ -605,5 +606,63 @@ describe('mergeEstimatedSessionValueEntriesWithLifetimeExclusions', () => {
       expect.objectContaining({ clientId: 'visible-reference' }),
       { clientId: 'hidden-sdk', excludedActualMoney: actual },
     ]);
+  });
+});
+
+
+describe('summarizeEstimatedSessionValuesBySession', () => {
+  it('batches per-session estimates and lifetime SDK exclusions', () => {
+    const rows = [
+      {
+        sessionId: 's-estimate',
+        clientId: 'e1',
+        createdAt: 20,
+        rewindAt: null,
+        agentMeta: JSON.stringify({ turnCostUsd: 0.12, turnCostIsEstimate: true }),
+      },
+      {
+        sessionId: 's-hidden',
+        clientId: 'h1',
+        createdAt: 20,
+        rewindAt: null,
+        agentMeta: JSON.stringify({
+          turnCostUsd: 0.42,
+          turnCostIsEstimate: false,
+          turnCostIsCustomProvider: true,
+        }),
+      },
+      {
+        sessionId: 's-cleared',
+        clientId: 'old-estimate',
+        createdAt: 5,
+        rewindAt: null,
+        agentMeta: JSON.stringify({ turnCostUsd: 0.99, turnCostIsEstimate: true }),
+      },
+    ];
+    const result = summarizeEstimatedSessionValuesBySession(
+      rows,
+      new Map([
+        ['s-estimate', null],
+        ['s-hidden', null],
+        ['s-cleared', 10],
+      ]),
+      ['s-estimate', 's-hidden', 's-cleared', 's-empty'],
+      new Map([
+        ['s-estimate', 'regular'],
+        ['s-hidden', 'hidden'],
+        ['s-cleared', 'regular'],
+      ]),
+      false,
+    );
+
+    expect(result['s-estimate']?.estimatedValueMoney?.amount).toBeCloseTo(0.12);
+    expect(result['s-hidden']?.estimatedValueMoney).toBeNull();
+    expect(result['s-hidden']?.excludedActualMoney?.amount).toBeCloseTo(0.42);
+    expect(result['s-cleared']?.estimatedValueMoney).toBeNull();
+    expect(result['s-empty']).toEqual({
+      estimatedValueMoney: null,
+      excludedActualMoney: null,
+      totalValueUsd: 0,
+    });
   });
 });

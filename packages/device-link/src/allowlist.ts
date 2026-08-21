@@ -272,6 +272,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 必须查被控端(查本机是空库恒 0);老被控端无此 channel → CHANNEL_NOT_ALLOWED →
   // 控制端吞错,仅靠已加载消息 + 实时 turn-cost 推送呈现部分值。
   'local-db:messages:estimatedSessionValue',
+  // Sidebar cost field: one read-only aggregation over many sessions. Same
+  // safety class as estimatedSessionValue; older controlled clients reject it
+  // and the controller falls back to the per-session channel.
+  'local-db:messages:estimatedSessionValueBatch',
   'local-db:recent-workdirs:list',
   // 窄口径写:从被控端「最近项目」列表移除一条(专用 handler,path 归一后按主键删,
   // 幂等,不动 sessions / 磁盘)。控制端项目选择器的删除入口与本机语义对等;

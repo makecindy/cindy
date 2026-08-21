@@ -4929,6 +4929,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
           presentation,
           showSdkEstimate,
         ),
+      estimatedSessionValueBatch: (payload: {
+        sessionIds: string[];
+        presentation?: 'regular' | 'hidden' | 'estimate';
+        showSdkEstimate?: boolean;
+        presentations?: Record<string, 'regular' | 'hidden' | 'estimate'>;
+      }): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:messages:estimatedSessionValueBatch', payload),
       around: (
         sessionId: string,
         messageId: string,

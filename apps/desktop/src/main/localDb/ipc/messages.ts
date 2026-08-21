@@ -18,7 +18,7 @@ import {
   safeStringify,
   extractMessagePreview,
 } from '../mapper';
-import { optionalEnum, throwIpcError, requireString } from '../../utils/ipcValidate';
+import { optionalEnum, throwIpcError, requireObject, requireString } from '../../utils/ipcValidate';
 import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
 import { collectCindyMediaHashes, commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
@@ -58,7 +58,17 @@ const log = createLogger('localDb/messages');
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
+// Keep IN (...) bind counts well below SQLite's historical 999 variable limit.
+const SQLITE_IN_CHUNK_SIZE = 500;
 const messageRowid = sql<number>`rowid`;
+
+function chunkArray<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
 type DataOwnerBroadcastScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>;
@@ -435,19 +445,10 @@ export function registerMessageIpc(): void {
       showSdkEstimateValue?: unknown,
     ) => {
       const sid = requireString(sessionId, 'sessionId');
-      const presentation: SdkCostPresentation =
-        optionalEnum(
-          presentationValue,
-          ['regular', 'hidden', 'estimate'] as const,
-          'custom provider cost presentation',
-        ) ?? 'regular';
-      if (showSdkEstimateValue !== undefined && typeof showSdkEstimateValue !== 'boolean') {
-        throwIpcError('INVALID_PARAMS', 'showSdkEstimate must be a boolean');
-      }
-      const showSdkEstimate =
-        typeof showSdkEstimateValue === 'boolean'
-          ? showSdkEstimateValue
-          : presentation === 'estimate';
+      const { presentation, showSdkEstimate } = parseEstimatedSessionValuePresentation(
+        presentationValue,
+        showSdkEstimateValue,
+      );
       const db = getDbClient().drizzle;
 
       const [sessionRow] = await db
@@ -455,8 +456,6 @@ export function registerMessageIpc(): void {
         .from(sessions)
         .where(eq(sessions.id, sid))
         .limit(1);
-      const clearedAtMs = sessionRow?.clearedAt ?? null;
-
       const rows = await db
         .select({
           clientId: messages.clientId,
@@ -466,39 +465,75 @@ export function registerMessageIpc(): void {
         })
         .from(messages)
         .where(and(eq(messages.sessionId, sid), eq(messages.role, 'assistant')));
-      const visibleRows = rows.filter(
-        (row) =>
-          row.rewindAt === null &&
-          (clearedAtMs === null || row.createdAt > clearedAtMs),
-      );
-      const visibleEntries = extractEstimatedSessionValueEntries(
-        visibleRows,
-        presentation,
-        showSdkEstimate,
-      );
-      const lifetimeEntries = extractEstimatedSessionValueEntries(
+      const summarized = summarizeEstimatedSessionValueRows(
         rows,
+        sessionRow?.clearedAt ?? null,
         presentation,
         showSdkEstimate,
-      );
-      const entries = mergeEstimatedSessionValueEntriesWithLifetimeExclusions(
-        visibleEntries,
-        lifetimeEntries,
-      );
-      const estimatedEntries = entries.flatMap((entry) => (entry.money ? [entry.money] : []));
-      const totalValueMoney = addCompatibleRegionalMoney(estimatedEntries);
-      const hasCompleteUsdProjection = entries.every(
-        (entry) => !entry.money || typeof entry.costUsd === 'number',
       );
       return {
-        totalValueMoney,
-        ...(hasCompleteUsdProjection
-          ? {
-              totalValueUsd: entries.reduce((sum, item) => sum + (item.costUsd ?? 0), 0),
-            }
-          : {}),
-        entries,
+        totalValueMoney: summarized.totalValueMoney,
+        ...(summarized.totalValueUsd != null ? { totalValueUsd: summarized.totalValueUsd } : {}),
+        entries: summarized.entries,
       };
+    },
+  );
+
+  /**
+   * Sidebar cost field: one query for many sessions instead of one full-history
+   * scan per SessionItem/SessionCard. Returns compact per-session totals only.
+   */
+  ipcMain.handle(
+    'local-db:messages:estimatedSessionValueBatch',
+    async (_e, body: unknown) => {
+      const payload = requireObject(body, 'payload');
+      const sessionIds = parseEstimatedSessionValueBatchIds(payload.sessionIds);
+      if (sessionIds.length === 0) return {};
+      const { presentation, showSdkEstimate } = parseEstimatedSessionValuePresentation(
+        payload.presentation,
+        payload.showSdkEstimate,
+      );
+      const presentationBySession = parseEstimatedSessionValuePresentationMap(
+        payload.presentations,
+        presentation,
+      );
+      const db = getDbClient().drizzle;
+      const sessionRows = (
+        await Promise.all(
+          chunkArray(sessionIds, SQLITE_IN_CHUNK_SIZE).map((chunk) =>
+            db
+              .select({ id: sessions.id, clearedAt: sessions.clearedAt })
+              .from(sessions)
+              .where(inArray(sessions.id, chunk)),
+          ),
+        )
+      ).flat();
+      const messageRows = (
+        await Promise.all(
+          chunkArray(sessionIds, SQLITE_IN_CHUNK_SIZE).map((chunk) =>
+            db
+              .select({
+                sessionId: messages.sessionId,
+                clientId: messages.clientId,
+                agentMeta: messages.agentMeta,
+                createdAt: messages.createdAt,
+                rewindAt: messages.rewindAt,
+              })
+              .from(messages)
+              .where(and(eq(messages.role, 'assistant'), inArray(messages.sessionId, chunk))),
+          ),
+        )
+      ).flat();
+      const clearedAtBySession = new Map<string, number | null>(
+        sessionRows.map((row) => [row.id, row.clearedAt ?? null]),
+      );
+      return summarizeEstimatedSessionValuesBySession(
+        messageRows,
+        clearedAtBySession,
+        sessionIds,
+        presentationBySession,
+        showSdkEstimate,
+      );
     },
   );
 
@@ -1636,6 +1671,152 @@ export async function updateAgentMeta(
     .update(messages)
     .set({ agentMeta: agentMetaJson })
     .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
+}
+
+export const ESTIMATED_SESSION_VALUE_BATCH_LIMIT = 256;
+
+export interface EstimatedSessionValueRow {
+  clientId: string;
+  agentMeta: string | null;
+  createdAt: number;
+  rewindAt: number | null;
+}
+
+export interface EstimatedSessionValueSummary {
+  estimatedValueMoney: RegionalMoney | null;
+  excludedActualMoney: RegionalMoney | null;
+  totalValueUsd?: number;
+}
+
+function parseEstimatedSessionValuePresentation(
+  presentationValue: unknown,
+  showSdkEstimateValue: unknown,
+): { presentation: SdkCostPresentation; showSdkEstimate: boolean } {
+  const presentation: SdkCostPresentation =
+    optionalEnum(
+      presentationValue,
+      ['regular', 'hidden', 'estimate'] as const,
+      'custom provider cost presentation',
+    ) ?? 'regular';
+  if (showSdkEstimateValue !== undefined && typeof showSdkEstimateValue !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'showSdkEstimate must be a boolean');
+  }
+  const showSdkEstimate =
+    typeof showSdkEstimateValue === 'boolean' ? showSdkEstimateValue : presentation === 'estimate';
+  return { presentation, showSdkEstimate };
+}
+
+function parseEstimatedSessionValueBatchIds(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throwIpcError('INVALID_PARAMS', 'sessionIds must be an array');
+  }
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const id = requireString(item, 'sessionId');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    if (ids.length >= ESTIMATED_SESSION_VALUE_BATCH_LIMIT) break;
+  }
+  return ids;
+}
+
+function parseEstimatedSessionValuePresentationMap(
+  value: unknown,
+  fallback: SdkCostPresentation,
+): Map<string, SdkCostPresentation> {
+  const map = new Map<string, SdkCostPresentation>();
+  if (value === undefined) return map;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throwIpcError('INVALID_PARAMS', 'presentations must be an object');
+  }
+  for (const [sessionId, presentationValue] of Object.entries(value as Record<string, unknown>)) {
+    map.set(
+      sessionId,
+      optionalEnum(
+        presentationValue,
+        ['regular', 'hidden', 'estimate'] as const,
+        'custom provider cost presentation',
+      ) ?? fallback,
+    );
+  }
+  return map;
+}
+
+export function summarizeEstimatedSessionValueRows(
+  rows: readonly EstimatedSessionValueRow[],
+  clearedAtMs: number | null,
+  presentation: SdkCostPresentation = 'regular',
+  showSdkEstimate: boolean = presentation === 'estimate',
+): {
+  totalValueMoney: RegionalMoney | null;
+  excludedActualMoney: RegionalMoney | null;
+  totalValueUsd?: number;
+  entries: EstimatedSessionValueEntry[];
+} {
+  const visibleRows = rows.filter(
+    (row) => row.rewindAt === null && (clearedAtMs === null || row.createdAt > clearedAtMs),
+  );
+  const visibleEntries = extractEstimatedSessionValueEntries(
+    visibleRows,
+    presentation,
+    showSdkEstimate,
+  );
+  const lifetimeEntries = extractEstimatedSessionValueEntries(rows, presentation, showSdkEstimate);
+  const entries = mergeEstimatedSessionValueEntriesWithLifetimeExclusions(
+    visibleEntries,
+    lifetimeEntries,
+  );
+  const estimatedEntries = entries.flatMap((entry) => (entry.money ? [entry.money] : []));
+  const excludedEntries = entries.flatMap((entry) =>
+    entry.excludedActualMoney ? [entry.excludedActualMoney] : [],
+  );
+  const totalValueMoney = addCompatibleRegionalMoney(estimatedEntries);
+  const excludedActualMoney = addCompatibleRegionalMoney(excludedEntries);
+  const hasCompleteUsdProjection = entries.every(
+    (entry) => !entry.money || typeof entry.costUsd === 'number',
+  );
+  return {
+    totalValueMoney,
+    excludedActualMoney,
+    ...(hasCompleteUsdProjection
+      ? { totalValueUsd: entries.reduce((sum, item) => sum + (item.costUsd ?? 0), 0) }
+      : {}),
+    entries,
+  };
+}
+
+export function summarizeEstimatedSessionValuesBySession(
+  rows: ReadonlyArray<EstimatedSessionValueRow & { sessionId: string }>,
+  clearedAtBySession: ReadonlyMap<string, number | null>,
+  sessionIds: readonly string[],
+  presentationBySession: ReadonlyMap<string, SdkCostPresentation>,
+  showSdkEstimate: boolean,
+): Record<string, EstimatedSessionValueSummary> {
+  const grouped = new Map<string, EstimatedSessionValueRow[]>();
+  for (const sessionId of sessionIds) grouped.set(sessionId, []);
+  for (const row of rows) {
+    const list = grouped.get(row.sessionId);
+    if (list) list.push(row);
+  }
+  const result: Record<string, EstimatedSessionValueSummary> = {};
+  for (const [sessionId, sessionRows] of grouped) {
+    const presentation = presentationBySession.get(sessionId) ?? 'regular';
+    const summarized = summarizeEstimatedSessionValueRows(
+      sessionRows,
+      clearedAtBySession.get(sessionId) ?? null,
+      presentation,
+      showSdkEstimate,
+    );
+    result[sessionId] = {
+      estimatedValueMoney: summarized.totalValueMoney,
+      excludedActualMoney: summarized.excludedActualMoney,
+      ...(summarized.totalValueUsd != null ? { totalValueUsd: summarized.totalValueUsd } : {}),
+    };
+  }
+  return result;
 }
 
 export function extractEstimatedSessionValueEntries(

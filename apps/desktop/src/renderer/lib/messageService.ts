@@ -56,6 +56,24 @@ export async function estimatedSessionValue(
   );
 }
 
+export async function estimatedSessionValueBatch(payload: {
+  sessionIds: string[];
+  presentation?: SdkCostPresentation;
+  showSdkEstimate?: boolean;
+  presentations?: Record<string, SdkCostPresentation>;
+}): Promise<
+  Record<
+    string,
+    {
+      estimatedValueMoney: RegionalMoney | null;
+      excludedActualMoney: RegionalMoney | null;
+      totalValueUsd?: number;
+    }
+  >
+> {
+  return wrap(window.electronAPI.localDb.messages.estimatedSessionValueBatch(payload));
+}
+
 export async function around(
   sessionId: string,
   messageId: string,

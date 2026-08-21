@@ -436,6 +436,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:messages:around-client-id', sessionId, clientId, opts),
       estimatedSessionValue: (sessionId: string): Promise<unknown> =>
         ipcRenderer.invoke('local-db:messages:estimatedSessionValue', sessionId),
+      estimatedSessionValueBatch: (payload: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:messages:estimatedSessionValueBatch', payload),
       onCreated: (cb: (payload: unknown, ownerStamp?: unknown) => void): (() => void) =>
         onPayloadWithMetadata('local-db:messages:created', cb),
       onDeleted: (cb: (payload: unknown, ownerStamp?: unknown) => void): (() => void) =>
