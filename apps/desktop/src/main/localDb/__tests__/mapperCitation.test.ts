@@ -73,4 +73,11 @@ describe('message mapper internal citation compatibility', () => {
     expect(parsed.text).toBe('see this file');
     expect(extractMessagePreview(bounded, 'user')).toBe('see this file');
   });
+
+  it('does not slice valid JSON that has no string text field', () => {
+    const raw = JSON.stringify({ images: [{ data: 'x'.repeat(5000) }] });
+    const bounded = boundSerializedMessageContent(raw);
+    expect(bounded).toBe(raw);
+    expect(extractMessagePreview(bounded, 'user')).toBeNull();
+  });
 });

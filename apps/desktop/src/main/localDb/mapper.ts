@@ -147,10 +147,10 @@ export function boundSerializedMessageContent(
         });
       }
     }
+    return raw;
   } catch {
     return raw.slice(0, maxChars);
   }
-  return raw.slice(0, maxChars);
 }
 
 /**
