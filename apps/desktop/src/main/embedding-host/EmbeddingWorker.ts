@@ -425,6 +425,20 @@ export class EmbeddingWorker {
           );
           const errorText = `[${code}] ${msg}`;
           const terminal = isTerminalInvalidModelError(err);
+          // 若是 TTL 到期后的重探失败且不是 INVALID_MODEL (例如 NETWORK_ERROR /
+          // RATE_LIMITED / SERVER_ERROR),清熔断让这批走普通退避,不要消耗 probeCount
+          // 也不要让本可恢复的瞬时错误把模型永久冻住 (PR #2288 Codex P1)。
+          if (this.blockedModels.has(modelId) && !terminal) {
+            this.blockedModels.delete(modelId);
+            this.opts.log.info(
+              JSON.stringify({
+                event: 'embeddingWorker.model.unblockOnTransient',
+                modelId,
+                code,
+                error: msg,
+              }),
+            );
+          }
           if (terminal) {
             // 若是 TTL 到期后的重探失败,保留已累计的 probeCount;否则从 0 开始。
             const prev = this.blockedModels.get(modelId);

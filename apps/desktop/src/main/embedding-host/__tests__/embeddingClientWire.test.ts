@@ -1134,4 +1134,13 @@ describe('EmbeddingClient · mapStatusToCode (INVALID_MODEL 熔断信号)', () =
       clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
     ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
   });
+
+  it('"model \'x\' is unsupported" 是模型不存在 → INVALID_MODEL (PR #2288 Codex P1)', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: "model 'voyage/voyage-4' is unsupported" },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+  });
 });

@@ -825,6 +825,11 @@ const MODEL_NOT_FOUND_PATTERNS = [
   // 这类输入/参数错误,只认 "invalid model name" 或后接冒号/引号模型 id 的措辞。
   /invalid[_\s-]?model[_\s-]?name/i,
   /invalid[_\s-]?model\s*[:='"`]/i,
+  // "model 'x' is unsupported" / `model "x" is unsupported` /
+  // "model: x is unsupported" — 已被 providerErrors 共享分类器识别为 model_not_found,
+  // 但用同一描述也可在这条路径里命中,避免路径分裂。后面不能接 parameter/field/
+  // input/key/argument/property 等参数词,避免把参数错误误判为模型不可用。
+  /model\s*[:'"`]?[^\n]{1,80}\s+is\s+(?:not\s+supported|unsupported)(?!\s+(?:parameter|field|input|key|argument|property))/i,
 ];
 
 function looksLikeModelNotFound(rawBody: string, parsedMsg: string): boolean {

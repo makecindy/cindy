@@ -198,6 +198,56 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
     }
   });
 
+  it('unblocks on transient reprobe failure so it does not consume the reprobe budget (PR #2288 Codex P1)', async () => {
+    // After TTL expiry the model gets reprobed. If the reprobe fails with a
+    // recoverable error (NETWORK_ERROR / RATE_LIMITED / 5xx), the block must
+    // be lifted so the next tick retries via the normal backoff instead of
+    // wasting the model's already-spent probe budget.
+    vi.useFakeTimers();
+    try {
+      let now = new Date('2026-08-21T12:00:00Z').getTime();
+      vi.setSystemTime(now);
+      let rowid = 0;
+      const query = vi.fn(async () => [{ ...job(++rowid, `msg-${rowid}`) }]);
+      const tx = vi.fn(async () => ({ failCount: 0 }));
+      const embed = vi
+        .fn()
+        .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
+        .mockRejectedValueOnce(new EmbeddingError('connection reset', 'NETWORK_ERROR'))
+        .mockResolvedValueOnce({ embeddings: [[0.1]], tokensUsed: 0, cacheHits: 0 });
+
+      registerProvider({
+        source: 'chat',
+        getTextsForJobs: async (jobs) =>
+          jobs.map(({ rowid: r, sourceId }) => ({ rowid: r, text: sourceId })),
+      });
+
+      const worker = new EmbeddingWorker({
+        getDbClient: () => ({ query, tx }) as never,
+        getClient: () => ({ embed }) as never,
+        isVecAvailable: () => true,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+      });
+      const tick = (worker as unknown as { tick: () => Promise<void> }).tick.bind(worker);
+
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(1);
+
+      // TTL elapses; first reprobe hits a transient error and must unblock.
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(2);
+
+      // Block should now be gone — next tick calls embed() immediately without
+      // waiting another TTL window.
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the batch pending when the model is disabled during an in-flight INVALID_MODEL failure', async () => {
     // embed() in-flight -> user disables the model -> request fails with INVALID_MODEL.
     // The catch branch must re-check isRouteSuspended(modelId) and NOT write a terminal
