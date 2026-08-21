@@ -107,7 +107,9 @@ describe('BotRosterView — the roster page', () => {
       expect(screen.getByText(`bots.createWizard.templates.${template.id}.intro`)).toBeTruthy();
     }
     // 阵容有六张角色卡 + 一张自定义卡。
-    expect(BOT_TEMPLATES).toHaveLength(6);
+    // 阵容人数会随产品增删,这里锁的是「每个角色都渲染出来了」而不是一个魔数:
+    // 上一版把它写死成 6,加两个角色就红,红的却不是任何真实缺陷。
+    expect(BOT_TEMPLATES.length).toBeGreaterThanOrEqual(8);
     expect(screen.getByText('bots.roster.customName')).toBeTruthy();
     expect(screen.getAllByText('bots.roster.join').length).toBe(BOT_TEMPLATES.length);
     // 阵容式创建没有名字 / 描述 / 身份表单。

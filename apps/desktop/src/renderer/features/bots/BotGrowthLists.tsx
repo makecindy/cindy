@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import type { MemoryRecord } from '@cindy/maker-core';
@@ -58,7 +58,7 @@ export function BotGrowthLists({
    */
   seedEntries?: readonly BotMemorySeedEntry[];
 }) {
-  const { t, i18n } = useTranslation();
+  const { t, i18n } = useBotTranslation();
   const { confirm } = useConfirmDialog();
   // 「本事」行要带来源时间。判定复用 botArtifactPresentation 的纯函数,文案复用
   // 已有的 bots.artifacts.time.* —— 同一套相对时间口径,不另造一份。

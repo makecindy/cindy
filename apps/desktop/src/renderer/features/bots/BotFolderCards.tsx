@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { FolderOpen } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 
 import { archiveBotProjectBinding, upsertBotProjectBinding, type BotProjectBinding } from './botStore';
 
@@ -27,7 +27,7 @@ export function BotFolderCards({
   botId: string;
   bindings: readonly BotProjectBinding[];
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const active = bindings.filter((binding) => binding.status !== 'archived');

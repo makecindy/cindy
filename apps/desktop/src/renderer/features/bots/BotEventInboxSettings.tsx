@@ -11,7 +11,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 
 import {
   DEFAULT_CONTROL_BOT_EVENT_RULE,
@@ -33,7 +33,7 @@ function statusIcon(status: BotInboxStatus) {
 }
 
 export function BotEventInboxSettings({ bot }: { bot: BotProfile }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const navigate = useNavigate();
   const [subscriptions, setSubscriptions] = useState<BotEventSubscriptionView[]>([]);
   const [items, setItems] = useState<BotInboxItemView[]>([]);

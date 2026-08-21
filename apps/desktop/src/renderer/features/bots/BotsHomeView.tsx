@@ -14,7 +14,7 @@ import {
   UserRound,
 } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 
 import { Spinner } from '@/components/ui/spinner';
 import * as sessionService from '@/lib/sessionService';
@@ -121,7 +121,7 @@ export function BotSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
   renewing: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const navigate = useNavigate();
   const [settingsSearchParams] = useSearchParams();
   // 批次 β:7 tab 收成一页,`?tab=<id>` 深链变成"滚到某个区块",不再是"切换到某个
@@ -1309,7 +1309,7 @@ export function BotSettings({
 }
 
 export function BotsHomeView() {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const navigate = useNavigate();
   const { botId, sessionId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1574,7 +1574,9 @@ export function BotsHomeView() {
 
   if (settingsOpen) {
     return (
-      <>
+      // 设置页整棵子树共用同一个第三人称:文案里的 {{pronoun}} 按这个伙伴的性别
+      // 取「她 / 他」,自建伙伴取它的名字(裁决:不用「TA」)。
+      <BotPronounProvider bot={selectedBot}>
         <BotSettings
           // 切到另一个 Bot 必须重挂:自动保存的基线、防抖计时与「未落即冲刷」都绑在
           // 实例上,复用实例会让上一个 Bot 的待保存改动记在新 Bot 头上。
@@ -1604,7 +1606,7 @@ export function BotsHomeView() {
             );
           }}
         />
-      </>
+      </BotPronounProvider>
     );
   }
 

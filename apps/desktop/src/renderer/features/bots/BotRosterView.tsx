@@ -184,6 +184,9 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
         channel: 'local',
         description: input.description,
         identitySource: input.identitySource,
+        // 角色性别跟着模板走 —— 界面文案据此用「她 / 他」。自定义伙伴没有这个
+        // 字段(留空 = neutral),文案改用伙伴自己的名字,见 shared/botGender.ts。
+        ...(input.template?.gender ? { gender: input.template.gender } : {}),
         // Hermes keeps USER context separate from SOUL. Templates do not
         // invent facts about the owner; users can add them in Bot Settings.
         userContextSource: '',

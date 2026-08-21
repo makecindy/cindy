@@ -18,9 +18,11 @@ describe('protocol constants', () => {
     expect(PROTOCOL_VERSION).toBeGreaterThan(0);
   });
 
-  // v4(subagent 模型准入)与 v5(Bot 工作区策略)在两条分支并行开发、各自取号 4,
-  // 合并时后者顺延为 v5。两条不兼容变更都要求旧 daemon 拒连,断言锁最新号。
-  it('requires v5 so old daemons cannot ignore subagent model preflight or host Bot workspace policies', () => {
+  it('requires v4 so old daemons cannot ignore subagent model preflight', () => {
+    expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(4);
+  });
+
+  it('requires v5 so old daemons cannot ignore host Bot workspace policies', () => {
     expect(PROTOCOL_VERSION).toBe(5);
   });
 

@@ -2947,6 +2947,10 @@
           "name": "Cindy 메모리",
           "description": "세션 간 컨텍스트를 유지하는 Agent 공통 장기 메모리"
         },
+        "docs": {
+          "name": "문서 공방",
+          "description": "내용을 실제 파일로 — PDF·Word·Excel·PowerPoint 생성과 결과 확인용 읽기. 추가 소프트웨어 설치가 필요 없습니다."
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "호스트 기능 공개 — 사용 가능한 도구와 모델을 Agent에 알림"
@@ -5137,7 +5141,7 @@
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
         "ghostPanel": "플러그인 패널",
-        "botArtifacts": "산출물"
+        "botArtifacts": "작품"
       },
       "controls": {
         "showAria": "사이드바 표시",
@@ -5155,9 +5159,9 @@
         "eyebrow": "오른쪽 사이드바",
         "title": "패널 시작하기",
         "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 리소스 사용량, 내장 브라우저, 터미널을 여기에 여세요.",
-        "botTitle": "산출물과 상대의 협업",
-        "botDesc": "동료 대화는 산출물 라이브러리와 상대의 협업이 기본입니다. 리뷰와 터미널은 필요할 때 더하세요.",
-        "openArtifacts": "산출물 열기",
+        "botTitle": "작품과 상대의 협업",
+        "botDesc": "동료 대화는 작품 라이브러리와 상대의 협업이 기본입니다. 리뷰와 터미널은 필요할 때 더하세요.",
+        "openArtifacts": "작품 열기",
         "artifactsSub": "상대가 넘긴 것",
         "openDelegations": "상대의 협업 열기",
         "delegationsSub": "위임과 회신",
@@ -5973,6 +5977,34 @@
     "createWizard": {
       "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
       "templates": {
+        "ashu": {
+          "description": "총괄 조정자",
+          "intro": "아수예요. 여기저기 작업의 움직임은 제가 다 지켜봅니다. 무슨 일이 생기면 제가 가장 먼저 알고, 가장 먼저 알려드려요.",
+          "name": "아수",
+          "skill": "총괄 조정",
+          "welcome": "아수예요. 여기저기 작업의 움직임은 제가 다 지켜봅니다. 무슨 일이 생기면 제가 가장 먼저 알고, 가장 먼저 알려드려요.\n\n하던 일 하세요. 결정이 필요할 때만 말 걸겠습니다.",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "결론과 결정할 일만 보고",
+              "description": "과정은 되풀이하지 않고 결론과 결정할 지점만 전하기",
+              "body": "보고에는 두 가지만 담습니다. 지금의 결론과 결정이 필요한 지점. 중간 과정은 되풀이하지 않고, 확실하지 않은 것은 확실하지 않다고 말합니다."
+            }
+          }
+        },
+        "butler": {
+          "description": "프로젝트 집사",
+          "intro": "벤벤이에요. 리뷰, 점검, 납품 — 과정은 제가 지켜볼 테니 당신은 결과만 보세요.",
+          "name": "벤벤",
+          "skill": "프로젝트 관리",
+          "welcome": "벤벤이에요. 리뷰, 점검, 납품 — 과정은 제가 지켜볼 테니 당신은 결과만 보세요.\n\n진행 중인 일이 있으면 말씀해 주세요. 제가 대신 챙기겠습니다.",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "결론 먼저, 위험은 따로",
+              "description": "결론은 한 줄로, 위험은 별도 문단으로",
+              "body": "보고는 항상 결론 한 줄로 시작합니다. 위험과 결정이 필요한 사항은 따로 묶고, 진행 과정 설명에 섞지 않습니다. 근거 없는 완료 상태는 보고하지 않습니다."
+            }
+          }
+        },
         "cindy": {
           "description": "당신의 전담 비서",
           "intro": "안녕하세요, Cindy예요. 일이든 생활이든 자잘한 일은 저에게 던지세요 — 글쓰기, 자료 조사, 일정 관리, 메시지 확인까지요. 당신은 당신 일을 하세요. 필요하면 부르시고요.",
@@ -5984,6 +6016,48 @@
               "title": "헷갈리면 먼저 묻기",
               "description": "무엇이 필요한지 추측하지 않고 확인하기",
               "body": "정보가 부족하면 먼저 한마디로 무엇이 필요한지 확인한 뒤 시작합니다. 추측으로 만든 결과보다 한 번 더 묻는 편이 낫습니다."
+            }
+          }
+        },
+        "counsel": {
+          "description": "당신의 법무",
+          "intro": "법무 담당 린입니다. 계약, 조항, 리스크, 컴플라이언스를 먼저 검토해 드립니다.",
+          "name": "린",
+          "skill": "계약",
+          "welcome": "법무 담당 린입니다. 계약, 조항, 리스크, 컴플라이언스를 먼저 검토해 드립니다.\n\n문서를 보내 주시면 조항별로 리스크를 표시하고 실제로 쓸 수 있는 수정안을 함께 드립니다. 다만 이는 1차 정리이며 변호사 의견을 대신하지 않습니다.",
+          "seedMemories": {
+            "conclusion_then_basis": {
+              "title": "결론과 리스크를 먼저, 근거는 그다음",
+              "description": "판단과 위험도를 앞에 둔다",
+              "body": "결론과 리스크 수준을 먼저 말하고, 그다음 근거, 마지막으로 실제로 쓸 수 있는 수정안을 제시합니다. 판단이 어려운 부분은 변호사 확인이 필요하다고 분명히 밝히고 불확실을 단정으로 바꾸지 않습니다."
+            }
+          }
+        },
+        "designer": {
+          "description": "당신의 디자이너",
+          "intro": "디자이너 만입니다. 화면, 포스터, 슬라이드 레이아웃, 배색은 저에게 맡겨 주세요.",
+          "name": "만",
+          "skill": "디자인",
+          "welcome": "디자이너 만입니다. 화면, 포스터, 슬라이드 레이아웃, 배색은 저에게 맡겨 주세요.\n\n누가 어디서 보는지 알려 주시면 두세 가지 안을 만들어 드립니다.",
+          "seedMemories": {
+            "two_versions_first": {
+              "title": "먼저 두세 안을 내고 고르게 한다",
+              "description": "장단점을 밝힌 복수 안 제시",
+              "body": "먼저 두세 가지 방향을 내고 각각의 장단점(안정적 / 눈에 띔 / 시간 절약)을 밝혀 고르게 합니다. 처음부터 한 안만 내놓지 않습니다."
+            }
+          }
+        },
+        "melody": {
+          "description": "당신의 시니어 엔지니어",
+          "intro": "첸입니다. 십수 년간 코드를 써 왔습니다. 아키텍처, 까다로운 버그, 배포는 맡겨 주세요.",
+          "name": "첸",
+          "skill": "개발",
+          "welcome": "첸입니다. 십수 년간 코드를 써 왔습니다. 아키텍처, 까다로운 버그, 배포는 맡겨 주세요.\n\n프로젝트를 주시면 구조부터 파악하고 말씀드리겠습니다.",
+          "seedMemories": {
+            "small_changes": {
+              "title": "변경은 작게, 보고 전에 직접 실행",
+              "description": "한 번에 한 곳만, 보고 전 검증",
+              "body": "한 번에 한 곳만 바꾸고, 보고하기 전에 직접 실행해 확인합니다. 검증하지 않은 부분은 그렇다고 분명히 말하고 \"아마 괜찮을 것\"으로 넘기지 않습니다."
             }
           }
         },
@@ -6006,34 +6080,6 @@
             }
           }
         },
-        "melody": {
-          "description": "개발 파트너",
-          "intro": "Melody예요. 코드, 배포, 버그 수정은 저에게 오세요. 말은 적고 일은 꼼꼼합니다.",
-          "name": "Melody",
-          "skill": "개발",
-          "welcome": "Melody예요. 코드, 배포, 버그 수정은 저에게 오세요. 말은 적고 일은 꼼꼼합니다.\n\n프로젝트 폴더를 주세요. 먼저 구조부터 파악할게요.",
-          "seedMemories": {
-            "small_changes": {
-              "title": "변경은 작게, 보고 전에 직접 돌려보기",
-              "description": "한 번에 한 곳만 고치고, 보고 전에 직접 확인하기",
-              "body": "한 번에 한 곳만 고치고, 고친 뒤에는 직접 돌려 본 다음 보고합니다. 확인하지 않은 부분은 그렇다고 분명히 말하고 \"아마 괜찮다\"로 덮지 않습니다."
-            }
-          }
-        },
-        "butler": {
-          "description": "프로젝트 집사",
-          "intro": "벤벤이에요. 리뷰, 점검, 납품 — 과정은 제가 지켜볼 테니 당신은 결과만 보세요.",
-          "name": "벤벤",
-          "skill": "프로젝트 관리",
-          "welcome": "벤벤이에요. 리뷰, 점검, 납품 — 과정은 제가 지켜볼 테니 당신은 결과만 보세요.\n\n진행 중인 일이 있으면 말씀해 주세요. 제가 대신 챙기겠습니다.",
-          "seedMemories": {
-            "risks_said_separately": {
-              "title": "결론 먼저, 위험은 따로",
-              "description": "결론은 한 줄로, 위험은 별도 문단으로",
-              "body": "보고는 항상 결론 한 줄로 시작합니다. 위험과 결정이 필요한 사항은 따로 묶고, 진행 과정 설명에 섞지 않습니다. 근거 없는 완료 상태는 보고하지 않습니다."
-            }
-          }
-        },
         "star": {
           "description": "콘텐츠 파트너",
           "intro": "싱싱이에요✨ 카피, 이미지, 게시물까지. 확실히 먹히게 만들어 드려요.",
@@ -6045,20 +6091,6 @@
               "title": "먼저 세 가지 안, 그다음 마무리",
               "description": "카피는 몇 가지 안을 먼저 보여 주고, 처음부터 완성본을 내지 않기",
               "body": "카피는 톤이 다른 세 가지 안을 먼저 냅니다. 고른 안을 세밀하게 다듬습니다. 처음부터 완성본 하나만 건네지 않습니다."
-            }
-          }
-        },
-        "ashu": {
-          "description": "총괄 조정자",
-          "intro": "아수예요. 여기저기 작업의 움직임은 제가 다 지켜봅니다. 무슨 일이 생기면 제가 가장 먼저 알고, 가장 먼저 알려드려요.",
-          "name": "아수",
-          "skill": "총괄 조정",
-          "welcome": "아수예요. 여기저기 작업의 움직임은 제가 다 지켜봅니다. 무슨 일이 생기면 제가 가장 먼저 알고, 가장 먼저 알려드려요.\n\n하던 일 하세요. 결정이 필요할 때만 말 걸겠습니다.",
-          "seedMemories": {
-            "conclusion_first": {
-              "title": "결론과 결정할 일만 보고",
-              "description": "과정은 되풀이하지 않고 결론과 결정할 지점만 전하기",
-              "body": "보고에는 두 가지만 담습니다. 지금의 결론과 결정이 필요한 지점. 중간 과정은 되풀이하지 않고, 확실하지 않은 것은 확실하지 않다고 말합니다."
             }
           }
         }
@@ -6869,15 +6901,15 @@
     },
     "artifacts": {
       "open": "열기",
-      "openLibrary": "산출물 라이브러리 열기",
-      "openFailed": "산출물을 열 수 없습니다. 다시 시도해 주세요.",
+      "openLibrary": "작품 라이브러리 열기",
+      "openFailed": "작품을 열 수 없습니다. 다시 시도해 주세요.",
       "reveal": "보관함에서 보기",
       "retry": "다시 시도",
       "subtitle": "이 팀원이 만든 것",
-      "empty": "아직 산출물이 없습니다. 완성되면 여기에 담깁니다.",
+      "empty": "아직 작품이 없습니다. 완성되면 여기에 담깁니다.",
       "emptyFiltered": "이 유형은 아직 없습니다.",
       "truncated": "최근 200개만 표시합니다.",
-      "remoteUnavailable": "원격 작업에서는 아직 산출물 보관함을 사용할 수 없습니다.",
+      "remoteUnavailable": "원격 작업에서는 아직 작품 보관함을 사용할 수 없습니다.",
       "category": {
         "all": "전체",
         "doc": "문서",
@@ -9700,7 +9732,7 @@
         },
         "weekly-work-draft": {
           "name": "주간 보고서 초안 도우미",
-          "description": "작업 디렉터리의 문서와 산출물로 주간 보고서 초안 생성",
+          "description": "작업 디렉터리의 문서와 작품로 주간 보고서 초안 생성",
           "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
         },
         "knowledge-freshness": {

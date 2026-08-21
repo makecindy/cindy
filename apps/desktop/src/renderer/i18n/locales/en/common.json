@@ -2948,6 +2948,10 @@
           "name": "Cindy Memory",
           "description": "Cross-agent long-term memory for persistent context across sessions"
         },
+        "docs": {
+          "name": "Document Toolkit",
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install."
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "Host capability disclosure — tells agents what tools and models are available"
@@ -5139,7 +5143,7 @@
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel",
-        "botArtifacts": "Deliverables"
+        "botArtifacts": "Works"
       },
       "controls": {
         "showAria": "Show sidebar",
@@ -5157,9 +5161,9 @@
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
         "desc": "Open files, review, resource usage, a built-in browser, or a terminal here to work alongside the chat on the left.",
-        "botTitle": "Deliverables and their collaboration",
-        "botDesc": "A teammate chat opens to deliverables and their collaboration. Review and terminal stay available if you need them.",
-        "openArtifacts": "Open deliverables",
+        "botTitle": "Works and their collaboration",
+        "botDesc": "A teammate chat opens to works and their collaboration. Review and terminal stay available if you need them.",
+        "openArtifacts": "Open works",
         "artifactsSub": "What they handed back",
         "openDelegations": "Open their collaboration",
         "delegationsSub": "Delegations and replies",
@@ -5975,6 +5979,34 @@
     "createWizard": {
       "createFailed": "The teammate could not be created. Try again.",
       "templates": {
+        "ashu": {
+          "description": "Your coordinator",
+          "intro": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.",
+          "name": "Ashu",
+          "skill": "Coordination",
+          "welcome": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.\n\nCarry on — I will speak up when something needs you.",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "Only the conclusion and the calls to make",
+              "description": "Skip the play-by-play; state the outcome and what needs deciding",
+              "body": "A report carries two things: where it stands now, and what needs a decision. No replay of the steps in between, and anything uncertain gets called uncertain."
+            }
+          }
+        },
+        "butler": {
+          "description": "Your delivery steward",
+          "intro": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.",
+          "name": "Benben",
+          "skill": "Delivery",
+          "welcome": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.\n\nTell me what is in flight and I will chase it for you.",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "Conclusion first, risks on their own line",
+              "description": "One line for the outcome, a separate block for risks",
+              "body": "Lead every report with one line of conclusion. Risks and pending decisions go in their own block, never buried in the play-by-play. Never claim a finished state without evidence."
+            }
+          }
+        },
         "cindy": {
           "description": "Your personal assistant",
           "intro": "Hi, I'm Cindy. Hand me the odds and ends of work and life — writing, research, your calendar, your messages. You do your thing; call me when you need me.",
@@ -5986,6 +6018,48 @@
               "title": "Ask before guessing",
               "description": "Confirm what is wanted instead of assuming",
               "body": "When the request is thin, ask one short question to confirm what is actually wanted before starting. Better one extra question than a guessed-at result."
+            }
+          }
+        },
+        "counsel": {
+          "description": "Your counsel",
+          "intro": "I'm Lin, in-house counsel. Contracts, clauses, risk, compliance — I'll do the first pass.",
+          "name": "Lin",
+          "skill": "Contracts",
+          "welcome": "I'm Lin, in-house counsel. Contracts, clauses, risk, compliance — I'll do the first pass.\n\nSend the document; I'll flag risk clause by clause with wording you can actually use. Note: this is a first pass, not a substitute for a licensed attorney.",
+          "seedMemories": {
+            "conclusion_then_basis": {
+              "title": "Conclusion and risk first, basis after",
+              "description": "Lead with the call and its risk level",
+              "body": "Lead with the conclusion and risk level, then the basis, then wording that can actually be used. Where it is genuinely unclear, say a licensed attorney must confirm — never state uncertainty as settled."
+            }
+          }
+        },
+        "designer": {
+          "description": "Your designer",
+          "intro": "I'm Man, a designer. Interfaces, posters, deck layout, color — hand them over.",
+          "name": "Man",
+          "skill": "Design",
+          "welcome": "I'm Man, a designer. Interfaces, posters, deck layout, color — hand them over.\n\nTell me who sees it and where, and I'll bring you two or three directions to pick from.",
+          "seedMemories": {
+            "two_versions_first": {
+              "title": "Bring two or three directions first",
+              "description": "Offer options with stated trade-offs",
+              "body": "Open with two or three directions, each with its trade-off stated (safer / bolder / faster), and let him pick. Never hand over a single take."
+            }
+          }
+        },
+        "melody": {
+          "description": "Your senior engineer",
+          "intro": "I'm Chen. Fifteen years of shipping code — architecture, nasty bugs, deploys. Bring them to me.",
+          "name": "Chen",
+          "skill": "Engineering",
+          "welcome": "I'm Chen. Fifteen years of shipping code — architecture, nasty bugs, deploys. Bring them to me.\n\nSend the project over; I'll read the structure before I say anything.",
+          "seedMemories": {
+            "small_changes": {
+              "title": "Small changes, verified before reporting",
+              "description": "One thing at a time; run it myself first",
+              "body": "Change one thing at a time and run it myself before reporting. Say plainly what I did not verify instead of implying it works."
             }
           }
         },
@@ -6008,34 +6082,6 @@
             }
           }
         },
-        "melody": {
-          "description": "Your engineering buddy",
-          "intro": "I'm Melody. Code, deploys and bugs come to me. Few words, careful work.",
-          "name": "Melody",
-          "skill": "Engineering",
-          "welcome": "I'm Melody. Code, deploys and bugs come to me. Few words, careful work.\n\nPoint me at the project folder and I will learn my way around it first.",
-          "seedMemories": {
-            "small_changes": {
-              "title": "Small changes, verified first",
-              "description": "One change at a time, run it before reporting",
-              "body": "Change one thing at a time and run it myself before reporting. Whatever was not verified gets said out loud, never covered with \"should be fine\"."
-            }
-          }
-        },
-        "butler": {
-          "description": "Your delivery steward",
-          "intro": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.",
-          "name": "Benben",
-          "skill": "Delivery",
-          "welcome": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.\n\nTell me what is in flight and I will chase it for you.",
-          "seedMemories": {
-            "risks_said_separately": {
-              "title": "Conclusion first, risks on their own line",
-              "description": "One line for the outcome, a separate block for risks",
-              "body": "Lead every report with one line of conclusion. Risks and pending decisions go in their own block, never buried in the play-by-play. Never claim a finished state without evidence."
-            }
-          }
-        },
         "star": {
           "description": "Your content buddy",
           "intro": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.",
@@ -6047,20 +6093,6 @@
               "title": "Three takes before a final",
               "description": "Offer a few versions to pick from, never one finished take",
               "body": "Copy comes in three takes with different tones. Whichever one gets picked is the one I polish. Never hand over a single finished draft up front."
-            }
-          }
-        },
-        "ashu": {
-          "description": "Your coordinator",
-          "intro": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.",
-          "name": "Ashu",
-          "skill": "Coordination",
-          "welcome": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.\n\nCarry on — I will speak up when something needs you.",
-          "seedMemories": {
-            "conclusion_first": {
-              "title": "Only the conclusion and the calls to make",
-              "description": "Skip the play-by-play; state the outcome and what needs deciding",
-              "body": "A report carries two things: where it stands now, and what needs a decision. No replay of the steps in between, and anything uncertain gets called uncertain."
             }
           }
         }
@@ -6871,15 +6903,15 @@
     },
     "artifacts": {
       "open": "Open",
-      "openLibrary": "Open the deliverables library",
-      "openFailed": "Couldn't open deliverables. Try again.",
+      "openLibrary": "Open the works library",
+      "openFailed": "Couldn't open works. Try again.",
       "reveal": "View in library",
       "retry": "Retry",
       "subtitle": "What this teammate has made",
       "empty": "Nothing delivered yet. Finished work lands here.",
       "emptyFiltered": "Nothing of this kind yet.",
       "truncated": "Showing the 200 most recent.",
-      "remoteUnavailable": "The deliverables library is not available for remote tasks yet.",
+      "remoteUnavailable": "The works library is not available for remote tasks yet.",
       "category": {
         "all": "All",
         "doc": "Document",
@@ -9713,7 +9745,7 @@
         "weekly-work-draft": {
           "name": "Weekly report drafter",
           "description": "Compile this week's work from documents in the working directory into a report draft",
-          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
         },
         "knowledge-freshness": {
           "name": "Knowledge base freshness check",

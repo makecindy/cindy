@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
 
@@ -98,7 +98,7 @@ export function BotPersonaWizard({
   onOpenChange: (open: boolean) => void;
   onSave: (nextIdentitySource: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const [style, setStyle] = useState<PersonaStyle>(DEFAULT_SELECTION.style);
   const [proactivity, setProactivity] = useState<PersonaProactivity>(DEFAULT_SELECTION.proactivity);
   const [call, setCall] = useState<PersonaCallForm>(DEFAULT_SELECTION.call);

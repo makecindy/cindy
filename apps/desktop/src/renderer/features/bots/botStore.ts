@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from 'react';
-import { getDraft } from '@/state/newMakerDraft';
+import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
 import {
   getBotLastReadAtMap,
   pruneBotReadState,
   seedMissingBotReadState,
 } from './botReadState';
+import type { BotGender } from '../../../shared/botGender';
 import type { BotWorkspacePolicy } from '../../../shared/botWorkspace';
 import type { BotChannelConnection } from '../../../shared/botChannelRegistry';
 import type { BotImMigrationPlan, BotImMigrationRecord } from '../../../shared/botImMigration';
@@ -112,6 +113,11 @@ export interface BotProfile {
   name: string;
   channel: BotChannel;
   description: string;
+  /**
+   * 角色性别 —— 只影响界面文案里用「她」还是「他」(裁决:不用「TA」)。
+   * 老 profile 与用户自建伙伴没有这个字段,归一为 neutral,文案改用伙伴名字。
+   */
+  gender?: BotGender;
   identitySource?: string;
   userContextSource?: string;
   avatar: string;
@@ -198,13 +204,32 @@ export interface BotRoute {
 const STORAGE_KEY = 'cindy.bots.v1';
 const SQLITE_MIGRATION_KEY = 'cindy.bots.v1.sqlite-migrated';
 
+/**
+ * 新建伙伴的默认模型:**只继承用户真正选过的模型**。
+ *
+ * `lastByVendor` 的整份快照会随任意 draft 写入落盘,里面的 model 即使用户从没碰过
+ * 也带着对话侧的种子默认(Opus 档) —— 直接读它,新建的每个伙伴都会撞上最贵的模型,
+ * 与用户自己的默认设置无关(2026-08-21 用户实测投诉)。`modelChosenByVendor` 才是
+ * 「真选过」的判据,`getPersistedVendorModel` 就是按它做的读取;没选过时回落到
+ * 与自动化任务同款的保守兜底 —— 伙伴同样是长期反复跑的角色,不该默认最贵档。
+ */
+function defaultBotModel(vendor: ReturnType<typeof vendorForHarness>, seeded: string): string {
+  const chosen = getPersistedVendorModel(vendor);
+  if (chosen) return chosen;
+  return vendor === 'codex' ? 'gpt-5.5' : vendor === 'pi' ? seeded : 'claude-sonnet-4-6';
+}
+
 function defaultCapabilities(harness: BotCapabilities['harness'] = 'claude'): BotCapabilities {
-  const prefs = getDraft().lastByVendor[vendorForHarness(harness)];
+  const vendor = vendorForHarness(harness);
+  const prefs = getDraft().lastByVendor[vendor];
+  const model = defaultBotModel(vendor, prefs.model);
   return {
-    model: prefs.model,
-    providerId: prefs.providerId ?? null,
+    model,
+    // 模型没沿用 lastByVendor 时,来源也不能沿用 —— providerId 与 model 必须同源,
+    // 否则会拿一个来源去解析另一个来源的模型 id。
+    providerId: model === prefs.model ? (prefs.providerId ?? null) : null,
     effort: prefs.effort,
-    fastMode: getDraft().fastModeByModel[prefs.model] === true,
+    fastMode: getDraft().fastModeByModel[model] === true,
     harness,
     skillMode: 'inherit',
     toolsetMode: 'inherit',

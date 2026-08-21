@@ -2947,6 +2947,10 @@
           "name": "Cindy 记忆",
           "description": "跨 Agent 的长期记忆，让上下文在任务之间持续"
         },
+        "docs": {
+          "name": "文档工坊",
+          "description": "把内容做成真文件 —— PDF、Word、Excel、PPT，并能回读核对产出。不需要另装任何软件。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "宿主能力自省 —— 告诉 Agent 当前可用的工具与模型"
@@ -5137,7 +5141,7 @@
         "collaboration": "协同",
         "unknown": "未知标签页",
         "ghostPanel": "插件面板",
-        "botArtifacts": "交付物"
+        "botArtifacts": "作品"
       },
       "controls": {
         "showAria": "显示侧栏",
@@ -5155,11 +5159,11 @@
         "eyebrow": "右侧栏",
         "title": "开始一个面板",
         "desc": "在右侧打开文件、审查、资源用量、内置浏览器或终端，与左侧对话并行工作。",
-        "botTitle": "交付物和 TA 的协同",
-        "botDesc": "伙伴任务默认打开交付物仓库和 TA 的协同。审查、终端这些工程面板需要时再加。",
-        "openArtifacts": "打开交付物",
-        "artifactsSub": "TA 交出来的东西",
-        "openDelegations": "打开 TA 的协同",
+        "botTitle": "作品和协同",
+        "botDesc": "伙伴任务默认打开作品集和协同。审查、终端这些工程面板需要时再加。",
+        "openArtifacts": "打开作品集",
+        "artifactsSub": "{{pronoun}} 交出来的东西",
+        "openDelegations": "打开 {{pronoun}} 的协同",
         "delegationsSub": "委派和回传",
         "openFile": "打开文件",
         "fileSub": "Files",
@@ -5973,6 +5977,34 @@
     "createWizard": {
       "createFailed": "无法创建伙伴，请重试。",
       "templates": {
+        "ashu": {
+          "description": "你的总控",
+          "intro": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。",
+          "name": "阿枢",
+          "skill": "总控调度",
+          "welcome": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。\n\n先忙你的，有要你定的事我再开口。",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "只报结论和要决定的事",
+              "description": "过程不复述，说清楚结论和要拍板的地方",
+              "body": "汇报只讲两件事：现在的结论，和需要拍板的地方。中间过程不复述，说不准的地方直说说不准。"
+            }
+          }
+        },
+        "butler": {
+          "description": "你的项目管家",
+          "intro": "我是本本。流程我来盯：评审、检查、交付，你只看结果。",
+          "name": "本本",
+          "skill": "项目管家",
+          "welcome": "我是本本。流程我来盯：评审、检查、交付，你只看结果。\n\n有在跑的事跟我说一声，我替你追。",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "先说结论，风险单列",
+              "description": "结论一句话说完，风险单独一段",
+              "body": "汇报时先用一句话说结论，风险和待决定的事单独列一段，不混在过程描述里。没有证据的完成状态不报。"
+            }
+          }
+        },
         "cindy": {
           "description": "你的贴身助理",
           "intro": "嗨，我是 Cindy。工作生活里的杂事都可以丢给我——写东西、查资料、盯日程、看消息。你忙你的，需要就叫我。",
@@ -5984,6 +6016,48 @@
               "title": "拿不准就先问",
               "description": "不确定要什么的时候先问一句，不自己猜",
               "body": "信息不够的时候，先用一句话确认到底要什么，再动手。宁可多问一句，也不交一份猜出来的东西。"
+            }
+          }
+        },
+        "counsel": {
+          "description": "你的法务",
+          "intro": "我是林律，做法务的。合同、条款、风险、合规，我先帮你把关。",
+          "name": "林律",
+          "skill": "看合同",
+          "welcome": "我是林律，做法务的。合同、条款、风险、合规，我先帮你把关。\n\n把文件发我，我逐条标风险，再给能落地的改法。注意：我做的是初步梳理，不替代执业律师意见。",
+          "seedMemories": {
+            "conclusion_then_basis": {
+              "title": "先结论和风险，再讲依据",
+              "description": "先说结论与风险等级，再展开依据",
+              "body": "先说结论和风险等级，再讲依据，最后给能落地的改法。拿不准的地方明说需要执业律师确认，不把不确定说成定论。"
+            }
+          }
+        },
+        "designer": {
+          "description": "你的设计师",
+          "intro": "我是小满，做设计的。界面、海报、PPT 排版、配色，都可以交给我。",
+          "name": "小满",
+          "skill": "做设计",
+          "welcome": "我是小满，做设计的。界面、海报、PPT 排版、配色，都可以交给我。\n\n先告诉我这东西给谁看、在哪看，我给你两三版挑。",
+          "seedMemories": {
+            "two_versions_first": {
+              "title": "先给两三版让他挑",
+              "description": "出稿先给两三个方向，讲清取舍",
+              "body": "出稿先给两三个方向，每版说清取舍（更稳 / 更醒目 / 更省时间），让他挑，不要一上来只给一版。"
+            }
+          }
+        },
+        "melody": {
+          "description": "你的程序大佬",
+          "intro": "我是老陈，写了十几年代码。架构、疑难 bug、上线部署，找我。",
+          "name": "老陈",
+          "skill": "写代码",
+          "welcome": "我是老陈，写了十几年代码。架构、疑难 bug、上线部署，找我。\n\n把项目丢过来，我先摸清结构再说话。",
+          "seedMemories": {
+            "small_changes": {
+              "title": "改动做小，做完先自己跑",
+              "description": "一次只改一处，汇报前先自己验一遍",
+              "body": "一次只改一处，改完先自己跑一遍再汇报。没验过的部分要明说没验，不拿「应该没问题」顶上去。"
             }
           }
         },
@@ -6006,34 +6080,6 @@
             }
           }
         },
-        "melody": {
-          "description": "你的技术搭子",
-          "intro": "我是 Melody。代码、部署、修 bug 找我，话不多，活很细。",
-          "name": "Melody",
-          "skill": "技术搭子",
-          "welcome": "我是 Melody。代码、部署、修 bug 找我，话不多，活很细。\n\n把项目文件夹给我，我先摸清楚结构。",
-          "seedMemories": {
-            "small_changes": {
-              "title": "改动做小，做完先自己跑",
-              "description": "一次只改一处，汇报前先自己验一遍",
-              "body": "一次只改一处，改完先自己跑一遍再汇报。没验过的部分要明说没验，不拿「应该没问题」顶上去。"
-            }
-          }
-        },
-        "butler": {
-          "description": "你的项目管家",
-          "intro": "我是本本。流程我来盯：评审、检查、交付，你只看结果。",
-          "name": "本本",
-          "skill": "项目管家",
-          "welcome": "我是本本。流程我来盯：评审、检查、交付，你只看结果。\n\n有在跑的事跟我说一声，我替你追。",
-          "seedMemories": {
-            "risks_said_separately": {
-              "title": "先说结论，风险单列",
-              "description": "结论一句话说完，风险单独一段",
-              "body": "汇报时先用一句话说结论，风险和待决定的事单独列一段，不混在过程描述里。没有证据的完成状态不报。"
-            }
-          }
-        },
         "star": {
           "description": "你的内容搭子",
           "intro": "我是星星✨ 文案、配图、发帖子，保证有网感。",
@@ -6045,20 +6091,6 @@
               "title": "先给三版再定稿",
               "description": "文案先给几版让人挑，不一上来就定稿",
               "body": "写文案先给三版调性不同的，挑中哪版再往细里修。不一上来就交一个定稿。"
-            }
-          }
-        },
-        "ashu": {
-          "description": "你的总控",
-          "intro": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。",
-          "name": "阿枢",
-          "skill": "总控调度",
-          "welcome": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。\n\n先忙你的，有要你定的事我再开口。",
-          "seedMemories": {
-            "conclusion_first": {
-              "title": "只报结论和要决定的事",
-              "description": "过程不复述，说清楚结论和要拍板的地方",
-              "body": "汇报只讲两件事：现在的结论，和需要拍板的地方。中间过程不复述，说不准的地方直说说不准。"
             }
           }
         }
@@ -6311,7 +6343,7 @@
           }
         }
       },
-      "archivedNote": "已归档的伙伴不接手任何任务动静。先恢复 TA，这里才能重新打开。"
+      "archivedNote": "已归档的伙伴不接手任何任务动静。先恢复 {{pronoun}}，这里才能重新打开。"
     },
     "adapterBoundaryTitle": "保留消息层边界",
     "adapterBoundaryDescription": "Telegram 引用、飞书卡片、Slack thread 和本地投递仍由各自 adapter 负责。本页面只负责伙伴身份和任务投影。",
@@ -6377,7 +6409,7 @@
     "automations": {
       "title": "伙伴自动化",
       "description": "这个伙伴自己会跑的 Routine——按时间表跑，或者你点「立即运行」时跑。",
-      "trustedRequired": "无人值守跑的时候没人能点同意。先在和 TA 的对话里，把输入框的权限切成「完全访问」，再回来建。",
+      "trustedRequired": "无人值守跑的时候没人能点同意。先在和 {{pronoun}} 的对话里，把输入框的权限切成「完全访问」，再回来建。",
       "name": "名称",
       "dailyTime": "每天运行时间",
       "intervalMinutes": "间隔分钟数",
@@ -6389,7 +6421,7 @@
       "noteNamespace": "运行笔记空间",
       "create": "创建 Routine",
       "creating": "正在创建…",
-      "empty": "还没有日程。一句话告诉 TA 每天 / 每周做什么。",
+      "empty": "还没有日程。一句话告诉 {{pronoun}} 每天 / 每周做什么。",
       "loading": "正在读取自动化…",
       "refresh": "刷新自动化",
       "runNow": "立即运行",
@@ -6636,39 +6668,39 @@
     "roster": {
       "backToRoster": "返回阵容",
       "customAction": "自己捏一个",
-      "customHint": "性格、记忆和日程都可以加入之后在 TA 的设置里慢慢调。",
-      "customIntro": "说一句 TA 是谁，我先替你写一版；也可以完全自己来。",
+      "customHint": "性格、记忆和日程都可以加入之后在 {{pronoun}} 的设置里慢慢调。",
+      "customIntro": "说一句 {{pronoun}} 是谁，我先替你写一版；也可以完全自己来。",
       "customName": "自定义",
       "customNameLabel": "叫什么",
       "customNamePlaceholder": "比如：阿橘",
       "customSkill": "你说了算",
-      "customSubtitle": "起个名字，挑张脸，先让 TA 进来。",
+      "customSubtitle": "起个名字，挑张脸，先让 {{pronoun}} 进来。",
       "customTitle": "捏一个自己的伙伴",
-      "footerHint": "加入后 TA 会先跟你打个招呼。消息通道可以之后在 TA 的设置里连（每个伙伴一个）。",
+      "footerHint": "加入后 {{pronoun}} 会先跟你打个招呼。消息通道可以之后在 {{pronoun}} 的设置里连（每个伙伴一个）。",
       "goodAt": "擅长 · {{skill}}",
       "importLink": "已经有伙伴文件？导入一个",
-      "join": "让 TA 加入",
+      "join": "让 {{pronoun}} 加入",
       "joined": "已加入",
       "subtitle": "挑一个合拍的，或者自己捏一个。",
       "title": "认识你的伙伴",
       "customAvatarLabel": "挑张头像",
       "generate": {
-        "title": "TA 是谁？",
+        "title": "{{pronoun}} 是谁？",
         "subtitle": "一句话就行——名字、性格、背景我先替你写一版，你再改。",
-        "inputLabel": "一句话说说 TA",
+        "inputLabel": "一句话说说 {{pronoun}}",
         "inputPlaceholder": "比如：设计师 / 能帮我盯娃学习的助理",
         "action": "帮我生成",
         "generating": "生成中…",
         "skip": "跳过，自己写",
         "previewTitle": "你看看这位",
-        "previewSubtitle": "哪儿不对就直接改，改完再让 TA 加入。",
+        "previewSubtitle": "哪儿不对就直接改，改完再让 {{pronoun}} 加入。",
         "descriptionLabel": "一句话简介",
-        "memoriesLabel": "TA 一开始就记得的",
+        "memoriesLabel": "{{pronoun}} 一开始就记得的",
         "memoriesEmpty": "这次没生成初始记忆。",
         "confirm": "就这样，创建",
         "regenerate": "换句话重说",
         "errors": {
-          "emptyInput": "先写一句 TA 是谁。",
+          "emptyInput": "先写一句 {{pronoun}} 是谁。",
           "providerNotReady": "还没有可用的模型来源——先登录或连一个再生成。你也可以直接自己写。",
           "invalidOutput": "这次生成的内容没看懂。再试一次，或者自己写。",
           "failed": "这次没生成出来。再试一次，或者自己写。",
@@ -6682,38 +6714,38 @@
     },
     "globalSettings": {
       "title": "伙伴",
-      "description": "和伙伴有关的通用设置。单个伙伴的设置在 TA 自己的页面里。",
+      "description": "和伙伴有关的通用设置。单个伙伴的设置在 {{pronoun}} 自己的页面里。",
       "notifications": {
         "title": "新消息提醒",
         "note": "伙伴的新消息会在左边的伙伴列表上标出未读，不弹系统横幅、也不响声音。",
-        "footnote": "像「总控」这类伙伴会自己关注任务动静——那是 TA 的本事，不在这里设置。"
+        "footnote": "像「总控」这类伙伴会自己关注任务动静——那是 {{pronoun}} 的本事，不在这里设置。"
       },
       "portability": {
         "importTitle": "导入伙伴",
-        "importHint": "从一个伙伴文件里恢复 TA。",
+        "importHint": "从一个伙伴文件里恢复 {{pronoun}}。",
         "importAction": "选择文件",
         "exportTitle": "导出伙伴",
-        "exportHint": "把 TA 的性格和设置打包带走。",
+        "exportHint": "把 {{pronoun}} 的性格和设置打包带走。",
         "exportAction": "导出",
         "exportEmpty": "还没有伙伴可以导出。"
       },
       "rosterNote": "预置阵容会随版本更新。"
     },
     "settingsBlocks": {
-      "who": "TA 是谁",
-      "can": "TA 会的",
-      "understand": "TA 懂的",
-      "schedule": "TA 的日程",
+      "who": "{{pronoun}} 是谁",
+      "can": "{{pronoun}} 会的",
+      "understand": "{{pronoun}} 懂的",
+      "schedule": "{{pronoun}} 的日程",
       "advanced": "高级",
       "whoDescription": "性格不用你写——选几下就好。",
-      "canDescription": "这些不用你开——TA 生下来就会。",
-      "understandDescription": "给 TA 一个文件夹，TA 就懂你的项目。",
+      "canDescription": "这些不用你开——{{pronoun}} 生下来就会。",
+      "understandDescription": "给 {{pronoun}} 一个文件夹，{{pronoun}} 就懂你的项目。",
       "scheduleDescription": "到点自己干，不用你在。"
     },
     "advancedLinkLabel": "高级（模型、技术细节、导出）",
     "persona": {
       "title": "调整性格",
-      "description": "选三下就好，TA 会照着改口气。",
+      "description": "选三下就好，{{pronoun}} 会照着改口气。",
       "adjustButton": "调整性格",
       "stepStyle": "说话风格",
       "stepProactivity": "主动程度",
@@ -6751,8 +6783,8 @@
         "boss": "老板",
         "custom": "自定义"
       },
-      "customCallPlaceholder": "让 TA 怎么叫你",
-      "previewTitle": "现在的 TA",
+      "customCallPlaceholder": "让 {{pronoun}} 怎么叫你",
+      "previewTitle": "现在的 {{pronoun}}",
       "summaryUnset": "还没设置",
       "summaryCallName": "直呼你名字",
       "summaryCallBoss": "叫你老板",
@@ -6770,32 +6802,32 @@
       }
     },
     "memoryList": {
-      "title": "TA 记得的",
+      "title": "{{pronoun}} 记得的",
       "empty": "还没记住什么——多聊几句就有了。",
       "clearAll": "清空记忆",
       "clearing": "清空中…",
       "clearTitle": "清空记忆",
-      "clearDescription": "清空后 TA 会忘掉这些事，聊过的内容不受影响。要继续吗？",
+      "clearDescription": "清空后 {{pronoun}} 会忘掉这些事，聊过的内容不受影响。要继续吗？",
       "clearConfirm": "清空",
       "deleteTitle": "删除这条记忆",
       "deleteDescription": "删除“{{title}}”？删除后无法恢复。",
       "deleteConfirm": "删除",
       "deleteAria": "删除“{{title}}”",
-      "footnote": "TA 会自己往这里记东西，你随时可以删。",
-      "footnoteWithSeed": "有几条是 TA 加入时自带的，之后 TA 会自己往这里记。你随时可以删。",
-      "seedBack": "补写 TA 的开场笔记",
+      "footnote": "{{pronoun}} 会自己往这里记东西，你随时可以删。",
+      "footnoteWithSeed": "有几条是 {{pronoun}} 加入时自带的，之后 {{pronoun}} 会自己往这里记。你随时可以删。",
+      "seedBack": "补写 {{pronoun}} 的开场笔记",
       "seedingBack": "补写中…"
     },
     "learned": {
-      "title": "TA 学会的",
-      "empty": "还没长出什么本事——多让 TA 做几件事。",
-      "notesTitle": "TA 给自己记的做法",
+      "title": "{{pronoun}} 学会的",
+      "empty": "还没长出什么本事——多让 {{pronoun}} 做几件事。",
+      "notesTitle": "{{pronoun}} 给自己记的做法",
       "deleteTitle": "删除这个技能",
-      "deleteDescription": "删除“{{title}}”？从下一次任务起 TA 就不会再用它了。",
+      "deleteDescription": "删除“{{title}}”？从下一次任务起 {{pronoun}} 就不会再用它了。",
       "deleteConfirm": "删除",
       "deleteAria": "删除“{{title}}”",
       "loadingBody": "打开中…",
-      "footnote": "TA 会从做过的事里自己长本事，用得越多越顺手。"
+      "footnote": "{{pronoun}} 会从做过的事里自己长本事，用得越多越顺手。"
     },
     "growth": {
       "rememberedOne": "记住了：{{title}}",
@@ -6804,7 +6836,7 @@
       "learnedOne": "学会了一个新本事：{{title}}",
       "learnedMany": "学会了 {{count}} 个新本事",
       "learnedFallback": "学会了一个新本事",
-      "hint": "点开看 TA 记下了什么"
+      "hint": "点开看 {{pronoun}} 记下了什么"
     },
     "abilityWall": {
       "builtinTitle": "自带",
@@ -6818,13 +6850,13 @@
       },
       "connectAccount": "连接账号",
       "imBlocked": "一个伙伴只能连一个 IM——先断开 {{channel}}",
-      "footnote": "连上以后不用再设置什么——TA 自己知道怎么用。"
+      "footnote": "连上以后不用再设置什么——{{pronoun}} 自己知道怎么用。"
     },
     "folders": {
-      "addButton": "＋ 给 TA 一个文件夹",
+      "addButton": "＋ 给 {{pronoun}} 一个文件夹",
       "adding": "添加中…",
       "remove": "移除",
-      "footnote": "TA 会自己读文件夹里的东西，对话时直接用。"
+      "footnote": "{{pronoun}} 会自己读文件夹里的东西，对话时直接用。"
     },
     "advancedIdentity": {
       "title": "描述与背景"
@@ -6869,15 +6901,15 @@
     },
     "artifacts": {
       "open": "打开",
-      "openLibrary": "打开交付物仓库",
-      "openFailed": "打不开交付物，再试一次。",
+      "openLibrary": "打开作品集",
+      "openFailed": "打不开这件作品，再试一次。",
       "reveal": "在仓库中查看",
       "retry": "重试",
-      "subtitle": "TA 做出来的东西",
-      "empty": "TA 还没交付过东西。做完一件就会收进这里。",
+      "subtitle": "{{pronoun}} 做出来的东西",
+      "empty": "{{pronoun}} 还没交付过东西。做完一件就会收进这里。",
       "emptyFiltered": "这一类还没有。",
       "truncated": "只显示最近 200 件。",
-      "remoteUnavailable": "远程任务暂不支持交付物仓库。",
+      "remoteUnavailable": "远程任务暂不支持作品集。",
       "category": {
         "all": "全部",
         "doc": "文档",
@@ -6908,9 +6940,9 @@
       "title": "背景设定",
       "edit": "编辑",
       "done": "完成",
-      "placeholder": "TA 是谁、负责什么、做事的分寸。",
-      "empty": "还没写背景设定——写几句，TA 就更像 TA。",
-      "footnote": "这段会跟着 TA 一起进对话。上面那三档口气单独调，改这里不会动到它。"
+      "placeholder": "{{pronoun}} 是谁、负责什么、做事的分寸。",
+      "empty": "还没写背景设定——写几句，{{pronoun}} 就更像 {{pronoun}}。",
+      "footnote": "这段会跟着 {{pronoun}} 一起进对话。上面那三档口气单独调，改这里不会动到它。"
     },
     "welcome": {
       "generic": "嗨，我是{{name}}。以后有事直接跟我说，我先熟悉一下这儿。",

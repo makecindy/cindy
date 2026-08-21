@@ -17,7 +17,7 @@ describe('Bot durable note tools', () => {
     }));
     const registry = new XdtHelperToolRegistry();
     registerBotDurableNoteTools(registry, {
-      getSessionContext: () => ({ sessionId: 'bot-session' }),
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: '/w', sessionId: 'bot-session' }),
       callbacks: {
         list: vi.fn(),
         get: vi.fn(),
@@ -44,7 +44,7 @@ describe('Bot durable note tools', () => {
   it('fails closed without a bound Session', async () => {
     const registry = new XdtHelperToolRegistry();
     registerBotDurableNoteTools(registry, {
-      getSessionContext: () => ({}),
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: '/w' }),
       callbacks: { list: vi.fn(), get: vi.fn(), set: vi.fn(), delete: vi.fn() },
     });
     const result = await registry.call('list_bot_notes', {});

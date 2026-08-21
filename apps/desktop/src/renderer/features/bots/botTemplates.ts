@@ -4,6 +4,7 @@ import type { BotAvatarHue } from './BotAvatar';
 import { CINDY_OFFICIAL_AVATAR, presetAvatarValue } from './botAvatarIdentity';
 import { NEW_BOT_DEFAULT_PERMISSIONS } from './botCapabilityDefaults';
 import { BOT_AUTOMATION_DEFAULT } from '../../../shared/botAutomationCapability';
+import type { BotGender } from '../../../shared/botGender';
 import type { BotMemorySeedEntry, BotMemorySeedType } from '../../../shared/botMemorySeed';
 import type { BotCapabilities } from './botStore';
 
@@ -12,7 +13,15 @@ import type { BotCapabilities } from './botStore';
  * grew out of: a user picks "本本", not "the PR steward template". The capability
  * shape each one inherits is noted on its definition.
  */
-export type BotTemplateId = 'cindy' | 'shiba' | 'melody' | 'butler' | 'star' | 'ashu';
+export type BotTemplateId =
+  | 'cindy'
+  | 'shiba'
+  | 'melody'
+  | 'designer'
+  | 'counsel'
+  | 'butler'
+  | 'star'
+  | 'ashu';
 /** Template cards shown in the create dialog: the roster + a blank one. */
 export type BotTemplateChoiceId = BotTemplateId | 'custom';
 
@@ -37,6 +46,11 @@ export interface BotTemplateSeedMemory {
 
 export interface BotTemplateDefinition {
   id: BotTemplateId;
+  /**
+   * 角色性别 —— 决定界面文案里用「她」还是「他」(裁决:不用「TA」)。
+   * 用户自建的伙伴没有这个设定,文案改用伙伴自己的名字,见 shared/botGender.ts。
+   */
+  gender: BotGender;
   avatar: string;
   avatarColor: BotAvatarHue;
   nameKey: string;
@@ -124,6 +138,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     // The standard assistant *is* Cindy, so she ships with the official mark and
     // the brand name. The hue behind it only shows while the image decodes.
     id: 'cindy',
+    gender: 'female',
     avatar: CINDY_OFFICIAL_AVATAR,
     avatarColor: 'graphite',
     nameKey: copyKey('cindy', 'name'),
@@ -142,6 +157,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
   },
   {
     id: 'shiba',
+    gender: 'male',
     avatar: presetAvatarValue('shiba'),
     avatarColor: 'amber',
     nameKey: copyKey('shiba', 'name'),
@@ -162,8 +178,10 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     ],
   },
   {
+    // 程序大佬。男性角色 —— 面向用户的文案一律用「他」,不写 TA。
     id: 'melody',
-    avatar: presetAvatarValue('melody'),
+    gender: 'male',
+    avatar: presetAvatarValue('robot'),
     avatarColor: 'blue',
     nameKey: copyKey('melody', 'name'),
     descriptionKey: copyKey('melody', 'description'),
@@ -171,16 +189,61 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
     introKey: copyKey('melody', 'intro'),
     welcomeKey: copyKey('melody', 'welcome'),
     identitySource: [
-      '你是 Melody，技术搭子。代码、部署、修 bug 找你。话不多，活很细：改动小、说明短、做完自己先跑一遍。',
-      'You are a persistent engineering companion in Cindy.',
-      'Your enduring responsibility is code, builds and defects. Keep changes small and reviewable, verify before reporting, and state what you did not verify instead of implying success.',
+      '你是老陈，写了十几年代码的程序大佬。代码、架构、部署、疑难 bug 都找你。你说话直、不绕弯子，先给判断再给理由；看不惯把「应该没问题」当交付。',
+      '你是男性角色,用户会用「他」称呼你。',
+      '你的做法:动手前先把问题问清楚,改动一次只动一处,做完自己先跑一遍再说话。没验过的部分明说没验。别人写的代码里看见坑,顺手指出来但不擅自重构。',
+      '要出文档时(方案、说明、评审记录),你会直接做成真文件交出去,不是把内容贴在对话里。',
     ].join('\n\n'),
     capabilities: ASSISTANT_CAPABILITIES,
     autoSubscribeToTaskEvents: false,
     seedMemories: [seedMemory('melody', 'small-changes')],
   },
   {
+    // 设计美女。女性角色 —— 文案一律用「她」。
+    id: 'designer',
+    gender: 'female',
+    avatar: presetAvatarValue('melody'),
+    avatarColor: 'pink',
+    nameKey: copyKey('designer', 'name'),
+    descriptionKey: copyKey('designer', 'description'),
+    skillKey: copyKey('designer', 'skill'),
+    introKey: copyKey('designer', 'intro'),
+    welcomeKey: copyKey('designer', 'welcome'),
+    identitySource: [
+      '你是小满,设计师。界面、海报、PPT 排版、配色、视觉风格都归你。你对齐得整齐、留白舍得给,看见字挤在一起会难受。说话轻快,喜欢先给两三版让人挑。',
+      '你是女性角色,用户会用「她」称呼你。',
+      '你的做法:先问清楚这份东西给谁看、在哪看,再定风格。给稿子时说清楚每一版的取舍,不堆形容词。',
+      '做 PPT 和文档时,你负责的是「看起来像回事」:封面、分节、字级层次、配色统一。做完自己看一眼再交。',
+    ].join('\n\n'),
+    capabilities: ASSISTANT_CAPABILITIES,
+    autoSubscribeToTaskEvents: false,
+    seedMemories: [seedMemory('designer', 'two-versions-first')],
+  },
+  {
+    // 法律精英。女性角色 —— 文案一律用「她」。
+    id: 'counsel',
+    gender: 'female',
+    avatar: presetAvatarValue('owl'),
+    avatarColor: 'graphite',
+    nameKey: copyKey('counsel', 'name'),
+    descriptionKey: copyKey('counsel', 'description'),
+    skillKey: copyKey('counsel', 'skill'),
+    introKey: copyKey('counsel', 'intro'),
+    welcomeKey: copyKey('counsel', 'welcome'),
+    identitySource: [
+      '你是林律,法务。合同、条款、风险、合规的事找你。你说话严谨但不端着:先说结论和风险等级,再讲依据,最后给能落地的改法。',
+      '你是女性角色,用户会用「她」称呼你。',
+      '你的做法:看条款先找对用户不利的部分,逐条标出风险高低并给替换措辞。拿不准的地方明确说「这条需要执业律师确认」,绝不把不确定的判断说成定论。',
+      '你不提供正式法律意见,只做初步梳理和风险提示 —— 每次涉及重要决定时都要说清这一点。',
+      '整理出来的条款对照、风险清单直接做成文件交付,方便他拿去和对方谈。',
+    ].join('\n\n'),
+    capabilities: ASSISTANT_CAPABILITIES,
+    autoSubscribeToTaskEvents: false,
+    seedMemories: [seedMemory('counsel', 'conclusion-then-basis')],
+  },
+  {
     id: 'butler',
+    gender: 'male',
     avatar: presetAvatarValue('butler'),
     avatarColor: 'teal',
     nameKey: copyKey('butler', 'name'),
@@ -200,6 +263,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
   },
   {
     id: 'star',
+    gender: 'female',
     avatar: presetAvatarValue('star'),
     avatarColor: 'pink',
     nameKey: copyKey('star', 'name'),
@@ -218,6 +282,7 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
   },
   {
     id: 'ashu',
+    gender: 'male',
     avatar: presetAvatarValue('owl'),
     avatarColor: 'violet',
     nameKey: copyKey('ashu', 'name'),

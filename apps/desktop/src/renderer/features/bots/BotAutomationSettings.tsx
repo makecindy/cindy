@@ -24,7 +24,7 @@ import {
   Plus,
   RefreshCcw,
 } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 
 import type { BotAutomation, BotAutomationRun } from '../../../shared/botAutomation';
 import {
@@ -86,7 +86,7 @@ function RunHistory({
   automation: BotAutomation;
   onOpenTask: (sessionId: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const { confirm } = useConfirmDialog();
   const [runs, setRuns] = useState<BotAutomationRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -247,7 +247,7 @@ function ScheduleModePicker({
   mode: AutomationFormValue['mode'];
   onChange: (mode: AutomationFormValue['mode']) => void;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   return (
     <div
       role="radiogroup"
@@ -290,7 +290,7 @@ function AutomationAdvancedFields({
   bots: BotProfile[];
   currentBotId: string;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const policy = value.policy;
   const updatePolicy = (patch: Partial<AutomationPolicyDraft>) =>
     onChange({ policy: { ...policy, ...patch } });
@@ -488,7 +488,7 @@ function AutomationForm({
   onSubmit: (submission: AutomationSubmission) => Promise<void>;
   onCancel: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const [value, setValue] = useState<AutomationFormValue>(initial);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -651,7 +651,7 @@ function AutomationRow({
   onChanged: () => Promise<void>;
   onOpenTask: (sessionId: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<'toggle' | 'run' | 'archive' | null>(null);
@@ -814,7 +814,7 @@ export function BotAutomationSettings({
   trusted: boolean;
   onOpenTask: (sessionId: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const bots = useBotProfiles();
   const [automations, setAutomations] = useState<BotAutomation[]>([]);
   const [loading, setLoading] = useState(true);

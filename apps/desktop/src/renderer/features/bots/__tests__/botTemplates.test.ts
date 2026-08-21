@@ -16,16 +16,27 @@ import {
 } from '../botTemplates';
 
 describe('Bot roster templates', () => {
-  it('ships the six characters in roster order, blank card last', () => {
+  it('ships the eight characters in roster order, blank card last', () => {
     expect(BOT_TEMPLATES.map((template) => template.id)).toEqual([
       'cindy',
       'shiba',
       'melody',
+      'designer',
+      'counsel',
       'butler',
       'star',
       'ashu',
     ]);
     expect(BOT_TEMPLATE_CHOICE_IDS[BOT_TEMPLATE_CHOICE_IDS.length - 1]).toBe('custom');
+  });
+
+  // 产品裁决(2026-08-21):界面文案里女角色用「她」、男角色用「他」,不用「TA」。
+  // 每个模板都必须显式声明性别,否则文案会退回用名字指代 —— 那是给自建伙伴的
+  // 兜底,不该落到阵容角色头上。
+  it('every roster character declares a gender', () => {
+    for (const template of BOT_TEMPLATES) {
+      expect(['female', 'male']).toContain(template.gender);
+    }
   });
 
   it('keeps Hermes-style identity separate from structured capabilities', () => {
@@ -63,7 +74,7 @@ describe('Bot roster templates', () => {
       autoSubscribeToTaskEvents: true,
       capabilities: { sessionControlMode: 'coordinate' },
     });
-    for (const id of ['cindy', 'shiba', 'melody', 'star'] as const) {
+    for (const id of ['cindy', 'shiba', 'melody', 'designer', 'counsel', 'star'] as const) {
       expect(getBotTemplate(id)).toMatchObject({
         autoSubscribeToTaskEvents: false,
         capabilities: { sessionControlMode: 'none' },

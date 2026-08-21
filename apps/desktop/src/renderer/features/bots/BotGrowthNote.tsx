@@ -1,5 +1,5 @@
 import { Sparkles } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 import { useNavigate } from 'react-router-dom';
 
 import { botGrowthNoteLabel, type BotGrowthNote as BotGrowthNoteData } from './botGrowth';
@@ -17,7 +17,7 @@ import { buildBotGrowthSettingsPath } from './botSettingsNav';
  * (`text-11`)。这是规范优先于原型像素值的有意取舍。
  */
 export function BotGrowthNote({ botId, note }: { botId: string; note: BotGrowthNoteData }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const navigate = useNavigate();
   const label = botGrowthNoteLabel(note);
   const text = t(label.key, label.params);

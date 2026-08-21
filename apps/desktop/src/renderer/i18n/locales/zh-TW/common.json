@@ -2947,6 +2947,10 @@
           "name": "Cindy 記憶",
           "description": "跨 Agent 的長期記憶，讓上下文在任務之間持續"
         },
+        "docs": {
+          "name": "文件工坊",
+          "description": "把內容做成真檔案 —— PDF、Word、Excel、PPT，並能回讀核對產出。不需要另裝任何軟體。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "宿主能力自省 —— 告訴 Agent 當前可用的工具與模型"
@@ -5137,7 +5141,7 @@
         "collaboration": "協同",
         "unknown": "未知標籤頁",
         "ghostPanel": "插件面板",
-        "botArtifacts": "交付物"
+        "botArtifacts": "作品"
       },
       "controls": {
         "showAria": "顯示側欄",
@@ -5155,11 +5159,11 @@
         "eyebrow": "右側欄",
         "title": "開始一個面板",
         "desc": "在右側開啟檔案、審查、資源用量、內建瀏覽器或終端，與左側對話並行工作。",
-        "botTitle": "交付物和 TA 的協同",
-        "botDesc": "夥伴任務預設開啟交付物倉庫和 TA 的協同。審查、終端這些工程面板需要時再加。",
-        "openArtifacts": "開啟交付物",
-        "artifactsSub": "TA 交出來的東西",
-        "openDelegations": "開啟 TA 的協同",
+        "botTitle": "作品和協同",
+        "botDesc": "夥伴任務預設開啟作品倉庫和 {{pronoun}} 的協同。審查、終端這些工程面板需要時再加。",
+        "openArtifacts": "開啟作品",
+        "artifactsSub": "{{pronoun}} 交出來的東西",
+        "openDelegations": "開啟 {{pronoun}} 的協同",
         "delegationsSub": "委派和回傳",
         "openFile": "開啟檔案",
         "fileSub": "Files",
@@ -5973,6 +5977,34 @@
     "createWizard": {
       "createFailed": "無法建立夥伴，請重試。",
       "templates": {
+        "ashu": {
+          "description": "你的總控",
+          "intro": "我是阿樞。各處任務的動靜我都盯著，出事我第一個知道，也第一個告訴你。",
+          "name": "阿樞",
+          "skill": "總控調度",
+          "welcome": "我是阿樞。各處任務的動靜我都盯著，出事我第一個知道，也第一個告訴你。\n\n先忙你的，有要你決定的事我再開口。",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "只報結論和要決定的事",
+              "description": "過程不複述，說清楚結論和要拍板的地方",
+              "body": "回報只講兩件事：現在的結論，和需要拍板的地方。中間過程不複述，說不準的地方直說說不準。"
+            }
+          }
+        },
+        "butler": {
+          "description": "你的專案管家",
+          "intro": "我是本本。流程我來盯：審查、檢查、交付，你只看結果。",
+          "name": "本本",
+          "skill": "專案管家",
+          "welcome": "我是本本。流程我來盯：審查、檢查、交付，你只看結果。\n\n有在跑的事跟我說一聲，我替你追。",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "先說結論，風險單列",
+              "description": "結論一句話說完，風險單獨一段",
+              "body": "回報時先用一句話說結論，風險和待決定的事單獨列一段，不混在過程描述裡。沒有證據的完成狀態不報。"
+            }
+          }
+        },
         "cindy": {
           "description": "你的貼身助理",
           "intro": "嗨，我是 Cindy。工作生活裡的雜事都可以丟給我——寫東西、查資料、盯行程、看訊息。你忙你的，需要就叫我。",
@@ -5984,6 +6016,48 @@
               "title": "拿不準就先問",
               "description": "不確定要什麼的時候先問一句，不自己猜",
               "body": "資訊不夠的時候，先用一句話確認到底要什麼，再動手。寧可多問一句，也不交一份猜出來的東西。"
+            }
+          }
+        },
+        "counsel": {
+          "description": "你的法務",
+          "intro": "我是林律，做法務的。合約、條款、風險、合規，我先幫你把關。",
+          "name": "林律",
+          "skill": "看合約",
+          "welcome": "我是林律，做法務的。合約、條款、風險、合規，我先幫你把關。\n\n把文件傳我，我逐條標風險，再給能落地的改法。注意：我做的是初步梳理，不替代執業律師意見。",
+          "seedMemories": {
+            "conclusion_then_basis": {
+              "title": "先結論和風險，再講依據",
+              "description": "先說結論與風險等級，再展開依據",
+              "body": "先說結論和風險等級，再講依據，最後給能落地的改法。拿不準的地方明說需要執業律師確認，不把不確定說成定論。"
+            }
+          }
+        },
+        "designer": {
+          "description": "你的設計師",
+          "intro": "我是小滿，做設計的。介面、海報、PPT 排版、配色，都可以交給我。",
+          "name": "小滿",
+          "skill": "做設計",
+          "welcome": "我是小滿，做設計的。介面、海報、PPT 排版、配色，都可以交給我。\n\n先告訴我這東西給誰看、在哪看，我給你兩三版挑。",
+          "seedMemories": {
+            "two_versions_first": {
+              "title": "先給兩三版讓他挑",
+              "description": "出稿先給兩三個方向，講清取捨",
+              "body": "出稿先給兩三個方向，每版說清取捨（更穩 / 更醒目 / 更省時間），讓他挑，不要一上來只給一版。"
+            }
+          }
+        },
+        "melody": {
+          "description": "你的程式大佬",
+          "intro": "我是老陳，寫了十幾年程式。架構、疑難 bug、上線部署，找我。",
+          "name": "老陳",
+          "skill": "寫程式",
+          "welcome": "我是老陳，寫了十幾年程式。架構、疑難 bug、上線部署，找我。\n\n把專案丟過來，我先摸清結構再說話。",
+          "seedMemories": {
+            "small_changes": {
+              "title": "改動做小，做完先自己跑",
+              "description": "一次只改一處，回報前先自己驗一遍",
+              "body": "一次只改一處，改完先自己跑一遍再回報。沒驗過的部分要明說沒驗，不拿「應該沒問題」頂上去。"
             }
           }
         },
@@ -6006,34 +6080,6 @@
             }
           }
         },
-        "melody": {
-          "description": "你的技術搭檔",
-          "intro": "我是 Melody。程式、部署、修 bug 找我，話不多，活很細。",
-          "name": "Melody",
-          "skill": "技術搭檔",
-          "welcome": "我是 Melody。程式、部署、修 bug 找我，話不多，活很細。\n\n把專案資料夾給我，我先摸清楚結構。",
-          "seedMemories": {
-            "small_changes": {
-              "title": "改動做小，做完先自己跑",
-              "description": "一次只改一處，回報前先自己驗一遍",
-              "body": "一次只改一處，改完先自己跑一遍再回報。沒驗過的部分要明說沒驗，不拿「應該沒問題」頂上去。"
-            }
-          }
-        },
-        "butler": {
-          "description": "你的專案管家",
-          "intro": "我是本本。流程我來盯：審查、檢查、交付，你只看結果。",
-          "name": "本本",
-          "skill": "專案管家",
-          "welcome": "我是本本。流程我來盯：審查、檢查、交付，你只看結果。\n\n有在跑的事跟我說一聲，我替你追。",
-          "seedMemories": {
-            "risks_said_separately": {
-              "title": "先說結論，風險單列",
-              "description": "結論一句話說完，風險單獨一段",
-              "body": "回報時先用一句話說結論，風險和待決定的事單獨列一段，不混在過程描述裡。沒有證據的完成狀態不報。"
-            }
-          }
-        },
         "star": {
           "description": "你的內容搭檔",
           "intro": "我是星星✨ 文案、配圖、發文，保證有網感。",
@@ -6045,20 +6091,6 @@
               "title": "先給三版再定稿",
               "description": "文案先給幾版讓人挑，不一上來就定稿",
               "body": "寫文案先給三版調性不同的，挑中哪版再往細裡修。不一上來就交一個定稿。"
-            }
-          }
-        },
-        "ashu": {
-          "description": "你的總控",
-          "intro": "我是阿樞。各處任務的動靜我都盯著，出事我第一個知道，也第一個告訴你。",
-          "name": "阿樞",
-          "skill": "總控調度",
-          "welcome": "我是阿樞。各處任務的動靜我都盯著，出事我第一個知道，也第一個告訴你。\n\n先忙你的，有要你決定的事我再開口。",
-          "seedMemories": {
-            "conclusion_first": {
-              "title": "只報結論和要決定的事",
-              "description": "過程不複述，說清楚結論和要拍板的地方",
-              "body": "回報只講兩件事：現在的結論，和需要拍板的地方。中間過程不複述，說不準的地方直說說不準。"
             }
           }
         }
@@ -6311,7 +6343,7 @@
           }
         }
       },
-      "archivedNote": "已歸檔的夥伴不接手任何任務動靜。先恢復 TA，這裡才能重新開啟。"
+      "archivedNote": "已歸檔的夥伴不接手任何任務動靜。先恢復 {{pronoun}}，這裡才能重新開啟。"
     },
     "adapterBoundaryTitle": "保留訊息層邊界",
     "adapterBoundaryDescription": "Telegram 引用、飛書卡片、Slack thread 與本地投遞仍由各自 adapter 負責。本頁只負責夥伴身分與任務投影。",
@@ -6377,7 +6409,7 @@
     "automations": {
       "title": "夥伴自動化",
       "description": "這個夥伴自己會執行的 Routine——依時間表執行，或你按「立即執行」時執行。",
-      "trustedRequired": "無人值守執行時沒有人能按同意。先在和 TA 的對話裡，把輸入框的權限切成「完全訪問」，再回來建。",
+      "trustedRequired": "無人值守執行時沒有人能按同意。先在和 {{pronoun}} 的對話裡，把輸入框的權限切成「完全訪問」，再回來建。",
       "name": "名稱",
       "dailyTime": "每天執行時間",
       "intervalMinutes": "間隔分鐘數",
@@ -6389,7 +6421,7 @@
       "noteNamespace": "執行筆記空間",
       "create": "建立 Routine",
       "creating": "正在建立…",
-      "empty": "還沒有日程。一句話告訴 TA 每天 / 每週做什麼。",
+      "empty": "還沒有日程。一句話告訴 {{pronoun}} 每天 / 每週做什麼。",
       "loading": "正在讀取自動化…",
       "refresh": "重新整理自動化",
       "runNow": "立即執行",
@@ -6636,39 +6668,39 @@
     "roster": {
       "backToRoster": "返回陣容",
       "customAction": "自己捏一個",
-      "customHint": "個性、記憶和行程都可以加入之後在 TA 的設定裡慢慢調。",
-      "customIntro": "說一句 TA 是誰，我先替你寫一版；也可以完全自己來。",
+      "customHint": "個性、記憶和行程都可以加入之後在 {{pronoun}} 的設定裡慢慢調。",
+      "customIntro": "說一句 {{pronoun}} 是誰，我先替你寫一版；也可以完全自己來。",
       "customName": "自訂",
       "customNameLabel": "叫什麼",
       "customNamePlaceholder": "例如：阿橘",
       "customSkill": "你說了算",
-      "customSubtitle": "取個名字，挑張臉，先讓 TA 進來。",
+      "customSubtitle": "取個名字，挑張臉，先讓 {{pronoun}} 進來。",
       "customTitle": "捏一個自己的伙伴",
-      "footerHint": "加入後 TA 會先跟你打聲招呼。訊息通道可以之後在 TA 的設定裡接（每個伙伴一個）。",
+      "footerHint": "加入後 {{pronoun}} 會先跟你打聲招呼。訊息通道可以之後在 {{pronoun}} 的設定裡接（每個伙伴一個）。",
       "goodAt": "擅長 · {{skill}}",
       "importLink": "已經有伙伴檔案？匯入一個",
-      "join": "讓 TA 加入",
+      "join": "讓 {{pronoun}} 加入",
       "joined": "已加入",
       "subtitle": "挑一個合拍的，或者自己捏一個。",
       "title": "認識你的伙伴",
       "customAvatarLabel": "挑張頭像",
       "generate": {
-        "title": "TA 是誰？",
+        "title": "{{pronoun}} 是誰？",
         "subtitle": "一句話就行——名字、性格、背景我先替你寫一版，你再改。",
-        "inputLabel": "一句話說說 TA",
+        "inputLabel": "一句話說說 {{pronoun}}",
         "inputPlaceholder": "例如：設計師 / 能幫我盯小孩功課的助理",
         "action": "幫我生成",
         "generating": "生成中…",
         "skip": "跳過，自己寫",
         "previewTitle": "你看看這位",
-        "previewSubtitle": "哪裡不對就直接改，改完再讓 TA 加入。",
+        "previewSubtitle": "哪裡不對就直接改，改完再讓 {{pronoun}} 加入。",
         "descriptionLabel": "一句話簡介",
-        "memoriesLabel": "TA 一開始就記得的",
+        "memoriesLabel": "{{pronoun}} 一開始就記得的",
         "memoriesEmpty": "這次沒生成初始記憶。",
         "confirm": "就這樣，建立",
         "regenerate": "換句話重說",
         "errors": {
-          "emptyInput": "先寫一句 TA 是誰。",
+          "emptyInput": "先寫一句 {{pronoun}} 是誰。",
           "providerNotReady": "還沒有可用的模型來源——先登入或接一個再生成。你也可以直接自己寫。",
           "invalidOutput": "這次生成的內容看不懂。再試一次，或者自己寫。",
           "failed": "這次沒生成出來。再試一次，或者自己寫。",
@@ -6682,38 +6714,38 @@
     },
     "globalSettings": {
       "title": "伙伴",
-      "description": "和伙伴有關的通用設定。單個伙伴的設定在 TA 自己的頁面裡。",
+      "description": "和伙伴有關的通用設定。單個伙伴的設定在 {{pronoun}} 自己的頁面裡。",
       "notifications": {
         "title": "新訊息提醒",
         "note": "夥伴的新訊息會在左邊的夥伴列表上標出未讀，不彈系統橫幅、也不響聲音。",
-        "footnote": "像「總控」這類夥伴會自己關注任務動靜——那是 TA 的本事，不在這裡設定。"
+        "footnote": "像「總控」這類夥伴會自己關注任務動靜——那是 {{pronoun}} 的本事，不在這裡設定。"
       },
       "portability": {
         "importTitle": "匯入伙伴",
-        "importHint": "從一個伙伴檔案裡還原 TA。",
+        "importHint": "從一個伙伴檔案裡還原 {{pronoun}}。",
         "importAction": "選擇檔案",
         "exportTitle": "匯出伙伴",
-        "exportHint": "把 TA 的個性和設定打包帶走。",
+        "exportHint": "把 {{pronoun}} 的個性和設定打包帶走。",
         "exportAction": "匯出",
         "exportEmpty": "還沒有伙伴可以匯出。"
       },
       "rosterNote": "預置陣容會隨版本更新。"
     },
     "settingsBlocks": {
-      "who": "TA 是誰",
-      "can": "TA 會的",
-      "understand": "TA 懂的",
-      "schedule": "TA 的日程",
+      "who": "{{pronoun}} 是誰",
+      "can": "{{pronoun}} 會的",
+      "understand": "{{pronoun}} 懂的",
+      "schedule": "{{pronoun}} 的日程",
       "advanced": "進階",
       "whoDescription": "性格不用你寫——選幾下就好。",
-      "canDescription": "這些不用你開——TA 生下來就會。",
-      "understandDescription": "給 TA 一個資料夾，TA 就懂你的專案。",
+      "canDescription": "這些不用你開——{{pronoun}} 生下來就會。",
+      "understandDescription": "給 {{pronoun}} 一個資料夾，{{pronoun}} 就懂你的專案。",
       "scheduleDescription": "到點自己幹，不用你在。"
     },
     "advancedLinkLabel": "進階（模型、技術細節、匯出）",
     "persona": {
       "title": "調整性格",
-      "description": "選三下就好，TA 會照著改口氣。",
+      "description": "選三下就好，{{pronoun}} 會照著改口氣。",
       "adjustButton": "調整性格",
       "stepStyle": "說話風格",
       "stepProactivity": "主動程度",
@@ -6751,8 +6783,8 @@
         "boss": "老闆",
         "custom": "自訂"
       },
-      "customCallPlaceholder": "讓 TA 怎麼叫你",
-      "previewTitle": "現在的 TA",
+      "customCallPlaceholder": "讓 {{pronoun}} 怎麼叫你",
+      "previewTitle": "現在的 {{pronoun}}",
       "summaryUnset": "還沒設定",
       "summaryCallName": "直呼你名字",
       "summaryCallBoss": "叫你老闆",
@@ -6770,32 +6802,32 @@
       }
     },
     "memoryList": {
-      "title": "TA 記得的",
+      "title": "{{pronoun}} 記得的",
       "empty": "還沒記住什麼——多聊幾句就有了。",
       "clearAll": "清空記憶",
       "clearing": "清空中…",
       "clearTitle": "清空記憶",
-      "clearDescription": "清空後 TA 會忘掉這些事，聊過的內容不受影響。要繼續嗎？",
+      "clearDescription": "清空後 {{pronoun}} 會忘掉這些事，聊過的內容不受影響。要繼續嗎？",
       "clearConfirm": "清空",
       "deleteTitle": "刪除這條記憶",
       "deleteDescription": "刪除「{{title}}」？刪除後無法恢復。",
       "deleteConfirm": "刪除",
       "deleteAria": "刪除「{{title}}」",
-      "footnote": "TA 會自己往這裡記東西，你隨時可以刪。",
-      "footnoteWithSeed": "有幾條是 TA 加入時自帶的，之後 TA 會自己往這裡記。你隨時可以刪。",
-      "seedBack": "補寫 TA 的開場筆記",
+      "footnote": "{{pronoun}} 會自己往這裡記東西，你隨時可以刪。",
+      "footnoteWithSeed": "有幾條是 {{pronoun}} 加入時自帶的，之後 {{pronoun}} 會自己往這裡記。你隨時可以刪。",
+      "seedBack": "補寫 {{pronoun}} 的開場筆記",
       "seedingBack": "補寫中…"
     },
     "learned": {
-      "title": "TA 學會的",
-      "empty": "還沒長出什麼本事——多讓 TA 做幾件事。",
-      "notesTitle": "TA 給自己記的做法",
+      "title": "{{pronoun}} 學會的",
+      "empty": "還沒長出什麼本事——多讓 {{pronoun}} 做幾件事。",
+      "notesTitle": "{{pronoun}} 給自己記的做法",
       "deleteTitle": "刪除這個技能",
-      "deleteDescription": "刪除「{{title}}」？從下一次任務起 TA 就不會再用它了。",
+      "deleteDescription": "刪除「{{title}}」？從下一次任務起 {{pronoun}} 就不會再用它了。",
       "deleteConfirm": "刪除",
       "deleteAria": "刪除「{{title}}」",
       "loadingBody": "開啟中…",
-      "footnote": "TA 會從做過的事裡自己長本事，用得越多越順手。"
+      "footnote": "{{pronoun}} 會從做過的事裡自己長本事，用得越多越順手。"
     },
     "growth": {
       "rememberedOne": "記住了：{{title}}",
@@ -6804,7 +6836,7 @@
       "learnedOne": "學會了一個新本事：{{title}}",
       "learnedMany": "學會了 {{count}} 個新本事",
       "learnedFallback": "學會了一個新本事",
-      "hint": "點開看 TA 記下了什麼"
+      "hint": "點開看 {{pronoun}} 記下了什麼"
     },
     "abilityWall": {
       "builtinTitle": "自帶",
@@ -6818,13 +6850,13 @@
       },
       "connectAccount": "連接帳號",
       "imBlocked": "一個夥伴只能連一個 IM——先斷開 {{channel}}",
-      "footnote": "連上以後不用再設定什麼——TA 自己知道怎麼用。"
+      "footnote": "連上以後不用再設定什麼——{{pronoun}} 自己知道怎麼用。"
     },
     "folders": {
-      "addButton": "＋ 給 TA 一個資料夾",
+      "addButton": "＋ 給 {{pronoun}} 一個資料夾",
       "adding": "新增中…",
       "remove": "移除",
-      "footnote": "TA 會自己讀資料夾裡的東西，對話時直接用。"
+      "footnote": "{{pronoun}} 會自己讀資料夾裡的東西，對話時直接用。"
     },
     "advancedIdentity": {
       "title": "描述與背景"
@@ -6869,15 +6901,15 @@
     },
     "artifacts": {
       "open": "開啟",
-      "openLibrary": "打開交付物倉庫",
-      "openFailed": "打不開交付物，再試一次。",
+      "openLibrary": "打開作品集",
+      "openFailed": "打不開這件作品，再試一次。",
       "reveal": "在倉庫中檢視",
       "retry": "重試",
-      "subtitle": "TA 做出來的東西",
-      "empty": "TA 還沒交付過東西。做完一件就會收進這裡。",
+      "subtitle": "{{pronoun}} 做出來的東西",
+      "empty": "{{pronoun}} 還沒交付過東西。做完一件就會收進這裡。",
       "emptyFiltered": "這一類還沒有。",
       "truncated": "只顯示最近 200 件。",
-      "remoteUnavailable": "遠端任務暫不支援交付物倉庫。",
+      "remoteUnavailable": "遠端任務暫不支援作品集。",
       "category": {
         "all": "全部",
         "doc": "文件",
@@ -6908,9 +6940,9 @@
       "title": "背景設定",
       "edit": "編輯",
       "done": "完成",
-      "placeholder": "TA 是誰、負責什麼、做事的分寸。",
-      "empty": "還沒寫背景設定——寫幾句，TA 就更像 TA。",
-      "footnote": "這段會跟著 TA 一起進對話。上面那三檔口氣單獨調，改這裡不會動到它。"
+      "placeholder": "{{pronoun}} 是誰、負責什麼、做事的分寸。",
+      "empty": "還沒寫背景設定——寫幾句，{{pronoun}} 就更像 {{pronoun}}。",
+      "footnote": "這段會跟著 {{pronoun}} 一起進對話。上面那三檔口氣單獨調，改這裡不會動到它。"
     },
     "welcome": {
       "generic": "嗨，我是{{name}}。以後有事直接跟我說，我先熟悉一下這裡。",

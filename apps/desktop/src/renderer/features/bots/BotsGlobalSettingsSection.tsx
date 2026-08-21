@@ -9,7 +9,7 @@
  */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
 import { BotAvatar } from './BotAvatar';
@@ -26,7 +26,7 @@ const ROW_HINT_CLASS =
   'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
 
 export function BotsGlobalSettingsSection() {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const navigate = useNavigate();
   const bots = useBotProfiles();
   const activeBots = bots.filter((bot) => bot.status !== 'archived');

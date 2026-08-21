@@ -1,5 +1,5 @@
 import { MessageCircleMore } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
 
@@ -44,7 +44,7 @@ export function BotAbilityWall({
   /** 该渠道还没有账号时,原地拉起它真实的连接流程(跳到设置里对应那张卡)。 */
   onConnectAccount: (kind: BotChannel) => void;
 }) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   const chips = applyImMutualExclusion(buildBotChannelChips(connections, isChannelMounted));
 
   return (

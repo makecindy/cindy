@@ -25,7 +25,7 @@ describe('Bot history tool scope', () => {
     const registry = new XdtHelperToolRegistry();
     registerGetChatHistoryTool(registry, {
       history,
-      getSessionContext: () => ({ sessionId: 'bot-main', memoryScopeKey: 'bot:bot-a' }),
+      getSessionContext: () => ({ agentKind: 'claude-code' as const, workingDir: '/w', sessionId: 'bot-main', memoryScopeKey: 'bot:bot-a' }),
     });
 
     await registry.call('get_chat_history', {
@@ -52,7 +52,7 @@ describe('Bot history tool scope', () => {
     const registry = new XdtHelperToolRegistry();
     registerListSessionsTool(registry, {
       history,
-      getSessionContext: () => ({ sessionId: 'bot-main', memoryScopeKey: 'bot:bot-a' }),
+      getSessionContext: () => ({ agentKind: 'claude-code' as const, workingDir: '/w', sessionId: 'bot-main', memoryScopeKey: 'bot:bot-a' }),
     });
 
     await registry.call('list_sessions', {});

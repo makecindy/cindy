@@ -10,6 +10,13 @@ import {
   type BotSessionControlMode,
 } from '../../shared/botSessionControl.js';
 import { normalizeBotAutomation } from '../../shared/botAutomationCapability.js';
+import {
+  buildBotContextTier,
+  buildBotStableTier,
+  buildBotVolatileTier,
+  type BotPromptCapabilitySignals,
+  type BotSystemPromptInput,
+} from './botSystemPrompt.js';
 import { getDbClient } from '../localDb/client/current.js';
 import {
   botLifecycleEvents,
@@ -682,10 +689,35 @@ export async function hydrateBotProfileRuntime(
     identitySource: identity,
   });
   const sessionControlMode = normalizeBotSessionControlMode(config.sessionControlMode);
+  // 三层装配(见 botSystemPrompt.ts):身份与「你会做什么」进稳定段,会话控制等
+  // 进上下文段,技能索引与记忆快照进易变段并排在最后。能力说明按**这个伙伴
+  // 实际挂载到的 toolset** 注入 —— 挂了 docs 才讲怎么做文件,没挂的一个字不提。
+  const promptCapabilities: BotPromptCapabilitySignals = {
+    toolsets: resolvedToolsets,
+    memoryEnabled: memoryEngineEnabled && config.memory !== false,
+    // 委派工具(delegate_to_bot / list_bots / cancel_bot_delegation)住在
+    // cindy_helper 里,它是 essential 插件、恒挂 —— 所以判据是它在不在工具面,
+    // 不是会话控制模式(那管的是"观察别的任务",另一件事)。
+    delegationEnabled: resolvedToolsets.includes('xdt_helper'),
+    ownSkillsEnabled: ownSkillPluginRoot !== null,
+  };
+  const promptInput: BotSystemPromptInput = {
+    displayName: profile.displayName,
+    identity,
+    capabilities: promptCapabilities,
+    skillIndex: ownSkills.map((item) => ({
+      name: item.name,
+      ...(item.description ? { description: item.description } : {}),
+    })),
+    contextSections: [
+      buildBotProfileContextPrompt(profile.displayName),
+      buildBotSessionControlContext(sessionControlMode),
+    ],
+  };
   opts.botProfileContextPrompt = [
-    buildBotProfileContextPrompt(profile.displayName),
-    buildBotCapabilityContextPrompt(),
-    buildBotSessionControlContext(sessionControlMode),
+    buildBotStableTier({ ...promptInput, identity: '' }),
+    buildBotContextTier(promptInput),
+    buildBotVolatileTier(promptInput),
   ].filter(Boolean).join('\n\n');
   opts.botRuntimeProfile = {
     botId: row.botId,
