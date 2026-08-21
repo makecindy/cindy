@@ -3294,6 +3294,11 @@ function _purgeSession(sessionId: string): void {
   discardPendingTextDelta(sessionId);
   discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
+  // Invalidate background-task snapshots too: an in-flight response must not
+  // recreate a purged session or schedule a retry for its old lifecycle.
+  invalidateBackgroundTaskReconcile(sessionId);
+  cancelBackgroundTaskReconcile(sessionId);
+  backgroundTaskStaleRetrySessions.delete(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   invalidateMessageHistoryWindow(sessionId);
@@ -6210,6 +6215,20 @@ const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
  */
 const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const backgroundTaskReconcileEpoch = new Map<string, number>();
+
+function invalidateBackgroundTaskReconcile(sessionId: string): number {
+  const next = (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) + 1;
+  backgroundTaskReconcileEpoch.set(sessionId, next);
+  return next;
+}
+
+/**
+ * A local_bash task may outlive the first active:false snapshot. Allow one
+ * bounded follow-up snapshot so a later missing terminal event can still be
+ * reconciled, without turning this lifecycle hook into polling.
+ */
+const backgroundTaskStaleRetrySessions = new Set<string>();
 
 function cancelBackgroundTaskReconcile(sessionId: string): void {
   const timer = backgroundTaskReconcileTimers.get(sessionId);
@@ -6221,10 +6240,12 @@ function cancelBackgroundTaskReconcile(sessionId: string): void {
 
 function scheduleBackgroundTaskReconcile(sessionId: string): void {
   cancelBackgroundTaskReconcile(sessionId);
+  const reconcileEpochAtSchedule = backgroundTaskReconcileEpoch.get(sessionId) ?? 0;
   backgroundTaskReconcileTimers.set(
     sessionId,
     setTimeout(() => {
       backgroundTaskReconcileTimers.delete(sessionId);
+      if ((backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule) return;
       // 触发沿复查远程归属(粘滞版):调度沿已筛过,但 3s 窗口内会话可能被识别
       // 为远程(启动期 registry 迟到水合等)。误放行的代价是拿本机空快照把镜像
       // 里真实在跑的任务错误收口,必须再拦一次。
@@ -6246,6 +6267,13 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
         .listSessionBackgroundTasks(sessionId)
         .then(({ tasks, pendingContinuations }) => {
           if (!Array.isArray(tasks)) return;
+          // active:true / a new lifecycle edge / purge invalidates the request
+          // even if the transport response itself arrives successfully.
+          if (
+            (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule
+          ) {
+            return;
+          }
           // 响应落地前再复查一次:请求在飞期间远程注册表才完成会话水合的话,
           // 本机「查无此会话」的空表不可用于收口镜像任务。
           if (isRemoteSessionSticky(sessionId)) return;
@@ -6258,6 +6286,25 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
             authorityPendingContinuations:
               typeof pendingContinuations === 'number' ? pendingContinuations : null,
           });
+
+          // A task that is still present in this first snapshot may finish
+          // after the activity edge and lose its terminal event. Take exactly
+          // one bounded follow-up snapshot; the next response either sees the
+          // task again (and leaves it alone) or proves it stale and stops it.
+          const candidateStillAlive = tasks.some(
+            (task) =>
+              (typeof task.taskId === 'string' && staleRunningCandidates.has(task.taskId)) ||
+              (typeof task.toolUseId === 'string' && staleRunningCandidates.has(task.toolUseId)),
+          );
+          const hasRetriedStaleCandidates = backgroundTaskStaleRetrySessions.has(sessionId);
+          if (candidateStillAlive && !hasRetriedStaleCandidates) {
+            backgroundTaskStaleRetrySessions.add(sessionId);
+            scheduleBackgroundTaskReconcile(sessionId);
+          } else {
+            // The bounded retry window is complete, whether the task was
+            // stopped or remained alive. Do not retain session IDs forever.
+            backgroundTaskStaleRetrySessions.delete(sessionId);
+          }
         })
         .catch(() => {
           // 静默:与其余快照拉取失败同口径(失败不对账,下次翻转沿 / 挂载重试)。
@@ -8096,9 +8143,15 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       const p = raw as { sessionId?: string; active?: boolean } | null;
       if (!p || typeof p.sessionId !== 'string' || !p.sessionId) return;
       if (p.active) {
+        invalidateBackgroundTaskReconcile(p.sessionId);
+        backgroundTaskStaleRetrySessions.delete(p.sessionId);
         cancelBackgroundTaskReconcile(p.sessionId);
         return;
       }
+      // A new inactive edge starts a fresh, bounded stale-task retry window and
+      // invalidates any response from the previous activity lifecycle.
+      invalidateBackgroundTaskReconcile(p.sessionId);
+      backgroundTaskStaleRetrySessions.delete(p.sessionId);
       if (isRemoteSessionSticky(p.sessionId)) return;
       // 调度前粗筛:没有 running 条目就不必挂定时器;到点后还会再次捕获候选集。
       // 唤醒桥接(pendingTaskWake)泄漏时 running 条目为空,同样需要对账,放行。
