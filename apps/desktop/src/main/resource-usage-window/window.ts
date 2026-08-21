@@ -2,8 +2,9 @@
  * createResourceUsageWindow —— 资源监视器独立窗口的 BrowserWindow 工厂。
  *
  * 窗口规格：
- * - 独立顶层窗口，不作为其它窗口的子窗口。macOS 上从全屏 Cindy 打开时，
- *   由 controller 让监视器自己进入原生全屏，占用新的 Space；Cindy 那扇全屏窗留在原 Space（#3183）
+ * - macOS：独立顶层窗口。从全屏 Cindy 打开时，由 controller 让监视器自己
+ *   进入原生全屏，占用新的 Space；Cindy 那扇全屏窗留在原 Space（#3183）
+ * - 非 macOS：仍挂在主窗下面，这样最小化 / 关到托盘时监视器一起消失
  * - 可独立拖拽、调整大小
  * - 单实例（重复 open = show + focus）
  * - 通过 `resourceUsageWindow=1` 进入独立轻量 renderer 模块图
@@ -22,12 +23,14 @@ import { markResourceUsageWebContentsId } from './registry.js';
 
 const log = createLogger('resource-usage-window');
 
-export function createResourceUsageWindow(): BrowserWindow {
+export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow {
   const platformOptions =
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
       : { frame: false };
   const bgColor = nativeTheme.shouldUseDarkColors ? '#1f1f1e' : '#f8f8f6';
+  const parentOption =
+    process.platform === 'darwin' || !parent || parent.isDestroyed() ? {} : { parent };
 
   const win = new BrowserWindow({
     width: 580,
@@ -42,6 +45,7 @@ export function createResourceUsageWindow(): BrowserWindow {
     show: false,
     backgroundColor: bgColor,
     ...platformOptions,
+    ...parentOption,
     webPreferences: {
       preload: path.join(__dirname, 'resourceUsagePreload.js'),
       sandbox: true,

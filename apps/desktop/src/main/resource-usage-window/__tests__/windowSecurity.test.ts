@@ -12,7 +12,7 @@ describe('resource usage BrowserWindow security contract', () => {
   it('stays hidden and uses the dedicated preload with Electron isolation enabled', () => {
     expect(source).toContain('show: false');
     expect(source).toContain("t('titleBar.menuItems.resourceUsage')");
-    expect(source).not.toMatch(/\bparent\s*:/);
+    expect(source).toContain("process.platform === 'darwin' || !parent || parent.isDestroyed()");
     expect(source).toContain("path.join(__dirname, 'resourceUsagePreload.js')");
     expect(source).toContain('sandbox: true');
     expect(source).toContain('contextIsolation: true');

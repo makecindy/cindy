@@ -19,6 +19,7 @@ const log = createLogger('resource-usage-window-controller');
 const DEFAULT_OPEN_TIMEOUT_MS = 5000;
 const DEFAULT_PREWARM_TIMEOUT_MS = 10_000;
 const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
+const DEFAULT_LEAVE_TIMEOUT_MS = 2000;
 const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 1;
 
 export interface ResourceUsageOwnerWindow {
@@ -44,6 +45,8 @@ export interface ResourceUsageWindowControllerDeps {
   openTimeoutMs?: number;
   prewarmTimeoutMs?: number;
   recoveryStabilityMs?: number;
+  /** 测试注入；macOS 退出全屏若迟迟没有 leave-full-screen，到期后强制隐藏。 */
+  leaveTimeoutMs?: number;
 }
 
 export class ResourceUsageWindowController {
@@ -55,6 +58,7 @@ export class ResourceUsageWindowController {
   private openTimeout: NodeJS.Timeout | null = null;
   private prewarmTimeout: NodeJS.Timeout | null = null;
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
+  private leaveTimeout: NodeJS.Timeout | null = null;
   private samplingActive = true;
   private automaticRecoveryAttempts = 0;
   private destroyingWindow = false;
@@ -168,6 +172,7 @@ export class ResourceUsageWindowController {
   destroyWindow(): void {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
+    this.clearLeaveTimeout();
     this.pendingOpen = false;
     const win = this.winRef;
     if (!win || win.isDestroyed()) {
@@ -272,6 +277,7 @@ export class ResourceUsageWindowController {
   private showAndFocus(win: BrowserWindow): void {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
+    this.clearLeaveTimeout();
     this.pendingOpen = false;
     this.pendingLeaveGeneration = null;
     this.fullscreenGeneration += 1;
@@ -297,6 +303,7 @@ export class ResourceUsageWindowController {
       this.pendingLeaveGeneration = generation;
       this.fullscreenTransition = 'leaving';
       win.setFullScreen(false);
+      this.scheduleLeaveFallback(win, generation);
       return;
     }
     this.pendingLeaveGeneration = generation;
@@ -323,6 +330,7 @@ export class ResourceUsageWindowController {
       }
       return;
     }
+    this.clearLeaveTimeout();
     this.pendingLeaveGeneration = null;
     this.fullscreenTransition = 'idle';
     if (win.isDestroyed()) return;
@@ -333,7 +341,7 @@ export class ResourceUsageWindowController {
 
   private onEnteredFullScreen(win: BrowserWindow): void {
     if (win !== this.winRef || win.isDestroyed()) return;
-    if (this.pendingLeaveGeneration !== null) {
+    if (this.pendingLeaveGeneration !== null || !this.visible) {
       this.fullscreenTransition = 'leaving';
       win.setFullScreen(false);
       return;
@@ -426,6 +434,7 @@ export class ResourceUsageWindowController {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.clearRecoveryStabilityTimeout();
+    this.clearLeaveTimeout();
     this.winRef = null;
     this.rendererReady = false;
     this.presentationReady = false;
@@ -477,6 +486,24 @@ export class ResourceUsageWindowController {
     if (!this.recoveryStabilityTimeout) return;
     clearTimeout(this.recoveryStabilityTimeout);
     this.recoveryStabilityTimeout = null;
+  }
+
+  private scheduleLeaveFallback(win: BrowserWindow, generation: number): void {
+    this.clearLeaveTimeout();
+    this.leaveTimeout = setTimeout(() => {
+      this.leaveTimeout = null;
+      if (win !== this.winRef || win.isDestroyed()) return;
+      if (this.pendingLeaveGeneration !== generation) return;
+      log.warn('resource-usage fullscreen leave timed out; hiding without leave-full-screen');
+      this.finishHide(win, generation);
+    }, this.deps.leaveTimeoutMs ?? DEFAULT_LEAVE_TIMEOUT_MS);
+    this.leaveTimeout.unref?.();
+  }
+
+  private clearLeaveTimeout(): void {
+    if (!this.leaveTimeout) return;
+    clearTimeout(this.leaveTimeout);
+    this.leaveTimeout = null;
   }
 
   private onRendererReloadStarted(win: BrowserWindow): void {
