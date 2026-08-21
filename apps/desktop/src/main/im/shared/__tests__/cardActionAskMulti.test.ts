@@ -257,4 +257,38 @@ describe('ask 多题/多选打勾卡', () => {
     await expect(decisionPromise).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
     expect(patchedSpec(1).body).toContain('已选择：继续');
   });
+
+  it('toggle 未完成时提交: 终态 patch 排进同一队列, 不被旧勾选 patch 覆盖', async () => {
+    const { decisionPromise, im, press } = setupAskMulti('req-race');
+    const deferred: Array<() => void> = [];
+    (im.updateInteractiveCard as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          deferred.push(resolve);
+        }),
+    );
+
+    const toggleP = press('ask:multi', { requestId: 'req-race', q: 0, o: 0 });
+    await vi.waitFor(() => expect(deferred).toHaveLength(1));
+
+    const submitP = press('ask:multi-submit', { requestId: 'req-race' });
+    // 终态还没发出: 还在等 toggle 的 in-flight patch
+    expect(im.updateInteractiveCard).toHaveBeenCalledTimes(1);
+
+    deferred[0]!();
+    await toggleP;
+    await vi.waitFor(() => expect(deferred).toHaveLength(2));
+    deferred[1]!();
+    await submitP;
+
+    const calls = (im.updateInteractiveCard as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(2);
+    const last = calls[1]![1] as ReturnType<typeof cards.buildResolvedCard>;
+    expect(last.buttons).toEqual([]);
+    expect(last.body).toContain('网关');
+    await expect(decisionPromise).resolves.toEqual({
+      kind: 'ask_user_question',
+      answers: { '开启哪些组件?': '网关' },
+    });
+  });
 });

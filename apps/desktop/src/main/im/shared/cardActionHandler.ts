@@ -114,8 +114,8 @@ export function createCardActionHandler(
   const log = createLogger(`im:${channel}:card`);
   const threadUi = ui.thread;
 
-  // Per-request patch serializer: prevents concurrent updateInteractiveCard calls
-  // from racing (fast toggles or toggle-then-submit) and overwriting each other.
+  // Per-request patch serializer: toggle 与提交终态都走这条链, 避免快速勾选后
+  // 立刻提交时旧 toggle patch 覆盖已收口卡片。
   const askPatchChain = new Map<string, Promise<void>>();
   function enqueueAskPatch(requestId: string, fn: () => Promise<void>): Promise<void> {
     const prev = askPatchChain.get(requestId) ?? Promise.resolve();
@@ -1510,8 +1510,9 @@ export function createCardActionHandler(
             await handleAskMultiToggle(im, event);
             return;
           }
-          // ask:multi-submit 不在这里拦截: 走通用决策路径(decisionFromPress
-          // 从勾选态合成 answers → resolvePending → 收口 patch)。
+          // ask:multi-submit 走通用决策路径(decisionFromPress 从勾选态合成
+          // answers → resolvePending); 收口 patch 仍排进 enqueueAskPatch,
+          // 与 toggle 同队列, 避免 in-flight 勾选 patch 盖掉终态。
 
           // /ctr picker —
           //   pick (workspace) → 替换为 session picker
@@ -1592,14 +1593,22 @@ export function createCardActionHandler(
           // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
           // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
           const resolvedLabel = describeDecision(decision);
-          try {
-            const spec = resolved.permissionCard
-              ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
-              : cards.buildResolvedCard(resolvedLabel);
-            await im.updateInteractiveCard(event.messageId, spec);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
+          const spec = resolved.permissionCard
+            ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
+            : cards.buildResolvedCard(resolvedLabel);
+          const patchResolved = async () => {
+            try {
+              await im.updateInteractiveCard(event.messageId, spec);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
+            }
+          };
+          // 打勾卡提交必须与 toggle 同队列, 否则 in-flight 勾选 patch 会盖掉终态。
+          if (event.buttonId === 'ask:multi-submit') {
+            await enqueueAskPatch(requestId, patchResolved);
+          } else {
+            await patchResolved();
           }
         });
       } catch (err) {

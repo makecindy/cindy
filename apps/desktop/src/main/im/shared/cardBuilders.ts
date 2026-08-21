@@ -164,7 +164,9 @@ export function createCardBuilders(
       }
       const options = (question.options ?? []).slice(0, MAX_OPTIONS);
       if (options.length === 0) {
-        // needsAskMultiCard 已排除含无选项问题的请求; 此处仅为防御性兜底
+        // 自由文本问题无法在打勾卡里给输入框: 正文已在上面渲染, 不出按钮;
+        // 提交时该问按未答省略, agent 会追问。不要写 noOptionsHint —— 那句
+        // 「直接发文字」在打勾卡里没有对应输入路径。
         return;
       }
       const selected = args.selections.get(qi);

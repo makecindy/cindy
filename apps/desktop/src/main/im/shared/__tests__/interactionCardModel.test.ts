@@ -202,7 +202,7 @@ describe('composeInteractionModel — v1 规则', () => {
     });
   });
 
-  it('needsAskMultiCard: 多题或含多选才走打勾卡, 含无选项问题时降级', () => {
+  it('needsAskMultiCard: 多题或含多选才走打勾卡; 混合问卷只要有选项题仍走打勾卡', () => {
     expect(needsAskMultiCard(ASK_MULTI)).toBe(true); // 多题 + 多选
     expect(needsAskMultiCard(ASK_NO_OPTIONS)).toBe(false); // 单题非多选
     expect(
@@ -215,7 +215,7 @@ describe('composeInteractionModel — v1 规则', () => {
     expect(
       needsAskMultiCard({ kind: 'ask_user_question', requestId: 'r', questions: [] }),
     ).toBe(false);
-    // 含无选项问题时降级为逐问单卡(自由文本无法在打勾卡里回填)
+    // 混合问卷: 选项题可在打勾卡作答, 无选项题只展示、提交时省略
     expect(
       needsAskMultiCard({
         kind: 'ask_user_question',
@@ -224,6 +224,14 @@ describe('composeInteractionModel — v1 规则', () => {
           { question: '选一个', options: [{ label: 'A' }] },
           { question: '备注?' },
         ],
+      }),
+    ).toBe(true);
+    // 全部无选项: 打勾卡收不了任何答案, 保持 v1 单问卡
+    expect(
+      needsAskMultiCard({
+        kind: 'ask_user_question',
+        requestId: 'r',
+        questions: [{ question: '备注?' }, { question: '还有呢?' }],
       }),
     ).toBe(false);
   });
@@ -472,17 +480,21 @@ describe('多题/多选打勾卡(仅提供 ui.cards.ask.multi 的渠道, 目前�
     expect(off.label).toBe('1·Vue');
   });
 
-  it('无选项的问题在打勾卡里静默跳过, 不出按钮也不出提示', () => {
-    const spec = feishuCards.buildAskMultiCard({
+  it('无选项的问题仍展示正文, 不出按钮也不写「直接发文字」', () => {
+    const mixed: AskRequest = {
+      kind: 'ask_user_question',
       requestId: 'r',
       questions: [
         { question: '选一个', options: [{ label: 'A' }] },
         { question: '备注?', multiSelect: true },
       ],
-      selections: new Map(),
-    });
+    };
+    const spec = feishuCards.buildAskUserCard(mixed)!;
+    expect(spec.buttons.some((b) => b.id === 'ask:multi-submit')).toBe(true);
+    expect(spec.body).toContain('**1. 选一个**');
+    expect(spec.body).toContain('**2. 备注?**');
     const optionButtons = spec.buttons.filter((b) => b.id === 'ask:multi');
-    // 只有第一问有选项按钮(1 枚), 无选项问题被防御性跳过
+    // 只有第一问有选项按钮(1 枚); 无选项题不出按钮、也不承诺文字输入
     expect(optionButtons).toHaveLength(1);
     expect(optionButtons[0].label).toBe('1·A');
     expect(spec.body).not.toContain(ui.cards.ask.noOptionsHint);
