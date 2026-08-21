@@ -324,9 +324,10 @@
 2. Desktop 完整镜像 `apps/desktop/src/shared/ghost.ts` 及其测试；
 3. 作者文档 `FORGE_GUIDE` 的对应章节及 Forge 测试。
 
-当前唯一登记的 Desktop-only 例外是尚未进入跨消费者发布契约的 `library` 槽；在其首个
-正式支持版本确定并完成分发端兼容设计前，不得仅为同步数组而把它加入
-`packages/plugin-protocol`。`main-view` 不属于该例外，两端必须保持一致。
+当前 `GHOST_SLOTS` 槽位集合中唯一登记的 Desktop-only 例外，是尚未进入跨消费者发布契约
+的 `library` 槽；在其首个正式支持版本确定并完成分发端兼容设计前，不得仅为同步数组而把
+它加入 `packages/plugin-protocol`。这里的「唯一」只描述槽位集合，不表示两套 validator 的
+其它历史字段语义已经完全同构；`main-view` 不属于该槽位例外，两端必须保持一致。
 
 `main-view` 的现行协议在 `FORGE_GUIDE` §4.20：`mainView.icon` 只接受 Cindy 系统线性图标
 `puzzle`、`globe`、`code`、`folder`、`database`、`chart-column`、`image`、
