@@ -4770,13 +4770,7 @@
     "expandControlledNotice": "원격 제어 알림 펼치기: {{label}}",
     "versionMismatch": "상대 기기 버전이 달라 일부 기능이 제한될 수 있습니다"
   },
-  "accountBoundaryAbort": {
-    "title": "계정 전환이 완료되지 않았습니다",
-    "message": "일부 서비스가 중지되었고 자동으로 복구할 수 없습니다.",
-    "detail": "이 계정의 모델 라우팅, 메시지 연결, 예약 실행을 사용할 수 없습니다. Cindy를 다시 시작하면 복구됩니다. 작업과 데이터에는 영향이 없습니다.",
-    "restartNow": "지금 다시 시작",
-    "later": "나중에"
-  },
+
   "accountDeletion": {
     "entryButton": "계정 삭제",
     "entryAria": "현재 계정 삭제",

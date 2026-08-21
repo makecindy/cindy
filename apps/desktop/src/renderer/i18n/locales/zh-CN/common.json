@@ -4770,13 +4770,7 @@
     "expandControlledNotice": "展开被控提示：{{label}}",
     "versionMismatch": "对方版本不一致，部分功能可能受限"
   },
-  "accountBoundaryAbort": {
-    "title": "账户切换未完成",
-    "message": "部分服务已停用，且无法自动恢复。",
-    "detail": "当前账户的模型路由、消息连接与定时运行暂不可用。重启 Cindy 即可恢复——你的任务与数据不受影响。",
-    "restartNow": "立即重启",
-    "later": "稍后"
-  },
+
   "accountDeletion": {
     "entryButton": "注销账号",
     "entryAria": "注销当前账号",

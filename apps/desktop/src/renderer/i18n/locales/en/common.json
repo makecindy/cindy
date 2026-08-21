@@ -4772,13 +4772,7 @@
     "expandControlledNotice": "Expand remote control notice: {{label}}",
     "versionMismatch": "Version mismatch with the other device; some features may be limited"
   },
-  "accountBoundaryAbort": {
-    "title": "Account switch did not finish",
-    "message": "Some services were stopped and could not be restarted.",
-    "detail": "Model routing, messaging connections and scheduled runs are unavailable for this account. Restart Cindy to bring them back — your tasks and data are unaffected.",
-    "restartNow": "Restart now",
-    "later": "Later"
-  },
+
   "accountDeletion": {
     "entryButton": "Delete account",
     "entryAria": "Delete the current account",

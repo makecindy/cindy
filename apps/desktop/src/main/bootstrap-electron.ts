@@ -843,7 +843,6 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { setMainLocale, t } from './i18n.js';
-import { showAccountBoundaryAbortNotice } from './accountBoundaryAbortNotice.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -1284,30 +1283,14 @@ class PiSubagentAccountBoundaryError extends Error {
  * readiness arm published from the startup closure, and calling half the list
  * would leave the account looking recovered while its routing stayed empty.
  *
- * Read by nothing yet: the next step is a user-visible "restart required" state,
- * which is a product decision, not one to smuggle in here.
+ * User-visible "restart required" is a product decision and is not smuggled
+ * in here. The abort is recorded and logged; it does not open a dialog.
  */
 let accountBoundaryAbortedMidTeardown: string | null = null;
 
 function markAccountBoundaryAbortedMidTeardown(reason: string): void {
   if (accountBoundaryAbortedMidTeardown !== null) return;
   accountBoundaryAbortedMidTeardown = reason;
-  // Fire-and-forget on purpose: the teardown still has to rethrow and still has
-  // to lower its launch fence, and neither may wait on a person. The notice
-  // itself never rejects — it downgrades a dialog it cannot show to a log.
-  void showAccountBoundaryAbortNotice({
-    strings: {
-      title: t('accountBoundaryAbort.title'),
-      message: t('accountBoundaryAbort.message'),
-      detail: t('accountBoundaryAbort.detail'),
-      restartNow: t('accountBoundaryAbort.restartNow'),
-      later: t('accountBoundaryAbort.later'),
-    },
-    showDialog: (options) => dialog.showMessageBox(options),
-    relaunch: () => app.relaunch(),
-    quit: () => app.quit(),
-    logError: (message, error) => authBoundaryLog.error(message, error),
-  });
   authBoundaryLog.error(
     `account handover on ${reason} was aborted after teardown had already run — this `
     + 'account keeps its custom provider catalog cleared and its IM, scheduler, '
