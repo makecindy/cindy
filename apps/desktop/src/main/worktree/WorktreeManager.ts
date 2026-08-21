@@ -659,8 +659,7 @@ export async function copyClaudeSiviDirs(
  *   6. configureHooksPath
  *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
  *   8. applyWorktreeIncludeFile
- *   9. git config --global --add safe.directory <path>
- *  10. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
  */
 export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => createWorktreeInner(req));
@@ -856,20 +855,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       );
     }
 
-    // 9. safe.directory
-    try {
-      await timed('add safe.directory', () =>
-        gitExec(['config', '--global', '--add', 'safe.directory', worktreePath]),
-      );
-    } catch (err) {
-      // 非致命 — 仅日志
-      log.warn(
-        `[worktree] add safe.directory failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-
-    // 10. store + DB
+    // 9. store + DB
     const meta: WorktreeMeta = {
       sessionId: req.sessionId,
       name,
