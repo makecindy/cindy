@@ -195,8 +195,9 @@ async function main() {
   if (!xai.agents.includes('pi')) xai.agents.push('pi');
   xai.routing.pi = {
     upstream: 'https://api.x.ai/v1',
-    // Provider default follows Pi's current xAI catalog. Per-model piApi remains the precise
-    // authority if Pi introduces a mixed-protocol xAI catalog in the future.
+    // The sync currently requires one provider-wide Pi protocol and fails closed on mixed
+    // model.api values. Per-model piApi records the exact model protocol, but supporting a
+    // mixed-protocol xAI catalog requires a separate sync-script change first.
     wireProtocol: runtimeWireProtocol('xai', providers.xai),
     authStrategy: 'provider-oauth-header',
     headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
