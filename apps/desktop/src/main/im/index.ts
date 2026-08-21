@@ -55,7 +55,7 @@
 
 import path from 'node:path';
 
-import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
+import { ipcMain, BrowserWindow, dialog, type IpcMainEvent, type WebContents } from 'electron';
 import { and, eq, like, ne, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
@@ -100,6 +100,11 @@ import {
   resetWechatWorkingDir,
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
+import { readWecomChannelSettings, resetWecomWorkingDir, writeWecomWorkingDir } from './wecom/channelSettings';
+import {
+  createWecomWorkingDirIpcHandlers,
+  registerWecomWorkingDirIpc,
+} from './wecom/workingDirIpc';
 
 export {
   registerTelegramBotConfigIpc,
@@ -289,6 +294,28 @@ export function startImOrchestrators(): void {
     } catch {
       throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
     }
+  });
+
+  // 企业微信渠道工作目录 — 与个人微信同构:目录只能经 Main 原生选择器进入,
+  // Renderer 不提交路径。业务体与可信 sender 边界的注册都在 wecom/workingDirIpc.ts,
+  // 两者的回归测试(含不可信 sender 拒绝)锁在 workingDirIpc.test.ts。
+  registerWecomWorkingDirIpc({
+    ipc: ipcMain,
+    handlers: createWecomWorkingDirIpcHandlers({
+      readSettings: () => readWecomChannelSettings(),
+      writeWorkingDir: (selectedPath) => writeWecomWorkingDir(selectedPath),
+      resetWorkingDir: () => resetWecomWorkingDir(),
+      showDirectoryPicker: async (sender) => {
+        const owner = BrowserWindow.fromWebContents(sender as WebContents);
+        if (!owner || owner.isDestroyed()) return null;
+        return dialog.showOpenDialog(owner, {
+          properties: ['openDirectory', 'createDirectory'],
+        });
+      },
+      captureGeneration: captureImAccountGeneration,
+      warn: (message, context) => log.warn(message, context),
+    }),
+    assertTrustedEvent: assertTrustedAppRendererEvent,
   });
 
   // bindingStore.preload() 故意不在这里跑 —— 它要 DbClient, 而 localDb 在

@@ -270,7 +270,10 @@ export function createSlashHandlers(
         const row =
           existing ?? (await repo.createSession(ctx.botContextId, ctx.userId, undefined, prepared));
         if (existing) {
-          await resetSessionToDefaults(row.id, adapter.config, prepared, adapter.channel);
+          await resetSessionToDefaults(row.id, adapter.config, prepared, {
+            channel: adapter.channel,
+            refreshWorkingDir: adapter.sessions.refreshWorkingDirOnNew === true,
+          });
         }
         await turnRunner.disposeOneSession(row.id);
         await safeSendText(ctx, ui.slash.new);

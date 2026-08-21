@@ -1,17 +1,12 @@
-import fs from 'node:fs';
-
 import type { WecomIM } from '@cindy/im';
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
-import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
+import { resolveWecomWorkingDir } from './channelSettings';
 import { ui } from './uiText';
 import type { WecomTextInteractions } from './textInteractions';
 
 function ensureWorkingDir(botId: string): string {
-  const safeBotId = Buffer.from(botId, 'utf8').toString('base64url').slice(0, 96);
-  const dir = ownerScopedImUserDataPath('im-working-dir', `wecom-${safeBotId}`);
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  return resolveWecomWorkingDir(botId);
 }
 
 function sessionSafeUserId(userId: string): string {
@@ -45,6 +40,8 @@ export function buildWecomAdapter(
       generatedTitlePrefix: '企业微信 · ',
       workspaceKind: 'dialogue',
       ensureWorkingDir,
+      // 设置页可改渠道托管目录: /new 边界刷新到最新解析结果。
+      refreshWorkingDirOnNew: true,
       extraInsertColumns: (botId, userId) => ({
         imBotContextId: botId,
         imUserId: userId,

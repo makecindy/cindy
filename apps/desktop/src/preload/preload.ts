@@ -2132,6 +2132,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       botId: string | null;
       ownerUserId: string | null;
     }> => ipcRenderer.invoke('wecomBot:disconnect'),
+    // 渠道工作目录只读投影 + Main 原生选择器入口;不提供 setWorkingDirectory(path)。
+    getChannelSettings: (): Promise<{
+      version: 1;
+      workingDir: string | null;
+      workingDirAvailable: boolean;
+    }> => ipcRenderer.invoke('wecomBot:get-channel-settings'),
+    chooseWorkingDirectory: (): Promise<{
+      canceled: boolean;
+      state: { version: 1; workingDir: string | null; workingDirAvailable: boolean };
+    }> => ipcRenderer.invoke('wecomBot:choose-working-directory'),
+    resetWorkingDirectory: (): Promise<{
+      version: 1;
+      workingDir: string | null;
+      workingDirAvailable: boolean;
+    }> => ipcRenderer.invoke('wecomBot:reset-working-directory'),
     onStatusChange: fanOutWecomBotStatusChange,
   },
 

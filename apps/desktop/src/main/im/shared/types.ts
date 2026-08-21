@@ -78,6 +78,12 @@ export interface ImSessionNamespace {
   workspaceKind?: 'project' | 'dialogue';
   /** 该渠道 session 的工作目录(必须已创建好)。 */
   ensureWorkingDir(botContextId: string): string;
+  /**
+   * `/new` 边界是否把会话行刷到渠道当前解析的工作目录。设置页可改渠道
+   * 托管目录的渠道(个人微信/企业微信)声明 true:新目录只在 `/new` 这个
+   * 显式边界生效,已有上下文永不静默移动。缺省 false(目录恒定的渠道)。
+   */
+  refreshWorkingDirOnNew?: boolean;
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**

@@ -2075,7 +2075,9 @@
         "hint": "微信首次對話或傳送 /new 後使用。更改不會移動當前上下文。",
         "managed": "使用 Cindy 管理的專用目錄",
         "reset": "恢復預設",
-        "unavailable": "已選目錄當前不可訪問；新對話將暫時使用 Cindy 管理的專用目錄。"
+        "unavailable": "已選目錄當前不可訪問，新對話將暫時使用 Cindy 管理的專用目錄；請恢復訪問或重新選擇。",
+        "chooseAria": "選擇新對話工作目錄",
+        "chooseAriaWithDir": "選擇新對話工作目錄，當前：{{dir}}"
       },
       "unbind": {
         "title": "解綁個人微信？",
@@ -2197,6 +2199,18 @@
       "saveFailed": "儲存失敗：{{message}}",
       "disconnected": "已解綁企業微信機器人",
       "disconnectFailed": "解綁失敗：{{message}}",
+      "workingDir": {
+        "title": "新對話工作目錄",
+        "hint": "企業微信首次對話或傳送 /new 後使用。更改不會移動當前上下文。",
+        "managed": "使用 Cindy 管理的專用目錄",
+        "reset": "恢復預設",
+        "unavailable": "已選目錄當前不可訪問，新對話將暫時使用 Cindy 管理的專用目錄；請恢復訪問或重新選擇。",
+        "chooseAria": "選擇新對話工作目錄",
+        "chooseAriaWithDir": "選擇新對話工作目錄，當前：{{dir}}"
+      },
+      "workingDirSaved": "企業微信新對話工作目錄已更新",
+      "workingDirReset": "企業微信新對話已恢復使用預設目錄",
+      "workingDirFailed": "更新工作目錄失敗，請重新選擇",
       "connected": {
         "heading": "企業微信機器人已連線",
         "awaitingOwner": "請使用你的企業微信帳號向機器人傳送一條單聊訊息，完成 owner 繫結。",

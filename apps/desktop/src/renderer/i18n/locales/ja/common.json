@@ -2075,7 +2075,9 @@
         "hint": "WeChat の初回会話と /new の後に使用します。変更しても現在のコンテキストは移動しません。",
         "managed": "Cindy 管理の専用ディレクトリを使用",
         "reset": "デフォルトに戻す",
-        "unavailable": "選択したディレクトリにアクセスできません。新しい会話では一時的に Cindy 管理のディレクトリを使用します。"
+        "unavailable": "選択したディレクトリにアクセスできません。新しい会話では一時的に Cindy 管理のディレクトリを使用します。アクセスを回復するか、別のディレクトリを選択してください。",
+        "chooseAria": "新しい会話の作業ディレクトリを選択",
+        "chooseAriaWithDir": "新しい会話の作業ディレクトリを選択（現在：{{dir}}）"
       },
       "unbind": {
         "title": "個人 WeChat の連携を解除しますか？",
@@ -2197,6 +2199,18 @@
       "saveFailed": "保存失敗：{{message}}",
       "disconnected": "WeCom ボットの連携を解除しました",
       "disconnectFailed": "連携解除に失敗しました：{{message}}",
+      "workingDir": {
+        "title": "新しい会話の作業ディレクトリ",
+        "hint": "WeCom の初回会話と /new の後に使用します。変更しても現在のコンテキストは移動しません。",
+        "managed": "Cindy 管理の専用ディレクトリを使用",
+        "reset": "デフォルトに戻す",
+        "unavailable": "選択したディレクトリにアクセスできません。新しい会話では一時的に Cindy 管理のディレクトリを使用します。アクセスを回復するか、別のディレクトリを選択してください。",
+        "chooseAria": "新しい会話の作業ディレクトリを選択",
+        "chooseAriaWithDir": "新しい会話の作業ディレクトリを選択（現在：{{dir}}）"
+      },
+      "workingDirSaved": "WeCom の新しい会話の作業ディレクトリを更新しました",
+      "workingDirReset": "WeCom の新しい会話はデフォルトディレクトリを使用します",
+      "workingDirFailed": "作業ディレクトリを更新できませんでした。もう一度選択してください。",
       "connected": {
         "heading": "WeCom ボット接続済み",
         "awaitingOwner": "WeCom アカウントからボットへ DM を送り、owner を設定してください。",

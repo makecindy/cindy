@@ -499,6 +499,14 @@ export async function clearContext(sessionId: string): Promise<void> {
     .where(eq(sessions.id, sessionId));
 }
 
+/** resetSessionToDefaults 的渠道选项 — 由调用方从 adapter 上取,不再按渠道名硬编码。 */
+export interface ResetSessionToDefaultsOptions {
+  /** 渠道 scope 的 IM 默认设置(见 resolveImSessionDefaults)。 */
+  channel?: ImSessionNamespace['source'];
+  /** 渠道声明 `/new` 边界刷新工作目录(ImSessionNamespace.refreshWorkingDirOnNew)。 */
+  refreshWorkingDir?: boolean;
+}
+
 /**
  * `/new` 语义:保留同一个 IM 会话行,但按当前渠道的 IM 默认重新开始一条新对话。
  *
@@ -510,8 +518,9 @@ export async function resetSessionToDefaults(
   sessionId: string,
   config: ImOrchestratorConfig,
   prepared?: ImSessionRow,
-  channel?: ImSessionNamespace['source'],
+  options: ResetSessionToDefaultsOptions = {},
 ): Promise<void> {
+  const { channel, refreshWorkingDir = false } = options;
   const defaults =
     prepared ??
     rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config, undefined, channel));
@@ -525,10 +534,9 @@ export async function resetSessionToDefaults(
       providerId: defaults.providerId,
       permissionMode: defaults.permissionMode,
       fastMode: defaults.fastMode,
-      // Personal WeChat exposes a user-selected channel working directory.
-      // It applies only at the explicit `/new` boundary; existing context is
-      // never moved silently.
-      ...(channel === 'wechat' && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
+      // 渠道把托管目录暴露给设置页(个人微信/企业微信,ns.refreshWorkingDirOnNew)
+      // 时,新目录只在 `/new` 这个显式边界生效;已有上下文永不静默移动。
+      ...(refreshWorkingDir && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),

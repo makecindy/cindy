@@ -28,6 +28,8 @@ export function buildWechatAdapter(
       generatedTitlePrefix: '微信 · ',
       workspaceKind: 'dialogue',
       ensureWorkingDir,
+      // 设置页可改渠道托管目录: /new 边界刷新到最新解析结果。
+      refreshWorkingDirOnNew: true,
       extraInsertColumns: (botId, peerId) => ({
         imBotContextId: botId,
         imUserId: peerId,

@@ -2072,11 +2072,13 @@
         "unbind": "Unbind"
       },
       "workingDir": {
-        "title": "Working directory for new conversations",
+        "title": "Working Directory for New Conversations",
         "hint": "Used for the first WeChat conversation and after /new. Changing it does not move the current context.",
-        "managed": "Use a Cindy-managed directory",
-        "reset": "Restore default",
-        "unavailable": "The selected directory is unavailable. New conversations temporarily use a Cindy-managed directory."
+        "managed": "Use a Cindy-Managed Directory",
+        "reset": "Restore Default",
+        "unavailable": "The selected directory is unavailable. New conversations temporarily use a Cindy-managed directory. Restore access or pick another directory.",
+        "chooseAria": "Choose Working Directory for New Conversations",
+        "chooseAriaWithDir": "Choose Working Directory for New Conversations, Current: {{dir}}"
       },
       "unbind": {
         "title": "Unbind personal WeChat?",
@@ -2198,6 +2200,18 @@
       "saveFailed": "Save failed: {{message}}",
       "disconnected": "WeCom bot unbound",
       "disconnectFailed": "Unbind failed: {{message}}",
+      "workingDir": {
+        "title": "Working Directory for New Conversations",
+        "hint": "Used for the first WeCom conversation and after /new. Changing it does not move the current context.",
+        "managed": "Use a Cindy-Managed Directory",
+        "reset": "Restore Default",
+        "unavailable": "The selected directory is unavailable. New conversations temporarily use a Cindy-managed directory. Restore access or pick another directory.",
+        "chooseAria": "Choose Working Directory for New Conversations",
+        "chooseAriaWithDir": "Choose Working Directory for New Conversations, Current: {{dir}}"
+      },
+      "workingDirSaved": "Working directory for new WeCom conversations updated",
+      "workingDirReset": "New WeCom conversations now use the default directory",
+      "workingDirFailed": "Could not update the working directory. Select it again.",
       "connected": {
         "heading": "WeCom bot connected",
         "awaitingOwner": "Send the bot a direct message from your WeCom account to bind the owner.",

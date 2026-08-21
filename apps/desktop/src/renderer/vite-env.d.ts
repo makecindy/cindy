@@ -517,6 +517,12 @@ interface WechatChannelSettingsState {
   workingDirAvailable: boolean;
 }
 
+interface WecomChannelSettingsState {
+  version: 1;
+  workingDir: string | null;
+  workingDirAvailable: boolean;
+}
+
 type DiscordBotSessionAuthCheckResult = {
   ok: boolean;
   missing: 'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected' | null;
@@ -2229,6 +2235,12 @@ interface ElectronAPI {
       botId: string | null;
       ownerUserId: string | null;
     }>;
+    getChannelSettings: () => Promise<WecomChannelSettingsState>;
+    chooseWorkingDirectory: () => Promise<{
+      canceled: boolean;
+      state: WecomChannelSettingsState;
+    }>;
+    resetWorkingDirectory: () => Promise<WecomChannelSettingsState>;
     onStatusChange: (
       callback: (update: {
         status: WecomBotTransportStatus;
