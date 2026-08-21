@@ -181,9 +181,13 @@ describe('cindy-subagent extension source', () => {
     expect(check).toBeGreaterThan(publish);
     expect(spawned).toBeGreaterThan(check);
     expect(src).toContain("const DELETED_TOMBSTONE_DIR = 'pi-subagent-deleted'");
-    const tombstone = src.indexOf('if (parentTaskDeletedTombstone(runRoot)) {', launch);
-    expect(tombstone).toBeGreaterThan(publish);
-    expect(spawned).toBeGreaterThan(tombstone);
+    const firstTombstone = src.indexOf('if (parentTaskDeletedTombstone(runRoot)) {', launch);
+    const lastTombstone = src.lastIndexOf('if (parentTaskDeletedTombstone(runRoot)) {', spawned);
+    const lastStaging = src.lastIndexOf('copyFileSync(runnerFile, durableRunnerFile)', spawned);
+    expect(firstTombstone).toBeGreaterThan(publish);
+    expect(lastStaging).toBeGreaterThan(firstTombstone);
+    expect(lastTombstone).toBeGreaterThan(lastStaging);
+    expect(spawned).toBeGreaterThan(lastTombstone);
     expect(src).toContain('join(dirname(dirname(runRoot)), DELETED_TOMBSTONE_DIR, basename(runRoot))');
     // The published record has to be one the Host's scan can actually count.
     const staging = src.slice(publish, check);

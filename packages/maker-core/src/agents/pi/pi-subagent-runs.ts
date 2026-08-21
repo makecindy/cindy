@@ -2528,6 +2528,16 @@ async function resumeClaimedPiSubagentRun(
       fs.chmod(runnerFile, 0o600).catch(() => undefined),
     ]);
     await writeAtomicJson(path.join(runDir, 'config.json'), config);
+    // Staging above awaits. A sibling instance can write the tombstone in that
+    // window; the queued check would already have passed. Recheck immediately
+    // before spawn so a deleted parent never starts a runner. Refusal falls
+    // into the rollback below.
+    if (isPiSubagentLaunchFenceActive(agentHome, process.pid)) {
+      throw new Error('Cindy is restarting for an update; retry this resume shortly.');
+    }
+    if (isPiSubagentDeletedTombstonePresent(agentHome, path.basename(root))) {
+      throw new Error('The parent task was deleted; this resume will not start.');
+    }
   } catch (error) {
     await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
     throw error;

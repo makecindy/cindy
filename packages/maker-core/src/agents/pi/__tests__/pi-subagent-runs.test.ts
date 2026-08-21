@@ -231,14 +231,24 @@ describe('PI durable subagent run store', () => {
       .replace(/\r\n/g, '\n');
     const claimed = source.indexOf('async function resumeClaimedPiSubagentRun(');
     const publish = source.indexOf("state: 'queued'", claimed);
-    const tombstone = source.indexOf(
+    const spawned = source.indexOf('spawn(launch.nodeExecutable', claimed);
+    const firstTombstone = source.indexOf(
       'isPiSubagentDeletedTombstonePresent(agentHome, path.basename(root))',
       claimed,
     );
-    const spawned = source.indexOf('spawn(launch.nodeExecutable', claimed);
+    const lastTombstone = source.lastIndexOf(
+      'isPiSubagentDeletedTombstonePresent(agentHome, path.basename(root))',
+      spawned,
+    );
+    const lastStaging = source.lastIndexOf(
+      "await writeAtomicJson(path.join(runDir, 'config.json')",
+      spawned,
+    );
     expect(publish).toBeGreaterThan(claimed);
-    expect(tombstone).toBeGreaterThan(publish);
-    expect(spawned).toBeGreaterThan(tombstone);
+    expect(firstTombstone).toBeGreaterThan(publish);
+    expect(lastStaging).toBeGreaterThan(firstTombstone);
+    expect(lastTombstone).toBeGreaterThan(lastStaging);
+    expect(spawned).toBeGreaterThan(lastTombstone);
   });
 
   it('reports UUID-contained corrupt runs without trusting disk PIDs', async () => {

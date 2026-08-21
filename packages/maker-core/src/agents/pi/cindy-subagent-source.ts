@@ -867,6 +867,12 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
     writePrivateJson(configPath, config);
     copyFileSync(runnerFile, durableRunnerFile);
     try { chmodSync(durableRunnerFile, 0o600); } catch (err) { /* best effort on Windows */ }
+    if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {
+      throw new Error('subagent: Cindy is restarting for an update; retry shortly.');
+    }
+    if (parentTaskDeletedTombstone(runRoot)) {
+      throw new Error('subagent: the parent task was deleted; this launch will not start.');
+    }
   } catch (err) {
     try { rmSync(runDir, { recursive: true, force: true }); } catch (_) { /* best effort cleanup */ }
     throw err;
