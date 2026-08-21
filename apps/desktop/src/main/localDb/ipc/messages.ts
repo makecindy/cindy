@@ -54,6 +54,15 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
 const messageRowid = sql<number>`rowid`;
+/**
+ * Skip silent-stop autoResume user rows without letting one bad historical
+ * agent_meta blob fail the whole page query. SQLite may evaluate
+ * json_extract even when a sibling OR json_valid(...) = 0 is already true.
+ */
+function notAutoResumeAgentMetaSql() {
+  return sql`(${messages.agentMeta} IS NULL OR CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1)`;
+}
+
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
 type DataOwnerBroadcastScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>;
@@ -922,7 +931,7 @@ export async function commitMessageDeletion(
       eq(messages.sessionId, sessionId),
       sql`${messages.role} IN ('user', 'assistant')`,
       isNull(messages.rewindAt),
-      sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+      notAutoResumeAgentMetaSql(),
       visibleAfterClear,
     );
     const [latestRow] = await db
@@ -1918,7 +1927,7 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
         isNull(messages.rewindAt),
         ...visibleAfterClear,
         olderThanOldestOnPage,
-        sql`(${messages.agentMeta} IS NULL OR json_valid(${messages.agentMeta}) = 0 OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        notAutoResumeAgentMetaSql(),
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid))

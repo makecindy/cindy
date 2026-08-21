@@ -531,14 +531,14 @@ const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
 // 见 register.ts handleSilentStopTurnEnd)不是用户消息,渲染层显示为「已自动继续」
 // 分隔卡,预览同样不能把它当最近消息展示(session.preview 经 device-link 直达手机
 // 首页,漏了会显示一条用户没发过的消息)。按落库标记过滤,不按文本——用户真发
-// 「继续」是合法消息。json_extract 对 JSON true 返回 1;非 JSON / 缺字段返回 NULL,
-// IS NOT 1 对两者都放行。
+// 「继续」是合法消息。json_extract 对 JSON true 返回 1;缺字段返回 NULL,IS NOT 1 放行。
+// 非法 JSON 必须用 CASE 挡住 json_extract,OR json_valid 不保证短路,会整句 malformed JSON。
 const LATEST_MSG_CONTENT_SQL = sql<string | null>`(
   SELECT m.content FROM messages m
   WHERE m.session_id = ${sessions.id}
     AND m.role IN ('user', 'assistant')
     AND m.rewind_at IS NULL
-    AND (m.agent_meta IS NULL OR json_extract(m.agent_meta, '$.autoResume') IS NOT 1)
+    AND (m.agent_meta IS NULL OR CASE WHEN json_valid(m.agent_meta) THEN json_extract(m.agent_meta, '$.autoResume') END IS NOT 1)
     AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
   ORDER BY m.created_at DESC LIMIT 1
 )`.as('latest_message_content');
@@ -547,7 +547,7 @@ const LATEST_MSG_ROLE_SQL = sql<string | null>`(
   WHERE m.session_id = ${sessions.id}
     AND m.role IN ('user', 'assistant')
     AND m.rewind_at IS NULL
-    AND (m.agent_meta IS NULL OR json_extract(m.agent_meta, '$.autoResume') IS NOT 1)
+    AND (m.agent_meta IS NULL OR CASE WHEN json_valid(m.agent_meta) THEN json_extract(m.agent_meta, '$.autoResume') END IS NOT 1)
     AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
   ORDER BY m.created_at DESC LIMIT 1
 )`.as('latest_message_role');

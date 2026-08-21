@@ -624,6 +624,54 @@ describe('local-db:messages:list cursor', () => {
       userTurnCostUsd: 0.5,
     });
   });
+
+  it('isolates malformed nearest prior user with CASE so list and around still hydrate', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (
+        'broken-user', 'broken-user', 's1', 'user', '""', NULL, '{not-json', 900, NULL
+      )
+    `,
+      )
+      .run();
+    insertCostMessage(sqlite, {
+      id: 'final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+
+    registerMessageIpc();
+    const prepareSpy = vi.spyOn(sqlite, 'prepare');
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const aroundHandler = h.handlers.get('local-db:messages:around');
+    const listRows = (await listHandler?.({}, 's1', { limit: 1 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const aroundRows = (await aroundHandler?.({}, 's1', 'final', { radius: 1 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(listRows.find((row) => row.id === 'final')?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+    expect(aroundRows.find((row) => row.id === 'final')?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+    const hydrateSql = prepareSpy.mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes('autoResume'));
+    expect(hydrateSql).toEqual(expect.stringContaining('CASE WHEN json_valid'));
+    expect(hydrateSql).not.toMatch(/json_valid\([^)]*\) = 0 OR json_extract/);
+  });
 });
 
 describe('findPendingForkOrigin 来源标记重建', () => {
