@@ -5,7 +5,12 @@ import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { installOfficialSidecar, readSidecarManifest } from '../ollamaInstall.js';
+import {
+  installOfficialSidecar,
+  readSidecarManifest,
+  resolveOfficialSidecarAsset,
+} from '../ollamaInstall.js';
+import { OLLAMA_GITHUB_API_LATEST } from '../ollamaRelease.js';
 import { findOllamaBinary } from '../ollamaSidecar.js';
 
 describe('installOfficialSidecar', () => {
@@ -121,5 +126,45 @@ describe('installOfficialSidecar', () => {
     await expect(pending).rejects.toThrow('aborted');
     await expect(readSidecarManifest(dir)).resolves.toBeNull();
     await expect(access(path.join(dir, 'ollama-runtime', 'v0.32.14'))).rejects.toThrow();
+  });
+
+  it('aborts a hanging GitHub release lookup when cancelled', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ollama-install-resolve-abort-'));
+    const abort = new AbortController();
+    const pending = installOfficialSidecar(dir, {
+      platform: 'darwin',
+      signal: abort.signal,
+      resolve: (_fetch, _platform, _arch, signal) =>
+        new Promise((_, reject) => {
+          if (signal?.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }),
+      download: async () => {
+        throw new Error('should not download');
+      },
+      extract: async () => {
+        throw new Error('should not extract');
+      },
+    });
+    abort.abort();
+    await expect(pending).rejects.toThrow('aborted');
+    await expect(readSidecarManifest(dir)).resolves.toBeNull();
+  });
+
+  it('passes the abort signal into the GitHub latest lookup', async () => {
+    const abort = new AbortController();
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(_url).toBe(OLLAMA_GITHUB_API_LATEST);
+      expect(init?.signal).toBe(abort.signal);
+      abort.abort();
+      throw new Error('aborted');
+    });
+    await expect(
+      resolveOfficialSidecarAsset(fetchImpl as typeof fetch, 'darwin', 'arm64', abort.signal),
+    ).rejects.toThrow('aborted');
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 });

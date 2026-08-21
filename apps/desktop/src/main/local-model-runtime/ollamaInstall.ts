@@ -51,13 +51,16 @@ export async function resolveOfficialSidecarAsset(
   fetchImpl: typeof fetch = fetch,
   platform: NodeJS.Platform = process.platform,
   arch: NodeJS.Architecture = process.arch,
+  signal?: AbortSignal,
 ): Promise<OfficialOllamaAsset> {
+  if (signal?.aborted) throw new Error('aborted');
   const response = await fetchImpl(OLLAMA_GITHUB_API_LATEST, {
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'Cindy-Desktop',
       'X-GitHub-Api-Version': '2022-11-28',
     },
+    signal,
   });
   if (!response.ok) {
     throw new Error(`ollama release lookup failed (${response.status})`);
@@ -69,8 +72,9 @@ export async function resolveOfficialSidecarAsset(
 
 export async function resolveOfficialDarwinAsset(
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<OfficialOllamaAsset> {
-  return resolveOfficialSidecarAsset(fetchImpl, 'darwin');
+  return resolveOfficialSidecarAsset(fetchImpl, 'darwin', process.arch, signal);
 }
 
 export async function downloadOfficialAsset(
@@ -219,7 +223,7 @@ export async function installOfficialSidecar(
   const emit = (progress: LocalRuntimeInstallProgress) => opts.onProgress?.(progress);
   emit({ phase: 'resolving', done: false });
   const resolve = opts.resolve ?? resolveOfficialSidecarAsset;
-  const asset = await resolve(opts.fetchImpl, platform, arch);
+  const asset = await resolve(opts.fetchImpl, platform, arch, opts.signal);
   if (opts.signal?.aborted) throw new Error('aborted');
   const root = ollamaRuntimeRoot(userDataDir);
   const archivePath = path.join(root, 'downloads', asset.assetName);
