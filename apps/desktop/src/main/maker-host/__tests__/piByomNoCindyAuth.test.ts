@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ loggedIn: false, sharedSkillRefreshes: 0 }));
+const state = vi.hoisted(() => ({ loggedIn: false, proxyReady: true, sharedSkillRefreshes: 0 }));
 
 vi.mock('electron', () => ({
   app: {
@@ -56,13 +56,27 @@ vi.mock('../grok-oauth-login.js', () => ({
   peekGrokAccessToken: () => (state.loggedIn ? 'grok-test-token' : null),
   recoverGrokAuthAfterRejection: async () => 'superseded' as const,
 }));
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  getClaudeEndpoint: () => 'http://127.0.0.1:18765',
+  isAnthropicCompatProxyHandleReady: () => state.proxyReady,
+}));
 
 import { desktopPiAuthAdapter, resolvePiNativeProviders } from '../pi-host.js';
 
 describe('Pi pure BYOM auth without a Cindy account', () => {
   beforeEach(() => {
     state.loggedIn = false;
+    state.proxyReady = true;
     state.sharedSkillRefreshes = 0;
+  });
+
+  it('fails closed when an official SuperGrok route has no local compat proxy', async () => {
+    state.proxyReady = false;
+    await expect(resolvePiNativeProviders({
+      workingDir: '/tmp/project',
+      providerId: 'xai',
+      model: 'grok-4.6',
+    })).rejects.toThrow('local compatibility proxy is not ready');
   });
 
   it('refreshes local shared skills before provider resolution and skips remote homes', async () => {
@@ -118,9 +132,9 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
 
     expect(resolved.providers).toContainEqual(
       expect.objectContaining({
-        id: 'cindy-byom-xai',
+        id: 'xai',
         sourceProviderId: 'xai',
-        baseUrl: expect.not.stringContaining('private-xai.example'),
+        baseUrl: 'http://127.0.0.1:18765/v1',
       }),
     );
     expect(resolved.providers).toContainEqual(

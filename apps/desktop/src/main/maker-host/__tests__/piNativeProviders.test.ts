@@ -269,8 +269,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers).toHaveLength(1);
     expect(providers[0]).toMatchObject({
       id: 'xai',
-      baseUrl: 'http://127.0.0.1:18765',
-      api: 'anthropic-messages',
+      baseUrl: 'http://127.0.0.1:18765/v1',
+      api: 'openai-responses',
       apiKeyEnvVar: 'CINDY_PI_XAI_PROXY_API_KEY',
       headers: {
         'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
@@ -280,7 +280,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       modelIdAliases: { 'grok-4.6': 'xai/grok-4.6' },
     });
     expect(providers[0]?.models.find((model) => model.id === 'xai/grok-4.6')).toMatchObject({
-      api: 'anthropic-messages',
+      api: 'openai-responses',
       contextWindow: 500_000,
       maxTokens: 500_000,
       input: ['text', 'image'],
@@ -292,8 +292,6 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: 'xhigh',
       },
       compat: {
-        supportsStore: false,
-        supportsDeveloperRole: false,
         supportsReasoningEffort: true,
       },
     });
@@ -306,8 +304,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const { providers } = await buildXaiPiNativeProvider('grok-4.6', false, true);
     expect(providers[0]).toMatchObject({
       id: 'xai',
-      baseUrl: `http://127.0.0.1:${PI_XAI_COMPAT_FORWARD_PORT}`,
-      api: 'anthropic-messages',
+      baseUrl: `http://127.0.0.1:${PI_XAI_COMPAT_FORWARD_PORT}/v1`,
+      api: 'openai-responses',
       headers: {
         'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID',
         'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
@@ -326,7 +324,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(providers[0]?.models.find((model) => model.id === 'xai/grok-retired')).toEqual({
       id: 'xai/grok-retired',
       name: 'xai/grok-retired',
-      api: 'anthropic-messages',
+      api: 'openai-responses',
     });
     expect(providers[0]?.modelIdAliases?.['grok-retired']).toBe('xai/grok-retired');
   });
@@ -370,7 +368,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(anthropicModels.length).toBeGreaterThan(0);
     expect(anthropicModels.every((model) => model.api === 'anthropic-messages')).toBe(true);
     expect(resolvePiBundledApiByModelId(catalog ?? undefined, 'glm-5.2')).toBe(
-      'openai-completions',
+      'openai-responses',
     );
     expect(catalog?.get('zai')?.get('glm-5.2')).toMatchObject({
       api: 'openai-completions',
@@ -633,7 +631,9 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const xai = catalog.providers.find((provider) => provider.id === 'xai');
     expect(xai?.models.pi?.some((model) => model.id === 'grok-4.6')).toBe(true);
-    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBeUndefined();
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBe(
+      'openai-responses',
+    );
 
     const { providers } = buildPiSubscriptionNativeProviders(
       catalog,
@@ -654,13 +654,13 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.api).toBe('openai-responses');
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
     expect(xaiProvider?.models.find((model) => model.id === 'grok-4.3')?.catalogAddition).toBeUndefined();
-    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.3')?.api).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.3')?.api).toBe('openai-responses');
     expect(xaiProvider?.models.find((model) => model.id === 'grok-build-0.1')?.catalogAddition).toBeUndefined();
   });
 
-  it('does not mark SuperGrok models as catalog additions when the PI probe is unavailable', () => {
+  it('keeps exact SuperGrok protocol annotations when the PI probe is unavailable', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-    expect(catalog.providers.find((provider) => provider.id === 'xai')?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBeUndefined();
+    expect(catalog.providers.find((provider) => provider.id === 'xai')?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBe('openai-responses');
 
     const { providers } = buildPiSubscriptionNativeProviders(
       catalog,
@@ -668,8 +668,12 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     );
 
     const xaiProvider = providers.find((provider) => provider.id === 'xai');
-    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')?.catalogAddition).toBeUndefined();
-    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')?.catalogAddition).toBeUndefined();
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.6')).toMatchObject({
+      api: 'openai-responses',
+    });
+    expect(xaiProvider?.models.find((model) => model.id === 'grok-4.5')).toMatchObject({
+      api: 'openai-responses',
+    });
   });
 
   it('does not mark SuperGrok models as catalog additions when the probe has no xAI baseline', () => {
@@ -731,7 +735,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       .find((provider) => provider.id === 'xai')
       ?.models.find((model) => model.wireId === 'grok-4.6' || model.id === 'grok-4.6');
     expect(grok).toMatchObject({
-      api: 'openai-completions',
+      api: 'openai-responses',
       reasoning: true,
       thinkingLevelMap: {
         low: 'low',
@@ -985,7 +989,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     });
   });
 
-  it('writes pinned-Pi-missing Grok 4.6 as an openai-responses catalog addition', () => {
+  it('writes pinned-Pi-missing Grok 4.6 using the official openai-responses API', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     const xai = catalog.providers.find((provider) => provider.id === 'xai')!;
     xai.models.pi = [
@@ -1001,7 +1005,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const provider = buildPiSubscriptionNativeProviders(
       catalog,
       'http://127.0.0.1:4567/',
-      new Map([['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-responses')]])]]),
+      new Map([['xai', new Map([['grok-4.5', piBundledModel('grok-4.5', 'openai-completions')]])]]),
       new Map([['xai', new Set(['grok-4.5'])]]),
     ).providers.find((candidate) => candidate.id === 'xai');
     expect(provider?.models).toEqual([

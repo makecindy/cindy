@@ -145,6 +145,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect((xai.models.codex ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
     expect((xai.models.pi ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_PI_IDS);
     expect(xai.models.pi?.find((m) => m.id === 'grok-4.6')).toMatchObject({
+      piApi: 'openai-responses',
       contextWindow: 500_000,
       maxOutput: 500_000,
       supportsImageInput: true,
