@@ -114,7 +114,7 @@ const CINDY_SUBAGENT_EXTENSION_BODY = String.raw`/**
  */
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import path, { join, isAbsolute } from 'node:path';
 
 const TOOL_NAME = 'subagent';
 const MARKER = '__cindySubagent';
@@ -397,8 +397,10 @@ function runTask(binary, task, runtime, signal, onProgress) {
     }
     // 父 bridge 已消费并删除 CINDY_PI_BASH_PACKAGE_HOME；写回派生值让子 bridge
     // 能解析 bash 隔离 home。子 bridge 仍会在首次加载时删除它(withoutPiSecrets)。
+    // path.posix.join 与 bridge derivedBashPackageHome 保持一致(Windows 下 path.join
+    // 产生反斜杠路径，bridge reload 时 stash 与 posix 派生值不匹配会 fail-closed)。
     if (isAbsolute(configHome)) {
-      childEnv[BASH_PACKAGE_HOME_ENV] = join(configHome, 'bash-package-home');
+      childEnv[BASH_PACKAGE_HOME_ENV] = path.posix.join(configHome, 'bash-package-home');
     }
 
     let child;

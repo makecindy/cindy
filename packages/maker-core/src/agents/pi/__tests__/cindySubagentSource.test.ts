@@ -36,6 +36,7 @@ function loadSubagentChildEnvHelper(): {
     "const BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';",
     'function readDepth(): number { return 0; }',
     'function isAbsolute(p: string): boolean { return path.isAbsolute(p); }',
+    // join 仍保留供未来其他用途；bash-package-home 写回使用 path.posix.join（见模板改动）。
     'function join(...args: string[]): string { return path.join(...args); }',
     // configHome 在 runTask 里来自 process.env[CONFIG_HOME_ENV]（已校验非空）
     '(globalThis as any).buildChildEnv = function(',
@@ -354,10 +355,10 @@ describe('cindy-subagent extension source', () => {
     // 导致子 bridge 无法解析 bash 隔离 home 而 fail-closed。runTask 在 spawn 前写回派生值。
     const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
     expect(src).toContain("const BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';");
-    expect(src).toContain("childEnv[BASH_PACKAGE_HOME_ENV] = join(configHome, 'bash-package-home');");
+    expect(src).toContain("childEnv[BASH_PACKAGE_HOME_ENV] = path.posix.join(configHome, 'bash-package-home');");
     expect(src).toContain('isAbsolute(configHome)');
     // 写回必须在 spawn 之前，否则子 bridge 在加载时仍读不到该变量。
-    const writeBack = src.indexOf('childEnv[BASH_PACKAGE_HOME_ENV] = join(configHome');
+    const writeBack = src.indexOf('childEnv[BASH_PACKAGE_HOME_ENV] = path.posix.join(configHome');
     const spawnCall = src.indexOf('child = spawn(binary, args');
     expect(writeBack).toBeGreaterThan(-1);
     expect(spawnCall).toBeGreaterThan(-1);
@@ -375,9 +376,10 @@ describe('cindy-subagent extension source', () => {
     // 防止 isAbsolute 分支或变量绑定出现回归而文本断言仍通过的漏检场景。
     const { buildChildEnv } = loadSubagentChildEnvHelper();
 
-    // 绝对路径：CINDY_PI_BASH_PACKAGE_HOME 必须被设置。
-    const envAbs = buildChildEnv('/host/agent/run-tmp/abc');
-    expect(envAbs['CINDY_PI_BASH_PACKAGE_HOME']).toBe('/host/agent/run-tmp/abc/bash-package-home');
+    // 绝对路径：CINDY_PI_BASH_PACKAGE_HOME 必须以 posix join 形式设置（与 bridge 一致）。
+    const configHome = '/host/agent/run-tmp/abc';
+    const envAbs = buildChildEnv(configHome);
+    expect(envAbs['CINDY_PI_BASH_PACKAGE_HOME']).toBe(path.posix.join(configHome, 'bash-package-home'));
 
     // 相对路径：不设置（fail-closed 语义不变）。
     const envRel = buildChildEnv('relative/path');
@@ -390,6 +392,6 @@ describe('cindy-subagent extension source', () => {
     });
     expect(envFull['CINDY_PI_MCP_BRIDGE']).toBeUndefined();
     expect(envFull['CINDY_PI_REMOTE_MCP_SECRET_X']).toBeUndefined();
-    expect(envFull['CINDY_PI_BASH_PACKAGE_HOME']).toBe('/abs/home/bash-package-home');
+    expect(envFull['CINDY_PI_BASH_PACKAGE_HOME']).toBe(path.posix.join('/abs/home', 'bash-package-home'));
   });
 });
