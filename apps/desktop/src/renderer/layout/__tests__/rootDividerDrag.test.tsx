@@ -90,14 +90,18 @@ function renderLayoutRoot() {
   );
 }
 
-/**
- * 覆盖 jsdom 恒为 0 的矩形:给某 panelKind 的元素钉死一个实测宽,让起拖时
- * measuredPanePx 拿到真机口径的宽度(而非回落账面)。
- */
-function mockPaneWidth(kind: string, width: number): void {
-  const el = document.querySelector(`[data-panel-drag-root="${kind}"]`) as HTMLElement | null;
-  expect(el).not.toBeNull();
-  el!.getBoundingClientRect = () =>
+function renderLayoutRootWithoutWidthHint() {
+  return render(
+    <BuiltinPanelBridgeProvider value={bridge}>
+      <div data-testid="row">
+        <LayoutRoot />
+      </div>
+    </BuiltinPanelBridgeProvider>,
+  );
+}
+
+function mockElementWidth(element: HTMLElement, width: number): void {
+  element.getBoundingClientRect = () =>
     ({
       width,
       height: 0,
@@ -109,6 +113,16 @@ function mockPaneWidth(kind: string, width: number): void {
       y: 0,
       toJSON: () => ({}),
     }) as DOMRect;
+}
+
+/**
+ * 覆盖 jsdom 恒为 0 的矩形:给某 panelKind 的元素钉死一个实测宽,让起拖时
+ * measuredPanePx 拿到真机口径的宽度(而非回落账面)。
+ */
+function mockPaneWidth(kind: string, width: number): void {
+  const el = document.querySelector(`[data-panel-drag-root="${kind}"]`) as HTMLElement | null;
+  expect(el).not.toBeNull();
+  mockElementWidth(el!, width);
 }
 
 /** 把缝一路拖向左(右侧面板变宽)到抓不动为止,松手。 */
@@ -156,6 +170,20 @@ afterEach(() => {
 });
 
 describe('RootDivider 拖宽 · 在场份额口径', () => {
+  it('生产路径没有宽度提示时按内容区宽度换算拖动份额', () => {
+    const { container } = renderLayoutRootWithoutWidthHint();
+    mockElementWidth(screen.getByTestId('layout-root-content'), AVAIL);
+    const divider = screen.getByTestId('layout-divider');
+    mockElementWidth(divider, 1);
+
+    dragDividerLeft(container, AVAIL * 0.1);
+
+    expect(setCalls).toHaveLength(1);
+    const children = (setCalls[0].content as SplitNode).children;
+    expect(children[0].fraction).toBeCloseTo(0.4, 6);
+    expect(children[1].fraction).toBeCloseTo(0.6, 6);
+  });
+
   it('已卸载插件的残留份额不参与分配:右栏宽按在场份额算', () => {
     currentLayout = treeWithUninstalledResidue();
     renderLayoutRoot();

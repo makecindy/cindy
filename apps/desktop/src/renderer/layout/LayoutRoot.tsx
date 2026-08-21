@@ -6,6 +6,7 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type RefObject,
 } from 'react';
 
 import {
@@ -386,8 +387,10 @@ interface RootDividerProps extends RootDividerPropsExtra {
   right: SplitChildEntry;
   /** 同一分割的全部在场子项(含缝两侧):压缩 chat 的接力出账要按实测宽找出折叠兄弟。 */
   visibleSiblings: SplitChildEntry[];
-  /** 测试/嵌入宿主可提供的可用宽提示；生产起拖时直接测量父 row。 */
+  /** 测试/嵌入宿主可提供的可用宽提示；生产起拖时直接测量内容区容器。 */
   availableWidthHint: number | null;
+  /** 根 split 所在的内容区；生产起拖时以它为像素/份额换算口径。 */
+  availableWidthRootRef: RefObject<HTMLDivElement | null>;
   /** 拖动中的瞬时**在场份额**覆盖(paneId → share);null = 结束。 */
   onLive: (live: Record<string, number> | null) => void;
   /** 提交后的乐观本地树更新(广播随后回声同一棵树)。 */
@@ -438,6 +441,7 @@ function RootDivider({
   right,
   visibleSiblings,
   availableWidthHint,
+  availableWidthRootRef,
   shareScale,
   onLive,
   onCommitted,
@@ -551,7 +555,7 @@ function RootDivider({
     const startX = e.clientX;
     const startL = left.share;
     const startR = right.share;
-    const measuredAvailable = e.currentTarget.parentElement?.getBoundingClientRect().width ?? 0;
+    const measuredAvailable = availableWidthRootRef.current?.getBoundingClientRect().width ?? 0;
     const available =
       availableWidthHint && availableWidthHint > 0
         ? availableWidthHint
@@ -602,9 +606,9 @@ function RootDivider({
   // 双击:两侧份额均分(把差值的一半转给少的一侧)—— 右栏旧"双击复位 50/50"
   // 在两块布局下的语义等价推广。在场份额口径:均分的是**画面上**这两块的宽度。
   // 压缩 chat 的方向同样走接力(计划即时按当前实测现算),且不得越过 chat 400px 下限。
-  const onDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
+  const onDoubleClick = () => {
     const total = left.share + right.share;
-    const measuredAvailable = event.currentTarget.parentElement?.getBoundingClientRect().width ?? 0;
+    const measuredAvailable = availableWidthRootRef.current?.getBoundingClientRect().width ?? 0;
     const available =
       availableWidthHint && availableWidthHint > 0
         ? availableWidthHint
@@ -953,6 +957,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
               right={entry}
               visibleSiblings={visible}
               availableWidthHint={availableWidthHint}
+              availableWidthRootRef={layoutRootRef}
               shareScale={ledger.scale}
               onLive={setLiveFractions}
               onCommitted={setLayout}
