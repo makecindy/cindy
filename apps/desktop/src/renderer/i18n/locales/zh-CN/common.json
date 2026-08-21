@@ -2552,9 +2552,14 @@
     "composer": {
       "title": "消息输入",
       "sendShortcut": {
-        "label": "使用 {{shortcut}} 发送",
-        "hint": "开启后按 {{shortcut}} 发送消息；关闭后按 Enter 发送消息，按 Shift+Enter 换行。",
-        "ariaLabel": "使用 {{shortcut}} 发送消息"
+        "label": "发送快捷键",
+        "hint": "选择 Enter 何时发送消息、何时换行。按 Shift+Enter 始终换行。",
+        "ariaLabel": "发送快捷键",
+        "options": {
+          "enter": "Enter",
+          "modifier-enter-multiline": "多行消息用 {{shortcut}}",
+          "modifier-enter": "始终用 {{shortcut}}"
+        }
       }
     },
     "linkOpen": {

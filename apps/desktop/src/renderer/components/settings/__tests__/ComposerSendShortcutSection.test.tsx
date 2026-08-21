@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const toastMocks = vi.hoisted(() => ({
@@ -13,10 +13,14 @@ vi.mock('react-i18next', () => ({
     t: (key: string, options?: { shortcut?: string }) => {
       const translations: Record<string, string> = {
         'settings.composer.title': 'Message input',
-        'settings.composer.sendShortcut.label': 'Use {{shortcut}} to send',
+        'settings.composer.sendShortcut.label': 'Send shortcut',
         'settings.composer.sendShortcut.hint':
-          'When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.',
-        'settings.composer.sendShortcut.ariaLabel': 'Use {{shortcut}} to send messages',
+          'Choose when Enter sends the message and when it inserts a new line. Shift+Enter always inserts a new line.',
+        'settings.composer.sendShortcut.ariaLabel': 'Send shortcut',
+        'settings.composer.sendShortcut.options.enter': 'Enter',
+        'settings.composer.sendShortcut.options.modifier-enter-multiline':
+          '{{shortcut}} for multiline messages',
+        'settings.composer.sendShortcut.options.modifier-enter': '{{shortcut}} always',
         'settings.defaults.customizedBadge': 'Customized',
         'settings.defaults.restore': 'Restore default',
         'settings.defaults.restored': 'Restored default',
@@ -61,6 +65,12 @@ function setVoiceInputShortcut(shortcut: object | null): void {
   });
 }
 
+async function openSelect(trigger: HTMLElement): Promise<void> {
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'ArrowDown', code: 'ArrowDown' });
+  await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
+}
+
 describe('ComposerSendShortcutSection', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -68,25 +78,30 @@ describe('ComposerSendShortcutSection', () => {
     toastMocks.error.mockReset();
     toastMocks.success.mockReset();
     setPlatform('win32');
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
   });
 
-  it('shows the default Enter mode and platform-specific shortcut copy', () => {
+  it('shows the default Enter mode and platform-specific option copy', async () => {
     setPlatform('darwin');
 
     render(<ComposerSendShortcutSection />);
 
-    expect(
-      screen.getByRole('switch', { name: 'Use ⌘+Enter to send messages' }).getAttribute('data-state'),
-    ).toBe('unchecked');
-    expect(screen.queryByText('Use ⌘+Enter to send')).not.toBeNull();
-    expect(
-      screen.queryByText(
-        'When enabled, ⌘+Enter sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.',
-      ),
-    ).not.toBeNull();
+    const trigger = screen.getByRole('combobox', { name: 'Send shortcut' });
+    expect(trigger.textContent).toContain('Enter');
+    expect(screen.queryByText('Customized')).toBeNull();
+
+    await openSelect(trigger);
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Enter',
+      '⌘+Enter for multiline messages',
+      '⌘+Enter always',
+    ]);
   });
 
-  it('synchronizes mode B across subscribers and restores the default override', () => {
+  it('persists mode B, synchronizes subscribers, and restores the default override', async () => {
     render(
       <>
         <ComposerSendShortcutSection />
@@ -94,23 +109,37 @@ describe('ComposerSendShortcutSection', () => {
       </>,
     );
 
-    const switches = screen.getAllByRole('switch', { name: 'Use Ctrl+Enter to send messages' });
-    fireEvent.click(switches[0]);
+    const triggers = screen.getAllByRole('combobox', { name: 'Send shortcut' });
+    await openSelect(triggers[0]);
+    fireEvent.click(screen.getByRole('option', { name: 'Ctrl+Enter always' }));
 
     expect(localStorage.getItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY)).toBe('modifier-enter');
-    expect(switches[0].getAttribute('data-state')).toBe('checked');
-    expect(switches[1].getAttribute('data-state')).toBe('checked');
+    expect(triggers[0].textContent).toContain('Ctrl+Enter always');
+    expect(triggers[1].textContent).toContain('Ctrl+Enter always');
     expect(screen.getAllByText('Customized')).toHaveLength(2);
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Restore default' })[0]);
 
     expect(localStorage.getItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY)).toBeNull();
-    expect(switches[0].getAttribute('data-state')).toBe('unchecked');
-    expect(switches[1].getAttribute('data-state')).toBe('unchecked');
+    expect(triggers[0].textContent).toContain('Enter');
+    expect(triggers[1].textContent).toContain('Enter');
     expect(toastMocks.success).toHaveBeenCalledWith('Restored default');
   });
 
-  it('rejects a Composer shortcut that is already used by Voice Input', () => {
+  it('persists the multiline mode', async () => {
+    render(<ComposerSendShortcutSection />);
+
+    const trigger = screen.getByRole('combobox', { name: 'Send shortcut' });
+    await openSelect(trigger);
+    fireEvent.click(screen.getByRole('option', { name: 'Ctrl+Enter for multiline messages' }));
+
+    expect(localStorage.getItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY)).toBe(
+      'modifier-enter-multiline',
+    );
+    expect(trigger.textContent).toContain('Ctrl+Enter for multiline messages');
+  });
+
+  it('rejects modifier modes when Voice Input already uses the shortcut', async () => {
     setVoiceInputShortcut({
       trigger: 'keyboard',
       code: 'Enter',
@@ -119,14 +148,18 @@ describe('ComposerSendShortcutSection', () => {
     });
 
     render(<ComposerSendShortcutSection />);
+    const trigger = screen.getByRole('combobox', { name: 'Send shortcut' });
 
-    const switchControl = screen.getByRole('switch', { name: 'Use ⌘+Enter to send messages' });
-    fireEvent.click(switchControl);
+    for (const optionName of ['⌘+Enter always', '⌘+Enter for multiline messages']) {
+      await openSelect(trigger);
+      fireEvent.click(screen.getByRole('option', { name: optionName }));
 
-    expect(localStorage.getItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY)).toBeNull();
-    expect(switchControl.getAttribute('data-state')).toBe('unchecked');
-    expect(toastMocks.error).toHaveBeenCalledWith(
-      'Conflicts with the voice input shortcut. Change either shortcut.',
-    );
+      expect(localStorage.getItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY)).toBeNull();
+      expect(trigger.textContent).toContain('Enter');
+      expect(toastMocks.error).toHaveBeenCalledWith(
+        'Conflicts with the voice input shortcut. Change either shortcut.',
+      );
+      toastMocks.error.mockReset();
+    }
   });
 });

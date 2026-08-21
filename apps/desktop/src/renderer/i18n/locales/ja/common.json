@@ -2618,9 +2618,14 @@
     "composer": {
       "title": "メッセージ入力",
       "sendShortcut": {
-        "label": "{{shortcut}}で送信",
-        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
-        "ariaLabel": "{{shortcut}}でメッセージを送信"
+        "label": "送信ショートカット",
+        "hint": "Enterで送信するか改行するかを選択します。Shift+Enterは常に改行します。",
+        "ariaLabel": "送信ショートカット",
+        "options": {
+          "enter": "Enter",
+          "modifier-enter-multiline": "複数行のメッセージは{{shortcut}}",
+          "modifier-enter": "常に{{shortcut}}"
+        }
       }
     },
     "linkOpen": {

@@ -2619,9 +2619,14 @@
     "composer": {
       "title": "Message input",
       "sendShortcut": {
-        "label": "Use {{shortcut}} to send",
-        "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
-        "ariaLabel": "Use {{shortcut}} to send messages"
+        "label": "Send shortcut",
+        "hint": "Choose when Enter sends the message and when it inserts a new line. Shift+Enter always inserts a new line.",
+        "ariaLabel": "Send shortcut",
+        "options": {
+          "enter": "Enter",
+          "modifier-enter-multiline": "{{shortcut}} for multiline messages",
+          "modifier-enter": "{{shortcut}} always"
+        }
       }
     },
     "linkOpen": {

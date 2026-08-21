@@ -101,18 +101,21 @@ describe('ChatInput steer shortcut contract', () => {
       resolveComposerEnterIntent(makeEnterEvent(), 'enter', {
         turnRunning: false,
         platform: 'darwin',
+        multilineDraft: false,
       }),
     ).toBe('queue');
     expect(
       resolveComposerEnterIntent(makeEnterEvent({ metaKey: true }), 'enter', {
         turnRunning: true,
         platform: 'darwin',
+        multilineDraft: false,
       }),
     ).toBe('steer');
     expect(
       resolveComposerEnterIntent(makeEnterEvent({ ctrlKey: true }), 'enter', {
         turnRunning: false,
         platform: 'darwin',
+        multilineDraft: false,
       }),
     ).toBe('queue');
   });
@@ -122,6 +125,7 @@ describe('ChatInput steer shortcut contract', () => {
       resolveComposerEnterIntent(event, 'modifier-enter', {
         turnRunning: true,
         platform: 'darwin',
+        multilineDraft: false,
       });
 
     expect(modeB(makeEnterEvent())).toBe('native');
@@ -134,14 +138,50 @@ describe('ChatInput steer shortcut contract', () => {
     expect(modeB(makeEnterEvent({ metaKey: true, repeat: true }))).toBe('ignore');
   });
 
+  it('keeps multiline mode single-line drafts on mode A and multiline drafts on mode B', () => {
+    const modeC = (event: ComposerEnterEvent, multilineDraft: boolean): ComposerEnterIntent =>
+      resolveComposerEnterIntent(event, 'modifier-enter-multiline', {
+        turnRunning: true,
+        platform: 'darwin',
+        multilineDraft,
+      });
+
+    expect(modeC(makeEnterEvent(), false)).toBe('queue');
+    expect(modeC(makeEnterEvent({ metaKey: true }), false)).toBe('steer');
+    expect(modeC(makeEnterEvent(), true)).toBe('native');
+    expect(modeC(makeEnterEvent({ metaKey: true }), true)).toBe('queue');
+    expect(modeC(makeEnterEvent({ shiftKey: true }), true)).toBeNull();
+    expect(modeC(makeEnterEvent({ isComposing: true }), true)).toBe('native');
+  });
+
   it('wires Settings preference updates to ChatInput copy while preserving row-level steer', () => {
     expect(composerSettingsSource).toContain('useComposerSendShortcutPreference()');
-    expect(composerSettingsSource).toContain("setPreference(enabled ? 'modifier-enter' : 'enter')");
+    expect(composerSettingsSource).toContain(
+      'setPreference(value as ComposerSendShortcutPreference)',
+    );
     expect(composerSettingsSource).toContain("setPreference('enter');");
     expect(chatInputSource).toContain('useComposerSendShortcutPreference()');
     expect(chatInputSource).toContain('getComposerSendShortcutLabel(');
-    expect(chatInputSource).toContain("composerSendShortcutPreference === 'modifier-enter'");
+    expect(chatInputSource).toContain("composerEffectiveSendMode === 'modifier-enter'");
     expect(chatInputSource).toContain('newChat.sendButton.queueTooltipSendMode');
+    // Both keydown paths must feed the current draft shape into the resolver;
+    // the render gate must refresh when the draft crosses the multiline boundary.
+    // The shared helper must also fold in the visible voice draft, which lives
+    // in a decoration and not yet in the editor doc.
+    expect(chatInputSource).toContain('multilineDraft: isComposerDraftMultiline(view.state.doc)');
+    expect(chatInputSource).toContain(
+      'multilineDraft: isComposerDraftMultiline(editorRef.current?.view.state.doc)',
+    );
+    expect(chatInputSource).toContain('isComposerDraftMultiline(ed.state.doc)');
+    // 语音稿必须限定归属当前输入框(与 decoration 同一判据):源任务还在听写时
+    // 切走,目标输入框不能拿别人的多行稿子把自己的单行草稿判成多行。
+    expect(chatInputSource).toContain(
+      "(voiceBusyOnCurrentComposerRef.current && voiceDraftTextRef.current.includes('\\n'))",
+    );
+    expect(chatInputSource).toContain(
+      'voiceBusyOnCurrentComposerRef.current = voiceBusyOnCurrentComposer;',
+    );
+    expect(chatInputSource).toContain('browserCommentsRef.current.length > 0');
     expect(pendingQueuePanelSource).toContain('isPendingQueueSteerShortcut');
     expect(pendingQueuePanelSource).toContain('void onSteer(entry.clientId);');
   });

@@ -2618,9 +2618,14 @@
     "composer": {
       "title": "메시지 입력",
       "sendShortcut": {
-        "label": "{{shortcut}}로 보내기",
-        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
-        "ariaLabel": "{{shortcut}}로 메시지 보내기"
+        "label": "보내기 단축키",
+        "hint": "Enter로 언제 메시지를 보내고 언제 줄을 바꿀지 선택합니다. Shift+Enter는 항상 줄을 바꿉니다.",
+        "ariaLabel": "보내기 단축키",
+        "options": {
+          "enter": "Enter",
+          "modifier-enter-multiline": "여러 줄 메시지는 {{shortcut}}",
+          "modifier-enter": "항상 {{shortcut}}"
+        }
       }
     },
     "linkOpen": {
