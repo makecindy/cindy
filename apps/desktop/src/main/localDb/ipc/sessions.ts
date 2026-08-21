@@ -534,7 +534,7 @@ const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
 // 「继续」是合法消息。json_extract 对 JSON true 返回 1;非 JSON / 缺字段返回 NULL,
 // IS NOT 1 对两者都放行。
 const LATEST_MSG_CONTENT_SQL = sql<string | null>`(
-  SELECT substr(m.content, 1, 4096) FROM messages m
+  SELECT m.content FROM messages m
   WHERE m.session_id = ${sessions.id}
     AND m.role IN ('user', 'assistant')
     AND m.rewind_at IS NULL

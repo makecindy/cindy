@@ -480,6 +480,47 @@ describe('makerChatStore active view tracking', () => {
       before: 'latest-00',
     });
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('idle-plan');
+    expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
+  });
+
+  it('schedules idle plan discovery when a prefetched session later mounts', async () => {
+    const sessionId = sid('prefetch-then-enter');
+    vi.mocked(messageService.list).mockClear();
+    const latest = Array.from({ length: 50 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (1000 + i) * 1000).toISOString(),
+      ),
+    );
+    const olderPlan = [
+      dbToolUseMessage(
+        sessionId,
+        'prefetch-plan',
+        'update_plan',
+        { plan: [{ step: 'Prefetch discovered plan', status: 'in_progress' }] },
+        new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+      ),
+    ];
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latest)
+      .mockResolvedValueOnce(olderPlan);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(20);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises(20);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+
+    enter(sessionId);
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises(20);
+
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('prefetch-plan');
   });
 
   it('continues initial plan backfill past older sources until a latest TaskUpdate can be resolved', async () => {

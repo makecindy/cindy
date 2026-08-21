@@ -7,7 +7,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, lte, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
@@ -245,7 +245,7 @@ export function registerMessageIpc(): void {
       .limit(limit);
     const orderedRows = afterCursor ? rows.slice().reverse() : rows;
     return hydrateLegacyUserTurnCosts(
-      capLocalHistoryMessageRows(orderedRows.map(messageToCamelWithRowid)),
+      capOversizedLocalHistoryRows(orderedRows.map(messageToCamelWithRowid)),
     );
   });
 
@@ -326,7 +326,7 @@ export function registerMessageIpc(): void {
         .limit(radius);
 
       return hydrateLegacyUserTurnCosts(
-        capLocalHistoryMessageRows(
+        capOversizedLocalHistoryRows(
           [...before.reverse(), anchor, ...after].map(messageToCamelWithRowid),
         ),
       );
@@ -1929,11 +1929,21 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
     )
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(1);
+  const newestOnPage = newestHistoryMessage(history);
+  const newestCreatedAtMs = Date.parse(newestOnPage.createdAt);
   const fromPriorUser = priorUser[0]
     ? or(
         gt(messages.createdAt, priorUser[0].createdAt),
         and(eq(messages.createdAt, priorUser[0].createdAt), gte(messageRowid, priorUser[0].rowid)),
       )
+    : undefined;
+  const throughNewestOnPage = Number.isFinite(newestCreatedAtMs)
+    ? newestOnPage.rowid != null
+      ? or(
+          lt(messages.createdAt, newestCreatedAtMs),
+          and(eq(messages.createdAt, newestCreatedAtMs), lte(messageRowid, newestOnPage.rowid)),
+        )
+      : lte(messages.createdAt, newestCreatedAtMs)
     : undefined;
   const rows = await db
     .select({
@@ -1948,6 +1958,7 @@ async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Message[]
         isNull(messages.rewindAt),
         ...visibleAfterClear,
         ...(fromPriorUser ? [fromPriorUser] : []),
+        ...(throughNewestOnPage ? [throughNewestOnPage] : []),
       ),
     )
     .orderBy(asc(messages.createdAt), asc(messageRowid));
@@ -2027,6 +2038,12 @@ function oldestHistoryMessage(history: Message[]): Message {
   );
 }
 
+function newestHistoryMessage(history: Message[]): Message {
+  return history.reduce((newest, message) =>
+    compareHistoryTimeline(message, newest) > 0 ? message : newest,
+  );
+}
+
 function compareHistoryTimeline(a: Message, b: Message): number {
   const timeDiff = Date.parse(a.createdAt) - Date.parse(b.createdAt);
   if (Number.isFinite(timeDiff) && timeDiff !== 0) return timeDiff;
@@ -2038,8 +2055,24 @@ function compareHistoryTimeline(a: Message, b: Message): number {
   return 0;
 }
 
-function capLocalHistoryMessageRows(history: Message[]): Message[] {
-  return capReferenceMessageRows(history, LOCAL_HISTORY_CONTENT_CHAR_LIMIT, true);
+function capOversizedLocalHistoryRows(history: Message[]): Message[] {
+  let capped: Message[] | null = null;
+  for (let index = 0; index < history.length; index += 1) {
+    const message = history[index];
+    if (typeof message.content !== 'string') continue;
+    if (message.content.length <= LOCAL_HISTORY_CONTENT_CHAR_LIMIT) continue;
+    capped ??= history.slice();
+    const priorMeta =
+      message.agentMeta && typeof message.agentMeta === 'object' && !Array.isArray(message.agentMeta)
+        ? message.agentMeta
+        : {};
+    capped[index] = {
+      ...message,
+      content: `…${message.content.slice(-(LOCAL_HISTORY_CONTENT_CHAR_LIMIT - 1))}`,
+      agentMeta: { ...priorMeta, remoteContentTruncated: true },
+    };
+  }
+  return capped ?? history;
 }
 
 /** DB content 可为 JSON string、含 text 的对象，或迁移前遗留的裸文本。 */

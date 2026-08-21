@@ -3465,6 +3465,7 @@ function enterView(sessionId: string): () => void {
   _activeViewSessions.set(sessionId, (_activeViewSessions.get(sessionId) ?? 0) + 1);
   _lastViewedAt.delete(sessionId);
   _ensureDemoteTimer();
+  scheduleIdlePlanDiscoveryIfNeeded(sessionId);
   return () => leaveView(sessionId);
 }
 
@@ -10075,7 +10076,8 @@ function loadOneOlderPageForPlanDiscovery(sessionId: string): Promise<boolean> {
   }
   if (getLatestMessageTodoState(state.messages).hasPlanEvent) return Promise.resolve(false);
   // 只要一页:真有深历史 plan 时胶囊晚一拍出现,没有 plan 的长任务不再付打开税。
-  return loadOlderMessages(sessionId, true, 1);
+  // automatic=false:这页不是视口自动补载,不能把跨 mount 的 viewport 预算标成耗尽。
+  return loadOlderMessages(sessionId, false, 1);
 }
 
 /**

@@ -496,6 +496,80 @@ describe('local-db:messages:list cursor', () => {
     expect(rows[0]?.content.length).toBe(32_000);
     expect(rows[0]?.agentMeta).toMatchObject({ remoteContentTruncated: true });
   });
+
+  it('keeps structured local user content below the oversized-row cap', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    sqlite
+      .prepare(
+        `
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (
+        'user-row', 'user-row', 's1', 'user', @content, NULL, NULL, 1000, NULL
+      )
+    `,
+      )
+      .run({
+        content: JSON.stringify({
+          text: 'see this file',
+          images: [],
+          files: [{ path: '/tmp/notes.md' }],
+        }),
+      });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 1 })) as Array<{
+      id: string;
+      content: unknown;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(rows[0]?.content).toEqual({
+      text: 'see this file',
+      images: [],
+      files: [{ path: '/tmp/notes.md' }],
+    });
+    expect(rows[0]?.agentMeta).toBeNull();
+  });
+
+  it('does not scan newer rounds after the current history page', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'old-final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+    insertCostMessage(sqlite, { id: 'later-user', role: 'user', createdAt: 2_000 });
+    for (let i = 0; i < 20; i += 1) {
+      insertCostMessage(sqlite, {
+        id: `later-${i}`,
+        role: 'assistant',
+        createdAt: 2_100 + i,
+        agentMeta: { turnCostUsd: 1 },
+      });
+    }
+
+    registerMessageIpc();
+    const prepareSpy = vi.spyOn(sqlite, 'prepare');
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', {
+      limit: 2,
+      beforeTs: 1_500,
+    })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const oldFinal = rows.find((row) => row.id === 'old-final');
+    expect(oldFinal?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+    expect(prepareSpy.mock.calls.some((call) => String(call[0]).includes('later-19'))).toBe(false);
+  });
 });
 
 describe('findPendingForkOrigin 来源标记重建', () => {
