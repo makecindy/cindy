@@ -33,6 +33,21 @@ function createDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('maker session CREATE_SESSION IPC handler', () => {
+  it('rejects device-link creation of a TrueForge session', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps({ isRemoteInvoke: () => true });
+    registerMakerSessionCreateHandler(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+        agentKind: 'trueforge',
+        workingDir: 'C:\\repo',
+        model: 'openai/gpt-5',
+      }),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
   it('bootstraps a session and returns the public create-session payload', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();

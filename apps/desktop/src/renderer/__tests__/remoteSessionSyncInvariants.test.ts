@@ -113,10 +113,10 @@ describe('CCAgentSessionView 接线不变式', () => {
       'const enforceConnectedSourceGate = !sessionId || !deviceLinkDeviceId;',
     );
     expect(chatInputSrc).toMatch(
-      /const noConnectedSource =\s*enforceConnectedSourceGate &&\s*!!currentModelAgentKind/,
+      /const noConnectedSource =\s*!isTrueForge &&\s*enforceConnectedSourceGate &&\s*!!currentModelAgentKind/,
     );
     expect(chatInputSrc).toMatch(
-      /if\s*\(\s*enforceConnectedSourceGate\s*&&\s*currentModelAgentKind\s*&&[\s\S]*?\)\s*\{/,
+      /if\s*\(\s*!isTrueForge\s*&&\s*enforceConnectedSourceGate\s*&&\s*currentModelAgentKind\s*&&[\s\S]*?\)\s*\{/,
     );
   });
   it('断线缓存的远程 session 可查看,但生命周期/元数据写操作必须走统一 gate', () => {

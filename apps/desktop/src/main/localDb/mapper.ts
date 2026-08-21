@@ -378,7 +378,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | 'trueforge' | null;
     createdAt?: number;
   },
   now: number,

@@ -16,7 +16,8 @@ export type DeviceLinkConnectionStatus = 'connected' | 'disconnected';
  * schema 不动；老 session DEFAULT 'cc' 兜底。
  */
 export type AgentKind = 'cc' | 'codex' | 'pi';
-export type MakerVendor = AgentKind | 'orca';
+export type SessionAgentKind = AgentKind | 'trueforge';
+export type MakerVendor = SessionAgentKind | 'orca';
 export type OrcaRole = 'lead' | 'worker';
 
 /**
@@ -238,7 +239,7 @@ export interface Session {
   userSendAt: string | null;
   status: SessionStatus;
   /** 当前 session 接的 agent。老 session DEFAULT 'cc'。 */
-  agentKind: AgentKind;
+  agentKind: SessionAgentKind;
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
@@ -352,6 +353,6 @@ export interface Message {
    * session-agent-switch 后 session.agentKind 只代表当前活跃引擎,历史行按本字段解析;
    * null = 切换功能上线前的老消息(回落 session.agentKind)。
    */
-  agentKind?: 'cc' | 'codex' | 'pi' | null;
+  agentKind?: SessionAgentKind | null;
   createdAt: string; // ISO 8601
 }

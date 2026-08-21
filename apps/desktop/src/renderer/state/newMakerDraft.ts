@@ -162,6 +162,15 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'trueforge') {
+    return {
+      model: getDefaultModelForVendor('trueforge').id,
+      effort: 'medium',
+      permissionMode: 'ask',
+      planMode: false,
+      providerId: null,
+    };
+  }
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -218,6 +227,7 @@ function makeDefault(): NewMakerDraft {
       pi: defaultVendorPrefs('pi'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
+      trueforge: defaultVendorPrefs('trueforge'),
     },
     modelChosenByVendor: {},
   };
@@ -251,7 +261,9 @@ function sanitize(raw: unknown): NewMakerDraft {
   // 每上线一个引擎都得手工补一次;漏补则用户选中新引擎、重启后被静默重置回 Claude。
   // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
   // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
-  const vendor: MakerVendor = isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
+  const vendor: MakerVendor = r.vendor === 'trueforge'
+    ? 'trueforge'
+    : isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
   const workingDir = normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0
@@ -347,7 +359,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
-  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
+  for (const v of ['cc', 'orca', 'codex', 'pi', 'trueforge'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
   // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，
@@ -385,6 +397,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
+      trueforge: sanitizeVendorPrefs(lastByVendorRaw.trueforge, 'trueforge'),
     },
     modelChosenByVendor,
   };

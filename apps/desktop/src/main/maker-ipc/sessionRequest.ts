@@ -66,6 +66,7 @@ export interface ReadCreateSessionOptsDeps {
 }
 
 function readAgentKind(value: unknown): AgentKind {
+  if (value === 'trueforge') return value as AgentKind;
   if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }

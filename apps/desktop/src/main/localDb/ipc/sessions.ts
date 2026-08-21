@@ -18,7 +18,7 @@ import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { resolveBusinessSessionId } from '../../sessionIds';
-import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
+import { normalizeDbAgentKind, normalizeSessionDbAgentKind } from '../../../shared/agentKindConversion';
 import {
   sessionToCamel,
   sessionCreateToRow,
@@ -1258,7 +1258,7 @@ export function registerSessionIpc(
         state: row.status === 'deleted' ? 'deleted' : 'available',
         status: row.status,
         title: row.title,
-        agentKind: normalizeDbAgentKind(row.agentKind),
+        agentKind: normalizeSessionDbAgentKind(row.agentKind),
       };
     });
   });

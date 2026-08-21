@@ -695,6 +695,7 @@ export function NewMakerDraftRoute() {
   // 当前 vendor 对应的 prefs(切 vendor 后这里自动重算 → 透传到 ChatInput initial*)
   const currentPrefs = draft.lastByVendor[draft.vendor];
   const chatPrefs = currentPrefs;
+  const isTrueForgeDraft = draft.vendor === 'trueforge';
   /**
    * 统一模型选择器里选中的收藏锚点(规格 §1.5)。
    *
@@ -720,6 +721,7 @@ export function NewMakerDraftRoute() {
   const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
   const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
   const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
+  const runtimeCapabilityAgentKind = isTrueForgeDraft ? 'trueforge' : capabilityAgentKind;
 
   // 品牌区跟随当前主题；icon / logo 的固定布局统一由 ThemeBrandLockup 负责。
   const [activeColorTheme, setActiveColorTheme] = useState<ColorTheme | null>(() =>
@@ -870,7 +872,9 @@ export function NewMakerDraftRoute() {
   );
   const hiddenSwitcherVendors = useMemo<MakerVendor[]>(() => {
     if (!availableAgentsLoaded) return [];
-    return (['cc', 'codex', 'pi'] as const).filter((vendor) => !availableVendors.has(vendor));
+    return (['cc', 'codex', 'pi', 'trueforge'] as const).filter(
+      (vendor) => !availableVendors.has(vendor),
+    );
   }, [availableAgentsLoaded, availableVendors]);
   /**
    * 「这份草稿要建到对端设备上」—— 只看 deviceId,**不再要求 workingDir**(#807)。
@@ -1189,7 +1193,7 @@ export function NewMakerDraftRoute() {
     capabilities,
     loading: capabilitiesLoading,
     error: capabilitiesError,
-  } = useAgentCapabilities(capabilityAgentKind, effectiveDeviceLinkDeviceId);
+  } = useAgentCapabilities(runtimeCapabilityAgentKind, effectiveDeviceLinkDeviceId);
   // device-link「以被控端为准」:远程草稿用被控端经隧道带来的 providers(per-provider,含 fast 能力);
   // 本地草稿用本机 providers。fast 判定统一交给 resolveFastSupported(不在控制端另写远程逻辑)。
   const { providers: localProviders, loading: localProvidersLoading } = useProviders();
@@ -1209,7 +1213,7 @@ export function NewMakerDraftRoute() {
   // 还回来 —— 否则那条链路上根本换不了引擎(只按 capable 撤掉时,默认形态下的新建草稿
   // 就彻底没有换引擎入口)。统一面板真启用时不注入(引擎跟着模型走)。
   const unifiedModelPanelEnabled =
-    !effectiveDeviceLinkDeviceId || !deviceProvidersUnsupported;
+    !isTrueForgeDraft && (!effectiveDeviceLinkDeviceId || !deviceProvidersUnsupported);
   const modelPickerLayoutPref = useModelPickerLayout();
   const unifiedModelPanelActive =
     unifiedModelPanelEnabled && modelPickerLayoutPref !== 'original';
@@ -1302,9 +1306,12 @@ export function NewMakerDraftRoute() {
     draftModelChosenByUser,
     localProvidersLoading,
   ]);
-  const calibratedDraftModel = draftCalibration.model;
+  const calibratedDraftModel = isTrueForgeDraft
+    ? (capabilities?.availableModels[0]?.id ?? chatPrefs.model)
+    : draftCalibration.model;
 
   const effectiveSourceId = useMemo<string | null>(() => {
+    if (isTrueForgeDraft) return null;
     // 本地草稿用**过滤后**的候选解析来源:SSH 场景下同一个 model id 可能既被允许的来源
     // 提供、又被排除掉的 openai-chat 来源提供,拿未过滤的 providers 解析会指到后者 ——
     // 于是 providerId 落 null、main 挑到被排除的原生默认,而 ChatInput 看到的是允许的
@@ -1333,6 +1340,7 @@ export function NewMakerDraftRoute() {
     chatPrefs.providerId,
     draftCalibration.providerId,
     calibratedDraftModel,
+    isTrueForgeDraft,
   ]);
 
   // 首页是“下一次创建会话”的配置草稿,没有正在运行的当前模型需要保护。其它对话更新同一模型
@@ -1340,6 +1348,7 @@ export function NewMakerDraftRoute() {
   // 由 CCAgentSessionView 的 live DB/runtime props 保护,不会走这里。
   const modelPresetVersion = useProviderModelMemoryVersion();
   const localDraftEffort = useMemo<Effort>(() => {
+    if (isTrueForgeDraft) return chatPrefs.effort;
     if (isDeviceLinkDraft || !effectiveSourceId) return chatPrefs.effort;
     const provider = providers.find((item) => item.id === effectiveSourceId);
     // 按**校准后**的模型推导:effort 必须和最终提交的模型属于同一个能力集合。
@@ -1364,6 +1373,7 @@ export function NewMakerDraftRoute() {
     calibratedDraftModel,
     chatPrefs.effort,
     modelPresetVersion,
+    isTrueForgeDraft,
   ]);
 
   // 草稿 live fast 读 per-(agent, 来源, 模型) 记忆(与下拉行 fastOnOf / 会话 resolveFast 同口径,
@@ -2273,6 +2283,9 @@ export function NewMakerDraftRoute() {
   // 首条消息发出时走既有 create-on-send 链路(见下方 isDeviceLinkDraft 分支)。
   const handleRemoteProjectAdded = useCallback(
     async (target: RemoteProjectTarget) => {
+      if (isTrueForgeDraft) {
+        throw new Error('TrueForge currently supports local desktop sessions only.');
+      }
       // vendor 由外层 VendorSegmentedSwitcher (draft.vendor) 单一决策 —— dialog 不再让用户选。
       const draftVendor: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
 
@@ -2484,6 +2497,7 @@ export function NewMakerDraftRoute() {
     },
     [
       draft.vendor,
+      isTrueForgeDraft,
       chatPrefs,
       chatInitialPermissionMode,
       chatInitialProviderId,
@@ -3252,6 +3266,14 @@ export function NewMakerDraftRoute() {
       },
     ): Promise<boolean | undefined> => {
       if (sendInFlightRef.current) return false;
+      if (isTrueForgeDraft && (isDeviceLinkDraft || effectiveRemoteHostId)) {
+        toast.error('TrueForge currently supports local desktop sessions only.');
+        return false;
+      }
+      if (isTrueForgeDraft && effectiveCollab.enabled) {
+        toast.error('TrueForge collaboration is not available in this experimental integration.');
+        return false;
+      }
       if (effectiveCollab.enabled && collabPolicy.loading) {
         toast.warning(t('newChat.collaboration.loadingHint'));
         return false;
@@ -3341,7 +3363,10 @@ export function NewMakerDraftRoute() {
       // 发送语义以用户按下 Send 的那一帧为准。鉴权检查期间项目/分支仍可能被 UI
       // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
       // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
-      const selectedWorktree = { ...wtRef.current };
+      const selectedWorktree = {
+        ...wtRef.current,
+        enabled: isTrueForgeDraft ? false : wtRef.current.enabled,
+      };
       // worktree 是用户对本次 project session 的明确选择。探测、分支偏好或远端
       // recovery 能力尚未就绪时保留输入并提示；绝不能把勾选静默降级成普通 session。
       // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
@@ -3403,9 +3428,11 @@ export function NewMakerDraftRoute() {
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
-          const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
-            deviceId: effectiveDeviceLinkDeviceId,
-          });
+          const { proceed } = isTrueForgeDraft
+            ? { proceed: true }
+            : await vendorAuthGate.checkAndConfirm(authVendor, {
+                deviceId: effectiveDeviceLinkDeviceId,
+              });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
 
@@ -4013,9 +4040,12 @@ export function NewMakerDraftRoute() {
             return;
           }
 
+          const createAgentKind = (
+            isTrueForgeDraft ? 'trueforge' : persistedAgentKind
+          ) as typeof persistedAgentKind;
           const newSession = await createSession({
             id: sessionId,
-            agentKind: persistedAgentKind,
+            agentKind: createAgentKind,
             model,
             effort,
             permissionMode,
@@ -4028,7 +4058,7 @@ export function NewMakerDraftRoute() {
             remoteHostId: workingDir ? (effectiveRemoteHostId ?? undefined) : undefined,
             // extraDirs 是 vendor 无关字段；Claude 与 Codex 都按只读引用目录透传。
             extraDirs: effectiveExtraDirs,
-            providerId,
+            providerId: isTrueForgeDraft ? null : providerId,
           });
           if (!newSession) {
             if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
@@ -4036,7 +4066,9 @@ export function NewMakerDraftRoute() {
             return;
           }
           // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
-          carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
+          if (!isTrueForgeDraft) {
+            carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
+          }
           // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭。
           if (effectivePlanMode) patchActivePrefs({ planMode: false });
           // 首条消息经 setPending → SessionView 自动发送,createOpts 读 chat store 的
@@ -4044,9 +4076,9 @@ export function NewMakerDraftRoute() {
           // seed store,否则勾了计划模式的首条消息可能以 planMode:false 发出
           // (worktree 路径同款 seed;bot review P2)。
           makerChatStore.setSessionRuntime(newSession.id, {
-            agentKind: capabilityAgentKind,
-            fastMode: effectiveFastMode,
-            planModeEnabled: effectivePlanMode,
+            agentKind: (isTrueForgeDraft ? 'trueforge' : capabilityAgentKind) as typeof capabilityAgentKind,
+            fastMode: isTrueForgeDraft ? false : effectiveFastMode,
+            planModeEnabled: isTrueForgeDraft ? false : effectivePlanMode,
           });
 
           // "创建即发送"路径:乐观回写 userSendAt 跳过 projectGrouping 的草稿兜底
@@ -4991,7 +5023,7 @@ export function NewMakerDraftRoute() {
                   // hasAnyRemoteTarget 影响 —— 它会在该设备离线时变 false,把「浏览文件夹」推回
                   // 本机原生对话框(见 FolderPickerPopover.handleChooseDifferent 的同款防护)。
                   onAddRemoteProject={
-                    hasAnyRemoteTarget || folderPickerDeviceScope
+                    !isTrueForgeDraft && (hasAnyRemoteTarget || folderPickerDeviceScope)
                       ? handleOpenRemoteProject
                       : undefined
                   }
@@ -5019,7 +5051,7 @@ export function NewMakerDraftRoute() {
                     />
                   </button>
                 </FolderPickerPopover>
-                <WorktreeChipsRow
+                {!isTrueForgeDraft && <WorktreeChipsRow
                   variant="advancedOnly"
                   compact
                   cwd={effectiveWorkingDir ?? null}
@@ -5041,7 +5073,7 @@ export function NewMakerDraftRoute() {
                   disabled={wtCreating || sendInFlight}
                   branchDisabled={wtBranchPreferenceLoading || wtBranchPreferenceSaving}
                   checkboxDisabled={wtPreferenceSaving}
-                />
+                />}
               </div>
               <ThemeBrandLockup
                 theme={activeColorTheme}
@@ -5078,7 +5110,11 @@ export function NewMakerDraftRoute() {
                     onEffortDidChange={handleEffortDidChange}
                     onPermissionModeDidChange={handlePermissionModeDidChange}
                     onProviderDidChange={handleProviderDidChange}
-                    vendorKey={normalizeDbAgentKind(draft.vendor)}
+                    vendorKey={
+                      draft.vendor === 'trueforge'
+                        ? 'trueforge'
+                        : normalizeDbAgentKind(draft.vendor)
+                    }
                     folderPickerOpen={folderPickerOpen}
                     onFolderPickerOpenChange={handleFolderPickerOpenChange}
                     showFolderPicker={false}
@@ -5109,7 +5145,7 @@ export function NewMakerDraftRoute() {
                     // 走它而非简单 worker popover。ON 态点击 onChange(enabled:false) 关闭协同。
                     // createSession 后按本次策略校验结果用 workerConfig 拉起 Worker。
                     collaboration={
-                      collabPolicyEligible
+                      collabPolicyEligible && !isTrueForgeDraft
                         ? {
                             enabled: effectiveCollab.enabled,
                             worker: effectiveCollab.worker,
@@ -5171,10 +5207,12 @@ export function NewMakerDraftRoute() {
                     // 不传 onChange 时 ExtraDirsButton 直接不渲染引用目录段(「新建目标」/ 计划模式 /
                     // Plugin 入口不受影响)。进入远程设备时 extraDirs 已被清空,不会留下无法删除的残留。
                     // 恢复这个能力要把 picker 路由到对端(设备域浏览器已有 fs:list-dir),见 follow-up。
-                    onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}
+                    onExtraDirsChange={
+                      isTrueForgeDraft || isDeviceLinkDraft ? undefined : handleExtraDirsChange
+                    }
                     // 首页「新建目标」入口:草稿态没有 sessionId,由本组件 createSession→setGoal。
                     // ChatInput 把输入框当前文字传上来作默认目标内容。
-                    onNewGoal={(text) => {
+                    onNewGoal={isTrueForgeDraft ? undefined : (text) => {
                       setNewGoalInitialObjective(text);
                       setNewGoalOpen(true);
                     }}

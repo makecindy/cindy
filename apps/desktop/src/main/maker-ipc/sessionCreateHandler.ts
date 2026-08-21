@@ -63,6 +63,8 @@ export interface MakerSessionCreateHandlerDeps<
   allocateDialogueWorkspace?: (sessionId: string, nowMs: number) => string;
   createSessionId?: () => string;
   now?: () => number;
+  /** True for device-link/controller-originated creates. */
+  isRemoteInvoke?: () => boolean;
   /**
    * 显式 sessionId 的创建事务锁。device-link 的预创建 worktree 补偿回收使用同一把锁，
    * 防止控制端超时后晚到的 create 与 cleanup 并发，出现「刚落库就被删目录」。
@@ -87,6 +89,9 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
       }),
       deps.warnStderr,
     );
+    if (deps.isRemoteInvoke?.() && (o.agentKind as string) === 'trueforge') {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'TrueForge sessions are desktop-local in this version');
+    }
 
     const run = async () => {
       let bootstrapped: Awaited<ReturnType<typeof deps.bootstrapSession>>;

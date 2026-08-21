@@ -288,7 +288,11 @@ import {
   plainTextToComposerDocument,
   stripHostCapabilityChips,
 } from '@/lib/composerListDocument';
-import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
+import {
+  useAgentCapabilities,
+  type AgentKind,
+  type CapabilityAgentKind,
+} from '@/hooks/useAgentCapabilities';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
@@ -452,7 +456,7 @@ interface ChatInputProps {
    * 已由 session/runtime 元数据确认的当前 Agent。null/undefined 表示身份尚未加载；
    * 不能用 vendorKey 的 Claude Code 默认回退冒充真实身份。
    */
-  runtimeAgentKind?: AgentKind | null;
+  runtimeAgentKind?: CapabilityAgentKind | null;
   /**
    * 会话的 Orca 角色(lead / worker;null = 已确认非协同;undefined = 元数据未加载)。
    * 协同运行时对 agent 形态有独立
@@ -639,7 +643,7 @@ interface ChatInputProps {
    * M35: Vendor lock — when provided, ModelSelector only shows models
    * belonging to this vendor ('cc' for Claude, 'codex' for OpenAI Codex).
    */
-  vendorKey?: 'cc' | 'codex' | 'pi';
+  vendorKey?: 'cc' | 'codex' | 'pi' | 'trueforge';
   /**
    * Optional override for the composerDraftStore key used to persist editor
    * content (and via attachmentState, attachments) across mount/unmount.
@@ -772,10 +776,11 @@ function agentKindToVendor(kind: AgentKind): 'cc' | 'codex' | 'pi' {
   return kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc';
 }
 
-function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
+function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi' | 'trueforge'): CapabilityAgentKind | null {
   if (v === 'cc') return 'claude-code';
   if (v === 'codex') return 'codex';
   if (v === 'pi') return 'pi';
+  if (v === 'trueforge') return 'trueforge';
   return null;
 }
 
@@ -1289,6 +1294,7 @@ export function ChatInput({
       // 冷加载帧:runtimeAgentKind 尚未确认时就默认 claude-code,会将其他引擎的会话内容
       // 发给 Claude Code provider —— 跳过预测,等 agent 身份确认后再恢复。
       if (runtimeAgentKind == null) return;
+      if (runtimeAgentKind === 'trueforge') return;
       const latestMessages = messagesRef.current;
       const ed = editorRef.current;
       if (
@@ -1632,8 +1638,11 @@ export function ChatInput({
   // initialModel/initialEffort 缺失的瞬态(会话快照未加载)兜底:读本地草稿 lastByVendor
   // (localStorage,按 agent 分槽、sanitize 恒有种子值)。默认模型/档位偏好已全量本地化,
   // 不再依赖服务端 UserPreferences(登录态失效/离线时模型与档位选择必须照常工作)。
-  const localVendorDefaults =
-    getDraft().lastByVendor[vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : 'cc'];
+  const localVendorDefaults = getDraft().lastByVendor[
+    vendorKey === 'trueforge'
+      ? 'trueforge'
+      : vendorKey === 'pi' ? 'pi' : vendorKey === 'codex' ? 'codex' : 'cc'
+  ];
   // session-agent-switch 意图制:意图期内 chip / 选择器显示用户选择的目标
   // (model/effort/provider/fast),props(镜像 DB)仍是旧引擎值——真切换在下一条
   // 消息发送时刻 apply,patched 回流后意图清除、显示交回 props。意图存放在
@@ -1721,17 +1730,31 @@ export function ChatInput({
     return () => clearTimeout(timer);
   }, [initialModel, initialEffort, initialProviderId, pendingRemoteSwitch]);
 
-  const agentKind = vendorKeyToAgentKind(vendorKey);
+  const capabilityAgentKind = vendorKeyToAgentKind(vendorKey);
+  const isTrueForge = capabilityAgentKind === 'trueforge';
+  const stableVendorKey = isTrueForge
+    ? undefined
+    : (vendorKey as 'cc' | 'codex' | 'pi' | undefined);
+  const agentKind: AgentKind | null =
+    capabilityAgentKind === 'trueforge' ? null : capabilityAgentKind;
   // device-link 远程会话:能力(模型 / fast / effort)从被控端读;本地会话 deviceLinkDeviceId undefined → 本地。
   const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId ?? undefined);
   const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId ?? undefined);
   const piCaps = useAgentCapabilities('pi', deviceLinkDeviceId ?? undefined);
+  const trueForgeCaps = useAgentCapabilities(
+    'trueforge',
+    isTrueForge ? undefined : deviceLinkDeviceId ?? undefined,
+  );
   const activeAgentCapabilities =
-    agentKind === 'codex'
+    capabilityAgentKind === 'trueforge'
+      ? trueForgeCaps.capabilities
+      : agentKind === 'codex'
       ? codexCaps.capabilities
       : agentKind === 'pi'
         ? piCaps.capabilities
         : ccCaps.capabilities;
+  const trueForgeModelLabel =
+    trueForgeCaps.capabilities?.availableModels[0]?.displayName ?? activeModel;
 
   // session-agent-switch 入口门控。device-link 远程会话读**被控端**的值；除了基础
   // supportsSessionAgentSwitch，还必须有 v2 CAS 能力。同引擎 no-op 的安全收尾依赖 host
@@ -1886,7 +1909,7 @@ export function ChatInput({
   // 的「已知边界」)。unsupported 是**结构化**判定(isDeviceProvidersUnsupportedError),
   // 不是 providers.length===0:后者在首帧加载中恒成立,拿它当条件会让面板每次打开先闪
   // 一下旧版布局。
-  const unifiedModelPanelEnabled = !deviceLinkDeviceId || !remoteProviders.unsupported;
+  const unifiedModelPanelEnabled = !isTrueForge && (!deviceLinkDeviceId || !remoteProviders.unsupported);
   // 联合列表参与哪些引擎 —— 以**运行时注册结果**为准(device-link 取被控端的)。
   // 撤掉新会话工具条的 AgentSelect 后,它的 hiddenVendors 门禁就落到这里:Pi 二进制缺失
   // 时模型目录照样投影 Pi 模型,只看目录会让用户一路选到 requireAgent 的 not-registered。
@@ -1918,7 +1941,7 @@ export function ChatInput({
         includeDisabled: !!sessionId,
       }).length > 0
     : false;
-  const noConnectedSource =
+  const noConnectedSource = !isTrueForge &&
     enforceConnectedSourceGate &&
     !!currentModelAgentKind &&
     !providersLoading &&
@@ -1934,7 +1957,7 @@ export function ChatInput({
   //   · 草稿(无 sessionId):sendProviderId 会 null 化 → 建会话回落默认路由,回落图标即真实,不判断开;
   //   · device-link 远程会话:连接态在被控端,控制端不判。
   // providersLoading 期间不判(规则同 noConnectedSource,避免首帧闪断开态)。
-  const selectedSourceDisconnected =
+  const selectedSourceDisconnected = !isTrueForge &&
     !!sessionId &&
     !deviceLinkDeviceId &&
     isSelectedSourceDisconnected({
@@ -1960,13 +1983,14 @@ export function ChatInput({
   //   providerId=null,路由才回落 spawn-aware 默认(字节级不变,no-break);写成显式 'xd'
   //   会改走 catalog gateway-key 路由(见 provider-route.ts),破坏默认 cohort 的路由/缓存基线。
   const sendProviderId = useMemo<string | null>(() => {
+    if (isTrueForge) return null;
     const kind = currentModelAgentKind;
     if (!kind || !activeProviderId) return null;
     return effectiveSourceIdForModel(sendProviders, activeProviderId, activeModel, kind) ===
       activeProviderId
       ? activeProviderId
       : null;
-  }, [sendProviders, currentModelAgentKind, activeProviderId, activeModel]);
+  }, [sendProviders, currentModelAgentKind, activeProviderId, activeModel, isTrueForge]);
 
   // 模型预设采用「全局默认 + 已创建会话保护」:
   //   - 本地草稿 / 已创建会话的**非选中行**都读写 providerModelMemory,所以同一
@@ -5121,6 +5145,7 @@ export function ChatInput({
         // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
         // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
         if (
+          !isTrueForge &&
           enforceConnectedSourceGate &&
           currentModelAgentKind &&
           // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
@@ -6403,11 +6428,12 @@ export function ChatInput({
   // composerEngineMarkVendor / 锚点派生校验早已同口径。意图清除(发送后 patched 回流)时
   // vendorKey 收敛成同一个值,口径无缝交回。
   const intentTargetAgent = agentSwitchIntent?.target ?? null;
+  const stableRuntimeAgentKind = runtimeAgentKind === 'trueforge' ? null : runtimeAgentKind;
   const sessionEngineFilter = useMemo(() => {
     if (!unifiedModelPanelEnabled) return undefined;
     if (!sessionId || !vendorKey || remoteHostId || !sessionAgentSwitchSupported) return undefined;
     const currentAgent = intentTargetAgent ?? vendorKeyToAgentKind(vendorKey);
-    if (!currentAgent) return undefined;
+    if (!currentAgent || currentAgent === 'trueforge') return undefined;
     return {
       currentAgent,
       // 跨引擎确认 / 切换路由只认任务**正在跑**的引擎,不认挂着的意图目标。
@@ -6497,9 +6523,9 @@ export function ChatInput({
   //     (绝不拿 vendorKey 的 Claude Code 回退冒充,见 runtimeAgentKind 的 prop 说明);
   //   · 草稿:没有 session 身份可言,当前引擎就是 vendorKey 本身。
   const composerEngineMarkVendor = sessionId
-    ? (resolveModelSelectorAgentIdentity(runtimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??
+    ? (resolveModelSelectorAgentIdentity(stableRuntimeAgentKind, agentSwitchIntent?.target)?.vendorKey ??
       null)
-    : (vendorKey ?? null);
+    : (stableVendorKey ?? null);
 
   /**
    * 下发给统一面板的收藏锚点:草稿用调用方(NewMakerDraftRoute)持有的那一份,会话用上面
@@ -6529,10 +6555,10 @@ export function ChatInput({
   // 两件事撞在一起的后果不是"闪一下":Codex 会话会摆出一张**纯 Claude** 的列表,而且此时
   // 没有跨引擎兜底,点任意一行都会把 Claude 模型经 onProviderChange 塞进 Codex 会话
   // (bug4)。所以身份未确认时不锁 —— 回落旧面板一帧,等 runtimeAgentKind 落地再进统一面板。
-  const sessionEngineConfirmed = !sessionId || runtimeAgentKind != null;
+  const sessionEngineConfirmed = !sessionId || stableRuntimeAgentKind != null;
   const inSessionEngineLocked = Boolean(sessionId) && !sessionEngineFilter;
   const lockedSessionAgentKind =
-    inSessionEngineLocked && sessionEngineConfirmed ? (runtimeAgentKind ?? agentKind) : null;
+    inSessionEngineLocked && sessionEngineConfirmed ? (stableRuntimeAgentKind ?? agentKind) : null;
   // 形态偏好(三档并存,Chris 2026-08-17):'original' = 最原始选择器(含旧 harness
   // 分段切换,agentSwitch 因 unifiedPanelActive=false 自动回来);'classic'/'badge' =
   // 新选择器 A/B 版。capable 表示统一面板**可用**(老面板 footer 据此摆「尝试新
@@ -6576,7 +6602,7 @@ export function ChatInput({
     }) => {
       if (sessionId || settingsLocked) return;
       const targetKind = vendorKeyToAgentKind(selection.engine);
-      if (targetKind && selection.providerId) {
+      if (targetKind && targetKind !== 'trueforge' && selection.providerId) {
         if (selection.effort) {
           modelMemory?.setEffort(
             targetKind,
@@ -8108,16 +8134,16 @@ export function ChatInput({
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
-                <PermissionSelector
+                {!isTrueForge && <PermissionSelector
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
-                  vendorKey={vendorKey}
+                  vendorKey={stableVendorKey}
                   deviceId={deviceLinkDeviceId ?? undefined}
                   disabled={composerEditorLocked || settingsLocked}
                   dense={effectiveDenseToolbar}
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                />
+                />}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               <div
@@ -8140,6 +8166,14 @@ export function ChatInput({
                     <>{middleToolbarSlot}</>
                   ))}
                 <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
+                  {isTrueForge ? (
+                    <div
+                      className="inline-flex h-8 max-w-[220px] items-center rounded-full border border-[var(--chat-input-border)] px-3 text-12 text-[var(--text-secondary)]"
+                      title={trueForgeModelLabel}
+                    >
+                      <span className="truncate">{trueForgeModelLabel}</span>
+                    </div>
+                  ) : (
                   <ModelSelector
                     // 选中态一律是会话 / 草稿持有的 **wire model id**(sessions.model 或
                     // lastByVendor.model)。面板行的归一化 id 只活在面板内部 —— 从这里递进去
@@ -8195,14 +8229,14 @@ export function ChatInput({
                       }
                     }}
                     modelMemory={modelMemory}
-                    vendorKey={vendorKey}
+                    vendorKey={stableVendorKey}
                     // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成
                     // “下条消息”的目标。这样冷启动不猜 Claude Code，切换失败保留 intent
                     // 供重试时也不会长期隐藏身份或把目标冒充为当前 Agent。
                     agentIdentity={
                       sessionId
                         ? resolveModelSelectorAgentIdentity(
-                            runtimeAgentKind,
+                            stableRuntimeAgentKind,
                             agentSwitchIntent?.target,
                           )
                         : undefined
@@ -8249,17 +8283,20 @@ export function ChatInput({
                     // 行浮层引擎胶囊」完整取代(见 ModelSelectorContentProps.sessionEngineFilter
                     // 的 prop 说明),两者同时传会得到一个永远不渲染的分段。
                     agentSwitch={
+                      !isTrueForge &&
                       !unifiedPanelActive &&
                       sessionId &&
                       vendorKey &&
                       !remoteHostId &&
                       sessionAgentSwitchSupported
                         ? {
-                            currentVendor: vendorKey,
+                            currentVendor: vendorKey as 'cc' | 'codex' | 'pi',
                             // 两步分段的目标是 vendor 口径,确认门按 AgentKind 判(与意图
                             // 记录同形),在边界上转一次 —— 见 confirmAgentBrowseSwitch。
                             confirmBrowseSwitch: (targetVendor: 'cc' | 'codex' | 'pi') =>
-                              confirmAgentBrowseSwitch(vendorKeyToAgentKind(targetVendor)),
+                              confirmAgentBrowseSwitch(
+                                vendorKeyToAgentKind(targetVendor) as AgentKind,
+                              ),
                             onSwitch: performAgentSwitch,
                           }
                         : undefined
@@ -8294,6 +8331,7 @@ export function ChatInput({
                     // settings/CreateWorker 不传该 prop → Radix 回退,不 morph。
                     useMorphPopover
                   />
+                  )}
                 </div>
                 <div
                   className={

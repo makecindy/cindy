@@ -18,11 +18,13 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 const log = createLogger('useAgentCapabilities');
 
 export type AgentKind = 'claude-code' | 'codex' | 'pi';
+export type CapabilityAgentKind = AgentKind | 'trueforge';
 
 // capability 生命周期(预取 / 驱逐通知 / 本地快照刷新 / 启动预载)必须覆盖全部 agent，
 // 少一个就会让该 agent 的远程会话在断链或 provider revision 后收不到 loading 事件、
 // 也不再被重新预取，界面永久停在旧模型/能力快照(codex review)。新增 agent 只改这里。
-const ALL_AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
+const ALL_AGENT_KINDS = ['claude-code', 'codex', 'pi', 'trueforge'] as const;
+const REMOTE_AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
 // renderer 视角: id 全部是不透明 string, 渲染只读 displayName。
 // effort 的合法 id 集合 = capabilities.effortLevels 上每个项的 id。
@@ -55,7 +57,7 @@ export interface ModelDescriptor {
    * 解耦;生产环境 XD 网关由服务端按区域下发)。消费点见 modelDefinitions.newSessionDefaultModelId
    * 与 draftModelCalibration:被标记且可用的模型优先作新对话默认。
    */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'trueforge')[];
 }
 
 export interface EffortDescriptor {
@@ -203,7 +205,7 @@ function isOptionalNewSessionDefault(value: unknown): boolean {
   if (!Array.isArray(value) || value.length === 0) return false;
   if (
     value.some(
-      (agent) => agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi',
+      (agent) => agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi' && agent !== 'trueforge',
     )
   ) {
     return false;
@@ -278,7 +280,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
 }
 
 interface MakerApiShape {
-  getCapabilities: (agentKind: AgentKind) => Promise<AgentCapabilities>;
+  getCapabilities: (agentKind: CapabilityAgentKind) => Promise<AgentCapabilities>;
 }
 
 interface DeviceLinkShape {
@@ -307,7 +309,7 @@ function getDeviceLink(): DeviceLinkShape | null {
 // 缓存按 (deviceId, agentKind) 隔离 —— 两台机器模型/能力配置可能不同,绝不能串。
 // deviceId 省略 = 本机会话,走与改造前逐字节相同的本地路径(零回归)。
 type CacheKey = string;
-function cacheKey(agentKind: AgentKind, deviceId?: string): CacheKey {
+function cacheKey(agentKind: CapabilityAgentKind, deviceId?: string): CacheKey {
   return `${deviceId ?? 'local'}:${agentKind}`;
 }
 
@@ -318,7 +320,7 @@ let localGen = 0;
 /** 已提交的本地快照 revision；失败刷新不会前进，用来区分缺失 tombstone 与未提交。 */
 let localSnapshotRevision = 0;
 /** 已挂载 hook 的本地能力订阅者；刷新完成后一次性切到新快照，避免中途空白帧。 */
-const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities | null) => void>();
+const localListeners = new Set<(agent: CapabilityAgentKind, caps: AgentCapabilities | null) => void>();
 /** 远程能力缓存事件；驱逐时先标 stale，成功 / 失败后再结束这一轮刷新。 */
 export type DeviceCapabilitiesEvent =
   | { status: 'loading' }
@@ -360,7 +362,7 @@ export function subscribeDeviceCapabilities(
 }
 
 async function fetchCapabilities(
-  agentKind: AgentKind,
+  agentKind: CapabilityAgentKind,
   deviceId?: string,
 ): Promise<AgentCapabilities | null> {
   const key = cacheKey(agentKind, deviceId);
@@ -379,6 +381,7 @@ async function fetchCapabilities(
 
   let raw: Promise<AgentCapabilities>;
   if (deviceId) {
+    if (agentKind === 'trueforge') throw new Error('TrueForge is not available over device-link');
     // 远程:隧道到被控端的 maker:get-capabilities(已在 allowlist)。
     const dl = getDeviceLink();
     if (!dl) throw new Error('device-link IPC not available');
@@ -397,7 +400,7 @@ async function fetchCapabilities(
         cache.set(key, caps);
         inflight.delete(key);
         if (deviceId)
-          notifyRemoteCapabilities(deviceId, agentKind, { status: 'ready', capabilities: caps });
+          notifyRemoteCapabilities(deviceId, agentKind as AgentKind, { status: 'ready', capabilities: caps });
       } else if (!deviceId) {
         // 已提交的新快照优先：有值就返回当前 cache，明确删除则以 null 作为 tombstone。
         const current = cache.get(key);
@@ -416,7 +419,7 @@ async function fetchCapabilities(
       if (isCurrent()) {
         inflight.delete(key);
         if (deviceId) {
-          notifyRemoteCapabilities(deviceId, agentKind, {
+          notifyRemoteCapabilities(deviceId, agentKind as AgentKind, {
             status: 'error',
             error: e instanceof Error ? e.message : String(e),
           });
@@ -435,7 +438,7 @@ export interface UseAgentCapabilitiesResult {
 }
 
 export function useAgentCapabilities(
-  agentKind: AgentKind | null | undefined,
+  agentKind: CapabilityAgentKind | null | undefined,
   deviceId?: string,
 ): UseAgentCapabilitiesResult {
   const selectedKey = agentKind ? cacheKey(agentKind, deviceId) : null;
@@ -472,14 +475,14 @@ export function useAgentCapabilities(
       setLoading(false);
       setError(null);
     };
-    if (deviceId) return subscribeDeviceCapabilities(deviceId, agentKind, applyRemoteEvent);
+    if (deviceId) return subscribeDeviceCapabilities(deviceId, agentKind as AgentKind, applyRemoteEvent);
     const applySnapshot = (caps: AgentCapabilities | null): void => {
       setOwnerKey(key);
       setCapabilities(caps);
       setLoading(false);
       setError(null);
     };
-    const onRefresh = (refreshedAgent: AgentKind, caps: AgentCapabilities | null): void => {
+    const onRefresh = (refreshedAgent: CapabilityAgentKind, caps: AgentCapabilities | null): void => {
       if (refreshedAgent !== agentKind) return;
       applySnapshot(caps);
     };
@@ -554,7 +557,7 @@ export function useAgentCapabilities(
  * deviceId 省略 = 本机缓存(行为不变);传 deviceId = 该被控端的缓存。
  */
 export function getCachedCapabilities(
-  agentKind: AgentKind,
+  agentKind: CapabilityAgentKind,
   deviceId?: string,
 ): AgentCapabilities | null {
   return cache.get(cacheKey(agentKind, deviceId)) ?? null;
@@ -565,7 +568,7 @@ export function getCachedCapabilities(
  * 模型下拉 / fast / effort 不为空、modelDefinitions 同步层已热。失败 swallow(轮询/打开会话会再取)。
  */
 export async function prefetchDeviceCapabilities(deviceId: string): Promise<void> {
-  await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
+  await Promise.allSettled(REMOTE_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
@@ -577,12 +580,12 @@ export function evictDeviceCapabilities(deviceId: string): void {
   deviceGen.set(deviceId, (deviceGen.get(deviceId) ?? 0) + 1);
   // 已挂载 hook 必须同步知道旧快照已失效；否则 provider 新快照先到时会拿旧 capabilities
   // 计算 fallback，并永久覆盖用户原本保存的模型偏好。
-  for (const agentKind of ALL_AGENT_KINDS) {
+  for (const agentKind of REMOTE_AGENT_KINDS) {
     notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });
   }
 }
 
-export type LocalCapabilitiesSnapshot = ReadonlyArray<readonly [AgentKind, AgentCapabilities]>;
+export type LocalCapabilitiesSnapshot = ReadonlyArray<readonly [CapabilityAgentKind, AgentCapabilities]>;
 
 /** 开始一轮本地 capabilities 刷新，并作废所有更早的本地请求。 */
 export function beginLocalCapabilitiesRefresh(): number {
@@ -605,7 +608,7 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
   const entries = await Promise.all(
-    ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
+    ALL_AGENT_KINDS.map(async (agent): Promise<readonly [CapabilityAgentKind, AgentCapabilities] | null> => {
       try {
         return [agent, await api.getCapabilities(agent)] as const;
       } catch (error) {
@@ -615,14 +618,17 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
             : typeof error === 'object' && error !== null && 'message' in error
               ? String(error.message)
               : String(error);
-        if (agent !== 'pi' || !message.includes("Agent 'pi' is not registered")) throw error;
-        log.warn('optional Pi capabilities unavailable; continuing with core agents:', error);
+        const optionalRuntimeMissing =
+          (agent === 'pi' && message.includes("Agent 'pi' is not registered")) ||
+          (agent === 'trueforge' && message.includes("Agent 'trueforge' is not registered"));
+        if (!optionalRuntimeMissing) throw error;
+        log.warn(`optional ${agent} capabilities unavailable; continuing with core agents:`, error);
         return null;
       }
     }),
   );
   return entries.filter(
-    (entry): entry is readonly [AgentKind, AgentCapabilities] => entry !== null,
+    (entry): entry is readonly [CapabilityAgentKind, AgentCapabilities] => entry !== null,
   );
 }
 

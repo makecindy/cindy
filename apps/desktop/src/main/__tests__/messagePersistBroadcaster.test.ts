@@ -1109,6 +1109,22 @@ describe('agent task terminal persistence', () => {
 });
 
 describe('agent_kind enqueue snapshot', () => {
+  it('persists the experimental TrueForge kind without coercing it to Claude', async () => {
+    noteSessionAgentKind(SESSION, 'trueforge');
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'trueforge-tool', toolName: 'search', input: { query: 'cindy' } },
+      null,
+    );
+    await flushWrites();
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({ role: 'tool_use', agentKind: 'trueforge' }),
+      broadcastGuard(),
+    );
+  });
+
   it('owner boundary after commit keeps the durable result instead of triggering retry', async () => {
     const result = await enqueueDurableWrite('post-commit-owner-switch', () => {
       ownerScopeState.current = false;

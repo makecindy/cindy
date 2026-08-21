@@ -1279,7 +1279,12 @@ export function ThreadPickerInline({ value, onSelect, onOpen, reference }: {
       .list(50, 'active')
       .then((list) => {
         if (!alive) return;
-        setSessions(list.filter((session) => !isReviewSessionSource(session.source)));
+        setSessions(
+          list.filter(
+            (session) =>
+              !isReviewSessionSource(session.source) && session.agentKind !== 'trueforge',
+          ),
+        );
         setError(null);
       })
       .catch((e: unknown) => {

@@ -700,7 +700,7 @@ describe('Shared create project picker', () => {
     // 上层仍要在已选设备时下发 onAddRemoteProject —— 入口 1 与空态入口都靠它,
     // 只是那个 Globe 项不再渲染。别顺手把这个 gate 一起收掉。
     expect(newMakerDraftRouteSource).toMatch(
-      /hasAnyRemoteTarget \|\|\s*folderPickerDeviceScope\s*\?\s*handleOpenRemoteProject\s*:\s*undefined/,
+      /!isTrueForgeDraft &&\s*\(hasAnyRemoteTarget \|\| folderPickerDeviceScope\)\s*\?\s*handleOpenRemoteProject\s*:\s*undefined/,
     );
   });
 
@@ -1047,7 +1047,7 @@ describe('Shared create project picker', () => {
     expect(folderPickerPopoverSource).toContain('onAddRemoteProject?.(deviceScope.deviceId);');
     // 已选定设备时无条件下发入口(设备离线也要能浏览它)。
     expect(newMakerDraftRouteSource).toMatch(
-      /hasAnyRemoteTarget \|\|\s*folderPickerDeviceScope\s*\?\s*handleOpenRemoteProject\s*:\s*undefined/,
+      /!isTrueForgeDraft &&\s*\(hasAnyRemoteTarget \|\| folderPickerDeviceScope\)\s*\?\s*handleOpenRemoteProject\s*:\s*undefined/,
     );
   });
 
@@ -1502,7 +1502,7 @@ describe('Shared create project picker', () => {
   // 会被静默丢掉、或撞上对端同名的无关目录 —— chip 显示的并不是真实授予的上下文。
   it('hides the reference-directory picker on remote drafts', () => {
     expect(newMakerDraftRouteSource).toContain(
-      'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
+      'isTrueForgeDraft || isDeviceLinkDraft ? undefined : handleExtraDirsChange',
     );
     // 统一建议面板的契约:没有 onExtraDirsChange 就不装配添加/移除引用目录能力。
     expect(chatInputSource).toContain('if (onExtraDirsChange) {');
