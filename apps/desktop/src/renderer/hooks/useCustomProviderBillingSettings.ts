@@ -55,7 +55,7 @@ export function useCustomProviderBillingSettings(deviceId?: string | null): {
       : subscribeCustomProviderShowSdkCost((next) => {
           if (!cancelled) setEnabledState(next);
         });
-    const pushUnsubscribe = window.electronAPI.maker.onCustomProviderBillingChanged?.(
+    const pushUnsubscribe = window.electronAPI.maker?.onCustomProviderBillingChanged?.(
       (payload: { deviceId?: string }) => {
         if (deviceId && payload?.deviceId !== deviceId) return;
         if (!deviceId && payload?.deviceId) return;

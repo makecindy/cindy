@@ -4,6 +4,11 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const estimatedSessionValueBatchFor = vi.fn();
+let remotePushListener: ((payload: {
+  deviceId: string;
+  channel: string;
+  payload: unknown;
+}) => void) | undefined;
 
 vi.mock('@/lib/makerTransport', () => ({
   estimatedSessionValueBatchFor: (...args: unknown[]) => estimatedSessionValueBatchFor(...args),
@@ -11,6 +16,14 @@ vi.mock('@/lib/makerTransport', () => ({
 
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
   isDataOwnerPushCurrent: () => true,
+}));
+
+vi.mock('@/lib/remoteDataOwnerPushFence', () => ({
+  isDeviceLinkRemotePushCurrent: () => true,
+}));
+
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: (sessionId: string) => sessionId === 'remote-1' ? 'dev-1' : undefined,
 }));
 
 import {
@@ -24,6 +37,7 @@ describe('useSidebarSessionUsageMoney', () => {
   beforeEach(() => {
     __resetSidebarSessionUsageStoreForTests();
     turnCostListener = undefined;
+    remotePushListener = undefined;
     estimatedSessionValueBatchFor.mockReset();
     estimatedSessionValueBatchFor.mockResolvedValue({
       's-1': {
@@ -34,6 +48,10 @@ describe('useSidebarSessionUsageMoney', () => {
         estimatedValueMoney: { amount: 0.34, currency: 'USD', approximate: true, kind: 'value-estimate' },
         excludedActualMoney: null,
       },
+      'remote-1': {
+        estimatedValueMoney: null,
+        excludedActualMoney: null,
+      },
     });
     vi.stubGlobal('window', {
       electronAPI: {
@@ -42,6 +60,12 @@ describe('useSidebarSessionUsageMoney', () => {
           turnCostListener = cb;
           return () => undefined;
         }),
+        deviceLink: {
+          onRemotePush: vi.fn((cb: typeof remotePushListener) => {
+            remotePushListener = cb ?? undefined;
+            return () => { remotePushListener = undefined; };
+          }),
+        },
       },
     });
   });
@@ -128,5 +152,40 @@ describe('useSidebarSessionUsageMoney', () => {
 
     expect(estimatedSessionValueBatchFor).toHaveBeenCalledTimes(2);
     expect(hook.result.current.estimatedValueMoney?.amount).toBeCloseTo(0.99);
+  });
+
+  it('refreshes a remote sidebar row from remote spend and turn-cost pushes', async () => {
+    vi.useFakeTimers();
+    const hook = renderHook(() =>
+      useSidebarSessionUsageMoney(
+        'remote-1',
+        { amount: 1, currency: 'USD', approximate: false, kind: 'actual-cost' },
+        1,
+        'regular',
+        false,
+      ),
+    );
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    await act(async () => {
+      remotePushListener?.({
+        deviceId: 'dev-1',
+        channel: 'usage:session-spend-changed',
+        payload: { sessionId: 'remote-1', totalCostUsd: 2 },
+      });
+    });
+    expect(hook.result.current.actualMoney?.amount).toBe(2);
+
+    await act(async () => {
+      remotePushListener?.({
+        deviceId: 'dev-1',
+        channel: 'usage:message-turn-cost',
+        payload: { sessionId: 'remote-1' },
+      });
+      await vi.runAllTimersAsync();
+    });
+    expect(estimatedSessionValueBatchFor).toHaveBeenCalledTimes(2);
   });
 });

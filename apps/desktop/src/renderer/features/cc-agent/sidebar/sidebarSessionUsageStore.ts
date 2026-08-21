@@ -10,6 +10,10 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import {
+  isDeviceLinkRemotePushCurrent,
+} from '@/lib/remoteDataOwnerPushFence';
 import {
   combineSessionUsageMoney,
   subtractExcludedActualMoney,
@@ -51,6 +55,7 @@ const inflight = new Set<string>();
 let listenersInstalled = false;
 let unsubscribeTurnCost: (() => void) | undefined;
 let unsubscribeSpend: (() => void) | undefined;
+let unsubscribeRemotePush: (() => void) | undefined;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function buildUsage(
@@ -113,6 +118,16 @@ function writeCache(
   return next;
 }
 
+function remoteSessionIdFor(sessionId: string): string | undefined {
+  return getStickySessionDeviceId(sessionId);
+}
+
+function invalidateSessionProjection(sessionId: string): void {
+  if (!interestParams.has(sessionId)) return;
+  pending.add(sessionId);
+  scheduleFlush();
+}
+
 function installSharedListeners(): void {
   if (listenersInstalled) return;
   listenersInstalled = true;
@@ -133,6 +148,27 @@ function installSharedListeners(): void {
     if (!interestParams.has(payload.sessionId)) return;
     pending.add(payload.sessionId);
     scheduleFlush();
+  });
+  unsubscribeRemotePush = window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
+    if (push.channel !== 'usage:session-spend-changed' && push.channel !== 'usage:message-turn-cost') return;
+    if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
+    const payload = push.payload as { sessionId?: string; totalMoney?: unknown; totalCostUsd?: unknown } | null;
+    if (!payload?.sessionId) return;
+    const deviceId = remoteSessionIdFor(payload.sessionId);
+    if (deviceId !== push.deviceId) return;
+    const params = interestParams.get(payload.sessionId);
+    if (!params) return;
+    if (push.channel === 'usage:session-spend-changed') {
+      writeCache(payload.sessionId, {
+        actualMoney:
+          normalizeRegionalMoney(payload.totalMoney) ??
+          (typeof payload.totalCostUsd === 'number' ? legacyUsdMoney(payload.totalCostUsd) : null),
+        presentation: params.presentation,
+        showSdkEstimate: params.showSdkEstimate,
+      });
+      return;
+    }
+    invalidateSessionProjection(payload.sessionId);
   });
 }
 
@@ -272,8 +308,10 @@ export function __resetSidebarSessionUsageStoreForTests(): void {
   }
   unsubscribeTurnCost?.();
   unsubscribeSpend?.();
+  unsubscribeRemotePush?.();
   unsubscribeTurnCost = undefined;
   unsubscribeSpend = undefined;
+  unsubscribeRemotePush = undefined;
   listenersInstalled = false;
 }
 

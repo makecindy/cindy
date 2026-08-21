@@ -88,4 +88,28 @@ describe('sidebar session cost presentation', () => {
       }),
     ]);
   });
+
+  it('does not label reference-price plus SDK as a pure SDK estimate', () => {
+    const pieces = buildSessionInfoPieces(
+      session({
+        amount: 0.75,
+        currency: 'USD',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['reference-price', 'sdk-estimate'],
+      }),
+      ['cost'],
+      undefined,
+      t,
+      false,
+      false,
+    );
+    expect(pieces).toEqual([
+      expect.objectContaining({
+        key: 'cost',
+        text: '$0.75',
+        title: 'ccAgent.sidebar.taskInfoTip.cost',
+      }),
+    ]);
+  });
 });

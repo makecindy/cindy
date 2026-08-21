@@ -3639,4 +3639,18 @@ describe('任务消息内存治理', () => {
     expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
     expect(remoteSessionStore.isSessionMessageAuthorityCurrent(authority)).toBe(true);
   });
+
+  it('tracks custom-provider billing preference push revisions per device', () => {
+    let notifications = 0;
+    const unsubscribe = remoteSessionStore.subscribe(() => {
+      notifications += 1;
+    });
+
+    expect(remoteSessionStore.getCustomProviderBillingRevision('dev-1')).toBe(0);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:custom-provider-billing:changed', {});
+
+    expect(remoteSessionStore.getCustomProviderBillingRevision('dev-1')).toBe(1);
+    expect(notifications).toBe(1);
+    unsubscribe();
+  });
 });

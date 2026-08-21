@@ -106,9 +106,12 @@ export function buildSessionInfoPieces(
     if (field === 'cost') {
       const money = session.totalMoney;
       if (money && money.amount > 0) {
+        const reasons = money.estimateReasons ?? [];
         const isSdkEstimate =
           money.kind === 'value-estimate' &&
-          money.estimateReasons?.includes('sdk-estimate') === true;
+          reasons.includes('sdk-estimate') &&
+          !reasons.includes('reference-price') &&
+          !reasons.includes('subscription-value');
         pieces.push({
           key: 'cost',
           text: formatMoney(money),

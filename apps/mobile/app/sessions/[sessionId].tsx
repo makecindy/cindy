@@ -498,6 +498,7 @@ import {
   sessionMetaWriteQueue,
   sessionPendingWrites,
   type RemoteSessionRunStatus,
+  useCustomProviderBillingRevision,
   useRemoteSessions,
   useSessionGoalStatus,
   useSessionInputProjection,
@@ -2282,9 +2283,11 @@ export default function SessionScreen() {
     [composerDeviceProviders.providers],
   );
 
+  const customProviderBillingRevision = useCustomProviderBillingRevision(deviceId);
   const sessionBillingRequestKey = [
     deviceId,
     connectionEpoch,
+    customProviderBillingRevision,
     sessionBillingRevision,
     sessionBillingProviderRevision,
   ].join('\n');
@@ -2861,7 +2864,6 @@ export default function SessionScreen() {
   }, []);
   const openSessionMenu = useCallback((view: SessionMenuView = 'menu') => {
     setMenuInitialView(view);
-    setSessionBillingRefreshKey((current) => current + 1);
     setSettingsOpen(true);
   }, []);
   const openSessionTreeAfterMenu = useCallback(() => {
