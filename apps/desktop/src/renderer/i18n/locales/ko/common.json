@@ -717,6 +717,13 @@
         "item2": "큰 작업은 여러 턴으로 나누세요. 먼저 이해하고, 다음에 수정하고, 마지막에 검증하세요.",
         "item3": "독립적인 문제는 한 스레드에 섞지 말고 새 세션을 만들어 처리하세요."
       },
+      "linuxUpdates": {
+        "title": "Linux 설치와 업데이트",
+        "description": "Linux는 현재 Ubuntu 22.04 / 24.04용 .deb로 제공됩니다. 새 빌드가 있으면 앱이 다운로드하고, 설치할 때 시스템 비밀번호를 묻습니다.",
+        "item1": "처음 설치할 때는 sudo apt install ./cindy-<버전>-amd64.deb 를 사용하세요.",
+        "item2": "앱 안 업데이트는 .deb를 다운로드합니다. 업데이트를 선택하면 시스템 권한 확인 후 덮어써 설치합니다.",
+        "item3": "설치에 비밀번호가 필요하므로 Linux에서는 Beta 채널과 유휴 상태 자동 설치를 제공하지 않습니다."
+      },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
       "qnaPlaceholder": "예: Codex 세션을 어떻게 가져오나요?",
@@ -775,6 +782,7 @@
       "openLogsDirError": "로그 디렉터리를 열지 못했습니다",
       "autoUpdateLabel": "유휴 상태일 때 업데이트 설치",
       "autoUpdateDescription": "업데이트 다운로드가 완료된 뒤, 이 컴퓨터가 10분 동안 조작되지 않았고 실행 중인 작업이 없으면 앱을 자동으로 다시 시작해 설치합니다.",
+      "linuxUpdateDescription": "새 빌드가 있으면 앱에서 .deb를 다운로드합니다. 설치할 때 시스템 비밀번호가 필요하므로 유휴 상태에서는 자동 설치하지 않습니다.",
       "autoUpdateEnabledToast": "유휴 상태 자동 업데이트 설치가 켜졌습니다",
       "autoUpdateDisabledToast": "유휴 상태 자동 업데이트 설치가 꺼졌습니다",
       "autoUpdateSaveFailed": "자동 업데이트 설정을 저장하지 못했습니다",
@@ -5188,7 +5196,7 @@
       "ready": "새 버전 준비 완료 — 사이드바를 클릭해 업데이트 완료",
       "manifestFailed": "업데이트 확인 실패, 네트워크를 확인하세요",
       "downloadFailed": "새 버전 다운로드 실패, 나중에 다시 시도하세요",
-      "manualDownload": "Linux 첫 릴리스는 수동 다운로드만 지원합니다. 다운로드 페이지에서 최신 설치 프로그램을 받아 주세요."
+      "manualDownload": "앱에서 업데이트를 다운로드하세요. 설치하려면 시스템 비밀번호가 필요합니다."
     },
     "closeConfirm": {
       "title": "정말 나가시겠습니까?",

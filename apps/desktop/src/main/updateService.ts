@@ -56,6 +56,7 @@ import {
 import { throwIpcError } from './utils/ipcValidate';
 import { noteExpectedExit } from './startup-diagnostics';
 import { buildMacOSUpdateScript } from './updateScriptMacOS';
+import { buildLinuxUpdateScript, normalizeLinuxDebSha256 } from './updateScriptLinux';
 import { disposeAndroidAdb } from './mcp-integrations/android';
 import { abortIOSSimulatorOperationsForExit } from './mcp-integrations/ios-simulator-exit';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
@@ -200,7 +201,7 @@ function broadcastStatus(payload: UpdateStatusPayload): void {
 
 function channelSettingsWire() {
   return {
-    enableBeta: readUpdateChannelSettings().enableBeta,
+    enableBeta: process.platform === 'linux' ? false : readUpdateChannelSettings().enableBeta,
     isCustomized: isEnableBetaUserCustomized(),
   };
 }
@@ -287,6 +288,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
     nowMs,
     lastBusyAtMs,
     lastResumeAtMs,
+    requiresInteractiveAuth: process.platform === 'linux',
   });
 }
 
@@ -310,6 +312,8 @@ async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason 
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
+  // pkexec 必须用户在场输入密码，启动时不能自己装。
+  if (process.platform === 'linux') return 'interactive-auth';
   return null;
 }
 
@@ -492,6 +496,8 @@ export function isUpdateRelaunchImminent(): boolean {
   if (currentStatus !== 'downloading' && currentStatus !== 'ready') return false;
   // The native updater replaces the *installed* app; it never runs in dev.
   if (isDev()) return false;
+  // Linux 安装要 pkexec 密码，不会在空闲/启动时自己装。
+  if (process.platform === 'linux') return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
   // there until they click the banner, which is not "imminent".
   return readAutoUpdateSettings().autoRelaunchOnIdle;
@@ -907,6 +913,23 @@ function isMacAppTranslocated(): boolean {
   return !isDev() && process.platform === 'darwin' && !app.isInApplicationsFolder();
 }
 
+/**
+ * mac/win 热更下 hotfix zip；Linux 没有 hotfix，清单只挂 installer .deb。
+ * 非 .deb 的 Linux installer 直接丢掉，避免把任意文件交给 pkexec。
+ */
+function resolveUpdateAsset(manifest: Manifest): { file: string; sha256: string; size: number } | undefined {
+  if (process.platform === 'linux') {
+    const installer = manifest.app.installer;
+    if (!installer?.file || !installer.sha256) return undefined;
+    if (!installer.file.toLowerCase().endsWith('.deb')) {
+      log.error('Linux installer is not a .deb, refusing in-app update: %s', installer.file);
+      return undefined;
+    }
+    return installer;
+  }
+  return manifest.app.hotfix;
+}
+
 // ── Core check logic ───────────────────────────────────────────────────────
 
 export type CheckForUpdateResult =
@@ -967,12 +990,6 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     return 'idle';
   }
 
-  if (process.platform === 'linux') {
-    log.info('Linux first-release guard: skipping in-app update flow');
-    currentStatus = 'idle';
-    return 'manual_download';
-  }
-
   // wasReady 路径:本地已经下好了 a 版本,正在等用户点重启。这次轮询要继续做版本对比,
   // 发现 b > a 时进入 superseding 状态去下 b,而不是像旧实现那样直接短路返回。
   // previousReadyVersion/Path 用于失败时静默回退到 a。
@@ -994,9 +1011,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     return 'manifest_failed';
   }
 
-  const asset = manifest.app.hotfix;
+  const asset = resolveUpdateAsset(manifest);
   if (!asset) {
-    log.info('No hotfix in manifest');
+    log.info(process.platform === 'linux' ? 'No installer in Linux manifest' : 'No hotfix in manifest');
     if (!wasReady) currentStatus = 'idle';
     return 'idle';
   }
@@ -1384,6 +1401,95 @@ function executeUpdateMacOS(zipPath: string): void {
   forceQuit();
 }
 
+function readStagedLinuxDebSha256(debPath: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(getUpdatesDir(), PATCH_INFO_FILE), 'utf-8');
+    const info = JSON.parse(raw) as PatchInfo;
+    if (info.fileName && path.basename(debPath) !== info.fileName) return null;
+    return normalizeLinuxDebSha256(info.sha256 ?? '');
+  } catch {
+    return null;
+  }
+}
+
+function executeUpdateLinux(debPath: string): void {
+  const exePath = app.getPath('exe');
+  const ts = Date.now();
+  const scriptDir = getUpdatesDir();
+  const scriptPath = path.join(scriptDir, `cindy-update-${ts}.sh`);
+  const lockFilePath = getUpdateLockPath();
+  const logDir = path.join(app.getPath('userData'), 'logs');
+  fs.mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(logDir, 'cindy-update.log');
+  const pid = process.pid;
+
+  if (!debPath.toLowerCase().endsWith('.deb') || !fs.existsSync(debPath)) {
+    log.error('Linux update file is missing or not a .deb: %s', maskPath(debPath));
+    handleApplyFailure('linux_deb_missing');
+    return;
+  }
+
+  const sha256 = readStagedLinuxDebSha256(debPath);
+  if (!sha256) {
+    log.error('Linux staged .deb is missing a trusted sha256: %s', maskPath(debPath));
+    handleApplyFailure('linux_deb_unverified');
+    return;
+  }
+
+  log.info('Linux relaunch: exe=%s, deb=%s, pid=%d', maskPath(exePath), maskPath(debPath), pid);
+  try {
+    const exeStat = fs.statSync(exePath);
+    const debStat = fs.statSync(debPath);
+    log.info(
+      'pre-update stat: exe size=%d mtime=%s, deb size=%d',
+      exeStat.size, exeStat.mtime.toISOString(), debStat.size,
+    );
+  } catch (err) {
+    log.error('pre-update stat failed:', err);
+  }
+
+  let script: string;
+  try {
+    script = buildLinuxUpdateScript({
+      pid, debPath, sha256, exePath, lockFilePath, scriptPath, logPath,
+    });
+  } catch (err) {
+    log.error('failed to build Linux update script:', err);
+    handleApplyFailure('linux_script_build_failed');
+    return;
+  }
+  const scriptFd = fs.openSync(scriptPath, 'wx', 0o700);
+  try {
+    fs.writeFileSync(scriptFd, script);
+  } finally {
+    fs.closeSync(scriptFd);
+  }
+
+  const child = spawn('/bin/bash', [scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+  });
+
+  const spawnTimeout = setTimeout(() => {
+    log.error('Linux update script spawn timed out after 5 s');
+    try { fs.unlinkSync(scriptPath); } catch { /* ignore */ }
+    handleApplyFailure('spawn_timeout');
+  }, 5_000);
+
+  child.on('spawn', () => {
+    clearTimeout(spawnTimeout);
+    child.unref();
+    forceQuit();
+  });
+
+  child.on('error', (err: NodeJS.ErrnoException) => {
+    clearTimeout(spawnTimeout);
+    log.error('Linux update script spawn failed: %s (code=%s)', err.message, err.code);
+    try { fs.unlinkSync(scriptPath); } catch { /* ignore */ }
+    handleApplyFailure(err.code ?? 'unknown');
+  });
+}
+
 function executeRelaunch(theme: 'light' | 'dark'): void {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
@@ -1447,8 +1553,7 @@ function executeRelaunch(theme: 'light' | 'dark'): void {
       executeUpdateMacOS(readyFilePath);
       break;
     case 'linux':
-      log.error('Linux in-app update is intentionally disabled in first release');
-      handleApplyFailure('linux_update_disabled');
+      executeUpdateLinux(readyFilePath);
       break;
     default:
       log.error(`Unsupported platform: ${process.platform}`);
@@ -1533,6 +1638,9 @@ export function initUpdateService(): void {
 
   ipcMain.handle('update-channel-settings-set', async (event, payload: unknown) => {
     assertTrustedAppRendererEvent(event);
+    if (process.platform === 'linux') {
+      throwIpcError('INVALID_PARAMS', 'Linux does not support the beta update channel');
+    }
     if (!payload || typeof payload !== 'object') {
       throwIpcError('INVALID_PARAMS', 'update channel settings payload required');
     }
