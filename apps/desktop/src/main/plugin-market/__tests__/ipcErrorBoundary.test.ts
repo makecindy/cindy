@@ -170,6 +170,17 @@ describe('Plugin Market IPC error boundary', () => {
       manifestIncompatible: false,
     },
     {
+      label: 'a duplicated unknown string slot',
+      // 同一个未知 slot 出现两次:新 Host 识别后仍会因重复声明而拒包,所以不该
+      // 提示升级,应判为包本身无效(GHOST_FILE_INVALID)。
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: ['future-capability', 'future-capability'],
+        tools: undefined,
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
       label: 'an unknown string slot alongside another malformed field',
       // slots 的未知字符串项本可提示升级,但 tools 字段也畸形——包本身有问题,
       // 必须报文件无效而非让用户升级 Cindy(其余字段先校验,错误不被升级提示掩盖)。

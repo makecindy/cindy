@@ -1332,11 +1332,18 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   // 继续校验——只有除此之外清单完全合法时才在收尾处报"宿主不支持",避免 tools
   // 等其它字段也有错误时被升级提示掩盖(包本身坏了,不该让用户去升级 Cindy)。
   let unknownStringSlot: string | null = null;
+  // 未知字符串 slot 也要查重:['future','future'] 不是「升级就能用」——新 Host 识别
+  // 该 slot 后,同一校验器会因重复声明而拒包,所以重复值必须归为包无效而非宿主不支持。
+  const seenUnknownStringSlots = new Set<string>();
   for (const s of raw.slots) {
     // 旧名兼容:'model' 静默归一化为 'cindy'(2026-07-11 更名,已装老包不消失)。
     const name = s === 'model' ? 'cindy' : s;
     if (typeof name !== 'string' || !(GHOST_SLOTS as readonly string[]).includes(name)) {
       if (typeof s === 'string' && s !== 'model') {
+        if (seenUnknownStringSlots.has(s)) {
+          return { ok: false, reason: `slots 含重复卡槽 ${JSON.stringify(s)}` };
+        }
+        seenUnknownStringSlots.add(s);
         unknownStringSlot ??= s;
         continue;
       }
