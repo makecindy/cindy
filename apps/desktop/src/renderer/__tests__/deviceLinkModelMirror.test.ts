@@ -35,14 +35,14 @@ describe('replaceScope / get*', () => {
     expect(getMirrorFast(DRAFT, 'codex', 'openai', 'unknown')).toBeUndefined();
   });
 
-  it('新快照的全局槽优先于来源兼容副本', () => {
+  it('只读真实 provider 槽,不采用 * 全局槽', () => {
     replaceScope(DRAFT, {
       'claude-code:*': { effortByModel: { opus: 'xhigh' }, fastByModel: { opus: true } },
       'claude-code:anthropic': { effortByModel: { opus: 'high' }, fastByModel: { opus: false } },
     });
-    expect(getMirrorEffort(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe('xhigh');
-    expect(getMirrorEffort(DRAFT, 'claude-code', 'xd', 'opus')).toBe('xhigh');
-    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(true);
+    expect(getMirrorEffort(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe('high');
+    expect(getMirrorEffort(DRAFT, 'claude-code', 'xd', 'opus')).toBeUndefined();
+    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBeUndefined();
   });
 
   it('replaceScope(undefined) 等于清空该 scope', () => {
@@ -70,11 +70,11 @@ describe('scope 隔离', () => {
     expect(getMirrorEffort(SESSION, 'claude-code', 'anthropic', 'opus')).toBe('low');
   });
 
-  it('同 agent/model 跨 provider 共享,不同 agent 仍隔离', () => {
+  it('同 agent/model 按 provider 隔离,不同 agent 也隔离', () => {
     setMirrorFast(DRAFT, 'claude-code', 'anthropic', 'opus', true);
-    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(true);
+    expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBeUndefined();
     setMirrorFast(DRAFT, 'claude-code', 'xd', 'opus', false);
-    expect(getMirrorFast(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe(false);
+    expect(getMirrorFast(DRAFT, 'claude-code', 'anthropic', 'opus')).toBe(true);
     expect(getMirrorFast(DRAFT, 'claude-code', 'xd', 'opus')).toBe(false);
     expect(getMirrorFast(DRAFT, 'codex', 'xd', 'opus')).toBeUndefined();
   });
@@ -110,11 +110,22 @@ describe('makeMirrorAccessors', () => {
     expect(onWrite).toHaveBeenCalledWith('codex', 'openai', 'gpt-5.4', { fast: true });
   });
 
+  it('setThinking:乐观写镜像 + 用 {thinking} 调 onWrite', () => {
+    const onWrite = vi.fn();
+    const acc = makeMirrorAccessors(SESSION, onWrite);
+    acc.setThinking?.('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', false);
+    expect(acc.getThinking?.('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8')).toBe(false);
+    expect(onWrite).toHaveBeenCalledWith('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', {
+      thinking: false,
+    });
+  });
+
   it('setChoice:共享预设并显式标记真正选中模型', () => {
     const onWrite = vi.fn();
     const acc = makeMirrorAccessors(SESSION, onWrite);
     acc.setChoice?.('claude-code', 'anthropic', 'opus', 'high');
-    expect(acc.getEffort('claude-code', 'xd', 'opus')).toBe('high');
+    expect(acc.getEffort('claude-code', 'anthropic', 'opus')).toBe('high');
+    expect(acc.getEffort('claude-code', 'xd', 'opus')).toBeUndefined();
     expect(onWrite).toHaveBeenCalledWith('claude-code', 'anthropic', 'opus', {
       effort: 'high',
       markModelChoice: true,

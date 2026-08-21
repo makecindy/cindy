@@ -56,6 +56,7 @@ interface ProviderMemory {
   lastModel: string;
   effortByModel: Record<string, Effort>;
   fastByModel: Record<string, boolean>;
+  thinkingByModel: Record<string, boolean>;
 }
 
 /** getProviderModelChoice 的返回形状(该来源上次的 model + 其 effort)。供 resolveSourceSwitch 消费。 */
@@ -82,7 +83,12 @@ function sanitize(raw: unknown): Record<string, ProviderMemory> {
   const out: Record<string, ProviderMemory> = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (!k || !v || typeof v !== 'object') continue;
-    const rec = v as { lastModel?: unknown; effortByModel?: unknown; fastByModel?: unknown };
+    const rec = v as {
+      lastModel?: unknown;
+      effortByModel?: unknown;
+      fastByModel?: unknown;
+      thinkingByModel?: unknown;
+    };
     const effortByModel: Record<string, Effort> = {};
     if (rec.effortByModel && typeof rec.effortByModel === 'object' && !Array.isArray(rec.effortByModel)) {
       for (const [mid, eff] of Object.entries(rec.effortByModel as Record<string, unknown>)) {
@@ -95,8 +101,23 @@ function sanitize(raw: unknown): Record<string, ProviderMemory> {
         if (mid && typeof fb === 'boolean') fastByModel[mid] = fb;
       }
     }
-    if (Object.keys(effortByModel).length === 0 && Object.keys(fastByModel).length === 0) continue;
-    out[k] = { lastModel: typeof rec.lastModel === 'string' ? rec.lastModel : '', effortByModel, fastByModel };
+    const thinkingByModel: Record<string, boolean> = {};
+    if (rec.thinkingByModel && typeof rec.thinkingByModel === 'object' && !Array.isArray(rec.thinkingByModel)) {
+      for (const [mid, tb] of Object.entries(rec.thinkingByModel as Record<string, unknown>)) {
+        if (mid && typeof tb === 'boolean') thinkingByModel[mid] = tb;
+      }
+    }
+    if (
+      Object.keys(effortByModel).length === 0 &&
+      Object.keys(fastByModel).length === 0 &&
+      Object.keys(thinkingByModel).length === 0
+    ) continue;
+    out[k] = {
+      lastModel: typeof rec.lastModel === 'string' ? rec.lastModel : '',
+      effortByModel,
+      fastByModel,
+      thinkingByModel,
+    };
   }
   return out;
 }
@@ -110,7 +131,12 @@ function migrateV1(raw: unknown): Record<string, ProviderMemory> {
     const model = (v as { model?: unknown }).model;
     const effort = (v as { effort?: unknown }).effort;
     if (typeof model === 'string' && model.length > 0 && typeof effort === 'string' && effort.length > 0) {
-      out[k] = { lastModel: model, effortByModel: { [model]: effort as Effort }, fastByModel: {} };
+      out[k] = {
+        lastModel: model,
+        effortByModel: { [model]: effort as Effort },
+        fastByModel: {},
+        thinkingByModel: {},
+      };
     }
   }
   return out;
@@ -188,7 +214,7 @@ export function getProviderModelChoice(
   const rec = load()[keyOf(agent, providerId)];
   if (!rec || !rec.lastModel) return undefined;
   const map = load();
-  const effort = map[presetKeyOf(agent)]?.effortByModel[rec.lastModel] ?? rec.effortByModel[rec.lastModel];
+  const effort = rec.effortByModel[rec.lastModel];
   return effort ? { model: rec.lastModel, effort } : undefined;
 }
 
@@ -203,7 +229,7 @@ export function getProviderModelEffort(
 ): Effort | undefined {
   if (!providerId || !model) return undefined;
   const map = load();
-  return map[presetKeyOf(agent)]?.effortByModel[model] ?? map[keyOf(agent, providerId)]?.effortByModel[model];
+  return map[keyOf(agent, providerId)]?.effortByModel[model];
 }
 
 function setModelEffort(
@@ -216,15 +242,9 @@ function setModelEffort(
   if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model || !effort) return;
   const map = load();
   const providerKey = keyOf(agent, providerId);
-  const presetKey = presetKeyOf(agent);
   const provider = map[providerKey];
-  const preset = map[presetKey];
   const lastModel = updateLastModel ? model : (provider?.lastModel ?? '');
-  if (
-    provider?.lastModel === lastModel &&
-    provider.effortByModel[model] === effort &&
-    preset?.effortByModel[model] === effort
-  ) return;
+  if (provider?.lastModel === lastModel && provider.effortByModel[model] === effort) return;
 
   persist({
     ...map,
@@ -232,11 +252,7 @@ function setModelEffort(
       lastModel,
       effortByModel: { ...(provider?.effortByModel ?? {}), [model]: effort },
       fastByModel: provider?.fastByModel ?? {},
-    },
-    [presetKey]: {
-      lastModel: '',
-      effortByModel: { ...(preset?.effortByModel ?? {}), [model]: effort },
-      fastByModel: preset?.fastByModel ?? {},
+      thinkingByModel: provider?.thinkingByModel ?? {},
     },
   });
 }
@@ -274,7 +290,7 @@ export function getProviderModelFast(
 ): boolean | undefined {
   if (!providerId || !model) return undefined;
   const map = load();
-  return map[presetKeyOf(agent)]?.fastByModel?.[model] ?? map[keyOf(agent, providerId)]?.fastByModel?.[model];
+  return map[keyOf(agent, providerId)]?.fastByModel?.[model];
 }
 
 /**
@@ -289,21 +305,46 @@ export function setProviderModelFast(
   if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
   const map = load();
   const providerKey = keyOf(agent, providerId);
-  const presetKey = presetKeyOf(agent);
   const provider = map[providerKey];
-  const preset = map[presetKey];
-  if (provider?.fastByModel?.[model] === enabled && preset?.fastByModel?.[model] === enabled) return;
+  if (provider?.fastByModel?.[model] === enabled) return;
   persist({
     ...map,
     [providerKey]: {
       lastModel: provider?.lastModel ?? '',
       effortByModel: provider?.effortByModel ?? {},
       fastByModel: { ...(provider?.fastByModel ?? {}), [model]: enabled },
+      thinkingByModel: provider?.thinkingByModel ?? {},
     },
-    [presetKey]: {
-      lastModel: '',
-      effortByModel: preset?.effortByModel ?? {},
-      fastByModel: { ...(preset?.fastByModel ?? {}), [model]: enabled },
+  });
+}
+
+export function getProviderModelThinking(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+): boolean | undefined {
+  if (!providerId || !model) return undefined;
+  return load()[keyOf(agent, providerId)]?.thinkingByModel?.[model];
+}
+
+export function setProviderModelThinking(
+  agent: AgentKind,
+  providerId: string,
+  model: string,
+  enabled: boolean,
+): void {
+  if (!providerId || providerId === MODEL_PRESET_SLOT_ID || !model) return;
+  const map = load();
+  const providerKey = keyOf(agent, providerId);
+  const provider = map[providerKey];
+  if (provider?.thinkingByModel?.[model] === enabled) return;
+  persist({
+    ...map,
+    [providerKey]: {
+      lastModel: provider?.lastModel ?? '',
+      effortByModel: provider?.effortByModel ?? {},
+      fastByModel: provider?.fastByModel ?? {},
+      thinkingByModel: { ...(provider?.thinkingByModel ?? {}), [model]: enabled },
     },
   });
 }
@@ -376,21 +417,31 @@ export function clearProviderModelFast(
 }
 
 /**
- * 快照当前全部槽的 (effortByModel, fastByModel)(丢弃 lastModel)。用于 renderer → main 缓存和
- * device-link 控制端镜像被控设备的全局模型预设。深拷贝,调用方拿到的快照不随后续本地改动变化。
+ * 快照当前全部槽的 (effortByModel, fastByModel, thinkingByModel)(丢弃 lastModel)。
+ * 用于 renderer → main 缓存和 device-link 控制端镜像被控设备的全局模型预设。
+ * 深拷贝,调用方拿到的快照不随后续本地改动变化。
  */
 export function snapshotForSeed(): Record<
   string,
-  { effortByModel: Record<string, Effort>; fastByModel: Record<string, boolean> }
+  {
+    effortByModel: Record<string, Effort>;
+    fastByModel: Record<string, boolean>;
+    thinkingByModel: Record<string, boolean>;
+  }
 > {
   const out: Record<
     string,
-    { effortByModel: Record<string, Effort>; fastByModel: Record<string, boolean> }
+    {
+      effortByModel: Record<string, Effort>;
+      fastByModel: Record<string, boolean>;
+      thinkingByModel: Record<string, boolean>;
+    }
   > = {};
   for (const [k, slot] of Object.entries(load())) {
     out[k] = {
       effortByModel: { ...slot.effortByModel },
       fastByModel: { ...slot.fastByModel },
+      thinkingByModel: { ...slot.thinkingByModel },
     };
   }
   return out;

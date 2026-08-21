@@ -53,6 +53,7 @@ import {
   type UnifiedModelPanelProps,
   type UnifiedSelectedRow,
 } from './UnifiedModelPanel';
+import { ThinkingToggle } from './ThinkingToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
 import {
@@ -154,6 +155,8 @@ export interface ModelMemoryAccessors {
   setChoice?: (agent: AgentKind, providerId: string, modelId: string, effort: Effort) => void;
   getFast: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
   setFast: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
+  getThinking?: (agent: AgentKind, providerId: string, modelId: string) => boolean | undefined;
+  setThinking?: (agent: AgentKind, providerId: string, modelId: string, enabled: boolean) => void;
   /**
    * 「恢复推荐 / 回落默认」用的**删除**入口(2026-08-17 review H3)。
    *
@@ -448,6 +451,7 @@ interface RowModel {
   defaultEffort: Effort | null;
   effortDisplayNames?: Partial<Record<string, string>>;
   supportsFastMode?: boolean;
+  thinkingToggle?: boolean;
   /** 模型级 Codex bridge 协议；仅同一 Provider 内混合原生/桥接模型时存在。 */
   codexCompatibilityWireProtocol?: 'openai-chat' | 'anthropic-messages';
   /** 展示图标 id(AI Gateway / 目录设定,SectionModel.icon);flat 列表的 ModelDescriptor 无此字段。 */
@@ -620,6 +624,8 @@ interface ModelSelectorProps {
   fastMode?: boolean;
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  thinkingEnabled?: boolean;
+  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   /** 非选中模型行的 effort/fast 全局预设读写器(按本机 / 被控设备隔离)。 */
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
@@ -766,6 +772,8 @@ interface ModelSelectorContentProps {
   fastMode?: boolean;
   /** 语义同 onEffortChange(含返回值口径)。 */
   onFastModeChange?: (enabled: boolean) => void | boolean | Promise<void | boolean>;
+  thinkingEnabled?: boolean;
+  onThinkingChange?: (enabled: boolean) => void | Promise<void>;
   modelMemory?: ModelMemoryAccessors;
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** device-link 远程会话所属被控端 id(列被控端模型)。 */
@@ -1020,6 +1028,8 @@ function ModelSelectorContentView({
   onEffortChange,
   fastMode = false,
   onFastModeChange,
+  thinkingEnabled = true,
+  onThinkingChange,
   modelMemory,
   vendorKey,
   deviceId,
@@ -2011,7 +2021,10 @@ function ModelSelectorContentView({
     (editingIsActive || inactiveProviderHasMemory) &&
     !!editingModel &&
     fastEditable(editingProviderId, editingModel);
-  const editHasEfforts = canConfigure && (editingModel?.efforts.length ?? 0) > 0;
+  const editThinkingToggle =
+    canConfigure && currentAgentKind === 'pi' && editingModel?.thinkingToggle === true;
+  const editHasEfforts =
+    canConfigure && (editingModel?.efforts.length ?? 0) > 0 && !editThinkingToggle;
 
   // 配置列当前 effort 值(选中 → live;否则记忆/默认)。
   const editEffortValue: Effort | null = editingModel
@@ -2110,7 +2123,7 @@ function ModelSelectorContentView({
           </span>
         )}
       </div>
-      {(editShowFast || editHasEfforts) && (
+      {(editShowFast || editHasEfforts || editThinkingToggle) && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editShowFast && (
@@ -2125,7 +2138,39 @@ function ModelSelectorContentView({
           />
         </div>
       )}
-      {editShowFast && editHasEfforts && (
+      {editShowFast && (editHasEfforts || editThinkingToggle) && (
+        <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
+      )}
+      {editThinkingToggle && editingModel && (
+        <div className="px-0.5">
+          <ThinkingToggle
+            enabled={
+              editingIsActive
+                ? thinkingEnabled
+                : (currentAgentKind && editingProviderId
+                    ? (modelMemory?.getThinking?.(currentAgentKind, editingProviderId, editingModel.id) ?? true)
+                    : true)
+            }
+            onToggle={() => {
+              const next = editingIsActive
+                ? !thinkingEnabled
+                : !(currentAgentKind && editingProviderId
+                    ? (modelMemory?.getThinking?.(currentAgentKind, editingProviderId, editingModel.id) ?? true)
+                    : true);
+              if (currentAgentKind && editingProviderId) {
+                modelMemory?.setThinking?.(currentAgentKind, editingProviderId, editingModel.id, next);
+              }
+              if (editingIsActive) void onThinkingChange?.(next);
+              bump();
+            }}
+            label={t('newChat.modelSelector.thinking')}
+            hideIcon
+            accentVar="var(--text-primary)"
+            thumbVar="var(--surface-on-card)"
+          />
+        </div>
+      )}
+      {editThinkingToggle && editHasEfforts && (
         <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />
       )}
       {editHasEfforts && (
@@ -3040,6 +3085,8 @@ export function ModelSelector({
   onEffortChange,
   fastMode,
   onFastModeChange,
+  thinkingEnabled,
+  onThinkingChange,
   modelMemory,
   vendorKey,
   agentIdentity,
@@ -3165,21 +3212,21 @@ export function ModelSelector({
 
   // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁;区别只在收尾:
-  //   · 调用方执行了切换(返回非 false)→ 收起面板(与旧两步分段选完即收一致);
-  //   · 用户在确认框上取消 / 事务失败(返回 false)→ 面板留在原地,他还能接着挑别的行。
+  // 保命锁。收尾**成功也不关**(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊,
+  // 以前 applied=true 就收窗,表象就是「所有模型改不了 Harness」。取消 / 失败同样留在原地。
   //
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
   // 不再只是确认框那一下。保命锁刻意**覆盖整个 await 期**:事务在途时面板被 Popover 的
   // 外点判定收掉,收尾再把 open 设回 true,就成了「面板闪一下又自己弹回来」。锁按住期间
-  // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰,收尾时才按结果决定收还是留
-  // —— 中途没有可以插进来的关闭窗口。
+  // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰。
   //
-  // ★ 因此 open 的表达式必须是 `(open && !disabled) || keepOpenForAgentConfirmation`,
-  // 不能是 `(open || keepOpen) && !disabled`(Chris 2026-08-19 实测「面板原地刷新一下」的
-  // 根因):事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled
-  // 拉高,后一种写法会连保命锁一起压掉 —— 面板当场收合,收尾时 setOpenWithoutAutoRefresh(true)
-  // 又把它弹回来。保命锁的意义就是「这段时间里别关」,disabled 不该有权否决它。
+  // ★ open 的表达式必须是 `open || keepOpenForAgentConfirmation`,disabled **不能**参与
+  // 开关(Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」):
+  // 事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled 拉高。
+  // `(open && !disabled) || keepOpen` 只保住确认框那条路,改思维 / 同引擎重登记不走
+  // keepOpen,选单照关。disabled 只该让面板置灰(interactionDisabled),不该有权把窗口关掉。
+  // 不能写成 `(open || keepOpen) && !disabled` —— 那是 08-19 的原症状。
+  // 不能写成 `(open && !disabled) || keepOpen` —— 那是 08-20 改思维仍闪关。
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
@@ -3191,8 +3238,10 @@ export function ModelSelector({
         setKeepOpenForAgentConfirmation(true);
         try {
           const applied = await onCrossEngineSelect(args);
-          // 执行了切换 → 收面板;取消 → 留在原地(open 保持 true)。
-          setOpenWithoutAutoRefresh(applied === false);
+          // 成功也不收选单(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊。
+          // 以前 `applied === true` 就把窗口关了,表象就是「所有模型改不了 Harness」——
+          // 一点胶囊选单消失,变量还没调完。取消 / 失败同样留在原地。用户自己点外面才关。
+          setOpenWithoutAutoRefresh(true);
           return applied !== false;
         } finally {
           setKeepOpenForAgentConfirmation(false);
@@ -3340,8 +3389,17 @@ export function ModelSelector({
     !providersLoading &&
     !hasConnectedSource;
   // trigger 上仍展示当前模型的 effort(模型支持时)。
-  const showEffort = !fallbackOption?.active && efforts.length > 0 && efforts.includes(effort);
-  const fullEffortLabel = showEffort ? labelOf(effort) : null;
+  const triggerProvider = providers.find((provider) => provider.id === activeSourceId);
+  const activeThinkingToggle =
+    currentAgentKind === 'pi' &&
+    !!triggerProvider &&
+    getModel(triggerProvider, modelId, currentAgentKind)?.thinkingToggle === true;
+  const showEffort = !fallbackOption?.active && efforts.length > 0 && efforts.includes(effort) && !activeThinkingToggle;
+  const fullEffortLabel = showEffort
+    ? labelOf(effort)
+    : activeThinkingToggle && thinkingEnabled
+      ? t('newChat.modelSelector.thinking')
+      : null;
   const effortLabel = showEffort
     ? modelCompactEffortLabel(
         resolvedTranslationLanguage(i18n),
@@ -3751,6 +3809,8 @@ export function ModelSelector({
       onEffortChange={onEffortChange}
       fastMode={fastMode}
       onFastModeChange={onFastModeChange}
+      thinkingEnabled={thinkingEnabled}
+      onThinkingChange={onThinkingChange}
       modelMemory={modelMemory}
       vendorKey={vendorKey}
       deviceId={deviceId}
@@ -3795,7 +3855,7 @@ export function ModelSelector({
   if (morphEnabled) {
     return (
       <MorphPopover
-        open={(open && !disabled) || keepOpenForAgentConfirmation}
+        open={open || keepOpenForAgentConfirmation}
         onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
@@ -3822,7 +3882,7 @@ export function ModelSelector({
 
   return (
     <Popover
-      open={(open && !disabled) || keepOpenForAgentConfirmation}
+      open={open || keepOpenForAgentConfirmation}
       onOpenChange={handleOpenChange}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>

@@ -95,10 +95,12 @@ export interface MobileComposerInputRowProps {
   editable?: boolean;
   /**
    * 语音按钮 render。语音按钮是简洁态与卡片态都存在的常驻控件，
-   * 由组件用一份完整 absolute 样式渲染为同一实例：简洁态贴输入行右侧、
-   * 卡片态落在底部工具排右二（工具排里放 ComposerToolbarVoiceSlot 占位）。
-   * 定位走 resolveMobileComposerVoiceButtonAnchorStyle，两态都写全 top /
-   * bottom / transform，避免 RN 合并残留把麦克风停在卡片中部。
+   * 由定位壳包成同一实例：简洁态在输入行右侧垂直居中、卡片态落在底部
+   * 工具排（工具排里放 ComposerToolbarVoiceSlot 占位）。壳的样式走
+   * resolveMobileComposerVoiceButtonAnchorStyle（数字 top/bottom +
+   * justifyContent），并由 voiceButtonTouchTarget 保住至少 44pt 横向命中区；
+   * 按钮本身不再吃 absolute inset，避免百分比 top 残留把麦克风停在卡片
+   * 中部挡住文字。
    */
   floatingVoiceButton?: (style: StyleProp<ViewStyle>) => ReactNode;
   floatingVoiceButtonStyle?: StyleProp<ViewStyle>;
@@ -321,15 +323,36 @@ export function MobileComposerInputRow({
           {toolbar}
         </View>
       ) : null}
-      {voicePlacement?.inline || voicePlacement?.floating
-        ? floatingVoiceButton?.([
-          resolveMobileComposerVoiceButtonAnchorStyle({
-            cardLayout,
-            floating: voicePlacement.floating,
-          }),
-          floatingVoiceButtonStyle,
-        ])
-        : null}
+      {voicePlacement?.inline || voicePlacement?.floating ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.voiceButtonTouchTarget,
+            resolveMobileComposerVoiceButtonAnchorStyle({
+              cardLayout,
+              floating: voicePlacement.floating,
+            }),
+          ]}
+        >
+          {floatingVoiceButton?.(floatingVoiceButtonStyle)}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/** card 工具排左侧组:[+][权限][计划][模型]。包成一行内组,药丸贴着权限而不是被 spacer 推到右侧。 */
+export function ComposerToolbarLeftGroup({
+  children,
+  testID,
+}: {
+  children: ReactNode;
+  testID?: string;
+}) {
+  const styles = useThemedStyles(makeMobileComposerInputRowStyles);
+  return (
+    <View style={styles.toolbarLeftGroup} testID={testID}>
+      {children}
     </View>
   );
 }
@@ -571,14 +594,30 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     alignItems: 'center',
     flexDirection: 'row',
     gap: MOBILE_COMPOSER_TOOL_GAP,
+    justifyContent: 'flex-start',
     marginTop: 8,
+  },
+  toolbarLeftGroup: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 1,
+    gap: MOBILE_COMPOSER_TOOL_GAP,
+    justifyContent: 'flex-start',
+    minWidth: 0,
   },
   toolbarSpacer: {
     flex: 1,
+    minWidth: 0,
   },
   toolbarVoiceSlot: {
     height: MOBILE_COMPOSER_CONTROL_SIZE,
     width: MOBILE_COMPOSER_CONTROL_SIZE,
+  },
+  // hitSlop 不会越过直接父边界：普通 34pt 麦克风需要至少 44pt 的横向父层。
+  // 用 minWidth 而非 width，录音计时胶囊仍可向左自然增宽；alignItems:flex-end
+  // 保持按钮右缘和原锚点不变。
+  voiceButtonTouchTarget: {
+    minWidth: MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   },
   // 字号 / 行高 / 水平内边距全部走 composerTextMetrics:WebView 富文本编辑器与语音
   // 听写覆盖层用同一份度量,三边换行位置必须逐字一致(见该文件注释)。

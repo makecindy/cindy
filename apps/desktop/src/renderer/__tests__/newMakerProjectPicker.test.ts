@@ -1749,24 +1749,15 @@ describe('New Maker 草稿的 wire model id 口径', () => {
     expect(handler).not.toContain('rowModelId');
   });
 
-  it('收藏锚点按 wire id 判失效,不拿收藏条目的归一化 id 去比', () => {
-    // 收藏条目按**归一化行 id** 存(那是行的稳定身份),草稿里放的是 wire id ——
-    // 直接比 favorite.modelId 与 draftInitialModel,像 chatgpt/gpt-5.6-luna 这类两者本就
-    // 不相等的模型会每次都判成失配,刚点上的收藏立刻掉勾。
-    //
-    // **有意变更**(Chris 2026-08-19):锚点从组件态改成按引擎分槽持久化
-    // (favoriteAnchorMemory),变量名随之从 selectedFavoriteAnchor 变成 draftFavoriteAnchor,
-    // 「vendor 也要对得上」那一维由槽键承担(读的永远是当前引擎那一格)。**比的仍然是
-    // wire id**,这条锁不变。
-    expect(newMakerDraftRouteSource).toContain(
+  it('草稿收藏选中只认 uid,不拿草稿当前模型/来源去对快照', () => {
+    // 收藏是独立选中项(Chris 2026-08-20):勾选身份就是 uid。拿 wire/来源去对,点了收藏
+    // 之后草稿被 coerce / seed 改走就会掉勾,焦点落到下面同名模型行。
+    expect(newMakerDraftRouteSource).toContain('draftFavoriteAnchor?.uid ?? null');
+    expect(newMakerDraftRouteSource).not.toContain(
       'draftFavoriteAnchor.wireModelId === draftInitialModel',
     );
-    // 来源也是锚点身份(2026-08-19 review P1):同 wire model 跨来源不得误恢复。
-    expect(newMakerDraftRouteSource).toContain(
-      'draftFavoriteAnchor.providerId === chatInitialProviderId',
-    );
     expect(newMakerDraftRouteSource).not.toContain('favorite.modelId !== draftInitialModel');
-    // 快照在选中那一刻记下本次写进草稿的 (wire id, 来源)。
+    // 快照仍记下选中那一刻的 (wire id, 来源),建会话延续用,不参与勾选判定。
     expect(newMakerDraftRouteSource).toContain('wireModelId: selection.modelId,');
     expect(newMakerDraftRouteSource).toContain('providerId: selection.providerId,');
   });

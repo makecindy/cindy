@@ -18,6 +18,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function classifyUpstreamErrorBody(text: string): 'empty' | 'json' | 'text' {
+  if (!text.trim()) return 'empty';
+  try {
+    JSON.parse(text);
+    return 'json';
+  } catch {
+    return 'text';
+  }
+}
+
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   if (res.headersSent) return;
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -262,6 +272,11 @@ export function createResponsesChatHandler(
 
       if (!upstream.ok || !upstream.body) {
         const text = await readErrorText(upstream);
+        log.warn?.('responses-chat bridge upstream error', {
+          model: request.model,
+          status: upstream.status,
+          errorKind: classifyUpstreamErrorBody(text),
+        });
         await reportUpstreamError(upstream.status, text);
         res.off('close', abortUpstream);
         writeJson(

@@ -143,6 +143,7 @@ import { findClaudeSessionJsonl } from './claude-projects-fs.js';
 import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
+import { resetClaudeGenerationTiming } from './generation-timing.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
 import type {
   ScanAtResourcesOptions,
@@ -1266,6 +1267,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'claude-code',
             getThresholdPct: getAutoCompactThresholdPct,
+            // 远端没有 overflow rollover;关掉 /compact 会让会话只能硬超限。
+            ...(opts.remoteHostId
+              ? {}
+              : {
+                  shouldHandoffAfterContextAssessment:
+                    this.deps.runtimeConfig.shouldHandoffAfterContextAssessment,
+                }),
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。
@@ -2357,6 +2365,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
+      resetClaudeGenerationTiming(runtimeState.generation);
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
@@ -3447,6 +3456,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     function teardownDeadHandle(logLabel: string): void {
       // Provider death is not a successful user cancellation. Session status
       // and the queued terminal error/done must decide observer settlement.
+      resetClaudeGenerationTiming(runtimeState.generation);
       discardActiveContinuation(logLabel);
       turnInFlight = false;
       // handle 死透 → 后续没有排队 turn 可跑, counter 归零避免残留污染下一 handle 重建
@@ -5933,6 +5943,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (closed) return;
         // Closing/dead sessions settle through Session status (or their queued
         // terminal event), never through the successful task-stop path.
+        resetClaudeGenerationTiming(runtimeState.generation);
         discardActiveContinuation('session_closed');
         clearUpstreamResponseIdle();
         pendingToolIds.clear();
@@ -5968,6 +5979,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? {
             async detach() {
               if (closed) return;
+              resetClaudeGenerationTiming(runtimeState.generation);
               discardActiveContinuation('session_detached', true);
               clearUpstreamResponseIdle();
               pendingToolIds.clear();

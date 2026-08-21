@@ -332,6 +332,7 @@ import {
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import {
   isModelDisabled,
+  isModelDisabledWithUniqueLegacyBasename,
   isProviderDisabled,
   type MediaCapability,
 } from '@cindy/model-providers';
@@ -393,6 +394,7 @@ import { isModelAccessReady } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
+  isMediaModelExecutableForGuide,
   listExecutableMediaModels,
   supportsMediaCapability,
 } from '../model-access/mediaModels.js';
@@ -3075,14 +3077,24 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
 function getVideoProviderRegistry() {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
   if (!registry) return null;
-  const xaiAliases =
-    getActiveCatalog()
-      .providers.find((provider) => provider.id === 'xai')
-      ?.videoModels?.map((model) => model.id) ?? [];
-  if (xaiAliases.some((alias) => !registry.hasAlias(alias))) {
+  const xaiCatalogProvider = getActiveCatalog().providers.find(
+    (provider) => provider.id === 'xai',
+  );
+  const xaiCatalogProviderId = xaiCatalogProvider?.id;
+  const xaiAliases = xaiCatalogProvider?.videoModels?.map((model) => model.id) ?? [];
+  const routableXaiAliases = xaiCatalogProviderId
+    ? xaiAliases.filter(
+        (alias) =>
+          !registry.hasAlias(alias) || registry.hasAlias(alias, xaiCatalogProviderId),
+      )
+    : [];
+  if (
+    xaiCatalogProviderId &&
+    routableXaiAliases.some((alias) => !registry.hasAlias(alias))
+  ) {
     registry.registerOrExtend(
       createXaiVideoProvider({
-        modelAliases: xaiAliases,
+        modelAliases: routableXaiAliases,
         hasOAuthLogin: () => hasGrokOAuthLogin(),
         getAccessToken: () => getGrokAccessToken(),
         getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
@@ -3092,6 +3104,7 @@ function getVideoProviderRegistry() {
         beforeDispatch: (model) => assertMediaModelStillEnabled('video', model),
         onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
       }),
+      xaiCatalogProviderId,
     );
   }
   return registry;
@@ -3106,10 +3119,55 @@ function isVideoCatalogProviderReady(providerId: string): boolean {
   return false;
 }
 
+const LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID = 'openai-images-v1';
+type LegacyCindyMediaAction = 'generate' | 'edit';
+
+/** 旧 cindy-request 类目清单只保留其固定通道对当前动作真正可执行的 XD 模型。 */
+function isXdMediaModelExecutableForCatalog(
+  kind: CindyCapabilityKind,
+  modelId: string,
+  action?: LegacyCindyMediaAction,
+): boolean {
+  if (kind === 'image') {
+    if (action) {
+      return isMediaModelExecutableForGuide(
+        modelId,
+        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
+        action === 'edit' ? 'image.edit' : 'image.generate',
+      );
+    }
+    return (
+      isMediaModelExecutableForGuide(
+        modelId,
+        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
+        'image.generate',
+      ) ||
+      isMediaModelExecutableForGuide(
+        modelId,
+        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
+        'image.edit',
+      )
+    );
+  }
+  if (kind === 'video') {
+    if (action) {
+      return isMediaModelExecutable(
+        modelId,
+        action === 'edit' ? 'video.image_to_video' : 'video.generate',
+      );
+    }
+    return (
+      isMediaModelExecutable(modelId, 'video.generate') ||
+      isMediaModelExecutable(modelId, 'video.image_to_video')
+    );
+  }
+  return true;
+}
+
 /**
  * 当前媒体能力配置(图像/视频同一套推导)——与会话模型列表**同一获取
- * 来源**:providers.json 运行时目录(getActiveCatalog,OSS 热更 + 内置兜底),
- * 汇总各供应商的 imageModels/imageDefaults 或 videoModels/videoDefaults。
+ * 来源**:active catalog。XD 媒体由 Gateway `/models` 动态投影，第三方媒体
+ * 保留各 Provider 的 imageModels/imageDefaults 或 videoModels/videoDefaults。
  * 清单与默认/档位选型全部来自目录,主机代码零
  * 模型字面量;派生规则见 cindyMediaCatalog.ts。
  *
@@ -3118,18 +3176,51 @@ function isVideoCatalogProviderReady(providerId: string): boolean {
  * (与聊天侧「无可用性证明不展示」同口径)。下游如实降级:详情页那几行显示
  * 灰字而不是下拉,cindySlot 早拒而不是拿不在册的型号下单。
  */
-function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConfig {
+function getCatalogMediaConfig(
+  kind: CindyCapabilityKind,
+  action?: LegacyCindyMediaAction,
+  selectedProviderId?: string,
+): CindyMediaCatalogConfig {
   try {
     // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
     // (与对话模型的准入口径同源,见 model-disable-store)。
     const access = readModelDisableOverrides();
     const catalog = getActiveCatalog();
+    const xdMediaModelIds = getXdGatewayModels()
+      .filter(
+        (model) =>
+          model.mode === 'image_generation' || model.mode === 'video_generation',
+      )
+      .map((model) => model.id);
+    // 旧 cindy-request 偏好不携带 providerId；同一完整 modelId 同时来自 XD 与
+    // 第三方时必须让托管默认来源先参与 first-wins，避免静默改用第三方凭证计费。
+    const orderedProviders =
+      kind === 'embed'
+        ? catalog.providers
+        : [
+            ...catalog.providers.filter((provider) => provider.id === 'xd'),
+            ...catalog.providers.filter((provider) => provider.id !== 'xd'),
+          ];
+    const providers = selectedProviderId
+      ? orderedProviders.filter((provider) => provider.id === selectedProviderId)
+      : orderedProviders;
+    const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
     return deriveCindyMediaConfig(
-      catalog.providers,
+      providers,
       kind,
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
-        isModelDisabled(access, providerId, modelId) ||
+        (providerId === 'xd' && kind !== 'embed'
+          ? isModelDisabledWithUniqueLegacyBasename(
+              access,
+              providerId,
+              modelId,
+              xdMediaModelIds,
+            )
+          : isModelDisabled(access, providerId, modelId)) ||
+        // active catalog 保留 Gateway 原始媒体事实源；旧 cindy-request 的同步目录
+        // 必须在消费边界复用已缓存的 Guide 预检结果，不能暴露这版客户端不可执行的型号。
+        (providerId === 'xd' && !isXdMediaModelExecutableForCatalog(kind, modelId, action)) ||
         // 向量:目录是热更的,可能给出客户端还不认识的型号 id(比 EmbeddingModelId
         // 这个静态联合更新)。不在这里滤掉的话,它会照常展示、可被钉选、甚至成为
         // 目录默认 —— 而执行侧 isKnownEmbeddingModel 那道纵深防御会把每一次请求
@@ -3140,7 +3231,7 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
         (kind === 'embed' && !isKnownEmbeddingModel(modelId)) ||
         // 视频目录可能比当前客户端通道先热更。执行 registry 不认识的型号
         // 必须先过滤，不能把“目录有”冒充成“这版客户端能下单”。
-        (kind === 'video' && !(getVideoProviderRegistry()?.hasAlias(modelId) ?? false)),
+        (kind === 'video' && !(videoRegistry?.hasAlias(modelId, providerId) ?? false)),
       // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
       // 头注)。视频按目录 provider 归属分别检查：xd 要求账号网关能力与 endpoint
       // 同时在场，xai 要求 SuperGrok OAuth 已连接；未知来源 fail closed。
@@ -3165,10 +3256,12 @@ function getCatalogMediaConfig(kind: CindyCapabilityKind): CindyMediaCatalogConf
   }
 }
 
-const getCatalogImageConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
-  getCatalogMediaConfig('image');
-const getCatalogVideoConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
-  getCatalogMediaConfig('video');
+const getCatalogImageConfig = (
+  action?: LegacyCindyMediaAction,
+): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image', action);
+const getCatalogVideoConfig = (
+  action?: LegacyCindyMediaAction,
+): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video', action);
 const getCatalogEmbedConfig = (): ReturnType<typeof getCatalogMediaConfig> =>
   getCatalogMediaConfig('embed');
 
@@ -3210,6 +3303,7 @@ function getMediaPreferenceConfig(
   capability: GhostMediaCapability,
 ): CindyMediaPreferenceConfig {
   const kind = capability.startsWith('image.') ? 'image' : 'video';
+  const videoRegistry = kind === 'video' ? getVideoProviderRegistry() : null;
   const coreCapability: MediaCapability =
     capability === 'video.edit' ? 'video.image_to_video' : capability;
   const providers = new Map(
@@ -3219,7 +3313,9 @@ function getMediaPreferenceConfig(
     .filter(
       (model) =>
         model.mode === (kind === 'image' ? 'image_generation' : 'video_generation') &&
-        supportsMediaCapability(model.modalities, coreCapability),
+        supportsMediaCapability(model.modalities, coreCapability) &&
+        (kind !== 'video' ||
+          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
     )
     .map((model) => {
       const provider = providers.get(model.providerId);
@@ -3241,7 +3337,11 @@ function getMediaPreferenceConfig(
     coreCapability,
     readModelDisableOverrides(),
   )
-    .filter((model) => isMediaModelExecutable(model.id, coreCapability))
+    .filter(
+      (model) =>
+        isMediaModelExecutable(model.id, coreCapability) &&
+        (kind !== 'video' || (videoRegistry?.hasAlias(model.id, 'xd') ?? false)),
+    )
     .map((model) => {
       const provider = providers.get('xd');
       const providerName = provider?.name ?? 'Cindy AI';
@@ -3277,11 +3377,107 @@ function resolveMediaPreferenceModel(
   const exact = config.models.find((model) => model.id === preference);
   if (exact) return exact;
   if (decodeMediaPreference(preference)) return null;
+  if (!preference.includes('/')) {
+    const legacyXdMatches = config.models.filter(
+      (model) =>
+        model.providerId === 'xd' &&
+        model.modelId.slice(model.modelId.lastIndexOf('/') + 1) === preference,
+    );
+    if (legacyXdMatches.length === 1) return legacyXdMatches[0]!;
+  }
   return (
     config.models.find((model) => model.providerId === 'xd' && model.modelId === preference) ??
     config.models.find((model) => model.modelId === preference) ??
     null
   );
+}
+
+function resolveMediaPreferenceOrDefault(
+  config: CindyMediaPreferenceConfig,
+  preference: string | undefined,
+): CindyMediaPreferenceModel | null {
+  return (
+    resolveMediaPreferenceModel(config, preference) ??
+    resolveMediaPreferenceModel(config, config.defaults?.standard)
+  );
+}
+
+/**
+ * Art 1.12.5–1.13.2 已经走 Core media，但还不会在 prepare 时传
+ * providerId。这段兼容窗口对同名模型选择一个可用来源并优先 Cindy AI；
+ * 1.13.3 起插件会传完整来源，恢复全部 Provider 选择。
+ */
+function isProviderBlindCoreArt(ghost: InstalledGhost): boolean {
+  return (
+    ghost.manifest.id === 'cindy-art' &&
+    supportsCindyVersion(ghost.manifest.version, '1.12.5') &&
+    !supportsCindyVersion(ghost.manifest.version, '1.13.3')
+  );
+}
+
+/** 旧插件无法区分同 modelId 的来源：冲突时优先 XD，否则保留第一个可用来源。 */
+function collapseProviderBlindMediaModels<T extends { providerId: string }>(
+  models: readonly T[],
+  modelId: (model: T) => string,
+): T[] {
+  const grouped = new Map<string, T[]>();
+  for (const model of models) {
+    const id = modelId(model);
+    const group = grouped.get(id) ?? [];
+    group.push(model);
+    grouped.set(id, group);
+  }
+  const selected: T[] = [];
+  for (const group of grouped.values()) {
+    const xd = group.find((model) => model.providerId === 'xd');
+    selected.push(xd ?? group[0]!);
+  }
+  return selected;
+}
+
+function getGhostMediaPreferenceConfig(
+  ghostId: string,
+  capability: GhostMediaCapability,
+): CindyMediaPreferenceConfig {
+  const config = getMediaPreferenceConfig(capability);
+  const ghost = getGhostManager().list().find((candidate) => candidate.manifest.id === ghostId);
+  if (!ghost || !isProviderBlindCoreArt(ghost)) return config;
+  const models = collapseProviderBlindMediaModels(config.models, (model) => model.modelId);
+  const standard = models[0]?.id;
+  return {
+    models,
+    defaults: standard ? { standard, draft: standard, best: standard } : null,
+  };
+}
+
+/** 存量钉定已失效或旧插件无法表达时，一次性升级为当前可用选型。 */
+function resolveAndMigrateGhostMediaPreference(
+  ghostId: string,
+  capability: GhostMediaCapability,
+  config: CindyMediaPreferenceConfig,
+  preference: string | undefined,
+): CindyMediaPreferenceModel | null {
+  const selected = resolveMediaPreferenceOrDefault(config, preference);
+  if (preference && selected && preference !== selected.id) {
+    try {
+      writeGhostCindyOverride(ghostId, capability, selected.id);
+      log.info('migrating stale ghost media preference to available model', {
+        ghostId,
+        capability,
+        previousPreference: preference,
+        nextPreference: selected.id,
+      });
+    } catch (error) {
+      log.warn('persisting migrated ghost media preference failed; using runtime fallback', {
+        ghostId,
+        capability,
+        previousPreference: preference,
+        fallbackPreference: selected.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return selected;
 }
 
 /**
@@ -3309,7 +3505,16 @@ async function getGhostConfigurableMediaModels(
     // Gateway modalities 透传给插件判断，不能把插件声明的多个动作取交集。
     const availability = await listExecutableMediaModels();
     const mode = type === 'image' ? 'image_generation' : 'video_generation';
-    const models = availability.models.filter((model) => model.mode === mode);
+    const videoRegistry = type === 'video' ? getVideoProviderRegistry() : null;
+    const candidates = availability.models.filter(
+      (model) =>
+        model.mode === mode &&
+        (type !== 'video' ||
+          (videoRegistry?.hasAlias(model.id, model.providerId) ?? false)),
+    );
+    const models = isProviderBlindCoreArt(ghost)
+      ? collapseProviderBlindMediaModels(candidates, (model) => model.id)
+      : candidates;
     if (
       models.length === 0 &&
       availability.unavailable.some((model) => model.retryable)
@@ -3361,8 +3566,8 @@ async function getGhostConfigurableMediaModels(
 
 /**
  * 读取插件在 Host「Cindy 能力」中的现有媒体选型。
- * 这里只投影当前有效值，不复制或迁移配置；用户已明确配置的精确来源失效时直接报错，
- * 不能静默回落到另一个 Provider 或默认模型。
+ * 已配置模型失效，或旧插件无法表达完整来源时，回落到当前第一个
+ * 可用模型，并一次性迁移存量配置，保证页面展示与实际执行一致。
  */
 function getGhostConfiguredMediaModel(
   ghostId: string,
@@ -3389,16 +3594,19 @@ function getGhostConfiguredMediaModel(
     };
   }
 
-  const config = getMediaPreferenceConfig(mediaCapability);
+  const config = getGhostMediaPreferenceConfig(ghostId, mediaCapability);
   const override = readGhostCindyOverrides(ghostId)[mediaCapability];
-  const selected = override
-    ? resolveMediaPreferenceModel(config, override)
-    : resolveMediaPreferenceModel(config, config.defaults?.standard);
+  const selected = resolveAndMigrateGhostMediaPreference(
+    ghostId,
+    mediaCapability,
+    config,
+    override,
+  );
   if (!selected) {
     return {
       ok: false,
       errorCode: 'NOT_AVAILABLE',
-      message: override ? '已配置的媒体模型当前不可用' : '当前没有可用的媒体模型',
+      message: '当前没有可用的媒体模型',
     };
   }
   return {
@@ -3419,12 +3627,18 @@ function assertMediaModelStillEnabled(
   kind: 'image' | 'video',
   model: string,
   providerId?: string,
+  action: LegacyCindyMediaAction = 'generate',
 ): void {
-  const available = providerId
-    ? getMediaPreferenceConfig(kind === 'image' ? 'image.generate' : 'video.generate').models.some(
-        (candidate) => candidate.providerId === providerId && candidate.modelId === model,
-      )
-    : getCatalogMediaConfig(kind).models.some((candidate) => candidate.id === model);
+  const capability: GhostMediaCapability = `${kind}.${action}`;
+  const available =
+    providerId && kind === 'image' && providerId !== 'xd'
+      ? getMediaPreferenceConfig(capability).models.some(
+          (candidate) => candidate.providerId === providerId && candidate.modelId === model,
+        )
+      : getCatalogMediaConfig(kind, action, providerId).models.some(
+          (candidate) =>
+            candidate.id === model && (!providerId || candidate.providerId === providerId),
+        );
   if (!available) {
     throw new Error(
       kind === 'image'
@@ -3483,8 +3697,16 @@ async function runGhostVideo(
   if (!registry || !registry.hasAny()) {
     throw new Error('视频能力不可用:主机未配置视频通道');
   }
+  if (params.providerId && !registry.hasAlias(params.alias, params.providerId)) {
+    throw new Error('视频模型与所选来源不匹配,本次生成已取消');
+  }
   // 提交紧前重查(第二十一轮):参考图 data URI 准备是 await,窗口内被停用即拒。
-  assertMediaModelStillEnabled('video', params.alias, params.providerId);
+  assertMediaModelStillEnabled(
+    'video',
+    params.alias,
+    params.providerId,
+    params.imageDataUris ? 'edit' : 'generate',
+  );
   const r = await submitAndAwaitVideo(registry, params);
   return {
     buffer: r.buffer,
@@ -3519,6 +3741,7 @@ function getGhostVideoCapabilities(
     }
     const registry = getVideoProviderRegistry();
     if (!registry || !registry.hasAny()) return null;
+    if (providerId && !registry.hasAlias(model, providerId)) return null;
     const caps = registry.resolveByAlias(model).provider.capabilities;
     return {
       durations: caps.supportedDurations,
@@ -3804,7 +4027,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, providerId, aspectRatio }) => {
         try {
-          assertMediaModelStillEnabled('image', model, providerId);
+          assertMediaModelStillEnabled('image', model, providerId, 'generate');
           const channel = resolveImageChannelForModel(model, 'generate', providerId);
           return decodeImageResponse(
             await channel.generateImage({
@@ -3819,7 +4042,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       editImage: async ({ prompt, model, providerId, imagePaths, aspectRatio }) => {
         try {
-          assertMediaModelStillEnabled('image', model, providerId);
+          assertMediaModelStillEnabled('image', model, providerId, 'edit');
           const channel = resolveImageChannelForModel(model, 'edit', providerId);
           return decodeImageResponse(
             await channel.editImage({
@@ -3835,7 +4058,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       generateVideo: async ({ prompt, model, providerId, ...videoParams }) => {
         try {
-          assertMediaModelStillEnabled('video', model, providerId);
+          assertMediaModelStillEnabled('video', model, providerId, 'generate');
           return await runGhostVideo({ alias: model, providerId, prompt, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
@@ -3843,7 +4066,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       },
       editVideo: async ({ prompt, model, providerId, imagePaths, refMode, ...videoParams }) => {
         try {
-          assertMediaModelStillEnabled('video', model, providerId);
+          assertMediaModelStillEnabled('video', model, providerId, 'edit');
           // 先算总量再读(闸按 refMode 分档:存量首尾帧不设闸,原样)。闸与
           // 读取绑在一个入口里,顺序是那边的结构保证、不是这里的约定;结果
           // 保序——顺序即语义:首/尾帧,或提示词里 [Image 1]… 的序号。
@@ -3870,16 +4093,20 @@ export function getGhostCindySlot(): GhostCindySlot {
       getMediaOverride: (ghostId, capability) => {
         const value = readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
         if (!value) return null;
-        const decoded = decodeMediaPreference(value);
-        if (!decoded) return null;
-        const selected = getMediaPreferenceConfig(capability as GhostMediaCapability).models.find(
-          (candidate) =>
-            candidate.providerId === decoded.providerId && candidate.modelId === decoded.modelId,
+        const mediaCapability = capability as GhostMediaCapability;
+        const selected = resolveAndMigrateGhostMediaPreference(
+          ghostId,
+          mediaCapability,
+          getGhostMediaPreferenceConfig(ghostId, mediaCapability),
+          value,
         );
-        return {
-          ...decoded,
-          ...(selected ? { label: selected.label } : {}),
-        };
+        return selected
+          ? {
+              providerId: selected.providerId,
+              modelId: selected.modelId,
+              label: selected.label,
+            }
+          : null;
       },
       getOverride: (ghostId, capability) => {
         const value = readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
@@ -6355,7 +6582,20 @@ export function registerGhostIpc(): void {
   // 读走 sendSync:详情页首帧要和其它信息同帧渲染(规则 7 无跳变),
   // 文件读取极小。写走 invoke,白名单在此校验(存储层不感知模型清单)。
   ipcMain.on('ghosts:cindy-prefs', (event, ghostId: unknown) => {
-    const overrides = typeof ghostId === 'string' ? readGhostCindyOverrides(ghostId) : {};
+    const storedOverrides = typeof ghostId === 'string' ? readGhostCindyOverrides(ghostId) : {};
+    const overrides = { ...storedOverrides };
+    for (const capability of GHOST_MEDIA_CAPABILITIES) {
+      const value = storedOverrides[capability];
+      if (!value) continue;
+      const selected = resolveAndMigrateGhostMediaPreference(
+        ghostId as string,
+        capability,
+        getGhostMediaPreferenceConfig(ghostId as string, capability),
+        value,
+      );
+      if (selected) overrides[capability] = selected.id;
+      else delete overrides[capability];
+    }
     // 每类目一份 options + defaultModel(当前包含 image/video 两类;下拉按
     // 能力键的类目取对应清单)。defaultModel:目录默认选型的展示信息
     // ("默认(GPT Image 2)"),让用户看得见"跟随"当下跟的是谁;
@@ -6400,10 +6640,10 @@ export function registerGhostIpc(): void {
       : null;
     event.returnValue = {
       overrides,
-      image: byKind(getMediaPreferenceConfig('image.generate')),
-      imageEdit: byKind(getMediaPreferenceConfig('image.edit')),
-      video: byKind(getMediaPreferenceConfig('video.generate')),
-      videoEdit: byKind(getMediaPreferenceConfig('video.edit')),
+      image: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'image.generate')),
+      imageEdit: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'image.edit')),
+      video: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'video.generate')),
+      videoEdit: byKind(getGhostMediaPreferenceConfig(ghostId as string, 'video.edit')),
       text: {
         options: textOptions,
         defaultModel:
@@ -6476,10 +6716,12 @@ export function registerGhostIpc(): void {
       // fail-closed 兜底,不在这层把「暂时没配 key」当成非法值。
       if (
         !isCindyOverrideModelAllowed(capability as string, model, {
-          image: getMediaPreferenceConfig(
+          image: getGhostMediaPreferenceConfig(
+            ghostId,
             capability === 'image.edit' ? 'image.edit' : 'image.generate',
           ).models,
-          video: getMediaPreferenceConfig(
+          video: getGhostMediaPreferenceConfig(
+            ghostId,
             capability === 'video.edit' ? 'video.edit' : 'video.generate',
           ).models,
           embed: getCatalogEmbedConfig().models,

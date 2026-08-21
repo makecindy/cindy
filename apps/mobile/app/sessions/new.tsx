@@ -207,6 +207,7 @@ import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import {
   ComposerResizeGrabber,
+  ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
   MOBILE_COMPOSER_CONTROL_SIZE,
@@ -3365,43 +3366,46 @@ export default function NewRemoteSessionScreen() {
     );
   };
 
-  // 工具条布局(对齐 Codex):左 = [+][权限图标][计划 chip];右 = [模型][语音][创建]。
+  // 工具条布局:左 = [+][权限][计划 chip][模型];右 = [语音][创建]。
+  // 模型放左侧组,不随创建按钮出现而横向跳动。
   const renderComposerToolbar = () => (
     <>
-      {renderAttachmentToggleButton()}
-      {renderPermissionIconButton()}
-      {planModeOn ? (
-        <PlanModeChip
-          disabled={creating}
-          onExit={() => togglePlanMode(false)}
-          testID="newSession.planModeChip"
-        />
-      ) : null}
-      <ComposerToolbarSpacer />
-      <Pressable
-        accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
-        accessibilityRole="button"
-        accessibilityState={{ expanded: modelSheetOpen || undefined }}
-        hitSlop={10}
-        onPress={toggleModelPicker}
-        style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
-        testID="newSession.modelIndicator"
-      >
-        {activeSourceProvider ? (
-          // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
-          <MobileModelIconMark
-            color={colors.textSecondary}
-            icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
-            name={activeSourceProvider.name}
-            providerId={activeSourceProvider.id}
-            routing={activeSourceProvider.routing}
-            logoKind={activeSourceProvider.logoKind}
+      <ComposerToolbarLeftGroup testID="newSession.composerToolbarLeft">
+        {renderAttachmentToggleButton()}
+        {renderPermissionIconButton()}
+        {planModeOn ? (
+          <PlanModeChip
+            disabled={creating}
+            onExit={() => togglePlanMode(false)}
+            testID="newSession.planModeChip"
           />
         ) : null}
-        <Text style={styles.modelPillText} numberOfLines={1}>{runtimeSummary.modelSummary}</Text>
-        {triggerFastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
-        <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      </Pressable>
+        <Pressable
+          accessibilityLabel={t('session.new.modelAccessibility', { model: runtimeSummary.modelSummary })}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: modelSheetOpen || undefined }}
+          hitSlop={10}
+          onPress={toggleModelPicker}
+          style={({ pressed }) => [styles.modelPill, pressed && styles.pressed]}
+          testID="newSession.modelIndicator"
+        >
+          {activeSourceProvider ? (
+            // 图标统一规则(桌面同源):模型条目 icon(AI Gateway 设定)优先,缺省回落来源标。
+            <MobileModelIconMark
+              color={colors.textSecondary}
+              icon={getModel(activeSourceProvider, draft.model, draft.agentKind)?.icon}
+              name={activeSourceProvider.name}
+              providerId={activeSourceProvider.id}
+              routing={activeSourceProvider.routing}
+              logoKind={activeSourceProvider.logoKind}
+            />
+          ) : null}
+          <Text style={styles.modelPillText} numberOfLines={1}>{runtimeSummary.modelSummary}</Text>
+          {triggerFastOn ? <Zap color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
+          <ChevronDown color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+        </Pressable>
+      </ComposerToolbarLeftGroup>
+      <ComposerToolbarSpacer />
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
         : null}

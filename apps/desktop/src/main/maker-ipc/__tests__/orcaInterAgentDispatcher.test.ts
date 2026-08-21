@@ -141,6 +141,9 @@ describe('Orca lead/worker dispatcher', () => {
       clientId: 'client-1',
       role: 'user',
       content: '{"orcaSource":"lead","content":"Implement feature"}',
+      agentMeta: {
+        origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Implement feature' },
+      },
     });
     expect(h.liveSession.send).toHaveBeenCalledWith(
       {

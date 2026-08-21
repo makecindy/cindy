@@ -1432,7 +1432,7 @@
           "codex": "Codex",
           "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。",
           "pi": "Pi",
-          "piDesc": "Pi 是多协议 harness：你的自定义或本地模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。"
+          "piDesc": "Pi 是多协议 harness：你的自定义或本机模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -1679,7 +1679,14 @@
         "stepConnect": "连接",
         "stepModels": "选择模型",
         "searchPlaceholder": "搜索供应商…",
-        "groupSubscription": "订阅授权 · 推荐",
+        "groupRecommend": "推荐",
+        "groupDetectedLocal": "检测到本机服务",
+        "groupSubscription": "订阅授权",
+        "recommendReason": {
+          "has-local-models": "本机已有模型",
+          "machine-capable": "这台电脑适合跑本机模型",
+          "subscription": "订阅授权"
+        },
         "groupApiKey": "API 与自托管 Proxy · 预设随目录更新",
         "groupCustom": "自定义",
         "metaOAuth": "订阅授权",
@@ -1728,7 +1735,135 @@
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 连接",
           "note": "此来源提供图像生成模型，不参与对话。API key 仅保存在本机（系统钥匙串加密），不会上传。"
-        }
+        },
+        "groupLocal": "本机模型",
+        "metaLocalRecommended": "推荐 · 在 Cindy 内下载",
+        "metaLocalConnect": "连接已运行的本机服务",
+        "moreLocal": "更多本机服务"
+      },
+      "local": {
+        "title": "Ollama",
+        "subtitle": "本机模型",
+        "beta": "Beta",
+        "recommended": "推荐",
+        "recommendedForThisDevice": "为这台电脑推荐",
+        "hostProfileApple": "Apple 芯片 · 约 {{memory}} GB 统一内存",
+        "hostProfileGeneric": "约 {{memory}} GB 内存",
+        "hostProfileUnknown": "还不能确定这台电脑的内存",
+        "bestForYou": "最适合你",
+        "alsoCoding": "也适合编程",
+        "packaging": {
+          "mxfp8": "MXFP8",
+          "mlx": "MLX",
+          "q4": "Q4"
+        },
+        "recommendReason": {
+          "apple-mxfp8": "这台 Mac 内存充裕，用官方 MXFP8 封装。",
+          "apple-mlx": "这台 Mac 适合官方 MLX 封装。",
+          "generic-27b": "这台电脑适合官方 Q4 封装。",
+          "compact": "按这台电脑的内存，先从更轻量的模型开始。",
+          "unknown": "先选一个更好跑起来的模型。"
+        },
+        "searchPlaceholder": "搜索模型",
+        "noSearchResults": "没有匹配的模型",
+        "alreadyInstalled": "已在本机",
+        "searchResults": "搜索结果",
+        "moreModels": "更多常用模型",
+        "memoryWarning": "这台电脑内存不足（需要 {{need}} GB，当前约 {{have}} GB）",
+        "manualDownload": "手动下载",
+        "manualDownloadPlaceholder": "Ollama 库名或 Hugging Face 链接",
+        "invalidLibraryName": "请输入 Ollama 库名，或粘贴 huggingface.co 上的模型页链接",
+        "advancedExactName": "高级：精确库名",
+        "models": {
+          "qwen38-27b": { "blurb": "当前最强可本机跑的稠密模型，适合编程和长任务。" },
+          "gpt-oss-20b": { "blurb": "OpenAI 开源 20B，16GB 级机器上的对话和推理首选。" },
+          "gemma4-e2b": { "blurb": "Gemma 4 最小杯，轻量机器也能跑，带视觉。" },
+          "gemma4-e4b": { "blurb": "Google Gemma 4 小杯，轻量日常，带视觉。" },
+          "gemma4-12b": { "blurb": "Gemma 4 中杯，日常对话和多模态更稳。" },
+          "gemma4-31b": { "blurb": "Gemma 4 大杯，对话和多模态更强，也更吃内存。" },
+          "gemma4-26b": { "blurb": "Gemma 4 的 MoE 中大杯，激活参数更少，适合中高配。" },
+          "ornith15-35b": { "blurb": "Ornith 1.5 中杯 MoE，本机编程和 Agent 备选。" },
+          "glm-47-flash": { "blurb": "智谱新一代编程模型，30B MoE，适合写代码和 Agent。" }
+        },
+        "onboardingTitle": "先安装 Ollama 运行环境",
+        "onboardingBody": "安装 Ollama 后，即可在 Cindy 中下载和使用本机模型，无需打开 Ollama App。Ollama 是免费开源的第三方运行环境。",
+        "installInCindy": "在 Cindy 里安装",
+        "installConsent": "Cindy 会下载官方 Ollama 运行时（约 {{size}}）到本机 Cindy 数据目录并启动，不会写入系统应用目录。Ollama 是免费开源的第三方软件。",
+        "installCancel": "取消安装",
+        "installFailed": "Ollama 安装失败",
+        "installPhase": {
+          "resolving": "正在查找官方版本…",
+          "downloading": "正在下载…",
+          "verifying": "正在校验…",
+          "extracting": "正在安装…",
+          "starting": "正在启动…",
+          "success": "已安装",
+          "error": "安装失败",
+          "cancelled": "已取消"
+        },
+        "openWebsite": "前往 Ollama 官网",
+        "recheck": "已安装，重新检测",
+        "start": "启动本机模型服务",
+        "conflict": "11434 端口已被其他程序占用",
+        "notReady": "本机模型服务尚未就绪",
+        "connectFailed": "无法连接本机模型服务",
+        "pullFailed": "模型下载失败",
+        "pullError": {
+          "not-gguf": "这是 MLX 仓库，Ollama 只能下载 GGUF。请改用带 GGUF 的模型页。",
+          "not-found": "找不到这个模型，请检查库名或链接。",
+          "unauthorized": "这个模型需要登录 Hugging Face 才能下载。",
+          "refused": "本机模型服务连不上，请确认 Ollama 已启动。",
+          "generic": "模型下载失败"
+        },
+        "added": "已加入 Cindy",
+        "status": {
+          "absent": "尚未安装 Ollama",
+          "stopped": "已安装 · 未运行",
+          "starting": "正在启动…",
+          "ready": "运行中",
+          "incompatible": "当前 Ollama 版本不受支持",
+          "port-conflict": "端口冲突",
+          "pulling": "正在下载…",
+          "error": "无法访问本机模型服务"
+        },
+        "installed": "本机已下载",
+        "emptyInstalled": "尚未安装本地模型",
+        "addToCindy": "加入选择器",
+        "removeFromCindy": "移出选择器",
+        "downloadAdd": "下载并添加",
+        "retryDownload": "重试",
+        "libraryName": "精确的 Ollama 库名",
+        "pullingTitle": "正在下载 {{name}}",
+        "pullIndeterminate": "准备中",
+        "pullBytes": "{{done}} / {{total}}",
+        "pullSpeed": " · {{speed}}",
+        "pullPhase": {
+          "starting": "准备下载…",
+          "manifest": "正在获取清单…",
+          "downloading": "正在下载模型文件",
+          "verifying": "正在校验…",
+          "writing": "正在写入…",
+          "success": "下载完成",
+          "error": "下载失败",
+          "paused": "已暂停",
+          "cancelled": "已取消"
+        },
+        "pauseDownload": "暂停",
+        "resumeDownload": "继续下载",
+        "cancelDownload": "删除未完成下载",
+        "notRecommended": "这台电脑未达到 Qwen3.8 27B 所需的 32 GB 内存门槛。你仍可输入精确库名自行下载。",
+        "sizeHint": "约 {{size}} · 需要 {{memory}} GB 统一内存",
+        "sizeHintApple": "约 {{size}} · 需要 {{memory}} GB 统一内存",
+        "sizeHintGeneric": "约 {{size}} · 需要 {{memory}} GB 内存",
+        "deleteFromCindy": "从 Cindy 移除",
+        "deleteConfirmTitle": "从 Cindy 移除 Ollama？",
+        "deleteConfirmBody": "只会移除 Cindy 中的连接。Ollama 里已下载的模型仍在磁盘上，服务也不会停止。",
+        "deleteModel": "删除此模型",
+        "deleteModelConfirmTitle": "删除 {{name}}？",
+        "deleteModelConfirmBody": "会从这台电脑删除已下载的模型文件，Cindy 里也会一并移除。需要时可以重新下载。",
+        "deleteModelConfirm": "删除",
+        "deleteModelDone": "已删除 {{name}}",
+        "deleteModelFailed": "删除失败，请确认 Ollama 正在运行后重试"
       },
       "xdSignin": {
         "badge": "推荐",
@@ -2579,7 +2714,7 @@
       "installSectionDescription": "粘贴 pi.dev 页面上的安装来源，或输入 npm 包名、Git 地址、本地绝对路径。",
       "installedSectionTitle": "已安装",
       "sourcePlaceholder": "npm 包名、Git 地址或本地绝对路径",
-      "inspectionHint": "安装后 Cindy 会检查资源和兼容性。可执行扩展代码默认保持停用，确认来源可信后再启用。",
+      "inspectionHint": "安装时只提示一次风险。确认后会安装扩展并检查资源；检查成功时，可运行资源会自动启用。",
       "install": "安装",
       "update": "更新",
       "remove": "卸载",
@@ -2601,11 +2736,11 @@
       "retry": "重试",
       "operationInProgress": "正在处理 {{name}}…",
       "relativePathUnsupported": "在设置中安装本地扩展时请使用绝对路径；./extension 这类相对路径可在 Pi 任务中安装。",
-      "confirmTitle": "安装第三方 Pi 扩展？",
-      "confirmDescription": "{{source}} 可能包含第三方代码。安装和更新不会执行 npm 生命周期脚本；检测到可执行扩展代码时会先保持停用，等你看完检查结果后再决定是否启用。",
+      "confirmTitle": "安装这个 Pi 扩展？",
+      "confirmDescription": "{{source}} 是第三方代码，会与 Cindy 的 Pi 在同一进程中运行，可能读取 Pi 能访问的文件和凭证。安装不会执行 npm 生命周期脚本。确认后将安装扩展。检查成功后，可运行资源会自动启用，即使 Cindy 同时提示兼容性限制。",
       "confirmInstall": "了解风险并安装",
-      "updateConfirmTitle": "更新第三方 Pi 扩展？",
-      "updateConfirmDescription": "{{source}} 会下载第三方新版本并替换已安装代码。更新不会执行 npm 生命周期脚本；可执行扩展代码必须重新确认后才能运行。",
+      "updateConfirmTitle": "更新这个 Pi 扩展？",
+      "updateConfirmDescription": "{{source}} 会下载第三方新版本并替换已安装代码。更新不会执行 npm 生命周期脚本。扩展代码与 Pi 在同一进程中运行，可能读取文件和凭证。确认后将更新扩展。你主动关闭的扩展会保持关闭；其他扩展会在检查成功后启用。",
       "confirmUpdate": "了解风险并更新",
       "uninstallTitle": "卸载 Pi 扩展？",
       "uninstallDescription": "将从这台设备移除 {{name}}。当前已打开的 Pi 任务仍会保留旧扩展，关闭后才会彻底卸载。",
@@ -2669,7 +2804,8 @@
         "lifecycle-scripts-disabled": "这个扩展声明了安装脚本，但 Cindy 为安全起见没有执行。依赖安装脚本生成文件的功能可能不可用。"
       },
       "success": {
-        "install": "Pi 扩展已安装。当前任务不会变化；新建或重启 Pi 任务后生效。",
+        "install": "Pi 扩展已安装，请在下方查看启用状态。当前任务不会变化。",
+        "installEnabled": "Pi 扩展已安装并启用。当前任务不会变化；新建或重启 Pi 任务后生效。",
         "remove": "Pi 扩展已移除。当前任务仍保留旧扩展，关闭后才会彻底卸载。",
         "update": "Pi 扩展已更新。当前任务仍使用旧版本；新建或重启后生效。",
         "set-enabled": "Pi 扩展启用状态已保存。当前任务不会变化；新建或重启后生效。"
@@ -4972,7 +5108,7 @@
     "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
     "cacheLabel": "缓存",
     "timeLabel": "耗时",
-    "timeAndRateValue": "{{duration}} 速度：{{rate}} token/秒",
+    "timeAndRateValue": "{{duration}} 速度：{{rate}} tokens/秒",
     "modelLabel": "模型",
     "staleData": "数据更新于 {{minutes}} 分钟前",
     "paceTrendFast": "按当前平均速度偏快（粗略趋势）",
@@ -4983,12 +5119,12 @@
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
     "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
-    "performanceLine": "速度 {{rate}} token/秒 · 耗时 {{duration}}",
-    "performanceRateLine": "速度 {{rate}} token/秒",
+    "performanceLine": "速度 {{rate}} tokens/秒 · 耗时 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} tokens/秒",
     "timeLine": "耗时 {{duration}}",
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",
-    "tokenLine": "Token：共 {{total}} · 输入 {{input}} · 输出 {{output}}",
+    "tokenLine": "Tokens：共 {{total}} · 输入 {{input}} · 输出 {{output}}",
     "cacheLine": "缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "缓存拆分：读取 {{read}} · 写入 {{create}}",
     "modelLine": "模型：{{model}}",
@@ -6139,6 +6275,7 @@
       "retryRemoteModels": "重新读取模型",
       "remoteEmpty": "这台设备没有可用模型",
       "effortLabel": "推理强度",
+      "thinking": "思考",
       "edit": "编辑",
       "options": "选项",
       "priceTip": "输入 {{input}} · 输出 {{output}} / 百万 token",
@@ -6464,11 +6601,12 @@
       "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "modelSwitchContextGuard": {
-        "title": "目标模型的上下文窗口较小",
-        "warnToast": "当前任务已使用 {{used}} 上下文，切换后约占目标模型窗口（{{total}}）的 {{pct}}%",
-        "overflowDescription": "当前任务已使用 {{used}} 上下文，超出目标模型窗口（{{total}}，约 {{pct}}%）。切换后回复和压缩都可能失败，建议先点击上下文圆环压缩对话，或新建任务使用该模型。仍要切换吗？",
-        "confirmSwitch": "仍然切换模型",
-        "cancelSwitch": "取消切换"
+        "title": "这个模型装不下当前对话",
+        "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
+        "overflowDescription": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。换过去后，Cindy 会先整理一份摘要再继续；对话记录还在，只是不会整段原样带给新模型。",
+        "overflowDescriptionRemote": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。远程任务不会自动换窗，下一次发送仍可能失败。可以仍然切换，或留在当前模型。",
+        "confirmSwitch": "切换并继续",
+        "cancelSwitch": "先不换"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切换，但新引擎启动失败；发送消息时会自动重试",
@@ -6773,6 +6911,10 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本轮明细"
     },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
+    },
     "shareImage": {
       "entry": "分享为图片",
       "title": "分享对话",
@@ -6843,7 +6985,8 @@
       "silentStopContinueTitle": "继续当前任务",
       "piTransportClosed": "远端 Pi 连接已中断（SSH 通道关闭）。远端任务仍在运行，重新连接后可以继续。",
       "piManagerUnavailable": "远端 Pi 管理器未就绪，请稍后重试；若持续失败请到「设置 → 远端机器」重新安装 Pi。",
-      "piBundledNodeMissing": "远端缺少运行环境（Node.js）。请到「设置 → 远端机器」展开该主机，先在 Claude Code 或 Codex 行点击「安装」（会附带 Node.js），再创建 Pi 任务。"
+      "piBundledNodeMissing": "远端缺少运行环境（Node.js）。请到「设置 → 远端机器」展开该主机，先在 Claude Code 或 Codex 行点击「安装」（会附带 Node.js），再创建 Pi 任务。",
+      "contextOverflow": "这条消息本身已经超过模型上下文上限，没法在当前 Agent 里自动换窗继续。请缩短输入或去掉超大附件后再试。"
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
@@ -7174,6 +7317,13 @@
         "handoffTitleEnglishSource": "交接内容——切换时发送给新引擎的上下文摘要，原文为英文(不计入对话记录，仅在此展示)",
         "resumedBadge": "已续接原任务"
       },
+      "contextRebuild": {
+        "labelOverflow": "已整理上下文并继续",
+        "labelTimeout": "上一轮没有响应，已整理后继续",
+        "toggleHint": "查看交接内容",
+        "handoffTitle": "交接内容——整理后发送给后续对话的上下文摘要(不计入对话记录，仅在此展示)",
+        "handoffTitleEnglishSource": "交接内容——整理后发送给后续对话的上下文摘要，原文为英文(不计入对话记录，仅在此展示)"
+      },
       "review": {
         "running": "正在审查当前成果",
         "completed": "审查完成",
@@ -7343,6 +7493,7 @@
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "远端 Claude Code 会话无法通过本地兼容 Proxy 路由(内部错误，请反馈)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 凭据尚未就绪(登录后由服务端自动下发)。请稍候重试；若持续出现，请到 设置 → 模型供应商 检查 Cindy AI 连接状态。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "该模型供应商是本机专属服务（如 Ollama），SSH 远端任务无法访问本机地址。请改用 Cindy AI 网关，或选择远端主机可达的模型供应商。",
+      "LOCAL_OLLAMA_NOT_READY": "本机 Ollama 还没就绪。请打开设置 → 模型供应商 → Ollama。",
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。"
     },
@@ -8196,6 +8347,7 @@
     }
   },
   "effortLevels": {
+    "off": "关闭",
     "minimal": "最小",
     "low": "低",
     "medium": "中",

@@ -209,7 +209,11 @@ export function PiPackagesSection() {
       }
       // Toasts are app-level feedback: even if the user leaves this panel while
       // the host mutation is running, they still need the final outcome.
-      toast.success(t(`settings.piPackages.success.${action}`));
+      const successKey =
+        action === 'install' && result.affectedPackage?.enabled
+          ? 'settings.piPackages.success.installEnabled'
+          : `settings.piPackages.success.${action}`;
+      toast.success(t(successKey));
       return true;
     } catch (error) {
       if (extractIpcError(error)?.code === 'MUTATION_CANCELLED') return false;

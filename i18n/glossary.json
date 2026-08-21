@@ -1708,6 +1708,18 @@
         "ko": "비전 브리지"
       },
       "note": "让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。"
+    },
+    {
+      "id": "local-model",
+      "status": "proposed",
+      "en": "Local model",
+      "translations": {
+        "zh-CN": "本机模型",
+        "zh-TW": "本機模型",
+        "ja": "ローカルモデル",
+        "ko": "로컬 모델"
+      },
+      "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。"
     }
   ]
 }

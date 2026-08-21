@@ -389,6 +389,27 @@ describe('buildMainListEntries — 排序口径', () => {
     expect(labels(entries)).toEqual(['s:needs-input', 's:done-unread', 's:running', 's:idle']);
   });
 
+  it('keeps a just-sent session at the top of running before the agent is actually live', () => {
+    // 组装层把 starting 并进 runningSessionIds。新发送比已在跑的更新,应压在运行中档顶;
+    // 更新的空闲任务仍在其余档,不能因为它更新就插到运行中前面。
+    const justSent = session({ updatedAt: '2026-08-12T12:00:00Z', title: 'just-sent' });
+    const runningOlder = session({ updatedAt: '2026-08-12T11:00:00Z', title: 'running-older' });
+    const idleNewer = session({ updatedAt: '2026-08-12T13:00:00Z', title: 'idle-newer' });
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [idleNewer, runningOlder, justSent],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set([justSent.id, runningOlder.id]),
+        attentionSessionIds: new Set<string>(),
+      },
+    });
+    expect(labels(entries)).toEqual(['s:just-sent', 's:running-older', 's:idle-newer']);
+  });
+
   it('keeps the open unread task in place, then parks it at the top of the rest tier after leave', () => {
     const unread = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'just-read' });
     const olderRest = session({ updatedAt: '2026-08-12T00:00:00Z', title: 'older-rest' });

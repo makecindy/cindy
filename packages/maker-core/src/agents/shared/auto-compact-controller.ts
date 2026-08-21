@@ -17,6 +17,14 @@ export interface AutoCompactControllerDeps {
   agentKind: string;
   /** 返回当前自动压缩阈值百分比。undefined 表示关闭 host 侧自动压缩。 */
   getThresholdPct: () => number | undefined;
+  /**
+   * Host-owned context assessment. danger/overflow sessions are rebuilt by
+   * the host on the next send, so the controller must not inject `/compact`.
+   */
+  shouldHandoffAfterContextAssessment?: (
+    contextTokens: number,
+    contextWindow: number,
+  ) => boolean;
 }
 
 /**
@@ -48,6 +56,20 @@ export class AutoCompactController {
   shouldCompactNow(): boolean {
     const thresholdPct = this.normalizeThreshold(this.deps.getThresholdPct());
     if (thresholdPct === undefined || this.latest === null || this.fired) return false;
+    if (
+      this.deps.shouldHandoffAfterContextAssessment?.(
+        this.latest.contextTokens,
+        this.latest.contextWindow,
+      ) === true
+    ) {
+      this.deps.logger.debug('auto-compact skipped: host will rebuild context', {
+        contextTokens: this.latest.contextTokens,
+        contextWindow: this.latest.contextWindow,
+        workdir: this.deps.workdir,
+        agentKind: this.deps.agentKind,
+      });
+      return false;
+    }
     if (this.latest.ratio < thresholdPct / 100) return false;
     this.fired = true;
     this.deps.logger.debug('auto-compact threshold crossed', {

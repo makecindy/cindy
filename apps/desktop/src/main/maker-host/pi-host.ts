@@ -57,6 +57,15 @@ import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { t } from '../i18n.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
+import {
+  MANAGED_OLLAMA_PROVIDER_ID,
+  matchesManagedOllamaFingerprint,
+} from '../../shared/localModelRuntime.js';
+import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
+import {
+  applyQwen38NativeOverlay,
+  shouldApplyQwen38Overlay,
+} from '../local-model-runtime/qwenProfile.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import {
   desktopClaudeAuthAdapter,
@@ -1170,6 +1179,11 @@ export function buildPiNativeProvidersFromConfigs(
       onSkip?.(cfg.id, 'oauth not supported for pi native');
       continue;
     }
+    const managedOllama = matchesManagedOllamaFingerprint({
+      id: cfg.id,
+      authMethod,
+      runtimes: cfg.runtimes,
+    });
     const runtimeApi =
       rt.wireProtocol === undefined ? undefined : wireProtocolToPiApi(rt.wireProtocol);
     // Protocol authority, in order: per-model override, explicit endpoint default,
@@ -1256,7 +1270,7 @@ export function buildPiNativeProvidersFromConfigs(
             : bundledModel?.api === modelApi
               ? bundledModel.baseUrl
               : undefined;
-        return {
+        const spec = {
           id: m.id,
           ...(m.piApi || modelApi !== providerApi ? { api: modelApi } : {}),
           ...(modelBaseUrl && modelBaseUrl !== rt.baseUrl ? { baseUrl: modelBaseUrl } : {}),
@@ -1293,6 +1307,9 @@ export function buildPiNativeProvidersFromConfigs(
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),
         };
+        return managedOllama && shouldApplyQwen38Overlay(m.id)
+          ? applyQwen38NativeOverlay(spec)
+          : spec;
       }),
     });
   }
@@ -1482,6 +1499,13 @@ export async function resolvePiNativeProviders(ctx: {
     );
   }
   const isRemote = Boolean(ctx.remoteHostId);
+  if (!isRemote && ctx.providerId === MANAGED_OLLAMA_PROVIDER_ID) {
+    await ensureManagedOllamaReadyForSession({
+      providerId: ctx.providerId,
+      remoteHostId: ctx.remoteHostId ?? null,
+      userDataDir: app.getPath('userData'),
+    });
+  }
   // 远端会话:本地 loopback 端点(本机 Ollama/vLLM)远端够不到。
   // 轮 42 P2(codex-connector):**不再 pre-filter 掉** —— 让 PiAgent 的
   // [REMOTE_LOCAL_ONLY_PROVIDER] guard 显式拒绝, 用户才能拿到带行动指引的
