@@ -10,6 +10,7 @@ import type { SessionWorktreeInfo } from '../sessionWorktreeInfo';
 const reveal = vi.fn();
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     t: (key: string) => key,
   }),
