@@ -172,7 +172,9 @@ export function createCardBuilders(
       const selected = args.selections.get(qi);
       options.forEach((opt, oi) => {
         // 勾选前缀也占按钮文案预算; 按钮是单行, 用单行省略号截断
-        // (块级截断的换行后缀会掉进按钮文案)
+        // (块级截断的换行后缀会掉进按钮文案)。
+        // 飞书 v1 单 action 模块最多 5 个按钮, 由 @cindy/im 的
+        // buildInteractiveCardV1 按模块拆分, 这里不截断选项。
         const prefix = `${selected?.has(oi) === true ? m.selectedMark : ''}${qi + 1}·`;
         buttons.push({
           id: 'ask:multi',
