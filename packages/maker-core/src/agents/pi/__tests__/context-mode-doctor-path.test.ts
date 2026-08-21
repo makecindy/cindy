@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONTEXT_MODE_STALE_EXTENSION_PATH,
   findContextModePackageRoot,
+  isContextModeDoctorUiEvent,
   rewriteContextModeDoctorPath,
 } from '../context-mode-doctor-path.js';
 
@@ -43,6 +44,24 @@ describe('rewriteContextModeDoctorPath', () => {
     const rewritten = rewriteContextModeDoctorPath(DOCTOR, root);
     expect(rewritten).toContain(`(${root}/)`);
     expect(rewritten).not.toContain(CONTEXT_MODE_STALE_EXTENSION_PATH);
+  });
+});
+
+describe('isContextModeDoctorUiEvent', () => {
+  it('matches command or tool identity on the event itself', () => {
+    expect(isContextModeDoctorUiEvent({ commandName: 'ctx-doctor' })).toBe(true);
+    expect(isContextModeDoctorUiEvent({ command: '/ctx-doctor' })).toBe(true);
+    expect(isContextModeDoctorUiEvent({ toolName: 'ctx_doctor' })).toBe(true);
+    expect(isContextModeDoctorUiEvent({ name: 'ctx-doctor' })).toBe(true);
+  });
+
+  it('rejects unidentified notify events even if the message mentions the stale path', () => {
+    expect(isContextModeDoctorUiEvent({
+      method: 'notify',
+      message: `[OK] Hook support: (${CONTEXT_MODE_STALE_EXTENSION_PATH}/)`,
+    })).toBe(false);
+    expect(isContextModeDoctorUiEvent({ source: 'extension' })).toBe(false);
+    expect(isContextModeDoctorUiEvent(undefined)).toBe(false);
   });
 });
 

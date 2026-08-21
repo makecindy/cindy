@@ -115,7 +115,7 @@ import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../
 import { scanPiCustomizations } from './customization-scanner.js';
 import {
   findContextModePackageRoot,
-  isContextModeDoctorCommandName,
+  isContextModeDoctorUiEvent,
   rewriteContextModeDoctorPath,
 } from './context-mode-doctor-path.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
@@ -2364,7 +2364,6 @@ export class PiAgent extends BaseAgent {
     let runtimeCapabilityGeneration = 0;
     let piAgentLifecycleSequence = 0;
     let activeExtensionCommandNotifications: string[] | null = null;
-    let activeManagedExtensionCommandName: string | null = null;
     const unsupportedExtensionUiMethods = new Set<string>();
     const runtimeCapabilityListeners = new Set<(manifest: PiRuntimeCapabilityManifest | undefined) => void>();
     const notifyRuntimeCapabilityListener = (
@@ -2563,8 +2562,8 @@ export class PiAgent extends BaseAgent {
               remote: Boolean(opts.remoteHostId),
               allowPiPackageManagement,
               piPackageManagementToken,
-              emitExtensionNotification: (message) => {
-                const text = isContextModeDoctorCommandName(activeManagedExtensionCommandName)
+              emitExtensionNotification: (message, event) => {
+                const text = isContextModeDoctorUiEvent(event)
                   ? rewriteContextModeDoctorPath(message, contextModeRoot)
                   : message;
                 if (activeExtensionCommandNotifications) {
@@ -3620,10 +3619,8 @@ export class PiAgent extends BaseAgent {
           const managedExtensionCommand = managedExtensionCommandName !== undefined;
           const lifecycleSequenceBeforePrompt = piAgentLifecycleSequence;
           const capturedExtensionNotifications: string[] | null = managedExtensionCommand ? [] : null;
-          const previousManagedExtensionCommandName = activeManagedExtensionCommandName;
           if (capturedExtensionNotifications) {
             activeExtensionCommandNotifications = capturedExtensionNotifications;
-            activeManagedExtensionCommandName = managedExtensionCommandName ?? null;
           }
           const command: Record<string, unknown> = {
             type: 'prompt',
@@ -3771,7 +3768,6 @@ export class PiAgent extends BaseAgent {
           } finally {
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
-              activeManagedExtensionCommandName = previousManagedExtensionCommandName;
             }
           }
         } catch (err) {
@@ -3832,18 +3828,7 @@ export class PiAgent extends BaseAgent {
           message: escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest),
         };
         if (images.length > 0) command.images = images;
-        const previousManagedExtensionCommandName = activeManagedExtensionCommandName;
-        if (managedExtensionCommand) {
-          activeManagedExtensionCommandName = managedExtensionCommandName ?? null;
-        }
-        let resp: Awaited<ReturnType<typeof proc.request>>;
-        try {
-          resp = await runExclusivePiRpc(() => proc.request(command));
-        } finally {
-          if (managedExtensionCommand) {
-            activeManagedExtensionCommandName = previousManagedExtensionCommandName;
-          }
-        }
+        const resp = await runExclusivePiRpc(() => proc.request(command));
         if (!resp.success) {
           if (managedPackageRoute.accepted) {
             // The host-owned mutation already completed and its deterministic
@@ -4547,7 +4532,7 @@ export class PiAgent extends BaseAgent {
       remote: boolean;
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
-      emitExtensionNotification: (message: string) => void;
+      emitExtensionNotification: (message: string, event?: PiRpcEvent) => void;
       notifyUnsupportedExtensionUi: (method: string, reason: 'unsupported-ui' | 'timed-dialog') => void;
       /**
        * 把一张挂起的权限卡登记进会话级表,返回注销函数。档位切换 / 关闭会话时由
@@ -4579,7 +4564,10 @@ export class PiAgent extends BaseAgent {
       // Pi RPC has no toast surface. Preserve the extension's only visible
       // output as transcript text instead of silently dropping it (for example
       // context-mode's /ctx-stats and /ctx-doctor commands).
-      getPermissionCtx().emitExtensionNotification(message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH));
+      getPermissionCtx().emitExtensionNotification(
+        message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH),
+        event,
+      );
       return;
     }
 

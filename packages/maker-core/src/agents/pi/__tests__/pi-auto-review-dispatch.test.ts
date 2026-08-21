@@ -798,8 +798,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       if (command.message !== '/ctx-doctor') return;
       captured.onEvent!({
         type: 'extension_ui_request',
+        id: 'other-ext-notify',
+        method: 'notify',
+        message: '[OK] other-ext: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+      });
+      captured.onEvent!({
+        type: 'extension_ui_request',
         id: 'ctx-doctor-notify',
         method: 'notify',
+        commandName: 'ctx-doctor',
         message: '[OK] Hook support: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
       });
     };
@@ -833,8 +840,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const texts = events
         .filter((event) => event.type === 'text')
         .map((event) => (event.data as { text?: string }).text ?? '');
-      expect(texts.some((text) => text.includes(packageRoot))).toBe(true);
-      expect(texts.some((text) => text.includes('~/.pi/extensions/context-mode'))).toBe(false);
+      expect(texts.some((text) => text.includes('other-ext') && text.includes('~/.pi/extensions/context-mode'))).toBe(true);
+      expect(texts.some((text) => text.includes('Hook support') && text.includes(packageRoot))).toBe(true);
+      expect(texts.some((text) => text.includes('Hook support') && text.includes('~/.pi/extensions/context-mode'))).toBe(false);
     } finally {
       await handle.close();
     }

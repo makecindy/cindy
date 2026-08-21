@@ -20,6 +20,20 @@ export function isContextModeDoctorCommandName(commandName: string | null | unde
   return commandName === CONTEXT_MODE_DOCTOR_COMMAND_NAME;
 }
 
+const DOCTOR_UI_EVENT_KEYS = ['command', 'commandName', 'name', 'toolName'] as const;
+
+/** True when a Pi extension UI event itself identifies ctx_doctor / ctx-doctor. */
+export function isContextModeDoctorUiEvent(event: Record<string, unknown> | undefined): boolean {
+  if (!event) return false;
+  for (const key of DOCTOR_UI_EVENT_KEYS) {
+    const value = event[key];
+    if (typeof value !== 'string') continue;
+    const name = value.trim().replace(/^\//, '');
+    if (isContextModeDoctorCommandName(name) || isContextModeDoctorToolName(name)) return true;
+  }
+  return false;
+}
+
 function isContextModePackageRoot(dir: string): boolean {
   try {
     const raw = readFileSync(path.join(dir, 'package.json'), 'utf8');
