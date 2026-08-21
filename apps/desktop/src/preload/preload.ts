@@ -2,6 +2,13 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import { isDeepLinkProviderConnectId } from '../shared/deepLinkSchemes';
+import {
+  parseProjectOrderSnapshot,
+  SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL,
+  SIDEBAR_GET_PROJECT_ORDER_CHANNEL,
+  SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
+  type SyncedProjectOrderSnapshot,
+} from '../shared/projectOrderSettings';
 import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
@@ -454,6 +461,7 @@ const fanOutSidebarPinnedOrderChanged = createIpcFanOut('sidebar-settings:pinned
 const fanOutSidebarHiddenProjectKeysChanged = createIpcFanOut(
   'sidebar-settings:hidden-project-keys-changed',
 );
+const fanOutSidebarProjectOrderChanged = createIpcFanOut(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL);
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut('maker:file-browser:event');
 const fanOutFileBrowserTransfer = createIpcFanOut('maker:file-browser:transfer');
@@ -628,6 +636,9 @@ const fanOutMakerAuthStateChanged = createIpcFanOut('maker:auth:state-changed');
 const fanOutMakerAuthLoginProgress = createIpcFanOut('maker:auth:login-progress');
 // 自定义供应商增删改广播 → 各 useProviders 实例 refetch（设置页列表 + 对话模型选择器 live 刷新）。
 const fanOutMakerProvidersChanged = createIpcFanOut('maker:provider:changed');
+const fanOutMakerLocalModelStatus = createIpcFanOut('maker:local-model:status');
+const fanOutMakerLocalModelPullProgress = createIpcFanOut('maker:local-model:pull-progress');
+const fanOutMakerLocalModelInstallProgress = createIpcFanOut('maker:local-model:install-progress');
 const fanOutMakerProviderOAuthProgress = createIpcFanOut('maker:provider:oauth:progress');
 // 自定义 MCP 服务器增删改广播 → 设置页 McpServersSection refetch。
 const fanOutMakerMcpChanged = createIpcFanOut('maker:mcp:changed');
@@ -4654,6 +4665,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
           cb(Array.from(payload), ownerStamp);
         }
       }),
+    getProjectOrder: async (): Promise<SyncedProjectOrderSnapshot> =>
+      parseProjectOrderSnapshot(await ipcRenderer.invoke(SIDEBAR_GET_PROJECT_ORDER_CHANNEL)),
+    applyProjectOrder: async (request: {
+      manualProjectOrder: readonly string[];
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
+      projectOrder: 'activity' | 'custom';
+    }): Promise<SyncedProjectOrderSnapshot> =>
+      parseProjectOrderSnapshot(await ipcRenderer.invoke(SIDEBAR_APPLY_PROJECT_ORDER_CHANNEL, {
+        ...request.ownerStamp,
+        manualProjectOrder: request.manualProjectOrder,
+        projectOrder: request.projectOrder,
+      })),
+    onProjectOrderChanged: (
+      cb: (
+        snapshot: SyncedProjectOrderSnapshot,
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ): (() => void) =>
+      fanOutSidebarProjectOrderChanged((payload, ownerStamp) => {
+        if (!isDataOwnerPushStamp(ownerStamp)) return;
+        cb(parseProjectOrderSnapshot({ ...parseProjectOrderSnapshot(payload), ownerStamp }), ownerStamp);
+      }),
   },
 
   remotePrecreatedWorktreeLedger: {
@@ -4710,6 +4743,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:update', id, patch),
       touchUserSend: (id: string, atMs?: number): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:touchUserSend', id, atMs),
+      setPinnedCardSummaries: (enabled: boolean): Promise<void> =>
+        ipcRenderer.invoke('local-db:sessions:set-pinned-card-summaries', enabled),
       /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: (): Promise<string[]> =>
         ipcRenderer.invoke('local-db:sessions:interrupted-pending'),
@@ -5181,6 +5216,50 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:provider:models-rediscover', providerId),
     /** 自定义供应商变更广播订阅（返回 off）。 */
     onProvidersChanged: fanOutMakerProvidersChanged,
+    localModelStatus: (): Promise<import('../shared/localModelRuntime').LocalRuntimeStatus> =>
+      ipcRenderer.invoke('maker:local-model:status'),
+    localModelStart: (): Promise<import('../shared/localModelRuntime').LocalRuntimeStatus> =>
+      ipcRenderer.invoke('maker:local-model:start'),
+    localModelList: (): Promise<{
+      status: import('../shared/localModelRuntime').LocalRuntimeStatus;
+      models: import('../shared/localModelRuntime').LocalInstalledModel[];
+      recommended: import('../shared/localModelRuntime').RecommendedLocalModel | null;
+      catalog: import('../shared/localModelRuntime').CuratedOllamaModel[];
+      featured: import('../shared/localModelRuntime').CuratedOllamaModel[];
+      memoryGb: number;
+      recommendReason: import('../shared/localModelRuntime').LocalRecommendReason;
+      appleSilicon: boolean;
+      pull: import('../shared/localModelRuntime').LocalModelPullProgress | null;
+      pulls: import('../shared/localModelRuntime').LocalModelPullProgress[];
+      pausedPull: import('../shared/localModelRuntime').LocalModelPullProgress | null;
+      detectedLocalPresetIds: string[];
+      catalogDirty?: boolean;
+    }> => ipcRenderer.invoke('maker:local-model:list'),
+    localModelPull: (name: string): Promise<{ ok: true; stopped?: 'pause' | 'cancel' }> =>
+      ipcRenderer.invoke('maker:local-model:pull', name),
+    localModelAbort: (reason: 'pause' | 'cancel', name: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:local-model:abort', reason, name),
+    localModelEnsure: (): Promise<{ ok: true; created: boolean }> =>
+      ipcRenderer.invoke('maker:local-model:ensure'),
+    localModelSetInPicker: (name: string, enabled: boolean): Promise<{ ok: true; created: boolean }> =>
+      ipcRenderer.invoke('maker:local-model:set-in-picker', name, enabled),
+    localModelDelete: (name: string): Promise<{ ok: true; created: boolean }> =>
+      ipcRenderer.invoke('maker:local-model:delete', name),
+    localModelDiscardPaused: (name: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:local-model:discard-paused', name),
+    localModelInstall: (
+      input: { consent: true },
+    ): Promise<{
+      ok: true;
+      status?: import('../shared/localModelRuntime').LocalRuntimeStatus;
+      created?: boolean;
+      stopped?: 'cancel';
+    }> => ipcRenderer.invoke('maker:local-model:install', input),
+    localModelInstallAbort: (): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:local-model:install-abort'),
+    onLocalModelStatus: fanOutMakerLocalModelStatus,
+    onLocalModelPullProgress: fanOutMakerLocalModelPullProgress,
+    onLocalModelInstallProgress: fanOutMakerLocalModelInstallProgress,
 
     // 自定义 MCP 服务器配置 CRUD（可选 bearer token 另走通用 safeStorage IPC，不经这里）。
     listCustomMcpServers: (): Promise<{
@@ -5812,6 +5891,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:set-permission-mode', sessionId, mode),
     setFastMode: (sessionId: string, enabled: boolean): Promise<void> =>
       ipcRenderer.invoke('maker:set-fast-mode', sessionId, enabled),
+    setThinkingEnabled: (sessionId: string, enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke('maker:set-thinking-enabled', sessionId, enabled),
     // 计划模式一级开关(与 permissionMode 正交)。runtime-only; DB 持久化由 renderer
     // 同步调 sessionService.update({ planModeEnabled })(与 setModel 双 IPC 协调先例一致)。
     setPlanMode: (sessionId: string, enabled: boolean): Promise<void> =>

@@ -1122,10 +1122,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
     const start = source.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('}, [', start));
-    // 取消确认 = false(现状,不变)。**有意变更**(Chris 2026-08-19):确认门现在收目标
-    // 引擎 —— 「已确认过就不再问」的判据是「已有指向**该目标**的意图」,不传目标会让确认框
-    // 在任何残留意图之后永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
+    // 取消确认 = false(现状,不变)。**有意变更**(Chris 2026-08-20):确认只认任务真实引擎,
+    // 挂着的意图不算已经确认过 —— Claude 任务点了 Pi 收藏再点另一条,仍要弹框。
     expect(body).toContain('if (!(await confirmAgentBrowseSwitch(targetAgent))) return false;');
+    expect(body).toContain('runtimeAgent: runtimeAgentKind ?? undefined,');
     // 真实结果原样交出去;绝不再出现 fire-and-forget + 提前 true。
     expect(body).toContain('const applied = await performAgentSwitchRef.current(');
     expect(body).toContain('return applied;');
@@ -1173,10 +1173,9 @@ describe('ChatInput 的入口门控与调用路由', () => {
   });
 
   /**
-   * Chris 2026-08-19 实测「面板原地刷新一下」的根因锁:切换事务一开始就把 disabled 拉高
-   * (agentSwitchInFlight),`(open || keepOpen) && !disabled` 会连保命锁一起压掉 —— 面板当场
-   * 收合,收尾时 setOpenWithoutAutoRefresh(true) 又把它弹回来。保命锁的意义就是「这段时间
-   * 别关」,disabled 不该有权否决它;in-flight 期间由 interactionDisabled 置灰即可。
+   * Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」:
+   * disabled 不得参与 popover 开关。`(open && !disabled) || keepOpen` 只保住确认框那条路,
+   * 改思维走 performAgentSwitch 时 keepOpen 是 false,选单照关。
    */
   it('ModelSelector 的保命锁不被 disabled 压穿(两个 popover 分支同一表达式)', () => {
     const selectorSource = readFileSync(
@@ -1184,12 +1183,60 @@ describe('ChatInput 的入口门控与调用路由', () => {
       'utf8',
     ).replace(/\r\n/g, '\n');
     const matches =
-      selectorSource.match(/open=\{\(open && !disabled\) \|\| keepOpenForAgentConfirmation\}/g) ??
-      [];
+      selectorSource.match(/open=\{open \|\| keepOpenForAgentConfirmation\}/g) ?? [];
     expect(matches).toHaveLength(2);
     expect(selectorSource).not.toContain('(open || keepOpenForAgentConfirmation) && !disabled');
+    expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentConfirmation');
+    // 切引擎成功也不收选单:applied=true 曾经会 setOpen(false),一点胶囊窗口就没了。
+    expect(selectorSource).toContain('setOpenWithoutAutoRefresh(true);');
+    expect(selectorSource).not.toContain('setOpenWithoutAutoRefresh(applied === false)');
+  });
+
+  it('换引擎确认只认任务真实引擎,不认挂着的意图', () => {
+    expect(source).toContain(
+      'runtimeAgentKind != null && runtimeAgentKind === targetAgent',
+    );
+    expect(source).not.toContain(
+      'makerChatStore.getAgentSwitchIntent(sessionId)?.target === targetAgent',
+    );
+  });
+
+  it('会话收藏锚点只认 uid,不拿正在跑的模型/引擎去对副本', () => {
+    expect(source).toContain('sessionFavoriteAnchor?.uid ?? null');
+    expect(source).not.toContain('sessionFavoriteAnchor.wireModelId === activeModel');
+  });
+
+  it('跨引擎选中拿任务真实引擎比,不拿意图目标', () => {
+    const actions = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/useUnifiedRowActions.ts'),
+      'utf8',
+    );
+    expect(actions).toContain('const runtimeAgent = sessionEngineFilter?.runtimeAgent;');
+    expect(actions).not.toContain(
+      'const runtimeAgent = sessionEngineFilter?.runtimeAgent ?? sessionAgent;',
+    );
+    expect(actions).toContain('if (runtimeAgent === undefined) return true;');
+    expect(actions).toContain('shouldCrossEngine(config.agent)');
+    expect(actions).toContain('pendingSwitch');
+    expect(actions).toContain('favoriteCopyIsLive');
+    expect(actions).not.toContain('config.agent !== sessionAgent');
+  });
+
+  it('打开选单只滚动选中行,不把焦点从搜索框抢走', () => {
+    const panel = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/UnifiedModelPanel.tsx'),
+      'utf8',
+    );
+    const ensure = panel.slice(
+      panel.indexOf('const ensureSelectedVisible = useCallback'),
+      panel.indexOf('}, [pickerLayout]);'),
+    );
+    expect(ensure).not.toContain('row.focus');
+    expect(ensure).toContain('computeSelectedRowScrollTop');
   });
 });
+
+
 
 describe('CCAgentSessionView 上下文环压缩入口按 agent 能力分流(#1927)', () => {
   const viewSource = readFileSync(

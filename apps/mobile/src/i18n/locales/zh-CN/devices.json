@@ -31,6 +31,9 @@
     },
     "a11y": {
       "selectScope": "选择任务范围",
+      "openMenu": "打开菜单",
+      "closeMenu": "关闭菜单",
+      "openDisplaySettings": "打开显示设置",
       "openSettings": "打开设置",
       "syncing": "正在重新同步",
       "sync": "重新同步",
@@ -38,6 +41,7 @@
       "newRemoteConversation": "新建远程任务",
       "renameDevice": "重命名 {{label}}",
       "project": "项目 {{title}}",
+      "dialogue": "对话",
       "openAutomationLatest": "打开自动化 {{title}} 的最新任务",
       "automationTask": "自动化 {{title}}",
       "openConversation": "打开任务 {{title}}",
@@ -51,7 +55,24 @@
       "cancelRename": "取消重命名"
     },
     "menu": {
-      "groupByProject": "按项目分组"
+      "groupByProject": "按项目分组",
+      "groupDialogue": "对话归为一组",
+      "sortByTime": "按时间排序",
+      "sortByPriority": "优先级",
+      "statusActive": "活跃",
+      "statusArchived": "已归档",
+      "statusAll": "全部",
+      "dialogueFolder": "对话",
+      "settings": "设置",
+      "remoteSettings": "远程连接设置",
+      "displaySettings": "显示设置",
+      "groupHeading": "分组",
+      "sortHeading": "任务排序",
+      "projectOrderHeading": "项目顺序",
+      "projectOrderActivity": "按最近活动",
+      "projectOrderManual": "手动",
+      "projectOrderManualTip": "长按项目行拖动调整顺序，组内任务仍按上面的排序",
+      "statusHeading": "状态"
     },
     "renameDevice": {
       "title": "重命名设备",

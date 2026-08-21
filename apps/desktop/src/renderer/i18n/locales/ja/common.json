@@ -1679,7 +1679,14 @@
         "stepConnect": "接続",
         "stepModels": "モデルを選択",
         "searchPlaceholder": "プロバイダーを検索…",
-        "groupSubscription": "サブスクリプション認証 · おすすめ",
+        "groupRecommend": "おすすめ",
+        "groupDetectedLocal": "このパソコンで検出",
+        "groupSubscription": "サブスクリプション認証",
+        "recommendReason": {
+          "has-local-models": "このパソコンにモデルがある",
+          "machine-capable": "このパソコンでローカルモデルを動かせる",
+          "subscription": "サブスクリプション認証"
+        },
         "groupApiKey": "API とセルフホスト型プロキシ · プリセットはカタログと同期",
         "groupCustom": "カスタム",
         "metaOAuth": "サブスクリプション認証",
@@ -1728,7 +1735,135 @@
         "builtinApiKey": {
           "subtitle": "自分の API key で接続",
           "note": "このソースは画像生成モデルを提供し、チャットには参加しません。API key はこの端末のみに保存され(システムキーチェーンで暗号化)、アップロードされません。"
-        }
+        },
+        "groupLocal": "ローカルモデル",
+        "metaLocalRecommended": "おすすめ · Cindy 内でダウンロード",
+        "metaLocalConnect": "起動中のローカルサーバーに接続",
+        "moreLocal": "その他のローカルサーバー"
+      },
+      "local": {
+        "title": "Ollama",
+        "subtitle": "ローカルモデル",
+        "beta": "Beta",
+        "recommended": "おすすめ",
+        "recommendedForThisDevice": "このコンピュータ向けのおすすめ",
+        "hostProfileApple": "Apple シリコン · 統合メモリ 約 {{memory}} GB",
+        "hostProfileGeneric": "メモリ 約 {{memory}} GB",
+        "hostProfileUnknown": "このコンピュータのメモリをまだ確認できません",
+        "bestForYou": "あなたに最適",
+        "alsoCoding": "コーディングにも",
+        "packaging": {
+          "mxfp8": "MXFP8",
+          "mlx": "MLX",
+          "q4": "Q4"
+        },
+        "recommendReason": {
+          "apple-mxfp8": "この Mac のメモリなら公式 MXFP8 が向いています。",
+          "apple-mlx": "この Mac には公式 MLX が向いています。",
+          "generic-27b": "このコンピュータには公式 Q4 が向いています。",
+          "compact": "このコンピュータのメモリなら、より軽いモデルから始めましょう。",
+          "unknown": "まずは動かしやすいモデルを選びます。"
+        },
+        "searchPlaceholder": "モデルを検索",
+        "noSearchResults": "一致するモデルがありません",
+        "alreadyInstalled": "インストール済み",
+        "searchResults": "検索結果",
+        "moreModels": "その他のよく使うモデル",
+        "memoryWarning": "このコンピュータのメモリが不足しています（{{need}} GB 必要、現在約 {{have}} GB）",
+        "manualDownload": "手動ダウンロード",
+        "manualDownloadPlaceholder": "Ollama のライブラリ名、または Hugging Face の URL",
+        "invalidLibraryName": "Ollama のライブラリ名を入力するか、huggingface.co のモデルページ URL を貼り付けてください",
+        "advancedExactName": "上級：正確なライブラリ名",
+        "models": {
+          "qwen38-27b": { "blurb": "ローカルで動かせる最強クラスの密モデル。コーディングと長時間タスク向け。" },
+          "gpt-oss-20b": { "blurb": "OpenAI のオープン 20B。16GB 級マシンの定番。" },
+          "gemma4-e2b": { "blurb": "Gemma 4 の最小。軽いマシンでも動く。ビジョン付き。" },
+          "gemma4-e4b": { "blurb": "Google Gemma 4 の小型。日常使いでビジョン付き。" },
+          "gemma4-12b": { "blurb": "Gemma 4 の中型。日常会話とマルチモーダル向け。" },
+          "gemma4-31b": { "blurb": "Gemma 4 の大型。会話とマルチモーダルがより強く、メモリもより食う。" },
+          "gemma4-26b": { "blurb": "Gemma 4 の中大型 MoE。有効パラメータは少なめ。" },
+          "ornith15-35b": { "blurb": "Ornith 1.5 の中型 MoE。ローカルのコーディングと Agent の控え。" },
+          "glm-47-flash": { "blurb": "智譜の新しいコーディングモデル。30B MoE で、コードと Agent 向き。" }
+        },
+        "onboardingTitle": "先に Ollama ランタイムをインストール",
+        "onboardingBody": "Ollama をインストールすれば、Ollama アプリを開かなくても Cindy 内でローカルモデルをダウンロードして使えます。Ollama は無料のオープンソース製サードパーティランタイムです。",
+        "installInCindy": "Cindy 内でインストール",
+        "installConsent": "Cindy は公式 Ollama ランタイム（約 {{size}}）を Cindy のデータフォルダにダウンロードして起動します。システムのアプリフォルダには入れません。Ollama は無料のオープンソース製サードパーティです。",
+        "installCancel": "インストールをキャンセル",
+        "installFailed": "Ollama のインストールに失敗しました",
+        "installPhase": {
+          "resolving": "公式リリースを確認中…",
+          "downloading": "ダウンロード中…",
+          "verifying": "検証中…",
+          "extracting": "インストール中…",
+          "starting": "起動中…",
+          "success": "インストール済み",
+          "error": "インストール失敗",
+          "cancelled": "キャンセル済み"
+        },
+        "openWebsite": "Ollama のサイトを開く",
+        "recheck": "インストール済み、再検出",
+        "start": "ローカルモデルサービスを起動",
+        "conflict": "ポート 11434 は別のプログラムが使用中です",
+        "notReady": "ローカルモデルサービスはまだ準備できていません",
+        "connectFailed": "ローカルモデルサービスに接続できませんでした",
+        "pullFailed": "モデルをダウンロードできませんでした",
+        "pullError": {
+          "not-gguf": "これは MLX リポジトリです。Ollama が取り込めるのは GGUF だけなので、GGUF のモデルページを使ってください。",
+          "not-found": "そのモデルが見つかりません。ライブラリ名かリンクを確認してください。",
+          "unauthorized": "このモデルをダウンロードするには Hugging Face へのログインが必要です。",
+          "refused": "ローカルモデルサービスに接続できません。Ollama が起動しているか確認してください。",
+          "generic": "モデルをダウンロードできませんでした"
+        },
+        "added": "Cindy に追加しました",
+        "status": {
+          "absent": "Ollama が未インストール",
+          "stopped": "インストール済み · 未起動",
+          "starting": "起動中…",
+          "ready": "実行中",
+          "incompatible": "この Ollama バージョンは未対応です",
+          "port-conflict": "ポート競合",
+          "pulling": "ダウンロード中…",
+          "error": "ローカルモデルサービスに到達できません"
+        },
+        "installed": "この Mac にダウンロード済み",
+        "emptyInstalled": "ローカルモデルはまだインストールされていません",
+        "addToCindy": "ピッカーに追加",
+        "removeFromCindy": "ピッカーから外す",
+        "downloadAdd": "ダウンロードして追加",
+        "retryDownload": "再試行",
+        "libraryName": "正確な Ollama ライブラリ名",
+        "pullingTitle": "{{name}} をダウンロード中",
+        "pullIndeterminate": "準備中",
+        "pullBytes": "{{done}} / {{total}}",
+        "pullSpeed": " · {{speed}}",
+        "pullPhase": {
+          "starting": "ダウンロードを準備しています…",
+          "manifest": "マニフェストを取得しています…",
+          "downloading": "モデルファイルをダウンロードしています",
+          "verifying": "検証しています…",
+          "writing": "書き込んでいます…",
+          "success": "ダウンロード完了",
+          "error": "ダウンロードに失敗しました",
+          "paused": "一時停止中",
+          "cancelled": "キャンセル済み"
+        },
+        "pauseDownload": "一時停止",
+        "resumeDownload": "ダウンロードを再開",
+        "cancelDownload": "未完了のダウンロードを削除",
+        "notRecommended": "この Mac は Qwen3.8 27B に必要な 32 GB メモリに達していません。正確なライブラリ名を入力して自分でダウンロードできます。",
+        "sizeHint": "約 {{size}} · 統合メモリ {{memory}} GB が必要",
+        "sizeHintApple": "約 {{size}} · 統合メモリ {{memory}} GB が必要",
+        "sizeHintGeneric": "約 {{size}} · メモリ {{memory}} GB が必要",
+        "deleteFromCindy": "Cindy から削除",
+        "deleteConfirmTitle": "Cindy から Ollama を削除しますか？",
+        "deleteConfirmBody": "Cindy 側の接続だけを削除します。Ollama にダウンロード済みのモデルはディスクに残り、サービスも停止しません。",
+        "deleteModel": "このモデルを削除",
+        "deleteModelConfirmTitle": "{{name}} を削除しますか？",
+        "deleteModelConfirmBody": "このパソコンからダウンロード済みのモデルファイルを削除し、Cindy からも取り除きます。必要ならあとから再ダウンロードできます。",
+        "deleteModelConfirm": "削除",
+        "deleteModelDone": "{{name}} を削除しました",
+        "deleteModelFailed": "削除できませんでした。Ollama が起動していることを確認して、もう一度お試しください。"
       },
       "xdSignin": {
         "badge": "おすすめ",
@@ -2579,7 +2714,7 @@
       "installSectionDescription": "pi.dev ページのインストール元を貼り付けるか、npm パッケージ名、Git URL、ローカルの絶対パスを入力します。",
       "installedSectionTitle": "インストール済み",
       "sourcePlaceholder": "npm パッケージ、Git URL、ローカルの絶対パス",
-      "inspectionHint": "インストール後に Cindy がリソースと互換性を確認します。実行可能な拡張コードは、信頼できる配布元だと確認して有効にするまで無効のままです。",
+      "inspectionHint": "インストール時にリスクを一度だけ確認します。承認後、Cindy が拡張機能をインストールしてリソースを検査し、検査に成功した実行可能リソースを自動的に有効にします。",
       "install": "インストール",
       "update": "更新",
       "remove": "アンインストール",
@@ -2600,11 +2735,11 @@
       "loadFailed": "Pi 拡張機能を読み込めませんでした。接続を確認して再試行してください。",
       "retry": "再試行",
       "operationInProgress": "{{name}} を処理しています…",
-      "confirmTitle": "サードパーティの Pi 拡張機能をインストールしますか？",
-      "confirmDescription": "{{source}} には第三者コードが含まれる場合があります。インストールと更新では npm ライフサイクルスクリプトを実行しません。実行可能な拡張コードが見つかった場合は、検査結果を確認して明示的に有効にするまで無効のままです。",
+      "confirmTitle": "この Pi 拡張機能をインストールしますか？",
+      "confirmDescription": "{{source}} は第三者コードです。Cindy の Pi と同じプロセスで実行され、Pi がアクセスできるファイルや認証情報を読み取る可能性があります。インストール時に npm ライフサイクルスクリプトは実行しません。承認するとインストールされます。検査に成功した実行可能リソースは、互換性の制限が報告された場合でも自動的に有効になります。",
       "confirmInstall": "リスクを理解してインストール",
-      "updateConfirmTitle": "サードパーティ製 Pi 拡張機能を更新しますか？",
-      "updateConfirmDescription": "{{source}} は新しいサードパーティ版をダウンロードし、インストール済みコードを置き換えます。更新時に npm ライフサイクルスクリプトは実行されず、実行可能な拡張コードは再承認するまで動作しません。",
+      "updateConfirmTitle": "この Pi 拡張機能を更新しますか？",
+      "updateConfirmDescription": "{{source}} は新しいサードパーティ版をダウンロードし、インストール済みコードを置き換えます。更新時に npm ライフサイクルスクリプトは実行しません。コードは Pi と同じプロセスで実行され、ファイルや認証情報を読み取る可能性があります。承認すると更新されます。自分で無効にした拡張機能は無効のままになり、それ以外は検査に成功すると有効になります。",
       "confirmUpdate": "リスクを理解して更新",
       "uninstallTitle": "Pi 拡張機能をアンインストールしますか？",
       "uninstallDescription": "{{name}} をこのデバイスから削除します。すでに開いている Pi タスクは、閉じるまで古い拡張機能を保持します。",
@@ -2669,7 +2804,8 @@
         "lifecycle-scripts-disabled": "この拡張機能にはインストールスクリプトがありますが、安全のため Cindy は実行していません。生成ファイルに依存する機能は動作しない可能性があります。"
       },
       "success": {
-        "install": "Pi 拡張機能をインストールしました。現在のタスクは変わりません。Pi タスクを新規作成または再起動すると有効になります。",
+        "install": "Pi 拡張機能をインストールしました。下の有効状態を確認してください。現在のタスクは変わりません。",
+        "installEnabled": "Pi 拡張機能をインストールして有効にしました。現在のタスクは変わりません。Pi タスクを新規作成または再起動すると使えます。",
         "remove": "Pi 拡張機能を削除しました。現在のタスクは閉じるまで古い拡張機能を保持します。",
         "update": "Pi 拡張機能を更新しました。現在のタスクは古いバージョンを保持します。新規作成または再起動後に反映されます。",
         "set-enabled": "Pi 拡張機能の状態を保存しました。現在のタスクは変わりません。新規作成または再起動後に反映されます。"
@@ -4988,7 +5124,7 @@
     "timeLine": "時間 {{duration}}",
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
-    "tokenLine": "Token: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
+    "tokenLine": "トークン: 合計 {{total}} · 入力 {{input}} · 出力 {{output}}",
     "cacheLine": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}} · ヒット率 {{rate}}",
     "cacheLineNoRate": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}}",
     "modelLine": "モデル: {{model}}",
@@ -6139,6 +6275,7 @@
       "retryRemoteModels": "モデルを再読み込み",
       "remoteEmpty": "このデバイスには利用可能なモデルがありません",
       "effortLabel": "推論強度",
+      "thinking": "思考",
       "edit": "編集",
       "options": "オプション",
       "priceTip": "入力 {{input}} · 出力 {{output}} / 100万トークン",
@@ -6464,11 +6601,12 @@
       "effortRuntimeDirty": "推論強度を更新しています。少し待ってからもう一度送信してください。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "modelSwitchContextGuard": {
-        "title": "切替先モデルのコンテキストウィンドウが小さいです",
-        "warnToast": "このセッションは {{used}} のコンテキストを使用中です。切替後は切替先モデルのウィンドウ（{{total}}）の約 {{pct}}% を占めます",
-        "overflowDescription": "このセッションは {{used}} のコンテキストを使用中で、切替先モデルのウィンドウ（{{total}}、約 {{pct}}%）を超えています。切替後は応答も圧縮も失敗する可能性があります。先にコンテキストリングをクリックしてセッションを圧縮するか、新しいセッションでこのモデルを使用してください。それでも切り替えますか？",
-        "confirmSwitch": "モデルを切り替える",
-        "cancelSwitch": "切替をキャンセル"
+        "title": "このモデルには今の会話が収まりません",
+        "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
+        "overflowDescription": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy が要約してから続けます。チャット履歴は残りますが、全文をそのままは渡しません。",
+        "overflowDescriptionRemote": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。リモートのタスクでは自動的に新しいエージェント文脈へ引き継げないため、次の送信が失敗する可能性があります。このまま切り替えるか、今のモデルのままにしてください。",
+        "confirmSwitch": "切り替えて続ける",
+        "cancelSwitch": "今は切り替えない"
       },
       "agentSwitch": {
         "engineNotReady": "エンジンは切り替わりましたが、新しいエンジンの起動に失敗しました。メッセージ送信時に自動的に再試行されます",
@@ -6773,6 +6911,10 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "リクエストの明細"
     },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
+    },
     "shareImage": {
       "entry": "画像として共有",
       "title": "会話を共有",
@@ -6845,7 +6987,8 @@
       "silentStopContinueTitle": "現在のタスクを続行",
       "piTransportClosed": "リモート Pi の接続が切断されました（SSH チャンネルが閉じました）。リモートのタスクは実行中のままです。再接続すると続行できます。",
       "piManagerUnavailable": "リモート Pi マネージャーが準備できていません。しばらくして再試行してください。失敗が続く場合は「設定 → リモートマシン」で Pi を再インストールしてください。",
-      "piBundledNodeMissing": "リモートホストに実行環境（Node.js）がありません。「設定 → リモートマシン」でホストを展開し、まず Claude Code または Codex の「インストール」をクリックしてください（Node.js もインストールされます）。その後 Pi タスクを開始してください。"
+      "piBundledNodeMissing": "リモートホストに実行環境（Node.js）がありません。「設定 → リモートマシン」でホストを展開し、まず Claude Code または Codex の「インストール」をクリックしてください（Node.js もインストールされます）。その後 Pi タスクを開始してください。",
+      "contextOverflow": "このメッセージ自体がモデルのコンテキスト上限を超えているため、同じセッション内で自動的に新しいエージェントセッションへ引き継げません。入力を短くするか大きな添付を外してから再試行してください。"
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
@@ -7176,6 +7319,13 @@
         "handoffTitleEnglishSource": "引き継ぎ内容——切り替え時に新しいエンジンへ送信されたコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)",
         "resumedBadge": "セッション再開"
       },
+      "contextRebuild": {
+        "labelOverflow": "コンテキストを整理して続行しました",
+        "labelTimeout": "直前の応答がなかったため、整理して続行しました",
+        "toggleHint": "引き継ぎ内容を表示",
+        "handoffTitle": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約(チャット履歴には含まれず、ここでのみ表示)",
+        "handoffTitleEnglishSource": "引き継ぎ内容——整理後にこの会話の続きへ渡したコンテキスト要約。原文は英語(チャット履歴には含まれず、ここでのみ表示)"
+      },
       "review": {
         "running": "現在の成果をレビュー中",
         "completed": "レビュー完了",
@@ -7345,6 +7495,7 @@
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "リモート Claude Code セッションはローカル互換プロキシ経由でルーティングできません(内部エラー)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI の資格情報がまだ準備できていません(サインイン後に自動発行されます)。しばらくしてから再試行してください。続く場合は 設定 → モデルプロバイダー で Cindy AI の接続状態を確認してください。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "このモデルプロバイダーはローカル専用サービス（Ollama など）で、SSH リモートタスクからはアクセスできません。Cindy AI ゲートウェイに切り替えるか、リモートホストから到達可能なプロバイダーを選んでください。",
+      "LOCAL_OLLAMA_NOT_READY": "ローカル Ollama の準備ができていません。設定 → モデルプロバイダー → Ollama を開いてください。",
       "DEVICE_LINK_CONTROL_DISABLED": "このデバイスの操作はオフです。メッセージは送信されていません。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "添付ファイルの転送に失敗しました。メッセージは送信されていません。もう一度お試しください。"
     },
@@ -8198,6 +8349,7 @@
     }
   },
   "effortLevels": {
+    "off": "オフ",
     "minimal": "最小",
     "low": "低",
     "medium": "中",

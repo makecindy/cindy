@@ -135,6 +135,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limit-reset')).toBe(true);
   });
 
+  it('放行被控端项目顺序读写(显示偏好,真相在被控端)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-order')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-order')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:set-project-order')).toBe(false);
+  });
+
   it('放行 Git safety 只读查询(远程 Codex Rewind 按被控端 snapshot 设置 gate)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:git-safety:get')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:git-safety:set')).toBe(false);
@@ -336,6 +342,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'local-db:messages:created',
       'local-db:messages:deleted',
       'local-db:session:error-persisted',
+      'sidebar-settings:project-order-changed',
       SESSION_ACTIVITY_CHANNEL,
     ]) {
       expect(PUSH_FORWARD_ALLOWLIST.has(ch)).toBe(true);

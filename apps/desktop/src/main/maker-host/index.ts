@@ -78,6 +78,7 @@ import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js
 import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
+import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
 import {
@@ -2050,6 +2051,14 @@ export function getMaker(): Maker {
             throw new Error('Account provider models are not ready for this app session; retry.');
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
+          if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
+            const thinkingEnabled = getThinkingEnabledFromMemory(
+              opts.agentKind,
+              opts.providerId,
+              opts.model,
+            );
+            if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
+          }
           if (opts.agentKind === 'codex') {
             const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(
               opts.workingDir,

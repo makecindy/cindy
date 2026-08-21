@@ -31,6 +31,9 @@
     },
     "a11y": {
       "selectScope": "Select session scope",
+      "openMenu": "Open menu",
+      "closeMenu": "Close menu",
+      "openDisplaySettings": "Open display settings",
       "openSettings": "Open settings",
       "syncing": "Syncing",
       "sync": "Sync again",
@@ -38,6 +41,7 @@
       "newRemoteConversation": "New remote session",
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
+      "dialogue": "Chat",
       "openAutomationLatest": "Open the latest session of automation {{title}}",
       "automationTask": "Automation {{title}}",
       "openConversation": "Open session {{title}}",
@@ -51,7 +55,24 @@
       "cancelRename": "Cancel rename"
     },
     "menu": {
-      "groupByProject": "Group by Project"
+      "groupByProject": "Group by Project",
+      "groupDialogue": "Group chats together",
+      "sortByTime": "By time",
+      "sortByPriority": "Priority",
+      "statusActive": "Active",
+      "statusArchived": "Archived",
+      "statusAll": "All",
+      "dialogueFolder": "Chat",
+      "settings": "Settings",
+      "remoteSettings": "Remote connection settings",
+      "displaySettings": "Display settings",
+      "groupHeading": "Group",
+      "sortHeading": "Task sort",
+      "projectOrderHeading": "Project order",
+      "projectOrderActivity": "By recent activity",
+      "projectOrderManual": "Manual",
+      "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
+      "statusHeading": "Status"
     },
     "renameDevice": {
       "title": "Rename Device",

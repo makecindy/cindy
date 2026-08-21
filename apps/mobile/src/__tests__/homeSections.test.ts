@@ -142,10 +142,96 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
 
   it('分组:项目保留 folder 行,与普通对话按活动时间倒序混排', () => {
     const rows = buildGroupedHomeRows(home);
-    expect(rows.map((row) => row.kind === 'project' ? row.project.key : row.item.session.id)).toEqual([
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : row.project.key)).toEqual([
       'chat-new',
       'proj-new',
       'chat-old',
+    ]);
+  });
+
+  it('对话归组:分组模式下对话收成 folder,平铺时项目会话仍展平', () => {
+    const grouped = buildGroupedHomeRows(home, { groupDialogue: true, dialogueTitle: '对话' });
+    expect(grouped.map((row) => row.kind === 'session' ? row.item.session.id : row.kind)).toEqual([
+      'dialogue',
+      'project',
+    ]);
+    const mixed = buildMixedHomeRows(home, { groupDialogue: true, dialogueTitle: '对话' });
+    expect(mixed.map((row) => row.kind === 'session' ? row.item.session.id : row.kind)).toEqual([
+      'dialogue',
+      's1',
+      's2',
+    ]);
+    expect(mixed.find((row) => row.kind === 'dialogue')?.project.title).toBe('对话');
+  });
+
+  it('手动项目顺序:项目行按存档序排在前面,对话仍按任务排序跟在后面', () => {
+    const twoProjects = presentation({
+      chats: [listItem('chat-new', '2026-06-09T00:00:00Z')],
+      projects: [
+        projectGroup('proj-old', '2026-06-01T00:00:00Z', [listItem('old', '2026-06-01T00:00:00Z')]),
+        projectGroup('proj-new', '2026-06-08T00:00:00Z', [listItem('fresh', '2026-06-08T00:00:00Z')]),
+      ],
+    });
+    const rows = buildGroupedHomeRows(twoProjects, {
+      projectOrder: 'custom',
+      manualProjectOrder: ['proj-old', 'proj-new'],
+    });
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : row.project.key)).toEqual([
+      'proj-old',
+      'proj-new',
+      'chat-new',
+    ]);
+  });
+
+  it('平铺时给项目会话和对话会话带来源标签,分组模式不带', () => {
+    const mixed = buildMixedHomeRows(home, { dialogueTitle: '对话' });
+    expect(mixed.filter((row): row is Extract<typeof row, { kind: 'session' }> => row.kind === 'session')
+      .map((row) => [row.item.session.id, row.sourceLabel])).toEqual([
+      ['chat-new', '对话'],
+      ['s1', undefined],
+      ['s2', undefined],
+      ['chat-old', '对话'],
+    ]);
+    // project.title 来自 fixture 里缺省的 undefined —— 上面只断言对话标签。补一个带 title 的项目。
+    const named = presentation({
+      chats: [listItem('chat-new', '2026-06-06T00:00:00Z')],
+      projects: [{
+        ...projectGroup('proj-new', '2026-06-05T00:00:00Z', [listItem('s1', '2026-06-05T00:00:00Z')]),
+        title: 'Cindy',
+      }],
+    });
+    const namedMixed = buildMixedHomeRows(named, { dialogueTitle: '对话' });
+    expect(namedMixed.map((row) => row.kind === 'session' ? [row.item.session.id, row.sourceLabel] : row.kind)).toEqual([
+      ['chat-new', '对话'],
+      ['s1', 'Cindy'],
+    ]);
+    const grouped = buildGroupedHomeRows(named, { dialogueTitle: '对话' });
+    expect(grouped.filter((row) => row.kind === 'session').map((row) => row.kind === 'session' ? row.sourceLabel : null))
+      .toEqual([undefined]);
+  });
+
+  it('优先级:等你处理 > 完成未读 > 运行中 > 其余,同档按时间', () => {
+    const waiting = listItem('wait', '2026-06-01T00:00:00Z');
+    const unread = listItem('unread', '2026-06-04T00:00:00Z');
+    const running = listItem('run', '2026-06-03T00:00:00Z');
+    const rest = listItem('rest', '2026-06-05T00:00:00Z');
+    const ranked = presentation({
+      chats: [rest, unread],
+      projects: [projectGroup('proj', '2026-06-03T00:00:00Z', [waiting, running])],
+    });
+    const rows = buildMixedHomeRows(ranked, {
+      sortBy: 'priority',
+      priorityContext: {
+        runningSessionIds: new Set(['run']),
+        unreadSessionIds: new Set(['unread']),
+        waitingSessionIds: new Set(['wait']),
+      },
+    });
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : row.kind)).toEqual([
+      'wait',
+      'unread',
+      'run',
+      'rest',
     ]);
   });
 

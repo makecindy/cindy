@@ -216,6 +216,7 @@ import {
 } from '@/session/messageHierarchyLayout';
 import {
   buildMessageContentLayout,
+  nextSettledContentWidth,
   type MessageContentLayout,
 } from '@/session/messageContentLayout';
 import { buildMobileReadableViewportLayout } from '@/session/responsiveViewportLayout';
@@ -2147,6 +2148,7 @@ function MessageBubble({
                   markdownImageCacheKey={item.message.key}
                   onOpenPayload={actions.onOpenPayload}
                   onOpenSessionLink={actions.onOpenSessionLink}
+                  pinContentWidth={!isUser}
                   selectable={canSelectVisibleText}
                   sessionReferences={item.message.sessionReferences}
                   streaming={false}
@@ -2163,6 +2165,7 @@ function MessageBubble({
             layout={contentLayout}
             onOpenPayload={actions.onOpenPayload}
             onOpenSessionLink={actions.onOpenSessionLink}
+            pinContentWidth={!isUser}
             sessionReferences={item.message.sessionReferences}
             selectable={canSelectVisibleText}
             streaming={isStreamingAssistant}
@@ -3610,6 +3613,7 @@ function MarkdownBody({
   layout,
   onOpenPayload,
   onOpenSessionLink,
+  pinContentWidth = false,
   sessionReferences,
   selectable,
   streaming,
@@ -3623,6 +3627,11 @@ function MarkdownBody({
   onOpenPayload?: (payload: MessagePayload) => void;
   /** 会话深链 chip 点击回调(app 内跳转)。 */
   onOpenSessionLink?: (url: string) => void;
+  /**
+   * 仅 agent 拉伸气泡启用:用户气泡是 hug + maxWidth 86%,钉死测宽会把展开态撑出
+   * 气泡(长代码围栏横向裁切 + 纵向巨高空白)。
+   */
+  pinContentWidth?: boolean;
   /** 当前落库消息里的展示安全引用摘要，按 sessionId + anchor 精确匹配链接。 */
   sessionReferences?: readonly MobilePersistedSessionReferenceMetadata[];
   /** 完成态消息为 true:各块 Text 开原生选中(含内嵌图片 View 的块除外,Android 上有风险)。 */
@@ -3635,6 +3644,20 @@ function MarkdownBody({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const chatFilePathContext = useContext(ChatFilePathContext);
+  // iOS UITextView 在 stretch/百分比宽度下会偶发只量出部分高度,LegendList 按这次
+  // 偏矮的 onLayout 裁切 agent 回复;点分享会换上确定宽度的容器从而完整显示。
+  // 外层始终 stretch 测可用宽,内层再钉像素宽:测宽不能钉在自己身上,否则旋转/
+  // 分屏变宽后 onLayout 仍报旧值。1px 内抖动忽略,避免公式 WebView 重挂。
+  const [contentWidth, setContentWidth] = useState(0);
+  const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
+    if (!pinContentWidth) return;
+    const nextWidth = Math.round(event.nativeEvent.layout.width);
+    setContentWidth((current) => nextSettledContentWidth(current, nextWidth));
+  }, [pinContentWidth]);
+  const pinSettledWidth = pinContentWidth && contentWidth > 0;
+  const settledTextStyle = pinSettledWidth
+    ? [styles.messageText, { width: contentWidth }]
+    : styles.messageText;
   const blocks = useMemo(() => parseMobileMarkdown(text), [text]);
   // Android 的 selectable Text 内嵌 View(直连内联图)行为未定义,含这类 inline 的块不开选中。
   const inlinesSelectable = useCallback((inlines: readonly MobileMarkdownInline[]) => (
@@ -3735,9 +3758,9 @@ function MarkdownBody({
     return (
       <MarkdownSelectableText
         allowIosUITextView={allowIosUITextView}
-        key={group.key}
+        key={`${group.key}:${pinSettledWidth ? contentWidth : 'hug'}`}
         selectable={runSelectable}
-        style={styles.messageText}
+        style={settledTextStyle}
         testID="message.markdownTextRun"
       >
         {group.blocks.flatMap((block, index) => {
@@ -3771,9 +3794,19 @@ function MarkdownBody({
   };
   return (
     <View
-      style={styles.markdownBody}
+      collapsable={false}
+      onLayout={handleSettledWidthLayout}
+      style={[
+        styles.markdownBody,
+        { maxWidth: '100%' },
+        pinContentWidth ? { alignSelf: 'stretch' } : null,
+      ]}
       testID="message.markdownBody"
     >
+      <View
+        collapsable={false}
+        style={pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null}
+      >
       {groups.flatMap((group, groupIndex) => {
         const renderedGroup = (() => {
           if (group.type === 'text_run') {
@@ -3811,12 +3844,12 @@ function MarkdownBody({
           );
         }
         if (block.type === 'code') {
+          // 围栏代码在气泡内换行,不用横向 ScrollView:后者在展开长用户消息时
+          // 会按未折行内容报出超高,气泡巨幅空白并把每行裁在右侧圆角外。
           return (
             <View key={block.key} style={styles.markdownCodeFrame}>
-              <ScrollView
-                horizontal
-                style={styles.markdownCodeScroll}
-                contentContainerStyle={[
+              <View
+                style={[
                   styles.markdownCodeContent,
                   {
                     paddingHorizontal: layout.codePaddingHorizontal,
@@ -3832,7 +3865,7 @@ function MarkdownBody({
                   styles={styles}
                   text={block.text}
                 />
-              </ScrollView>
+              </View>
             </View>
           );
         }
@@ -3950,9 +3983,9 @@ function MarkdownBody({
         return (
           <MarkdownSelectableText
             allowIosUITextView={allowIosUITextView}
-            key={block.key}
+            key={`${block.key}:${pinSettledWidth ? contentWidth : 'hug'}`}
             selectable={inlinesSelectable(block.inlines)}
-            style={styles.messageText}
+            style={settledTextStyle}
           >
             {renderInlines(block.inlines, spanFor(inlinesSelectable(block.inlines)))}
           </MarkdownSelectableText>
@@ -3966,6 +3999,7 @@ function MarkdownBody({
           renderedGroup,
         ];
       })}
+      </View>
     </View>
   );
 }
@@ -6368,6 +6402,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.borderStrong,
     maxWidth: '86%',
+    minWidth: 0,
+    overflow: 'hidden',
   },
   agentBubble: {
     alignSelf: 'stretch',
@@ -6761,15 +6797,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   markdownListText: { flex: 1 },
   markdownCodeFrame: {
+    alignSelf: 'stretch',
     backgroundColor: colors.chatCodeSurface,
     borderColor: colors.chatCodeBorder,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container,
     maxWidth: '100%',
+    minWidth: 0,
     overflow: 'hidden',
-  },
-  markdownCodeScroll: {
-    maxWidth: '100%',
   },
   markdownCodeContent: {
     paddingHorizontal: spacing.md,
@@ -6777,9 +6812,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   markdownCodeText: {
     color: colors.textPrimary,
+    flexShrink: 1,
     fontFamily: monoFont,
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
+    maxWidth: '100%',
   },
   // 语法着色:只上 color,其余(字体/字号/行高)继承 markdownCodeText —— 嵌套 Text
   // 只支持有限样式,且改字号会让同一行的 token 高低不齐。

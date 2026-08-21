@@ -102,6 +102,10 @@ export interface RemoteSessionRunStatus {
   startedAt: number | null;
   status: string;
   tokenUsage: number;
+  outputTokens: number;
+  generationDurationMs: number;
+  generationActive: boolean;
+  generationReliable: boolean;
 }
 
 export interface RemoteSessionReconnectAttempt {
@@ -154,6 +158,10 @@ const EMPTY_SESSION_RUN_STATUS: RemoteSessionRunStatus = Object.freeze({
   startedAt: null,
   status: '',
   tokenUsage: 0,
+  outputTokens: 0,
+  generationDurationMs: 0,
+  generationActive: false,
+  generationReliable: true,
 });
 
 const shards = new Map<string, DeviceShard>();
@@ -2423,13 +2431,13 @@ export const remoteSessionStore = {
       : flushAndFinalizeRemoteStreamingMessages(sessionId, boundaryAgentMeta);
     const turnBoundaryChanged = writeMakerTurnRunning(sessionId, running);
     const current = readSessionRunStatus(sessionId);
-    const next: RemoteSessionRunStatus = {
+    const next = clearLiveGenerationOnWideRunStart(current, {
       ...current,
       isRunning: running,
       reconnectAttempt: running ? current.reconnectAttempt : null,
       sideTaskRunning: running ? current.sideTaskRunning : false,
       startedAt: running ? (current.startedAt ?? Date.now()) : null,
-    };
+    });
     if (writeSessionRunStatus(sessionId, next)
       || turnBoundaryChanged
       || streamingChanged
@@ -2469,13 +2477,13 @@ export const remoteSessionStore = {
       const current = readSessionRunStatus(sessionId);
       const hasNewerMakerActivity = (sessionMakerActivityEpochs.get(sessionId) ?? 0)
         > activityEpochAtFetchStart;
-      const next: RemoteSessionRunStatus = {
+      const next = clearLiveGenerationOnWideRunStart(current, {
         ...current,
         isRunning: running,
         reconnectAttempt: running && hasNewerMakerActivity ? current.reconnectAttempt : null,
         sideTaskRunning: running ? current.sideTaskRunning : false,
         startedAt: running ? (current.startedAt ?? Date.now()) : null,
-      };
+      });
       changed = writeSessionRunStatus(sessionId, next) || changed;
     }
     if (changed) emit();
@@ -2861,12 +2869,12 @@ export const remoteSessionStore = {
       };
       changed = writeSessionLiveActivity(sessionId, next) || changed;
       const current = readSessionRunStatus(sessionId);
-      changed = writeSessionRunStatus(sessionId, {
+      changed = writeSessionRunStatus(sessionId, clearLiveGenerationOnWideRunStart(current, {
         ...current,
         isRunning: true,
         sideTaskRunning: current.sideTaskRunning,
         startedAt: current.startedAt ?? Date.now(),
-      }) || changed;
+      })) || changed;
       if (phase === 'needs-interaction') {
         changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
       }
@@ -3083,14 +3091,18 @@ export const remoteSessionStore = {
         if (textFlushed || reconnectCleared) emit();
         return;
       }
-      // The compact boundary itself preserves the historical `streaming: false` marker
-      // on the rows (the renderer uses it for compact boundaries), so do not use the
-      // generic finalizer here. Only retire the live-row identity after de-duplication.
-      streamingAssistantClientIds.delete(sessionId);
-      const finalized = existing.map(finishMessageStreamingAtCompactBoundary);
+      const backgroundCompact = readString(event, 'turnScope') === 'background';
+      // Background compact belongs to the previous idle cycle. Finalizing here
+      // would seal a product turn that started after compaction_start.
+      if (!backgroundCompact) {
+        streamingAssistantClientIds.delete(sessionId);
+      }
+      const nextMessages = backgroundCompact
+        ? existing
+        : existing.map(finishMessageStreamingAtCompactBoundary);
       const createdAt = new Date().toISOString();
       messages.set(sessionId, normalizeMessages([
-        ...finalized,
+        ...nextMessages,
         {
           id: clientId,
           clientId,
@@ -3111,6 +3123,16 @@ export const remoteSessionStore = {
     if (type === 'status') {
       const data = isRecord(event.data) ? event.data : null;
       const current = readSessionRunStatus(sessionId);
+      if (readString(event, 'turnScope') === 'background') {
+        const rawStatus = readString(data, 'status') ?? '';
+        const status =
+          !rawStatus || (rawStatus === 'Done' && current.isRunning)
+            ? current.status
+            : rawStatus;
+        const changed = writeSessionRunStatus(sessionId, { ...current, status });
+        if (changed || textFlushed || reconnectCleared) emit();
+        return;
+      }
       const isRunning = typeof data?.isRunning === 'boolean' ? data.isRunning : current.isRunning;
       if (!isRunning && isTurnContinuationBoundaryEvent(event)) {
         // A claimed status(false) closes only the provider SDK segment. Keep the
@@ -3129,6 +3151,31 @@ export const remoteSessionStore = {
       const tokenUsage = rawTokenUsage !== null && rawTokenUsage > 0
         ? rawTokenUsage
         : (isTurnStart ? 0 : current.tokenUsage);
+      const rawOutputTokens = readNumber(data, 'outputTokens');
+      const rawGenerationDurationMs = readNumber(data, 'generationDurationMs');
+      const hasLiveFields =
+        rawOutputTokens !== null ||
+        rawGenerationDurationMs !== null ||
+        typeof data?.generationActive === 'boolean' ||
+        typeof data?.generationReliable === 'boolean';
+      // turn 边界清的是上一轮残留,不是本条 status 自带的 live 字段。
+      // 重连/前台恢复会先清 maker-turn,活跃快照只恢复宽 isRunning,于是下一条
+      // 用量刷新被当成 isTurnStart;若这里无条件归零,权威 output / duration
+      // 会被丢掉,紧接着的终态也来不及再显示 tok/s。
+      const outputTokens = rawOutputTokens !== null
+        ? rawOutputTokens
+        : (isTurnStart ? 0 : current.outputTokens);
+      const generationDurationMs = rawGenerationDurationMs !== null
+        ? rawGenerationDurationMs
+        : (isTurnStart ? 0 : current.generationDurationMs);
+      const generationActive = !isRunning
+        ? false
+        : typeof data?.generationActive === 'boolean'
+          ? data.generationActive
+          : (isTurnStart || hasLiveFields ? false : current.generationActive);
+      const generationReliable = typeof data?.generationReliable === 'boolean'
+        ? data.generationReliable
+        : (isTurnStart ? true : current.generationReliable);
       // maker turn 边界 false→true 时清掉上一轮残留的 live task updates:它们是 turn 级
       // live 状态,残留到下一轮会被渲染层的孤儿兜底当作"仍在运行的子 agent"追加到消息流
       // 末尾(桌面端靠 idle demote / clear 清,手机 store 是常驻单例,只能在 turn 边界收口)。
@@ -3153,6 +3200,10 @@ export const remoteSessionStore = {
         startedAt: isRunning ? (current.startedAt ?? Date.now()) : null,
         status: rawStatus ?? current.status,
         tokenUsage,
+        outputTokens,
+        generationDurationMs,
+        generationActive,
+        generationReliable,
       };
       if (
         writeSessionRunStatus(sessionId, next)
@@ -3590,6 +3641,24 @@ function parseReconnectAttemptMessage(
 
 // 写 maker turn 边界,返回是否实际变化——变化必须参与调用方的 emit 判定(宽 run status
 // 可能已被 activity / 快照流改到相同值,单靠 writeSessionRunStatus 的返回值会漏通知)。
+function clearLiveGenerationOnWideRunStart(
+  current: RemoteSessionRunStatus,
+  next: RemoteSessionRunStatus,
+): RemoteSessionRunStatus {
+  if (current.isRunning || !next.isRunning) return next;
+  // Activity / snapshot / setSessionRunning can flip the wide running flag
+  // before the next maker status. Leftover tok/s belongs to the previous
+  // turn and must not flash. Maker status still writes authoritative live
+  // fields afterwards (including reconnect first-status).
+  return {
+    ...next,
+    outputTokens: 0,
+    generationDurationMs: 0,
+    generationActive: false,
+    generationReliable: true,
+  };
+}
+
 function writeMakerTurnRunning(sessionId: string, running: boolean): boolean {
   const prev = sessionMakerTurnRunning.get(sessionId) === true;
   if (running === prev) return false;

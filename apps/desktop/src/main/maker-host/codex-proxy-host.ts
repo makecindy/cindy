@@ -45,6 +45,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { isCuratedQwen38Tag } from '../../shared/localModelRuntime.js';
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getActiveCatalog, getCatalogModelContextWindow } from './active-catalog.js';
@@ -832,11 +833,15 @@ function createChatBridgeDecision(
         googleThoughtSignaturePlaceholder: true,
     }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
-  const capabilities = chatBridgeCapabilitiesForRoute(
+  const routedCapabilities = chatBridgeCapabilitiesForRoute(
     route.routing.upstream,
     realModel,
     baseCapabilities,
   );
+  const capabilities =
+    route.providerId === 'cindy-local-ollama' && isCuratedQwen38Tag(realModel)
+      ? { ...routedCapabilities, systemMessagePolicy: 'coalesce-leading' as const }
+      : routedCapabilities;
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -2174,6 +2179,17 @@ export function createModelRoutingTransform(
         selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
       );
+    if (explicitProviderId === 'cindy-local-ollama') {
+      log.debug('codex managed ollama route', {
+        sessionId,
+        providerId: explicitProviderId,
+        wireProtocol: selectedRouting?.wireProtocol ?? null,
+        bridgeKind: selectedUsesLocalBridge ? 'local-bridge' : 'passthrough',
+        upstream: selectedRouting?.upstream ?? null,
+        method: ctx.method,
+        path: ctx.url.split('?', 1)[0],
+      });
+    }
 
     if (subagentRoute) {
       if (

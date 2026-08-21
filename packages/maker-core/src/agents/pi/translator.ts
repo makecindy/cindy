@@ -28,11 +28,16 @@ import {
 } from '@cindy/maker-shared/internal-citation';
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import {
   UPSTREAM_OVERLOAD_REASON,
   formatOverloadRetryMessage,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import {
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '../shared/context-overflow-error.js';
 import {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
@@ -66,7 +71,7 @@ interface PiPendingAssistantError {
   sdkError: string;
   errorStatus?: 401 | 429 | 529;
   usageLimit?: true;
-  reason?: string;
+  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON;
 }
 
 interface PiThinkingBlock {
@@ -116,6 +121,8 @@ export interface PiTranslateContext {
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
+  /** Open generation interval start; 0 while tools/user waits own the turn. */
+  generationOpenAt: number;
   /** False when any reported output lacks compatible parent generation timing. */
   generationTimingReliable: boolean;
   generationHeartbeatAt: number;
@@ -136,6 +143,12 @@ export interface PiTranslateContext {
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
   /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
   hostAutoCompactInFlight: boolean;
+  /**
+   * compaction_start 锁存的 turnScope。end/boundary 必须复用，不能按结束时的
+   * isStreaming 重判——idle compact 期间用户开了新 turn 时，重判会把后台边界
+   * 当成前台事件，截断正在流式的 assistant。
+   */
+  compactTurnScope: 'background' | 'turn' | null;
 }
 
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
@@ -156,6 +169,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     finalAssistantText: '',
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
+    generationOpenAt: 0,
     generationTimingReliable: true,
     generationHeartbeatAt: 0,
     generationHeartbeatTimer: null,
@@ -164,6 +178,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     subagentToolCalls: new Map(),
     pendingAssistantError: null,
     hostAutoCompactInFlight: false,
+    compactTurnScope: null,
   };
 }
 
@@ -174,6 +189,7 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   if (ctx.generationHeartbeatTimer !== null) clearInterval(ctx.generationHeartbeatTimer);
   ctx.generationHeartbeatTimer = null;
   ctx.generationHeartbeatAt = 0;
+  ctx.generationOpenAt = 0;
 }
 
 /** Release translator-owned resources when a Pi session ends outside a normal turn boundary. */
@@ -181,6 +197,7 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.isStreaming = false;
   ctx.pendingAssistantError = null;
+  ctx.compactTurnScope = null;
   ctx.subagentToolCalls.clear();
 }
 
@@ -199,18 +216,27 @@ function startPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.generationHeartbeatReliable = true;
   ctx.generationHeartbeatAt = Date.now();
+  ctx.generationOpenAt = ctx.generationHeartbeatAt;
   const timer = setInterval(() => samplePiGenerationHeartbeat(ctx), PI_GENERATION_HEARTBEAT_MS);
   timer.unref?.();
   ctx.generationHeartbeatTimer = timer;
 }
 
 export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
-  return {
-    tokenUsage: ctx.turnTokens,
-    contextTokens: ctx.contextTokens,
-    contextWindow: ctx.contextWindow,
-    costUsd: ctx.costUsd,
-  };
+  return attachLiveGeneration(
+    {
+      tokenUsage: ctx.turnTokens,
+      contextTokens: ctx.contextTokens,
+      contextWindow: ctx.contextWindow,
+      costUsd: ctx.costUsd,
+    },
+    {
+      outputTokens: ctx.turnOutput,
+      closedDurationMs: ctx.generationDurationMs,
+      openStartedAt: ctx.generationOpenAt > 0 ? ctx.generationOpenAt : null,
+      reliable: ctx.generationTimingReliable && ctx.generationHeartbeatReliable,
+    },
+  );
 }
 
 function pushStatus(
@@ -218,12 +244,37 @@ function pushStatus(
   ctx: PiTranslateContext,
   text: string,
   isRunning: boolean,
+  extras?: Pick<AgentEvent, 'turnScope'>,
 ): void {
   queue.push({
     type: 'status',
     data: { status: text, ...usageSnapshotOf(ctx), isRunning },
     source: 'pi',
+    ...(extras?.turnScope ? { turnScope: extras.turnScope } : {}),
   });
+}
+
+/** Idle compact is not a product turn; mark it background so host/UI do not latch busy. */
+function idleCompactScope(ctx: PiTranslateContext): Pick<AgentEvent, 'turnScope'> | undefined {
+  return ctx.isStreaming ? undefined : { turnScope: 'background' };
+}
+
+function latchCompactTurnScope(
+  ctx: PiTranslateContext,
+): Pick<AgentEvent, 'turnScope'> | undefined {
+  const scope = idleCompactScope(ctx);
+  ctx.compactTurnScope = scope?.turnScope === 'background' ? 'background' : 'turn';
+  return scope;
+}
+
+function takeCompactTurnScope(
+  ctx: PiTranslateContext,
+): Pick<AgentEvent, 'turnScope'> | undefined {
+  const latched = ctx.compactTurnScope;
+  ctx.compactTurnScope = null;
+  if (latched === 'background') return { turnScope: 'background' };
+  if (latched === 'turn') return undefined;
+  return idleCompactScope(ctx);
 }
 
 function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined): void {
@@ -297,9 +348,11 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
     sdkError: redactedError,
     ...(signals.errorStatus !== undefined ? { errorStatus: signals.errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
-    ...(isStreamInterruptedErrorMessage(redactedError)
-      ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
-      : {}),
+    ...(isContextOverflowErrorMessage(redactedError)
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : isStreamInterruptedErrorMessage(redactedError)
+        ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+        : {}),
   };
 }
 
@@ -406,6 +459,9 @@ export function translatePiEvent(
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
       startPiGenerationHeartbeat(ctx);
+      // Tell the UI generation is active so it can tick the TPS denominator
+      // locally between sparse message_end usage reports.
+      pushStatus(queue, ctx, 'Working…', true);
       return;
     }
 
@@ -688,15 +744,19 @@ export function translatePiEvent(
     }
 
     case 'compaction_start': {
-      pushStatus(queue, ctx, 'Compacting context…', true);
+      // Host auto-compact 发在 agent_settled 之后(isStreaming=false)。若这里
+      // 无条件 isRunning=true 而不标 background，desktop tracker 会当成新一轮产品 turn。
+      // 在 start 锁存 scope：end 时 isStreaming 可能已因新 turn 变 true。
+      pushStatus(queue, ctx, 'Compacting context…', true, latchCompactTurnScope(ctx));
       return;
     }
 
     case 'compaction_end': {
+      const compactScope = takeCompactTurnScope(ctx);
       if (isFailedOrAbortedPiCompaction(event)) {
         // 失败/取消不是压缩边界。手动压缩仍要收口 Compacting 状态，避免圆环卡 running。
         if (event.reason === 'manual' && !ctx.isStreaming) {
-          pushStatus(queue, ctx, 'Done', false);
+          pushStatus(queue, ctx, 'Done', false, compactScope);
         }
         return;
       }
@@ -709,6 +769,7 @@ export function translatePiEvent(
           postTokens: result?.estimatedTokensAfter,
         },
         source: 'pi',
+        ...compactScope,
       });
       if (result && typeof result.estimatedTokensAfter === 'number') {
         ctx.contextTokens = result.estimatedTokensAfter;
@@ -717,8 +778,9 @@ export function translatePiEvent(
       // 若不收口,renderer 圆环会永久卡 running、新 contextTokens 也送不回去。
       // 仅 manual 收口:auto 压缩发生在活跃 turn 内(turn 结束经 agent_settled 自然收口),
       // 且若压缩期间用户已开始新 turn(ctx.isStreaming)也不能收口,否则会误杀新 turn。
+      // idle compact 的 status 带 turnScope=background，产品 turn 位不再闪。
       if (event.reason === 'manual' && !ctx.isStreaming) {
-        pushStatus(queue, ctx, 'Done', false);
+        pushStatus(queue, ctx, 'Done', false, compactScope);
       }
       return;
     }
