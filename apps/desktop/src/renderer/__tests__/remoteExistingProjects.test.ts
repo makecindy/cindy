@@ -84,6 +84,42 @@ describe('sshExistingProjects', () => {
     ]);
   });
 
+  it('canonical SSH HostRef 同时兼容新会话和旧裸 alias 会话', () => {
+    const sessions = [
+      sess({ remoteHostId: 'ssh-config:h1', workingDir: '/srv/new-session' }),
+      sess({ remoteHostId: 'h1', workingDir: '/srv/legacy-session' }),
+      sess({ remoteHostId: 'ssh-config:h2', workingDir: '/srv/other-host' }),
+    ];
+
+    expect(sshExistingProjects(sessions, 'ssh-config:h1')).toEqual([
+      { path: '/srv/new-session', name: 'new-session' },
+      { path: '/srv/legacy-session', name: 'legacy-session' },
+    ]);
+  });
+
+  it('does not reinterpret a known HostRef prefix as a legacy SSH alias', () => {
+    const sessions = [
+      sess({ remoteHostId: 'cindy:foo', workingDir: '/srv/cindy-profile' }),
+      sess({ remoteHostId: 'ssh-config:cindy:foo', workingDir: '/srv/ssh-alias' }),
+    ];
+
+    expect(sshExistingProjects(sessions, 'ssh-config:cindy:foo')).toEqual([
+      { path: '/srv/ssh-alias', name: 'ssh-alias' },
+    ]);
+  });
+
+  it('recovers a reserved-prefix legacy SSH alias when that SSH alias is active', () => {
+    const sessions = [
+      sess({ remoteHostId: 'cindy:foo', workingDir: '/srv/legacy-ssh' }),
+      sess({ remoteHostId: 'ssh-config:cindy:foo', workingDir: '/srv/canonical-ssh' }),
+    ];
+
+    expect(sshExistingProjects(sessions, 'ssh-config:cindy:foo', ['ssh-config:cindy:foo'])).toEqual([
+      { path: '/srv/legacy-ssh', name: 'legacy-ssh' },
+      { path: '/srv/canonical-ssh', name: 'canonical-ssh' },
+    ]);
+  });
+
   it('device-link 会话(无 remoteHostId)不混入 SSH 列表', () => {
     const sessions = [
       sess({ remoteHostId: null, deviceLinkDeviceId: 'dev-1', workingDir: '/dl/proj' }),

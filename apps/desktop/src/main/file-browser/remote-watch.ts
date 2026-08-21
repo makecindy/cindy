@@ -22,6 +22,8 @@ import type { FileTreeEvent } from './watcher.js';
 const log = createLogger('file-browser/remote-watch');
 
 interface RegistryEntry {
+  hostId: string;
+  workdir: string;
   offEvent: () => void;
   offReconnect: () => void;
 }
@@ -35,7 +37,7 @@ export class RemoteWatchRegistry {
   }
 
   private key(windowId: number, hostId: string, workdir: string): string {
-    return `${windowId}::${hostId}::${workdir}`;
+    return JSON.stringify([windowId, this.mgr.normalizeHostId(hostId), workdir]);
   }
 
   /** 幂等:同 (window, host, workdir) 重复 start 直接 no-op。 */
@@ -46,6 +48,7 @@ export class RemoteWatchRegistry {
     opts: { hideMetaFiles?: boolean },
     onEvent: (event: FileTreeEvent) => void,
   ): Promise<void> {
+    hostId = this.mgr.normalizeHostId(hostId);
     const k = this.key(window.id, hostId, workdir);
     if (this.entries.has(k)) return;
 
@@ -62,7 +65,7 @@ export class RemoteWatchRegistry {
         .request(hostId, 'watchStart', { workdir, hideMetaFiles: opts.hideMetaFiles ?? true })
         .catch((err) => log.warn('watch replay failed', { hostId, workdir, error: String(err) }));
     });
-    this.entries.set(k, { offEvent, offReconnect });
+    this.entries.set(k, { hostId, workdir, offEvent, offReconnect });
 
     window.once('closed', () => {
       void this.stop(window.id, hostId, workdir);
@@ -84,6 +87,7 @@ export class RemoteWatchRegistry {
   }
 
   async stop(windowId: number, hostId: string, workdir: string): Promise<void> {
+    hostId = this.mgr.normalizeHostId(hostId);
     const k = this.key(windowId, hostId, workdir);
     const entry = this.entries.get(k);
     if (!entry) return;
@@ -92,10 +96,9 @@ export class RemoteWatchRegistry {
     entry.offReconnect();
     // 同 host 其它 window/workdir 还在 watch 时不能全局 watchStop;仅当这是该
     // (host, workdir) 的最后一个订阅者才让 daemon 停 watch。
-    const stillWatching = [...this.entries.keys()].some((key) => {
-      const [, h, w] = key.split('::');
-      return h === hostId && w === workdir;
-    });
+    const stillWatching = [...this.entries.values()].some(
+      (candidate) => candidate.hostId === hostId && candidate.workdir === workdir,
+    );
     if (!stillWatching) {
       await this.mgr
         .request(hostId, 'watchStop', { workdir })

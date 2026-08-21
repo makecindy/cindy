@@ -40,6 +40,21 @@ describe('ensureRemoteReadyForSessionStart Maker Memory flag (R1 P1)', () => {
     expect(backfill).toBeGreaterThan(fnStart);
   });
 
+  it('separates legacy persisted spelling from canonical runtime HostRef', () => {
+    const fnStart = source.indexOf('async function ensureRemoteReadyForSessionStart');
+    expect(fnStart).toBeGreaterThan(-1);
+    const canonical = source.indexOf(
+      'const canonicalRemoteHostId = getRemoteSshPool().resolveId(remoteHostIdToEnsure);',
+      fnStart,
+    );
+    const runtimeAssignment = source.indexOf(
+      'remoteHostRuntimeId?: string }).remoteHostRuntimeId = canonicalRemoteHostId;',
+      canonical,
+    );
+    expect(canonical).toBeGreaterThan(fnStart);
+    expect(runtimeAssignment).toBeGreaterThan(canonical);
+  });
+
   it('clamps the session flag when the active (stale) bridge lacks cindy_memory (R2 P2)', () => {
     // busy 延迟窗口:manager 已翻转、bridge 重建被推迟。flag 保持 true 会让
     // prompt 注入 memory rules 而工具面没有 server — 必须按活跃 bridge 的
@@ -67,10 +82,12 @@ describe('codex remote drift uses the bridge-clamped memory flag (R2 P2)', () =>
     // codexRemoteDriftOpts (内部走 remoteMakerMemoryEnabledForBridge)。
     expect(source).toContain('function remoteMakerMemoryEnabledForBridge()');
     expect(source).toContain('makerMemoryEnabled: remoteMakerMemoryEnabledForBridge()');
-    const driftCalls =
-      source.match(
-        /hasPendingRemoteMcpDrift\(\s*live\.remoteHostId\s*,\s*codexRemoteDriftOpts\(\)\s*,?\s*\)/g,
-      ) ?? [];
+    expect(source).toContain(
+      'const driftHostRef = live.remoteHostId\n          ? getRemoteSshPool().resolveId(live.remoteHostId)',
+    );
+    const driftCalls = source.match(
+      /hasPendingRemoteMcpDrift\(\s*driftHostRef\s*,\s*codexRemoteDriftOpts\(\)\s*,?\s*\)/g,
+    ) ?? [];
     expect(driftCalls.length).toBe(2);
     // drift 调用点不得残留裸 manager 现值。
     expect(source).not.toContain('makerMemoryEnabled: maker.makerMemory?.isEnabled() ?? false');

@@ -80,7 +80,11 @@ import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
-import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
+import {
+  getRemoteSshPool,
+  sameRemoteHostId,
+  broadcastSilentInstallStatus,
+} from '../remote-ssh/index.js';
 import {
   getRemoteAgentProxyEnv,
   reconcileCodexAgentProxyEnv,
@@ -196,6 +200,7 @@ import {
   setRemoteMcpForwardRearmedHook,
   stripRemoteCodexMcpConfig,
 } from '../remote-ssh/codex-remote-mcp.js';
+import { StaleRemoteEndpointError } from '../remote-ssh/endpoint-generation.js';
 import {
   buildCcRemoteHttpMcpServers,
   CC_MCP_DISABLED_FINGERPRINT,
@@ -455,7 +460,7 @@ export function setBeforeLocalCodexSessionStartHook(hook: (() => Promise<void>) 
  */
 function detachActiveRemoteCodexSessions(hostId: string, reason: string): void {
   for (const s of _maker?.listActiveSessions() ?? []) {
-    if (s.agentKind !== 'codex' || s.remoteHostId !== hostId) continue;
+    if (s.agentKind !== 'codex' || !sameRemoteHostId(s.remoteHostId, hostId)) continue;
     if (s.isTurnRunning()) continue;
     void s.detach().catch((err) => {
       desktopMakerLogger.warn('remote codex session detach after daemon rebootstrap failed', {
@@ -478,6 +483,7 @@ function invalidateActiveRemoteCcQueries(opts: { hostId?: string; reason: string
     {
       listRemoteCcSessions: () =>
         (_maker?.listActiveSessions() ?? []).filter((s) => s.agentKind === 'claude-code'),
+      sameHostId: (left, right) => sameRemoteHostId(left, right),
       // invalidate 的语义是「该 query 的 MCP 代际已过期」— 除清 fresh 标记
       // 外记入 stale 集合:下次重建 (lazy-resume) 无论本次是否注入 (例如
       // collab 已禁用 → 无 server 可注) 都必须 forceFresh kill 旧 query,
@@ -506,8 +512,14 @@ function invalidateActiveRemoteCcQueries(opts: { hostId?: string; reason: string
 export function handleCodexEnvironmentShutdownForRemote(): void {
   invalidateActiveRemoteCcQueries({ reason: 'bridge-shutdown' });
   const hostIds = new Set<string>();
+  const sshPool = getRemoteSshPool();
   for (const s of _maker?.listActiveSessions() ?? []) {
-    if (s.remoteHostId && s.agentKind === 'codex') hostIds.add(s.remoteHostId);
+    if (s.remoteHostId && s.agentKind === 'codex') {
+      // A process may contain an old session keyed by a bare alias and a new
+      // one keyed by HostRef. Collapse both before strip/rebootstrap so the
+      // same daemon is not processed twice during bridge shutdown.
+      hostIds.add(sshPool.resolveId(s.remoteHostId));
+    }
   }
   const liveTurnChecker = getRemoteCodexLiveTurnChecker();
   for (const hostId of hostIds) {
@@ -570,8 +582,11 @@ export async function ensureCodexMcpBridgeStartedForRemote(): Promise<{
         refreshRemoteCodexMcpAfterBridgeRecreate({
           listRemoteCodexHostIds: () => {
             const ids = new Set<string>();
+            const sshPool = getRemoteSshPool();
             for (const s of _maker?.listActiveSessions() ?? []) {
-              if (s.remoteHostId && s.agentKind === 'codex') ids.add(s.remoteHostId);
+              if (s.remoteHostId && s.agentKind === 'codex') {
+                ids.add(sshPool.resolveId(s.remoteHostId));
+              }
             }
             return [...ids];
           },
@@ -874,13 +889,17 @@ export function getMaker(): Maker {
           agentKind: typeof params.agentKind;
           remoteHostId: string;
           makerMemoryEnabled?: boolean;
+          remoteHostRuntimeId?: string;
         } = {
           id: params.sessionId,
           agentKind: params.agentKind,
           remoteHostId: params.remoteHostId,
         };
         await getRemoteSessionStartEnsure()?.({ createOpts });
-        return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
+        return {
+          makerMemoryEnabled: createOpts.makerMemoryEnabled === true,
+          remoteHostRuntimeId: createOpts.remoteHostRuntimeId,
+        };
       },
       orcaTeamStore: orcaTeamStoreAdapter,
       readLeadHistory: async ({ leadSessionId, fromMs, limit, cursor }) => {
@@ -1083,6 +1102,7 @@ export function getMaker(): Maker {
             mutableParams.mcpServers = { ...(mutableParams.mcpServers ?? {}), ...injected.servers };
           }
         } catch (err) {
+          if (err instanceof StaleRemoteEndpointError) throw err;
           desktopMakerLogger.warn('cc remote MCP injection skipped', {
             remoteHostId,
             sessionId,
@@ -2440,7 +2460,7 @@ export async function softCloseCcSessionsForHost(
   if (!maker) return;
   let liveCc = maker
     .listActiveSessions()
-    .filter((s) => s.agentKind === 'claude-code' && s.remoteHostId === hostId);
+    .filter((s) => s.agentKind === 'claude-code' && sameRemoteHostId(s.remoteHostId, hostId));
   // **Scope gate**: 升级走这里的时候我们只想关 "发起 upgrade 的那个 session" —
   // 它有 UpgradeBanner 做的 retry snapshot, close 后下次 send 会重发。其它同 host
   // 的 streaming session **没有** retry snapshot, 这里如果一并 close 会让那个

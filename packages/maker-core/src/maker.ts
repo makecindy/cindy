@@ -608,7 +608,7 @@ export class Maker {
         ? this.claimCodexThread({
             sessionId: id,
             sessionInstanceId,
-            remoteHostId: startOpts.remoteHostId,
+            remoteHostId: startOpts.remoteHostRuntimeId ?? startOpts.remoteHostId,
             threadId: startOpts.resumeSessionId,
           })
         : null;
@@ -642,7 +642,7 @@ export class Maker {
           codexThreadClaim = this.claimCodexThread({
             sessionId: id,
             sessionInstanceId,
-            remoteHostId: startOpts.remoteHostId,
+            remoteHostId: startOpts.remoteHostRuntimeId ?? startOpts.remoteHostId,
             threadId: handle.id,
           });
         }
@@ -770,7 +770,7 @@ export class Maker {
               codexThreadClaim = this.claimCodexThread({
                 sessionId: id,
                 sessionInstanceId,
-                remoteHostId: startOpts.remoteHostId,
+                remoteHostId: startOpts.remoteHostRuntimeId ?? startOpts.remoteHostId,
                 threadId: evt.data,
               });
             }

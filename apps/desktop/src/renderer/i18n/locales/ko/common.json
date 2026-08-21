@@ -154,11 +154,15 @@
     },
     "remote": {
       "title": "원격 머신",
-      "footnote": "Phase A 는 SSH 연결 관리만 지원합니다. 원격에서 에이전트 실행은 다음 업데이트에서 제공됩니다.",
+      "footnote": "SSH 설정 호스트는 읽기 전용이며 OpenSSH 설정에서 다시 읽습니다. 수동으로 추가한 호스트는 Cindy에만 저장됩니다.",
       "viaAuth": "{{label}} 로 인증",
+      "section": { "sshConfig": "SSH 설정 호스트", "cindy": "Cindy 로컬 호스트" },
+      "error": { "config": "SSH 설정을 새로 고칠 수 없습니다. 마지막으로 정상적으로 읽은 목록을 표시합니다. {{message}}", "profile": "Cindy 로컬 호스트를 읽을 수 없습니다. 마지막 유효 목록을 표시합니다. {{message}}", "path": "파일: {{path}}", "configRecovery": "이 파일과 Include 경로를 확인한 뒤 다시 읽으세요.", "configLimitRecovery": "Include 중첩 단계, 파일 수 또는 전체 설정 크기를 줄인 뒤 다시 읽으세요.", "profileRecovery": "이 파일을 수정하거나 복원한 뒤 다시 읽으세요." },
+      "remove": { "confirmTitle": "Cindy 로컬 호스트를 제거할까요?", "confirmDescription": "Cindy에서 “{{name}}”을(를) 영구적으로 제거합니다. SSH 설정은 변경하지 않습니다.", "confirm": "제거" },
+      "copy": { "confirm": "해석된 연결 설정을 Cindy로 복사할까요?\n\n{{target}}\n인증: {{auth}}\n\n복사본은 이후 SSH 설정 변경을 따라가지 않습니다.", "authAgent": "ssh-agent", "authAgentPinned": "ssh-agent, {{key}}에 고정", "authKey": "개인 키 파일 {{key}} 직접 읽기(Cindy는 암호를 저장하지 않습니다. 암호화된 키는 ssh-agent를 사용하세요)", "done": "Cindy로 복사했습니다" },
       "empty": {
-        "title": "아직 원격 머신이 없습니다.",
-        "hint": "\"추가\"를 클릭해 등록하거나, 새로 고침 아이콘으로 ~/.ssh/config 에서 가져오세요."
+        "title": "~/.ssh/config에서 호스트를 찾지 못했습니다.",
+        "hint": "SSH 설정을 편집한 뒤 새로 고치거나 아래에서 Cindy 전용 호스트를 추가하세요."
       },
       "status": {
         "disconnected": "연결 끊김",
@@ -170,6 +174,8 @@
       },
       "button": {
         "add": "추가",
+        "manualAdd": "수동 추가",
+        "copyToCindy": "Cindy로 복사",
         "reload": "~/.ssh/config 다시 읽기",
         "connect": "연결",
         "disconnect": "끊기",
@@ -187,6 +193,8 @@
       },
       "edit": {
         "title": "{{id}} 편집",
+        "sshConfigReadOnly": "연결 필드와 인증 방식은 SSH 설정에서 가져오므로 여기서는 읽기 전용입니다. ~/.ssh/config를 편집한 뒤 다시 읽거나 Cindy로 복사해 독립 복사본을 만드세요.",
+        "authSummary": "인증: {{auth}}",
         "submit": "변경 저장"
       },
       "keys": {
@@ -262,8 +270,10 @@
         }
       },
       "add": {
-        "title": "원격 머신 추가",
+        "title": "Cindy 로컬 호스트 추가",
         "alias": "별칭",
+        "displayName": "표시 이름",
+        "displayNamePlaceholder": "빌드 서버",
         "hostname": "호스트명",
         "user": "사용자",
         "port": "포트",

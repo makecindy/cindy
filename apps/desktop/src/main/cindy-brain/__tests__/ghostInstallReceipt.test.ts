@@ -18,7 +18,9 @@ describe('GhostInstallReceiptStore cleanup', () => {
   let store: GhostInstallReceiptStore;
 
   beforeEach(async () => {
-    workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-receipt-cleanup-'));
+    workDir = await fs.promises.realpath(
+      await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-receipt-cleanup-')),
+    );
     stateRoot = path.join(workDir, 'state');
     await fs.promises.mkdir(stateRoot);
     store = new GhostInstallReceiptStore(() => stateRoot, async ({ parentDir, targetName, operation }) => {

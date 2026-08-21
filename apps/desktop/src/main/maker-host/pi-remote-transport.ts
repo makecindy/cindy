@@ -38,6 +38,10 @@ import type {
   PiCloseHandler,
   PiRemoteFileOps,
 } from '@cindy/maker-core';
+import {
+  assertCurrentRemoteEndpointGeneration,
+  currentRemoteEndpointGeneration,
+} from '../remote-ssh/endpoint-generation.js';
 
 interface Logger {
   debug(msg: string, ctx?: Record<string, unknown>): void;
@@ -102,7 +106,7 @@ export function shellQuote(s: string): string {
 }
 
 /** per-host 远端 pi 二进制路径 cache(probe 一次,后续命中)。 */
-const remotePiBinaryPathCache = new Map<string, string>();
+const remotePiBinaryPathCache = new Map<string, { generation: number; path: string }>();
 
 /**
  * 解析远端 pi 二进制绝对路径。probe(远端 `pi --version`)+ cache,首次 ~200ms。
@@ -111,15 +115,17 @@ const remotePiBinaryPathCache = new Map<string, string>();
  */
 export async function resolveRemotePiBinaryPath(host: RemoteHost): Promise<string> {
   const hostId = host.id;
+  const generation = currentRemoteEndpointGeneration(hostId);
   const cached = remotePiBinaryPathCache.get(hostId);
-  if (cached) return cached;
+  if (cached?.generation === generation) return cached.path;
   const probe = await probeRemoteAgent(host, 'pi');
   if (!probe.binaryPath) {
     throw new Error(
       `pi not installed on remote host ${hostId} — run install (Settings → Remote → Pi) or wait for silent install`,
     );
   }
-  remotePiBinaryPathCache.set(hostId, probe.binaryPath);
+  assertCurrentRemoteEndpointGeneration(hostId, generation);
+  remotePiBinaryPathCache.set(hostId, { generation, path: probe.binaryPath });
   return probe.binaryPath;
 }
 
@@ -371,7 +377,11 @@ async function buildPiManagerDaemonCmd(
 }
 
 /** pi-manager 二进制路径(带 per-host cache, 避免每次 bridge 都重复 probe)。 */
-const piManagerPathsCache = new Map<string, { nodeBinaryPath: string; piManagerBinaryPath: string }>();
+const piManagerPathsCache = new Map<string, {
+  generation: number;
+  nodeBinaryPath: string;
+  piManagerBinaryPath: string;
+}>();
 
 /**
  * 清除某 host 的远端路径 cache(轮 40-w4-t4 MEDIUM):host remove/disconnect/
@@ -382,15 +392,22 @@ export function invalidateRemotePiPathCaches(hostId: string): void {
   piManagerPathsCache.delete(hostId);
 }
 
-async function resolvePiManagerBinaryPaths(
+export async function resolvePiManagerBinaryPaths(
   remoteHost: RemoteHost,
   logger: Logger,
 ): Promise<{ nodeBinaryPath: string; piManagerBinaryPath: string }> {
+  const generation = currentRemoteEndpointGeneration(remoteHost.id);
   const cached = piManagerPathsCache.get(remoteHost.id);
-  if (cached) return cached;
+  if (cached?.generation === generation) {
+    return {
+      nodeBinaryPath: cached.nodeBinaryPath,
+      piManagerBinaryPath: cached.piManagerBinaryPath,
+    };
+  }
   const probe = await probePiManager(remoteHost);
+  assertCurrentRemoteEndpointGeneration(remoteHost.id, generation);
   const paths = { nodeBinaryPath: probe.nodeBinaryPath, piManagerBinaryPath: probe.piManagerBinaryPath };
-  piManagerPathsCache.set(remoteHost.id, paths);
+  piManagerPathsCache.set(remoteHost.id, { generation, ...paths });
   return paths;
 }
 

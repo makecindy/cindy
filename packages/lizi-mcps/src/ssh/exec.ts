@@ -42,12 +42,12 @@ export function registerSshExecTool(
     description:
       '在已配置的 SSH 主机上执行一条命令并返回 {stdout, stderr, exitCode}。' +
       '自动使用已配置的认证方式（ssh-agent / key），命令按原样在远端 shell 执行，无需本地转义。' +
-      '注意：当前为直连，不支持 ~/.ssh/config 的 ProxyJump/ProxyCommand 跳板——仅跳板可达的主机会连接失败。' +
+      '注意：当前为直连，不支持 ~/.ssh/config 的 ProxyJump/ProxyCommand 跳板——仅跳板可达的主机会连接失败；主机列表和拨号地址来自展开 Include 后的 compute。' +
       'exitCode 非 0 会如实返回（不算工具错误），由你判断语义。' +
       `默认超时 ${DEFAULT_TIMEOUT_MS / 1000}s（可调，上限 ${MAX_TIMEOUT_MS / 1000}s）；` +
       '更长的任务请 `nohup <cmd> > /tmp/task.log 2>&1 &` 后台跑，再用本工具轮询日志。',
     inputShape: {
-      host: z.string().min(1).describe('主机 alias 或 hostname/IP（须已在设置中配置，可用 ssh_list_hosts 查看）'),
+      host: z.string().min(1).describe('SSH alias 或完整 HostRef（Cindy 本地主机必须使用 cindy:<uuid>；可用 ssh_list_hosts 查看）'),
       command: z.string().min(1).describe('要在远端执行的命令（原样传入远端 shell，不要做本地 shell 转义）'),
       cwd: z.string().min(1).optional().describe('远端工作目录（绝对路径）；引号安全包装由工具负责'),
       timeoutMs: z

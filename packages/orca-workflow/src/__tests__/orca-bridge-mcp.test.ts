@@ -818,7 +818,10 @@ describe('orca_worker_bridge MCP helpers', () => {
       logger: makeLogger() as never,
       persistUserMessage: async () => {},
       wireSession: () => {},
-      ensureRemoteSessionStart: async () => ({ makerMemoryEnabled: true }),
+      ensureRemoteSessionStart: async () => ({
+        makerMemoryEnabled: true,
+        remoteHostRuntimeId: 'ssh-config:host-remote-1',
+      }),
       orcaTeamStore: {
         async getWorkerLink() {
           return workerLink;
@@ -845,6 +848,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(createSessionCalls[0]).toMatchObject({
       id: 'lead-1',
       remoteHostId: 'host-remote-1',
+      remoteHostRuntimeId: 'ssh-config:host-remote-1',
       makerMemoryEnabled: true,
     });
   });

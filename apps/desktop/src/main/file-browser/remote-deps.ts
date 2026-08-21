@@ -15,7 +15,11 @@ import {
 } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
-import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
+import {
+  ensureRemoteHostReady,
+  getRemoteSshPool,
+  setRemoteFileBrowserEndpointInvalidator,
+} from '../remote-ssh/index.js';
 import { RemoteFileBrowserManager } from './remote.js';
 
 const log = createLogger('file-browser/remote-deps');
@@ -47,10 +51,18 @@ export function resolveFileServiceBundlePath(): string {
 
 let manager: RemoteFileBrowserManager | null = null;
 
+setRemoteFileBrowserEndpointInvalidator(async (hostId) => {
+  if (manager) await manager.disposeHost(hostId);
+});
+
 /** 生产单例。首次调用装配真实依赖。 */
 export function getRemoteFileBrowser(): RemoteFileBrowserManager {
   if (manager) return manager;
   manager = new RemoteFileBrowserManager({
+    // Resolve legacy bare aliases through the live pool, not just by adding a
+    // namespace. This preserves pre-HostRef aliases such as `cindy:build`
+    // while still giving an exact Cindy profile precedence when one exists.
+    resolveHostId: (hostId) => getRemoteSshPool().resolveId(hostId),
     ensureHostReady: (hostId) => ensureRemoteHostReady(hostId),
     getHost: (hostId) => {
       const host = getRemoteSshPool().get(hostId);
@@ -71,6 +83,14 @@ export function getRemoteFileBrowser(): RemoteFileBrowserManager {
     },
   });
   return manager;
+}
+
+/** Resolve a persisted remote id through the live SSH pool.  Kept beside the
+ * file-browser wiring so callers do not import the Electron-heavy remote SSH
+ * registration module just to normalize an id (which also keeps pure device-op
+ * tests and secondary process entry points side-effect free). */
+export function resolveRemoteFileBrowserHostId(hostId: string): string {
+  return getRemoteSshPool().resolveId(hostId);
 }
 
 /** 应用退出清理(bootstrap 的 will-quit 钩子调用)。 */

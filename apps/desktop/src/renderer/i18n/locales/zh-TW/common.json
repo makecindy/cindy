@@ -154,11 +154,15 @@
     },
     "remote": {
       "title": "遠端機器",
-      "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
+      "footnote": "SSH 設定主機為唯讀，並隨 OpenSSH 設定重新整理；手動新增的主機只儲存在 Cindy。",
       "viaAuth": "透過 {{label}} 認證",
+      "section": { "sshConfig": "SSH 設定主機", "cindy": "Cindy 本地主機" },
+      "error": { "config": "無法重新整理 SSH 設定，目前顯示上次成功讀取的清單。{{message}}", "profile": "無法讀取 Cindy 本地主機，目前顯示上次有效清單。{{message}}", "path": "檔案：{{path}}", "configRecovery": "請檢查此檔案及其 Include 路徑，然後重新讀取。", "configLimitRecovery": "請減少 Include 巢狀層級、檔案數量或設定總大小，然後重新讀取。", "profileRecovery": "請修復或還原此檔案，然後重新讀取。" },
+      "remove": { "confirmTitle": "移除 Cindy 本地主機？", "confirmDescription": "這會從 Cindy 永久移除「{{name}}」，不會修改你的 SSH 設定。", "confirm": "移除" },
+      "copy": { "confirm": "要將這份已解析的連線設定複製到 Cindy 嗎？\n\n{{target}}\n驗證：{{auth}}\n\n複製後不會再跟隨 SSH 設定變更。", "authAgent": "ssh-agent", "authAgentPinned": "ssh-agent，固定 {{key}}", "authKey": "直接讀取私鑰檔案 {{key}}（Cindy 不儲存密碼短語；加密私鑰請使用 ssh-agent）", "done": "已複製到 Cindy" },
       "empty": {
-        "title": "還沒有遠端機器。",
-        "hint": "點選\"新增\"註冊一臺，或點重新整理圖示從 ~/.ssh/config 匯入。"
+        "title": "在 ~/.ssh/config 中找不到主機。",
+        "hint": "可以編輯 SSH 設定後重新整理，或在下方新增一台只屬於 Cindy 的主機。"
       },
       "status": {
         "disconnected": "未連線",
@@ -170,6 +174,8 @@
       },
       "button": {
         "add": "新增",
+        "manualAdd": "手動新增",
+        "copyToCindy": "複製到 Cindy",
         "reload": "重新讀取 ~/.ssh/config",
         "connect": "連線",
         "disconnect": "斷開",
@@ -187,6 +193,8 @@
       },
       "edit": {
         "title": "編輯 {{id}}",
+        "sshConfigReadOnly": "連線欄位與驗證方式來自 SSH 設定，在這裡是唯讀的。請編輯 ~/.ssh/config 後重新讀取，或複製到 Cindy 建立獨立副本。",
+        "authSummary": "驗證：{{auth}}",
         "submit": "儲存修改"
       },
       "keys": {
@@ -262,8 +270,10 @@
         }
       },
       "add": {
-        "title": "新增一臺遠端機器",
+        "title": "新增 Cindy 本地主機",
         "alias": "別名",
+        "displayName": "顯示名稱",
+        "displayNamePlaceholder": "建置伺服器",
         "hostname": "主機名",
         "user": "使用者",
         "port": "埠",

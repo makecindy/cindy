@@ -11,6 +11,7 @@
 import { useMemo } from 'react';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 
 export interface PickerProject {
@@ -20,15 +21,22 @@ export interface PickerProject {
 
 export function useProjectsForPicker(): { projects: PickerProject[]; loading: boolean } {
   const { sessions, isLoading } = useCCSessions();
+  const sshHosts = useRemoteSshHosts();
 
   const projects = useMemo<PickerProject[]>(() => {
     if (isLoading) return [];
-    const { projects: grouped } = groupSessions(sessions);
+    const { projects: grouped } = groupSessions(sessions, {
+      remoteHostCandidates: sshHosts.map((host) => ({
+        id: host.config.id,
+        alias: host.config.alias,
+        source: host.config.source,
+      })),
+    });
     return grouped.map((p) => ({
       projectRoot: p.workingDir,
       displayName: p.displayName,
     }));
-  }, [sessions, isLoading]);
+  }, [sessions, isLoading, sshHosts]);
 
   return { projects, loading: isLoading };
 }

@@ -1129,7 +1129,7 @@ describe('CodexAgent capability routing', () => {
 
   it('preserves the remote daemon Browser companion snapshot', async () => {
     const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => {
-      expect(ctx?.remoteHostId).toBe('remote-browser-host');
+      expect(ctx?.remoteHostId).toBe('ssh-config:remote-browser-host');
       return {
         extraArgs: [],
         extraEnv: {},
@@ -1150,6 +1150,7 @@ describe('CodexAgent capability routing', () => {
       model: 'gpt-5.4',
       workingDir: '/remote/repo',
       remoteHostId: 'remote-browser-host',
+      remoteHostRuntimeId: 'ssh-config:remote-browser-host',
     });
     const hosts = (agent as unknown as {
       hosts: Map<string, {
@@ -1159,10 +1160,10 @@ describe('CodexAgent capability routing', () => {
     }).hosts;
 
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
-      remoteHostId: 'remote-browser-host',
+      remoteHostId: 'ssh-config:remote-browser-host',
       credentialMode: undefined,
     });
-    expect(getRemoteCodexTransport).toHaveBeenCalledWith('remote-browser-host');
+    expect(getRemoteCodexTransport).toHaveBeenCalledWith('ssh-config:remote-browser-host');
     expect([...hosts.values()]).toHaveLength(1);
     expect([...hosts.values()][0]?.isCodexBrowserUseAvailable()).toBe(true);
     expect([...hosts.values()][0]?.getCodexBrowserUseVersion()).toBe('26.727.51351');

@@ -447,6 +447,7 @@ import {
   ensureRemoteAgentInstalledOrInstall,
   ensureRemoteHostReady,
   getRemoteSshPool,
+  sameRemoteHostId,
   isCcMgrUpgradeInFlight,
   broadcastSilentInstallStatus,
 } from '../remote-ssh/index.js';
@@ -7157,17 +7158,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       createOpts && typeof createOpts === 'object'
         ? ((createOpts as { remoteHostId?: string }).remoteHostId ?? null)
         : null;
+    let persistedRemoteHostId = sessRemoteHostId ?? null;
     let remoteHostIdToEnsure = sessRemoteHostId ?? coRemoteHostId;
-    if (!remoteHostIdToEnsure) {
-      // DB 兜底:live session 缺失 (lazy resume) 且调用方快照未带 remoteHostId
-      // 时 (main 侧发起的 Orca worker 派活 / scheduler 等路径),从 sessions 行
-      // 对齐——否则 remote worker 会以远端 workingDir 在本机 spawn。session 的
-      // remoteHostId 创建后不变,进程内缓存安全。
-      const sessionIdForLookup =
-        (session as { id?: string } | null | undefined)?.id ??
-        (createOpts && typeof createOpts === 'object' ? (createOpts as { id?: unknown }).id : null);
-      if (typeof sessionIdForLookup === 'string' && sessionIdForLookup) {
-        remoteHostIdToEnsure = await readSessionRemoteHostIdCached(sessionIdForLookup);
+    // DB lookup serves two purposes: fill a missing host on lazy resume, and
+    // distinguish an existing legacy row from a genuinely new session. The
+    // former may use a bare alias as its Maker Memory scope and must keep that
+    // exact persisted identity at runtime; compatibility is resolution-only.
+    const sessionIdForLookup =
+      (session as { id?: string } | null | undefined)?.id ??
+      (createOpts && typeof createOpts === 'object' ? (createOpts as { id?: unknown }).id : null);
+    if (
+      typeof sessionIdForLookup === 'string'
+      && sessionIdForLookup
+      && (!remoteHostIdToEnsure || (!session && coRemoteHostId))
+    ) {
+      const storedHostId = await readSessionRemoteHostIdCached(sessionIdForLookup);
+      if (storedHostId) {
+        persistedRemoteHostId = storedHostId;
+        // The persisted row owns an existing session's identity and Maker
+        // Memory scope. A caller may already have canonicalized the same host,
+        // but compatibility is resolution-only: do not let that spelling
+        // replace the historical DB value at runtime.
+        remoteHostIdToEnsure = storedHostId;
       }
     }
     if (!remoteHostIdToEnsure) return;
@@ -7175,9 +7187,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (createOpts && typeof createOpts === 'object') {
       const mutableCreateOpts = createOpts as {
         remoteHostId?: string;
+        remoteHostRuntimeId?: string;
         makerMemoryEnabled?: boolean;
       };
-      mutableCreateOpts.remoteHostId = remoteHostIdToEnsure;
       // SSH remote 与本地同语义:Maker Memory 跟随控制端设置 (scope 由
       // maker-core 按 remoteHostId+workingDir 隔离)。调用方显式给的值优先
       // (renderer 已按全局设置填);main 侧发起、快照缺该字段的路径 (Orca
@@ -7193,6 +7205,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
 
     await ensureRemoteHostReady(remoteHostIdToEnsure);
+    // New sessions persist the canonical HostRef. Existing sessions may still
+    // carry a bare alias and are resolved lazily by ConnectionPool; do not
+    // rewrite those historical DB rows. The create-options object is mutable
+    // by contract at this boundary, so normalize it before maker.createSession
+    // writes the new row.
+    const canonicalRemoteHostId = getRemoteSshPool().resolveId(remoteHostIdToEnsure);
+    if (createOpts && typeof createOpts === 'object') {
+      // Existing rows keep their persisted spelling as the runtime / Maker
+      // Memory scope; only genuinely new rows receive the canonical HostRef.
+      (createOpts as { remoteHostId?: string }).remoteHostId =
+        persistedRemoteHostId ?? canonicalRemoteHostId;
+      // Runtime identity is always canonical even when an existing DB row
+      // keeps a historical bare alias for persistence / Maker Memory scope.
+      // Without this split, old and new sessions on the same machine create
+      // separate Codex app-server hosts and thread-claim namespaces.
+      (createOpts as { remoteHostRuntimeId?: string }).remoteHostRuntimeId = canonicalRemoteHostId;
+    }
+    remoteHostIdToEnsure = canonicalRemoteHostId;
     const ensureAgentKind: 'claude-code' | 'codex' | 'pi' | null =
       session?.agentKind === 'codex' ||
       session?.agentKind === 'claude-code' ||
@@ -7322,7 +7352,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .listActiveSessions()
       .some(
         (s) =>
-          s.remoteHostId === hostId &&
+          sameRemoteHostId(s.remoteHostId, hostId) &&
           s.agentKind === 'codex' &&
           (agentInputCoordinatorHolder?.hasActiveTurnForRewind(s.id) ?? false),
       );
@@ -7341,7 +7371,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .listActiveSessions()
       .some(
         (s) =>
-          s.remoteHostId === hostId &&
+          sameRemoteHostId(s.remoteHostId, hostId) &&
           (s.agentKind === 'codex' || s.agentKind === 'claude-code' || s.agentKind === 'pi') &&
           (agentInputCoordinatorHolder?.hasActiveTurnForRewind(s.id) ?? false),
       );
@@ -7357,7 +7387,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ): Promise<void> {
     const detachTasks: Array<Promise<void>> = [];
     for (const s of maker.listActiveSessions()) {
-      if (s.remoteHostId !== hostId || s.agentKind !== 'codex') continue;
+      if (!sameRemoteHostId(s.remoteHostId, hostId) || s.agentKind !== 'codex') continue;
       if (agentInputCoordinatorHolder?.hasActiveTurnForRewind(s.id) ?? false) continue;
       detachTasks.push(
         s.detach().catch((err) => {
@@ -7384,17 +7414,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const remoteHostId = session?.remoteHostId;
     if (!remoteHostId) return;
     const host = getRemoteSshPool().get(remoteHostId);
+    const canonicalHostId = host?.id ?? getRemoteSshPool().resolveId(remoteHostId);
     const hostReady = host?.getStatus() === 'ready';
     // agent-proxy 的 live-turn defer 在这里补刀 — codex 与 CC 的 turn 收口
     // 都算 (隧道是两个 agent 共用的通路, gate 也共用, R3 review P1)。只有
     // 确有 pending (defer / 失败) 时才跑, 稳态下不为每次 turn 结束白付一次
     // 远端 cat RTT。失败不阻断后续 (自身已重新记 pending)。
     const reconcileIfPending =
-      hostReady && host && hasPendingAgentProxyReconcile(remoteHostId)
+      hostReady && host && hasPendingAgentProxyReconcile(canonicalHostId)
         ? reconcileCodexAgentProxyEnv(host).catch((err) => {
             log.warn('agent-proxy reconcile on turn settled failed', {
               sessionId,
-              hostId: remoteHostId,
+              hostId: canonicalHostId,
               err: err instanceof Error ? err.message : String(err),
             });
           })
@@ -7418,6 +7449,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               'codex-mcp-turn-settled-rebootstrap',
             );
           }
+        })
+        .catch((err) => {
+          log.warn('turn-settled remote MCP reconcile failed', {
+            remoteHostId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
       return;
     }
@@ -8919,10 +8956,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // live 直发路径原本不经任何 ensure, daemon 会带着死 URL / 空 env
         // 跑到 turn-done 才恢复 (codex-connector R23 P1)。命中漂移才走完整
         // remote ensure (含 lazy 重建 bridge), 无漂移零开销。
+        const driftHostRef = live.remoteHostId
+          ? getRemoteSshPool().resolveId(live.remoteHostId)
+          : null;
         if (
-          live.remoteHostId &&
+          driftHostRef &&
           live.agentKind === 'codex' &&
-          hasPendingRemoteMcpDrift(live.remoteHostId, codexRemoteDriftOpts())
+          hasPendingRemoteMcpDrift(driftHostRef, codexRemoteDriftOpts())
         ) {
           const ensureResult = await ensureRemoteReadyForSessionStart({ session: live });
           // ensure 完整生效 ⇒ daemon 已 (重) bootstrap ⇒ 长命 transport
@@ -8935,7 +8975,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             live = undefined;
           } else {
             const driftCleared = !hasPendingRemoteMcpDrift(
-              live.remoteHostId,
+              driftHostRef,
               codexRemoteDriftOpts(),
             );
             if (driftCleared) {

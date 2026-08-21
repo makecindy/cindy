@@ -43,6 +43,7 @@ import type {
 } from '@cindy/maker-scheduler';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { canonicalRemoteHostRef } from '../../shared/remoteHostRef.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
   addRegionalMoney,
@@ -243,6 +244,17 @@ export function normalizeRemoteHostId(raw: string | null | undefined): string | 
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/**
+ * Normalize a remote host for a newly-created session row. Historical rows
+ * remain untouched and are resolved compatibly at read/use boundaries.
+ */
+export function normalizeRemoteHostRefForCreate(
+  raw: string | null | undefined,
+): string | null {
+  const normalized = normalizeRemoteHostId(raw);
+  return normalized ? canonicalRemoteHostRef(normalized) : null;
+}
+
 /** Session create 入口字段映射。生成 timestamps + 默认值由调用方保证必填。 */
 export function sessionCreateToRow(
   id: string,
@@ -300,7 +312,7 @@ export function sessionCreateToRow(
     forkedAtMessageId: body?.forkedAtMessageId ?? null,
     worktreePath: null,
     extraDirs: safeStringify(body?.extraDirs ?? []),
-    remoteHostId: normalizeRemoteHostId(body?.remoteHostId),
+    remoteHostId: normalizeRemoteHostRefForCreate(body?.remoteHostId),
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
     providerId:

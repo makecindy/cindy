@@ -33,13 +33,23 @@ vi.mock('node:fs', async (importOriginal) => {
     default: {
       ...actual,
       existsSync: () => prefsFileContent != null,
-      readFileSync: () => prefsFileContent ?? '',
+      readFileSync: () => {
+        if (prefsFileContent == null) {
+          const error = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+          error.code = 'ENOENT';
+          throw error;
+        }
+        return prefsFileContent;
+      },
       writeFileSync: (_p: string, content: string) => {
         prefsFileContent = content;
       },
       renameSync: () => {},
-      unlinkSync: () => {
-        prefsFileContent = null;
+      unlinkSync: (filePath: string) => {
+        // writePrefs() cleans up its temporary file after rename. The in-memory
+        // fixture represents the final destination, so deleting that temp file
+        // must not erase the successfully renamed preferences.
+        if (filePath.endsWith('/ssh-host-prefs.json')) prefsFileContent = null;
       },
     },
   };

@@ -30,7 +30,11 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { RemoteHost } from '@cindy/maker-remote-ssh';
+import {
+  canonicalHostRef,
+  legacySshAliasForHostRef,
+  type RemoteHost,
+} from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
 import {
@@ -40,6 +44,12 @@ import {
   selectRemoteInjectableServerNames,
 } from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
+import {
+  assertCurrentRemoteEndpointGeneration,
+  currentRemoteEndpointGeneration,
+  isCurrentRemoteEndpointGeneration,
+  StaleRemoteEndpointError,
+} from './endpoint-generation.js';
 
 const log = createLogger('codex-remote-mcp');
 
@@ -142,15 +152,36 @@ function writePortPrefs(next: PortPrefs): void {
   portPrefsCache = next;
 }
 
+function readHostPortPref(hostId: string): PortPrefs[string] | undefined {
+  const prefs = readPortPrefs();
+  // HostRef is authoritative when both the new key and a historical bare
+  // alias exist. Bare legacy callers resolve through the same namespace
+  // contract as ConnectionPool instead of missing state that was already
+  // migrated on a previous canonical write.
+  const canonicalHostId = canonicalHostRef(hostId);
+  const exact = prefs[canonicalHostId];
+  if (exact) return exact;
+  const legacyAlias = legacySshAliasForHostRef(canonicalHostId);
+  return legacyAlias ? prefs[legacyAlias] : undefined;
+}
+
+function writeHostPortPref(hostId: string, value: PortPrefs[string]): void {
+  const canonicalHostId = canonicalHostRef(hostId);
+  const next = { ...readPortPrefs(), [canonicalHostId]: value };
+  const legacyAlias = legacySshAliasForHostRef(canonicalHostId);
+  if (legacyAlias) delete next[legacyAlias];
+  writePortPrefs(next);
+}
+
 function writeHostRemotePort(hostId: string, remotePort: number): void {
-  writePortPrefs({ ...readPortPrefs(), [hostId]: { ...readPortPrefs()[hostId], remotePort } });
+  writeHostPortPref(hostId, { ...readHostPortPref(hostId), remotePort });
 }
 
 /** 记录本机 bridge 当前本地端口:bridge 重建换端口时识别并拆除旧 forward。 */
 function writeHostBridgeLocalPort(hostId: string, bridgeLocalPort: number): void {
-  const current = readPortPrefs()[hostId];
+  const current = readHostPortPref(hostId);
   if (!current) return;
-  writePortPrefs({ ...readPortPrefs(), [hostId]: { ...current, bridgeLocalPort } });
+  writeHostPortPref(hostId, { ...current, bridgeLocalPort });
 }
 
 /**
@@ -161,26 +192,41 @@ function writeHostBridgeLocalPort(hostId: string, bridgeLocalPort: number): void
  * env 401 (Greptile P1: 重启丢失令牌更新状态)。
  */
 function writeHostAppliedFingerprint(hostId: string, fingerprint: string): void {
-  const current = readPortPrefs()[hostId];
+  const current = readHostPortPref(hostId);
   if (!current) return; // 无端口记录 = 未曾注入, 不写孤儿行
-  writePortPrefs({ ...readPortPrefs(), [hostId]: { ...current, appliedFingerprint: fingerprint } });
+  writeHostPortPref(hostId, { ...current, appliedFingerprint: fingerprint });
 }
 
 /** 清理路径 (白名单为空) bootstrap 后调用:daemon env 已清, 摘除生效记录。 */
 function clearHostAppliedFingerprint(hostId: string): void {
-  const current = readPortPrefs()[hostId];
+  const current = readHostPortPref(hostId);
   if (!current?.appliedFingerprint) return;
-  const next = { ...readPortPrefs() };
-  delete next[hostId].appliedFingerprint;
-  writePortPrefs(next);
+  const next = { ...current };
+  delete next.appliedFingerprint;
+  writeHostPortPref(hostId, next);
+}
+
+/**
+ * Endpoint edits keep the HostRef but invalidate every fact that belongs to
+ * the old machine.  In particular, the preferred remote port and the local
+ * bridge-port association must not survive a HostName/User/Port change: the
+ * stable HostRef is reused by the pool, and RemoteHost would otherwise re-arm
+ * an old MCP forward on the replacement endpoint before the next ensure has
+ * a chance to recompute it.
+ */
+export function invalidateRemoteCodexMcpEndpointState(hostId: string): void {
+  removeRemoteMcpForwardPref(hostId);
 }
 
 /** host 被删时清理端口记录 (registerRemoteSshIpc 的 remove 路径调用)。 */
 export function removeRemoteMcpForwardPref(hostId: string): void {
   const current = readPortPrefs();
-  if (!(hostId in current)) return;
+  const canonicalHostId = canonicalHostRef(hostId);
+  const legacyAlias = legacySshAliasForHostRef(canonicalHostId);
+  if (!(canonicalHostId in current) && (!legacyAlias || !(legacyAlias in current))) return;
   const next = { ...current };
-  delete next[hostId];
+  delete next[canonicalHostId];
+  if (legacyAlias) delete next[legacyAlias];
   writePortPrefs(next);
 }
 
@@ -444,8 +490,13 @@ async function bootstrapDaemon(host: RemoteHost, token: string): Promise<void> {
 
 // ── per-host 固定 remotePort:持久化值优先, 被占则由 RemoteHost 顺延探测 ──────
 
-async function ensureRemotePort(host: RemoteHost, localBridgePort: number): Promise<number> {
-  const prefs = readPortPrefs()[host.id];
+async function ensureRemotePort(
+  host: RemoteHost,
+  localBridgePort: number,
+  generation: number,
+): Promise<number> {
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
+  const prefs = readHostPortPref(host.id);
   const preferred = prefs?.remotePort;
   // bridge 重建换本地端口:旧 localPort 的 forward 在 RemoteHost 上仍 armed
   // (ensureRemoteForward 按 localHost:localPort 幂等, 不主动拆) — 不拆每次
@@ -454,12 +505,14 @@ async function ensureRemotePort(host: RemoteHost, localBridgePort: number): Prom
   if (staleBridgeLocalPort !== undefined && staleBridgeLocalPort !== localBridgePort) {
     try {
       await host.closeRemoteForward('127.0.0.1', staleBridgeLocalPort);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       log.info('stale remote MCP forward closed after bridge port change', {
         host: host.id,
         staleLocalPort: staleBridgeLocalPort,
         localPort: localBridgePort,
       });
     } catch (err) {
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       log.warn('close stale remote MCP forward failed (continuing)', {
         host: host.id,
         staleLocalPort: staleBridgeLocalPort,
@@ -476,6 +529,7 @@ async function ensureRemotePort(host: RemoteHost, localBridgePort: number): Prom
     localPort: localBridgePort,
     preferredRemotePort: preferred ?? DEFAULT_REMOTE_PORT_START,
     onRearmed: (remotePort) => {
+      if (!isCurrentRemoteEndpointGeneration(host.id, generation)) return;
       // 重连后隧道口被重绑到新端口:持久化新值。旧 daemon config 仍指向旧
       // 端口,下一次 ensure 的漂移检测会重写 config 并重启 daemon 自愈。
       writeHostRemotePort(host.id, remotePort);
@@ -486,6 +540,7 @@ async function ensureRemotePort(host: RemoteHost, localBridgePort: number): Prom
       rearmedHook?.(host.id, remotePort);
     },
   });
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   if (fwd.remotePort !== preferred) {
     // 换了端口:持久化新值。旧 daemon config 指向旧端口,但接下来的
     // config 漂移检测会重写并重启 daemon,自洽恢复。
@@ -516,24 +571,27 @@ export function setRemoteMcpForwardRearmedHook(fn: (hostId: string, remotePort: 
  * bridge 的隧道, 残留 forward 是无谓的远端端口占用 (R20 P2 同源)。
  * close 失败不阻断清理 (记录照摘, 服务端残留随连接死亡消失)。
  */
-async function releaseRemoteMcpForwardIfAny(host: RemoteHost): Promise<void> {
-  const stale = readPortPrefs()[host.id]?.bridgeLocalPort;
+async function releaseRemoteMcpForwardIfAny(host: RemoteHost, generation: number): Promise<void> {
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
+  const stale = readHostPortPref(host.id)?.bridgeLocalPort;
   if (stale === undefined) return;
   try {
     await host.closeRemoteForward('127.0.0.1', stale);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     log.info('remote MCP forward released on cleanup path', { host: host.id, staleLocalPort: stale });
   } catch (err) {
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     log.warn('release remote MCP forward failed (continuing cleanup)', {
       host: host.id,
       staleLocalPort: stale,
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  const current = readPortPrefs()[host.id];
+  const current = readHostPortPref(host.id);
   if (!current?.bridgeLocalPort) return;
-  const next = { ...readPortPrefs() };
-  delete next[host.id].bridgeLocalPort;
-  writePortPrefs(next);
+  const next = { ...current };
+  delete next.bridgeLocalPort;
+  writeHostPortPref(host.id, next);
 }
 
 // ── per-host 串行锁与共用 forward 入口 ───────────────────────────────────────
@@ -569,7 +627,8 @@ export function ensureRemoteMcpForward(
   host: RemoteHost,
   localBridgePort: number,
 ): Promise<number> {
-  return withHostSerial(host.id, () => ensureRemotePort(host, localBridgePort));
+  const generation = currentRemoteEndpointGeneration(host.id);
+  return withHostSerial(host.id, () => ensureRemotePort(host, localBridgePort, generation));
 }
 
 // ── 主入口 ──────────────────────────────────────────────────────────────────
@@ -589,7 +648,8 @@ export function stripRemoteCodexMcpConfig(
   host: RemoteHost,
   deps?: { hasLiveTurnOnHost?: (hostId: string) => boolean },
 ): Promise<StripRemoteCodexMcpConfigResult> {
-  return withHostSerial(host.id, () => doStripRemoteCodexMcpConfig(host, deps));
+  const generation = currentRemoteEndpointGeneration(host.id);
+  return withHostSerial(host.id, () => doStripRemoteCodexMcpConfig(host, generation, deps));
 }
 
 /**
@@ -599,34 +659,42 @@ export function stripRemoteCodexMcpConfig(
  */
 async function doStripRemoteCodexMcpConfig(
   host: RemoteHost,
+  generation: number,
   deps?: { hasLiveTurnOnHost?: (hostId: string) => boolean },
 ): Promise<StripRemoteCodexMcpConfigResult> {
   {
     try {
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       if (deps?.hasLiveTurnOnHost?.(host.id)) return { daemonRebootstrapped: false };
       const existing = await readRemoteConfig(host);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       const { next, changed } = mergeManagedMcpBlock(existing, '', { serverNames: [] });
       if (changed) {
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
         await writeRemoteConfig(host, next);
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
         log.info('remote codex config.toml managed block stripped on bridge shutdown', {
           host: host.id,
         });
       }
-      const applied = readPortPrefs()[host.id]?.appliedFingerprint;
+      const applied = readHostPortPref(host.id)?.appliedFingerprint;
       const daemonRunning = await isDaemonRunning(host);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       if (daemonRunning && (changed || applied)) {
         await bootstrapDaemon(host, '');
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
         log.info('remote codex daemon rebootstrapped with empty MCP env on bridge shutdown', {
           host: host.id,
         });
         clearHostAppliedFingerprint(host.id);
-        await releaseRemoteMcpForwardIfAny(host);
+        await releaseRemoteMcpForwardIfAny(host, generation);
         return { daemonRebootstrapped: true };
       }
       if (changed || applied) clearHostAppliedFingerprint(host.id);
-      await releaseRemoteMcpForwardIfAny(host);
+      await releaseRemoteMcpForwardIfAny(host, generation);
       return { daemonRebootstrapped: false };
     } catch (err) {
+      if (err instanceof StaleRemoteEndpointError) throw err;
       log.warn('strip remote codex MCP config on bridge shutdown failed', {
         host: host.id,
         error: err instanceof Error ? err.message : String(err),
@@ -661,7 +729,7 @@ export function hasPendingRemoteMcpDrift(
     bridgeInstanceId: string | null;
   },
 ): boolean {
-  const applied = readPortPrefs()[hostId]?.appliedFingerprint ?? null;
+  const applied = readHostPortPref(hostId)?.appliedFingerprint ?? null;
   if ((!opts.collabEnabled && !opts.makerMemoryEnabled) || !opts.token) {
     // 清理语义:applied 存在 = 待清理 (strip / 清理路径未跑过)。
     return applied !== null;
@@ -669,7 +737,7 @@ export function hasPendingRemoteMcpDrift(
   if (!opts.bridgeInstanceId) {
     return true;
   }
-  const remotePort = readPortPrefs()[hostId]?.remotePort ?? DEFAULT_REMOTE_PORT_START;
+  const remotePort = readHostPortPref(hostId)?.remotePort ?? DEFAULT_REMOTE_PORT_START;
   // desired 集合与 ensure 的注入集合靠 selectRemoteInjectableServerNames 构造
   // 同源;available 传白名单全集 = 「provider 恒注册」假设 (keepOrcaProviderStable,
   // memory 侧由调用方按活跃 bridge 快照预钳制)。
@@ -722,11 +790,13 @@ export function ensureRemoteCodexMcpBridge(
     isMakerMemoryEnabled?: () => boolean;
   },
 ): Promise<EnsureRemoteCodexMcpResult> {
-  return withHostSerial(host.id, () => doEnsureRemoteCodexMcpBridge(host, deps));
+  const generation = currentRemoteEndpointGeneration(host.id);
+  return withHostSerial(host.id, () => doEnsureRemoteCodexMcpBridge(host, generation, deps));
 }
 
 async function doEnsureRemoteCodexMcpBridge(
   host: RemoteHost,
+  generation: number,
   deps: {
     ensureBridgeStarted: () => Promise<RemoteMcpBridgeEndpoint | null>;
     hasLiveTurnOnHost?: (hostId: string) => boolean;
@@ -742,15 +812,17 @@ async function doEnsureRemoteCodexMcpBridge(
   },
 ): Promise<EnsureRemoteCodexMcpResult> {
   try {
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     let daemonRebootstrapped = false;
     const bridge = await deps.ensureBridgeStarted();
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (!bridge) {
       // bridge 起不来时清理场景 (collab 全局禁用 / token 失效 / 曾注入过)
       // 不需要 bridge — 剥 config / 清 env 都是纯远端操作。直接走 strip
       // (R21 的无 bridge 变体), 否则 bridge 停机期间旧 config/env 残留,
       // 远端持续暴露死 MCP (codex-connector R27 P2)。从未注入过且无清理
       // 对象的维持 bridge-unavailable 早退。
-      const applied = readPortPrefs()[host.id]?.appliedFingerprint;
+      const applied = readHostPortPref(host.id)?.appliedFingerprint;
       const collabEnabled = deps.isCollabEnabled?.() ?? true;
       const memoryEnabled = deps.isMakerMemoryEnabled?.() ?? false;
       const token = getRemoteMcpBridgeToken();
@@ -763,7 +835,11 @@ async function doEnsureRemoteCodexMcpBridge(
           hasToken: Boolean(token),
         });
         // 已在 per-host 串行锁内 (ensure 持锁), 直调无锁核心 (R27 P2 自死锁修正)。
-        const stripResult = await doStripRemoteCodexMcpConfig(host, { hasLiveTurnOnHost: deps.hasLiveTurnOnHost });
+        const stripResult = await doStripRemoteCodexMcpConfig(
+          host,
+          generation,
+          { hasLiveTurnOnHost: deps.hasLiveTurnOnHost },
+        );
         return { ok: true, daemonRebootstrapped: stripResult.daemonRebootstrapped };
       }
       log.warn('remote MCP injection skipped: http bridge unavailable', { host: host.id });
@@ -796,7 +872,7 @@ async function doEnsureRemoteCodexMcpBridge(
       // 每次调用 401 — 比「降级无 MCP」更糟。按清理路径剥受管段 + 清 env
       // (codex-connector R19 P2);token 恢复后下次 ensure 自然重新注入。
       // 之前没注入过则维持早退 (无清理对象)。
-      if (!readPortPrefs()[host.id]?.appliedFingerprint) {
+      if (!readHostPortPref(host.id)?.appliedFingerprint) {
         log.warn('remote MCP injection skipped: persistent token unavailable (safeStorage?)', {
           host: host.id,
         });
@@ -818,7 +894,9 @@ async function doEnsureRemoteCodexMcpBridge(
     // (bootstrap) 时:live turn 期间 defer 不拆 — daemon 内存里的旧
     // config 还指着这个端口, 早拆会让进行中的协同调用 connection
     // refused, 与「不打断 live turn」自相矛盾 (codex-connector R21 P2)。
-    const remotePort = serverNames.length > 0 ? await ensureRemotePort(host, bridge.port) : 0;
+    const remotePort = serverNames.length > 0
+      ? await ensureRemotePort(host, bridge.port, generation)
+      : 0;
 
     // token 与 bridge 代际一起进指纹:token 轮换 (账号切换) 与 bridge 重建
     // (旧 mcp-session-id 全失效, codex-connector P2) 都构成 config 漂移,
@@ -828,6 +906,7 @@ async function doEnsureRemoteCodexMcpBridge(
       .digest('hex')
       .slice(0, 12);
     const existing = await readRemoteConfig(host);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     // serverNames 为空时 block='':merge 只剥不建 — 清掉上一次注入留下的
     // 受管段 (不能早退, 否则 daemon 永远持旧 token env 与死配置,
     // codex-connector P2);本来就没注入过 → changed=false → no-op。
@@ -849,6 +928,7 @@ async function doEnsureRemoteCodexMcpBridge(
     }
     if (changed) {
       await writeRemoteConfig(host, next);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       log.info('remote codex config.toml mcp_servers updated', {
         host: host.id,
         remotePort,
@@ -873,11 +953,12 @@ async function doEnsureRemoteCodexMcpBridge(
           serverNames,
         })
       : null;
-    const appliedFingerprint = readPortPrefs()[host.id]?.appliedFingerprint ?? null;
+    const appliedFingerprint = readHostPortPref(host.id)?.appliedFingerprint ?? null;
     const driftUnapplied = desiredFingerprint !== appliedFingerprint;
     const needApply = changed || driftUnapplied;
 
     const daemonRunning = await isDaemonRunning(host);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (needApply && deps.hasLiveTurnOnHost?.(host.id)) {
       // bootstrap 重启会断 live turn:config 已就绪 (changed 时已写入, daemon
       // 运行中不读 config), 本次只推迟重启 — driftUnapplied 是持久事实,
@@ -890,16 +971,20 @@ async function doEnsureRemoteCodexMcpBridge(
     }
     if (!daemonRunning || needApply) {
       await bootstrapDaemon(host, effectiveToken);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       daemonRebootstrapped = true;
       // 防御:bootstrap 若覆盖了 config.toml (managed_install 行为未文档化),
       // 管理段丢失时补写一次并再次 bootstrap。最多两轮,避免无限循环。
       // 仅注入路径 (serverNames 非空):清理路径本来就要管理段不存在,
       // 不得把它当"丢失"补写回去。
       const after = await readRemoteConfig(host);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       if (serverNames.length > 0 && !after.includes(MANAGED_BEGIN)) {
         log.warn('managed mcp block lost after bootstrap — rewriting once', { host: host.id });
         await writeRemoteConfig(host, next);
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
         await bootstrapDaemon(host, effectiveToken);
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
         daemonRebootstrapped = true;
       }
       // bootstrap 确认完成才落已生效指纹;失败/中断不落 → 下次 ensure
@@ -909,7 +994,7 @@ async function doEnsureRemoteCodexMcpBridge(
       if (serverNames.length === 0) {
         // 清理真正生效 (daemon 已持空 env 重启) 才拆 MCP forward — 见
         // ensureRemotePort 调用点注释 (R21 P2: live turn defer 期间不拆)。
-        await releaseRemoteMcpForwardIfAny(host);
+        await releaseRemoteMcpForwardIfAny(host, generation);
       }
       log.info('remote codex daemon (re)bootstrapped with MCP bridge env', {
         host: host.id,
@@ -919,6 +1004,7 @@ async function doEnsureRemoteCodexMcpBridge(
     }
     return { ok: true, daemonRebootstrapped };
   } catch (err) {
+    if (err instanceof StaleRemoteEndpointError) throw err;
     log.error('ensureRemoteCodexMcpBridge failed', {
       host: host.id,
       error: err instanceof Error ? err.message : String(err),

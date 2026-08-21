@@ -550,7 +550,7 @@ describe('nextProjectsAfterToggle', () => {
     ];
 
     expect(nextProjectsAfterToggle(prev, 'local:c:/WORKSPACE/CINDY', 'win32')).toEqual([
-      'remote:host:C:/Workspace/Cindy',
+      'remote:ssh-config%3Ahost:C:/Workspace/Cindy',
     ]);
     expect(
       nextProjectsAfterToggle(
@@ -604,7 +604,7 @@ describe('includeProjectInFilter', () => {
 
     expect(includeProjectInFilter(prev, 'local:c:/WORKSPACE/CINDY', 'win32')).toEqual([
       'local:C:/Workspace/Cindy',
-      'remote:host:C:/Workspace/Cindy',
+      'remote:ssh-config%3Ahost:C:/Workspace/Cindy',
     ]);
   });
 });
@@ -648,7 +648,11 @@ describe('removeProjectsFromFilter', () => {
         ]),
         'win32',
       ),
-    ).toEqual(['remote:host-a:C:/Repo', 'device:device-a:C:/Repo', 'local:/Users/Lee/Repo']);
+    ).toEqual([
+      'remote:ssh-config%3Ahost-a:C:/Repo',
+      'device:device-a:C:/Repo',
+      'local:/Users/Lee/Repo',
+    ]);
   });
 
   it('keeps a different-cased POSIX double-slash project in the filter', () => {
@@ -704,7 +708,7 @@ describe('gcProjectsAgainstActive', () => {
     const prev: FilterProjects = ['/a', 'remote:host:/b'];
     expect(gcProjectsAgainstActive(prev, ['local:/a', 'remote:host:/b'])).toEqual([
       'local:/a',
-      'remote:host:/b',
+      'remote:ssh-config%3Ahost:/b',
     ]);
   });
 

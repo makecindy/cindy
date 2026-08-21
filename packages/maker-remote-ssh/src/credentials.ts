@@ -23,6 +23,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { BaseAgent } from 'ssh2';
 
 import { createFilteredAgentFromPubkey } from './filteredAgent.js';
@@ -83,20 +84,20 @@ export async function resolveAuth(host: HostConfig): Promise<ResolvedAuth> {
     // Wrap the agent so only that fingerprint gets offered, bypassing the
     // MaxAuthTries-trigger of enumerating every loaded key.
     if (host.identityFile) {
-      const pubkeyPath = host.identityFile.endsWith('.pub')
-        ? host.identityFile
-        : `${host.identityFile}.pub`;
+      let pubkeyPath: string;
       try {
+        pubkeyPath = await resolvePinnedPublicKeyPath(host.identityFile);
         const filtered = await createFilteredAgentFromPubkey(pubkeyPath, endpoint);
         return { agent: filtered, label: `ssh-agent[${baseName(pubkeyPath)}]` };
       } catch (err) {
+        const expected = pinnedPublicKeyCandidates(host.identityFile).join(' or ');
         // 轮 21-W2 MEDIUM:tag PINNED_AGENT_FAILED —— 本地配置错误(缺 .pub /
         // 内容非法 / 与 loaded key 不匹配), 不应落进 SSH_CONNECT_FAILED(可重试
         // 语义)。classifyConnectFailure 按稳定 code 分类, 不 pattern-match 文本。
         const e = new Error(
           `agent + pinned key failed (${(err as Error).message}). ` +
-          `Make sure ${pubkeyPath} exists and is a valid SSH public key, ` +
-          `and that the matching private key is loaded in ssh-agent ('ssh-add ${pubkeyPath.replace(/\.pub$/, '')}').`,
+          `Make sure ${expected} exists and is a valid SSH public key, ` +
+          `and that the matching private key is loaded in ssh-agent ('ssh-add ${host.identityFile}').`,
         );
         (e as { code?: string }).code = PINNED_AGENT_FAILED_CODE;
         throw e;
@@ -132,6 +133,30 @@ export async function resolveAuth(host: HostConfig): Promise<ResolvedAuth> {
   }
 
   throw new Error(`unsupported authMethod: ${(host as { authMethod: string }).authMethod}`);
+}
+
+/** Candidate public-key paths for an agent pin, in stable preference order. */
+export function pinnedPublicKeyCandidates(identityFile: string): string[] {
+  if (identityFile.endsWith('.pub')) return [identityFile];
+  const candidates = [`${identityFile}.pub`];
+  if (identityFile.endsWith('.key')) {
+    candidates.push(path.join(path.dirname(identityFile), `${path.basename(identityFile, '.key')}.pub`));
+  }
+  return candidates;
+}
+
+/** Resolve foo.key -> foo.pub while retaining foo.key.pub compatibility. */
+export async function resolvePinnedPublicKeyPath(identityFile: string): Promise<string> {
+  const candidates = pinnedPublicKeyCandidates(identityFile);
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch { /* try the next conventional companion */ }
+  }
+  const error = new Error(`public key file not found: ${candidates.join(' or ')}`);
+  (error as { code?: string }).code = PINNED_AGENT_FAILED_CODE;
+  throw error;
 }
 
 function baseName(p: string): string {

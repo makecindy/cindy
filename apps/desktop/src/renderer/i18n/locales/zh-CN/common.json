@@ -154,11 +154,35 @@
     },
     "remote": {
       "title": "远端机器",
-      "footnote": "第一版仅支持 SSH 连接管理。在远端运行 Agent 的能力将在后续版本中加入。",
+      "footnote": "SSH 配置主机只读并随 OpenSSH 配置刷新；手动添加的主机只保存在 Cindy。",
       "viaAuth": "通过 {{label}} 认证",
+      "section": {
+        "sshConfig": "SSH 配置主机",
+        "cindy": "Cindy 本地主机"
+      },
+      "error": {
+        "config": "无法刷新 SSH 配置，当前显示上次成功读取的列表。{{message}}",
+        "profile": "无法读取 Cindy 本地主机，当前显示上次有效列表。{{message}}",
+        "path": "文件：{{path}}",
+        "configRecovery": "请检查此文件及其 Include 路径，然后重新读取。",
+        "configLimitRecovery": "请减少 Include 嵌套层级、文件数量或配置总大小，然后重新读取。",
+        "profileRecovery": "请修复或还原此文件，然后重新读取。"
+      },
+      "remove": {
+        "confirmTitle": "移除 Cindy 本地主机？",
+        "confirmDescription": "这会从 Cindy 永久移除“{{name}}”，不会修改你的 SSH 配置。",
+        "confirm": "移除"
+      },
+      "copy": {
+        "confirm": "要把这份已解析的连接配置复制到 Cindy 吗？\n\n{{target}}\n认证：{{auth}}\n\n复制后不会再跟随 SSH 配置变化。",
+        "authAgent": "ssh-agent",
+        "authAgentPinned": "ssh-agent，钉定 {{key}}",
+        "authKey": "直接读取私钥文件 {{key}}（Cindy 不保存密码短语；加密私钥请使用 ssh-agent）",
+        "done": "已复制到 Cindy"
+      },
       "empty": {
-        "title": "还没有远端机器。",
-        "hint": "点击\"添加\"注册一台，或点刷新图标从 ~/.ssh/config 导入。"
+        "title": "~/.ssh/config 里没有找到主机。",
+        "hint": "可以编辑 SSH 配置后刷新，或在下方添加一台只属于 Cindy 的主机。"
       },
       "status": {
         "disconnected": "未连接",
@@ -170,6 +194,8 @@
       },
       "button": {
         "add": "添加",
+        "manualAdd": "手动添加",
+        "copyToCindy": "复制到 Cindy",
         "reload": "重新读取 ~/.ssh/config",
         "connect": "连接",
         "disconnect": "断开",
@@ -187,6 +213,8 @@
       },
       "edit": {
         "title": "编辑 {{id}}",
+        "sshConfigReadOnly": "连接字段和认证方式来自 SSH 配置，在这里是只读的。请编辑 ~/.ssh/config 后重新读取，或复制到 Cindy 创建独立副本。",
+        "authSummary": "认证：{{auth}}",
         "submit": "保存修改"
       },
       "keys": {
@@ -262,8 +290,10 @@
         }
       },
       "add": {
-        "title": "添加一台远端机器",
+        "title": "添加 Cindy 本地主机",
         "alias": "别名",
+        "displayName": "显示名称",
+        "displayNamePlaceholder": "构建服务器",
         "hostname": "主机名",
         "user": "用户",
         "port": "端口",

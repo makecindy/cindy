@@ -1,3 +1,5 @@
+import { resolveRemoteHostRefAgainstCandidates } from '../../../../shared/remoteHostRef';
+
 /** 远程项目在 UI 中显示的机器身份,统一供项目树、搜索与筛选使用。 */
 export interface RemoteProjectMachineIdentity {
   kind: 'ssh' | 'device-link';
@@ -89,7 +91,17 @@ export function resolveRemoteProjectMachineIdentity(
   }
 
   if (!project.remoteHostId) return null;
-  const host = sshHosts.find((candidate) => candidate.config.id === project.remoteHostId);
+  const resolvedHostRef = resolveRemoteHostRefAgainstCandidates(
+    project.remoteHostId,
+    sshHosts.map((host) => ({
+      id: host.config.id,
+      alias: host.config.alias,
+      source: host.config.source,
+    })),
+  );
+  const host = sshHosts.find((candidate) =>
+    candidate.config.id === resolvedHostRef,
+  );
   if (!host) {
     return {
       kind: 'ssh',
@@ -102,11 +114,12 @@ export function resolveRemoteProjectMachineIdentity(
   const endpoint = `${host.config.user}@${host.config.hostname}${
     host.config.port === 22 ? '' : `:${host.config.port}`
   }`;
+  const label = host.config.displayName ?? host.config.alias ?? host.config.id;
   return {
     kind: 'ssh',
-    label: host.config.id,
+    label,
     detail: endpoint,
-    displayLabel: joinIdentity(host.config.id, endpoint),
+    displayLabel: joinIdentity(label, endpoint),
   };
 }
 

@@ -19,6 +19,8 @@
  * 一条事件 (race window 很小但理论存在)。
  */
 
+import { canonicalRemoteHostRef } from '../../shared/remoteHostRef';
+
 interface PendingUpgrade {
   currentVersion: string;
   availableVersion: string;
@@ -36,7 +38,7 @@ const state = new Map<string, PendingUpgrade>();
 const listeners = new Set<() => void>();
 
 function hostAgentKey(hostId: string, agent: string): string {
-  return `${hostId}:${agent}`;
+  return `${canonicalRemoteHostRef(hostId)}:${agent}`;
 }
 
 // inflightUpgradeHosts: 用户点了「立即升级」从 UpgradeBanner 触发 force-upgrade
@@ -164,7 +166,11 @@ export async function forceUpgradeCcMgr(hostId: string, sessionId?: string, agen
     // 把 sessionId 透到 main 端: main 现在只 soft-close 这个 banner-clicker
     // session, 同 host 其它 session 不动 (避免 in-flight turn 静默丢)。
     // 轮 22:agent 参数区分 cc-mgr / pi-manager 升级。
-    const r = await window.electronAPI.remoteSsh.ccMgrForceUpgrade(hostId, sessionId, agent);
+    const r = await window.electronAPI.remoteSsh.ccMgrForceUpgrade(
+      canonicalRemoteHostRef(hostId),
+      sessionId,
+      agent,
+    );
     return { daemonReady: r.daemonReady };
   } finally {
     setInflightUpgrade(sessionId, false);
@@ -177,5 +183,5 @@ export async function forceUpgradeCcMgr(hostId: string, sessionId?: string, agen
  * 重新写入 pending)。
  */
 export async function dismissCcMgrUpgrade(hostId: string, agent: 'cc' | 'pi' = 'cc'): Promise<void> {
-  await window.electronAPI.remoteSsh.ccMgrDismissPendingUpgrade(hostId, agent);
+  await window.electronAPI.remoteSsh.ccMgrDismissPendingUpgrade(canonicalRemoteHostRef(hostId), agent);
 }

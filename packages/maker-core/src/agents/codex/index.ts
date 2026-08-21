@@ -2889,6 +2889,7 @@ export class CodexAgent extends BaseAgent {
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
+    const remoteHostRuntimeId = opts.remoteHostRuntimeId ?? opts.remoteHostId;
     const reviewMode = opts.reviewMode === true;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
@@ -2902,6 +2903,7 @@ export class CodexAgent extends BaseAgent {
       workDir: opts.workingDir,
       resume: opts.resumeSessionId ?? 'new',
       remoteHostId: opts.remoteHostId ?? null,
+      remoteHostRuntimeId: remoteHostRuntimeId ?? null,
       reviewMode,
       mcpProvidersCount: this.deps.mcpProviders?.length ?? 0,
     });
@@ -3764,7 +3766,7 @@ export class CodexAgent extends BaseAgent {
           providerId: opts.providerId,
           model: opts.model,
         });
-    const currentHostKey = reviewMode ? localReviewHostKey(sid) : hostKey(opts.remoteHostId);
+    const currentHostKey = reviewMode ? localReviewHostKey(sid) : hostKey(remoteHostRuntimeId);
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -3776,7 +3778,7 @@ export class CodexAgent extends BaseAgent {
       release?.();
     };
     const getSessionHost = async (): Promise<AppServerHost> => {
-      if (opts.remoteHostId) return await this.getHost(opts.remoteHostId, credentialMode);
+      if (remoteHostRuntimeId) return await this.getHost(remoteHostRuntimeId, credentialMode);
       // 本地会话先等已有 credential switch 完成，再占用 startup reservation。否则
       // session 已拿到旧 host、但尚未 thread/start 订阅时，credential 切换看不到它。
       await this.waitForHostCredentialModeSwitch(currentHostKey);

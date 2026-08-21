@@ -64,6 +64,7 @@ import { createLogger } from '../logger.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { canonicalRemoteHostRef } from '../../shared/remoteHostRef.js';
 import {
   checkRemoteWorkingDir,
   remoteWorkingDirRejectionToIpcError,
@@ -75,7 +76,7 @@ import { pushToTopicSubscribers } from '../device-link/dispatch.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import * as subscriptions from '../device-link/subscriptions.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
-import { getRemoteFileBrowser } from './remote-deps.js';
+import * as remoteDeps from './remote-deps.js';
 import { generateFileThumbnail } from './thumbnail.js';
 
 const log = createLogger('file-browser/device-op');
@@ -193,7 +194,16 @@ async function resolveWorkdirExecution(
       .selectDistinct({ remoteHostId: sessions.remoteHostId })
       .from(sessions)
       .where(and(eq(sessions.workingDir, normalizedWorkdir), isNotNull(sessions.remoteHostId)));
-    sshHosts = rows.map((r) => r.remoteHostId).filter((h): h is string => !!h);
+    sshHosts = Array.from(new Set(
+      rows
+        .map((r) => r.remoteHostId)
+        .filter((h): h is string => !!h)
+        // Resolve legacy bare aliases against the live pool. Pure namespace
+        // addition would misclassify a historical SSH alias named
+        // `cindy:foo` and could select an offline Cindy profile with the same
+        // text.
+        .map((hostId) => remoteDeps.resolveRemoteFileBrowserHostId?.(hostId) ?? canonicalRemoteHostRef(hostId)),
+    ));
   } catch (err) {
     log.warn('workdir execution lookup failed', { error: String(err) });
     if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
@@ -262,7 +272,7 @@ async function sshSearchCollect(
   hostId: string,
   q: { workdir: string; query: string; caseSensitive: boolean; maxMatches: number },
 ): Promise<{ matches: SearchMatch[]; truncated: boolean; totalMatches: number; totalFiles: number }> {
-  const mgr = getRemoteFileBrowser();
+  const mgr = remoteDeps.getRemoteFileBrowser();
   const matches: SearchMatch[] = [];
   return await new Promise((resolve, reject) => {
     let settled = false;
@@ -418,7 +428,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
 
   // —— SSH 二跳:直接透传给本机的 SSH file-service 路由 ——
   if (exec.kind === 'ssh') {
-    const mgr = getRemoteFileBrowser();
+    const mgr = remoteDeps.getRemoteFileBrowser();
     const hostId = exec.hostId;
     switch (args.op) {
       case 'listDir': {
@@ -778,7 +788,7 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
     return;
   }
   // SSH 嵌套:daemon watch + 事件转推。
-  const mgr = getRemoteFileBrowser();
+  const mgr = remoteDeps.getRemoteFileBrowser();
   const hostId = exec.hostId;
   const offEvent = mgr.onHostEvent(hostId, (evt) => {
     if (evt.event !== 'fileTree') return;

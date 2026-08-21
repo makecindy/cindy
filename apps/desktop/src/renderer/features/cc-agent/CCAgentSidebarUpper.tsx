@@ -50,6 +50,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useModifierHold } from '@/hooks/useModifierHold';
@@ -923,6 +924,7 @@ function ExpandedView({
 }: ExpandedProps) {
   const { t, i18n } = useTranslation();
   const localPlatform = window.electronAPI.platform;
+  const remoteSshHosts = useRemoteSshHosts();
   const { sessions, refreshSessions, patchLocal, effectiveIncludeArchived } = sessionsHook;
   const {
     hiddenProjectKeys,
@@ -1639,8 +1641,13 @@ function ExpandedView({
         lastActivityCutoff: cutoffForLastActivity(filter.lastActivity),
         pinnedProjectKeys,
         vendorPredicate,
+        remoteHostCandidates: remoteSshHosts.map((host) => ({
+          id: host.config.id,
+          alias: host.config.alias,
+          source: host.config.source,
+        })),
       }),
-    [filter.lastActivity, pinnedProjectKeys, scopedSidebarSessions, vendorPredicate],
+    [filter.lastActivity, pinnedProjectKeys, remoteSshHosts, scopedSidebarSessions, vendorPredicate],
   );
   const restorableProjectKeysRef = useRef(restorableProjectKeys);
   restorableProjectKeysRef.current = restorableProjectKeys;

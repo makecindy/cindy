@@ -154,11 +154,15 @@
     },
     "remote": {
       "title": "リモートマシン",
-      "footnote": "Phase A は SSH 接続管理のみ。リモートでのエージェント実行は今後のアップデートで対応します。",
+      "footnote": "SSH 設定のホストは読み取り専用で、OpenSSH 設定から再読み込みされます。手動で追加したホストは Cindy のみに保存されます。",
       "viaAuth": "{{label}} で認証",
+      "section": { "sshConfig": "SSH 設定のホスト", "cindy": "Cindy ローカルホスト" },
+      "error": { "config": "SSH 設定を更新できませんでした。最後に正常に読み込んだ一覧を表示しています。{{message}}", "profile": "Cindy ローカルホストを読み込めませんでした。最後に有効だった一覧を表示しています。{{message}}", "path": "ファイル：{{path}}", "configRecovery": "このファイルと Include パスを確認してから、再読み込みしてください。", "configLimitRecovery": "Include のネスト、ファイル数、または設定の合計サイズを減らしてから、再読み込みしてください。", "profileRecovery": "このファイルを修復または復元してから、再読み込みしてください。" },
+      "remove": { "confirmTitle": "Cindy ローカルホストを削除しますか？", "confirmDescription": "Cindy から「{{name}}」を完全に削除します。SSH 設定は変更されません。", "confirm": "削除" },
+      "copy": { "confirm": "解決済みの接続設定を Cindy にコピーしますか？\n\n{{target}}\n認証：{{auth}}\n\nコピー後は SSH 設定の変更に追従しません。", "authAgent": "ssh-agent", "authAgentPinned": "ssh-agent（{{key}} に固定）", "authKey": "秘密鍵ファイル {{key}} を直接読み込み（Cindy はパスフレーズを保存しません。暗号化鍵は ssh-agent を使用してください）", "done": "Cindy にコピーしました" },
       "empty": {
-        "title": "リモートマシンはまだありません。",
-        "hint": "「追加」で登録するか、更新アイコンで ~/.ssh/config から取り込めます。"
+        "title": "~/.ssh/config にホストが見つかりません。",
+        "hint": "SSH 設定を編集して更新するか、下から Cindy 専用ホストを追加してください。"
       },
       "status": {
         "disconnected": "切断",
@@ -170,6 +174,8 @@
       },
       "button": {
         "add": "追加",
+        "manualAdd": "手動で追加",
+        "copyToCindy": "Cindy にコピー",
         "reload": "~/.ssh/config を再読み込み",
         "connect": "接続",
         "disconnect": "切断",
@@ -187,6 +193,8 @@
       },
       "edit": {
         "title": "{{id}} を編集",
+        "sshConfigReadOnly": "接続項目と認証方式は SSH 設定から読み込まれるため、ここでは読み取り専用です。~/.ssh/config を編集して再読み込みするか、Cindy にコピーして独立した複製を作成してください。",
+        "authSummary": "認証：{{auth}}",
         "submit": "変更を保存"
       },
       "keys": {
@@ -262,8 +270,10 @@
         }
       },
       "add": {
-        "title": "リモートマシンを追加",
+        "title": "Cindy ローカルホストを追加",
         "alias": "エイリアス",
+        "displayName": "表示名",
+        "displayNamePlaceholder": "ビルドサーバー",
         "hostname": "ホスト名",
         "user": "ユーザー",
         "port": "ポート",

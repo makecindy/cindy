@@ -41,7 +41,7 @@ describe('projectKeyComparisonKey', () => {
       'local:/Users/Lee/Repo',
     );
     expect(projectKeyComparisonKey('remote:host-a:C:/Repo/Cindy', 'win32')).toBe(
-      'remote:host-a:C:/Repo/Cindy',
+      'remote:ssh-config%3Ahost-a:C:/Repo/Cindy',
     );
     expect(projectKeyComparisonKey('device:device-a:C:/Repo/Cindy', 'win32')).toBe(
       'device:device-a:C:/Repo/Cindy',

@@ -22,7 +22,7 @@ export function registerSshHostStatusTool(
       '查看单台已配置 SSH 主机的连接状态（status / 最近错误 / 认证方式）。' +
       'ssh_exec 失败后用于诊断；认证类错误请把提示转告用户，不要重试。',
     inputShape: {
-      host: z.string().min(1).describe('主机 alias 或 hostname/IP（须已在设置中配置）'),
+      host: z.string().min(1).describe('SSH alias 或完整 HostRef（不按 IP、hostname 或显示名解析）'),
     },
     handler: async ({ host }) => {
       try {

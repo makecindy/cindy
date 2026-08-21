@@ -17,7 +17,12 @@ import {
   ensureRemoteCodexMcpBridge,
   stripRemoteCodexMcpConfig,
   hasPendingRemoteMcpDrift,
+  invalidateRemoteCodexMcpEndpointState,
 } from '../codex-remote-mcp.js';
+import {
+  advanceRemoteEndpointGeneration,
+  StaleRemoteEndpointError,
+} from '../endpoint-generation.js';
 
 // safeStorage 在测试 stub 里 isEncryptionAvailable=false → token 真源恒 null;
 // 走完整 ensure 流程的用例需要固定 token。
@@ -74,15 +79,26 @@ function decodeWrittenConfig(inputs: string[]): string | null {
   return null;
 }
 
-/** 读 prefs 文件里某 host 的记录 (appliedFingerprint / 端口断言用)。 */
-function prefsOf(hostId: string): { remotePort?: number; appliedFingerprint?: string; bridgeLocalPort?: number } | null {
+type RemoteMcpPref = {
+  remotePort?: number;
+  appliedFingerprint?: string;
+  bridgeLocalPort?: number;
+};
+
+/** 读 prefs 文件里的原始 key（迁移断言用，不做 HostRef 兼容映射）。 */
+function rawPrefsOf(hostId: string): RemoteMcpPref | null {
   const file = path.join(app.getPath('userData'), 'remote-mcp-forwards.json');
   if (!fs.existsSync(file)) return null;
-  const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<
-    string,
-    { remotePort?: number; appliedFingerprint?: string; bridgeLocalPort?: number }
-  >;
+  const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, RemoteMcpPref>;
   return raw[hostId] ?? null;
+}
+
+/** 读某 host 的记录；历史 bare SSH alias 用例同时接受 canonical 写盘。 */
+function prefsOf(hostId: string): RemoteMcpPref | null {
+  // Production writes legacy bare SSH aliases back under canonical HostRef
+  // keys. Explicit namespaces remain authoritative, so `cindy:foo` must not
+  // accidentally inspect `ssh-config:cindy:foo`.
+  return rawPrefsOf(hostId) ?? (hostId.includes(':') ? null : rawPrefsOf(`ssh-config:${hostId}`));
 }
 
 describe('renderManagedMcpBlock', () => {
@@ -1196,6 +1212,46 @@ describe('hasPendingRemoteMcpDrift (R23 P1 lightweight live-send gate)', () => {
     })).toBe(true);
   });
 
+  it('lets a legacy bare alias read state already stored under its canonical HostRef', async () => {
+    const alias = 'host-drift-legacy-alias';
+    const hostRef = `ssh-config:${alias}`;
+    const { host } = fakeHost(hostRef, '');
+    await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    });
+    const desired = {
+      collabEnabled: true,
+      makerMemoryEnabled: false,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'bridge-1',
+    };
+
+    expect(prefsOf(hostRef)?.appliedFingerprint).toBeTruthy();
+    expect(rawPrefsOf(alias)).toBeNull();
+    expect(hasPendingRemoteMcpDrift(alias, desired)).toBe(false);
+  });
+
+  it('invalidates the applied fingerprint when the stable HostRef moves to a new endpoint', async () => {
+    const hostId = 'host-drift-endpoint-edit';
+    const { host } = fakeHost(hostId, '');
+    await ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-1' }),
+      hasLiveTurnOnHost: () => false,
+    });
+    const desired = {
+      collabEnabled: true,
+      makerMemoryEnabled: false,
+      token: 'test-persistent-token',
+      bridgeInstanceId: 'bridge-1',
+    };
+    expect(hasPendingRemoteMcpDrift(hostId, desired)).toBe(false);
+
+    invalidateRemoteCodexMcpEndpointState(hostId);
+
+    expect(hasPendingRemoteMcpDrift(hostId, desired)).toBe(true);
+  });
+
   it('is true after a bridge shutdown strip (applied cleared) when collab stays enabled', async () => {
     const { host } = fakeHost('host-drift-strip', '');
     await ensureRemoteCodexMcpBridge(host, {
@@ -1238,6 +1294,37 @@ describe('hasPendingRemoteMcpDrift (R23 P1 lightweight live-send gate)', () => {
     expect(hasPendingRemoteMcpDrift('host-drift-memory', { ...opts, makerMemoryEnabled: false })).toBe(false);
     // 用户打开 Maker Memory → desired 集合多出 cindy_memory → 判 drift。
     expect(hasPendingRemoteMcpDrift('host-drift-memory', { ...opts, makerMemoryEnabled: true })).toBe(true);
+  });
+});
+
+describe('endpoint generation fencing', () => {
+  it('stops before touching remote state when the endpoint changes while the local bridge starts', async () => {
+    const hostId = 'host-stale-during-bridge-start';
+    const { host, execCmds } = fakeHost(hostId, '');
+    let resolveBridge!: (endpoint: {
+      port: number;
+      serverNames: string[];
+      bridgeInstanceId: string;
+    }) => void;
+    const bridgeStarted = new Promise<{
+      port: number;
+      serverNames: string[];
+      bridgeInstanceId: string;
+    }>((resolve) => {
+      resolveBridge = resolve;
+    });
+
+    const ensure = ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: () => bridgeStarted,
+      hasLiveTurnOnHost: () => false,
+    });
+    await Promise.resolve();
+    advanceRemoteEndpointGeneration(hostId);
+    resolveBridge({ port: 38080, serverNames: SERVERS, bridgeInstanceId: 'bridge-stale' });
+
+    await expect(ensure).rejects.toBeInstanceOf(StaleRemoteEndpointError);
+    expect(execCmds).toEqual([]);
+    expect(prefsOf(hostId)).toBeNull();
   });
 });
 
@@ -1326,4 +1413,64 @@ describe('codex-connector R27 regressions', () => {
     expect(result.reason).toBe('bridge-unavailable');
     expect(execCmds.join('\n')).not.toContain('bootstrap');
   });
+});
+
+describe('HostRef forward-pref compatibility', () => {
+  it('reads a legacy bare-alias key and migrates it on the next host write', async () => {
+    const file = path.join(app.getPath('userData'), 'remote-mcp-forwards.json');
+    fs.writeFileSync(file, JSON.stringify({
+      'legacy.example': { remotePort: 48010 },
+    }));
+
+    // Simulate an app restart so the module reads the fixture from disk rather
+    // than the cache populated by earlier tests in this file.
+    vi.resetModules();
+    const fresh = await import('../codex-remote-mcp.js');
+    const { host } = fakeHost('ssh-config:legacy.example', '');
+    const result = await fresh.ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: SERVERS,
+        bridgeInstanceId: 'bridge-hostref-migration',
+      }),
+      hasLiveTurnOnHost: () => false,
+    });
+
+    expect(result.ok).toBe(true);
+    const persisted = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<
+      string,
+      { remotePort: number }
+    >;
+    expect(persisted['ssh-config:legacy.example']?.remotePort).toBe(48010);
+    expect(persisted['legacy.example']).toBeUndefined();
+  }, 15_000);
+
+  it('does not reuse or delete another canonical host when an SSH alias contains a namespace', async () => {
+    const file = path.join(app.getPath('userData'), 'remote-mcp-forwards.json');
+    fs.writeFileSync(file, JSON.stringify({
+      'ssh-config:foo': { remotePort: 48010 },
+      'cindy:foo': { remotePort: 48011 },
+    }));
+
+    vi.resetModules();
+    const fresh = await import('../codex-remote-mcp.js');
+    const { host } = fakeHost('ssh-config:ssh-config:foo', '');
+    const result = await fresh.ensureRemoteCodexMcpBridge(host, {
+      ensureBridgeStarted: async () => ({
+        port: 38080,
+        serverNames: SERVERS,
+        bridgeInstanceId: 'bridge-namespaced-alias',
+      }),
+      hasLiveTurnOnHost: () => false,
+    });
+
+    expect(result.ok).toBe(true);
+    const persisted = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<
+      string,
+      { remotePort: number }
+    >;
+    expect(persisted['ssh-config:foo']?.remotePort).toBe(48010);
+    expect(persisted['cindy:foo']?.remotePort).toBe(48011);
+    expect(persisted['ssh-config:ssh-config:foo']).toBeDefined();
+  }, 15_000);
 });

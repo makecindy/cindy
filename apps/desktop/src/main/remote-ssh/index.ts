@@ -5,15 +5,17 @@
  *
  *   maker:remote-ssh:list           list hosts + status snapshots
  *   maker:remote-ssh:reload-config  re-read ~/.ssh/config, refresh registry
- *   maker:remote-ssh:add            add a host (also writes ~/.ssh/config)
- *   maker:remote-ssh:remove         remove a host (also strips ~/.ssh/config)
+ *   maker:remote-ssh:add            add a Cindy-local profile
+ *   maker:remote-ssh:update         edit a Cindy-local profile or SSH prefs
+ *   maker:remote-ssh:remove         remove a Cindy-local profile
  *   maker:remote-ssh:connect        open the SSH connection
  *   maker:remote-ssh:disconnect     close the SSH connection
  *   maker:remote-ssh:status-changed (push) host status fan-out
  *
- * All host writes round-trip through ~/.ssh/config so the user can still
- * run `ssh <alias>` from the terminal. The pool itself is in-memory; on
- * app restart, hydrate() rebuilds it from disk.
+ * SSH config entries are read-only snapshots of the user's OpenSSH config.
+ * Cindy-local profiles live in remote-profiles.json and never write back to
+ * ~/.ssh/config. The pool itself is in-memory; on app restart, hydrate()
+ * rebuilds both sources.
  */
 
 import { app, ipcMain, BrowserWindow } from 'electron';
@@ -24,10 +26,9 @@ import os from 'node:os';
 
 import {
   ConnectionPool,
-  readSshConfig,
-  upsertHost,
-  updateHostFields,
-  removeHost as removeHostFromConfig,
+  canonicalHostRef,
+  readSshConfigDetailed,
+  sshHostRef,
   installRemoteAgent,
   PINNED_PI_VERSION,
   probeRemoteAgent,
@@ -41,6 +42,7 @@ import {
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
+  type SshConfigDiagnostic,
   type InstallProgressEvent,
   type InstallResult,
   type RemoteAgentKind,
@@ -74,19 +76,38 @@ import {
 import {
   getSshHostAgentProxy,
   getSshHostAutoConnect,
+  getSshHostDisplayName,
   hasAnyAutoConnectHost,
   isAllowedAgentProxyRemotePort,
   LEGACY_AGENT_PROXY_REMOTE_PORT,
   normalizeAgentProxyUrl,
-  readSshHostPrefs,
-  removeSshHostPref,
-  setSshHostAgentProxy,
   setSshHostAutoConnect,
+  setActiveSshHostAliases,
+  updateSshHostPreferences,
   type SshHostAgentProxyPref,
 } from './ssh-host-prefs-store.js';
 import {
+  addRemoteProfile,
+  readRemoteProfiles,
+  remoteProfileToHostConfig,
+  removeRemoteProfile,
+  updateRemoteProfile,
+  type RemoteProfile,
+  type RemoteProfileDiagnostic,
+} from './remote-profiles-store.js';
+import { RemoteHostHydrationQueue } from './hydration-queue.js';
+import {
+  advanceRemoteEndpointGeneration,
+  assertCurrentRemoteEndpointGeneration,
+  currentRemoteEndpointGeneration,
+  isCurrentRemoteEndpointGeneration,
+  remoteEndpointScopedKey,
+  StaleRemoteEndpointError,
+} from './endpoint-generation.js';
+import {
   applyAgentProxyForHost,
   clearAgentProxyTunnelState,
+  clearAgentProxyTunnelStateAndWait,
   disposeAllTunnels,
   getAgentProxyTunnelState,
   getRemoteAgentProxyEnvUppercase,
@@ -104,7 +125,10 @@ import {
   dismissPendingCcMgrUpgrade,
   ensureCcManagerInstalledOrInstall,
 } from './cc-manager-install.js';
-import { removeRemoteMcpForwardPref } from './codex-remote-mcp.js';
+import {
+  invalidateRemoteCodexMcpEndpointState,
+  removeRemoteMcpForwardPref,
+} from './codex-remote-mcp.js';
 import { ensureDaemonRunning } from '../maker-host/cc-manager-client.js';
 import { getMakerIfReady, softCloseCcSessionsForHost } from '../maker-host/index.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
@@ -124,6 +148,7 @@ export const REMOTE_SSH_INVOKE = {
   ADD: 'maker:remote-ssh:add',
   UPDATE: 'maker:remote-ssh:update',
   REMOVE: 'maker:remote-ssh:remove',
+  COPY_TO_CINDY: 'maker:remote-ssh:copy-to-cindy',
   CONNECT: 'maker:remote-ssh:connect',
   DISCONNECT: 'maker:remote-ssh:disconnect',
   // Phase B
@@ -226,6 +251,10 @@ const VALID_AGENT_KINDS: ReadonlyArray<RemoteAgentKind> = ['claude-code', 'codex
 let pool: ConnectionPool | null = null;
 let initPromise: Promise<void> | null = null;
 let registered = false;
+let lastSshConfigHosts: HostConfig[] = [];
+let lastCindyProfileHosts: HostConfig[] = [];
+let sshConfigError: SshConfigDiagnostic | null = null;
+let remoteProfileError: RemoteProfileDiagnostic | null = null;
 /** 与 pool 共享的 host-key store — agent-proxy 隧道专用连接也用它做 TOFU 校验。 */
 let sharedHostKeyStore: FileHostKeyStore | null = null;
 
@@ -282,6 +311,17 @@ export function buildRemotePiQuickTestModelsJson(endpoint: string): string {
   });
 }
 
+/** Compare canonical HostRefs while preserving read compatibility with legacy bare SSH aliases. */
+export function sameRemoteHostId(left: string | null | undefined, right: string): boolean {
+  if (!left) return false;
+  // When the pool is hydrated, resolve through its active alias index so an
+  // old persisted alias such as `cindy:build` can still identify the SSH host
+  // that is now represented as `ssh-config:cindy:build`. Outside a hydrated
+  // pool, retain the pure namespace comparison.
+  const resolve = (value: string): string => pool?.resolveId(value) ?? canonicalHostRef(value);
+  return resolve(left) === resolve(right);
+}
+
 /**
  * Like getRemoteSshPool() but guarantees the pool has been hydrated from
  * ~/.ssh/config first. Required by callers that read `pool.list()` before any
@@ -314,7 +354,12 @@ export async function ensureRemoteHostReady(id: string): Promise<void> {
   try {
     await pool.connect(id);
   } catch (err) {
-    const { code, msg } = classifyConnectFailure(err);
+    const cfg = host.config;
+    const { code, msg } = classifyConnectFailure(err, {
+      alias: cfg.alias,
+      resolvedHost: cfg.hostname,
+      port: cfg.port,
+    });
     throwIpcError(code, msg);
   }
 }
@@ -327,19 +372,22 @@ export async function ensureRemoteHostReady(id: string): Promise<void> {
  * 版本维度:pi 记录 probe 时的 installedVersion —— pin 变化(客户端升级)后
  * 旧版本不得命中 cache, 必须穿透重新 probe 触发升级(R5 配置审计 H-6)。
  */
-const remoteAgentInstalledCache = new Map<
-  string,
-  Map<RemoteAgentKind, { installedVersion: string | null }>
->();
+interface RemoteAgentCacheEntry {
+  generation: number;
+  agents: Map<RemoteAgentKind, { installedVersion: string | null }>;
+}
+
+const remoteAgentInstalledCache = new Map<string, RemoteAgentCacheEntry>();
 
 /** cache 命中判定:pi 额外要求版本与 pin 一致(v 前缀两种写法都认)。 */
 function isAgentCacheHit(
-  cached: Map<RemoteAgentKind, { installedVersion: string | null }> | undefined,
+  cached: RemoteAgentCacheEntry | undefined,
+  generation: number,
   agentKind: RemoteAgentKind,
 ): boolean {
-  if (!cached || !cached.has(agentKind)) return false;
+  if (!cached || cached.generation !== generation || !cached.agents.has(agentKind)) return false;
   if (agentKind !== 'pi') return true;
-  const v = cached.get(agentKind)?.installedVersion ?? null;
+  const v = cached.agents.get(agentKind)?.installedVersion ?? null;
   return v !== null && (v === PINNED_PI_VERSION || v === `v${PINNED_PI_VERSION}`);
 }
 
@@ -356,8 +404,10 @@ export async function ensureRemoteAgentInstalled(
   hostId: string,
   agentKind: RemoteAgentKind,
 ): Promise<void> {
+  hostId = getPool().resolveId(hostId);
+  const generation = currentRemoteEndpointGeneration(hostId);
   const cached = remoteAgentInstalledCache.get(hostId);
-  if (isAgentCacheHit(cached, agentKind)) return;
+  if (isAgentCacheHit(cached, generation, agentKind)) return;
 
   const host = getPool().get(hostId);
   if (!host || host.getStatus() !== 'ready') {
@@ -369,6 +419,10 @@ export async function ensureRemoteAgentInstalled(
   let installedVersion: string | null = null;
   if (agentKind === 'claude-code' || agentKind === 'pi') {
     const probe = await probeRemoteAgent(host, agentKind);
+    // A probe can complete after a profile/config edit has advanced the
+    // stable HostRef's endpoint generation. Do not report the old machine's
+    // missing binary as a current installation result.
+    assertCurrentRemoteEndpointGeneration(hostId, generation);
     ok = probe.installed;
     installedVersion = probe.installedVersion;
   } else {
@@ -377,6 +431,7 @@ export async function ensureRemoteAgentInstalled(
       timeoutMs: 5_000,
       label: 'check-agent-installed',
     });
+    assertCurrentRemoteEndpointGeneration(hostId, generation);
     ok = result.stdout.trim() === 'OK';
   }
   if (!ok) {
@@ -386,9 +441,14 @@ export async function ensureRemoteAgentInstalled(
       `远端 ${hostId} 还没安装 ${friendlyKind}。请到 设置 → 远端机器 → 展开 ${hostId} → ${friendlyKind} 那行点"安装"。`,
     );
   }
+  assertCurrentRemoteEndpointGeneration(hostId, generation);
   const entry = { installedVersion };
-  if (!cached) remoteAgentInstalledCache.set(hostId, new Map([[agentKind, entry]]));
-  else cached.set(agentKind, entry);
+  if (!cached || cached.generation !== generation) {
+    remoteAgentInstalledCache.set(hostId, {
+      generation,
+      agents: new Map([[agentKind, entry]]),
+    });
+  } else cached.agents.set(agentKind, entry);
 }
 
 /**
@@ -397,8 +457,8 @@ export async function ensureRemoteAgentInstalled(
  * 跑 install.sh。Promise resolve/reject 后会 delete, 下次没装会重新跑一次。
  */
 const inFlightInstall = new Map<string, Promise<InstallResult>>();
-function inFlightKey(hostId: string, agentKind: RemoteAgentKind): string {
-  return `${hostId}::${agentKind}`;
+function inFlightKey(hostId: string, agentKind: RemoteAgentKind, generation: number): string {
+  return `${remoteEndpointScopedKey(hostId, generation)}::${agentKind}`;
 }
 
 // Exported so cc-manager-install.ts (separate silent install pipeline) can push
@@ -442,16 +502,18 @@ export async function ensureRemoteAgentInstalledOrInstall(
   hostId: string,
   agentKind: RemoteAgentKind,
 ): Promise<InstallResult> {
+  hostId = getPool().resolveId(hostId);
+  const generation = currentRemoteEndpointGeneration(hostId);
   // 已装 cache 命中 — 微秒级返回, 不发任何 event
   const cached = remoteAgentInstalledCache.get(hostId);
-  if (isAgentCacheHit(cached, agentKind)) {
+  if (isAgentCacheHit(cached, generation, agentKind)) {
     return {
       agentKind,
       ready: true,
       nodeReady: true,
       nodeVersion: null,
       installed: true,
-      installedVersion: cached?.get(agentKind)?.installedVersion ?? null,
+      installedVersion: cached?.agents.get(agentKind)?.installedVersion ?? null,
       installDir: '',
       binaryPath: null,
       error: null,
@@ -482,7 +544,7 @@ export async function ensureRemoteAgentInstalledOrInstall(
   // ⚠️ get → set 之间必须保持纯同步块(无 await):Node 事件循环 FIFO 保证并发
   // 调用者中先到的先 set, 后到的 join in-flight promise。若未来在此插入 await
   // (如 host readiness 复核), 竞争窗口会变成真实并发冲突(R7 并发审计 LOW)。
-  const key = inFlightKey(hostId, agentKind);
+  const key = inFlightKey(hostId, agentKind, generation);
   const existing = inFlightInstall.get(key);
   if (existing) return existing;
 
@@ -502,6 +564,7 @@ export async function ensureRemoteAgentInstalledOrInstall(
     const logTail: string[] = [];
     try {
       const result = await installRemoteAgent(host, agentKind, (progress) => {
+        if (!isCurrentRemoteEndpointGeneration(hostId, generation)) return;
         // 维护尾部 log 串 — 只收 install-log 行做诊断补充。error event 不收:
         // installer.ts 已经把 ERROR 行的 message 写到 state.error, 失败时作为
         // result.error 透出来当 baseMsg, 这里再 push 就会跟 baseMsg 重复显示。
@@ -531,6 +594,7 @@ export async function ensureRemoteAgentInstalledOrInstall(
           eventKind: progress.kind,
         });
       });
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       if (!result.ready) {
         const baseMsg = result.error ?? 'install did not reach ready state';
         // 拼上最近 install log 尾, 让 renderer toast 直接显示根因 (curl 403 / 网络等)。
@@ -543,10 +607,13 @@ export async function ensureRemoteAgentInstalledOrInstall(
       }
       // 装好后标 cache, 后续 ensureRemoteAgentInstalled 短路返回。
       // pi 记录 install 结果的 installedVersion, 供版本一致判定(R5 H-6)。
-      const map = remoteAgentInstalledCache.get(hostId)
-        ?? new Map<RemoteAgentKind, { installedVersion: string | null }>();
-      map.set(agentKind, { installedVersion: result.installedVersion });
-      remoteAgentInstalledCache.set(hostId, map);
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
+      const current = remoteAgentInstalledCache.get(hostId);
+      const agents = current?.generation === generation
+        ? current.agents
+        : new Map<RemoteAgentKind, { installedVersion: string | null }>();
+      agents.set(agentKind, { installedVersion: result.installedVersion });
+      remoteAgentInstalledCache.set(hostId, { generation, agents });
       log.info('silent-install: done', { hostId, agentKind });
       broadcastSilentInstallStatus({ hostId, agentKind, phase: 'done' });
       return result;
@@ -560,6 +627,9 @@ export async function ensureRemoteAgentInstalledOrInstall(
       // 不是安装失败;改写成 SSH_INSTALL_FAILED 会误导调用方走安装重试分支。
       const msg = err instanceof Error ? err.message : String(err);
       const code = (err as { code?: string }).code;
+      if (err instanceof StaleRemoteEndpointError) {
+        throwIpcError('SSH_NOT_CONNECTED', 'remote host endpoint changed during install; retry');
+      }
       if (!code || !isIpcErrorCode(code)) {
         log.error('silent-install: unexpected error', { hostId, agentKind, error: msg });
         broadcastSilentInstallStatus({ hostId, agentKind, phase: 'failed', message: msg });
@@ -578,19 +648,180 @@ export async function ensureRemoteAgentInstalledOrInstall(
   }
 }
 
-/** Read ~/.ssh/config and seed the pool. Idempotent — subsequent calls refresh. */
+function canonicalizeSshConfigHost(host: HostConfig): HostConfig {
+  const alias = host.alias ?? host.id;
+  return {
+    ...host,
+    id: sshHostRef(alias),
+    alias,
+    displayName: alias,
+    source: 'ssh-config',
+    editable: false,
+    deletable: false,
+  };
+}
+
+function remoteConnectionFieldsChanged(left: HostConfig, right: HostConfig): boolean {
+  return left.hostname !== right.hostname
+    || left.port !== right.port
+    || left.user !== right.user
+    || left.authMethod !== right.authMethod
+    || left.identityFile !== right.identityFile;
+}
+
+async function invalidateHostRuntimeState(
+  hostId: string,
+  options: { disconnectHost?: boolean } = {},
+): Promise<void> {
+  const oldHost = getPool().get(hostId);
+  // Fence in-flight work before the first await. Deleting caches alone is not
+  // sufficient: a probe/install started on the old endpoint could otherwise
+  // finish during tunnel teardown and repopulate the stable HostRef key.
+  advanceRemoteEndpointGeneration(hostId);
+  // These values are facts about the previous resolved endpoint, not the
+  // stable alias/profile identity. Reusing them after an external config edit
+  // could skip installation on a different machine or leave the independent
+  // proxy tunnel connected to the old target.
+  invalidateRemoteCodexMcpEndpointState(hostId);
+  // Generation checks fence stale results, but cannot cancel an SSH exec that
+  // already started. Close the old control connection before async cleanup so
+  // endpoint replacement also fails closed at the transport layer. The
+  // post-hydrate fence passes disconnectHost=false so it never disconnects the
+  // newly hydrated replacement host.
+  const shouldDisconnect = options.disconnectHost !== false;
+  await Promise.all([
+    ...(shouldDisconnect && oldHost
+      ? [oldHost.disconnect().catch((error) => {
+          log.warn('failed to disconnect old SSH endpoint during invalidation', {
+            hostId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })]
+      : []),
+    clearAgentProxyTunnelStateAndWait(hostId),
+    // RemoteHost keeps forward wishes across an ordinary reconnect.  A config
+    // edit is different: retaining those wishes would make the replacement
+    // endpoint inherit the old MCP bridge forward during re-arm.
+    oldHost?.closeAllRemoteForwards().catch((error) => {
+      log.warn('failed to clear old remote MCP forwards during endpoint invalidation', {
+        hostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }),
+  ]);
+  remoteAgentInstalledCache.delete(hostId);
+  clearCcManagerInstallCache(hostId);
+  invalidateRemotePiPathCaches(hostId);
+  invalidateRemoteCodexMcpEndpointState(hostId);
+  await remoteFileBrowserEndpointInvalidator?.(hostId);
+}
+
+let remoteFileBrowserEndpointInvalidator: ((hostId: string) => Promise<void>) | null = null;
+
+/** Registered by file-browser/remote-deps without creating a reverse import cycle. */
+export function setRemoteFileBrowserEndpointInvalidator(
+  invalidator: ((hostId: string) => Promise<void>) | null,
+): void {
+  remoteFileBrowserEndpointInvalidator = invalidator;
+}
+
+const remoteHostHydrationQueue = new RemoteHostHydrationQueue();
+
+async function hydrateRemoteHostSourcesUnqueued(options: {
+  sshConfig?: boolean;
+  profiles?: boolean;
+} = {}): Promise<void> {
+  const readSsh = options.sshConfig !== false;
+  const readProfiles = options.profiles !== false;
+  if (readSsh) {
+    const result = await readSshConfigDetailed();
+    sshConfigError = result.diagnostic;
+    if (!result.diagnostic) {
+      lastSshConfigHosts = result.hosts.map(canonicalizeSshConfigHost);
+      setActiveSshHostAliases(
+        new Map(
+          lastSshConfigHosts
+            .filter((host) => host.alias)
+            .map((host) => [host.id, host.alias!] as const),
+        ),
+      );
+    }
+  }
+  if (readProfiles) {
+    const result = readRemoteProfiles();
+    remoteProfileError = result.error;
+    // The profile store returns its last valid snapshot on failure.
+    lastCindyProfileHosts = result.profiles.map(remoteProfileToHostConfig);
+  }
+  const nextHosts = [...lastSshConfigHosts, ...lastCindyProfileHosts];
+  // Validate the complete merged source snapshot before invalidating any live
+  // endpoint. ConnectionPool.hydrate() performs the same duplicate checks,
+  // but doing them here first keeps a malformed merge (for example a future
+  // profile/schema collision) from bumping generations and disconnecting the
+  // old pool before hydrate can reject the replacement. A failed refresh must
+  // leave the last valid pool usable, not merely retain its stale configs.
+  const seenHostIds = new Set<string>();
+  const seenAliases = new Set<string>();
+  for (const host of nextHosts) {
+    if (seenHostIds.has(host.id)) {
+      throw new Error(`duplicate host id: ${host.id}`);
+    }
+    seenHostIds.add(host.id);
+    if (host.alias) {
+      if (seenAliases.has(host.alias)) {
+        throw new Error(`duplicate ssh alias: ${host.alias}`);
+      }
+      seenAliases.add(host.alias);
+    }
+  }
+  const nextById = new Map(nextHosts.map((host) => [host.id, host]));
+  const invalidatedHostIds: string[] = [];
+  const invalidations: Array<Promise<void>> = [];
+  for (const current of getPool().list()) {
+    const next = nextById.get(current.config.id);
+    if (!next || remoteConnectionFieldsChanged(current.config, next)) {
+      invalidatedHostIds.push(current.config.id);
+      invalidations.push(invalidateHostRuntimeState(current.config.id));
+    }
+  }
+  await Promise.all(invalidations);
+  await getPool().hydrate(nextHosts);
+  // Fence the transition window too. Work can start after the first bump but
+  // before ConnectionPool swaps the effective config; a second generation +
+  // cleanup prevents that old-endpoint work from publishing after hydrate.
+  await Promise.all(
+    invalidatedHostIds.map((hostId) => invalidateHostRuntimeState(hostId, { disconnectHost: false })),
+  );
+}
+
+function hydrateRemoteHostSources(options: {
+  sshConfig?: boolean;
+  profiles?: boolean;
+} = {}): Promise<void> {
+  // Serialize the complete read → invalidate → replace transaction. Queuing
+  // only ConnectionPool.hydrate() would still allow a slower, older refresh
+  // to enqueue after and overwrite a newer source snapshot.
+  return remoteHostHydrationQueue.run(() => hydrateRemoteHostSourcesUnqueued(options));
+}
+
+/** Read SSH config + Cindy profiles and seed the pool. */
 async function ensureHydrated(): Promise<void> {
   if (initPromise) return initPromise;
   initPromise = (async () => {
     try {
-      const hosts = await readSshConfig();
-      await getPool().hydrate(hosts);
-      log.info('ssh hosts hydrated', { count: hosts.length });
+      await hydrateRemoteHostSources();
+      log.info('remote ssh hosts hydrated', {
+        sshConfigHosts: lastSshConfigHosts.length,
+        cindyProfiles: lastCindyProfileHosts.length,
+      });
     } catch (err) {
-      log.warn('failed to read ~/.ssh/config (continuing with empty pool)', {
+      log.warn('failed to hydrate remote hosts (keeping last valid pool)', {
         error: String(err),
       });
-      // Don't throw — empty pool is a valid starting state.
+      // Don't throw — empty pool is a valid starting state. Do allow the next
+      // caller to retry: permanently caching a failed first hydrate leaves
+      // Settings, MCP and auto-connect stale until app restart.
+      initPromise = null;
     }
   })();
   return initPromise;
@@ -613,10 +844,15 @@ export type HostSnapshotWithPrefs = HostSnapshot & {
 
 function withPrefs(snapshot: HostSnapshot): HostSnapshotWithPrefs {
   const id = snapshot.config.id;
+  const alias = snapshot.config.alias;
+  const config = snapshot.config.source === 'ssh-config' && alias
+    ? { ...snapshot.config, displayName: getSshHostDisplayName(id, alias) }
+    : snapshot.config;
   return {
     ...snapshot,
-    autoConnect: getSshHostAutoConnect(id),
-    agentProxy: getSshHostAgentProxy(id),
+    config,
+    autoConnect: getSshHostAutoConnect(id, alias),
+    agentProxy: getSshHostAgentProxy(id, alias),
     agentProxyTunnel: getAgentProxyTunnelState(id),
   };
 }
@@ -668,13 +904,15 @@ function normalizeAgentProxyInput(raw: unknown): SshHostAgentProxyPref | null | 
   return { enabled: true, mode: 'tunnel', localHost, localPort, remotePort: remotePortRaw };
 }
 
-function normalizeAddInput(raw: unknown): AddHostInput & { agentProxy?: SshHostAgentProxyPref | null } {
+function normalizeAddInput(raw: unknown): AddHostInput & {
+  displayName: string;
+  agentProxy?: SshHostAgentProxyPref | null;
+} {
   const obj = requireObject(raw, 'host');
   const id = requireString(obj.id, 'id').trim();
-  // Alias must be safe to drop into ~/.ssh/config Host directive.
-  if (/\s/.test(id) || id.includes('*') || id.includes('?') || id.startsWith('!')) {
-    throwIpcError('INVALID_PARAMS', 'id must not contain whitespace or wildcards');
-  }
+  const displayName = typeof obj.displayName === 'string' && obj.displayName.trim()
+    ? obj.displayName.trim()
+    : id;
   const hostname = requireString(obj.hostname, 'hostname').trim();
   const user = requireString(obj.user, 'user').trim();
   const port = typeof obj.port === 'number' && Number.isInteger(obj.port) && obj.port > 0 && obj.port < 65536
@@ -686,13 +924,34 @@ function normalizeAddInput(raw: unknown): AddHostInput & { agentProxy?: SshHostA
   //   agent → optional, when set it pins the agent to that one key
   //           (FilteredAgent — solves MaxAuthTries with busy agents)
   const identityFile = typeof obj.identityFile === 'string' && obj.identityFile.trim()
-    ? expandHome(obj.identityFile.trim())
+    ? (() => {
+        const expanded = expandHome(obj.identityFile.trim());
+        // Cindy profiles are literal connection records and are never
+        // computed as SSH aliases. Resolve their relative key paths against
+        // ~/.ssh explicitly so Electron's process.cwd() can never affect
+        // credential lookup.
+        return path.isAbsolute(expanded)
+          ? expanded
+          : path.resolve(os.homedir(), '.ssh', expanded);
+      })()
     : undefined;
   if (authMethod === 'key' && !identityFile) {
     throwIpcError('INVALID_PARAMS', 'identityFile required when authMethod is "key"');
   }
   const agentProxy = normalizeAgentProxyInput(obj.agentProxy);
-  return { id, hostname, port, user, authMethod, identityFile, ...(agentProxy !== undefined ? { agentProxy } : {}) };
+  return { id, displayName, hostname, port, user, authMethod, identityFile, ...(agentProxy !== undefined ? { agentProxy } : {}) };
+}
+
+function persistRemoteHostData<T>(action: string, mutation: () => T): T {
+  try {
+    return mutation();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/^profile not found:/.test(message)) {
+      throwIpcError('SSH_HOST_NOT_FOUND', `${action} failed: ${message}`);
+    }
+    throwIpcError('SSH_CONFIG_IO_FAILED', `${action} failed; no existing connection data was overwritten: ${message}`);
+  }
 }
 
 export function registerRemoteSshIpc(): void {
@@ -732,91 +991,98 @@ export function registerRemoteSshIpc(): void {
 
   ipcMain.handle(REMOTE_SSH_INVOKE.LIST, async () => {
     await ensureHydrated();
-    return { hosts: getPool().list().map(withPrefs) };
+    return {
+      hosts: getPool().list().map(withPrefs),
+      configError: sshConfigError,
+      profileError: remoteProfileError,
+    };
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.RELOAD_CONFIG, async () => {
-    try {
-      const hosts = await readSshConfig();
-      await getPool().hydrate(hosts);
-      return { hosts: getPool().list().map(withPrefs) };
-    } catch (err) {
-      throwIpcError('SSH_CONFIG_IO_FAILED', `read ~/.ssh/config failed: ${String(err)}`);
-    }
+    await hydrateRemoteHostSources();
+    return {
+      hosts: getPool().list().map(withPrefs),
+      configError: sshConfigError,
+      profileError: remoteProfileError,
+    };
   });
 
-  ipcMain.handle(REMOTE_SSH_INVOKE.ADD, async (_event, rawHost: unknown) => {
+  ipcMain.handle(REMOTE_SSH_INVOKE.ADD, async (event, rawHost: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const input = normalizeAddInput(rawHost);
-    const cfg: HostConfig = {
-      id: input.id,
+    const profile = persistRemoteHostData('add Cindy remote host', () => addRemoteProfile({
+      displayName: input.displayName,
       hostname: input.hostname,
       port: input.port ?? 22,
       user: input.user,
       authMethod: input.authMethod ?? 'agent',
       identityFile: input.identityFile,
-      source: 'manual',
-    };
-
-    const existing = getPool().get(cfg.id);
-    if (existing) {
-      throwIpcError('ALREADY_EXISTS', `host already exists: ${cfg.id}`);
-    }
-
-    try {
-      await upsertHost(cfg);
-    } catch (err) {
-      throwIpcError('SSH_CONFIG_IO_FAILED', `write ~/.ssh/config failed: ${String(err)}`);
-    }
-
-    const host = getPool().add(cfg);
-    if (input.agentProxy !== undefined) {
-      setSshHostAgentProxy(cfg.id, input.agentProxy);
-    }
+      autoConnect: false,
+      ...(input.agentProxy ? { agentProxy: input.agentProxy } : {}),
+    }));
+    await hydrateRemoteHostSources({ sshConfig: false, profiles: true });
+    const hostId = `cindy:${profile.profileId}`;
+    const host = getPool().get(hostId);
+    if (!host) throwIpcError('INTERNAL', `new remote profile was not hydrated: ${profile.profileId}`);
     // 轮 40-w4-t8 HIGH:host 配置变更(凭证/端点相关)成功路径需审计。
     log.info('audit: remote ssh host added', {
       operation: 'remote_ssh_host_add',
-      hostId: cfg.id,
-      hostname: cfg.hostname,
-      user: cfg.user,
-      port: cfg.port ?? null,
-      authMethod: cfg.authMethod ?? null,
+      hostId,
+      hostname: profile.hostname,
+      user: profile.user,
+      port: profile.port,
+      authMethod: profile.authMethod,
     });
     return { host: withPrefs(host.snapshot()) };
   });
 
-  ipcMain.handle(REMOTE_SSH_INVOKE.UPDATE, async (_event, rawHost: unknown) => {
+  ipcMain.handle(REMOTE_SSH_INVOKE.UPDATE, async (event, rawHost: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const input = normalizeAddInput(rawHost);
     const existing = getPool().get(input.id);
     if (!existing) {
       throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${input.id}`);
     }
-    // Edit is allowed regardless of source. We update only the directives
-    // xdt-maker owns (HostName / User / Port / IdentityFile / IdentitiesOnly)
-    // and leave everything else in the block (ProxyJump / ServerAliveInterval /
-    // comments / ...) untouched — see updateHostFields. `source` is a
-    // disk-vs-UI provenance hint only; after a restart, hydrate() flips
-    // every host back to 'ssh-config' so the old "manual only" gate
-    // would lock out everything the user had just added.
-    const cfg: HostConfig = {
-      id: input.id,
+    if (existing.config.source === 'ssh-config') {
+      const alias = existing.config.alias ?? existing.config.id;
+      persistRemoteHostData('update SSH host preferences', () => {
+        updateSshHostPreferences(existing.config.id, alias, {
+          displayName: input.displayName,
+          ...(input.agentProxy !== undefined ? { agentProxy: input.agentProxy } : {}),
+        });
+      });
+      if (input.agentProxy !== undefined && existing.getStatus() === 'ready') {
+        await applyAgentProxyForHost(existing);
+      }
+      return { host: withPrefs(existing.snapshot()) };
+    }
+
+    const profileId = existing.config.id.slice('cindy:'.length);
+    const currentProfile = readRemoteProfiles().profiles.find((item) => item.profileId === profileId);
+    if (!currentProfile) throwIpcError('SSH_HOST_NOT_FOUND', `unknown Cindy profile: ${profileId}`);
+    const nextProfile: RemoteProfile = {
+      ...currentProfile,
+      displayName: input.displayName,
       hostname: input.hostname,
       port: input.port ?? 22,
       user: input.user,
       authMethod: input.authMethod ?? 'agent',
       identityFile: input.identityFile,
-      // Preserve original source — editing doesn't change provenance.
-      source: existing.config.source,
+      ...(input.agentProxy !== undefined
+        ? input.agentProxy ? { agentProxy: input.agentProxy } : {}
+        : currentProfile.agentProxy ? { agentProxy: currentProfile.agentProxy } : {}),
     };
+    if (input.agentProxy === null) delete nextProfile.agentProxy;
 
     // 仅当连接字段真的变了才断开 — 只改 agentProxy 偏好不该打断正在用的
     // SSH 连接 (隧道/会话都在上面)。
     const prev = existing.config;
     const connectionFieldsChanged =
-      prev.hostname !== cfg.hostname ||
-      prev.user !== cfg.user ||
-      prev.port !== cfg.port ||
-      prev.authMethod !== cfg.authMethod ||
-      prev.identityFile !== cfg.identityFile;
+      prev.hostname !== nextProfile.hostname ||
+      prev.user !== nextProfile.user ||
+      prev.port !== nextProfile.port ||
+      prev.authMethod !== nextProfile.authMethod ||
+      prev.identityFile !== nextProfile.identityFile;
     // 轮 42 P1(codex-connector):引用检查必须在 disconnect **之前** ——
     // 有活跃会话时编辑被拒绝, 但断开已发生会中断正在用的会话/隧道。
     if (connectionFieldsChanged) {
@@ -841,11 +1107,18 @@ export function registerRemoteSshIpc(): void {
         );
       }
     }
-    // 轮 42 P1(codex-connector):旧 host 的 Pi daemon 清理必须在 disconnect
+    // Persist before touching the live connection. A read-only/corrupt profile
+    // file or a disk-write failure must leave the currently working remote
+    // session untouched. The old RemoteHost is still live here, so daemon
+    // cleanup can run after the atomic write and before hydrate disconnects it.
+    persistRemoteHostData('update Cindy remote host', () => updateRemoteProfile(nextProfile));
+
+    // 轮 42 P1(codex-connector):旧 host 的 Pi daemon 清理必须在 hydrate
     // **之前** —— cleanupRemotePiDaemonsOnHost 内部用 RemoteHost.exec()
     // (piManagerList/probe), exec 立即 requireReady(), 断开的 host 会抛错。
-    // 顺序: 引用检查 → 清理旧 daemon(连接还在) → 清 cache → disconnect。
+    // 顺序: 引用检查 → 原子写 → 清理旧 daemon(连接还在) → 清 cache → hydrate。
     if (connectionFieldsChanged) {
+      advanceRemoteEndpointGeneration(input.id);
       // 无活跃会话引用 → 清理旧 host 的 Pi daemon(含凭证 env-file)。
       if (existing.getStatus() === 'ready') {
         await cleanupRemotePiDaemonsOnHost(existing).catch(() => undefined);
@@ -854,45 +1127,34 @@ export function registerRemoteSshIpc(): void {
       clearCcManagerInstallCache(input.id);
       invalidateRemotePiPathCaches(input.id);
     }
-    if (connectionFieldsChanged && existing.getStatus() !== 'disconnected') {
-      await existing.disconnect();
-    }
-
-    try {
-      await updateHostFields(cfg);
-    } catch (err) {
-      throwIpcError('SSH_CONFIG_IO_FAILED', `update ~/.ssh/config failed: ${String(err)}`);
-    }
-    existing.updateConfig(cfg);
-
-    // agentProxy 偏好: 写盘 + host 活着就立即应用 (建/拆隧道 + codex daemon
-    // env 对账)。host 未连时只落 pref, 下次 ready 时由 ready hook 应用。
-    if (input.agentProxy !== undefined) {
-      setSshHostAgentProxy(cfg.id, input.agentProxy);
-      if (existing.getStatus() === 'ready') {
-        await applyAgentProxyForHost(existing);
-      }
-    }
+    await hydrateRemoteHostSources({ sshConfig: false, profiles: true });
+    const updated = getPool().get(input.id);
+    if (!updated) throwIpcError('INTERNAL', `updated remote profile was not hydrated: ${input.id}`);
+    if (input.agentProxy !== undefined && updated.getStatus() === 'ready') await applyAgentProxyForHost(updated);
     // 轮 40-w4-t8 HIGH:update(端点/凭证字段可能变更)成功路径需审计。
     log.info('audit: remote ssh host updated', {
       operation: 'remote_ssh_host_update',
-      hostId: cfg.id,
+      hostId: input.id,
       connectionFieldsChanged,
-      hostname: cfg.hostname,
-      user: cfg.user,
-      port: cfg.port ?? null,
-      authMethod: cfg.authMethod ?? null,
+      hostname: nextProfile.hostname,
+      user: nextProfile.user,
+      port: nextProfile.port,
+      authMethod: nextProfile.authMethod,
     });
-    return { host: withPrefs(existing.snapshot()) };
+    return { host: withPrefs(updated.snapshot()) };
   });
 
-  ipcMain.handle(REMOTE_SSH_INVOKE.REMOVE, async (_event, args: unknown) => {
+  ipcMain.handle(REMOTE_SSH_INVOKE.REMOVE, async (event, args: unknown) => {
+    assertTrustedAppRendererEvent(event);
     const obj = requireObject(args);
     const id = requireString(obj.id, 'id');
 
     const host = getPool().get(id);
     if (!host) {
       throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
+    }
+    if (host.config.source === 'ssh-config') {
+      throwIpcError('PRECONDITION_FAILED', 'SSH config hosts are read-only in Cindy');
     }
 
     // 轮 40-w4-t15 HIGH:host 被活跃 PI remote 会话引用时 fail-closed 拒绝删除
@@ -923,16 +1185,12 @@ export function registerRemoteSshIpc(): void {
       );
     }
 
-    // Only strip the config block when the host was added via maker. Hosts
-    // imported from existing ~/.ssh/config are left intact — the user owns
-    // that file; we don't yank entries they wrote themselves.
-    if (host.config.source === 'manual') {
-      try {
-        await removeHostFromConfig(id);
-      } catch (err) {
-        throwIpcError('SSH_CONFIG_IO_FAILED', `strip ~/.ssh/config failed: ${String(err)}`);
-      }
-    }
+    // Persist the deletion before disrupting a working connection. If the
+    // profile store is malformed/read-only or the atomic write fails, remove
+    // stops here and the live host remains untouched.
+    persistRemoteHostData('remove Cindy remote host', () => {
+      removeRemoteProfile(id.slice('cindy:'.length));
+    });
 
     // 清理远端 pi daemon 会话(host 移除后 setsid daemon 仍会跑,孤儿进程 —
     // R1 安装 M4)。**必须在 getPool().remove(id) 之前** —— remove 后 pool 里
@@ -965,24 +1223,46 @@ export function registerRemoteSshIpc(): void {
         hostId: id,
       });
     }
+    // Removing a Cindy profile is an endpoint invalidation too.  Dispose the
+    // file-browser client and clear endpoint-scoped MCP/agent-proxy/installer
+    // state before the pool drops the stable HostRef; otherwise a folder
+    // picker/watch opened shortly before removal can keep an in-flight client
+    // alive against the deleted machine.
+    await invalidateHostRuntimeState(id);
     await getPool().remove(id);
-    // 同步清掉 prefs 里的孤儿 autoConnect 标志, 避免后续重新 add 同名 host 时
-    // 拿到旧偏好造成"莫名其妙又自动连了"。同步清 agent install cache、agent
-    // proxy 隧道状态与 per-host MCP 转发端口记录。
-    removeSshHostPref(id);
-    clearAgentProxyTunnelState(id);
-    removeRemoteMcpForwardPref(id);
-    remoteAgentInstalledCache.delete(id);
-    clearCcManagerInstallCache(id);
-    // 轮 40-w4-t4 MEDIUM:清 pi 远端路径 cache —— 否则同名 host 重建(不同
-    // user/home/port)会串到旧远端路径。
-    invalidateRemotePiPathCaches(id);
+    lastCindyProfileHosts = lastCindyProfileHosts.filter((item) => item.id !== id);
+    // Cindy profiles own their preferences in remote-profiles.json, so
+    // deletion never touches ssh-host-prefs.json.
     // 轮 40-w4-t8 HIGH:host 移除(剥离配置 + 清理 daemon)成功路径需审计。
     log.info('audit: remote ssh host removed', {
       operation: 'remote_ssh_host_remove',
       hostId: id,
     });
     return { ok: true as const };
+  });
+
+  ipcMain.handle(REMOTE_SSH_INVOKE.COPY_TO_CINDY, async (event, args: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const obj = requireObject(args);
+    const id = requireString(obj.id, 'id');
+    const source = getPool().get(id);
+    if (!source || source.config.source !== 'ssh-config') {
+      throwIpcError('SSH_HOST_NOT_FOUND', `unknown SSH config host: ${id}`);
+    }
+    const cfg = source.config;
+    const profile = persistRemoteHostData('copy SSH host to Cindy', () => addRemoteProfile({
+      displayName: cfg.alias ?? cfg.displayName ?? cfg.id,
+      hostname: cfg.hostname,
+      port: cfg.port,
+      user: cfg.user,
+      authMethod: cfg.authMethod,
+      identityFile: cfg.identityFile,
+      autoConnect: false,
+    }));
+    await hydrateRemoteHostSources({ sshConfig: false, profiles: true });
+    const copied = getPool().get(`cindy:${profile.profileId}`);
+    if (!copied) throwIpcError('INTERNAL', 'copied Cindy profile was not hydrated');
+    return { host: withPrefs(copied.snapshot()) };
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.CONNECT, async (_event, args: unknown) => {
@@ -1001,11 +1281,17 @@ export function registerRemoteSshIpc(): void {
       // | SSH_CONNECT_FAILED. RemoteHost rewrites auth failures to actionable
       // text (ssh-copy-id hint) verbatim so the toast matches the host-row
       // subtitle; a local identityFile ENOENT is classified off `.code`.
-      const { code, msg } = classifyConnectFailure(err);
+      const cfg = host.config;
+      const { code, msg } = classifyConnectFailure(err, {
+        alias: cfg.alias,
+        resolvedHost: cfg.hostname,
+        port: cfg.port,
+      });
       throwIpcError(code, msg);
     }
 
-    return { host: getPool().get(id)?.snapshot() ?? null };
+    const connected = getPool().get(id);
+    return { host: connected ? withPrefs(connected.snapshot()) : null };
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.DISCONNECT, async (_event, args: unknown) => {
@@ -1044,7 +1330,8 @@ export function registerRemoteSshIpc(): void {
       }
     }
     await getPool().disconnect(id);
-    return { host: getPool().get(id)?.snapshot() ?? null };
+    const disconnected = getPool().get(id);
+    return { host: disconnected ? withPrefs(disconnected.snapshot()) : null };
   });
 
   // ── Phase B: agent on remote ─────────────────────────────────────────────
@@ -1064,16 +1351,22 @@ export function registerRemoteSshIpc(): void {
     const sender = event.sender;
     // 与 silent install 共享并发锁(inFlightInstall):手动安装与 silent 并发时
     // await 同一个安装, 避免两个 PI_INSTALL_SH 并发跑损坏安装(R4-1 R3 / R4-4 问题1)。
-    const key = inFlightKey(host.id, agentKind);
+    const generation = currentRemoteEndpointGeneration(host.id);
+    const key = inFlightKey(host.id, agentKind, generation);
     const existing = inFlightInstall.get(key);
     if (existing) {
       const joined = await existing;
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       // 轮 42 P2:join 已有安装也要带 result(renderer 读 result.*)。
       return { ok: true as const, result: joined } as const;
     }
     const promise: Promise<InstallResult> = (async () => {
       const result = await installRemoteAgent(host, agentKind, (progress) => {
-        if (sender.isDestroyed()) return;
+        // A manual install is scoped to the endpoint generation captured when
+        // the IPC call started.  A profile/config refresh may keep the same
+        // stable HostRef while replacing its SSH target; late progress from
+        // the old machine must not update the new row.
+        if (sender.isDestroyed() || !isCurrentRemoteEndpointGeneration(host.id, generation)) return;
         sender.send(REMOTE_SSH_PUSH.INSTALL_PROGRESS, {
           hostId: host.id,
           agentKind,
@@ -1083,17 +1376,20 @@ export function registerRemoteSshIpc(): void {
       if (!result.ready) {
         throwIpcError('SSH_INSTALL_FAILED', result.error ?? 'install did not reach ready state');
       }
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       return result;
     })();
     let installResult: InstallResult | undefined;
     inFlightInstall.set(key, promise);
     try {
       installResult = await promise;
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
     } finally {
       inFlightInstall.delete(key);
     }
     // 装好后清 cache, 下次 maker:send 前置检查会重 stat 一次确认。
-    remoteAgentInstalledCache.get(host.id)?.delete(agentKind);
+    const cacheEntry = remoteAgentInstalledCache.get(host.id);
+    if (cacheEntry?.generation === generation) cacheEntry.agents.delete(agentKind);
 
     try {
       // claude-code 远端走 cc-mgr daemon —— 装完 CLI 顺手把 cc-mgr.mjs bundle 也
@@ -1108,11 +1404,17 @@ export function registerRemoteSshIpc(): void {
         try {
           await ensureCcManagerInstalledOrInstall({ host });
         } catch (err) {
+          // The piggy-back install is part of the same endpoint-scoped
+          // operation.  Treat a superseded endpoint as stale rather than
+          // reporting the CLI install as a successful result for the new
+          // machine.
+          if (err instanceof StaleRemoteEndpointError) throw err;
           log.warn('INSTALL_AGENT: cc-mgr piggy-back install failed (CLI still installed)', {
             hostId: host.id,
             error: String((err as Error)?.message ?? err),
           });
         }
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
       }
 
       // 轮 42 P2:成功必须带 result —— renderer 的 RemoteHostDetail.install()
@@ -1144,7 +1446,7 @@ export function registerRemoteSshIpc(): void {
       }
       await uninstallRemoteAgent(host, agentKind);
       // 卸载后清 cache, 避免下次 send 命中 stale "已装" 跳过检查。
-      remoteAgentInstalledCache.get(host.id)?.delete(agentKind);
+      remoteAgentInstalledCache.get(host.id)?.agents.delete(agentKind);
       return { ok: true as const };
     } catch (err) {
       throwIpcError('SSH_EXEC_FAILED', String((err as Error).message ?? err));
@@ -1496,27 +1798,41 @@ export function registerRemoteSshIpc(): void {
     }
   });
 
-  // Phase D — autoConnect pref toggle. Writes ssh-host-prefs-store + pushes
-  // a status snapshot so renderer's host list updates the checkbox without
-  // a round-trip back to LIST.
+  // Phase D — autoConnect pref toggle. SSH config hosts write
+  // ssh-host-prefs.json; Cindy profiles update remote-profiles.json. Push a
+  // status snapshot so renderer updates without a round-trip back to LIST.
   ipcMain.handle(REMOTE_SSH_INVOKE.SET_AUTO_CONNECT, async (_event, args: unknown) => {
+    assertTrustedAppRendererEvent(_event);
     const obj = requireObject(args);
     const id = requireString(obj.id, 'id');
     if (typeof obj.autoConnect !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'autoConnect required (boolean)');
     }
+    const autoConnect = obj.autoConnect;
     const host = getPool().get(id);
     if (!host) {
       throwIpcError('SSH_HOST_NOT_FOUND', `unknown host: ${id}`);
     }
-    setSshHostAutoConnect(id, obj.autoConnect);
+    persistRemoteHostData('update remote auto-connect preference', () => {
+      // Resolve legacy bare aliases at the IPC edge, then persist only the
+      // canonical HostRef. The prefs writer removes the matching legacy key.
+      setSshHostAutoConnect(host.config.id, autoConnect, host.config.alias);
+    });
     // 推一次最新 snapshot, 让所有 renderer (Settings + NewMaker 入口可见性) 同步刷新。
     broadcastStatus(host.snapshot());
-    return { ok: true as const, autoConnect: obj.autoConnect };
+    return { ok: true as const, autoConnect };
   });
 
-  ipcMain.handle(REMOTE_SSH_INVOKE.HAS_ANY_AUTO_CONNECT_HOST, () => {
-    return { hasAny: hasAnyAutoConnectHost() };
+  ipcMain.handle(REMOTE_SSH_INVOKE.HAS_ANY_AUTO_CONNECT_HOST, async () => {
+    await ensureHydrated();
+    const activeSnapshots = getPool().list();
+    const activeHostIds = new Set(activeSnapshots.map((host) => host.config.id));
+    const aliasesByHostId = new Map(
+      activeSnapshots
+        .filter((host) => host.config.alias)
+        .map((host) => [host.config.id, host.config.alias!] as const),
+    );
+    return { hasAny: hasAnyAutoConnectHost(activeHostIds, aliasesByHostId) };
   });
 
   // Phase D — list a directory on a remote host. Powers the "添加远程项目"
@@ -1811,21 +2127,25 @@ done
  * (ensureRemoteHostReady) 兜底。
  */
 export async function startAutoConnectHostsBackground(): Promise<void> {
-  // **先读 prefs (本地 JSON, 微秒级), 一台都没勾就早 return** — 不勾任何
-  // remote / 纯本地用户不该为 ensureHydrated 的磁盘 IO (~/.ssh/config) 买单。
-  // 这样 autoConnect feature 对"从不用远端"的用户完全 0 成本。
-  const prefs = readSshHostPrefs();
-  const autoConnectIds = Object.entries(prefs)
-    .filter(([, p]) => p?.autoConnect)
-    .map(([id]) => id);
-  if (autoConnectIds.length === 0) {
-    log.info('autoConnect: no autoConnect prefs set, skipping');
+  // Hydrate first, then inspect only the hosts present in this snapshot. A
+  // stale prefs entry for an alias removed from ~/.ssh/config must never
+  // resurrect a connection target or count as an auto-connect host.
+  await ensureHydrated();
+  const activeSnapshots = getPool().list();
+  const activeHostIds = new Set(activeSnapshots.map((host) => host.config.id));
+  const aliasesByHostId = new Map(
+    activeSnapshots
+      .filter((host) => host.config.alias)
+      .map((host) => [host.config.id, host.config.alias!] as const),
+  );
+  if (!hasAnyAutoConnectHost(activeHostIds, aliasesByHostId)) {
+    log.info('autoConnect: no active autoConnect prefs set, skipping');
     return;
   }
-  // 至少一台勾了, 才需要 hydrate pool + 找对应 host 实例。
-  await ensureHydrated();
   const targets: string[] = [];
-  for (const hostId of autoConnectIds) {
+  for (const snapshot of getPool().list()) {
+    const hostId = snapshot.config.id;
+    if (!getSshHostAutoConnect(hostId, snapshot.config.alias)) continue;
     const host = getPool().get(hostId);
     if (!host) continue;
     if (host.getStatus() === 'ready') continue;
@@ -2017,7 +2337,7 @@ async function softClosePiSessionsForHost(hostId: string, opts?: { onlySessionId
   if (!maker) return;
   const livePi = maker
     .listActiveSessions()
-    .filter((s) => s.agentKind === 'pi' && s.remoteHostId === hostId)
+    .filter((s) => s.agentKind === 'pi' && sameRemoteHostId(s.remoteHostId, hostId))
     .filter((s) => (opts?.onlySessionId ? s.id === opts.onlySessionId : true));
   if (livePi.length === 0) return;
   log.info('soft-close pi sessions before host remove', {

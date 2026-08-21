@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Outlet } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
+import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import { useRegisterCCAgentSidebar } from '@/features/cc-agent/useRegisterCCAgentSidebar';
 import { createLogger } from '@/lib/logger';
@@ -130,10 +131,17 @@ export function useSkillhubStoreSync(): void {
   // 这就是点击闪烁和 DetailView 短暂 "skill not found" 的来源；因此必须等
   // isLoading=false 后再同步项目列表。
   const { sessions, isLoading: sessionsLoading } = useCCSessions();
+  const sshHosts = useRemoteSshHosts();
 
   const skillhubProjects = useMemo<SkillhubProject[] | null>(() => {
     if (sessionsLoading) return null;
-    const { projects } = groupSessions(sessions);
+    const { projects } = groupSessions(sessions, {
+      remoteHostCandidates: sshHosts.map((host) => ({
+        id: host.config.id,
+        alias: host.config.alias,
+        source: host.config.source,
+      })),
+    });
     return projects
       .filter((p) => p.scope === 'local')
       .map((p) => ({
@@ -141,7 +149,7 @@ export function useSkillhubStoreSync(): void {
         hash: projectHash(p.workingDir),
         displayName: p.displayName,
       }));
-  }, [sessions, sessionsLoading]);
+  }, [sessions, sessionsLoading, sshHosts]);
 
   useEffect(() => {
     setSkillhubDataOwner(dataOwnerId);

@@ -154,11 +154,35 @@
     },
     "remote": {
       "title": "Remote machines",
-      "footnote": "Phase A: SSH connection management only. Running agents on the remote arrives in a later update.",
+      "footnote": "SSH config hosts are read-only and refresh from OpenSSH. Hosts added manually are stored only in Cindy.",
       "viaAuth": "via {{label}}",
+      "section": {
+        "sshConfig": "SSH config hosts",
+        "cindy": "Cindy hosts"
+      },
+      "error": {
+        "config": "Could not refresh SSH config. Showing the last valid list. {{message}}",
+        "profile": "Could not read Cindy hosts. Showing the last valid list. {{message}}",
+        "path": "File: {{path}}",
+        "configRecovery": "Check this file and its Include paths, then refresh.",
+        "configLimitRecovery": "Reduce Include nesting, file count, or total config size, then refresh.",
+        "profileRecovery": "Fix or restore this file, then refresh."
+      },
+      "remove": {
+        "confirmTitle": "Remove Cindy host?",
+        "confirmDescription": "This permanently removes “{{name}}” from Cindy. It does not change your SSH config.",
+        "confirm": "Remove"
+      },
+      "copy": {
+        "confirm": "Copy this effective connection into Cindy?\n\n{{target}}\nAuthentication: {{auth}}\n\nThe copy will not follow later SSH config changes.",
+        "authAgent": "ssh-agent",
+        "authAgentPinned": "ssh-agent, pinned to {{key}}",
+        "authKey": "directly read identity file {{key}} (Cindy does not store passphrases; use ssh-agent for encrypted keys)",
+        "done": "Copied to Cindy"
+      },
       "empty": {
-        "title": "No remote machines yet.",
-        "hint": "Click \"Add\" to register one, or click the refresh icon to import from ~/.ssh/config."
+        "title": "No hosts found in ~/.ssh/config.",
+        "hint": "Edit your SSH config and refresh, or add a Cindy-only host below."
       },
       "status": {
         "disconnected": "Disconnected",
@@ -170,6 +194,8 @@
       },
       "button": {
         "add": "Add",
+        "manualAdd": "Add manually",
+        "copyToCindy": "Copy to Cindy",
         "reload": "Reload ~/.ssh/config",
         "connect": "Connect",
         "disconnect": "Disconnect",
@@ -187,6 +213,8 @@
       },
       "edit": {
         "title": "Edit {{id}}",
+        "sshConfigReadOnly": "Connection fields and authentication come from SSH config and are read-only here. Edit ~/.ssh/config, then reload, or copy this host to Cindy as an independent copy.",
+        "authSummary": "Authentication: {{auth}}",
         "submit": "Save changes"
       },
       "keys": {
@@ -262,8 +290,10 @@
         }
       },
       "add": {
-        "title": "Add a remote machine",
+        "title": "Add a Cindy host",
         "alias": "Alias",
+        "displayName": "Display name",
+        "displayNamePlaceholder": "Build server",
         "hostname": "Hostname",
         "user": "User",
         "port": "Port",

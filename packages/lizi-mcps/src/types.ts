@@ -311,8 +311,10 @@ export interface LspMcpDeps {
 /** ConnectionPool.list() 返回的单主机快照子集。 */
 export interface SshHostSnapshotLike {
   config: {
-    /** SSH alias（= ~/.ssh/config 的 Host 指令），也是 pool 的主键。 */
+    /** Canonical HostRef: ssh-config:<alias> or cindy:<profileId>. */
     id: string;
+    alias?: string;
+    displayName?: string;
     hostname: string;
     port: number;
     user: string;

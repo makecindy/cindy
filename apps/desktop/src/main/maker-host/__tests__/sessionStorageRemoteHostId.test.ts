@@ -70,11 +70,18 @@ describe('DesktopSessionStorage.create remoteHostId 规范化', () => {
     expect(h.captured?.remoteHostId).toBeNull();
   });
 
-  it('有效 host trim 后保留', async () => {
+  it('有效 legacy SSH alias trim 后写成 canonical HostRef', async () => {
     const storage = new DesktopSessionStorage();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await storage.create({ ...base, remoteHostId: ' host-a ' } as any);
-    expect(h.captured?.remoteHostId).toBe('host-a');
+    expect(h.captured?.remoteHostId).toBe('ssh-config:host-a');
+  });
+
+  it('保留已经规范化的 Cindy HostRef', async () => {
+    const storage = new DesktopSessionStorage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await storage.create({ ...base, remoteHostId: ' cindy:profile-id ' } as any);
+    expect(h.captured?.remoteHostId).toBe('cindy:profile-id');
   });
 
   it('未传 host 落 null', async () => {
