@@ -22,6 +22,7 @@ import path from 'node:path';
 import * as blobStore from './blobStore';
 import { ingestMedia } from './ingest';
 import type { LedgerDb } from './ledger';
+import { sniffMediaMime } from './sniffMediaMime';
 
 /** 与 @cindy/mcps SavedImage 结构对齐(structural typing,不 import 包内类型)。 */
 export interface SavedBlobImage {
@@ -155,11 +156,56 @@ export function createBlobVideoStorage(db?: LedgerDb): {
   return { saveVideo };
 }
 
-// ── codex 生成图物化(register.ts 的 thin adapter 调用,规则 14:逻辑在此可测)──
+// ── Agent 图片输出物化(register.ts 的 thin adapter 调用,规则 14:逻辑在此可测)──
 
 export interface GeneratedImageSource {
   url?: string;
   path?: string;
+}
+
+const MAX_OUTPUT_IMAGE_BYTES = 20 * 1024 * 1024;
+
+export interface ImageOutputSource extends GeneratedImageSource {
+  outputId?: string;
+  prompt?: string;
+  status?: string;
+}
+
+export function isMaterializableImageOutput(
+  data: ImageOutputSource | null | undefined,
+): data is ImageOutputSource & { outputId: string } {
+  return (
+    typeof data?.outputId === 'string' &&
+    data.outputId.length > 0 &&
+    (typeof data.path === 'string' || typeof data.url === 'string')
+  );
+}
+
+export function createImageOutputToolPresentation(
+  data: ImageOutputSource & { outputId: string },
+  cached: { url: string; filename: string },
+): {
+  toolName: 'imagegen';
+  toolInput: Record<string, string>;
+  fullText: string;
+} {
+  return {
+    toolName: 'imagegen',
+    toolInput: {
+      ...(data.prompt ? { prompt: data.prompt } : {}),
+      ...(data.status ? { status: data.status } : {}),
+    },
+    fullText: JSON.stringify({
+      ok: true,
+      kind: 'output',
+      text: 'image generated',
+      xdt_image_url: cached.url,
+      filename: cached.filename,
+      ...(data.prompt ? { prompt: data.prompt } : {}),
+      ...(data.status ? { status: data.status } : {}),
+      ...(data.path ? { original_path: data.path } : {}),
+    }),
+  };
 }
 
 /** 从 URL / 路径推导展示文件名;推不出兜底 generated-image.png。 */
@@ -184,22 +230,25 @@ function parseDataImageUrl(url: string): { mimeType: string; buffer: Buffer } | 
 }
 
 /**
- * codex 生成图 → 总仓物化:托管地址(老 xdt-image / 新 cindy-media)透传;
+ * Agent 图片输出 → 总仓物化:托管地址(老 xdt-image / 新 cindy-media)透传;
  * 本地路径 / data: base64 入仓(零引用,合成 tool_result 落库时挂账)。
  * 形状不认识返回 null;入仓失败(白名单外 mime / 读盘失败)向上抛,由调用方
  * 决定丢图语义。
  */
-export async function materializeGeneratedImage(
+export async function materializeOutputImage(
   data: GeneratedImageSource,
   deps: {
     ingestFromPath: (params: { sourcePath: string; originalName?: string }) => Promise<{ url: string; filename: string }>;
     ingestBuffer: (params: { buffer: Uint8Array; mimeType: string }) => Promise<{ url: string; filename: string }>;
+    fetchRemoteImage?: (url: string, maxBytes: number) => Promise<{ buffer: Uint8Array }>;
   },
+  opts: { allowLocalPath?: boolean } = {},
 ): Promise<{ url: string; filename: string } | null> {
   if (data.url?.startsWith('xdt-image://') || data.url?.startsWith('cindy-media://')) {
     return { url: data.url, filename: safeGeneratedImageFilename(data.url) };
   }
   if (data.path) {
+    if (opts.allowLocalPath === false || !path.isAbsolute(data.path)) return null;
     return deps.ingestFromPath({
       sourcePath: data.path,
       originalName: safeGeneratedImageFilename(data.path),
@@ -207,8 +256,16 @@ export async function materializeGeneratedImage(
   }
   if (data.url?.startsWith('data:')) {
     const parsed = parseDataImageUrl(data.url);
-    if (!parsed) return null;
-    return deps.ingestBuffer({ buffer: parsed.buffer, mimeType: parsed.mimeType });
+    if (!parsed || parsed.buffer.byteLength > MAX_OUTPUT_IMAGE_BYTES) return null;
+    const mimeType = sniffMediaMime(parsed.buffer);
+    if (!mimeType?.startsWith('image/')) return null;
+    return deps.ingestBuffer({ buffer: parsed.buffer, mimeType });
+  }
+  if (data.url?.startsWith('https://') && deps.fetchRemoteImage) {
+    const fetched = await deps.fetchRemoteImage(data.url, MAX_OUTPUT_IMAGE_BYTES);
+    const mimeType = sniffMediaMime(fetched.buffer);
+    if (!mimeType?.startsWith('image/')) return null;
+    return deps.ingestBuffer({ buffer: fetched.buffer, mimeType });
   }
   return null;
 }

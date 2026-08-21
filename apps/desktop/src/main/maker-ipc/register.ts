@@ -165,7 +165,13 @@ import {
 } from './atAgentCatalog.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
-import { materializeGeneratedImage } from '../cindy-media/generatedMedia.js';
+import { fetchPublicImageBytes } from '../im/publicImageFetch.js';
+import {
+  createImageOutputToolPresentation,
+  isMaterializableImageOutput,
+  materializeOutputImage,
+  type ImageOutputSource,
+} from '../cindy-media/generatedMedia.js';
 import {
   getDbClient,
   isDbClientNotReadyError,
@@ -413,6 +419,7 @@ import {
   markAssistantTurnFailed,
   noteAgentMeta,
   noteSessionAgentKind,
+  noteSessionMarkdownImageContext,
   noteSessionClearBoundary,
   noteTurnStarted,
   onAssistantTextEvent,
@@ -427,9 +434,9 @@ import {
   onToolResultFullEvent,
   onToolUseEvent,
   preserveTurnPersistStateForBackground,
+  persistSyntheticToolExchange,
   markAutoResumeOutcome,
   onTurnErrorEvent,
-  prepareSyntheticToolEventForBroadcast,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
 } from '../messagePersistBroadcaster.js';
@@ -2003,14 +2010,7 @@ function summarizeIpcUserMessage(message: IpcUserMessage): Record<string, unknow
   };
 }
 
-interface CodexImageEventData {
-  kind?: 'view' | 'generation';
-  blockId?: string;
-  path?: string;
-  url?: string;
-  revisedPrompt?: string;
-  status?: string;
-}
+type ImageOutputEventData = ImageOutputSource;
 
 /**
  * 待解决的 interaction 请求(permission/ask/plan 三合一)—— 用 promise 跨 IPC 边界。
@@ -3689,6 +3689,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // session-agent-switch:登记本会话当前引擎,broadcaster / user 行落库据此逐行
   // stamp messages.agent_kind(切换后历史行的 agent_meta 必须按写入时引擎解析)。
   noteSessionAgentKind(session.id, makerToDbAgentKind(session.agentKind));
+  noteSessionMarkdownImageContext(session.id, {
+    workingDir: session.workDir,
+    allowLocalPaths: !session.remoteHostId,
+  });
 
   // 订阅槽①旁听 tap(独立监听,叠加在主转发之外互不干扰):AgentEvent →
   // did-turn-*。资格(用户主会话)与自动化轮次过滤都在 tap 内部,这里零逻辑。
@@ -3774,8 +3778,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         });
         return;
       }
-      if (event.type === 'image' && event.source === 'codex') {
-        void broadcastCodexImageAsToolResult(session.id, event);
+      if (event.type === 'image_output') {
+        void broadcastImageOutputAsToolResult(session.id, event, {
+          allowLocalPath: !session.remoteHostId,
+        });
         return;
       }
       if (event.type === 'plan_mode_changed') {
@@ -14425,111 +14431,70 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   log.info('maker:* IPC handlers registered');
 }
 
-async function broadcastCodexImageAsToolResult(
+async function broadcastImageOutputAsToolResult(
   sessionId: string,
   event: AgentEvent,
+  opts: { allowLocalPath: boolean },
 ): Promise<void> {
-  const data = event.data as CodexImageEventData | null;
-  if (data?.kind !== 'generation') return;
+  const data = event.data as ImageOutputEventData | null;
+  if (!isMaterializableImageOutput(data)) return;
+  const createdAt = Date.now();
 
   try {
-    const cached = await materializeCodexImage(sessionId, data);
+    const cached = await materializeImageOutput(sessionId, data, opts);
     if (!cached) {
-      log.warn('codex image event missing materializable image', {
+      log.warn('image output event missing materializable image', {
         sessionId,
-        blockId: data.blockId,
+        outputId: data.outputId,
         hasPath: !!data.path,
         hasUrl: !!data.url,
+        allowLocalPath: opts.allowLocalPath,
       });
       return;
     }
 
-    const toolUseId = data.blockId || `codex-image-${Date.now()}`;
-    const toolInput = {
-      ...(data.revisedPrompt ? { prompt: data.revisedPrompt } : {}),
-      ...(data.status ? { status: data.status } : {}),
-    };
-    const fullText = JSON.stringify({
-      ok: true,
-      kind: 'generation',
-      text: 'image generated',
-      xdt_image_url: cached.url,
-      filename: cached.filename,
-      ...(data.revisedPrompt ? { revised_prompt: data.revisedPrompt } : {}),
-      ...(data.status ? { status: data.status } : {}),
-      ...(data.path ? { original_path: data.path } : {}),
-    });
+    const toolUseId = data.outputId;
+    const presentation = createImageOutputToolPresentation(data, cached);
 
-    broadcastSyntheticToolEvent(sessionId, {
-      type: 'tool_use',
-      source: 'codex',
-      agentMeta: event.agentMeta,
-      data: {
-        toolUseId,
-        toolName: 'imagegen',
-        input: toolInput,
-      },
-    } satisfies AgentEvent);
-    broadcastSyntheticToolEvent(sessionId, {
-      type: 'tool_result_full',
-      source: 'codex',
-      agentMeta: event.agentMeta,
-      data: {
-        toolUseId,
-        fullText,
-        isError: false,
-      },
-    } satisfies AgentEvent);
-    broadcastSyntheticToolEvent(sessionId, {
-      type: 'tool_result',
-      source: 'codex',
-      agentMeta: event.agentMeta,
-      data: {
-        summary: 'image generated',
-        toolUseIds: [toolUseId],
-      },
-    } satisfies AgentEvent);
-  } catch (err) {
-    log.warn('failed to materialize codex image event', {
+    persistSyntheticToolExchange({
       sessionId,
-      blockId: data?.blockId,
+      toolUseId,
+      toolName: presentation.toolName,
+      toolInput: presentation.toolInput,
+      resultContent: presentation.fullText,
+      agentMeta: (event.agentMeta as AgentMeta | null | undefined) ?? null,
+      createdAt,
+    });
+  } catch (err) {
+    log.warn('failed to materialize image output event', {
+      sessionId,
+      outputId: data?.outputId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
 }
 
-function broadcastSyntheticToolEvent(
+async function materializeImageOutput(
   sessionId: string,
-  event: AgentEvent & { type: 'tool_use' | 'tool_result' | 'tool_result_full' },
-): void {
-  const prepared = prepareSyntheticToolEventForBroadcast(
-    sessionId,
-    { type: event.type, data: event.data },
-    (event.agentMeta as AgentMeta | null | undefined) ?? null,
-  );
-  broadcastToAllWindows(MAKER_PUSH.EVENT, {
-    sessionId,
-    event,
-    persistId: prepared.persistId,
-    resolvedContent: prepared.resolvedContent,
-  });
-}
-
-async function materializeCodexImage(
-  sessionId: string,
-  data: CodexImageEventData,
+  data: ImageOutputEventData,
+  opts: { allowLocalPath: boolean },
 ): Promise<{ url: string; filename: string } | null> {
-  // 规则 25:生成图入 cindy-media 总仓(零引用;合成 tool_result
+  // 规则 25:Agent 图片输出入 cindy-media 总仓(零引用;合成 tool_result
   // 消息落库时由 createMessage 的挂账钩子补 session-attachment 引用)。逻辑
   // 本体在 cindy-media/generatedMedia.ts(规则 14 可测),这里只做 thin adapter。
   try {
-    return await materializeGeneratedImage(data, {
-      ingestFromPath: cindyChatAttachments.ingestChatImageFromPath,
-      ingestBuffer: cindyChatAttachments.ingestChatImageBuffer,
-    });
+    return await materializeOutputImage(
+      data,
+      {
+        ingestFromPath: cindyChatAttachments.ingestChatImageFromPath,
+        ingestBuffer: cindyChatAttachments.ingestChatImageBuffer,
+        fetchRemoteImage: fetchPublicImageBytes,
+      },
+      opts,
+    );
   } catch (err) {
     // 白名单外 mime / 读盘失败:丢图不炸事件流(与旧行为的失败面一致)。
-    log.warn('materializeCodexImage: ingest failed, dropping image', {
+    log.warn('materializeImageOutput: ingest failed, dropping image', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     });

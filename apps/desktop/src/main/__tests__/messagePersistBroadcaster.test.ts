@@ -28,6 +28,13 @@ vi.mock('../localDb/ipc/messages.js', () => ({
 vi.mock('../localDb/subagentRuns.js', () => ({
   getSubagentRunDetail: vi.fn(async () => null),
 }));
+vi.mock('../cindy-media/markdownImages.js', () => ({
+  materializeMarkdownImages: vi.fn(async ({ text }: { text: string }) => ({
+    absPaths: [],
+    managedText: text,
+    textWithoutImages: text,
+  })),
+}));
 
 vi.mock('../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -69,6 +76,7 @@ import {
   writeCodexPlanTerminal,
   writeCodexPlanUpdate,
 } from '../localDb/codexPlanState.js';
+import { materializeMarkdownImages } from '../cindy-media/markdownImages.js';
 import {
   recordMediaToolResult,
   __resetMediaToolResultPoolForTesting,
@@ -80,7 +88,7 @@ import {
   persistCodexPlanOnTerminalError,
   onToolResultEvent,
   onToolResultFullEvent,
-  prepareSyntheticToolEventForBroadcast,
+  persistSyntheticToolExchange,
   onAssistantTextEvent,
   onInteractionMessage,
   onThinkingEvent,
@@ -97,6 +105,7 @@ import {
   markAssistantTurnFailed,
   noteSessionClearBoundary,
   noteSessionAgentKind,
+  noteSessionMarkdownImageContext,
   noteAgentMeta,
   enqueueDurableWrite,
   noteTurnStarted,
@@ -132,11 +141,111 @@ describe('Codex done completion boundary', () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(materializeMarkdownImages).mockImplementation(async ({ text }) => ({
+    absPaths: [],
+    managedText: text,
+    textWithoutImages: text,
+  }));
   vi.mocked(findVisibleToolUseMessageByAliases).mockResolvedValue(null);
   vi.mocked(getSubagentRunDetail).mockResolvedValue(null);
   ownerScopeState.current = true;
   noteSessionClearBoundary(SESSION, null);
   clearSessionPersistState(SESSION);
+});
+
+describe('assistant Markdown image materialization', () => {
+  it.each(['cc', 'codex', 'pi'] as const)(
+    '%s 最终回复统一改写为 cindy-media URL',
+    async (agentKind) => {
+      const original = '完成\n![二维码](/workspace/output/qr.png)';
+      const managed = `完成\n![二维码](cindy-media://blobs/${'a'.repeat(64)}.png)`;
+      noteSessionAgentKind(SESSION, agentKind);
+      noteSessionMarkdownImageContext(SESSION, {
+        workingDir: '/workspace',
+        allowLocalPaths: true,
+      });
+      vi.mocked(materializeMarkdownImages).mockResolvedValueOnce({
+        absPaths: ['/media/qr.png'],
+        managedText: managed,
+        textWithoutImages: '完成\n二维码',
+      });
+      vi.mocked(updateMessageContent).mockResolvedValueOnce({
+        createdAt: '2026-08-20T08:00:00.000Z',
+      } as never);
+
+      const clientId = onAssistantTextEvent(SESSION, { text: original, isFinal: true }, null);
+      await flushWrites();
+      await flushWrites();
+
+      expect(materializeMarkdownImages).toHaveBeenCalledWith({
+        text: original,
+        workingDir: '/workspace',
+        sessionId: SESSION,
+        maxImages: 4,
+        allowLocalPaths: true,
+      });
+      expect(updateMessageContent).toHaveBeenCalledWith(SESSION, clientId, managed, {
+        onlyVisible: true,
+      });
+      expect(broadcastMessageRow).toHaveBeenCalledWith(
+        SESSION,
+        expect.objectContaining({ createdAt: '2026-08-20T08:00:00.000Z' }),
+        ownerScopeState.scope,
+      );
+    },
+  );
+
+  it('SSH 会话拒绝把远端绝对路径当成本机文件读取', async () => {
+    const text = '![远端图片](/home/remote/output.png)';
+    noteSessionMarkdownImageContext(SESSION, {
+      workingDir: '/home/remote',
+      allowLocalPaths: false,
+    });
+
+    onAssistantTextEvent(SESSION, { text, isFinal: true }, null);
+    await flushWrites();
+
+    expect(materializeMarkdownImages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text,
+        workingDir: '/home/remote',
+        allowLocalPaths: false,
+      }),
+    );
+    expect(updateMessageContent).not.toHaveBeenCalled();
+  });
+
+  it('会话关闭后丢弃尚未完成的异步图片改写', async () => {
+    let resolveMaterialization:
+      | ((value: { absPaths: string[]; managedText: string; textWithoutImages: string }) => void)
+      | undefined;
+    vi.mocked(materializeMarkdownImages).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMaterialization = resolve;
+        }),
+    );
+    noteSessionMarkdownImageContext(SESSION, {
+      workingDir: '/workspace',
+      allowLocalPaths: true,
+    });
+
+    onAssistantTextEvent(
+      SESSION,
+      { text: '![二维码](/workspace/output.png)', isFinal: true },
+      null,
+    );
+    clearSessionPersistState(SESSION);
+    resolveMaterialization?.({
+      absPaths: ['/media/output.png'],
+      managedText: `![二维码](cindy-media://blobs/${'b'.repeat(64)}.png)`,
+      textWithoutImages: '二维码',
+    });
+    await flushWrites();
+    await flushWrites();
+
+    expect(updateMessageContent).not.toHaveBeenCalled();
+  });
 });
 
 describe('update_plan tool_use persistence', () => {
@@ -1570,55 +1679,52 @@ describe('eager-create:tool_use 已到,tool_result_full 早于摘要', () => {
   });
 });
 
-describe('synthetic tool events:本地合成事件也返回 renderer 展示所需 payload', () => {
-  it('Codex imageGeneration 合成 imagegen 三联事件时带 persistId/resolvedContent', async () => {
-    const toolUse = prepareSyntheticToolEventForBroadcast(
-      SESSION,
-      {
-        type: 'tool_use',
-        data: { toolUseId: 'codex-img-1', toolName: 'imagegen', input: { status: 'completed' } },
-      },
-      null,
-    );
-    expect(toolUse).toEqual({ persistId: expect.any(String) });
-
+describe('synthetic tool exchange persistence', () => {
+  it('异步图片输出在 turn reset 后仍直接落稳定的 tool_use/tool_result 消息对', async () => {
+    const createdAt = Date.parse('2026-08-20T08:00:00.000Z');
     const imageResult = JSON.stringify({
       ok: true,
-      kind: 'generation',
+      kind: 'output',
       xdt_image_url: 'xdt-image://sess-tr/generated.png',
     });
-
-    const full = prepareSyntheticToolEventForBroadcast(
-      SESSION,
-      { type: 'tool_result_full', data: { toolUseId: 'codex-img-1', fullText: imageResult } },
-      null,
-    );
-    expect(full).toEqual({ persistId: expect.any(String), resolvedContent: imageResult });
-
-    const summary = prepareSyntheticToolEventForBroadcast(
-      SESSION,
-      { type: 'tool_result', data: { summary: 'image generated', toolUseIds: ['codex-img-1'] } },
-      null,
-    );
-    expect(summary).toEqual(full);
+    noteSessionAgentKind(SESSION, 'pi');
+    const ids = persistSyntheticToolExchange({
+      sessionId: SESSION,
+      toolUseId: 'image-output-1',
+      toolName: 'imagegen',
+      toolInput: { status: 'completed' },
+      resultContent: imageResult,
+      agentMeta: { uuid: 'image-meta' },
+      createdAt,
+    });
+    resetTurnPersistState(SESSION);
 
     await flushWrites();
     expect(createMessage).toHaveBeenCalledWith(
       SESSION,
       expect.objectContaining({
-        clientId: toolUse.persistId,
+        clientId: ids.toolUseClientId,
         role: 'tool_use',
-        toolUseId: 'codex-img-1',
+        content: {
+          toolUseId: 'image-output-1',
+          toolName: 'imagegen',
+          input: { status: 'completed' },
+        },
+        toolUseId: 'image-output-1',
+        agentKind: 'pi',
+        createdAt,
       }),
       broadcastGuard(),
     );
     expect(createMessage).toHaveBeenCalledWith(
       SESSION,
       expect.objectContaining({
-        clientId: full.persistId,
+        clientId: ids.toolResultClientId,
         role: 'tool_result',
         content: imageResult,
-        toolUseId: 'codex-img-1',
+        toolUseId: 'image-output-1',
+        agentKind: 'pi',
+        createdAt: createdAt + 1,
       }),
       broadcastGuard(),
     );

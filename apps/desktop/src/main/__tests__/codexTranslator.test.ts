@@ -426,6 +426,42 @@ describe('webSearch', () => {
   });
 });
 
+describe('imageView', () => {
+  it('模型内部读图不作为用户可见输出事件', () => {
+    feedItem('completed', {
+      type: 'imageView',
+      id: 'img-view-1',
+      path: '/tmp/login-qr.png',
+    });
+    expect(coll.events).toEqual([]);
+  });
+});
+
+describe('imageGeneration', () => {
+  it('completed 发 provider-neutral image_output', () => {
+    feedItem('completed', {
+      type: 'imageGeneration',
+      id: 'img-gen-1',
+      status: 'completed',
+      revisedPrompt: 'draw a QR code',
+      result: 'data:image/png;base64,AAAA',
+      savedPath: '/tmp/generated-qr.png',
+    });
+    expect(coll.events).toEqual([
+      {
+        type: 'image_output',
+        source: 'codex',
+        data: {
+          outputId: 'img-gen-1',
+          path: '/tmp/generated-qr.png',
+          prompt: 'draw a QR code',
+          status: 'completed',
+        },
+      },
+    ]);
+  });
+});
+
 // ── fileChange ──────────────────────────────────────────────────────────────
 
 describe('fileChange', () => {

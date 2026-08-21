@@ -1176,17 +1176,22 @@ export async function updateMessageContent(
   sessionId: string,
   clientId: string,
   content: unknown,
+  opts?: { onlyVisible?: boolean },
 ): Promise<Message | null> {
   const db = getDbClient().drizzle;
+  const where =
+    opts?.onlyVisible === true
+      ? and(
+          eq(messages.sessionId, sessionId),
+          eq(messages.clientId, clientId),
+          isNull(messages.rewindAt),
+        )
+      : and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId));
   await db
     .update(messages)
     .set({ content: safeStringify(content) })
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
-  const [row] = await db
-    .select()
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
-    .limit(1);
+    .where(where);
+  const [row] = await db.select().from(messages).where(where).limit(1);
   if (row) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
     // (review P2:vendor 事件顺序一变,首现于 update 的 blob URL 若不在这里

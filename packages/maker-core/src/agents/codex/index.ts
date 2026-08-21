@@ -6212,7 +6212,7 @@ export class CodexAgent extends BaseAgent {
         event.type === 'tool_result' ||
         event.type === 'tool_result_full' ||
         event.type === 'agent_task_update' ||
-        event.type === 'image' ||
+        event.type === 'image_output' ||
         event.type === 'done'
       ) {
         return true;

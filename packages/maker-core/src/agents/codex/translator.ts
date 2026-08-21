@@ -420,7 +420,7 @@ export function translateItemNotification(
       handlePlan(phase, item as unknown as PlanItem, queue, ctx);
       return;
     case 'imageView':
-      handleImageView(phase, item as unknown as ImageViewItem, queue);
+      // imageView 只表示模型为了推理读取图片，不代表要把图片交付给用户。
       return;
     case 'imageGeneration':
       handleImageGeneration(phase, item as unknown as ImageGenerationItem, queue);
@@ -870,13 +870,6 @@ interface CollabAgentToolCallItem {
   model?: string | null;
   reasoningEffort?: string | null;
   agentsStates: Record<string, unknown>;
-}
-
-// v2.rs ThreadItem::ImageView { id, path } — 模型读图 (本地绝对路径)。
-interface ImageViewItem {
-  type: 'imageView';
-  id: string;
-  path: string;
 }
 
 // v2.rs ThreadItem::ImageGeneration — 模型生成图; result 是 url/data URL, savedPath 落盘后才有。
@@ -2072,24 +2065,7 @@ function toCodexTaskUpdate(
   };
 }
 
-// ── imageView → image event (kind='view') ────────────────────────────────────
-// 模型读了一张本地图。codex 一般只发 completed (path 必有), started/updated 防御性同样发 — 同一
-// blockId, renderer 自己判重。
-
-function handleImageView(
-  phase: ItemPhase,
-  item: ImageViewItem,
-  queue: AsyncQueue<AgentEvent>,
-): void {
-  if (phase === 'updated') return;
-  queue.push({
-    type: 'image',
-    data: { kind: 'view', blockId: item.id, path: item.path },
-    source: 'codex',
-  });
-}
-
-// ── imageGeneration → image event (kind='generation') ────────────────────────
+// ── imageGeneration → provider-neutral image_output ─────────────────────────
 // 模型生成图。result 优先识别为 url (http/data 协议头) — 否则当 path 兜底 (codex 偶尔直接给本地路径
 // 不走 savedPath 字段)。savedPath 优先 path; 同时给 revisedPrompt / status 让 UI 显示生成参数。
 // started 阶段 result/savedPath 通常没填, 只发 completed。
@@ -2105,25 +2081,23 @@ function handleImageGeneration(
 ): void {
   if (phase !== 'completed') return;
   const data: {
-    kind: 'generation';
-    blockId: string;
+    outputId: string;
     path?: string;
     url?: string;
-    revisedPrompt?: string;
+    prompt?: string;
     status?: string;
   } = {
-    kind: 'generation',
-    blockId: item.id,
+    outputId: item.id,
     status: item.status,
   };
-  if (item.revisedPrompt) data.revisedPrompt = item.revisedPrompt;
+  if (item.revisedPrompt) data.prompt = item.revisedPrompt;
   if (item.savedPath) {
     data.path = item.savedPath;
   } else if (item.result) {
     if (isUrlLike(item.result)) data.url = item.result;
     else data.path = item.result;
   }
-  queue.push({ type: 'image', data, source: 'codex' });
+  queue.push({ type: 'image_output', data, source: 'codex' });
 }
 
 // ── contextCompaction → compact_boundary ─────────────────────────────────────
