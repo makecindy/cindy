@@ -37,14 +37,7 @@ function session(totalMoney: Session['totalMoney']): Session {
 
 describe('sidebar session cost presentation', () => {
   it('renders no cost after the per-turn projection removes a custom-provider SDK amount', () => {
-    const pieces = buildSessionInfoPieces(
-      session(undefined),
-      ['cost'],
-      undefined,
-      t,
-      false,
-      'hidden',
-    );
+    const pieces = buildSessionInfoPieces(session(undefined), ['cost'], undefined, t, false, false);
     expect(pieces).toEqual([]);
   });
 
@@ -61,7 +54,7 @@ describe('sidebar session cost presentation', () => {
       undefined,
       t,
       false,
-      'estimate',
+      false,
     );
     expect(pieces).toEqual([
       expect.objectContaining({
@@ -84,6 +77,8 @@ describe('sidebar session cost presentation', () => {
       ['cost'],
       undefined,
       t,
+      false,
+      false,
     );
     expect(pieces).toEqual([
       expect.objectContaining({

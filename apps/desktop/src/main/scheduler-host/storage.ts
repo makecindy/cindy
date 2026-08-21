@@ -679,7 +679,22 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           run.sdkEstimatedValueMoney,
           fallbackProviderId,
         );
-        return { ...run, ...reclassified };
+        const {
+          costMoney: _costMoney,
+          estimatedValueMoney: _estimatedValueMoney,
+          sdkEstimatedValueMoney: _sdkEstimatedValueMoney,
+          ...runWithoutMoney
+        } = run;
+        return {
+          ...runWithoutMoney,
+          ...(reclassified.costMoney ? { costMoney: reclassified.costMoney } : {}),
+          ...(reclassified.estimatedValueMoney
+            ? { estimatedValueMoney: reclassified.estimatedValueMoney }
+            : {}),
+          ...(reclassified.sdkEstimatedValueMoney
+            ? { sdkEstimatedValueMoney: reclassified.sdkEstimatedValueMoney }
+            : {}),
+        };
       }
       if (run.costAttribution === 'direct') {
         const snapshot = reclassifyLegacyCustomProviderSnapshot(
@@ -1034,7 +1049,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       entry.sessionCosts.set(sessionId, sessionCost);
     };
     const remainingMoney = (
-      total: RegionalMoney | undefined,
+      total: RegionalMoney | null | undefined,
       messageValues: readonly RegionalMoney[],
     ): RegionalMoney | null => {
       if (!total || total.amount <= 0) return null;

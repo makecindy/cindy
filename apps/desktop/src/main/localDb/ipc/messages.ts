@@ -1823,7 +1823,7 @@ export function summarizeEstimatedSessionValuesBySession(
 }
 
 export function extractEstimatedSessionValueEntries(
-  rows: Array<{ clientId: string; agentMeta: string | null }>,
+  rows: ReadonlyArray<{ clientId: string; agentMeta: string | null }>,
   presentation: SdkCostPresentation = 'regular',
   showSdkEstimate: boolean = presentation === 'estimate',
 ): EstimatedSessionValueEntry[] {

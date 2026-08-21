@@ -601,10 +601,16 @@ export async function estimatedSessionValueBatchFor(
   >();
   for (const request of requests) {
     if (!request.sessionId) continue;
-    const deviceId = getStickySessionDeviceId(request.sessionId);
+    const deviceId: string | null = getStickySessionDeviceId(request.sessionId) ?? null;
     const key = deviceId ?? '';
-    const group = grouped.get(key) ?? { deviceId, sessionIds: [], presentations: {} };
-    if (!group.presentations[request.sessionId]) group.sessionIds.push(request.sessionId);
+    const group = grouped.get(key) ?? {
+      deviceId,
+      sessionIds: [],
+      presentations: {} as Record<string, import('../../shared/regionalMoney').SdkCostPresentation>,
+    };
+    if (!Object.prototype.hasOwnProperty.call(group.presentations, request.sessionId)) {
+      group.sessionIds.push(request.sessionId);
+    }
     group.presentations[request.sessionId] = request.presentation ?? 'regular';
     grouped.set(key, group);
   }

@@ -54,10 +54,10 @@ describe('useSidebarSessionUsageMoney', () => {
   it('coalesces visible sidebar rows into one main-process batch query', async () => {
     vi.useFakeTimers();
     const first = renderHook(() =>
-      useSidebarSessionUsageMoney('s-1', { amount: 1, currency: 'USD', kind: 'actual-cost' }, 1, 'regular', false),
+      useSidebarSessionUsageMoney('s-1', { amount: 1, currency: 'USD', approximate: false, kind: 'actual-cost' }, 1, 'regular', false),
     );
     const second = renderHook(() =>
-      useSidebarSessionUsageMoney('s-2', { amount: 2, currency: 'USD', kind: 'actual-cost' }, 2, 'hidden', false),
+      useSidebarSessionUsageMoney('s-2', { amount: 2, currency: 'USD', approximate: false, kind: 'actual-cost' }, 2, 'hidden', false),
     );
 
     await act(async () => {
@@ -105,7 +105,7 @@ describe('useSidebarSessionUsageMoney', () => {
       });
 
     const hook = renderHook(() =>
-      useSidebarSessionUsageMoney('s-1', { amount: 1, currency: 'USD', kind: 'actual-cost' }, 1, 'regular', false),
+      useSidebarSessionUsageMoney('s-1', { amount: 1, currency: 'USD', approximate: false, kind: 'actual-cost' }, 1, 'regular', false),
     );
     await act(async () => {
       await vi.runAllTimersAsync();
