@@ -1681,7 +1681,14 @@
         "stepConnect": "Connect",
         "stepModels": "Choose models",
         "searchPlaceholder": "Search providers…",
-        "groupSubscription": "Subscription sign-in · recommended",
+        "groupRecommend": "Recommended",
+        "groupDetectedLocal": "Detected on this computer",
+        "groupSubscription": "Subscription sign-in",
+        "recommendReason": {
+          "has-local-models": "Models already on this computer",
+          "machine-capable": "This computer can run a local model",
+          "subscription": "Subscription sign-in"
+        },
         "groupApiKey": "API and self-hosted proxies · presets update with the catalog",
         "groupCustom": "Custom",
         "metaOAuth": "Subscription (OAuth)",
@@ -1730,7 +1737,135 @@
         "builtinApiKey": {
           "subtitle": "Connect with your own API key",
           "note": "This source provides image generation models and does not join chats. The API key is stored only on this device (encrypted by the system keychain) and never uploaded."
-        }
+        },
+        "groupLocal": "Local models",
+        "metaLocalRecommended": "Recommended · download in Cindy",
+        "metaLocalConnect": "Connect a running local server",
+        "moreLocal": "More local servers"
+      },
+      "local": {
+        "title": "Ollama",
+        "subtitle": "Local model",
+        "beta": "Beta",
+        "recommended": "Recommended",
+        "recommendedForThisDevice": "Recommended for this computer",
+        "hostProfileApple": "Apple silicon · about {{memory}} GB unified memory",
+        "hostProfileGeneric": "About {{memory}} GB memory",
+        "hostProfileUnknown": "This computer’s memory isn’t available yet",
+        "bestForYou": "Best for you",
+        "alsoCoding": "Also good for coding",
+        "packaging": {
+          "mxfp8": "MXFP8",
+          "mlx": "MLX",
+          "q4": "Q4"
+        },
+        "recommendReason": {
+          "apple-mxfp8": "This Mac has enough memory for the official MXFP8 build.",
+          "apple-mlx": "This Mac is a good fit for the official MLX build.",
+          "generic-27b": "This computer is a good fit for the official Q4 build.",
+          "compact": "For this computer’s memory, start with a lighter model.",
+          "unknown": "Start with a model that’s easier to run."
+        },
+        "searchPlaceholder": "Search models",
+        "noSearchResults": "No matching models",
+        "alreadyInstalled": "Installed",
+        "searchResults": "Search results",
+        "moreModels": "More local models",
+        "memoryWarning": "Not enough memory on this computer (needs {{need}} GB, about {{have}} GB available)",
+        "manualDownload": "Manual download",
+        "manualDownloadPlaceholder": "Ollama library name or Hugging Face URL",
+        "invalidLibraryName": "Enter an Ollama library name, or paste a huggingface.co model page URL",
+        "advancedExactName": "Advanced: exact library name",
+        "models": {
+          "qwen38-27b": { "blurb": "The strongest dense model you can run locally. Best for coding and long tasks." },
+          "gpt-oss-20b": { "blurb": "OpenAI’s open 20B. The usual pick for 16 GB machines." },
+          "gemma4-e2b": { "blurb": "Smallest Gemma 4. Light machines, with vision." },
+          "gemma4-e4b": { "blurb": "Google Gemma 4 small. Light daily use, with vision." },
+          "gemma4-12b": { "blurb": "Gemma 4 mid-size. Steadier chat and multimodal." },
+          "gemma4-31b": { "blurb": "Gemma 4 large. Stronger chat and multimodal, more memory." },
+          "gemma4-26b": { "blurb": "Gemma 4 mid-large MoE. Fewer active parameters, mid-to-high-end machines." },
+          "ornith15-35b": { "blurb": "Ornith 1.5 mid-size MoE. The local coding and agent backup." },
+          "glm-47-flash": { "blurb": "Zhipu’s current coding model. 30B MoE, good for code and agents." }
+        },
+        "onboardingTitle": "Install the Ollama runtime",
+        "onboardingBody": "After you install Ollama, you can download and use local models in Cindy without opening the Ollama app. Ollama is a free, open-source third-party runtime.",
+        "installInCindy": "Install in Cindy",
+        "installConsent": "Cindy will download the official Ollama runtime (about {{size}}) into Cindy’s data folder and start it. It will not be added to the system apps folder. Ollama is free, open-source third-party software.",
+        "installCancel": "Cancel install",
+        "installFailed": "Couldn’t install Ollama",
+        "installPhase": {
+          "resolving": "Looking up the official release…",
+          "downloading": "Downloading…",
+          "verifying": "Verifying…",
+          "extracting": "Installing…",
+          "starting": "Starting…",
+          "success": "Installed",
+          "error": "Install failed",
+          "cancelled": "Cancelled"
+        },
+        "openWebsite": "Open Ollama website",
+        "recheck": "I installed it, check again",
+        "start": "Start local model service",
+        "conflict": "Port 11434 is in use by something else",
+        "notReady": "The local model service is not ready",
+        "connectFailed": "Couldn’t connect to the local model service",
+        "pullFailed": "Couldn’t download the model",
+        "pullError": {
+          "not-gguf": "This is an MLX repo. Ollama can only pull GGUF — use the GGUF model page instead.",
+          "not-found": "Couldn’t find that model. Check the library name or link.",
+          "unauthorized": "This model needs a Hugging Face login to download.",
+          "refused": "Can’t reach the local model service. Make sure Ollama is running.",
+          "generic": "Couldn’t download the model"
+        },
+        "added": "Model added to Cindy",
+        "status": {
+          "absent": "Ollama is not installed",
+          "stopped": "Installed · not running",
+          "starting": "Starting…",
+          "ready": "Running",
+          "incompatible": "This Ollama version is not supported",
+          "port-conflict": "Port conflict",
+          "pulling": "Downloading…",
+          "error": "Couldn’t reach the local model service"
+        },
+        "installed": "Installed on this Mac",
+        "emptyInstalled": "No local models installed yet",
+        "addToCindy": "Add to picker",
+        "removeFromCindy": "Remove from picker",
+        "downloadAdd": "Download and add",
+        "retryDownload": "Retry",
+        "libraryName": "Exact Ollama library name",
+        "pullingTitle": "Downloading {{name}}",
+        "pullIndeterminate": "Preparing",
+        "pullBytes": "{{done}} / {{total}}",
+        "pullSpeed": " · {{speed}}",
+        "pullPhase": {
+          "starting": "Preparing download…",
+          "manifest": "Fetching manifest…",
+          "downloading": "Downloading model files",
+          "verifying": "Verifying…",
+          "writing": "Writing…",
+          "success": "Download complete",
+          "error": "Download failed",
+          "paused": "Paused",
+          "cancelled": "Cancelled"
+        },
+        "pauseDownload": "Pause",
+        "resumeDownload": "Resume Download",
+        "cancelDownload": "Delete Incomplete Download",
+        "notRecommended": "This Mac doesn’t meet the 32 GB memory bar for Qwen3.8 27B. You can still enter an exact library name.",
+        "sizeHint": "About {{size}} · needs {{memory}} GB unified memory",
+        "sizeHintApple": "About {{size}} · needs {{memory}} GB unified memory",
+        "sizeHintGeneric": "About {{size}} · needs {{memory}} GB memory",
+        "deleteFromCindy": "Remove from Cindy",
+        "deleteConfirmTitle": "Remove Ollama from Cindy?",
+        "deleteConfirmBody": "This only removes the Cindy connection. Models already downloaded in Ollama stay on disk, and the service keeps running.",
+        "deleteModel": "Delete This Model",
+        "deleteModelConfirmTitle": "Delete {{name}}?",
+        "deleteModelConfirmBody": "This deletes the downloaded model files from this computer and removes them from Cindy. You can download the model again later.",
+        "deleteModelConfirm": "Delete",
+        "deleteModelDone": "Deleted {{name}}",
+        "deleteModelFailed": "Couldn’t delete the model. Make sure Ollama is running, then try again."
       },
       "xdSignin": {
         "badge": "Recommended",
@@ -2581,7 +2716,7 @@
       "installSectionDescription": "Paste the install source from a pi.dev page, or enter an npm package name, Git URL, or absolute local path.",
       "installedSectionTitle": "Installed",
       "sourcePlaceholder": "npm package, Git URL, or absolute local path",
-      "inspectionHint": "After installation, Cindy checks resources and compatibility. Executable extension code stays disabled until you trust the source and enable it.",
+      "inspectionHint": "Cindy warns you once about the risk. After you confirm, Cindy installs it, checks its resources, and automatically enables runnable resources when inspection succeeds.",
       "install": "Install",
       "update": "Update",
       "remove": "Uninstall",
@@ -2603,12 +2738,12 @@
       "retry": "Retry",
       "operationInProgress": "Working on {{name}}…",
       "relativePathUnsupported": "Use an absolute path for local extensions in Settings. Relative paths such as ./extension can be installed from a Pi task.",
-      "confirmTitle": "Install a third-party Pi extension?",
-      "confirmDescription": "{{source}} may contain third-party code. Install and update do not run npm lifecycle scripts. If executable extension code is found, it stays disabled until you review the inspection and explicitly enable it.",
-      "confirmInstall": "Accept risk and install",
-      "updateConfirmTitle": "Update a third-party Pi extension?",
-      "updateConfirmDescription": "{{source}} may replace installed code with a new third-party version. Update does not run npm lifecycle scripts, and executable extension code must be approved again before it can run.",
-      "confirmUpdate": "Accept risk and update",
+      "confirmTitle": "Install This Pi Extension?",
+      "confirmDescription": "{{source}} is third-party code. It will run in the same process as Cindy's Pi and may read files and credentials Pi can access. Install does not run npm lifecycle scripts. Confirming installs it. Cindy automatically enables runnable resources after a successful inspection, even when it reports compatibility limits.",
+      "confirmInstall": "Accept Risk, Install",
+      "updateConfirmTitle": "Update This Pi Extension?",
+      "updateConfirmDescription": "{{source}} will download a new third-party version and replace the installed code. Update does not run npm lifecycle scripts. The code runs in the same process as Pi and may read files and credentials. Confirming updates it. If you turned it off, it stays off; otherwise, Cindy enables it after a successful inspection.",
+      "confirmUpdate": "Accept Risk, Update",
       "uninstallTitle": "Uninstall Pi extension?",
       "uninstallDescription": "{{name}} will be removed from this device. Pi tasks that are already open keep the old extension until they are closed.",
       "confirmUninstall": "Uninstall",
@@ -2671,7 +2806,8 @@
         "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work."
       },
       "success": {
-        "install": "Pi extension installed. The current task is unchanged; start or restart a Pi task to use it.",
+        "install": "Pi extension installed. Check its enabled state below; the current task is unchanged.",
+        "installEnabled": "Pi extension installed and enabled. The current task is unchanged; start or restart a Pi task to use it.",
         "remove": "Pi extension removed. The current task keeps the old extension until it is closed.",
         "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.",
         "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it."
@@ -6155,7 +6291,7 @@
     "sessionLoadFailedTitle": "This teammate task could not be loaded",
     "sessionLoadFailedDescription": "The task link is valid, but Cindy could not read the teammate state. Retry or return to the teammate overview.",
     "sessionUnavailableTitle": "This teammate task is no longer available",
-    "sessionUnavailableDescription": "It may have been renewed, archived, or removed from this teammate. Return to the teammate overview to open its current task.",
+    "sessionUnavailableDescription": "It may have been replaced by a newer task, moved to history, or it no longer belongs to this teammate. Go back to open the current one.",
     "settings": "Settings",
     "settingsNav": {
       "title": "Settings sections"
@@ -6171,9 +6307,9 @@
     "open": "Open",
     "archived": "Archived",
     "sessionLifecycleTitle": "Task lifecycle",
-    "sessionLifecycleDescription": "Renewing archives the current task and starts a fresh canonical teammate task.",
-    "renew": "Renew task",
-    "renewing": "Renewing…",
+    "sessionLifecycleDescription": "Starting a new task picks up the latest settings. The current task moves to history — nothing in it is lost.",
+    "renew": "Start a new task",
+    "renewing": "Starting…",
     "historyTitle": "Archived history",
     "historyDescription": "Review transcripts from previous canonical tasks.",
     "historyEmpty": "No archived teammate tasks yet.",
@@ -6205,7 +6341,7 @@
       "archiveTitle": "Archive this teammate?",
       "archiveDescription": "The teammate stops accepting work and its canonical and route tasks move into history.",
       "deleteTitle": "Permanently delete teammate",
-      "deleteDescription": "This removes the Profile, channel mounts, and automation links for {{name}}. It cannot be undone.",
+      "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
       "keepHistory": "Keep task transcripts as ordinary archived tasks.",
       "confirmName": "Enter “{{name}}” to confirm permanent deletion",
       "worktree": {
@@ -6232,13 +6368,13 @@
         "paused": "Paused"
       },
       "issues": {
-        "profile-error": "The teammate Profile is in an error state.",
+        "profile-error": "This teammate’s settings are in an error state.",
         "missing-canonical": "The canonical teammate task has not been created.",
         "canonical-session-missing": "The canonical task record is missing and must be recovered.",
         "canonical-session-deleted": "The canonical task was deleted and must be replaced.",
         "canonical-link-missing": "The canonical task lost its teammate ownership link.",
         "canonical-link-mismatch": "The canonical task ownership link is inconsistent.",
-        "profile-update-pending": "The saved Profile is newer than the running task; Renew to apply it.",
+        "profile-update-pending": "Newer settings are saved; they take effect in the next task.",
         "runtime-degraded": "The current runtime started without every configured capability.",
         "runtime-failed": "The current runtime failed to start.",
         "routes-recovering": "{{count}} routes are recovering.",
@@ -6276,10 +6412,10 @@
       "events": {
         "created": "Teammate created",
         "canonical-created": "Canonical task created",
-        "canonical-renewed": "Canonical task renewed",
+        "canonical-renewed": "Started a new task",
         "canonical-linked": "Canonical task linked",
         "session-linked": "Task linked to teammate history",
-        "legacy-profile-migrated": "Legacy teammate Profile migrated",
+        "legacy-profile-migrated": "Moved over from an older teammate setup",
         "legacy-session-skipped": "Legacy task could not be linked",
         "project-binding-upserted": "Project binding updated",
         "workspace-lease-released": "Workspace released",
@@ -6353,15 +6489,15 @@
     "identityTitle": "Identity",
     "identitySourceLabel": "Teammate identity (SOUL)",
     "identitySourcePlaceholder": "Describe this teammate's personality, role, and durable behavior.",
-    "identitySourceDescription": "Loaded once as Profile identity when a teammate task starts, not repeated before every message.",
+    "identitySourceDescription": "This is who they are. It is given to them once when a task starts, not repeated with every message.",
     "userContextSourceLabel": "User profile (USER)",
     "userContextSourcePlaceholder": "Tell this teammate who you are, how to address you, and your durable preferences.",
-    "userContextSourceDescription": "Hermes USER.md equivalent. It is versioned separately from teammate identity and writable teammate Memory, then frozen read-only for each runtime.",
+    "userContextSourceDescription": "What they should know about you. Kept separate from their personality and from what they remember on their own, and frozen alongside the rest of the settings.",
     "chooseAvatar": "Choose avatar {{avatar}}",
     "chooseAvatarColor": "Choose avatar color {{color}}",
     "advancedCapabilities": {
       "title": "Technical details behind these abilities",
-      "description": "Harness, model, tools, MCP servers and skills. Nothing here is needed for everyday use."
+      "description": "Which engine and model it runs on, plus tools and skills. You do not need to touch this for everyday use."
     },
     "memoryRecovery": {
       "title": "Long-term memory is off for this teammate",
@@ -6369,27 +6505,27 @@
       "action": "Turn memory back on"
     },
     "capabilitiesTitle": "Capabilities",
-    "capabilitiesDescription": "Each teammate task loads these real capabilities from its pinned Profile version.",
-    "capabilitiesDeferred": "Capability changes create a new Profile version. The current task stays pinned until you explicitly Renew it.",
+    "capabilitiesDescription": "These are the abilities it actually gets when a task starts.",
+    "capabilitiesDeferred": "Changes here take effect in the next task; the current one keeps the abilities it started with.",
     "profileApply": {
-      "title": "New Profile saved",
-      "description": "Profile v{{currentVersion}} is saved, while the current task still uses v{{activeVersion}}. Renew creates a new primary task with the new Profile and archives the current one.",
-      "keepCurrent": "Keep current task",
-      "renewAndApply": "Renew and apply",
+      "title": "Settings saved",
+      "description": "The new settings are saved, but this task is still running the old ones. Start a new task to use them — this one moves to history.",
+      "keepCurrent": "Stay on this task",
+      "renewAndApply": "Start a new task",
       "saveFailed": "Teammate settings could not be saved. No changes were applied.",
-      "renewFailed": "The new Profile is saved, but Renew could not start a new primary task. Your current task is unchanged."
+      "renewFailed": "The new settings are saved, but a new task could not be started. This task is unchanged."
     },
     "runtimeState": {
       "saved": "Saved; applies on start",
       "prepared": "Startup prepared; not yet confirmed",
       "applied": "Active in current task",
-      "pendingRenew": "Waiting for Renew",
+      "pendingRenew": "Takes effect in the next task",
       "degraded": "Some capabilities unavailable",
       "failed": "Last startup failed; not applied"
     },
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",
-    "harnessLabel": "Harness",
+    "harnessLabel": "Engine",
     "capabilityMode": {
       "inherit": "Use currently available",
       "allowlist": "Choose individually"
@@ -6407,7 +6543,7 @@
     "memoryLabel": "Persistent memory",
     "memoryDescription": "Uses a private memory namespace for this teammate.",
     "automationLabel": "Automation",
-    "automationDescription": "Allow this teammate to run unattended on a schedule. Each run pins its Profile version, project, worktree, and delivery target.",
+    "automationDescription": "Let this teammate work on a schedule while you are away. Each run is pinned to the settings, project and delivery target in effect when it starts.",
     "automations": {
       "title": "Teammate automation",
       "description": "Routines this teammate runs on its own — on a schedule, or when you press Run now.",
@@ -6438,7 +6574,7 @@
       "retryingDelivery": "Retrying…",
       "edit": "Edit",
       "saving": "Saving…",
-      "nextProfileVersion": "Next run uses Profile v{{version}}",
+      "nextProfileVersion": "The next run uses the settings saved now",
       "executionPolicy": "Run limits",
       "executionPolicyDescription": "The timeout aborts the run when it is reached.",
       "timeoutMinutes": "Maximum run time (minutes)",
@@ -6530,7 +6666,7 @@
     "permissionsLabel": "Permission mode",
     "permissionAsk": "Ask before acting",
     "permissionTrusted": "Trusted actions",
-    "codexAutomaticCompact": "Codex teammates compact context automatically. /new keeps this teammate task; use Renew in teammate settings only when you really want a new task.",
+    "codexAutomaticCompact": "Codex teammates compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",
     "chatWelcome": "Chat with {{name}}",
     "previewHint": "Local preview — messages are not sent to a real Agent yet.",
     "chatPlaceholder": "Message this teammate…",
@@ -6952,6 +7088,7 @@
     }
   },
   "commonUi": {
+    "retry": "Try again",
     "crossAgentConvert": {
       "asking": {
         "title": "Convertible workspace config detected",
@@ -7164,6 +7301,7 @@
       "retryRemoteModels": "Reload models",
       "remoteEmpty": "This device has no available models",
       "effortLabel": "Effort level",
+      "thinking": "Thinking",
       "edit": "Edit",
       "options": "Options",
       "priceTip": "Input {{input}} · Output {{output}} per 1M tokens",
@@ -7489,11 +7627,12 @@
       "effortRuntimeDirty": "Reasoning effort is still updating. Wait a moment, then send again.",
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "modelSwitchContextGuard": {
-        "title": "Target model has a smaller context window",
-        "warnToast": "This session uses {{used}} of context — about {{pct}}% of the target model's {{total}} window after switching",
-        "overflowDescription": "This session uses {{used}} of context, exceeding the target model's {{total}} window (about {{pct}}%). After switching, replies and even compaction may fail. Compact the session first (click the context ring) or start a new session for this model. Switch anyway?",
-        "confirmSwitch": "Switch model anyway",
-        "cancelSwitch": "Cancel switch"
+        "title": "This model can't fit the current conversation",
+        "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
+        "overflowDescription": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won't all be passed through verbatim.",
+        "overflowDescriptionRemote": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). On a remote session Cindy cannot rebuild a fresh agent context, so the next request may still fail. You can switch anyway, or keep this model.",
+        "confirmSwitch": "Switch and continue",
+        "cancelSwitch": "Keep this model"
       },
       "agentSwitch": {
         "engineNotReady": "Engine switched, but the new engine failed to start; it will retry when you send a message",
@@ -7799,6 +7938,10 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details"
     },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
+    },
     "shareImage": {
       "entry": "Share as Image",
       "title": "Share Conversation",
@@ -7870,7 +8013,8 @@
       "silentStopContinueTitle": "Continue the current task",
       "piTransportClosed": "Remote Pi connection interrupted (SSH channel closed). The remote task is still running — reconnect to continue.",
       "piManagerUnavailable": "Remote Pi manager is not ready. Retry shortly; if it keeps failing, reinstall Pi under Settings → Remote Machines.",
-      "piBundledNodeMissing": "The remote host is missing its runtime (Node.js). Expand the host under Settings → Remote Machines and click Install on Claude Code or Codex first (they bundle Node.js), then start a Pi task."
+      "piBundledNodeMissing": "The remote host is missing its runtime (Node.js). Expand the host under Settings → Remote Machines and click Install on Claude Code or Codex first (they bundle Node.js), then start a Pi task.",
+      "contextOverflow": "This message itself exceeds the model's context window, so Cindy cannot continue it in a fresh agent session. Shorten the input or remove a large attachment, then try again."
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
@@ -8201,6 +8345,13 @@
         "handoffTitleEnglishSource": "Handoff — the context summary sent to the new engine at switch time (not part of the chat transcript; shown only here)",
         "resumedBadge": "session resumed"
       },
+      "contextRebuild": {
+        "labelOverflow": "Context reorganized, continuing",
+        "labelTimeout": "Last turn didn't respond; context reorganized to continue",
+        "toggleHint": "View handoff context",
+        "handoffTitle": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)",
+        "handoffTitleEnglishSource": "Handoff — the context summary sent to the next stretch of this conversation (not part of the chat transcript; shown only here)"
+      },
       "review": {
         "running": "Reviewing current work",
         "completed": "Review complete",
@@ -8370,6 +8521,7 @@
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote Claude Code sessions can't route through the local compat proxy (internal error).",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI credentials are not ready yet (issued automatically after sign-in). Please retry shortly; if this persists, check the Cindy AI status in Settings → Model Providers.",
       "REMOTE_LOCAL_ONLY_PROVIDER": "This model provider is a local-only service (e.g. Ollama) that a remote SSH task cannot reach. Switch to the Cindy AI gateway, or pick a provider reachable from the remote host.",
+      "LOCAL_OLLAMA_NOT_READY": "Local Ollama isn't ready. Open Settings → Model Providers → Ollama.",
       "DEVICE_LINK_CONTROL_DISABLED": "Control for this device is off; the message was not sent.",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "Attachment transfer failed; the message was not sent. Please try again."
     },
@@ -9232,6 +9384,7 @@
     }
   },
   "effortLevels": {
+    "off": "Off",
     "minimal": "Minimal",
     "low": "Low",
     "medium": "Medium",

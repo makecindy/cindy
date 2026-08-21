@@ -155,6 +155,14 @@ function readText(value: unknown, field: string, max = MAX_TEXT, required = fals
   return text;
 }
 
+/**
+ * 角色性别。只收已知取值,别的一律当没给 —— 界面文案据它取「她 / 他」,
+ * 收到脏值不如回落到「用名字称呼」(见 shared/botGender.ts)。
+ */
+function readBotGender(value: unknown): 'female' | 'male' | undefined {
+  return value === 'female' || value === 'male' ? value : undefined;
+}
+
 function parseJson(value: string, fallback: Record<string, unknown> = {}): Record<string, unknown> {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -359,6 +367,9 @@ async function readProfile(
     description: profile.description,
     identitySource: version?.identitySource ?? '',
     userContextSource: typeof config.userContextSource === 'string' ? config.userContextSource : '',
+    // 与 userContextSource 同款:存在档案 JSON 里,投影成顶层字段。老档案没有这
+    // 个键 → undefined → 界面回落「用名字称呼」,与升级前行为一致。
+    ...(readBotGender(config.gender) ? { gender: readBotGender(config.gender) } : {}),
     avatar: profile.avatar,
     avatarColor: profile.avatarColor,
     enabled: profile.status === 'active',
@@ -912,6 +923,11 @@ export function registerBotIpc(): void {
         ? (body.capabilities as Record<string, unknown>)
         : {};
     const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+    // 角色性别。与 userContextSource 同款:不是「能力」,但和档案同生命周期,
+    // 所以一起冻进 capabilities_json,再由 readProfile 投影成顶层字段。
+    // 之前渲染层传了它、这里没接,阵容里的角色一律落回「用名字称呼」,
+    // 设置页显示「林律是谁」而不是「她是谁」(2026-08-21 实机发现)。
+    const gender = readBotGender(body.gender);
     let eventSubscription:
       { id: string; name: string; status: 'active' | 'paused'; ruleJson: string } | undefined;
     if (body.eventSubscription !== undefined) {
@@ -956,7 +972,12 @@ export function registerBotIpc(): void {
       avatar,
       avatarColor,
       identitySource,
-      capabilitiesJson: safeJson({ ...capabilities, skills, userContextSource }),
+      capabilitiesJson: safeJson({
+        ...capabilities,
+        skills,
+        userContextSource,
+        ...(gender ? { gender } : {}),
+      }),
       eventSubscription,
       now,
     });
@@ -1052,6 +1073,13 @@ export function registerBotIpc(): void {
     });
     if (Object.prototype.hasOwnProperty.call(body, 'userContextSource')) {
       nextConfig.userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
+    }
+    // 没显式传就保持原值(mergeBotProfileCapabilities 已经把 previous 整份带过来了),
+    // 显式传脏值则清掉 —— 与 readBotGender 的口径一致。
+    if (Object.prototype.hasOwnProperty.call(body, 'gender')) {
+      const nextGender = readBotGender(body.gender);
+      if (nextGender) nextConfig.gender = nextGender;
+      else delete nextConfig.gender;
     }
     const nextIdentitySource =
       body.identitySource !== undefined

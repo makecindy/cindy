@@ -21,7 +21,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { useBotTranslation } from '@/features/bots/botPronounContext';
 import { cn } from '@/lib/utils';
 
 interface EmptyStateProps {
@@ -31,7 +31,7 @@ interface EmptyStateProps {
   onAddReviewTab: () => void;
   onAddSubagentsTab: () => void;
   onAddBackgroundTasksTab: () => void;
-  /** 伙伴会话:默认只推交付物 / TA 的协同,不把工程空态原样摆出来。 */
+  /** 伙伴会话:默认只推作品与协同,不把工程空态原样摆出来。 */
   botSession?: boolean;
   onAddArtifactsTab?: () => void;
   onAddDelegationsTab?: () => void;
@@ -48,7 +48,7 @@ export function EmptyState({
   onAddArtifactsTab,
   onAddDelegationsTab,
 }: EmptyStateProps) {
-  const { t } = useTranslation();
+  const { t } = useBotTranslation();
   return (
     <div className="flex min-h-0 flex-1 flex-col items-start gap-8 overflow-y-auto px-10 pb-8 pt-16">
       <div className="flex w-full flex-col gap-2">

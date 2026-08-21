@@ -31,7 +31,11 @@ import path from 'node:path';
 
 import { ipcMain } from 'electron';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
-import { describeToolUse } from '@cindy/maker-shared/tool-use-descriptor';
+import {
+  createdPathsFromDescriptor,
+  describeToolUse,
+  sourcePathCandidatesFromDescriptor,
+} from '@cindy/maker-shared/tool-use-descriptor';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
 import { botDelegations, botProfiles, botSessionLinks, messages, sessions } from '../schema';
@@ -85,20 +89,18 @@ function parseContent(raw: string): Record<string, unknown> | null {
   }
 }
 
-/** `tool_use` 消息 → 本条新建的文件原始路径(与 generatedFiles.ts 同口径:只收新建)。 */
+/** `tool_use` 消息 → 本条新建的文件原始路径。判定与对话里的产物卡共用同一份。 */
 export function createdPathsFromToolUseContent(content: Record<string, unknown>): string[] {
   const toolName = typeof content.toolName === 'string' ? content.toolName : '';
   if (!toolName) return [];
-  const descriptor = describeToolUse(toolName, content.input ?? null);
-  if (descriptor.kind === 'file') {
-    return descriptor.action === 'create' && descriptor.filePath ? [descriptor.filePath] : [];
-  }
-  if (descriptor.kind === 'fileChange') {
-    return descriptor.changes
-      .filter((change) => change.action === 'add' && change.path)
-      .map((change) => change.path);
-  }
-  return [];
+  return createdPathsFromDescriptor(describeToolUse(toolName, content.input ?? null));
+}
+
+/** `tool_use` 消息 → 本条产出成品时读走的素材路径候选(中间件,不进作品集)。 */
+export function materialPathsFromToolUseContent(content: Record<string, unknown>): string[] {
+  const toolName = typeof content.toolName === 'string' ? content.toolName : '';
+  if (!toolName) return [];
+  return sourcePathCandidatesFromDescriptor(describeToolUse(toolName, content.input ?? null));
 }
 
 /**
@@ -366,6 +368,9 @@ export async function listBotArtifacts(
 
     // 命令候选与「本轮被编辑过的文件」的对撞要跨整批消息判定,所以先把编辑集扫出来。
     const editedTargets = new Set<string>();
+    // 同一遍里收「产出成品时被读走的素材」:自己写的 HTML 设计稿渲成 PDF 之后,
+    // 设计稿不该跟成品一起躺在作品集里(与对话里的产物卡同一条判定)。
+    const materialTargets = new Set<string>();
     for (const row of messageRows) {
       if (row.role !== 'tool_use') continue;
       const content = parseContent(row.content);
@@ -373,6 +378,9 @@ export async function listBotArtifacts(
       const workingDir = workdirBySession.get(row.sessionId) ?? null;
       for (const rawPath of editedPathsFromToolUseContent(content)) {
         editedTargets.add(resolveArtifactPath(rawPath, workingDir));
+      }
+      for (const rawPath of materialPathsFromToolUseContent(content)) {
+        materialTargets.add(resolveArtifactPath(rawPath, workingDir));
       }
     }
 
@@ -383,10 +391,12 @@ export async function listBotArtifacts(
       const workingDir = workdirBySession.get(row.sessionId) ?? null;
       if (row.role === 'tool_use') {
         for (const rawPath of createdPathsFromToolUseContent(content)) {
+          const target = resolveArtifactPath(rawPath, workingDir);
+          if (materialTargets.has(target)) continue;
           addStructural(
             makeBotArtifact({
               source: 'generated',
-              target: resolveArtifactPath(rawPath, workingDir),
+              target,
               isRef: false,
               createdAt: row.createdAt,
               sessionId: row.sessionId,

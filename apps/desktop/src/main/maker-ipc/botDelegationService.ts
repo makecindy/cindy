@@ -31,6 +31,9 @@ import {
   sessions,
 } from '../localDb/schema.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { deriveAvailableModels } from '../maker-host/catalog-to-descriptors.js';
+import type { AgentKind } from '@cindy/maker-core';
 import { createLogger } from '../logger.js';
 import { resolveBusinessSessionId } from '../sessionIds.js';
 import { registerBotDelegationParentCancellation } from './botDelegationLifecycle.js';
@@ -225,6 +228,31 @@ function botAgentKind(config: Record<string, unknown>): 'cc' | 'codex' | 'pi' {
 }
 
 /**
+ * 配置里没有 model 时,快照该记哪个模型。
+ *
+ * 这里**不写死型号**:取目录里标了「新对话默认」的那个,也就是模型选择器给新对话
+ * 用的同一个值;没有标记就取该 agent 的首个可用模型。目录未加载时 `getActiveCatalog`
+ * 会回落 bundled 目录(它保证不抛、不为空),所以这条路不会产出空串。
+ *
+ * 曾经这里(两处)各写死一个型号当兜底 —— 那是与选择器打架的第三份默认口径,
+ * 已删除。要调默认档位去改目录,不在这里分叉。
+ */
+function catalogDefaultModelId(kind: 'cc' | 'codex' | 'pi'): string {
+  const agent: AgentKind = kind === 'cc' ? 'claude-code' : kind;
+  const models = deriveAvailableModels(getActiveCatalog(), agent);
+  return (
+    models.find((m) => m.newSessionDefault?.includes(agent))?.id ?? models[0]?.id ?? ''
+  );
+}
+
+/** 读配置里的 model;缺失或空白时按目录默认补齐(见 catalogDefaultModelId)。 */
+function configuredModelId(config: Record<string, unknown>): string {
+  const raw = config.model;
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  return catalogDefaultModelId(botAgentKind(config));
+}
+
+/**
  * 目标 Bot 的执行配置 → 子任务 session 行字段。
  *
  * 与 `createBotCanonicalSession` 读同一份 `capabilities_json`，口径必须一致：委派子任务
@@ -309,10 +337,7 @@ function configuredCapabilitySnapshot(input: {
   return {
     profileVersion: input.version,
     agentKind: botAgentKind(config),
-    model:
-      typeof config.model === 'string' && config.model.trim()
-        ? config.model.trim()
-        : 'claude-sonnet-4-6',
+    model: configuredModelId(config),
     capabilitiesSha256: sha256(input.capabilitiesJson),
     identitySha256: sha256(input.identitySource),
     skills,
@@ -2282,10 +2307,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       target: {
         profileVersion: target.currentVersion,
         agentKind: botAgentKind(config),
-        model:
-          typeof config.model === 'string' && config.model.trim()
-            ? config.model.trim()
-            : 'claude-sonnet-4-6',
+        model: configuredModelId(config),
         capabilitiesSha256: sha256(version.capabilitiesJson),
         identitySha256: sha256(version.identitySource),
         skills,

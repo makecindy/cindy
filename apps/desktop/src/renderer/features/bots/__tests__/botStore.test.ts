@@ -8,6 +8,12 @@ import {
   setCanonicalBotSession,
   updateBotProfile,
 } from '../botStore';
+import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
+import { getPersistedVendorModel } from '@/state/newMakerDraft';
+
+vi.mock('@/lib/modelDefinitions', () => ({
+  getDefaultModelForVendor: vi.fn(() => ({ id: 'catalog-new-session-default' })),
+}));
 
 describe('bot profile store', () => {
   const createdIds: string[] = [];
@@ -26,6 +32,22 @@ describe('bot profile store', () => {
 
     expect(bot.sessions).toHaveLength(0);
     expect(bot.canonicalSessionId).toBeUndefined();
+  });
+
+  /**
+   * 全新安装(用户从没选过模型)时,新建伙伴必须落在**系统默认**上,也就是模型选择器
+   * 给新对话用的那个值。这里锁的不是某个具体型号 —— 锁的是「不许在伙伴这条线上
+   * 自造一份默认口径」:2026-08-21 用户实测发现全新安装的伙伴一律显示一个写死的
+   * 型号,与选择器无关。
+   */
+  it('falls back to the model catalog default, never a hardcoded id', () => {
+    expect(getPersistedVendorModel('cc')).toBeFalsy();
+
+    const bot = addBotProfile({ name: 'Brand new', channel: 'local', description: '' });
+    createdIds.push(bot.id);
+
+    expect(getDefaultModelForVendor).toHaveBeenCalledWith('cc');
+    expect(bot.capabilities.model).toBe('catalog-new-session-default');
   });
 
   it('creates new Bots hands-on by default, and never with memory turned off', () => {

@@ -111,7 +111,18 @@ describe('BotRosterView — the roster page', () => {
     // 上一版把它写死成 6,加两个角色就红,红的却不是任何真实缺陷。
     expect(BOT_TEMPLATES.length).toBeGreaterThanOrEqual(8);
     expect(screen.getByText('bots.roster.customName')).toBeTruthy();
-    expect(screen.getAllByText('bots.roster.join').length).toBe(BOT_TEMPLATES.length);
+    // 每张卡的加入按钮都带**自己**的第三人称:女角色「她」、男角色「他」。
+    // 之前这里只对得上一个裸 key,于是阵容页整屏落到兜底词「这位伙伴」也照样绿
+    // (2026-08-21 实测才发现)。
+    for (const template of BOT_TEMPLATES) {
+      const expected = template.gender === 'female' ? '她' : '他';
+      expect(
+        screen.getAllByText(`bots.roster.join:{"pronoun":"${expected}"}`).length,
+      ).toBeGreaterThanOrEqual(1);
+    }
+    expect(
+      screen.getAllByText((text) => text.startsWith('bots.roster.join:')).length,
+    ).toBe(BOT_TEMPLATES.length);
     // 阵容式创建没有名字 / 描述 / 身份表单。
     expect(screen.queryByText('bots.nameLabel')).toBeNull();
     expect(screen.queryByText('bots.descriptionLabel')).toBeNull();
@@ -188,7 +199,7 @@ describe('BotRosterView — the roster page', () => {
     renderRoster();
 
     openManualCustom();
-    const submit = screen.getByRole('button', { name: 'bots.roster.join' }) as HTMLButtonElement;
+    const submit = screen.getByRole('button', { name: /^bots.roster.join:/ }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     // 自定义卡不再逼用户先写一段身份设定。
     expect(screen.queryByLabelText('bots.createWizard.roleLabel')).toBeNull();
@@ -272,7 +283,7 @@ describe('BotRosterView — the roster page', () => {
       screen.getByLabelText('bots.roster.customNameLabel', { selector: 'input' }),
       { target: { value: 'Ops buddy' } },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.join' }));
+    fireEvent.click(screen.getByRole('button', { name: /^bots.roster.join:/ }));
 
     await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
     expect(parsePresetAvatarId(mocks.addBotProfileAndWait.mock.calls[0][0].avatar)).toBe('owl');
@@ -327,7 +338,7 @@ describe('BotRosterView — 角色自带的开场笔记', () => {
     fireEvent.change(screen.getByLabelText('bots.roster.customNameLabel', { selector: 'input' }), {
       target: { value: 'Ops buddy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'bots.roster.join' }));
+    fireEvent.click(screen.getByRole('button', { name: /^bots.roster.join:/ }));
 
     await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledTimes(1));
     expect(mocks.seedBotMemory).not.toHaveBeenCalled();

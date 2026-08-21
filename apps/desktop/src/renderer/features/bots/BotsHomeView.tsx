@@ -35,6 +35,7 @@ import {
   updateBotProfile,
   upsertBotChannel,
   useBotProfiles,
+  defaultBotModel,
   exportBotBundle,
   importBotBundle,
   type BotCapabilities,
@@ -938,13 +939,17 @@ export function BotSettings({
                         onChange={(next) => {
                           if (next === 'orca') return;
                           const prefs = getDraft().lastByVendor[next];
+                          // 与新建伙伴同一条判定:用户真选过的优先,没选过跟系统默认。
+                          // 直接读 prefs.model 会把种子快照当成用户的选择。
+                          const model = defaultBotModel(next);
                           setCapabilities((current) => ({
                             ...current,
                             harness: next === 'cc' ? 'claude' : next,
-                            model: prefs.model,
-                            providerId: prefs.providerId ?? null,
+                            model,
+                            // 来源必须与模型同源,否则会拿一个来源去解析另一个来源的 id。
+                            providerId: model === prefs.model ? (prefs.providerId ?? null) : null,
                             effort: prefs.effort,
-                            fastMode: getDraft().fastModeByModel[prefs.model] === true,
+                            fastMode: getDraft().fastModeByModel[model] === true,
                             skillMode: 'inherit',
                           }));
                           autosave.onEdit('instant');
@@ -1613,9 +1618,22 @@ export function BotsHomeView() {
   return (
     <main className="flex h-full items-center justify-center bg-[var(--surface)]" role="main">
       {importNotice || (createSessionError && !isCreatingSession) ? (
-        <p className="max-w-lg px-6 text-center text-13 text-[var(--text-secondary)]">
-          {importNotice ?? t('ccAgent.draft.createSessionFailed')}
-        </p>
+        <div className="flex max-w-lg flex-col items-center gap-3 px-6 text-center">
+          <p className="text-13 text-[var(--text-secondary)]">
+            {importNotice ?? t('ccAgent.draft.createSessionFailed')}
+          </p>
+          {/* 文案写着「请重试」,却没有任何能按的东西 —— 只能切走再切回来才会重建
+              (2026-08-21 实测撞上一次瞬时失败)。这里补上真正的重试入口。 */}
+          {!importNotice && selectedBot ? (
+            <button
+              type="button"
+              onClick={() => void renewBotSession(selectedBot)}
+              className="h-8 rounded-full border border-[var(--border-default)] px-4 text-12 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+            >
+              {t('commonUi.retry')}
+            </button>
+          ) : null}
+        </div>
       ) : (
         // Opening a Bot is a hand-off to its canonical chat, not a page of its
         // own: show a quiet spinner instead of full-screen "loading" text.

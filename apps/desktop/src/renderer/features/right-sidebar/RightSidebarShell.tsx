@@ -64,6 +64,7 @@ import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 import { TabBodyErrorBoundary } from './TabBodyErrorBoundary';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useBotProfiles } from '@/features/bots/botStore';
+import { BotPronounProvider } from '@/features/bots/botPronounContext';
 import {
   isIOSSimulatorPluginAvailable,
   mergeIOSSimulatorVisibleTabOrder,
@@ -157,14 +158,17 @@ export function RightSidebarShell({
 }: RightSidebarShellProps) {
   const { isFullscreen } = useMacFullscreen();
   const bots = useBotProfiles();
-  const isBotSession = Boolean(
-    sessionId
-    && bots.some(
-      (bot) =>
-        bot.canonicalSessionId === sessionId
-        || bot.sessions.some((session) => session.id === sessionId),
-    ),
-  );
+  // 当前会话属于哪个伙伴。以前这里只留了一个 boolean,右侧栏那几处「{{pronoun}}
+  // 的协同 / 的作品」就永远拿不到性别,一律落到兜底词上(实测)。伙伴本体本来就
+  // 在手边,取出来供进 context,子树里的 useBotTranslation 直接就有「她 / 他」。
+  const sessionBot = sessionId
+    ? bots.find(
+        (bot) =>
+          bot.canonicalSessionId === sessionId
+          || bot.sessions.some((session) => session.id === sessionId),
+      )
+    : undefined;
+  const isBotSession = Boolean(sessionBot);
   const chromeActionsLeft =
     isMac && !isFullscreen
       ? CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft
@@ -551,6 +555,7 @@ export function RightSidebarShell({
   }, [handleCycleTab, sessionId]);
 
   return (
+    <BotPronounProvider bot={sessionBot}>
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       {unifiedTopbar ? (
         <div
@@ -714,6 +719,7 @@ export function RightSidebarShell({
         )}
       </div>
     </div>
+    </BotPronounProvider>
   );
 }
 

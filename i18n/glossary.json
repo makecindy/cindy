@@ -1736,17 +1736,48 @@
       "note": "让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。"
     },
     {
-      "id": "deliverable",
+      "id": "engine",
       "status": "proposed",
-      "en": "Deliverable",
+      "en": "Engine",
       "translations": {
-        "zh-CN": "交付物",
-        "zh-TW": "交付物",
-        "ja": "成果物",
-        "ko": "산출물"
+        "zh-CN": "引擎",
+        "zh-TW": "引擎",
+        "ja": "エンジン",
+        "ko": "엔진"
       },
       "checkCase": false,
-      "note": "伙伴(Bot)做出来的、用户能打开的产物:委派回传的产物、会话里新建的文件、消息附件。右栏「交付物」面板与对话里的交付物卡使用。zh-CN/zh-TW 取「交付物」与既有产品语感一致;ja「成果物」、ko「산출물」为各自语言的通用说法。先登记为 proposed,待产品术语评审后固化。"
+      "note": "伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。"
+    },
+    {
+      "id": "work",
+      "status": "decided",
+      "en": "Work",
+      "translations": {
+        "zh-CN": "作品",
+        "zh-TW": "作品",
+        "ja": "作品",
+        "ko": "작품"
+      },
+      "checkCase": false,
+      "minorityByDesign": {
+        "zh-CN": "英文 Work 绝大多数出现是「工作 / 运行」的常义(working、work on、workspace 等),那些照旧;本条只管产出物那一层语义 —— 伙伴做出来、用户能打开的东西。少数派是必然的,不是漏翻。",
+        "zh-TW": "英文 Work 绝大多数出现是「工作 / 运行」的常义(working、work on、workspace 等),那些照旧;本条只管产出物那一层语义 —— 伙伴做出来、用户能打开的东西。少数派是必然的,不是漏翻。",
+        "ja": "英文 Work 绝大多数出现是「工作 / 运行」的常义(working、work on、workspace 等),那些照旧;本条只管产出物那一层语义 —— 伙伴做出来、用户能打开的东西。少数派是必然的,不是漏翻。",
+        "ko": "英文 Work 绝大多数出现是「工作 / 运行」的常义(working、work on、workspace 等),那些照旧;本条只管产出物那一层语义 —— 伙伴做出来、用户能打开的东西。少数派是必然的,不是漏翻。"
+      },
+      "note": "伙伴做出来的、用户能打开的产物:文件(PDF/Word/Excel/PPT)、图片、视频。集合叫「作品集」。2026-08-21 用户裁决:此前的「交付物 / Deliverable」太工程腔,面向普通用户改叫「作品」。右栏面板、对话里的作品卡、会话头部入口统一用它。代码标识符(BotArtifact / bot-artifacts)不跟随改名。"
+    },
+    {
+      "id": "local-model",
+      "status": "proposed",
+      "en": "Local model",
+      "translations": {
+        "zh-CN": "本机模型",
+        "zh-TW": "本機模型",
+        "ja": "ローカルモデル",
+        "ko": "로컬 모델"
+      },
+      "note": "用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。"
     }
   ]
 }

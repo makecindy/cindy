@@ -19,7 +19,11 @@
  *   (消息无 createdAt / 远程会话无法 stat)时宁可不出。tool 来源保持原判定。
  */
 
-import { describeToolUse } from '@cindy/maker-shared';
+import {
+  createdPathsFromDescriptor,
+  describeToolUse,
+  sourcePathCandidatesFromDescriptor,
+} from '@cindy/maker-shared';
 
 import { extractCommandOutputPathCandidates } from '../../shared/commandOutputPaths';
 import { resolveToolFilePath } from './localPathResolver';
@@ -82,16 +86,9 @@ function canonicalizeWindowsShape(abs: string): string {
   return /^[a-zA-Z]:[\\/]/.test(abs) ? abs.replace(/\//g, '\\').replace(/\\{2,}/g, '\\') : abs;
 }
 
-/** 单条 tool_use 消息 → 它新建的文件原始路径列表(可能为空)。 */
+/** 单条 tool_use 消息 → 它新建的文件原始路径列表(可能为空)。判定在共享包里。 */
 function createdPathsFromToolUse(toolName: string, input: unknown): string[] {
-  const descriptor = describeToolUse(toolName, input);
-  if (descriptor.kind === 'file') {
-    return descriptor.action === 'create' && descriptor.filePath ? [descriptor.filePath] : [];
-  }
-  if (descriptor.kind === 'fileChange') {
-    return descriptor.changes.filter((c) => c.action === 'add' && c.path).map((c) => c.path);
-  }
-  return [];
+  return createdPathsFromDescriptor(describeToolUse(toolName, input));
 }
 
 
@@ -151,6 +148,18 @@ export function collectGeneratedFiles(
       for (const rawPath of extractCommandOutputPathCandidates(descriptor.command)) {
         addPath(rawPath, 'command');
       }
+    }
+  }
+
+  // 最后一遍:摘掉中间件 —— 本轮产出、但又被本轮另一次产出当素材读走的文件。
+  // 典型是自己写的 HTML 设计稿:它先被 Write 出来,再被 render_pdf 渲成 PDF,
+  // 两个都进列表的话用户会同时看到设计稿和成品(2026-08-21 实测)。
+  // 求交集而不是猜字段名,所以只有真产出过的文件才可能被摘。
+  for (const msg of messages) {
+    if (msg.role !== 'tool_use' || !msg.toolName) continue;
+    const d = describeToolUse(msg.toolName, msg.toolInput);
+    for (const raw of sourcePathCandidatesFromDescriptor(d)) {
+      byKey.delete(dedupeKeyForPath(canonicalizeWindowsShape(resolveToolFilePath(raw, workingDir))));
     }
   }
   return [...byKey.values()];

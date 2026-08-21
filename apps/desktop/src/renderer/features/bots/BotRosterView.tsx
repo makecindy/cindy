@@ -25,6 +25,7 @@ import {
   type BotAvatarAssignment,
   type BotAvatarHue,
 } from './BotAvatar';
+import { botPronoun } from '../../../shared/botGender';
 import { rememberPendingBotWelcome, type PendingBotWelcome } from './botWelcome';
 import {
   botManualWelcome,
@@ -374,7 +375,10 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
             {t('bots.roster.generate.previewTitle')}
           </h1>
           <p className="mt-2 text-13 leading-6 text-[var(--text-secondary)]">
-            {t('bots.roster.generate.previewSubtitle')}
+            {/* 预览里草稿已经有名字了,第三人称就用它自己的名字(自建伙伴无性别)。 */}
+            {t('bots.roster.generate.previewSubtitle', {
+              pronoun: botPronoun('neutral', draft.name),
+            })}
           </p>
 
           <div className="mt-7 flex flex-col gap-4 rounded-xl border border-[var(--border-default)] p-5">
@@ -428,7 +432,9 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
 
             <div>
               <p className="text-12 text-[var(--text-secondary)]">
-                {t('bots.roster.generate.memoriesLabel')}
+                {t('bots.roster.generate.memoriesLabel', {
+                  pronoun: botPronoun('neutral', draft.name),
+                })}
               </p>
               {draft.memories.length === 0 ? (
                 <p className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
@@ -594,7 +600,8 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
               className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full bg-[var(--accent-cta-bg)] px-6 text-12 font-medium text-[var(--accent-pure-cta-fg)] transition-opacity hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
             >
               {creatingId !== null ? <Spinner size={14} /> : null}
-              {t('bots.roster.join')}
+              {/* 自建伙伴还没有性别,按裁决用它自己的名字;名字没填时按钮本来就是禁用的。 */}
+              {t('bots.roster.join', { pronoun: botPronoun('neutral', customName) })}
             </button>
             <button
               type="button"
@@ -637,6 +644,9 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
           {BOT_TEMPLATES.map((template) => {
             const joined = isJoined(template);
             const name = t(template.nameKey);
+            // 每张卡自己的第三人称。阵容页同屏站着八个人,不存在「当前伙伴」可以
+            // 供进 context,所以这里按卡取值:小满是「她」,老陈是「他」。
+            const pronoun = botPronoun(template.gender, name);
             // 只有一张是实心主按钮。六张卡全实心的一页没有落点,眼睛不知道先看哪
             // 一张;定稿把「先看这个」交给第一张还能点的,其余是同级的描边次选。
             const primary = template.id === primaryTemplateId;
@@ -695,7 +705,7 @@ export function BotRosterView({ onCreated, notice }: BotRosterViewProps = {}) {
                   )}
                 >
                   {creatingId === template.id ? <Spinner size={14} /> : null}
-                  {joined ? t('bots.roster.joined') : t('bots.roster.join')}
+                  {joined ? t('bots.roster.joined') : t('bots.roster.join', { pronoun })}
                 </button>
               </div>
             );

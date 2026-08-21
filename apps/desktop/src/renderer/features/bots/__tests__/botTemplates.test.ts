@@ -169,7 +169,15 @@ describe('Bot roster templates', () => {
       // 角色卡画的是真人像,不是 emoji:解析不出预置立绘就说明这张卡会退化成首字母。
       expect(parsePresetAvatarId(template.avatar)).not.toBeNull();
     }
-    // 阿枢就是原来的「总控」,用猫头鹰立绘。
-    expect(parsePresetAvatarId(getBotTemplate('ashu').avatar)).toBe('owl');
+    // 八张卡同屏,谁跟谁都不能撞脸 —— 撞了就认不出谁是谁(林律与阿枢曾同用猫头鹰,
+    // 2026-08-21 实机截图才发现)。锁不变量,不锁某张卡具体用哪张立绘。
+    const faces = BOT_TEMPLATES.map((t) => t.avatar);
+    expect(new Set(faces).size).toBe(faces.length);
+  });
+
+  it('每个角色都有明确性别设定(界面按它取「她 / 他」)', () => {
+    for (const template of BOT_TEMPLATES) {
+      expect(['female', 'male']).toContain(template.gender);
+    }
   });
 });

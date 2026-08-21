@@ -34,5 +34,20 @@ export function normalizeBotGender(value: unknown): BotGender {
 export function botPronoun(gender: BotGender, displayName: string): string {
   if (gender === 'female') return '她';
   if (gender === 'male') return '他';
-  return displayName.trim() || '这位伙伴';
+  return padLatin(displayName.trim()) || '这位伙伴';
+}
+
+/**
+ * 中文正文里代词紧贴前后字(「让她加入」),但夹进来的如果是西文名字,不留空隙就
+ * 挤成一团(「让Cindy加入」)。文案模板里因此**不写空格**,由这里按值决定 ——
+ * 名字首尾是西文才补,中文名字原样返回。
+ *
+ * 只对中文生效:en / ja / ko 的文案根本不引用这个插值。
+ */
+function padLatin(name: string): string {
+  if (!name) return name;
+  const cjk = /[㐀-鿿぀-ヿ가-힯]/;
+  const head = cjk.test(name[0]!) ? '' : ' ';
+  const tail = cjk.test(name[name.length - 1]!) ? '' : ' ';
+  return `${head}${name}${tail}`;
 }

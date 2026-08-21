@@ -283,7 +283,8 @@ export const BOT_TEMPLATES: readonly BotTemplateDefinition[] = [
   {
     id: 'ashu',
     gender: 'male',
-    avatar: presetAvatarValue('owl'),
+    // 猫头鹰归林律(戴眼镜、法务气质更贴)。阵容页八个人同屏,撞脸就认不出谁是谁。
+    avatar: presetAvatarValue('dino'),
     avatarColor: 'violet',
     nameKey: copyKey('ashu', 'name'),
     descriptionKey: copyKey('ashu', 'description'),
