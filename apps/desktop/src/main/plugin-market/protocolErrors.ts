@@ -30,16 +30,20 @@ function parseJsonLiteral(serialized: string): { ok: true; value: unknown } | { 
 
 /**
  * The market protocol validates the current release manifest while parsing a
- * detail response. Keep this narrow: malformed envelopes must remain an
- * internal/network failure, while an unsupported manifest gets actionable UI.
+ * detail response. Keep this narrow: only a genuine manifest parse/validation
+ * failure (the ` 不合法: ` marker emitted by the protocol parser) maps to
+ * `GHOST_FILE_INVALID`. Other protocol errors whose message merely mentions
+ * `currentRelease.manifest` — e.g. oidc-token scope mismatch, name/description/
+ * author consistency checks, or a missing manifest field — are envelope-level
+ * failures and must stay INTERNAL so we don't mislabel a malformed server
+ * response as a bad package. Malformed envelopes remain an internal/network
+ * failure, while an unsupported manifest gets actionable UI.
  */
 export function isPluginManifestIncompatibilityError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.name === 'PluginProtocolError' &&
-    error.message.includes('currentRelease.manifest') &&
-    !isPluginHostUnsupportedError(error)
-  );
+  // Require the exact `currentRelease.manifest 不合法: <reason>` shape produced
+  // by the protocol validator, not any message that happens to mention the
+  // path. `currentReleaseManifestReason` returns null for non-parse errors.
+  return currentReleaseManifestReason(error) !== null && !isPluginHostUnsupportedError(error);
 }
 
 /**

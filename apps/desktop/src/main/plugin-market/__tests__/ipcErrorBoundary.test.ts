@@ -217,6 +217,22 @@ describe('Plugin Market IPC error boundary', () => {
     ).toBe(false);
   });
 
+  // Non-parse protocol errors whose message merely mentions currentRelease.manifest
+  // (oidc scope mismatch, name/description/author consistency) are envelope-level
+  // failures, not a bad package. They must stay INTERNAL rather than being mapped
+  // to GHOST_FILE_INVALID by the broad `.includes('currentRelease.manifest')` match.
+  it.each([
+    'response.plugin.currentRelease.manifest 的 oidc-token 仅允许 organization scope',
+    'response.plugin.name 与 currentRelease.manifest.name 不一致',
+    'response.plugin.description 与 currentRelease.manifest.description 不一致',
+    'response.plugin.author 与 currentRelease.manifest.author 不一致',
+    'response.plugin.currentRelease.manifest.id 与 ghostId 不一致',
+  ])('does not map non-parse protocol error %j to a manifest/package failure', (message) => {
+    const error = Object.assign(new Error(message), { name: 'PluginProtocolError' });
+    expect(isPluginHostUnsupportedError(error)).toBe(false);
+    expect(isPluginManifestIncompatibilityError(error)).toBe(false);
+  });
+
   it('guards removal notice consumption and signals trusted app windows only', () => {
     const consumeStart = registerSource.indexOf(
       "ipcMain.handle('plugin-market:consume-removal-notice'",
