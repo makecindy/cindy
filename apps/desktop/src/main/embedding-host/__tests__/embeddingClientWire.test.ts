@@ -1143,4 +1143,22 @@ describe('EmbeddingClient · mapStatusToCode (INVALID_MODEL 熔断信号)', () =
       clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
     ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
   });
+
+  it('"unknown_model_parameter" 下划线机器码不误判 → BAD_REQUEST (PR #2288 Codex P2)', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: 'unknown_model_parameter: dimensions' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('"unknown-model-input" 连字符机器码不误判 → BAD_REQUEST (PR #2288 Codex P2)', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: 'unknown-model-input: dimension too small' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
 });

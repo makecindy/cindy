@@ -819,7 +819,7 @@ const MODEL_NOT_FOUND_PATTERNS = [
   /deployment[_\s-]?not[_\s-]?found/i,
   // "unknown model" 独立出现 / 后接冒号引号模型 id;
   // 不匹配 "unknown model parameter / field / input / key / argument" 这类参数错误。
-  /unknown[_\s-]?model(?!\s+(?:parameter|field|input|key|argument|property|option|setting|value|type))/i,
+  /unknown[_\s-]?model(?![_\s-]+(?:parameter|field|input|key|argument|property|option|setting|value|type))/i,
   /the model .* does not exist/i,
   // LiteLLM: "Invalid model name" (非存在模型);避免误伤 "invalid model input"
   // 这类输入/参数错误,只认 "invalid model name" 或后接冒号/引号模型 id 的措辞。
