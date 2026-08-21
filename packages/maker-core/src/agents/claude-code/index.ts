@@ -2404,6 +2404,9 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 的边界事件正常放行、清 turnInFlight。计数 = "已注入但 SDK 还没跑完的桥接 turn 数"。
      */
     let queuedBridgeTurns = 0;
+    // 用户 turn 结束后由 completeTranslatedTurnEnd / setModel 注入的静默 /compact。
+    // 不能复用 queuedBridgeTurns：那会 suppress 终态、并把 isTurnRunning 卡在 true。
+    let hostAutoCompactInFlight = false;
     type ActiveBridgeKind = 'rewind' | 'cancellation';
     let activeBridgeKind: ActiveBridgeKind | null = null;
     // Bridge /compact 由 rewind 或 cancellation rebuild 尾部注入。若用户 Stop 打在该 bridge turn
@@ -2583,6 +2586,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
         source: 'claude-code',
       });
+      if (hostAutoCompactInFlight) {
+        autoCompactController?.onCompactCanceled('host_auto_compact_idle_timeout');
+        hostAutoCompactInFlight = false;
+      }
       // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
       // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
       turnInFlight = false;
@@ -2611,8 +2618,10 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 检查是否需要 auto-compact, 需要时把 /compact push 到 inputQueue。返回是否实际 push。
      * 调用方在 rebuild 尾部的 "compact→user 桥接场景" 中据此把 queuedBridgeTurns++,
      * 让后续中间 turn 边界事件被 suppress、turnInFlight 跨排队 turn 保持。
+     * origin=idle 是用户 turn 结束后的静默压缩，失败要 latch/cancel；origin=bridge 由
+     * queuedBridgeTurns 分支处理，不要再标 hostAutoCompactInFlight。
      */
-    function triggerAutoCompactIfNeeded(): boolean {
+    function triggerAutoCompactIfNeeded(origin: 'idle' | 'bridge' = 'idle'): boolean {
       if (closed || turnInFlight) return false;
       if (!autoCompactController?.shouldCompactNow()) return false;
       const snapshot = autoCompactController.getLatestSnapshot();
@@ -2627,6 +2636,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       beginNewTurn();
       resetToolLoopGuards();
       turnInFlight = true;
+      if (origin === 'idle') hostAutoCompactInFlight = true;
       inputQueue.push({
         type: 'user',
         message: { role: 'user', content: '/compact' },
@@ -2634,6 +2644,15 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
       armUpstreamResponseIdle();
       return true;
+    }
+
+    function noteHostAutoCompactTerminalFailure(message: string): void {
+      if (!hostAutoCompactInFlight) return;
+      if (!opts.remoteHostId && isDeterministicHostCompactFailure(message)) {
+        autoCompactController?.markNeedsRollover('host_auto_compact_failed');
+      } else {
+        autoCompactController?.onCompactCanceled('host_auto_compact_failed');
+      }
     }
 
     // Rewind preview/commit intentionally skip injecting /compact because they
@@ -2652,7 +2671,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     }
 
     function queueAutoCompactBridge(kind: ActiveBridgeKind, resumeAt?: string): boolean {
-      const queued = triggerAutoCompactIfNeeded();
+      const queued = triggerAutoCompactIfNeeded('bridge');
       if (!queued) return false;
       bridgeCompactUsageSnapshot = autoCompactController?.getLatestSnapshot() ?? null;
       activeBridgeKind = kind;
@@ -3478,6 +3497,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let bridgeSuppressedDoneData: Record<string, unknown> | undefined;
     function clearBridgeState(): void {
       queuedBridgeTurns = 0;
+      hostAutoCompactInFlight = false;
       activeBridgeKind = null;
       activeBridgeRewindResumeAt = undefined;
       bridgeCompactUsageSnapshot = null;
@@ -4195,6 +4215,19 @@ export class ClaudeCodeAgent extends BaseAgent {
             return true;
           }
         }
+        if (hostAutoCompactInFlight && e.type === 'error' && isTerminalAgentErrorEvent(e)) {
+          const compactError =
+            typeof (e.data as { message?: unknown }).message === 'string'
+              ? (e.data as { message: string }).message
+              : '';
+          log.warn('host auto-compact turn failed', {
+            reason: (e.data as { reason?: unknown } | null | undefined)?.reason,
+            message: compactError,
+          });
+          noteHostAutoCompactTerminalFailure(
+            compactError || 'Error during compaction: unknown host auto-compact failure',
+          );
+        }
         if (e.type === 'status') {
           const data = e.data as { isRunning?: unknown } | null | undefined;
           if (data?.isRunning === false) {
@@ -4279,6 +4312,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     const getClaudeSubagentTaskUsage = this.deps.getClaudeSubagentTaskUsage;
     function completeTranslatedTurnEnd(): void {
       pendingToolIds.clear();
+      const endingHostAutoCompact = hostAutoCompactInFlight;
+      hostAutoCompactInFlight = false;
       if (queuedBridgeTurns > 0) {
         queuedBridgeTurns -= 1;
         log.debug('onTurnEnd: consumed one bridge turn, keeping turnInFlight + plan state', {
@@ -4303,7 +4338,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       turnInFlight = false;
       clearUpstreamResponseIdle();
-      triggerAutoCompactIfNeeded();
+      // 本轮已经是静默 /compact。瞬时失败由 onCompactCanceled 打开重试，等下一轮用户
+      // turn 结束再压；这里立刻再注入会把 401/过载打成紧循环。
+      if (!endingHostAutoCompact) triggerAutoCompactIfNeeded();
     }
     function startForwardLoop(currentQ: Query): void {
       // q 换代: 上一代 q 的 pending interrupted result 不可能从新 q drain 出来,
@@ -4577,6 +4614,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                       autoCompactController?.onUsageUpdate(used, window);
                     },
                     onCompactBoundary: () => {
+                      hostAutoCompactInFlight = false;
                       memoryFlushController?.onCompactBoundary();
                       autoCompactController?.onCompactBoundary();
                     },
@@ -5708,6 +5746,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 前台仍在跑或 provider continuation 正在 awaiting 时都要锁定本代 Stop。
         // 后者的 turnInFlight 已经是 false，但 interrupt ACK 前的迟到 result 同样
         // 不得重新铸造 continuation claim。
+        if (hostAutoCompactInFlight) {
+          autoCompactController?.onCompactCanceled('host_auto_compact_aborted');
+          hostAutoCompactInFlight = false;
+        }
         const awaitingContinuationAtUserStop = activeContinuationClaim();
         if (turnInFlight || awaitingContinuationAtUserStop?.state === 'awaiting') {
           turnState.interruptRequested = true;

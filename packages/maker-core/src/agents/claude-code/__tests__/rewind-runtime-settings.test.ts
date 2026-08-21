@@ -825,6 +825,110 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('latches rollover when idle host auto-compact returns an empty summary', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: summarization produced empty response',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.getUsageSnapshot().needsRollover).toBe(true);
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    firstQuery.stream.emit({
+      type: 'stream_event',
+      event: { type: 'message_delta', usage: { input_tokens: 438_000, output_tokens: 0 } },
+    });
+    await Promise.resolve();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.close();
+  });
+
+  it('retries idle host auto-compact after a transient compact failure', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'Error during compaction: 401 unauthorized',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
   it('rebuild replays auto-compact when a large→small window switch crossed the threshold during rewind', async () => {
     const { handle, firstQuery } = await startRewindableSession({ autoCompactThresholdPct: 50 });
     const eventIterator = handle.events()[Symbol.asyncIterator]();

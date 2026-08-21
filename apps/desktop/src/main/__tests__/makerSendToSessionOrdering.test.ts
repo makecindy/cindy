@@ -200,6 +200,17 @@ describe('sendToSession ordering', () => {
     expect(dispatchBlock).toContain('return failureResult(result.dispatchOutcome);');
     expectOrder(dispatchBlock, 'const runAccepted = async (): Promise<void> => {', 'sendPersistedUserMessageToSession(deps, {');
     expectOrder(dispatchBlock, 'onAccepted: runAccepted,', 'return failureResult(result.dispatchOutcome);');
+    expectOrder(
+      dispatchBlock,
+      'await deps.prepareUnhealthySession?.(params.targetSessionId);',
+      'const live = deps.getLiveSession(params.targetSessionId);',
+    );
+    expect(source).toContain('prepareUnhealthySession: (sessionId) =>');
+    expectOrder(
+      source,
+      'const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({',
+      'prepareUnhealthySession: (sessionId) =>',
+    );
 
     expect(serviceDispatchBlock).toContain('let acceptedSnapshot: {');
     expect(serviceDispatchBlock).toContain('if (!acceptedSnapshot) return;');

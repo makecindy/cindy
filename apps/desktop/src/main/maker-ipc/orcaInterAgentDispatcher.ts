@@ -135,6 +135,8 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   getLiveSession: (sessionId: string) => PersistedUserMessageSession | null | undefined;
   shouldQueueNewTurn: (sessionId: string) => boolean;
   hasSendToSessionLock: (sessionId: string) => boolean;
+  /** 直发前与 sendToSessionInternal 共用同一套满窗 / compact 失败换窗预检。 */
+  prepareUnhealthySession?: (sessionId: string) => Promise<boolean | void>;
   buildCreateOptsForQueuedSession: (
     sessionId: string,
     meta: TSessionMeta,
@@ -349,6 +351,7 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     }
 
     try {
+      await deps.prepareUnhealthySession?.(params.targetSessionId);
       const live = deps.getLiveSession(params.targetSessionId);
       if (live) {
         const senderLabel = await resolveSenderLabel();

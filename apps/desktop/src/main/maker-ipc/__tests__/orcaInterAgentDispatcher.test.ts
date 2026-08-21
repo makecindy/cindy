@@ -155,6 +155,56 @@ describe('Orca lead/worker dispatcher', () => {
     );
   });
 
+  it('prepares an unhealthy live session before direct send and does not reuse the closed handle', async () => {
+    const closed = { current: false };
+    const liveSession = createLiveSession(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const prepareUnhealthySession = vi.fn(async () => {
+      closed.current = true;
+      return true;
+    });
+    const h = createHarness({
+      getLiveSession: vi.fn(() => (closed.current ? null : liveSession)),
+      prepareUnhealthySession,
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Continue after compact failure',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'prepare-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
+    expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'target-session',
+      clientId: 'client-1',
+    }));
+    expect(liveSession.send).not.toHaveBeenCalled();
+  });
+
+  it('still sends through the live handle after prepare leaves it open', async () => {
+    const prepareUnhealthySession = vi.fn(async () => false);
+    const h = createHarness({ prepareUnhealthySession });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Healthy live send',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'healthy-prepare-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
+    expect(h.liveSession.send).toHaveBeenCalled();
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+  });
+
   it('delays queued accepted side effects until the coordinator accepted hook runs', async () => {
     const accepted = vi.fn();
     const h = createHarness({
