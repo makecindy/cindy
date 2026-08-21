@@ -46,11 +46,36 @@ export const IM_PERMISSION_INPUT_PREVIEW_MAX = 800;
 /** 无选项降级时唯一按钮的文案(两侧一致)。 */
 export const ASK_CONTINUE_LABEL = '继续';
 /**
- * 多选题提交时多个选项 label 的拼接分隔符。answers 的 value 是 string
- * (SDK 契约), 多选编码成逗号拼接 —— 与 AskUserQuestion 原生 UI 的
- * multiSelect 返回形态一致, 模型侧无需特殊理解。
+ * 把打勾卡勾选结果编成 answers value。
+ *
+ * 多选必须是 JSON 数组字符串(`["A","B"]`), 与 AskUserQuestion 原生 UI
+ * (`encodeMultiSelectAnswer` / `AskUserQuestionPrompt.handleNext`) 以及
+ * Codex `responseFromAskUserAnswers` 一致; 单选仍是裸 label。
  */
-export const ASK_MULTI_ANSWER_SEPARATOR = ', ';
+export function encodeAskOptionAnswers(
+  multiSelect: boolean,
+  labels: readonly string[],
+): string {
+  if (labels.length === 0) return '';
+  return multiSelect ? JSON.stringify(labels) : labels[0]!;
+}
+
+/** 收口卡展示: JSON 数组解成逗号分隔, 多问之间用分号。 */
+export function formatAskAnswersForDisplay(answers: Record<string, string>): string {
+  return Object.values(answers)
+    .map((value) => {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+          return parsed.join(', ');
+        }
+      } catch {
+        // 单选是裸 label
+      }
+      return value;
+    })
+    .join('；');
+}
 
 // ── 截断工具 ────────────────────────────────────────────────────────────────
 

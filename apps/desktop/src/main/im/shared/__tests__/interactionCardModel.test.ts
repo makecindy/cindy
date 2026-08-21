@@ -18,6 +18,8 @@ import { createCardBuilders } from '../cardBuilders';
 import {
   buildAskAnswerDecision,
   buildAskAnswersDecision,
+  encodeAskOptionAnswers,
+  formatAskAnswersForDisplay,
   buildPermissionAllowAlwaysDecision,
   buildPermissionAllowOnceDecision,
   buildPermissionDenyDecision,
@@ -236,12 +238,28 @@ describe('composeInteractionModel — v1 规则', () => {
     ).toBe(false);
   });
 
-  it('buildAskAnswersDecision: 未答的题不写 key, 多选答案由调用方拼接', () => {
-    expect(buildAskAnswersDecision({ '用哪个?': 'A, B' })).toEqual({
+  it('buildAskAnswersDecision: 未答的题不写 key, 多选答案由调用方编码', () => {
+    expect(buildAskAnswersDecision({ '用哪个?': JSON.stringify(['A', 'B']) })).toEqual({
       kind: 'ask_user_question',
-      answers: { '用哪个?': 'A, B' },
+      answers: { '用哪个?': JSON.stringify(['A', 'B']) },
     });
     expect(buildAskAnswersDecision({})).toEqual({ kind: 'ask_user_question', answers: {} });
+  });
+
+  it('encodeAskOptionAnswers: 多选 JSON 数组, 单选裸 label', () => {
+    expect(encodeAskOptionAnswers(true, ['A', 'B'])).toBe(JSON.stringify(['A', 'B']));
+    expect(encodeAskOptionAnswers(true, ['A'])).toBe(JSON.stringify(['A']));
+    expect(encodeAskOptionAnswers(false, ['A'])).toBe('A');
+    expect(encodeAskOptionAnswers(true, [])).toBe('');
+  });
+
+  it('formatAskAnswersForDisplay: JSON 数组解成逗号, 多问分号', () => {
+    expect(
+      formatAskAnswersForDisplay({
+        '开启哪些组件?': JSON.stringify(['网关', '日志']),
+        '部署到哪?': '生产环境',
+      }),
+    ).toBe('网关, 日志；生产环境');
   });
 
   it('permission 的会话级 addRules destination 与 maker-core 常量同值(防漂移)', () => {

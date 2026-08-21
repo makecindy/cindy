@@ -3,7 +3,7 @@
  *
  * 语义: 选项按键只改写 pendingInteractions 里登记的勾选态并原地 patch 整卡
  * (✓ 前缀反馈), 不产生决策; 提交按键从勾选态合成 answers(未答的题不写 key,
- * 多选按原选项顺序逗号拼接)走通用收口。pendingInteractions 用真实实现 —
+ * 多选 JSON 数组 / 单选裸 label)走通用收口。pendingInteractions 用真实实现 —
  * 这条链路本来就是它和多处注入的唯一粘合点。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -76,6 +76,7 @@ vi.mock('../../../maker-ipc/register', () => ({
 }));
 
 import { ui } from '../../feishu/uiText';
+import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createCardActionHandler } from '../cardActionHandler';
 import { createCardBuilders } from '../cardBuilders';
 import { cancelPending, lookupPending, registerPending } from '../pendingInteractions';
@@ -214,7 +215,7 @@ describe('ask 多题/多选打勾卡', () => {
     expect(optionButton(final, 1, 1).label).toBe('✓ 2·生产环境');
   });
 
-  it('提交: 全部已答合成 answers(多选逗号拼接), 未答的题不写 key, 卡片收口', async () => {
+  it('提交: 全部已答合成 answers(多选 JSON 数组), 未答的题不写 key, 卡片收口', async () => {
     const { decisionPromise, im, press, patchedSpec } = setupAskMulti('req-submit');
 
     await press('ask:multi', { requestId: 'req-submit', q: 0, o: 0 });
@@ -224,7 +225,7 @@ describe('ask 多题/多选打勾卡', () => {
 
     await expect(decisionPromise).resolves.toEqual({
       kind: 'ask_user_question',
-      answers: { '开启哪些组件?': '网关, 日志', '部署到哪?': '生产环境' },
+      answers: { '开启哪些组件?': JSON.stringify(['网关', '日志']), '部署到哪?': '生产环境' },
     });
     // 最后一拍是收口卡: 决策摘要拼成一句, 按钮清空
     const resolved = patchedSpec(4);
@@ -245,7 +246,7 @@ describe('ask 多题/多选打勾卡', () => {
 
     await expect(decisionPromise).resolves.toEqual({
       kind: 'ask_user_question',
-      answers: { '开启哪些组件?': '监控' },
+      answers: { '开启哪些组件?': JSON.stringify(['监控']) },
     });
   });
 
@@ -288,7 +289,41 @@ describe('ask 多题/多选打勾卡', () => {
     expect(last.body).toContain('网关');
     await expect(decisionPromise).resolves.toEqual({
       kind: 'ask_user_question',
-      answers: { '开启哪些组件?': '网关' },
+      answers: { '开启哪些组件?': JSON.stringify(['网关']) },
     });
+  });
+
+  it('toggle 未完成时作废: 过期终态排进同一队列, 不被旧勾选 patch 覆盖', async () => {
+    const { decisionPromise, im, press } = setupAskMulti('req-drop');
+    const deferred: Array<() => void> = [];
+    (im.updateInteractiveCard as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          deferred.push(resolve);
+        }),
+    );
+
+    const toggleP = press('ask:multi', { requestId: 'req-drop', q: 0, o: 0 });
+    await vi.waitFor(() => expect(deferred).toHaveLength(1));
+
+    const cancelled = cancelPending('req-drop', 'turn-end');
+    expect(cancelled?.messageId).toBe('card-1');
+    const dropP = enqueueAskCardPatch('req-drop', async () => {
+      await im.updateInteractiveCard('card-1', cards.buildResolvedCard('卡片已过期'));
+    });
+    expect(im.updateInteractiveCard).toHaveBeenCalledTimes(1);
+
+    deferred[0]!();
+    await toggleP;
+    await vi.waitFor(() => expect(deferred).toHaveLength(2));
+    deferred[1]!();
+    await dropP;
+
+    const calls = (im.updateInteractiveCard as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(2);
+    const last = calls[1]![1] as ReturnType<typeof cards.buildResolvedCard>;
+    expect(last.buttons).toEqual([]);
+    expect(last.body).toContain('卡片已过期');
+    await expect(decisionPromise).resolves.toEqual({ kind: 'ask_user_question', answers: {} });
   });
 });

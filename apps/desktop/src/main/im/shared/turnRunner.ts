@@ -154,6 +154,7 @@ import {
   changeSessionPermissionMode,
   type PermissionModeChangeResult,
 } from './permissionModeControl';
+import { enqueueAskCardPatch } from './askCardPatchQueue';
 import { needsAskMultiCard } from './interactionCardModel';
 
 /**
@@ -2456,12 +2457,16 @@ export function createTurnRunner(
     if (!cancelled) return false;
     const notice = adapter.interactionExpiredNotice;
     if (!notice || !richIm) return true;
-    void richIm
-      .updateInteractiveCard(cancelled.messageId, cards.buildResolvedCard(notice))
-      .catch((err: unknown) => {
+    const messageId = cancelled.messageId;
+    const im = richIm;
+    void enqueueAskCardPatch(requestId, async () => {
+      try {
+        await im.updateInteractiveCard(messageId, cards.buildResolvedCard(notice));
+      } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`dropped interaction card cleanup failed (non-fatal): ${msg}`);
-      });
+      }
+    });
     return true;
   }
 

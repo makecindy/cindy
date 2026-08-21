@@ -75,8 +75,8 @@ import {
 } from './sessionRepo';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
+import { enqueueAskCardPatch } from './askCardPatchQueue';
 import {
-  ASK_MULTI_ANSWER_SEPARATOR,
   buildAskAnswerDecision,
   buildAskAnswersDecision,
   buildAskNoAnswerDecision,
@@ -85,6 +85,8 @@ import {
   buildPermissionDenyDecision,
   buildPlanApproveDecision,
   buildPlanDenyDecision,
+  encodeAskOptionAnswers,
+  formatAskAnswersForDisplay,
   MAX_OPTIONS,
   PERMISSION_USER_DENIED_REASON,
   PLAN_USER_REJECTED_REASON,
@@ -114,18 +116,8 @@ export function createCardActionHandler(
   const log = createLogger(`im:${channel}:card`);
   const threadUi = ui.thread;
 
-  // Per-request patch serializer: toggle 与提交终态都走这条链, 避免快速勾选后
-  // 立刻提交时旧 toggle patch 覆盖已收口卡片。
-  const askPatchChain = new Map<string, Promise<void>>();
-  function enqueueAskPatch(requestId: string, fn: () => Promise<void>): Promise<void> {
-    const prev = askPatchChain.get(requestId) ?? Promise.resolve();
-    const next = prev.then(fn, fn);
-    askPatchChain.set(requestId, next);
-    next.finally(() => {
-      if (askPatchChain.get(requestId) === next) askPatchChain.delete(requestId);
-    });
-    return next;
-  }
+  // Per-request patch serializer: toggle / 提交收口 / turn 作废都走
+  // enqueueAskCardPatch, 避免 in-flight 勾选覆盖终态。
 
   function requireThreadUi() {
     if (!threadUi)
@@ -1365,7 +1357,7 @@ export function createCardActionHandler(
     log.info(`ask:multi toggle q=${qi} o=${oi} multiSelect=${question.multiSelect === true}`);
     const questions = entry.askQuestions;
     const selections = entry.askSelections;
-    await enqueueAskPatch(requestId, async () => {
+    await enqueueAskCardPatch(requestId, async () => {
       if (!lookupPending(requestId)) return;
       try {
         await im.updateInteractiveCard(
@@ -1421,7 +1413,7 @@ export function createCardActionHandler(
       case 'ask:multi-submit': {
         // 打勾卡提交: 从 pendingInteractions 登记的问题与勾选态合成 answers。
         // 未作答的问题不写 key(与超时空 answers 同语义, agent 会追问);
-        // 多选按选项原顺序拼接(与 AskUserQuestion 原生 UI 的返回形态一致)。
+        // 多选编成 JSON 数组字符串, 单选仍是裸 label。
         const requestId = String(p.requestId ?? '');
         const entry = requestId ? lookupPending(requestId) : null;
         if (!entry?.askQuestions || !entry.askSelections) {
@@ -1437,7 +1429,10 @@ export function createCardActionHandler(
             .sort((a, b) => a - b)
             .map((oi) => question.options![oi]!.label);
           if (labels.length > 0) {
-            answers[question.question] = labels.join(ASK_MULTI_ANSWER_SEPARATOR);
+            answers[question.question] = encodeAskOptionAnswers(
+              question.multiSelect === true,
+              labels,
+            );
           }
         });
         return buildAskAnswersDecision(answers);
@@ -1459,9 +1454,8 @@ export function createCardActionHandler(
           ? ui.cards.plan.resolvedApproved
           : ui.cards.plan.resolvedRejected;
       case 'ask_user_question': {
-        // 单答维持原样; 打勾卡一次提交多问时拼成一句收口(答案文本内已含
-        // 多选的逗号拼接, 外层用分号隔开各问)
-        const joined = Object.values(d.answers).join('；');
+        // 协议层多选是 JSON 数组; 收口卡展示再解成逗号分隔, 多问用分号。
+        const joined = formatAskAnswersForDisplay(d.answers);
         return joined ? ui.cards.ask.resolved(joined) : '✅ 已选择：继续';
       }
     }
@@ -1511,8 +1505,8 @@ export function createCardActionHandler(
             return;
           }
           // ask:multi-submit 走通用决策路径(decisionFromPress 从勾选态合成
-          // answers → resolvePending); 收口 patch 仍排进 enqueueAskPatch,
-          // 与 toggle 同队列, 避免 in-flight 勾选 patch 盖掉终态。
+          // answers → resolvePending); 收口 patch 仍排进 enqueueAskCardPatch,
+          // 与 toggle / 作废终态同队列, 避免 in-flight 勾选 patch 盖掉终态。
 
           // /ctr picker —
           //   pick (workspace) → 替换为 session picker
@@ -1606,7 +1600,7 @@ export function createCardActionHandler(
           };
           // 打勾卡提交必须与 toggle 同队列, 否则 in-flight 勾选 patch 会盖掉终态。
           if (event.buttonId === 'ask:multi-submit') {
-            await enqueueAskPatch(requestId, patchResolved);
+            await enqueueAskCardPatch(requestId, patchResolved);
           } else {
             await patchResolved();
           }
