@@ -236,7 +236,7 @@ export interface HookRunOutcome {
   finalText: string;
   errorMessage: string | null;
   durationMs: number;
-  /** 出站附件(agent 产图/产文件, runner 收集编码; 无则省略), 随 turn.end 回传。 */
+  /** 出站附件(agent 产图/视频/文件, runner 收集编码; 无则省略), 随 turn.end 回传。 */
   attachments?: TaskAttachment[];
 }
 
