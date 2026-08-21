@@ -29,8 +29,7 @@ import { getMaker } from './maker-host/index.js';
 import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
 import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
 import { getDbClient } from './localDb/client/current.js';
-import { latestMessageText } from './localDb/latestMessageText.js';
-import { extractMessagePreview } from './localDb/mapper.js';
+import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';
 import { messages, sessions } from './localDb/schema.js';
 import { createLogger } from './logger.js';
 import {
@@ -118,35 +117,6 @@ function broadcastPatched(
       /* swallow */
     }
   }
-}
-
-const messageRowid = sql<number>`rowid`;
-
-/** 与 sessions:list / 删除消息同一口径的最近可见消息 preview。 */
-async function latestVisiblePreview(sessionId: string): Promise<string | null> {
-  const db = getDbClient().drizzle;
-  const [sessionRow] = await db
-    .select({ clearedAt: sessions.clearedAt })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  const visibleAfterClear =
-    sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
-  const [latestRow] = await db
-    .select({ content: messages.content, role: messages.role })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        sql`${messages.role} IN ('user', 'assistant')`,
-        isNull(messages.rewindAt),
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
-        visibleAfterClear,
-      ),
-    )
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(1);
-  return extractMessagePreview(latestRow?.content, latestRow?.role);
 }
 
 /** 把已知的列表预览立刻推给侧栏。不 bump updatedAt,也不碰 summary。 */

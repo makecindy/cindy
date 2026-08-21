@@ -11,6 +11,7 @@ import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } f
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
+import { latestVisiblePreview, latestVisiblePreviewRow } from '../latestMessageText';
 import { messages, sessions } from '../schema';
 import {
   messageToCamel,
@@ -146,10 +147,9 @@ async function maybeBroadcastSessionListPreview(
   ownerScope?: DataOwnerBroadcastScope | null,
 ): Promise<void> {
   if (!isVisibleSessionListPreviewRow(row)) return;
-  const preview = extractMessagePreview(row.content, row.role);
-  if (!preview) return;
+  let latest: Awaited<ReturnType<typeof latestVisiblePreviewRow>>;
   try {
-    if (!(await isLatestVisibleSessionListPreviewRow(sessionId, row))) return;
+    latest = await latestVisiblePreviewRow(sessionId);
   } catch (err) {
     log.warn('session list preview latest-row check failed (swallowed)', {
       sessionId,
@@ -158,43 +158,13 @@ async function maybeBroadcastSessionListPreview(
     });
     return;
   }
+  if (latest?.clientId !== row.clientId) return;
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  broadcastOwnedPayload('local-db:sessions:patched', { sessionId, patch: { preview } }, ownerScope);
-}
-
-/** 与 sessions:list 同一口径:clearedAt / rewind / autoResume / (createdAt, rowid)。 */
-async function isLatestVisibleSessionListPreviewRow(
-  sessionId: string,
-  row: MessageRow,
-): Promise<boolean> {
-  const db = getDbClient().drizzle;
-  const [sessionRow] = await db
-    .select({ clearedAt: sessions.clearedAt })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  if (sessionRow?.clearedAt != null && row.createdAt <= sessionRow.clearedAt) return false;
-  const visibleAfterClear =
-    sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
-  const [latest] = await db
-    .select({
-      clientId: messages.clientId,
-      createdAt: messages.createdAt,
-      rowid: messageRowid,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        sql`${messages.role} IN ('user', 'assistant')`,
-        isNull(messages.rewindAt),
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
-        visibleAfterClear,
-      ),
-    )
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(1);
-  return latest?.clientId === row.clientId;
+  broadcastOwnedPayload(
+    'local-db:sessions:patched',
+    { sessionId, patch: { preview: extractMessagePreview(row.content, row.role) } },
+    ownerScope,
+  );
 }
 
 function isAutoResumeUserRow(agentMetaJson: string | null): boolean {
@@ -993,28 +963,7 @@ export async function commitMessageDeletion(
   // 口径要动得连 maker-shared/sessionList 的 messageCountLabel 一起改。
   let preview: string | null = null;
   try {
-    const db = getDbClient().drizzle;
-    const [sessionRow] = await db
-      .select({ clearedAt: sessions.clearedAt })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    const visibleAfterClear =
-      sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
-    const visibleMessageProjection = and(
-      eq(messages.sessionId, sessionId),
-      sql`${messages.role} IN ('user', 'assistant')`,
-      isNull(messages.rewindAt),
-      sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
-      visibleAfterClear,
-    );
-    const [latestRow] = await db
-      .select({ content: messages.content, role: messages.role })
-      .from(messages)
-      .where(visibleMessageProjection)
-      .orderBy(desc(messages.createdAt), desc(messageRowid))
-      .limit(1);
-    preview = extractMessagePreview(latestRow?.content, latestRow?.role);
+    preview = await latestVisiblePreview(sessionId);
   } catch (error) {
     // 删除已经原子提交；投影查询失败不能把成功操作伪装成失败。广播保守空值，
     // 后续 sessions:list / reseed 会按 DB 真相收敛。

@@ -253,11 +253,18 @@ describe('turn-done list preview refresh', () => {
     expect(summarySource).toContain(
       'broadcastSessionListPreview(sessionId, preview, ownerScope);',
     );
+    expect(summarySource).toContain(
+      "import { latestMessageText, latestVisiblePreview } from './localDb/latestMessageText.js';",
+    );
   });
 
   it('助手正文被改写后也刷新列表预览', () => {
     const messagesSource = readFileSync(
       resolve(__dirname, '..', 'localDb', 'ipc', 'messages.ts'),
+      'utf8',
+    );
+    const latestSource = readFileSync(
+      resolve(__dirname, '..', 'localDb', 'latestMessageText.ts'),
       'utf8',
     );
     const updateStart = messagesSource.indexOf('export async function updateMessageContent');
@@ -270,13 +277,22 @@ describe('turn-done list preview refresh', () => {
     expect(updateBlock).toContain(
       'await maybeBroadcastSessionListPreview(sessionId, row, ownerScope);',
     );
-    const latestStart = messagesSource.indexOf(
-      'async function isLatestVisibleSessionListPreviewRow',
+    const broadcastStart = messagesSource.indexOf(
+      'async function maybeBroadcastSessionListPreview',
     );
-    const latestEnd = messagesSource.indexOf('function isAutoResumeUserRow', latestStart);
-    const latestBlock = messagesSource.slice(latestStart, latestEnd);
-    expect(latestBlock).toContain('.orderBy(desc(messages.createdAt), desc(messageRowid))');
-    expect(latestBlock).toContain('return latest?.clientId === row.clientId;');
+    const broadcastEnd = messagesSource.indexOf('function isAutoResumeUserRow', broadcastStart);
+    const broadcastBlock = messagesSource.slice(broadcastStart, broadcastEnd);
+    expect(broadcastBlock).toContain('latest = await latestVisiblePreviewRow(sessionId);');
+    expect(broadcastBlock).toContain('if (latest?.clientId !== row.clientId) return;');
+    expect(broadcastBlock).toContain(
+      'preview: extractMessagePreview(row.content, row.role)',
+    );
+    expect(broadcastBlock).not.toContain('if (!preview) return;');
+    expect(latestSource).toContain('export async function latestVisiblePreviewRow');
+    expect(latestSource).toContain(
+      'or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt))',
+    );
+    expect(latestSource).toContain('.orderBy(desc(messages.createdAt), desc(messageRowid))');
   });
 });
 
