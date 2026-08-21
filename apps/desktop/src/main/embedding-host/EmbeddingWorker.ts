@@ -361,6 +361,9 @@ export class EmbeddingWorker {
           if (this.aborted) return;
           // availability 可能在网络往返期间丢失;保留 pending,不要把它记成失败重试。
           if (isProviderSuspended(source)) break;
+          // 逐模型停用也可能在网络往返期间发生:该批保持 pending,恢复启用后续跑,
+          // 不要把它写成 failed / 写进 blockedModels (PR #2288 review)。
+          if (this.opts.isRouteSuspended?.(modelId as string)) continue;
           const code = err instanceof EmbeddingError ? err.code : 'UNKNOWN';
           const msg = err instanceof Error ? err.message : String(err);
           this.opts.log.error(

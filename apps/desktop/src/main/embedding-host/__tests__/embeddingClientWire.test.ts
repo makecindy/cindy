@@ -1053,3 +1053,60 @@ describe('EmbeddingClient · 坐标必须是有限数字', () => {
     ).rejects.toThrow(/document 0 chunk 0 embedding is not an array \(got string\)/);
   });
 });
+
+/**
+ * 构造一个固定 status + body 的假响应,用来断言 mapStatusToCode 对各种错误体的归类。
+ * 这些路径过去出过"误把瞬时 4xx 当模型不存在导致整进程熔断"的 bug (PR #2288 review)。
+ */
+function errorResponse(status: number, body: unknown) {
+  return vi.fn(
+    async () =>
+      new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+  );
+}
+
+describe('EmbeddingClient · mapStatusToCode (INVALID_MODEL 熔断信号)', () => {
+  it('LiteLLM 400 "Invalid model name" → INVALID_MODEL', async () => {
+    const fetchImpl = errorResponse(400, { error: { message: 'Invalid model name' } });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+  });
+
+  it('Anthropic 风格 400 "model: xxx not found" → INVALID_MODEL', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: 'model: voyage/voyage-4 not found' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+  });
+
+  it('OpenAI 404 "The model `x` does not exist" → INVALID_MODEL', async () => {
+    const fetchImpl = errorResponse(404, {
+      error: { message: 'The model `voyage/voyage-4` does not exist' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'INVALID_MODEL' });
+  });
+
+  it('400 纯输入错误 "input too large" → BAD_REQUEST,不熔断', async () => {
+    const fetchImpl = errorResponse(400, { error: { message: 'input too large' } });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('"invalid model input" 是参数错误而非模型不存在 → BAD_REQUEST', async () => {
+    const fetchImpl = errorResponse(400, {
+      error: { message: 'invalid model input: expected array of strings' },
+    });
+    await expect(
+      clientWith(fetchImpl).embed({ texts: ['a'], model: 'voyage/voyage-4' }),
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+});

@@ -810,10 +810,17 @@ export class EmbeddingClient {
  * 必须看错误体里有没有明确的 model_not_found / deployment_not_found 信号。
  */
 const MODEL_NOT_FOUND_PATTERNS = [
+  // "model_not_found", "model-not-found", "model not found"
   /model[_\s-]?not[_\s-]?found/i,
+  // Anthropic 风格: "model: glm-5 not found" / "model 'glm-5' was not found"
+  /model[^\n]{0,40}not[_\s-]?found/i,
   /deployment[_\s-]?not[_\s-]?found/i,
   /unknown[_\s-]?model/i,
   /the model .* does not exist/i,
+  // LiteLLM: "Invalid model name" (非存在模型);避免误伤 "invalid model input"
+  // 这类输入/参数错误,只认 "invalid model name" 或后接冒号/引号模型 id 的措辞。
+  /invalid[_\s-]?model[_\s-]?name/i,
+  /invalid[_\s-]?model\s*[:'"`]/i,
 ];
 
 function looksLikeModelNotFound(rawBody: string, parsedMsg: string): boolean {
