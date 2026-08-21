@@ -21,6 +21,7 @@ import {
 } from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
 import {
+  bodyFontSize,
   DEFAULT_PPTX_LAYOUT,
   defineCindyPptxMasters,
   layoutSlots,
@@ -138,7 +139,11 @@ export function registerMakePptxTool(
         }
 
         const pptx = new pptxgen();
-        pptx.layout = 'LAYOUT_16x9';
+        // **不是 LAYOUT_16x9**:那个在 pptxgenjs 里是 10" × 5.625",而 pptxMasters 的
+        // 几何常量按 13.333" × 7.5" 写(现代 PowerPoint 的宽屏默认)。两边对不上的
+        // 后果不是「小一点」——页脚与页码定位在 y=7.02,整个落在页面外,**从来没
+        // 显示过**;正文框也伸出页底,长内容会被裁掉。LAYOUT_WIDE 才是 13.33 × 7.5。
+        pptx.layout = 'LAYOUT_WIDE';
         if (title) pptx.title = title;
         pptx.author = 'Cindy';
 
@@ -217,9 +222,14 @@ export function registerMakePptxTool(
                   y: slots.body.y,
                   w: slots.body.w,
                   h: hasBody ? bulletBlockH : slots.body.h,
-                  fontSize: slots.body.fontSize,
+                  // 要点少就放大字号占住版面(见 bodyFontSize)。正文一律顶着标题排 ——
+                  // 试过垂直居中,目检下来标题与正文之间裂开一条空白,更糟。
+                  fontSize: hasBody
+                    ? slots.body.fontSize
+                    : bodyFontSize(slots.body.fontSize, slide.bullets?.length ?? 0),
                   color: palette.body,
-                  lineSpacingMultiple: 1.3,
+                  // 行距放到 1.5:1.3 在实机目检里几行要点糊成一坨,读起来很挤。
+                  lineSpacingMultiple: 1.5,
                   valign: 'top',
                   margin: 0,
                 },

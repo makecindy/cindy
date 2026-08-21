@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
 import { PPTX_LAYOUT_IDS, PPTX_THEMES } from '../cindy-docs/make_pptx.js';
-import { layoutSlots } from '../cindy-docs/pptxMasters.js';
+import { layoutSlots, SLIDE_H, SLIDE_W } from '../cindy-docs/pptxMasters.js';
 import { applyReportTemplate, htmlLooksUnstyled } from '../cindy-docs/pdfTemplate.js';
 import { DOCS_THEMES, formatDocsDate, themeToArgb } from '../cindy-docs/themes.js';
 import type { DocsMcpDeps, DocsMcpSessionCtx, DocsPdfRenderInput } from '../cindy-docs/types.js';
@@ -94,7 +94,9 @@ describe('PPT 母版版式', () => {
     expect(cover.title.fontSize).toBeGreaterThan(section.title.fontSize);
     expect(section.title.fontSize).toBeGreaterThan(content.title.fontSize);
     expect(content.accentLine).toBeDefined();
-    expect(cover.accentLine).toBeUndefined();
+    // 封面也有强调短线了(2026-08-22):原来封面除了一根细竖条什么都没有,
+    // 目检下来就是「白底加几行字」。
+    expect(cover.accentLine).toBeDefined();
     expect(split.body.w).toBeLessThan(content.body.w);
     expect(split.image).toBeDefined();
   });
@@ -128,8 +130,9 @@ describe('PPT 母版版式', () => {
     expect(slide1).toContain('Q3 经营回顾');
     expect(slide1).toContain('华东区');
     expect(slide1).toContain(PPTX_THEMES.navy.background);
-    // 封面标题字号 40pt = DrawingML 4000
-    expect(slide1).toContain('4000');
+    // 封面标题字号 44pt = DrawingML 4400(2026-08-22 从 40pt 放大:封面通栏只有
+    // 一行字,40pt 在实机目检里显得又小又散)。
+    expect(slide1).toContain('4400');
 
     expect(layouts).toContain(PPTX_THEMES.navy.accent);
     expect(layouts).toContain('Q3 经营回顾');
@@ -336,5 +339,49 @@ describe('PDF 无样式 HTML 套报告模板', () => {
     });
     expect(custom.templateApplied).toBe(true);
     expect(seen[1]!.margins).toEqual({ top: 1, bottom: 1, left: 0.5, right: 0.5 });
+  });
+});
+
+/**
+ * 版面尺寸必须与 pptxMasters 的几何常量一致。
+ *
+ * 曾经不一致:layout 用了 pptxgenjs 的 'LAYOUT_16x9'(10" × 5.625"),几何却按
+ * 13.333" × 7.5" 写 —— 页脚和页码定位在 y=7.02,整个落在页面外,**从来没显示过**,
+ * 正文框也伸出页底。这条只比对数字,不依赖任何人肉目检。
+ */
+describe('页面尺寸与几何常量对齐', () => {
+  const EMU = 914400;
+
+  it('生成的 pptx 页面尺寸就是 SLIDE_W × SLIDE_H', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_pptx', {
+      slides: [{ title: '页面尺寸', layout: 'content', bullets: ['一条'] }],
+      outPath: 'size.pptx',
+    });
+    const xml = await unzip(result.path as string, 'ppt/presentation.xml');
+    const size = xml.match(/<p:sldSz[^>]*>/)![0];
+    expect(Number(size.match(/cx="(\d+)"/)![1]) / EMU).toBeCloseTo(SLIDE_W, 2);
+    expect(Number(size.match(/cy="(\d+)"/)![1]) / EMU).toBeCloseTo(SLIDE_H, 2);
+  });
+
+  it('母版上的每个形状都落在页面之内(页脚页码不许跑到页外)', async () => {
+    const client = await connect();
+    const result = await callTool(client, 'make_pptx', {
+      title: '页脚检查',
+      slides: [{ title: '页脚', layout: 'content', bullets: ['一条'] }],
+      outPath: 'footer.pptx',
+    });
+    const layouts = await unzipAll(
+      result.path as string,
+      (name) => name.startsWith('ppt/slideLayouts/') && name.endsWith('.xml'),
+    );
+    for (const m of layouts.matchAll(
+      /<a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/g,
+    )) {
+      const y = Number(m[2]) / EMU;
+      const h = Number(m[4]) / EMU;
+      if (h === 0) continue; // pptxgenjs 写的空组占位
+      expect(y + h).toBeLessThanOrEqual(SLIDE_H + 0.01);
+    }
   });
 });
