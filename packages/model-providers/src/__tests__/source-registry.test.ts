@@ -234,6 +234,47 @@ describe('mergeWithBundled', () => {
     expect(rerouted?.models.pi).toBeUndefined();
   });
 
+  it.each([
+    { label: 'api access', access: { kind: 'api' } as const },
+    { label: 'managed access', access: { kind: 'managed' } as const },
+    { label: 'different subscription', access: { kind: 'subscription', product: 'OtherGrok' } as const },
+  ])('does not backfill SuperGrok Pi for explicit $label', ({ access }) => {
+    const bundledXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    const legacyXai = structuredClone(bundledXai);
+    legacyXai.access = access;
+    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== 'pi');
+    delete legacyXai.routing.pi;
+    delete legacyXai.models.pi;
+
+    const merged = mergeWithBundled({ version: '2', providers: [legacyXai] });
+    const xai = merged.providers.find((provider) => provider.id === 'xai');
+
+    expect(xai?.access).toEqual(access);
+    expect(xai?.agents).not.toContain('pi');
+    expect(xai?.routing.pi).toBeUndefined();
+    expect(xai?.models.pi).toBeUndefined();
+  });
+
+  it('keeps the SuperGrok Pi backfill when an old catalog explicitly repeats the same access', () => {
+    const bundledXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    const legacyXai = structuredClone(bundledXai);
+    legacyXai.access = { kind: 'subscription', product: 'SuperGrok' };
+    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== 'pi');
+    delete legacyXai.routing.pi;
+    delete legacyXai.models.pi;
+
+    const merged = mergeWithBundled({ version: '2', providers: [legacyXai] });
+    const xai = merged.providers.find((provider) => provider.id === 'xai');
+
+    expect(xai?.agents).toContain('pi');
+    expect(xai?.routing.pi).toEqual(bundledXai.routing.pi);
+    expect(xai?.models.pi).toEqual(bundledXai.models.pi);
+  });
+
   it('backfills access for an old primary catalog without mutating it', () => {
     const merged = mergeWithBundled(MINIMAL);
     expect(MINIMAL.providers[0].access).toBeUndefined();

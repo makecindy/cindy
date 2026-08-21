@@ -166,8 +166,21 @@ function allowsLegacyPiRuntimeBackfill(primary: Catalog): boolean {
 }
 
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
+function allowsBundledAccessInheritance(
+  primaryAccess: Provider['access'],
+  bundledAccess: Provider['access'],
+): boolean {
+  if (primaryAccess === undefined) return true;
+  if (bundledAccess === undefined || primaryAccess.kind !== bundledAccess.kind) return false;
+  return (
+    primaryAccess.kind !== 'subscription' ||
+    (bundledAccess.kind === 'subscription' && primaryAccess.product === bundledAccess.product)
+  );
+}
+
 function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access'] {
   if (primary.auth.method !== bundled.auth.method) return undefined;
+  if (!allowsBundledAccessInheritance(primary.access, bundled.access)) return undefined;
   const sharedAgents = primary.agents.filter((agent) => bundled.agents.includes(agent));
   if (sharedAgents.length === 0) return undefined;
   const sameRoutes = sharedAgents.every((agent) => {
