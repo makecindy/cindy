@@ -5920,7 +5920,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports).toHaveLength(1);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledTimes(1);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
-      remoteHostId: undefined, credentialMode: 'oauth-bearer',
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'gateway-key',
     });
     await xdHandle.close();
     await oauthHandle.close();
@@ -6028,7 +6030,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports).toHaveLength(1);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledTimes(2);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(1, [], {
-      remoteHostId: undefined, credentialMode: 'oauth-bearer',
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'gateway-key',
     });
     expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
       remoteHostId: undefined, credentialMode: 'gateway-key',
@@ -6251,8 +6255,207 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
       remoteHostId: undefined,
       credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'provider-oauth',
     });
     await handle.close();
+    await agent.dispose();
+  });
+
+  it('reuses a host when both main-task modes resolve to the default Subagent profile', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async () => ({
+        extraArgs: [],
+        extraEnv: {},
+        codexProxyActive: true,
+        codexSubagentRoutingProfile: 'default' as const,
+      }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const oauth = await agent.startSession({
+      sessionId: 'session-profile-default-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    });
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-default-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    expect(createdTransports).toHaveLength(1);
+    expect(createdTransports[0].closed).toBe(false);
+    await thirdParty.close();
+    await oauth.close();
+    await agent.dispose();
+  });
+
+  it('rebuilds an OAuth-default host when the next main task requires configured Subagent routing', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async (_providers, ctx) => ({
+        extraArgs: [],
+        extraEnv: {},
+        codexProxyActive: true,
+        codexSubagentRoutingProfile:
+          (ctx.requestedCredentialMode ?? ctx.credentialMode) === 'oauth-bearer'
+            ? 'oauth-default' as const
+            : 'configured' as const,
+      }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const oauth = await agent.startSession({
+      sessionId: 'session-profile-non-chatgpt-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    });
+    await oauth.close();
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-non-chatgpt-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(true);
+    expect(createdTransports[1].closed).toBe(false);
+    await thirdParty.close();
+    await agent.dispose();
+  });
+
+  it('does not reuse a host whose Subagent routing profile belongs to the opposite main-task mode', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async (_providers, ctx) => {
+        const requestedCredentialMode = ctx.requestedCredentialMode ?? ctx.credentialMode;
+        if (
+          requestedCredentialMode === 'provider-oauth'
+          && ctx.credentialMode === 'provider-oauth'
+        ) {
+          return {
+            extraArgs: [],
+            extraEnv: {},
+            codexProxyActive: true,
+            requiredSpawnCredentialMode: 'oauth-bearer' as const,
+          };
+        }
+        return {
+          extraArgs: [],
+          extraEnv: {},
+          codexProxyActive: true,
+          codexSubagentRoutingProfile:
+            requestedCredentialMode === 'oauth-bearer'
+              ? 'oauth-default' as const
+              : 'configured' as const,
+        };
+      });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+    await thirdParty.close();
+
+    const oauth = await agent.startSession({
+      sessionId: 'session-profile-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    });
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(true);
+    await oauth.close();
+
+    const thirdPartyAgain = await agent.startSession({
+      sessionId: 'session-profile-provider-oauth-again',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai-again',
+    });
+    expect(createdTransports).toHaveLength(3);
+    expect(createdTransports[1].closed).toBe(true);
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'provider-oauth',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(3, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(5, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'provider-oauth',
+    });
+
+    await thirdPartyAgain.close();
+    await agent.dispose();
+  });
+
+  it('does not retire an active host when only the Subagent routing profile must change', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async (_providers, ctx) => {
+        const requestedCredentialMode = ctx.requestedCredentialMode ?? ctx.credentialMode;
+        if (
+          requestedCredentialMode === 'provider-oauth'
+          && ctx.credentialMode === 'provider-oauth'
+        ) {
+          return {
+            extraArgs: [],
+            extraEnv: {},
+            codexProxyActive: true,
+            requiredSpawnCredentialMode: 'oauth-bearer' as const,
+          };
+        }
+        return {
+          extraArgs: [],
+          extraEnv: {},
+          codexProxyActive: true,
+          codexSubagentRoutingProfile:
+            requestedCredentialMode === 'oauth-bearer'
+              ? 'oauth-default' as const
+              : 'configured' as const,
+        };
+      });
+    const prepareCodexLocalCredentialModeSwitch: NonNullable<
+      AgentDeps['prepareCodexLocalCredentialModeSwitch']
+    > = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexExtraSpawnConfig,
+      prepareCodexLocalCredentialModeSwitch,
+    }));
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-busy-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-profile-busy-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    })).rejects.toThrow(/still attached/i);
+
+    expect(prepareCodexLocalCredentialModeSwitch).toHaveBeenCalledWith({
+      fromMode: 'oauth-bearer',
+      fromModeEffective: 'oauth-bearer',
+      toMode: 'oauth-bearer',
+      activeSubscriptions: 1,
+    });
+    expect(createdTransports).toHaveLength(1);
+    expect(createdTransports[0].closed).toBe(false);
+
+    await thirdParty.close();
     await agent.dispose();
   });
 

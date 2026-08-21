@@ -2503,6 +2503,7 @@
       "unspecified": "Use default setting",
       "hint": "Claude Code changes apply to new sessions. Codex changes apply automatically when it is idle.",
       "codexV2ModelHint": "Claude Code uses the selected model as its default. All local Codex Subagents are locked to the selected model and reasoning effort.",
+      "codexOauthCompatibilityHint": "Fixed Subagent routing cannot safely share a task with ChatGPT OAuth. When the main Codex task uses ChatGPT OAuth, or a non-OAuth main task selects a ChatGPT OAuth Subagent, Cindy ignores the model, provider, and reasoning effort selected here and uses that task’s default Codex Subagent.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {
         "title": "Codex subagent guardrails",

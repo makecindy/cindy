@@ -2502,6 +2502,7 @@
       "unspecified": "既定の設定を使用",
       "hint": "Claude Code の変更は新しいセッションから適用されます。Codex の変更はアイドル時に自動で適用されます。",
       "codexV2ModelHint": "Claude Code は選択したモデルを既定値として使用します。ローカルの Codex サブエージェントはすべて、選択したモデルと推論強度に固定されます。",
+      "codexOauthCompatibilityHint": "固定したサブエージェントのルーティングと ChatGPT OAuth は安全に併用できません。メインタスクが ChatGPT OAuth を使用する場合、または非 OAuth のメインタスクで ChatGPT OAuth のサブエージェントを指定した場合、ここで選択したモデル、プロバイダー、推論強度は適用されず、メインタスクの Codex デフォルトサブエージェントが使用されます。",
       "saveFailed": "サブエージェント設定の保存に失敗しました",
       "guardrails": {
         "title": "Codex サブエージェントガードレール",

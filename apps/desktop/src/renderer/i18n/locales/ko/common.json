@@ -2502,6 +2502,7 @@
       "unspecified": "기본 설정 사용",
       "hint": "Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 자동으로 적용됩니다.",
       "codexV2ModelHint": "Claude Code는 선택한 모델을 기본값으로 사용합니다. 모든 로컬 Codex 하위 에이전트는 선택한 모델과 추론 강도로 고정됩니다.",
+      "codexOauthCompatibilityHint": "고정 하위 에이전트 라우팅과 ChatGPT OAuth는 안전하게 함께 사용할 수 없습니다. 메인 작업이 ChatGPT OAuth를 사용하거나 비 OAuth 메인 작업에서 ChatGPT OAuth 하위 에이전트를 선택하면 여기에서 지정한 모델, 제공자, 추론 강도는 적용되지 않고 메인 작업의 Codex 기본 하위 에이전트가 사용됩니다.",
       "saveFailed": "하위 에이전트 설정 저장 실패",
       "guardrails": {
         "title": "Codex 하위 에이전트 가드레일",
