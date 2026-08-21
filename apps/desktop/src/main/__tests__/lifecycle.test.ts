@@ -154,6 +154,123 @@ describe('runQuitDisposers', () => {
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
   });
 
+  it('stops async producers before draining DbClient and closing the local database', async () => {
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    const log: string[] = [];
+    let settleUsageWrite!: () => void;
+    const usageWrite = new Promise<void>((resolve) => {
+      settleUsageWrite = resolve;
+    });
+
+    onQuit(
+      'shutdown-maker',
+      async () => {
+        log.push('producer-started');
+        await Promise.resolve();
+        log.push('producer-stopped');
+        settleUsageWrite();
+      },
+      'async',
+    );
+    onQuit(
+      'db-client',
+      async () => {
+        log.push('drain-started');
+        await usageWrite;
+        log.push('usage-settled');
+        log.push('client-disposed');
+      },
+      'post-async',
+    );
+    onQuit(
+      'local-db-close',
+      () => {
+        log.push('local-db-closed');
+      },
+      'post-async',
+    );
+
+    await runQuitDisposers(1000);
+
+    expect(log).toEqual([
+      'producer-started',
+      'producer-stopped',
+      'drain-started',
+      'usage-settled',
+      'client-disposed',
+      'local-db-closed',
+    ]);
+  });
+
+  it('closes Ghost ingress before an async shutdown timeout reaches DbClient disposal', async () => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    const log: string[] = [];
+
+    onQuit(
+      'ghost-call-ingress',
+      () => {
+        log.push('ingress-closed');
+      },
+      'sync',
+    );
+    onQuit('shutdown-maker', () => new Promise<void>(() => undefined), 'async');
+    onQuit(
+      'db-client',
+      () => {
+        log.push('db-client-disposed');
+      },
+      'post-async',
+    );
+
+    const shutdown = runQuitDisposers(6_000);
+    expect(log).toEqual(['ingress-closed']);
+    await vi.advanceTimersByTimeAsync(6_000);
+    await shutdown;
+
+    expect(log).toEqual(['ingress-closed', 'db-client-disposed']);
+  });
+
+  it('wires DbClient disposal into post-async before local DB close', () => {
+    const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+    const ingress = source.indexOf(
+      "onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');",
+    );
+    const maker = source.indexOf("onQuit('shutdown-maker', shutdownMaker, 'async');");
+    const dbClient = source.indexOf(
+      "onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');",
+    );
+    const localDb = source.indexOf(
+      "onQuit('local-db-close', () => localDbCloseDb(), 'post-async');",
+    );
+
+    expect(ingress).toBeGreaterThan(-1);
+    expect(maker).toBeGreaterThan(ingress);
+    expect(dbClient).toBeGreaterThan(maker);
+    expect(localDb).toBeGreaterThan(dbClient);
+  });
+
+  it('observes Ghost skill cleanup in the async phase instead of the sync ingress hook', () => {
+    const source = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
+    const ghostSource = readFileSync(
+      new URL('../cindy-brain/index.ts', import.meta.url),
+      'utf8',
+    );
+    const beginStart = ghostSource.indexOf('export function beginGhostShutdown(): void {');
+    const beginEnd = ghostSource.indexOf('\n}', beginStart);
+    const beginBody = ghostSource.slice(beginStart, beginEnd);
+
+    expect(beginStart).toBeGreaterThan(-1);
+    expect(beginBody).toContain('if (ghostShutdownStarted) return;');
+    expect(beginBody).toContain('stopGhostRuntimesForBoundary();');
+    expect(beginBody).not.toContain('suspendAllGhosts()');
+    expect(ghostSource).toContain(
+      'ghostShutdownCleanupPromise ??= cleanupGhostOwnerSkillLinks();',
+    );
+    expect(source).toContain("onQuit('ghost-call-ingress', beginGhostShutdown, 'sync');");
+    expect(source).toContain("onQuit('ghost-skill-links', finishGhostShutdown, 'async');");
+  });
+
   it('sync disposer that throws does not block subsequent disposers', async () => {
     const { onQuit, runQuitDisposers } = await freshLifecycle();
     const log: string[] = [];

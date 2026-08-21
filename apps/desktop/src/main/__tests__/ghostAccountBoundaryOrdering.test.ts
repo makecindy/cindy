@@ -41,4 +41,28 @@ describe('Ghost account-boundary teardown ordering', () => {
     expect(helper).toContain('nodeRuntimeBrokerSingleton = null;');
     expect(ghostIndex).toContain('resetNodeRuntimeBrokerForAccountBoundary();');
   });
+
+  it('keeps Ghost call ingress closed until the active owner DbClient is ready', () => {
+    const helperStart = ghostIndex.indexOf('function canAcceptGhostCalls(): boolean {');
+    const helperEnd = ghostIndex.indexOf('\n}', helperStart);
+    const helper = ghostIndex.slice(helperStart, helperEnd);
+
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helper).toContain('!isAppSessionBoundaryPending()');
+    expect(helper).toContain('activeOwnerId !== null');
+    expect(helper).toContain('getCurrentDbClientUserId() === activeOwnerId');
+    expect(ghostIndex).toContain('canAcceptCalls: canAcceptGhostCalls,');
+  });
+
+  it('fails open only after the active owner DbClient startup reaches a terminal failure', () => {
+    expect(ghostIndex).toContain('export function noteGhostDbClientStartupOutcome(');
+    expect(ghostIndex).toContain('activeSession.dataOwnerId !== dataOwnerId');
+    expect(ghostIndex).toContain('generation: activeSession.generation');
+    expect(ghostIndex).toContain(
+      'ghostDbClientUnavailableFor.generation === activeSession.generation',
+    );
+    expect(bootstrap).toContain(
+      "dbClientTakeover.mode !== 'failed' && dbClientTakeover.mode !== 'skipped'",
+    );
+  });
 });

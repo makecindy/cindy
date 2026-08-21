@@ -31,6 +31,8 @@ import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
 
 export interface PipeDispatcherDeps {
+  /** app/账号边界是否仍允许受理新调用；边界结束后可恢复。 */
+  canAcceptCalls(): boolean;
   /** 按 id 取已装意识(未装 → null)。 */
   getGhost(id: string): InstalledGhost | null;
   /** 当前运行时状态。 */
@@ -39,6 +41,8 @@ export interface PipeDispatcherDeps {
   spawn(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** 把下行消息发到该意识的电子脑逻辑页;false = 逻辑页不在线。 */
   sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
+  /** 记录一次已受理的顶层调用；失败只能记日志，不能影响派发。 */
+  recordUsage(ghostId: string): Promise<void>;
   ownerScope?: GhostOwnerScope;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
   timeoutMs?: number;
@@ -120,8 +124,17 @@ export function toolNotFoundMessage(
 
 export class GhostPipeDispatcher {
   private readonly pending = new Map<string, PendingCall>();
+  private acceptingCalls = true;
 
   constructor(private readonly deps: PipeDispatcherDeps) {}
+
+  /**
+   * 主机退出的同步入口门禁。只阻止尚未受理的新调用；已经越过门禁并进入
+   * pending/usage tracking 的调用仍由既有收卷与关闭前 drain 负责。
+   */
+  stopAcceptingCalls(): void {
+    this.acceptingCalls = false;
+  }
 
   /** 在途调用数(诊断/测试用)。 */
   pendingCount(): number {
@@ -152,6 +165,8 @@ export class GhostPipeDispatcher {
     timeoutMs?: number;
   }): Promise<GhostToolCallResult> {
     const { ghostId, tool, args } = request;
+
+    if (!this.canAcceptCalls()) return this.shutdownResult();
 
     // ── 资格审 ─────────────────────────────────────────────────────────
     const ghost = this.deps.getGhost(ghostId);
@@ -186,7 +201,28 @@ export class GhostPipeDispatcher {
       return this.ownerBoundaryResult();
     }
 
+    // spawn() 是本路径在计数前唯一的 await。退出门禁可能在沙箱加载期间关闭，
+    // 因此必须在“已受理”计数点前重查，避免 drain 之后再产生新的 usage 写入。
+    if (!this.canAcceptCalls()) return this.shutdownResult();
+
     // ── 派发 + 配对等待 ────────────────────────────────────────────────
+    // 此时资格审与按需拉起均已通过，顶层调用已被主进程接受。计数不等插件
+    // 交卷，因此成功、插件失败、派发瞬时失败和超时都各记一次。
+    try {
+      void this.deps.recordUsage(ghostId).catch((error: unknown) => {
+        this.deps.log?.warn('failed to record ghost usage', {
+          ghostId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    } catch (error) {
+      // 依赖实现即使同步抛错也不能改变原有插件调用结果。
+      this.deps.log?.warn('failed to record ghost usage', {
+        ghostId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
     const payload: GhostPipeToolCall = { type: 'tool-call', callId, tool, args };
 
@@ -218,6 +254,18 @@ export class GhostPipeDispatcher {
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
       }
     });
+  }
+
+  private shutdownResult(): GhostToolCallResult {
+    return {
+      ok: false,
+      errorCode: 'GHOST_CRASHED',
+      message: '应用正在退出或切换账号，插件调用未受理',
+    };
+  }
+
+  private canAcceptCalls(): boolean {
+    return this.acceptingCalls && this.deps.canAcceptCalls();
   }
 
   /**

@@ -218,6 +218,7 @@ import {
   updateGhostCardHeight,
   upsertGhostCard,
 } from './cardStoreDb.js';
+import { recordTrackedGhostUsage } from '../localDb/ghostUsage.js';
 import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
@@ -404,7 +405,7 @@ import {
 // delete require.cache[__filename] 不在 CJS 缓存里——跨 chunk require 会把整个
 // 主进程 bundle 重新求值,启动副作用全量重跑直至 IPC 二次注册抛错,反复触发即
 // 主进程 OOM(2026-07-12 实事故,详见 bootstrap-electron.ts 末尾的缓存自愈注释)。
-import { getDbClient } from '../localDb/client/current.js';
+import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import * as localDbSchema from '../localDb/schema.js';
 import { eq } from 'drizzle-orm';
 import { requireAppCapability } from '../appCapabilities.js';
@@ -976,11 +977,13 @@ function listGhostOwnerProjectionRoots(): string[] {
   ])];
 }
 
-/** Stop every sandbox and revoke global skill projections before changing the active data owner. */
-export async function suspendAllGhosts(): Promise<void> {
+function stopGhostRuntimesForBoundary(): void {
   runtimeSingleton?.destroyAll();
   resetNodeRuntimeBrokerForAccountBoundary();
   brainRootCache = null;
+}
+
+async function cleanupGhostOwnerSkillLinks(): Promise<void> {
   const skillCleanup = await removeGhostSkillLinksForRoots(listGhostOwnerProjectionRoots());
   for (const warning of skillCleanup.warnings) {
     log.warn('ghost owner skill cleanup warning', { warning });
@@ -991,6 +994,12 @@ export async function suspendAllGhosts(): Promise<void> {
     }
     throw new Error(`ghost owner skill cleanup incomplete (${skillCleanup.blockers.length})`);
   }
+}
+
+/** Stop every sandbox and revoke global skill projections before changing the active data owner. */
+export async function suspendAllGhosts(): Promise<void> {
+  stopGhostRuntimesForBoundary();
+  await cleanupGhostOwnerSkillLinks();
 }
 let ipcRegistered = false;
 
@@ -1550,6 +1559,45 @@ export function getGhostRuntime(): GhostRuntime {
 
 let dispatcherSingleton: GhostPipeDispatcher | null = null;
 
+let ghostDbClientUnavailableFor: {
+  dataOwnerId: string;
+  generation: number;
+} | null = null;
+
+/**
+ * Record the terminal outcome of this owner's lifecycle DbClient startup.
+ * Before an outcome exists, calls stay closed so account restoration cannot race DB takeover.
+ * A terminal unavailable outcome fails open: usage still warns through recordUsage, while the
+ * optional counter never becomes a hard dependency for the underlying plugin call.
+ */
+export function noteGhostDbClientStartupOutcome(
+  dataOwnerId: string,
+  dbClientAvailable: boolean,
+): void {
+  const activeSession = getActiveAppSession();
+  if (isAppSessionBoundaryPending() || activeSession.dataOwnerId !== dataOwnerId) {
+    return;
+  }
+  ghostDbClientUnavailableFor = dbClientAvailable
+    ? null
+    : {
+        dataOwnerId,
+        generation: activeSession.generation,
+      };
+}
+
+function canAcceptGhostCalls(): boolean {
+  const activeSession = getActiveAppSession();
+  const activeOwnerId = activeSession.dataOwnerId;
+  return (
+    !isAppSessionBoundaryPending() &&
+    activeOwnerId !== null &&
+    (getCurrentDbClientUserId() === activeOwnerId ||
+      (ghostDbClientUnavailableFor?.dataOwnerId === activeOwnerId &&
+        ghostDbClientUnavailableFor.generation === activeSession.generation))
+  );
+}
+
 /**
  * 管子工具派发器单例:ghost 总机(cindy-tools)的 callGhostTool 真身。
  * deps 全部懒取现查——装/卸/唤醒/沉睡即时反映(网关模式的"现查现报"承诺
@@ -1558,6 +1606,7 @@ let dispatcherSingleton: GhostPipeDispatcher | null = null;
 export function getGhostPipeDispatcher(): GhostPipeDispatcher {
   if (!dispatcherSingleton) {
     dispatcherSingleton = new GhostPipeDispatcher({
+      canAcceptCalls: canAcceptGhostCalls,
       getGhost: findAvailableGhost,
       ownerScope: ghostOwnerScope,
       runtimeStateOf: (id) => getGhostRuntime().stateOf(id),
@@ -1566,6 +1615,7 @@ export function getGhostPipeDispatcher(): GhostPipeDispatcher {
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
       },
       sendToGhost: (ghostId, payload) => sendToGhostLogic(ghostId, payload),
+      recordUsage: recordTrackedGhostUsage,
       log,
     });
   }
@@ -1658,6 +1708,28 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
     });
   }
   return nodeRuntimeBrokerSingleton;
+}
+
+let ghostShutdownStarted = false;
+let ghostShutdownCleanupPromise: Promise<void> | null = null;
+
+/**
+ * 主机退出期同步封闭 Ghost 调用入口，并停止已经存在的沙箱/Node runtime。
+ * 必须幂等：正常 before-quit 与 lifecycle 的 sync disposer 可能先后触发。
+ */
+export function beginGhostShutdown(): void {
+  if (ghostShutdownStarted) return;
+  ghostShutdownStarted = true;
+  // 先关入口，再销毁 runtime。callGhostTool 在 spawn await 后还会重查该门禁，
+  // 因此这里返回后不会再有新的“已受理”调用开始 usage 写入。
+  getGhostPipeDispatcher().stopAcceptingCalls();
+  stopGhostRuntimesForBoundary();
+}
+
+/** 主机退出期异步撤销全局技能链接；由 lifecycle async phase await 并观测错误。 */
+export function finishGhostShutdown(): Promise<void> {
+  ghostShutdownCleanupPromise ??= cleanupGhostOwnerSkillLinks();
+  return ghostShutdownCleanupPromise;
 }
 
 /** 意识聊天卡片更新推送通道(main → 全窗口 renderer;ghostCardStore 消费)。 */
@@ -5972,10 +6044,7 @@ export function registerGhostIpc(): void {
   });
   // 主机正常退出:逐个销毁沙箱(docs/dev-rules/plugin-security-and-authoring.md 的"关完才走";
   // 主进程被强杀时 Chromium 会级联回收渲染子进程,无孤儿)。
-  app.on('before-quit', () => {
-    runtime.destroyAll();
-    getGhostNodeRuntimeBroker().destroyAll();
-  });
+  app.on('before-quit', beginGhostShutdown);
 
   // Stable-owner 后处理序列：先完成内置插件对账，再恢复常驻插件和旧账号凭证。
   // 旧凭证迁移保持 best-effort，不阻塞其他插件；任一迁移异常会把本 owner scope
