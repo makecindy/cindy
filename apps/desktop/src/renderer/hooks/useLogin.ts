@@ -21,6 +21,12 @@ interface UseLoginReturn {
     action: DesktopLoginAction,
   ) => Promise<{ success: boolean; code: string | null }>;
   clearError: () => void;
+  /**
+   * 「跳过登录」必须走这里,不能直接调 `authEnterLocal` IPC。
+   * AuthContext 会用返回值立刻改 `mode` / `canEnterApp`;绕过它只改主进程会话,
+   * 界面仍停在登录页,再点一次也不会重播状态。
+   */
+  enterLocalMode: ReturnType<typeof useAuth>['enterLocalMode'];
 }
 
 /** Coordinates presentation state while all credentials and tickets stay in main. */
@@ -32,6 +38,7 @@ export function useLogin(): UseLoginReturn {
     hasAccountDeletionReceipt,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
+    enterLocalMode,
   } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -94,5 +101,6 @@ export function useLogin(): UseLoginReturn {
     dispatch,
     dispatchWithResult,
     clearError: () => setErrorCode(null),
+    enterLocalMode,
   };
 }
