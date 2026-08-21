@@ -444,9 +444,57 @@ describe('local-db:messages:list cursor', () => {
     expect(JSON.parse(stored.agent_meta)).toEqual({
       turnCostUsd: 0.777042,
     });
-    // list/session + one visibility scan (plus the direct storage assertion);
-    // never one SQLite query set per SDK segment.
-    expect(prepareSpy).toHaveBeenCalledTimes(5);
+    // list/session + prior-user lookup + bounded visibility scan
+    // (plus the direct storage assertion); never one SQLite query set per SDK segment.
+    expect(prepareSpy).toHaveBeenCalledTimes(6);
+  });
+
+  it('does not scan older user rounds when projecting legacy turn cost', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertCostMessage(sqlite, { id: 'old-user', role: 'user', createdAt: 100 });
+    insertCostMessage(sqlite, {
+      id: 'old-assistant',
+      role: 'assistant',
+      createdAt: 200,
+      agentMeta: { turnCostUsd: 9.99 },
+    });
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1_000 });
+    insertCostMessage(sqlite, {
+      id: 'final',
+      role: 'assistant',
+      createdAt: 1_400,
+      agentMeta: { turnCostUsd: 0.5 },
+    });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 2 })) as Array<{
+      id: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    const final = rows.find((row) => row.id === 'final');
+    expect(final?.agentMeta).toMatchObject({
+      turnCostUsd: 0.5,
+      userTurnCostUsd: 0.5,
+    });
+  });
+
+  it('caps oversized local history rows before returning them', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'huge', createdAt: 1_000, content: 'x'.repeat(40_000) });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = (await listHandler?.({}, 's1', { limit: 1 })) as Array<{
+      id: string;
+      content: string;
+      agentMeta: Record<string, unknown> | null;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.content.length).toBe(32_000);
+    expect(rows[0]?.agentMeta).toMatchObject({ remoteContentTruncated: true });
   });
 });
 

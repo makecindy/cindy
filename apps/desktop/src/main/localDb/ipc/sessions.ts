@@ -9,7 +9,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { ipcMain, app, BrowserWindow } from 'electron';
-import { eq, ne, and, desc, count, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
+import { eq, ne, and, desc, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
@@ -501,34 +501,18 @@ export async function persistSessionFields(
 const MAX_LIMIT = 1000;
 
 /**
- * LEFT JOIN 形状下 `count()` 的目标列——必须是 `messages.session_id`，不能是 `messages.id`。
- * 当前只有单行 get/update 路径（{@link selectSessionWithCount}）用这个形状。
+ * list / get / update 共用的 messageCount：标量子查询。口径是该会话的全部 messages 行数，
+ * 不过滤 role / rewind_at / cleared_at（口径要动就得连手机端卡片上的「N 条消息」一起想，
+ * 见 maker-shared/sessionList 的 messageCountLabel）。
  *
- * 三种写法只有一种可用：
- *   - `count(messages.id)`         语义对但**回表**：id 不在任何覆盖索引里，SQLite 为取它
- *                                  必须逐行读 messages 主表。消息多的会话就是读几万行。
- *   - `count(*)`                   **语义错**：LEFT JOIN 对零消息会话也补一行，数出 1 而非 0，
- *                                  会打歪 sidebar 的「单空 New Maker 草稿」判定。
- *   - `count(messages.session_id)` 语义对且免回表：session_id 是
- *                                  idx_messages_session_created 的首列。
+ * 标量子查询没有 LEFT JOIN 补的那一行空行，无匹配时聚合返回 0，所以这里用 `count(*)` 是
+ * 安全的。仍然只扫 idx_messages_session_created（session_id 是首列），不回表。
  *
- * 代价差一个数量级。这个形状原先也用在 list 路径上（`LIMIT` 在 GROUP BY 之后才生效、削不掉
- * 扫描量，于是成本正比于 messages 表**总体积**）：4.7GB / 111 万条消息的真实库上同库同数据
- * 实测冷缓存 10.2s → 1.25s、热缓存 920ms → 73ms。list 现已另走两段式（见
- * {@link selectSessionListRows}），但 get/update 每次改标题、切模型都会跑这一条。
+ * 旧的一段式 LEFT JOIN + GROUP BY 不能图快改用 `count(*)`：LEFT JOIN 会给空会话补一行，
+ * 数出 1 而非 0，打歪 sidebar 的「单空 New Maker 草稿」判定。list 已改成两段式；get/update
+ * 也走同一条标量子查询，避免切任务时把几万行 join 进单行快照。
  *
- * 由 sessionListMessageCount 回归测试守护：它在真库上对照两种写法的 query plan（覆盖索引
- * vs 回表）与空会话语义，并静态断言生产源码用的就是这一列。
- */
-const MESSAGE_COUNT_COL = messages.sessionId;
-
-/**
- * 两段式 list 里的 messageCount：标量子查询版。口径与 `count(MESSAGE_COUNT_COL)` 完全
- * 一致——该会话的全部 messages 行数，不过滤 role / rewind_at / cleared_at（口径要动就得
- * 连手机端卡片上的「N 条消息」一起想，见 maker-shared/sessionList 的 messageCountLabel）。
- *
- * 这里用 `count(*)` 反而是安全的：标量子查询没有 LEFT JOIN 补的那一行空行，无匹配时聚合
- * 返回 0。仍然只扫 idx_messages_session_created（session_id 是首列），不回表。
+ * 由 sessionListMessageCount 回归测试守护。
  */
 const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
   SELECT count(*) FROM messages m WHERE m.session_id = ${sessions.id}
@@ -550,7 +534,7 @@ const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
 // 「继续」是合法消息。json_extract 对 JSON true 返回 1;非 JSON / 缺字段返回 NULL,
 // IS NOT 1 对两者都放行。
 const LATEST_MSG_CONTENT_SQL = sql<string | null>`(
-  SELECT m.content FROM messages m
+  SELECT substr(m.content, 1, 4096) FROM messages m
   WHERE m.session_id = ${sessions.id}
     AND m.role IN ('user', 'assistant')
     AND m.rewind_at IS NULL
@@ -1854,9 +1838,8 @@ interface SessionListRow {
  *      CTE 是单条语句、单一致性快照。
  *   2. 参数——`IN (...)` 要绑 cap 个参数（当前 MAX_LIMIT=1000），CTE 只绑一个 limit。
  *
- * messageCount 在这里是**标量子查询**里的 `count(*)`，与一段式的 `count(MESSAGE_COUNT_COL)`
- * 语义一致：无匹配行时聚合返回 0，不存在 LEFT JOIN 那个"空会话数出 1"的坑（那也是为什么
- * 一段式不能图快改用 `count(*)`）。它同样只扫 idx_messages_session_created，不回表。
+ * messageCount 在这里是**标量子查询**里的 `count(*)`：无匹配行时聚合返回 0，不存在 LEFT JOIN
+ * 那个"空会话数出 1"的坑。它同样只扫 idx_messages_session_created，不回表。
  *
  * @param where 行过滤条件，同时作用于 CTE 与主查询（CTE 决定取哪些、主查询决定算哪些）。
  * @param cap   取前 N 行；`null` = 不限（置顶补齐分支用，pinned 行数天然很少）。
@@ -1888,11 +1871,9 @@ function selectSessionListRows(
     .orderBy(desc(sessions.updatedAt));
 }
 
-/** 单行 SELECT + messages count：LEFT JOIN + GROUP BY 保证 0 条消息时 count 为 0。
+/** 单行 SELECT + 标量 count / preview：与 list 同口径，不 JOIN 该会话全部消息。
  *  preview 子查询同步带出——get/update 路径返回的 Session 会整体替换 store 里的行，
- *  缺字段会把列表查询带回的 preview 冲掉。
- *  count 目标列同 list 路径走 {@link MESSAGE_COUNT_COL}：这里虽只数一个会话，但消息多的
- *  会话回表一样要读几万行主表，而 get/update 在每次改标题、切模型后都会跑。 */
+ *  缺字段会把列表查询带回的 preview 冲掉。 */
 async function selectSessionWithCount(
   db: DbClient['drizzle'],
   id: string,
@@ -1900,14 +1881,12 @@ async function selectSessionWithCount(
   const [r] = await db
     .select({
       session: sessions,
-      messageCount: count(MESSAGE_COUNT_COL),
+      messageCount: SESSION_MESSAGE_COUNT_SQL,
       latestMessageContent: LATEST_MSG_CONTENT_SQL,
       latestMessageRole: LATEST_MSG_ROLE_SQL,
     })
     .from(sessions)
-    .leftJoin(messages, eq(messages.sessionId, sessions.id))
     .where(eq(sessions.id, id))
-    .groupBy(sessions.id)
     .limit(1);
   if (!r) return undefined;
   return {

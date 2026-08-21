@@ -1350,7 +1350,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     expect(restoreSessionAutomaticHistoryLoadAttempts(SID, 5)).toBe(5);
   });
 
-  it('Y2. 超长裁剪丢掉当前计划边界时,允许重入重新首拉补回计划', async () => {
+  it('Y2. 超长裁剪丢掉当前计划边界时,仍保留 historyLoaded,不把打开路径打回全量首拉', async () => {
     const oldPlan = planToolMessage({
       id: 'trimmed-plan',
       clientId: 'trimmed-plan',
@@ -1380,7 +1380,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     const snapshot = makerChatStore.getSnapshot(SID);
     expect(snapshot.messages).toHaveLength(200);
     expect(snapshot.messages.some((message) => message.clientId === 'trimmed-plan')).toBe(false);
-    expect(snapshot.historyLoaded).toBe(false);
+    expect(snapshot.historyLoaded).toBe(true);
   });
 
   it('X. /clear 清空窗口时一并清掉孤岛标记,不把会话永久钉在"不连续"', async () => {
