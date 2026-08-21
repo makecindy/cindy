@@ -53,12 +53,13 @@
 
 ## 路径与生命周期
 
-| 数据性质 | 正确位置 |
-|---|---|
-| Cindy 管理的持久数据 | Desktop 使用 `app.getPath('userData')`，共享 package 由宿主注入等价根目录 |
-| 可丢弃的临时数据 | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录 |
-| 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
-| 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
+| 数据性质                           | 正确位置                                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| Cindy 管理的持久数据               | Desktop 使用 `app.getPath('userData')`，共享 package 由宿主注入等价根目录                 |
+| 经专项登记的 OS 用户级共享集成状态 | 仅使用下节逐项登记的 `appData` 下 Cindy 专属稳定子目录；未登记的数据仍必须进入 `userData` |
+| 可丢弃的临时数据                   | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录                                   |
+| 测试生成物                         | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理                         |
+| 用户明确导出的文件                 | 用户选择或任务明确指定的目标路径                                                          |
 
 - 禁止把 `process.cwd()`、仓库根或源码目录作为 userData、凭证目录或临时目录的默认回退。
   特别不要写 `process.env.TEMP ?? process.cwd()` 一类跨平台会落入仓库的逻辑。
@@ -69,6 +70,30 @@
   或用户动作中发生，便于控制路径、失败语义和清理。
 - 临时文件使用唯一目录或文件名，完成、失败和取消路径都应尽力清理；需要跨重启保留的
   内容不属于临时文件，应进入明确的 userData 存储与生命周期设计。
+
+### OS 用户级共享集成状态例外
+
+`userData` 仍是 Cindy 持久数据的默认且强制边界。只有状态语义与某个 OS 用户级外部配置
+一致、必须跨 cn／global／隔离 dev profile 共享，并且明确不随单个 profile 迁移或清理时，
+才能在本节逐项登记后使用 `appData`。登记项必须满足：
+
+- 不包含凭证、授权材料或只属于某个 profile 的私有状态；不同 Cindy profile 共同读写不会
+  造成身份或数据串用。
+- 使用 `appData` 下 Cindy 专属、稳定且有明确名称的子目录，不直接向 `appData` 根目录落盘。
+- 记录所有者、生命周期、并发与失败语义及撤销方式。外部工具已提供配置写入、锁和原子
+  替换能力时，优先通过该工具修改其配置，不另造 Cindy 跨进程文件锁。
+
+当前登记的唯一例外是 Git `safe.directory` 共享配置：
+
+- 路径为 `<appData>/CindyShared/git-safe-directory.config`，所有者是 Desktop worktree 的
+  ownership 恢复逻辑。它被 OS 用户级 Git global config include，生命周期因此与该用户的
+  Git 全局信任集合一致，而不是与任一 Cindy profile 一致。
+- cn、global 与隔离 dev profile 共用同一文件，避免每个 profile 都向 Git global config
+  安装永久 include；删除或迁移单个 profile 不清理该文件，已添加的精确路径持久保留。
+- 所有配置变更都通过 `git config` 完成。Git 负责单个配置文件的写锁与原子替换；Cindy
+  只负责先写共享文件、再按需安装 include 的顺序与失败返回，不提供跨文件事务或额外锁。
+- 撤销由用户显式移除 global include 或共享配置文件完成；Cindy 不在 worktree 生命周期中
+  自动撤销用户级信任。
 
 ## Review 清单
 
