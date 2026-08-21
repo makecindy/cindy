@@ -40,6 +40,8 @@ vi.mock('electron', () => ({
     }),
   },
   BrowserWindow: { getAllWindows: () => [] },
+  // status 写路径会经 removeHookAttachmentDir 调 app.getPath('userData')，需提供桩。
+  app: { getPath: () => '/tmp/cindy-test-user-data' },
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -229,6 +231,24 @@ describe('local-db:sessions:update handler wiring', () => {
       expect.objectContaining({
         sessionId: 'codex-local',
         patch: { permissionMode: 'ask' },
+      }),
+    );
+  });
+
+  it('broadcasts status-only patches so secondary windows converge on delete', async () => {
+    await invokeUpdate('cc-local', { status: 'deleted' });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
+      .get('cc-local') as { status: string };
+    expect(persisted.status).toBe('deleted');
+    // #3175 回归:纯 status 变化(无 title / settings / project / pinnedAt)也必须广播
+    // sessions:patched,否则「在新窗口打开」的副窗口收不到删除,仍停留在旧视图。
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({
+        sessionId: 'cc-local',
+        patch: { status: 'deleted' },
       }),
     );
   });
