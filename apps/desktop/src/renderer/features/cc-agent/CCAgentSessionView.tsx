@@ -71,7 +71,7 @@ import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
-import { MessageStream } from '@/components/chat/MessageStream';
+import { MessageStream, type InlinePlanVisibility } from '@/components/chat/MessageStream';
 import {
   readSendFollowCancelGeneration,
   tryRequestFollowLatest,
@@ -1244,6 +1244,30 @@ export function CCAgentSessionView({
   const [overlayHeight, setOverlayHeight] = useState(200);
   const [composerStackTopOffset, setComposerStackTopOffset] = useState<number | undefined>(
     undefined,
+  );
+  const [inlinePlanVisibilityState, setInlinePlanVisibilityState] = useState<{
+    sessionId: string | undefined;
+    value: InlinePlanVisibility | null;
+  }>({ sessionId, value: null });
+  const inlinePlanVisibility =
+    inlinePlanVisibilityState.sessionId === sessionId ? inlinePlanVisibilityState.value : null;
+  const handleInlinePlanVisibilityChange = useCallback(
+    (value: InlinePlanVisibility | null) => {
+      setInlinePlanVisibilityState((current) => {
+        if (
+          current.sessionId === sessionId &&
+          current.value?.key === value?.key &&
+          current.value?.visible === value?.visible
+        ) {
+          return current;
+        }
+        if (current.sessionId === sessionId && current.value === null && value === null) {
+          return current;
+        }
+        return { sessionId, value };
+      });
+    },
+    [sessionId],
   );
 
   useEffect(() => {
@@ -3984,6 +4008,7 @@ export function CCAgentSessionView({
       onLoadMore={loadOlderMessages}
       isLoadingMore={isLoadingMore}
       hasMoreMessages={hasMoreMessages}
+      historyWindowHasIsland={historyWindowHasIsland}
       bottomPadding={overlayHeight}
       composerStackTopOffset={composerStackTopOffset}
       contentWidth={messageWidth}
@@ -3993,6 +4018,7 @@ export function CCAgentSessionView({
       onOpenForkOrigin={handleOpenForkOrigin}
       isLocalUserSend={isLocalUserSend}
       ownsHardwareScrollActions={ownsHardwareTaskActions}
+      onInlinePlanVisibilityChange={handleInlinePlanVisibilityChange}
     />
   );
 
@@ -4289,6 +4315,7 @@ export function CCAgentSessionView({
                   animated={isStreaming}
                   streaming={isStreaming}
                   width={inputWidth}
+                  inlinePlanVisibility={inlinePlanVisibility}
                   taskHistoryMayBeIncomplete={
                     !historyLoaded || hasMoreMessages || historyWindowHasIsland
                   }

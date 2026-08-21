@@ -314,6 +314,8 @@ export interface PiExtraSpawnConfigContext {
   remoteHostId?: string | null;
 }
 
+export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default';
+
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
@@ -331,6 +333,8 @@ export interface CodexExtraSpawnConfig {
   codexBrowserUseAvailable?: boolean;
   /** Whether the OpenAI identity provider on this app-server may use Responses WebSocket. */
   codexOpenAiWebSocketsEnabled?: boolean;
+  /** Host-level Subagent route profile used to prevent incompatible local host reuse. */
+  codexSubagentRoutingProfile?: CodexSubagentRoutingProfile;
   /** Exact verified Chrome plugin version provisioned into this app-server. */
   codexBrowserUseVersion?: string;
   /** Maximum startup wait copied from the verified companion descriptor. */
@@ -725,6 +729,8 @@ export interface AgentDeps {
     ctx: {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
+      /** Original session request when the shared host was upgraded to a credential superset. */
+      requestedCredentialMode?: AgentCredentialMode;
       /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
       hostPurpose?: 'control-plane' | 'review';
     },
@@ -1613,6 +1619,11 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /**
+   * Codex-only: thread/start 或 thread/resume 响应确认的实际 model provider。
+   * 这是 thread 级冻结身份，不随 thread/settings/update 的模型切换改变。
+   */
+  readonly codexThreadModelProviderId?: string;
   /**
    * Codex-only: start/resume 成功后,产品 prompt 这一次到底有没有进入
    * codex thread history。Maker 用这个事实更新 host 持久化 bit,避免再从

@@ -2502,6 +2502,7 @@
       "unspecified": "既定の設定を使用",
       "hint": "Claude Code の変更は新しいセッションから適用されます。Codex の変更はアイドル時に自動で適用されます。",
       "codexV2ModelHint": "Claude Code は選択したモデルを既定値として使用します。ローカルの Codex サブエージェントはすべて、選択したモデルと推論強度に固定されます。",
+      "codexOauthCompatibilityHint": "固定したサブエージェントのルーティングと ChatGPT OAuth は安全に併用できません。メインタスクが ChatGPT OAuth を使用する場合、または非 OAuth のメインタスクで ChatGPT OAuth のサブエージェントを指定した場合、ここで選択したモデル、プロバイダー、推論強度は適用されず、メインタスクの Codex デフォルトサブエージェントが使用されます。",
       "saveFailed": "サブエージェント設定の保存に失敗しました",
       "guardrails": {
         "title": "Codex サブエージェントガードレール",
@@ -3183,12 +3184,14 @@
           "copyLink": "リンクをコピー",
           "copied": "リンクをコピーしました",
           "state": {
-            "denied": "Slack の認可ページで認可がキャンセルされました",
+            "denied": "Slack の認可はキャンセルされ、アカウントはまだ連携されていません",
             "expired": "認可がタイムアウトしました。再接続してください",
             "failed": "連携に失敗しました",
             "revoked": "連携が解除されました"
           },
-          "retryHint": "スイッチをもう一度オンにすると再接続して連携し直せます。"
+          "reauthorize": "Slack を再認可",
+          "reauthorizing": "Slack を再認可しています…",
+          "retryHint": "Slack を再認可すると再接続して連携し直せます。"
         },
         "toast": {
           "saveFailed": "保存に失敗しました",
@@ -3198,6 +3201,8 @@
         "loginRequired": "先に {{appName}} アカウントにログインしてください。ログイン後、接続は自動的に復旧します。",
         "standbyHint": "このコンピューター上の別の Cindy インスタンスが Slack 接続を使用しています。それを閉じてから、このスイッチをもう一度オンにすると引き継げます。",
         "authorizing": "認可中…",
+        "transportStatus": "通信接続：{{status}}",
+        "accountStatus": "Slack アカウント：{{status}}",
         "statusBound": "連携済み @{{name}}",
         "statusBoundTeam": "{{team}} に連携済み @{{name}}",
         "statusUnbound": "未連携",
@@ -6616,6 +6621,7 @@
     },
     "chatInput": {
       "defaultPlaceholder": "今日は何をしましょうか〜",
+      "createAgentPlaceholder": "{{appName}}さん、こんにちは！",
       "voiceInput": {
         "start": "音声入力を開始",
         "stop": "音声入力を停止",

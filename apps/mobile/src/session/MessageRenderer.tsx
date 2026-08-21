@@ -47,6 +47,7 @@ import {
   StatusBar,
   useWindowDimensions,
   View,
+  type GestureResponderEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   type LayoutChangeEvent,
@@ -73,7 +74,10 @@ import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
-import { ShareMessageCheckbox } from '@/session/ShareMessageCheckbox';
+import {
+  ShareMessageCheckbox,
+  useCancelShareSelectionRowTap,
+} from '@/session/ShareMessageCheckbox';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   composerDocumentFromSerializedMessage,
@@ -324,6 +328,10 @@ import { i18n } from '@/i18n';
 const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
 const MESSAGE_CONTROL_TOUCH_SIZE = 44;
 const MESSAGE_LIST_VISIBLE_PERCENT_THRESHOLD = 5;
+
+/** 分享模式吸顶 check 与行内 check 共用 44px 触达高度。 */
+const SHARE_STICKY_CHECK_HEIGHT = 44;
+const STICKY_SHARE_CHECK_THROTTLE_MS = 150;
 const SCREENSHOT_SHARE_VISIBLE_PERCENT_THRESHOLD = 10;
 // LegendList 变高 item 的初始估高(仅影响首帧布局定位,LegendList 挂载后按实测尺寸修正)。
 /**
@@ -441,7 +449,20 @@ function MarkdownSelectableText({
  * 混入 RN Text 会破坏原生文本树。仅由 renderInline 在「块可选中且 iOS」时使用。
  */
 function MarkdownSelectableSpan(props: ComponentProps<typeof Text>) {
-  return <UITextView maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} {...props} />;
+  const cancelShareSelectionRowTap = useCancelShareSelectionRowTap();
+  const handlePress = props.onPress
+    ? (event: GestureResponderEvent) => {
+      cancelShareSelectionRowTap?.();
+      props.onPress?.(event);
+    }
+    : undefined;
+  return (
+    <UITextView
+      maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+      {...props}
+      onPress={handlePress}
+    />
+  );
 }
 
 function isTextRunContinuationGroup(group: MobileMarkdownBlockGroup): boolean {
@@ -603,6 +624,9 @@ export function MessageRenderer({
     screenHeight: windowDimensions.height,
     screenWidth: windowDimensions.width,
   }), [windowDimensions.height, windowDimensions.width]);
+  const wideContentInset = viewportLayout.wideViewport
+    ? Math.max(0, (windowDimensions.width - viewportLayout.contentMaxWidth) / 2)
+    : 0;
   const nearBottomRef = useRef(true);
   // ── 拖动手势追踪(贴底跟随的意图解除用)──
   // 拖动期间(onScrollBeginDrag ~ onScrollEndDrag)相对起点累计上移超过死区
@@ -838,11 +862,8 @@ export function MessageRenderer({
     const micCenterFromRight = touchLayout.composerPaddingHorizontal
       + MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT
       + MOBILE_COMPOSER_CONTROL_SIZE / 2;
-    const wideInset = viewportLayout.wideViewport
-      ? Math.max(0, (windowDimensions.width - viewportLayout.contentMaxWidth) / 2)
-      : 0;
-    return Math.round(wideInset + micCenterFromRight - SCROLL_TO_BOTTOM_FAB_SIZE / 2);
-  }, [viewportLayout.contentMaxWidth, viewportLayout.wideViewport, windowDimensions.width]);
+    return Math.round(wideContentInset + micCenterFromRight - SCROLL_TO_BOTTOM_FAB_SIZE / 2);
+  }, [wideContentInset, windowDimensions.width]);
   const loadEarlierAction = buildMessageLoadEarlierAction({
     hasOlderMessages: canLoadEarlier === true,
     loading: loadingEarlier === true,
@@ -851,9 +872,10 @@ export function MessageRenderer({
   const handleShareableMessageViewChange = useCallback((clientId: string, view: View | null) => {
     if (view) {
       shareableMessageViewsRef.current.set(clientId, view);
-      return;
+    } else {
+      shareableMessageViewsRef.current.delete(clientId);
     }
-    shareableMessageViewsRef.current.delete(clientId);
+    if (shareSelectionActiveRef.current) scheduleStickyShareCheckRef.current?.(true);
   }, []);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     onAddMessageToComposer,
@@ -933,6 +955,74 @@ export function MessageRenderer({
   const viewabilityConfigRef = useRef({
     itemVisiblePercentThreshold: MESSAGE_LIST_VISIBLE_PERCENT_THRESHOLD,
   });
+  const shareSelectionActiveRef = useRef(shareSelectionActive);
+  shareSelectionActiveRef.current = shareSelectionActive;
+  const topOverlayHeightRef = useRef(topOverlayHeight);
+  topOverlayHeightRef.current = topOverlayHeight;
+  const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
+  const stickyCheckSeqRef = useRef(0);
+  const stickyCheckLastRunAtRef = useRef(0);
+  const stickyCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runStickyShareCheck = useCallback(async () => {
+    const seq = ++stickyCheckSeqRef.current;
+    if (!shareSelectionActiveRef.current) {
+      setStickyShareClientId(null);
+      return;
+    }
+    const shareableViews = Array.from(shareableMessageViewsRef.current.entries());
+    const list = listRef.current;
+    if (!list || shareableViews.length === 0) {
+      setStickyShareClientId(null);
+      return;
+    }
+    const [listFrame, candidates] = await Promise.all([
+      measureInWindow(list.getNativeScrollRef()),
+      Promise.all(shareableViews.map(async ([clientId, view]) => ({
+        clientId,
+        frame: await measureInWindow(view),
+      }))),
+    ]);
+    if (seq !== stickyCheckSeqRef.current) return;
+    if (!listFrame) {
+      setStickyShareClientId(null);
+      return;
+    }
+    const dockY = listFrame.y + (topOverlayHeightRef.current ?? 0) + spacing.sm;
+    candidates.sort((a, b) => (a.frame?.y ?? Number.POSITIVE_INFINITY)
+      - (b.frame?.y ?? Number.POSITIVE_INFINITY));
+    const pinned = candidates.find(({ frame }) => frame
+      && frame.height > 0
+      && frame.y + spacing.sm < dockY
+      && frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT);
+    setStickyShareClientId((prev) => {
+      const next = pinned?.clientId ?? null;
+      return prev === next ? prev : next;
+    });
+  }, []);
+  const scheduleStickyShareCheck = useCallback((immediate = false) => {
+    const now = Date.now();
+    const elapsed = now - stickyCheckLastRunAtRef.current;
+    if (immediate || elapsed >= STICKY_SHARE_CHECK_THROTTLE_MS) {
+      stickyCheckLastRunAtRef.current = now;
+      void runStickyShareCheck();
+      return;
+    }
+    if (stickyCheckTimerRef.current) return;
+    stickyCheckTimerRef.current = setTimeout(() => {
+      stickyCheckTimerRef.current = null;
+      stickyCheckLastRunAtRef.current = Date.now();
+      void runStickyShareCheck();
+    }, STICKY_SHARE_CHECK_THROTTLE_MS - elapsed);
+  }, [runStickyShareCheck]);
+  const scheduleStickyShareCheckRef = useRef(scheduleStickyShareCheck);
+  scheduleStickyShareCheckRef.current = scheduleStickyShareCheck;
+  useEffect(() => {
+    if (!shareSelectionActive) setStickyShareClientId(null);
+    else scheduleStickyShareCheck(true);
+  }, [shareSelectionActive, scheduleStickyShareCheck, topOverlayHeight]);
+  useEffect(() => () => {
+    if (stickyCheckTimerRef.current) clearTimeout(stickyCheckTimerRef.current);
+  }, []);
   const handleViewableItemsChangedRef = useRef((info: {
     viewableItems: ViewToken<MobileMessageRenderItem>[];
   }) => {
@@ -1129,7 +1219,9 @@ export function MessageRenderer({
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
     // 滚动事件兜底重评估;前置短路让稳态滚动只付 1~2 次 ref 比较的成本。
     attemptAutoLoadEarlier();
-  }, [attemptAutoLoadEarlier, bottomOverlayHeight]);
+    // 分享模式:滚动驱动吸顶 check 的几何重判(内部节流,非分享模式直接返回)。
+    if (shareSelectionActiveRef.current) scheduleStickyShareCheck();
+  }, [attemptAutoLoadEarlier, bottomOverlayHeight, scheduleStickyShareCheck]);
 
   // 用户开始拖动 → 标记「上翻意图」,放行自动加载更早(onScrollBeginDrag 仅用户手势触发,
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
@@ -1466,6 +1558,24 @@ export function MessageRenderer({
         >
           <ArrowUp color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
         </MessageListActionButton>
+      ) : null}
+      {shareSelectionActive && stickyShareClientId ? (
+        // 与分享消息行同构，保持吸顶 check 和行内 check 水平对齐。
+        <View
+          pointerEvents="box-none"
+          style={[styles.stickyShareOverlay, { top: (topOverlayHeight ?? 0) + spacing.sm }]}
+          testID="message.shareStickyCheck"
+        >
+          <View
+            pointerEvents="box-none"
+            style={[styles.stickyShareControl, { marginLeft: wideContentInset + spacing.lg }]}
+          >
+            <ShareMessageCheckbox
+              clientId={stickyShareClientId}
+              disabled={shareSelectionBusy === true}
+            />
+          </View>
+        </View>
       ) : null}
       {hasNewMessages || showJumpToLatest ? (
         // 跳到底部浮标(Telegram 风):右下角半透明圆形 chevron,弱存在感;
@@ -2342,12 +2452,15 @@ function MessageBubble({
 
   if (!shareSelectionActive) return messageNode;
   return (
-    <View style={styles.shareSelectionRow}>
-      <View style={styles.shareSelectionGutter}>
-        <ShareMessageCheckbox clientId={clientId} disabled={actions.shareSelectionBusy === true} />
+    <ShareMessageCheckbox
+      clientId={clientId}
+      disabled={actions.shareSelectionBusy === true}
+      fill
+    >
+      <View style={styles.shareSelectionContent}>
+        {messageNode}
       </View>
-      <View style={styles.shareSelectionContent}>{messageNode}</View>
-    </View>
+    </ShareMessageCheckbox>
   );
 }
 
@@ -6367,21 +6480,21 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     width: '100%',
   },
-  shareSelectionRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minWidth: 0,
-    width: '100%',
-  },
-  shareSelectionGutter: {
-    alignItems: 'center',
-    paddingTop: spacing.sm,
-    width: spacing.xl * 2,
-  },
   shareSelectionContent: {
     flex: 1,
     minWidth: 0,
+  },
+  stickyShareOverlay: {
+    height: SHARE_STICKY_CHECK_HEIGHT,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 5,
+  },
+  stickyShareControl: {
+    alignItems: 'center',
+    width: spacing.xl * 2,
   },
   sentInlineTextChunk: {
     flexBasis: '100%',

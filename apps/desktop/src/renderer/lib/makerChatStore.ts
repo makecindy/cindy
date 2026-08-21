@@ -3294,6 +3294,11 @@ function _purgeSession(sessionId: string): void {
   discardPendingTextDelta(sessionId);
   discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
+  // Invalidate background-task snapshots too: an in-flight response must not
+  // recreate a purged session or schedule a retry for its old lifecycle.
+  invalidateBackgroundTaskReconcile(sessionId);
+  cancelBackgroundTaskReconcile(sessionId);
+  backgroundTaskStaleRetrySessions.delete(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   invalidateMessageHistoryWindow(sessionId);
@@ -5194,12 +5199,16 @@ export function handleStreamEvent(
       });
 
       const terminalData = event.data as
-        { cancelled?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
+        { cancelled?: unknown; reason?: unknown; plan?: unknown; raw?: { id?: unknown; status?: unknown } }
         | null
         | undefined;
       const terminalTurnId = typeof terminalData?.raw?.id === 'string' ? terminalData.raw.id : null;
       const terminalTurnStatus =
         typeof terminalData?.raw?.status === 'string' ? terminalData.raw.status : null;
+      const terminalCancelled =
+        terminalData?.cancelled === true ||
+        terminalData?.reason === 'turn_continuation_cancelled' ||
+        terminalData?.reason === 'user_stop_unconfirmed_wake_tasks';
       const doneMessages =
         event.source === 'codex'
           ? applyCodexPlanSnapshotOnDone(
@@ -5208,7 +5217,7 @@ export function handleStreamEvent(
               terminalTurnId,
               terminalTurnStatus,
               Date.now(),
-              terminalData?.cancelled === true,
+              terminalCancelled,
             ).messages
           : cleanedMessages;
 
@@ -5241,6 +5250,9 @@ export function handleStreamEvent(
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
+        // cancelled terminal 会广播到同一 session 的所有窗口；把它投影成 session 级
+        // Stop 标记，避免非发起窗口把不完整回复误当正常完成并触发付费推荐。
+        turnStoppedByUser: state.turnStoppedByUser || terminalCancelled,
         agentStatus: {
           ...state.agentStatus,
           isRunning: false,
@@ -6210,6 +6222,20 @@ const BACKGROUND_TASK_RECONCILE_DELAY_MS = 3000;
  */
 const WAKE_BRIDGE_RECONCILE_MIN_AGE_MS = 10_000;
 const backgroundTaskReconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const backgroundTaskReconcileEpoch = new Map<string, number>();
+
+function invalidateBackgroundTaskReconcile(sessionId: string): number {
+  const next = (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) + 1;
+  backgroundTaskReconcileEpoch.set(sessionId, next);
+  return next;
+}
+
+/**
+ * A local_bash task may outlive the first active:false snapshot. Allow one
+ * bounded follow-up snapshot so a later missing terminal event can still be
+ * reconciled, without turning this lifecycle hook into polling.
+ */
+const backgroundTaskStaleRetrySessions = new Set<string>();
 
 function cancelBackgroundTaskReconcile(sessionId: string): void {
   const timer = backgroundTaskReconcileTimers.get(sessionId);
@@ -6221,10 +6247,12 @@ function cancelBackgroundTaskReconcile(sessionId: string): void {
 
 function scheduleBackgroundTaskReconcile(sessionId: string): void {
   cancelBackgroundTaskReconcile(sessionId);
+  const reconcileEpochAtSchedule = backgroundTaskReconcileEpoch.get(sessionId) ?? 0;
   backgroundTaskReconcileTimers.set(
     sessionId,
     setTimeout(() => {
       backgroundTaskReconcileTimers.delete(sessionId);
+      if ((backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule) return;
       // 触发沿复查远程归属(粘滞版):调度沿已筛过,但 3s 窗口内会话可能被识别
       // 为远程(启动期 registry 迟到水合等)。误放行的代价是拿本机空快照把镜像
       // 里真实在跑的任务错误收口,必须再拦一次。
@@ -6246,6 +6274,13 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
         .listSessionBackgroundTasks(sessionId)
         .then(({ tasks, pendingContinuations }) => {
           if (!Array.isArray(tasks)) return;
+          // active:true / a new lifecycle edge / purge invalidates the request
+          // even if the transport response itself arrives successfully.
+          if (
+            (backgroundTaskReconcileEpoch.get(sessionId) ?? 0) !== reconcileEpochAtSchedule
+          ) {
+            return;
+          }
           // 响应落地前再复查一次:请求在飞期间远程注册表才完成会话水合的话,
           // 本机「查无此会话」的空表不可用于收口镜像任务。
           if (isRemoteSessionSticky(sessionId)) return;
@@ -6258,6 +6293,25 @@ function scheduleBackgroundTaskReconcile(sessionId: string): void {
             authorityPendingContinuations:
               typeof pendingContinuations === 'number' ? pendingContinuations : null,
           });
+
+          // A task that is still present in this first snapshot may finish
+          // after the activity edge and lose its terminal event. Take exactly
+          // one bounded follow-up snapshot; the next response either sees the
+          // task again (and leaves it alone) or proves it stale and stops it.
+          const candidateStillAlive = tasks.some(
+            (task) =>
+              (typeof task.taskId === 'string' && staleRunningCandidates.has(task.taskId)) ||
+              (typeof task.toolUseId === 'string' && staleRunningCandidates.has(task.toolUseId)),
+          );
+          const hasRetriedStaleCandidates = backgroundTaskStaleRetrySessions.has(sessionId);
+          if (candidateStillAlive && !hasRetriedStaleCandidates) {
+            backgroundTaskStaleRetrySessions.add(sessionId);
+            scheduleBackgroundTaskReconcile(sessionId);
+          } else {
+            // The bounded retry window is complete, whether the task was
+            // stopped or remained alive. Do not retain session IDs forever.
+            backgroundTaskStaleRetrySessions.delete(sessionId);
+          }
         })
         .catch(() => {
           // 静默:与其余快照拉取失败同口径(失败不对账,下次翻转沿 / 挂载重试)。
@@ -8096,9 +8150,15 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       const p = raw as { sessionId?: string; active?: boolean } | null;
       if (!p || typeof p.sessionId !== 'string' || !p.sessionId) return;
       if (p.active) {
+        invalidateBackgroundTaskReconcile(p.sessionId);
+        backgroundTaskStaleRetrySessions.delete(p.sessionId);
         cancelBackgroundTaskReconcile(p.sessionId);
         return;
       }
+      // A new inactive edge starts a fresh, bounded stale-task retry window and
+      // invalidates any response from the previous activity lifecycle.
+      invalidateBackgroundTaskReconcile(p.sessionId);
+      backgroundTaskStaleRetrySessions.delete(p.sessionId);
       if (isRemoteSessionSticky(p.sessionId)) return;
       // 调度前粗筛:没有 running 条目就不必挂定时器;到点后还会再次捕获候选集。
       // 唤醒桥接(pendingTaskWake)泄漏时 running 条目为空,同样需要对账,放行。
@@ -8298,6 +8358,39 @@ function getSnapshot(sessionId: string): SessionChatState {
 function hasPausedQueue(sessionId: string): boolean {
   const state = sessions.get(sessionId);
   return state ? isQueuePausedWithPending(state) : false;
+}
+
+/**
+ * 输入框推荐提示词在全局 running→stopped 边沿后读取的终态资格快照。
+ * 必须是 non-creating read：后台会话可能已被 demote / LRU，不能为了补推荐
+ * materialize 空 state 并把 Stop / error 等守卫误读成默认值。
+ */
+export interface PromptRecommendationCompletionStatus {
+  turnStoppedByUser: boolean;
+  hasTerminalError: boolean;
+  sideTask: boolean;
+  hasBackgroundAgentWork: boolean;
+  hasAutoDrainingQueue: boolean;
+}
+
+function getPromptRecommendationRunStartedAt(sessionId: string): number | null {
+  return sessions.get(sessionId)?.agentStatus.startedAt ?? null;
+}
+
+function getPromptRecommendationCompletionStatus(
+  sessionId: string,
+): PromptRecommendationCompletionStatus | null {
+  const state = sessions.get(sessionId);
+  if (!state) return null;
+  return {
+    turnStoppedByUser: state.turnStoppedByUser,
+    hasTerminalError: !!state.error && !state.lastStopWasSideTask,
+    sideTask: state.lastStopWasSideTask,
+    hasBackgroundAgentWork: hasBackgroundAgentWork(sessionId, state),
+    // 与 useCCAgentChat.isAgentBusy 对齐：暂停队列允许当前完成轮展示推荐，
+    // 自动续跑队列则等最终一轮结束后再生成。
+    hasAutoDrainingQueue: state.pendingQueue.length > 0 && !state.queuePaused,
+  };
 }
 
 /**
@@ -14504,6 +14597,10 @@ export const makerChatStore = {
   /** F-SB-7: Authoritative terminal-error read, immune to snapshot-generation races. */
   hasSessionTerminalError,
   wasLastStopSideTask,
+  /** 输入框推荐后台完成配对用的 non-creating turn 起点。 */
+  getPromptRecommendationRunStartedAt,
+  /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
+  getPromptRecommendationCompletionStatus,
   ensureInitialMessages,
   reloadMessages,
   /** 消息菜单:本地移除一次删除动作覆盖的整轮记录。 */

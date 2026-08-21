@@ -260,6 +260,23 @@ describe('buildConversationShareHtml 富内容导出', () => {
       resolve(process.cwd(), 'src/session/ShareSelectionBar.tsx'),
       'utf8',
     );
+    const selectAllSource = readFileSync(
+      resolve(process.cwd(), 'src/session/ShareSelectAllButton.tsx'),
+      'utf8',
+    );
+
+    const messageCheckboxSource = readFileSync(
+      resolve(process.cwd(), 'src/session/ShareMessageCheckbox.tsx'),
+      'utf8',
+    );
+    const messageRendererSource = readFileSync(
+      resolve(process.cwd(), 'src/session/MessageRenderer.tsx'),
+      'utf8',
+    );
+    const sessionSource = readFileSync(
+      resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
+      'utf8',
+    );
 
     expect(html).toContain('<div class="share-gap" aria-hidden="true">⋯</div>');
     expect(html).toMatch(
@@ -267,11 +284,51 @@ describe('buildConversationShareHtml 富内容导出', () => {
     );
     expect(shareBarSource).toContain('height: 44,');
     expect(shareBarSource).toContain('minHeight: 44,');
-    expect(shareBarSource).toContain(
+    expect(shareBarSource).toContain('minWidth: 112,');
+    expect(shareBarSource).toContain('fontSize: typeScale.body,');
+    expect(selectAllSource).toContain(
       'shareableIds.filter((clientId) =>',
     );
-    expect(shareBarSource).toContain(
+    expect(selectAllSource).toContain(
       'selectionBeforeSelectAllRef.current?.includes(clientId)',
+    );
+    expect(selectAllSource).toContain('<ShareCheckboxMark checked={allSelected} />');
+    expect(selectAllSource).not.toContain('backgroundColor: colors.surfaceChip');
+    expect(messageCheckboxSource).toContain('onStartShouldSetResponder={() => !disabled}');
+    expect(messageCheckboxSource).toContain('onResponderTerminationRequest={() => true}');
+    expect(messageCheckboxSource).toContain('shouldCommitShareSelectionTap({');
+    expect(messageCheckboxSource).toContain('<ShareSelectionRowInteractionContext.Provider');
+    expect(messageCheckboxSource).toContain('if (!gesture.consumed) toggle();');
+    expect(messageCheckboxSource).not.toContain('fill ? styles.rowButton : styles.button');
+    expect(messageRendererSource).toContain('<View style={styles.shareSelectionContent}>');
+    expect(messageRendererSource).not.toContain(
+      'pointerEvents="none" style={styles.shareSelectionContent}',
+    );
+    expect(messageRendererSource).toContain('useCancelShareSelectionRowTap()');
+    expect(messageRendererSource).toContain('fill');
+    expect(messageRendererSource).toContain(
+      'testID="message.shareStickyCheck"',
+    );
+    expect(messageRendererSource).toContain(
+      'const shareableViews = Array.from(shareableMessageViewsRef.current.entries())',
+    );
+    expect(messageRendererSource).toContain(
+      'candidates.sort((a, b) => (a.frame?.y ?? Number.POSITIVE_INFINITY)',
+    );
+    expect(messageRendererSource).toContain(
+      'const pinned = candidates.find(({ frame }) => frame',
+    );
+    expect(messageRendererSource).toContain(
+      'frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT',
+    );
+    expect(messageRendererSource).toContain('pointerEvents="box-none"');
+    expect(messageRendererSource).toContain('marginLeft: wideContentInset + spacing.lg');
+    expect(messageRendererSource).not.toContain('styles.stickyShareSpacer');
+    expect(sessionSource).toContain(
+      'shareSelectionLeadingInset={nativeShellLayout.wideViewport',
+    );
+    expect(sessionSource).toContain(
+      '{ paddingLeft: shareSelectionLeadingInset + spacing.sm }',
     );
     expect(webViewSource).toContain(
       'onShouldStartLoadWithRequest={interceptNavigation}',

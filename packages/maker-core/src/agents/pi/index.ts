@@ -138,6 +138,13 @@ import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../typ
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
 import { scanPiCustomizations } from './customization-scanner.js';
+import {
+  DoctorCommandActivity,
+  findContextModePackageRoot,
+  isContextModeDoctorCommandName,
+  rewriteContextModeDoctorPath,
+  shouldRewriteContextModeDoctorNotification,
+} from './context-mode-doctor-path.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
@@ -479,11 +486,17 @@ function isExecutablePiSlashCommand(text: string, manifest: PiRuntimeCapabilityM
   return manifest?.status === 'loaded' && manifest.managedPackageCommandNames?.includes(match[1]) === true;
 }
 
-function isManagedPiExtensionSlashCommand(text: string, manifest: PiRuntimeCapabilityManifest | undefined): boolean {
+function managedExtensionSlashCommandName(
+  text: string,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): string | undefined {
   const match = text.trimStart().match(/^\/([^\s]+)(?:\s|$)/);
-  if (!match?.[1] || manifest?.status !== 'loaded') return false;
-  if (manifest.managedPackageCommandNames?.includes(match[1]) !== true) return false;
-  return manifest.commands.some((command) => command.name === match[1] && command.source === 'extension');
+  if (!match?.[1] || manifest?.status !== 'loaded') return undefined;
+  if (manifest.managedPackageCommandNames?.includes(match[1]) !== true) return undefined;
+  if (!manifest.commands.some((command) => command.name === match[1] && command.source === 'extension')) {
+    return undefined;
+  }
+  return match[1];
 }
 
 function escapeLeadingSlashCommand(text: string, manifest: PiRuntimeCapabilityManifest | undefined): string {
@@ -2426,6 +2439,8 @@ export class PiAgent extends BaseAgent {
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
+    const contextModeRoot = findContextModePackageRoot(managedPackageResources.packageRoots);
+    ctx.rewriteToolResultText = (text) => rewriteContextModeDoctorPath(text, contextModeRoot);
     let interactionResolver: InteractionResolver | null = null;
     /**
      * Bumped whenever the approval surface is (re)wired. Deferred Subagent
@@ -3323,6 +3338,7 @@ export class PiAgent extends BaseAgent {
     let runtimeCapabilityGeneration = 0;
     let piAgentLifecycleSequence = 0;
     let activeExtensionCommandNotifications: string[] | null = null;
+    const doctorCommandActivity = new DoctorCommandActivity();
     const unsupportedExtensionUiMethods = new Set<string>();
     const runtimeCapabilityListeners = new Set<(manifest: PiRuntimeCapabilityManifest | undefined) => void>();
     const notifyRuntimeCapabilityListener = (
@@ -3768,13 +3784,20 @@ export class PiAgent extends BaseAgent {
               remote: Boolean(opts.remoteHostId),
               allowPiPackageManagement,
               piPackageManagementToken,
-              emitExtensionNotification: (message) => {
+              emitExtensionNotification: (message, event) => {
+                const text = shouldRewriteContextModeDoctorNotification(
+                  message,
+                  event,
+                  doctorCommandActivity.active,
+                )
+                  ? rewriteContextModeDoctorPath(message, contextModeRoot)
+                  : message;
                 if (activeExtensionCommandNotifications) {
-                  activeExtensionCommandNotifications.push(message);
+                  activeExtensionCommandNotifications.push(text);
                 }
                 queue.push({
                   type: 'text',
-                  data: { text: message, isFinal: false },
+                  data: { text, isFinal: false },
                   source: 'pi',
                 });
               },
@@ -4820,9 +4843,14 @@ export class PiAgent extends BaseAgent {
           // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
           // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
           const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs), runtimeCapabilityManifest);
-          const managedExtensionCommand = isManagedPiExtensionSlashCommand(promptText, runtimeCapabilityManifest);
+          const managedExtensionCommandName = managedExtensionSlashCommandName(
+            promptText,
+            runtimeCapabilityManifest,
+          );
+          const managedExtensionCommand = managedExtensionCommandName !== undefined;
           const lifecycleSequenceBeforePrompt = piAgentLifecycleSequence;
           const capturedExtensionNotifications: string[] | null = managedExtensionCommand ? [] : null;
+          const isDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
           if (capturedExtensionNotifications) {
             activeExtensionCommandNotifications = capturedExtensionNotifications;
           }
@@ -4839,6 +4867,7 @@ export class PiAgent extends BaseAgent {
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           promptRequestStarted = true;
           try {
+            doctorCommandActivity.enter(isDoctorCommand);
             const resp = await runExclusivePiRpc(() => proc.request(command, {
               timeoutMs: PI_PROMPT_ACCEPTANCE_TIMEOUT_MS,
               // Prompt acceptance may legitimately span multiple compaction
@@ -4973,6 +5002,7 @@ export class PiAgent extends BaseAgent {
             if (activeExtensionCommandNotifications === capturedExtensionNotifications) {
               activeExtensionCommandNotifications = null;
             }
+            doctorCommandActivity.leave(isDoctorCommand);
           }
         } catch (err) {
           // 只在 Provider 尚未接受本轮时回滚。接受后的 transcript 回调失败不代表
@@ -5019,7 +5049,11 @@ export class PiAgent extends BaseAgent {
         if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'steer');
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
         const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs), runtimeCapabilityManifest);
-        const managedExtensionCommand = isManagedPiExtensionSlashCommand(promptText, runtimeCapabilityManifest);
+        const managedExtensionCommandName = managedExtensionSlashCommandName(
+          promptText,
+          runtimeCapabilityManifest,
+        );
+        const managedExtensionCommand = managedExtensionCommandName !== undefined;
         const command: Record<string, unknown> = {
           // Pi rejects extension commands on the steer RPC. Its prompt RPC
           // explicitly executes extension commands immediately while another
@@ -5028,7 +5062,14 @@ export class PiAgent extends BaseAgent {
           message: escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest),
         };
         if (images.length > 0) command.images = images;
-        const resp = await runExclusivePiRpc(() => proc.request(command));
+        const isDoctorCommand = isContextModeDoctorCommandName(managedExtensionCommandName);
+        doctorCommandActivity.enter(isDoctorCommand);
+        let resp: Awaited<ReturnType<typeof proc.request>>;
+        try {
+          resp = await runExclusivePiRpc(() => proc.request(command));
+        } finally {
+          doctorCommandActivity.leave(isDoctorCommand);
+        }
         if (!resp.success) {
           if (managedPackageRoute.accepted) {
             // The host-owned mutation already completed and its deterministic
@@ -5841,7 +5882,7 @@ export class PiAgent extends BaseAgent {
       remote: boolean;
       allowPiPackageManagement: boolean;
       piPackageManagementToken?: string;
-      emitExtensionNotification: (message: string) => void;
+      emitExtensionNotification: (message: string, event?: PiRpcEvent) => void;
       notifyUnsupportedExtensionUi: (method: string, reason: 'unsupported-ui' | 'timed-dialog') => void;
       /**
        * 把一张挂起的权限卡登记进会话级表,返回注销函数。档位切换 / 关闭会话时由
@@ -5873,7 +5914,10 @@ export class PiAgent extends BaseAgent {
       // Pi RPC has no toast surface. Preserve the extension's only visible
       // output as transcript text instead of silently dropping it (for example
       // context-mode's /ctx-stats and /ctx-doctor commands).
-      getPermissionCtx().emitExtensionNotification(message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH));
+      getPermissionCtx().emitExtensionNotification(
+        message.slice(0, MAX_PI_EXTENSION_NOTIFICATION_LENGTH),
+        event,
+      );
       return;
     }
 

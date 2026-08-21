@@ -8,12 +8,13 @@
  *
  * 通过 mock electron ipcMain 捕获真实 handler + 内存 sqlite 全列 sessions 表做集成断言。
  */
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { messages, sessions } from '../../schema';
@@ -38,21 +39,25 @@ const h = vi.hoisted(() => ({
     isSessionAlive: (id: string) => boolean;
     closeSession: (id: string) => Promise<void>;
   } | null => null),
-  userData: '',
   setPinnedSectionCardMode: vi.fn(),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
+  userDataDir: null as string | null,
 }));
 
 vi.mock('electron', () => ({
-  app: { getPath: () => h.userData },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       h.handlers.set(channel, handler);
     }),
   },
   BrowserWindow: { getAllWindows: () => [] },
+  // status 写路径(removeHookAttachmentDir / removeTurnChangeSetsForSession)会调
+  // app.getPath('userData') 并对真实文件系统做 fire-and-forget fs.rm。这里返回每次
+  // 测试用 mkdtemp 生成的独立目录，避免并发 worktree 共享同一字面量路径互相删 fixture，
+  // 也避免 Windows 把 POSIX 字面量解析成盘符根相对路径。
+  app: { getPath: () => h.userDataDir },
 }));
 vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   piSubagentRunRoot: (agentHome: string, sessionId: string) =>
@@ -203,6 +208,7 @@ beforeEach(() => {
   h.clearPiSubagentDeletedTombstone.mockImplementation(async () => undefined);
   h.getMakerIfReady.mockReset();
   h.getMakerIfReady.mockReturnValue(null);
+  h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
   registerSessionIpc();
@@ -210,14 +216,17 @@ beforeEach(() => {
 
 afterEach(async () => {
   setSessionRouteLockImplementation(null);
-  if (h.userData) await rm(h.userData, { recursive: true, force: true });
-  h.userData = '';
+  const dir = h.userDataDir;
+  if (dir) {
+    rmSync(dir, { recursive: true, force: true });
+    h.userDataDir = null;
+  }
 });
 
 describe('local-db:sessions:update handler wiring', () => {
   it('recovers cleanup only for deleted parent tasks after restart', async () => {
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-recovery-'));
-    const parentRoot = path.join(h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+    const userData = h.userDataDir!;
+    const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
     await Promise.all([
       mkdir(path.join(parentRoot, 'codex-local'), { recursive: true }),
       mkdir(path.join(parentRoot, 'cc-local'), { recursive: true }),
@@ -235,7 +244,7 @@ describe('local-db:sessions:update handler wiring', () => {
       path.join(parentRoot, 'cc-local'),
     );
     expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(
-      path.join(h.userData, 'pi-agent-home'),
+      path.join(userData, 'pi-agent-home'),
       'codex-local',
     );
     expect(h.writePiSubagentDeletedTombstone.mock.invocationCallOrder[0]!).toBeLessThan(
@@ -244,8 +253,8 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('reviving a deleted IM session cancels pending cleanup and clears the tombstone', async () => {
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-revive-'));
-    const agentHome = path.join(h.userData, 'pi-agent-home');
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
     h.writePiSubagentDeletedTombstone.mockImplementation(
       async () => new Promise((resolve) => { setTimeout(resolve, 40); }),
     );
@@ -260,8 +269,8 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('recovers tombstones for deleted PI tasks that never grew a run root', async () => {
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-no-root-'));
-    const agentHome = path.join(h.userData, 'pi-agent-home');
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('pi-local');
 
     await resumeDeletedPiSubagentCleanup();
@@ -277,8 +286,8 @@ describe('local-db:sessions:update handler wiring', () => {
   it('writes the deleted-task tombstone even while this process never loaded the parent', async () => {
     // Codex P1: another supported instance sharing userData can still have the
     // parent PI alive. A local Maker miss is not proof that no launcher exists.
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-tombstone-'));
-    const agentHome = path.join(h.userData, 'pi-agent-home');
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
     const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
     await mkdir(path.join(parentRoot, 'codex-local'), { recursive: true });
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
@@ -295,8 +304,8 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('raises the deleted-task tombstone while the local parent is still closing', async () => {
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-tombstone-live-'));
-    const agentHome = path.join(h.userData, 'pi-agent-home');
+    const userData = h.userDataDir!;
+    const agentHome = path.join(userData, 'pi-agent-home');
     const runRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs', 'codex-local');
     await mkdir(runRoot, { recursive: true });
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
@@ -313,8 +322,8 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('does not run the conclusive scan when the deleted-task tombstone cannot be written', async () => {
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-tombstone-fail-'));
-    const parentRoot = path.join(h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+    const userData = h.userDataDir!;
+    const parentRoot = path.join(userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
     await mkdir(path.join(parentRoot, 'codex-local'), { recursive: true });
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
     h.writePiSubagentDeletedTombstone.mockRejectedValue(new Error('disk full'));
@@ -330,9 +339,9 @@ describe('local-db:sessions:update handler wiring', () => {
     // launch can enter *after* that scan — recreating the root and spawning a
     // detached runner on the deleted task's credentials, with cleanup already
     // reporting success and its retry timer thrown away.
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-live-'));
+    const userData = h.userDataDir!;
     const runRoot = path.join(
-      h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
+      userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
     );
     await mkdir(runRoot, { recursive: true });
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
@@ -367,9 +376,9 @@ describe('local-db:sessions:update handler wiring', () => {
   it('leaves no runner behind when a launch races the scan of a deleted task', async () => {
     // The timing the finding describes, end to end: parent alive at cleanup
     // time, and a launch entering the moment the scan declares the root empty.
-    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-race-'));
+    const userData = h.userDataDir!;
     const runRoot = path.join(
-      h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
+      userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs', 'codex-local',
     );
     await mkdir(runRoot, { recursive: true });
     h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
@@ -455,6 +464,24 @@ describe('local-db:sessions:update handler wiring', () => {
       expect.objectContaining({
         sessionId: 'codex-local',
         patch: { permissionMode: 'ask' },
+      }),
+    );
+  });
+
+  it('broadcasts status-only patches so secondary windows converge on delete', async () => {
+    await invokeUpdate('cc-local', { status: 'deleted' });
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
+      .get('cc-local') as { status: string };
+    expect(persisted.status).toBe('deleted');
+    // #3175 回归:纯 status 变化(无 title / settings / project / pinnedAt)也必须广播
+    // sessions:patched,否则「在新窗口打开」的副窗口收不到删除,仍停留在旧视图。
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(
+      'local-db:sessions:patched',
+      expect.objectContaining({
+        sessionId: 'cc-local',
+        patch: { status: 'deleted' },
       }),
     );
   });

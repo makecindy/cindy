@@ -563,7 +563,7 @@ const LATEST_MSG_CONTENT_SQL = sql<string | null>`(
     AND m.rewind_at IS NULL
     AND (m.agent_meta IS NULL OR json_extract(m.agent_meta, '$.autoResume') IS NOT 1)
     AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-  ORDER BY m.created_at DESC LIMIT 1
+  ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
 )`.as('latest_message_content');
 const LATEST_MSG_ROLE_SQL = sql<string | null>`(
   SELECT m.role FROM messages m
@@ -572,7 +572,7 @@ const LATEST_MSG_ROLE_SQL = sql<string | null>`(
     AND m.rewind_at IS NULL
     AND (m.agent_meta IS NULL OR json_extract(m.agent_meta, '$.autoResume') IS NOT 1)
     AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-  ORDER BY m.created_at DESC LIMIT 1
+  ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
 )`.as('latest_message_role');
 
 /**
@@ -1505,6 +1505,9 @@ export function registerSessionIpc(
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
+    // 归档/删除这类纯 status 变化也要广播:本机多窗口收敛靠 sessions:patched,
+    // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
+    const statusChanged = p.status !== undefined;
     if (
       projectTargetChanged &&
       row.workspaceKind === 'project' &&
@@ -1513,7 +1516,13 @@ export function registerSessionIpc(
     ) {
       await upsertRecentWorkdir(row.workingDir, Date.now());
     }
-    if (projectTargetChanged || settingsChanged || titleChanged || p.pinnedAt !== undefined) {
+    if (
+      projectTargetChanged ||
+      settingsChanged ||
+      titleChanged ||
+      statusChanged ||
+      p.pinnedAt !== undefined
+    ) {
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, broadcastPatch, ownerScope);
       }

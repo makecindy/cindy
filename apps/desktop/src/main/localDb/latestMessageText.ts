@@ -16,6 +16,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from 'drizz
 import { extractText } from '../sessionTaskSummary.logic.js';
 
 import { getDbClient } from './client/current.js';
+import { extractMessagePreview } from './mapper.js';
 import { messages, sessions } from './schema.js';
 import {
   isTitleTurnBoundaryUser,
@@ -56,6 +57,49 @@ export interface RegenerateTitleMaterial {
 
 /** 同毫秒 tie-breaker:与 messages:list 一致,用 SQLite rowid 保持写入顺序。 */
 const messageRowid = sql<number>`rowid`;
+/** JOIN sessions 时必须限定表名,否则 SQLite 报 no such column: rowid。 */
+const joinedMessageRowid = sql<number>`"messages"."rowid"`;
+
+export interface LatestVisiblePreviewRow {
+  clientId: string;
+  content: string;
+  role: string;
+}
+
+/**
+ * 与 sessions:list 同一口径的最近可见 user/assistant 行。
+ * clear 边界与消息放进同一条 JOIN,避免先读旧 clearedAt 再选出清空前的行。
+ */
+export async function latestVisiblePreviewRow(
+  sessionId: string,
+): Promise<LatestVisiblePreviewRow | null> {
+  const [row] = await getDbClient()
+    .drizzle.select({
+      clientId: messages.clientId,
+      content: messages.content,
+      role: messages.role,
+    })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        sql`${messages.role} IN ('user', 'assistant')`,
+        isNull(messages.rewindAt),
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(joinedMessageRowid))
+    .limit(1);
+  return row ?? null;
+}
+
+/** 最近可见消息的列表预览;无可见行或抽不出正文时为 null,与 sessions:list 一致。 */
+export async function latestVisiblePreview(sessionId: string): Promise<string | null> {
+  const row = await latestVisiblePreviewRow(sessionId);
+  return extractMessagePreview(row?.content, row?.role);
+}
 
 /** 开场扫描窗口:会话开头可能连续多条纯附件等抽不出正文的消息,按序多看一批。 */
 const OPENING_SCAN_LIMIT = 15;

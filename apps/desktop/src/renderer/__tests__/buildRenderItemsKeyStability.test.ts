@@ -29,6 +29,8 @@ import {
   insertForkOriginItem,
   isScrollNavigationKey,
   pickDeleteCompensationAnchorKey,
+  isPlanCardVisibleInViewport,
+  planSessionBelongsToLatestUserTurn,
   shouldBlockAssistantFork,
   type RenderItem,
 } from '../components/chat/MessageStream';
@@ -119,6 +121,64 @@ const todoInput = (items: Array<{ content: string; status: 'pending' | 'in_progr
     activeForm: t.content,
     id: `t${idx}`,
   })),
+});
+
+const rect = (top: number, bottom: number, left = 0, right = 100) => ({
+  top,
+  right,
+  bottom,
+  left,
+  width: right - left,
+  height: bottom - top,
+});
+
+describe('isPlanCardVisibleInViewport', () => {
+  const viewport = rect(0, 600, 0, 800);
+
+  it('treats a partially visible card as visible', () => {
+    expect(isPlanCardVisibleInViewport(rect(-20, 40), viewport)).toBe(true);
+  });
+
+  it('treats a card covered by the composer overlay as invisible', () => {
+    expect(isPlanCardVisibleInViewport(rect(520, 580), viewport, 100)).toBe(false);
+  });
+
+  it('keeps the card visible when any pixels remain above the composer overlay', () => {
+    expect(isPlanCardVisibleInViewport(rect(480, 540), viewport, 100)).toBe(true);
+  });
+});
+
+describe('planSessionBelongsToLatestUserTurn', () => {
+  it('does not reactivate an older plan when a later user turn starts', () => {
+    expect(
+      planSessionBelongsToLatestUserTurn(
+        [mkUser('u1'), mkTool('plan1', 'update_plan'), mkUser('u2')],
+        ['plan1'],
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps steer rows inside the current plan turn', () => {
+    expect(
+      planSessionBelongsToLatestUserTurn(
+        [mkUser('u1'), mkTool('plan1', 'update_plan'), { ...mkUser('steer'), delivery: 'steer' }],
+        ['plan1'],
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps synthetic continuation rows inside the current plan turn', () => {
+    expect(
+      planSessionBelongsToLatestUserTurn(
+        [
+          mkUser('u1'),
+          mkTool('plan1', 'update_plan'),
+          { ...mkUser('auto-resume'), isSyntheticTrigger: true },
+        ],
+        ['plan1'],
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('assistant fork boundary detection', () => {
@@ -531,48 +591,247 @@ describe('buildRenderItems — key stability', () => {
     expect(taskItem.update?.summary).toBe('Found the relevant renderer path');
   });
 
-  // ── case 3: plan 工具调用被整体吞掉 —— 流内不再渲染计划卡 ────────────────
-  // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(Codex IDE 扩展式钉住面板)。
+  // ── case 3:plan session 在流内只产一张 stable-key 卡 ─────────────────────
   // session 分组 / 输入解析语义的覆盖在 @cindy/maker-shared 的 messageRender.test.ts;
-  // 这里只锁桌面流内行为:不产 item、不切段、结尾不留无效 tail。
+  // 这里只锁桌面时间线行为:多步骤计划插卡,单步骤计划继续保持紧凑。
 
-  it('plan tool calls are swallowed without splitting the surrounding tool segment', () => {
+  it('inserts a multi-step plan card between surrounding tool segments', () => {
     const seq: ChatMessage[] = [
       mkUser('u1'),
       mkTool('t1', 'Bash'),
-      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }])),
+      mkTool(
+        'tw1',
+        'TodoWrite',
+        todoInput([
+          { content: 'Inspect state', status: 'completed' },
+          { content: 'Patch renderer', status: 'in_progress' },
+        ]),
+      ),
       mkResult('r-tw1', 'tu-tw1', 'ok'),
       mkTool('t2', 'Read'),
       mkAssistant('a1', 'done'),
     ];
     const { items } = buildRenderItems(seq);
 
-    // TodoWrite 及其 tool_result 如同不存在:t1 / t2 仍聚在同一段里。
-    expect(items.map((it) => it.type)).toEqual(['message', 'tool_segment', 'message']);
-    const seg = items[1] as Extract<RenderItem, { type: 'tool_segment' }>;
-    expect(seg.key).toBe('seg-t1');
-    expect(seg.toolCalls.map((tc) => tc.clientId)).toEqual(['t1', 't2']);
+    expect(items.map((it) => it.type)).toEqual([
+      'message',
+      'tool_segment',
+      'agent_plan',
+      'tool_segment',
+      'message',
+    ]);
+    const plan = items[2] as Extract<RenderItem, { type: 'agent_plan' }>;
+    expect(plan.key).toBe('todo-tw1');
+    expect(plan.sourceClientIds).toEqual(['tw1']);
+    expect(plan.todos.map((todo) => todo.content)).toEqual(['Inspect state', 'Patch renderer']);
   });
 
-  it('update_plan and Task* plan calls likewise produce no render items', () => {
-    const plan = mkTool('plan1', 'update_plan', {
-      plan: [{ step: 'Read code', status: 'in_progress' }],
+  it('updates one logical plan card at the latest row while keeping its first key', () => {
+    const first = mkTool('plan1', 'update_plan', {
+      plan: [
+        { step: 'Read code', status: 'in_progress' },
+        { step: 'Patch renderer', status: 'pending' },
+      ],
     });
-    const taskCreate = mkTool('tc1', 'TaskCreate', { subject: 'Collect logs' });
+    const second = mkTool('plan2', 'update_plan', {
+      plan: [
+        { step: 'Read code', status: 'completed' },
+        { step: 'Patch renderer', status: 'in_progress' },
+      ],
+    });
 
-    const { items } = buildRenderItems([mkUser('u1'), plan, taskCreate, mkAssistant('a1', 'On it')]);
-
-    expect(items.map((it) => it.type)).toEqual(['message', 'message']);
-  });
-
-  it('a trailing plan call keeps the tail invariant on the previous valid item', () => {
     const { items } = buildRenderItems([
       mkUser('u1'),
-      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }])),
-      mkResult('r-tw1', 'tu-tw1', 'ok'),
+      first,
+      mkTool('t1', 'Read'),
+      second,
+      mkAssistant('a1', 'On it'),
     ]);
 
-    expect(items.map((it) => it.type)).toEqual(['message']);
+    const plans = items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+    expect(plans).toHaveLength(1);
+    expect(plans[0].key).toBe('todo-plan1');
+    expect(plans[0].sourceClientIds).toEqual(['plan1', 'plan2']);
+    expect(plans[0].todos).toEqual([
+      { content: 'Read code', status: 'completed' },
+      { content: 'Patch renderer', status: 'in_progress' },
+    ]);
+  });
+
+  it('renders a reconstructed multi-step Task plan as one inline card', () => {
+    const first = mkTool('tc1', 'TaskCreate', { subject: 'Collect logs' });
+    const second = mkTool('tc2', 'TaskCreate', { subject: 'Run tests' });
+
+    const { items } = buildRenderItems([
+      mkUser('u1'),
+      first,
+      mkResult('r-tc1', 'tu-tc1', 'Task #1 created successfully: Collect logs'),
+      second,
+      mkResult('r-tc2', 'tu-tc2', 'Task #2 created successfully: Run tests'),
+      mkAssistant('a1', 'On it'),
+    ]);
+
+    expect(items.map((it) => it.type)).toEqual(['message', 'agent_plan', 'message']);
+    const plan = items[1] as Extract<RenderItem, { type: 'agent_plan' }>;
+    expect(plan.key).toBe('todo-tc1');
+    expect(plan.todos.map((todo) => todo.content)).toEqual(['Collect logs', 'Run tests']);
+  });
+
+  it('keeps a single-step plan suppressed without splitting the surrounding tool segment', () => {
+    const { items } = buildRenderItems([
+      mkUser('u1'),
+      mkTool('t1', 'Bash'),
+      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'Only step', status: 'pending' }])),
+      mkResult('r-tw1', 'tu-tw1', 'ok'),
+      mkTool('t2', 'Read'),
+      mkAssistant('a1', 'done'),
+    ]);
+
+    expect(items.map((it) => it.type)).toEqual(['message', 'tool_segment', 'message']);
+    const segment = items[1] as Extract<RenderItem, { type: 'tool_segment' }>;
+    expect(segment.toolCalls.map((tool) => tool.clientId)).toEqual(['t1', 't2']);
+  });
+
+  it('waits for older Task history before showing a partial inline plan', () => {
+    const first = mkTool('tc2', 'TaskCreate', { subject: 'Fix renderer' });
+    const second = mkTool('tc3', 'TaskCreate', { subject: 'Run tests' });
+    const messages = [
+      first,
+      mkResult('r-tc2', 'tu-tc2', 'Task #2 created successfully: Fix renderer'),
+      second,
+      mkResult('r-tc3', 'tu-tc3', 'Task #3 created successfully: Run tests'),
+    ];
+
+    expect(
+      buildRenderItems(messages, undefined, undefined, { historyWindowIncomplete: true }).items,
+    ).toEqual([]);
+    expect(
+      buildRenderItems(messages, undefined, undefined, {
+        historyWindowIncomplete: false,
+      }).items.map((item) => item.type),
+    ).toEqual(['agent_plan']);
+  });
+
+  it('filters an earlier partial Task card when a later plan session is resolved', () => {
+    const messages = [
+      mkTool('tc2', 'TaskCreate', { subject: 'Fix renderer' }),
+      mkResult('r-tc2', 'tu-tc2', 'Task #2 created successfully: Fix renderer'),
+      mkTool('tc3', 'TaskCreate', { subject: 'Run tests' }),
+      mkResult('r-tc3', 'tu-tc3', 'Task #3 created successfully: Run tests'),
+      mkUser('u2', 'Start a different plan'),
+      mkTool('plan2', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'in_progress' },
+          { step: 'Patch renderer', status: 'pending' },
+        ],
+      }),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0].key).toBe('todo-plan2');
+  });
+
+  it('keeps an authoritative TaskList card when its result follows the insertion row', () => {
+    const messages = [
+      mkUser('u1', 'Show the current tasks'),
+      mkTool('task-list', 'TaskList'),
+      mkResult(
+        'r-task-list',
+        'tu-task-list',
+        JSON.stringify({
+          tasks: [
+            { id: '1', subject: 'Inspect renderer', status: 'in_progress' },
+            { id: '2', subject: 'Run tests', status: 'pending' },
+          ],
+        }),
+      ),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      key: 'todo-task-list',
+      todos: [
+        { content: 'Inspect renderer', status: 'in_progress' },
+        { content: 'Run tests', status: 'pending' },
+      ],
+    });
+  });
+
+  it('renders a new Task plan after a real user turn despite an older orphan update', () => {
+    const messages = [
+      mkTool('old-update', 'TaskUpdate', { taskId: 'old', status: 'in_progress' }),
+      mkUser('u2', 'Start a new plan'),
+      mkTool('new-task-1', 'TaskCreate', { subject: 'Inspect renderer' }),
+      mkResult(
+        'r-new-task-1',
+        'tu-new-task-1',
+        'Task #new-1 created successfully: Inspect renderer',
+      ),
+      mkTool('new-task-2', 'TaskCreate', { subject: 'Run tests' }),
+      mkResult(
+        'r-new-task-2',
+        'tu-new-task-2',
+        'Task #new-2 created successfully: Run tests',
+      ),
+    ];
+
+    const plans = buildRenderItems(messages, undefined, undefined, {
+      historyWindowIncomplete: true,
+    }).items.filter(
+      (item): item is Extract<RenderItem, { type: 'agent_plan' }> => item.type === 'agent_plan',
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({
+      key: 'todo-new-task-1',
+      todos: [
+        { content: 'Inspect renderer', status: 'pending' },
+        { content: 'Run tests', status: 'pending' },
+      ],
+    });
+  });
+
+  it('recovers an old plan anchor after prepend changes the session key', () => {
+    const oldWindow = buildRenderItems([
+      mkTool('plan2', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'completed' },
+          { step: 'Patch renderer', status: 'in_progress' },
+        ],
+      }),
+    ]).items;
+    const prepended = buildRenderItems([
+      mkTool('plan1', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'in_progress' },
+          { step: 'Patch renderer', status: 'pending' },
+        ],
+      }),
+      mkTool('plan2', 'update_plan', {
+        plan: [
+          { step: 'Read code', status: 'completed' },
+          { step: 'Patch renderer', status: 'in_progress' },
+        ],
+      }),
+    ]).items;
+
+    expect(oldWindow[0]?.key).toBe('todo-plan2');
+    expect(prepended[0]?.key).toBe('todo-plan1');
+    expect(findRestorableViewportItemIdx(prepended, 'todo-plan2')).toBe(0);
   });
 
   // ── case 4: orphan tool_result 补到末尾不产生新 item / 不重 key ─────────
@@ -1134,13 +1393,20 @@ describe('groupWorkRuns — work-group collapsing', () => {
     ]);
   });
 
-  it('plan calls stay absent through work-group folding (sole presentation is the pinned panel)', () => {
-    const todo = mkTool('tw1', 'TodoWrite', todoInput([{ content: 'inspect', status: 'completed' }]));
-    // 正文前后各放一次:两个位置都不应折出 work_group,也不应出现任何计划 item。
+  it('keeps inline plan cards outside work-group folding', () => {
+    const todo = mkTool(
+      'tw1',
+      'TodoWrite',
+      todoInput([
+        { content: 'Inspect', status: 'completed' },
+        { content: 'Patch', status: 'in_progress' },
+      ]),
+    );
+    // 正文前后各放一次:两个位置都保留流内计划卡,且不折进 work_group。
     const before = build([mkUser('u1'), todo, mkAssistant('a-final', 'Done.')], false);
     const after = build([mkUser('u1'), mkAssistant('a-final', 'Done.'), todo], false);
-    expect(before.map((it) => it.type)).toEqual(['message', 'message']);
-    expect(after.map((it) => it.type)).toEqual(['message', 'message']);
+    expect(before.map((it) => it.type)).toEqual(['message', 'agent_plan', 'message']);
+    expect(after.map((it) => it.type)).toEqual(['message', 'message', 'agent_plan']);
   });
 
   it('computes durationMs from the previous boundary (user message) to the terminating text createdAt', () => {
