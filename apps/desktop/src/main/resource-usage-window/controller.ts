@@ -342,8 +342,11 @@ export class ResourceUsageWindowController {
   private onEnteredFullScreen(win: BrowserWindow): void {
     if (win !== this.winRef || win.isDestroyed()) return;
     if (this.pendingLeaveGeneration !== null || !this.visible) {
+      const generation = this.pendingLeaveGeneration ?? this.fullscreenGeneration;
+      this.pendingLeaveGeneration = generation;
       this.fullscreenTransition = 'leaving';
       win.setFullScreen(false);
+      this.scheduleLeaveFallback(win, generation);
       return;
     }
     this.fullscreenTransition = 'entered';
