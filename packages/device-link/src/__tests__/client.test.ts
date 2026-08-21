@@ -4482,6 +4482,7 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       protocolVersion: 1,
       appVersion: '1',
     }, 50);
+    const firstOpenRejection = expect(firstOpen).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
     await relay.settle();
 
     const liveInvoke = host.invoke('ios', {
@@ -4491,7 +4492,7 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     await relay.settle();
     const rawBeforeConfirm = relay.deliveredTo.get('ios') ?? [];
     expect(rawBeforeConfirm.some((env) => parseTransportPayload(env.payload) !== null)).toBe(false);
-    await expect(firstOpen).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+    await firstOpenRejection;
 
     const secondOpen = controller.openLink('desktop', {
       controllerName: 'iPhone',
@@ -4604,10 +4605,16 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     controller.stop();
   }, 10_000);
 
-  it('新确认阶段:确认 ACK 丢失后,首个同 stream 可靠业务帧自动提交并恢复双向流量', async () => {
+  it('新确认阶段:同 stream 可靠业务帧不能替代当前代确认 ACK', async () => {
     const relay = new MemoryRelay();
-    const host = makeRelayClient(relay, 'desktop');
-    const controller = makeRelayClient(relay, 'ios');
+    const host = makeRelayClient(relay, 'desktop', {
+      transportRetryIntervalMs: 1_000,
+      transportMaxRetryAttempts: 3,
+    });
+    const controller = makeRelayClient(relay, 'ios', {
+      transportRetryIntervalMs: 1_000,
+      transportMaxRetryAttempts: 3,
+    });
     const receivedInvokes: Envelope[] = [];
     const offHost = host.onFrame((env) => {
       if (env.kind === 'link-open' && env.src && env.id) {
@@ -4635,7 +4642,11 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       appVersion: '1',
     }, 500);
     await relay.settle();
-    await expect(firstOpen).resolves.toBeTruthy();
+    const accepted = await firstOpen;
+    const currentRequestId = (relay.deliveredTo.get('desktop') ?? [])
+      .filter((env) => env.kind === 'link-open')
+      .at(-1)?.id;
+    expect(currentRequestId).toBeTruthy();
     expect(host.isLinkReady('ios')).toBe(false);
 
     const liveInvoke = host.invoke('ios', {
@@ -4649,8 +4660,18 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
       channel: 'maker:prove-accept-was-processed',
       args: [],
     }, 500);
-    await relay.settleUntil(() => receivedInvokes.length === 1);
+    await relay.settleUntil(() => (
+      relay.deliveredTo.get('ios') ?? []
+    ).some((env) => env.kind === 'invoke-result'));
     await expect(inboundEvidence).resolves.toEqual({ ok: true, result: 'host-ready' });
+    expect(host.isLinkReady('ios')).toBe(false);
+
+    controller.sendPush('desktop', DEVICE_LINK_TRANSPORT_ACK_CHANNEL, {
+      streamId: accepted.transportStreamId,
+      ackSeq: 0,
+      linkRequestId: currentRequestId,
+    });
+    await relay.settleUntil(() => receivedInvokes.length === 1);
     await expect(liveInvoke).resolves.toEqual({ ok: true, result: 'reopened' });
     expect(host.isLinkReady('ios')).toBe(true);
 

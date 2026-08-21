@@ -455,7 +455,7 @@ interface PeerTransportState {
   receiveReady: boolean;
   /** 新版入站 accept 等待对端回显 request id；新 offer 会原子替换旧代。 */
   pendingLinkConfirmation: PendingLinkConfirmation | null;
-  /** 本机已处理出站 accept 后的有界确认 ACK 重发；收到同 stream 业务帧即撤销。 */
+  /** 本机已处理出站 accept 后的有界确认 ACK 重发；只由对应确认 ACK 或代际复位撤销。 */
   outboundLinkConfirmationAck: OutboundLinkConfirmationAck | null;
   explicitlyClosed: boolean;
   /**
@@ -2025,12 +2025,6 @@ export class DeviceLinkClient {
     }
     if (!peer.remoteStreamId) peer.remoteStreamId = parsed.meta.streamId;
     const { meta } = parsed;
-    // 同 stream 的可靠业务帧只能由已处理 link-accept、已开放发送方向的对端发出，
-    // 因而也是确认 ACK 的等价提交证据。这样显式确认因本地背压发送失败时，不会
-    // 再形成「对端已 ready、被控端永远 awaiting-confirm」的新死锁；旧 stream
-    // 已在上面的严格匹配处丢弃，不能借迟到业务帧跨进程代放行。
-    this.cancelOutboundLinkConfirmation(peer);
-    this.commitReliableSendFromInboundEvidence(env.src, peer);
     const stream = this.getReceiveStream(
       peer,
       meta.streamId,
@@ -2808,23 +2802,6 @@ export class DeviceLinkClient {
       if (peer.outboundLinkConfirmationAck !== confirmation) return;
       this.retryReliableLinkConfirmation(dst, peer);
     }, normalizeTransportRetryInterval(this.timing.transportRetryIntervalMs));
-  }
-
-  private cancelOutboundLinkConfirmation(peer: PeerTransportState): void {
-    const confirmation = peer.outboundLinkConfirmationAck;
-    if (confirmation?.timer) clearTimeout(confirmation.timer);
-    peer.outboundLinkConfirmationAck = null;
-  }
-
-  private commitReliableSendFromInboundEvidence(dst: string, peer: PeerTransportState): void {
-    if (peer.sendPhase !== 'awaiting-confirm' || !peer.pendingLinkConfirmation) return;
-    this.log.info(
-      `device-link recovery dst=${dst.slice(0, 8)} trigger=link-confirm-inbound`
-      + ` stream=${peer.streamId.slice(0, 8)}`
-      + ` request=${peer.pendingLinkConfirmation.requestId.slice(0, 8)}`
-      + ` conn=${this.connEpoch}`,
-    );
-    this.commitReliableSendResume(dst, peer, peer.pendingLinkConfirmation.resume);
   }
 
   private handleTransportAck(

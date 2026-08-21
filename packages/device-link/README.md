@@ -70,8 +70,7 @@
   发出 `link-accept` 后，只先开放接收方向；控制端真正处理匹配的 accept、安装 stream
   基线后，会回一条带该 `link-open` requestId 的 transport ACK。被控端只有收到同代、
   同 stream 且基线合法的确认才开放发送方向并 replay pending；若这条确认因瞬时背压未发出，
-  控制端会按既有可靠重试间隔有界重发确认；对端后续发来的首个同 stream 可靠业务帧也可
-  作为已处理 accept 的等价证据。确认窗口耗尽仍无证据时，被控端复用现有 peer 级
+  控制端会按既有可靠重试间隔有界重发确认。确认窗口耗尽仍无确认时，被控端复用现有 peer 级
   `transport-timeout` 重置，要求控制端重开链路，而不是永久停在等待态。迟到 accept、被新请求
   替换的 accept、错误 requestId、旧 stream 业务帧都不能跨代放行；任一端未声明本能力时继续
   使用旧版即时 ready 行为，保证 Desktop 与 Mobile 可以独立升级，server relay 无需理解新字段。
@@ -97,9 +96,10 @@
   仍未恢复；熔断器会继续保持单飞探测，不应把普通业务请求重新放成洪峰。
 - 真机版本未同时包含这组代码时，只能验证旧协议兼容路径；必须以 Desktop、Mobile
   实际版本和 24 小时日志中的 `await-link-confirm`、`link-confirm-ack`、
-  `link-confirm-inbound`、`link confirmation timeout` 与 `responsiveness probe` 证据判断发布效果，不能仅凭
+  `link confirmation timeout` 与 `responsiveness probe` 证据判断发布效果，不能仅凭
   “online”判定连接健康。若同一 request 长期只有 `await-link-confirm`，说明对端没有
-  提交本代 accept；若随后出现两个 `link-confirm-*` 之一，说明发送方向已经安全恢复。
+  提交本代 accept；若随后出现 `link-confirm-ack`，说明发送方向已经安全恢复；若出现
+  `link confirmation timeout`，说明本代确认未完成并已进入 peer 级重开路径。
 
 设备列表另有 REST:`GET /api/device-link/devices` → `DeviceView[]`(DB 档案 ∪ presence 三态合成,含可选 `selfName/deviceInfo`);`PATCH`/`DELETE` 改名/删除。
 
