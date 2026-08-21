@@ -1582,7 +1582,9 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`badge\`
 (在插件入口留一颗持久的未读绿点,与 notify 并列、互不为前置,见 §4.9.1)、\`confirm\`(弹主机
 同款确认框征求用户同意并拿回真实点击,见 §4.18)、\`fs\`(请主机
-代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
+代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`library\`
+(持久作品库:用户作品级存储,不受 fs 配额约束、卸载不删,含受控 SQLite,
+见 §4.10.1)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
 可信 session_id / workdir / 只读状态注入 args,见 §4.13)、\`pick\`(请主机弹系统选文件夹窗口,
 用户亲选即授权,见 §4.14)、\`preview\`(请主机在右侧栏内置浏览器打开白名单网站的
@@ -3258,6 +3260,74 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
 - \`content\` 默认按 UTF-8 文本落盘;二进制传 \`encoding:'base64'\`(read 同理,
   想拿二进制回传 \`encoding:'base64'\`);单次写入上限 16MB,超了拆多个文件;
 - 符号链接一律不穿透:目标是 symlink、或路径经 symlink 逃出根目录,直接拒。
+
+### 4.10.1 持久作品库(library 槽)
+
+声明 \`"slots": [..., "library"]\` 后,你获得一个**用户作品级**的持久存储区——
+和 fs 槽的私有储物柜(256MB 配额、卸载即回收)是两个语义:Library 不受配额
+约束(只受磁盘水位约束),**卸载插件不删数据**(用户必须在 Cindy 设置里单独
+确认才删除)。适合画布、素材库、项目文件这类"用户会心疼"的数据。
+
+位置由用户与宿主决定(装入时可选、随时可在设置里迁移),你**看不到也无需
+知道**绝对路径——所有 \`path\`/\`dbPath\` 都是库内相对路径,段数放宽到 32、
+总长 512(比 fs 槽宽,够 \`canvases/<id>/assets/objects/<shard>/<hash>\` 深度)。
+
+\`\`\`js
+// 语法糖:cindy.library({...}) ≡ cindy.send({ type:'library-request', ... })
+const open = await cindy.library({ op: 'open' });   // 建议启动即调(幂等)
+const st = await cindy.library({ op: 'status' });
+// st = { ok:true, state:'ready', usedBytes, fileCount, diskFreeBytes,
+//        softLimitBytes, softLimitExceeded, location:'default'|'custom' }
+
+// 文件操作(全 Family;写入原子化,大文件走分块流)
+await cindy.library({ op: 'write', path: 'canvases/c1/state.json', content: s });
+await cindy.library({ op: 'read', path: 'canvases/c1/state.json', encoding: 'base64' });
+await cindy.library({ op: 'list', recursive: true, cursor: st.nextCursor, limit: 500 });
+await cindy.library({ op: 'stat' }); / mkdir / delete({ recursive:true }) / rename({ overwrite:true })
+
+// 大文件分块流(>16MB 必须走这里;sha256 由宿主实算回传,做完整性对账)
+const b = await cindy.library({ op: 'writeBegin', path: 'assets/video.bin',
+  totalBytes: blob.size, sha256: expectedHash });
+for (const chunk of chunks) {
+  await cindy.library({ op: 'writeChunk', streamId: b.streamId, seq: n, content: chunkB64, encoding: 'base64' });
+}
+const done = await cindy.library({ op: 'writeCommit', streamId: b.streamId });
+// done = { ok:true, path, bytes, sha256 }; 中断/放弃用 writeAbort
+
+// SQLite:参数化语句 + 首词白名单(SELECT/WITH/INSERT/REPLACE/UPDATE/DELETE/
+// CREATE/DROP/ALTER/REINDEX/ANALYZE);ATTACH/PRAGMA/VACUUM/事务语句一律拒,
+// 事务由宿主管理(db.batch 整批原子),迁移按 user_version 幂等续跑
+await cindy.library({ op: 'db.open', dbPath: 'library.sqlite' });
+await cindy.library({ op: 'db.exec', dbPath: 'library.sqlite',
+  sql: 'CREATE TABLE canvases (id TEXT PRIMARY KEY, name TEXT)' });
+await cindy.library({ op: 'db.batch', dbPath: 'library.sqlite', statements: [
+  { sql: 'INSERT INTO canvases VALUES (?, ?)', params: ['c1', '我的画布'] },
+] });
+await cindy.library({ op: 'db.migrate', dbPath: 'canvas.sqlite', targetVersion: 2,
+  steps: [{ toVersion: 1, sql: ['CREATE TABLE v1 (a TEXT)'] },
+          { toVersion: 2, sql: ['CREATE TABLE v2 (a TEXT)'] }] });
+await cindy.library({ op: 'db.backup', dbPath: 'library.sqlite' });  // 宿主命名空间
+await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_check
+\`\`\`
+
+关键语义(全部由宿主强制):
+
+- **失败是结构化的**:\`{ ok:false, errorCode, message }\`,常用码
+  \`LIBRARY_UNAVAILABLE\`(含 reason:binding-moved/disk-missing/corrupt)、
+  \`LIBRARY_READONLY\`、\`DISK_FULL\`、\`PATH_INVALID\`、\`NOT_FOUND\`、
+  \`ALREADY_EXISTS\`、\`TOO_LARGE\`、\`STREAM_INVALID\`、\`DB_STATEMENT_REJECTED\`、
+  \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`;
+- **不可用 ≠ 空**:\`state:'unavailable'\` 时**不要**当空库重建、不要触发
+  清理、不要把素材判成已删——如实向用户展示状态,等位置恢复;
+- **无跨库事务**:多个 .sqlite 之间没有 ATTACH;跨库一致性用幂等 + 墓碑
+  自行设计(每库独立,反而是独立同步/删除的好边界);
+- **推荐"先字节后记账"**:先写 asset 文件、再 batch 写元数据行——崩溃只会
+  留无账文件(内容寻址可自愈),绝不出现有账无文件;
+- **面板展示库内文件**:\`cindy-ghost://<你的id>/library/<相对路径>\`(只读,
+  支持视频 Range)——与 /media/ 的内容寻址缓存不同,这个地址内容可变。
+
+\`write\`/\`writeCommit\`/\`read\` 都回 \`sha256\`(宿主对实字节计算)——
+外自称的哈希只当对账参考,不是凭证。
 
 ## 4.11 发起 Agent 新回合(agent 槽)
 

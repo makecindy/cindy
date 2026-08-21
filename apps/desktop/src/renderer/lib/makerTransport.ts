@@ -52,6 +52,7 @@ export interface RoutableMaker {
   setEffort: FullMaker['setEffort'];
   setPermissionMode: FullMaker['setPermissionMode'];
   setFastMode: FullMaker['setFastMode'];
+  setThinkingEnabled: FullMaker['setThinkingEnabled'];
   setPlanMode: FullMaker['setPlanMode'];
   getSessionTree: FullMaker['getSessionTree'];
   navigateSessionTree: FullMaker['navigateSessionTree'];
@@ -153,6 +154,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     setEffort: t('maker:set-effort') as FullMaker['setEffort'],
     setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
     setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],
+    setThinkingEnabled: t('maker:set-thinking-enabled') as FullMaker['setThinkingEnabled'],
     setPlanMode: t('maker:set-plan-mode') as FullMaker['setPlanMode'],
     getSessionTree: t('maker:get-session-tree') as FullMaker['getSessionTree'],
     navigateSessionTree: t('maker:navigate-session-tree') as FullMaker['navigateSessionTree'],

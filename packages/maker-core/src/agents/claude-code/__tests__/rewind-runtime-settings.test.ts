@@ -67,11 +67,13 @@ const TEST_MODELS: ModelDescriptor[] = [
   },
 ];
 
-function createNoopLogger(): Logger {
+function createNoopLogger(onInfo?: (message: string) => void): Logger {
   const logger: Logger = {
     trace() {},
     debug() {},
-    info() {},
+    info(message: string) {
+      onInfo?.(message);
+    },
     warn() {},
     error() {},
     fatal() {},
@@ -82,7 +84,10 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createDeps(runtimeConfig: AgentDeps['runtimeConfig'] = {}): AgentDeps {
+function createDeps(
+  runtimeConfig: AgentDeps['runtimeConfig'] = {},
+  onInfo?: (message: string) => void,
+): AgentDeps {
   const auth: AuthAdapter = {
     async getState() {
       return { authenticated: true };
@@ -100,7 +105,7 @@ function createDeps(runtimeConfig: AgentDeps['runtimeConfig'] = {}): AgentDeps {
     auth,
     runtimeConfig,
     binaryPath: process.execPath,
-    logger: createNoopLogger(),
+    logger: createNoopLogger(onInfo),
   };
 }
 
@@ -175,6 +180,7 @@ function createFakeQuery(stream = createControlledStream()) {
     setModel: vi.fn(async () => assertWritable()),
     applyFlagSettings: vi.fn(async () => assertWritable()),
     interrupt: vi.fn(async () => {}),
+    send: vi.fn(async () => {}),
     close: vi.fn(() => {
       closed = true;
     }),
@@ -194,7 +200,12 @@ async function makeTempDir(): Promise<string> {
 }
 
 async function startRewindableSession(
-  options: { autoCompactThresholdPct?: number; idleTimeoutMs?: number } = {},
+  options: {
+    autoCompactThresholdPct?: number;
+    idleTimeoutMs?: number;
+    remoteHostId?: string;
+    shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
+  } = {},
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -204,19 +215,33 @@ async function startRewindableSession(
 
   const firstQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(firstQuery);
+  const remoteCcQueryFactory = options.remoteHostId
+    ? (async () => firstQuery as never)
+    : undefined;
+  const infoCalls: string[] = [];
 
   const agent = new ClaudeCodeAgent({
-    ...createDeps({ autoCompactThresholdPct: options.autoCompactThresholdPct }),
+    ...createDeps(
+      {
+        autoCompactThresholdPct: options.autoCompactThresholdPct,
+        shouldHandoffAfterContextAssessment: options.shouldHandoffAfterContextAssessment,
+      },
+      (message) => {
+        infoCalls.push(message);
+      },
+    ),
     capabilityAdditions: { availableModels: TEST_MODELS },
+    ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
     model: 'claude-opus-4-6',
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery };
+  return { agent, handle, firstQuery, infoCalls };
 }
 
 afterEach(async () => {
@@ -656,6 +681,77 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
     // 修复前这里会立即注入 /compact 到即将被重建丢弃的 inputQueue, 并把 turnInFlight 置 true。
     expect(handle.isTurnRunning?.()).toBe(false);
+
+    await handle.close();
+  });
+
+  it('skips idle auto-compact on local sessions when host will rebuild context', async () => {
+    const shouldHandoff = vi.fn(() => true);
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      autoCompactThresholdPct: 50,
+      shouldHandoffAfterContextAssessment: shouldHandoff,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 400_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(shouldHandoff).toHaveBeenCalled();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
+
+    await handle.close();
+  });
+
+  it('keeps idle auto-compact on remote sessions because overflow rollover is local-only', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      autoCompactThresholdPct: 50,
+      remoteHostId: 'remote-1',
+      shouldHandoffAfterContextAssessment: () => true,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 400_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+      'auto-compact triggered',
+    ]);
 
     await handle.close();
   });

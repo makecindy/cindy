@@ -730,6 +730,13 @@ export interface AgentDeps {
   ) => Promise<CodexExtraSpawnConfig>;
 
   /**
+   * Codex-only host policy: disable local app-server plugin runtimes even when
+   * dynamic spawn configuration degrades after a non-fatal preparation error.
+   * Remote transports own their runtime and ignore this local policy.
+   */
+  disableCodexPluginRuntime?: boolean;
+
+  /**
    * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
    * 返回 disposer 时会跟随 transport close 调用；远端 SSH transport 不触发。
    */
@@ -1332,6 +1339,8 @@ export interface StartSessionOptions {
    * Undefined means do not override the agent/server default.
    */
   fastMode?: boolean;
+  /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
+  thinkingEnabled?: boolean;
   /**
    * 用户级 system prompt 追加段，跨 agent (claude-code / codex) 公用，
    * 拼接顺序最末（优先级最高），覆盖 engine 与 host 段。空串 / undefined 跳过。
@@ -1732,6 +1741,8 @@ export interface AgentSessionHandle {
 
   /** 运行时切换 Fast mode；不支持的 agent 不实现。 */
   setFastMode?(enabled: boolean): Promise<void>;
+  /** Pi thinking-toggle 模型：运行时开关思考。 */
+  setThinkingEnabled?(enabled: boolean): Promise<void>;
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。

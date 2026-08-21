@@ -1,4 +1,5 @@
 import {
+  type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
@@ -97,6 +98,8 @@ export interface MessageRenderNormalizedMessage<
    * `createdAt`。
    */
   settledAt?: string;
+  /** Durable terminal lifecycle for an Agent/Task tool call. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
   turnCompleted?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
@@ -1720,6 +1723,7 @@ function isRunningAgentTaskItem<
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
+    persistedStatus: item.toolCall?.agentTaskStatus,
     resultIsLaunchReceipt:
       item.toolCall !== undefined &&
       (subagentSpawnReceiptName(

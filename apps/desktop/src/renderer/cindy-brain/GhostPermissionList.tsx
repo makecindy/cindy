@@ -23,6 +23,7 @@ import {
   GraduationCap,
   KeyRound,
   LayoutTemplate,
+  Library,
   MapPin,
   Megaphone,
   MessageCircleQuestion,
@@ -55,6 +56,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   notify: Megaphone,
   confirm: MessageCircleQuestion,
   fs: FilePen,
+  library: Library,
   'session-context': MapPin,
   pick: FolderOpen,
   preview: AppWindow,
@@ -313,12 +315,15 @@ export function GhostInstallReview({
   trust,
   items,
   manualCount = 0,
+  extra,
 }: {
   description?: string;
   meta: string;
   trust: GhostTrustInfo;
   items: GhostPermissionItem[];
   manualCount?: number;
+  /** 追加内容(如 library 槽的存储位置行),渲染在权限清单下方。 */
+  extra?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -362,6 +367,7 @@ export function GhostInstallReview({
       <div className="mt-3 border-t border-[var(--border-default)] pt-3">
         <GhostPermissionList items={items} />
       </div>
+      {extra ? <div className="mt-3">{extra}</div> : null}
     </div>
   );
 }

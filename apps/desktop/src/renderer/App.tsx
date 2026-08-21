@@ -54,6 +54,7 @@ import {
   setProviderModelChoice,
   setProviderModelEffort,
   setProviderModelFast,
+  setProviderModelThinking,
   subscribeProviderModelMemory,
 } from '@/state/providerModelMemory';
 import {
@@ -233,7 +234,7 @@ export function App() {
   // 通过 providerModelMemory 同步。写入触发上面的镜像 effect → NEW_MAKER_DRAFT_CHANGED 回流控制端。
   useEffect(() => {
     const offDraft = window.electronAPI.onMakerDraftPrefApply(
-      ({ agent, providerId, modelId, active, effort, fast, markModelChoice }) => {
+      ({ agent, providerId, modelId, active, effort, fast, thinking, markModelChoice }) => {
         const vendor = agentKindToVendor(agent);
         if (active) {
           const patch =
@@ -262,6 +263,9 @@ export function App() {
         if (fast !== undefined) {
           setProviderModelFast(agent, providerId, modelId, fast);
           if (active) setFastModeForModel(modelId, fast); // 旧层兜底保持一致
+        }
+        if (thinking !== undefined) {
+          setProviderModelThinking(agent, providerId, modelId, thinking);
         }
       },
     );

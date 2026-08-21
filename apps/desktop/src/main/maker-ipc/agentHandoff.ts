@@ -21,6 +21,8 @@ export interface HandoffSourceMessage {
   role: string;
   content: unknown;
   createdAt: number; // unix ms
+  /** 生产 tool_result 的关联列；content 经常是纯字符串，不能靠信封里的 toolUseId。 */
+  toolUseId?: string | null;
 }
 
 export interface BuildHandoffOptions {
@@ -50,9 +52,10 @@ export interface BuildHandoffOptions {
   workStateMessages?: HandoffSourceMessage[];
   /**
    * 交接触发原因。message-deletion 表示同一引擎因本地消息被删除而重建原生
-   * 上下文；framing 会要求只采用删除后的有效历史，且不向用户暴露内部重建。
+   * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
+   * pi-prompt-timeout 表示原生会话对 prompt 无响应后用户重试换窗。
    */
-  reason?: 'agent-switch' | 'message-deletion';
+  reason?: 'agent-switch' | 'message-deletion' | 'context-overflow' | 'pi-prompt-timeout';
 }
 
 /** 最近多少个用户轮次进入逐字区(其余进单行提要区)。 */
@@ -145,6 +148,42 @@ export function extractPlainText(content: unknown): string {
   return '';
 }
 
+function isStringifyUserContentEnvelope(
+  value: unknown,
+): value is { text: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.text === 'string'
+    && Array.isArray(record.images)
+    && Array.isArray(record.files);
+}
+
+/** 岛上预览正文:只解开 stringifyUserContent 信封,JSON 原文提示保持原样。 */
+export function extractAgentIslandPromptText(content: unknown): string | null {
+  if (typeof content === 'string') {
+    const trimmed = content.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('{')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (isStringifyUserContentEnvelope(parsed)) {
+          const text = parsed.text.trim();
+          return text || null;
+        }
+      } catch {
+        // 用户原文就是 JSON 形字符串。
+      }
+    }
+    return trimmed;
+  }
+  if (isStringifyUserContentEnvelope(content)) {
+    const text = content.text.trim();
+    return text || null;
+  }
+  const text = extractPlainText(content).trim();
+  return text || null;
+}
+
 interface Turn {
   userText: string;
   /** 轮内按序的展示行(assistant 文本 / 工具行 / 错误行)。 */
@@ -160,35 +199,115 @@ interface Turn {
  */
 interface WorkState {
   changedFiles: string[];
-  commands: string[];
+  commands: Array<{ command: string; outcome?: string }>;
+  failedPaths: string[];
+}
+
+function commandTextOf(input: Record<string, unknown>): string {
+  const raw = input.command;
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) return raw.filter((x) => typeof x === 'string').join(' ');
+  return '';
+}
+
+function toolUseIdOf(message: HandoffSourceMessage, content?: Record<string, unknown>): string {
+  if (typeof message.toolUseId === 'string' && message.toolUseId) return message.toolUseId;
+  if (!content) return '';
+  return typeof content.toolUseId === 'string'
+    ? content.toolUseId
+    : typeof content.id === 'string'
+      ? content.id
+      : '';
+}
+
+function extractFailedPathHints(text: string): string[] {
+  const hints: string[] = [];
+  for (const line of text.split('\n')) {
+    const match = line.match(/\bFAIL\s+(\S+)/) ?? line.match(/(\S+\.(?:test|spec)\.\w+)/);
+    if (!match?.[1]) continue;
+    hints.push(truncate(match[1], 80));
+    if (hints.length >= 3) break;
+  }
+  return hints;
+}
+
+function extractCommandOutcome(content: Record<string, unknown>): string | undefined {
+  if (content.isError === true) return 'failed';
+  if (typeof content.exitCode === 'number' && Number.isFinite(content.exitCode)) {
+    return `exit ${content.exitCode}`;
+  }
+  const text = extractPlainText(content.fullText ?? content.output ?? content.content ?? content);
+  const exitMatch = text.match(/exit(?:ed)?(?:\s+code)?[:\s]+(-?\d+)/i);
+  if (exitMatch) return `exit ${exitMatch[1]}`;
+  if (/\b(tests? failed|failing tests|assertionerror)\b/i.test(text)) return 'tests failed';
+  if (content.isError === false) return 'ok';
+  return undefined;
+}
+
+function isFailedOutcome(outcome: string | undefined): boolean {
+  if (!outcome) return false;
+  if (outcome === 'ok' || outcome === 'exit 0') return false;
+  return true;
 }
 
 function extractWorkState(messages: HandoffSourceMessage[]): WorkState {
   const files = new Set<string>();
-  const commands: string[] = [];
+  const commands: Array<{ command: string; outcome?: string }> = [];
+  const commandByToolUseId = new Map<string, number>();
+  const failedPaths: string[] = [];
   for (const msg of messages) {
-    if (msg.role !== 'tool_use' || !msg.content || typeof msg.content !== 'object') continue;
-    const c = msg.content as Record<string, unknown>;
-    const name = typeof c.toolName === 'string' ? c.toolName : '';
-    const input = (c.input && typeof c.input === 'object' ? c.input : {}) as Record<string, unknown>;
-    if (FILE_EDIT_TOOL_NAMES.has(name)) {
-      for (const key of ['file_path', 'path', 'notebook_path']) {
-        const v = input[key];
-        if (typeof v === 'string' && v) files.add(v);
+    const objectContent =
+      msg.content && typeof msg.content === 'object' && !Array.isArray(msg.content)
+        ? (msg.content as Record<string, unknown>)
+        : undefined;
+    if (msg.role === 'tool_use') {
+      if (!objectContent) continue;
+      const name = typeof objectContent.toolName === 'string' ? objectContent.toolName : '';
+      const input = (
+        objectContent.input && typeof objectContent.input === 'object'
+          ? objectContent.input
+          : {}
+      ) as Record<string, unknown>;
+      if (FILE_EDIT_TOOL_NAMES.has(name)) {
+        for (const key of ['file_path', 'path', 'notebook_path']) {
+          const v = input[key];
+          if (typeof v === 'string' && v) files.add(v);
+        }
+      } else if (COMMAND_TOOL_NAMES.has(name)) {
+        const cmd = commandTextOf(input);
+        if (!cmd) continue;
+        const entry = { command: truncate(oneLine(cmd), COMMAND_LINE_CAP) };
+        const index = commands.push(entry) - 1;
+        const toolUseId = toolUseIdOf(msg, objectContent);
+        if (toolUseId) commandByToolUseId.set(toolUseId, index);
       }
-    } else if (COMMAND_TOOL_NAMES.has(name)) {
-      const raw = input.command;
-      const cmd = typeof raw === 'string'
-        ? raw
-        : Array.isArray(raw)
-          ? raw.filter((x) => typeof x === 'string').join(' ')
-          : '';
-      if (cmd) commands.push(truncate(oneLine(cmd), COMMAND_LINE_CAP));
+      continue;
+    }
+    if (msg.role !== 'tool_result') continue;
+    const toolUseId = toolUseIdOf(msg, objectContent);
+    const index = toolUseId ? commandByToolUseId.get(toolUseId) : undefined;
+    if (index === undefined) continue;
+    const outcomeSource =
+      objectContent ??
+      (typeof msg.content === 'string' ? { fullText: msg.content } : undefined);
+    if (!outcomeSource) continue;
+    const outcome = extractCommandOutcome(outcomeSource);
+    if (!outcome) continue;
+    commands[index] = { ...commands[index]!, outcome };
+    if (isFailedOutcome(outcome)) {
+      const rawText =
+        typeof msg.content === 'string'
+          ? msg.content
+          : extractPlainText(outcomeSource.fullText ?? outcomeSource.output ?? outcomeSource);
+      const hints = extractFailedPathHints(rawText);
+      if (hints.length > 0) failedPaths.push(...hints);
+      else failedPaths.push(`${commands[index]!.command} → ${outcome}`);
     }
   }
   return {
     changedFiles: [...files].slice(-CHANGED_FILES_CAP),
     commands: commands.slice(-COMMANDS_CAP),
+    failedPaths: failedPaths.slice(-COMMANDS_CAP),
   };
 }
 
@@ -293,7 +412,11 @@ const FORK_TERMINATOR = "== End of fork note; the user's new message follows =="
 
 /** 结束标记——交接正文与"用户的新消息"之间唯一的分隔,任何情况下都要留住。 */
 function handoffTerminator(opts: BuildHandoffOptions): string {
-  return opts.reason === 'message-deletion' ? REBUILD_TERMINATOR : HANDOFF_TERMINATOR;
+  return opts.reason === 'message-deletion' ||
+    opts.reason === 'context-overflow' ||
+    opts.reason === 'pi-prompt-timeout'
+    ? REBUILD_TERMINATOR
+    : HANDOFF_TERMINATOR;
 }
 
 /**
@@ -335,13 +458,33 @@ function splitTrailingTerminator(text: string): [body: string, tail: string] {
  * 内部历史的显式分隔——工具密集的长历史(逐字区已收缩到 1 轮仍超限)真会走到这里,
  * 英文 framing 比原中文长,触达上限更容易。
  */
+const RETRIEVAL_SECTION_HEADING = '== Retrieving earlier verbatim history';
+
+function splitMandatoryHandoffTail(text: string, opts: BuildHandoffOptions): {
+  body: string;
+  tail: string;
+} {
+  const retrievalAt = text.lastIndexOf(RETRIEVAL_SECTION_HEADING);
+  if (retrievalAt >= 0) {
+    return {
+      body: text.slice(0, retrievalAt).trimEnd(),
+      tail: text.slice(retrievalAt),
+    };
+  }
+  const [body, terminatorTail] = splitTrailingTerminator(text);
+  return {
+    body: body.trimEnd(),
+    tail: terminatorTail || `${handoffTerminator(opts)}`,
+  };
+}
+
 function capPreservingTerminator(text: string, opts: BuildHandoffOptions): string {
   if (text.length <= HANDOFF_HARD_CAP) return text;
-  const terminator = handoffTerminator(opts);
+  const { body, tail } = splitMandatoryHandoffTail(text, opts);
   const separator = '\n\n';
-  const room = HANDOFF_HARD_CAP - terminator.length - separator.length;
-  if (room <= 0) return terminator.slice(0, HANDOFF_HARD_CAP);
-  return `${text.slice(0, room)}${separator}${terminator}`;
+  const room = HANDOFF_HARD_CAP - tail.length - separator.length;
+  if (room <= 0) return tail.slice(0, HANDOFF_HARD_CAP);
+  return `${body.slice(0, room)}${separator}${tail}`;
 }
 
 function assembleHandoffText(
@@ -354,16 +497,30 @@ function assembleHandoffText(
   const earlier = turns.slice(0, -recentCount);
 
   const sections: string[] = [];
-  if (opts.reason === 'message-deletion') {
+  if (
+    opts.reason === 'message-deletion' ||
+    opts.reason === 'context-overflow' ||
+    opts.reason === 'pi-prompt-timeout'
+  ) {
+    const rebuildCause =
+      opts.reason === 'context-overflow'
+        ? `The previous native agent session exceeded the model's context window, so Cindy started a fresh native session in the same task. ` +
+          `Below is the valid conversation history before the overflowing turn; treat only these records as the prior conversation, ` +
+          `and do not try to recover, cite, or infer messages that are not listed. `
+        : opts.reason === 'pi-prompt-timeout'
+          ? `The previous native agent session stopped responding to prompts, so Cindy started a fresh native session in the same task. ` +
+            `Below is the valid conversation history before the unresponsive turn; treat only these records as the prior conversation, ` +
+            `and do not try to recover, cite, or infer messages that are not listed. `
+        : `The user edited this conversation's local record, which invalidated the current native session context. ` +
+          `Below is the valid conversation history after that edit; treat only these records as the prior conversation, ` +
+          `and do not try to recover, cite, or infer messages that are not listed. `;
     sections.push(
       `[Session context rebuild · internal context]\n` +
-        `The user edited this conversation's local record, which invalidated the current native session context. ` +
-        `Below is the valid conversation history after that edit; treat only these records as the prior conversation, ` +
-        `and do not try to recover, cite, or infer messages that are not listed. ` +
+        rebuildCause +
         `Continue naturally in the first person, and do not mention this rebuild note to the user. ` +
         `Before making any change, check the actual workspace state (e.g. git status / git diff / reading the relevant files): ` +
         `when the record conflicts with the workspace, the workspace always wins; ` +
-        `when you are unsure about an earlier detail, read the real files and code to confirm rather than guessing from the summary.`,
+        `when you are unsure about an earlier detail, read the real files and code to confirm rather than guessing from the index or a guess.`,
     );
   } else if (opts.mode === 'delta') {
     // 归位续接:目标引擎 resume 了自己的停泊原生会话,已持有离场前的完整记忆。
@@ -396,17 +553,23 @@ function assembleHandoffText(
   // 动过哪些文件、跑过哪些命令,避免重复劳动或誤判"还没做过"。
   // delta 模式按 workStateMessages(全量历史)提取,见 BuildHandoffOptions 注释。
   const work = extractWorkState(opts.workStateMessages ?? messages);
-  if (work.changedFiles.length > 0 || work.commands.length > 0) {
+  if (work.changedFiles.length > 0 || work.commands.length > 0 || work.failedPaths.length > 0) {
     const lines: string[] = [];
     if (work.changedFiles.length > 0) {
       lines.push('Files changed:');
       for (const f of work.changedFiles) lines.push(`- ${f}`);
     }
     if (work.commands.length > 0) {
-      lines.push('Commands run (most recent):');
-      for (const cmd of work.commands) lines.push(`- ${cmd}`);
+      lines.push('Commands (most recent):');
+      for (const cmd of work.commands) {
+        lines.push(cmd.outcome ? `- ${cmd.command} → ${cmd.outcome}` : `- ${cmd.command}`);
+      }
     }
-    sections.push(`== Work state (auto-extracted) ==\n${lines.join('\n')}`);
+    if (work.failedPaths.length > 0) {
+      lines.push('Failed attempts:');
+      for (const path of work.failedPaths) lines.push(`- ${path}`);
+    }
+    sections.push(`== Work ledger (auto-extracted) ==\n${lines.join('\n')}`);
   }
 
   if (earlier.length > 0) {
@@ -433,7 +596,7 @@ function assembleHandoffText(
     sections.push(
       opts.mode === 'delta'
         ? `== Earlier progress while you were away ==\n${digest}`
-        : `== Earlier conversation digest ==\n${digest}`,
+        : `== Earlier conversation index (hints only, not a verified summary) ==\n${digest}`,
     );
   }
 
@@ -462,11 +625,11 @@ function assembleHandoffText(
     sections.push(
       `== Retrieving earlier verbatim history (use when needed) ==\n` +
         `Session id: ${opts.sessionId}\n` +
-        `Earlier conversation text beyond the digest above can be retrieved at any time (tools live under cindy_helper's history category):\n` +
-        `- By content: search_chat_history, args {"query":"<keywords>","session_ids":["${opts.sessionId}"]}\n` +
-        `- By time/role: get_chat_history, args {"session_ids":["${opts.sessionId}"],"roles":["user","assistant"]} (page through with nextCursor when hasMore)\n` +
-        `When the user asks about a detail that is not in the context above, retrieve the original text before answering instead of guessing from the digest; ` +
-        `when retrieved history conflicts with the current workspace, the workspace wins. Use this only when needed, not on every turn.`,
+        `The index above is only a hint. Retrieve earlier verbatim text only when needed (tools live under cindy_helper's history category):\n` +
+        `1. First: search_chat_history, args {"query":"<keywords>","session_ids":["${opts.sessionId}"],"limit":10}\n` +
+        `2. Only if that is not enough: get_chat_history, args {"session_ids":["${opts.sessionId}"],"roles":["user","assistant"],"limit":20}\n` +
+        `Page with nextCursor only when hasMore is true and the needed detail is still missing. Never request the default 200-row page and never dump the full history.\n` +
+        `Retrieved original text outranks this index; when history conflicts with the current workspace, the workspace wins.`,
     );
   }
 

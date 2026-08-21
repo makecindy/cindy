@@ -11,6 +11,17 @@ Agent 会话的事件流与 prompt 组装中枢，这里的改动会在用户无
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
 Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture.md)。
 
+## 上下文已满时的引擎边界
+
+本地 Claude Code、Codex、PI 在同一 Cindy 任务内，按 host 的
+`assessModelSwitchContext` 评估判断当前模型已经满（`danger` 或 `overflow`）时，走
+`host-controlled rollover + model-controlled bounded retrieval`：host 关闭旧原生窗口、写交接并
+在下一次发送前 fresh bootstrap，不先让引擎自动压缩。明确 `context-overflow` 且本轮没有助手输出或
+工具副作用时，host 才会对失败的 user 消息做一次 wire-only replay；有副作用或分类不确定时必须
+fail closed。PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
+timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
+自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。手动压缩入口不受此规则影响。
+
 > **适用范围与增量原则**：Agent 能力归属（下节 1）与代码优先确定性（下节 2）按增量
 > 适用——约束新增和正在修改的代码，不要求为统一形式专项重构存量。但**核心指标不变量
 > （下节 3）与 system prompt 改动门禁（下节 4）对所有触及相关路径的改动都生效，不分

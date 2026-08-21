@@ -71,6 +71,11 @@ import {
   normalizeDeviceLinkTopics,
   topicsMissingRemoteAck,
 } from '@/device-link/topicRegistry';
+import {
+  applyRemoteProjectOrderPush,
+  resetRemoteProjectOrderPushFence,
+  SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
+} from '@/session/remoteProjectOrder';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import {
@@ -259,6 +264,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }
 
   const auth = useAuth();
+  const currentDataOwnerIdRef = useRef<string | null>(auth.user?.id ?? null);
+  currentDataOwnerIdRef.current = auth.user?.id ?? null;
   const clientRef = useRef<DeviceLinkClient | null>(null);
   const registryRef = useRef(new DeviceLinkTopicRegistry());
   const remoteSubscribedTopicsRef = useRef(new Map<string, Set<Topic>>());
@@ -719,6 +726,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         );
       }
       setConnectionEpoch((n) => n + 1);
+      resetRemoteProjectOrderPushFence();
       void rehydrateWithClient(client);
     });
     const offPresence = client.onPresenceChanged((snap) => {
@@ -789,8 +797,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (presence.recovered) void rehydrateWithClient(client);
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
+      currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
       onLinkClosed: (deviceId, reason) => {
+        resetRemoteProjectOrderPushFence(deviceId);
         updateRehydrateSuppressionOnLinkClose(
           rehydrateSuppressedDeviceIds,
           deviceId,
@@ -1136,6 +1146,7 @@ function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
 }
 
 export function routeFrame(env: Envelope, handlers: {
+  currentDataOwnerId?: string | null;
   onAccessRevoked?: (deviceId: string) => void;
   onLinkClosed?: (deviceId: string, reason?: string) => void;
   onProviderChanged?: (deviceId: string) => void;
@@ -1157,6 +1168,14 @@ export function routeFrame(env: Envelope, handlers: {
   }
   if (push.channel === 'maker:schedule:event') {
     remoteScheduleEventStore.apply(env.src, push.payload);
+  }
+  if (push.channel === SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL) {
+    applyRemoteProjectOrderPush(env.src, push.payload, {
+      controllerDataOwnerId: handlers.currentDataOwnerId ?? null,
+      ownerStamp: push.ownerStamp,
+      ownerStampPresent: Object.prototype.hasOwnProperty.call(push, 'ownerStamp'),
+    });
+    return;
   }
   if (push.channel === FILE_BROWSER_EVENT_CHANNEL) {
     // 文件树变更是 workdir 域事件,与会话 store 无关,单独分发给文件浏览页。
@@ -1554,6 +1573,7 @@ function markOfflineDeviceMirror(deviceId: string): void {
 }
 
 function wipeUnavailableDeviceMirror(deviceId: string): void {
+  resetRemoteProjectOrderPushFence(deviceId);
   invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   remoteScheduleEventStore.clearDevice(deviceId);

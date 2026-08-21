@@ -27,10 +27,6 @@ appId: ${APP_ID}
     id: "deviceDetail.statusFilter.archived"
 - assertVisible:
     id: "deviceDetail.statusFilter.all"
-- assertVisible:
-    id: "deviceDetail.groupMode.project"
-- assertVisible:
-    id: "deviceDetail.groupMode.date"
 - tapOn:
     id: "deviceDetail.statusFilter.automation"
 - extendedWaitUntil:

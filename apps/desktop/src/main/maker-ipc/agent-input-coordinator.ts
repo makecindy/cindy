@@ -213,6 +213,7 @@ export interface AgentInputSendOpts {
   persistUserMessage?: {
     clientId: string;
     content: string;
+    agentFacingWireContent?: unknown;
     sdkSessionId?: string;
     delivery: AgentInputDelivery;
     expectedClearBoundaryMs?: number | null;
@@ -271,6 +272,7 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  isLiveTurnRunning?: (sessionId: string) => boolean | undefined;
   /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
   getTurnGeneration?: (sessionId: string) => number | null;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
@@ -439,6 +441,8 @@ export interface AgentInputCoordinatorDeps {
    */
   /** Technical or policy rejection before vendor dispatch. */
   onRejectedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  persistTerminalSendError?: (sessionId: string, message: string) => void;
+  onPersistedSendRejected?: (sessionId: string, message: string) => void;
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -485,6 +489,7 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  previewQueuedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /** 自动输入推进了会话，但不构成真人介入，也不能重置自动恢复预算。 */
   onAutomaticEnqueue?: (sessionId: string) => void;
   /**
@@ -629,6 +634,7 @@ interface SessionInputState {
   sessionRunningRetryDelayMs: number | null;
   /** 保护新 generation 的 timer 不被旧 generation 的迟到 callback 清掉。 */
   sessionRunningRetryToken: symbol | null;
+  staleLiveIdleSinceMs: number | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -692,6 +698,7 @@ function createInitialInputState(
     sessionRunningRetryOwnerKey: null,
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
+    staleLiveIdleSinceMs: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -1563,6 +1570,7 @@ export class AgentInputCoordinator {
     // 仍有 getDrainableHead 幂等校验, 不会与既有 wake 点重复派发。agent 忙 / 队列
     // 已有积压时走 else, 维持原排队语义(emit 中间态 + 异步 drain)。
     if (this.getDrainableHead(sessionId, state) === item) {
+      if (!automaticOrigin && !isUiContinuationItem(item)) this.deps.previewQueuedUserTurn?.(sessionId, item);
       void this.drain(sessionId, 'enqueue-immediate');
     } else {
       this.emit(sessionId);
@@ -2299,6 +2307,7 @@ export class AgentInputCoordinator {
     this.abortInputBoundary(sessionId);
     this.abortSteerTransactions(sessionId);
     this.clearAbortReconcileRetry(state);
+    state.staleLiveIdleSinceMs = null;
     // Stop 是用户显式收手:凭证切换等待随之取消(保留队列时队首仍在,恢复后会重新进入等待)。
     this.clearCredentialSwitchWait(state);
     if (!preserveQueue) {
@@ -3437,6 +3446,23 @@ export class AgentInputCoordinator {
     );
   }
 
+  private tryReconcileStaleDispatchBoundary(sessionId: string, state: SessionInputState): boolean {
+    if (state.abortBoundaryToken || state.queueAbortPending || state.queueInteractionLocks.length > 0 || state.steeringQueueClientIds.length > 0 || state.pendingExternalTerminalDone || this.deps.hasPendingInteraction(sessionId) || state.activeTurn !== null) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
+    if (this.deps.isLiveTurnRunning?.(sessionId) !== false || !this.deps.isTurnRunning(sessionId)) {
+      state.staleLiveIdleSinceMs = null;
+      return false;
+    }
+    if (state.staleLiveIdleSinceMs == null) state.staleLiveIdleSinceMs = Date.now();
+    if (Date.now() - state.staleLiveIdleSinceMs < SESSION_RUNNING_RETRY_DELAY_MS) return false;
+    const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
+    if (!reconciled) return false;
+    state.staleLiveIdleSinceMs = null;
+    return true;
+  }
+
   private isTurnSteerable(sessionId: string, state: SessionInputState): boolean {
     return state.activeTurn !== null || this.deps.isTurnRunning(sessionId);
   }
@@ -3525,6 +3551,13 @@ export class AgentInputCoordinator {
     }
     const drainableHead = this.getDrainableHead(sessionId, state);
     if (!drainableHead) {
+      const hasRunnableWork = state.pendingQueue.length > 0 || state.pendingCompacts.some((item) => item.waitForClientIds.length === 0);
+      if (hasRunnableWork && this.isDispatchBoundaryBusy(sessionId, state) && this.tryReconcileStaleDispatchBoundary(sessionId, state)) {
+        this.scheduleDrain(sessionId, 'reconcile-stale-idle');
+        return;
+      }
+      if (hasRunnableWork && state.staleLiveIdleSinceMs != null) this.scheduleSessionRunningRetry(sessionId, 'stale-live-idle-confirm');
+      else if (!hasRunnableWork) state.staleLiveIdleSinceMs = null;
       // #2506 结果级诊断:排队输入被 gate 挡住时留痕(此前零日志,gate-clear
       // 到成功 drain 之间的静默滞留无从定位)。只记 id / 布尔 / 枚举,不记正文;
       // 空队列的例行 drain 不记,避免每次 turn-done 都产生噪音。
@@ -3555,6 +3588,7 @@ export class AgentInputCoordinator {
       return;
     }
     let head: AgentInputQueuedMessage = drainableHead;
+    state.staleLiveIdleSinceMs = null;
     state.pendingQueue = state.pendingQueue.slice(1);
     this.removePendingCompactWaitClientId(state, head.clientId);
     if (!state.stickyError) {
@@ -3640,9 +3674,10 @@ export class AgentInputCoordinator {
         head.persistedContent,
         referenceContexts,
       );
+      const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
       const result = await this.deps.sendToAgent(
         sessionId,
-        buildMakerUserMessage(head, referenceContexts),
+        makerUserMessage,
         head.createOpts,
         {
           messageUuid: active.messageUuid,
@@ -3660,6 +3695,7 @@ export class AgentInputCoordinator {
           persistUserMessage: {
             clientId: head.clientId,
             content: head.persistedContent,
+            agentFacingWireContent: makerUserMessage,
             sdkSessionId,
             delivery: active.delivery,
             expectedClearBoundaryMs: active.clearBoundaryMs,
@@ -3871,6 +3907,10 @@ export class AgentInputCoordinator {
       }
       latest.error = errorMessage(err);
       latest.stickyError = null;
+      // A persisted send has already crossed the dispatch boundary.  If the
+      // vendor start fails before a terminal event exists, release the active
+      // turn so the coordinator can accept/retry subsequent queue work.
+      latest.activeTurn = null;
       const piImageCapabilityRejected = isPiImageInputUnsupportedError(err);
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
       // (review #944 第九轮 P1;判据内建在 setActiveTurnRecovery)。
@@ -3881,14 +3921,14 @@ export class AgentInputCoordinator {
         // (用户 Retry / clearError)—— 现在没有了,不主动清就等于把会话永久钉在"有活跃
         // turn":之后所有用户与调度消息全部积压到 coordinator 被重置
         // (review #944 第十轮 P1)。
-        latest.activeTurn = null;
       } else if (piImageCapabilityRejected) {
         // Pi 图片能力拒绝发生在 vendor RPC 之前，不会再有 terminal event 来释放 activeTurn；
         // 已持久化的用户行仍保留 active-turn recovery，供用户切换到视觉模型后重试。
-        latest.activeTurn = null;
       }
       this.notifyRejectedUserTurn(sessionId, head);
       this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
+      this.persistTerminalSendError(sessionId, latest.error);
+      this.notifyPersistedSendRejected(sessionId, latest.error);
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
@@ -4213,6 +4253,10 @@ export class AgentInputCoordinator {
       if (latest.generation !== generation) return;
       if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
+        if (this.tryReconcileStaleDispatchBoundary(sessionId, latest)) {
+          this.scheduleDrain(sessionId, 'session-running-retry-reconciled');
+          return;
+        }
         this.scheduleSessionRunningRetry(sessionId, reason);
         return;
       }
@@ -5065,6 +5109,19 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
         error: errorMessage(err),
       });
+    }
+  }
+
+  private persistTerminalSendError(sessionId: string, message: string): void {
+    if (!message.trim()) return;
+    try { this.deps.persistTerminalSendError?.(sessionId, message); } catch (err) {
+      log.warn('persistTerminalSendError failed', { sessionId, error: errorMessage(err) });
+    }
+  }
+
+  private notifyPersistedSendRejected(sessionId: string, message: string): void {
+    try { this.deps.onPersistedSendRejected?.(sessionId, message); } catch (err) {
+      log.warn('onPersistedSendRejected failed', { sessionId, error: errorMessage(err) });
     }
   }
 

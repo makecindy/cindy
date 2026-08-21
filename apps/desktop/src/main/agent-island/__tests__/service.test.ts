@@ -2239,6 +2239,123 @@ describe('AgentIslandService native publishing', () => {
     expect(playSound).toHaveBeenNthCalledWith(2, customSound('complete.wav'));
   });
 
+  it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+      },
+    });
+    playSound.mockClear();
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+
+    expect(playSound).toHaveBeenCalledWith(customSound('start.wav'));
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: 's1',
+      phase: 'running',
+    });
+  });
+
+  it('keeps the first rollback snapshot when the same clientId is previewed again', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 's1', agentKind: 'codex' as const };
+
+    service.handleUserPrompt(meta, 'first preview', { clientId: 'c1' });
+    playSound.mockClear();
+    service.handleUserPrompt(meta, 'persist preview', { clientId: 'c1' });
+    expect(playSound).not.toHaveBeenCalled();
+    service.rollbackUserPrompt(meta.sessionId, 'c1');
+
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+  });
+
+  it('does not rewind another session reveal when rolling back a blocked preview', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+
+    service.handleUserPrompt({ sessionId: 'session-a', agentKind: 'codex' }, 'task a', {
+      clientId: 'client-a',
+    });
+    service.handleUserPrompt({ sessionId: 'session-b', agentKind: 'codex' }, 'task b', {
+      clientId: 'client-b',
+    });
+    service.rollbackUserPrompt('session-a', 'client-a');
+
+    const sessionIds = (publish.mock.calls.at(-1)?.[0].sessions ?? []).map(
+      (session) => session.sessionId,
+    );
+    expect(sessionIds).toContain('session-b');
+    expect(sessionIds).not.toContain('session-a');
+  });
+
+  it('restores the same session completion reveal after a blocked follow-up preview', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setAppFocused(false);
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      displaySurface: 'completionCard',
+      currentSessionId: 's1',
+    });
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'follow up', {
+      clientId: 'follow',
+    });
+    service.rollbackUserPrompt('s1', 'follow');
+
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
+      displaySurface: 'completionCard',
+      currentSessionId: 's1',
+    });
+  });
+
   it('removes user-stopped sessions and ignores provider completion tails without playing completion sound', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

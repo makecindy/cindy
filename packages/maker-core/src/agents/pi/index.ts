@@ -363,18 +363,23 @@ async function stageManagedRipgrep(configHome: string, sourcePath: string | unde
   return targetPath;
 }
 
-/** cindy Effort → pi thinking level(pi 无 ultra;cindy 无 off)。 */
+/** cindy Effort → pi thinking level(pi 无 ultra)。思考开关走 setThinkingEnabled / thinkingEnabled。 */
 function effortToPiThinkingLevel(effort: Effort): string {
   return effort === 'ultra' ? 'max' : effort;
 }
 
-const PI_NATIVE_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const PI_NATIVE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
   if (!model) return undefined;
   if (model.thinkingLevelMap) {
-    return PI_NATIVE_THINKING_LEVELS.filter((effort) => model.thinkingLevelMap?.[effort] != null);
+    const efforts: Effort[] = [];
+    for (const effort of PI_NATIVE_THINKING_LEVELS) {
+      if (effort === 'off') continue;
+      if (model.thinkingLevelMap?.[effort] != null) efforts.push(effort);
+    }
+    return efforts;
   }
   // writeModelsJson 对缺省 reasoning 同样序列化为 false；因此缺省与显式 false
   // 都必须冻结为空能力，不能把 renderer 后续热刷出的 effort 放行给旧进程。
@@ -2290,6 +2295,13 @@ export class PiAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'pi',
             getThresholdPct: getAutoCompactThresholdPct,
+            // 远端没有 overflow rollover,必须保留 host compact。
+            ...(opts.remoteHostId
+              ? {}
+              : {
+                  shouldHandoffAfterContextAssessment:
+                    this.deps.runtimeConfig.shouldHandoffAfterContextAssessment,
+                }),
           });
     // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
     // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。
@@ -2943,7 +2955,15 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      if (startupEffort) {
+      if (opts.thinkingEnabled === false) {
+        const resp = await proc.request({
+          type: 'set_thinking_level',
+          level: 'off',
+        });
+        if (!resp.success) {
+          this.deps.logger.warn('pi set_thinking_level rejected', { effort: 'off', error: resp.error });
+        }
+      } else if (startupEffort) {
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(startupEffort),
@@ -2956,13 +2976,10 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      // 显式保证 auto-compaction 开 —— 这是"pi 保持轻上下文"的不变量:上下文接近满时
-      // pi 自动压缩(与 CC/Codex 一致)。pi 默认即开,这里显式化并兜底(幂等,失败不致命)。
+      // 上下文接近满时由 host 换干净原生会话(handoff),不再让 PI 先自动压缩。
+      // 自动压缩在大窗口上往往先卡住/超时,用户看不到交接。失败不致命。
       {
-        const resp = await proc.request({
-          type: 'set_auto_compaction',
-          enabled: true,
-        });
+        const resp = await proc.request({ type: 'set_auto_compaction', enabled: false });
         if (!resp.success) {
           this.deps.logger.warn('pi set_auto_compaction failed (non-fatal)', {
             error: resp.error,
@@ -3921,6 +3938,15 @@ export class PiAgent extends BaseAgent {
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(effort),
         }));
+        if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
+      },
+
+      async setThinkingEnabled(enabled: boolean): Promise<void> {
+        if (reviewMode) return;
+        const resp = await proc.request({
+          type: 'set_thinking_level',
+          level: enabled ? 'xhigh' : 'off',
+        });
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
       },
 

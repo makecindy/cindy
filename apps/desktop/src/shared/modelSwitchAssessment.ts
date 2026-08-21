@@ -9,10 +9,10 @@
  *   - ok       : 占用 < 70% —— 直接切
  *   - warn     : 70% ≤ 占用 < 自动压缩阈值 —— 允许切, 轻提示
  *   - danger   : 自动压缩阈值 ≤ 占用 < 100% —— 允许切, 轻提示(切过去会立即触发自动压缩)
- *   - overflow : 占用 ≥ 100% —— 弹确认并建议先压缩 / 新开会话
+ *   - overflow : 占用 ≥ 100% —— 弹确认；确认后由 host 交接换窗，而不是用新模型压缩
  *
  * danger 档阈值取用户当前的 auto-compact 触发百分比(设置页 50-95%), 语义统一为
- * "切过去就会立刻触发你设置的压缩线"; 读不到 / 非法时回退 90。
+ * "切过去就会立刻顶到压缩线"; 读不到 / 非法时回退 90。此时同样走交接，不再先 compact。
  *
  * fail-open 原则: 目标窗口未知(目录查不到)或当前占用未知(=0, 新会话 / 状态未回流)
  * 时一律放行 —— 预检是护栏不是闸门, 缺数据时不能挡住用户操作。
@@ -74,4 +74,11 @@ export function assessModelSwitchContext(
   if (ratio >= dangerPct / 100) return { level: 'danger', projectedPct };
   if (ratio >= WARN_RATIO) return { level: 'warn', projectedPct };
   return { level: 'ok', projectedPct };
+}
+
+/** danger/overflow = 新窗口装不下当前用量，应交接而不是 compact。 */
+export function shouldHandoffAfterContextAssessment(
+  assessment: ModelSwitchContextAssessment,
+): boolean {
+  return assessment.level === 'danger' || assessment.level === 'overflow';
 }
