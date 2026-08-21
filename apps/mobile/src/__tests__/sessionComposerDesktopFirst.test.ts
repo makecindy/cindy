@@ -38,7 +38,7 @@ describe('mobile session composer desktop-first surface', () => {
     const trailingActionsStart = attachmentButtonEnd;
     const trailingActionsEnd = source.indexOf('const resumeQueue = () => {', trailingActionsStart);
     const trailingActionsSource = source.slice(trailingActionsStart, trailingActionsEnd);
-    const voiceButtonStart = source.indexOf('const renderComposerVoiceButton = () => (');
+    const voiceButtonStart = source.indexOf('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
     const voiceButtonEnd = source.indexOf('const removeRemoteFileAttachment = useCallback', voiceButtonStart);
     const voiceButtonSource = source.slice(voiceButtonStart, voiceButtonEnd);
     const floatingVoiceIndex = composerInputSource.indexOf('floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}');
@@ -358,7 +358,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);');
     expect(source).toContain('const composerVoicePlacement = voiceUiAvailable');
     expect(source).toContain('hasTrailingAction: composerSendSlotIsStop || composerShowSendButton');
-    expect(source).toContain('const renderComposerVoiceButton = () => (');
+    expect(source).toContain('const renderComposerVoiceButton = (buttonStyle?: StyleProp<ViewStyle>) => (');
     // 录音状态由语音按钮形态表达（Mic / 红点计时胶囊 / spinner），状态行只承载错误。
     expect(source).toContain('const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);');
     expect(voiceButtonSource).toContain(') : voiceRecordingTimer.label !== null ? (');
@@ -480,12 +480,6 @@ describe('mobile session composer desktop-first surface', () => {
     expect(sharedSource).toContain('voicePlacement?.inline || voicePlacement?.floating');
     expect(sharedSource).toContain('resolveMobileComposerVoiceButtonAnchorStyle({');
     expect(sharedSource).toContain('floating: voicePlacement.floating,');
-    expect(sharedSource).toContain('accessoryAbove != null ? (');
-    expect(sharedSource).toContain('styles.accessoryReveal');
-    expect(sharedSource).toContain('maxHeight: cardTransition.value * MOBILE_COMPOSER_INPUT_MAX_HEIGHT');
-    expect(sharedSource).toContain('height: MOBILE_COMPOSER_CONTROL_SIZE');
-    expect(sharedSource).toContain('width: MOBILE_COMPOSER_CONTROL_SIZE');
-    expect(sharedSource).toContain('{floatingVoiceButton?.()}');
     expect(sharedSource).not.toContain('cardLayout && styles.voiceButtonAnchorCard,');
     // 录音中语音按钮以「红色停止方块」可见,禁止任何 opacity:0 隐藏样式回归
     // (旧 gestureAnchor 设计曾把听写中的按钮隐藏,会让停止录音无可见控件)。
@@ -500,7 +494,7 @@ describe('mobile session composer desktop-first surface', () => {
     const toolbarSource = source.slice(toolbarStart, toolbarEnd);
     const toolbarInlineStopIndex = toolbarSource.indexOf('{renderComposerInlineStop()}');
     const toolbarVoiceSlotIndex = toolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
-    const toolbarSendSlotIndex = toolbarSource.indexOf('{renderComposerSendSlot({ measureTarget: composerCardActive })}');
+    const toolbarSendSlotIndex = toolbarSource.indexOf('{renderComposerSendSlot()}');
     expect(toolbarInlineStopIndex).toBeGreaterThan(-1);
     expect(toolbarVoiceSlotIndex).toBeGreaterThan(toolbarInlineStopIndex);
     expect(toolbarSendSlotIndex).toBeGreaterThan(toolbarVoiceSlotIndex);
@@ -509,11 +503,11 @@ describe('mobile session composer desktop-first surface', () => {
     const trailingFragmentSource = source.slice(trailingFragmentStart, trailingFragmentEnd);
     const trailingInlineStopIndex = trailingFragmentSource.indexOf('{renderComposerInlineStop()}');
     const trailingVoiceSlotIndex = trailingFragmentSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
-    const trailingSendSlotIndex = trailingFragmentSource.indexOf('{renderComposerSendSlot({ measureTarget: true })}');
+    const trailingSendSlotIndex = trailingFragmentSource.indexOf('{renderComposerSendSlot()}');
     expect(trailingInlineStopIndex).toBeGreaterThan(-1);
     expect(trailingVoiceSlotIndex).toBeGreaterThan(trailingInlineStopIndex);
     expect(trailingSendSlotIndex).toBeGreaterThan(trailingVoiceSlotIndex);
-    expect(voiceButtonSource).not.toContain('buttonStyle');
+    expect(voiceButtonSource).toContain('buttonStyle');
     expect(floatingVoiceIndex).toBeGreaterThan(-1);
     expect(sendIndex).toBeGreaterThan(-1);
     expect(floatingVoiceIndex).toBeLessThan(sendIndex);
