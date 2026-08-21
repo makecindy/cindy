@@ -367,6 +367,7 @@ export function createImSessionRepo(
         if (priorRows[0]?.status === 'deleted') {
           await retireDeletedPiSubagentState(row.id);
         }
+        const isFreshInsert = priorRows.length === 0;
         await db
           .insert(sessions)
           .values({
@@ -402,16 +403,6 @@ export function createImSessionRepo(
               userSendAt: now,
             },
           });
-        // upsert 前先判行是否已存在: resolveSessionTitle 只对**新建行**生效 —
-        // 复活行带着自己的历史标题(oneshot 拼装的话题名等), 不能被渠道解析
-        // 结果刷掉(飞书话题 lane 首条消息会把标题升级成 [飞书·群名·简介] 格式,
-        // 复活时再刷回 [飞书·群名] 后缀格式就是数据回退)。
-        const preRows = await db
-          .select({ title: sessions.title })
-          .from(sessions)
-          .where(eq(sessions.id, row.id))
-          .limit(1);
-        const isFreshInsert = preRows.length === 0;
         // upsert 可能走冲突分支(残留行的 sdkSessionId / 模型 / 权限被刻意保留),
         // 返回值必须以 DB 持久化结果为准——直接返回 prepared 默认值会让 turn 拿
         // sdkSessionId=null 新开对话,而 DB 里旧上下文仍标记 active,两边失配。
@@ -447,7 +438,7 @@ export function createImSessionRepo(
       // 只对**新建行**生效 — 复活行保留自己的历史标题(首条消息 oneshot 会把
       // 话题会话升级成 [飞书·群名·简介] 格式, 不能回刷)。失败/无结果保持
       // defaultTitle, 不阻塞建行。
-      if (ns.resolveSessionTitle && persisted?.isFreshInsert !== false) {
+      if (ns.resolveSessionTitle && persisted?.isFreshInsert) {
         try {
           const resolved = await ns.resolveSessionTitle(userId, scopeKey);
           if (resolved) {
