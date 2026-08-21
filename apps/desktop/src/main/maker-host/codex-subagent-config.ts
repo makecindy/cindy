@@ -143,7 +143,9 @@ export function resolveCodexSubagentRoutingProfile(
   providerViews?: ProviderView[],
 ): 'default' | 'configured' | 'oauth-default' {
   if (!hasCodexSubagentOverride(settings)) return 'default';
-  if (mainTaskCredentialMode === 'oauth-bearer') return 'oauth-default';
+  // OAuth 主任务会清除所有固定 Subagent 路由；profile 必须反映最终生效的默认路由，
+  // 这样它可以与第三方主任务因 ChatGPT OAuth 冲突而回落的默认路由复用同一个 host。
+  if (mainTaskCredentialMode === 'oauth-bearer') return 'default';
   return codexSubagentRouteUsesChatGptOAuth(configuredRoute, providerViews)
     || (!configuredRoute && codexSubagentSelectionUsesChatGptOAuth(settings, providerViews))
     ? 'default'

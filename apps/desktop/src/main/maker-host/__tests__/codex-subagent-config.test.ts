@@ -90,7 +90,7 @@ describe('resolveEffectiveCodexSubagentSettings', () => {
       codexProviderId: null,
       codexEffort: null,
     });
-    expect(resolveCodexSubagentRoutingProfile(configured, 'oauth-bearer')).toBe('oauth-default');
+    expect(resolveCodexSubagentRoutingProfile(configured, 'oauth-bearer')).toBe('default');
     expect(resolveCodexSubagentRouteSnapshot(effective)).toBeUndefined();
     expect(resolveCodexSubagentModelFallback(effective)).toBeUndefined();
     expect(withoutDelegationArgs(buildCodexSubagentSpawnArgs(effective))).toEqual([
@@ -245,7 +245,7 @@ describe('resolveEffectiveCodexSubagentSettings', () => {
     const effortOnly = settings({ codexEffort: 'high' });
     const effective = resolveEffectiveCodexSubagentSettings(effortOnly, 'oauth-bearer');
     expect(effective.codexEffort).toBeNull();
-    expect(resolveCodexSubagentRoutingProfile(effortOnly, 'oauth-bearer')).toBe('oauth-default');
+    expect(resolveCodexSubagentRoutingProfile(effortOnly, 'oauth-bearer')).toBe('default');
   });
 
   it('does not create a mode-specific profile when the master switch is off', () => {
