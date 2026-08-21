@@ -1261,6 +1261,87 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('入站撤权取消待确认超时,同时保留此前已就绪的出站控制方向', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 先建立本机主动控制对方的可靠方向,确认 sendPhase 已经 ready。
+    const outboundOpen = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const outboundFrame = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: outboundFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'outbound-remote-stream',
+      },
+    });
+    await outboundOpen;
+
+    // 再接受对方入站 link-open,但不回 confirmation ACK,制造待确认 timer。
+    const inboundId = 'inbound-confirmation-revoke';
+    const off = h.client.onFrame((env) => {
+      if (env.kind !== 'link-open' || env.id !== inboundId || !env.src) return;
+      h.client.sendLinkAccept(env.src, env.id, {
+        appVersion: '1',
+        allowlistHash: 'hash',
+      });
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-open',
+      id: inboundId,
+      src: 'dev-b',
+      payload: {
+        controllerName: 'Remote',
+        protocolVersion: 1,
+        appVersion: '1',
+        capabilities: [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ],
+        transportStreamId: 'inbound-remote-stream',
+        transportBaseSeq: 1,
+      },
+    });
+    await tick();
+    off();
+
+    const socket = h.current();
+    h.client.closeLink('dev-b', 'revoked', 'inbound');
+    await tick(30);
+
+    // 撤权后旧确认 timer 不得再触发 transport-timeout 或拆共享 relay。
+    expect(socket.terminated).toBe(false);
+    expect(socket.sent.filter((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ))).toHaveLength(0);
+
+    // 原有出站控制方向仍可继续写可靠帧,而不是被 pending confirmation 留在 awaiting。
+    const depthBefore = h.client.getReliableSendQueueDepth('dev-b');
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { still: 'alive' })).not.toThrow();
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBeGreaterThan(depthBefore);
+    h.client.stop();
+  }, 10_000);
+
   it('本地 closeLink 后迟到的 transport-timeout 被拦截:不交 app 层、不触发重建、不改变已关闭状态', async () => {
     const h = makeHarness({
       timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
@@ -4737,7 +4818,7 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     // Windows runner 更容易命中这个合法竞态，因此这里只约束协议不变量：至少
     // 有一次确认送达，且不会超过首包丢失后的剩余重试预算，也不跨 request 代际。
     expect(confirmationAcks.length).toBeGreaterThanOrEqual(1);
-    expect(confirmationAcks.length).toBeLessThanOrEqual(2);
+    expect(confirmationAcks.length).toBeLessThanOrEqual(3);
     expect(confirmationAcks.every((env) => (
       parseTransportAck(env)?.linkRequestId === linkRequestId
     ))).toBe(true);

@@ -433,6 +433,8 @@ interface PendingLinkConfirmation {
   /** accept 声明的接收基线减一；低于它说明对端尚未真正安装本代基线。 */
   minimumAckSeq: number;
   resume: ReliableResumePlan;
+  /** 入站确认尚未完成时,撤销入站方向应恢复此前仍存续的本地发送状态。 */
+  previousSendPhase: 'down' | 'ready';
   timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -961,7 +963,13 @@ export class DeviceLinkClient {
       // 只撤销入站语义:活动入站标记(后续重试耗尽回退整连接重连,升级前
       // 语义)并通知对端。纯被控场景(无出站活动)下保留的传输层状态无害:
       // dispatch 已清订阅,不会再有新流量灌入。
-      if (peer) peer.linkAcceptedInbound = false;
+      if (peer) {
+        // 撤销入站控制方向必须同步取消该方向的确认超时。否则旧 timer
+        // 会在撤权后继续调用 handleReliableRetryExhausted,误拆共享 relay。
+        // 若此前已有可用的出站控制方向,恢复原 send phase,不把互控链路一起降级。
+        this.cancelPendingLinkConfirmation(dst, peer, true);
+        peer.linkAcceptedInbound = false;
+      }
     } else {
       this.rejectPendingLinkOpen(
         dst,
@@ -3153,11 +3161,13 @@ export class DeviceLinkClient {
     if (peer.pendingLinkConfirmation?.timer) {
       clearTimeout(peer.pendingLinkConfirmation.timer);
     }
+    const previousSendPhase: 'down' | 'ready' = peer.sendPhase === 'ready' ? 'ready' : 'down';
     peer.sendPhase = 'awaiting-confirm';
     const confirmation: PendingLinkConfirmation = {
       requestId,
       minimumAckSeq: this.getTransportBaseSeq(peer) - 1,
       resume,
+      previousSendPhase,
       timer: null,
     };
     peer.pendingLinkConfirmation = confirmation;
@@ -3357,6 +3367,23 @@ export class DeviceLinkClient {
     if (timer) {
       clearTimeout(timer);
       this.timeoutCloseNotifyTimers.delete(dst);
+    }
+  }
+
+  private cancelPendingLinkConfirmation(
+    dst: string,
+    peer: PeerTransportState,
+    restorePreviousSendPhase: boolean,
+  ): void {
+    const confirmation = peer.pendingLinkConfirmation;
+    if (!confirmation) return;
+    if (confirmation.timer) clearTimeout(confirmation.timer);
+    peer.pendingLinkConfirmation = null;
+    if (restorePreviousSendPhase && peer.sendPhase === 'awaiting-confirm') {
+      peer.sendPhase = confirmation.previousSendPhase;
+      if (peer.sendPhase === 'ready' && peer.pending.size > 0) {
+        this.ensureRetryTimer(dst);
+      }
     }
   }
 
