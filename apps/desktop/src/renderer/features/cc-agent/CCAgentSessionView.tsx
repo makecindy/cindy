@@ -4463,6 +4463,7 @@ export function CCAgentSessionView({
                   />
                 ) : pendingAskUser ? (
                   <AskUserQuestionPrompt
+                    sessionId={sessionId}
                     pending={pendingAskUser}
                     onAnswer={answerUserQuestion}
                     viewerState={askUserViewerState}
