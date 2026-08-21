@@ -62,7 +62,8 @@ async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return payload(await client.callTool({ name: 'call_tool', arguments: { name, args } }));
+  // 六个文档工具是顶层直接注册的,不再经 call_tool 二级分派(2026-08-21 改)。
+  return payload(await client.callTool({ name, arguments: args }));
 }
 
 async function unzip(file: string, entry: string): Promise<string> {

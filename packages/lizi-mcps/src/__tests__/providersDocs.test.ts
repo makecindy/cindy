@@ -57,8 +57,19 @@ describe('createLiziMcpProviders — cindy_docs', () => {
     const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'docs-provider-test', version: '0.0.0' });
     await Promise.all([config.instance.connect(serverTx), client.connect(clientTx)]);
+    // 六个工具顶层直接注册,不再是 call_tool / list_tools 两个入口(2026-08-21 改:
+    // 藏在二级分派后面时模型根本没把「做个 PPT」和它联系起来)。这里 host 没注入
+    // 渲染 / 回读回调,所以 render_pdf 与 inspect_pdf 不登记。
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['call_tool', 'list_tools']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'make_docx',
+      'make_pptx',
+      'make_xlsx',
+      'read_sheet',
+    ]);
+    // 顶层描述必须自解释 —— 模型只能靠它选型。
+    const pptx = tools.find((t) => t.name === 'make_pptx');
+    expect(pptx?.description ?? '').toContain('PPT');
   });
 
   it('ctx 的 getSessionContext 被透传:归属由每次调用现解析,而不是建 server 时冻结', async () => {
@@ -72,8 +83,8 @@ describe('createLiziMcpProviders — cindy_docs', () => {
     await Promise.all([config.instance.connect(serverTx), client.connect(clientTx)]);
 
     const result = await client.callTool({
-      name: 'call_tool',
-      arguments: { name: 'read_sheet', args: { path: 'a.csv' } },
+      name: 'read_sheet',
+      arguments: { path: 'a.csv' },
     });
     const body = JSON.parse(
       (result as { content: Array<{ text: string }> }).content[0]!.text,
@@ -84,10 +95,10 @@ describe('createLiziMcpProviders — cindy_docs', () => {
   });
 
   it('render_pdf / inspect_pdf 的注册取决于 host 是否注入了对应回调', async () => {
-    async function toolNames(
-      deps: Parameters<typeof createLiziMcpProviders>[0]['docs'],
-      category: 'convert' | 'read' = 'convert',
-    ) {
+    // 顶层暴露之后没有 list_tools 类目可查了,直接读 MCP 工具清单,再挑出这两个
+    // 受 host 注入门控的工具 —— 断言的仍是同一件事:host 没给能力就不该登记。
+    const HOST_GATED = ['render_pdf', 'inspect_pdf'] as const;
+    async function gatedToolNames(deps: Parameters<typeof createLiziMcpProviders>[0]['docs']) {
       const provider = createLiziMcpProviders({ docs: deps }).find(
         (p) => p.name === 'cindy_docs',
       )!;
@@ -97,30 +108,23 @@ describe('createLiziMcpProviders — cindy_docs', () => {
       const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: 'docs-render-gate', version: '0.0.0' });
       await Promise.all([config.instance.connect(serverTx), client.connect(clientTx)]);
-      const result = await client.callTool({
-        name: 'list_tools',
-        arguments: { category },
-      });
-      const body = JSON.parse(
-        (result as { content: Array<{ text: string }> }).content[0]!.text,
-      ) as { tools: Array<{ name: string }> };
-      return body.tools.map((t) => t.name).sort();
+      const { tools } = await client.listTools();
+      return tools
+        .map((t) => t.name)
+        .filter((name): name is (typeof HOST_GATED)[number] =>
+          (HOST_GATED as readonly string[]).includes(name),
+        )
+        .sort();
     }
 
-    expect(await toolNames({})).toEqual([]);
+    expect(await gatedToolNames({})).toEqual([]);
     expect(
-      await toolNames({
+      await gatedToolNames({
         renderHtmlToPdf: async () => ({ buffer: Buffer.alloc(0), fontsReady: true }),
       }),
     ).toEqual(['render_pdf']);
-
-    // read 类目:read_sheet 恒在(纯 JS),inspect_pdf 要 host 注入 pdfjs 通道。
-    expect(await toolNames({}, 'read')).toEqual(['read_sheet']);
     expect(
-      await toolNames(
-        { inspectPdf: async () => ({ numPages: 0, pagesInspected: 0, pages: [] }) },
-        'read',
-      ),
-    ).toEqual(['inspect_pdf', 'read_sheet']);
+      await gatedToolNames({ inspectPdf: async () => ({ numPages: 0, pagesInspected: 0, pages: [] }) }),
+    ).toEqual(['inspect_pdf']);
   });
 });
