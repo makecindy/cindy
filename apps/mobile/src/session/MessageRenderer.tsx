@@ -323,6 +323,10 @@ import { i18n } from '@/i18n';
 const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
 const MESSAGE_CONTROL_TOUCH_SIZE = 44;
 const MESSAGE_LIST_VISIBLE_PERCENT_THRESHOLD = 5;
+
+/** 分享模式吸顶 check 与行内 check 共用 44px 触达高度。 */
+const SHARE_STICKY_CHECK_HEIGHT = 44;
+const STICKY_SHARE_CHECK_THROTTLE_MS = 150;
 const SCREENSHOT_SHARE_VISIBLE_PERCENT_THRESHOLD = 10;
 // LegendList 变高 item 的初始估高(仅影响首帧布局定位,LegendList 挂载后按实测尺寸修正)。
 /**
@@ -932,15 +936,89 @@ export function MessageRenderer({
   const viewabilityConfigRef = useRef({
     itemVisiblePercentThreshold: MESSAGE_LIST_VISIBLE_PERCENT_THRESHOLD,
   });
+  const shareSelectionActiveRef = useRef(shareSelectionActive);
+  shareSelectionActiveRef.current = shareSelectionActive;
+  const topOverlayHeightRef = useRef(topOverlayHeight);
+  topOverlayHeightRef.current = topOverlayHeight;
+  const firstShareableViewableClientIdRef = useRef<string | null>(null);
+  const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
+  const stickyCheckSeqRef = useRef(0);
+  const stickyCheckLastRunAtRef = useRef(0);
+  const stickyCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runStickyShareCheck = useCallback(async () => {
+    const seq = ++stickyCheckSeqRef.current;
+    if (!shareSelectionActiveRef.current) {
+      setStickyShareClientId(null);
+      return;
+    }
+    const clientId = firstShareableViewableClientIdRef.current;
+    const list = listRef.current;
+    const view = clientId ? shareableMessageViewsRef.current.get(clientId) : null;
+    if (!clientId || !list || !view) {
+      setStickyShareClientId(null);
+      return;
+    }
+    const [listFrame, frame] = await Promise.all([
+      measureInWindow(list.getNativeScrollRef()),
+      measureInWindow(view),
+    ]);
+    if (seq !== stickyCheckSeqRef.current) return;
+    if (!listFrame || !frame || frame.height <= 0) {
+      setStickyShareClientId(null);
+      return;
+    }
+    const dockY = listFrame.y + (topOverlayHeightRef.current ?? 0) + spacing.sm;
+    const pinned =
+      frame.y < dockY && frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT;
+    setStickyShareClientId((prev) => {
+      const next = pinned ? clientId : null;
+      return prev === next ? prev : next;
+    });
+  }, []);
+  const scheduleStickyShareCheck = useCallback((immediate = false) => {
+    const now = Date.now();
+    const elapsed = now - stickyCheckLastRunAtRef.current;
+    if (immediate || elapsed >= STICKY_SHARE_CHECK_THROTTLE_MS) {
+      stickyCheckLastRunAtRef.current = now;
+      void runStickyShareCheck();
+      return;
+    }
+    if (stickyCheckTimerRef.current) return;
+    stickyCheckTimerRef.current = setTimeout(() => {
+      stickyCheckTimerRef.current = null;
+      stickyCheckLastRunAtRef.current = Date.now();
+      void runStickyShareCheck();
+    }, STICKY_SHARE_CHECK_THROTTLE_MS - elapsed);
+  }, [runStickyShareCheck]);
+  const scheduleStickyShareCheckRef = useRef(scheduleStickyShareCheck);
+  scheduleStickyShareCheckRef.current = scheduleStickyShareCheck;
+  useEffect(() => {
+    if (!shareSelectionActive) setStickyShareClientId(null);
+    else scheduleStickyShareCheck(true);
+  }, [shareSelectionActive, scheduleStickyShareCheck]);
+  useEffect(() => () => {
+    if (stickyCheckTimerRef.current) clearTimeout(stickyCheckTimerRef.current);
+  }, []);
   const handleViewableItemsChangedRef = useRef((info: {
     viewableItems: ViewToken<MobileMessageRenderItem>[];
   }) => {
     let nextIndex: number | null = null;
+    let firstShareable: string | null = null;
+    let firstShareableIndex = Number.POSITIVE_INFINITY;
     for (const token of info.viewableItems) {
       if (typeof token.index !== 'number') continue;
       nextIndex = nextIndex === null ? token.index : Math.min(nextIndex, token.index);
+      if (token.item.type !== 'message' || !isShareableMessage(token.item.message)) continue;
+      const clientId = messageClientId(token.item);
+      if (clientId && token.index < firstShareableIndex) {
+        firstShareableIndex = token.index;
+        firstShareable = clientId;
+      }
     }
     if (nextIndex !== null) setFirstVisibleIndex(nextIndex);
+    const candidateChanged = firstShareableViewableClientIdRef.current !== firstShareable;
+    firstShareableViewableClientIdRef.current = firstShareable;
+    if (candidateChanged) scheduleStickyShareCheckRef.current?.(true);
   });
   const readActuallyVisibleShareableMessageIds = useCallback(async (
     viewport: ShareableMessageViewport,
@@ -1128,7 +1206,9 @@ export function MessageRenderer({
     // 拖动进近顶区时 onStartReached 边沿可能早已被消费(见 attemptAutoLoadEarlier 注释),
     // 滚动事件兜底重评估;前置短路让稳态滚动只付 1~2 次 ref 比较的成本。
     attemptAutoLoadEarlier();
-  }, [attemptAutoLoadEarlier, bottomOverlayHeight]);
+    // 分享模式:滚动驱动吸顶 check 的几何重判(内部节流,非分享模式直接返回)。
+    if (shareSelectionActiveRef.current) scheduleStickyShareCheck();
+  }, [attemptAutoLoadEarlier, bottomOverlayHeight, scheduleStickyShareCheck]);
 
   // 用户开始拖动 → 标记「上翻意图」,放行自动加载更早(onScrollBeginDrag 仅用户手势触发,
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
@@ -1455,6 +1535,24 @@ export function MessageRenderer({
         >
           <ArrowUp color={colors.textPrimary} size={iconSize.md} strokeWidth={iconStroke.regular} />
         </MessageListActionButton>
+      ) : null}
+      {shareSelectionActive && stickyShareClientId ? (
+        // 与分享消息行同构，保持吸顶 check 和行内 check 水平对齐。
+        <View
+          pointerEvents="box-none"
+          style={[styles.stickyShareOverlay, { top: (topOverlayHeight ?? 0) + spacing.sm }]}
+          testID="message.shareStickyCheck"
+        >
+          <View style={styles.stickyShareRow}>
+            <View style={styles.stickyShareGutter}>
+              <ShareMessageCheckbox
+                clientId={stickyShareClientId}
+                disabled={shareSelectionBusy === true}
+              />
+            </View>
+            <View style={styles.stickyShareSpacer} />
+          </View>
+        </View>
       ) : null}
       {hasNewMessages || showJumpToLatest ? (
         // 跳到底部浮标(Telegram 风):右下角半透明圆形 chevron,弱存在感;
@@ -2331,12 +2429,15 @@ function MessageBubble({
 
   if (!shareSelectionActive) return messageNode;
   return (
-    <View style={styles.shareSelectionRow}>
-      <View style={styles.shareSelectionGutter}>
-        <ShareMessageCheckbox clientId={clientId} disabled={actions.shareSelectionBusy === true} />
+    <ShareMessageCheckbox
+      clientId={clientId}
+      disabled={actions.shareSelectionBusy === true}
+      fill
+    >
+      <View pointerEvents="none" style={styles.shareSelectionContent}>
+        {messageNode}
       </View>
-      <View style={styles.shareSelectionContent}>{messageNode}</View>
-    </View>
+    </ShareMessageCheckbox>
   );
 }
 
@@ -6356,21 +6457,30 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     width: '100%',
   },
-  shareSelectionRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minWidth: 0,
-    width: '100%',
-  },
-  shareSelectionGutter: {
-    alignItems: 'center',
-    paddingTop: spacing.sm,
-    width: spacing.xl * 2,
-  },
   shareSelectionContent: {
     flex: 1,
     minWidth: 0,
+  },
+  stickyShareOverlay: {
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 5,
+  },
+  // 与消息列表 padding 和分享行 gutter 同构。
+  stickyShareRow: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    paddingTop: 0,
+    width: '100%',
+  },
+  stickyShareGutter: {
+    alignItems: 'center',
+    width: spacing.xl * 2,
+  },
+  stickyShareSpacer: {
+    flex: 1,
   },
   sentInlineTextChunk: {
     flexBasis: '100%',

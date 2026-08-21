@@ -260,6 +260,19 @@ describe('buildConversationShareHtml 富内容导出', () => {
       resolve(process.cwd(), 'src/session/ShareSelectionBar.tsx'),
       'utf8',
     );
+    const selectAllSource = readFileSync(
+      resolve(process.cwd(), 'src/session/ShareSelectAllButton.tsx'),
+      'utf8',
+    );
+
+    const messageCheckboxSource = readFileSync(
+      resolve(process.cwd(), 'src/session/ShareMessageCheckbox.tsx'),
+      'utf8',
+    );
+    const messageRendererSource = readFileSync(
+      resolve(process.cwd(), 'src/session/MessageRenderer.tsx'),
+      'utf8',
+    );
 
     expect(html).toContain('<div class="share-gap" aria-hidden="true">⋯</div>');
     expect(html).toMatch(
@@ -267,11 +280,32 @@ describe('buildConversationShareHtml 富内容导出', () => {
     );
     expect(shareBarSource).toContain('height: 44,');
     expect(shareBarSource).toContain('minHeight: 44,');
-    expect(shareBarSource).toContain(
+    expect(shareBarSource).toContain('minWidth: 112,');
+    expect(shareBarSource).toContain('fontSize: typeScale.body,');
+    expect(selectAllSource).toContain(
       'shareableIds.filter((clientId) =>',
     );
-    expect(shareBarSource).toContain(
+    expect(selectAllSource).toContain(
       'selectionBeforeSelectAllRef.current?.includes(clientId)',
+    );
+    expect(selectAllSource).toContain('<ShareCheckboxMark checked={allSelected} />');
+    expect(selectAllSource).not.toContain('backgroundColor: colors.surfaceChip');
+    expect(messageCheckboxSource).toContain('fill ? styles.rowButton : styles.button');
+    expect(messageRendererSource).toContain(
+      'pointerEvents="none" style={styles.shareSelectionContent}',
+    );
+    expect(messageRendererSource).toContain('fill');
+    expect(messageRendererSource).toContain(
+      'testID="message.shareStickyCheck"',
+    );
+    expect(messageRendererSource).toContain(
+      'token.item.type !== \'message\' || !isShareableMessage(token.item.message)',
+    );
+    expect(messageRendererSource).toContain(
+      'token.index < firstShareableIndex',
+    );
+    expect(messageRendererSource).toContain(
+      'frame.y + frame.height > dockY + SHARE_STICKY_CHECK_HEIGHT',
     );
     expect(webViewSource).toContain(
       'onShouldStartLoadWithRequest={interceptNavigation}',

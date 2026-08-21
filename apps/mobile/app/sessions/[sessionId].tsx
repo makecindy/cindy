@@ -123,6 +123,7 @@ import {
   isFoldableBlockExpanded,
   useFoldableExpandedBlocksSnapshot,
 } from '@/session/expandedBlockMemory';
+import { ShareSelectAllButton } from '@/session/ShareSelectAllButton';
 import { ShareSelectionBar } from '@/session/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -8833,6 +8834,9 @@ export default function SessionScreen() {
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
+              shareSelectAllNode={shareSelectionActive ? (
+                <ShareSelectAllButton busy={conversationShareBusy} shareableIds={allShareableIds} />
+              ) : undefined}
               syncing={showSyncingIndicator}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               onBack={goBackToHome}
@@ -9675,7 +9679,6 @@ export default function SessionScreen() {
             <ShareSelectionBar
               busy={conversationShareBusy}
               count={shareSelectionCount}
-              shareableIds={allShareableIds}
               screenshotTriggered={shareSelectionTriggeredByScreenshot}
               onCancel={cancelShareSelection}
               onShare={() => void shareSelectedConversation()}
@@ -9724,6 +9727,7 @@ function SessionHeaderBar({
   currentSession,
   diffCount,
   isDeviceAccessRevoked,
+  shareSelectAllNode,
   syncing,
   messageCount,
   onBack,
@@ -9744,6 +9748,8 @@ function SessionHeaderBar({
   currentSession: RemoteSession | null;
   diffCount: number;
   isDeviceAccessRevoked: boolean;
+  /** 分享选择模式下替换头部动作区。 */
+  shareSelectAllNode?: ReactNode;
   syncing: boolean;
   messageCount: number;
   onBack(): void;
@@ -9799,6 +9805,14 @@ function SessionHeaderBar({
     session: currentSession,
   });
 
+  // 分享选择模式只保留全选；底部关闭按钮负责退出。
+  if (shareSelectAllNode) {
+    return (
+      <View style={styles.sessionHeaderBar} testID="session.summary">
+        {shareSelectAllNode}
+      </View>
+    );
+  }
   return (
     <View style={styles.sessionHeaderBar} testID="session.summary">
       {onOpenSessionList ? (
