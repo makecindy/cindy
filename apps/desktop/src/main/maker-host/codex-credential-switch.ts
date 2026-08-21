@@ -7,6 +7,10 @@ import {
 } from '@cindy/maker-core';
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
+import {
+  CODEX_GATEWAY_PROVIDER_ID,
+  CODEX_OPENAI_COMPACT_PROVIDER_ID,
+} from './codex-gateway-config.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
 
@@ -22,6 +26,11 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * provider-oauth 依赖 proxy 做供应商 OAuth 注入和 model rewrite；未知状态按 false 处理。
    */
   currentCodexProxyActive?: boolean | null;
+  /**
+   * 当前 Codex thread 由 app-server 的 start/resume 响应确认的 model provider。
+   * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
+   */
+  currentCodexThreadModelProviderId?: string | null;
   /**
    * 当前本地 Codex app-server spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * 用于把隐式来源(resolveAgentCredentialMode 解析出 undefined)落到实际凭证家族,
@@ -202,6 +211,29 @@ export function shouldCloseSessionForCredentialSwitch(
     const fallbackFamily = credentialFamilyFromAuthInjection(input.codexAuthInjection);
     const effCurrent = currentMode ?? fallbackFamily;
     const effNext = nextMode ?? fallbackFamily;
+    const actualThreadModelProviderId = normalizeProviderId(
+      input.currentCodexThreadModelProviderId,
+    );
+    const expectedNextThreadModelProviderId =
+      effNext === 'oauth-bearer'
+        ? CODEX_OPENAI_COMPACT_PROVIDER_ID
+        : effNext !== undefined
+          ? CODEX_GATEWAY_PROVIDER_ID
+          : null;
+    const actualThreadIdentityKnown =
+      actualThreadModelProviderId === CODEX_OPENAI_COMPACT_PROVIDER_ID ||
+      actualThreadModelProviderId === CODEX_GATEWAY_PROVIDER_ID;
+
+    // provider store 可能先于运行时切换被 UI/持久层覆盖。此时仅比较 currentMode/nextMode
+    // 会把两边误判为同一家族，并在仍绑定 cindy_openai 的 thread 上热切 DeepSeek/xAI/XD。
+    // start/resume 响应才是 thread 身份的事实源；与目标身份不一致就必须 close + resume。
+    if (
+      actualThreadIdentityKnown &&
+      expectedNextThreadModelProviderId !== null &&
+      actualThreadModelProviderId !== expectedNextThreadModelProviderId
+    ) {
+      return true;
+    }
     const mayTouchRemoteCompaction =
       effCurrent === 'oauth-bearer' || effNext === 'oauth-bearer' ||
       effCurrent === undefined || effNext === undefined;

@@ -921,6 +921,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           currentModel: liveSession.model,
           nextModel: model,
           currentCodexProxyActive: liveSession.codexProxyActive,
+          currentCodexThreadModelProviderId: liveSession.codexThreadModelProviderId,
         })
       ) {
         if (isHeartbeat && isSessionInTurn(sessionId)) {
@@ -1323,6 +1324,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               currentModel: runtimeModel,
               nextModel: runtimeModel,
               currentCodexProxyActive: session.codexProxyActive,
+              currentCodexThreadModelProviderId: session.codexThreadModelProviderId,
             })
           ) {
             throw new Error(
@@ -2093,6 +2095,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         currentModel: live.model,
         nextModel: targetModel,
         currentCodexProxyActive: live.codexProxyActive,
+        currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
       })
     ) {
       // 早退 = 本轮沿用 live 当前路由派发:这条保留路由自己也要过停用裁决 ——
