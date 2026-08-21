@@ -1,10 +1,12 @@
 /**
- * compaction-settings-store —— Claude Code 与 Pi 共用的自动上下文压缩阈值。
+ * compaction-settings-store —— Claude Code 与 Pi 共用的上下文压力阈值。
  *
  * 文件: <userData>/compaction-settings.json
  *   { "claudeCodeAutoCompactPct": 75 }
  * 字段名保留历史 key，避免用户已调过的阈值丢失；Codex 不读这份设置。
  *
+ * 本地会话把该百分比当 rollover 压力线(#3114):到线后下次 send 换干净窗口,
+ * 不再先 compact。远端 Claude Code / Pi 仍按该比例自动压缩。
  * 默认 75 —— 对齐历史自动压缩默认阈值。范围固定 50–95,
  * 写入和读取都 clamp + round, 确保注入 runtimeConfig.autoCompactThresholdPct 始终是合法整数百分比。
  *

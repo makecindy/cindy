@@ -92,11 +92,14 @@ export interface AgentRuntimeConfig {
   ) => string | undefined;
 
   /**
-   * Host 管的自动上下文压缩阈值百分比。Claude Code 与 Pi 共用同一份设置；Codex 仍由上游自己压。
+   * Host 管的上下文压力阈值百分比。Claude Code 与 Pi 共用同一份设置；Codex 仍由上游自己压。
    *
    * - undefined: host 不接管自动压缩 (保持 agent 默认行为)
    * - 50-95: 每个 turn 结束时, maker-core 基于最新 usage 快照判断。
-   *   Claude Code 静默注入 `/compact`；Pi 调已有 compact RPC。
+   *   本地会话若 `shouldHandoffAfterContextAssessment` 为 true,跳过 host
+   *   `/compact` / compact RPC,等下次 send 换干净原生窗口(#3114)。
+   *   远端没有换窗,Claude Code 静默注入 `/compact`；Pi 调已有 compact RPC。
+   *   本地 Claude Code 另注入 `DISABLE_AUTO_COMPACT`,关掉 SDK 自己的自动压缩。
    *   Pi 原生 `window - reserveTokens` 仍作顶满抢救。
    *
    * Host 可以用 getter 注入, agent 会在每次判断时读取最新值。

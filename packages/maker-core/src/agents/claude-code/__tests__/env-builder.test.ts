@@ -58,6 +58,27 @@ describe('buildClaudeEnv', () => {
     expect(env.CLAUDE_CODE_DISABLE_CRON).toBe('1');
   });
 
+  it('disables SDK auto-compact on local sessions without disabling manual compact', async () => {
+    const env = await buildClaudeEnv(
+      createAuthAdapter(),
+      { behaviorFlags: { DISABLE_COMPACT: '1', DISABLE_AUTO_COMPACT: '0' } },
+    );
+
+    expect(env.DISABLE_AUTO_COMPACT).toBe('1');
+    expect(env.DISABLE_COMPACT).toBeUndefined();
+  });
+
+  it('keeps SDK auto-compact on remote sessions and strips inherited disable flags', async () => {
+    const env = await buildClaudeEnv(
+      createAuthAdapter(),
+      { behaviorFlags: { DISABLE_AUTO_COMPACT: '1', DISABLE_COMPACT: '1' } },
+      { mode: 'remote' },
+    );
+
+    expect(env.DISABLE_AUTO_COMPACT).toBeUndefined();
+    expect(env.DISABLE_COMPACT).toBeUndefined();
+  });
+
   it('passes requested credential mode to the auth adapter', async () => {
     const getAuthEnv = vi.fn(async () => ({ ANTHROPIC_API_KEY: 'key' }));
     const env = await buildClaudeEnv(

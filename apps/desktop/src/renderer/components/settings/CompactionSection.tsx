@@ -1,6 +1,7 @@
 /**
- * CompactionSection — Settings → Personalization 下的自动上下文压缩阈值。
- * Claude Code 与 Pi 共用同一份设置；Codex 由上游自己压，不读这里。
+ * CompactionSection — Settings → Personalization 下的上下文占用阈值。
+ * Claude Code 与 Pi 共用同一份设置；本地到线后换干净窗口，远端仍自动压缩。
+ * Codex 由上游自己压，不读这里。
  *
  * main 的 <userData>/compaction-settings.json 是 source of truth。renderer 只负责
  * 拉取、渲染和把滑块数值提交给 IPC；实际 clamp 与 runtimeConfig 注入都在 main 完成。

@@ -373,6 +373,27 @@ describe('createContextOverflowRollover', () => {
     expect(deps.commitRebuild).toHaveBeenCalled();
   });
 
+  it('rebuilds a local Claude Code session at the 0.1.57 occupancy that previously compacted', async () => {
+    const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active',
+      agentKind: 'cc',
+      remoteHostId: null,
+      clearedAt: null,
+      sdkSessionId: '/tmp/dead-cc',
+      contextTokens: 437_712,
+      contextWindow: 500_000,
+      model: 'x-ai/grok-4.6',
+      providerId: 'xai',
+    });
+    deps.getAutoCompactThresholdPct = vi.fn(() => 80);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+    expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('uses the same pressure guard for Claude Code and Codex before send', async () => {
     for (const agentKind of ['cc', 'codex'] as const) {
       const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);

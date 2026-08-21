@@ -16,7 +16,9 @@ Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture
 本地 Claude Code、Codex、PI 在同一 Cindy 任务内，按 host 的
 `assessModelSwitchContext` 评估判断当前模型已经满（`danger` 或 `overflow`）时，走
 `host-controlled rollover + model-controlled bounded retrieval`：host 关闭旧原生窗口、写交接并
-在下一次发送前 fresh bootstrap，不先让引擎自动压缩。明确 `context-overflow` 且本轮没有助手输出或
+在下一次发送前 fresh bootstrap，不先让引擎自动压缩。本地 Claude Code 还须注入
+`DISABLE_AUTO_COMPACT`（不得注入 `DISABLE_COMPACT`），避免 SDK 在 host 已决定换窗后
+自己再压；远端 Claude Code 不注入该 flag，因为 host 无法替它换窗。明确 `context-overflow` 且本轮没有助手输出或
 工具副作用时，host 才会对失败的 user 消息做一次 wire-only replay；有副作用或分类不确定时必须
 fail closed。PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
 timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host

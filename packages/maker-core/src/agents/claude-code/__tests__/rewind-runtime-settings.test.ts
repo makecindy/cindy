@@ -204,6 +204,7 @@ async function startRewindableSession(
     autoCompactThresholdPct?: number;
     idleTimeoutMs?: number;
     remoteHostId?: string;
+    model?: string;
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -215,8 +216,12 @@ async function startRewindableSession(
 
   const firstQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(firstQuery);
+  const remoteStartParams: Array<Record<string, unknown>> = [];
   const remoteCcQueryFactory = options.remoteHostId
-    ? (async () => firstQuery as never)
+    ? (async (opts: { startParams: Record<string, unknown> }) => {
+        remoteStartParams.push(opts.startParams);
+        return firstQuery as never;
+      })
     : undefined;
   const infoCalls: string[] = [];
 
@@ -235,13 +240,13 @@ async function startRewindableSession(
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
-    model: 'claude-opus-4-6',
+    model: options.model ?? 'claude-opus-4-6',
     workingDir,
     permissionMode: 'acceptEdits',
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery, infoCalls };
+  return { agent, handle, firstQuery, infoCalls, remoteStartParams };
 }
 
 afterEach(async () => {
@@ -718,6 +723,56 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
 
     await handle.close();
+  });
+
+  it('skips host auto-compact at the 0.1.57 Grok occupancy that previously injected /compact', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+      shouldHandoffAfterContextAssessment: (tokens, window) => tokens / window >= 0.8,
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+
+    expect(handle.getUsageSnapshot().contextTokens).toBe(437_712);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(500_000);
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([]);
+
+    await handle.close();
+  });
+
+  it('disables SDK auto-compact on local sessions and leaves remote sessions enabled', async () => {
+    const local = await startRewindableSession();
+    const localEnv = (sdkMock.query.mock.calls[0]?.[0] as { options?: { env?: Record<string, string> } })
+      .options?.env;
+    expect(localEnv?.DISABLE_AUTO_COMPACT).toBe('1');
+    expect(localEnv?.DISABLE_COMPACT).toBeUndefined();
+    await local.handle.close();
+
+    sdkMock.query.mockClear();
+    const remote = await startRewindableSession({ remoteHostId: 'remote-1' });
+    const remoteEnv = remote.remoteStartParams[0]?.env as Record<string, string> | undefined;
+    expect(remoteEnv?.DISABLE_AUTO_COMPACT).toBeUndefined();
+    expect(remoteEnv?.DISABLE_COMPACT).toBeUndefined();
+    await remote.handle.close();
   });
 
   it('keeps idle auto-compact on remote sessions because overflow rollover is local-only', async () => {
