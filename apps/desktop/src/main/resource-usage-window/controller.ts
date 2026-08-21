@@ -72,7 +72,7 @@ export class ResourceUsageWindowController {
   private fullscreenGeneration = 0;
   private pendingLeaveGeneration: number | null = null;
   private pendingLeaveRestoresOwner = true;
-  private requestedFullscreenGeneration: number | null = null;
+  private pendingFullscreenRequests: number[] = [];
   private fullscreenTransition: FullscreenTransition = 'idle';
 
   constructor(private readonly deps: ResourceUsageWindowControllerDeps) {}
@@ -238,10 +238,10 @@ export class ResourceUsageWindowController {
     win.on('hide', () => this.onNativeVisibilityChanged(win, false));
     win.on('minimize', () => this.onNativeVisibilityChanged(win, false));
     win.on('enter-full-screen', () => {
-      this.reconcileFullscreenEvent(win, 'entered', this.requestedFullscreenGeneration);
+      this.reconcileFullscreenEvent(win, 'entered', this.takeFullscreenRequestGeneration());
     });
     win.on('leave-full-screen', () => {
-      this.reconcileFullscreenEvent(win, 'left', this.requestedFullscreenGeneration);
+      this.reconcileFullscreenEvent(win, 'left', this.takeFullscreenRequestGeneration());
     });
     // index.html 的 <title>Cindy</title> 会在每次导航发出 page-title-updated，
     // 不拦截的话 Mission Control / 任务栏会把本地化标题盖回 Cindy。
@@ -489,8 +489,12 @@ export class ResourceUsageWindowController {
   }
 
   private requestFullscreen(win: BrowserWindow, fullScreen: boolean): void {
-    this.requestedFullscreenGeneration = this.fullscreenGeneration;
+    this.pendingFullscreenRequests.push(this.fullscreenGeneration);
     win.setFullScreen(fullScreen);
+  }
+
+  private takeFullscreenRequestGeneration(): number | null {
+    return this.pendingFullscreenRequests.shift() ?? null;
   }
 
   private focusOwnerWindow(): void {
@@ -527,7 +531,7 @@ export class ResourceUsageWindowController {
     }
   }
 
-  private resetWindowState(): void {
+  private resetWindowState(options: { preserveOwner?: boolean } = {}): void {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.clearRecoveryStabilityTimeout();
@@ -539,11 +543,13 @@ export class ResourceUsageWindowController {
     this.pendingOpen = false;
     this.samplingActive = true;
     this.destroyingWindow = false;
-    this.unbindOwnerVisibility();
-    this.lastOwner = null;
+    if (!options.preserveOwner) {
+      this.unbindOwnerVisibility();
+      this.lastOwner = null;
+    }
     this.pendingLeaveGeneration = null;
     this.pendingLeaveRestoresOwner = true;
-    this.requestedFullscreenGeneration = null;
+    this.pendingFullscreenRequests = [];
     this.fullscreenTransition = 'idle';
   }
 
@@ -624,8 +630,9 @@ export class ResourceUsageWindowController {
   private invalidateWindow(win: BrowserWindow, reason: string): void {
     if (win !== this.winRef || win.isDestroyed()) return;
     const reopen = this.pendingOpen || this.visible;
+    const owner = this.lastOwner;
     log.warn('resource-usage cached window invalidated', { reason, reopen });
-    this.destroyCachedWindow(win);
+    this.destroyCachedWindow(win, { preserveOwner: reopen });
     if (!reopen || this.disposed) return;
     if (this.automaticRecoveryAttempts >= MAX_AUTOMATIC_RECOVERY_ATTEMPTS) {
       log.error('resource-usage automatic recovery exhausted', { reason });
@@ -633,6 +640,8 @@ export class ResourceUsageWindowController {
     }
     this.automaticRecoveryAttempts += 1;
     this.pendingOpen = true;
+    this.lastOwner = owner && !owner.isDestroyed() ? owner : null;
+    this.bindOwnerVisibility(this.lastOwner);
     const replacement = this.ensureWindow();
     if (!replacement) {
       this.pendingOpen = false;
@@ -642,10 +651,10 @@ export class ResourceUsageWindowController {
     this.scheduleOpenFallback(replacement);
   }
 
-  private destroyCachedWindow(win: BrowserWindow): void {
+  private destroyCachedWindow(win: BrowserWindow, options: { preserveOwner?: boolean } = {}): void {
     if (win !== this.winRef) return;
     this.setSamplingActive(win, false);
-    this.resetWindowState();
+    this.resetWindowState({ preserveOwner: options.preserveOwner });
     this.destroyingWindow = true;
     try {
       if (!win.isDestroyed()) win.destroy();
