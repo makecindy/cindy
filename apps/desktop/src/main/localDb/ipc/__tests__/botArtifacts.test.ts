@@ -344,6 +344,56 @@ describe('bot artifact projection', () => {
   //
   // 真机症状是「对话里有卡、仓库里没有」。这一组锁住:命令产物与 checkpoint 新建
   // 这两条来源在仓库侧同样成立,且各自的防误报门槛没有被绕过。
+  describe('中间件不进作品集', () => {
+    /**
+     * 实机截图里冒出过一份 q3-summary.html:它是伙伴自己写来定版式的设计稿,被
+     * render_pdf 读走做成 PDF 之后,不该和成品并排躺在作品集里。
+     *
+     * 这条曾经只在「文件工具」那条来源上挡住,而设计稿被 Write 出来时 checkpoint
+     * 也记了一笔,于是照样从另一条来源绕进去 —— 所以判定收在三条来源汇合之后。
+     */
+    it('产出成品时读走的设计稿不出现在作品集里', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      writeFile('tmp/design.html');
+      writeFile('documents/report.pdf');
+      addMessage(
+        'session-a',
+        'w1',
+        'tool_use',
+        { toolName: 'Write', input: { file_path: path.join(tmpRoot, 'tmp', 'design.html') } },
+        Date.now() - 60_000,
+      );
+      addMessage(
+        'session-a',
+        'r1',
+        'tool_use',
+        {
+          toolName: 'mcp__cindy_docs__render_pdf',
+          input: { htmlPath: 'tmp/design.html', outPath: 'documents/report.pdf' },
+        },
+        Date.now() - 30_000,
+      );
+
+      const names = (await listBotArtifacts({ botId: 'bot-a' })).items.map((i) => i.name);
+      expect(names).toEqual(['report.pdf']);
+    });
+
+    it('没被读走的文件照常是作品', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      writeFile('documents/notes.html');
+      addMessage(
+        'session-a',
+        'w2',
+        'tool_use',
+        { toolName: 'Write', input: { file_path: path.join(tmpRoot, 'documents', 'notes.html') } },
+        Date.now() - 60_000,
+      );
+
+      const names = (await listBotArtifacts({ botId: 'bot-a' })).items.map((i) => i.name);
+      expect(names).toEqual(['notes.html']);
+    });
+  });
+
   describe('parity with the in-chat deliverable card', () => {
     // 命令里一律用**相对**路径:候选文本会过临时目录黑名单,而测试夹具本身就住在
     // 系统临时目录里(Linux 上是 /tmp)。相对路径由 workingDir 解析,与真机同路。

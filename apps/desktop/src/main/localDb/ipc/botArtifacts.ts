@@ -339,6 +339,15 @@ export async function listBotArtifacts(
     }
   }
 
+  /**
+   * 「产出成品时被读走的素材」——中间件,不是作品。
+   *
+   * 在这一层收集、最后统一过滤一遍,而不是在每条来源分支各挡一次:产物有文件工具、
+   * 命令文本、checkpoint 三条来源,分散挡必漏 —— 实机里那份 HTML 设计稿就是被文件
+   * 工具那条挡住了、又从 checkpoint 那条绕进作品集的。
+   */
+  const materialTargets = new Set<string>();
+
   // ── 来源 2 / 3:伙伴名下会话的消息。
   const links = await db
     .select({ sessionId: botSessionLinks.sessionId })
@@ -368,9 +377,6 @@ export async function listBotArtifacts(
 
     // 命令候选与「本轮被编辑过的文件」的对撞要跨整批消息判定,所以先把编辑集扫出来。
     const editedTargets = new Set<string>();
-    // 同一遍里收「产出成品时被读走的素材」:自己写的 HTML 设计稿渲成 PDF 之后,
-    // 设计稿不该跟成品一起躺在作品集里(与对话里的产物卡同一条判定)。
-    const materialTargets = new Set<string>();
     for (const row of messageRows) {
       if (row.role !== 'tool_use') continue;
       const content = parseContent(row.content);
@@ -392,7 +398,6 @@ export async function listBotArtifacts(
       if (row.role === 'tool_use') {
         for (const rawPath of createdPathsFromToolUseContent(content)) {
           const target = resolveArtifactPath(rawPath, workingDir);
-          if (materialTargets.has(target)) continue;
           addStructural(
             makeBotArtifact({
               source: 'generated',
@@ -475,7 +480,10 @@ export async function listBotArtifacts(
     }
   }
 
-  const merged = mergeBotArtifacts(raw);
+  // 中间件在这里统一摘掉 —— 三条产物来源汇合之后只过一道闸,不在每条分支各挡一次。
+  const merged = mergeBotArtifacts(raw).filter(
+    (item) => !(item.path !== null && materialTargets.has(item.path)),
+  );
   const commandOnlyNotBefore = new Map(
     [...commandNotBefore].filter(([id]) => !structuralIds.has(id)),
   );
