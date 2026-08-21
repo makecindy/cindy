@@ -292,6 +292,21 @@ export interface PiNativeProvidersResult {
 }
 
 /**
+ * The host could not construct the first-party Pi provider because its local
+ * compatibility proxy is not ready. This is a fatal startup condition for
+ * every SuperGrok route, including provider-less and legacy sessions; it must
+ * not be converted into a silent fallback to the Cindy gateway.
+ */
+export class PiNativeProviderProxyNotReadyError extends Error {
+  readonly code = 'PI_NATIVE_PROVIDER_PROXY_NOT_READY';
+
+  constructor(message = 'SuperGrok Pi provider unavailable: local compatibility proxy is not ready') {
+    super(message);
+    this.name = 'PiNativeProviderProxyNotReadyError';
+  }
+}
+
+/**
  * pi MCP 桥的 per-session 身份上下文(host 用它在 bridge 上注册当前 pi 会话)。
  *
  * 为什么需要:pi 是独立子进程,其 MCP 请求不带 codex 那样的 _meta.threadId。控制类

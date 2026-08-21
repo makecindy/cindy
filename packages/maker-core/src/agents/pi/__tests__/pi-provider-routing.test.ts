@@ -85,7 +85,7 @@ vi.mock('../rpc-client.js', () => {
 
 import { PiAgent } from '../index.js';
 import { PiRpcRequestTimeoutError } from '../rpc-client.js';
-import type { AgentDeps } from '../../base-agent.js';
+import { PiNativeProviderProxyNotReadyError, type AgentDeps } from '../../base-agent.js';
 import type { ModelDescriptor } from '../../../types/capabilities.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -1501,6 +1501,24 @@ describe('Pi provider-aware model routing', () => {
       workingDir: cwd,
       model: 'legacy',
     })).rejects.toThrow(/matches multiple native providers.*refusing to guess an endpoint/);
+    expect(captured.args).toEqual([]);
+  });
+
+  it('surfaces a first-party Pi proxy-not-ready failure for provider-less and legacy Grok sessions', async () => {
+    const proxyNotReady = new PiNativeProviderProxyNotReadyError();
+    const agent = new PiAgent(byomDeps(async () => {
+      throw proxyNotReady;
+    }, [
+      { id: 'grok-4.6', displayName: 'Grok 4.6', contextWindow: 500_000, efforts: [], defaultEffort: null },
+    ]));
+
+    for (const [index, model] of ['grok-4.6', 'xai/grok-4.6'].entries()) {
+      await expect(agent.startSession({
+        sessionId: `providerless-grok-proxy-not-ready-${index}`,
+        workingDir: cwd,
+        model,
+      })).rejects.toBe(proxyNotReady);
+    }
     expect(captured.args).toEqual([]);
   });
 

@@ -24,6 +24,7 @@ import { app } from 'electron';
 
 import {
   PiAgent,
+  PiNativeProviderProxyNotReadyError,
   type AgentDeps,
   type AuthAdapter,
   type AuthState,
@@ -1491,7 +1492,7 @@ export async function resolvePiNativeProviders(ctx: {
       model: ctx.model,
       remoteHostId: ctx.remoteHostId ?? null,
     });
-    throw new Error('SuperGrok Pi provider unavailable: local compatibility proxy is not ready');
+    throw new PiNativeProviderProxyNotReadyError();
   }
   const piBinaryPath = resolvePiBinaryPath();
   const bundledModels = piBinaryPath ? await readPiBundledModels(piBinaryPath) : null;
