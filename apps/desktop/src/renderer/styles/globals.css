@@ -2147,6 +2147,15 @@ body.resizing-pane [data-ghost-webview] {
   background: var(--surface-translucent-sidebar);
   /* backdrop-filter 移除:CSS blur 采样不到窗外壁纸,且已知会把透明窗背衬渲染成黑;壁纸模糊由原生 vibrancy 材质提供 */
 }
+/* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
+   扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
+   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。 */
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]),
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: transparent;
+}
 /* Sidebar peek 抽屉是 fixed overlay,它覆盖的是应用内容而不是窗外壁纸;这里需要
    单独 blur 被覆盖的应用 UI,避免 hover 预览时正文直接透出来。常规展开态仍交给
    原生 vibrancy,非 CINDY family 不命中。 */

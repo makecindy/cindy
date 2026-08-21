@@ -16,7 +16,6 @@ import { LayoutRoot } from '@/layout/LayoutRoot';
 import { PanelDragController } from '@/layout/PanelDragController';
 import { GhostMediaLightboxHost } from '@/cindy-brain/GhostMediaLightboxHost';
 import { GhostPanelBubbleLayer } from '@/cindy-brain/GhostPanelBubbleLayer';
-import { ContentAvailableWidthProvider } from '@/layout/paneWidths';
 import {
   migrateLegacySidebarCollapsed,
   readPanelCollapsed,
@@ -60,10 +59,7 @@ import { useSidebarResize } from '@/hooks/useSidebarResize';
 import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
 import { useSidebarPeek } from '@/hooks/useSidebarPeek';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
-import {
-  useRightSidebarResize,
-  RIGHT_SIDEBAR_AVAILABLE_WIDTH_FALLBACK,
-} from '@/hooks/useRightSidebarResize';
+import { useRightSidebarResize } from '@/hooks/useRightSidebarResize';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useUpdateNotice } from '@/hooks/useUpdateNotice';
 import { syncNotificationsEnabledToMain } from '@/hooks/useNotificationSettings';
@@ -328,22 +324,17 @@ export function MainLayout() {
       ),
     [],
   );
-  // 右栏 + 中间聊天区可分配的总宽（= 窗口宽 − 左栏宽）。首帧用 fallback，挂载后
-  // 由下方 useLayoutEffect 按实际布局测出。右栏按 fraction × 此值算像素宽，实现
-  // 两栏按比例缩放（见 useRightSidebarResize）。
-  const [rightAvailableWidth, setRightAvailableWidth] = useState(
-    RIGHT_SIDEBAR_AVAILABLE_WIDTH_FALLBACK,
-  );
   const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
-  // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper,
-  // 可用宽度测量的唯一观测目标 —— 见下方 useLayoutEffect 注释。
+  // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper。
+  // row/sidebar refs 仅供面板拖放命中区测量，不再驱动 live-resize React state。
   const sidebarBlockRef = useRef<HTMLDivElement>(null);
   // B1b-1:宽度全局一份、持久化在布局树里(不再 per-session),hook 不再收 sessionId。
   // 拖宽把手已统一为引擎分割线(LayoutRoot RootDivider),hook 只剩宽度兜底 +
   // 所在侧推导(rightSidebarSide 供折叠 toggle 落角)。
-  const { width: rightSidebarWidth, resizeEdge: rightResizeEdge } =
-    useRightSidebarResize(rightAvailableWidth);
+  // 像素宽主权在 LayoutRoot → PaneWidthContext；这里仅保留引擎缺席时的稳定
+  // fallback + 面板所在侧推导，不再让 MainLayout 订阅连续窗口宽度。
+  const { width: rightSidebarWidth, resizeEdge: rightResizeEdge } = useRightSidebarResize();
   // B2b:工具面板当前贴哪条边(把手在面板朝聊天区那侧,取反即面板所在侧)。
   // 经 Outlet context 下发给聊天视图 —— 折叠态的展开入口要留守面板消失的那一侧。
   const rightSidebarSide: 'left' | 'right' = rightResizeEdge === 'left' ? 'right' : 'left';
@@ -392,32 +383,6 @@ export function MainLayout() {
 
   const isSettingsRoute = location.pathname === '/settings';
   const hasInlineControlledBanner = hasInlineControlledBannerPath(location.pathname);
-
-  // 可用总宽 = 窗口宽 − 左侧占位块宽(pinning spacer + Sidebar 的 wrapper)。
-  // 布局去方位化(docs/dev-rules/architecture-invariants.md):
-  // 旧实现用「main 左边界」推左栏占宽,隐含"工具面板在 main 右侧"的方位假设 ——
-  // 布局树把工具面板换到 main 左侧后,其展开动画每帧推动 main 左边界,
-  // ResizeObserver 每帧触发 → 整个 MainLayout 每帧重渲染(实测明显卡顿),
-  // 且重新引入了刻意规避的「右栏宽 → 可用宽 → 右栏宽」反馈环。
-  // 现改为直接观测左侧占位块自身:窗口 / 左栏变化(折叠、rail、peek、拖宽)照常
-  // 触发重算,而任何内容区 pane 的动画都不再反哺测量,与面板停靠位置彻底解耦。
-  // 设置页整块不渲染(wrapper 为 null)→ 左侧占宽按 0 计,与旧行为一致。
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    if (!row) return;
-    const recompute = () => {
-      const rowWidth = row.clientWidth;
-      const leftWidth = sidebarBlockRef.current?.getBoundingClientRect().width ?? 0;
-      setRightAvailableWidth(Math.max(0, rowWidth - leftWidth));
-    };
-    recompute();
-    const ro = new ResizeObserver(recompute);
-    ro.observe(row);
-    const sidebarBlock = sidebarBlockRef.current;
-    if (sidebarBlock) ro.observe(sidebarBlock);
-    return () => ro.disconnect();
-    // isSettingsRoute 切换会挂载 / 卸载左侧占位块,需要重绑观测目标。
-  }, [isSettingsRoute]);
 
   // 完全隐藏态 hover 临时浮出(peek)状态机 —— hover 折叠按钮抽屉滑出预览,
   // 点击/⌘B 固定展开(pin)。rail 态(isCollapsed=false)不触发。见 useSidebarPeek。
@@ -874,8 +839,7 @@ export function MainLayout() {
   }, [rsbWindow]);
 
   // RSB Maximize(Phase 6):侧栏接管整个内容区。
-  // - true:`<main>` 加 hidden(display:none),RSB style width 强制 = rightAvailableWidth
-  //   (即"窗口宽 − 左栏宽"),RSB 占满整个非左栏区
+  // - true:`<main>` 加 hidden(display:none),RSB 走 flex-1 占满整个非左栏区
   // - 全局 Esc 拦截退出 maximize(只在 maximize 态绑监听,避免抢占其它 Esc 行为)
   // - 折叠 RSB 时自动退出(否则 maximize 状态下点折叠会导致主区 hidden + RSB 也 0 宽 → 全黑)
   // - 不持久化:刷新 / 切 session 默认非 maximize,跟"临时聚焦视图"语义一致
@@ -1011,9 +975,7 @@ export function MainLayout() {
     writeCollapsedFor(rightSidebarSessionId, false);
     const snapshot = getTabSnapshot(rightSidebarSessionId);
     const handoff = snapshot ? { snapshots: [snapshot] } : undefined;
-    void window.electronAPI.rightSidebarWindow
-      .setDetached(true, handoff)
-      .catch(() => undefined);
+    void window.electronAPI.rightSidebarWindow.setDetached(true, handoff).catch(() => undefined);
   }, [rightSidebarSessionId]);
 
   const handlePageZoomIn = useCallback(() => {
@@ -1380,7 +1342,7 @@ export function MainLayout() {
         )}
       >
         {/* 左侧占位块 wrapper(B1a):透传容器,包住 pinning spacer + Sidebar,
-            作为可用宽度测量的唯一观测目标(见上方 useLayoutEffect 注释)。
+            作为可用宽度测量的唯一观测目标(见 paneWidths 的测量 Provider)。
             flex + shrink-0 与 aside 原有的 flex child 行为一致,不改变布局;
             peek 期 aside 变 fixed 出流,wrapper 宽度自然等于流内 spacer 宽。 */}
         {!isSettingsRoute && (
@@ -1420,8 +1382,8 @@ export function MainLayout() {
             (renderer/panels)。两大块 JSX 原样保留在 bridge 里 —— 构造与状态
             所有权仍在 MainLayout(绞杀式重构 Step A:只换骨架不动组件;尺寸/
             折叠仍由既有 props 驱动,树上 fraction 暂不参与渲染)。LayoutRoot 的
-            root split 扁平化保证 DOM 与重构前一致(pane 无额外包装 div,flex
-            上下文与 ResizeObserver 测量逻辑不变)。 */}
+            root split 扁平化保证 DOM 与重构前一致；稳态窗口 resize 的 pane 宽度
+            由 CSS 百分比直接响应，不再把连续窗口宽度发布进 React)。 */}
         <BuiltinPanelBridgeProvider
           value={{
             // 会话列表是树外全高固定柱,由上方 <Sidebar/> 直接渲染,此槽 Step A 不消费。
@@ -1546,11 +1508,9 @@ export function MainLayout() {
               ) : null,
           }}
         >
-          {/* 内容区可用总宽下发给引擎(fraction → 像素宽、缝把手夹取都用它)。
-              设置页 = 全屏接管路由,非 chat 面板(右栏之外还有意识面板)统一歇业。 */}
-          <ContentAvailableWidthProvider value={rightAvailableWidth}>
-            <LayoutRoot suppressNonChatPanels={isSettingsRoute} />
-          </ContentAvailableWidthProvider>
+          {/* 面板稳态宽度由 LayoutRoot 输出 CSS 百分比/clamp，BrowserWindow live resize
+              不再逐像素回灌 React；设置页接管时非 chat 面板统一歇业。 */}
+          <LayoutRoot suppressNonChatPanels={isSettingsRoute} />
         </BuiltinPanelBridgeProvider>
         {/* 拖面板换位(B3 转正;M3 起 mac 同步开闸——mac 顶栏全部保留窗口拖拽,
             手势天然只剩长按窗体)。总开关只管全局语境(内容区路由在场、非
@@ -1602,21 +1562,21 @@ export function MainLayout() {
           rightSidebarAvailable &&
           rsbWindow.loaded &&
           (rsbDetached || isRightSidebarCollapsed) && (
-          <div
-            className="absolute right-0 top-0 z-50 flex h-[46px] items-center gap-1 pr-2"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          >
-            {/* 固定唤起入口只负责显示 / 聚焦。detach / maximize / 收起属于面板自身，
+            <div
+              className="absolute right-0 top-0 z-50 flex h-[46px] items-center gap-1 pr-2"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            >
+              {/* 固定唤起入口只负责显示 / 聚焦。detach / maximize / 收起属于面板自身，
                 在 RightSidebarShell 的顶栏内渲染，不再与本入口混用。 */}
-            <RightSidebarToggle
-              size="toolbar"
-              action="show"
-              collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
-              onToggle={handleOpenRightSidebar}
-              side={rightSidebarSide}
-            />
-          </div>
-        )}
+              <RightSidebarToggle
+                size="toolbar"
+                action="show"
+                collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
+                onToggle={handleOpenRightSidebar}
+                side={rightSidebarSide}
+              />
+            </div>
+          )}
       </div>
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (

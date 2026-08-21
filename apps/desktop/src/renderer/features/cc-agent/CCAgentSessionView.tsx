@@ -202,10 +202,7 @@ import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions'
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
-import {
-  formatRunningTokenCount,
-  resolveRunningUsageMeta,
-} from './lib/runningTokenUsage';
+import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -706,14 +703,19 @@ export function CCAgentSessionView({
   // 历史 caveat(已不再适用):早期尝试过按 `rightSidebarCollapsed` 布尔即时切 compact,
   // 右栏 250ms transition 期间 parent 还是 stale 宽度,messageWidth 先扩出去顶过
   // parent → mx-auto 失效 → padding 被压成 0 → 视觉上消息"先顶到最左再缩回来"。
-  // 现在的方案由 hook 内 ResizeObserver 回调驱动 compact 切换,只在父宽**已经收敛**
-  // 的那一帧切, 该跳变彻底没有触发面。所以这里继续只传 isCompactRail,不要再叠
+  // 现在的方案由 hook 内 ResizeObserver 直接更新继承 CSS 宽度变量；React 只在
+  // compact 阈值跨越时切换一次。这里继续只传 isCompactRail,不要再叠
   // rightSidebarCollapsed 进来。
-  const { containerRef, messageWidth, inputWidth, inputPad, isCompact } = useProportionalWidth(
-    914,
-    { compact: isCompactRail },
-  );
-  const controlledBannerMaxWidth = getControlledBannerMaxWidth(inputWidth);
+  const {
+    containerRef,
+    messageWidth,
+    inputWidth,
+    inputPad,
+    inputHalfWidth,
+    isCompact,
+    getMessageWidth,
+  } = useProportionalWidth(914, { compact: isCompactRail });
+  const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
   // /ctr 接管态: attached=true 时把 ChatInput 替换为 TakeoverMask, 防止 desktop
   // 用户跟 IM 端 race; permission/ask/plan 三个 prompt 不替换 — 它们是 SDK 反向触
@@ -4012,6 +4014,7 @@ export function CCAgentSessionView({
       bottomPadding={overlayHeight}
       composerStackTopOffset={composerStackTopOffset}
       contentWidth={messageWidth}
+      getContentWidth={getMessageWidth}
       focusMessageClientId={focusedMessageTarget?.clientId ?? null}
       focusMessageRequestId={focusedMessageTarget?.requestId ?? 0}
       forkOrigin={forkOrigin}
@@ -4615,8 +4618,8 @@ export function CCAgentSessionView({
               ) : shareSelectionActive && sessionId ? (
                 <ShareSelectionBar
                   sessionId={sessionId}
-                  contentWidth={messageWidth}
                   barWidth={inputWidth}
+                  getContentWidth={getMessageWidth}
                 />
               ) : (
                 <ChatInput
@@ -5014,15 +5017,6 @@ function HandoffSourcePill({
 
 const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
-const CONTROLLED_BANNER_WIDTH_RATIO = 0.5;
-
-function getControlledBannerMaxWidth(inputWidth?: number): number {
-  if (inputWidth == null) return CONTROLLED_BANNER_MAX_WIDTH;
-  return Math.max(
-    0,
-    Math.min((inputWidth - 16) * CONTROLLED_BANNER_WIDTH_RATIO, CONTROLLED_BANNER_MAX_WIDTH),
-  );
-}
 
 function RunningStatusBar({
   status,
@@ -5049,7 +5043,7 @@ function RunningStatusBar({
   generationReliable?: boolean;
   startedAt: number | null;
   visible: boolean;
-  inputWidth?: number;
+  inputWidth?: CSSProperties['width'];
   /**
    * 当前是否处于 side-task (mivo MJ 按钮等不走 LLM 的后台任务) 运行态。
    * true 时隐藏右侧的 elapsed · rate 行 —— mivo 不消耗 token, 显示上一轮
@@ -5177,7 +5171,15 @@ function RunningStatusBar({
     }
     shimmerPlayingRef.current = true;
     setShimmerCycle((n) => n + 1);
-  }, [visible, suppressContent, reducedMotion, status, tokenUsage, outputTokens, generationDurationMs]);
+  }, [
+    visible,
+    suppressContent,
+    reducedMotion,
+    status,
+    tokenUsage,
+    outputTokens,
+    generationDurationMs,
+  ]);
 
   // Animate the token counter so live mid-turn updates feel like a smoothly-
   // incrementing number. Rate does not use this: locally ticking the
@@ -5196,9 +5198,7 @@ function RunningStatusBar({
     tokens: formatRunningTokenCount(animatedTokens),
   });
   const rateText =
-    usageMeta.kind === 'rate'
-      ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate })
-      : null;
+    usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个

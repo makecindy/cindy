@@ -28,7 +28,9 @@ import {
   type ScreenPoint,
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
-import { resolveVibrancyConfig, type WindowsBackdropMaterial } from './vibrancyConfig.js';
+import { resolveVibrancyConfig } from './vibrancyConfig.js';
+import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
+import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow } from './appearance-settings-ipc.js';
 
@@ -99,6 +101,11 @@ export function openSessionInNewWindow(
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
       : { frame: false };
   const bgColor = nativeTheme.shouldUseDarkColors ? '#1f1f1e' : '#f8f8f6';
+  const winBackdropConfig = resolveVibrancyConfig(
+    'cindy',
+    nativeTheme.shouldUseDarkColors,
+    process.platform,
+  );
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base
@@ -130,10 +137,19 @@ export function openSessionInNewWindow(
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
+    ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
+      ? {
+          backgroundMaterial: winBackdropConfig.backgroundMaterial,
+          backgroundColor: winBackdropConfig.backgroundColor,
+        }
+      : {}),
     acceptFirstMouse: !swallowActivationClick,
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: [
+        createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+      ],
       spellcheck: false,
       // A task drag that misses a renderer drop target must never navigate the
       // application window to the dragged plain-text fallback.

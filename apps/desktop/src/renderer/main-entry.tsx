@@ -84,6 +84,8 @@ const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissi
 const isAppearanceUtilityView =
   isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
+document.documentElement.dataset.windowBackdropMaterial =
+  window.electronAPI.windowBackdropMaterial ?? 'none';
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
 }

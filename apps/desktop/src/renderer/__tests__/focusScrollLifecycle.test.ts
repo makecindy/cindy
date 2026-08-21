@@ -288,8 +288,8 @@ describe('MessageStream focus cancellation wiring', () => {
 
   it('replays a deferred deletion before the message navigation rail requests a fallible target', () => {
     const railJump = sourceBetween(
-      'const handleNavRailJump = useCallback((clientId: string) => {',
-      'useLayoutEffect(() => {',
+      'const handleNavRailJump = useCallback(',
+      'useLayoutEffect(() => {\n    if (!railJumpRequest) return;',
     );
     const cancelIndex = railJump.indexOf('cancelFocusJump();');
     const requestIndex = railJump.indexOf(

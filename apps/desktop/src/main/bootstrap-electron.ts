@@ -19,6 +19,7 @@ import {
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
+import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -370,9 +371,7 @@ import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
-import {
-  attachWorkLouderCodexWindowReveal,
-} from './worklouder-codex/index.js';
+import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
 import {
   disposeInputDevices,
   resumeInputDeviceTaskSlots,
@@ -1025,10 +1024,7 @@ const _scheduleIpcRegistered = new WeakSet<object>();
  */
 function isChatEmbeddingAvailable(): boolean {
   try {
-    return isCindyEmbeddingModelAvailable(
-      getDesktopSelectableCatalog(),
-      CHAT_EMBED_MODEL_ID,
-    );
+    return isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), CHAT_EMBED_MODEL_ID);
   } catch {
     return false;
   }
@@ -1123,7 +1119,9 @@ function scheduleChatEmbeddingRuntimeReconcile(): void {
       }
     })
     .catch((err: unknown) => {
-      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', { error: String(err) });
+      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', {
+        error: String(err),
+      });
     });
 }
 
@@ -1236,9 +1234,11 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
   };
 
   await run('interruptGhostCallsForAccountBoundary', () =>
-    withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
+    withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary),
+  );
   await run('waitForGhostMutations', () =>
-    withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
+    withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations),
+  );
   await run('suspendAllGhosts', suspendAllGhosts);
 
   if (failures.length > 0) {
@@ -1667,7 +1667,10 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   }
 
   if (blockingFailures.length > 0) {
-    throw new AggregateError(blockingFailures, `account boundary teardown on ${reason} was incomplete`);
+    throw new AggregateError(
+      blockingFailures,
+      `account boundary teardown on ${reason} was incomplete`,
+    );
   }
   // Reached only when the handover ran all the way through, which is exactly
   // when a previous abort's blocking state stops being true.
@@ -1994,7 +1997,11 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
     }
   },
   sendToWindow: (win, channel, payload) => {
-    try { win.webContents.send(channel, payload); } catch { /* ignore */ }
+    try {
+      win.webContents.send(channel, payload);
+    } catch {
+      /* ignore */
+    }
   },
   isQuitting: () => isQuitting,
   log: createLogger('ghost-panel-window-controller'),
@@ -3228,6 +3235,9 @@ const createWindow = () => {
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: [
+        createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+      ],
       spellcheck: false,
       // 默认保留 Chromium 后台节流；只有 active turn 或 terminal grace 期间才由
       // setMainWindowBackgroundThrottlingForActiveTurn 临时关闭，避免后台 idle 常驻耗电。
@@ -7626,11 +7636,7 @@ app.on('ready', async () => {
       setAccountProviderReadinessReadyHandler((ownerId) => {
         startAccountIntegrationsAfterOwnerDbReady(ownerId, {
           isOwnerCurrent: (id) =>
-            isLocalDbOwnerCurrent(
-              authManager.getAuthState(),
-              id,
-              isAppSessionBoundaryPending(),
-            ),
+            isLocalDbOwnerCurrent(authManager.getAuthState(), id, isAppSessionBoundaryPending()),
           startHookControlAccount,
           startImConnection,
           log: dbClientLog,
@@ -7638,9 +7644,14 @@ app.on('ready', async () => {
         attemptStartScheduler();
         attemptStartEmbeddingHost();
       });
-      accountProviderReadinessArm.publish(userId, startProviderReadiness, resumeIncompleteDiscovery);
+      accountProviderReadinessArm.publish(
+        userId,
+        startProviderReadiness,
+        resumeIncompleteDiscovery,
+      );
       if (makerProviderRefreshConfigured) startProviderReadiness();
-      else startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
+      else
+        startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
       logStartupPhase('post-db-hooks-scheduled');
     },
   });
@@ -8324,7 +8335,10 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
     // trim 后拒绝空白元素，避免脏值（" deepseek " / "  "）落盘。
     const trimmed = input.targetModels.map((m) => (typeof m === 'string' ? m.trim() : ''));
     if (trimmed.some((m) => m.length === 0)) {
-      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a non-blank string array');
+      throwIpcError(
+        'INVALID_PARAMS',
+        'vision bridge targetModels must be a non-blank string array',
+      );
     }
     patch.targetModels = trimmed;
   }
@@ -8336,11 +8350,17 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
       continue;
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     const ref = value as Record<string, unknown>;
     if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     // trim 后拒绝纯空白，避免脏配置（空白串）落盘。
     const providerId = ref.providerId.trim();

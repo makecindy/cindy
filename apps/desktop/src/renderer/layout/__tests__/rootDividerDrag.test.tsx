@@ -3,7 +3,10 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDefaultLayout, type Layout, type SplitNode } from '../../../shared/layoutTree';
-import { BuiltinPanelBridgeProvider, type BuiltinPanelBridge } from '../../panels/BuiltinPanelBridge';
+import {
+  BuiltinPanelBridgeProvider,
+  type BuiltinPanelBridge,
+} from '../../panels/BuiltinPanelBridge';
 import { __resetBuiltinPanelsForTest } from '../../panels/builtinPanels';
 import { __resetPanelRegistryForTest, registerPanelKind } from '../../panels/registry';
 import { LayoutRoot } from '../LayoutRoot';
@@ -49,7 +52,12 @@ function treeWithUninstalledResidue(): Layout {
   split.children[1].fraction = 0.32108649782155757; // right-tabs
   split.children.unshift({
     fraction: 0.22,
-    node: { type: 'pane', id: 'ghost-project-opener', panelKind: 'ghost:project-opener', minWidth: 240 },
+    node: {
+      type: 'pane',
+      id: 'ghost-project-opener',
+      panelKind: 'ghost:project-opener',
+      minWidth: 240,
+    },
   });
   return layout;
 }
@@ -90,7 +98,17 @@ function mockPaneWidth(kind: string, width: number): void {
   const el = document.querySelector(`[data-panel-drag-root="${kind}"]`) as HTMLElement | null;
   expect(el).not.toBeNull();
   el!.getBoundingClientRect = () =>
-    ({ width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    ({
+      width,
+      height: 0,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
 }
 
 /** 把缝一路拖向左(右侧面板变宽)到抓不动为止,松手。 */
@@ -142,7 +160,10 @@ describe('RootDivider 拖宽 · 在场份额口径', () => {
     currentLayout = treeWithUninstalledResidue();
     renderLayoutRoot();
     // 在场份额 0.3211 / 0.78 = 0.4117 → 683px。按树上原始 fraction 只有 533px。
-    expect(Number(screen.getByTestId('w-right-tabs').textContent)).toBe(683);
+    const width = screen.getByTestId('w-right-tabs').textContent ?? '';
+    const preferredPercent = width.match(/^clamp\(120px, ([\d.]+)%, calc\(100% - 400px\)\)$/)?.[1];
+    expect(preferredPercent).toBeDefined();
+    expect((Number(preferredPercent) / 100) * AVAIL).toBeCloseTo(683, 0);
   });
 
   it('有卸载残留时把右栏拖到最大:松手后写树成功(不回弹),聊天流正好落在最小宽', () => {
