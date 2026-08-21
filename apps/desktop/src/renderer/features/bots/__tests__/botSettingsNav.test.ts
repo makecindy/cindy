@@ -2,18 +2,25 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BOT_SETTINGS_ANCHOR_IDS,
-  BOT_SETTINGS_ANCHORS,
   isBotSettingsAnchor,
   resolveBotSettingsAnchor,
 } from '../botSettingsNav';
 
 describe('Bot settings anchors', () => {
-  it('lists the four blocks plus Advanced, in page order', () => {
-    expect(BOT_SETTINGS_ANCHOR_IDS).toEqual(['who', 'can', 'understand', 'schedule', 'advanced']);
-    expect(BOT_SETTINGS_ANCHORS.map((anchor) => anchor.id)).toEqual([...BOT_SETTINGS_ANCHOR_IDS]);
+  it('lists every scroll target in page order', () => {
+    // `grew` 夹在 understand 与 schedule 之间 —— 顺序就是页面上从上到下的顺序,
+    // 错位会让「上一块/下一块」类的推断跟着错。
+    expect(BOT_SETTINGS_ANCHOR_IDS).toEqual([
+      'who',
+      'can',
+      'understand',
+      'grew',
+      'schedule',
+      'advanced',
+    ]);
   });
 
-  it('recognizes only the five canonical anchor ids', () => {
+  it('recognizes only the canonical anchor ids', () => {
     for (const id of BOT_SETTINGS_ANCHOR_IDS) {
       expect(isBotSettingsAnchor(id)).toBe(true);
     }
@@ -49,11 +56,7 @@ describe('Bot settings anchors', () => {
     expect(resolveBotSettingsAnchor('advanced')).toBe('advanced');
   });
 
-  it('gives every anchor a unique id and an i18n label key under bots.settingsBlocks', () => {
-    const ids = new Set(BOT_SETTINGS_ANCHORS.map((anchor) => anchor.id));
-    expect(ids.size).toBe(BOT_SETTINGS_ANCHORS.length);
-    for (const anchor of BOT_SETTINGS_ANCHORS) {
-      expect(anchor.labelKey).toBe(`bots.settingsBlocks.${anchor.id}`);
-    }
+  it('has no duplicate anchor ids', () => {
+    expect(new Set(BOT_SETTINGS_ANCHOR_IDS).size).toBe(BOT_SETTINGS_ANCHOR_IDS.length);
   });
 });

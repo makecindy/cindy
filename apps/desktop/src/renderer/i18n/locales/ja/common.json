@@ -6962,8 +6962,7 @@
       "deleteDescription": "「{{title}}」を削除しますか？次のタスクからは使わなくなります。",
       "deleteConfirm": "削除",
       "deleteAria": "「{{title}}」を削除",
-      "loadingBody": "開いています…",
-      "footnote": "やった仕事から自分で得意を増やします。使うほど手際がよくなります。"
+      "loadingBody": "開いています…"
     },
     "growth": {
       "rememberedOne": "覚えました：{{title}}",
@@ -6986,13 +6985,12 @@
       },
       "connectAccount": "アカウントを接続",
       "imBlocked": "チームメイトが接続できるIMは1つだけです — 先に{{channel}}を切断してください",
-      "footnote": "つないだ後は何も設定しなくて大丈夫です——使い方は自分で分かります。"
+      "connectedTitle": "接続済み"
     },
     "folders": {
       "addButton": "+ フォルダーを追加",
       "adding": "追加中…",
-      "remove": "削除",
-      "footnote": "フォルダの中身を自分で読んで、会話でそのまま使います。"
+      "remove": "削除"
     },
     "advancedIdentity": {
       "title": "説明と背景情報"

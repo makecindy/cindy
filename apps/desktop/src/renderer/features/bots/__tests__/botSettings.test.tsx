@@ -182,6 +182,7 @@ vi.mock('@/state/newMakerDraft', () => ({
 }));
 
 import { BotSettings } from '../BotsHomeView';
+import { compilePersonaIntoIdentitySource } from '../botPersona';
 import {
   peekPendingBotPersonaAck,
   resetPendingBotPersonaAckForTests,
@@ -378,22 +379,80 @@ describe('Bot settings page structure', () => {
     expect(screen.queryByRole('button', { name: 'bots.cancel' })).toBeNull();
   });
 
-  it('says what each block is for, in one plain line under its title', () => {
+  it('says what each block is for — while that block is still empty', () => {
     renderSettings();
 
-    // 四个标题都是「TA 怎样怎样」;不说清楚这一块要用户做什么,人会以为四块都得填。
+    // 标题都是「TA 怎样怎样」;不说清楚这一块要用户做什么,人会以为每块都得填。
     expect(screen.getByText('bots.settingsBlocks.whoDescription')).toBeTruthy();
     expect(screen.getByText('bots.settingsBlocks.canDescription')).toBeTruthy();
     expect(screen.getByText('bots.settingsBlocks.understandDescription')).toBeTruthy();
   });
 
-  it('carries the memory / know-how footnotes so the lists explain themselves', async () => {
+  /*
+    这一条盯的是本次重做的核心约定(写在 BotSettingsBlock 的文件头):
+    **说明文字的任务是教会用户一次,不是常驻在那里占版面。** 用户已经把东西填进去
+    之后,那句话就该消失。
+
+    「TA 会的」是唯一的例外,单独一条盯着它 —— 它解释的是「为什么这里没有开关」,
+    而版面上永远看不到开关,用户永远得不到这个答案的第二个来源。
+  */
+  it('takes the hint away once the block has real content in it', () => {
+    const { unmount } = renderSettings({
+      projectBindings: [
+        {
+          id: 'binding-1',
+          projectKey: 'cindy',
+          workingDir: '/Users/chris/Code/cindy',
+          workspacePolicy: 'none',
+          isDefault: true,
+          status: 'active',
+          allowedPaths: [],
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      ],
+    });
+    // 已经给过文件夹的人不用再看「给 TA 一个文件夹」。
+    expect(screen.queryByText('bots.settingsBlocks.understandDescription')).toBeNull();
+    unmount();
+
+    // 已经选过性格的人不用再看「性格不用你写——选几下就好」。
+    // 用真的编译函数造这段 identitySource,不手拼 marker —— 手拼的格式一旦和
+    // botPersona.ts 漂移,这条测试会在「人格其实没被识别」的情况下照样绿。
+    renderSettings({
+      identitySource: compilePersonaIntoIdentitySource('', {
+        style: 'concise',
+        proactivity: 'reactive',
+        call: 'name',
+      }),
+    });
+    expect(screen.queryByText('bots.settingsBlocks.whoDescription')).toBeNull();
+  });
+
+  it('keeps the "TA 会的" hint even when connected — nothing else on screen answers it', () => {
+    renderSettings();
+    expect(screen.getByText('bots.settingsBlocks.canDescription')).toBeTruthy();
+  });
+
+  /*
+    解释文字只留还在回答问题的那一句。
+
+    原来每个区块都是「标题 / 说明 / 内容 / 脚注」四层,说明与脚注经常是同一件事
+    说两遍 —— 「给 TA 一个文件夹,TA 就懂你的项目」下面跟着「TA 会自己读文件夹里的
+    东西」,中间只夹了一个按钮。三条重复的脚注已删,它们的 i18n key 也一并删了,
+    所以这里断言的是 key 本身不再出现在页面上。
+  */
+  it('keeps the one footnote that still answers something, drops the three that repeat a hint', async () => {
     renderSettings();
 
+    // 留下的这句回答的是「这些记忆是谁放进来的、我能不能动」—— 列表本身答不了,
+    // 所以它跟着「TA 记得的」的标题走(不再自己占一行)。
     expect(await screen.findByText('bots.memoryList.footnote')).toBeTruthy();
-    expect(screen.getByText('bots.learned.footnote')).toBeTruthy();
-    expect(screen.getByText('bots.abilityWall.footnote')).toBeTruthy();
-    expect(screen.getByText('bots.folders.footnote')).toBeTruthy();
+
+    // 这三句各自都能在同一块里找到一句意思相同的话,已删。
+    expect(screen.queryByText('bots.learned.footnote')).toBeNull();
+    expect(screen.queryByText('bots.abilityWall.footnote')).toBeNull();
+    expect(screen.queryByText('bots.folders.footnote')).toBeNull();
   });
 
   it('answers "who is this and how long have they been around" right under the name', () => {
@@ -766,34 +825,42 @@ describe('TA 会的 — ability wall and single-IM mutual exclusion', () => {
     它现在可点,直接落到该渠道**真实**的连接界面(设置 › IM 机器人 的对应
     分区,个人分区还会把那张手风琴卡展开)。
   */
-  it('takes an account-less channel row straight to that channel\'s real connect UI', async () => {
+  it('takes an account-less channel straight to that channel\'s real connect UI', async () => {
     mocks.listBotChannelConnections.mockResolvedValue([]);
     renderSettings();
 
-    // 占位行的标题只有渠道名(没有 ` · 账号`)。
-    const wecomRow = (await screen.findByText('Wecom')).closest('.min-w-0')!
-      .parentElement as HTMLElement;
-    const connectButton = within(wecomRow).getByRole('button', {
-      name: 'bots.abilityWall.connectAccount',
+    // 还没有账号的渠道现在是一枚可点的小片(标题就是渠道名,没有 ` · 账号`),
+    // 不再是一整行带「连接账号」按钮的卡 —— 七个「还没连」的占位行曾经是这一页
+    // 上版面最大、信息量最小的一片。
+    const wecomChip = await screen.findByRole('button', {
+      name: 'bots.abilityWall.connectAccount · Wecom',
     });
-    expect((connectButton as HTMLButtonElement).disabled).toBe(false);
-    // 「先在设置里连接 X 账号」那句死路话术连同它的 i18n key 一起没了;整个
-    // capabilityChips 命名空间的回归守卫在下面「一颗 Switch 都不剩」那条里。
+    expect((wecomChip as HTMLButtonElement).disabled).toBe(false);
 
-    fireEvent.click(connectButton);
+    fireEvent.click(wecomChip);
     expect(mocks.navigate).toHaveBeenCalledWith(
       '/settings?tab=im-bot&imGroup=personal&imChannel=wecom',
     );
+  });
+
+  it('no longer spends a full row per not-yet-connected channel', async () => {
+    mocks.listBotChannelConnections.mockResolvedValue([]);
+    renderSettings();
+
+    await screen.findByRole('button', { name: /Wecom/ });
+    // 每行一颗、名字就叫「连接账号」的按钮没有了 —— 那是收成小片之前的形态。
+    // 小片的可访问名是「连接账号 · <渠道>」,精确匹配这个名字查不到,正好用来区分。
+    expect(
+      screen.queryAllByRole('button', { name: 'bots.abilityWall.connectAccount' }),
+    ).toHaveLength(0);
   });
 
   it('sends Slack to the Cindy relay group, not the personal one', async () => {
     mocks.listBotChannelConnections.mockResolvedValue([]);
     renderSettings();
 
-    const slackRow = (await screen.findByText('Slack')).closest('.min-w-0')!
-      .parentElement as HTMLElement;
     fireEvent.click(
-      within(slackRow).getByRole('button', { name: 'bots.abilityWall.connectAccount' }),
+      await screen.findByRole('button', { name: 'bots.abilityWall.connectAccount · Slack' }),
     );
     expect(mocks.navigate).toHaveBeenCalledWith('/settings?tab=im-bot&imGroup=cindy');
   });

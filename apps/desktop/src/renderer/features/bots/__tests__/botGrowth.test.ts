@@ -420,12 +420,14 @@ describe('尾注跳转 —— 设置页高亮参数', () => {
     expect(resolveBotSettingsHighlight('')).toBeNull();
   });
 
-  it('跳转路径落到「TA 是谁」并带上要高亮的列表', () => {
+  it('跳转路径落到成长那一段并带上要高亮的列表', () => {
+    // 锚点是 `grew` 不是 `who`:两个成长列表已从「TA 是谁」搬出来独立成块,
+    // 还滚到 `who` 会停在头像那一行,要看的列表在一屏之外。
     expect(buildBotGrowthSettingsPath('bot-1', 'memory')).toBe(
-      '/bots/bot-1?settings=1&anchor=who&highlight=memory',
+      '/bots/bot-1?settings=1&anchor=grew&highlight=memory',
     );
     expect(buildBotGrowthSettingsPath('bot-1', 'learned')).toBe(
-      '/bots/bot-1?settings=1&anchor=who&highlight=learned',
+      '/bots/bot-1?settings=1&anchor=grew&highlight=learned',
     );
   });
 

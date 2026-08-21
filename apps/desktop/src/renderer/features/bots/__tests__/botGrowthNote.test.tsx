@@ -43,13 +43,13 @@ describe('BotGrowthNote — 气泡末尾的成长注脚', () => {
   it('点它跳到该伙伴设置页并高亮对应列表', () => {
     render(<BotGrowthNote botId="bot-7" note={{ count: 1, title: 'A', target: 'learned' }} />);
     fireEvent.click(screen.getByRole('button'));
-    expect(navigate).toHaveBeenCalledWith('/bots/bot-7?settings=1&anchor=who&highlight=learned');
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-7?settings=1&anchor=grew&highlight=learned');
   });
 
   it('记忆尾注跳「TA 记得的」', () => {
     render(<BotGrowthNote botId="bot-7" note={{ count: 3, title: null, target: 'memory' }} />);
     fireEvent.click(screen.getByRole('button'));
-    expect(navigate).toHaveBeenCalledWith('/bots/bot-7?settings=1&anchor=who&highlight=memory');
+    expect(navigate).toHaveBeenCalledWith('/bots/bot-7?settings=1&anchor=grew&highlight=memory');
   });
 
   it('保持"淡淡的":三级文字色 + 极淡分隔线,hover 才提亮,不加背景不加阴影', () => {

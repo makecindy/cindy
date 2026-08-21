@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   ArrowLeft,
+  BookMarked,
   Bot,
   Check,
   ChevronDown,
@@ -58,6 +59,11 @@ import { BotAbilityWall } from './BotAbilityWall';
 import { botChannelConnectPath } from './botChannelConnectRoutes';
 import { BotFolderCards } from './BotFolderCards';
 import { BotGrowthLists } from './BotGrowthLists';
+import {
+  BotSettingsBlock,
+  BotSettingsBlockHeading,
+  BOT_SETTINGS_BLOCK_CLASS,
+} from './BotSettingsBlock';
 import { botTemplateForName, botTemplateSeedEntries } from './botTemplates';
 import { BotPersonaWizard, personaSummaryText } from './BotPersonaWizard';
 import {
@@ -81,9 +87,6 @@ const BOT_SETTINGS_HIGHLIGHT_MS = 2400;
 function channelLabel(channel: BotChannel): string {
   return channel === 'local' ? 'Local Bot' : channel[0].toUpperCase() + channel.slice(1);
 }
-
-/** 区块标题下那句白话（`block-d`）：一个档位、一个颜色，四块保持一致。 */
-const BLOCK_DESCRIPTION_CLASS = 'mt-1 text-12 leading-5 text-[var(--text-secondary)]';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -150,6 +153,7 @@ export function BotSettings({
     who: null,
     can: null,
     understand: null,
+    grew: null,
     schedule: null,
     advanced: null,
   });
@@ -514,6 +518,13 @@ export function BotSettings({
       setChannelBusy(null);
     }
   };
+  /*
+    区块标题旁那句提示只在「这一块还空着」时出现(约定见 BotSettingsBlock)。
+    这两个判断就是各自那块的「空不空」,提到这里一处算,免得在 JSX 里内联出两份
+    不一致的判据。
+  */
+  const persona = extractPersonaFromIdentitySource(identitySource);
+  const hasFolder = (bot.projectBindings ?? []).some((binding) => binding.status !== 'archived');
   const joined = botJoinedRelativeKey(bot.createdAt, Date.now());
   const headerMeta = [description.trim(), joined ? t(joined.key, { n: joined.n }) : '']
     .filter(Boolean)
@@ -636,20 +647,18 @@ export function BotSettings({
       <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
         <div className="mx-auto flex max-w-3xl flex-col gap-5 pb-10">
           {/* "TA 是谁" */}
-          <section
-            ref={(el) => {
+          <BotSettingsBlock
+            icon={UserRound}
+            title={t('bots.settingsBlocks.who')}
+            /* 「性格不用你写——选几下就好」讲的是下面那条性格控件怎么用。已经选过的
+               人不需要再被讲一遍,所以只在还没设置时出现(见 BotSettingsBlock 的
+               hint 约定)。 */
+            hint={persona === null ? t('bots.settingsBlocks.whoDescription') : undefined}
+            blockRef={(el) => {
               anchorRefs.current.who = el;
             }}
-            className="scroll-mt-6 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
           >
-            <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-              <UserRound size={16} />
-              {t('bots.settingsBlocks.who')}
-            </div>
-            {/* 每块标题下面一句白话。四个区块的标题都是「TA 怎样怎样」,不说清楚这
-                一块要用户做什么,人会以为四块都得填一遍。 */}
-            <p className={BLOCK_DESCRIPTION_CLASS}>{t('bots.settingsBlocks.whoDescription')}</p>
-            <div className="mt-4 flex items-center gap-3">
+            <div className="flex items-center gap-3">
               <BotAvatarPicker
                 name={name}
                 avatar={avatar}
@@ -678,7 +687,7 @@ export function BotSettings({
             </div>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--surface-chip)] px-3 py-2.5">
               <p className="min-w-0 flex-1 text-12 text-[var(--text-primary)]">
-                {personaSummaryText(t, extractPersonaFromIdentitySource(identitySource))}
+                {personaSummaryText(t, persona)}
               </p>
               <button
                 type="button"
@@ -753,30 +762,79 @@ export function BotSettings({
                   {t('bots.background.empty')}
                 </p>
               )}
-              <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
-                {t('bots.background.footnote')}
-              </p>
+              {/* 这句解释的是「背景设定和上面那三档口气是两套东西,改一个不动另一
+                  个」——只有正在改的人需要知道。只读时它是一行常驻的白噪音。 */}
+              {backgroundDraft !== null ? (
+                <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
+                  {t('bots.background.footnote')}
+                </p>
+              ) : null}
             </div>
+          </BotSettingsBlock>
 
-            {/* "TA 记得的" + "TA 学会的" — memory=false 的历史伙伴留一条自己开回来的
-                路,恒开后走真实的 bot-memory 只读枚举 + 单删 + 清空。记忆关掉时两个
-                列表一起消失:没有记忆分域,伙伴也长不出本事。 */}
-            <div className="mt-5 border-t border-[var(--border-default)] pt-4">
-              {capabilities.memory ? (
-                <BotGrowthLists
-                  botId={bot.id}
-                  highlight={highlight}
-                  seedEntries={templateSeedEntries}
-                />
-              ) : (
-                <div className="flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-3">
-                  <span className="min-w-0">
-                    <span className="block text-12 font-medium text-[var(--text-primary)]">
-                      {t('bots.memoryRecovery.title')}
-                    </span>
-                    <span className="mt-0.5 block text-11 leading-4 text-[var(--text-tertiary)]">
-                      {t('bots.memoryRecovery.description')}
-                    </span>
+          {/* "TA 会的" */}
+          <BotSettingsBlock
+            icon={Sparkles}
+            title={t('bots.settingsBlocks.can')}
+            /* 这句常驻:它解释的是「为什么这里没有开关」,而版面上永远看不到开关,
+               所以用户永远得不到这个答案的第二个来源。 */
+            hint={t('bots.settingsBlocks.canDescription')}
+            blockRef={(el) => {
+              anchorRefs.current.can = el;
+            }}
+          >
+            <BotAbilityWall
+              connections={visibleChannelConnections}
+              isChannelMounted={(connection) => Boolean(mountedChannelFor(connection))}
+              channelBusyId={channelBusy}
+              onToggleChannel={(connection) => void toggleChannel(connection)}
+              onConnectAccount={(kind) => {
+                // 原地拉起该渠道真实的连接界面(设置 › IM 机器人 的对应分区/卡片)。
+                // 连完回到这一页时,下面那条 listBotChannelConnections effect 会
+                // 随 bot.id 重跑,行状态自然刷新。
+                const path = botChannelConnectPath(kind);
+                if (path) navigate(path);
+              }}
+            />
+            {channelError ? (
+              <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
+            ) : null}
+          </BotSettingsBlock>
+
+          {/* "TA 懂的" */}
+          <BotSettingsBlock
+            icon={FolderGit2}
+            title={t('bots.settingsBlocks.understand')}
+            /* 已经给过文件夹的人不用再看「给 TA 一个文件夹」——那句话的收件人是还
+               没给过的人。 */
+            hint={hasFolder ? undefined : t('bots.settingsBlocks.understandDescription')}
+            blockRef={(el) => {
+              anchorRefs.current.understand = el;
+            }}
+          >
+            <BotFolderCards botId={bot.id} bindings={bot.projectBindings ?? []} />
+          </BotSettingsBlock>
+
+          {/* "TA 记得的" + "TA 学会的" — 各自成块(见 BotGrowthLists 的说明)。
+              memory=false 的历史伙伴留一条自己开回来的路;记忆关掉时两个列表一起
+              消失:没有记忆分域,伙伴也长不出本事。 */}
+          <div
+            ref={(el) => {
+              anchorRefs.current.grew = el;
+            }}
+            className="flex scroll-mt-6 flex-col gap-5"
+          >
+            {capabilities.memory ? (
+              <BotGrowthLists
+                botId={bot.id}
+                highlight={highlight}
+                seedEntries={templateSeedEntries}
+              />
+            ) : (
+              <BotSettingsBlock icon={BookMarked} title={t('bots.memoryRecovery.title')}>
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 text-11 leading-4 text-[var(--text-tertiary)]">
+                    {t('bots.memoryRecovery.description')}
                   </span>
                   <button
                     type="button"
@@ -786,60 +844,9 @@ export function BotSettings({
                     {t('bots.memoryRecovery.action')}
                   </button>
                 </div>
-              )}
-            </div>
-          </section>
-
-          {/* "TA 会的" */}
-          <section
-            ref={(el) => {
-              anchorRefs.current.can = el;
-            }}
-            className="scroll-mt-6 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
-          >
-            <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-              <Sparkles size={16} />
-              {t('bots.settingsBlocks.can')}
-            </div>
-            <p className={BLOCK_DESCRIPTION_CLASS}>{t('bots.settingsBlocks.canDescription')}</p>
-            <div className="mt-4">
-              <BotAbilityWall
-                connections={visibleChannelConnections}
-                isChannelMounted={(connection) => Boolean(mountedChannelFor(connection))}
-                channelBusyId={channelBusy}
-                onToggleChannel={(connection) => void toggleChannel(connection)}
-                onConnectAccount={(kind) => {
-                  // 原地拉起该渠道真实的连接界面(设置 › IM 机器人 的对应分区/卡片)。
-                  // 连完回到这一页时,下面那条 listBotChannelConnections effect 会
-                  // 随 bot.id 重跑,行状态自然刷新。
-                  const path = botChannelConnectPath(kind);
-                  if (path) navigate(path);
-                }}
-              />
-            </div>
-            {channelError ? (
-              <p className="mt-3 text-11 text-[var(--text-danger)]">{channelError}</p>
-            ) : null}
-          </section>
-
-          {/* "TA 懂的" */}
-          <section
-            ref={(el) => {
-              anchorRefs.current.understand = el;
-            }}
-            className="scroll-mt-6 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5"
-          >
-            <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-              <FolderGit2 size={16} />
-              {t('bots.settingsBlocks.understand')}
-            </div>
-            <p className={BLOCK_DESCRIPTION_CLASS}>
-              {t('bots.settingsBlocks.understandDescription')}
-            </p>
-            <div className="mt-4">
-              <BotFolderCards botId={bot.id} bindings={bot.projectBindings ?? []} />
-            </div>
-          </section>
+              </BotSettingsBlock>
+            )}
+          </div>
 
           {/* "TA 的日程" — 整体嵌入。定时干活是标配(裁决 2026-08-19),这里不再
               有任何「先开自动化」的前置,也不再需要建完 Routine 回头翻开关。 */}
@@ -878,14 +885,12 @@ export function BotSettings({
 
             {advancedOpen ? (
               <div className="mt-4 flex flex-col gap-5">
-                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-                    <Settings2 size={16} />
-                    {t('bots.advancedIdentity.title')}
-                  </div>
-                  <p className="mt-1 text-11 text-[var(--text-tertiary)]">
-                    {t('bots.channelLabel')}: {channelLabel(bot.channel)}
-                  </p>
+                <section className={BOT_SETTINGS_BLOCK_CLASS}>
+                  <BotSettingsBlockHeading
+                    icon={Settings2}
+                    title={t('bots.advancedIdentity.title')}
+                    hint={`${t('bots.channelLabel')}: ${channelLabel(bot.channel)}`}
+                  />
                   <label className="mt-4 flex flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
                     {t('bots.descriptionLabel')}
                     <textarea
@@ -918,14 +923,12 @@ export function BotSettings({
                   </label>
                 </section>
 
-                <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-                  <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-                    <Sparkles size={16} />
-                    {t('bots.advancedCapabilities.title')}
-                  </div>
-                  <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                    {t('bots.advancedCapabilities.description')}
-                  </p>
+                <section className={BOT_SETTINGS_BLOCK_CLASS}>
+                  <BotSettingsBlockHeading
+                    icon={Sparkles}
+                    title={t('bots.advancedCapabilities.title')}
+                    hint={t('bots.advancedCapabilities.description')}
+                  />
                   <div className="mt-4 grid min-w-0 gap-4 md:grid-cols-2">
                     <div className="flex min-w-0 flex-col gap-1.5 text-12 text-[var(--text-secondary)]">
                       <span>{t('bots.harnessLabel')}</span>

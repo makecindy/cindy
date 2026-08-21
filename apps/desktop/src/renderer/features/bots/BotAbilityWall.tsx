@@ -1,4 +1,4 @@
-import { MessageCircleMore } from 'lucide-react';
+import { MessageCircleMore, Plus } from 'lucide-react';
 import { useBotTranslation } from './botPronounContext';
 
 import { cn } from '@/lib/utils';
@@ -46,10 +46,20 @@ export function BotAbilityWall({
 }) {
   const { t } = useBotTranslation();
   const chips = applyImMutualExclusion(buildBotChannelChips(connections, isChannelMounted));
+  /*
+    有账号的渠道才值得占一整行 —— 它有账号名要显示、有连接/断开要点。没账号的
+    渠道行原来长得跟它一模一样,于是七个「还没连」的占位撑满了整块,是这一页上
+    版面最大、信息量最小的一片。现在把它们收成一排「+ 渠道」小片,点一下直接落到
+    该渠道真实的连接界面 —— 能做的事一点没少,占的地方少了一屏。
+  */
+  const connectedChips = chips.filter((chip) => chip.connection);
+  const connectableChips = chips.filter((chip) => !chip.connection);
 
   return (
     <div>
-      <p className="text-11 font-medium uppercase tracking-[0.1em] text-[var(--text-tertiary)]">
+      {/* 中文标签不写 uppercase + tracking:大写对中文无效,字距却真的被拉开,
+          读起来更散。这两个小标题只需要比正文轻一档。 */}
+      <p className="text-11 text-[var(--text-tertiary)]">
         {t('bots.abilityWall.builtinTitle')}
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
@@ -63,94 +73,110 @@ export function BotAbilityWall({
         ))}
       </div>
 
-      <p className="mt-4 text-11 font-medium uppercase tracking-[0.1em] text-[var(--text-tertiary)]">
-        {t('bots.abilityWall.connectableTitle')}
-      </p>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        {chips.map((chip) => {
-          const channelName = botChannelDisplayName(chip.kind);
-          const label = chip.accountLabel ? `${channelName} · ${chip.accountLabel}` : channelName;
-          const blocked = Boolean(chip.blockedByImKind);
-          /*
-            「先断开 X」只有在这一行**本来就能连**的时候才是一句有用的话。
-            没有账号的占位行(Wecom / 微信…)和账号不可路由的行，断开 X 之后照样连
-            不上 —— 对它们说这句就是给了一个做了也没用的补救办法。互斥判定本身
-            (blockedByImKind)保持不变，只收窄这句提示的出现条件。
-          */
-          const showImBlockedHint = blocked && Boolean(chip.connection) && !chip.disabled;
-          /*
-            还没有账号的渠道行。原来是死的置灰行 +「先在设置里连接 X 账号」——
-            一句把用户支走、点下去什么都不发生的话。现在这一行**可点**,直接
-            落到该渠道真实的连接界面(botChannelConnectRoutes 是唯一映射表)。
-
-            占位行只由 MOUNTABLE_BOT_CHANNEL_KINDS 生成,而 CONNECT_ROUTES 的类型
-            就是 `Record<MountableBotChannelKind, …>` —— 每个占位行都必有入口,
-            `connectPath === null` 结构上不可达。原先挂在这个分支上的
-            「暂不支持在界面里连接」提示因此一次都不会出现,已随
-            `bots.abilityWall.noConnectUi` 一并删除。这里保留 null 判断只作为
-            类型守卫:将来有人往 MOUNTABLE 里加渠道却忘了配路由时,宁可不给按钮,
-            也不给一个点了没反应的按钮。
-          */
-          const needsAccount = !chip.connection;
-          const connectPath = needsAccount ? botChannelConnectPath(chip.kind) : null;
-          const rowDimmed = needsAccount ? false : chip.disabled || blocked;
-          return (
-            <div
-              key={chip.id}
-              className={cn(
-                'flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-2',
-                rowDimmed && 'opacity-60',
-              )}
-            >
-              <span className="min-w-0">
-                <span className="flex items-center gap-1.5 truncate text-12 text-[var(--text-primary)]">
-                  <MessageCircleMore size={13} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
-                  {label}
-                </span>
-                {showImBlockedHint && chip.blockedByImKind ? (
-                  <span className="mt-0.5 block text-10 leading-4 text-[var(--text-tertiary)]">
-                    {t('bots.abilityWall.imBlocked', {
-                      channel: botChannelDisplayName(chip.blockedByImKind),
-                    })}
+      {connectedChips.length > 0 ? (
+        <>
+          <p className="mt-5 text-11 text-[var(--text-tertiary)]">
+            {t('bots.abilityWall.connectedTitle')}
+          </p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {connectedChips.map((chip) => {
+              const channelName = botChannelDisplayName(chip.kind);
+              const label = chip.accountLabel
+                ? `${channelName} · ${chip.accountLabel}`
+                : channelName;
+              const blocked = Boolean(chip.blockedByImKind);
+              /*
+                「先断开 X」只有在这一行**本来就能连**的时候才是一句有用的话。
+                账号不可路由的行断开 X 之后照样连不上 —— 对它说这句就是给了一个
+                做了也没用的补救办法。互斥判定本身(blockedByImKind)保持不变,
+                只收窄这句提示的出现条件。
+              */
+              const showImBlockedHint = blocked && !chip.disabled;
+              return (
+                <div
+                  key={chip.id}
+                  className={cn(
+                    'flex items-start justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-2',
+                    (chip.disabled || blocked) && 'opacity-60',
+                  )}
+                >
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5 truncate text-12 text-[var(--text-primary)]">
+                      <MessageCircleMore
+                        size={13}
+                        className="shrink-0 text-[var(--text-secondary)]"
+                        aria-hidden
+                      />
+                      {label}
+                    </span>
+                    {showImBlockedHint && chip.blockedByImKind ? (
+                      <span className="mt-0.5 block text-10 leading-4 text-[var(--text-tertiary)]">
+                        {t('bots.abilityWall.imBlocked', {
+                          channel: botChannelDisplayName(chip.blockedByImKind),
+                        })}
+                      </span>
+                    ) : null}
                   </span>
-                ) : null}
-              </span>
-              {needsAccount ? (
-                connectPath !== null ? (
                   <button
                     type="button"
-                    onClick={() => onConnectAccount(chip.kind)}
-                    className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                    disabled={chip.disabled || blocked || channelBusyId !== null}
+                    onClick={() => {
+                      if (chip.connection) onToggleChannel(chip.connection);
+                    }}
+                    className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
                   >
-                    {t('bots.abilityWall.connectAccount')}
+                    {/* 「挂载 / 已挂载」是实现词,而且「已挂载」把一个动作说成了状态,
+                        用户看不出点下去会发生什么。定稿用的是「连接 / 断开」——两边都是
+                        这个按钮真会做的事。 */}
+                    {chip.connection && channelBusyId === chip.connection.id
+                      ? '…'
+                      : chip.mounted
+                        ? t('bots.channelDisconnect')
+                        : t('bots.channelConnect')}
                   </button>
-                ) : null
-              ) : (
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
+
+      {connectableChips.length > 0 ? (
+        <>
+          <p className="mt-5 text-11 text-[var(--text-tertiary)]">
+            {t('bots.abilityWall.connectableTitle')}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {connectableChips.map((chip) => {
+              /*
+                占位片只由 MOUNTABLE_BOT_CHANNEL_KINDS 生成,而 CONNECT_ROUTES 的
+                类型就是 `Record<MountableBotChannelKind, …>` —— 每个占位片都必有
+                入口,`connectPath === null` 结构上不可达。这里保留 null 判断只作为
+                类型守卫:将来有人往 MOUNTABLE 里加渠道却忘了配路由时,宁可不给这一
+                片,也不给一个点了没反应的东西。
+              */
+              if (botChannelConnectPath(chip.kind) === null) return null;
+              return (
                 <button
+                  key={chip.id}
                   type="button"
-                  disabled={chip.disabled || blocked || channelBusyId !== null}
-                  onClick={() => {
-                    if (chip.connection) onToggleChannel(chip.connection);
-                  }}
-                  className="h-7 shrink-0 rounded-full border border-[var(--border-default)] px-2.5 text-10 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:cursor-default disabled:opacity-70"
+                  onClick={() => onConnectAccount(chip.kind)}
+                  /*
+                    看得见的只有渠道名 + 一个「＋」,读屏用户只会听到「Feishu 按钮」,
+                    不知道按下去会发生什么。可访问名补上动作,并且**包含**那串可见
+                    文字(WCAG 2.5.3 Label in Name),语音操作说「点 Feishu」仍然命中。
+                  */
+                  aria-label={`${t('bots.abilityWall.connectAccount')} · ${botChannelDisplayName(chip.kind)}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-[var(--border-default)] px-3 py-1.5 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 >
-                  {/* 「挂载 / 已挂载」是实现词,而且「已挂载」把一个动作说成了状态,
-                      用户看不出点下去会发生什么。定稿用的是「连接 / 断开」——两边都是
-                      这个按钮真会做的事。 */}
-                  {chip.connection && channelBusyId === chip.connection.id
-                    ? '…'
-                    : chip.mounted
-                      ? t('bots.channelDisconnect')
-                      : t('bots.channelConnect')}
+                  <Plus size={12} className="shrink-0" aria-hidden />
+                  {botChannelDisplayName(chip.kind)}
                 </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <p className="mt-3 text-11 leading-4 text-[var(--text-tertiary)]">
-        {t('bots.abilityWall.footnote')}
-      </p>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

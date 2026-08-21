@@ -42,6 +42,7 @@ import {
   type AutomationSubmission,
 } from './automationForm';
 import { BotAvatar } from './BotAvatar';
+import { BotSettingsBlockHeading, BOT_SETTINGS_BLOCK_CLASS } from './BotSettingsBlock';
 import { useBotProfiles, type BotProfile } from './botStore';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
@@ -875,41 +876,42 @@ export function BotAutomationSettings({
   }, [bot.id, load]);
 
   return (
-    <section className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-14 font-medium text-[var(--text-primary)]">
-            {/* 主路径上这一块叫「TA 的日程」,不叫「伙伴自动化」——它跟「TA 是谁 /
-                TA 会的 / TA 懂的」是同一排的第四块,得说同一种话。「自动化」「Routine」
-                这类实现词留在高级里。 */}
-            <CalendarClock size={16} />
-            {t('bots.settingsBlocks.schedule')}
-          </div>
-          <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-            {t('bots.settingsBlocks.scheduleDescription')}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
-            aria-label={t('bots.automations.refresh')}
-          >
-            <RefreshCcw size={14} className={loading ? 'animate-spin motion-reduce:animate-none' : undefined} />
-          </button>
-          {canCreate ? (
+    <section className={BOT_SETTINGS_BLOCK_CLASS}>
+      {/* 主路径上这一块叫「TA 的日程」,不叫「伙伴自动化」——它跟「TA 是谁 /
+          TA 会的 / TA 懂的」是同一排的一块,得说同一种话。「自动化」「Routine」
+          这类实现词留在高级里。 */}
+      <BotSettingsBlockHeading
+        icon={CalendarClock}
+        title={t('bots.settingsBlocks.schedule')}
+        /* 「到点自己干,不用你在」只在还没有日程时说 —— 已经排了活的人不需要再被
+           讲一遍这块是干什么的。空态本身也会解释,所以这句一旦有内容就撤掉。 */
+        hint={visibleAutomations.length === 0 ? t('bots.settingsBlocks.scheduleDescription') : undefined}
+        action={
+          <>
             <button
               type="button"
-              onClick={() => setDraft((current) => (current ? null : emptyAutomationFormValue()))}
-              className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--accent-cta-bg)] px-4 text-12 font-medium text-[var(--accent-pure-cta-fg)]"
+              onClick={() => void load()}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)]"
+              aria-label={t('bots.automations.refresh')}
             >
-              <Plus size={13} />
-              {t('bots.automations.newRoutine')}
+              <RefreshCcw
+                size={14}
+                className={loading ? 'animate-spin motion-reduce:animate-none' : undefined}
+              />
             </button>
-          ) : null}
-        </div>
-      </div>
+            {canCreate ? (
+              <button
+                type="button"
+                onClick={() => setDraft((current) => (current ? null : emptyAutomationFormValue()))}
+                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--accent-cta-bg)] px-4 text-12 font-medium text-[var(--accent-pure-cta-fg)]"
+              >
+                <Plus size={13} />
+                {t('bots.automations.newRoutine')}
+              </button>
+            ) : null}
+          </>
+        }
+      />
 
       {!trusted ? (
         <p className="mt-4 rounded-xl bg-[var(--warning-bg-soft)] px-3 py-3 text-12 text-[var(--warning-fg)]">

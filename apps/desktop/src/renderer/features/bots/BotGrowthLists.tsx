@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import { BookMarked, ChevronDown, ChevronRight, GraduationCap, Trash2 } from 'lucide-react';
 import { useBotTranslation } from './botPronounContext';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { cn } from '@/lib/utils';
 import type { MemoryRecord } from '@cindy/maker-core';
+
+import { BotSettingsBlockHeading, BOT_SETTINGS_BLOCK_CLASS } from './BotSettingsBlock';
 
 import { artifactTimeLabel } from './botArtifactPresentation';
 import { partitionBotMemoryRecords } from './botGrowth';
@@ -323,70 +326,93 @@ export function BotGrowthLists({
   };
 
   // 高亮是"从尾注跳进来"的落点提示:加一圈焦点色描边,不改配色也不加阴影。
-  const highlightRing = (id: BotSettingsHighlightId): string =>
-    highlight === id ? ' rounded-xl ring-2 ring-[var(--focus-ring-soft)]' : '';
+  // 圆角由区块外壳自己带,这里只加描边 —— 两边都写 rounded 会在 cn() 里打架。
+  const highlightRing = (id: BotSettingsHighlightId): string | false =>
+    highlight === id && 'ring-2 ring-[var(--focus-ring-soft)]';
 
+  /*
+    两个列表各自成为页面上的一个区块,而不是挤在「TA 是谁」那张卡的下半截。
+
+    原来「TA 是谁」一张卡里装了六件事(头像名字 / 性格 / 背景设定 / 记得的 /
+    学会的),而隔壁「TA 懂的」整张卡只有一个按钮 —— 卡片规格一样重,信息量差六倍,
+    页面读起来就是上面一坨、下面空荡。现在每张卡只讲一件事,四块变六块但每块都
+    更短,而且「TA 记得的 / TA 学会的」跟「TA 会的 / TA 懂的」本来就是同一个句式,
+    并进这一排是它们本来该在的位置。
+
+    两份数据仍在同一个组件里拉、删除后一起刷新(分成两个组件会出现「删了一条,
+    另一个列表还是旧的」),只是渲染成两个并列的外壳。
+  */
   return (
     <>
-      <div data-testid="bot-memory-list" className={`-m-1 p-1${highlightRing('memory')}`}>
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-12 font-medium text-[var(--text-primary)]">
-            {t('bots.memoryList.title')}
-          </p>
-          {records && records.length > 0 ? (
-            <button
-              type="button"
-              disabled={clearing}
-              onClick={() => void clearAll()}
-              className="text-11 text-[var(--text-tertiary)] hover:text-[var(--text-danger)] disabled:opacity-50"
-            >
-              {clearing ? t('bots.memoryList.clearing') : t('bots.memoryList.clearAll')}
-            </button>
-          ) : null}
-        </div>
-        {error ? <p className="mt-2 text-11 text-[var(--text-danger)]">{error}</p> : null}
+      <section
+        data-testid="bot-memory-list"
+        className={cn(BOT_SETTINGS_BLOCK_CLASS, highlightRing('memory'))}
+      >
+        <BotSettingsBlockHeading
+          icon={BookMarked}
+          title={t('bots.memoryList.title')}
+          /* 这句回答的是「这些东西是谁放进来的、我能不能动」——列表本身答不了,
+             所以它常驻。但它跟着标题走,不再自己占一整行。 */
+          hint={
+            hasSeedMemory ? t('bots.memoryList.footnoteWithSeed') : t('bots.memoryList.footnote')
+          }
+          action={
+            records && records.length > 0 ? (
+              <button
+                type="button"
+                disabled={clearing}
+                onClick={() => void clearAll()}
+                className="text-11 text-[var(--text-tertiary)] hover:text-[var(--text-danger)] disabled:opacity-50"
+              >
+                {clearing ? t('bots.memoryList.clearing') : t('bots.memoryList.clearAll')}
+              </button>
+            ) : null
+          }
+        />
+        {error ? <p className="mt-3 text-11 text-[var(--text-danger)]">{error}</p> : null}
         {records === null ? null : memories.length === 0 ? (
-          <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
+          <p className="mt-3 text-11 leading-4 text-[var(--text-tertiary)]">
             {t('bots.memoryList.empty')}
           </p>
         ) : (
-          <ul className="mt-2 flex flex-col gap-1.5">
+          <ul className="mt-3 flex flex-col gap-1.5">
             {memories.map((record) => renderRow(record, false))}
           </ul>
         )}
-        {/* 脚注回答的是「这些东西是谁放进来的、我能不能动」——列表本身答不了。 */}
-        <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
-          {hasSeedMemory ? t('bots.memoryList.footnoteWithSeed') : t('bots.memoryList.footnote')}
-        </p>
         {canSeedBack ? (
           <button
             type="button"
             disabled={seeding}
             onClick={() => void seedBack()}
-            className="mt-1.5 rounded-lg text-11 text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)] disabled:opacity-50"
+            className="mt-2 rounded-lg text-11 text-[var(--text-secondary)] underline underline-offset-2 hover:text-[var(--text-primary)] disabled:opacity-50"
           >
             {seeding ? t('bots.memoryList.seedingBack') : t('bots.memoryList.seedBack')}
           </button>
         ) : null}
-      </div>
+      </section>
 
       {/* 「TA 学会的」与「TA 记得的」并列:记忆是你说过的,本事是 TA 做出来的。 */}
-      <div
+      <section
         data-testid="bot-learned-list"
-        className={`-m-1 mt-5 border-t border-[var(--border-default)] p-1 pt-4${highlightRing('learned')}`}
+        className={cn(BOT_SETTINGS_BLOCK_CLASS, highlightRing('learned'))}
       >
-        <p className="text-12 font-medium text-[var(--text-primary)]">{t('bots.learned.title')}</p>
+        {/*
+          空的时候不给 hint:原来的脚注「TA 会从做过的事里自己长本事,用得越多越
+          顺手」和空态那句「还没长出什么本事——多让 TA 做几件事」说的是同一件事,
+          留一句就够。有内容时更不需要 —— 用户看着列表,不必再被讲一遍它是什么。
+        */}
+        <BotSettingsBlockHeading icon={GraduationCap} title={t('bots.learned.title')} />
         {/*
           两组都空才说「还没长出什么本事」。技能已经有了、只是没有笔记(反之亦然)
           时说这句就是对着一个非空列表讲假话。
         */}
         {skills === null || records === null ? null : skills.length === 0 && learned.length === 0 ? (
-          <p className="mt-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
+          <p className="mt-3 text-11 leading-4 text-[var(--text-tertiary)]">
             {t('bots.learned.empty')}
           </p>
         ) : null}
         {skills && skills.length > 0 ? (
-          <ul data-testid="bot-skill-list" className="mt-2 flex flex-col gap-1.5">
+          <ul data-testid="bot-skill-list" className="mt-3 flex flex-col gap-1.5">
             {skills.map(renderSkillRow)}
           </ul>
         ) : null}
@@ -396,17 +422,14 @@ export function BotGrowthLists({
           不然用户会以为每一条都是「能用的本事」。
         */}
         {records && learned.length > 0 ? (
-          <div data-testid="bot-learned-notes" className="mt-3">
+          <div data-testid="bot-learned-notes" className="mt-4">
             <p className="text-11 text-[var(--text-tertiary)]">{t('bots.learned.notesTitle')}</p>
             <ul className="mt-1.5 flex flex-col gap-1.5">
               {learned.map((record) => renderRow(record, true))}
             </ul>
           </div>
         ) : null}
-        <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
-          {t('bots.learned.footnote')}
-        </p>
-      </div>
+      </section>
     </>
   );
 }

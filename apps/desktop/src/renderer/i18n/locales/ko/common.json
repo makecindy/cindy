@@ -6962,8 +6962,7 @@
       "deleteDescription": "\"{{title}}\"을(를) 삭제할까요? 다음 작업부터는 사용하지 않아요.",
       "deleteConfirm": "삭제",
       "deleteAria": "\"{{title}}\" 삭제",
-      "loadingBody": "여는 중…",
-      "footnote": "해온 일에서 스스로 실력을 쌓아요. 많이 쓸수록 손에 익습니다."
+      "loadingBody": "여는 중…"
     },
     "growth": {
       "rememberedOne": "기억했어요: {{title}}",
@@ -6986,13 +6985,12 @@
       },
       "connectAccount": "계정 연결",
       "imBlocked": "한 팀원은 IM을 하나만 연결할 수 있어요 — 먼저 {{channel}} 연결을 끊어주세요",
-      "footnote": "연결한 뒤에는 따로 설정할 게 없어요 — 쓰는 법은 스스로 압니다."
+      "connectedTitle": "연결됨"
     },
     "folders": {
       "addButton": "+ 폴더 추가하기",
       "adding": "추가하는 중…",
-      "remove": "제거",
-      "footnote": "폴더 안의 내용을 스스로 읽고, 대화에서 바로 씁니다."
+      "remove": "제거"
     },
     "advancedIdentity": {
       "title": "설명과 배경 정보"

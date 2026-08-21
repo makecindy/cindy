@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { useBotTranslation } from './botPronounContext';
 
+import { cn } from '@/lib/utils';
+
 import { archiveBotProjectBinding, upsertBotProjectBinding, type BotProjectBinding } from './botStore';
 
 function folderName(workingDir: string): string {
@@ -99,14 +101,21 @@ export function BotFolderCards({
         type="button"
         disabled={busy !== null}
         onClick={() => void addFolder()}
-        className="mt-2 inline-flex h-9 items-center gap-2 rounded-xl border border-dashed border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+        /* 上边距只在它下面真的压着文件夹卡片时才有意义。一个都没有时这 8px 是
+           凭空多出来的一道缝,空态卡看起来就比内容还高。 */
+        className={cn(
+          'inline-flex h-9 items-center gap-2 rounded-xl border border-dashed border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50',
+          active.length > 0 && 'mt-2',
+        )}
       >
         <FolderOpen size={14} />
         {busy === 'add' ? t('bots.folders.adding') : t('bots.folders.addButton')}
       </button>
-      <p className="mt-2 text-11 leading-4 text-[var(--text-tertiary)]">
-        {t('bots.folders.footnote')}
-      </p>
+      {/*
+        原来这里还有一句脚注「TA 会自己读文件夹里的东西,对话时直接用」——它和区块
+        标题旁那句「给 TA 一个文件夹,TA 就懂你的项目」是同一件事说两遍,中间只夹了
+        一个按钮。同一块里两句解释包一个控件,正是整页「密密麻麻」的来源,已删。
+      */}
       {error ? <p className="mt-2 text-11 text-[var(--text-danger)]">{error}</p> : null}
     </div>
   );

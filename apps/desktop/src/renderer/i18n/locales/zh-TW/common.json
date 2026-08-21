@@ -6962,8 +6962,7 @@
       "deleteDescription": "刪除「{{title}}」？從下一次任務起{{pronoun}}就不會再用它了。",
       "deleteConfirm": "刪除",
       "deleteAria": "刪除「{{title}}」",
-      "loadingBody": "開啟中…",
-      "footnote": "{{pronoun}}會從做過的事裡自己長本事，用得越多越順手。"
+      "loadingBody": "開啟中…"
     },
     "growth": {
       "rememberedOne": "記住了：{{title}}",
@@ -6986,13 +6985,12 @@
       },
       "connectAccount": "連接帳號",
       "imBlocked": "一個夥伴只能連一個 IM——先斷開 {{channel}}",
-      "footnote": "連上以後不用再設定什麼——{{pronoun}}自己知道怎麼用。"
+      "connectedTitle": "已連上"
     },
     "folders": {
       "addButton": "＋ 給{{pronoun}}一個資料夾",
       "adding": "新增中…",
-      "remove": "移除",
-      "footnote": "{{pronoun}}會自己讀資料夾裡的東西，對話時直接用。"
+      "remove": "移除"
     },
     "advancedIdentity": {
       "title": "描述與背景"

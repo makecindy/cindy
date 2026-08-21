@@ -6964,8 +6964,7 @@
       "deleteDescription": "Delete \"{{title}}\"? They will stop using it from the next task on.",
       "deleteConfirm": "Delete",
       "deleteAria": "Delete \"{{title}}\"",
-      "loadingBody": "Opening…",
-      "footnote": "They pick up know-how from the things they do — the more you use them, the better they get."
+      "loadingBody": "Opening…"
     },
     "growth": {
       "rememberedOne": "Remembered: {{title}}",
@@ -6988,13 +6987,12 @@
       },
       "connectAccount": "Connect an account",
       "imBlocked": "A teammate can only connect to one IM — disconnect {{channel}} first",
-      "footnote": "Once connected there is nothing else to set up — they know how to use it."
+      "connectedTitle": "Connected"
     },
     "folders": {
       "addButton": "+ Give them a folder",
       "adding": "Adding…",
-      "remove": "Remove",
-      "footnote": "They read what is in the folder on their own and use it right in the chat."
+      "remove": "Remove"
     },
     "advancedIdentity": {
       "title": "Description & background"
