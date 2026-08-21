@@ -2456,6 +2456,21 @@ export function isSafeGhostRelativePath(p: unknown): p is string {
   return segments.every((seg) => GHOST_PATH_SEGMENT_RE.test(seg) && seg !== '.' && seg !== '..');
 }
 
+const WINDOWS_RESERVED_GHOST_PATH_SEGMENT_RE =
+  /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
+/**
+ * New cross-platform manifest paths must also be creatable on Windows.
+ * Keep the legacy helper above unchanged so an upgrade does not invalidate
+ * already-installed plugins that were previously accepted on macOS.
+ */
+function isPortableGhostRelativePath(p: unknown): p is string {
+  return (
+    isSafeGhostRelativePath(p) &&
+    p.split('/').every((segment) => !WINDOWS_RESERVED_GHOST_PATH_SEGMENT_RE.test(segment))
+  );
+}
+
 /**
  * 意识 webview 允许附加的入口 pathname 白名单(attach 闸的可测真身):
  * 面板 panel.html、主视图 mainView.html 与设置区 settingsHtml，声明哪个放行哪个；
@@ -3450,7 +3465,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
         reason: `mainView.icon 必须是以下系统图标之一:${GHOST_MAIN_VIEW_ICONS.join(' / ')}`,
       };
     }
-    if (!isSafeGhostRelativePath(raw.mainView.html)) {
+    if (!isPortableGhostRelativePath(raw.mainView.html)) {
       return {
         ok: false,
         reason: 'mainView.html 必填，且必须是安装目录内的安全相对路径',

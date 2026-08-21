@@ -1670,6 +1670,14 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         ...goodChipManifest(),
         minCindyVersion: '1.2.3',
         slots: ['panel', 'main-view'],
+        mainView: { html: 'assets/AUX.html' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        minCindyVersion: '1.2.3',
+        slots: ['panel', 'main-view'],
         mainView: { html: 'main-view.html', position: 'left' },
       }),
     ).toMatchObject({ ok: false, reason: expect.stringContaining('不允许的字段') });
