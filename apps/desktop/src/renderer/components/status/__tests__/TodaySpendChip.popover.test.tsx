@@ -480,6 +480,18 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(within(card).getByText('本任务 SDK 估算（非供应商账单）$0.50')).toBeTruthy();
   });
 
+  it('reference-price plus SDK estimate uses the regular estimate label', () => {
+    mocks.sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney: usdMoney(5, 'value-estimate', ['reference-price', 'sdk-estimate']),
+      totalMoney: usdMoney(5, 'value-estimate', ['reference-price', 'sdk-estimate']),
+    };
+
+    renderClaudeSubscriptionChip();
+    const { card } = openCardFromHover();
+    expect(within(card).queryByText('本任务 SDK 估算（非供应商账单）$5.00')).toBeNull();
+  });
+
   it('混合实际费用与 SDK 估算时不把整笔合计标成 SDK 估算', () => {
     mocks.sessionUsage = {
       actualMoney: usdMoney(0.25),

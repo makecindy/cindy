@@ -15,6 +15,8 @@ export interface MobileMessageBillingProjection {
   presentation: MobileSdkCostPresentation;
   showSdkEstimate: boolean;
   entries: MobileEstimatedSessionValueSnapshot['entries'];
+  /** Older hosts can accept the channel but omit authoritative exclusion fields. */
+  legacyHost?: boolean;
 }
 
 const BUILTIN_PROVIDER_IDS = new Set([
@@ -108,10 +110,16 @@ export function billingSessionForRevision(
     : withoutSessionMoney(sessionAtSend);
 }
 
+export function hasAuthoritativeBillingProjection(
+  snapshot: MobileEstimatedSessionValueSnapshot,
+): boolean {
+  return snapshot.projectionVersion === 1;
+}
 export function projectSessionBilling(
   session: RemoteSession,
   snapshot: MobileEstimatedSessionValueSnapshot,
 ): RemoteSession {
+  if (!hasAuthoritativeBillingProjection(snapshot)) return withoutSessionMoney(session);
   const persistedMoney =
     normalizeRemoteMoney(session.totalMoney) ?? legacyUsdMoney(session.totalCostUsd);
   const excludedActualMoney = addCompatibleRemoteMoney(

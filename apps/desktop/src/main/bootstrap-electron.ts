@@ -392,6 +392,7 @@ import {
   pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
+import * as broadcastTap from './device-link/broadcast-tap.js';
 import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
@@ -3786,6 +3787,19 @@ const registerIpcHandlers = () => {
     return gitSafetyWire();
   });
 
+  const broadcastCustomProviderBillingChanged = (): void => {
+    const payload = customProviderBillingWire();
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(MAKER_PUSH.CUSTOM_PROVIDER_BILLING_CHANGED, payload);
+      } catch {
+        // window torn down mid-broadcast
+      }
+    }
+    broadcastTap.tapWindowBroadcast(MAKER_PUSH.CUSTOM_PROVIDER_BILLING_CHANGED, payload);
+  };
+
   // Custom provider billing: default off records token usage only, hides SDK cost.
   ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_GET, async (event) => {
     assertTrustedAppRendererEvent(event);
@@ -3797,11 +3811,13 @@ const registerIpcHandlers = () => {
       throwIpcError('INVALID_PARAMS', 'custom provider billing enabled required (boolean)');
     }
     writeCustomProviderShowSdkCostEnabled(enabled);
+    broadcastCustomProviderBillingChanged();
     return customProviderBillingWire();
   });
   ipcMain.handle(MAKER_IPC_INVOKE.CUSTOM_PROVIDER_BILLING_RESET, async (event) => {
     assertTrustedAppRendererEvent(event);
     resetCustomProviderBillingSettings();
+    broadcastCustomProviderBillingChanged();
     return customProviderBillingWire();
   });
 

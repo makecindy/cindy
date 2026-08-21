@@ -4472,6 +4472,7 @@ interface ElectronAPI {
         presentation?: import('../shared/regionalMoney').SdkCostPresentation,
         showSdkEstimate?: boolean,
       ) => Promise<{
+        projectionVersion?: number;
         totalValueMoney?: import('../shared/regionalMoney').RegionalMoney | null;
         totalValueUsd?: number;
         entries: Array<{
@@ -5662,6 +5663,9 @@ interface ElectronAPI {
       isCustomized: boolean;
       defaultShowSdkCostForCustomProviders: boolean;
     }>;
+    onCustomProviderBillingChanged?: (
+      callback: (payload: { deviceId?: string }) => void,
+    ) => () => void;
 
     /**
      * 智能通讯录(maker-contacts)— 设置页管理 UI 数据通道。

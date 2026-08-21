@@ -252,8 +252,11 @@ export function SessionCard({
   const cardPrRefs = usePrRefsForSession(session.id);
   const cardInfoPrRef = taskInfoFields.includes('pr') ? cardPrRefs[0] : undefined;
   const cardInfoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));
-  const costPresentation = useSessionCustomProviderCostPresentation(session.providerId);
-  const showSdkEstimate = useShowCustomProviderSdkEstimate();
+  const costPresentation = useSessionCustomProviderCostPresentation(
+    session.providerId,
+    session.deviceLinkDeviceId,
+  );
+  const showSdkEstimate = useShowCustomProviderSdkEstimate(session.deviceLinkDeviceId);
   // 传 hasPrRef / hasWorktree 让它们参与「按勾选顺序」排列。
   const cardInfoPieces = useProjectedSessionInfoPieces(
     session,

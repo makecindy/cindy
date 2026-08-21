@@ -90,6 +90,7 @@ describe('mobile custom-provider billing projection', () => {
         },
       }),
       {
+        projectionVersion: 1,
         totalValueMoney: {
           amount: 0.07,
           currency: 'USD',
@@ -119,6 +120,7 @@ describe('mobile custom-provider billing projection', () => {
 
   it('shows an SDK estimate when the host opt-in includes it in the projection', () => {
     const projected = projectSessionBilling(session(), {
+      projectionVersion: 1,
       totalValueMoney: {
         amount: 0.42,
         currency: 'USD',
@@ -135,6 +137,26 @@ describe('mobile custom-provider billing projection', () => {
       estimateReasons: ['sdk-estimate'],
     });
     expect(projected.totalCostUsd).toBeCloseTo(0.42, 10);
+  });
+
+  it('treats a legacy host projection as token-only', () => {
+    const projected = projectSessionBilling(
+      session({
+        totalCostUsd: 0.42,
+        totalMoney: {
+          amount: 0.42,
+          currency: 'USD',
+          approximate: false,
+          kind: 'actual-cost',
+        },
+        totalTokenUsage: 9000,
+      }),
+      { entries: [], totalValueUsd: 0 },
+    );
+
+    expect(projected.totalCostUsd).toBe(0);
+    expect(projected.totalMoney).toBeUndefined();
+    expect(projected.totalTokenUsage).toBe(9000);
   });
 
   it('revisions persisted money and assistant billing metadata without message bodies', () => {

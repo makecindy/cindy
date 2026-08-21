@@ -35,6 +35,7 @@ export async function estimatedSessionValue(
   presentation: SdkCostPresentation = 'regular',
   showSdkEstimate: boolean = presentation === 'estimate',
 ): Promise<{
+  projectionVersion?: number;
   totalValueMoney?: RegionalMoney | null;
   totalValueUsd?: number;
   entries: Array<{

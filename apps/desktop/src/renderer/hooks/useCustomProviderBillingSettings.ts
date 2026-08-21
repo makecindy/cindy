@@ -21,9 +21,7 @@ export function useCustomProviderBillingSettings(deviceId?: string | null): {
   const refresh = useCallback(async (isCancelled: () => boolean = () => false) => {
     const settings = await customProviderBillingGetFor(deviceId);
     if (isCancelled()) return;
-    if (!deviceId) {
-      setCustomProviderShowSdkCost(settings.showSdkCostForCustomProviders);
-    }
+    if (!deviceId) setCustomProviderShowSdkCost(settings.showSdkCostForCustomProviders);
     setEnabledState(settings.showSdkCostForCustomProviders);
     setIsCustomized(settings.isCustomized);
   }, [deviceId]);
@@ -44,23 +42,43 @@ export function useCustomProviderBillingSettings(deviceId?: string | null): {
 
   useEffect(() => {
     let cancelled = false;
-    void refresh(() => cancelled).catch(() => {
+    const failClosed = () => {
       if (!cancelled && deviceId) {
         setEnabledState(false);
         setIsCustomized(false);
       }
+    };
+    void refresh(() => cancelled).catch(failClosed);
+
+    const localUnsubscribe = deviceId
+      ? undefined
+      : subscribeCustomProviderShowSdkCost((next) => {
+          if (!cancelled) setEnabledState(next);
+        });
+    const pushUnsubscribe = window.electronAPI.maker.onCustomProviderBillingChanged?.(
+      (payload: { deviceId?: string }) => {
+        if (deviceId && payload?.deviceId !== deviceId) return;
+        if (!deviceId && payload?.deviceId) return;
+        void refresh(() => cancelled).catch(failClosed);
+      },
+    );
+
+    const remotePushUnsubscribe = window.electronAPI.deviceLink?.onRemotePush?.((push) => {
+      if (
+        !deviceId ||
+        push.deviceId !== deviceId ||
+        push.channel !== 'maker:custom-provider-billing:changed'
+      ) {
+        return;
+      }
+      void refresh(() => cancelled).catch(failClosed);
     });
-    if (deviceId) {
-      return () => {
-        cancelled = true;
-      };
-    }
-    const unsubscribe = subscribeCustomProviderShowSdkCost((next) => {
-      if (!cancelled) setEnabledState(next);
-    });
+
     return () => {
       cancelled = true;
-      unsubscribe();
+      localUnsubscribe?.();
+      pushUnsubscribe?.();
+      remotePushUnsubscribe?.();
     };
   }, [deviceId, refresh]);
 

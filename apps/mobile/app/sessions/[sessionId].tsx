@@ -2281,13 +2281,12 @@ export default function SessionScreen() {
     ),
     [composerDeviceProviders.providers],
   );
-  const [sessionBillingRefreshKey, setSessionBillingRefreshKey] = useState(0);
+
   const sessionBillingRequestKey = [
     deviceId,
     connectionEpoch,
     sessionBillingRevision,
     sessionBillingProviderRevision,
-    sessionBillingRefreshKey,
   ].join('\n');
   const [sessionBillingProjection, setSessionBillingProjection] = useState<{
     entries: MobileMessageBillingProjection['entries'];

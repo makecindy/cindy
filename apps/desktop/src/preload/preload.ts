@@ -636,6 +636,7 @@ const fanOutMakerAuthStateChanged = createIpcFanOut('maker:auth:state-changed');
 const fanOutMakerAuthLoginProgress = createIpcFanOut('maker:auth:login-progress');
 // 自定义供应商增删改广播 → 各 useProviders 实例 refetch（设置页列表 + 对话模型选择器 live 刷新）。
 const fanOutMakerProvidersChanged = createIpcFanOut('maker:provider:changed');
+const fanOutMakerProviderBillingChanged = createIpcFanOut('maker:custom-provider-billing:changed');
 const fanOutMakerLocalModelStatus = createIpcFanOut('maker:local-model:status');
 const fanOutMakerLocalModelPullProgress = createIpcFanOut('maker:local-model:pull-progress');
 const fanOutMakerLocalModelInstallProgress = createIpcFanOut('maker:local-model:install-progress');
@@ -6161,6 +6162,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       isCustomized: boolean;
       defaultShowSdkCostForCustomProviders: boolean;
     }> => ipcRenderer.invoke('maker:custom-provider-billing:reset'),
+    onCustomProviderBillingChanged: fanOutMakerProviderBillingChanged,
 
     // 智能通讯录(maker-contacts)—— 设置页管理 UI 的数据通道。
     // DTO 形状即 @cindy/maker-core contacts/types.ts(renderer 直接 type-import),

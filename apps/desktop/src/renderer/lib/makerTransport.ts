@@ -469,6 +469,7 @@ export function estimatedSessionValueFor(
   presentation: import('../../shared/regionalMoney').SdkCostPresentation = 'regular',
   showSdkEstimate: boolean = presentation === 'estimate',
 ): Promise<{
+  projectionVersion?: number;
   totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
   totalValueUsd?: number;
   entries: Array<{
@@ -500,7 +501,8 @@ export interface EstimatedSessionValueSummary {
 
 function summaryFromEstimatedSessionValueSnapshot(
   snapshot: {
-    totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
+    projectionVersion?: number;
+  totalValueMoney?: import('../../shared/regionalMoney').RegionalMoney | null;
     totalValueUsd?: number;
     entries?: Array<{
       excludedActualMoney?: import('../../shared/regionalMoney').RegionalMoney;

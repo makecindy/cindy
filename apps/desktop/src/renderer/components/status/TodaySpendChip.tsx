@@ -733,8 +733,11 @@ interface LatestTurnUsageSummary {
 }
 
 function isSdkEstimateMoney(money: RegionalMoney | null | undefined): boolean {
+  const reasons = money?.estimateReasons;
   return money?.kind === 'value-estimate'
-    && money.estimateReasons?.includes('sdk-estimate') === true;
+    && reasons?.includes('sdk-estimate') === true
+    && reasons.includes('reference-price') !== true
+    && reasons.includes('subscription-value') !== true;
 }
 
 function formatTurnUsagePercent(value: number | null): string | null {

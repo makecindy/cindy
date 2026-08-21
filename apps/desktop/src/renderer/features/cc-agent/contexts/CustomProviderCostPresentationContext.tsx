@@ -10,14 +10,10 @@ import {
 
 interface CustomProviderCostPresentationContextValue {
   providers: readonly Pick<ProviderView, 'id' | 'source'>[];
-  showSdkEstimate: boolean;
 }
 
 const CustomProviderCostPresentationContext =
-  createContext<CustomProviderCostPresentationContextValue>({
-    providers: [],
-    showSdkEstimate: false,
-  });
+  createContext<CustomProviderCostPresentationContextValue>({ providers: [] });
 
 export function CustomProviderCostPresentationProvider({
   providers,
@@ -26,14 +22,7 @@ export function CustomProviderCostPresentationProvider({
   providers: readonly Pick<ProviderView, 'id' | 'source'>[];
   children: ReactNode;
 }) {
-  const { showSdkCostForCustomProviders } = useCustomProviderBillingSettings();
-  const value = useMemo(
-    () => ({
-      providers,
-      showSdkEstimate: showSdkCostForCustomProviders,
-    }),
-    [providers, showSdkCostForCustomProviders],
-  );
+  const value = useMemo(() => ({ providers }), [providers]);
   return (
     <CustomProviderCostPresentationContext.Provider value={value}>
       {children}
@@ -43,11 +32,13 @@ export function CustomProviderCostPresentationProvider({
 
 export function useSessionCustomProviderCostPresentation(
   providerId: string | null | undefined,
+  deviceId?: string | null,
 ): CustomProviderCostPresentation {
-  const { providers, showSdkEstimate } = useContext(CustomProviderCostPresentationContext);
-  return resolveCustomProviderCostPresentation(providerId, providers, showSdkEstimate);
+  const { providers } = useContext(CustomProviderCostPresentationContext);
+  const { showSdkCostForCustomProviders } = useCustomProviderBillingSettings(deviceId);
+  return resolveCustomProviderCostPresentation(providerId, providers, showSdkCostForCustomProviders);
 }
 
-export function useShowCustomProviderSdkEstimate(): boolean {
-  return useContext(CustomProviderCostPresentationContext).showSdkEstimate;
+export function useShowCustomProviderSdkEstimate(deviceId?: string | null): boolean {
+  return useCustomProviderBillingSettings(deviceId).showSdkCostForCustomProviders;
 }

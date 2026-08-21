@@ -160,6 +160,7 @@ export interface MessageAroundOptions {
 }
 
 export interface MobileEstimatedSessionValueSnapshot {
+  projectionVersion?: number;
   totalValueMoney?: import('@/session/remoteMoney').RemoteMoney | null;
   totalValueUsd?: number;
   entries: Array<{

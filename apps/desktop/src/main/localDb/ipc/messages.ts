@@ -40,6 +40,7 @@ import { resolveStaleCodexSubscriptionValueEstimate } from '../../../shared/code
 import { normalizeTurnUsageDetails } from '../../../shared/turnUsageDetails.js';
 import {
   projectSdkCostMoneyWithBreakdown,
+  resolveCustomProviderCostFlag,
   resolveTurnSdkCostPresentation,
 } from '../../../shared/customProviderBilling.js';
 import {
@@ -474,6 +475,7 @@ export function registerMessageIpc(): void {
         showSdkEstimate,
       );
       return {
+        projectionVersion: ESTIMATED_SESSION_VALUE_PROJECTION_VERSION,
         totalValueMoney: summarized.totalValueMoney,
         ...(summarized.totalValueUsd != null ? { totalValueUsd: summarized.totalValueUsd } : {}),
         entries: summarized.entries,
@@ -1691,6 +1693,8 @@ export interface EstimatedSessionValueSummary {
   totalValueUsd?: number;
 }
 
+export const ESTIMATED_SESSION_VALUE_PROJECTION_VERSION = 1;
+
 function parseEstimatedSessionValuePresentation(
   presentationValue: unknown,
   showSdkEstimateValue: unknown,
@@ -1858,10 +1862,23 @@ export function extractEstimatedSessionValueEntries(
     if (!rawMoney) continue;
 
     const turnUsageDetails = normalizeTurnUsageDetails(meta.turnUsageDetails);
+    const entryProviderFlag = resolveCustomProviderCostFlag(
+      meta.turnCostIsCustomProvider,
+      meta.turnCostProviderId,
+    );
+    const fallbackPresentation =
+      meta.turnCostIsCustomProvider === undefined && meta.turnCostProviderId !== undefined
+        ? resolveTurnSdkCostPresentation({
+            money: rawMoney,
+            isCustomProviderCost: entryProviderFlag,
+            fallback: presentation,
+            showSdkEstimate,
+          })
+        : presentation;
     const turnPresentation = resolveTurnSdkCostPresentation({
       money: rawMoney,
       isCustomProviderCost: meta.turnCostIsCustomProvider,
-      fallback: presentation,
+      fallback: fallbackPresentation,
       showSdkEstimate,
     });
     const projected = projectSdkCostMoneyWithBreakdown(

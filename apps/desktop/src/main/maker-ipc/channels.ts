@@ -810,6 +810,8 @@ export const MAKER_PUSH = {
   PLUGIN_SETUP_NAVIGATE: 'maker:plugin-setup:navigate',
   /** Agent 鉴权状态变化 (login/logout 完成时, 替代老 codex:auth:state-changed) */
   AUTH_STATE_CHANGED: 'maker:auth:state-changed',
+  /** Custom-provider SDK display preference changed on this host. */
+  CUSTOM_PROVIDER_BILLING_CHANGED: 'maker:custom-provider-billing:changed',
   /**
    * 自定义供应商增删改后广播（renderer 各 useProviders 实例 refetch → 设置页列表 + 对话
    * 模型选择器 live 刷新）。无 payload；收到即重拉 listProviders。

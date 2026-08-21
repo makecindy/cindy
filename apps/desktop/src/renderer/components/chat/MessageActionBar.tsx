@@ -388,7 +388,10 @@ export function MessageActionBar({
     ? userTurnCostIsEstimate
     : turnCostIsEstimate;
   const displayedCostIsSdkEstimate =
-    displayedMoney?.estimateReasons?.includes('sdk-estimate') === true;
+    displayedMoney?.kind === 'value-estimate' &&
+    displayedMoney.estimateReasons?.includes('sdk-estimate') === true &&
+    displayedMoney.estimateReasons?.includes('reference-price') !== true &&
+    displayedMoney.estimateReasons?.includes('subscription-value') !== true;
   const isUserTurnTotal = effectiveUserTurnMoney != null;
 
   // 费用 — 样式与 timeText 完全一致(12px + 同色 + 0.5px 光学修正)。
