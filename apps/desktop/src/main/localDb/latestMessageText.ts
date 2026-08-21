@@ -57,6 +57,8 @@ export interface RegenerateTitleMaterial {
 
 /** 同毫秒 tie-breaker:与 messages:list 一致,用 SQLite rowid 保持写入顺序。 */
 const messageRowid = sql<number>`rowid`;
+/** JOIN sessions 时必须限定表名,否则 SQLite 报 no such column: rowid。 */
+const joinedMessageRowid = sql<number>`"messages"."rowid"`;
 
 export interface LatestVisiblePreviewRow {
   clientId: string;
@@ -88,7 +90,7 @@ export async function latestVisiblePreviewRow(
         or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
       ),
     )
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .orderBy(desc(messages.createdAt), desc(joinedMessageRowid))
     .limit(1);
   return row ?? null;
 }

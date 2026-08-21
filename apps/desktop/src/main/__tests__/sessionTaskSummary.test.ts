@@ -292,7 +292,10 @@ describe('turn-done list preview refresh', () => {
     expect(latestSource).toContain(
       'or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt))',
     );
-    expect(latestSource).toContain('.orderBy(desc(messages.createdAt), desc(messageRowid))');
+    expect(latestSource).toContain('const joinedMessageRowid = sql<number>`"messages"."rowid"`;');
+    expect(latestSource).toContain(
+      '.orderBy(desc(messages.createdAt), desc(joinedMessageRowid))',
+    );
   });
 });
 
