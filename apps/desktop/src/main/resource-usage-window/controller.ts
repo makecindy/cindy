@@ -221,6 +221,12 @@ export class ResourceUsageWindowController {
     win.on('minimize', () => this.onNativeVisibilityChanged(win, false));
     win.on('enter-full-screen', () => this.onEnteredFullScreen(win));
     win.on('leave-full-screen', () => this.onLeftFullScreen(win));
+    // index.html 的 <title>Cindy</title> 会在每次导航发出 page-title-updated，
+    // 不拦截的话 Mission Control / 任务栏会把本地化标题盖回 Cindy。
+    win.webContents.on('page-title-updated', (event) => {
+      event.preventDefault();
+      this.applyNativeTitle(win);
+    });
     win.webContents.on('did-start-loading', () => this.onRendererReloadStarted(win));
     win.webContents.on(
       'did-fail-load',

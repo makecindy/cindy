@@ -368,6 +368,34 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.setTitle).toHaveBeenCalledWith('资源监视器');
   });
 
+  it('keeps the localized native title when the renderer reports Cindy as the page title', () => {
+    const windows: FakeWindow[] = [];
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: () => true,
+      resolveNativeTitle: (locale) =>
+        locale === 'zh-CN' ? '资源监视器' : 'Activity Monitor',
+    });
+    controller.prewarm();
+    windows[0]?.setTitle.mockClear();
+
+    const firstLoad = { preventDefault: vi.fn() };
+    windows[0]?.emitWebContents('page-title-updated', firstLoad, 'Cindy');
+    expect(firstLoad.preventDefault).toHaveBeenCalled();
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('Activity Monitor');
+
+    controller.setLocale('zh-CN');
+    windows[0]?.setTitle.mockClear();
+    const reload = { preventDefault: vi.fn() };
+    windows[0]?.emitWebContents('page-title-updated', reload, 'Cindy');
+    expect(reload.preventDefault).toHaveBeenCalled();
+    expect(windows[0]?.setTitle).toHaveBeenCalledWith('资源监视器');
+  });
+
   it('cancels a pending macOS fullscreen entry if the monitor is closed before enter-full-screen', () => {
     const windows: FakeWindow[] = [];
     const mainSender = { id: 100 } as WebContents;
