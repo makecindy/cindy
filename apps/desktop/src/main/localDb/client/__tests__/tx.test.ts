@@ -1910,7 +1910,7 @@ describe('db worker tx handlers', () => {
     });
   });
 
-  it('embedding.recordFailures can immediately terminate a deterministic failure', async () => {
+  it('embedding.recordFailures snoozes terminal (INVALID_MODEL) failures instead of permanent fail', async () => {
     await withClient(async (client) => {
       const rowid = await insertJob(client, { sourceId: 'invalid-model', attempts: 0 });
       const result = await client.tx('embedding.recordFailures', {
@@ -1920,16 +1920,18 @@ describe('db worker tx handlers', () => {
         terminal: true,
       });
 
-      expect(result).toEqual({ failCount: 1 });
+      // Snoozed jobs are not failed — they stay pending with scheduled_at pushed
+      // forward, so they can be re-probed after restart / model recovery.
+      expect(result).toEqual({ failCount: 0 });
       await expect(
         client.queryOne(
           'SELECT status, attempts, scheduled_at, last_error FROM embedding_jobs WHERE rowid = ?',
           [rowid],
         ),
       ).resolves.toEqual({
-        status: 'failed',
-        attempts: 1,
-        scheduled_at: 0,
+        status: 'pending',
+        attempts: 0,
+        scheduled_at: 10_000 + 30 * 60_000,
         last_error: '[INVALID_MODEL] unsupported model',
       });
     });

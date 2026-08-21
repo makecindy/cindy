@@ -8,8 +8,8 @@
  *   4. 剩下有 text 的按 model_id 再分组, 同组一次 client.embed()
  *   5. 成功 → 一个事务内: INSERT INTO {vec_table}(rowid, embedding) + UPDATE jobs.status='done'
  *   6. 失败 → attempts++, last_error, scheduled_at += 退避; attempts >= MAX → status='failed'
- *      只有错误体明确包含 model_not_found 信号 (由 mapStatusToCode 归类为 INVALID_MODEL)
- *      才是确定性配置错误:首批直接 failed,本进程内同模型后续批次不再请求 API。
+ *      INVALID_MODEL (确定性模型不可用) → snooze (保持 pending, 不增加 attempts,
+ *      推后 scheduled_at 30 分钟); 进程内 blockedModels 短路出网, 重启后重新探测。
  *
  * 重要约束 (better-sqlite3 同步事务 vs async embed):
  *   embed() 是 async, 不能在 db.transaction 内 await; 所以流程是
@@ -17,6 +17,7 @@
  *
  * 重试退避由 worker 侧 embedding.recordFailures tx 统一计算;
  *   attempts >= tx 内部上限时不再 schedule, 走 status='failed'。
+ *   terminal (INVALID_MODEL) 走 snooze 而非 failed, 避免网关误报导致永久索引缺失。
  *
  * 不做:
  *   - 不并发 (单 worker 串行, 简单可预期; 真到瓶颈再说)
