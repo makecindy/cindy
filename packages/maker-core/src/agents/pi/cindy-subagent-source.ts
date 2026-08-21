@@ -123,7 +123,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 const TOOL_NAME = 'subagent';
 const MARKER = '__cindySubagent';
@@ -696,6 +696,7 @@ const LAUNCH_FENCE_SUFFIX = '.json';
 // Pre-per-host name, still read so a half-upgraded pair of instances does not
 // leave a gap. Removable once no shipped build writes the shared name.
 const LEGACY_LAUNCH_FENCE_FILENAME = '.launch-fence.json';
+const DELETED_TOMBSTONE_DIR = 'pi-subagent-deleted';
 
 // Same tolerance the Host uses: ps rounds to the second and samples after the
 // clock is read.
@@ -738,6 +739,19 @@ function fenceNamesLiveHost(file, hostPid, hostStartTimeSec) {
     if (Math.abs(fence.hostStartTimeSec - hostStartTimeSec) > FENCE_START_TOLERANCE_SEC) return false;
   }
   return hostProcessIsAlive(hostPid);
+}
+
+function parentTaskDeletedTombstone(runRoot) {
+  const file = join(dirname(dirname(runRoot)), DELETED_TOMBSTONE_DIR, basename(runRoot));
+  try {
+    statSync(file);
+    return true;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return false;
+    // Unreadable is fail-closed: a concurrent write of the tombstone is the
+    // window this exists to close.
+    return true;
+  }
 }
 
 function launchFenceBlocksSpawn(runRoot, runtimeOwnerId) {
@@ -877,6 +891,9 @@ function launchDurableRun(binary, tasks, runtime, taskId, mode, context, display
     });
     if (launchFenceBlocksSpawn(runRoot, runtimeOwnerId)) {
       throw new Error('subagent: Cindy is restarting for an update; retry shortly.');
+    }
+    if (parentTaskDeletedTombstone(runRoot)) {
+      throw new Error('subagent: the parent task was deleted; this launch will not start.');
     }
     try { chmodSync(runDir, 0o700); } catch (err) { /* best effort on Windows */ }
     copyFileSync(sourcePermissionFile, permissionFile);

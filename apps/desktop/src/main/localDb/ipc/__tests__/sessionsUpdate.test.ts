@@ -32,6 +32,7 @@ const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
   summarizeSession: vi.fn(async () => undefined),
   stopAndRemovePiSubagentRuns: vi.fn(async (_root: string) => true),
+  writePiSubagentDeletedTombstone: vi.fn(async (_agentHome: string, _sessionId: string) => undefined),
   getMakerIfReady: vi.fn((): {
     isSessionAlive: (id: string) => boolean;
     closeSession: (id: string) => Promise<void>;
@@ -55,6 +56,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   piSubagentRunRoot: (agentHome: string, sessionId: string) =>
     path.join(agentHome, 'runtime', 'pi-subagent-runs', sessionId),
   stopAndRemovePiSubagentRuns: h.stopAndRemovePiSubagentRuns,
+  writePiSubagentDeletedTombstone: h.writePiSubagentDeletedTombstone,
 }));
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -181,6 +183,8 @@ beforeEach(() => {
   h.handlers.clear();
   h.stopAndRemovePiSubagentRuns.mockClear();
   h.stopAndRemovePiSubagentRuns.mockImplementation(async () => true);
+  h.writePiSubagentDeletedTombstone.mockClear();
+  h.writePiSubagentDeletedTombstone.mockImplementation(async () => undefined);
   h.getMakerIfReady.mockReset();
   h.getMakerIfReady.mockReturnValue(null);
   createDb();
@@ -214,6 +218,63 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalledWith(
       path.join(parentRoot, 'cc-local'),
     );
+    expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(
+      path.join(h.userData, 'pi-agent-home'),
+      'codex-local',
+    );
+    expect(h.writePiSubagentDeletedTombstone.mock.invocationCallOrder[0]!).toBeLessThan(
+      h.stopAndRemovePiSubagentRuns.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('writes the deleted-task tombstone even while this process never loaded the parent', async () => {
+    // Codex P1: another supported instance sharing userData can still have the
+    // parent PI alive. A local Maker miss is not proof that no launcher exists.
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-tombstone-'));
+    const agentHome = path.join(h.userData, 'pi-agent-home');
+    const parentRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs');
+    await mkdir(path.join(parentRoot, 'codex-local'), { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    h.getMakerIfReady.mockReturnValue(null);
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'codex-local');
+      expect(h.stopAndRemovePiSubagentRuns).toHaveBeenCalledTimes(1);
+    });
+    expect(h.writePiSubagentDeletedTombstone.mock.invocationCallOrder[0]!).toBeLessThan(
+      h.stopAndRemovePiSubagentRuns.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('raises the deleted-task tombstone while the local parent is still closing', async () => {
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-tombstone-live-'));
+    const agentHome = path.join(h.userData, 'pi-agent-home');
+    const runRoot = path.join(agentHome, 'runtime', 'pi-subagent-runs', 'codex-local');
+    await mkdir(runRoot, { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    h.getMakerIfReady.mockReturnValue({
+      isSessionAlive: () => true,
+      closeSession: vi.fn(async () => undefined),
+    });
+
+    await resumeDeletedPiSubagentCleanup();
+    await vi.waitFor(() => {
+      expect(h.writePiSubagentDeletedTombstone).toHaveBeenCalledWith(agentHome, 'codex-local');
+    });
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
+  });
+
+  it('does not run the conclusive scan when the deleted-task tombstone cannot be written', async () => {
+    h.userData = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-cleanup-tombstone-fail-'));
+    const parentRoot = path.join(h.userData, 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+    await mkdir(path.join(parentRoot, 'codex-local'), { recursive: true });
+    h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    h.writePiSubagentDeletedTombstone.mockRejectedValue(new Error('disk full'));
+
+    await resumeDeletedPiSubagentCleanup();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(h.stopAndRemovePiSubagentRuns).not.toHaveBeenCalled();
   });
 
   it('will not run the conclusive scan while the deleted task is still loaded', async () => {

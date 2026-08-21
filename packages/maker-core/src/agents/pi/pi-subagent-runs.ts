@@ -38,12 +38,49 @@ const RENAME_RETRY_STEP_MS = 25;
 const RENAME_RETRY_MAX_MS = 100;
 let controlWriteSequence = 0;
 
-export function piSubagentRunRoot(agentHome: string, sessionId: string): string {
+function containedParentSessionId(sessionId: string): string {
   const id = sessionId.trim();
   if (!id || id === '.' || id === '..' || /[\\/\0]/.test(id)) {
     throw new Error('unsafe PI Subagent parent session id');
   }
-  return path.join(agentHome, 'runtime', 'pi-subagent-runs', id);
+  return id;
+}
+
+export function piSubagentRunRoot(agentHome: string, sessionId: string): string {
+  return path.join(agentHome, 'runtime', 'pi-subagent-runs', containedParentSessionId(sessionId));
+}
+
+/**
+ * Cross-process tombstone for a *deleted parent task*.
+ *
+ * Lives next to the run root, never inside it: `stopAndRemovePiSubagentRuns`
+ * deletes the run directory, and a marker that vanished with it could not stop
+ * another instance sharing `userData` from recreating the root. The in-Pi
+ * launcher reads this after publishing `queued` and before spawn, using the
+ * same opposite-order protocol as the launch fence.
+ */
+export function piSubagentDeletedTombstonePath(agentHome: string, sessionId: string): string {
+  return path.join(agentHome, 'runtime', 'pi-subagent-deleted', containedParentSessionId(sessionId));
+}
+
+export async function writePiSubagentDeletedTombstone(
+  agentHome: string,
+  sessionId: string,
+): Promise<void> {
+  const file = piSubagentDeletedTombstonePath(agentHome, sessionId);
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const staging = `${file}.tmp-${process.pid}-${randomUUID()}`;
+  await fs.writeFile(staging, `${JSON.stringify({
+    version: 1,
+    sessionId: containedParentSessionId(sessionId),
+    deletedAt: Date.now(),
+    hostPid: process.pid,
+  })}\n`, { mode: 0o600 });
+  try {
+    await fs.rename(staging, file);
+  } finally {
+    await fs.rm(staging, { force: true }).catch(() => undefined);
+  }
 }
 
 export type PiSubagentRunState = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';

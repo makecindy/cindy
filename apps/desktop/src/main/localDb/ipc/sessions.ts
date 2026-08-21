@@ -14,6 +14,7 @@ import { eq, ne, and, desc, count, inArray, isNotNull, isNull, sql, type SQL } f
 import {
   piSubagentRunRoot,
   stopAndRemovePiSubagentRuns,
+  writePiSubagentDeletedTombstone,
 } from '@cindy/maker-core/pi-subagent-runs';
 import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 
@@ -1785,10 +1786,12 @@ const PI_SUBAGENT_CLEANUP_CLOSE_TIMEOUT_MS = 15_000;
  * the cleanup already reporting success and its retry timer discarded. The
  * publish-intent-first protocol makes the converse true: a launch that started
  * before the parent died has already written its `queued` status, so the scan
- * sees it and stops it. Proving the parent stopped is therefore the whole
- * barrier.
+ * sees it and stops it.
  *
- * Not the host-level launch fence: that one blocks *every* session's launches
+ * This function only proves the launcher in *this* process stopped. Other
+ * supported instances share userData, so a parent PI elsewhere can still be
+ * alive; the per-session tombstone written before the scan is what stops those
+ * launches. Not the host-level launch fence: that one blocks *every* session
  * for the duration, and this is one deleted task's cleanup.
  *
  * `closeSession` is idempotent and is issued here rather than waited for
@@ -1814,8 +1817,10 @@ async function piSubagentLauncherProvenStopped(sessionId: string): Promise<boole
     });
     return false;
   }
-  // No Maker means no loaded session, and so no extension anywhere that could
-  // launch for this task.
+  // Nothing loaded in *this* process. Another instance sharing userData may
+  // still have the parent PI alive; the deleted-task tombstone (written before
+  // this function is used as a scan gate) is what stops its launches. Returning
+  // true here only means there is no local launcher left to close.
   if (!maker) return true;
   if (!maker.isSessionAlive(sessionId)) return true;
   const closing = maker.closeSession(sessionId).catch((err: unknown) => {
@@ -1851,11 +1856,27 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
   piSubagentCleanupTimers.set(sessionId, marker);
   void (async () => {
     try {
+      // Tombstone first, before asking whether *this* process still has a
+      // launcher. Dev, packaged and --passive instances share userData, so a
+      // parent PI in another process can still spawn after our local Maker
+      // reports the task unloaded. The in-Pi launcher reads this marker after
+      // publishing queued and before spawn — same opposite-order protocol as
+      // the launch fence. Without it, stopAndRemove deleting an empty root is
+      // not a proof.
+      const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+      try {
+        await writePiSubagentDeletedTombstone(agentHome, sessionId);
+      } catch (err) {
+        log.warn('PI Subagent cleanup could not write the deleted-task tombstone', {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
       // Every attempt, not just the first: the parent may still have been alive
       // when an earlier one gave up, and this is the only thing standing
       // between the conclusive scan and a launch that outruns it.
       if (await piSubagentLauncherProvenStopped(sessionId)) {
-        const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
         const removed = await stopAndRemovePiSubagentRuns(piSubagentRunRoot(agentHome, sessionId));
         if (removed) {
           piSubagentCleanupTimers.delete(sessionId);

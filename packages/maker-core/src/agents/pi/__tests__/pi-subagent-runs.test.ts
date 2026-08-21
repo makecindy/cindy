@@ -15,6 +15,8 @@ import {
   acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
   isPiSubagentLaunchFenceActive,
+  piSubagentDeletedTombstonePath,
+  writePiSubagentDeletedTombstone,
   isPiSubagentRunStale,
   piSubagentControlOwnership,
   piSubagentLaunchFencePath,
@@ -190,6 +192,20 @@ describe('PI durable subagent run store', () => {
     );
     expect(() => piSubagentRunRoot('/agent-home', '../escape')).toThrow(/unsafe/);
     expect(() => piSubagentRunRoot('/agent-home', 'a\\b')).toThrow(/unsafe/);
+  });
+
+  it('keeps the deleted-task tombstone outside the run root and rejects traversal ids', async () => {
+    expect(piSubagentDeletedTombstonePath('/agent-home', 'session-1')).toBe(
+      path.join('/agent-home', 'runtime', 'pi-subagent-deleted', 'session-1'),
+    );
+    expect(piSubagentDeletedTombstonePath('/agent-home', 'session-1')).not.toContain(
+      `${path.sep}pi-subagent-runs${path.sep}`,
+    );
+    expect(() => piSubagentDeletedTombstonePath('/agent-home', '../escape')).toThrow(/unsafe/);
+    const agentHome = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-tombstone-'));
+    roots.push(agentHome);
+    await writePiSubagentDeletedTombstone(agentHome, 'session-1');
+    expect(existsSync(piSubagentDeletedTombstonePath(agentHome, 'session-1'))).toBe(true);
   });
 
   it('reports UUID-contained corrupt runs without trusting disk PIDs', async () => {
