@@ -9,12 +9,15 @@ import { ResourceUsageWindowController } from '../controller.js';
 
 interface FakeWindow {
   on: ReturnType<typeof vi.fn>;
+  once: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
   hide: ReturnType<typeof vi.fn>;
   show: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   restore: ReturnType<typeof vi.fn>;
+  setFullScreen: ReturnType<typeof vi.fn>;
+  isFullScreen: () => boolean;
   isMinimized: () => boolean;
   isVisible: () => boolean;
   isDestroyed: () => boolean;
@@ -27,9 +30,11 @@ interface FakeWindow {
 
 function fakeWindow(id: number, minimized = false): FakeWindow {
   const listeners = new Map<string, (...args: unknown[]) => void>();
+  const onceListeners = new Map<string, (...args: unknown[]) => void>();
   const webContentsListeners = new Map<string, (...args: unknown[]) => void>();
   let destroyed = false;
   let visible = false;
+  let fullScreen = false;
   const send = vi.fn();
   const webContents = {
     id,
@@ -42,6 +47,9 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
   const win: FakeWindow = {
     on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
       listeners.set(event, callback);
+    }),
+    once: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
+      onceListeners.set(event, callback);
     }),
     close: vi.fn(() => {
       let prevented = false;
@@ -68,6 +76,10 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
     }),
     focus: vi.fn(),
     restore: vi.fn(),
+    setFullScreen: vi.fn((next: boolean) => {
+      fullScreen = next;
+    }),
+    isFullScreen: () => fullScreen,
     isMinimized: () => minimized,
     isVisible: () => visible,
     isDestroyed: () => destroyed,
@@ -79,7 +91,16 @@ function fakeWindow(id: number, minimized = false): FakeWindow {
       listeners.get('closed')?.();
     },
     emitWebContents: (event, ...args) => webContentsListeners.get(event)?.(...args),
-    emitWindow: (event) => listeners.get(event)?.(),
+    emitWindow: (event) => {
+      if (event === 'leave-full-screen') fullScreen = false;
+      if (event === 'enter-full-screen') fullScreen = true;
+      const once = onceListeners.get(event);
+      if (once) {
+        onceListeners.delete(event);
+        once();
+      }
+      listeners.get(event)?.();
+    },
   };
   return win;
 }
@@ -220,6 +241,137 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.hide).not.toHaveBeenCalled();
     expect(controller.close(windows[0]!.webContents)).toBe(true);
     expect(windows[0]?.hide).toHaveBeenCalledOnce();
+  });
+
+  it('opens the monitor as its own macOS fullscreen Space and leaves the owner fullscreen', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+
+    expect(controller.open(mainSender)).toBe(true);
+    expect(windows[0]?.show).toHaveBeenCalledOnce();
+    expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(true);
+    expect(owner.isFullScreen()).toBe(true);
+
+    expect(controller.close(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.setFullScreen).toHaveBeenLastCalledWith(false);
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+    expect(owner.show).not.toHaveBeenCalled();
+
+    windows[0]?.emitWindow('leave-full-screen');
+    expect(windows[0]?.hide).toHaveBeenCalledOnce();
+    expect(owner.show).toHaveBeenCalledOnce();
+    expect(owner.focus).toHaveBeenCalledOnce();
+  });
+
+  it('does not hide a reopened monitor when a stale leave-full-screen arrives', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+    expect(controller.open(mainSender)).toBe(true);
+    expect(controller.close(windows[0]!.webContents)).toBe(true);
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+
+    expect(controller.open(mainSender)).toBe(true);
+    windows[0]?.hide.mockClear();
+    windows[0]?.setFullScreen.mockClear();
+    windows[0]?.emitWindow('leave-full-screen');
+    expect(windows[0]?.hide).not.toHaveBeenCalled();
+    expect(windows[0]?.setFullScreen).toHaveBeenCalledWith(true);
+  });
+
+  it('does not fullscreen the monitor when the owner is not fullscreen', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => false,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'darwin',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+
+    expect(controller.open(mainSender)).toBe(true);
+    expect(windows[0]?.setFullScreen).not.toHaveBeenCalled();
+  });
+
+  it('does not fullscreen the monitor on non-macOS even if the owner is fullscreen', () => {
+    const windows: FakeWindow[] = [];
+    const mainSender = { id: 100 } as WebContents;
+    const owner = {
+      isDestroyed: () => false,
+      isFullScreen: () => true,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => {
+        const win = fakeWindow(windows.length + 1);
+        windows.push(win);
+        return win as unknown as BrowserWindow;
+      },
+      isOpenSender: (sender) => sender === mainSender,
+      getOwnerWindow: () => owner,
+      platform: 'win32',
+    });
+    controller.prewarm();
+    markPrewarmed(controller, windows[0]!);
+
+    expect(controller.open(mainSender)).toBe(true);
+    expect(windows[0]?.setFullScreen).not.toHaveBeenCalled();
   });
 
   it('stops a hidden prewarm that cannot produce a presentation', () => {

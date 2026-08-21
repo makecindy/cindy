@@ -5177,7 +5177,7 @@
     "close": "닫기",
     "menuItems": {
       "settings": "설정",
-      "resourceUsage": "리소스 사용량",
+      "resourceUsage": "활성 상태 보기",
       "help": "도움말",
       "issues": "이슈",
       "checkForUpdates": "업데이트 확인"
@@ -5272,7 +5272,7 @@
         "review": "리뷰",
         "subagents": "하위 에이전트",
         "backgroundTasks": "백그라운드 작업",
-        "resourceUsage": "리소스 사용량",
+        "resourceUsage": "활성 상태 보기",
         "collaboration": "협업",
         "unknown": "알 수 없는 탭",
         "ghostPanel": "플러그인 패널"
@@ -5292,7 +5292,7 @@
       "empty": {
         "eyebrow": "오른쪽 사이드바",
         "title": "패널 시작하기",
-        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 리소스 사용량, 내장 브라우저, 터미널을 여기에 여세요.",
+        "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 활성 상태 보기, 내장 브라우저, 터미널을 여기에 여세요.",
         "openFile": "파일 열기",
         "fileSub": "Files",
         "openReview": "리뷰 열기",
@@ -5301,7 +5301,7 @@
         "subagentsSub": "나중에도 볼 수 있는 하위 작업",
         "openBackgroundTasks": "백그라운드 작업 열기",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "리소스 사용량 열기",
+        "openResourceUsage": "활성 상태 보기 열기",
         "openBrowser": "브라우저 열기",
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
@@ -5955,9 +5955,9 @@
       "processCount_one": "프로세스 트리: {{count}}개",
       "processCount_other": "프로세스 트리: {{count}}개",
       "agentsEmpty": "실행 중인 Agent 프로세스가 없습니다. 작업을 시작하면 여기에 표시됩니다.",
-      "tableLabel": "프로세스별 리소스 사용량",
+      "tableLabel": "활성 상태 보기",
       "sortBy": "{{column}} 기준 정렬",
-      "loading": "리소스 사용량을 불러오는 중…",
+      "loading": "프로세스를 불러오는 중…",
       "remoteUnavailableTitle": "원격 세션에서는 사용할 수 없음",
       "remoteUnavailableDescription": "이 패널은 이 기기의 프로세스만 읽습니다. 이 기기에서 로컬로 실행되는 세션에만 사용할 수 있습니다.",
       "selectHint": "프로세스 선택",

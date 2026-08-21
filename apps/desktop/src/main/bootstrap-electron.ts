@@ -1746,11 +1746,12 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
 
-// ── 资源用量独立子窗口 ──────────────────────────────────────────────
-// 单实例轻量子窗口:顶部菜单「资源用量」→ open()。不需要 detach/attach 偏好、
+// ── 资源监视器独立窗口 ──────────────────────────────────────────────
+// 单实例轻量独立窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
 // 不需要 session 上下文转发。后台预热后常驻复用，普通关窗只隐藏。
+// macOS 全屏时监视器自己进新的 Space，不作为主窗的子窗口。
 const resourceUsageWindowController = new ResourceUsageWindowController({
-  createWindow: () => createResourceUsageWindow(mainWindowRef),
+  createWindow: () => createResourceUsageWindow(),
   isOpenSender: (sender) =>
     isResourceUsageOpenSender({
       sender,
@@ -1758,6 +1759,13 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
       senderWindow: BrowserWindow.fromWebContents(sender),
       isSecondaryAppWindow,
     }),
+  getOwnerWindow: (sender) => {
+    const senderWindow = BrowserWindow.fromWebContents(sender);
+    if (senderWindow && !senderWindow.isDestroyed()) return senderWindow;
+    const owner = mainWindowRef;
+    if (!owner || owner.isDestroyed()) return null;
+    return owner;
+  },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
 

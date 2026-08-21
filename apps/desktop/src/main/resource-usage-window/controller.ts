@@ -20,9 +20,22 @@ const DEFAULT_PREWARM_TIMEOUT_MS = 10_000;
 const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
 const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 1;
 
+export interface ResourceUsageOwnerWindow {
+  isDestroyed(): boolean;
+  isFullScreen(): boolean;
+  isMinimized(): boolean;
+  restore(): void;
+  show(): void;
+  focus(): void;
+}
+
 export interface ResourceUsageWindowControllerDeps {
   createWindow: () => BrowserWindow;
   isOpenSender: (sender: WebContents) => boolean;
+  /** 打开监视器的那扇应用窗；macOS 全屏时监视器自己进新的 Space，这扇窗留在原 Space。 */
+  getOwnerWindow?: (sender: WebContents) => ResourceUsageOwnerWindow | null;
+  /** 测试注入；默认 process.platform。仅 darwin 会把监视器送进独立全屏 Space。 */
+  platform?: NodeJS.Platform;
   openTimeoutMs?: number;
   prewarmTimeoutMs?: number;
   recoveryStabilityMs?: number;
@@ -42,6 +55,10 @@ export class ResourceUsageWindowController {
   private destroyingWindow = false;
   private disposed = false;
   private locale: SupportedLocale | null = null;
+  private lastOwner: ResourceUsageOwnerWindow | null = null;
+  /** 递增代次：关闭全屏时记下当前值，leave-full-screen 迟到时对照，避免把刚重新打开的窗口藏掉。 */
+  private fullscreenGeneration = 0;
+  private pendingLeaveGeneration: number | null = null;
 
   constructor(private readonly deps: ResourceUsageWindowControllerDeps) {}
 
@@ -61,6 +78,7 @@ export class ResourceUsageWindowController {
     this.automaticRecoveryAttempts = 0;
     this.clearRecoveryStabilityTimeout();
     this.pendingOpen = true;
+    this.rememberOwner(sender);
     const win = this.ensureWindow();
     if (!win) {
       this.pendingOpen = false;
@@ -229,11 +247,17 @@ export class ResourceUsageWindowController {
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
+    this.pendingLeaveGeneration = null;
+    this.fullscreenGeneration += 1;
     this.setSamplingActive(win, true);
     if (win.isMinimized()) win.restore();
+    // 必须先 show，再 setFullScreen。构造时 fullscreen: true 在已有全屏窗的
+    // 同一块屏幕上会被 Electron 忽略（electron#34367）；show 之后再进全屏，
+    // 才能在 macOS 上单独占一个 Space，Cindy 那扇全屏窗继续留在原 Space。
     win.show();
     win.focus();
     this.visible = true;
+    this.syncFullscreenWithOwner(win);
   }
 
   private hideWindow(win: BrowserWindow): void {
@@ -241,8 +265,75 @@ export class ResourceUsageWindowController {
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
     this.setSamplingActive(win, false);
-    if (win.isVisible()) win.hide();
-    this.visible = false;
+    const finishHide = (generation: number): void => {
+      if (this.pendingLeaveGeneration !== generation) {
+        // 关闭动画还在走时用户又打开了：系统仍会把这扇窗送出全屏。
+        // pendingLeaveGeneration 已清空表示这次 leave 属于上一轮关闭；
+        // 若监视器已经重新显示，再送回独立全屏 Space。新一轮关闭进行中则忽略过期事件。
+        if (
+          this.pendingLeaveGeneration === null &&
+          !win.isDestroyed() &&
+          (this.visible || this.pendingOpen)
+        ) {
+          this.syncFullscreenWithOwner(win);
+        }
+        return;
+      }
+      this.pendingLeaveGeneration = null;
+      if (win.isDestroyed()) return;
+      if (win.isVisible()) win.hide();
+      this.visible = false;
+      this.focusOwnerWindow();
+    };
+    if (this.pendingLeaveGeneration !== null) return;
+    if (this.platform() === 'darwin' && win.isFullScreen()) {
+      const generation = this.fullscreenGeneration;
+      this.pendingLeaveGeneration = generation;
+      win.once('leave-full-screen', () => finishHide(generation));
+      win.setFullScreen(false);
+      return;
+    }
+    this.pendingLeaveGeneration = this.fullscreenGeneration;
+    finishHide(this.fullscreenGeneration);
+  }
+
+  private rememberOwner(sender: WebContents): void {
+    const owner = this.deps.getOwnerWindow?.(sender) ?? null;
+    this.lastOwner = owner && !owner.isDestroyed() ? owner : null;
+  }
+
+  private ownerWindow(): ResourceUsageOwnerWindow | null {
+    const owner = this.lastOwner;
+    if (!owner || owner.isDestroyed()) {
+      this.lastOwner = null;
+      return null;
+    }
+    return owner;
+  }
+
+  private platform(): NodeJS.Platform {
+    return this.deps.platform ?? process.platform;
+  }
+
+  /**
+   * macOS 原生全屏是「每扇窗一个 Space」。从全屏 Cindy 打开监视器时，
+   * 监视器自己进全屏（新 Space），Cindy 保持全屏留在原 Space。
+   * 非全屏或非 darwin 只显示普通独立窗口。
+   */
+  private syncFullscreenWithOwner(win: BrowserWindow): void {
+    if (this.platform() !== 'darwin') return;
+    const owner = this.ownerWindow();
+    const shouldBeFullScreen = Boolean(owner?.isFullScreen());
+    if (win.isFullScreen() === shouldBeFullScreen) return;
+    win.setFullScreen(shouldBeFullScreen);
+  }
+
+  private focusOwnerWindow(): void {
+    const owner = this.ownerWindow();
+    if (!owner) return;
+    if (owner.isMinimized()) owner.restore();
+    owner.show();
+    owner.focus();
   }
 
   private setSamplingActive(win: BrowserWindow, active: boolean): void {
@@ -281,6 +372,8 @@ export class ResourceUsageWindowController {
     this.pendingOpen = false;
     this.samplingActive = true;
     this.destroyingWindow = false;
+    this.lastOwner = null;
+    this.pendingLeaveGeneration = null;
   }
 
   private clearOpenTimeout(): void {

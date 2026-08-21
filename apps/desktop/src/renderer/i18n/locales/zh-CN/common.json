@@ -5177,7 +5177,7 @@
     "close": "关闭",
     "menuItems": {
       "settings": "设置",
-      "resourceUsage": "资源用量",
+      "resourceUsage": "资源监视器",
       "help": "帮助",
       "issues": "问题反馈",
       "checkForUpdates": "检查更新"
@@ -5272,7 +5272,7 @@
         "review": "审查",
         "subagents": "Subagent",
         "backgroundTasks": "后台任务",
-        "resourceUsage": "资源用量",
+        "resourceUsage": "资源监视器",
         "collaboration": "协同",
         "unknown": "未知标签页",
         "ghostPanel": "插件面板"
@@ -5292,7 +5292,7 @@
       "empty": {
         "eyebrow": "右侧栏",
         "title": "开始一个面板",
-        "desc": "在右侧打开文件、审查、资源用量、内置浏览器或终端，与左侧对话并行工作。",
+        "desc": "在右侧打开文件、审查、资源监视器、内置浏览器或终端，与左侧对话并行工作。",
         "openFile": "打开文件",
         "fileSub": "Files",
         "openReview": "打开审查",
@@ -5301,7 +5301,7 @@
         "subagentsSub": "可持续回看的子任务",
         "openBackgroundTasks": "打开后台任务",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "打开资源用量",
+        "openResourceUsage": "打开资源监视器",
         "openBrowser": "打开浏览器",
         "browserSub": "Browser",
         "openTerminal": "打开终端",
@@ -5955,9 +5955,9 @@
       "processCount_one": "进程树：{{count}} 个进程",
       "processCount_other": "进程树：{{count}} 个进程",
       "agentsEmpty": "当前没有运行中的 Agent 进程，启动任务后会在这里展示占用",
-      "tableLabel": "按进程展示的资源用量",
+      "tableLabel": "资源监视器",
       "sortBy": "按{{column}}排序",
-      "loading": "正在读取资源用量…",
+      "loading": "正在读取进程…",
       "remoteUnavailableTitle": "远程任务暂不可用",
       "remoteUnavailableDescription": "此面板仅读取本机进程，仅适用于在此设备上运行的本机任务。",
       "selectHint": "选择一个进程",

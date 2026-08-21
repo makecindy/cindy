@@ -5177,7 +5177,7 @@
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
-      "resourceUsage": "リソース使用量",
+      "resourceUsage": "アクティビティモニタ",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
@@ -5272,7 +5272,7 @@
         "review": "レビュー",
         "subagents": "サブエージェント",
         "backgroundTasks": "バックグラウンドタスク",
-        "resourceUsage": "リソース使用量",
+        "resourceUsage": "アクティビティモニタ",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
         "ghostPanel": "プラグインパネル"
@@ -5292,7 +5292,7 @@
       "empty": {
         "eyebrow": "右サイドバー",
         "title": "パネルを開く",
-        "desc": "ファイル、レビュー、リソース使用量、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
+        "desc": "ファイル、レビュー、アクティビティモニタ、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
         "openFile": "ファイルを開く",
         "fileSub": "Files",
         "openReview": "レビューを開く",
@@ -5301,7 +5301,7 @@
         "subagentsSub": "後から確認できる子タスク",
         "openBackgroundTasks": "バックグラウンドタスクを開く",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "リソース使用量を開く",
+        "openResourceUsage": "アクティビティモニタを開く",
         "openBrowser": "ブラウザを開く",
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
@@ -5955,9 +5955,9 @@
       "processCount_one": "プロセスツリー：{{count}} 個",
       "processCount_other": "プロセスツリー：{{count}} 個",
       "agentsEmpty": "実行中の Agent プロセスはありません。タスクを開始するとここに表示されます",
-      "tableLabel": "プロセス別のリソース使用量",
+      "tableLabel": "アクティビティモニタ",
       "sortBy": "{{column}}で並べ替え",
-      "loading": "リソース使用量を読み込んでいます…",
+      "loading": "プロセスを読み込んでいます…",
       "remoteUnavailableTitle": "リモートセッションでは利用できません",
       "remoteUnavailableDescription": "このパネルはこのデバイス上のプロセスだけを読み取ります。このデバイスでローカルに実行されるセッションでのみ利用できます。",
       "selectHint": "プロセスを選択",

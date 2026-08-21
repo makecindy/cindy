@@ -11,6 +11,7 @@ const preloadSource = fs.readFileSync(
 describe('resource usage BrowserWindow security contract', () => {
   it('stays hidden and uses the dedicated preload with Electron isolation enabled', () => {
     expect(source).toContain('show: false');
+    expect(source).not.toMatch(/\bparent\s*:/);
     expect(source).toContain("path.join(__dirname, 'resourceUsagePreload.js')");
     expect(source).toContain('sandbox: true');
     expect(source).toContain('contextIsolation: true');
@@ -27,5 +28,10 @@ describe('resource usage BrowserWindow security contract', () => {
     expect(preloadSource).not.toContain("ipcRenderer.invoke('appearance-settings:get'");
     expect(preloadSource).not.toContain("ipcRenderer.invoke('local-themes:list'");
     expect(preloadSource).not.toContain("ipcRenderer.send('update-set-relaunch-theme'");
+  });
+
+  it('exposes the persisted-session hint so the first-launch light gate cannot lock dark users to light', () => {
+    expect(preloadSource).toContain('authHasPersistedSessionHintSync');
+    expect(preloadSource).toContain("ipcRenderer.sendSync('auth:has-persisted-session-hint-sync')");
   });
 });
