@@ -201,6 +201,30 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(source).toContain('agentSkillInvocation: pendingAgentSkillInvocation');
   });
 
+  it('binds a selected Pi user Skill to the normal new-task runtime before handoff', () => {
+    const normalBranch = source.slice(
+      source.indexOf('const newSession = await createSession({', source.indexOf('const handleSend')),
+      source.indexOf('setPending(newSession.id, {', source.indexOf('const handleSend')),
+    );
+    const resolveSkill = normalBranch.indexOf('resolvePendingPiUserSkillForDispatch({');
+    const initializeRuntime = normalBranch.indexOf(
+      'window.electronAPI.maker.createSession({',
+      resolveSkill,
+    );
+
+    expect(resolveSkill).toBeGreaterThan(-1);
+    expect(initializeRuntime).toBeGreaterThan(resolveSkill);
+    expect(normalBranch).toContain("opts?.pendingAgentSkillInvocation?.scope === 'user'");
+    expect(normalBranch).toContain('pendingInvocation: opts.pendingAgentSkillInvocation');
+    expect(normalBranch).toContain('retryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
+    expect(normalBranch).toContain('const runtimeWorkingDir = newSession.workingDir;');
+    expect(normalBranch).toContain('workingDir: runtimeWorkingDir');
+    expect(normalBranch).toContain('forceReload: true');
+    expect(normalBranch).toContain('rollbackUnclaimedPiProjectSkillSession({');
+    expect(normalBranch).toContain("toast.warning(t('commandPalette.skillUnavailableForNewTask'))");
+    expect(normalBranch).toContain('pendingAgentSkillInvocation = resolvedInvocation;');
+  });
+
   it('rebinds a selected Pi project Skill to the created worktree before sending', () => {
     const worktreeBranch = source.slice(
       source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)'),

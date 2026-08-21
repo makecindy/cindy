@@ -4212,6 +4212,76 @@ export function NewMakerDraftRoute() {
               return;
             }
             pendingAgentSkillInvocation = resolvedInvocation;
+          } else if (
+            persistedAgentKind === 'pi'
+            && opts?.pendingAgentSkillInvocation?.scope === 'user'
+          ) {
+            const rollbackUnclaimedSession = async () => {
+              await rollbackUnclaimedPiProjectSkillSession({
+                sessionId: newSession.id,
+                closeRuntime: () => window.electronAPI.maker.closeSession(
+                  newSession.id,
+                  { preserveWorkspace: true },
+                ),
+                markDeleted: () => sessionService.setStatus(
+                  newSession.id,
+                  'deleted',
+                ).then(() => undefined),
+                patchDeleted: () => sessionsStore.patchLocal(
+                  newSession.id,
+                  { status: 'deleted' },
+                ),
+                purgeRuntimeState: () => makerChatStore.purgeSession(newSession.id),
+              });
+            };
+            const runtimeWorkingDir = newSession.workingDir;
+            if (!runtimeWorkingDir) {
+              await rollbackUnclaimedSession();
+              toast.warning(t('commandPalette.skillUnavailableForNewTask'));
+              return;
+            }
+            let resolvedInvocation: AgentSkillInvocation | null;
+            try {
+              resolvedInvocation = await resolvePendingPiUserSkillForDispatch({
+                message,
+                pendingInvocation: opts.pendingAgentSkillInvocation,
+                retryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+                prepareRuntime: () => window.electronAPI.maker.createSession({
+                  id: newSession.id,
+                  ...buildCreateOptsForCurrentSession(
+                    newSession.id,
+                    model,
+                    effort,
+                    permissionMode,
+                    runtimeWorkingDir,
+                  ),
+                  agentKind: 'pi',
+                  workingDir: runtimeWorkingDir,
+                }).then(() => undefined),
+                reload: async () => {
+                  const result = await window.electronAPI.maker.listAgentSkills('pi', {
+                    workingDir: runtimeWorkingDir,
+                    sessionId: newSession.id,
+                    forceReload: true,
+                  });
+                  if (!result.success || !result.skills) return [];
+                  return result.skills.flatMap((skill): UnifiedCommand[] => (
+                    skill.scope === 'user' || skill.scope === 'repo'
+                      ? [{ ...skill, scope: skill.scope }]
+                      : []
+                  ));
+                },
+              });
+            } catch (error) {
+              await rollbackUnclaimedSession();
+              throw error;
+            }
+            if (!resolvedInvocation) {
+              await rollbackUnclaimedSession();
+              toast.warning(t('commandPalette.skillUnavailableForNewTask'));
+              return;
+            }
+            pendingAgentSkillInvocation = resolvedInvocation;
           }
 
           // 计划模式是一次性选择:只有首条消息已具备完整交接条件时才消费。
