@@ -2853,36 +2853,38 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
 
 const sessions = new Map<string, SessionChatState>();
 /**
- * Request-scoped permission response guard.
- * Keyed by sessionId → requestId. A guard only belongs to the specific permission
- * card it was armed for. When the snapshot advances (A promoted, B displayed),
- * the old A guard is invalidated and B can respond immediately.
+ * Session-scoped permission response guard.
+ * Prevents double-click / key-repeat from approving the newly promoted permission
+ * card within the gesture-dedupe window (300ms after IPC settle).
  */
-const permissionResponseInFlight = new Map<string, string>();
+const permissionResponseInFlight = new Set<string>();
 /** Gesture dedupe window: prevents double-click from approving the newly promoted card. */
 const PERMISSION_RESPONSE_GUARD_WINDOW_MS = 300;
 /** Timer per session for gesture dedupe release (purge / dismissal cleanup). */
 const permissionResponseGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
- * Invalidate any active guard for this session when the displayed permission changes.
- * Called when pendingPermission transitions from A to B (promotion or snapshot advance).
- * A's guard becomes stale — B can respond immediately without waiting for A's RPC.
+ * Rearm gesture-dedupe window when a dismissal arrives.
+ * Keeps the session-level guard active and restarts the timer. This prevents
+ * A's delayed click from approving the newly promoted B within the gesture window.
+ * After the window expires, B can be responded to normally.
  */
-function invalidatePermissionGuardForPromotion(sessionId: string): void {
+function rearmPermissionResponseGuard(sessionId: string): void {
+  if (!permissionResponseInFlight.has(sessionId)) return;
   const timer = permissionResponseGuardTimers.get(sessionId);
   if (timer !== undefined) clearTimeout(timer);
-  permissionResponseGuardTimers.delete(sessionId);
-  permissionResponseInFlight.delete(sessionId);
+  const next = setTimeout(
+    () => releasePermissionResponseGuard(sessionId),
+    PERMISSION_RESPONSE_GUARD_WINDOW_MS,
+  );
+  permissionResponseGuardTimers.set(sessionId, next);
 }
 
 /**
  * Release the gesture-dedupe timer after IPC settle.
- * Only releases if the guard still belongs to the same requestId (no ABA).
+ * Idempotent — safe to call even if guard was already cleared.
  */
-function releasePermissionResponseGuard(sessionId: string, guardRequestId: string): void {
-  // If guard has already been replaced by a newer request, don't touch it.
-  if (permissionResponseInFlight.get(sessionId) !== guardRequestId) return;
+function releasePermissionResponseGuard(sessionId: string): void {
   const timer = permissionResponseGuardTimers.get(sessionId);
   if (timer !== undefined) clearTimeout(timer);
   permissionResponseGuardTimers.delete(sessionId);
@@ -2891,14 +2893,12 @@ function releasePermissionResponseGuard(sessionId: string, guardRequestId: strin
 
 /**
  * Arm gesture-dedupe window after IPC settle.
- * Only arms if the guard still belongs to the same requestId.
  */
-function armPermissionResponseGuard(sessionId: string, guardRequestId: string): void {
-  if (permissionResponseInFlight.get(sessionId) !== guardRequestId) return;
+function armPermissionResponseGuard(sessionId: string): void {
   const timer = permissionResponseGuardTimers.get(sessionId);
   if (timer !== undefined) clearTimeout(timer);
   const next = setTimeout(
-    () => releasePermissionResponseGuard(sessionId, guardRequestId),
+    () => releasePermissionResponseGuard(sessionId),
     PERMISSION_RESPONSE_GUARD_WINDOW_MS,
   );
   permissionResponseGuardTimers.set(sessionId, next);
@@ -7354,8 +7354,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // 会让双击第二击误批新推广的 B(security P1)。重新武装 gesture 窗口:
     // 既挡住 A 的迟到输入,又不依赖旧 RPC settle(可达 ~30s)才放行 B 的真实
     // 响应。guard 不在场时(远端撤回)no-op,不影响新卡即时响应。
-    // Dismissal: invalidate old guard so next permission can respond immediately.
-    invalidatePermissionGuardForPromotion(sessionId);
+    // Dismissal: rearm guard to block A's delayed click within gesture window.
+    rearmPermissionResponseGuard(sessionId);
     setState(sessionId, (s) =>
       handleStreamEvent(s, { sessionId, type: 'permission_dismissed', data }),
     );
@@ -13645,11 +13645,11 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
 
   const { requestId } = state.pendingPermission;
 
-  // Request-scoped guard: only block if THIS specific requestId is already in flight.
-  // If the guard belongs to a different (stale) requestId, it's safe to proceed.
-  if (permissionResponseInFlight.get(sessionId) === requestId) return;
+  // Session-scoped guard: block all responses during the gesture-dedupe window.
+  // This prevents double-click / key-repeat from approving the newly promoted card.
+  if (permissionResponseInFlight.has(sessionId)) return;
 
-  permissionResponseInFlight.set(sessionId, requestId);
+  permissionResponseInFlight.add(sessionId);
   bumpInteractionReconcileEpoch(sessionId);
 
   // Clear the displayed permission immediately and promote the next parallel
@@ -13678,15 +13678,14 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
         : undefined,
     });
   } catch (err) {
-    permissionResponseInFlight.delete(sessionId);
+    releasePermissionResponseGuard(sessionId);
     log.error('Failed to respond to permission:', err);
     return;
   }
   void response
     .catch((err) => log.error('Failed to respond to permission:', err))
     .finally(() => {
-      // Request-scoped: only arm dedupe if this guard still owns the session.
-      armPermissionResponseGuard(sessionId, requestId);
+      armPermissionResponseGuard(sessionId);
     });
 }
 
