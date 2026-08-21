@@ -49,6 +49,7 @@ const KIND_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   tool: Wrench,
   command: Terminal,
   panel: PanelRight,
+  'main-view': AppWindow,
   code: FileCode2,
   subscribe: Bell,
   card: LayoutTemplate,
