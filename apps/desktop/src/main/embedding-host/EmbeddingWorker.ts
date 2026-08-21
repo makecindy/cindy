@@ -39,6 +39,11 @@ import {
 
 const TICK_INTERVAL_MS = 5_000;
 const BATCH_SIZE = 32;
+/**
+ * 熔断 TTL,必须与 DB 层 TERMINAL_SNOOZE_MS 保持一致。
+ * 到期后放行一次探测:成功清熔断,失败重新阻断。
+ */
+const MODEL_BLOCK_TTL_MS = 30 * 60_000;
 
 /**
  * 只有 INVALID_MODEL 才触发永久熔断。
@@ -90,11 +95,13 @@ export class EmbeddingWorker {
   private vecWarned = false;
   private suspendedWarned = false;
   /**
-   * 只有 INVALID_MODEL (错误体明确包含 model_not_found) 不会自愈。按进程生命周期记住它:
-   * 后续新 job 本地终止, 避免每 5 秒继续打同一个必败请求。400/422 输入错误、404 路由
-   * 错误等均走退避重试, 让网关或模型配置修复后无需重启即可恢复。
+   * INVALID_MODEL (错误体明确包含 model_not_found) 熔断表。
+   *
+   * TTL 与 DB 层 TERMINAL_SNOOZE_MS 一致 (30 分钟):阻断期间新 job snooze 不出网,
+   * TTL 到期后放行一次探测;探测成功则清除条目,失败则重新阻断。这样网关短暂误报或
+   * 模型恢复后无需重启应用即可自动续跑 (PR #2288 review)。
    */
-  private readonly blockedModels = new Map<string, string>();
+  private readonly blockedModels = new Map<string, { error: string; blockedAt: number }>();
   // 关闭 / 切账号时由 stop() 置 true。in-flight tick 在每个 await 点之后检查它,
   // 一旦为 true 就立刻放弃后续写库直接返回 —— 那批 job 保持 status='pending',
   // 下次启动自动续跑 (零丢失)。目的是退出时让 worker 立即让出 SQLite 写连接,
@@ -318,18 +325,30 @@ export class EmbeddingWorker {
           );
           continue;
         }
-        const blockedError = this.blockedModels.get(modelId);
-        if (blockedError !== undefined) {
-          const fc = await this.recordFailureBatch(modelJobs, blockedError, true);
-          failCount += fc;
-          this.opts.log.debug?.(
+        const blocked = this.blockedModels.get(modelId);
+        if (blocked !== undefined) {
+          const age = Date.now() - blocked.blockedAt;
+          if (age < MODEL_BLOCK_TTL_MS) {
+            // 熔断 TTL 内:snooze 这批,不出网。
+            await this.recordFailureBatch(modelJobs, blocked.error, true);
+            this.opts.log.debug?.(
+              JSON.stringify({
+                event: 'embeddingWorker.batch.skip.invalidModel',
+                modelId,
+                count: modelJobs.length,
+                remainingMs: MODEL_BLOCK_TTL_MS - age,
+              }),
+            );
+            continue;
+          }
+          // TTL 到期:清除熔断,放行一次探测。成功则正常写入,失败会在 catch 中重新阻断。
+          this.blockedModels.delete(modelId);
+          this.opts.log.info(
             JSON.stringify({
-              event: 'embeddingWorker.batch.skip.invalidModel',
+              event: 'embeddingWorker.model.blockExpired.reprobe',
               modelId,
-              count: modelJobs.length,
             }),
           );
-          continue;
         }
         const inputs = modelJobs.map((j) => textByRowid.get(j.rowid) as string);
         try {
@@ -380,7 +399,7 @@ export class EmbeddingWorker {
           const errorText = `[${code}] ${msg}`;
           const terminal = isTerminalInvalidModelError(err);
           if (terminal) {
-            this.blockedModels.set(modelId, errorText);
+            this.blockedModels.set(modelId, { error: errorText, blockedAt: Date.now() });
             this.opts.log.warn(
               JSON.stringify({
                 event: 'embeddingWorker.model.blocked.invalidModel',

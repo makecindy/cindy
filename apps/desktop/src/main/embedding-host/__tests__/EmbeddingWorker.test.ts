@@ -99,6 +99,52 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
     });
   });
 
+  it('re-probes the model after the block TTL expires instead of snoozing forever', async () => {
+    // Tick 1: model returns INVALID_MODEL → blocked.
+    // After 30 min TTL: tick 2 should delete the block and call embed() again
+    // instead of silently snoozing the batch (PR #2288 Codex P1).
+    vi.useFakeTimers();
+    try {
+      const T0 = new Date('2026-08-21T12:00:00Z').getTime();
+      vi.setSystemTime(T0);
+      const batches = [[job(1, 'first')], [job(2, 'second')]];
+      const query = vi.fn(async () => batches.shift() ?? []);
+      const tx = vi.fn(async (_name: string, args?: FailureArgs) => ({
+        failCount: args?.jobs?.length ?? 0,
+      }));
+      const embed = vi
+        .fn()
+        .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
+        .mockResolvedValueOnce({ embeddings: [[0.1]], tokensUsed: 0, cacheHits: 0 });
+
+      registerProvider({
+        source: 'chat',
+        getTextsForJobs: async (jobs) =>
+          jobs.map(({ rowid, sourceId }) => ({ rowid, text: sourceId })),
+      });
+
+      const worker = new EmbeddingWorker({
+        getDbClient: () => ({ query, tx }) as never,
+        getClient: () => ({ embed }) as never,
+        isVecAvailable: () => true,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+      });
+      const tick = (worker as unknown as { tick: () => Promise<void> }).tick.bind(worker);
+
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(1);
+      expect(tx.mock.calls[0]?.[1]).toMatchObject({ terminal: true });
+
+      // Advance past the 30-minute TTL; next tick must re-probe, not snooze.
+      vi.setSystemTime(T0 + 31 * 60_000);
+      await tick();
+
+      expect(embed).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the batch pending when the model is disabled during an in-flight INVALID_MODEL failure', async () => {
     // embed() in-flight -> user disables the model -> request fails with INVALID_MODEL.
     // The catch branch must re-check isRouteSuspended(modelId) and NOT write a terminal
