@@ -8776,6 +8776,11 @@ function reconcilePendingInteractions(
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
+      // Capture the old pending permission before reconciliation so we can
+      // release the stale permissionResponseInFlight guard when the snapshot
+      // advances (P1: device-link reconnects while a permission request was
+      // in flight — the old guard blocks every action on the new request).
+      const oldPendingPermission = getOrCreateState(sessionId).pendingPermission;
       setState(sessionId, (state) => {
         // Permission snapshots are authoritative too. In particular, do not
         // append the snapshot behind a stale displayed request: a renderer can
@@ -8838,6 +8843,17 @@ function reconcilePendingInteractions(
           pluginSetupCommandInFlight: nextCommand,
         };
       });
+      // When the authoritative snapshot replaces the displayed permission (e.g.
+      // device-link reconnects while old request was in flight), release the
+      // stale guard so the newly promoted request can be acted on immediately.
+      const newPendingPermission = getOrCreateState(sessionId).pendingPermission;
+      if (
+        oldPendingPermission !== newPendingPermission &&
+        oldPendingPermission !== null &&
+        permissionResponseInFlight.has(sessionId)
+      ) {
+        releasePermissionResponseGuard(sessionId);
+      }
       for (const item of list) {
         if (!isCurrentInteractionReconcile()) return 0;
         applyInteractionRequestRef?.({
