@@ -99,6 +99,7 @@ import {
 } from '../shared/auto-review-decision.js';
 import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS } from '../shared/sensitive-credential-paths.js';
@@ -2904,6 +2905,12 @@ export class CodexAgent extends BaseAgent {
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
+    const liveUsageSnapshot = () => attachLiveGeneration(usageTracker.snapshot(), {
+      outputTokens: usageTracker.getTurnUsage().output,
+      closedDurationMs: translatorRt.generationDurationMs,
+      openStartedAt: translatorRt.generationStartedAt,
+      reliable: translatorRt.generationTimingReliable,
+    });
     /**
      * 本 turn 用于**目录查找**的模型 id, 在构造 turnParams 时快照(取 mutableCatalogModel,
      * 不是送上游的 wire 值 —— 见该变量注释)。
@@ -7465,10 +7472,31 @@ export class CodexAgent extends BaseAgent {
     // codex 协议没这层 — 必须自己从 item.* lifecycle + thread/status/changed 推断。
     // 实现策略: 每次切换语义化阶段 push 一次, 不在 delta 里 push (会刷成风暴);
     // 由 renderer 显示最新一条, react batch 自然消化中间抖动。
+    let lastStatusText = 'Working…';
+    let lastUsageRefreshAt = 0;
+    const USAGE_REFRESH_MIN_MS = 500;
+
     function pushStatus(text: string): void {
+      lastStatusText = text;
+      lastUsageRefreshAt = Date.now();
       eventQueue.push({
         type: 'status',
-        data: { status: text, ...usageTracker.snapshot(), isRunning: true },
+        data: { status: text, ...liveUsageSnapshot(), isRunning: true },
+        source: 'codex',
+      });
+    }
+
+    function maybePushUsageRefresh(): void {
+      const now = Date.now();
+      // No UI status yet: a refresh would invent a Working… frame and steal the
+      // next event from tests / terminal error sequences. Real turns always
+      // pushStatus or send() first, which stamps lastUsageRefreshAt.
+      if (lastUsageRefreshAt === 0) return;
+      if (now - lastUsageRefreshAt < USAGE_REFRESH_MIN_MS) return;
+      lastUsageRefreshAt = now;
+      eventQueue.push({
+        type: 'status',
+        data: { status: lastStatusText, ...liveUsageSnapshot(), isRunning: true },
         source: 'codex',
       });
     }
@@ -8340,7 +8368,16 @@ export class CodexAgent extends BaseAgent {
 
       eventQueue.push({
         type: 'status',
-        data: { status: 'Done', ...endSnap, isRunning: false },
+        data: {
+          status: 'Done',
+          ...attachLiveGeneration(endSnap, {
+            outputTokens: realTurnUsage.output,
+            closedDurationMs: translatorRt.generationDurationMs,
+            openStartedAt: null,
+            reliable: translatorRt.generationTimingReliable,
+          }),
+          isRunning: false,
+        },
         source: 'codex',
       });
       // 真实 per-turn 用量 (host 的 today chip / daily_model_usage 记账消费):
@@ -9366,6 +9403,7 @@ export class CodexAgent extends BaseAgent {
           cacheReadTokens: cached,
           cacheCreateTokens: 0,
         });
+        maybePushUsageRefresh();
         // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
         if (memoryFlushController) {
           const snap = usageTracker.snapshot();
@@ -10224,11 +10262,13 @@ export class CodexAgent extends BaseAgent {
           oneShotTipState.displayed.set(id, (oneShotTipState.displayed.get(id) ?? 0) + 1);
           oneShotTipState.pity.delete(id);
         }
+        lastStatusText = turnStartPick.text;
+        lastUsageRefreshAt = Date.now();
         eventQueue.push({
           type: 'status',
           data: {
             status: turnStartPick.text,
-            ...usageTracker.snapshot(),
+            ...liveUsageSnapshot(),
             isRunning: true,
           },
           source: 'codex',
@@ -10476,6 +10516,7 @@ export class CodexAgent extends BaseAgent {
                 ...(turnModel ? { model: turnModel } : {}),
               });
               currentTurnId = resp.turn.id;
+              beginCodexGenerationTurn(translatorRt, resp.turn.id);
               isTurnInFlight = true;
               turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
               if (reconnectStallTimer && reconnectStallTurnId === resp.turn.id) {
@@ -11183,7 +11224,7 @@ export class CodexAgent extends BaseAgent {
       },
 
       getUsageSnapshot(): UsageSnapshot {
-        return usageTracker.snapshot();
+        return liveUsageSnapshot();
       },
 
       setInteractionResolver(resolver: InteractionResolver) {

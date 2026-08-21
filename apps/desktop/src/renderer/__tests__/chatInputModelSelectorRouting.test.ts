@@ -159,6 +159,15 @@ describe('ChatInput model source switching wiring', () => {
    * 档位集合,而意图期的回调(performAgentSwitch(intent.target, …))按目标能力校验,
    * 用户点的档位被静默回落。
    */
+  it('passes unresolved runtime identity through instead of falling back to the intent target', () => {
+    const start = chatInputSource.indexOf('const sessionEngineFilter = useMemo(');
+    expect(start).toBeGreaterThan(-1);
+    const block = chatInputSource.slice(start, chatInputSource.indexOf('}, [', start));
+    expect(block).toContain('runtimeAgent: runtimeAgentKind ?? undefined');
+    expect(block).not.toContain('runtimeAgentKind ?? currentAgent');
+    expect(block).not.toContain('runtimeAgentKind ?? vendorKeyToAgentKind');
+  });
+
   it('prefers the pending switch intent target as the unified panel session agent', () => {
     expect(chatInputSource).toContain(
       'const intentTargetAgent = agentSwitchIntent?.target ?? null;',
@@ -188,9 +197,9 @@ describe('ChatInput model source switching wiring', () => {
     expect(block).toContain('wireModelId: modelId,');
     expect(block).toContain('engine: agentKindToVendor(targetAgent),');
     expect(block).toContain('providerId,');
-    // 派生校验必须比对来源:仅来源被切走(wire id / 引擎不变)时锚点失效
-    // (2026-08-17 review:跨窗口 / 外部 patch 切来源后不得继续勾旧来源的收藏)。
-    expect(chatInputSource).toContain(
+    // 勾选只认 uid(Chris 2026-08-20):不拿正在跑的来源去对副本。
+    expect(chatInputSource).toContain('sessionFavoriteAnchor?.uid ?? null');
+    expect(chatInputSource).not.toContain(
       'sessionFavoriteAnchor.providerId === activeProviderId &&',
     );
   });

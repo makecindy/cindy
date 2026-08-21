@@ -782,6 +782,10 @@ interface CCAgentStatusUpdate {
   costUsd?: number;
   contextTokens: number;
   contextWindow: number;
+  outputTokens?: number;
+  generationDurationMs?: number;
+  generationActive?: boolean;
+  generationReliable?: boolean;
   isRunning: boolean;
   /** Host-owned SDK boundary claim; a claimed `status(false)` is not product idle. */
   turnContinuationId?: number;
@@ -1561,6 +1565,16 @@ interface ElectronAPI {
     runtimeStates: () => Promise<{ states: Record<string, string> }>;
     /** 面板错误态「重载意识」:清熔断记账 + 重新拉起沙箱。 */
     reload: (id: string) => Promise<{ state: string }>;
+    /** Library(持久作品库)设置面:概览/选位置/绑定/迁移/回默认/解绑/删除。 */
+    libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    libraryPickLocation: (
+      id: string,
+    ) => Promise<{ ok: boolean; cancelled?: boolean; candidate?: string; warnings?: string[]; message?: string }>;
+    libraryBind: (id: string, candidate: string) => Promise<{ ok: boolean; message?: string; warnings?: string[] }>;
+    libraryRelocate: (id: string, candidate: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryRevertDefault: (id: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryUnbind: (id: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryDelete: (id: string) => Promise<{ ok: boolean; cancelled?: boolean; message?: string }>;
     legacyRecoveryStatus: () => Promise<
       import('../shared/legacyGhostRecovery').LegacyGhostRecoveryStatus
     >;
@@ -2300,6 +2314,7 @@ interface ElectronAPI {
       markModelChoice?: boolean;
       effort?: string;
       fast?: boolean;
+      thinking?: boolean;
     }) => void,
   ) => () => void;
 
@@ -4088,6 +4103,18 @@ interface ElectronAPI {
         ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
       ) => void,
     ) => () => void;
+    getProjectOrder: () => Promise<import('../shared/projectOrderSettings').SyncedProjectOrderSnapshot>;
+    applyProjectOrder: (request: {
+      manualProjectOrder: readonly string[];
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
+      projectOrder: 'activity' | 'custom';
+    }) => Promise<import('../shared/projectOrderSettings').SyncedProjectOrderSnapshot>;
+    onProjectOrderChanged: (
+      cb: (
+        snapshot: import('../shared/projectOrderSettings').SyncedProjectOrderSnapshot,
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
   };
 
   remotePrecreatedWorktreeLedger: {
@@ -4224,6 +4251,8 @@ interface ElectronAPI {
        * fire-and-forget；renderer 应在 emitPatch userSendAt 之后调用，作为持久化兜底。
        */
       touchUserSend: (id: string, atMs?: number) => Promise<void>;
+      /** 置顶段切到卡片模式才生成/回填任务摘要。 */
+      setPinnedCardSummaries: (enabled: boolean) => Promise<void>;
       /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: () => Promise<string[]>;
       /** 红点派生的周期性重算源:尾部停在未 dismissed 错误行的 active 会话 id。 */
@@ -4679,6 +4708,50 @@ interface ElectronAPI {
       keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
     ) => Promise<{ ok: true }>;
     deleteCustomProvider: (providerId: string) => Promise<{ ok: true }>;
+    localModelStatus: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
+    localModelStart: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
+    localModelList: () => Promise<{
+      status: import('../shared/localModelRuntime').LocalRuntimeStatus;
+      models: import('../shared/localModelRuntime').LocalInstalledModel[];
+      recommended: import('../shared/localModelRuntime').RecommendedLocalModel | null;
+      catalog: import('../shared/localModelRuntime').CuratedOllamaModel[];
+      featured: import('../shared/localModelRuntime').CuratedOllamaModel[];
+      memoryGb: number;
+      recommendReason: import('../shared/localModelRuntime').LocalRecommendReason;
+      appleSilicon: boolean;
+      pull: import('../shared/localModelRuntime').LocalModelPullProgress | null;
+      pulls: import('../shared/localModelRuntime').LocalModelPullProgress[];
+      pausedPull: import('../shared/localModelRuntime').LocalModelPullProgress | null;
+      detectedLocalPresetIds: string[];
+      catalogDirty?: boolean;
+    }>;
+    localModelPull: (name: string) => Promise<{ ok: true; stopped?: 'pause' | 'cancel' }>;
+    localModelAbort: (reason: 'pause' | 'cancel', name: string) => Promise<{ ok: true }>;
+    localModelEnsure: () => Promise<{ ok: true; created: boolean }>;
+    localModelSetInPicker: (
+      name: string,
+      enabled: boolean,
+    ) => Promise<{ ok: true; created: boolean }>;
+    localModelDelete: (name: string) => Promise<{ ok: true; created: boolean }>;
+    localModelDiscardPaused: (name: string) => Promise<{ ok: true }>;
+    localModelInstall: (input: {
+      consent: true;
+    }) => Promise<{
+      ok: true;
+      status?: import('../shared/localModelRuntime').LocalRuntimeStatus;
+      created?: boolean;
+      stopped?: 'cancel';
+    }>;
+    localModelInstallAbort: () => Promise<{ ok: true }>;
+    onLocalModelStatus: (
+      callback: (status: import('../shared/localModelRuntime').LocalRuntimeStatus) => void,
+    ) => () => void;
+    onLocalModelPullProgress: (
+      callback: (progress: import('../shared/localModelRuntime').LocalModelPullProgress) => void,
+    ) => () => void;
+    onLocalModelInstallProgress: (
+      callback: (progress: import('../shared/localModelRuntime').LocalRuntimeInstallProgress) => void,
+    ) => () => void;
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: () => Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
@@ -4817,6 +4890,8 @@ interface ElectronAPI {
     /** 会话仍在运行的后台任务快照(挂载 / 重载后补回存量;实时增量走事件流)。 */
     listSessionBackgroundTasks: (sessionId: string) => Promise<{
       tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>;
+      /** 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数(桥接对账收口权威依据)。 */
+      pendingContinuations?: number;
     }>;
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。
@@ -5346,6 +5421,7 @@ interface ElectronAPI {
     setEffort: (sessionId: string, effort: string) => Promise<void>;
     setPermissionMode: (sessionId: string, mode: string) => Promise<void>;
     setFastMode: (sessionId: string, enabled: boolean) => Promise<void>;
+    setThinkingEnabled: (sessionId: string, enabled: boolean) => Promise<void>;
     /** 计划模式一级开关(与 permissionMode 正交); DB 持久化由调用方另调 sessionService.update({ planModeEnabled }) */
     setPlanMode: (sessionId: string, enabled: boolean) => Promise<void>;
     /** 会话导出 HTML(pi 原生); 主进程弹保存对话框 + 导出 + 在文件管理器显示; 返回路径或 null(取消/不支持) */

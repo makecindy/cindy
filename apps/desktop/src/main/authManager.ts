@@ -297,6 +297,22 @@ let pendingAuthRealm: AuthRegion | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 let sessionInvalidationPromise: Promise<void> | null = null;
+// Real owner change / logout: keep the renderer fail-closed even if a late
+// notifyRenderer() races the teardown. Same-owner Ghost repair must not set
+// this — that was the 55-minute /login flash.
+let ownerChangeShellPendingDepth = 0;
+
+function enterOwnerChangeShellPending(): void {
+  ownerChangeShellPendingDepth += 1;
+}
+
+function leaveOwnerChangeShellPending(): void {
+  ownerChangeShellPendingDepth = Math.max(0, ownerChangeShellPendingDepth - 1);
+}
+
+function isOwnerChangeShellPending(): boolean {
+  return ownerChangeShellPendingDepth > 0;
+}
 /**
  * 设备标识。默认绑定物理机(machineIdSync)。
  *
@@ -860,6 +876,7 @@ async function withCloudOwnerCommit<T>(opts: {
     return withGhostSkillProjectionReadOnlyOwner(opts.nextOwnerId, opts.commit);
   }
   let releaseBoundary: (() => void) | null = null;
+  let heldOwnerChangeShell = false;
   // A same-owner projection repair tears down the owner-bound Ghost runtime but
   // keeps the same mode/owner, so commitActiveAppSession's same-owner early
   // return would NOT advance the owner generation — stale async work that
@@ -873,7 +890,14 @@ async function withCloudOwnerCommit<T>(opts: {
       previousOwnerId: opts.previousOwnerId,
       nextOwnerId: opts.nextOwnerId,
       prepareTransition: async ({ ownerChanged }) => {
-        notifyRendererAuthBoundaryPending();
+        // Same-owner Ghost repair (token refresh when the durable projection is
+        // unstable) is not a logout. Broadcasting snapshotLoggedOutAuthState()
+        // here bounced ProtectedRoute to /login every ~55 minutes.
+        if (ownerChanged) {
+          notifyRendererAuthBoundaryPending();
+          enterOwnerChangeShellPending();
+          heldOwnerChangeShell = true;
+        }
         releaseBoundary = beginAppSessionBoundary();
         if (ownerChanged) {
           await opts.prepareTransition();
@@ -901,6 +925,7 @@ async function withCloudOwnerCommit<T>(opts: {
   } finally {
     const release = releaseBoundary as (() => void) | null;
     release?.();
+    if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
     if (release) notifyRenderer();
   }
   if (committed) requestStableOwnerPostCommit('owner-commit');
@@ -929,6 +954,7 @@ async function withAccountFreeOwnerCommit(opts: {
 }): Promise<void> {
   let authCleared = opts.authAlreadyCleared ?? false;
   let releaseBoundary: (() => void) | null = null;
+  let heldOwnerChangeShell = false;
   // Same-owner account-free repair tears down the owner-bound Ghost runtime but
   // keeps the same mode/owner, so commitActiveAppSession's same-owner early
   // return would NOT advance the owner generation — stale async work that
@@ -966,6 +992,8 @@ async function withAccountFreeOwnerCommit(opts: {
       nextOwnerId: opts.nextMode === 'local' ? LOCAL_DATA_OWNER_ID : null,
       prepareTransition: async ({ ownerChanged }) => {
         notifyRendererAuthBoundaryPending();
+        enterOwnerChangeShellPending();
+        heldOwnerChangeShell = true;
         releaseBoundary = beginAppSessionBoundary();
         if (ownerChanged) {
           if (!authSessionTeardown) {
@@ -1034,6 +1062,7 @@ async function withAccountFreeOwnerCommit(opts: {
   } finally {
     const release = releaseBoundary as (() => void) | null;
     release?.();
+    if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
     if (release && notify) notifyRenderer();
   }
 
@@ -1695,7 +1724,9 @@ function snapshotAuthState(): AuthState {
     mode: appSession.mode,
     dataOwnerId: appSession.dataOwnerId,
     ownerGeneration: appSession.generation,
-    canEnterApp: appSession.mode !== 'signed-out' && !isAppSessionBoundaryPending(),
+    // IPC pending is not a logout. Real owner change / logout still holds the
+    // shell closed so a late notifyRenderer() cannot remount the outgoing owner.
+    canEnterApp: appSession.mode !== 'signed-out' && !isOwnerChangeShellPending(),
     isAuthenticated: isCloudAuthenticated,
     isCanary: currentUser !== null && canaryFlagStore.read(),
     deviceId,

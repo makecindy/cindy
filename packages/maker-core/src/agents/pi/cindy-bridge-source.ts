@@ -443,6 +443,84 @@ function whichRgOnPath(): string {
   return '';
 }
 
+// bash 隔离 home 的跨重载解析(#3070)。CINDY_PI_BASH_PACKAGE_HOME 由 host 在
+// spawn 时注入一次,bridge 首次加载后即从 process.env 删除(防止进程内其它代码
+// 改写)。但 Pi 会重载扩展:同一进程里 bridge 文件被再次执行时 env 已被删,重载
+// 实例拿到 undefined —— bash 从此永久 fail-closed。解法:首次加载把值 stash 进
+// globalThis 上的 non-configurable / non-writable 属性(语言层面不可替换、不可
+// 删除),重载实例取回时再做双重验证。
+//
+// 威胁模型:本进程内会加载用户安装的第三方托管扩展,它们与 bridge 共享同一
+// realm,能触碰 globalThis 与 process.env。因此:
+//  - stash 用 defineProperty(writable:false, configurable:false) 封死事后改写
+//    /替换/删除;读取时校验属性形态,可写可配置的属性一律不信任。
+//  - 重载取值要求 stash 与 PI_CODING_AGENT_DIR 派生值(path.posix.join(configHome,
+//    'bash-package-home'),与 host 侧 index.ts 的 joinRemotePosixPath 派生式逐字
+//    一致)双重相等:事后改写 PI_CODING_AGENT_DIR 会让二者失配 → fail-closed
+//    (该 env 本就常驻可写,这里顺带把它变成 canary);抢跑预置 stash(攻击者
+//    扩展先于 bridge 首次加载执行)也得同时锚定 PI_CODING_AGENT_DIR 才可能一致,
+//    与「抢跑改写注入 env」在原实现下同级别,不新增面。
+//  - env 值在已消费(stash 已建立)后再次出现,视为进程内写入:删除并忽略。
+//  - stash 缺失(非 Cindy 初始化的进程,如手工把 bridge 拷进用户 ~/.pi)或双重
+//    验证失败 → 返回 undefined,下游 isolatedBashEnvironment 保持原 fail-closed,
+//    不猜外来 runtime 的路径。
+//
+// 凭证不走本机制:CINDY_PI_PACKAGE_MANAGEMENT 是 host 签发的 bearer token,
+// 保持读一次即删、仅闭包持有(见入口注释)。
+const BRIDGE_RELOAD_STASH_GLOBAL = '__cindyBridgeBashPackageHome';
+
+function stashBashPackageHome(value: string): void {
+  try {
+    Object.defineProperty(globalThis, BRIDGE_RELOAD_STASH_GLOBAL, {
+      value,
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
+  } catch {
+    // 属性已被抢跑占用或 globalThis 受限:本加载仍可用 env 值;重载后双重验证
+    // 会因 stash 缺失/失配而 fail-closed,不会信任被占用的值。
+  }
+}
+
+function readStashedBashPackageHome(): string | undefined {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, BRIDGE_RELOAD_STASH_GLOBAL);
+    // 只信任我们写入的形态:non-configurable + non-writable。可写可配置的属性
+    // (含 plain 赋值)随时可被第三方扩展替换,一律不信任。
+    if (!descriptor || descriptor.configurable || descriptor.writable) return undefined;
+    return typeof descriptor.value === 'string' ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function derivedBashPackageHome(): string | undefined {
+  const configHome = process.env.PI_CODING_AGENT_DIR;
+  if (!configHome || !path.isAbsolute(configHome)) return undefined;
+  // 与 host 侧 index.ts 的 joinRemotePosixPath(configHome, 'bash-package-home')
+  // 逐字一致(posix join:本地 Windows 路径同样以正斜杠拼接)。
+  return path.posix.join(configHome, 'bash-package-home');
+}
+
+function resolveBashPackageHome(): string | undefined {
+  const injected = process.env[PI_BASH_PACKAGE_HOME_ENV];
+  if (injected !== undefined) delete process.env[PI_BASH_PACKAGE_HOME_ENV];
+  const stashed = readStashedBashPackageHome();
+  if (stashed === undefined) {
+    // 本进程首次加载:host 注入的 env 是权威,stash 供重载实例取回。
+    if (injected !== undefined) {
+      stashBashPackageHome(injected);
+      return injected;
+    }
+    return undefined;
+  }
+  // 重载(env 已被消费;或 env 值又被进程内写入 —— 上面的 delete 已顺手清掉):
+  // stash 与 PI_CODING_AGENT_DIR 派生值双重一致才信任,否则 fail-closed。
+  const derived = derivedBashPackageHome();
+  return derived !== undefined && stashed === derived ? stashed : undefined;
+}
+
 // 凭证/密钥路径特征由 maker-core 的单一来源生成。bridge 自包含、运行时不能 import，
 // 但不再维护第二份手写名单，避免新增凭证目录时 Pi 静默漏拦。
 const CREDENTIAL_PATH_PATTERNS = ${JSON.stringify(SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS)}
@@ -2439,8 +2517,13 @@ function rgGlob(
 }
 
 export default async function cindyBridge(pi: any) {
-  const bashPackageHome = process.env[PI_BASH_PACKAGE_HOME_ENV];
-  delete process.env[PI_BASH_PACKAGE_HOME_ENV];
+  // bash 隔离 home 经 resolveBashPackageHome 解析(首次加载读删 + 防篡改 stash,
+  // 扩展重载(#3070)经双重验证取回,而不是拿到 undefined 让 bash 永久 fail-closed)。
+  // 包管理 token 是 bearer 凭证,保持读一次即删、仅闭包持有 —— 不进 globalThis
+  // stash(同进程的第三方托管扩展可读它,见 resolveBashPackageHome 注释)。
+  const bashPackageHome = resolveBashPackageHome();
+  const piPackageManagementToken = process.env[PI_PACKAGE_MANAGEMENT_ENV];
+  delete process.env[PI_PACKAGE_MANAGEMENT_ENV];
   // 主 Pi 不传 --tools：那个白名单也会筛掉动态 MCP 与 subagent。改由 bridge 注册
   // 专用只读工具；子代理仍用自己的 read,grep,find,ls 白名单收紧能力面。
   const grepTool = createGrepTool(process.cwd());
@@ -2573,8 +2656,7 @@ export default async function cindyBridge(pi: any) {
   // CLI from bash writes to Pi's default user home and bypasses Cindy's
   // compatibility/approval state. Normal local tasks therefore receive one
   // host-backed mutation tool; Review and SSH remoteHostId tasks do not.
-  const piPackageManagementToken = process.env[PI_PACKAGE_MANAGEMENT_ENV];
-  delete process.env[PI_PACKAGE_MANAGEMENT_ENV];
+  // (token 在函数开头读一次即删、仅闭包持有;重载后本工具不再注册 —— 见开注释。)
   if (piPackageManagementToken && /^[A-Za-z0-9_-]{40,256}$/.test(piPackageManagementToken)) {
     pi.registerTool({
       name: 'cindy_pi_extension',

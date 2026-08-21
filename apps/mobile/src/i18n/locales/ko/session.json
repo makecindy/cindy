@@ -26,6 +26,9 @@
   },
   "screen": {
     "thinking": "생각 중…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "다시 연결하는 중…",
     "modelBusyRetrying": "모델 서비스 혼잡, 다시 시도 중…",
     "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 다시 시도 중…",

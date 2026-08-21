@@ -74,16 +74,17 @@ vi.mock('../referenceModelPricing', () => ({
           outputPerMtok: 10,
         }
       : undefined,
-  getSubscriptionDirectValuePrice: (model: string) =>
-    model === 'xai/grok-4.3'
+  getSubscriptionDirectValuePrice: (model: string, agent?: string) =>
+    model === 'xai/grok-4.3' || (model === 'grok-4.6' && agent === 'pi')
       ? {
           providerId: 'xai',
           modelId: model,
           currency: 'USD',
           source: 'subscription-reference',
           approximate: true,
-          inputPerMtok: 3,
-          outputPerMtok: 15,
+          inputPerMtok: model === 'grok-4.6' ? 2 : 3,
+          outputPerMtok: model === 'grok-4.6' ? 6 : 15,
+          cacheReadPerMtok: model === 'grok-4.6' ? 0.5 : undefined,
         }
       : undefined,
 }));
@@ -109,6 +110,7 @@ import {
   computeAnomaly,
   computeStreaks,
   emptyUsageHistoryPayload,
+  getSubscriptionValuePriceFor,
   piSubscriptionUsageModelKey,
   prevDayKey,
   readUsageHistory,
@@ -294,6 +296,18 @@ describe('billing model keys', () => {
     expect(piSubscriptionUsageModelKey('chatgpt/gpt-5.6-sol')).toBe(
       'chatgpt/gpt-5.6-sol#billing=subscription',
     );
+  });
+});
+
+describe('getSubscriptionValuePriceFor', () => {
+  it('routes Pi exclusive Grok ids through the subscription-direct quote', () => {
+    expect(getSubscriptionValuePriceFor('pi', 'grok-4.6', null)).toMatchObject({
+      providerId: 'xai',
+      modelId: 'grok-4.6',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.5,
+    });
   });
 });
 
@@ -563,6 +577,29 @@ describe('readUsageHistoryWith', () => {
     });
     expect(result.models[0].estimatedMoney?.amount).toBeGreaterThan(0);
     expect(result.totals.todayTokens).toBe(1_002_000);
+  });
+
+  it('estimates Pi SuperGrok subscription value for exclusive grok ids', async () => {
+    const result = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [
+        modelRow(
+          TODAY,
+          'pi',
+          piSubscriptionUsageModelKey('grok-4.6'),
+          actual(0),
+          { inputTokens: 179_300, outputTokens: 9_300, cacheReadTokens: 1_600_000 },
+        ),
+      ],
+    }));
+
+    expect(result.models[0]).toMatchObject({
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      inputTokens: 179_300,
+      cacheReadTokens: 1_600_000,
+    });
+    // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $1.2144
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(1.2144, 6);
   });
 
   it('marks estimates pending only when a subscription price is missing during refresh', async () => {

@@ -1854,7 +1854,7 @@ describe('remoteSessionStore', () => {
     const truncated = {
       ...messageAt('m1', 's1', '2026-01-01T10:00:01.000Z'),
       content: '[remote content truncated: payload too large]',
-      agentMeta: { remoteContentTruncated: true },
+      agentMeta: { remoteContentTruncated: true, agentTaskStatus: 'failed' as const },
     };
     remoteSessionStore.setMessages('s1', [full]);
 
@@ -1866,6 +1866,8 @@ describe('remoteSessionStore', () => {
     const rows = remoteSessionStore.getMessages('s1');
     expect(rows.map((item) => item.id)).toEqual(['m1', 'm2']);
     expect(rows[0].content).toBe('完整的长内容');
+    expect(rows[0].agentMeta?.agentTaskStatus).toBe('failed');
+    expect(rows[0].agentMeta?.remoteContentTruncated).not.toBe(true);
   });
 
   it('does not emit when a reseed returns the same session list or message window', () => {
@@ -2173,6 +2175,83 @@ describe('remoteSessionStore', () => {
     });
     expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
     vi.useRealTimers();
+  });
+
+  it('keeps live generation fields from the first post-reconnect status', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', {
+      isRunning: true,
+      outputTokens: 12,
+      generationDurationMs: 400,
+      generationActive: true,
+      generationReliable: true,
+    });
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', [{ sessionId: 's1', isTurnRunning: true }]);
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(true);
+    expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
+
+    pushMakerStatus('s1', {
+      isRunning: true,
+      status: 'Generating...',
+      tokenUsage: 235,
+      outputTokens: 40,
+      generationDurationMs: 800,
+      generationActive: true,
+      generationReliable: true,
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      tokenUsage: 235,
+      outputTokens: 40,
+      generationDurationMs: 800,
+      generationActive: true,
+      generationReliable: true,
+    });
+  });
+
+  it('still zeros leftover live metrics when a new turn starts without them', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', {
+      isRunning: true,
+      outputTokens: 99,
+      generationDurationMs: 5_000,
+      generationActive: true,
+      generationReliable: false,
+    });
+    pushMakerStatus('s1', { isRunning: false });
+    pushMakerStatus('s1', { isRunning: true, status: 'Thinking' });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      outputTokens: 0,
+      generationDurationMs: 0,
+      generationActive: false,
+      generationReliable: true,
+    });
+  });
+
+  it('clears leftover tok/s when activity restores wide running before the next maker status', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    pushMakerStatus('s1', {
+      isRunning: true,
+      outputTokens: 40,
+      generationDurationMs: 800,
+      generationActive: true,
+      generationReliable: true,
+    });
+    pushMakerStatus('s1', { isRunning: false });
+    expect(remoteSessionStore.getSessionRunStatus('s1').outputTokens).toBe(40);
+
+    remoteSessionStore.applySessionActivity('dev-1', { sessionId: 's1', phase: 'running' });
+    expect(remoteSessionStore.getSessionRunStatus('s1')).toMatchObject({
+      isRunning: true,
+      outputTokens: 0,
+      generationDurationMs: 0,
+      generationActive: false,
+      generationReliable: true,
+    });
   });
 
   it('clears leftover task updates on a real turn start, scoped to that session', () => {

@@ -79,6 +79,7 @@ import type { PiRuntimeCapabilityManifest } from '../types/pi-runtime-capabiliti
 import type { PiProjectTrustInputSnapshot } from '../types/pi-project-trust.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
 import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
+import type { ClaudeSubagentModelAccessResult } from './claude-code/subagent-model-access.js';
 
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
@@ -467,6 +468,18 @@ export interface AgentDeps {
    */
   binaryPath: string;
   logger: Logger;
+
+  /**
+   * Claude Code 专用：按本次会话的当前 provider、账号与父模型实时判定显式
+   * Agent/Task 模型是否可路由。只有 `denied` 会形成产品硬阻断；目录未就绪、
+   * 非权威快照或读取失败必须返回 `unknown`，不能把静态 catalog 当权限清单。
+   */
+  resolveClaudeSubagentModelAccess?: (context: {
+    providerId?: string | null;
+    parentModel: string;
+    credentialMode?: AgentCredentialMode;
+    model: string;
+  }) => ClaudeSubagentModelAccessResult | Promise<ClaudeSubagentModelAccessResult>;
 
   /**
    * 解析某 session 的 cc-debug raw 文件落盘路径 (host 注入)。host 用 logger 的 logDir 拼
@@ -1117,6 +1130,11 @@ export interface AgentDeps {
      */
     onApprovalRequest?: (params: unknown) => Promise<unknown>;
     /**
+     * 远端 daemon 的 PreToolUse 通过反向 RPC 调回同一个实时模型准入 resolver。
+     * Params/Result 采用 maker-cc-manager 的同名协议形状，但保持 unknown 以免耦包。
+     */
+    onSubagentModelAccessRequest?: (params: unknown) => Promise<unknown>;
+    /**
      * 本 session 的 Maker Memory 注入开关 (startSession 时已按 per-session flag
      * + manager 就绪归一)。host 据此决定是否把 cindy_memory 以 http 形态经
      * bridge 注进远端 startParams.mcpServers — prompt 段 (rules + MEMORY.md
@@ -1314,6 +1332,8 @@ export interface StartSessionOptions {
    * Undefined means do not override the agent/server default.
    */
   fastMode?: boolean;
+  /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
+  thinkingEnabled?: boolean;
   /**
    * 用户级 system prompt 追加段，跨 agent (claude-code / codex) 公用，
    * 拼接顺序最末（优先级最高），覆盖 engine 与 host 段。空串 / undefined 跳过。
@@ -1618,6 +1638,15 @@ export interface AgentSessionHandle {
   listBackgroundTasks?(): BackgroundTaskSnapshot[];
 
   /**
+   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数
+   * (awaiting + active,cancelled 不计)。listBackgroundTasks 在任务终态后
+   * 立即不再包含该任务,空快照不能证明后续没有 wake turn —— renderer 的
+   * 唤醒桥接对账以本计数为收口权威依据。不支持的 agent 留空(Session 层
+   * 回退为 0,消费方按「信号不可用 → 不收口」保守处理)。
+   */
+  countPendingWakeContinuations?(): number;
+
+  /**
    * Resolve the provider claim attached atomically to a specific `done` event.
    * Returns null when that event has no matching continuation boundary.
    */
@@ -1705,6 +1734,8 @@ export interface AgentSessionHandle {
 
   /** 运行时切换 Fast mode；不支持的 agent 不实现。 */
   setFastMode?(enabled: boolean): Promise<void>;
+  /** Pi thinking-toggle 模型：运行时开关思考。 */
+  setThinkingEnabled?(enabled: boolean): Promise<void>;
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。

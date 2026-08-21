@@ -328,6 +328,8 @@ export interface CatalogModel {
   effortDisplayNames?: Partial<Record<Effort, string>>;
   /** 默认 effort；null = 不支持。 */
   defaultEffort: Effort | null;
+  /** 思考只有开/关两档时，选择器显示开关而不是档位列表。 */
+  thinkingToggle?: boolean;
   /**
    * 该模型在**该 (provider, agent) 下**是否支持 Fast Mode —— Fast 能力的**唯一真相**。
    *
@@ -532,15 +534,17 @@ export interface ProviderRuntimeModelConfig {
   defaultEnabled?: boolean;
   /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
   supportsImageInput?: boolean;
-  /** Pi 自定义模型是否支持 reasoning；缺省 / false 均按不支持处理。 */
+  /** 该 runtime 模型是否支持 reasoning；缺省表示未声明（由投影层决定 fallback）。 */
   reasoning?: boolean;
   /**
-   * Pi 自定义模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
-   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
+   * 该 runtime 模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
+   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的端点。
    */
   reasoningEfforts?: PiReasoningEffort[];
-  /** Pi 自定义模型的厂商推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
+  /** 该 runtime 模型的推荐默认推理强度；必须包含在 reasoningEfforts 中。 */
   reasoningDefaultEffort?: PiReasoningEffort;
+  /** 思考只有开/关时走开关 UI。 */
+  thinkingToggle?: boolean;
 }
 
 /**

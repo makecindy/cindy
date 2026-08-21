@@ -1,16 +1,17 @@
 /**
  * sessionTaskSummary — 置顶会话的"任务现状一句话摘要"生成器
  * ---------------------------------------------------------------------------
- * sidebar-card-mode redesign:置顶卡片与折叠 rail flyout 不再展示"最近消息前
- * 140 字"原文,而是一句概括"任务是什么 + 当前进展"(对照 redesign 稿示例:
- * "重构 Prompt 模板与变量结构,已完成 3/5 个模块。")。
+ * sidebar-card-mode redesign:置顶卡片不再展示"最近消息前 140 字"原文,
+ * 而是一句概括"任务是什么 + 当前进展"。列表/文字模式不展示摘要。
  *
  * 生成时机(两处调用方,都 fire-and-forget):
  *   1. maker-ipc/register.ts — turn 结束(done event)
  *   2. localDb/ipc/sessions.ts — 会话被置顶那一刻(动态 import 避免模块环)
+ * 两处都还要满足「置顶段当前是卡片模式」(由 renderer 通知)。
+ * 列表/文字模式下的 turn-done(force)会清掉旧摘要,切回卡片时由回填按最新内容重写。
  *
  * 成本控制(对齐 title.ts 的口径):
- *   - 仅 status='active' 且 pinnedAt 非空的会话生成(卡片/rail 只展示置顶)
+ *   - 仅 status='active' 且 pinnedAt 非空、置顶段是卡片模式时生成
  *   - maker.oneShot 路由到低价模型(Claude → haiku / Codex → mini),maxTokens 80
  *   - per-session in-flight 守卫 + 20s 节流,失败 swallow
  *
@@ -22,13 +23,14 @@
  */
 
 import { BrowserWindow } from 'electron';
-import { and, count, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gt, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getMaker } from './maker-host/index.js';
 import { isAgentOneShotRouteDisabled } from './maker-host/model-route-guard-live.js';
 import { agentSupportsOneShot, requestUtilityText } from './utility-model/oneShotCandidates.js';
 import { getDbClient } from './localDb/client/current.js';
 import { latestMessageText } from './localDb/latestMessageText.js';
+import { extractMessagePreview } from './localDb/mapper.js';
 import { messages, sessions } from './localDb/schema.js';
 import { createLogger } from './logger.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
@@ -41,12 +43,22 @@ import {
   pickTier,
   maxCharsForTier,
   hasSummarizableMaterial,
+  shouldGeneratePinnedCardSummary,
+  shouldVoidSummaryAfterGenerationAttempt,
+  nonCardTurnDisplayPatch,
+  shouldForceGenerateOnClear,
+  shouldScheduleForceGenerateAfterInFlight,
 } from './sessionTaskSummary.logic.js';
 
 const log = createLogger('sessionTaskSummary');
 
 /** 同一 session 两次生成的最小间隔。 */
 const THROTTLE_MS = 20_000;
+
+/** 置顶段当前是否卡片模式。默认 false:renderer 未通知前不生成。 */
+let pinnedSectionIsCard = false;
+/** 一次启动只回填一轮。切到卡片模式会清掉再跑。 */
+let backfillDone = false;
 
 /** 正在生成中的 session → 其生成 Promise。去重用;force 模式据此等在跑的那次结束再重生成。 */
 const inFlight = new Map<string, Promise<void>>();
@@ -69,14 +81,124 @@ function broadcastPatched(sessionId: string, patch: Record<string, unknown>): vo
   }
 }
 
-/**
- * 为置顶会话生成/刷新任务摘要。非置顶/归档/草稿自动跳过;失败 swallow。
- * fire-and-forget——调用方 `void maybeGenerateSessionTaskSummary(id)` 即可。
- */
+const messageRowid = sql<number>`rowid`;
+
+/** 与 sessions:list / 删除消息同一口径的最近可见消息 preview。 */
+async function latestVisiblePreview(sessionId: string): Promise<string | null> {
+  const db = getDbClient().drizzle;
+  const [sessionRow] = await db
+    .select({ clearedAt: sessions.clearedAt })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  const visibleAfterClear =
+    sessionRow?.clearedAt == null ? undefined : gt(messages.createdAt, sessionRow.clearedAt);
+  const [latestRow] = await db
+    .select({ content: messages.content, role: messages.role })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        sql`${messages.role} IN ('user', 'assistant')`,
+        isNull(messages.rewindAt),
+        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        visibleAfterClear,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  return extractMessagePreview(latestRow?.content, latestRow?.role);
+}
+
+/** 已切回卡片:绝不继续写 null。没有生成在飞才 force 再生成;在飞则交给那次结算,避免自等待。 */
+async function stopClearBecauseCard(sessionId: string): Promise<boolean> {
+  if (!pinnedSectionIsCard) return false;
+  const sessionGenerateInFlight = inFlight.has(sessionId);
+  if (
+    shouldForceGenerateOnClear({
+      pinnedSectionIsCard: true,
+      sessionGenerateInFlight,
+    })
+  ) {
+    await maybeGenerateSessionTaskSummary(sessionId, { force: true });
+    return true;
+  }
+  if (
+    shouldScheduleForceGenerateAfterInFlight({
+      pinnedSectionIsCard: true,
+      sessionGenerateInFlight,
+    })
+  ) {
+    const pending = inFlight.get(sessionId);
+    if (pending) {
+      void pending
+        .catch(() => undefined)
+        .then(() => {
+          if (!pinnedSectionIsCard) return;
+          return maybeGenerateSessionTaskSummary(sessionId, { force: true });
+        });
+    }
+  }
+  return true;
+}
+
+/** 列表/文字模式下作废旧摘要,并补上最新 preview。不 bump updatedAt。
+ *  读/写之间用户可能已切回卡片:那时不能再抹掉摘要(回填可能刚因非空跳过),
+ *  且当前没有生成在飞时才 force 再生成——不得从 generateSummaryOnce.finally 再入 inFlight。 */
+async function clearSessionTaskSummary(sessionId: string): Promise<void> {
+  try {
+    if (await stopClearBecauseCard(sessionId)) return;
+    let preview: string | null = null;
+    try {
+      preview = await latestVisiblePreview(sessionId);
+    } catch (err) {
+      log.warn('latest visible preview for list settle failed (swallowed)', {
+        sessionId,
+        error: String(err),
+      });
+    }
+    if (await stopClearBecauseCard(sessionId)) return;
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select({ summary: sessions.summary })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (row?.summary) {
+      if (await stopClearBecauseCard(sessionId)) return;
+      await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
+      if (await stopClearBecauseCard(sessionId)) return;
+    }
+    lastGeneratedAt.delete(sessionId);
+    broadcastPatched(sessionId, nonCardTurnDisplayPatch(preview));
+  } catch (err) {
+    log.warn('clear stale task summary failed (swallowed)', {
+      sessionId,
+      error: String(err),
+    });
+  }
+}
+
+/** renderer 在置顶段显示模式变化时通知。切到卡片会重跑一次置顶回填。 */
+export function setPinnedSectionCardMode(enabled: boolean): void {
+  const next = enabled === true;
+  const was = pinnedSectionIsCard;
+  pinnedSectionIsCard = next;
+  if (next && !was) {
+    backfillDone = false;
+    void backfillPinnedSessionSummaries();
+  }
+}
+
 export async function maybeGenerateSessionTaskSummary(
   sessionId: string,
   opts: { force?: boolean } = {},
 ): Promise<void> {
+  if (!pinnedSectionIsCard) {
+    // turn-done 是权威边界:列表态不生成,但必须作废旧摘要,否则切回卡片会先露出上一轮句子。
+    if (opts.force) await clearSessionTaskSummary(sessionId);
+    return;
+  }
   const existing = inFlight.get(sessionId);
   if (existing) {
     if (!opts.force) return; // 已有生成在跑 → 去重跳过
@@ -102,6 +224,7 @@ export async function maybeGenerateSessionTaskSummary(
 
 /** 实际生成一次:读素材 → 选档 → oneShot → 写回前重查 → 落库 + 广播。失败 swallow。 */
 async function generateSummaryOnce(sessionId: string): Promise<void> {
+  let wroteFresh = false;
   try {
     const db = getDbClient().drizzle;
     const [session] = await db
@@ -118,7 +241,16 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    if (!session || session.status !== 'active' || session.pinnedAt == null) return;
+    if (
+      !session ||
+      !shouldGeneratePinnedCardSummary({
+        status: session.status,
+        pinnedAt: session.pinnedAt,
+        pinnedSectionIsCard,
+      })
+    ) {
+      return;
+    }
     const isScheduled = isScheduledSession(session.source, session.title);
 
     // 消息计数与 latestMessageText 同口径地尊重 /clear 边界——只数 clearedAt 之后、
@@ -130,7 +262,10 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     const [userMsg, assistantMsg, [msgCount]] = await Promise.all([
       latestMessageText(sessionId, 'user'),
       latestMessageText(sessionId, 'assistant'),
-      db.select({ n: count() }).from(messages).where(and(...msgCountConds)),
+      db
+        .select({ n: count() })
+        .from(messages)
+        .where(and(...msgCountConds)),
     ]);
     // 没有任何对话素材(空草稿被置顶)——没东西可总结
     if (!hasSummarizableMaterial(userMsg, assistantMsg)) return;
@@ -144,7 +279,10 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     const inactiveMs = Date.now() - (session.userSendAt ?? session.updatedAt);
     const tier = pickTier({ inactiveMs, messageCount, isScheduled });
 
-    const agentKind = session.agentKind === 'codex' || session.agentKind === 'pi' ? session.agentKind : 'claude-code';
+    const agentKind =
+      session.agentKind === 'codex' || session.agentKind === 'pi'
+        ? session.agentKind
+        : 'claude-code';
     const prompt = SUMMARY_PROMPT(session.title, userMsg, assistantMsg, tier);
     // 模型走系统统一配置:优先用"轻量任务模型链"(utility-model,与起标题同源,
     // 由 getUtilityModelChainProfiles 决定),配置缺失/不可用时再回退到 agent 自带的
@@ -160,7 +298,7 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // 那样跨 agent 兜底 —— 会话 agent 不支持 oneShot 时直接跳过兜底(仅靠 utility-model)。
     const text = utility.ok
       ? utility.text
-      : (!agentSupportsOneShot(agentKind) || (await isAgentOneShotRouteDisabled(agentKind)))
+      : !agentSupportsOneShot(agentKind) || (await isAgentOneShotRouteDisabled(agentKind))
         ? ''
         : await getMaker().oneShot(agentKind, prompt, { maxTokens: 120 });
     const summary = sanitize(text, maxCharsForTier(tier));
@@ -182,12 +320,15 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
+    if (!cur || cur.clearedAt !== session.clearedAt || cur.userSendAt !== session.userSendAt) {
+      return;
+    }
     if (
-      !cur ||
-      cur.status !== 'active' ||
-      cur.pinnedAt == null ||
-      cur.clearedAt !== session.clearedAt ||
-      cur.userSendAt !== session.userSendAt
+      !shouldGeneratePinnedCardSummary({
+        status: cur.status,
+        pinnedAt: cur.pinnedAt,
+        pinnedSectionIsCard,
+      })
     ) {
       return;
     }
@@ -195,17 +336,27 @@ async function generateSummaryOnce(sessionId: string): Promise<void> {
     // 直写 summary,不 bump updatedAt——摘要刷新不应引起 sidebar 重排
     await db.update(sessions).set({ summary }).where(eq(sessions.id, sessionId));
     lastGeneratedAt.set(sessionId, Date.now());
+    wroteFresh = true;
     broadcastPatched(sessionId, { summary });
   } catch (err) {
     log.warn('generate task summary failed (swallowed)', {
       sessionId,
       error: String(err),
     });
+  } finally {
+    // 不变量:生成尝试一旦开始,结算时若不在卡片模式且没写出新摘要,旧句子必须作废。
+    // 覆盖成功写回以外的全部出口(空结果 / 抛错 / 写回放弃 / 中途 return)。
+    if (
+      shouldVoidSummaryAfterGenerationAttempt({
+        wroteFresh,
+        pinnedSectionIsCard,
+      })
+    ) {
+      await clearSessionTaskSummary(sessionId);
+    }
   }
 }
 
-/** 一次启动只回填一轮。 */
-let backfillDone = false;
 /** 回填上限——置顶通常个位数,封顶防极端数据。 */
 const BACKFILL_MAX = 20;
 
@@ -217,6 +368,7 @@ const BACKFILL_MAX = 20;
  *      久置会话不会再有 turn-done,启动巡检是衰减唯一的执行点
  */
 export async function backfillPinnedSessionSummaries(): Promise<void> {
+  if (!pinnedSectionIsCard) return;
   if (backfillDone) return;
   backfillDone = true;
   try {

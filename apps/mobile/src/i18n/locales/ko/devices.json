@@ -31,6 +31,9 @@
     },
     "a11y": {
       "selectScope": "세션 범위 선택",
+      "openMenu": "메뉴 열기",
+      "closeMenu": "메뉴 닫기",
+      "openDisplaySettings": "표시 설정 열기",
       "openSettings": "설정 열기",
       "syncing": "다시 동기화하는 중",
       "sync": "다시 동기화",
@@ -38,6 +41,7 @@
       "newRemoteConversation": "새 원격 세션",
       "renameDevice": "{{label}} 이름 변경",
       "project": "프로젝트 {{title}}",
+      "dialogue": "채팅",
       "openAutomationLatest": "자동화 작업 {{title}}의 최근 세션 열기",
       "automationTask": "자동화 작업 {{title}}",
       "openConversation": "세션 {{title}} 열기",
@@ -51,7 +55,24 @@
       "cancelRename": "이름 변경 취소"
     },
     "menu": {
-      "groupByProject": "프로젝트별 그룹화"
+      "groupByProject": "프로젝트별 그룹화",
+      "groupDialogue": "대화 묶기",
+      "sortByTime": "시간순",
+      "sortByPriority": "우선순위",
+      "statusActive": "활성",
+      "statusArchived": "보관됨",
+      "statusAll": "전체",
+      "dialogueFolder": "채팅",
+      "settings": "설정",
+      "remoteSettings": "원격 연결 설정",
+      "displaySettings": "표시 설정",
+      "groupHeading": "그룹",
+      "sortHeading": "작업 정렬",
+      "projectOrderHeading": "프로젝트 순서",
+      "projectOrderActivity": "최근 활동순",
+      "projectOrderManual": "수동",
+      "projectOrderManualTip": "프로젝트 행을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다. 그룹 안 작업은 위 정렬을 따릅니다.",
+      "statusHeading": "상태"
     },
     "renameDevice": {
       "title": "기기 이름 변경",

@@ -39,6 +39,16 @@ import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
 import { MACHINE_ALL } from '@/features/device-link/selectedMachineStore';
+import {
+  projectOrderWriteLedger,
+  resolveDisplayedProjectOrder,
+} from '@cindy/maker-shared/project-order-sync';
+import {
+  controllerManualOrderForDevice,
+  projectOrderWriteScopeForSelection,
+  useLocalHostProjectOrder,
+  useRemoteHostProjectOrders,
+} from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
@@ -265,12 +275,31 @@ export function ProjectsSection({
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
+  const selectedMachineForOrder = useEffectiveSelectedMachineId();
+  const localHostProjectOrder = useLocalHostProjectOrder();
+  const remoteHostProjectOrders = useRemoteHostProjectOrders(selectedMachineForOrder);
   // 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。独立于置顶段的三态设置。
   const { mode: mainViewMode } = useSidebarMainViewMode();
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
   // 折叠溢出且未点「显示全部」时禁用，避免只重排可见前缀。
-  const customProjectOrder = filter.groupBy === 'project' && filter.projectOrder === 'custom';
+  const projectOrderScope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+  const hostSnapshotForDisplay = projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+    ? localHostProjectOrder.snapshot
+    : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+      ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
+      : undefined;
+  const displayedProjectOrder = resolveDisplayedProjectOrder(
+    projectOrderScope,
+    hostSnapshotForDisplay,
+    filter,
+    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+      ? localHostProjectOrder.snapshot.manualProjectOrder
+      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+        ? controllerManualOrderForDevice(projectOrderScope.deviceId, hostSnapshotForDisplay) ?? []
+        : [],
+  );
+  const customProjectOrder = filter.groupBy === 'project' && displayedProjectOrder.projectOrder === 'custom';
   const projectDragEnabled = customProjectOrder;
   const projectKeysForOrderBaseline = allProjectKeysForOrder;
   // 段级收起已随「全部任务 = 范围下拉」取消(2026-08-13 用户定稿):标题的点击
@@ -290,16 +319,59 @@ export function ProjectsSection({
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
       // 位置会被无关拖拽悄悄打乱)。做法:先取全量规范顺序作 baseline,再把可见新序原位填回。
-      // projectKeysForOrderBaseline 是未过滤全量 universe 的 key,因此 baseline 含
-      // 隐藏项;setManualProjectOrder 内部会再归一化一次(对已规范的 merged 结果幂等)。
-      const fullOrder = normalizeManualProjectOrder(
-        filter.manualProjectOrder,
-        projectKeysForOrderBaseline,
-      );
-      const merged = mergeVisibleReorder(fullOrder, visibleNewOrder);
-      filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
+      const scope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+      const hostSnapshot = scope.kind === 'host' && scope.deviceId === null
+        ? localHostProjectOrder.snapshot
+        : scope.kind === 'host' && scope.deviceId
+          ? remoteHostProjectOrders.orders.get(scope.deviceId)
+          : undefined;
+      const persistViewer = (order: readonly string[]) => {
+        const fullOrder = normalizeManualProjectOrder(filter.manualProjectOrder, projectKeysForOrderBaseline);
+        const merged = mergeVisibleReorder(fullOrder, order);
+        filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
+        if (filter.projectOrder !== 'custom') filter.setProjectOrder('custom');
+      };
+      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId === null) {
+        const localKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith('local:'));
+        const fullOrder = normalizeManualProjectOrder(
+          localHostProjectOrder.snapshot.manualProjectOrder,
+          localKeys,
+        );
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder);
+        void localHostProjectOrder.apply({
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        }).then((result) => {
+          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        });
+        return;
+      }
+      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId) {
+        const deviceId = scope.deviceId;
+        const remoteKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith(`device:${encodeURIComponent(deviceId)}:`));
+        const current = controllerManualOrderForDevice(
+          deviceId,
+          remoteHostProjectOrders.orders.get(deviceId),
+        ) ?? [];
+        const fullOrder = normalizeManualProjectOrder(current, remoteKeys);
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder);
+        void remoteHostProjectOrders.apply(deviceId, {
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        }).then((result) => {
+          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        });
+        return;
+      }
+      persistViewer(visibleNewOrder);
     },
-    [filter, projectKeysForOrderBaseline],
+    [
+      filter,
+      localHostProjectOrder,
+      projectKeysForOrderBaseline,
+      remoteHostProjectOrders,
+      selectedMachineForOrder,
+    ],
   );
 
   // toggleDisabled 用 allKnownProjects（不是过滤后的 projects），避免 filter 收窄到 0 时
@@ -418,8 +490,8 @@ export function ProjectsSection({
         groupBy: filter.groupBy,
         groupDialogue: filter.groupDialogue,
         sortBy: filter.sortBy,
-        projectOrder: filter.projectOrder,
-        manualProjectOrder: filter.manualProjectOrder,
+        projectOrder: displayedProjectOrder.projectOrder,
+        manualProjectOrder: displayedProjectOrder.manualProjectOrder,
         priorityContext,
         notifications,
         scheduleSessionIndex,
@@ -433,8 +505,7 @@ export function ProjectsSection({
       filter.groupBy,
       filter.groupDialogue,
       filter.sortBy,
-      filter.projectOrder,
-      filter.manualProjectOrder,
+      displayedProjectOrder,
       priorityContext,
       notifications,
       scheduleSessionIndex,

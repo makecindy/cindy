@@ -56,6 +56,14 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { projectOrderWriteLedger, resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
+import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
+import {
+  controllerManualOrderForDevice,
+  projectOrderWriteScopeForSelection,
+  useLocalHostProjectOrder,
+  useRemoteHostProjectOrders,
+} from '../hooks/useRemoteHostProjectOrders';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import { getRemoteProjectMachineIdentity } from '../lib/remoteProjectIdentity';
 import type {
@@ -343,6 +351,10 @@ export function SidebarFilterPopover({
 }: SidebarFilterPopoverProps) {
   const { t } = useTranslation();
   const localPlatform = window.electronAPI.platform;
+  const selectedMachineForOrder = useEffectiveSelectedMachineId();
+  const localHostProjectOrder = useLocalHostProjectOrder();
+  const remoteHostProjectOrders = useRemoteHostProjectOrders(selectedMachineForOrder);
+  const projectOrderScope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
   // 受控光标模式 = 调用方传了 contextMenuPos 这个 prop(值为 null 表示"当前关闭",
   // 仍算受控);段头按钮模式则完全不传。用 !== undefined 而非真值判断。
   const isContextMode = contextMenuPos !== undefined;
@@ -359,6 +371,7 @@ export function SidebarFilterPopover({
     groupDevice,
     sortBy,
     projectOrder,
+    manualProjectOrder,
     setStatus,
     toggleProject,
     setProjectsAll,
@@ -368,7 +381,7 @@ export function SidebarFilterPopover({
     setGroupDialogue,
     setGroupDevice,
     setSortBy,
-    setProjectOrder,
+    setProjectOrder: setViewerProjectOrder,
     resetContentFilters,
   } = filter;
 
@@ -387,6 +400,76 @@ export function SidebarFilterPopover({
       : 'ccAgent.sidebar.filterGroupBy.flat',
   );
   const sortByValue = optionLabel(SORT_BY_OPTIONS, sortBy, t);
+  const hostSnapshotForWrite = projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+    ? localHostProjectOrder.snapshot
+    : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+      ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
+      : undefined;
+  const scopedProjectOrder: FilterProjectOrder = resolveDisplayedProjectOrder(
+    projectOrderScope,
+    hostSnapshotForWrite,
+    { manualProjectOrder, projectOrder },
+    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+      ? localHostProjectOrder.snapshot.manualProjectOrder
+      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+        ? controllerManualOrderForDevice(
+          projectOrderScope.deviceId,
+          hostSnapshotForWrite,
+        ) ?? []
+        : [],
+  ).projectOrder;
+  const setProjectOrder = (next: FilterProjectOrder) => {
+    if (
+      projectOrderScope.kind === 'viewer'
+      || groupBy !== 'project'
+      || projectOrderWriteLedger(projectOrderScope, hostSnapshotForWrite) === 'viewer'
+    ) {
+      setViewerProjectOrder(next);
+      return;
+    }
+    const hostKeys = projectOrderScope.deviceId === null
+      ? allKnownProjects.map((project) => project.projectKey).filter((key) => key.startsWith('local:'))
+      : allKnownProjects.map((project) => project.projectKey).filter((key) =>
+        key.startsWith(`device:${encodeURIComponent(projectOrderScope.deviceId!)}:`));
+    if (next === 'custom') {
+      if (projectOrderScope.deviceId === null) {
+        void localHostProjectOrder.apply({
+          manualProjectOrder: localHostProjectOrder.snapshot.manualProjectOrder.length > 0
+            ? localHostProjectOrder.snapshot.manualProjectOrder
+            : hostKeys,
+          projectOrder: 'custom',
+        }).then((result) => {
+          if (result.kind === 'unavailable') setViewerProjectOrder('custom');
+        });
+        return;
+      }
+      const current = controllerManualOrderForDevice(
+        projectOrderScope.deviceId,
+        remoteHostProjectOrders.orders.get(projectOrderScope.deviceId),
+      ) ?? hostKeys;
+      void remoteHostProjectOrders.apply(projectOrderScope.deviceId, {
+        manualProjectOrder: current,
+        projectOrder: 'custom',
+      }).then((result) => {
+        if (result.kind === 'unavailable') setViewerProjectOrder('custom');
+      });
+      return;
+    }
+    if (projectOrderScope.deviceId === null) {
+      void localHostProjectOrder.apply({
+        manualProjectOrder: localHostProjectOrder.snapshot.manualProjectOrder,
+        projectOrder: 'activity',
+      });
+      return;
+    }
+    void remoteHostProjectOrders.apply(projectOrderScope.deviceId, {
+      manualProjectOrder: controllerManualOrderForDevice(
+        projectOrderScope.deviceId,
+        remoteHostProjectOrders.orders.get(projectOrderScope.deviceId),
+      ) ?? [],
+      projectOrder: 'activity',
+    });
+  };
   const projectValue =
     projects === 'all'
       ? t('ccAgent.sidebar.filterAllText')
@@ -539,7 +622,7 @@ export function SidebarFilterPopover({
                 <SelectMenuItem
                   key={option.value}
                   label={t(option.labelKey)}
-                  selected={projectOrder === option.value}
+                  selected={scopedProjectOrder === option.value}
                   onSelect={() => setProjectOrder(option.value)}
                   tip={option.tipKey ? t(option.tipKey) : undefined}
                 />

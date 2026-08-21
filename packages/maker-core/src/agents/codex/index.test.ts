@@ -15123,6 +15123,162 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
+  it('resets generation timing when turn/start response arrives before turnStarted', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const firstStart = deferred<unknown>();
+      const secondStart = deferred<unknown>();
+      let attempt = 0;
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) {
+          attempt += 1;
+          if (attempt === 1) return firstStart.promise;
+          return secondStart.promise;
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-generation-timing-start-resp-before-started',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+        throw new Error('expected generation timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const send1 = handle.send({ type: 'user', content: 'first' });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+        await Promise.resolve();
+      }
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 4_000;
+      handlers.tokenUsageUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        tokenUsage: {
+          last: { inputTokens: 10, outputTokens: 20, cachedInputTokens: 0 },
+        },
+      });
+      now = 5_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 4_000 },
+      });
+      firstStart.resolve({ turn: { id: 'turn-1' } });
+      await send1;
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      events.length = 0;
+
+      const send2 = handle.send({ type: 'user', content: 'second' });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+        await Promise.resolve();
+      }
+      now = 6_000;
+      secondStart.resolve({ turn: { id: 'turn-2' } });
+      await send2;
+      now = 7_000;
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+      now = 8_000;
+      handlers.tokenUsageUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        tokenUsage: {
+          last: { inputTokens: 10, outputTokens: 40, cachedInputTokens: 0 },
+        },
+      });
+      now = 8_500;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-2', status: 'completed', durationMs: 2_500 },
+      });
+      await waitForExpectation(() =>
+        expect(events.some((event) => event.type === 'done')).toBe(true),
+      );
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(2_500);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('attaches throttled token usage to the Done snapshot without an extra running frame', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-generation-usage-flush',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+        throw new Error('expected generation usage handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const sendPromise = handle.send({ type: 'user', content: 'fast' });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+        await Promise.resolve();
+      }
+      now = 1_050;
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-fast' } });
+      now = 1_200;
+      handlers.tokenUsageUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-fast',
+        tokenUsage: {
+          last: { inputTokens: 10, outputTokens: 40, cachedInputTokens: 0 },
+        },
+      });
+      now = 1_300;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-fast', status: 'completed', durationMs: 300 },
+      });
+      await sendPromise;
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+
+      const extraRunningLive = events.filter(
+        (event) =>
+          event.type === 'status'
+          && (event.data as { isRunning?: boolean }).isRunning === true
+          && (event.data as { outputTokens?: number }).outputTokens === 40,
+      );
+      expect(extraRunningLive).toHaveLength(0);
+      const doneStatus = events.find(
+        (event) =>
+          event.type === 'status'
+          && (event.data as { status?: string }).status === 'Done',
+      );
+      expect(doneStatus?.data).toMatchObject({
+        isRunning: false,
+        outputTokens: 40,
+        generationDurationMs: 250,
+      });
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('keeps descendant approval waits out of the root generation timer', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);

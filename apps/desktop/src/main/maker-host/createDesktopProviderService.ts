@@ -69,6 +69,9 @@ import {
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
+import { updateCustomProviderIfUnchanged } from './custom-provider-store.js';
+import { migrateManagedOllamaProvider } from '../local-model-runtime/managedOllamaProvider.js';
+import { migrateLocalConnectProvider } from '../../shared/localConnectHarness.js';
 import {
   setCustomProviderKeyReader,
   setOAuthTokenReader,
@@ -739,13 +742,54 @@ export async function refreshCustomProvidersIntoCatalog(
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
   try {
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh');
+      return;
+    }
     const configs = await listCustomProvidersWithSecureHeaders();
     if (!shouldApply()) {
       log.info('discarded stale custom provider catalog refresh');
       return;
     }
-    setCustomProviderConfigs(configs);
-    log.info('custom providers merged into active catalog', { count: configs.length });
+    const next = configs.map((config) => {
+      const migrated =
+        migrateManagedOllamaProvider(config) ?? migrateLocalConnectProvider(config);
+      return migrated ?? config;
+    });
+    const persisted = await Promise.all(
+      next.flatMap((config, index) => {
+        const previous = configs[index];
+        if (!previous || JSON.stringify(config.runtimes) === JSON.stringify(previous.runtimes)) {
+          return [];
+        }
+        if (!shouldApply()) return [];
+        return [
+          updateCustomProviderIfUnchanged(previous.id, previous, config).catch((err: unknown) => {
+            log.warn('persist migrated custom provider failed', {
+              id: config.id,
+              err: String(err),
+            });
+            return false;
+          }),
+        ];
+      }),
+    );
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh after migration');
+      return;
+    }
+    if (persisted.some((applied) => applied !== true)) {
+      const fresh = await listCustomProvidersWithSecureHeaders();
+      if (!shouldApply()) {
+        log.info('discarded stale custom provider catalog refresh after cas miss');
+        return;
+      }
+      setCustomProviderConfigs(fresh);
+      log.info('custom providers merged into active catalog after cas miss', { count: fresh.length });
+      return;
+    }
+    setCustomProviderConfigs(next);
+    log.info('custom providers merged into active catalog', { count: next.length });
   } catch (err) {
     if (!shouldApply()) {
       log.info('discarded stale custom provider catalog refresh failure', {

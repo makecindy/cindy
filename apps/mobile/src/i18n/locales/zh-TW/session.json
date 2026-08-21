@@ -26,6 +26,9 @@
   },
   "screen": {
     "thinking": "思考中…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "正在重新連線…",
     "modelBusyRetrying": "模型服務繁忙，正在重試…",
     "rateLimitRetrying": "請求受到限流，正在重試…",

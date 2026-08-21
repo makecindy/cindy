@@ -262,67 +262,9 @@ export function resolveFavoriteRowConfig(args: {
 }
 
 /**
- * 「当前选中的收藏」锚点的**完整配置校验**(2026-08-19 review P2:深度与 Fast 纳入锚点判定)。
- *
- * 病根:锚点记录与上游派生校验(草稿 / 会话两侧)只比模型、来源、引擎三个**身份**维。
- * 收藏的定义是**完整配置副本**(规格 §1.2,含深度与 Fast)——持久化锚点存在期间,
- * device-link seed、另一窗口或另一控制端只改同一模型/来源的 effort 或 Fast 时,身份三维
- * 照样全对,旧收藏 uid 被恢复:面板抑制真实模型行的勾选、把带旧深度/Fast 的副本当成
- * 当前配置展示,编辑/删除还会按错误副本执行(删除会误触「先回落默认配置」)。
- *
- * 修法是**校验收窄,不是记录加维**:锚点记录刻意维持身份三元组(见 favoriteAnchorMemory
- * 的 schema 注释)——把 effort/Fast 抄进锚点会造出第二份会过期的副本(编辑选中收藏的
- * 每一条路径都得记得同步它,漏一处就误杀)。这里改为在**消费点**把「该收藏当前副本的
- * 解析结果」与「正在跑的完整配置」直接比对:收藏 store 与 live 值都是各自的唯一事实源,
- * 不新增任何写路径。所有锚点入口(草稿槽、会话槽、storage 事件回读、各建会话路径的
- * 锚点携带)最终都汇到这一个派生点,天然一次覆盖。
- *
- * 逐维口径:
- * - 引擎:`liveAgent` 已知时必须与副本解析引擎一致(意图期 = 目标引擎,与调用方
- *   liveEngineAgent 同口径);未知(身份未加载的一帧)不参与判定,免得误杀。
- * - 深度:双方都有值才比 —— 副本解析出 null(不可调模型)或 live 值为空(上游未就绪)
- *   时该维放行。
- * - Fast:live 值按副本的 fastCapable 门控后逐字比(副本无能力时恒 false,两边同规则)。
- * - 收藏指向的模型行不可路由(来源断开)时**不否决**:配置无从解析,身份校验已在上游
- *   通过,此时列表里本就没有可勾的行,维持既有行为。
- *
- * 面板内正常操作不会被误杀:模型行上改 live 深度/Fast 会显式清锚(M2),编辑选中收藏
- * 走「live 写成才落副本」的同一事务(两边同步收敛);只有**外部**改动才会造成真正的
- * 副本 ≠ live,而那正是该松开勾选的时刻。
+ * 收藏选中身份就是 uid(Chris 2026-08-20):面板只认「这条 uid 还在收藏列表里」,
+ * 不拿正在跑的引擎/思维/加速去对副本 —— 对上才打勾会让下面同名模型行抢走焦点。
  */
-export function resolveActiveFavoriteAnchorUid(args: {
-  /** 上游身份校验(模型/来源/引擎快照)已通过的锚点 uid。 */
-  selectedFavoriteUid: string | null | undefined;
-  favorites: readonly ModelFavoriteItem[];
-  entries: readonly UnifiedModelEntry[];
-  /** 正在跑的深度(空值 = 未知,该维不参与判定)。 */
-  liveEffort: Effort | null | undefined;
-  /** 正在跑的 Fast。 */
-  liveFast: boolean;
-  /** 正在跑的引擎(意图期 = 目标引擎);null = 身份未加载,该维不参与判定。 */
-  liveAgent: AgentKind | null;
-  agentFastModeCapable?: (agent: AgentKind) => boolean;
-}): string | null {
-  const { selectedFavoriteUid, favorites, entries, liveEffort, liveFast, liveAgent } = args;
-  if (!selectedFavoriteUid) return null;
-  // 选中的收藏必须仍然存在(规格 §1.5 删除回落;换账号后旧 uid 查无此条同此兜底)。
-  const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
-  if (!item) return null;
-  const entry = entries.find(
-    (candidate) =>
-      candidate.providerId === item.providerId && entryMatchesModelId(candidate, item.modelId),
-  );
-  if (!entry) return selectedFavoriteUid;
-  const config = resolveFavoriteRowConfig({
-    entry,
-    item,
-    ...(args.agentFastModeCapable ? { agentFastModeCapable: args.agentFastModeCapable } : {}),
-  });
-  if (liveAgent !== null && config.agent !== liveAgent) return null;
-  if (liveEffort && config.effort !== null && config.effort !== liveEffort) return null;
-  if (config.fast !== (config.fastCapable ? liveFast : false)) return null;
-  return selectedFavoriteUid;
-}
 
 /**
  * 该收藏是否**就是**该模型的推荐配置 —— 决定收藏行右侧要不要挂 `引擎 · 深度 [⚡]` 后缀

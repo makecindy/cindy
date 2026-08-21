@@ -635,7 +635,7 @@ describe('sessionList', () => {
     });
     expect(remoteSessionFilterLabel('waiting', overview)).toBe('待处理 1');
     expect(remoteSessionFilterLabel('all', overview)).toBe('全部 5');
-    expect(remoteSessionControlsSummary('automation', 'date', overview)).toBe('自动化 2 · 时间分组');
+    expect(remoteSessionControlsSummary('automation', overview)).toBe('自动化 2 · 项目分组');
     expect(remoteSessionOverviewCopy(overview)).toBe('1 个置顶 · 3 个项目 · 1 个自动化执行中');
   });
 
@@ -667,7 +667,6 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: activeOverview,
       searchQuery: 'billing',
       sections: searchSections,
@@ -699,7 +698,6 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: automationOverview,
       searchQuery: '',
       sections: automationSections,
@@ -837,27 +835,6 @@ describe('sessionList', () => {
     expect(genuineContinueIndex.get('s5')).toBe('继续');
   });
 
-  it('can group non-pinned sessions by recent activity date', () => {
-    const now = new Date(2026, 0, 8, 12, 0, 0).getTime();
-    const sections = buildRemoteSessionSections([
-      session('today', { updatedAt: localIso(2026, 0, 8, 1), userSendAt: localIso(2026, 0, 8, 1) }),
-      session('yesterday', { updatedAt: localIso(2026, 0, 7, 23), userSendAt: localIso(2026, 0, 7, 23), workingDir: '/repo/b' }),
-      session('last7', { updatedAt: localIso(2026, 0, 3, 1), userSendAt: localIso(2026, 0, 3, 1), workingDir: '/repo/c' }),
-      session('earlier', { updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1), workingDir: '/repo/d' }),
-      session('pinned', { pinnedAt: localIso(2026, 0, 8, 2), updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1) }),
-    ], now, {
-      groupMode: 'date',
-    });
-
-    expect(sections.map((section) => [section.key, section.title, section.data.map((item) => item.session.id)])).toEqual([
-      ['pinned', '置顶', ['pinned']],
-      ['date:today', '今天', ['today']],
-      ['date:yesterday', '昨天', ['yesterday']],
-      ['date:last7', '最近 7 天', ['last7']],
-      ['date:earlier', '更早', ['earlier']],
-    ]);
-  });
-
   it('builds sections for a 1000-session remote device without duplicate rendered rows', () => {
     const now = new Date('2026-01-08T12:00:00.000Z').getTime();
     const sessions = createLargeSessionFixture(1000);
@@ -884,7 +861,6 @@ describe('sessionList', () => {
 
     const start = performance.now();
     const projectSections = buildRemoteSessionSections(sessions, now, {
-      groupMode: 'project',
       scheduleIndex,
     });
     const durationMs = performance.now() - start;
@@ -1045,10 +1021,6 @@ describe('getRemoteSessionPreviewCollapse', () => {
     expect(view.hiddenCount).toBe(1);
   });
 });
-
-function localIso(year: number, monthIndex: number, day: number, hour: number): string {
-  return new Date(year, monthIndex, day, hour, 0, 0).toISOString();
-}
 
 function createLargeSessionFixture(count: number): RemoteSession[] {
   const base = Date.parse('2026-01-08T12:00:00.000Z');

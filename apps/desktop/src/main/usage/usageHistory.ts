@@ -363,12 +363,13 @@ export function piSubscriptionUsageModelKey(model: string): string {
  *   - codex → 订阅直连(chatgpt/ / xai/)registry 参考价 → OpenAI registry 参考价
  *     → Anthropic registry 参考价(Codex 显式选内置 anthropic 的 Claude.ai 订阅轮;
  *     模型 id 只会命中各自 provider 的路由,依次尝试不会串价)
- *   - pi → 先按订阅直连估价,再依次回退 Codex(OpenAI)与 Anthropic registry 参考价
+ *   - pi → 先按订阅直连估价(agent=pi,才能命中设置里的 Pi 价格覆盖),
+ *     再依次回退 Codex(OpenAI)与 Anthropic registry 参考价
  *     (Pi 可跨三类 provider,按模型 id 路由,依次尝试不会串价)
  *   - claude-code → Anthropic registry 参考价
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
-function getSubscriptionValuePriceFor(
+export function getSubscriptionValuePriceFor(
   agentKind: 'claude-code' | 'codex' | 'pi',
   model: string,
   pricing: ModelPricingMap | null,
@@ -384,7 +385,7 @@ function getSubscriptionValuePriceFor(
   }
   if (agentKind === 'pi') {
     return (
-      getSubscriptionDirectValuePrice(model, undefined, pricing, at, overrides) ??
+      getSubscriptionDirectValuePrice(model, 'pi', pricing, at, overrides) ??
       getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
       getClaudeSubscriptionValuePrice(model, pricing, at, overrides)
     );

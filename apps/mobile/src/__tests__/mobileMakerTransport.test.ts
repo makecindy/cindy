@@ -42,6 +42,7 @@ describe('mobile maker transport', () => {
       'maker:set-effort',
       'maker:set-permission-mode',
       'maker:set-fast-mode',
+      'maker:set-thinking-enabled',
       'maker:set-extra-dirs',
       'maker:set-session-model-pref',
       'maker:apply-new-maker-draft-pref',

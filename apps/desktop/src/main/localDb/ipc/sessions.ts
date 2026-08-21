@@ -268,7 +268,8 @@ export async function recycleSessionWorktreeForStatusChange(
         // quiescence and ref/worktree deletion.
         await removeDeletedSessionMediaRefs(targetSessionId, mediaDb)
           .then((count) => {
-            if (count > 0) log.info('session media refs removed', { sessionId: targetSessionId, count });
+            if (count > 0)
+              log.info('session media refs removed', { sessionId: targetSessionId, count });
           })
           .catch((err) => {
             log.warn('session media ref cleanup failed', {
@@ -1436,8 +1437,8 @@ export function registerSessionIpc(
     if (p.clearedAt !== undefined) {
       noteSessionClearBoundary(sid, p.clearedAt as string | null);
       // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
-      // 已过时;SessionCard / rail flyout 优先用 summary 而非 preview,不清就会继续
-      // 显示旧任务摘要。这里一并清空,待 clear 后新一轮 turn-done 重新生成。
+      // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
+      // 这里一并清空,待 clear 后新一轮 turn-done 重新生成。
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sid));
       // 广播 summary:null,让已挂载的 sidebar 立即清掉旧摘要(codex review)——renderer 的
       // clearSession 乐观 patch 只带 sdkSessionId/clearedAt、不含 summary,本 update handler
@@ -1473,6 +1474,11 @@ export function registerSessionIpc(
     }
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
+    if (p.pinnedAt !== undefined && row.pinnedAt == null) {
+      await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sid));
+      row.summary = null;
+    }
     const updated = sessionToCamel(row);
     const broadcastPatch =
       p.pinnedAt === undefined
@@ -1480,7 +1486,7 @@ export function registerSessionIpc(
         : {
             ...p,
             pinnedAt: updated.pinnedAt,
-            ...(updated.pinnedAt === null ? {} : { status: updated.status }),
+            ...(updated.pinnedAt === null ? { summary: null } : { status: updated.status }),
           };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
@@ -1503,7 +1509,7 @@ export function registerSessionIpc(
     // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
     if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
       void import('../../sessionTaskSummary.js').then((m) =>
-        m.maybeGenerateSessionTaskSummary(sid),
+        m.maybeGenerateSessionTaskSummary(sid, { force: true }),
       );
     }
     notifyAgentIslandSessionPatch(updated.id, {
@@ -1547,6 +1553,21 @@ export function registerSessionIpc(
       await touchUserSendInDb(sid, typeof atMs === 'number' ? atMs : undefined);
     },
   );
+
+  // 本机 UI 偏好:置顶段是不是卡片模式。故意不进 device-link allowlist —— 摘要
+  // oneShot 只服务本机卡片展示,控制端卡片回退 preview,不把付费生成推到被控端。
+  // 新增 handler 一律校验顶层 app renderer(electron-security §5)。
+  ipcMain.handle(
+    'local-db:sessions:set-pinned-card-summaries',
+    async (event, enabled: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+      }
+      const m = await import('../../sessionTaskSummary.js');
+      m.setPinnedSectionCardMode(enabled);
+    },
+  );
 }
 
 export async function patchSessionMetaInDb(
@@ -1583,6 +1604,10 @@ export async function patchSessionMetaInDb(
     await writeSessionPatch(db, sessionId, setObj, patch.status);
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    if (patch.pinnedAt !== undefined && row.pinnedAt == null) {
+      await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
+      row.summary = null;
+    }
     return sessionToCamel(row);
   });
   notifyAgentIslandSessionPatch(updated.id, {
@@ -1612,7 +1637,16 @@ export async function patchSessionMetaInDb(
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);
   //   - CCAgentSessionView.onPatched → 合并进 serverSession。
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
-  if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, patch, ownerScope);
+  const broadcastPatch =
+    patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
+  if (isOwnerScopeCurrent(ownerScope)) {
+    broadcastSessionPatched(sessionId, broadcastPatch, ownerScope);
+  }
+  if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
+    void import('../../sessionTaskSummary.js').then((m) =>
+      m.maybeGenerateSessionTaskSummary(sessionId, { force: true }),
+    );
+  }
   return updated;
 }
 

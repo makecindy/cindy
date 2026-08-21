@@ -18,7 +18,7 @@ describe('usage performance units', () => {
   });
 
   it.each([
-    ['zh-CN', zhCN, 'token/秒'],
+    ['zh-CN', zhCN, 'tokens/秒'],
     ['ja', ja, 'トークン/秒'],
     ['ko', ko, '토큰/초'],
   ] as const)('uses a localized token-per-second unit in %s', (_locale, messages, unit) => {

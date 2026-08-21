@@ -977,6 +977,15 @@ export class Session {
   }
 
   /**
+   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+   * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
+   */
+  countPendingWakeContinuations(): number {
+    if (this.status === 'closed' || this.status === 'error') return 0;
+    return this.handle.countPendingWakeContinuations?.() ?? 0;
+  }
+
+  /**
    * Resolve the provider-owned continuation claim already attached to this
    * exact `done`. Host observers must never infer this from the current task
    * list: task state can change after the event was queued but before it is
@@ -1322,6 +1331,12 @@ export class Session {
       throw new NotSupportedError('fastMode', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setFastMode(enabled);
+  }
+
+  async setThinkingEnabled(enabled: boolean): Promise<void> {
+    this.ensureActive();
+    if (!this.handle.setThinkingEnabled) return;
+    await this.handle.setThinkingEnabled(enabled);
   }
 
   /** 运行时开关计划模式（capability 见 Capabilities.planMode）。 */

@@ -71,6 +71,10 @@ import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
 import { InteractionPromptHost } from '@/components/interaction-portal';
 import { MessageStream, type InlinePlanVisibility } from '@/components/chat/MessageStream';
+import {
+  readSendFollowCancelGeneration,
+  tryRequestFollowLatest,
+} from '@/components/chat/autoFollowIntent';
 import { measureComposerStackTopOffset } from '@/components/chat/messageStreamIndicatorPosition';
 import { ShareSelectionBar } from '@/components/chat/ShareSelectionBar';
 import {
@@ -97,6 +101,7 @@ import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
 import { ConnectProviderBanner } from '@/components/onboarding/ConnectProviderBanner';
 import { Tip } from '@/components/ui/tooltip';
+import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
@@ -140,7 +145,6 @@ import {
   useComposerCollapsed,
   useControlledBy,
 } from '@/features/remote-device/ControlledBanner';
-import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import {
   loadAllCommands,
   dispatchCommand,
@@ -195,7 +199,10 @@ import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions'
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
-import { formatRunningTokenCount } from './lib/runningTokenUsage';
+import {
+  formatRunningTokenCount,
+  resolveRunningUsageMeta,
+} from './lib/runningTokenUsage';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -943,6 +950,7 @@ export function CCAgentSessionView({
               : {}),
             ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
             ...(patch.fast !== undefined ? { fast: patch.fast } : {}),
+            ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
           },
         ])
         .catch(() => {
@@ -1292,6 +1300,18 @@ export function CCAgentSessionView({
     (clientId: string) =>
       sessionId ? makerChatStore.isLocalSentUserMessage(sessionId, clientId) : false,
     [sessionId],
+  );
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+  const requestFollowLatest = useCallback(
+    (sourceSessionId: string | null | undefined, startGeneration: number) => {
+      tryRequestFollowLatest({
+        sourceSessionId,
+        currentSessionId: sessionIdRef.current,
+        startGeneration,
+      });
+    },
+    [],
   );
 
   const handleOpenForkOrigin = useCallback(() => {
@@ -2827,6 +2847,7 @@ export function CCAgentSessionView({
                 )
               : undefined;
           const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
+          const followStartGeneration = readSendFollowCancelGeneration(sessionId);
           const accepted = await dispatch(
             slashDispatch.message,
             pending.model,
@@ -2865,6 +2886,7 @@ export function CCAgentSessionView({
           );
           if (accepted) {
             pending.onDeferredAccepted?.();
+            requestFollowLatest(sessionId, followStartGeneration);
             const resumedSessionId = sessionId;
             if (resumedSessionId) {
               void dispatchDeferredUiAssignment(resumedSessionId, undefined).catch((err) => {
@@ -2888,6 +2910,7 @@ export function CCAgentSessionView({
       session?.agentKind,
       session?.orcaRole,
       sessionId,
+      requestFollowLatest,
       sendMessage,
       steerMessage,
     ],
@@ -3141,6 +3164,7 @@ export function CCAgentSessionView({
         ...(opts?.onDeferredAccepted ? { onDeferredAccepted: opts.onDeferredAccepted } : {}),
       };
       if (deliveryMode === 'steer') {
+        const followStartGeneration = readSendFollowCancelGeneration(sessionId);
         const accepted = await steerMessage(
           message,
           model,
@@ -3152,6 +3176,7 @@ export function CCAgentSessionView({
           sendOptions,
         );
         if (accepted && sessionId) {
+          requestFollowLatest(sessionId, followStartGeneration);
           void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
             log.error('recover deferred Worker assignment after user message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3159,6 +3184,7 @@ export function CCAgentSessionView({
         }
         return accepted;
       }
+      const followStartGeneration = readSendFollowCancelGeneration(sessionId);
       const accepted = await sendMessage(
         message,
         model,
@@ -3170,6 +3196,7 @@ export function CCAgentSessionView({
         sendOptions,
       );
       if (accepted && sessionId) {
+        requestFollowLatest(sessionId, followStartGeneration);
         void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
           log.error('recover deferred Worker assignment after user message failed', err);
           toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3188,6 +3215,7 @@ export function CCAgentSessionView({
       patchLocalSession,
       sendMessage,
       steerMessage,
+      requestFollowLatest,
       navigate,
       session,
       sessionId,
@@ -3660,6 +3688,7 @@ export function CCAgentSessionView({
             : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
+        const followStartGeneration = readSendFollowCancelGeneration(sessionId);
         const delivered = await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
             pendingText,
@@ -3691,6 +3720,7 @@ export function CCAgentSessionView({
           ),
         );
         if (delivered) {
+          requestFollowLatest(sessionId, followStartGeneration);
           void dispatchDeferredUiAssignment(sessionId, deferredUiAssignment).catch((err) => {
             log.error('deferred Worker assignment after first message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -3706,6 +3736,7 @@ export function CCAgentSessionView({
     historyLoaded,
     maybeDispatchDesktopSlashCommand,
     restoreRecoverableHandoff,
+    requestFollowLatest,
     sendMessage,
     session,
     sessionId,
@@ -4184,6 +4215,9 @@ export function CCAgentSessionView({
                   key={sessionId}
                   status={agentStatus.status}
                   tokenUsage={agentStatus.tokenUsage}
+                  outputTokens={agentStatus.outputTokens ?? 0}
+                  generationDurationMs={agentStatus.generationDurationMs ?? 0}
+                  generationReliable={agentStatus.generationReliable ?? true}
                   startedAt={agentStatus.startedAt}
                   visible={!pendingPlanReview && (agentStatus.isRunning || backgroundTasksActive)}
                   inputWidth={inputWidth}
@@ -4935,6 +4969,9 @@ function getControlledBannerMaxWidth(inputWidth?: number): number {
 function RunningStatusBar({
   status,
   tokenUsage,
+  outputTokens = 0,
+  generationDurationMs = 0,
+  generationReliable = true,
   startedAt,
   visible,
   inputWidth,
@@ -4949,12 +4986,15 @@ function RunningStatusBar({
 }: {
   status: string;
   tokenUsage: number;
+  outputTokens?: number;
+  generationDurationMs?: number;
+  generationReliable?: boolean;
   startedAt: number | null;
   visible: boolean;
   inputWidth?: number;
   /**
    * 当前是否处于 side-task (mivo MJ 按钮等不走 LLM 的后台任务) 运行态。
-   * true 时隐藏右侧的 elapsed · ↓ tokens 行 —— mivo 不消耗 token, 显示上一轮
+   * true 时隐藏右侧的 elapsed · rate 行 —— mivo 不消耗 token, 显示上一轮
    * 残留数字会误导用户。"Done" check icon 也不显示 (sideTaskRunning 期间永远
    * 把 status 当成进行中, 即便 status 文案恰好是 "Done")。
    */
@@ -5079,16 +5119,28 @@ function RunningStatusBar({
     }
     shimmerPlayingRef.current = true;
     setShimmerCycle((n) => n + 1);
-  }, [visible, suppressContent, reducedMotion, status, tokenUsage]);
+  }, [visible, suppressContent, reducedMotion, status, tokenUsage, outputTokens, generationDurationMs]);
 
-  // Animate the token counter so live mid-turn updates (from message_delta in
-  // agentManager) feel like a smoothly-incrementing number, the same way claude
-  // code's CLI status line ticks. The hook re-anchors from the displayed value
-  // on every target change, so rapid updates blend without snap-back.
+  // Animate the token counter so live mid-turn updates feel like a smoothly-
+  // incrementing number. Rate does not use this: locally ticking the
+  // denominator would make a paused model look like decaying speed.
   const animatedTokens = useAnimatedNumber(tokenUsage, 400);
-  const tokenText = t('chat.messageActionBar.turnTokens', {
-    tokens: formatRunningTokenCount(animatedTokens, visible),
+  const usageMeta = resolveRunningUsageMeta({
+    outputTokens,
+    generationDurationMs,
+    generationReliable,
+    tokenUsage,
   });
+  const tokenCountText = t('chat.runningStatus.tokenCount', {
+    tokens: formatRunningTokenCount(animatedTokens),
+  });
+  const tokenCountTipText = t('chat.messageActionBar.turnTokens', {
+    tokens: formatRunningTokenCount(animatedTokens),
+  });
+  const rateText =
+    usageMeta.kind === 'rate'
+      ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate })
+      : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -5195,15 +5247,31 @@ function RunningStatusBar({
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}
                 </span>
-                {!sideTaskRunning && (
+                {!sideTaskRunning && usageMeta.kind !== 'none' && (
                   <>
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       &middot;
                     </span>
-                    <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
-                    <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                      {tokenText}
-                    </span>
+                    {rateText ? (
+                      tokenUsage > 0 ? (
+                        <Tip text={tokenCountTipText} side="top">
+                          <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                            {rateText}
+                          </span>
+                        </Tip>
+                      ) : (
+                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                          {rateText}
+                        </span>
+                      )
+                    ) : (
+                      <>
+                        <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
+                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                          {tokenCountText}
+                        </span>
+                      </>
+                    )}
                   </>
                 )}
               </>
