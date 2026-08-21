@@ -99,6 +99,14 @@ function resolveActiveTheme(mode: Theme) {
   return resolveFamilyVariant(getStoredFamilyId(), isDark ? 'dark' : 'light');
 }
 
+function resolveSessionActiveTheme(mode: Theme) {
+  return resolveActiveTheme(firstLaunchLightSession === true ? 'light' : mode);
+}
+
+function resolveSessionIsDark(mode: Theme): boolean {
+  return resolveSessionActiveTheme(mode).theme.type === 'dark';
+}
+
 // 切主题时临时禁掉所有 transition,避免带 transition-colors 的元素(顶栏图标、
 // 设置侧边活动项、Logout 按钮等)慢 150ms 淡到新色,看起来和瞬间换色的其他部分不同步。
 // hover/active 等交互态的 transition 不受影响 —— 注入只在切换那一瞬生效,下一帧就移除。
@@ -119,9 +127,7 @@ export function applyThemeClass(theme: Theme, force = false): void {
   const wasDark = root.classList.contains('dark');
   // 首启亮色门激活期间(pre-login 会话)一律按亮色解析——ThemeProvider 挂载
   // 重放与系统色变化都不会把登录界面翻回暗色;门由登录页卸载时结束。
-  const { theme: nextTheme } = resolveActiveTheme(
-    firstLaunchLightSession === true ? 'light' : theme,
-  );
+  const { theme: nextTheme } = resolveSessionActiveTheme(theme);
   const nextDark = nextTheme.type === 'dark';
 
   if (!force && nextDark === wasDark && root.dataset.theme === nextTheme.id) {
@@ -215,7 +221,15 @@ export function loginFirstLaunchLightActive(): boolean {
 export function endLoginFirstLaunchLightGate(): void {
   if (firstLaunchLightSession !== true) return;
   firstLaunchLightSession = false;
-  applyThemeClass(getStoredTheme(), true);
+  const mode = getStoredTheme();
+  applyThemeClass(mode, true);
+  // 首启门结束不会改变 ThemeProvider 的 React state，因此对应 effect 不会自动重跑。
+  // 在这里用恢复后的实际主题立即同步 backing，同时保留用户原始模式供下次冷启动解析。
+  window.electronAPI?.theme?.applyVibrancy?.(getStoredFamilyId(), resolveSessionIsDark(mode), mode);
+}
+
+export function __resetLoginFirstLaunchLightGateForTest(): void {
+  firstLaunchLightSession = null;
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -324,7 +338,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // 通知 main 开关 macOS vibrancy(仅 CINDY family 启用,其他恢复不透明)。覆盖
   // setFamily/storage 跨窗口同步/mount 三个场景(任一变化都重应用)。
   useEffect(() => {
-    window.electronAPI?.theme?.applyVibrancy?.(familyId, resolveIsDark(theme), theme);
+    window.electronAPI?.theme?.applyVibrancy?.(familyId, resolveSessionIsDark(theme), theme);
   }, [familyId, theme, systemPrefersDark]);
 
   const fallbackFromType = useMemo<ThemeType | null>(() => {

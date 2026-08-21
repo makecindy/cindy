@@ -12,13 +12,20 @@ import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import { themeService } from '../../themes/theme-service';
-import { ThemeProvider, useTheme } from '../useTheme';
+import {
+  __resetLoginFirstLaunchLightGateForTest,
+  endLoginFirstLaunchLightGate,
+  getInitialThemeVariant,
+  ThemeProvider,
+  useTheme,
+} from '../useTheme';
 
 const applyVibrancyMock = vi.fn();
+let systemPrefersDark = false;
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
 vi.stubGlobal('matchMedia', (q: string) => ({
-  matches: false,
+  matches: systemPrefersDark,
   media: q,
   addEventListener: () => {},
   removeEventListener: () => {},
@@ -40,6 +47,8 @@ function dispatchStorage(key: string, newValue: string | null) {
 
 describe('useTheme 跨窗口主题同步(D2-3)', () => {
   beforeEach(() => {
+    __resetLoginFirstLaunchLightGateForTest();
+    systemPrefersDark = false;
     localStorage.clear();
     delete document.documentElement.dataset.theme;
     document.documentElement.classList.remove('dark');
@@ -55,6 +64,19 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     renderHook(() => useTheme(), { wrapper });
 
     expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark');
+  });
+
+  it('系统深色下真首启按亮色门的实际主题上报 backing，门结束后恢复深色', () => {
+    systemPrefersDark = true;
+    expect(getInitialThemeVariant().theme.type).toBe('light');
+
+    renderHook(() => useTheme(), { wrapper });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system');
+
+    act(() => {
+      endLoginFirstLaunchLightGate();
+    });
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system');
   });
 
   it('其他窗口切 theme → storage 事件 → 本窗口 theme state 跟随并重应用', () => {
