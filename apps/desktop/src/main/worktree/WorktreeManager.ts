@@ -104,6 +104,38 @@ function activeWorktreePath(meta: WorktreeMeta): string {
   return meta.quarantinePath ?? meta.path;
 }
 
+/**
+ * 删除/归档成功后, 清理该 worktree 路径残留在全局 git config 里的 safe.directory
+ * 条目(#2627)。只按精确值移除(meta.path + quarantinePath), 不触碰用户其它仓库的
+ * 手动配置; 失败仅日志, 不影响删除主流程。
+ */
+async function removeWorktreeSafeDirectory(meta: WorktreeMeta): Promise<void> {
+  const candidates = new Set(
+    [meta.path, meta.quarantinePath].filter(
+      (p): p is string => typeof p === 'string' && p.length > 0,
+    ),
+  );
+  for (const target of candidates) {
+    try {
+      await gitExec([
+        'config',
+        '--global',
+        '--unset-all',
+        '--fixed-value',
+        'safe.directory',
+        target,
+      ]);
+    } catch (err) {
+      // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
+      if (err instanceof GitExecError && err.exitCode === 5) continue;
+      log.warn(
+        `[worktree] remove safe.directory entry for ${target} failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
 async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
   const startedAt = Date.now();
   try {
@@ -659,8 +691,9 @@ export async function copyClaudeSiviDirs(
  *   6. configureHooksPath
  *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
  *   8. applyWorktreeIncludeFile
- *   9. git config --global --add safe.directory <path>
- *  10. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
+ *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
 export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => createWorktreeInner(req));
@@ -856,20 +889,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       );
     }
 
-    // 9. safe.directory
-    try {
-      await timed('add safe.directory', () =>
-        gitExec(['config', '--global', '--add', 'safe.directory', worktreePath]),
-      );
-    } catch (err) {
-      // 非致命 — 仅日志
-      log.warn(
-        `[worktree] add safe.directory failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-
-    // 10. store + DB
+    // 9. store + DB
     const meta: WorktreeMeta = {
       sessionId: req.sessionId,
       name,
@@ -1294,6 +1314,7 @@ async function removeWorktreeForSessionInner(
 
     if (removedByGit) {
       store.del(sessionId);
+      await removeWorktreeSafeDirectory(meta);
     } else if (snapshotted) {
       // Both removal paths failed: put WIP back before restoring the live registration. If apply
       // also fails, keep it unregistered so the send-time restore gate retries the snapshot.

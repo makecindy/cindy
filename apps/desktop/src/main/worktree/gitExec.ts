@@ -4,7 +4,8 @@
  * 职责:
  *   - 用 child_process.execFile 调用 git, 保留 stderr/stdout/exitCode
  *   - 自动处理 dubious-ownership: 若 stderr 含 "dubious ownership", 提取路径,
- *     `git config --global --add safe.directory <path>`, 重试**一次**原命令
+ *     幂等地 `git config --global --add safe.directory <path>`(已存在则不重复添加),
+ *     重试**一次**原命令
  *   - 抛出 GitExecError 让上层 errorClassifier 解析为 WorktreeError
  *
  * 不在这里做 errorClassifier — 那是上层 createWorktree/removeWorktree 的职责,
@@ -447,6 +448,32 @@ function extractDubiousPath(stderr: string): string | null {
 }
 
 /**
+ * 读取当前全局 safe.directory 的值列表。从未配置过时 git 返回非零, 按空列表处理。
+ */
+async function readGlobalSafeDirectories(): Promise<string[]> {
+  try {
+    const { stdout } = await execFileOnce(['config', '--global', '--get-all', 'safe.directory']);
+    return stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 幂等地把 targetPath 加入全局 safe.directory: 已存在则不再 --add, 避免同一路径
+ * 因多个 git 操作反复触发 dubious-ownership 而用 --add 堆积出重复记录(#2627)。
+ * 用底层 execFileOnce 而非 gitExec, 防止递归进入 dubious-ownership 分支。
+ */
+async function ensureGlobalSafeDirectory(targetPath: string): Promise<void> {
+  const existing = await readGlobalSafeDirectories();
+  if (existing.some((p) => p === targetPath)) return;
+  await execFileOnce(['config', '--global', '--add', 'safe.directory', targetPath]);
+}
+
+/**
  * 主 API: 执行 git 命令, 自动处理 dubious-ownership。
  *
  * 行为:
@@ -471,9 +498,7 @@ export async function gitExec(
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {
-          await execFileOnce(
-            ['config', '--global', '--add', 'safe.directory', dubiousPath],
-          );
+          await ensureGlobalSafeDirectory(dubiousPath);
           // 配完 safe.directory 后重试原命令
           return await execFileOnce(args, cwd, opts);
         } catch {

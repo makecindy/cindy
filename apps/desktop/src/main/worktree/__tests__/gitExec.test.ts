@@ -541,3 +541,69 @@ describe('gitExec timeoutMs', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe('gitExec dubious-ownership safe.directory', () => {
+  /**
+   * 只按调用顺序捕获每次 git execFile 的 args 与回调(不 spawn 真进程),
+   * 供 dubious-ownership 的「幂等 add + 重试一次」路径逐步驱动。
+   */
+  function installSequenceMock() {
+    const calls: string[][] = [];
+    const cbs: ExecCb[] = [];
+    mocks.execFile.mockImplementation(
+      (file: string, args: string[], _opts: unknown, cb?: ExecCb) => {
+        if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
+        calls.push(args as string[]);
+        cbs.push(cb as ExecCb);
+        return new EventEmitter();
+      },
+    );
+    return { calls, cbs };
+  }
+
+  async function flushDeep() {
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+  }
+
+  it('首次 dubious ownership → 幂等加入 safe.directory 后重试一次', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    expect(calls).toEqual([['status']]);
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    // 读取现有 safe.directory → 未配置(exit 1)按空处理
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    cbs[1](new Error('exit 1'), '', '');
+    await flushDeep();
+
+    // 尚不存在 → 幂等 add 一次
+    expect(calls[2]).toEqual(['config', '--global', '--add', 'safe.directory', '/repo']);
+    cbs[2](null, '', '');
+    await flushDeep();
+
+    // 重试原命令
+    expect(calls[3]).toEqual(['status']);
+    cbs[3](null, 'ok', '');
+    await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
+  });
+
+  it('路径已在 safe.directory 中 → 不重复 --add, 直接重试原命令', async () => {
+    const { calls, cbs } = installSequenceMock();
+
+    const p = gitExec(['status'], '/repo');
+    cbs[0](new Error('boom'), '', "fatal: detected dubious ownership in repository at '/repo'");
+    await flushDeep();
+
+    expect(calls[1]).toEqual(['config', '--global', '--get-all', 'safe.directory']);
+    cbs[1](null, '/repo\n', '');
+    await flushDeep();
+
+    // 已存在 → 跳过 --add, 直接重试
+    expect(calls[2]).toEqual(['status']);
+    cbs[2](null, 'ok', '');
+    await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
+    expect(calls.some((a) => a.includes('--add'))).toBe(false);
+  });
+});
