@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, nativeTheme } from 'electron';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
@@ -13,6 +13,7 @@ const log = desktopMakerLogger.child('window-theme-mode-store');
 export interface WindowThemeSnapshot {
   mode: AppThemeMode;
   resolvedIsDark?: boolean;
+  systemIsDark?: boolean;
 }
 
 const DEFAULTS: WindowThemeSnapshot = { mode: 'system' };
@@ -26,7 +27,28 @@ function normalize(raw: unknown): WindowThemeSnapshot {
   if (typeof value.resolvedIsDark === 'boolean') {
     normalized.resolvedIsDark = value.resolvedIsDark;
   }
+  if (typeof value.systemIsDark === 'boolean') {
+    normalized.systemIsDark = value.systemIsDark;
+  }
   return normalized;
+}
+
+function resolveSnapshotForSystem(
+  snapshot: WindowThemeSnapshot,
+  currentSystemIsDark: boolean,
+): WindowThemeSnapshot {
+  if (snapshot.mode !== 'system') return snapshot;
+  if (
+    snapshot.resolvedIsDark !== undefined
+    && snapshot.systemIsDark === currentSystemIsDark
+  ) {
+    return {
+      ...snapshot,
+      mode: snapshot.resolvedIsDark ? 'dark' : 'light',
+    };
+  }
+  const { resolvedIsDark: _staleResolvedTheme, ...currentSystemSnapshot } = snapshot;
+  return currentSystemSnapshot;
 }
 
 function settingsFilePath(): string {
@@ -44,14 +66,19 @@ const store = createOverrideSettingsFile<WindowThemeSnapshot>({
 });
 
 export function readWindowThemeSnapshot(): WindowThemeSnapshot {
-  return store.read();
+  return resolveSnapshotForSystem(store.read(), nativeTheme.shouldUseDarkColors);
 }
 
 export function writeWindowThemeSnapshot(mode: AppThemeMode, resolvedIsDark: boolean): void {
   try {
+    const systemIsDark = nativeTheme.shouldUseDarkColors;
     const current = store.read();
-    if (current.mode === mode && current.resolvedIsDark === resolvedIsDark) return;
-    store.writePatch({ mode, resolvedIsDark });
+    if (
+      current.mode === mode
+      && current.resolvedIsDark === resolvedIsDark
+      && current.systemIsDark === systemIsDark
+    ) return;
+    store.writePatch({ mode, resolvedIsDark, systemIsDark });
   } catch (error) {
     // Theme rendering must remain available even if the best-effort restart mirror cannot persist.
     log.warn('window theme mode write failed', {
@@ -60,4 +87,4 @@ export function writeWindowThemeSnapshot(mode: AppThemeMode, resolvedIsDark: boo
   }
 }
 
-export const __testing = { normalize };
+export const __testing = { normalize, resolveSnapshotForSystem };

@@ -18,6 +18,7 @@ export function resolveAppThemeIsDark(
   persistedResolvedIsDark?: boolean,
 ): boolean {
   if (lastResolvedIsDark !== undefined) return lastResolvedIsDark;
+  if (persistedMode === 'system') return systemIsDark;
   if (persistedResolvedIsDark !== undefined) return persistedResolvedIsDark;
   if (persistedMode === 'dark') return true;
   if (persistedMode === 'light') return false;
