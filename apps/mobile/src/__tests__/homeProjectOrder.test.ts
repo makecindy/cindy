@@ -6,6 +6,7 @@ import {
   projectDropIndexFromY,
   reorderVisibleProjectByDropIndex,
   reorderVisibleProjectToIndex,
+  resolveVirtualizedDropIndex,
   snapshotManualProjectOrder,
 } from '@/session/homeProjectOrder';
 
@@ -73,5 +74,27 @@ describe('projectDropIndexFromY', () => {
     expect(projectDropIndexFromY(layouts, 110)).toBe(0);
     expect(projectDropIndexFromY(layouts, 190)).toBe(2);
     expect(projectDropIndexFromY(layouts, 400)).toBe(3);
+  });
+});
+
+describe('resolveVirtualizedDropIndex', () => {
+  const visible = ['a', 'b', 'c', 'd', 'e']; // 完整可见项目序
+
+  it('passes the drop index through when every visible row is mounted', () => {
+    // 全挂载:mounted(含源) = 全量;拖 e 到子集去掉源后的第 1 位。
+    expect(resolveVirtualizedDropIndex(visible, visible, 'e', 1)).toBe(1);
+  });
+
+  it('adds the scrolled-past prefix so a drop does not jump to the front', () => {
+    // 只挂载 c/d/e(a、b 滚过未挂载),拖 e。已挂载去掉源 = [c, d],
+    // mountedDropIndex=0 表示落在 c 之前。完整去掉源 = [a, b, c, d],
+    // c 的真实位置是 2 —— 必须回 2,而不是 0(旧 bug 会甩到最前)。
+    expect(resolveVirtualizedDropIndex(visible, ['c', 'd', 'e'], 'e', 0)).toBe(2);
+    // 落在已挂载子集末尾(d 之后)→ 紧跟 d,即完整去掉源里的 index 3+1=4? d 在 [a,b,c,d] 的 index 是 3,末尾插入 → 4。
+    expect(resolveVirtualizedDropIndex(visible, ['c', 'd', 'e'], 'e', 2)).toBe(4);
+  });
+
+  it('aborts (null) when the dragged row itself was not measured', () => {
+    expect(resolveVirtualizedDropIndex(visible, ['a', 'b'], 'e', 0)).toBeNull();
   });
 });

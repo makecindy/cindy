@@ -3,7 +3,6 @@ import {
   liveTaskPriorityRank,
 } from '@cindy/maker-shared/live-task-priority';
 import type { RemoteSessionListItem } from './sessionList';
-import { resolveMobileSessionRightStatus } from './sessionRightStatus';
 
 export type HomeListSortBy = 'recency' | 'priority';
 export type HomeStatusFilter = 'active' | 'archived' | 'all';
@@ -123,15 +122,20 @@ export function collectHomePriorityContext(
   const unreadSessionIds = new Set<string>();
   const waitingSessionIds = new Set<string>();
   for (const item of items) {
-    const status = resolveMobileSessionRightStatus({
-      liveAttention: item.liveActivity?.attention === true,
-      livePhase: item.liveActivity?.phase,
-      pendingInteractionCount: item.pendingInteractionCount,
-      running: runningSessionIds.has(item.session.id) || !!item.scheduleInfo?.running,
-      scheduleUnreadCount: item.scheduleInfo?.unreadCount ?? 0,
-    });
-    if (status === 'error' || status === 'awaiting') waitingSessionIds.add(item.session.id);
-    else if (status === 'done') unreadSessionIds.add(item.session.id);
+    // 各信号独立收集,不从互斥的 resolveMobileSessionRightStatus 反推:定时任务同时
+    // 「完成未读」又「下一轮运行中」时,右侧展示状态会先返回 running 把 unread 吞掉,导致
+    // 排序落到 running 档而非「完成未读 > 运行中」。这里对齐桌面(attentionSessionIds /
+    // runningSessionIds 各自独立集合),让同一会话可同时进 unread 与 running,由
+    // liveTaskPriorityRank 的尺子(waiting > unread > running)裁决档位。
+    const liveAttention = item.liveActivity?.attention === true;
+    const livePhase = item.liveActivity?.phase;
+    const isError = liveAttention && livePhase === 'error';
+    const isAwaiting = item.pendingInteractionCount > 0
+      || (liveAttention && livePhase === 'needs-interaction');
+    const isUnread = (item.scheduleInfo?.unreadCount ?? 0) > 0
+      || (liveAttention && livePhase === 'completed');
+    if (isError || isAwaiting) waitingSessionIds.add(item.session.id);
+    if (isUnread) unreadSessionIds.add(item.session.id);
   }
   return {
     heldPriorityRanks: hold.heldPriorityRanks,

@@ -109,4 +109,20 @@ describe('collectHomePriorityContext', () => {
     expect(naturalPriorityRankForId('run', ctx)).toBe(LIVE_TASK_PRIORITY.running);
     expect(naturalPriorityRankForId('idle', ctx)).toBe(LIVE_TASK_PRIORITY.rest);
   });
+
+  it('ranks an unread + running task as unread, not running', () => {
+    const hold = createViewedPriorityHoldState();
+    // 定时任务同时「完成未读」(scheduleInfo.unreadCount>0) 又「下一轮运行中」。
+    const ctx = collectHomePriorityContext(
+      [item('both', { unread: 1, running: true })],
+      new Set(['both']),
+      hold,
+    );
+
+    // 独立收集:该任务同时进 unread 与 running 集合。
+    expect(ctx.unreadSessionIds.has('both')).toBe(true);
+    expect(ctx.runningSessionIds.has('both')).toBe(true);
+    // 尺子 waiting > unread > running:落 unread 档而非 running 档。
+    expect(naturalPriorityRankForId('both', ctx)).toBe(LIVE_TASK_PRIORITY.unread);
+  });
 });

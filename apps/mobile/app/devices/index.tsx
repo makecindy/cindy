@@ -109,6 +109,7 @@ import {
 import {
   projectDropIndexFromY,
   reorderVisibleProjectByDropIndex,
+  resolveVirtualizedDropIndex,
   snapshotManualProjectOrder,
   type HomeProjectOrder,
 } from '@/session/homeProjectOrder';
@@ -1419,10 +1420,20 @@ export default function HomeScreen() {
       setManualProjectOrder(next);
       void saveHomeViewPreferences({ projectOrder: 'custom', manualProjectOrder: next });
     };
+    const mountedKeysByY = session.layouts.map((item) => item.key);
     if (ledger === 'host' && selectedDeviceId) {
       const visibleKeys = home.projects
         .filter((item) => item.deviceId === selectedDeviceId)
         .map((item) => item.key);
+      // 虚拟化下 session.hoverIndex 只在已挂载子集从 0 计,先翻译成完整可见列表的插入位;
+      // 翻译不出(源行未测到 / 已挂载子集为空)则中止,不写主机账本。
+      const dropIndex = resolveVirtualizedDropIndex(
+        visibleKeys,
+        mountedKeysByY,
+        session.key,
+        session.hoverIndex,
+      );
+      if (dropIndex === null) return;
       const currentKeys = controllerKeysFromHost(
         selectedDeviceId,
         hostProjectOrders.get(selectedDeviceId) ?? UNAVAILABLE_PROJECT_ORDER_SNAPSHOT,
@@ -1431,7 +1442,7 @@ export default function HomeScreen() {
         currentKeys.length > 0 ? currentKeys : visibleKeys,
         visibleKeys,
         session.key,
-        session.hoverIndex,
+        dropIndex,
       );
       if (!next) return;
       void applyHostProjectOrder(invoke, selectedDeviceId, {
@@ -1460,11 +1471,18 @@ export default function HomeScreen() {
       });
       return;
     }
+    const dropIndex = resolveVirtualizedDropIndex(
+      visibleProjectKeys,
+      mountedKeysByY,
+      session.key,
+      session.hoverIndex,
+    );
+    if (dropIndex === null) return;
     const next = reorderVisibleProjectByDropIndex(
       manualProjectOrder,
       visibleProjectKeys,
       session.key,
-      session.hoverIndex,
+      dropIndex,
     );
     if (!next) return;
     persistViewer(next);

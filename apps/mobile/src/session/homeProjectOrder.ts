@@ -119,6 +119,44 @@ export function reorderVisibleProjectByDropIndex(
   return mergeVisibleReorder(fullOrder, nextVisible);
 }
 
+/**
+ * 虚拟化列表(SectionList)只挂载窗口附近的行,拖拽时未挂载的项目行量不到,`projectDropIndexFromY`
+ * 得到的 dropIndex 只是「已挂载去掉源行」子集里的插入位(从 0 计)。直接拿去重排完整可见列表会把
+ * 项目甩到列表前部并持久化错误顺序。这里把它翻译成完整可见列表(去掉源行)里的插入位:按已挂载落点
+ * 邻居的键在完整列表里的真实位置定位,天然带上已滚过的前缀偏移;插到已挂载窗口末尾时紧跟最后一行
+ * (不越到未挂载的绝对末尾)。测不到源行 / 已挂载子集为空时返回 null,调用方中止拖拽,不 APPLY,
+ * 避免污染主机账本。
+ *
+ * @param mountedKeysByY 已挂载项目行的键,按 y 升序,含源行。
+ * @param mountedDropIndex `projectDropIndexFromY` 在「已挂载去掉源行」上算出的插入位。
+ */
+export function resolveVirtualizedDropIndex(
+  visibleKeys: readonly string[],
+  mountedKeysByY: readonly string[],
+  sourceKey: string,
+  mountedDropIndex: number,
+): number | null {
+  const visible = normalizeProjectKeyList(visibleKeys);
+  const mounted = normalizeProjectKeyList(mountedKeysByY).filter((key) => visible.includes(key));
+  if (!mounted.includes(sourceKey)) return null;
+  const fullRemaining = visible.filter((key) => key !== sourceKey);
+  if (mounted.length === visible.length) {
+    // 全部可见行都已挂载:dropIndex 已经是完整下标。
+    return Math.max(0, Math.min(fullRemaining.length, Math.round(mountedDropIndex)));
+  }
+  const mountedRemaining = mounted.filter((key) => key !== sourceKey);
+  if (mountedRemaining.length === 0) return null;
+  const clamped = Math.max(0, Math.min(mountedRemaining.length, Math.round(mountedDropIndex)));
+  if (clamped >= mountedRemaining.length) {
+    const lastKey = mountedRemaining[mountedRemaining.length - 1];
+    const idx = fullRemaining.indexOf(lastKey);
+    return idx < 0 ? null : idx + 1;
+  }
+  const targetKey = mountedRemaining[clamped];
+  const idx = fullRemaining.indexOf(targetKey);
+  return idx < 0 ? null : idx;
+}
+
 export function projectDropIndexFromY(
   layouts: readonly { height: number; y: number }[],
   y: number,
