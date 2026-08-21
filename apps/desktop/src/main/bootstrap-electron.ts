@@ -1908,10 +1908,20 @@ if (started) {
 // written → crash. Block here (synchronously) until the lock disappears.
 {
   const lockPath = getUpdateLockPath();
-  const maxWaitMs = 30_000;
+  // Windows / mac 热更窗口很短。Linux pkexec 要用户输入密码，脚本会心跳
+  // 刷新这把锁；锁还在被刷新时不能当过期清掉，否则旧进程会在安装中途启动。
+  const maxWaitMs = process.platform === 'linux' ? 30 * 60 * 1000 : 30_000;
+  const staleAfterMs = process.platform === 'linux' ? 20_000 : 30_000;
   const pollMs = 500;
   const start = Date.now();
   while (fs.existsSync(lockPath) && Date.now() - start < maxWaitMs) {
+    if (process.platform === 'linux') {
+      try {
+        if (Date.now() - fs.statSync(lockPath).mtimeMs > staleAfterMs) break;
+      } catch {
+        break;
+      }
+    }
     // Busy-wait is acceptable here: this only runs during the brief
     // robocopy window and the app has no UI yet.
     const waitUntil = Date.now() + pollMs;
@@ -1919,7 +1929,7 @@ if (started) {
       /* spin */
     }
   }
-  // If still locked after 30s, proceed anyway (stale lock).
+  // If still locked after the wait, proceed anyway (stale lock).
   try {
     fs.unlinkSync(lockPath);
   } catch {

@@ -17,6 +17,8 @@ export interface LinuxUpdateScriptTimings {
   verifyTimeoutSeconds: number;
   /** Second at which relaunch is retried (only if the first launch failed). */
   verifyRetryAtSeconds: number;
+  /** Seconds between lock-file heartbeats while pkexec may be waiting. */
+  lockHeartbeatSeconds: number;
 }
 
 export const DEFAULT_LINUX_UPDATE_SCRIPT_TIMINGS: LinuxUpdateScriptTimings = {
@@ -24,6 +26,7 @@ export const DEFAULT_LINUX_UPDATE_SCRIPT_TIMINGS: LinuxUpdateScriptTimings = {
   exitAbortAfterSeconds: 135,
   verifyTimeoutSeconds: 30,
   verifyRetryAtSeconds: 15,
+  lockHeartbeatSeconds: 5,
 };
 
 export interface LinuxUpdateScriptParams {
@@ -31,6 +34,8 @@ export interface LinuxUpdateScriptParams {
   pid: number;
   /** Absolute path of the downloaded .deb. */
   debPath: string;
+  /** Manifest SHA-256 of the staged .deb, rechecked immediately before pkexec. */
+  sha256: string;
   /** Absolute path of the installed main binary to relaunch. */
   exePath: string;
   /** Update lock file the bootstrap spins on during the swap. */
@@ -55,8 +60,17 @@ export function escapeEre(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+export function normalizeLinuxDebSha256(value: string): string | null {
+  const hex = value.trim().toLowerCase();
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : null;
+}
+
 export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string {
   const { pid, debPath, exePath, lockFilePath, scriptPath, logPath } = params;
+  const sha256 = normalizeLinuxDebSha256(params.sha256);
+  if (!sha256) {
+    throw new Error('Linux update script requires a 64-char sha256 of the staged .deb');
+  }
   const t = { ...DEFAULT_LINUX_UPDATE_SCRIPT_TIMINGS, ...params.timings };
   const qLog = shellSingleQuote(logPath);
   const qDeb = shellSingleQuote(debPath);
@@ -64,11 +78,27 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
   const qExeEre = shellSingleQuote(escapeEre(exePath));
   const qLock = shellSingleQuote(lockFilePath);
   const qScript = shellSingleQuote(scriptPath);
+  const qSha = shellSingleQuote(sha256);
 
   return [
     '#!/bin/bash',
+    'set -u',
     `echo "[$(date)] Update script started, waiting for PID ${pid}" >> ${qLog}`,
     `echo "[$(date)] deb=${qDeb} exe=${qExe}" >> ${qLog}`,
+    '',
+    `echo updating > ${qLock}`,
+    '(',
+    '    while true; do',
+    `        echo updating > ${qLock}`,
+    `        sleep ${t.lockHeartbeatSeconds}`,
+    '    done',
+    ') &',
+    'LOCK_HEARTBEAT_PID=$!',
+    'cleanup() {',
+    '    kill "$LOCK_HEARTBEAT_PID" 2>/dev/null',
+    `    rm -f ${qLock}`,
+    '}',
+    'trap cleanup EXIT',
     '',
     'WAITED=0',
     `while kill -0 ${pid} 2>/dev/null; do`,
@@ -86,18 +116,28 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     `echo "[$(date)] Process ${pid} exited, waiting for filesystem to settle" >> ${qLog}`,
     'sleep 2',
     '',
-    `echo updating > ${qLock}`,
-    '',
     'PKEXEC=/usr/bin/pkexec',
     'if [ ! -x "$PKEXEC" ]; then',
     '    PKEXEC=$(command -v pkexec 2>/dev/null || true)',
     'fi',
     'if [ -z "$PKEXEC" ] || [ ! -x "$PKEXEC" ]; then',
     `    echo "[$(date)] FATAL: pkexec not found — cannot install .deb" >> ${qLog}`,
-    `    rm -f ${qLock}`,
     `    nohup ${qExe} >/dev/null 2>&1 &`,
     '    exit 1',
     'fi',
+    '',
+    `if [ ! -f ${qDeb} ]; then`,
+    `    echo "[$(date)] FATAL: staged .deb missing before install" >> ${qLog}`,
+    `    nohup ${qExe} >/dev/null 2>&1 &`,
+    '    exit 1',
+    'fi',
+    `ACTUAL_SHA=$(sha256sum ${qDeb} | awk '{print $1}')`,
+    `if [ "$ACTUAL_SHA" != ${qSha} ]; then`,
+    `    echo "[$(date)] FATAL: staged .deb sha256 mismatch before pkexec (got $ACTUAL_SHA)" >> ${qLog}`,
+    `    nohup ${qExe} >/dev/null 2>&1 &`,
+    '    exit 1',
+    'fi',
+    `echo "[$(date)] staged .deb sha256 revalidated" >> ${qLog}`,
     '',
     'INSTALL_EXIT=1',
     'if [ -x /usr/bin/apt-get ]; then',
@@ -113,8 +153,6 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     '    INSTALL_EXIT=127',
     'fi',
     `echo "[$(date)] install exit code: $INSTALL_EXIT" >> ${qLog}`,
-    '',
-    `rm -f ${qLock}`,
     '',
     'if [ "$INSTALL_EXIT" -ne 0 ]; then',
     `    echo "[$(date)] INSTALL FAILED — relaunching previous binary" >> ${qLog}`,

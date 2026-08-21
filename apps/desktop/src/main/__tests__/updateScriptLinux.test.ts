@@ -12,10 +12,13 @@ import {
   type LinuxUpdateScriptParams,
 } from '../updateScriptLinux';
 
+const STAGED_SHA = 'a'.repeat(64);
+
 function makeParams(overrides: Partial<LinuxUpdateScriptParams> = {}): LinuxUpdateScriptParams {
   return {
     pid: 12345,
     debPath: '/tmp/cindy-0.0.2-amd64.deb',
+    sha256: STAGED_SHA,
     exePath: '/usr/lib/cindy/Cindy',
     lockFilePath: '/tmp/cindy-update.lock',
     scriptPath: '/tmp/cindy-update-1.sh',
@@ -45,6 +48,29 @@ describe('buildLinuxUpdateScript structure', () => {
     expect(script).not.toMatch(/rm -rf ['"]?\/usr/);
     expect(script).toContain('"$PKEXEC" /usr/bin/apt-get install --yes --allow-downgrades');
     expect(script).toContain('"$PKEXEC" /usr/bin/dpkg --install');
+  });
+
+  it('revalidates the staged .deb sha256 immediately before pkexec', () => {
+    const shaIdx = script.indexOf('staged .deb sha256 revalidated');
+    const aptIdx = script.indexOf('"$PKEXEC" /usr/bin/apt-get install');
+    expect(shaIdx).toBeGreaterThan(-1);
+    expect(aptIdx).toBeGreaterThan(shaIdx);
+    expect(script).toContain(`ACTUAL_SHA=$(sha256sum '/tmp/cindy-0.0.2-amd64.deb'`);
+    expect(script).toContain(`if [ "$ACTUAL_SHA" != '${STAGED_SHA}' ]; then`);
+  });
+
+  it('keeps the update lock alive while pkexec may be waiting', () => {
+    const lockIdx = script.indexOf(`echo updating > '/tmp/cindy-update.lock'`);
+    const pkexecIdx = script.indexOf('"$PKEXEC" /usr/bin/apt-get install');
+    expect(lockIdx).toBeGreaterThan(-1);
+    expect(pkexecIdx).toBeGreaterThan(lockIdx);
+    expect(script).toContain('LOCK_HEARTBEAT_PID=$!');
+    expect(script).toContain('trap cleanup EXIT');
+    expect(script).toContain("rm -f '/tmp/cindy-update.lock'");
+  });
+
+  it('rejects a missing or malformed sha256 instead of installing unverified bytes', () => {
+    expect(() => buildLinuxUpdateScript(makeParams({ sha256: 'abc' }))).toThrow(/sha256/);
   });
 
   it('escalates SIGKILL at exitKillAfterSeconds and aborts at exitAbortAfterSeconds', () => {
