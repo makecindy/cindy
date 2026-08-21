@@ -3165,21 +3165,21 @@ export function ModelSelector({
 
   // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
   // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁;区别只在收尾:
-  //   · 调用方执行了切换(返回非 false)→ 收起面板(与旧两步分段选完即收一致);
-  //   · 用户在确认框上取消 / 事务失败(返回 false)→ 面板留在原地,他还能接着挑别的行。
+  // 保命锁。收尾**成功也不关**(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊,
+  // 以前 applied=true 就收窗,表象就是「所有模型改不了 Harness」。取消 / 失败同样留在原地。
   //
   // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
   // 不再只是确认框那一下。保命锁刻意**覆盖整个 await 期**:事务在途时面板被 Popover 的
   // 外点判定收掉,收尾再把 open 设回 true,就成了「面板闪一下又自己弹回来」。锁按住期间
-  // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰,收尾时才按结果决定收还是留
-  // —— 中途没有可以插进来的关闭窗口。
+  // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰。
   //
-  // ★ 因此 open 的表达式必须是 `(open && !disabled) || keepOpenForAgentConfirmation`,
-  // 不能是 `(open || keepOpen) && !disabled`(Chris 2026-08-19 实测「面板原地刷新一下」的
-  // 根因):事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled
-  // 拉高,后一种写法会连保命锁一起压掉 —— 面板当场收合,收尾时 setOpenWithoutAutoRefresh(true)
-  // 又把它弹回来。保命锁的意义就是「这段时间里别关」,disabled 不该有权否决它。
+  // ★ open 的表达式必须是 `open || keepOpenForAgentConfirmation`,disabled **不能**参与
+  // 开关(Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」):
+  // 事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled 拉高。
+  // `(open && !disabled) || keepOpen` 只保住确认框那条路,改思维 / 同引擎重登记不走
+  // keepOpen,选单照关。disabled 只该让面板置灰(interactionDisabled),不该有权把窗口关掉。
+  // 不能写成 `(open || keepOpen) && !disabled` —— 那是 08-19 的原症状。
+  // 不能写成 `(open && !disabled) || keepOpen` —— 那是 08-20 改思维仍闪关。
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
@@ -3191,8 +3191,10 @@ export function ModelSelector({
         setKeepOpenForAgentConfirmation(true);
         try {
           const applied = await onCrossEngineSelect(args);
-          // 执行了切换 → 收面板;取消 → 留在原地(open 保持 true)。
-          setOpenWithoutAutoRefresh(applied === false);
+          // 成功也不收选单(Chris 2026-08-20):切完引擎用户还要改思维 / 再点胶囊。
+          // 以前 `applied === true` 就把窗口关了,表象就是「所有模型改不了 Harness」——
+          // 一点胶囊选单消失,变量还没调完。取消 / 失败同样留在原地。用户自己点外面才关。
+          setOpenWithoutAutoRefresh(true);
           return applied !== false;
         } finally {
           setKeepOpenForAgentConfirmation(false);
@@ -3795,7 +3797,7 @@ export function ModelSelector({
   if (morphEnabled) {
     return (
       <MorphPopover
-        open={(open && !disabled) || keepOpenForAgentConfirmation}
+        open={open || keepOpenForAgentConfirmation}
         onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
@@ -3822,7 +3824,7 @@ export function ModelSelector({
 
   return (
     <Popover
-      open={(open && !disabled) || keepOpenForAgentConfirmation}
+      open={open || keepOpenForAgentConfirmation}
       onOpenChange={handleOpenChange}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>

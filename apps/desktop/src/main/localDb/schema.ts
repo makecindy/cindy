@@ -89,9 +89,9 @@ export const sessions = sqliteTable(
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
     /**
-     * 任务现状一句话摘要（sidebar-card-mode 卡片/rail flyout 展示）。
-     * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束时经 oneShot 生成,
-     * NULL = 尚未生成（非置顶会话不生成）。
+     * 任务现状一句话摘要（仅置顶段卡片模式展示/生成）。
+     * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束或置顶时经 oneShot 生成,
+     * 取消置顶时清空。NULL = 尚未生成或非卡片置顶。
      */
     summary: text('summary'),
     /**

@@ -28,6 +28,7 @@ import {
 } from '@cindy/maker-shared/internal-citation';
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import {
   UPSTREAM_OVERLOAD_REASON,
   formatOverloadRetryMessage,
@@ -111,6 +112,8 @@ export interface PiTranslateContext {
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
   generationDurationMs: number;
+  /** Open generation interval start; 0 while tools/user waits own the turn. */
+  generationOpenAt: number;
   /** False when any reported output lacks compatible parent generation timing. */
   generationTimingReliable: boolean;
   generationHeartbeatAt: number;
@@ -151,6 +154,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     finalAssistantText: '',
     turnWallClockStartedAt: 0,
     generationDurationMs: 0,
+    generationOpenAt: 0,
     generationTimingReliable: true,
     generationHeartbeatAt: 0,
     generationHeartbeatTimer: null,
@@ -169,6 +173,7 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   if (ctx.generationHeartbeatTimer !== null) clearInterval(ctx.generationHeartbeatTimer);
   ctx.generationHeartbeatTimer = null;
   ctx.generationHeartbeatAt = 0;
+  ctx.generationOpenAt = 0;
 }
 
 /** Release translator-owned resources when a Pi session ends outside a normal turn boundary. */
@@ -194,18 +199,27 @@ function startPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   stopPiGenerationHeartbeat(ctx);
   ctx.generationHeartbeatReliable = true;
   ctx.generationHeartbeatAt = Date.now();
+  ctx.generationOpenAt = ctx.generationHeartbeatAt;
   const timer = setInterval(() => samplePiGenerationHeartbeat(ctx), PI_GENERATION_HEARTBEAT_MS);
   timer.unref?.();
   ctx.generationHeartbeatTimer = timer;
 }
 
 export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
-  return {
-    tokenUsage: ctx.turnTokens,
-    contextTokens: ctx.contextTokens,
-    contextWindow: ctx.contextWindow,
-    costUsd: ctx.costUsd,
-  };
+  return attachLiveGeneration(
+    {
+      tokenUsage: ctx.turnTokens,
+      contextTokens: ctx.contextTokens,
+      contextWindow: ctx.contextWindow,
+      costUsd: ctx.costUsd,
+    },
+    {
+      outputTokens: ctx.turnOutput,
+      closedDurationMs: ctx.generationDurationMs,
+      openStartedAt: ctx.generationOpenAt > 0 ? ctx.generationOpenAt : null,
+      reliable: ctx.generationTimingReliable && ctx.generationHeartbeatReliable,
+    },
+  );
 }
 
 function pushStatus(
@@ -398,6 +412,9 @@ export function translatePiEvent(
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
       startPiGenerationHeartbeat(ctx);
+      // Tell the UI generation is active so it can tick the TPS denominator
+      // locally between sparse message_end usage reports.
+      pushStatus(queue, ctx, 'Working…', true);
       return;
     }
 

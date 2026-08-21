@@ -630,6 +630,14 @@ export interface AgentStatus {
   contextWindow: number;
   isRunning: boolean;
   startedAt: number | null;
+  /** Turn-cumulative output tokens for live TPS. */
+  outputTokens?: number;
+  /** Generation-only milliseconds including any open interval at emit time. */
+  generationDurationMs?: number;
+  /** True while the model currently owns the turn. */
+  generationActive?: boolean;
+  /** False hides live TPS. Omitted on placeholder status frames. */
+  generationReliable?: boolean;
   /**
    * Side-channel running (mivo MJ 按钮等不走 LLM 的后台任务)。
    * RunningStatusBar 据此把 token 计数行隐藏掉, 避免显示"上一轮残留 718 tokens"
@@ -5879,6 +5887,61 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
   };
 }
 
+function mergeLiveGenerationStatus(
+  isTurnStart: boolean,
+  update: CCAgentStatusUpdate,
+  previous: AgentStatus,
+): Pick<
+  AgentStatus,
+  'outputTokens' | 'generationDurationMs' | 'generationActive' | 'generationReliable'
+> {
+  // Turn start drops leftover metrics from the previous turn, then keeps any
+  // live fields carried by this same status. A reconnect-shaped first event
+  // (isRunning false→true with output / duration already present) must not
+  // zero the values that just arrived.
+  const baseline = isTurnStart
+    ? {
+        outputTokens: 0,
+        generationDurationMs: 0,
+        generationActive: false,
+        generationReliable: true,
+      }
+    : previous;
+  const hasLiveFields =
+    typeof update.outputTokens === 'number' ||
+    typeof update.generationDurationMs === 'number' ||
+    typeof update.generationActive === 'boolean' ||
+    typeof update.generationReliable === 'boolean';
+  if (!hasLiveFields) {
+    return {
+      outputTokens: baseline.outputTokens,
+      generationDurationMs: baseline.generationDurationMs,
+      generationActive: update.isRunning ? baseline.generationActive : false,
+      generationReliable: baseline.generationReliable,
+    };
+  }
+  const merged = {
+    outputTokens:
+      typeof update.outputTokens === 'number' ? update.outputTokens : baseline.outputTokens,
+    generationDurationMs:
+      typeof update.generationDurationMs === 'number'
+        ? update.generationDurationMs
+        : baseline.generationDurationMs,
+    generationActive:
+      typeof update.generationActive === 'boolean'
+        ? update.generationActive
+        : baseline.generationActive,
+    generationReliable:
+      typeof update.generationReliable === 'boolean'
+        ? update.generationReliable
+        : baseline.generationReliable,
+  };
+  if (!update.isRunning) {
+    return { ...merged, generationActive: false };
+  }
+  return merged;
+}
+
 function handleStatusUpdate(
   state: SessionChatState,
   update: CCAgentStatusUpdate,
@@ -5992,6 +6055,7 @@ function handleStatusUpdate(
       contextWindow: cw,
       isRunning: update.isRunning,
       startedAt,
+      ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
     continuationTurnClientId: update.isRunning ? state.continuationTurnClientId : null,

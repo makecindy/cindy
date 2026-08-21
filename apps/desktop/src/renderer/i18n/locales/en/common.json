@@ -2591,7 +2591,11 @@
       "removeAria": "Uninstall {{name}}",
       "showDetails": "Show details for {{name}}",
       "collapseDetails": "Hide details for {{name}}",
-      "rowStatus": { "compatible": "Compatible", "noticeCount": "{{count}} compatibility notices", "unmanageable": "Manage from Pi" },
+      "rowStatus": {
+        "compatible": "Compatible",
+        "noticeCount": "{{count}} compatibility notices",
+        "unmanageable": "Manage from Pi"
+      },
       "operationFailed": "The Pi extension operation failed. Check the source or network and try again.",
       "loading": "Loading Pi extensions…",
       "loadFailed": "Cindy couldn't load Pi extensions. Check the connection and try again.",
@@ -2609,8 +2613,19 @@
       "confirmUninstall": "Uninstall",
       "extensionDialogConfirm": "Confirm",
       "cancel": "Cancel",
-      "resources": { "extension": "Extension code", "skill": "Skill", "prompt": "Prompt template", "theme": "Theme" },
-      "status": { "supported": "Fully supported by Cindy", "extensionSupported": "No known Pi TUI dependency found", "partial": "Compatibility limits found", "unsupported": "Installed, but not loaded by Cindy", "unknown": "Compatibility check incomplete" },
+      "resources": {
+        "extension": "Extension code",
+        "skill": "Skill",
+        "prompt": "Prompt template",
+        "theme": "Theme"
+      },
+      "status": {
+        "supported": "Fully supported by Cindy",
+        "extensionSupported": "No known Pi TUI dependency found",
+        "partial": "Compatibility limits found",
+        "unsupported": "Installed, but not loaded by Cindy",
+        "unknown": "Compatibility check incomplete"
+      },
       "compatibility": {
         "supported": "Skills and prompt templates are fully supported. Extension source is inspected after install instead of being classified only by resource type.",
         "partial": "When Pi TUI APIs are detected, Cindy lists the specific limits. The extension can still be installed and you decide whether to keep it enabled.",
@@ -2646,8 +2661,20 @@
       "keepDisabled": "Keep disabled",
       "approveAndEnable": "Accept risk and enable",
       "done": "Done",
-      "warning": { "no-resources": "No Pi resources were found in this extension.", "inspection-failed": "The extension is configured, but its installed contents could not be inspected.", "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.", "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.", "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.", "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work." },
-      "success": { "install": "Pi extension installed. The current task is unchanged; start or restart a Pi task to use it.", "remove": "Pi extension removed. The current task keeps the old extension until it is closed.", "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.", "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it." }
+      "warning": {
+        "no-resources": "No Pi resources were found in this extension.",
+        "inspection-failed": "The extension is configured, but its installed contents could not be inspected.",
+        "inspection-limit": "The extension exceeded safe inspection limits and remains disabled.",
+        "unsupported-filter": "This extension uses Pi resource filters that Cindy cannot safely reproduce yet, so it remains disabled.",
+        "unsafe-source": "This extension's saved source contains credentials or private URL parameters. Cindy hid the sensitive parts, kept it disabled, and blocked in-app update or removal.",
+        "lifecycle-scripts-disabled": "This extension declares install scripts, but Cindy did not run them for safety. Features that depend on generated files may not work."
+      },
+      "success": {
+        "install": "Pi extension installed. The current task is unchanged; start or restart a Pi task to use it.",
+        "remove": "Pi extension removed. The current task keeps the old extension until it is closed.",
+        "update": "Pi extension updated. The current task keeps the old version; start or restart a Pi task to use the update.",
+        "set-enabled": "Pi extension state saved. The current task is unchanged; start or restart a Pi task to apply it."
+      }
     },
     "computerUse": {
       "title": "Automation",
@@ -4086,6 +4113,8 @@
         "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
         "fsWrite": "Can write files (create / modify)",
         "fsWriteDetail": "Its own private data folder is always writable. Writes into the current session's working directory follow the session's permission mode (auto-approve modes write directly; per-action modes ask you first). Any other folder always requires your confirmation. Files are always written by the host — the plugin itself never touches your file system.",
+        "libraryPersist": "Can use a durable library (large files and databases)",
+        "libraryPersistDetail": "It gets a Cindy-managed storage area for your work (canvases, images, databases) with no normal plugin data quota. All file and database operations are executed by the host; the plugin only uses relative paths inside its own library and cannot touch your other files. Uninstalling the plugin does not delete this data; deletion requires separate confirmation in Cindy settings.",
         "networkHost": "Accesses the network domain {{host}}",
         "networkSecret": "Needs a credential from you: \"{{name}}\"",
         "networkSecretGhostInputDetail": "Collected by this plugin's own settings UI — the plugin page sees the value at entry time. It is then handed to the host in one step for encrypted storage; once stored, the plugin can never read it back, and the host injects it only for the domains it declares.",
@@ -4235,11 +4264,60 @@
         "slotNotify": "System tips",
         "slotBadge": "Unread badge",
         "slotFs": "File writing",
+        "slotLibrary": "Durable library",
         "slotSkill": "Agent skills",
         "slotWorkspace": "Workspace sessions",
         "slotIOSSimulator": "Embedded iOS Simulator"
       },
       "commandPaletteTag": "Plugin command",
+      "library": {
+        "title": "Durable library",
+        "loading": "Loading library info…",
+        "loadFailed": "Failed to load library info",
+        "refresh": "Refresh",
+        "locationLabel": "Storage location",
+        "locationDefault": "Cindy-managed location (system data folder)",
+        "locationCustomPrefix": "Custom:",
+        "usageLabel": "Usage",
+        "filesUnit": "files",
+        "diskFreeLabel": "Disk free",
+        "stateDiskMissing": "Library unavailable: the storage disk is not connected. Reconnect it, then re-select the location in settings.",
+        "stateBindingMoved": "Library unavailable: the storage location has changed. Please re-select the location.",
+        "stateReadonly": "The library is currently read-only.",
+        "orphanedBanner": "The plugin is uninstalled, but its work data is kept. Reinstalling the plugin restores access automatically.",
+        "softLimitWarning": "Library usage exceeds the suggested watermark ({{limit}}). Consider cleaning up or moving it to another disk.",
+        "changeLocation": "Change location…",
+        "revertDefault": "Restore default location",
+        "unbind": "Forget custom location",
+        "relocateConfirmTitle": "Move the library?",
+        "relocateConfirmDescription": "All work data will be copied to the new location and verified item by item; the old folder is kept for 14 days as a rollback window. Large libraries may take a few minutes — avoid using the plugin during the move.",
+        "relocateConfirmText": "Start moving",
+        "relocateDone": "Library moved",
+        "relocateFailed": "Move failed",
+        "relocateBusy": "Moving…",
+        "revertConfirmTitle": "Move back to the default location?",
+        "revertConfirmText": "Move back",
+        "unbindConfirmTitle": "Forget the custom location?",
+        "unbindConfirmDescription": "The library will return to the Cindy-managed default location. Data in the old custom folder is neither deleted nor moved; recover it manually if needed.",
+        "unbindConfirmText": "Forget location",
+        "cloudWarningTitle": "Cloud-synced folder reminder",
+        "cloudWarningProceed": "Use this location anyway",
+        "cloudWarningToast": "A cloud-synced folder is in use; database files may be corrupted by sync. Consider changing the location soon.",
+        "deleteData": "Delete work data…",
+        "deleteBusy": "Deleting…",
+        "deleteConfirmTitle": "Delete all work data of this plugin?",
+        "deleteConfirmDescription": "This is separate from uninstalling the plugin. Deleted data is moved to a trash folder and kept for 30 days, then permanently removed. Uninstalling or reinstalling the plugin does not affect this data.",
+        "deleteConfirmText": "Delete data",
+        "deleteDone": "Work data moved to trash",
+        "deleteFailed": "Delete failed",
+        "pickFailed": "The selected location is not usable",
+        "installLocationLabel": "Library storage location",
+        "installLocationDefault": "Default (Cindy-managed location)",
+        "installLocationPickedPrefix": "Selected:",
+        "installLocationChange": "Change…",
+        "bindAfterInstallFailed": "Failed to set the custom storage location; fell back to the default",
+        "cancel": "Cancel"
+      },
       "updateConfirm": {
         "title": "Update plugin \"{{name}}\"?",
         "body": "Version {{from}} → {{to}}. This replaces the installed version; enabled state and panel position are preserved.",
@@ -6764,6 +6842,10 @@
       "turnCostEstimatedValue": "Worth {{cost}}",
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "Request details"
+    },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
       "entry": "Share as Image",

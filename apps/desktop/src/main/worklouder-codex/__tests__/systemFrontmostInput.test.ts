@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { joystickScrollSpeed } from '../../../shared/workLouderCodexScroll.js';
 import {
@@ -10,15 +10,67 @@ import {
 } from '../systemFrontmostInput.js';
 
 describe('createWorkLouderCodexSystemFrontmostInput', () => {
-  it('maps a held microphone to the global overlay start/end phases', () => {
-    const triggerVoice = vi.fn();
-    const input = createWorkLouderCodexSystemFrontmostInput({ triggerVoice });
+  describe('microphone key outside Cindy', () => {
+    const HOLD_DELAY_MS = 450;
 
-    expect(input.handle({ type: 'voice', phase: 'press' })).toBe(true);
-    expect(input.handle({ type: 'voice', phase: 'release' })).toBe(true);
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
 
-    expect(triggerVoice).toHaveBeenNthCalledWith(1, 'start');
-    expect(triggerVoice).toHaveBeenNthCalledWith(2, 'end');
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function createVoiceInput() {
+      const triggerVoice = vi.fn();
+      return {
+        triggerVoice,
+        input: createWorkLouderCodexSystemFrontmostInput({
+          triggerVoice,
+          holdDelayMs: HOLD_DELAY_MS,
+          createScrollPump: () => ({ setSpeed: vi.fn(), stop: vi.fn() }),
+        }),
+      };
+    }
+
+    it('keeps the overlay recording after a short tap', () => {
+      const { triggerVoice, input } = createVoiceInput();
+
+      expect(input.handle({ type: 'voice', phase: 'press' })).toBe(true);
+      vi.advanceTimersByTime(HOLD_DELAY_MS - 1);
+      expect(input.handle({ type: 'voice', phase: 'release' })).toBe(true);
+
+      expect(triggerVoice.mock.calls.map(([phase]) => phase)).toEqual(['start', 'tap']);
+    });
+
+    it('submits when the key is held past the hold threshold', () => {
+      const { triggerVoice, input } = createVoiceInput();
+
+      expect(input.handle({ type: 'voice', phase: 'press' })).toBe(true);
+      vi.advanceTimersByTime(HOLD_DELAY_MS);
+      expect(input.handle({ type: 'voice', phase: 'release' })).toBe(true);
+
+      expect(triggerVoice.mock.calls.map(([phase]) => phase)).toEqual(['start', 'end']);
+    });
+
+    it('ignores repeated key-down messages while the key is held', () => {
+      const { triggerVoice, input } = createVoiceInput();
+
+      input.handle({ type: 'voice', phase: 'press' });
+      input.handle({ type: 'voice', phase: 'press' });
+      vi.advanceTimersByTime(HOLD_DELAY_MS);
+      input.handle({ type: 'voice', phase: 'release' });
+
+      expect(triggerVoice.mock.calls.map(([phase]) => phase)).toEqual(['start', 'end']);
+    });
+
+    it('drops a release that has no matching press', () => {
+      const { triggerVoice, input } = createVoiceInput();
+
+      expect(input.handle({ type: 'voice', phase: 'release' })).toBe(true);
+
+      expect(triggerVoice).not.toHaveBeenCalled();
+    });
   });
 
   it('sends Return for the send key', () => {

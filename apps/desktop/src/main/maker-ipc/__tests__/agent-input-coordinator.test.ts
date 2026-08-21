@@ -4801,6 +4801,7 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
   it.each([
     { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
     { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
+    { agentKind: 'pi' as const, providerId: 'openai', model: 'chatgpt/gpt-5.5' },
   ])(
     'invalidates an old abort token when $agentKind starts a new turn after a non-preserving stop',
     async ({ agentKind, providerId, model }) => {

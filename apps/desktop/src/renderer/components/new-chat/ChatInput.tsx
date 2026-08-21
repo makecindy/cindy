@@ -6056,28 +6056,13 @@ export function ChatInput({
   const confirmAgentBrowseSwitch = useCallback(
     (targetAgent: 'claude-code' | 'codex' | 'pi' | null) =>
       confirmAgentSwitchRisk({
-        // 两条「不必再问」的出口(任一成立即放行):
-        //
-        // 1. **同目标意图已存在** = 用户进入这个目标的浏览态时已经确认过;后续在同一目标里
-        //    改选模型 / 来源 / 深度 / Fast 都不重复弹。
-        //    判据必须带上目标(Chris 2026-08-19 实测):此前只判「有没有意图」,会话上挂着
-        //    **任何**残留意图之后确认框就永久静默 —— 先切 Codex(意图挂上)再去选 Pi 的
-        //    模型,一声不吭就改道了另一个引擎,而那是一次全新的上下文重建风险。
-        //
-        // 2. **目标就是会话真实引擎** = 用户在撤销、要回家。这一路在 main 侧是 same-engine
-        //    no-op(清掉 pending 意图 + 按普通 SET_MODEL 应用),不重建上下文、零风险,弹
-        //    「切换会重建上下文」纯属吓人。真源必须用 `runtimeAgentKind`(session / runtime
-        //    元数据确认的**事实**),**绝不能**用 vendorKey / composerEngineMarkVendor —— 那两个
-        //    在意图期会跟着意图翻到目标引擎,于是「回原引擎」反而被判成跨引擎、而「继续切到
-        //    意图目标」被判成同引擎,两边都反了。身份未加载(null)时不走这条出口,回落到
-        //    出口 1 或照常弹框。
-        //
-        // 目标解析不出来(理论上不会,防御历史 vendor 值)时按「没确认过」处理,宁可多问一次。
+        // 只有「目标就是会话正在跑的真实引擎」才不必再问(回原引擎 = same-engine no-op,
+        // 不重建上下文)。挂着的切换意图不算已经确认过(Chris 2026-08-20):Claude 任务里
+        // 点了 Pi 收藏、意图挂上但还没发消息,再点另一条非当前引擎的模型/收藏,仍然要问。
+        // 真源必须用 `runtimeAgentKind`,绝不能用 vendorKey / 意图目标 —— 那两个在意图期
+        // 会翻到目标引擎,把「继续切到意图目标」错判成同引擎、把确认框跳过。
         hasSwitchIntent:
-          !!sessionId &&
-          !!targetAgent &&
-          (makerChatStore.getAgentSwitchIntent(sessionId)?.target === targetAgent ||
-            (runtimeAgentKind != null && runtimeAgentKind === targetAgent)),
+          !!sessionId && !!targetAgent && runtimeAgentKind != null && runtimeAgentKind === targetAgent,
         confirm: confirmDialog,
         copy: {
           title: t('newChat.chatInput.agentSwitch.confirmation.title'),
@@ -6419,6 +6404,10 @@ export function ChatInput({
     if (!currentAgent) return undefined;
     return {
       currentAgent,
+      // 跨引擎确认 / 切换路由只认任务**正在跑**的引擎,不认挂着的意图目标。
+      // 意图期 currentAgent 会翻到 Pi,若用它判断,点 Pi 收藏会被当成同引擎、不弹确认、
+      // 还不带收藏里的思维(Chris 2026-08-20)。
+      runtimeAgent: runtimeAgentKind ?? undefined,
       onCrossEngineSelect: async ({
         providerId,
         modelId,
@@ -6487,6 +6476,7 @@ export function ChatInput({
     vendorKey,
     intentTargetAgent,
     remoteHostId,
+    runtimeAgentKind,
     sessionAgentSwitchSupported,
     confirmAgentBrowseSwitch,
     // 锚点写入绑的是**这一份闭包里的** sessionId(见 setSessionFavoriteAnchor):它随会话
@@ -6509,25 +6499,14 @@ export function ChatInput({
    * 下发给统一面板的收藏锚点:草稿用调用方(NewMakerDraftRoute)持有的那一份,会话用上面
    * 那份内存态。
    *
-   * 会话侧刻意做成**派生校验**而不是「配置一变就 setState 清掉」:同引擎选中一条收藏时,
-   * 模型的持久化是异步的(onProviderChange → IPC),清理式写法会在那个窗口里把刚记下的锚点
-   * 当场抹掉。派生写法在那一帧只是先不打勾,等 activeModel 收敛回来自然对上;而配置真被别的
-   * 路径改走(换模型 / 换引擎)之后,它永远对不上,等价于清除。判据与草稿侧同名兜底逐字同构:
-   * 比的是**快照里的 wire id** 与当前会话的 wire id(收藏条目按归一化行 id 存,两者天生可能不等)。
-   * 引擎身份未加载时(composerEngineMarkVendor 为 null)不参与判定,免得一帧未就绪就误判。
-   * 锚点指向的收藏被删 / 换账号后查无此条,由面板侧 activeFavoriteUid 兜底。
+   * 收藏是**独立选中项**(Chris 2026-08-20):选中身份就是那条收藏的 uid,不拿正在跑的
+   * 模型 / 引擎 / 思维去对副本 —— 对上才会勾,等于让下面的同名模型行把焦点抢走(点了
+   * Pi 收藏、任务还停在 Claude 时必现)。uid 指向的收藏被删 / 换账号后查无此条,由面板
+   * 侧 activeFavoriteUid 兜底。用户点普通模型行时 favoriteUid 显式置 null,那才是离开
+   * 这条收藏。
    */
   const effectiveSelectedFavoriteUid = sessionId
-    ? sessionFavoriteAnchor &&
-      sessionFavoriteAnchor.wireModelId === activeModel &&
-      // 来源同为锚点身份(2026-08-17 review):仅来源被切走(跨窗口 / 外部 patch,wire id
-      // 与引擎都没变)时锚点必须失效,否则面板继续勾旧来源的收藏。activeProviderId 为
-      // null = 会话跟随默认路由,与显式来源的锚点永不相等 —— 语义正确:锚点记录的是
-      // 一次显式来源选择。
-      sessionFavoriteAnchor.providerId === activeProviderId &&
-      (composerEngineMarkVendor === null || sessionFavoriteAnchor.engine === composerEngineMarkVendor)
-      ? sessionFavoriteAnchor.uid
-      : null
+    ? (sessionFavoriteAnchor?.uid ?? null)
     : selectedFavoriteUid;
 
   // 会话内拿不到跨引擎切换事务(SSH 远程会话 / 被控端不支持 session-agent-switch /

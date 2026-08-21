@@ -263,6 +263,33 @@ describe('computePriceQuoteTurnMoney', () => {
       ).toEqual(['reference-price']);
     }
   });
+
+  it('estimates SuperGrok token value from xAI reference prices including cache reads',
+    () => {
+    const money = computePriceQuoteTurnMoney(
+      {
+        inputTokens: 179_300,
+        outputTokens: 9_300,
+        cacheReadTokens: 1_600_000,
+        cacheCreateTokens: 0,
+      },
+      quote('grok-4.6', 2, 6, {
+        providerId: 'xai',
+        source: 'subscription-reference',
+        approximate: true,
+        cacheReadPerMtok: 0.5,
+      }),
+      'USD',
+    );
+    // 179.3k * $2 + 9.3k * $6 + 1.6M * $0.50 = $0.3586 + $0.0558 + $0.80
+    expect(money).toMatchObject({
+      amount: 1.2144,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+    });
+    expect(money?.estimateReasons).toEqual(['subscription-value', 'reference-price']);
+  });
 });
 
 describe('resolveTurnCost', () => {

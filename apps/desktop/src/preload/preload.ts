@@ -1278,6 +1278,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runtimeStates: (): Promise<{ states: Record<string, string> }> =>
       ipcRenderer.invoke('ghosts:runtime-states'),
     reload: (id: string): Promise<{ state: string }> => ipcRenderer.invoke('ghosts:reload', id),
+    // Library(持久作品库)设置面:概览/选位置(宿主弹原生选择器)/绑定/
+    // 迁移/回默认/解绑/删除。删除的破坏性确认在 Renderer 完成。
+    libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
+      ipcRenderer.invoke('ghosts:library-overview', id),
+    libraryPickLocation: (
+      id: string,
+    ): Promise<{ ok: boolean; cancelled?: boolean; candidate?: string; warnings?: string[]; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-pick-location', id),
+    libraryBind: (id: string, candidate: string): Promise<{ ok: boolean; message?: string; warnings?: string[] }> =>
+      ipcRenderer.invoke('ghosts:library-bind', id, candidate),
+    libraryRelocate: (id: string, candidate: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-relocate', id, candidate),
+    libraryRevertDefault: (id: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-revert-default', id),
+    libraryUnbind: (id: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-unbind', id),
+    libraryDelete: (id: string): Promise<{ ok: boolean; cancelled?: boolean; message?: string }> =>
+      ipcRenderer.invoke('ghosts:library-delete', id),
     legacyRecoveryStatus: (): Promise<
       import('../shared/legacyGhostRecovery').LegacyGhostRecoveryStatus
     > => ipcRenderer.invoke('ghosts:legacy-recovery-status'),
@@ -4694,6 +4712,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('local-db:sessions:update', id, patch),
       touchUserSend: (id: string, atMs?: number): Promise<void> =>
         ipcRenderer.invoke('local-db:sessions:touchUserSend', id, atMs),
+      setPinnedCardSummaries: (enabled: boolean): Promise<void> =>
+        ipcRenderer.invoke('local-db:sessions:set-pinned-card-summaries', enabled),
       /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: (): Promise<string[]> =>
         ipcRenderer.invoke('local-db:sessions:interrupted-pending'),

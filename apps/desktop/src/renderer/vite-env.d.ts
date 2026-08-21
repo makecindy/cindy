@@ -782,6 +782,10 @@ interface CCAgentStatusUpdate {
   costUsd?: number;
   contextTokens: number;
   contextWindow: number;
+  outputTokens?: number;
+  generationDurationMs?: number;
+  generationActive?: boolean;
+  generationReliable?: boolean;
   isRunning: boolean;
   /** Host-owned SDK boundary claim; a claimed `status(false)` is not product idle. */
   turnContinuationId?: number;
@@ -1561,6 +1565,16 @@ interface ElectronAPI {
     runtimeStates: () => Promise<{ states: Record<string, string> }>;
     /** 面板错误态「重载意识」:清熔断记账 + 重新拉起沙箱。 */
     reload: (id: string) => Promise<{ state: string }>;
+    /** Library(持久作品库)设置面:概览/选位置/绑定/迁移/回默认/解绑/删除。 */
+    libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    libraryPickLocation: (
+      id: string,
+    ) => Promise<{ ok: boolean; cancelled?: boolean; candidate?: string; warnings?: string[]; message?: string }>;
+    libraryBind: (id: string, candidate: string) => Promise<{ ok: boolean; message?: string; warnings?: string[] }>;
+    libraryRelocate: (id: string, candidate: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryRevertDefault: (id: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryUnbind: (id: string) => Promise<{ ok: boolean; message?: string }>;
+    libraryDelete: (id: string) => Promise<{ ok: boolean; cancelled?: boolean; message?: string }>;
     legacyRecoveryStatus: () => Promise<
       import('../shared/legacyGhostRecovery').LegacyGhostRecoveryStatus
     >;
@@ -4227,6 +4241,8 @@ interface ElectronAPI {
        * fire-and-forget；renderer 应在 emitPatch userSendAt 之后调用，作为持久化兜底。
        */
       touchUserSend: (id: string, atMs?: number) => Promise<void>;
+      /** 置顶段切到卡片模式才生成/回填任务摘要。 */
+      setPinnedCardSummaries: (enabled: boolean) => Promise<void>;
       /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: () => Promise<string[]>;
       /** 红点派生的周期性重算源:尾部停在未 dismissed 错误行的 active 会话 id。 */
