@@ -8834,6 +8834,9 @@ export default function SessionScreen() {
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
+              shareSelectionLeadingInset={nativeShellLayout.wideViewport
+                ? Math.max(0, (windowDimensions.width - nativeShellLayout.contentMaxWidth) / 2)
+                : 0}
               shareSelectAllNode={shareSelectionActive ? (
                 <ShareSelectAllButton busy={conversationShareBusy} shareableIds={allShareableIds} />
               ) : undefined}
@@ -9727,6 +9730,7 @@ function SessionHeaderBar({
   currentSession,
   diffCount,
   isDeviceAccessRevoked,
+  shareSelectionLeadingInset,
   shareSelectAllNode,
   syncing,
   messageCount,
@@ -9748,6 +9752,8 @@ function SessionHeaderBar({
   currentSession: RemoteSession | null;
   diffCount: number;
   isDeviceAccessRevoked: boolean;
+  /** 宽屏下与消息内容列共用的左侧 inset。 */
+  shareSelectionLeadingInset: number;
   /** 分享选择模式下替换头部动作区。 */
   shareSelectAllNode?: ReactNode;
   syncing: boolean;
@@ -9808,7 +9814,13 @@ function SessionHeaderBar({
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
   if (shareSelectAllNode) {
     return (
-      <View style={styles.sessionHeaderBar} testID="session.summary">
+      <View
+        style={[
+          styles.sessionHeaderBar,
+          { paddingLeft: shareSelectionLeadingInset + spacing.sm },
+        ]}
+        testID="session.summary"
+      >
         {shareSelectAllNode}
       </View>
     );

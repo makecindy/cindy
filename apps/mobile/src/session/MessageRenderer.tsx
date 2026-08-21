@@ -47,6 +47,7 @@ import {
   StatusBar,
   useWindowDimensions,
   View,
+  type GestureResponderEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   type LayoutChangeEvent,
@@ -73,7 +74,10 @@ import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
-import { ShareMessageCheckbox } from '@/session/ShareMessageCheckbox';
+import {
+  ShareMessageCheckbox,
+  useCancelShareSelectionRowTap,
+} from '@/session/ShareMessageCheckbox';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   composerDocumentFromSerializedMessage,
@@ -444,7 +448,20 @@ function MarkdownSelectableText({
  * 混入 RN Text 会破坏原生文本树。仅由 renderInline 在「块可选中且 iOS」时使用。
  */
 function MarkdownSelectableSpan(props: ComponentProps<typeof Text>) {
-  return <UITextView maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER} {...props} />;
+  const cancelShareSelectionRowTap = useCancelShareSelectionRowTap();
+  const handlePress = props.onPress
+    ? (event: GestureResponderEvent) => {
+      cancelShareSelectionRowTap?.();
+      props.onPress?.(event);
+    }
+    : undefined;
+  return (
+    <UITextView
+      maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
+      {...props}
+      onPress={handlePress}
+    />
+  );
 }
 
 function isTextRunContinuationGroup(group: MobileMarkdownBlockGroup): boolean {

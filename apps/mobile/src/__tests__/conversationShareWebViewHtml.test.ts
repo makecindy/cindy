@@ -273,6 +273,10 @@ describe('buildConversationShareHtml 富内容导出', () => {
       resolve(process.cwd(), 'src/session/MessageRenderer.tsx'),
       'utf8',
     );
+    const sessionSource = readFileSync(
+      resolve(process.cwd(), 'app/sessions/[sessionId].tsx'),
+      'utf8',
+    );
 
     expect(html).toContain('<div class="share-gap" aria-hidden="true">⋯</div>');
     expect(html).toMatch(
@@ -290,11 +294,17 @@ describe('buildConversationShareHtml 富内容导出', () => {
     );
     expect(selectAllSource).toContain('<ShareCheckboxMark checked={allSelected} />');
     expect(selectAllSource).not.toContain('backgroundColor: colors.surfaceChip');
-    expect(messageCheckboxSource).toContain('fill ? styles.rowButton : styles.button');
+    expect(messageCheckboxSource).toContain('onStartShouldSetResponder={() => !disabled}');
+    expect(messageCheckboxSource).toContain('onResponderTerminationRequest={() => true}');
+    expect(messageCheckboxSource).toContain('shouldCommitShareSelectionTap({');
+    expect(messageCheckboxSource).toContain('<ShareSelectionRowInteractionContext.Provider');
+    expect(messageCheckboxSource).toContain('if (!gesture.consumed) toggle();');
+    expect(messageCheckboxSource).not.toContain('fill ? styles.rowButton : styles.button');
     expect(messageRendererSource).toContain('<View style={styles.shareSelectionContent}>');
     expect(messageRendererSource).not.toContain(
       'pointerEvents="none" style={styles.shareSelectionContent}',
     );
+    expect(messageRendererSource).toContain('useCancelShareSelectionRowTap()');
     expect(messageRendererSource).toContain('fill');
     expect(messageRendererSource).toContain(
       'testID="message.shareStickyCheck"',
@@ -314,6 +324,12 @@ describe('buildConversationShareHtml 富内容导出', () => {
     expect(messageRendererSource).toContain('pointerEvents="box-none"');
     expect(messageRendererSource).toContain('marginLeft: wideContentInset + spacing.lg');
     expect(messageRendererSource).not.toContain('styles.stickyShareSpacer');
+    expect(sessionSource).toContain(
+      'shareSelectionLeadingInset={nativeShellLayout.wideViewport',
+    );
+    expect(sessionSource).toContain(
+      '{ paddingLeft: shareSelectionLeadingInset + spacing.sm }',
+    );
     expect(webViewSource).toContain(
       'onShouldStartLoadWithRequest={interceptNavigation}',
     );
