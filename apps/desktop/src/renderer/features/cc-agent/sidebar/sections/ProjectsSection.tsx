@@ -68,6 +68,11 @@ import {
   type ViewedPriorityHoldState,
 } from '../../lib/mainListModel';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
+import {
+  aggregateSessionLamps,
+  type SessionLampAggregate,
+} from '../../lib/sessionLampAggregation';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
 import {
@@ -392,6 +397,26 @@ export function ProjectsSection({
     viewedIdForSort,
   ]);
 
+  // 聚合灯(2026-08 用户反馈:未读点只亮在最底层会话行,项目层与设备层没有
+  // 灯,多设备下找未读要逐层展开翻找)——项目行 / 对话组行 / 设备段头都从
+  // 各自下方**实际渲染的行集合**聚合灯语(sessionLampAggregation,rail 同源):
+  // running → 图标呼吸橙;未读 → AttentionDot(红 error > 蓝 awaiting > 绿 done)。
+  // remoteActivityRevision 已在上方订阅,依赖注释同 priorityContext。
+  const lampAgg = useCallback(
+    (list: readonly Session[]): SessionLampAggregate =>
+      aggregateSessionLamps(
+        list.map((s) => s.id),
+        {
+          runningSessionIds,
+          notifications,
+          attentionKinds,
+          urgentSessionIds: urgentSet,
+        },
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 remoteLampOf 读到的整表内容
+    [runningSessionIds, notifications, attentionKinds, urgentSet, remoteActivityRevision],
+  );
+
   // E 期「按设备分组」:有远程设备连接 + 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
   // 自定义项目顺序可以和设备分组叠加:每段内项目行按全局序的子集排,段内可拖。
@@ -446,9 +471,15 @@ export function ProjectsSection({
   // 条目;任何排序/筛选下都生效。
   const entrySessions = getMainListEntrySessions;
   // 折叠视图共用一份参数:非设备分组 = 全列表一份;设备分组 = 每段各一份(见
-  // deviceSections)。attention 豁免用 priorityContext.attentionSessionIds——与
-  // 排序同一口径(含远程活动镜像),远程 waiting/unread 的条目不能被折进
-  // 「显示全部」。
+  // deviceSections)。豁免口径 = attention ∪ running(priorityContext,含远程
+  // 活动镜像)——与聚合灯同口径:上层灯为哪条会话点亮(未读或 running),
+  // 该条目就不能被折进「显示全部」(Greptile P1:此前只豁免 attention,
+  // running-only 会话会让呼吸灯指向不可见的条目)。
+  const lampFoldExemptIds = useMemo(() => {
+    const next = new Set(priorityContext.attentionSessionIds);
+    for (const id of priorityContext.runningSessionIds) next.add(id);
+    return next;
+  }, [priorityContext]);
   const collapseEntries = useCallback(
     (entries: readonly MainListEntry[], showAll: boolean) =>
       getSessionListCollapseView({
@@ -459,9 +490,9 @@ export function ProjectsSection({
         isFiltering: false,
         isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === viewedIdForSort),
         hasAttentionEntry: (entry) =>
-          entrySessions(entry).some((s) => priorityContext.attentionSessionIds.has(s.id)),
+          entrySessions(entry).some((s) => lampFoldExemptIds.has(s.id)),
       }),
-    [viewedIdForSort, entrySessions, priorityContext],
+    [viewedIdForSort, entrySessions, lampFoldExemptIds],
   );
   const {
     visibleEntries: visibleMixedEntries,
@@ -703,6 +734,8 @@ export function ProjectsSection({
         collapsed.has(project.projectKey) ? collapsedAttentionToneFor(project.sessions) : null
       }
       parentSectionCollapsed={false}
+      lamp={lampAgg(project.sessions)}
+      foldExemptSessionIds={lampFoldExemptIds}
       activeSessionId={activeSessionId}
       runningSessionIds={runningSessionIds}
       attachedSessionIds={attachedSessionIds}
@@ -787,6 +820,8 @@ export function ProjectsSection({
         <DialogueGroupNode
           key={`dialogue-group:${dialogueGroupKey}`}
           sessions={entry.sessions}
+          lamp={lampAgg(entry.sessions)}
+          foldExemptSessionIds={lampFoldExemptIds}
           collapsed={isCollapsed}
           onToggle={() => setDialogueCollapsed([dialogueGroupKey], !isCollapsed)}
           onCreateDialogue={() => onCreateDialogue(dialogueDeviceTarget)}
@@ -892,6 +927,9 @@ export function ProjectsSection({
                 : t('ccAgent.sidebar.deviceGroup.local');
               const online = section.deviceId ? (device?.online ?? false) : true;
               const sectionCollapsed = collapsedDevices.has(key);
+              // 设备层聚合灯:聚合本段全部条目的会话(与段内渲染一致)。顶层
+              // 也要有灯,否则未读藏在折叠段/折叠上限之外时只能逐段展开翻找。
+              const sectionLamp = lampAgg(section.entries.flatMap(entrySessions));
               return (
                 <div key={key} className="flex flex-col gap-1">
                   {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
@@ -914,7 +952,16 @@ export function ProjectsSection({
                     ) : (
                       <ChevronDown size={12} strokeWidth={2} className="shrink-0" />
                     )}
-                    <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
+                    {/* 段内任一 running → 设备图标呼吸橙(rail 段钮同款灯语)。 */}
+                    <span
+                      className={cn(
+                        'inline-flex shrink-0',
+                        sectionLamp.running &&
+                          'text-[var(--status-bar-accent)] session-status-breathing',
+                      )}
+                    >
+                      <MonitorSmartphone size={13} strokeWidth={2} aria-hidden />
+                    </span>
                     <span className="min-w-0 truncate text-xs font-medium">{name}</span>
                     {!online && (
                       <span
@@ -924,12 +971,18 @@ export function ProjectsSection({
                     )}
                     {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
                           (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
-                          段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}
-                    {!online && (
-                      <span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                        {t('ccAgent.sidebar.deviceGroup.offline')}
-                      </span>
-                    )}
+                          段展开后内容本身就是答案。右侧改为灯组:聚合未读点
+                          (段级 size 6,rail 段钮同款)+ 离线标注。 */}
+                    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                      {sectionLamp.dotTone && (
+                        <AttentionDot size={6} tone={sectionLamp.dotTone} />
+                      )}
+                      {!online && (
+                        <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+                          {t('ccAgent.sidebar.deviceGroup.offline')}
+                        </span>
+                      )}
+                    </span>
                   </button>
                   <SectionCollapse collapsed={sectionCollapsed}>
                     <div className="flex flex-col gap-1 pl-2">
@@ -1028,6 +1081,8 @@ export function ProjectsSection({
  */
 function DialogueGroupNode({
   sessions,
+  lamp,
+  foldExemptSessionIds,
   collapsed,
   onToggle,
   onCreateDialogue,
@@ -1051,6 +1106,11 @@ function DialogueGroupNode({
   sessionVariant,
 }: {
   sessions: Session[];
+  /** 组头聚合灯(ProjectNode.lamp 同款语义):running → 图标呼吸橙;
+   *  dotTone → 标题右侧 AttentionDot。聚合集合 = 组内会话(与渲染一致)。 */
+  lamp: SessionLampAggregate;
+  /** 透传给组内 SessionEntryList 的折叠豁免追加集合(语义见其 prop 注释)。 */
+  foldExemptSessionIds?: ReadonlySet<string>;
   collapsed: boolean;
   onToggle: () => void;
   /**
@@ -1103,13 +1163,21 @@ function DialogueGroupNode({
           'transition-colors hover:bg-sidebar-item-hover',
         )}
       >
-        <MessagesSquare
-          size={15}
-          strokeWidth={1.8}
-          className="shrink-0 text-[var(--sidebar-list-muted)]"
-        />
+        {/* 灯语与 ProjectNode 表头同款:running → 呼吸橙(动画挂 wrapper)。 */}
+        <span
+          className={cn(
+            'inline-flex shrink-0',
+            lamp.running
+              ? 'text-[var(--status-bar-accent)] session-status-breathing'
+              : 'text-[var(--sidebar-list-muted)]',
+          )}
+        >
+          <MessagesSquare size={15} strokeWidth={1.8} aria-hidden />
+        </span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate">{t('ccAgent.sidebar.dialogues')}</span>
+          <span className="min-w-0 shrink truncate">{t('ccAgent.sidebar.dialogues')}</span>
+          {/* 聚合未读点:ProjectNode 表头同款(size 5,静态,常驻可见)。 */}
+          {lamp.dotTone && <AttentionDot size={5} tone={lamp.dotTone} className="shrink-0" />}
           <Chevron
             size={13}
             strokeWidth={2}
@@ -1176,6 +1244,7 @@ function DialogueGroupNode({
             collapsible
             collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}
+            foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={parentSectionCollapsed || collapsed}
             sessionVariant={sessionVariant}
           />

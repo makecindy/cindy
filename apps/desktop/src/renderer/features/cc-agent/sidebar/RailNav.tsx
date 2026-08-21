@@ -23,11 +23,9 @@ import type { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
-import {
-  getRemoteSessionActivity,
-  useRemoteSessionActivityRevision,
-} from '@/features/device-link/remoteSessionActivityStore';
+import { useRemoteSessionActivityRevision } from '@/features/device-link/remoteSessionActivityStore';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import { aggregateSessionLamps, remoteLampOf } from '../lib/sessionLampAggregation';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { Tip } from '@/components/ui/tooltip';
@@ -61,43 +59,12 @@ export interface RailNavProps {
   onReorderPinned: (newOrderIds: string[]) => void;
 }
 
-const TONE_RANK: Record<AttentionKind, number> = { error: 3, awaiting: 2, done: 1 };
-
 /** 置顶瓷砖短标签:拉丁首词 ≤7 字符,否则 CJK 取前 4 字(CSS ellipsis 兜底)。 */
 function pinnedTileLabel(title: string): string {
   const trimmed = title.trim();
   const latinWord = /^[A-Za-z0-9][A-Za-z0-9.-]*/.exec(trimmed)?.[0];
   if (latinWord && latinWord.length >= 2) return latinWord.slice(0, 7);
   return trimmed.slice(0, 4);
-}
-
-function dotToneOf(
-  id: string,
-  notifications: ReadonlySet<string>,
-  attentionKinds: ReadonlyMap<string, AttentionKind>,
-  urgentSessionIds: ReadonlySet<string>,
-): AttentionKind | null {
-  if (!notifications.has(id)) return null;
-  const kind = attentionKinds.get(id);
-  if (kind === 'error' || urgentSessionIds.has(id)) return 'error';
-  if (kind === 'awaiting') return 'awaiting';
-  return 'done';
-}
-
-/** device-link 远程会话的灯语补充:本地 running/attention 链路对被控端后台会话
- *  是盲区,SessionItem 行内状态由 remoteSessionActivityStore 驱动 —— rail 聚合灯
- *  与置顶瓷砖必须并入同一镜像,否则远程会话「行亮而入口不亮」(codex review)。
- *  phase → 灯语映射与 SessionItem.remoteRightStatus 同一张表;镜像里 completed/
- *  error 条目仅在未读(attention)期间存在,存在即未读。 */
-export function remoteLampOf(id: string): { running: boolean; tone: AttentionKind | null } | null {
-  const remote = getRemoteSessionActivity(id);
-  if (!remote) return null;
-  if (remote.phase === 'running') return { running: true, tone: null };
-  return {
-    running: false,
-    tone:
-      remote.phase === 'error' ? 'error' : remote.phase === 'needs-interaction' ? 'awaiting' : 'done',
-  };
 }
 
 interface PreviewState {
@@ -223,23 +190,13 @@ export function RailNav({
   const remoteActivityRevision = useRemoteSessionActivityRevision();
 
   const aggregateIds = useCallback(
-    (ids: readonly string[]) => {
-      let running = false;
-      let best: AttentionKind | null = null;
-      const consider = (tone: AttentionKind | null) => {
-        if (tone && (!best || TONE_RANK[tone] > TONE_RANK[best])) best = tone;
-      };
-      for (const id of ids) {
-        if (runningSessionIds.has(id)) running = true;
-        consider(dotToneOf(id, notifications, attentionKinds, urgentSessionIds));
-        const remote = remoteLampOf(id);
-        if (remote) {
-          if (remote.running) running = true;
-          consider(remote.tone);
-        }
-      }
-      return { running, dotTone: best };
-    },
+    (ids: readonly string[]) =>
+      aggregateSessionLamps(ids, {
+        runningSessionIds,
+        notifications,
+        attentionKinds,
+        urgentSessionIds,
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 remoteLampOf 读到的整表内容
     [runningSessionIds, notifications, attentionKinds, urgentSessionIds, remoteActivityRevision],
   );

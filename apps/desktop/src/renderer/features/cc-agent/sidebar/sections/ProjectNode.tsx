@@ -49,6 +49,8 @@ import type {
   AutomationSessionGroup,
 } from '../../lib/automationSidebarGrouping';
 import { getProjectSessionCollapseLimit } from '../../lib/sidebarCollapseConfig';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import type { SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import type { FilterStatus } from '../../hooks/useSidebarFilter';
@@ -91,6 +93,16 @@ export interface ProjectNodeProps {
    * 不重复归属信息。置顶区不受分组影响,照常显示。
    */
   hideRemoteMachineLabel?: boolean;
+  /**
+   * 项目行聚合灯(rail 浮层面板项目行同款语义,2026-08 用户反馈:未读点只在
+   * 会话行,项目层没有灯,折叠或行数超限时找未读要逐个展开):running →
+   * 文件夹图标呼吸橙;dotTone → 标题右侧 AttentionDot(红 error > 蓝 awaiting >
+   * 绿 done)。聚合集合必须与本行下实际渲染的会话一致(父层负责),灯亮进去
+   * 一定找得到亮的行。不传 = 不显示(兼容旧调用点)。
+   */
+  lamp?: SessionLampAggregate;
+  /** 透传给项目内 SessionEntryList 的折叠豁免追加集合(语义见其 prop 注释)。 */
+  foldExemptSessionIds?: ReadonlySet<string>;
   onToggle: (projectKey: string) => void;
   /** Project pin is independent from conversation pin state. */
   isProjectPinned: boolean;
@@ -137,6 +149,8 @@ export function ProjectNode({
   selectedSessionIds,
   disableSessionCollapse,
   hideRemoteMachineLabel = false,
+  lamp,
+  foldExemptSessionIds,
   onToggle,
   isProjectPinned,
   onToggleProjectPin,
@@ -308,11 +322,17 @@ export function ProjectNode({
           !isEditingName && 'hover:bg-sidebar-item-hover',
         )}
       >
-        <FolderIcon
-          size={15}
-          strokeWidth={1.8}
-          className="shrink-0 text-[var(--sidebar-list-muted)]"
-        />
+        {/* 灯语与 rail 浮层面板项目行同款:running → 呼吸橙(动画挂 wrapper)。 */}
+        <span
+          className={cn(
+            'inline-flex shrink-0',
+            lamp?.running
+              ? 'text-[var(--status-bar-accent)] session-status-breathing'
+              : 'text-[var(--sidebar-list-muted)]',
+          )}
+        >
+          <FolderIcon size={15} strokeWidth={1.8} aria-hidden />
+        </span>
         {/* 名字 + remote identity 同组占据 flex-1。远程项目常态展示机器身份,
             避免相同 workingDir 的项目只能靠 hover 才能区分。 */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -369,6 +389,11 @@ export function ProjectNode({
               {remoteIdentity.displayLabel}
             </span>
           ) : null}
+          {/* 聚合未读点:rail 浮层面板项目行同款(size 5,静态)。挂在标题组
+              尾部而非行尾——行尾是 hover 工具组的位置,点要常驻可见。 */}
+          {!isEditingName && lamp?.dotTone && (
+            <AttentionDot size={5} tone={lamp.dotTone} className="shrink-0" />
+          )}
           {/* 展开/收起指示箭头:标题右侧、hover 才渐显(参考 MivoCanvas 的
               row-hover-arrow;仅 opacity 渐显,不做位移,守 docs/design-rules/cindy-design-system.md §14.4)。 */}
           {!isEditingName && (
@@ -606,6 +631,7 @@ export function ProjectNode({
             collapsible
             collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}
+            foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={isCollapsed || parentSectionCollapsed}
             onSessionClick={onSessionClick}
             onAction={onAction}
