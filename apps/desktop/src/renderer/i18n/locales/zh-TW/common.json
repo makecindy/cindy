@@ -717,6 +717,13 @@
         "item2": "把大任務拆成多輪：先理解，再修改，再驗證。",
         "item3": "當你要處理獨立問題時，建立新任務而不是把所有事情混在一個任務裡。"
       },
+      "linuxUpdates": {
+        "title": "Linux 安裝與更新",
+        "description": "Linux 目前提供 Ubuntu 22.04 / 24.04 的 .deb 套件。有新版本時，應用程式會下載安裝包，安裝時需要系統密碼。",
+        "item1": "首次安裝用 sudo apt install ./cindy-<版本>-amd64.deb。",
+        "item2": "應用程式內更新會下載 .deb，點更新後透過系統權限提示覆蓋安裝。",
+        "item3": "Linux 暫不提供 Beta 渠道和空閒時自動安裝，因為安裝需要輸入密碼。"
+      },
       "qnaTitle": "直接提問",
       "qnaDescription": "如果 overview 裡沒有覆蓋到你的問題，可以直接問我該怎麼做。",
       "qnaPlaceholder": "例如：如何匯入 codex 任務",
@@ -775,6 +782,7 @@
       "openLogsDirError": "開啟日誌目錄失敗",
       "autoUpdateLabel": "空閒時自動安裝更新",
       "autoUpdateDescription": "更新下載完成後，當這臺電腦 10 分鐘無操作且沒有任務執行時，自動重啟應用完成安裝。",
+      "linuxUpdateDescription": "有新版本時會在應用程式內下載 .deb。點更新後需要輸入系統密碼完成安裝，因此不會在空閒時自動安裝。",
       "autoUpdateEnabledToast": "已開啟空閒時自動安裝更新",
       "autoUpdateDisabledToast": "已關閉空閒時自動安裝更新",
       "autoUpdateSaveFailed": "儲存自動更新設定失敗",
@@ -4978,7 +4986,7 @@
       "ready": "新版本已就緒，點選側邊欄完成更新",
       "manifestFailed": "檢查更新失敗，請檢查網路",
       "downloadFailed": "新版本下載失敗，稍後再試",
-      "manualDownload": "Linux 首版僅支援手動下載安裝包，請前往下載頁獲取最新版。"
+      "manualDownload": "請在應用程式內下載更新，安裝時需要系統密碼。"
     },
     "closeConfirm": {
       "title": "確認要離開嗎？",
