@@ -16,9 +16,23 @@ export function resolveSessionCardBody(args: {
   return preview || null;
 }
 
+/** 本轮开始时的 preview 基线。运行中即使权威值先到,也不改这份基线。 */
+export function nextTurnStartPreview(args: {
+  previousSessionId: string;
+  nextSessionId: string;
+  previousLivePreview: string | null;
+  previousTurnStartPreview: string | null;
+  currentPreview: string | null;
+}): string | null {
+  if (args.previousSessionId === args.nextSessionId && args.previousLivePreview != null) {
+    return args.previousTurnStartPreview;
+  }
+  return args.currentPreview;
+}
+
 /** 实时活动文案消失前,用最后一帧顶住列表预览,避免结束瞬间跳回上一轮。
- *  只在能确认当前 preview 仍是旧轮内容时才写:卡片复用、权威值已到、或只是和
- *  本轮文案不同,都不能把运行态盖上去。 */
+ *  只在当前 preview 仍等于本轮开始前的缓存时才写:权威值已在运行中到达,
+ *  或卡片换了任务,都不能把运行态盖上去。 */
 export function shouldPromoteLivePreviewToSession(args: {
   previousSessionId: string;
   nextSessionId: string;

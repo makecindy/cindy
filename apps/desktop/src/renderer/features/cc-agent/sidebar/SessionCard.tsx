@@ -81,7 +81,11 @@ import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
-import { resolveSessionCardBody, shouldPromoteLivePreviewToSession } from './sessionCardPreview';
+import {
+  nextTurnStartPreview,
+  resolveSessionCardBody,
+  shouldPromoteLivePreviewToSession,
+} from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -238,14 +242,21 @@ export function SessionCard({
   const runningDetailRef = useRef({
     sessionId: session.id,
     detail: runningDetail,
-    preview: session.preview ?? null,
+    turnStartPreview: session.preview ?? null,
   });
   useLayoutEffect(() => {
     const previous = runningDetailRef.current;
+    const currentPreview = session.preview ?? null;
     runningDetailRef.current = {
       sessionId: session.id,
       detail: runningDetail,
-      preview: session.preview ?? null,
+      turnStartPreview: nextTurnStartPreview({
+        previousSessionId: previous.sessionId,
+        nextSessionId: session.id,
+        previousLivePreview: previous.detail,
+        previousTurnStartPreview: previous.turnStartPreview,
+        currentPreview,
+      }),
     };
     if (
       !shouldPromoteLivePreviewToSession({
@@ -253,8 +264,8 @@ export function SessionCard({
         nextSessionId: session.id,
         previousLivePreview: previous.detail,
         nextLivePreview: runningDetail,
-        currentPreview: session.preview,
-        stalePreview: previous.preview,
+        currentPreview,
+        stalePreview: previous.turnStartPreview,
       })
     ) {
       return;

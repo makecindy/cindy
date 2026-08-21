@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveSessionCardBody, shouldPromoteLivePreviewToSession } from '../sessionCardPreview';
+import {
+  nextTurnStartPreview,
+  resolveSessionCardBody,
+  shouldPromoteLivePreviewToSession,
+} from '../sessionCardPreview';
 
 describe('resolveSessionCardBody', () => {
   it('list 模式只用最近消息,即使有摘要', () => {
@@ -48,6 +52,41 @@ describe('resolveSessionCardBody', () => {
   });
 });
 
+describe('nextTurnStartPreview', () => {
+  it('运行中即使权威值先到,也冻结本轮开始时的缓存', () => {
+    expect(
+      nextTurnStartPreview({
+        previousSessionId: 's1',
+        nextSessionId: 's1',
+        previousLivePreview: '运行测试',
+        previousTurnStartPreview: '不正常。但问题不在布局代码',
+        currentPreview: '那就对上了——正是枚举到了但不发输入报告那个状态。',
+      }),
+    ).toBe('不正常。但问题不在布局代码');
+  });
+
+  it('活动已结束或换了任务时改用当前 preview', () => {
+    expect(
+      nextTurnStartPreview({
+        previousSessionId: 's1',
+        nextSessionId: 's1',
+        previousLivePreview: null,
+        previousTurnStartPreview: '不正常。但问题不在布局代码',
+        currentPreview: '那就对上了——正是枚举到了但不发输入报告那个状态。',
+      }),
+    ).toBe('那就对上了——正是枚举到了但不发输入报告那个状态。');
+    expect(
+      nextTurnStartPreview({
+        previousSessionId: 's1',
+        nextSessionId: 's2',
+        previousLivePreview: '运行测试',
+        previousTurnStartPreview: '不正常。但问题不在布局代码',
+        currentPreview: '另一条任务',
+      }),
+    ).toBe('另一条任务');
+  });
+});
+
 describe('shouldPromoteLivePreviewToSession', () => {
   it('实时活动消失、缓存仍是上一轮时,把最后一帧顶进列表预览', () => {
     expect(
@@ -71,6 +110,26 @@ describe('shouldPromoteLivePreviewToSession', () => {
         nextLivePreview: null,
         currentPreview: '那就对上了——正是枚举到了但不发输入报告那个状态。',
         stalePreview: '不正常。但问题不在布局代码',
+      }),
+    ).toBe(false);
+  });
+
+  it('权威值先到、活动后消失时也不覆盖', () => {
+    const turnStartPreview = nextTurnStartPreview({
+      previousSessionId: 's1',
+      nextSessionId: 's1',
+      previousLivePreview: '运行测试',
+      previousTurnStartPreview: '不正常。但问题不在布局代码',
+      currentPreview: '那就对上了——正是枚举到了但不发输入报告那个状态。',
+    });
+    expect(
+      shouldPromoteLivePreviewToSession({
+        previousSessionId: 's1',
+        nextSessionId: 's1',
+        previousLivePreview: '运行测试',
+        nextLivePreview: null,
+        currentPreview: '那就对上了——正是枚举到了但不发输入报告那个状态。',
+        stalePreview: turnStartPreview,
       }),
     ).toBe(false);
   });
