@@ -10057,7 +10057,10 @@ function scheduleIdlePlanDiscoveryIfNeeded(sessionId: string): void {
   if (!_activeViewSessions.has(sessionId)) return;
   const state = sessions.get(sessionId);
   if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) return;
-  if (getLatestMessageTodoState(state.messages).hasPlanEvent) return;
+  const planState = getLatestMessageTodoState(state.messages, {
+    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+  });
+  if (planState.hasPlanEvent && planState.isResolved) return;
   if (_idlePlanDiscoveryHandles.has(sessionId)) return;
 
   const run = () => {
@@ -10074,7 +10077,13 @@ function loadOneOlderPageForPlanDiscovery(sessionId: string): Promise<boolean> {
   if (!state?.historyLoaded || state.isLoadingMore || !state.hasMoreMessages) {
     return Promise.resolve(false);
   }
-  if (getLatestMessageTodoState(state.messages).hasPlanEvent) return Promise.resolve(false);
+  const planState = getLatestMessageTodoState(state.messages, {
+    taskHistoryMayBeIncomplete: state.hasMoreMessages || state.historyWindowHasIsland,
+  });
+  if (planState.hasPlanEvent && planState.isResolved) return Promise.resolve(false);
+  if (planState.hasPlanEvent && !planState.isResolved) {
+    return continuePlanResolutionAfterIdleDiscovery(sessionId).then(() => true);
+  }
   // 先只翻 1 页。若这一页首次露出未解析完的 plan,再转入与首拉相同的有界 resolution
   // 回填;没有 plan 的长任务仍只付这一页。automatic=false:不消耗视口自动补载预算。
   return loadOlderMessages(sessionId, false, 1).then(async (advanced) => {
