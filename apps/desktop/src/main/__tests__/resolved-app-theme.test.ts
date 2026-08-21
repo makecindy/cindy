@@ -5,11 +5,13 @@ describe('resolved app theme snapshot', () => {
     vi.resetModules();
   });
 
-  it('falls back to the system theme before the renderer reports its preference', async () => {
+  it('uses the persisted mode before the renderer reports its preference', async () => {
     const { resolveAppThemeIsDark } = await import('../resolved-app-theme');
 
     expect(resolveAppThemeIsDark(false)).toBe(false);
     expect(resolveAppThemeIsDark(true)).toBe(true);
+    expect(resolveAppThemeIsDark(false, 'dark')).toBe(true);
+    expect(resolveAppThemeIsDark(true, 'light')).toBe(false);
   });
 
   it('uses the latest renderer-resolved theme for windows created later', async () => {
@@ -22,5 +24,13 @@ describe('resolved app theme snapshot', () => {
 
     rememberResolvedAppTheme(false);
     expect(resolveAppThemeIsDark(true)).toBe(false);
+  });
+
+  it('accepts only supported persisted modes', async () => {
+    const { isAppThemeMode } = await import('../resolved-app-theme');
+
+    expect(['system', 'light', 'dark'].every(isAppThemeMode)).toBe(true);
+    expect(isAppThemeMode('auto')).toBe(false);
+    expect(isAppThemeMode(null)).toBe(false);
   });
 });

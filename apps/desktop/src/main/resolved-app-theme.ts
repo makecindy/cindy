@@ -1,11 +1,23 @@
 let lastResolvedIsDark: boolean | undefined;
 
+export type AppThemeMode = 'system' | 'light' | 'dark';
+
+export function isAppThemeMode(value: unknown): value is AppThemeMode {
+  return value === 'system' || value === 'light' || value === 'dark';
+}
+
 /** Keep the renderer-resolved app theme available for windows created later. */
 export function rememberResolvedAppTheme(isDark: boolean): void {
   lastResolvedIsDark = isDark;
 }
 
-/** Fall back to the OS theme until the renderer has resolved the app preference. */
-export function resolveAppThemeIsDark(systemIsDark: boolean): boolean {
-  return lastResolvedIsDark ?? systemIsDark;
+/** Fall back to the persisted mode until the renderer resolves this run's preference. */
+export function resolveAppThemeIsDark(
+  systemIsDark: boolean,
+  persistedMode: AppThemeMode = 'system',
+): boolean {
+  if (lastResolvedIsDark !== undefined) return lastResolvedIsDark;
+  if (persistedMode === 'dark') return true;
+  if (persistedMode === 'light') return false;
+  return systemIsDark;
 }

@@ -83,6 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  document.body.classList.remove('resizing-pane');
   vi.useRealTimers();
   __resetPanelRegistryForTest();
   __resetBuiltinPanelsForTest();
@@ -191,6 +192,56 @@ describe('LayoutRoot · 树驱动的顺序与在场', () => {
     if (fixed.content.type !== 'split') throw new Error('expected split layout');
     expect(fixed.content.children[0].fraction).toBeCloseTo(0.85);
     expect(fixed.content.children[1].fraction).toBeCloseTo(0.15);
+  });
+
+  it('分割线拖动期间暂停 120px clamp 自愈，松手后再执行', async () => {
+    vi.useFakeTimers();
+    currentLayout = {
+      ...createDefaultLayout(),
+      content: {
+        type: 'split',
+        id: 'root',
+        direction: 'row',
+        children: [
+          {
+            fraction: 0.9,
+            node: { type: 'pane', id: 'chat', panelKind: 'chat-main', minWidth: 400 },
+          },
+          {
+            fraction: 0.1,
+            node: { type: 'pane', id: 'right', panelKind: 'right-tabs', minWidth: 120 },
+          },
+        ],
+      },
+    };
+    renderLayoutRoot();
+    const content = screen.getByTestId('layout-root-content');
+    content.getBoundingClientRect = () =>
+      ({
+        width: 800,
+        height: 600,
+        top: 0,
+        right: 800,
+        bottom: 600,
+        left: 0,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      }) as DOMRect;
+
+    document.body.classList.add('resizing-pane');
+    await act(async () => {
+      vi.advanceTimersByTime(240);
+      await Promise.resolve();
+    });
+    expect(setLayoutMock).not.toHaveBeenCalled();
+
+    document.body.classList.remove('resizing-pane');
+    await act(async () => {
+      vi.advanceTimersByTime(120);
+      await Promise.resolve();
+    });
+    expect(setLayoutMock).toHaveBeenCalledTimes(1);
   });
 
   it('卸载后重新 mount 不泄漏 onChanged 订阅', () => {

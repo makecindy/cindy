@@ -19,7 +19,13 @@ import {
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
-import { rememberResolvedAppTheme } from './resolved-app-theme';
+import {
+  isAppThemeMode,
+  rememberResolvedAppTheme,
+  resolveAppThemeIsDark,
+  type AppThemeMode,
+} from './resolved-app-theme';
+import { readWindowThemeMode, writeWindowThemeMode } from './window-theme-mode-store';
 import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -3184,20 +3190,16 @@ const createWindow = () => {
   // 效果由 renderer 的 swallowActivationClick DOM adapter 承接,即时生效。
   const swallowActivationClick = readWindowBehaviorSettings().swallowActivationClick;
 
-  // Use nativeTheme to pick initial background color matching OS preference,
-  // avoiding white flash on startup for dark mode users.
+  // Windows uses the renderer theme-mode mirror before the first BrowserWindow exists;
+  // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
   // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
+  const isDark =
+    process.platform === 'win32'
+      ? resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors, readWindowThemeMode())
+      : nativeTheme.shouldUseDarkColors;
   const bgColor =
-    process.platform === 'darwin'
-      ? '#00000000'
-      : nativeTheme.shouldUseDarkColors
-        ? '#1f1f1e'
-        : '#f8f8f6';
-  const winBackdropConfig = resolveVibrancyConfig(
-    'cindy',
-    nativeTheme.shouldUseDarkColors,
-    process.platform,
-  );
+    process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
+  const winBackdropConfig = resolveVibrancyConfig('cindy', isDark, process.platform);
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first
@@ -3720,10 +3722,23 @@ const registerIpcHandlers = () => {
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
 
-  ipcMain.on('theme:apply-vibrancy', (_event, payload: { familyId: string; isDark: boolean }) => {
-    rememberResolvedAppTheme(payload.isDark);
-    applyWindowVibrancy(payload.familyId, payload.isDark);
-  });
+  ipcMain.on(
+    'theme:apply-vibrancy',
+    (
+      _event,
+      payload: {
+        familyId: string;
+        isDark: boolean;
+        mode?: AppThemeMode;
+      },
+    ) => {
+      if (process.platform === 'win32' && isAppThemeMode(payload.mode)) {
+        writeWindowThemeMode(payload.mode);
+      }
+      rememberResolvedAppTheme(payload.isDark);
+      applyWindowVibrancy(payload.familyId, payload.isDark);
+    },
+  );
 
   ipcMain.on('get-app-version', (event) => {
     event.returnValue = app.getVersion();

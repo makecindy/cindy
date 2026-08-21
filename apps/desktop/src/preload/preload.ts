@@ -2369,8 +2369,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // E4D 毛玻璃:family 切换/启动时通知 main 开关 macOS vibrancy(仅 CINDY 透壁纸)
   theme: {
-    applyVibrancy: (familyId: string, isDark: boolean): void => {
-      ipcRenderer.send('theme:apply-vibrancy', { familyId, isDark });
+    applyVibrancy: (
+      familyId: string,
+      isDark: boolean,
+      mode: 'system' | 'light' | 'dark',
+    ): void => {
+      ipcRenderer.send('theme:apply-vibrancy', { familyId, isDark, mode });
     },
   },
   onAppUpdateProgress: fanOutAppUpdateProgress,

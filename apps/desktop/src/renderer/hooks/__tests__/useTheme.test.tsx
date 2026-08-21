@@ -14,6 +14,8 @@ import { createElement, type ReactNode } from 'react';
 import { themeService } from '../../themes/theme-service';
 import { ThemeProvider, useTheme } from '../useTheme';
 
+const applyVibrancyMock = vi.fn();
+
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
 vi.stubGlobal('matchMedia', (q: string) => ({
   matches: false,
@@ -42,6 +44,17 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     delete document.documentElement.dataset.theme;
     document.documentElement.classList.remove('dark');
     vi.spyOn(themeService, 'applyTheme').mockImplementation(() => {});
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      theme: { applyVibrancy: applyVibrancyMock },
+    };
+    applyVibrancyMock.mockClear();
+  });
+
+  it('把应用主题模式同步给 main 作为下次 Windows 创建期 backing 镜像', () => {
+    localStorage.setItem('theme', 'dark');
+    renderHook(() => useTheme(), { wrapper });
+
+    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark');
   });
 
   it('其他窗口切 theme → storage 事件 → 本窗口 theme state 跟随并重应用', () => {

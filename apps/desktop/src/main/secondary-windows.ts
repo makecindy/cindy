@@ -34,6 +34,7 @@ import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow } from './appearance-settings-ipc.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
+import { readWindowThemeMode } from './window-theme-mode-store.js';
 
 const log = createLogger('secondary-windows');
 
@@ -101,7 +102,10 @@ export function openSessionInNewWindow(
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
       : { frame: false };
-  const isDark = resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors);
+  const isDark =
+    process.platform === 'win32'
+      ? resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors, readWindowThemeMode())
+      : nativeTheme.shouldUseDarkColors;
   const bgColor = isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig('cindy', isDark, process.platform);
 

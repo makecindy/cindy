@@ -815,6 +815,10 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     let timer: number | null = null;
     const heal = () => {
       timer = null;
+      if (document.body.classList.contains('resizing-pane')) {
+        schedule();
+        return;
+      }
       const available = root.getBoundingClientRect().width;
       if (!(available > 0)) return;
       const fixed = normalizeSubMinFractions(layout, available, isPanelKindVisible);
