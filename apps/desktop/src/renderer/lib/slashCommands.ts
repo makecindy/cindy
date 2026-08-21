@@ -275,6 +275,7 @@ export function pendingProjectSkillForMessage(
   if (!name || ambiguousPendingProjectSkillName(message, commands, true)) return undefined;
   const matches = commands.filter((command): command is PendingProjectSkillCommand => (
     command.kind === 'agent-skill'
+    && command.scope === 'repo'
     && isSlashCommandUnavailable(command)
     && command.name.toLowerCase() === name
     && typeof command.path === 'string'

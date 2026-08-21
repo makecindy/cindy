@@ -185,6 +185,18 @@ describe('Pi project skill availability', () => {
     expect(pendingProjectSkillForMessage('/demo', merged, false)).toBeUndefined();
   });
 
+  it('does not route an unknown managed user Skill through the project handoff', () => {
+    const managed = skill({
+      path: '/managed/context-mode/SKILL.md',
+      scope: 'user',
+      runtimeStatus: 'unknown',
+    });
+    const merged = mergeCommands([], [], [managed]);
+
+    expect(isSlashCommandUnavailable(managed)).toBe(true);
+    expect(pendingProjectSkillForMessage('/demo run this', merged, true)).toBeUndefined();
+  });
+
   it('fails closed instead of choosing a typed ambiguous project Skill path', () => {
     const merged = mergeCommands([], [], [
       skill({
