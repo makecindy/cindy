@@ -189,9 +189,12 @@ describe('RootDivider 拖宽 · 在场份额口径', () => {
     renderLayoutRoot();
     // 在场份额 0.3211 / 0.78 = 0.4117 → 683px。按树上原始 fraction 只有 533px。
     const width = screen.getByTestId('w-right-tabs').textContent ?? '';
-    const preferredPercent = width.match(/^clamp\(120px, ([\d.]+)%, calc\(100% - 400px\)\)$/)?.[1];
+    const preferredPercent = width.match(
+      /^clamp\(120px, ([\d.]+)cqw, calc\(100cqw - 400px\)\)$/,
+    )?.[1];
     expect(preferredPercent).toBeDefined();
     expect((Number(preferredPercent) / 100) * AVAIL).toBeCloseTo(683, 0);
+    expect(screen.getByTestId('layout-root-content').style.containerType).toBe('inline-size');
   });
 
   it('有卸载残留时把右栏拖到最大:松手后写树成功(不回弹),聊天流正好落在最小宽', () => {

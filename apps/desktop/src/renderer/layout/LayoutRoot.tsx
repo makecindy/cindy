@@ -251,10 +251,11 @@ function computeRootWidths(layout: Layout, live: Record<string, number> | null):
     if (node.type === 'pane' && node.panelKind === 'chat-main') continue;
     const share = live?.[node.id] ?? entry.share;
     const min = paneMinPx(node);
-    // CSS directly resolves percentage widths as the BrowserWindow changes. The clamp mirrors
-    // the old pixel calculation: non-chat pane keeps its floor and leaves 400px for chat.
-    // No ResizeObserver → React state round-trip is needed for steady-state window resizing.
-    const width = `clamp(${min}px, ${share * 100}%, calc(100% - ${CHAT_MIN_PX}px))`;
+    // Resolve every consumer against the dedicated layout-content query container. A plain `%`
+    // would be relative to each consumer's immediate parent, so GhostPanel's inner section would
+    // accidentally apply the root share a second time. cqw keeps the shell and content aligned
+    // without restoring a ResizeObserver → React state round-trip during live window resizing.
+    const width = `clamp(${min}px, ${share * 100}cqw, calc(100cqw - ${CHAT_MIN_PX}px))`;
     if (node.type === 'pane') panelWidths[node.panelKind] = width;
     else splitWidths[node.id] = width;
   }
@@ -948,6 +949,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
               ref={layoutRootRef}
               data-testid="layout-root-content"
               className="flex min-w-0 flex-1 overflow-hidden"
+              style={{ containerType: 'inline-size' }}
             >
               {body}
             </div>
@@ -1034,6 +1036,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
           ref={layoutRootRef}
           data-testid="layout-root-content"
           className="flex min-w-0 flex-1 overflow-hidden"
+          style={{ containerType: 'inline-size' }}
         >
           {body}
         </div>
