@@ -3741,11 +3741,8 @@ const registerIpcHandlers = () => {
       assertTrustedAppRendererEvent(event);
       const payload = parseWindowThemeVibrancyPayload(rawPayload);
       if (!payload) return;
-      if (
-        process.platform === 'win32'
-        && payload.mode !== undefined
-        && payload.systemModeFollowsSystem !== undefined
-      ) {
+      if (payload.mode === undefined || payload.systemModeFollowsSystem === undefined) return;
+      if (process.platform === 'win32') {
         writeWindowThemeSnapshot(
           payload.mode,
           payload.isDark,

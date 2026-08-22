@@ -20,13 +20,19 @@ describe('window theme vibrancy IPC trust boundary', () => {
     const handler = bootstrapSource.slice(start, end);
     const senderGuard = handler.indexOf('assertTrustedAppRendererEvent(event);');
     const payloadParse = handler.indexOf('parseWindowThemeVibrancyPayload(rawPayload);');
+    const modeGuard = handler.indexOf('payload.mode === undefined');
+    const systemFollowGuard = handler.indexOf('payload.systemModeFollowsSystem === undefined');
     const snapshotWrite = handler.indexOf('writeWindowThemeSnapshot(');
+    const resolvedThemeWrite = handler.indexOf('rememberResolvedAppTheme(payload.isDark);');
     const vibrancyMutation = handler.indexOf('applyWindowVibrancy(payload.familyId');
 
     expect(handler).toContain('(event, rawPayload: unknown)');
     expect(senderGuard).toBeGreaterThanOrEqual(0);
     expect(payloadParse).toBeGreaterThan(senderGuard);
-    expect(snapshotWrite).toBeGreaterThan(payloadParse);
-    expect(vibrancyMutation).toBeGreaterThan(payloadParse);
+    expect(modeGuard).toBeGreaterThan(payloadParse);
+    expect(systemFollowGuard).toBeGreaterThan(payloadParse);
+    expect(snapshotWrite).toBeGreaterThan(systemFollowGuard);
+    expect(resolvedThemeWrite).toBeGreaterThan(systemFollowGuard);
+    expect(vibrancyMutation).toBeGreaterThan(systemFollowGuard);
   });
 });
