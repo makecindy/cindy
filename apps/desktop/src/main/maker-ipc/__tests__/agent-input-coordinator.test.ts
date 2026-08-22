@@ -6117,7 +6117,8 @@ describe('AgentInputCoordinator steer transaction', () => {
       await flush();
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
 
-      h.setLiveRunning(false);
+      // Session.send reservation keeps live busy before agent_start.
+      h.setLiveRunning(true);
       h.setRunning(true);
       h.coordinator.enqueue(sid, second);
       await flush();
@@ -6193,6 +6194,104 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
     expect(h.sendToAgent).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
+  });
+
+  it('clears a leftover activeTurn when the live Session is idle and drains the next head', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-zombie-active-turn';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-idle');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setRunning(true);
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        h.setLiveRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, second);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-idle',
+      });
+      expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drains queued work after an unloaded Session leaves only a leftover activeTurn', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-unloaded-active-turn';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-unload');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      // Process gone: live probe is idle (false), tracker already released.
+      h.setLiveRunning(false);
+      h.setRunning(false);
+      h.coordinator.enqueue(sid, second);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-unload',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconciles a stale tracker after the live Session process is gone', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-unloaded-tracker';
+      h.setRunning(true);
+      h.setLiveRunning(false);
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+
+      h.coordinator.enqueue(sid, makeItem('q-1', 'queued-after-unload'));
+      await flush();
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('recovers from a zombie turn: NO_ACTIVE_TURN reconciles stale busy state and dispatches the fallback', async () => {

@@ -202,7 +202,7 @@ describe('maker:event hot path ordering', () => {
       "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
     );
     expect(coordinatorSource).toContain('isLiveTurnRunning: (sessionId) =>');
-    expect(coordinatorSource).toContain('if (!sess) return undefined;');
+    expect(coordinatorSource).toContain('if (!sess) return false;');
   });
 
   it('does not latch product-turn bookkeeping on background status events', () => {

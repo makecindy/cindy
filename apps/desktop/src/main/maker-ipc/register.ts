@@ -11426,7 +11426,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const reconcileSessionTurnIdle = (sessionId: string, source: string): boolean => {
     const sess = getStableSessionForTurnBoundary(sessionId);
-    if (!sess) return false;
+    if (!sess) {
+      const trackerStale =
+        sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
+        sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
+      if (!trackerStale) return false;
+      log.warn('reconciling stale session turn boundary after session unload', {
+        sessionId,
+        source,
+      });
+      sessionTurnActivityTracker.deleteSession(sessionId);
+      return true;
+    }
     let liveSessionIdle = false;
     try {
       liveSessionIdle = !sess.isTurnRunning();
@@ -11935,7 +11946,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     isLiveTurnRunning: (sessionId) => {
       try {
         const sess = getStableSessionForTurnBoundary(sessionId);
-        if (!sess) return undefined;
+        // No live Session means the process is gone, so it is not running.
+        // Only a lookup exception is "probe unavailable" (owner-boundary).
+        if (!sess) return false;
         return sess.isTurnRunning();
       } catch {
         return undefined;

@@ -3415,12 +3415,15 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * Live Session idle + host tracker still busy is an invariant break.
-   * Reconcile the tracker so queued input can drain without a user Stop / steer.
-   * Do not call this while a send is in flight, an activeTurn still owns the
-   * generation, a permission card is up, or abort/steer already owns the boundary.
-   * Dispatched-but-not-started turns (Pi may accept a prompt before agent_start)
-   * must wait for real lifecycle events — do not synthesize done.
+   * Live Session idle + host tracker / leftover activeTurn still busy is an
+   * invariant break. Reconcile so queued input can drain without Stop / steer.
+   * Do not call this while a send is in flight, a permission card is up, or
+   * abort/steer already owns the boundary.
+   *
+   * Live `isTurnRunning()` already covers Session.send reservations, so a
+   * leftover `activeTurn` plus live-idle after the 250ms grace is a zombie
+   * (done never reached the coordinator, or the process already unloaded).
+   * Missing live probe (`undefined`) stays fail-closed.
    */
   private tryReconcileStaleDispatchBoundary(
     sessionId: string,
@@ -3432,8 +3435,7 @@ export class AgentInputCoordinator {
       state.queueInteractionLocks.length > 0 ||
       state.steeringQueueClientIds.length > 0 ||
       state.pendingExternalTerminalDone ||
-      this.deps.hasPendingInteraction(sessionId) ||
-      state.activeTurn !== null
+      this.deps.hasPendingInteraction(sessionId)
     ) {
       state.staleLiveIdleSinceMs = null;
       return false;
@@ -3444,7 +3446,9 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    if (!this.deps.isTurnRunning(sessionId)) {
+    const leftoverActiveTurn = state.activeTurn !== null;
+    const trackerBusy = this.deps.isTurnRunning(sessionId);
+    if (!trackerBusy && !leftoverActiveTurn) {
       state.staleLiveIdleSinceMs = null;
       return false;
     }
@@ -3458,8 +3462,18 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
-    if (!reconciled) return false;
+    if (trackerBusy) {
+      const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
+      if (!reconciled && !leftoverActiveTurn) return false;
+    }
+    if (leftoverActiveTurn) {
+      log.warn('reconciling leftover activeTurn while live session idle', {
+        sessionId,
+        clientId: state.activeTurn?.item?.clientId ?? null,
+        dispatchLifecycle: state.activeTurn?.dispatchLifecycle ?? null,
+      });
+      state.activeTurn = null;
+    }
     state.staleLiveIdleSinceMs = null;
     return true;
   }
