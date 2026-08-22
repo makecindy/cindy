@@ -63,6 +63,8 @@ export function planModeComposerDraftText(
   editorOwnsSource: boolean,
   editorText: JSONContent | null | undefined,
   storedText: JSONContent | null | undefined,
+  consumedCommand = false,
 ): JSONContent | null {
+  if (consumedCommand) return null;
   return (editorOwnsSource ? editorText : storedText) ?? null;
 }

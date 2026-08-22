@@ -100,4 +100,10 @@ describe('/plan composer command', () => {
     expect(planModeComposerDraftText(false, null, storedText)).toBe(storedText);
     expect(planModeComposerDraftText(true, null, storedText)).toBeNull();
   });
+
+  it('does not persist the consumed /plan command as draft text', () => {
+    const editorText = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '/plan' }] }] };
+    expect(planModeComposerDraftText(true, editorText, null, true)).toBeNull();
+    expect(planModeComposerDraftText(false, null, editorText, true)).toBeNull();
+  });
 });

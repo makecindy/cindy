@@ -5049,6 +5049,7 @@ export function ChatInput({
             editorOwnsSource,
             editorOwnsSource ? editor.getJSON() : null,
             existingDraft?.text,
+            true,
           );
           if (editorOwnsSource) {
             planModeEntry?.onToggle(!planModeEntry.enabled);
