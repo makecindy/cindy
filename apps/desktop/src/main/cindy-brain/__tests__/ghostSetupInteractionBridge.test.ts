@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_PUSH } from '../../maker-ipc/channels';
+import { createDesktopOnlyConfirmationRequestId } from '../desktopOnlyConfirmationProjection';
 import {
-  rememberDesktopOnlyConfirmation,
   projectInteractionDismissedForRemote,
   GhostSetupInteractionBridge,
   parseGhostSetupInlineSubmit,
@@ -415,7 +415,11 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
   });
 
   it('maps a desktop-only confirmation dismissal to its opaque remote request id', () => {
-    const sourceRequest = { kind: 'issue_confirm', requestId: 'private-request-id', draft: { title: 'private' } };
+    const sourceRequest = {
+      kind: 'issue_confirm',
+      requestId: createDesktopOnlyConfirmationRequestId(),
+      draft: { title: 'private' },
+    };
     const projected = projectInteractionRequestForRemote(sourceRequest)!;
     const dismissed = projectInteractionDismissedForRemote({
       sessionId: 'session-1',
@@ -428,12 +432,11 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
       requestId: projected.requestId,
       reason: 'resolved',
     });
-    expect(JSON.stringify(dismissed)).not.toContain('private-request-id');
+    expect(JSON.stringify(dismissed)).not.toContain(sourceRequest.requestId);
   });
 
   it('maps a dismissal when the desktop-only confirmation predates Device Link activation', () => {
-    const requestId = 'preexisting-private-request-id';
-    rememberDesktopOnlyConfirmation(requestId);
+    const requestId = createDesktopOnlyConfirmationRequestId();
 
     const dismissed = projectInteractionDismissedForRemote({
       sessionId: 'session-1',
@@ -449,16 +452,38 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
     expect(JSON.stringify(dismissed)).not.toContain(requestId);
   });
 
-  it('drops a dismissal after its desktop-only confirmation projection expires', () => {
+  it('keeps the opaque dismissal id stable after the Host confirmation timeout', () => {
     vi.useFakeTimers();
     try {
-      const requestId = 'expired-private-request-id';
-      rememberDesktopOnlyConfirmation(requestId);
+      const requestId = createDesktopOnlyConfirmationRequestId();
+      const projected = projectInteractionRequestForRemote({
+        kind: 'issue_confirm',
+        requestId,
+      })!;
       vi.advanceTimersByTime(9 * 60 * 1000);
 
-      expect(projectInteractionDismissedForRemote({ requestId })).toBeNull();
+      expect(projectInteractionDismissedForRemote({ requestId })).toEqual({
+        requestId: projected.requestId,
+      });
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('projects more than 128 concurrent confirmations without evicting source ids', () => {
+    const sourceRequestIds = Array.from(
+      { length: 256 },
+      () => createDesktopOnlyConfirmationRequestId(),
+    );
+
+    for (const requestId of sourceRequestIds) {
+      const projected = projectInteractionRequestForRemote({
+        kind: 'ghost_grant_confirm',
+        requestId,
+      })!;
+      const dismissed = projectInteractionDismissedForRemote({ requestId });
+      expect(dismissed).toEqual({ requestId: projected.requestId });
+      expect(JSON.stringify(dismissed)).not.toContain(requestId);
     }
   });
 });

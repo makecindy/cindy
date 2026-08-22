@@ -43,6 +43,7 @@ import {
   isDeviceLinkInvoke,
 } from '../device-link/invoke-context';
 import * as subscriptions from '../device-link/subscriptions';
+import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection';
 
 beforeEach(() => {
   remoteControlEnabled = true;
@@ -2483,9 +2484,10 @@ describe('被控端订阅 registry + topic 转发', () => {
     wireInboundDispatch(client);
     feed(subFrame('ctrl-a', SUB, ['session:s1']));
 
+    const sourceRequestId = createDesktopOnlyConfirmationRequestId();
     tapWindowBroadcast(MAKER_PUSH.INTERACTION_REQUEST, {
       sessionId: 's1',
-      request: { kind: 'issue_confirm', requestId: 'private-request-id', draft: { title: 'private' } },
+      request: { kind: 'issue_confirm', requestId: sourceRequestId, draft: { title: 'private' } },
     });
     const remoteRequestId = (calls.push[0].payload as {
       request: { requestId: string };
@@ -2493,7 +2495,7 @@ describe('被控端订阅 registry + topic 转发', () => {
 
     tapWindowBroadcast(MAKER_PUSH.INTERACTION_DISMISSED, {
       sessionId: 's1',
-      requestId: 'private-request-id',
+      requestId: sourceRequestId,
       reason: 'resolved',
     });
 
@@ -2502,7 +2504,7 @@ describe('被控端订阅 registry + topic 转发', () => {
       channel: MAKER_PUSH.INTERACTION_DISMISSED,
       payload: { sessionId: 's1', requestId: remoteRequestId, reason: 'resolved' },
     });
-    expect(JSON.stringify(calls.push[1].payload)).not.toContain('private-request-id');
+    expect(JSON.stringify(calls.push[1].payload)).not.toContain(sourceRequestId);
   });
 
   it('explicit unsubscribe removes the final remembered topic and stops the tap', () => {
