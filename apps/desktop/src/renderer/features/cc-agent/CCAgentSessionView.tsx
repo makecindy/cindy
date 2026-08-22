@@ -151,10 +151,10 @@ import {
   dispatchCommand,
   leadingSlashInvocation,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-  rebaseInlineRangesAfterSlashCommandRewrite,
+  agentSkillInvocationForDispatch,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
-  rewriteAgentSkillInvocationForDispatch,
+  type AgentSkillInvocation,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
@@ -2673,12 +2673,17 @@ export function CCAgentSessionView({
         workingDirOverride?: string;
         preparePiRuntime?: () => Promise<void>;
       },
-    ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
+    ): Promise<{
+      handled: boolean;
+      accepted: boolean;
+      agentSkillInvocation?: AgentSkillInvocation;
+    }> => {
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
       const agentKind = dbToMakerAgentKind(session?.agentKind);
-      const leading =
-        !slashMatch && agentKind === 'pi' ? leadingSlashInvocation(message) : undefined;
-      if (!slashMatch && !leading) return { handled: false, accepted: false, message };
+      const leading = !slashMatch && agentKind === 'pi'
+        ? leadingSlashInvocation(message)
+        : undefined;
+      if (!slashMatch && !leading) return { handled: false, accepted: false };
       const cmdName = (slashMatch?.[1] ?? leading!.name).toLowerCase();
       const args = slashMatch?.[2] ?? '';
       const allowDesktopDispatch = options?.allowDesktopDispatch ?? true;
@@ -2721,26 +2726,32 @@ export function CCAgentSessionView({
       }
       const hit = reconciled.command;
       if (hit?.kind !== 'desktop') {
+        const agentSkillInvocation = agentKind === 'pi'
+          ? agentSkillInvocationForDispatch(message, hit)
+          : undefined;
+        if (agentKind === 'pi' && hit?.kind === 'agent-skill' && !agentSkillInvocation) {
+          toast.warning(t('commandPalette.skillUnavailableForNewTask'));
+          return { handled: true, accepted: false };
+        }
         return {
           handled: false,
           accepted: false,
-          message:
-            agentKind === 'pi' ? rewriteAgentSkillInvocationForDispatch(message, hit) : message,
+          ...(agentSkillInvocation ? { agentSkillInvocation } : {}),
         };
       }
       // Desktop commands stay `^/` only. A whitespace-prefixed `/help` is not a dispatch.
-      if (!slashMatch) return { handled: false, accepted: false, message };
-      if (!allowDesktopDispatch) return { handled: false, accepted: false, message };
+      if (!slashMatch) return { handled: false, accepted: false };
+      if (!allowDesktopDispatch) return { handled: false, accepted: false };
       // Review is handed to Main immediately with this invocation's serialized
       // attachments. It must not depend on this React view remaining mounted,
       // nor share a mutable attachment ref with a later command.
       if (hit.name === 'review') {
-        if (!sessionId) return { handled: true, accepted: false, message };
+        if (!sessionId) return { handled: true, accepted: false };
         if (remoteDeviceId || session?.remoteHostId) {
           // 轮 35 HIGH-2:SSH 远端会话同样不支持 /review —— 与 device-link 并列
           // 前置拦截, 避免命令进入 main 后被 UNSUPPORTED_CAPABILITY 拒绝。
           toast.warning(t('review.toast.remoteUnsupported'));
-          return { handled: true, accepted: false, message };
+          return { handled: true, accepted: false };
         }
         const attachments = files?.length ? serializeAttachedFiles(files) : undefined;
         try {
@@ -2749,7 +2760,7 @@ export function CCAgentSessionView({
             ...(args.trim() ? { focus: args.trim() } : {}),
             ...(attachments?.length ? { attachments } : {}),
           });
-          return { handled: true, accepted: true, message };
+          return { handled: true, accepted: true };
         } catch (err) {
           const ipcError = extractIpcError(err);
           toast.error(
@@ -2759,7 +2770,7 @@ export function CCAgentSessionView({
                 ? err.message
                 : t('review.toast.failed'),
           );
-          return { handled: true, accepted: false, message };
+          return { handled: true, accepted: false };
         }
       }
       // 仅 /issue 需要携带附件:snapshot 到 ref,DESKTOP_COMMAND_TRIGGERED 回流时消费。
@@ -2777,7 +2788,7 @@ export function CCAgentSessionView({
         ...(args ? { args } : {}),
         ...(remoteDeviceId ? { deviceId: remoteDeviceId } : {}),
       });
-      return { handled: true, accepted: true, message };
+      return { handled: true, accepted: true };
     },
     [
       getHelpCommandsSnapshot,
@@ -2798,7 +2809,7 @@ export function CCAgentSessionView({
 
       // Auto-continue: if there's a pending send and a valid dir was selected, execute step ③.
       // The first slash reconciliation ran before this directory existed, so refresh again with
-      // the selected project before dispatching and keep inline metadata aligned with any alias rewrite.
+      // the selected project before dispatching and attach the runtime mapping to the unchanged text.
       const pending = pendingSendRef.current;
       if (!newDir || !pending) return;
       pendingSendRef.current = null;
@@ -2855,32 +2866,10 @@ export function CCAgentSessionView({
             return;
           }
 
-          const pendingAgentReferences = pending.agentReferences
-            ? rebaseInlineRangesAfterSlashCommandRewrite(
-                pending.agentReferences,
-                pending.message,
-                slashDispatch.message,
-              )
-            : undefined;
-          const pendingPastedTextRanges = pending.pastedTextRanges
-            ? rebaseInlineRangesAfterSlashCommandRewrite(
-                pending.pastedTextRanges,
-                pending.message,
-                slashDispatch.message,
-              )
-            : undefined;
-          const pendingSlashCommandRanges =
-            pending.slashCommandRanges !== undefined
-              ? rebaseInlineRangesAfterSlashCommandRewrite(
-                  pending.slashCommandRanges,
-                  pending.message,
-                  slashDispatch.message,
-                )
-              : undefined;
           const dispatch = pending.deliveryMode === 'steer' ? steerMessage : sendMessage;
           const followStartGeneration = readSendFollowCancelGeneration(sessionId);
           const accepted = await dispatch(
-            slashDispatch.message,
+            pending.message,
             pending.model,
             pending.effort,
             pending.permissionMode,
@@ -2889,22 +2878,26 @@ export function CCAgentSessionView({
             pending.mentions,
             pending.quotesEncoded ||
               pending.vendorOptions !== undefined ||
-              pendingAgentReferences?.length ||
-              pendingPastedTextRanges?.length ||
-              pendingSlashCommandRanges !== undefined ||
+              pending.agentReferences?.length ||
+              pending.pastedTextRanges?.length ||
+              pending.slashCommandRanges !== undefined ||
+              slashDispatch.agentSkillInvocation !== undefined ||
               pending.onRemoteOptimisticFailure !== undefined ||
               pending.onDeferredAccepted !== undefined
               ? {
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
-                  ...(pendingAgentReferences?.length
-                    ? { agentReferences: pendingAgentReferences }
+                  ...(pending.agentReferences?.length
+                    ? { agentReferences: pending.agentReferences }
                     : {}),
-                  ...(pendingPastedTextRanges?.length
-                    ? { pastedTextRanges: pendingPastedTextRanges }
+                  ...(pending.pastedTextRanges?.length
+                    ? { pastedTextRanges: pending.pastedTextRanges }
                     : {}),
-                  ...(pendingSlashCommandRanges !== undefined
-                    ? { slashCommandRanges: pendingSlashCommandRanges }
+                  ...(pending.slashCommandRanges !== undefined
+                    ? { slashCommandRanges: pending.slashCommandRanges }
+                    : {}),
+                  ...(slashDispatch.agentSkillInvocation
+                    ? { agentSkillInvocation: slashDispatch.agentSkillInvocation }
                     : {}),
                   ...(pending.onRemoteOptimisticFailure
                     ? { onRemoteOptimisticFailure: pending.onRemoteOptimisticFailure }
@@ -3015,6 +3008,7 @@ export function CCAgentSessionView({
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
+        agentSkillInvocation?: AgentSkillInvocation;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
         onDeferredAccepted?: () => void;
       },
@@ -3049,9 +3043,10 @@ export function CCAgentSessionView({
       //   - desktop 命令(/help /clear ...) → executeDesktopCommand IPC,
       //     main 端 registry 跑 execute(), 副作用通过 DESKTOP_COMMAND_TRIGGERED
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
-      //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
+      //   - agent-builtin / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      const originalMessage = message;
+      //   - agent-skill → UI/落库仍保留 palette alias；Pi 的 runtime 命令名只作为
+      //     agentSkillInvocation 随队列项传递，在 Main 构造 Agent 输入时投影。
       const slashDispatch =
         deliveryMode === 'steer'
           ? await maybeDispatchDesktopSlashCommand(message, files, {
@@ -3072,37 +3067,10 @@ export function CCAgentSessionView({
         }
         return slashDispatch.accepted;
       }
-      message = slashDispatch.message;
-      if (message !== originalMessage && opts) {
+      if (slashDispatch.agentSkillInvocation) {
         opts = {
           ...opts,
-          ...(opts.agentReferences
-            ? {
-                agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.agentReferences,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-          ...(opts.pastedTextRanges
-            ? {
-                pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.pastedTextRanges,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-          ...(opts.slashCommandRanges !== undefined
-            ? {
-                slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.slashCommandRanges,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
+          agentSkillInvocation: slashDispatch.agentSkillInvocation,
         };
       }
 
@@ -3188,6 +3156,9 @@ export function CCAgentSessionView({
         ...(opts?.pastedTextRanges?.length ? { pastedTextRanges: opts.pastedTextRanges } : {}),
         ...(opts?.slashCommandRanges !== undefined
           ? { slashCommandRanges: opts.slashCommandRanges }
+          : {}),
+        ...(opts?.agentSkillInvocation
+          ? { agentSkillInvocation: opts.agentSkillInvocation }
           : {}),
         ...(opts?.onRemoteOptimisticFailure
           ? { onRemoteOptimisticFailure: opts.onRemoteOptimisticFailure }
@@ -3661,11 +3632,9 @@ export function CCAgentSessionView({
         }
         // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
         // resolve false / 抛错都保留(见该函数注释)。
-        let pendingText = pending.text;
         const slashDispatch = await maybeDispatchDesktopSlashCommand(pending.text, pending.files, {
           piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
         });
-        pendingText = slashDispatch.message;
         if (slashDispatch.handled) {
           if (!slashDispatch.accepted) {
             // NewMaker 已把源草稿移交并清空；Main 没受理 `/review` 时，把正文和附件
@@ -3695,34 +3664,12 @@ export function CCAgentSessionView({
           }
           return;
         }
-        const pendingAgentReferences = pending.agentReferences
-          ? rebaseInlineRangesAfterSlashCommandRewrite(
-              pending.agentReferences,
-              pending.text,
-              pendingText,
-            )
-          : undefined;
-        const pendingPastedTextRanges = pending.pastedTextRanges
-          ? rebaseInlineRangesAfterSlashCommandRewrite(
-              pending.pastedTextRanges,
-              pending.text,
-              pendingText,
-            )
-          : undefined;
-        const pendingSlashCommandRanges =
-          pending.slashCommandRanges !== undefined
-            ? rebaseInlineRangesAfterSlashCommandRewrite(
-                pending.slashCommandRanges,
-                pending.text,
-                pendingText,
-              )
-            : undefined;
         // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
         // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
         const followStartGeneration = readSendFollowCancelGeneration(sessionId);
         const delivered = await deliverRecoverableHandoff(sessionId, () =>
           sendMessage(
-            pendingText,
+            pending.text,
             session.model,
             session.effort as Effort,
             session.permissionMode as PermissionMode,
@@ -3731,20 +3678,28 @@ export function CCAgentSessionView({
             pending.mentions,
             pending.vendorOptions ||
               pending.quotesEncoded ||
-              pendingAgentReferences?.length ||
-              pendingPastedTextRanges?.length ||
-              pendingSlashCommandRanges !== undefined
+              pending.agentReferences?.length ||
+              pending.pastedTextRanges?.length ||
+              pending.slashCommandRanges !== undefined ||
+              pending.agentSkillInvocation !== undefined ||
+              slashDispatch.agentSkillInvocation !== undefined
               ? {
                   ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
                   ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
-                  ...(pendingAgentReferences?.length
-                    ? { agentReferences: pendingAgentReferences }
+                  ...(pending.agentReferences?.length
+                    ? { agentReferences: pending.agentReferences }
                     : {}),
-                  ...(pendingPastedTextRanges?.length
-                    ? { pastedTextRanges: pendingPastedTextRanges }
+                  ...(pending.pastedTextRanges?.length
+                    ? { pastedTextRanges: pending.pastedTextRanges }
                     : {}),
-                  ...(pendingSlashCommandRanges !== undefined
-                    ? { slashCommandRanges: pendingSlashCommandRanges }
+                  ...(pending.slashCommandRanges !== undefined
+                    ? { slashCommandRanges: pending.slashCommandRanges }
+                    : {}),
+                  ...(pending.agentSkillInvocation ?? slashDispatch.agentSkillInvocation
+                    ? {
+                        agentSkillInvocation:
+                          pending.agentSkillInvocation ?? slashDispatch.agentSkillInvocation,
+                      }
                     : {}),
                 }
               : undefined,

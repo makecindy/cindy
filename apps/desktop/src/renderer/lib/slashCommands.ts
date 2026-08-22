@@ -26,6 +26,7 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SlashCommands');
 const shadowedUnavailableSkillsByCommands = new WeakMap<UnifiedCommand[], Set<string>>();
+const ambiguousUnavailableSkillsByCommands = new WeakMap<UnifiedCommand[], Set<string>>();
 
 export type { UnifiedCommand } from '@cindy/maker-core';
 
@@ -40,99 +41,68 @@ export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
     );
 }
 
-export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): boolean {
-  return commands.some((command) => !isSlashCommandUnavailable(command));
-}
-
-export function slashCommandInvocationName(command: UnifiedCommand): string {
-  return command.kind === 'agent-skill' && command.runtimeCommandName
-    ? command.runtimeCommandName
-    : command.name;
-}
-
 /**
- * Palette / composer keep the human name (`/git`). Rewrite only at dispatch so
- * Pi receives the runtime alias (`/skill:git`) without leaking it into the UI.
+ * A discovered Pi project Skill is not executable in an existing runtime, but
+ * New Maker may select it before the runtime exists. The delayed first-message
+ * handoff starts Pi, refreshes the catalog until the Skill is loaded, then
+ * records Pi's runtime command name separately for the send boundary.
  */
-export function rewriteAgentSkillInvocationForDispatch(
-  message: string,
-  command: UnifiedCommand | undefined,
-): string {
-  if (
-    !command ||
-    command.kind !== 'agent-skill' ||
-    !command.runtimeCommandName ||
-    isSlashCommandUnavailable(command)
-  ) {
-    return message;
-  }
-  const leading = leadingSlashInvocation(message);
-  if (!leading || leading.name.toLowerCase() !== command.name.toLowerCase()) return message;
-  return `${message.slice(0, leading.start)}/${command.runtimeCommandName}${message.slice(leading.end)}`;
+export function isSlashCommandSelectable(
+  command: UnifiedCommand,
+  allowPendingProjectSkillSelection = false,
+): boolean {
+  return !isSlashCommandUnavailable(command) || allowPendingProjectSkillSelection;
 }
 
-/** Rewrite `/git` → `/skill:git` even when the skill is still `discovered`. */
-export function rewritePiSkillAliasFromCommand(
+export function hasAvailableSlashCommand(
+  commands: readonly UnifiedCommand[],
+  allowPendingProjectSkillSelection = false,
+): boolean {
+  return commands.some((command) => (
+    isSlashCommandSelectable(command, allowPendingProjectSkillSelection)
+  ));
+}
+
+export interface AgentSkillInvocation {
+  name: string;
+  runtimeCommandName: string;
+  scope: NonNullable<Extract<UnifiedCommand, { kind: 'agent-skill' }>['scope']>;
+  sourcePath?: string;
+}
+
+/** Resolve an available Skill alias without changing its user-visible text. */
+export function agentSkillInvocationForDispatch(
   message: string,
   command: UnifiedCommand | undefined,
-): string {
-  const leading = leadingSlashInvocation(message);
+): AgentSkillInvocation | undefined {
   if (
-    !leading
-    || command?.kind !== 'agent-skill'
+    !command
+    || command.kind !== 'agent-skill'
     || !command.runtimeCommandName
-    || leading.name.toLowerCase() !== command.name.toLowerCase()
+    || !command.scope
+    || !command.path
+    || isSlashCommandUnavailable(command)
   ) {
-    return rewriteAgentSkillInvocationForDispatch(message, command);
+    return undefined;
   }
-  return `${message.slice(0, leading.start)}/${command.runtimeCommandName}${message.slice(leading.end)}`;
-}
-
-/** First-message / worktree send paths that skip SessionView dispatch. */
-export async function rewritePiSkillMessageForSend(params: {
-  agentKind: AgentKind;
-  message: string;
-  workingDir?: string | null;
-  sessionId?: string;
-}): Promise<string> {
-  if (params.agentKind !== 'pi') return params.message;
-  const leading = leadingSlashInvocation(params.message);
-  if (!leading) return params.message;
-  const commands = await loadAllCommands(params.agentKind, params.workingDir, {
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-  });
-  const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
-  return rewritePiSkillAliasFromCommand(params.message, hit);
-}
-
-/**
- * Rebase persisted/render-only inline ranges after the leading slash-command
- * token grows or shrinks during runtime alias rewriting.
- */
-export function rebaseInlineRangesAfterSlashCommandRewrite<T extends { start: number; end: number }>(
-  ranges: readonly T[],
-  originalMessage: string,
-  rewrittenMessage: string,
-): T[] {
-  if (originalMessage === rewrittenMessage) return [...ranges];
-  const originalCommand = leadingSlashInvocation(originalMessage);
-  const rewrittenCommand = leadingSlashInvocation(rewrittenMessage);
-  if (!originalCommand || !rewrittenCommand) return [...ranges];
-
-  const boundary = originalCommand.end;
-  const delta = (rewrittenCommand.end - rewrittenCommand.start)
-    - (originalCommand.end - originalCommand.start);
-  if (delta === 0) return [...ranges];
-  return ranges.map((range) => ({
-    ...range,
-    start: range.start >= boundary ? range.start + delta : range.start,
-    end: range.end >= boundary ? range.end + delta : range.end,
-  }));
+  const leading = leadingSlashInvocation(message);
+  if (!leading || leading.name.toLowerCase() !== command.name.toLowerCase()) return undefined;
+  return {
+    name: command.name,
+    runtimeCommandName: command.runtimeCommandName,
+    scope: command.scope,
+    sourcePath: command.path,
+  };
 }
 
 /** First available command index, or 0 when nothing is available/present. */
-export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
-  const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
+export function firstAvailableSlashCommandIndex(
+  commands: readonly UnifiedCommand[],
+  allowPendingProjectSkillSelection = false,
+): number {
+  const index = commands.findIndex((command) => (
+    isSlashCommandSelectable(command, allowPendingProjectSkillSelection)
+  ));
   return index >= 0 ? index : 0;
 }
 
@@ -141,12 +111,13 @@ export function nextAvailableSlashCommandIndex(
   commands: readonly UnifiedCommand[],
   current: number,
   delta: 1 | -1,
+  allowPendingProjectSkillSelection = false,
 ): number {
   if (commands.length === 0) return current;
   let index = current;
   for (let step = 0; step < commands.length; step++) {
     index = (index + delta + commands.length) % commands.length;
-    if (!isSlashCommandUnavailable(commands[index])) return index;
+    if (isSlashCommandSelectable(commands[index], allowPendingProjectSkillSelection)) return index;
   }
   return current;
 }
@@ -221,7 +192,23 @@ export function mergeCommands(
   const result: UnifiedCommand[] = [];
   const shadowedUnavailableSkills = new Set<string>();
   const availableSkills = agentSkill.filter((command) => !isSlashCommandUnavailable(command));
-  const unavailableSkills = agentSkill.filter(isSlashCommandUnavailable);
+  const unavailableSkills = agentSkill.filter((command): command is Extract<
+    UnifiedCommand,
+    { kind: 'agent-skill' }
+  > => isSlashCommandUnavailable(command));
+  const unavailableProjectSkillPaths = new Map<string, Set<string>>();
+  for (const command of unavailableSkills) {
+    const normalizedName = command.name.toLowerCase();
+    const paths = unavailableProjectSkillPaths.get(normalizedName) ?? new Set<string>();
+    paths.add(command.path ?? '');
+    unavailableProjectSkillPaths.set(normalizedName, paths);
+  }
+  const ambiguousUnavailableSkills = new Set(
+    [...unavailableProjectSkillPaths]
+      .filter(([, paths]) => paths.size > 1 || paths.has(''))
+      .map(([name]) => name),
+  );
+  for (const name of ambiguousUnavailableSkills) shadowedUnavailableSkills.add(name);
   const tiers: UnifiedCommand[][] = [
     availableSkills.sort((a, b) => a.name.localeCompare(b.name)),
     [...desktop].sort((a, b) => a.name.localeCompare(b.name)),
@@ -230,22 +217,72 @@ export function mergeCommands(
   ];
   for (const tier of tiers) {
     for (const cmd of tier) {
-      if (seen.has(cmd.name)) {
+      const normalizedName = cmd.name.toLowerCase();
+      if (isSlashCommandUnavailable(cmd) && ambiguousUnavailableSkills.has(normalizedName)) {
+        continue;
+      }
+      if (seen.has(normalizedName)) {
         if (isSlashCommandUnavailable(cmd)) {
-          shadowedUnavailableSkills.add(cmd.name.toLowerCase());
+          shadowedUnavailableSkills.add(normalizedName);
         } else {
           log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
         }
         continue;
       }
-      seen.add(cmd.name);
+      seen.add(normalizedName);
       result.push(cmd);
     }
   }
   if (shadowedUnavailableSkills.size > 0) {
     shadowedUnavailableSkillsByCommands.set(result, shadowedUnavailableSkills);
   }
+  const unresolvedAmbiguousSkills = new Set(
+    [...ambiguousUnavailableSkills].filter((name) => (
+      !result.some((command) => command.name.toLowerCase() === name)
+    )),
+  );
+  if (unresolvedAmbiguousSkills.size > 0) {
+    ambiguousUnavailableSkillsByCommands.set(result, unresolvedAmbiguousSkills);
+  }
   return result;
+}
+
+/** Reject a typed project Skill alias whose source path cannot be selected uniquely. */
+export function ambiguousPendingProjectSkillName(
+  message: string,
+  commands: UnifiedCommand[],
+  allowPendingProjectSkillSelection = false,
+): string | undefined {
+  if (!allowPendingProjectSkillSelection) return undefined;
+  const name = leadingSlashInvocation(message)?.name.toLowerCase();
+  return name && ambiguousUnavailableSkillsByCommands.get(commands)?.has(name)
+    ? name
+    : undefined;
+}
+
+type PendingProjectSkillCommand = Extract<UnifiedCommand, { kind: 'agent-skill' }> & {
+  path: string;
+};
+
+/** Resolve a typed or palette-inserted project Skill alias to one exact discovery path. */
+export function pendingProjectSkillForMessage(
+  message: string,
+  commands: UnifiedCommand[],
+  allowPendingProjectSkillSelection = false,
+): PendingProjectSkillCommand | undefined {
+  if (!allowPendingProjectSkillSelection) return undefined;
+  const name = leadingSlashInvocation(message)?.name.toLowerCase();
+  if (!name || ambiguousPendingProjectSkillName(message, commands, true)) return undefined;
+  const matches = commands.filter((command): command is PendingProjectSkillCommand => (
+    command.kind === 'agent-skill'
+    && command.scope === 'repo'
+    && isSlashCommandUnavailable(command)
+    && command.name.toLowerCase() === name
+    && typeof command.path === 'string'
+    && command.path.length > 0
+  ));
+  const sourcePaths = new Set(matches.map((command) => command.path));
+  return sourcePaths.size === 1 ? matches[0] : undefined;
 }
 
 function hasShadowedUnavailableSkill(
@@ -369,6 +406,14 @@ export async function loadAllCommands(
   return mergeCommands(desktop, agentBuiltin, agentSkill);
 }
 
+function isPiUserSkillAwaitingRuntimeProof(
+  command: UnifiedCommand | undefined,
+): boolean {
+  return command?.kind === 'agent-skill'
+    && command.scope === 'user'
+    && command.runtimeStatus !== 'loaded';
+}
+
 /**
  * A Pi runtime catalog may finish after the palette/dispatch snapshot was
  * created. Recheck desktop hits before executing them so a newly loaded
@@ -387,7 +432,8 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   const current = findCommand(params.commands);
   const shouldReload = !current
     || current.kind === 'desktop'
-    || isSlashCommandUnavailable(current);
+    || isSlashCommandUnavailable(current)
+    || isPiUserSkillAwaitingRuntimeProof(current);
   if (params.agentKind !== 'pi' || !params.sessionId || !shouldReload) {
     return { command: current, commands: params.commands };
   }
@@ -426,7 +472,8 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
     || (current !== undefined && isSlashCommandUnavailable(current));
   const shouldPrepareRuntime = !current
     || current.kind === 'desktop'
-    || isSlashCommandUnavailable(current);
+    || isSlashCommandUnavailable(current)
+    || isPiUserSkillAwaitingRuntimeProof(current);
   if (
     params.agentKind === 'pi'
     && params.sessionId
@@ -440,6 +487,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
     const shouldRetry = result.command === undefined
       ? mayStillBeLoading
       : isSlashCommandUnavailable(result.command)
+        || isPiUserSkillAwaitingRuntimeProof(result.command)
         || (
           result.command.kind === 'desktop'
           && hasShadowedUnavailableSkill(result.commands, params.commandName)
@@ -452,6 +500,173 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
     });
   }
   return result;
+}
+
+function normalizeProjectSkillPath(value: string): { path: string; windows: boolean } | null {
+  if (!value || value.includes('\0')) return null;
+  const withoutLongPrefix = value.startsWith('\\\\?\\UNC\\')
+    ? `//${value.slice('\\\\?\\UNC\\'.length)}`
+    : value.startsWith('\\\\?\\')
+      ? value.slice('\\\\?\\'.length)
+      : value;
+  const windows = /^[A-Za-z]:[\\/]/.test(withoutLongPrefix)
+    || withoutLongPrefix.startsWith('\\\\')
+    || withoutLongPrefix.startsWith('//');
+  let normalized = withoutLongPrefix.replace(/\\/g, '/');
+  const prefix = normalized.startsWith('//') ? '//' : '';
+  normalized = prefix + normalized.slice(prefix.length).replace(/\/+/g, '/');
+  while (normalized.length > 1 && normalized.endsWith('/')) {
+    if (/^[A-Za-z]:\/$/.test(normalized)) break;
+    normalized = normalized.slice(0, -1);
+  }
+  // No host comparison identity reaches this renderer-only worktree helper.
+  // Preserve case so Windows case-sensitive directories fail closed instead
+  // of binding a different Skill that differs only by case.
+  return { path: normalized, windows };
+}
+
+function projectRelativeSkillPath(projectRoot: string, skillPath: string): string | null {
+  const root = normalizeProjectSkillPath(projectRoot);
+  const skill = normalizeProjectSkillPath(skillPath);
+  if (!root || !skill || root.windows !== skill.windows) return null;
+  if (skill.path === root.path) return '';
+  const prefix = root.path.endsWith('/') ? root.path : `${root.path}/`;
+  return skill.path.startsWith(prefix) ? skill.path.slice(prefix.length) : null;
+}
+
+export function isSameProjectSkillAcrossRoots(params: {
+  sourceProjectRoot: string;
+  sourceSkillPath: string;
+  targetProjectRoot: string;
+  targetSkillPath: string;
+}): boolean {
+  const sourceRelative = projectRelativeSkillPath(
+    params.sourceProjectRoot,
+    params.sourceSkillPath,
+  );
+  const targetRelative = projectRelativeSkillPath(
+    params.targetProjectRoot,
+    params.targetSkillPath,
+  );
+  return sourceRelative !== null && sourceRelative === targetRelative;
+}
+
+/**
+ * New Maker can select a discovered Pi project Skill before a runtime exists.
+ * Worktree creation changes the physical project root, so that first message
+ * must be rebound against the newly created directory instead of trusting the
+ * palette snapshot from the base repository.
+ */
+export async function resolvePendingPiProjectSkillForDispatch(params: {
+  sessionId: string;
+  commandName: string;
+  reload: () => Promise<UnifiedCommand[]>;
+  prepareRuntime: () => Promise<void>;
+  sourceProjectRoot: string;
+  sourceSkillPath: string;
+  targetProjectRoot: string;
+  retryDelaysMs?: readonly number[];
+  sleep?: (delayMs: number) => Promise<void>;
+}): Promise<AgentSkillInvocation | null> {
+  const retryDelaysMs = params.retryDelaysMs ?? PI_RUNTIME_SKILL_RETRY_DELAYS_MS;
+  const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>(
+    (resolve) => window.setTimeout(resolve, delayMs),
+  ));
+  type LoadedProjectSkill = Extract<UnifiedCommand, { kind: 'agent-skill' }> & {
+    scope: 'repo';
+    path: string;
+    runtimeCommandName: string;
+  };
+  const findLoadedTarget = (commands: UnifiedCommand[]) => commands.find((candidate): candidate is LoadedProjectSkill => (
+    candidate.kind === 'agent-skill'
+    && candidate.name.toLowerCase() === params.commandName.toLowerCase()
+    && candidate.scope === 'repo'
+    && candidate.runtimeStatus === 'loaded'
+    && !!candidate.path
+    && isSameProjectSkillAcrossRoots({
+      sourceProjectRoot: params.sourceProjectRoot,
+      sourceSkillPath: params.sourceSkillPath,
+      targetProjectRoot: params.targetProjectRoot,
+      targetSkillPath: candidate.path,
+    })
+  ));
+
+  await params.prepareRuntime();
+  let commands = await params.reload();
+  let command = findLoadedTarget(commands);
+  for (const delayMs of retryDelaysMs) {
+    if (command) break;
+    await sleep(delayMs);
+    commands = await params.reload();
+    command = findLoadedTarget(commands);
+  }
+  if (!command?.runtimeCommandName) return null;
+  return {
+    name: command.name,
+    runtimeCommandName: command.runtimeCommandName,
+    scope: command.scope,
+    sourcePath: command.path,
+  };
+}
+
+/**
+ * A New Maker worktree sends its first turn directly, before SessionView can
+ * reconcile aliases. Bind a selected user Skill to the exact path that the
+ * newly started Pi session re-discovers; a same-name Skill from another
+ * directory is not an acceptable replacement. Main remains the final loaded
+ * provenance authority when the receipt reaches the dispatch fence.
+ */
+export async function resolvePendingPiUserSkillForDispatch(params: {
+  message: string;
+  pendingInvocation: AgentSkillInvocation;
+  reload: () => Promise<UnifiedCommand[]>;
+  prepareRuntime: () => Promise<void>;
+  retryDelaysMs?: readonly number[];
+  sleep?: (delayMs: number) => Promise<void>;
+}): Promise<AgentSkillInvocation | null> {
+  if (
+    params.pendingInvocation.scope !== 'user'
+    || !params.pendingInvocation.sourcePath
+  ) return null;
+  const retryDelaysMs = params.retryDelaysMs ?? PI_RUNTIME_SKILL_RETRY_DELAYS_MS;
+  const sleep = params.sleep ?? ((delayMs: number) => new Promise<void>(
+    (resolve) => window.setTimeout(resolve, delayMs),
+  ));
+  const findLoadedTarget = (commands: UnifiedCommand[]) => commands.find((candidate) => (
+    candidate.kind === 'agent-skill'
+    && candidate.scope === 'user'
+    && candidate.name.toLowerCase() === params.pendingInvocation.name.toLowerCase()
+    && candidate.path === params.pendingInvocation.sourcePath
+    && candidate.runtimeStatus === 'loaded'
+    && !!candidate.runtimeCommandName
+  ));
+
+  await params.prepareRuntime();
+  let command = findLoadedTarget(await params.reload());
+  for (const delayMs of retryDelaysMs) {
+    if (command) break;
+    await sleep(delayMs);
+    command = findLoadedTarget(await params.reload());
+  }
+  return agentSkillInvocationForDispatch(params.message, command) ?? null;
+}
+
+/**
+ * A draft Pi Skill session is not user-owned until its exact runtime receipt
+ * exists. Roll it back durably and in order; never hide a session locally when
+ * Main or the database failed to release it.
+ */
+export async function rollbackUnclaimedPiProjectSkillSession(params: {
+  sessionId: string;
+  closeRuntime: () => Promise<void>;
+  markDeleted: () => Promise<void>;
+  patchDeleted: () => void;
+  purgeRuntimeState: () => void;
+}): Promise<void> {
+  await params.closeRuntime();
+  await params.markDeleted();
+  params.patchDeleted();
+  params.purgeRuntimeState();
 }
 
 /**

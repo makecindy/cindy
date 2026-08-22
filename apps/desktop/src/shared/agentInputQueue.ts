@@ -9,6 +9,7 @@
  */
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
+import { leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@cindy/maker-shared/mention-ref';
 import {
   describeAgentInputReference,
@@ -189,6 +190,24 @@ export interface RecoveryCheckpoint {
 export interface AgentInputQueuedMessage {
   clientId: string;
   text: string;
+  /**
+   * 用户可见的 Skill 名称与 Pi runtime 命令名之间的发送期映射。
+   *
+   * `text` / `persistedContent` / `chatMessage.content` 始终保留 Composer 中的
+   * `/name`，让输入框、排队行与历史消息共用同一套 Slash 胶囊坐标；只有
+   * {@link buildMakerUserMessage} 在真正构造 Agent 输入时将它改写为
+   * `/${runtimeCommandName}`。这不是批准能力，也不能让未装配的 Skill 变为可用；
+   * Renderer 只会在 Main 返回的当前 Pi runtime catalog 命中后写入该路由声明；
+   * Main 在每次实际 dispatch 前仍会用当前 runtime provenance 重新验证。
+   */
+  agentSkillInvocation?: {
+    name: string;
+    runtimeCommandName: string;
+    /** Scanner scope captured with the catalog hit; missing legacy values fail closed. */
+    scope?: 'global' | 'project' | 'user' | 'repo' | 'system' | 'admin';
+    /** Exact scanner source used to bind repo-scoped Skills to runtime provenance. */
+    sourcePath?: string;
+  };
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled
    * Desktop writes this value when it accepts an item; controller-provided
@@ -531,6 +550,18 @@ export function updateQueuedMessageText(
     persistedContent: nextPersisted,
     chatMessage: nextChatMessage,
   };
+  // 队列纯文本编辑若只改参数，仍可保持原 runtime 路由声明；一旦首个 token
+  // 改名或被移除就 fail closed，绝不能让旧 Skill 身份附着到另一条正文上。
+  const leadingInvocation = leadingSlashInvocation(newText);
+  if (
+    entry.agentSkillInvocation
+    && leadingInvocation?.name.toLowerCase()
+      === entry.agentSkillInvocation.name.toLowerCase()
+  ) {
+    updated.agentSkillInvocation = entry.agentSkillInvocation;
+  } else {
+    delete updated.agentSkillInvocation;
+  }
   if (!refsUnchanged) {
     delete updated.trustedSessionReferenceContexts;
     // 引用坐标发生变化后，旧的 device-link 快照已经不再对应当前文本。
@@ -566,6 +597,18 @@ export function updateQueuedMessageContent(
         : {}),
     },
   };
+  // update-content is an editor replacement, not a fresh runtime-catalog decision.
+  // Only the mapping frozen on the original queue item may survive, and only while
+  // the visible alias is unchanged; never trust a replacement payload to introduce
+  // or swap the command that will actually execute.
+  const leadingInvocation = leadingSlashInvocation(next.text);
+  const retainedInvocation = entry.agentSkillInvocation
+    && leadingInvocation?.name.toLowerCase()
+      === entry.agentSkillInvocation.name.toLowerCase()
+    ? entry.agentSkillInvocation
+    : undefined;
+  if (retainedInvocation) merged.agentSkillInvocation = retainedInvocation;
+  else delete merged.agentSkillInvocation;
   // 附件是"编辑后的完整集合"语义:清空要真的清掉键,不能靠 spread 残留旧值
   // (手机编辑器能完整表达附件,undefined / 空数组都表示清空)。
   if (next.files && next.files.length > 0) merged.files = next.files;
@@ -680,13 +723,28 @@ export function serializeSessionReferencePayload(
   });
 }
 
-/** Immutable semantic projection shared by Ghost, titles, turn and steer. */
+/** Immutable user-text projection shared by Ghost, retry checks, turn and steer. */
 export function getAgentFacingText(queued: AgentInputQueuedMessage): string {
   return projectAgentFacingText({
     text: queued.text,
     quotesEncoded: queued.chatMessage.quotesEncoded === true,
     agentReferences: queued.agentReferences,
   });
+}
+
+/** Apply a catalog-verified Pi Skill mapping only at the final Agent input boundary. */
+function getRuntimeFacingText(queued: AgentInputQueuedMessage): string {
+  const projected = getAgentFacingText(queued);
+  const invocation = queued.agentSkillInvocation;
+  if (
+    queued.createOpts.agentKind !== 'pi'
+    || !invocation
+    || !invocation.name
+    || !/^skill:[^\s/]+$/i.test(invocation.runtimeCommandName)
+  ) return projected;
+  const leading = leadingSlashInvocation(projected);
+  if (!leading || leading.name.toLowerCase() !== invocation.name.toLowerCase()) return projected;
+  return `${projected.slice(0, leading.start)}/${invocation.runtimeCommandName}${projected.slice(leading.end)}`;
 }
 
 /**
@@ -932,7 +990,7 @@ export function buildMakerUserMessage(
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const agentFacingText = getAgentFacingText(queued);
+  const agentFacingText = getRuntimeFacingText(queued);
   if (agentFacingText.length > 0) {
     blocks.push({ type: 'text', text: agentFacingText });
   }

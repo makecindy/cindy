@@ -635,6 +635,13 @@ import { startOrcaTeamWithPermissionGate } from './orcaStartTeamPermissionGate.j
 import { createWorkerCreationPrefsSyncHandler } from './workerCreationPrefsSyncHandler.js';
 import { createMakerSendTransaction } from './makerSendTransaction.js';
 import {
+  assertCurrentPiSkillInvocationSession,
+  isCurrentPiSkillInvocation,
+  isStalePiSkillInvocationError,
+  piSkillScanErrorsBlockInvocation,
+  stalePiSkillInvocationError,
+} from './piSkillInvocationValidation.js';
+import {
   installDesktopInteractionHandler,
   installInteractionLifecycleObserver,
 } from './interactionRouter.js';
@@ -11160,6 +11167,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       expectedInputGeneration?: number;
       expectedTurnSession?: object;
       expectedTurnGeneration?: number;
+      /** Main-only final fence used by the coordinator; never accepted from IPC. */
+      validateAgentSkillInvocation?: () => void | Promise<void>;
     };
     const readCurrentSteerSession = () => {
       const current = maker.getSession(sessionId);
@@ -11229,6 +11238,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const steerPayload = steerNote
       ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerNote)
       : normalized;
+    await assertCurrentPiSkillInvocationSession(
+      sess,
+      () => maker.getSession(sessionId),
+      so.validateAgentSkillInvocation,
+    );
     try {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
@@ -11755,6 +11769,38 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   };
 
+  const validateQueuedAgentSkillInvocation = async (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ): Promise<boolean> => {
+    if (!item.agentSkillInvocation) return true;
+    if (item.createOpts.agentKind !== 'pi') return false;
+    const session = maker.getSession(sessionId);
+    const manifest = session?.getRuntimeCapabilities();
+    if (!session || !manifest) return false;
+    const currentSkills = await maker.listAgentSkills('pi', {
+      sessionId,
+      workingDir: item.createOpts.workingDir,
+      forceReload: true,
+    });
+    if (piSkillScanErrorsBlockInvocation(
+      currentSkills.errors,
+      item.agentSkillInvocation.sourcePath,
+    )) return false;
+    if (
+      maker.getSession(sessionId) !== session
+      || session.getRuntimeCapabilities() !== manifest
+    ) return false;
+    const invocationIsCurrent = await isCurrentPiSkillInvocation(
+      item,
+      manifest,
+      currentSkills.skills,
+    );
+    return invocationIsCurrent
+      && maker.getSession(sessionId) === session
+      && session.getRuntimeCapabilities() === manifest;
+  };
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -11773,6 +11819,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throw err;
       }
     },
+    validateAgentSkillInvocation: validateQueuedAgentSkillInvocation,
     // turn 被上游打断(且已有产出)→ 自动替用户点一次「继续」。判据、额度、退避都在
     // interruptedTurnAutoResume;这里只做编排:决策 → 退避 → 复核 → 补发 → 失败回滚。
     // 纯判定,无副作用:coordinator 用它在「决策还做不了」的时序里先把红横幅与 error 行
@@ -11916,8 +11963,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sessionTotal: decision.sessionTotal,
       };
     },
-    steerToAgent: (sessionId, message, sendOpts) =>
-      steerToAgentAccepted(sessionId, message, sendOpts),
+    steerToAgent: async (sessionId, message, sendOpts, item) => {
+      // steerToAgentAccepted performs its own async review/input preparation
+      // before reading the live Session. Validate once more after that route
+      // work by carrying the exact queue receipt into its final session-bound
+      // fence, so a replacement runtime cannot inherit an older proof.
+      await steerToAgentAccepted(sessionId, message, {
+        ...sendOpts,
+        validateAgentSkillInvocation: async () => {
+          try {
+            if (await validateQueuedAgentSkillInvocation(sessionId, item) !== true) {
+              throw stalePiSkillInvocationError();
+            }
+          } catch (error) {
+            if (isStalePiSkillInvocationError(error)) throw error;
+            throw stalePiSkillInvocationError();
+          }
+        },
+      });
+    },
     abortSession: async (sessionId) => {
       resetAutomaticRecoveryForExplicitStop(sessionId);
       markWorkerManualInterruptIfKnown(sessionId, 'input_stop');
@@ -11968,6 +12032,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
         rewindPersistedUserMessageAfterClear(sessionId, clientId),
       ),
+    rewindPersistedUndispatchedUserMessage: (sessionId, clientId) =>
+      enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, async () => {
+        await rewindPersistedUserMessageAfterClear(sessionId, clientId);
+        const [row] = await getDbClient().drizzle
+          .select({ rewindAt: messages.rewindAt })
+          .from(messages)
+          .where(and(
+            eq(messages.sessionId, sessionId),
+            eq(messages.clientId, clientId),
+            eq(messages.role, 'user'),
+          ))
+          .limit(1);
+        return row?.rewindAt != null;
+      }),
     resolveSessionReferences,
     // interrupted-turn-resume:retry 续跑判定走 DB 持久化行(见 dep 注释)。
     // 先 drain 持久化写队列:terminal error 到达时 flushAssistantBlock 只是把

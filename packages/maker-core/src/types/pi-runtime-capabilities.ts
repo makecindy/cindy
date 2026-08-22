@@ -73,6 +73,8 @@ export interface PiProjectResourceRuntimeDiagnostic {
     sourceFingerprint?: string;
     /** Approval-time boundary used to fingerprint the current source fail closed. */
     canonicalRepoRoot?: string;
+    /** Host-proven comparison semantics for recursive source containment checks. */
+    pathComparisonIdentity?: import('./pi-project-trust.js').PiProjectPathComparisonIdentity;
   }[];
 }
 

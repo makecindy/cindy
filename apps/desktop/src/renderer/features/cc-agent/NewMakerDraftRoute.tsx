@@ -132,10 +132,14 @@ import { emitAutoTitlePreview, emitAutoTitlePreviewCleared } from '@/lib/session
 import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
 import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { buildCreateOptsForCurrentSession, makerChatStore } from '@/lib/makerChatStore';
 import {
-  rebaseInlineRangesAfterSlashCommandRewrite,
-  rewritePiSkillMessageForSend,
+  PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  resolvePendingPiProjectSkillForDispatch,
+  resolvePendingPiUserSkillForDispatch,
+  rollbackUnclaimedPiProjectSkillSession,
+  type AgentSkillInvocation,
+  type UnifiedCommand,
 } from '@/lib/slashCommands';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
@@ -747,6 +751,7 @@ export function NewMakerDraftRoute() {
   const [wtName, setWtName] = useState('');
   const [wtSourceBranch, setWtSourceBranch] = useState('');
   const [wtBaseRepo, setWtBaseRepo] = useState<string | null>(null);
+  const [projectRepoRoot, setProjectRepoRoot] = useState<string | null>(null);
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(
     null,
   );
@@ -2208,6 +2213,7 @@ export function NewMakerDraftRoute() {
         wtBranchPreferenceErrorRef.current = false;
         setWtBranchPreferenceError(false);
         setWtBaseRepo(null);
+        setProjectRepoRoot(null);
         setWtSourceBranch('');
         setWtSupportsRecoveryKeyDiscard(null);
         setWtConfirmedIneligible(null);
@@ -3199,6 +3205,9 @@ export function NewMakerDraftRoute() {
     setWtSourceBranch('');
     setWtBaseRepo(baseRepo);
   }, [effectiveDeviceLinkDeviceId, wtBaseRepo]);
+  const handleProjectRepoRootChange = useCallback((repoRoot: string | null) => {
+    setProjectRepoRoot(repoRoot);
+  }, []);
   const handleWtRecoveryKeyDiscardSupportChange = useCallback((supported: boolean | null) => {
     setWtSupportsRecoveryKeyDiscard(supported);
   }, []);
@@ -3248,6 +3257,10 @@ export function NewMakerDraftRoute() {
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
+        pendingAgentSkillInvocation?: AgentSkillInvocation;
+        pendingProjectSkillName?: string;
+        pendingProjectSkillPath?: string;
+        pendingProjectSkillRoot?: string;
         onAccepted?: () => void;
       },
     ): Promise<boolean | undefined> => {
@@ -3394,6 +3407,12 @@ export function NewMakerDraftRoute() {
       let optimisticTitleSessionId: string | null = null;
       let remoteOptimisticTitleSessionId: string | null = null;
       let markedStartingSessionId: string | null = null;
+      let rollbackUnclaimedPiSkillHandoff: (() => Promise<void>) | null = null;
+      const rollbackUnclaimedPiSkillHandoffIfNeeded = async () => {
+        const rollback = rollbackUnclaimedPiSkillHandoff;
+        rollbackUnclaimedPiSkillHandoff = null;
+        await rollback?.();
+      };
       const autoTitleLabels = {
         image: t('ccAgent.autoTitle.image'),
         file: t('ccAgent.autoTitle.file'),
@@ -3792,10 +3811,13 @@ export function NewMakerDraftRoute() {
             }
             // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
             carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
-            // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭,
-            // 下一次 New Maker 不延续。
-            if (effectivePlanMode) patchActivePrefs({ planMode: false });
-
+            // 计划模式是一次性选择:随本次发送先消费,避免后台创建期间另开 New Maker
+            // 重复使用。若 Skill 交接最终无法证明,下方只在该快照仍未被用户改动时恢复。
+            let consumedPlanModePrefs: VendorPrefs | null = null;
+            if (effectivePlanMode) {
+              patchActivePrefs({ planMode: false });
+              consumedPlanModePrefs = getDraft().lastByVendor[persistedAgentKind];
+            }
             // 先把真实 session 收进项目列表，让用户可以切走、再开 New Maker。
             const sendAt = new Date();
             sessionsStore.patchLocal(newSession.id, {
@@ -3839,7 +3861,24 @@ export function NewMakerDraftRoute() {
               // 真实会话消息(删会话清不到)。初始值取原 files:rehome 自身抛错时
               // 走 catch 恢复原附件,行为与迁移前一致(fail-soft)。
               let rehomedFiles = files;
+              let piSkillHandoffProven = !(
+                persistedAgentKind === 'pi'
+                && (
+                  !!opts?.pendingProjectSkillName
+                  || opts?.pendingAgentSkillInvocation?.scope === 'user'
+                )
+              );
+              const restorePlanModeAfterUnprovenSkillHandoff = () => {
+                if (piSkillHandoffProven || !consumedPlanModePrefs) return;
+                const currentPlanModePrefs = getDraft().lastByVendor[persistedAgentKind];
+                if (
+                  currentPlanModePrefs !== consumedPlanModePrefs
+                  || currentPlanModePrefs.planMode !== false
+                ) return;
+                patchVendorPrefs(persistedAgentKind, { planMode: true });
+              };
               const restoreFirstMessageDraft = () => {
+                restorePlanModeAfterUnprovenSkillHandoff();
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
@@ -3911,6 +3950,76 @@ export function NewMakerDraftRoute() {
                 // 才进入 1.6s 平滑期, overlay 从 "空 ChatView" 自然过渡到 "已在
                 // streaming 的 ChatView", 不暴露中间空窗。clear 时机见本 async 块末尾。
 
+                const preparePiRuntimeForWorktree = () => window.electronAPI.maker.createSession({
+                  id: newSession.id,
+                  ...buildCreateOptsForCurrentSession(
+                    newSession.id,
+                    model,
+                    effort,
+                    permissionMode,
+                    newDir,
+                  ),
+                  agentKind: 'pi',
+                  workingDir: newDir,
+                }).then(() => undefined);
+                const reloadPiSkillsForWorktree = async () => {
+                  const result = await window.electronAPI.maker.listAgentSkills('pi', {
+                    workingDir: newDir,
+                    sessionId: newSession.id,
+                    forceReload: true,
+                  });
+                  if (!result.success || !result.skills) return [];
+                  return result.skills.flatMap((skill): UnifiedCommand[] => (
+                    skill.scope === 'user' || skill.scope === 'repo'
+                      ? [{ ...skill, scope: skill.scope }]
+                      : []
+                  ));
+                };
+                let agentSkillInvocation: AgentSkillInvocation | undefined;
+                if (persistedAgentKind === 'pi' && opts?.pendingProjectSkillName) {
+                  if (!opts.pendingProjectSkillPath || !opts.pendingProjectSkillRoot) {
+                    worktreeCreationStore.clear(newSession.id);
+                    restoreFirstMessageDraft();
+                    toast.warning(t('commandPalette.projectSkillMissingInWorktree'));
+                    return;
+                  }
+                  const resolvedInvocation = await resolvePendingPiProjectSkillForDispatch({
+                    sessionId: newSession.id,
+                    commandName: opts.pendingProjectSkillName,
+                    sourceProjectRoot: opts.pendingProjectSkillRoot,
+                    sourceSkillPath: opts.pendingProjectSkillPath,
+                    targetProjectRoot: newDir,
+                    retryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+                    prepareRuntime: preparePiRuntimeForWorktree,
+                    reload: reloadPiSkillsForWorktree,
+                  });
+                  if (!resolvedInvocation) {
+                    worktreeCreationStore.clear(newSession.id);
+                    restoreFirstMessageDraft();
+                    toast.warning(t('commandPalette.projectSkillMissingInWorktree'));
+                    return;
+                  }
+                  agentSkillInvocation = resolvedInvocation;
+                } else if (
+                  persistedAgentKind === 'pi'
+                  && opts?.pendingAgentSkillInvocation?.scope === 'user'
+                ) {
+                  const resolvedInvocation = await resolvePendingPiUserSkillForDispatch({
+                    message,
+                    pendingInvocation: opts.pendingAgentSkillInvocation,
+                    prepareRuntime: preparePiRuntimeForWorktree,
+                    reload: reloadPiSkillsForWorktree,
+                    retryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+                  });
+                  if (!resolvedInvocation) {
+                    worktreeCreationStore.clear(newSession.id);
+                    restoreFirstMessageDraft();
+                    toast.warning(t('commandPalette.skillUnavailableForNewTask'));
+                    return;
+                  }
+                  agentSkillInvocation = resolvedInvocation;
+                }
+                piSkillHandoffProven = true;
                 let deferredUiAssignment: DeferredUiAssignment | undefined;
                 if (shouldEnableCollab) {
                   try {
@@ -3949,21 +4058,9 @@ export function NewMakerDraftRoute() {
                   }
                 }
 
-                const dispatchedMessage = await rewritePiSkillMessageForSend({
-                  agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
-                  message,
-                  workingDir: newDir,
-                  sessionId: newSession.id,
-                });
-                const rebaseRanges = <T extends { start: number; end: number }>(
-                  ranges: readonly T[] | undefined,
-                ): T[] | undefined => {
-                  if (!ranges) return undefined;
-                  return rebaseInlineRangesAfterSlashCommandRewrite(ranges, message, dispatchedMessage);
-                };
                 const accepted = await makerChatStore.sendMessage(
                   newSession.id,
-                  dispatchedMessage,
+                  message,
                   model,
                   effort,
                   permissionMode,
@@ -3973,14 +4070,15 @@ export function NewMakerDraftRoute() {
                   {
                     ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
                     ...(opts?.agentReferences?.length
-                      ? { agentReferences: rebaseRanges(opts.agentReferences) }
+                      ? { agentReferences: opts.agentReferences }
                       : {}),
                     ...(opts?.pastedTextRanges?.length
-                      ? { pastedTextRanges: rebaseRanges(opts.pastedTextRanges) }
+                      ? { pastedTextRanges: opts.pastedTextRanges }
                       : {}),
                     ...(opts?.slashCommandRanges !== undefined
-                      ? { slashCommandRanges: rebaseRanges(opts.slashCommandRanges) }
+                      ? { slashCommandRanges: opts.slashCommandRanges }
                       : {}),
+                    ...(agentSkillInvocation ? { agentSkillInvocation } : {}),
                   },
                 );
                 if (accepted) {
@@ -4037,8 +4135,6 @@ export function NewMakerDraftRoute() {
           }
           // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。
           carryDraftFavoriteAnchorToSession(newSession.id, persistedAgentKind, model, providerId);
-          // 计划模式是一次性选择:随本次发送被消耗,草稿勾选同步熄灭。
-          if (effectivePlanMode) patchActivePrefs({ planMode: false });
           // 首条消息经 setPending → SessionView 自动发送,createOpts 读 chat store 的
           // planModeEnabled —— ensureInitialMessages 的行水合是异步的,必须先确定性
           // seed store,否则勾了计划模式的首条消息可能以 planMode:false 发出
@@ -4048,6 +4144,153 @@ export function NewMakerDraftRoute() {
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
           });
+
+          let pendingAgentSkillInvocation: AgentSkillInvocation | undefined;
+          if (persistedAgentKind === 'pi' && opts?.pendingProjectSkillName) {
+            rollbackUnclaimedPiSkillHandoff = () =>
+              rollbackUnclaimedPiProjectSkillSession({
+                sessionId: newSession.id,
+                closeRuntime: () => window.electronAPI.maker.closeSession(
+                  newSession.id,
+                  { preserveWorkspace: true },
+                ),
+                markDeleted: () => sessionService.setStatus(
+                  newSession.id,
+                  'deleted',
+                ).then(() => undefined),
+                patchDeleted: () => sessionsStore.patchLocal(
+                  newSession.id,
+                  { status: 'deleted' },
+                ),
+                purgeRuntimeState: () => makerChatStore.purgeSession(newSession.id),
+              });
+            if (!workingDir || !opts.pendingProjectSkillPath || !opts.pendingProjectSkillRoot) {
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
+              toast.warning(t('commandPalette.projectSkillUnavailableForNewTask'));
+              return;
+            }
+            let resolvedInvocation: AgentSkillInvocation | null;
+            try {
+              resolvedInvocation = await resolvePendingPiProjectSkillForDispatch({
+                sessionId: newSession.id,
+                commandName: opts.pendingProjectSkillName,
+                sourceProjectRoot: opts.pendingProjectSkillRoot,
+                sourceSkillPath: opts.pendingProjectSkillPath,
+                // No worktree rebind occurs on this path. Keep both sides rooted
+                // at the detected repository so ancestor `.agents/skills`
+                // entries remain provable when workingDir is a nested folder.
+                targetProjectRoot: opts.pendingProjectSkillRoot,
+                retryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+                prepareRuntime: () => window.electronAPI.maker.createSession({
+                  id: newSession.id,
+                  ...buildCreateOptsForCurrentSession(
+                    newSession.id,
+                    model,
+                    effort,
+                    permissionMode,
+                    workingDir,
+                  ),
+                  agentKind: 'pi',
+                  workingDir,
+                }).then(() => undefined),
+                reload: async () => {
+                  const result = await window.electronAPI.maker.listAgentSkills('pi', {
+                    workingDir,
+                    sessionId: newSession.id,
+                    forceReload: true,
+                  });
+                  if (!result.success || !result.skills) return [];
+                  return result.skills.flatMap((skill): UnifiedCommand[] => (
+                    skill.scope === 'user' || skill.scope === 'repo'
+                      ? [{ ...skill, scope: skill.scope }]
+                      : []
+                  ));
+                },
+              });
+            } catch (error) {
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
+              throw error;
+            }
+            if (!resolvedInvocation) {
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
+              toast.warning(t('commandPalette.projectSkillUnavailableForNewTask'));
+              return;
+            }
+            pendingAgentSkillInvocation = resolvedInvocation;
+          } else if (
+            persistedAgentKind === 'pi'
+            && opts?.pendingAgentSkillInvocation?.scope === 'user'
+          ) {
+            rollbackUnclaimedPiSkillHandoff = () =>
+              rollbackUnclaimedPiProjectSkillSession({
+                sessionId: newSession.id,
+                closeRuntime: () => window.electronAPI.maker.closeSession(
+                  newSession.id,
+                  { preserveWorkspace: true },
+                ),
+                markDeleted: () => sessionService.setStatus(
+                  newSession.id,
+                  'deleted',
+                ).then(() => undefined),
+                patchDeleted: () => sessionsStore.patchLocal(
+                  newSession.id,
+                  { status: 'deleted' },
+                ),
+                purgeRuntimeState: () => makerChatStore.purgeSession(newSession.id),
+              });
+            const runtimeWorkingDir = newSession.workingDir;
+            if (!runtimeWorkingDir) {
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
+              toast.warning(t('commandPalette.skillUnavailableForNewTask'));
+              return;
+            }
+            let resolvedInvocation: AgentSkillInvocation | null;
+            try {
+              resolvedInvocation = await resolvePendingPiUserSkillForDispatch({
+                message,
+                pendingInvocation: opts.pendingAgentSkillInvocation,
+                retryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+                prepareRuntime: () => window.electronAPI.maker.createSession({
+                  id: newSession.id,
+                  ...buildCreateOptsForCurrentSession(
+                    newSession.id,
+                    model,
+                    effort,
+                    permissionMode,
+                    runtimeWorkingDir,
+                  ),
+                  agentKind: 'pi',
+                  workingDir: runtimeWorkingDir,
+                }).then(() => undefined),
+                reload: async () => {
+                  const result = await window.electronAPI.maker.listAgentSkills('pi', {
+                    workingDir: runtimeWorkingDir,
+                    sessionId: newSession.id,
+                    forceReload: true,
+                  });
+                  if (!result.success || !result.skills) return [];
+                  return result.skills.flatMap((skill): UnifiedCommand[] => (
+                    skill.scope === 'user' || skill.scope === 'repo'
+                      ? [{ ...skill, scope: skill.scope }]
+                      : []
+                  ));
+                },
+              });
+            } catch (error) {
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
+              throw error;
+            }
+            if (!resolvedInvocation) {
+              await rollbackUnclaimedPiSkillHandoffIfNeeded();
+              toast.warning(t('commandPalette.skillUnavailableForNewTask'));
+              return;
+            }
+            pendingAgentSkillInvocation = resolvedInvocation;
+          }
+
+          // 计划模式是一次性选择:只有首条消息已具备完整交接条件时才消费。
+          // Pi Skill catalog proof 失败会留在 /new，必须保持用户原选择可重试。
+          if (effectivePlanMode) patchActivePrefs({ planMode: false });
 
           // "创建即发送"路径:乐观回写 userSendAt 跳过 projectGrouping 的草稿兜底
           // (userSendAt==null && messages==0 → unclassified),否则新会话会先在
@@ -4110,8 +4353,12 @@ export function NewMakerDraftRoute() {
             ...(opts?.slashCommandRanges !== undefined
               ? { slashCommandRanges: opts.slashCommandRanges }
               : {}),
+            ...(pendingAgentSkillInvocation
+              ? { agentSkillInvocation: pendingAgentSkillInvocation }
+              : {}),
             ...(deferredUiAssignment ? { deferredUiAssignment } : {}),
           });
+          rollbackUnclaimedPiSkillHandoff = null;
           opts?.onAccepted?.();
           // 草稿已经成功移交给新会话(setPending),清掉 NEW_MAKER_DRAFT_KEY
           // 下的 store 条目,防止下次回到 /cc-agent/new 还看到本次刚发送的内容。
@@ -4131,6 +4378,11 @@ export function NewMakerDraftRoute() {
               : undefined,
           });
         } catch (err) {
+          try {
+            await rollbackUnclaimedPiSkillHandoffIfNeeded();
+          } catch (rollbackError) {
+            log.error('[draft send] roll back unclaimed Pi Skill handoff failed', rollbackError);
+          }
           // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
           // 归属切换也会提前 return,必须先撤;否则已建、未发出首条的空会话会一直顶着原文。
           if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
@@ -5030,6 +5282,7 @@ export function NewMakerDraftRoute() {
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
+                  onProjectRepoRootChange={handleProjectRepoRootChange}
                   onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
                   onConfirmedIneligibleChange={handleWtConfirmedIneligibleChange}
                   onSuggestedNameChange={handleWtNameChange}
@@ -5159,6 +5412,16 @@ export function NewMakerDraftRoute() {
                     }
                     narrowToolbar={isDraftToolbarNarrow}
                     paletteMaxHeight={240}
+                    allowPendingProjectSkillSelection={
+                      persistedAgentKind === 'pi'
+                      && !!effectiveWorkingDir
+                      && !!projectRepoRoot
+                      && !effectiveRemoteHostId
+                      && !isDeviceLinkDraft
+                    }
+                    pendingProjectSkillRoot={
+                      projectRepoRoot ?? undefined
+                    }
                     attachmentState={guardedAttachmentState}
                     draftKey={NEW_MAKER_DRAFT_KEY}
                     focusOnStorageKeyChange

@@ -419,9 +419,9 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
       'attachMainOwnedInputBoundary(stripMainOnlySendOpts(sendOpts), boundaryStamp)',
     );
     // coordinator 的内部调用**不得**被消毒 —— 那条路的 sendOpts 是 main 构造的透传值。
-    expect(register).toContain('steerToAgent: (sessionId, message, sendOpts) =>');
+    expect(register).toContain('steerToAgent: async (sessionId, message, sendOpts, item) =>');
     expect(register).toMatch(
-      /steerToAgent: \(sessionId, message, sendOpts\) =>\s*\n\s*steerToAgentAccepted\(sessionId, message, sendOpts\),/,
+      /steerToAgent: async \(sessionId, message, sendOpts, item\) =>[\s\S]*?await steerToAgentAccepted\(sessionId, message, \{\s*\.\.\.sendOpts,\s*validateAgentSkillInvocation:/,
     );
   });
 });

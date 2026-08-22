@@ -1,20 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  agentSkillInvocationForDispatch,
+  ambiguousPendingProjectSkillName,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
   isSlashCommandUnavailable,
+  isSlashCommandSelectable,
+  isSameProjectSkillAcrossRoots,
   mergeCommands,
   nextAvailableSlashCommandIndex,
-  rebaseInlineRangesAfterSlashCommandRewrite,
+  pendingProjectSkillForMessage,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
-  rewriteAgentSkillInvocationForDispatch,
-  rewritePiSkillAliasFromCommand,
-  rewritePiSkillMessageForSend,
-  slashCommandInvocationName,
+  resolvePendingPiProjectSkillForDispatch,
+  resolvePendingPiUserSkillForDispatch,
+  rollbackUnclaimedPiProjectSkillSession,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 
@@ -23,96 +26,6 @@ const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' 
   name: 'demo',
   source: 'skill' as const,
   ...overrides,
-});
-
-describe('rewriteAgentSkillInvocationForDispatch', () => {
-  it('rewrites a directly typed loaded Pi skill alias and preserves its arguments', () => {
-    const loaded = skill({
-      name: 'demo',
-      scope: 'repo',
-      runtimeStatus: 'loaded',
-      runtimeCommandName: 'skill:demo',
-    });
-
-    expect(rewriteAgentSkillInvocationForDispatch('/demo   keep spacing', loaded)).toBe(
-      '/skill:demo   keep spacing',
-    );
-    expect(rewriteAgentSkillInvocationForDispatch('  \n/demo keep', loaded)).toBe(
-      '  \n/skill:demo keep',
-    );
-    expect(rewriteAgentSkillInvocationForDispatch('please /demo', loaded)).toBe('please /demo');
-    expect(rewriteAgentSkillInvocationForDispatch('> quoted\n\n/demo', loaded)).toBe(
-      '> quoted\n\n/demo',
-    );
-  });
-
-  it('rebases command and later inline metadata when the runtime alias grows', () => {
-    const original = '/demo @task pasted';
-    const rewritten = '/skill:demo @task pasted';
-
-    expect(rebaseInlineRangesAfterSlashCommandRewrite(
-      [
-        { start: 0, end: 5, kind: 'slash' },
-        { start: 6, end: 11, kind: 'reference' },
-        { start: 12, end: 18, kind: 'paste' },
-      ],
-      original,
-      rewritten,
-    )).toEqual([
-      { start: 0, end: 11, kind: 'slash' },
-      { start: 12, end: 17, kind: 'reference' },
-      { start: 18, end: 24, kind: 'paste' },
-    ]);
-
-    expect(rebaseInlineRangesAfterSlashCommandRewrite(
-      [
-        { start: 3, end: 8, kind: 'slash' },
-        { start: 9, end: 14, kind: 'reference' },
-      ],
-      '  \n/demo @task',
-      '  \n/skill:demo @task',
-    )).toEqual([
-      { start: 3, end: 14, kind: 'slash' },
-      { start: 15, end: 20, kind: 'reference' },
-    ]);
-  });
-
-  it('does not rewrite unavailable, mismatched, or non-skill commands', () => {
-    const discovered = skill({
-      name: 'demo',
-      scope: 'repo',
-      runtimeStatus: 'discovered',
-      runtimeCommandName: 'skill:demo',
-    });
-    const desktop: UnifiedCommand = { kind: 'desktop', name: 'demo', description: 'Demo' };
-
-    expect(rewriteAgentSkillInvocationForDispatch('/demo', discovered)).toBe('/demo');
-    expect(rewriteAgentSkillInvocationForDispatch('/other', {
-      ...discovered,
-      runtimeStatus: 'loaded',
-    })).toBe('/other');
-    expect(rewriteAgentSkillInvocationForDispatch('/demo', desktop)).toBe('/demo');
-  });
-
-  it('leaves non-Pi first messages untouched without loading a roster', async () => {
-    await expect(rewritePiSkillMessageForSend({
-      agentKind: 'codex',
-      message: '/git please',
-    })).resolves.toBe('/git please');
-  });
-
-  it('rewrites a discovered Pi project skill that already has a runtime alias', () => {
-    const discovered = skill({
-      name: 'git',
-      scope: 'repo',
-      runtimeStatus: 'discovered',
-      runtimeCommandName: 'skill:git',
-    });
-    expect(rewriteAgentSkillInvocationForDispatch('/git please', discovered)).toBe('/git please');
-    expect(rewritePiSkillAliasFromCommand('/git please', discovered)).toBe('/skill:git please');
-    expect(rewritePiSkillAliasFromCommand(' \n/git please', discovered)).toBe(' \n/skill:git please');
-    expect(rewritePiSkillAliasFromCommand('note /git', discovered)).toBe('note /git');
-  });
 });
 
 describe('filterSlashCommands', () => {
@@ -209,17 +122,167 @@ describe('Pi project skill availability', () => {
     expect(isSlashCommandUnavailable(skill({ scope: 'repo' }))).toBe(false);
   });
 
-  it('keeps the palette / composer label while invoking Pi skills by their runtime command name', () => {
+  it('allows New Maker to select a discovered project skill without marking it loaded', () => {
+    const discovered = skill({ scope: 'repo', runtimeStatus: 'discovered' });
+
+    expect(isSlashCommandUnavailable(discovered)).toBe(true);
+    expect(isSlashCommandSelectable(discovered)).toBe(false);
+    expect(isSlashCommandSelectable(discovered, true)).toBe(true);
+    expect(firstAvailableSlashCommandIndex([discovered], true)).toBe(0);
+    expect(hasAvailableSlashCommand([discovered], true)).toBe(true);
+  });
+
+  it('hides ambiguous same-name project skills instead of binding an arbitrary path', () => {
+    const first = skill({
+      name: 'demo',
+      path: '/repo/.pi/skills/demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+    const second = skill({
+      name: 'Demo',
+      path: '/repo/.agents/skills/demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+
+    const merged = mergeCommands([], [], [first, second]);
+
+    expect(merged).toEqual([]);
+    expect(hasAvailableSlashCommand(merged, true)).toBe(false);
+    expect(hasUnavailableProjectSkillPreview(merged)).toBe(true);
+    expect(ambiguousPendingProjectSkillName('/DEMO run', merged, true)).toBe('demo');
+    expect(ambiguousPendingProjectSkillName('  \n/DEMO run', merged, true)).toBe('demo');
+    expect(ambiguousPendingProjectSkillName('/demo run', merged, false)).toBeUndefined();
+  });
+
+  it('deduplicates repeated discovery of the same project skill path', () => {
+    const discovered = skill({
+      name: 'demo',
+      path: '/repo/.pi/skills/demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+
+    const merged = mergeCommands([], [], [discovered, { ...discovered, name: 'Demo' }]);
+
+    expect(merged).toEqual([discovered]);
+    expect(hasAvailableSlashCommand(merged, true)).toBe(true);
+    expect(ambiguousPendingProjectSkillName('/demo', merged, true)).toBeUndefined();
+  });
+
+  it('binds a uniquely typed project Skill alias to its exact discovery path', () => {
+    const discovered = skill({
+      name: 'demo',
+      path: '/repo/.pi/skills/demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+    const merged = mergeCommands([], [], [discovered]);
+
+    expect(pendingProjectSkillForMessage('/DEMO run this', merged, true)).toEqual(discovered);
+    expect(pendingProjectSkillForMessage('  \n/DEMO run this', merged, true)).toEqual(discovered);
+    expect(pendingProjectSkillForMessage('/demo', merged, false)).toBeUndefined();
+  });
+
+  it('does not route an unknown managed user Skill through the project handoff', () => {
+    const managed = skill({
+      path: '/managed/context-mode/SKILL.md',
+      scope: 'user',
+      runtimeStatus: 'unknown',
+    });
+    const merged = mergeCommands([], [], [managed]);
+
+    expect(isSlashCommandUnavailable(managed)).toBe(true);
+    expect(pendingProjectSkillForMessage('/demo run this', merged, true)).toBeUndefined();
+  });
+
+  it('fails closed instead of choosing a typed ambiguous project Skill path', () => {
+    const merged = mergeCommands([], [], [
+      skill({
+        name: 'demo',
+        path: '/repo/.pi/skills/demo',
+        scope: 'repo',
+        runtimeStatus: 'discovered',
+      }),
+      skill({
+        name: 'Demo',
+        path: '/repo/.agents/skills/demo',
+        scope: 'repo',
+        runtimeStatus: 'discovered',
+      }),
+    ]);
+
+    expect(pendingProjectSkillForMessage('/demo', merged, true)).toBeUndefined();
+  });
+
+  it('does not turn a typed executable same-name command into a pending project Skill', () => {
+    const discovered = skill({
+      name: 'help',
+      path: '/repo/.pi/skills/help',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+    const desktop: UnifiedCommand = { kind: 'desktop', name: 'help', description: 'Help' };
+    const merged = mergeCommands([desktop], [], [discovered]);
+
+    expect(pendingProjectSkillForMessage('/help', merged, true)).toBeUndefined();
+  });
+
+  it('keeps an explicit executable owner when same-name project previews are ambiguous', () => {
+    const discovered = (name: string, path: string) => skill({
+      name,
+      path,
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+    });
+    const desktop: UnifiedCommand = { kind: 'desktop', name: 'demo', description: '' };
+
+    const merged = mergeCommands(
+      [desktop],
+      [],
+      [
+        discovered('demo', '/repo/.pi/skills/demo'),
+        discovered('Demo', '/repo/.agents/skills/demo'),
+      ],
+    );
+
+    expect(merged).toEqual([desktop]);
+    expect(ambiguousPendingProjectSkillName('/demo', merged, true)).toBeUndefined();
+  });
+
+  it('keeps the palette label and records the Pi runtime command separately', () => {
     const loaded = skill({
       name: 'demo',
+      path: '/repo/.pi/skills/demo',
       scope: 'repo',
       runtimeStatus: 'loaded',
       runtimeCommandName: 'skill:demo',
     });
 
     expect(loaded.name).toBe('demo');
-    expect(slashCommandInvocationName(loaded)).toBe('skill:demo');
-    expect(slashCommandInvocationName({ kind: 'desktop', name: 'help', description: 'Help' })).toBe('help');
+    expect(agentSkillInvocationForDispatch('/demo arg', loaded)).toEqual({
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+      scope: 'repo',
+      sourcePath: '/repo/.pi/skills/demo',
+    });
+    expect(agentSkillInvocationForDispatch('  \n/demo arg', loaded)).toEqual({
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+      scope: 'repo',
+      sourcePath: '/repo/.pi/skills/demo',
+    });
+    expect(agentSkillInvocationForDispatch('/demo', skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'discovered',
+      runtimeCommandName: 'skill:demo',
+    }))).toBeUndefined();
+    expect(agentSkillInvocationForDispatch(
+      '/help',
+      { kind: 'desktop', name: 'help', description: 'Help' },
+    )).toBeUndefined();
   });
 
   it('keeps an available same-name skill ahead of a discovered project preview', () => {
@@ -341,6 +404,42 @@ describe('Pi project skill availability', () => {
     })).resolves.toEqual({ command: loaded, commands: [loaded] });
     expect(sleeps).toEqual([10, 20]);
     expect(reloads).toBe(3);
+  });
+
+  it('waits for a user Skill with a guessed command to gain loaded runtime proof', async () => {
+    const pending = skill({
+      name: 'demo',
+      scope: 'user',
+      path: '/home/user/.agents/skills/demo',
+      runtimeCommandName: 'skill:demo',
+    });
+    const loaded = skill({
+      ...pending,
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:frontmatter-demo',
+    });
+    const sleeps: number[] = [];
+    let reloads = 0;
+
+    const result = await reconcilePiRuntimeCommandForDispatchWithRetry({
+      agentKind: 'pi',
+      sessionId: 'session-1',
+      commandName: 'demo',
+      commands: [pending],
+      retryDelaysMs: [10, 20],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+      reload: async () => (++reloads < 2 ? [pending] : [loaded]),
+    });
+
+    expect(result).toEqual({ command: loaded, commands: [loaded] });
+    expect(agentSkillInvocationForDispatch('/demo run this', result.command)).toEqual({
+      name: 'demo',
+      scope: 'user',
+      sourcePath: '/home/user/.agents/skills/demo',
+      runtimeCommandName: 'skill:frontmatter-demo',
+    });
+    expect(sleeps).toEqual([10]);
+    expect(reloads).toBe(2);
   });
 
   it('keeps waiting when a Desktop command temporarily shadows a same-name Pi skill', async () => {
@@ -516,5 +615,302 @@ describe('Pi project skill availability', () => {
       },
     })).resolves.toEqual({ command: desktop, commands: [desktop] });
     expect(reloaded).toBe(false);
+  });
+});
+
+describe('resolvePendingPiProjectSkillForDispatch', () => {
+  it('prepares the runtime, binds the Skill to the new worktree, and rewrites the alias', async () => {
+    const prepareRuntime = vi.fn(async () => {});
+    const loaded = skill({
+      name: 'demo',
+      scope: 'repo',
+      runtimeStatus: 'loaded',
+      runtimeCommandName: 'skill:demo',
+    });
+
+    await expect(resolvePendingPiProjectSkillForDispatch({
+      sessionId: 'session-1',
+      commandName: 'demo',
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/repo/.pi/skills/demo',
+      targetProjectRoot: '/repo/.cindy-worktrees/demo',
+      prepareRuntime,
+      reload: async () => [{ ...loaded, path: '/repo/.cindy-worktrees/demo/.pi/skills/demo' }],
+      retryDelaysMs: [],
+    })).resolves.toEqual({
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+      scope: 'repo',
+      sourcePath: '/repo/.cindy-worktrees/demo/.pi/skills/demo',
+    });
+    expect(prepareRuntime).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when the selected project Skill is absent from the new worktree', async () => {
+    await expect(resolvePendingPiProjectSkillForDispatch({
+      sessionId: 'session-1',
+      commandName: 'demo',
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/repo/.pi/skills/demo',
+      targetProjectRoot: '/repo/.cindy-worktrees/demo',
+      prepareRuntime: async () => {},
+      reload: async () => [],
+      retryDelaysMs: [],
+    })).resolves.toBeNull();
+  });
+
+  it('waits through an initially empty worktree catalog before the selected Skill loads', async () => {
+    const sleeps: number[] = [];
+    let reloads = 0;
+    await expect(resolvePendingPiProjectSkillForDispatch({
+      sessionId: 'session-1',
+      commandName: 'demo',
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/repo/.pi/skills/demo',
+      targetProjectRoot: '/repo/.cindy-worktrees/demo',
+      prepareRuntime: async () => {},
+      reload: async () => {
+        reloads += 1;
+        return reloads === 1
+          ? []
+          : [skill({
+              name: 'demo',
+              path: '/repo/.cindy-worktrees/demo/.pi/skills/demo',
+              scope: 'repo',
+              runtimeStatus: 'loaded',
+              runtimeCommandName: 'skill:demo',
+            })];
+      },
+      retryDelaysMs: [10],
+      sleep: async (delayMs) => { sleeps.push(delayMs); },
+    })).resolves.toEqual({
+      name: 'demo',
+      runtimeCommandName: 'skill:demo',
+      scope: 'repo',
+      sourcePath: '/repo/.cindy-worktrees/demo/.pi/skills/demo',
+    });
+    expect(sleeps).toEqual([10]);
+  });
+
+  it('does not accept a same-name global Skill as the selected project Skill', async () => {
+    await expect(resolvePendingPiProjectSkillForDispatch({
+      sessionId: 'session-1',
+      commandName: 'demo',
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/repo/.pi/skills/demo',
+      targetProjectRoot: '/repo/.cindy-worktrees/demo',
+      prepareRuntime: async () => {},
+      reload: async () => [skill({
+        name: 'demo',
+        scope: 'user',
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:demo',
+      })],
+      retryDelaysMs: [],
+    })).resolves.toBeNull();
+  });
+
+  it('ignores a same-name global Skill when the exact project Skill is also loaded', async () => {
+    await expect(resolvePendingPiProjectSkillForDispatch({
+      sessionId: 'session-1',
+      commandName: 'demo',
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/repo/.pi/skills/demo',
+      targetProjectRoot: '/repo/.cindy-worktrees/demo',
+      prepareRuntime: async () => {},
+      reload: async () => [
+        skill({
+          name: 'demo',
+          scope: 'user',
+          runtimeStatus: 'loaded',
+          runtimeCommandName: 'skill:global-demo',
+        }),
+        skill({
+          name: 'demo',
+          path: '/repo/.cindy-worktrees/demo/.pi/skills/demo',
+          scope: 'repo',
+          runtimeStatus: 'loaded',
+          runtimeCommandName: 'skill:project-demo',
+        }),
+      ],
+      retryDelaysMs: [],
+    })).resolves.toEqual({
+      name: 'demo',
+      runtimeCommandName: 'skill:project-demo',
+      scope: 'repo',
+      sourcePath: '/repo/.cindy-worktrees/demo/.pi/skills/demo',
+    });
+  });
+
+  it('rejects a same-name project Skill at a different relative path', async () => {
+    await expect(resolvePendingPiProjectSkillForDispatch({
+      sessionId: 'session-1',
+      commandName: 'demo',
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/repo/.pi/skills/demo',
+      targetProjectRoot: '/repo/.cindy-worktrees/demo',
+      prepareRuntime: async () => {},
+      reload: async () => [skill({
+        name: 'demo',
+        path: '/repo/.cindy-worktrees/demo/.agents/skills/demo',
+        scope: 'repo',
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:demo',
+      })],
+      retryDelaysMs: [],
+    })).resolves.toBeNull();
+  });
+});
+
+describe('resolvePendingPiUserSkillForDispatch', () => {
+  it('waits for the exact selected user Skill path in the new runtime', async () => {
+    const prepareRuntime = vi.fn(async () => undefined);
+    const sleep = vi.fn(async () => undefined);
+    const reload = vi.fn()
+      .mockResolvedValueOnce([
+        skill({
+          name: 'demo',
+          scope: 'user',
+          path: '/home/user/.agents/skills/demo',
+          runtimeCommandName: 'skill:demo',
+        }),
+      ])
+      .mockResolvedValueOnce([
+        skill({
+          name: 'Demo',
+          scope: 'user',
+          path: '/home/user/.agents/skills/demo',
+          runtimeStatus: 'loaded',
+          runtimeCommandName: 'skill:frontmatter-demo',
+        }),
+      ]);
+
+    await expect(resolvePendingPiUserSkillForDispatch({
+      message: '/demo run this',
+      pendingInvocation: {
+        name: 'demo',
+        scope: 'user',
+        sourcePath: '/home/user/.agents/skills/demo',
+        runtimeCommandName: 'skill:demo',
+      },
+      prepareRuntime,
+      reload,
+      retryDelaysMs: [0],
+      sleep,
+    })).resolves.toEqual({
+      name: 'Demo',
+      scope: 'user',
+      sourcePath: '/home/user/.agents/skills/demo',
+      runtimeCommandName: 'skill:frontmatter-demo',
+    });
+    expect(prepareRuntime).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when only a same-name user Skill from another path is loaded', async () => {
+    await expect(resolvePendingPiUserSkillForDispatch({
+      message: '/demo',
+      pendingInvocation: {
+        name: 'demo',
+        scope: 'user',
+        sourcePath: '/home/user/.agents/skills/demo',
+        runtimeCommandName: 'skill:demo',
+      },
+      prepareRuntime: async () => undefined,
+      reload: async () => [skill({
+        name: 'demo',
+        scope: 'user',
+        path: '/other/.agents/skills/demo',
+        runtimeStatus: 'loaded',
+        runtimeCommandName: 'skill:demo',
+      })],
+      retryDelaysMs: [],
+    })).resolves.toBeNull();
+  });
+});
+
+describe('rollbackUnclaimedPiProjectSkillSession', () => {
+  it('closes the runtime before durable deletion and only then hides local state', async () => {
+    const order: string[] = [];
+    await rollbackUnclaimedPiProjectSkillSession({
+      sessionId: 'session-1',
+      closeRuntime: async () => { order.push('close'); },
+      markDeleted: async () => { order.push('delete'); },
+      patchDeleted: () => { order.push('patch'); },
+      purgeRuntimeState: () => { order.push('purge'); },
+    });
+    expect(order).toEqual(['close', 'delete', 'patch', 'purge']);
+  });
+
+  it.each(['close', 'delete'] as const)(
+    'keeps the session visible when %s rollback fails',
+    async (failure) => {
+      const patchDeleted = vi.fn();
+      const purgeRuntimeState = vi.fn();
+      await expect(rollbackUnclaimedPiProjectSkillSession({
+        sessionId: 'session-1',
+        closeRuntime: async () => {
+          if (failure === 'close') throw new Error('close failed');
+        },
+        markDeleted: async () => {
+          if (failure === 'delete') throw new Error('delete failed');
+        },
+        patchDeleted,
+        purgeRuntimeState,
+      })).rejects.toThrow(`${failure} failed`);
+      expect(patchDeleted).not.toHaveBeenCalled();
+      expect(purgeRuntimeState).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('isSameProjectSkillAcrossRoots', () => {
+  it('matches POSIX project-relative paths across worktree roots', () => {
+    expect(isSameProjectSkillAcrossRoots({
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/repo/.agents/skills/demo',
+      targetProjectRoot: '/repo/.cindy-worktrees/task',
+      targetSkillPath: '/repo/.cindy-worktrees/task/.agents/skills/demo',
+    })).toBe(true);
+  });
+
+  it('matches Windows paths only when their project-relative spelling is exact', () => {
+    expect(isSameProjectSkillAcrossRoots({
+      sourceProjectRoot: 'C:\\Repo',
+      sourceSkillPath: 'C:\\Repo\\.pi\\skills\\Demo',
+      targetProjectRoot: 'D:\\Worktrees\\Task',
+      targetSkillPath: 'D:\\Worktrees\\Task\\.pi\\skills\\Demo',
+    })).toBe(true);
+    expect(isSameProjectSkillAcrossRoots({
+      sourceProjectRoot: '\\\\server\\share\\Repo',
+      sourceSkillPath: '\\\\server\\share\\Repo\\.agents\\skills\\demo',
+      targetProjectRoot: '\\\\server\\share\\worktrees\\task',
+      targetSkillPath: '\\\\server\\share\\worktrees\\task\\.agents\\skills\\demo',
+    })).toBe(true);
+    expect(isSameProjectSkillAcrossRoots({
+      sourceProjectRoot: 'C:\\Repo',
+      sourceSkillPath: 'C:\\Repo\\.pi\\skills\\Demo',
+      targetProjectRoot: 'D:\\Worktrees\\Task',
+      targetSkillPath: 'D:\\Worktrees\\Task\\.pi\\skills\\demo',
+    })).toBe(false);
+  });
+
+  it('does not erase meaningful trailing spaces from Windows Skill paths', () => {
+    expect(isSameProjectSkillAcrossRoots({
+      sourceProjectRoot: 'C:\\Repo',
+      sourceSkillPath: 'C:\\Repo\\.pi\\skills\\Demo ',
+      targetProjectRoot: 'D:\\Worktrees\\Task',
+      targetSkillPath: 'D:\\Worktrees\\Task\\.pi\\skills\\Demo',
+    })).toBe(false);
+  });
+
+  it('rejects paths outside either project root', () => {
+    expect(isSameProjectSkillAcrossRoots({
+      sourceProjectRoot: '/repo',
+      sourceSkillPath: '/other/.pi/skills/demo',
+      targetProjectRoot: '/worktree',
+      targetSkillPath: '/worktree/.pi/skills/demo',
+    })).toBe(false);
   });
 });

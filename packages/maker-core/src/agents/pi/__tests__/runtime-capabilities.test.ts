@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+
+import { describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
 import {
@@ -30,6 +33,223 @@ describe('Pi runtime capability parsing', () => {
 
   it('accepts an authoritative empty catalog without treating it as scanner discovery', () => {
     expect(parsePiRuntimeCommands({ commands: [] })).toEqual({ ok: true, commands: [] });
+  });
+
+  it('freezes pathless and pathful user Skills by scanned directory when frontmatter name differs', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-runtime-user-skill-'));
+    const baseDir = path.join(root, 'pi-home');
+    const firstTarget = path.join(root, 'target-a');
+    const secondTarget = path.join(root, 'target-b');
+    const linkedSource = path.join(baseDir, 'skills', 'directory-name');
+    try {
+      fs.mkdirSync(firstTarget, { recursive: true });
+      fs.mkdirSync(secondTarget, { recursive: true });
+      fs.writeFileSync(
+        path.join(firstTarget, 'SKILL.md'),
+        '---\nname: frontmatter-name\n---\n# First target\n',
+      );
+      fs.writeFileSync(
+        path.join(secondTarget, 'SKILL.md'),
+        '---\nname: frontmatter-name\n---\n# Second target\n',
+      );
+      fs.mkdirSync(path.dirname(linkedSource), { recursive: true });
+      fs.symlinkSync(
+        firstTarget,
+        linkedSource,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      const manifest = await capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [
+                {
+                  name: 'skill:frontmatter-name',
+                  source: 'skill',
+                  sourceInfo: { source: 'auto', scope: 'user', baseDir },
+                },
+                {
+                  name: 'skill:frontmatter-name',
+                  source: 'skill',
+                  sourceInfo: {
+                    source: 'auto',
+                    scope: 'user',
+                    baseDir,
+                    path: path.join(firstTarget, 'SKILL.md'),
+                  },
+                },
+              ],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [baseDir] },
+      );
+      const runtimeCommand = manifest.commands[0]!;
+      const provenance = Reflect.get(
+        runtimeCommand,
+        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
+      );
+      expect(provenance).toMatchObject({
+        canonicalSourcePath: await fs.promises.realpath(firstTarget),
+        entrypointPath: path.join(
+          await fs.promises.realpath(baseDir),
+          'skills',
+          'directory-name',
+          'SKILL.md',
+        ),
+      });
+      expect(Object.isFrozen(provenance)).toBe(true);
+      expect(Reflect.get(
+        manifest.commands[1],
+        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
+      )).toBe(provenance);
+      expect(JSON.stringify(runtimeCommand)).not.toContain(firstTarget);
+
+      fs.unlinkSync(linkedSource);
+      fs.symlinkSync(
+        secondTarget,
+        linkedSource,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      expect(Reflect.get(
+        runtimeCommand,
+        Symbol.for('cindy.pi.runtime-user-skill-canonical-source'),
+      )).toBe(provenance);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an unknown manifest when pathless user Skill provenance times out after RPC', async () => {
+    const baseDir = path.resolve(os.tmpdir(), 'pi-runtime-provenance-timeout');
+    const realpath = vi.spyOn(fs.promises, 'realpath').mockImplementation(async (candidate) => {
+      if (path.resolve(String(candidate)) === baseDir) {
+        return new Promise<string>(() => {});
+      }
+      return path.resolve(String(candidate));
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => {
+            vi.setSystemTime(Date.now() + 4_999);
+            return {
+              type: 'response',
+              command: 'get_commands',
+              success: true,
+              data: {
+                commands: [{
+                  name: 'skill:demo',
+                  source: 'skill',
+                  sourceInfo: { source: 'auto', scope: 'user', baseDir },
+                }],
+              },
+            };
+          },
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [baseDir] },
+      );
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toMatchObject({
+        status: 'unknown',
+        commands: [],
+        error: { code: 'timeout' },
+      });
+    } finally {
+      vi.useRealTimers();
+      realpath.mockRestore();
+    }
+  });
+
+  it('returns an unknown manifest when a configured user Skill root cannot be canonicalized', async () => {
+    const baseDir = path.resolve(os.tmpdir(), 'pi-runtime-provenance-io-failure');
+    const realpath = vi.spyOn(fs.promises, 'realpath').mockImplementation(async (candidate) => {
+      if (path.resolve(String(candidate)) === baseDir) {
+        throw Object.assign(new Error('temporary I/O failure'), { code: 'EIO' });
+      }
+      return path.resolve(String(candidate));
+    });
+    try {
+      await expect(capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: { source: 'auto', scope: 'user', baseDir },
+              }],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [baseDir] },
+      )).resolves.toMatchObject({
+        status: 'unknown',
+        commands: [],
+      });
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
+  it('returns an unknown manifest when a user Skill provenance scan has a transient I/O failure', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-runtime-provenance-scan-'));
+    const baseDir = path.join(root, 'pi-home');
+    fs.mkdirSync(path.join(baseDir, 'skills'), { recursive: true });
+    const opendir = vi.spyOn(fs.promises, 'opendir').mockRejectedValueOnce(
+      Object.assign(new Error('temporary I/O failure'), { code: 'EIO' }),
+    );
+    try {
+      await expect(capturePiRuntimeCapabilityManifest(
+        {
+          request: async () => ({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: {
+              commands: [{
+                name: 'skill:demo',
+                source: 'skill',
+                sourceInfo: { source: 'auto', scope: 'user', baseDir },
+              }],
+            },
+          }),
+        },
+        {},
+        1,
+        'ready',
+        { userSkillBaseDirs: [baseDir] },
+      )).resolves.toMatchObject({
+        status: 'unknown',
+        commands: [],
+      });
+    } finally {
+      opendir.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('accepts duplicate names because Pi can expose an Extension command and Prompt together', () => {

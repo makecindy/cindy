@@ -802,7 +802,17 @@ describe('Shared create project picker', () => {
     const block = wt.slice(0, wt.indexOf('      }'));
     expect(block).not.toContain('setWtEnabled(false);');
     expect(block).toContain('setWtBaseRepo(null);');
+    expect(block).toContain('setProjectRepoRoot(null);');
     expect(block).toContain("setWtSourceBranch('');");
+  });
+
+  it('reports a fenced project repo root separately from worktree eligibility', () => {
+    expect(worktreeChipsSource).toContain('const projectRepoRoot =');
+    expect(worktreeChipsSource).toContain('projectRepoRootFromDetectCwd(detect.data)');
+    expect(worktreeChipsSource).toContain('onProjectRepoRootChange?.(projectRepoRoot);');
+    expect(newMakerDraftRouteSource).toContain(
+      'onProjectRepoRootChange={handleProjectRepoRootChange}',
+    );
   });
 
   // #807 review 第十四轮:compact 模式下按钮只剩图标 + 状态点,不渲染设备名 —— aria-label 只报

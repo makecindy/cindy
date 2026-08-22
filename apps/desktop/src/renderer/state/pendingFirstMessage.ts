@@ -19,6 +19,7 @@
 import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue';
 import type { DeferredUiAssignment } from '@/features/cc-agent/deferredUiAssignment';
 
 /**
@@ -48,6 +49,8 @@ export interface PendingPayload {
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: PastedTextRange[];
   slashCommandRanges?: SlashCommandRange[];
+  /** Exact loaded Pi Skill receipt; Main revalidates it against the live runtime. */
+  agentSkillInvocation?: AgentInputQueuedMessage['agentSkillInvocation'];
   /** 非空 = 发首轮之前先在被控端开协同(见 PendingRemoteCollab)。 */
   remoteCollab?: PendingRemoteCollab;
   /** 本机 Worker 已创建但尚未派单；首条消息 accepted 后再派。 */

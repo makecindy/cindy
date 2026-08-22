@@ -6,22 +6,27 @@ import { describe, expect, it } from 'vitest';
 const source = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
+
+const chatInputSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
+  'utf8',
+).replace(/\r\n/g, '\n');
 
 const sessionViewSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 const pendingHandoffSource = readFileSync(
   resolve(__dirname, '..', 'state', 'pendingFirstMessage.ts'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 const remoteCollabHandoffSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'remoteCollabHandoff.ts'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 describe('NewMakerDraftRoute Orca worker create order', () => {
   it('delegates worker creation to enableOrca and defers tab reveal until the new route is current', () => {
@@ -142,7 +147,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     );
   });
 
-  it('rebases delayed-create inline metadata after rewriting a Pi skill alias', () => {
+  it('keeps delayed-create display metadata while carrying the Pi runtime mapping separately', () => {
     const pendingBranch = sessionViewSource
       .slice(
         sessionViewSource.indexOf('const pending = consumePending(sessionId);'),
@@ -150,22 +155,189 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       )
       .replace(/\r\n/g, '\n');
 
+    expect(pendingBranch).not.toContain('rebaseInlineRangesAfterSlashCommandRewrite');
+    expect(pendingBranch).toContain('pending.text,');
+    expect(pendingBranch).toContain('agentReferences: pending.agentReferences');
+    expect(pendingBranch).toContain('pastedTextRanges: pending.pastedTextRanges');
+    expect(pendingBranch).toContain('slashCommandRanges: pending.slashCommandRanges');
     expect(pendingBranch).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.agentReferences,',
+      'pending.agentSkillInvocation ?? slashDispatch.agentSkillInvocation',
     );
-    expect(pendingBranch).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n              pending.pastedTextRanges,',
-    );
-    expect(pendingBranch).toMatch(
-      /rebaseInlineRangesAfterSlashCommandRewrite\(\s*\n\s*pending\.slashCommandRanges,/,
-    );
-    expect(pendingBranch).toContain('agentReferences: pendingAgentReferences');
-    expect(pendingBranch).toContain('pastedTextRanges: pendingPastedTextRanges');
-    expect(pendingBranch).toContain('slashCommandRanges: pendingSlashCommandRanges');
     expect(pendingBranch).toContain('PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
   });
 
-  it('reconciles Pi skill aliases after the user selects a working directory', () => {
+  it('lets only a new local Pi project select a discovered Skill before startup loads it', () => {
+    expect(source).toContain('allowPendingProjectSkillSelection={');
+    expect(source).toContain("persistedAgentKind === 'pi'");
+    expect(source).toContain('!!effectiveWorkingDir');
+    expect(source).toContain('!!projectRepoRoot');
+    expect(source).toContain('!effectiveRemoteHostId');
+    expect(source).toContain('!isDeviceLinkDraft');
+    expect(source).toContain('pendingProjectSkillRoot={');
+    expect(source).toContain('projectRepoRoot ?? undefined');
+    expect(source).not.toContain('wtBaseRepo ?? effectiveWorkingDir ?? undefined');
+    expect(source).toContain('onProjectRepoRootChange={handleProjectRepoRootChange}');
+  });
+
+  it('loads a selected project Skill before handing off a normal first message', () => {
+    const normalBranch = source.slice(
+      source.indexOf('const newSession = await createSession({', source.indexOf('const handleSend')),
+      source.indexOf('setPending(newSession.id, {', source.indexOf('const handleSend')),
+    );
+    const resolveSkill = normalBranch.lastIndexOf('resolvePendingPiProjectSkillForDispatch({');
+    const initializeRuntime = normalBranch.lastIndexOf('window.electronAPI.maker.createSession({');
+
+    expect(resolveSkill).toBeGreaterThan(-1);
+    expect(initializeRuntime).toBeGreaterThan(resolveSkill);
+    expect(normalBranch).toContain('sourceProjectRoot: opts.pendingProjectSkillRoot');
+    expect(normalBranch).toContain('targetProjectRoot: opts.pendingProjectSkillRoot');
+    expect(normalBranch).toContain('rollbackUnclaimedPiProjectSkillSession({');
+    expect(normalBranch).toContain('closeRuntime: () => window.electronAPI.maker.closeSession(');
+    expect(normalBranch).toContain('markDeleted: () => sessionService.setStatus(');
+    expect(normalBranch).toContain('purgeRuntimeState: () => makerChatStore.purgeSession');
+    expect(normalBranch.lastIndexOf('patchActivePrefs({ planMode: false })'))
+      .toBeGreaterThan(normalBranch.lastIndexOf('if (!resolvedInvocation)'));
+    expect(normalBranch).toContain('pendingAgentSkillInvocation = resolvedInvocation;');
+    expect(source).toContain('agentSkillInvocation: pendingAgentSkillInvocation');
+  });
+
+  it('binds a selected Pi user Skill to the normal new-task runtime before handoff', () => {
+    const normalBranch = source.slice(
+      source.indexOf('const newSession = await createSession({', source.indexOf('const handleSend')),
+      source.indexOf('setPending(newSession.id, {', source.indexOf('const handleSend')),
+    );
+    const resolveSkill = normalBranch.indexOf('resolvePendingPiUserSkillForDispatch({');
+    const initializeRuntime = normalBranch.indexOf(
+      'window.electronAPI.maker.createSession({',
+      resolveSkill,
+    );
+
+    expect(resolveSkill).toBeGreaterThan(-1);
+    expect(initializeRuntime).toBeGreaterThan(resolveSkill);
+    expect(normalBranch).toContain("opts?.pendingAgentSkillInvocation?.scope === 'user'");
+    expect(normalBranch).toContain('pendingInvocation: opts.pendingAgentSkillInvocation');
+    expect(normalBranch).toContain('retryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS');
+    expect(normalBranch).toContain('const runtimeWorkingDir = newSession.workingDir;');
+    expect(normalBranch).toContain('workingDir: runtimeWorkingDir');
+    expect(normalBranch).toContain('forceReload: true');
+    expect(normalBranch).toContain('rollbackUnclaimedPiProjectSkillSession({');
+    expect(normalBranch).toContain("toast.warning(t('commandPalette.skillUnavailableForNewTask'))");
+    expect(normalBranch).toContain('pendingAgentSkillInvocation = resolvedInvocation;');
+  });
+
+  it('keeps normal Pi Skill rollback armed until the first message is handed off', () => {
+    const normalFlow = source.slice(
+      source.indexOf('let rollbackUnclaimedPiSkillHandoff:'),
+      source.indexOf('} finally {\n          setWtCreating(false);'),
+    );
+    const projectArm = normalFlow.indexOf('rollbackUnclaimedPiSkillHandoff = () =>');
+    const userArm = normalFlow.indexOf(
+      'rollbackUnclaimedPiSkillHandoff = () =>',
+      projectArm + 1,
+    );
+    const attachmentRehome = normalFlow.indexOf(
+      'await rehomeDraftAttachments(files, newSession.id)',
+      userArm,
+    );
+    const pendingHandoff = normalFlow.indexOf('setPending(newSession.id, {', attachmentRehome);
+    const disarm = normalFlow.indexOf('rollbackUnclaimedPiSkillHandoff = null;', pendingHandoff);
+    const outerCatch = normalFlow.indexOf('} catch (err) {', disarm);
+    const rollbackAfterFailure = normalFlow.indexOf(
+      'await rollbackUnclaimedPiSkillHandoffIfNeeded();',
+      outerCatch,
+    );
+
+    expect(projectArm).toBeGreaterThan(-1);
+    expect(userArm).toBeGreaterThan(projectArm);
+    expect(attachmentRehome).toBeGreaterThan(userArm);
+    expect(pendingHandoff).toBeGreaterThan(attachmentRehome);
+    expect(disarm).toBeGreaterThan(pendingHandoff);
+    expect(rollbackAfterFailure).toBeGreaterThan(outerCatch);
+  });
+
+  it('rebinds a selected Pi project Skill to the created worktree before sending', () => {
+    const worktreeBranch = source.slice(
+      source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)'),
+      source.indexOf('// 普通路径:', source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)')),
+    );
+    const resolveSkill = worktreeBranch.indexOf('resolvePendingPiProjectSkillForDispatch({');
+    const send = worktreeBranch.indexOf('makerChatStore.sendMessage(');
+
+    expect(resolveSkill).toBeGreaterThan(-1);
+    expect(resolveSkill).toBeLessThan(send);
+    expect(worktreeBranch).toContain('sourceProjectRoot: opts.pendingProjectSkillRoot');
+    expect(worktreeBranch).toContain('sourceSkillPath: opts.pendingProjectSkillPath');
+    expect(worktreeBranch).toContain('targetProjectRoot: newDir');
+    expect(worktreeBranch).toContain("toast.warning(t('commandPalette.projectSkillMissingInWorktree'))");
+    expect(worktreeBranch).toContain('restoreFirstMessageDraft();');
+    expect(worktreeBranch).toContain('const resolvedInvocation =');
+    expect(worktreeBranch).toContain('agentSkillInvocation = resolvedInvocation;');
+    expect(worktreeBranch).toContain('newSession.id,\n                  message,');
+    expect(worktreeBranch).toContain('agentSkillInvocation }');
+    expect(worktreeBranch).not.toContain('messageForSend');
+  });
+
+  it('binds a selected Pi user Skill to the worktree runtime before direct send', () => {
+    const worktreeBranch = source.slice(
+      source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)'),
+      source.indexOf('// 普通路径:', source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)')),
+    );
+    const resolveSkill = worktreeBranch.indexOf('resolvePendingPiUserSkillForDispatch({');
+    const send = worktreeBranch.indexOf('makerChatStore.sendMessage(');
+
+    expect(chatInputSource).toContain('pendingAgentSkillInvocation?: AgentSkillInvocation;');
+    expect(chatInputSource).toContain('agentSkillInvocationForDispatch(');
+    expect(chatInputSource).toContain('pendingAgentSkillInvocation }');
+    expect(resolveSkill).toBeGreaterThan(-1);
+    expect(resolveSkill).toBeLessThan(send);
+    expect(worktreeBranch).toContain("opts?.pendingAgentSkillInvocation?.scope === 'user'");
+    expect(worktreeBranch).toContain('pendingInvocation: opts.pendingAgentSkillInvocation');
+    expect(worktreeBranch).toContain('prepareRuntime: preparePiRuntimeForWorktree');
+    expect(worktreeBranch).toContain('reload: reloadPiSkillsForWorktree');
+    expect(worktreeBranch).toContain("toast.warning(t('commandPalette.skillUnavailableForNewTask'))");
+    expect(worktreeBranch).toContain('restoreFirstMessageDraft();');
+    expect(worktreeBranch).toContain('agentSkillInvocation = resolvedInvocation;');
+  });
+
+  it('restores only the unchanged plan-mode preference when worktree Skill proof fails', () => {
+    const worktreeBranch = source.slice(
+      source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)'),
+      source.indexOf('// 普通路径:', source.indexOf('if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo)')),
+    );
+    const consumePlanMode = worktreeBranch.indexOf('patchActivePrefs({ planMode: false })');
+    const capturedSnapshot = worktreeBranch.indexOf(
+      'consumedPlanModePrefs = getDraft().lastByVendor[persistedAgentKind]',
+      consumePlanMode,
+    );
+    const restoreHelper = worktreeBranch.indexOf(
+      'const restorePlanModeAfterUnprovenSkillHandoff = () => {',
+      capturedSnapshot,
+    );
+    const snapshotGuard = worktreeBranch.indexOf(
+      'currentPlanModePrefs !== consumedPlanModePrefs',
+      restoreHelper,
+    );
+    const restorePlanMode = worktreeBranch.indexOf(
+      'patchVendorPrefs(persistedAgentKind, { planMode: true })',
+      snapshotGuard,
+    );
+    const restoreDraft = worktreeBranch.indexOf('const restoreFirstMessageDraft = () => {');
+    const restoreBeforeDraft = worktreeBranch.indexOf(
+      'restorePlanModeAfterUnprovenSkillHandoff();',
+      restoreDraft,
+    );
+    const proofAccepted = worktreeBranch.indexOf('piSkillHandoffProven = true;', restoreDraft);
+
+    expect(consumePlanMode).toBeGreaterThan(-1);
+    expect(capturedSnapshot).toBeGreaterThan(consumePlanMode);
+    expect(restoreHelper).toBeGreaterThan(capturedSnapshot);
+    expect(snapshotGuard).toBeGreaterThan(restoreHelper);
+    expect(restorePlanMode).toBeGreaterThan(snapshotGuard);
+    expect(restoreBeforeDraft).toBeGreaterThan(restoreDraft);
+    expect(proofAccepted).toBeGreaterThan(restoreBeforeDraft);
+  });
+
+  it('reconciles Pi Skill receipts after the user selects a working directory', () => {
     const workingDirHandler = sessionViewSource
       .slice(
         sessionViewSource.indexOf('const handleWorkingDirChange = useCallback('),
@@ -179,23 +351,24 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(workingDirHandler).toContain('preparePiRuntime: async () =>');
     expect(workingDirHandler).toContain("'maker:create-session'");
     expect(workingDirHandler).toContain('window.electronAPI.maker.createSession(createOpts)');
+    expect(workingDirHandler).not.toContain('rebaseInlineRangesAfterSlashCommandRewrite');
+    expect(workingDirHandler).toContain('pending.message,');
+    expect(workingDirHandler).toContain('agentReferences: pending.agentReferences');
+    expect(workingDirHandler).toContain('pastedTextRanges: pending.pastedTextRanges');
+    expect(workingDirHandler).toContain('slashCommandRanges: pending.slashCommandRanges');
     expect(workingDirHandler).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.agentReferences,',
+      'agentSkillInvocation: slashDispatch.agentSkillInvocation',
     );
-    expect(workingDirHandler).toContain(
-      'rebaseInlineRangesAfterSlashCommandRewrite(\n                pending.pastedTextRanges,',
-    );
-    expect(workingDirHandler).toMatch(
-      /rebaseInlineRangesAfterSlashCommandRewrite\(\s*\n\s*pending\.slashCommandRanges,/,
-    );
-    expect(workingDirHandler).toContain('slashDispatch.message,');
   });
 
   it('uses bounded Pi runtime reconciliation for ordinary sends and steering', () => {
     const slashDispatchBranch = sessionViewSource
       .slice(
-        sessionViewSource.indexOf('const originalMessage = message;'),
-        sessionViewSource.indexOf('if (slashDispatch.handled) return slashDispatch.accepted;'),
+        sessionViewSource.indexOf('// ── Slash command dispatch (palette refactor) ──'),
+        sessionViewSource.indexOf(
+          'if (slashDispatch.handled) return slashDispatch.accepted;',
+          sessionViewSource.indexOf('// ── Slash command dispatch (palette refactor) ──'),
+        ),
       )
       .replace(/\r\n/g, '\n');
 

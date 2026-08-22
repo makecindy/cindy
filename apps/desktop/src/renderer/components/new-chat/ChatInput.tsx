@@ -221,6 +221,8 @@ import { Selection, TextSelection } from '@tiptap/pm/state';
 import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import {
+  agentSkillInvocationForDispatch,
+  ambiguousPendingProjectSkillName,
   beginSlashCommandRosterLoad,
   EMPTY_SLASH_COMMANDS,
   failSlashCommandRosterLoad,
@@ -228,11 +230,14 @@ import {
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
-  isSlashCommandUnavailable,
+  isSlashCommandSelectable,
   isSlashCommandRosterReady,
+  leadingSlashInvocation,
   loadAllCommands,
   nextAvailableSlashCommandIndex,
+  pendingProjectSkillForMessage,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  type AgentSkillInvocation,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -432,6 +437,13 @@ interface ChatInputProps {
       pastedTextRanges?: PastedTextRange[];
       /** Exact local display ranges for slash commands confirmed by this composer. */
       slashCommandRanges?: SlashCommandRange[];
+      /** Palette identity awaiting proof from a newly created Pi runtime. */
+      pendingAgentSkillInvocation?: AgentSkillInvocation;
+      /** Discovered Pi project Skill selected before the New Maker runtime exists. */
+      pendingProjectSkillName?: string;
+      /** Absolute discovery path and project root used when rebinding into a new worktree. */
+      pendingProjectSkillPath?: string;
+      pendingProjectSkillRoot?: string;
       /**
        * New Maker 会异步创建会话并自己清理草稿，onSend 为保留编辑器
        * 始终返回 false。它在消息真正移交给新会话后调本回调，与
@@ -629,6 +641,10 @@ interface ChatInputProps {
    * 避免弹窗盖住 logo / worktree chips。
    */
   paletteMaxHeight?: number;
+  /** New Maker may select a discovered Pi project Skill that startup will load before send. */
+  allowPendingProjectSkillSelection?: boolean;
+  /** Base repository root used to bind a selected project Skill across worktree creation. */
+  pendingProjectSkillRoot?: string;
   /** Parent-owned drag state for full-page drop zones; mirrors the same hint inside the input card. */
   externalDragOver?: boolean;
   /** Composer drops stop propagation, so parent full-page drag state needs an explicit reset hook. */
@@ -1060,6 +1076,8 @@ export function ChatInput({
   onProviderDidChange,
   attachmentState,
   paletteMaxHeight,
+  allowPendingProjectSkillSelection = false,
+  pendingProjectSkillRoot,
   externalDragOver = false,
   onComposerDropHandled,
   vendorKey,
@@ -3717,6 +3735,9 @@ export function ChatInput({
         persistDetachedVoice(unlandedPreview || submittedAtSwitch, nextVoice);
       })();
     }
+    return () => {
+      cancelled = true;
+    };
   }, [editor, storageKey]);
 
   // ── External draft writes for the CURRENT session (e.g. rewind / fork
@@ -4385,13 +4406,22 @@ export function ChatInput({
 
   // Keep keyboard focus on an executable row when filtering or runtime status changes.
   useEffect(() => {
-    setSlashFocus((current) =>
-      current >= filteredCommands.length ||
-      (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
-        ? firstAvailableSlashCommandIndex(filteredCommands)
-        : current,
-    );
-  }, [filteredCommands]);
+    setSlashFocus((current) => (
+      current >= filteredCommands.length
+      || (
+        filteredCommands[current]
+        && !isSlashCommandSelectable(
+          filteredCommands[current],
+          allowPendingProjectSkillSelection,
+        )
+      )
+        ? firstAvailableSlashCommandIndex(
+            filteredCommands,
+            allowPendingProjectSkillSelection,
+          )
+        : current
+    ));
+  }, [allowPendingProjectSkillSelection, filteredCommands]);
   useEffect(() => {
     if (
       atFocus >= filteredAt.length ||
@@ -4507,7 +4537,12 @@ export function ChatInput({
         switch (e.key) {
           case 'ArrowDown':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, 1));
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(
+                filteredCommands,
+                i,
+                1,
+                allowPendingProjectSkillSelection,
+              ));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -4517,7 +4552,12 @@ export function ChatInput({
             return false;
           case 'ArrowUp':
             if (slashOpen && filteredCommands.length > 0) {
-              setSlashFocus((i) => nextAvailableSlashCommandIndex(filteredCommands, i, -1));
+              setSlashFocus((i) => nextAvailableSlashCommandIndex(
+                filteredCommands,
+                i,
+                -1,
+                allowPendingProjectSkillSelection,
+              ));
               return true;
             }
             if (atOpen && filteredAt.length > 0) {
@@ -4533,9 +4573,21 @@ export function ChatInput({
                 if (trigger.kind === 'slash') setSuppressedSlashAt(trigger.from);
                 return true;
               }
-              if (isSlashCommandUnavailable(focusedCommand)) {
-                setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
-                if (!hasAvailableSlashCommand(filteredCommands) && trigger.kind === 'slash') {
+              if (!isSlashCommandSelectable(
+                focusedCommand,
+                allowPendingProjectSkillSelection,
+              )) {
+                setSlashFocus(firstAvailableSlashCommandIndex(
+                  filteredCommands,
+                  allowPendingProjectSkillSelection,
+                ));
+                if (
+                  !hasAvailableSlashCommand(
+                    filteredCommands,
+                    allowPendingProjectSkillSelection,
+                  )
+                  && trigger.kind === 'slash'
+                ) {
                   setSuppressedSlashAt(trigger.from);
                 }
                 return true;
@@ -4586,7 +4638,7 @@ export function ChatInput({
         trigger.kind !== 'slash' ||
         composerMutationLockedRef.current ||
         editor.view.composing ||
-        isSlashCommandUnavailable(cmd)
+        !isSlashCommandSelectable(cmd, allowPendingProjectSkillSelection)
       ) {
         return;
       }
@@ -4634,7 +4686,7 @@ export function ChatInput({
             // 识别并追加机器指令,序列化零特判。
             tr.replaceWith(from, runEnd, editor.schema.text(`$${cmd.name} `));
           } else {
-            // 展示层写入人类名(`/git`);Pi 线路名(`/skill:git`)只在发送期改写。
+            // 展示与原消息保留人类名(`/git`);Pi 线路名(`/skill:git`)只随 receipt 发送。
             replaceSlashCommandRunWithText(
               tr,
               editor.schema,
@@ -4650,7 +4702,13 @@ export function ChatInput({
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, trigger],
+    [
+      allowPendingProjectSkillSelection,
+      editor,
+      planModeCommandAvailable,
+      planModeEntry,
+      trigger,
+    ],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -4963,6 +5021,26 @@ export function ChatInput({
           slashCommandRanges,
           hostCapability,
         } = serializedContent;
+        if (ambiguousPendingProjectSkillName(
+          editorText,
+          mergedCommands,
+          allowPendingProjectSkillSelection,
+        )) {
+          toast.warning(t('commandPalette.projectSkillUnavailableForNewTask'));
+          return;
+        }
+        const pendingProjectSkill = pendingProjectSkillForMessage(
+          editorText,
+          mergedCommands,
+          allowPendingProjectSkillSelection,
+        );
+        const slashCommandName = leadingSlashInvocation(editorText)?.name.toLowerCase();
+        const pendingAgentSkillInvocation = agentSkillInvocationForDispatch(
+          editorText,
+          slashCommandName
+            ? mergedCommands.find((command) => command.name.toLowerCase() === slashCommandName)
+            : undefined,
+        );
         let agentReferences = serializedAgentReferences;
         const sourceDraftExtras =
           sourceStorageKey !== undefined ? getComposerDraft(sourceStorageKey) : undefined;
@@ -5548,6 +5626,16 @@ export function ChatInput({
               ...(agentReferences.length > 0 ? { agentReferences } : {}),
               ...(pastedTextRanges.length > 0 ? { pastedTextRanges } : {}),
               slashCommandRanges,
+              ...(pendingAgentSkillInvocation ? { pendingAgentSkillInvocation } : {}),
+              ...(pendingProjectSkill
+                ? {
+                    pendingProjectSkillName: pendingProjectSkill.name,
+                    ...(pendingProjectSkill.path
+                      ? { pendingProjectSkillPath: pendingProjectSkill.path }
+                      : {}),
+                    ...(pendingProjectSkillRoot ? { pendingProjectSkillRoot } : {}),
+                  }
+                : {}),
               ...(usedGhost ? { onAccepted: markRecentPluginUsage } : {}),
               ...(onRemoteOptimisticFailure ? { onRemoteOptimisticFailure } : {}),
               onDeferredAccepted,
@@ -8405,6 +8493,7 @@ export function ChatInput({
               }}
               onTooltipHoverChange={setPaletteTooltipHover}
               maxHeight={paletteMaxHeight}
+              allowPendingProjectSkillSelection={allowPendingProjectSkillSelection}
             />
           )}
 

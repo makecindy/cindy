@@ -9231,7 +9231,10 @@
     }
   },
   "commandPalette": {
-    "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入"
+    "projectSkillNotLoaded": "目前的 Pi 任務尚未載入此專案 Skill，新任務會自動嘗試載入",
+    "skillUnavailableForNewTask": "無法安全載入所選 Skill，第一則訊息已恢復；請重新選擇該 Skill 後再試一次",
+    "projectSkillUnavailableForNewTask": "無法安全載入所選專案 Skill，第一則訊息已保留；請重新啟動或重新選擇該 Skill 後再試一次",
+    "projectSkillMissingInWorktree": "新 worktree 中沒有載入所選專案 Skill，第一則訊息已恢復；請確認目標分支包含該 Skill 後重試"
   },
   "skillhub": {
     "home": {

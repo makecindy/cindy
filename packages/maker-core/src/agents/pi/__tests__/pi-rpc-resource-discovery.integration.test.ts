@@ -218,7 +218,12 @@ function expectedExplicitProjectSkillScope(fixture: Fixture): 'project' | 'tempo
 }
 
 async function createFixture(prefix = 'pi-rpc-fixture-'): Promise<Fixture> {
-  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  // Keep the fixture's cwd and explicit Skill paths in one canonical namespace.
+  // macOS exposes the default temp root through `/var` while the filesystem
+  // resolves it through `/private/var`; mixing those spellings makes Pi report
+  // an in-project explicit Skill as temporary even though its identity is
+  // contained by cwd.
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), prefix)));
   fixtureRoots.push(root);
   const configHome = path.join(root, 'config-home');
   const repoRoot = path.join(root, 'repo');

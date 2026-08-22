@@ -71,6 +71,35 @@ describe('SlashCommandPalette project Skill rows', () => {
     expect(zhCNCommon.commandPalette).not.toHaveProperty('projectSkillConfirmAction');
   });
 
+  it('lets New Maker select a discovered project Skill for startup loading', () => {
+    const onSelect = vi.fn();
+    const discovered = {
+      ...discoveredProjectSkill,
+      description: 'Project demo Skill',
+    };
+
+    render(
+      <SlashCommandPalette
+        query=""
+        commands={[discovered]}
+        focusedIndex={0}
+        onFocusedIndexChange={vi.fn()}
+        onSelect={onSelect}
+        onClose={vi.fn()}
+        allowPendingProjectSkillSelection
+      />,
+    );
+
+    const row = screen.getByRole('button', { name: 'demo' });
+    expect(row.getAttribute('aria-disabled')).toBe('false');
+    expect(row.className).not.toContain('opacity-50');
+    expect(screen.getByText('Project demo Skill')).toBeTruthy();
+
+    fireEvent.mouseDown(row);
+
+    expect(onSelect).toHaveBeenCalledWith(discovered);
+  });
+
   it('continues to select a loaded Skill normally', () => {
     const loaded: UnifiedCommand = {
       ...discoveredProjectSkill,

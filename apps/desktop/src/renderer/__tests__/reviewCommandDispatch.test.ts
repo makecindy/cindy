@@ -12,15 +12,34 @@ const dispatchEnd = sessionViewSource.indexOf('const maybeShowContextUsage', dis
 const dispatchSource = sessionViewSource.slice(dispatchStart, dispatchEnd);
 
 describe('/review command dispatch', () => {
+  it('keeps a known Pi Skill draft when loaded runtime proof is unavailable', () => {
+    const proofGuard = dispatchSource.indexOf(
+      "agentKind === 'pi' && hit?.kind === 'agent-skill' && !agentSkillInvocation",
+    );
+    const warning = dispatchSource.indexOf(
+      "toast.warning(t('commandPalette.skillUnavailableForNewTask'))",
+      proofGuard,
+    );
+    const rejected = dispatchSource.indexOf(
+      'return { handled: true, accepted: false };',
+      warning,
+    );
+    const ordinaryForward = dispatchSource.indexOf('handled: false', rejected);
+
+    expect(proofGuard).toBeGreaterThan(-1);
+    expect(warning).toBeGreaterThan(proofGuard);
+    expect(rejected).toBeGreaterThan(warning);
+    expect(ordinaryForward).toBeGreaterThan(rejected);
+  });
+
   it('crosses the Main boundary with this invocation attachment snapshot before returning', () => {
     expect(dispatchSource).toContain("if (hit.name === 'review')");
     expect(dispatchSource).toContain('serializeAttachedFiles(files)');
     expect(dispatchSource).toContain('.startReview({');
     expect(dispatchSource).toContain('await window.electronAPI.maker.startReview({');
-    expect(dispatchSource).toContain('return { handled: true, accepted: true, message }');
-    expect(dispatchSource).toContain('return { handled: true, accepted: false, message }');
+    expect(dispatchSource).toContain('return { handled: true, accepted: true }');
+    expect(dispatchSource).toContain('return { handled: true, accepted: false }');
     expect(sessionViewSource).toContain('if (slashDispatch.handled) {');
-    expect(sessionViewSource).toContain('waitForLeadHistory: false');
     expect(dispatchSource.indexOf('.startReview({')).toBeLessThan(
       dispatchSource.indexOf('void dispatchCommand(hit'),
     );

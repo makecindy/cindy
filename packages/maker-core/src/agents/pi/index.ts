@@ -138,7 +138,7 @@ import type { MemoryResetResult, MemorySetResult, MemoryStatus } from '../../typ
 import type { AgentKind, Effort, UserMessage, UserContentBlock } from '../../types/common.js';
 import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/palette.js';
 import type { ListCustomizationsOptions, ListCustomizationsResult } from '../../types/customizations.js';
-import { scanPiCustomizations } from './customization-scanner.js';
+import { piUserSkillRoot, scanPiCustomizations } from './customization-scanner.js';
 import {
   DoctorCommandActivity,
   findContextModePackageRoot,
@@ -164,6 +164,7 @@ import {
 } from './runtime-capabilities.js';
 import {
   assembleApprovedPiProjectResources,
+  PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS,
   reconcilePiProjectResourceRuntime,
   stageApprovedPiProjectResources,
   unavailablePiProjectResourceAssembly,
@@ -2373,8 +2374,22 @@ export class PiAgent extends BaseAgent {
           workingDir: opts.workingDir,
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
         });
-        projectResourceAssembly = await assembleApprovedPiProjectResources(trustInput, opts.workingDir);
-        projectResourceAssembly = await stageApprovedPiProjectResources(projectResourceAssembly, configHome);
+        const projectResourceDeadlineAtMs =
+          Date.now() + PI_PROJECT_SKILL_SNAPSHOT_DEADLINE_MS;
+        const remainingProjectResourceDeadlineMs = (): number => Math.max(
+          0,
+          projectResourceDeadlineAtMs - Date.now(),
+        );
+        projectResourceAssembly = await assembleApprovedPiProjectResources(
+          trustInput,
+          opts.workingDir,
+          { deadlineMs: remainingProjectResourceDeadlineMs() },
+        );
+        projectResourceAssembly = await stageApprovedPiProjectResources(
+          projectResourceAssembly,
+          configHome,
+          { deadlineMs: remainingProjectResourceDeadlineMs() },
+        );
       } catch {
         projectResourceAssembly = unavailablePiProjectResourceAssembly('approval-resolver-failed');
         this.deps.logger.warn('pi project approval resolver failed closed', {
@@ -4042,6 +4057,11 @@ export class PiAgent extends BaseAgent {
         },
         generation,
         stage,
+        {
+          userSkillBaseDirs: remote
+            ? []
+            : [path.dirname(piUserSkillRoot()), configHome],
+        },
       );
       const managedPackageCommandNames = identifyManagedPiPackageCommandNames(
         capturedManifest.commands,

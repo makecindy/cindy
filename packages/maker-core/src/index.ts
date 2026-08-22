@@ -15,7 +15,12 @@ export * from './interfaces/index.js';
 
 // agents
 export * from './agents/index.js';
-export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
+export {
+  evaluatePiProjectTrust,
+  piCanonicalPathIsWithin,
+  piCanonicalPathsEqual,
+  piProjectKey,
+} from './agents/pi/project-trust.js';
 export {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
