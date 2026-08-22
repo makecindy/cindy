@@ -7,17 +7,22 @@ import { cindyLight } from '../themes/builtin/cindy-light';
 
 const rendererRoot = resolve(__dirname, '..');
 const desktopSourceRoot = resolve(rendererRoot, '..');
-const globalsSource = readFileSync(resolve(rendererRoot, 'styles', 'globals.css'), 'utf8');
-const mainEntrySource = readFileSync(resolve(rendererRoot, 'main-entry.tsx'), 'utf8');
-const bootstrapSource = readFileSync(
-  resolve(desktopSourceRoot, 'main', 'bootstrap-electron.ts'),
-  'utf8',
+const normalizeSource = (source: string) => source.replace(/\r\n?/g, '\n');
+const globalsSource = normalizeSource(
+  readFileSync(resolve(rendererRoot, 'styles', 'globals.css'), 'utf8'),
 );
-const secondaryWindowsSource = readFileSync(
-  resolve(desktopSourceRoot, 'main', 'secondary-windows.ts'),
-  'utf8',
+const mainEntrySource = normalizeSource(
+  readFileSync(resolve(rendererRoot, 'main-entry.tsx'), 'utf8'),
 );
-const preloadSource = readFileSync(resolve(desktopSourceRoot, 'preload', 'preload.ts'), 'utf8');
+const bootstrapSource = normalizeSource(
+  readFileSync(resolve(desktopSourceRoot, 'main', 'bootstrap-electron.ts'), 'utf8'),
+);
+const secondaryWindowsSource = normalizeSource(
+  readFileSync(resolve(desktopSourceRoot, 'main', 'secondary-windows.ts'), 'utf8'),
+);
+const preloadSource = normalizeSource(
+  readFileSync(resolve(desktopSourceRoot, 'preload', 'preload.ts'), 'utf8'),
+);
 
 describe('Windows Acrylic resize backing contract', () => {
   it('uses the exact sidebar tint tokens for the native backing', () => {

@@ -5171,15 +5171,7 @@ function RunningStatusBar({
     }
     shimmerPlayingRef.current = true;
     setShimmerCycle((n) => n + 1);
-  }, [
-    visible,
-    suppressContent,
-    reducedMotion,
-    status,
-    tokenUsage,
-    outputTokens,
-    generationDurationMs,
-  ]);
+  }, [visible, suppressContent, reducedMotion, status, tokenUsage, outputTokens, generationDurationMs]);
 
   // Animate the token counter so live mid-turn updates feel like a smoothly-
   // incrementing number. Rate does not use this: locally ticking the

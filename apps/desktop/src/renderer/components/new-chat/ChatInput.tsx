@@ -5818,9 +5818,7 @@ export function ChatInput({
       const markModelChoice = opts.markModelChoice === true;
       if (!remoteDeviceId) {
         const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
-        const persistPrefs = markModelChoice
-          ? patchVendorPrefs
-          : patchVendorPrefsPreservingModelChoice;
+        const persistPrefs = markModelChoice ? patchVendorPrefs : patchVendorPrefsPreservingModelChoice;
         persistPrefs(vendor, {
           // 换模才带配对并打标记。本机只改思考档 / Fast 不写回活动模型,
           // 避免未打标用户把区域默认改成当前任务模型。
@@ -6029,8 +6027,7 @@ export function ChatInput({
         hasSwitchIntent:
           !!sessionId &&
           !!targetAgent &&
-          runtimeAgentKind != null &&
-          runtimeAgentKind === targetAgent,
+          runtimeAgentKind != null && runtimeAgentKind === targetAgent,
         confirm: confirmDialog,
         copy: {
           title: t('newChat.chatInput.agentSwitch.confirmation.title'),
@@ -6607,7 +6604,10 @@ export function ChatInput({
 
       // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
       // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(newModelId, effectiveSourceId);
+      const { efforts, defaultEffort } = resolveModelEfforts(
+        newModelId,
+        effectiveSourceId,
+      );
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
