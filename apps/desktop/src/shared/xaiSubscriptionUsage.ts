@@ -8,6 +8,8 @@
  *
  * 这是账号级「每周包含限额」,不是单次任务配额,也不是 api.x.ai 的 RPM/TPM 限流。
  * 解析必须 fail-safe:字段缺失 / 形状不符就跳过,绝不从 token 数反推百分比。
+ * 例外:未结束的周窗口若省略 creditUsagePercent,按 proto3 默认值当成 0% ——
+ * 手动重置 / 新窗口刚开始时上游经常不发这个字段,缺了不能继续沿用打满时的缓存。
  */
 
 /** 分产品周用量(页面「Grok Build 2%」)。 */
@@ -93,10 +95,34 @@ function parseProductUsage(raw: unknown): XaiProductUsage[] {
 }
 
 /**
+ * 未结束的周窗口里,省略的 creditUsagePercent 就是 0%。
+ * 已过期窗口缺百分比则保持 null,让 fetch 保缓存,避免把打满快照改成 0。
+ */
+export function inferXaiWeeklyUsagePercent(
+  creditUsagePercent: number | null,
+  resetsAt: number | null,
+  nowMs: number,
+): number | null {
+  if (creditUsagePercent !== null) return clampPercent(creditUsagePercent);
+  if (
+    typeof resetsAt === 'number'
+    && Number.isFinite(resetsAt)
+    && resetsAt > 0
+    && nowMs < resetsAt * 1000
+  ) {
+    return 0;
+  }
+  return null;
+}
+
+/**
  * 解析 billing?format=credits 的 config。
  * 至少要有 creditUsagePercent 或重置时间,否则返回 null。
  */
-export function parseXaiBillingCreditsConfig(data: unknown): {
+export function parseXaiBillingCreditsConfig(
+  data: unknown,
+  nowMs: number = Date.now(),
+): {
   creditUsagePercent: number | null;
   resetsAt: number | null;
   productUsage: XaiProductUsage[];
@@ -112,7 +138,7 @@ export function parseXaiBillingCreditsConfig(data: unknown): {
   const prepaidBalance = toFiniteNumber(unwrapVal(config.prepaidBalance));
   if (creditUsagePercent === null && resetsAt === null) return null;
   return {
-    creditUsagePercent: creditUsagePercent === null ? null : clampPercent(creditUsagePercent),
+    creditUsagePercent: inferXaiWeeklyUsagePercent(creditUsagePercent, resetsAt, nowMs),
     resetsAt,
     productUsage: parseProductUsage(config.productUsage),
     prepaidBalance,
