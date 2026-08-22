@@ -743,16 +743,26 @@ export class Session {
       //     turn 的剩余事件(含 done)继续带正确 origin。若这里强行清 null,正在跑的
       //     turn 的 done 会丢 origin → IM 转播收不到 done → 转播卡永不 finalize、残留
       //     state 污染下一轮(见 PR #129 review)。
-      if (originInstalled && !turnDispatched) {
-        this.currentTurnOrigin = previousTurnOrigin;
-        this.currentTurnAttemptToken = previousTurnAttemptToken;
+      if (!turnDispatched) {
+        if (originInstalled) {
+          this.currentTurnOrigin = previousTurnOrigin;
+          this.currentTurnAttemptToken = previousTurnAttemptToken;
+          originInstalled = false;
+          // Confirmed provider rejection cannot produce a turn tail, so it may
+          // immediately reuse the rolled-back generation. Other failures retain
+          // the bounded tail fence before another turn can enter.
+          if (!dispatchConfirmedUndispatched) {
+            this.armTerminalErrorDrain(previousTurnGeneration);
+          }
+        }
         this.turnGeneration = previousTurnGeneration;
-        this.pendingPriorGeneration = null;
-        // Confirmed provider rejection cannot produce a turn tail, so it may
-        // immediately reuse the rolled-back generation. Other failures retain
-        // the bounded tail fence before another turn can enter.
-        if (!dispatchConfirmedUndispatched) {
-          this.armTerminalErrorDrain(previousTurnGeneration);
+        if (
+          previousTurnGeneration > 0 &&
+          this.terminalEventObservedGeneration !== previousTurnGeneration
+        ) {
+          this.pendingPriorGeneration = previousTurnGeneration;
+        } else {
+          this.pendingPriorGeneration = null;
         }
       }
       if (turnLifecyclePrepared && !turnDispatched) {

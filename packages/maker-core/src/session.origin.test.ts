@@ -638,6 +638,37 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('keeps leftover done on the unresolved generation after a cancelled reservation', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const controller = new AbortController();
+    await expect(session.send('cancelled', {
+      signal: controller.signal,
+      afterTurnReserved: () => controller.abort(),
+    })).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+
+    const leftoverDone = seen.find((event) => event.type === 'done');
+    expect(leftoverDone?.sessionTurnGeneration).toBe(1);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('treats a standalone image as new-turn progress before leftover done', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,
