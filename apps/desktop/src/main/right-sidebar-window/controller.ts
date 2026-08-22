@@ -420,7 +420,10 @@ export class RsbWindowController {
     }
     const adopted = this.adoptHostSession(hostSessionId);
     if (adopted) await adopted;
-    if (!this.canDispatchCommand(command)) return 'stale-context';
+    if (!this.canDispatchCommand(command)) {
+      this.enqueueDeferredCommand(command);
+      return 'queued';
+    }
 
     if (allowOpen && (!this.isOpen() || !this.presentationReady)) {
       try {
@@ -878,12 +881,10 @@ export class RsbWindowController {
   }
 
   private canDispatchCommand(cmd: RsbWindowCommand): boolean {
-    const hostSessionId = commandHostSessionId(cmd);
-    if (this.pinnedSessionId) return this.pinnedSessionId === hostSessionId;
     return Boolean(
       this.lastContext?.available &&
         this.lastContext.sessionId &&
-        this.lastContext.sessionId === hostSessionId,
+        this.lastContext.sessionId === commandHostSessionId(cmd),
     );
   }
 

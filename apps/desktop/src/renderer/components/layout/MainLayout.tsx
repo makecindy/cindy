@@ -53,6 +53,7 @@ import {
 } from '@/lib/rightSidebarWindowState';
 import {
   didUserCloseDetachedSidebarWindow,
+  nextDetachedHostAfterFocus,
   sessionIdForDetachedSidebarClose,
 } from '@/lib/rsbWindowTransitions';
 import { routeSidebarCommand } from '@/features/right-sidebar/lib/detachedSidebarRouting';
@@ -293,6 +294,10 @@ export function MainLayout() {
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
+      detachedHostSessionIdRef.current = nextDetachedHostAfterFocus(
+        detachedHostSessionIdRef.current,
+        sessionId,
+      );
       setRightSidebarSessionId(sessionId);
       setRightSidebarSubagentsAvailable(sessionId ? opts.subagentsAvailable : undefined);
       if (!sessionId || !rsbWindow.loaded || rsbDetached) return;

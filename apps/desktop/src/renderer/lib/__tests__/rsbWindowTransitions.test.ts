@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   didUserCloseDetachedSidebarWindow,
+  nextDetachedHostAfterFocus,
   sessionIdForDetachedSidebarClose,
 } from '../rsbWindowTransitions';
 
@@ -40,6 +41,12 @@ describe('didUserCloseDetachedSidebarWindow', () => {
     expect(sessionIdForDetachedSidebarClose('session-a', 'session-b')).toBe('session-a');
     expect(sessionIdForDetachedSidebarClose(null, 'session-b')).toBe('session-b');
     expect(sessionIdForDetachedSidebarClose(null, null)).toBeNull();
+    expect(nextDetachedHostAfterFocus('session-a', 'session-b')).toBe('session-a');
+    expect(nextDetachedHostAfterFocus('session-a', 'session-a')).toBeNull();
+    expect(sessionIdForDetachedSidebarClose(
+      nextDetachedHostAfterFocus('session-a', 'session-a'),
+      'session-c',
+    )).toBe('session-c');
   });
 
   it('does not let a secondary window persist the primary detached close transition', () => {

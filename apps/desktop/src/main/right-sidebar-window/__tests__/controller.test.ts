@@ -948,13 +948,10 @@ describe('setContext / routeCommand', () => {
     h.controller.open();
     markReady(h.controller, h.windows[0]);
     h.sends.length = 0;
-    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('routed');
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
     expect(h.controller.getContext()).toEqual(focused);
     expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
-    expect(h.sends.at(-1)).toEqual({
-      channel: 'cmd-channel',
-      payload: { type: 'open-terminal', sessionId: 's1' },
-    });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
   });
 
   it('reuses a previously reported host context instead of forging a local one', async () => {
@@ -996,7 +993,10 @@ describe('setContext / routeCommand', () => {
   });
 
   it('keeps another session queued when a later reveal adopts a different host', async () => {
-    const h = makeHarness({ detached: true });
+    const s3 = { ...ctx, sessionId: 's3' };
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's3' ? s3 : null),
+    });
     h.controller.setContext({ ...ctx, sessionId: 's2' });
     const first = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://a.example' };
     await expect(
@@ -1010,10 +1010,10 @@ describe('setContext / routeCommand', () => {
     ]);
 
     h.sends.length = 0;
-    await expect(h.controller.routeCommand(terminalRequest('s1'))).resolves.toBe('routed');
+    h.controller.setContext(s3);
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
     expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
       { channel: 'cmd-channel', payload: first },
-      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
     ]);
   });
 
@@ -1111,9 +1111,10 @@ describe('setContext / routeCommand', () => {
       h.controller.routeCommand({ command: first, allowOpen: false }),
     ).resolves.toBe('queued');
     h.controller.setContext({ ...ctx, sessionId: 's3' });
-    const pending = h.controller.routeCommand(terminalRequest('s1'));
+    await expect(h.controller.routeCommand(terminalRequest('s1'))).resolves.toBe('queued');
+    h.controller.open();
     markReady(h.controller, h.windows[0]);
-    await expect(pending).resolves.toBe('routed');
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
     expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
       { channel: 'cmd-channel', payload: first },
       { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
