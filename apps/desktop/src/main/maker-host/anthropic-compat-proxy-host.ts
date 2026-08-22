@@ -69,8 +69,10 @@ import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observe
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider } from './session-provider-store.js';
 import {
+  buildRouteDecision,
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
+  resolveImplicitLocalBridgeRoute,
   resolvePendingSessionRouteDecision,
   resolveProviderRouteDecision,
   resolveSessionRouteDecision,
@@ -437,7 +439,54 @@ export function createModelRoutingTransform(): RoutingTransform {
       if (perSession) return recordSelectedRoute(perSession);
     }
 
+    // ①.5 隐式来源(#3210):仅在**没有任何显式供应商绑定**(含内置 XD/anthropic)时
+    //     按模型解析已连接的 anthropic-messages bridge 来源(用户 Anthropic 兼容上游,
+    //     如智谱 GLM)。裸 catalog id(如 glm-5.3)不是默认网关(LiteLLM)注册的命名
+    //     空间 id(z-ai/glm-5.3),抢在 session↔provider 绑定前到达会被网关模型校验拒
+    //     (偶发 400、重试恢复)。与 codex-proxy-host ①.5 段同语义。
+    //     必须排除任何已绑定 session:已选 XD 在 gateway key 清除后仍带冻结 x-api-key
+    //     时,② 段有专门的 XD passthrough 分支处理计费;若这里覆盖会把显式选 XD 的
+    //     提示词改送到用户 bridge,违背用户选择(codex review P1)。
+    //     其它排除:PI(自带 per-model 路由)、anthropic wire 模型(claude-* 保持
+    //     #886 默认路径)、xd 来源(② 段带计费记账)。歧义保护由
+    //     resolveImplicitLocalBridgeRoute 保证:多候选不猜测,回落 ② 段。
+    if (
+      !piSessionId
+      && !selectedProviderId
+      && wireModel
+      && !isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()))
+    ) {
+      return resolveImplicitLocalBridgeRoute(wireModel, 'claude-code').then((bridgeRoute) => {
+        if (
+          bridgeRoute
+          && bridgeRoute.providerId !== 'xd'
+          && bridgeRoute.routing.wireProtocol !== 'openai-chat'
+        ) {
+          const decision = buildRouteDecision(
+            bridgeRoute.routing,
+            gatewayKey,
+            'claude-code',
+            bridgeRoute.apiKey,
+            bridgeRoute.oauthToken,
+          );
+          // 用户自定义 Anthropic 兼容上游可在 routing 上声明 requestPath(多租户
+          // 网关 / 反向代理子路径),会话绑定后由 resolveSessionRouteDecision
+          // 写入 pathOverride;隐式首包也必须带上,否则会请求原始 /v1/messages 而
+          // 拿到 404(#3210 codex review P2)。
+          if (decision && bridgeRoute.routing.requestPath) {
+            return { ...decision, pathOverride: bridgeRoute.routing.requestPath };
+          }
+          if (decision) return decision;
+        }
+        return decideDefaultRoute();
+      });
+    }
+
+    return decideDefaultRoute();
+
     // ② 未显式选供应商 → 据请求凭证判定 spawn 形态(见上方注释)。
+    // 函数声明提升:①.5 解析落空时复用本段,行为与引入 ①.5 前一致。
+    function decideDefaultRoute(): RoutingDecision | null {
     // 计费路由旁路只记「未显式选供应商」的会话(registry 声明的语义,消费方也只在
     // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
     // 的 claude-* 分类器调用)不该往表里写死记录。
@@ -499,6 +548,7 @@ export function createModelRoutingTransform(): RoutingTransform {
       log.warn('claude oauth-spawn but no gateway key; non-anthropic passthrough (可能 401)', { wireModel });
     }
     return null;
+    }
   };
   return (body, ctx) => {
     const decision = route(body, ctx);
