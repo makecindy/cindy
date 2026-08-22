@@ -285,6 +285,9 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 7. **重启后 Lead↔Worker 互访 / resume 不随开启路径变化（状态：不变量）**
    无论协同通过 `enableTeam` 自动创建首个 worker、MCP `start_team` + `create_worker`，还是 renderer 的协同按钮开启；也无论重启发生在对话中途，还是初始化完毕但 worker 尚未接过真实任务，maker 重启后 Lead 与 Worker 都必须能继续互访。`send_to_worker`、`send_to_lead`、`switch_focus` / idle resume 不能因为内存态丢失、worker link 懒登记缺失或空 worker rollout 缺失而失败。实现指针：`CCAgentSessionView.tsx` 的 `requestEnableCollab`、`packages/lizi-mcps/src/orca/server.ts` 的 `start_team` / `create_worker` 顶层注册、`xdt-helper/start_team.ts` / `create_worker.ts`、`orcaLifecycleService.ts` 的 `startTeam` / `createWorker` / `enableTeam`、`register.ts` 的 `synthesizeOrcaVendorOptionsFromDb` / `resumeOrcaWorkerSessionIfMissing`、`orcaTeamService.ts` 的 `sendToWorker`、`orca-bridge-mcp.ts` 的 worker `send_to_lead` handler。
 
+8. **被同 turn 收尾拒绝的 done 确认必须在 terminal 边界补收口（状态：不变量）**
+   worker 的回报 settle（`send_to_lead` 被接受/入队）会先把持久化状态置 `done`，而 worker 自己的 turn 可能还在收尾；renderer「看到 done 即 ack」此时会被 active-turn / send 锁守卫以 `WORKER_STATE_CHANGED` 拒绝。被这两类守卫拒绝的确认必须登记下来，在该 turn 的 `handleWorkerTerminalTurn` done 分支重试一次（fire-once，重试失败不重登记）；新 turn 开始（`handleWorkerTurnStarted`）必须作废登记。没有登记过的 done 不得在 terminal 边界自动收口——`done` 的产品语义是「保持到用户看到为止」。实现指针：`orcaTeamService.ts` 的 `deferredDoneAcknowledgements`、`idleWorker`、`handleWorkerTurnStarted`、`handleWorkerTerminalTurn`。
+
 ### 测试与回归清单
 
 当前文档要求保留以下回归方向：

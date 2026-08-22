@@ -1182,6 +1182,205 @@ describe('OrcaTeamService', () => {
     expect(calls).toEqual([]);
   });
 
+  // (#3153) 回报 settle 先落库、worker 自己的 turn 还在收尾时,renderer 的
+  // 「看到 done 即 ack」会被 active-turn 守卫拒绝;terminal 边界必须补一次收口,
+  // 否则 worker 永久停在 done(runtime/attention 悬置)。
+  it('retries a skipped done acknowledgement at the worker terminal boundary', async () => {
+    let turnRunning = true;
+    const { calls, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'WORKER_STATE_CHANGED',
+      message: 'worker worker-1 has an active turn',
+    });
+    expect(getWorker().status).toBe('done');
+
+    // worker 的 turn 终止:此时补确认应当成功。
+    turnRunning = false;
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('idle');
+    expect(calls).toEqual([
+      'markWorkerIdleIfStatus',
+      'closeWorkerSessionIfIdle:worker-session-1',
+      'broadcastOrcaWorkerChanged',
+    ]);
+  });
+
+  it('does not auto-acknowledge a done worker at the terminal boundary without a skipped attempt', async () => {
+    const { calls, getWorker, service, setWorker } = createDeps();
+    setWorker(createWorker({ status: 'done' }));
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    // done 的语义是「保持到用户看到为止」:用户从未确认过的 done 不能被 terminal 收口。
+    expect(getWorker().status).toBe('done');
+    expect(calls).toEqual([]);
+  });
+
+  it('does not retry a deferred acknowledgement after a new turn started and re-finished', async () => {
+    let turnRunning = true;
+    const { calls, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+
+    // 新 turn 开始:旧 done 被取代,悬置的补确认必须作废。
+    await service.handleWorkerTurnStarted('worker-session-1');
+    expect(getWorker().status).toBe('running');
+
+    // 新 turn 结束且再次 settle 为 done(模拟下一次 send_to_lead):不应触发旧补确认。
+    turnRunning = false;
+    setWorker(createWorker({ status: 'done' }));
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('done');
+    expect(calls).toEqual(['updateWorkerStatus:running', 'broadcastOrcaWorkerChanged']);
+  });
+
+  it('consumes a deferred acknowledgement even when the terminal retry is rejected', async () => {
+    let turnRunning = true;
+    let queuedInput = false;
+    const { deps, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+      hasPendingWorkerInput: vi.fn(async () => queuedInput),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+
+    // terminal 边界重试时已有新排队输入:确认被拒(fire-once,不重登记),worker 保持 done。
+    turnRunning = false;
+    queuedInput = true;
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('done');
+    expect(deps.markWorkerIdleIfStatus).not.toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledWith(
+      'orca deferred done acknowledgement skipped',
+      expect.objectContaining({ workerId: 'worker-1', errorCode: 'WORKER_STATE_CHANGED' }),
+    );
+  });
+
+  // terminal 补收口重试若被 active-turn 守卫拒绝,守卫不得把 worker 重新登记——
+  // 否则 fire-once 被打破,且该 terminal 边界之后未必还有下一个 terminal 事件,
+  // worker 会带着悬置登记卡回 done(本机制要修的状态复发)。
+  // turn-start 的登记作废必须在 running 提交之后:旧 done 的 ack 若与
+  // turn-start 并发(它在 transition 队列上排队,轮到时观察到旧 done + 新
+  // active turn),守卫拒绝后的登记会残留;running 提交后的清理必须把它清掉,
+  // 否则脏 entry 存活到新 turn 的 terminal 边界被消费,绕过用户可见性语义。
+  it('invalidates a deferred acknowledgement re-registered after the turn-start transition commits', async () => {
+    let turnRunning = false;
+    let startedRunning = false;
+    const { getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+      listWorkersByLead: vi.fn(async (leadSessionId: string) => {
+        if (startedRunning) {
+          // turn-start 已提交 running(测试 mock 状态已推进):此刻与 turn-start
+          // 并发排队的旧 done ack 开始执行——它读到的 worker 行若是 done(mock
+          // 已是 running,这里临时换回 done 模拟其读到旧快照),守卫拒绝并登记。
+          const saved = getWorker().status;
+          setWorker(createWorker({ status: 'done' }));
+          const result = await service.idleWorker({
+            callerLeadSessionId: leadSessionId,
+            workerId: 'worker-1',
+            expectedStatus: 'done',
+          });
+          setWorker(createWorker({ status: saved }));
+          expect(result).toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+          startedRunning = false;
+        }
+        return [getWorker()];
+      }),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    turnRunning = true;
+    await service.handleWorkerTurnStarted('worker-session-1');
+    // turn-start 完成:状态 running,且其后临界区外插队的登记已被清理。
+    expect(getWorker().status).toBe('running');
+
+    // 新 turn 结束 settle 为 done:terminal 边界不得消费插队登记(用户从未见过)。
+    turnRunning = false;
+    setWorker(createWorker({ status: 'done' }));
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('done');
+  });
+
+  it('does not re-register a deferred acknowledgement when the terminal retry itself hits the active-turn guard', async () => {
+    const { deps, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => true })),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+
+    // terminal 边界:live session 仍报 running,重试被拒——但不得重新登记。
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+    expect(getWorker().status).toBe('done');
+    expect(deps.markWorkerIdleIfStatus).not.toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledWith(
+      'orca deferred done acknowledgement skipped',
+      expect.objectContaining({ workerId: 'worker-1', errorCode: 'WORKER_STATE_CHANGED' }),
+    );
+
+    // 后续再来的 terminal 事件(无新登记来源)也不得触发重试:fire-once 契约成立。
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+    expect(deps.markWorkerIdleIfStatus).not.toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledTimes(1);
+  });
+
   it('does not close a direct send that wins the atomic idle-close reservation after the CAS', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps({
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
