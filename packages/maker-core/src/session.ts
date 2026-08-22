@@ -432,6 +432,8 @@ export class Session {
   private insideProviderSendSync = false;
   /** Keep a leftover status/done tail on the generation that started it. */
   private staleTerminalQueuedGeneration: number | null = null;
+  /** Previous turn generation, kept until leftover tail or new-turn progress. */
+  private pendingPriorGeneration: number | null = null;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
    * AgentEvent.turnOrigin 上,turn 终止(isTerminalTurnEvent)后清空 — 共享
@@ -578,6 +580,9 @@ export class Session {
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     const previousTurnGeneration = this.turnGeneration;
     this.turnGeneration += 1;
+    if (previousTurnGeneration > 0) {
+      this.pendingPriorGeneration = previousTurnGeneration;
+    }
     const reservedTurnGeneration = this.turnGeneration;
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
@@ -712,6 +717,7 @@ export class Session {
           this.currentTurnOrigin = previousTurnOrigin;
           this.currentTurnAttemptToken = previousTurnAttemptToken;
           this.turnGeneration = previousTurnGeneration;
+          this.pendingPriorGeneration = null;
           originInstalled = false;
         }
         await this.close();
@@ -736,6 +742,7 @@ export class Session {
         this.currentTurnOrigin = previousTurnOrigin;
         this.currentTurnAttemptToken = previousTurnAttemptToken;
         this.turnGeneration = previousTurnGeneration;
+        this.pendingPriorGeneration = null;
         // Confirmed provider rejection cannot produce a turn tail, so it may
         // immediately reuse the rolled-back generation. Other failures retain
         // the bounded tail fence before another turn can enter.
@@ -1779,6 +1786,16 @@ export class Session {
     );
   }
 
+  private isNewTurnProgressEvent(event: AgentEvent): boolean {
+    return (
+      event.type === 'text' ||
+      event.type === 'thinking' ||
+      event.type === 'tool_use' ||
+      event.type === 'tool_result' ||
+      event.type === 'tool_result_full'
+    );
+  }
+
   private resolveSessionTurnGeneration(
     waitStartGeneration: number,
     observedGeneration: number,
@@ -1787,6 +1804,17 @@ export class Session {
     if (observedGeneration > waitStartGeneration) {
       this.staleTerminalQueuedGeneration = null;
       return observedGeneration;
+    }
+    const prior = this.pendingPriorGeneration;
+    const leftoverDoneOrIdle = event.type === 'done' || this.isIdleStatusEvent(event);
+    if (prior !== null && leftoverDoneOrIdle && waitStartGeneration !== 0) {
+      if (event.type === 'done') {
+        this.pendingPriorGeneration = null;
+        this.staleTerminalQueuedGeneration = null;
+      } else {
+        this.staleTerminalQueuedGeneration = prior;
+      }
+      return prior;
     }
     const leftoverTail = this.isLeftoverTailEvent(event);
     if (leftoverTail && this.staleTerminalQueuedGeneration !== null) {
@@ -1816,11 +1844,19 @@ export class Session {
       this.staleTerminalQueuedGeneration = null;
       return inFlightGeneration;
     }
+    if (prior !== null && isTerminalAgentErrorEvent(event) && waitStartGeneration !== 0) {
+      this.pendingPriorGeneration = null;
+      this.staleTerminalQueuedGeneration = null;
+      return prior;
+    }
     if (waitStartGeneration === 0 && this.turnGeneration > 0) {
       this.staleTerminalQueuedGeneration = null;
       return this.turnGeneration;
     }
-    this.staleTerminalQueuedGeneration = null;
+    if (this.isNewTurnProgressEvent(event)) {
+      this.pendingPriorGeneration = null;
+      this.staleTerminalQueuedGeneration = null;
+    }
     return waitStartGeneration;
   }
 
