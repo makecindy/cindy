@@ -1220,10 +1220,10 @@ function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
 const RETRYABLE_SDK_ERROR_TAGS = new Set(['rate_limit', 'server_error', 'unknown']);
 
 /**
- * 子 Agent launch 阶段失败的父会话可见投影：发出一个 failed 终态
- * agent_task_update。kind 用 spawn 而非 terminal，是因为持久化层只允许 spawn
- * 创建 durable run（progress/terminal 无权凭空建子任务），而 launch 失败往往
- * 没有更早的 spawn 观测——这条是唯一权威观测，必须能建出可查询的 failed 记录。
+ * 子 Agent launch 阶段失败的父会话可见投影：先用 spawn 创建 failed durable run，
+ * 再补同一身份的 terminal 观测。launch 失败往往没有更早的 spawn，而持久化层不允许
+ * terminal 凭空建子任务；但消息历史又只把 terminal 当作可回放终态。两帧按队列顺序
+ * 同步发出，既创建 run，也确保 Desktop 重载 / Mobile 重连后仍恢复为 failed。
  *
  * 不发 title：标题由渲染层 AgentTaskCard 按 locale 从结构化失败状态生成
  * （chat.agentTask.emptyTitle + status.failed），maker-core 不下发单语言文案。
@@ -1233,25 +1233,30 @@ function emitSubagentLaunchFailure(
   parentToolUseId: string,
   options: { errorMessage: string; model?: string },
 ): void {
-  queue.push({
-    type: 'agent_task_update',
-    data: {
-      provider: 'claude-code',
-      // launch 失败发生在 task_started 之前，没有真实 task_id；与
-      // extractSubagentToolResult 同口径回退到 parent tool_use id。
-      taskId: parentToolUseId,
-      parentToolUseId,
-      status: 'failed',
-      description: options.errorMessage,
-      ...(options.model ? { model: options.model } : {}),
-      subagentObservation: {
-        kind: 'spawn',
-        logicalSubagentId: parentToolUseId,
-        parentToolUseId,
+  const baseData = {
+    provider: 'claude-code' as const,
+    // launch 失败发生在 task_started 之前，没有真实 task_id；与
+    // extractSubagentToolResult 同口径回退到 parent tool_use id。
+    taskId: parentToolUseId,
+    parentToolUseId,
+    status: 'failed' as const,
+    description: options.errorMessage,
+    ...(options.model ? { model: options.model } : {}),
+  };
+  for (const kind of ['spawn', 'terminal'] as const) {
+    queue.push({
+      type: 'agent_task_update',
+      data: {
+        ...baseData,
+        subagentObservation: {
+          kind,
+          logicalSubagentId: parentToolUseId,
+          parentToolUseId,
+        },
       },
-    },
-    source: 'claude-code',
-  });
+      source: 'claude-code',
+    });
+  }
 }
 
 function projectSubagentLaunchFailure(

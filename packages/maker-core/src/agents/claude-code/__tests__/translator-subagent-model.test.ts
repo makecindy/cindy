@@ -1377,7 +1377,7 @@ describe('Claude Code sidechain launch failure projection', () => {
     const taskUpdates = (await collect(queue)).filter(
       (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
     );
-    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates).toHaveLength(2);
     expect(taskUpdates[0].data).toMatchObject({
       provider: 'claude-code',
       taskId: 'toolu_launch_fail',
@@ -1392,6 +1392,17 @@ describe('Claude Code sidechain launch failure projection', () => {
     expect(taskUpdates[0].data.description).toContain('not available for your account');
     // 标题不下发：由渲染层按 locale 生成，避免 maker-core 输出单语言文案。
     expect(taskUpdates[0].data).not.toHaveProperty('title');
+    expect(taskUpdates[1].data).toMatchObject({
+      provider: 'claude-code',
+      taskId: 'toolu_launch_fail',
+      parentToolUseId: 'toolu_launch_fail',
+      status: 'failed',
+      subagentObservation: {
+        kind: 'terminal',
+        logicalSubagentId: 'toolu_launch_fail',
+        parentToolUseId: 'toolu_launch_fail',
+      },
+    });
   });
 
   it('does not project a retryable sidechain error before the SDK retries', async () => {
@@ -1455,11 +1466,18 @@ describe('Claude Code sidechain launch failure projection', () => {
     const taskUpdates = (await collect(queue)).filter(
       (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
     );
-    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates).toHaveLength(2);
     expect(taskUpdates[0].data).toMatchObject({
       taskId: 'toolu_retry_exhausted',
       parentToolUseId: 'toolu_retry_exhausted',
       status: 'failed',
+      subagentObservation: { kind: 'spawn' },
+    });
+    expect(taskUpdates[1].data).toMatchObject({
+      taskId: 'toolu_retry_exhausted',
+      parentToolUseId: 'toolu_retry_exhausted',
+      status: 'failed',
+      subagentObservation: { kind: 'terminal' },
     });
     expect(taskUpdates[0].data.description).toContain('all retries');
   });
