@@ -608,6 +608,35 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('treats a standalone image as new-turn progress before leftover done', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({
+      type: 'image',
+      data: { kind: 'imageGeneration', result: 'data:image/png;base64,xx' },
+      source: 'codex',
+    });
+    await emit({ type: 'done', data: { reason: 'new-turn' }, source: 'codex' });
+
+    const done = seen.find((event) => event.type === 'done');
+    expect(done?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('排队中的旧 Codex terminal error 不能冒领随后 dispatch 的 attempt token', async () => {
     const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
       dispatchEvent: {

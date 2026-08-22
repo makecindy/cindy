@@ -1801,6 +1801,7 @@ export class Session {
     return (
       event.type === 'text' ||
       event.type === 'thinking' ||
+      event.type === 'image' ||
       event.type === 'tool_use' ||
       event.type === 'tool_result' ||
       event.type === 'tool_result_full'
