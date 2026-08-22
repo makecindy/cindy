@@ -39,12 +39,25 @@ export function getNotificationsEnabled(): boolean {
 export function getSoundNotificationsEnabled(): boolean {
   try {
     const raw = localStorage.getItem(SOUND_STORAGE_KEY);
+    if (raw === String(DEFAULT_SOUND_ENABLED)) {
+      // 旧版会把当前默认值也写成 override；清掉后才能跟随未来默认值。
+      localStorage.removeItem(SOUND_STORAGE_KEY);
+      return DEFAULT_SOUND_ENABLED;
+    }
     if (raw === 'true') return true;
     if (raw === 'false') return false;
   } catch {
     // localStorage 不可用——退回默认。
   }
   return DEFAULT_SOUND_ENABLED;
+}
+
+function hasSoundNotificationOverride(): boolean {
+  try {
+    return localStorage.getItem(SOUND_STORAGE_KEY) === String(!DEFAULT_SOUND_ENABLED);
+  } catch {
+    return false;
+  }
 }
 
 /** Main needs the same gate for scheduler notifications that do not originate in renderer. */
@@ -56,10 +69,13 @@ export function useNotificationSettings(): {
   enabled: boolean;
   setEnabled: (next: boolean) => void;
   soundEnabled: boolean;
+  soundIsCustomized: boolean;
   setSoundEnabled: (next: boolean) => void;
+  resetSoundEnabled: () => void;
 } {
   const [enabled, setEnabledState] = useState<boolean>(getNotificationsEnabled);
   const [soundEnabled, setSoundEnabledState] = useState<boolean>(getSoundNotificationsEnabled);
+  const [soundIsCustomized, setSoundIsCustomized] = useState<boolean>(hasSoundNotificationOverride);
 
   const setEnabled = useCallback((next: boolean) => {
     setEnabledState(next);
@@ -73,10 +89,23 @@ export function useNotificationSettings(): {
 
   const setSoundEnabled = useCallback((next: boolean) => {
     setSoundEnabledState(next);
+    const isCustomized = next !== DEFAULT_SOUND_ENABLED;
+    setSoundIsCustomized(isCustomized);
     try {
-      localStorage.setItem(SOUND_STORAGE_KEY, String(next));
+      if (isCustomized) localStorage.setItem(SOUND_STORAGE_KEY, String(next));
+      else localStorage.removeItem(SOUND_STORAGE_KEY);
     } catch {
       // localStorage 不可用——忽略，UI 仍以内存值为准。
+    }
+  }, []);
+
+  const resetSoundEnabled = useCallback(() => {
+    setSoundEnabledState(DEFAULT_SOUND_ENABLED);
+    setSoundIsCustomized(false);
+    try {
+      localStorage.removeItem(SOUND_STORAGE_KEY);
+    } catch {
+      // localStorage 不可用——UI 仍以内存默认值为准。
     }
   }, []);
 
@@ -84,11 +113,21 @@ export function useNotificationSettings(): {
   useEffect(() => {
     const handler = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY) setEnabledState(getNotificationsEnabled());
-      if (e.key === SOUND_STORAGE_KEY) setSoundEnabledState(getSoundNotificationsEnabled());
+      if (e.key === SOUND_STORAGE_KEY) {
+        setSoundEnabledState(getSoundNotificationsEnabled());
+        setSoundIsCustomized(hasSoundNotificationOverride());
+      }
     };
     window.addEventListener('storage', handler);
     return () => window.removeEventListener('storage', handler);
   }, []);
 
-  return { enabled, setEnabled, soundEnabled, setSoundEnabled };
+  return {
+    enabled,
+    setEnabled,
+    soundEnabled,
+    soundIsCustomized,
+    setSoundEnabled,
+    resetSoundEnabled,
+  };
 }

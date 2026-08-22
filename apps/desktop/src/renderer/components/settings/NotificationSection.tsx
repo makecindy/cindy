@@ -13,8 +13,17 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 
+import { DefaultOverrideControls } from './DefaultOverrideControls';
+
 export function NotificationSection() {
-  const { enabled, setEnabled, soundEnabled, setSoundEnabled } = useNotificationSettings();
+  const {
+    enabled,
+    setEnabled,
+    soundEnabled,
+    soundIsCustomized,
+    setSoundEnabled,
+    resetSoundEnabled,
+  } = useNotificationSettings();
   const { t } = useTranslation();
 
   return (
@@ -73,11 +82,14 @@ export function NotificationSection() {
           </p>
         </div>
 
-        <Switch
-          checked={soundEnabled}
-          onCheckedChange={setSoundEnabled}
-          aria-label={t('settings.notifications.soundAria')}
-        />
+        <div className="flex shrink-0 items-center gap-2">
+          <DefaultOverrideControls isCustomized={soundIsCustomized} onReset={resetSoundEnabled} />
+          <Switch
+            checked={soundEnabled}
+            onCheckedChange={setSoundEnabled}
+            aria-label={t('settings.notifications.soundAria')}
+          />
+        </div>
       </div>
     </div>
   );
