@@ -195,6 +195,84 @@ describe('useWecomBot', () => {
     expect(result.current.isUpdatingWorkingDir).toBe(false);
   });
 
+  it('applies the picked directory immediately although closing the dialog fires a focus refresh', async () => {
+    // 回归: 原生选择器关窗触发 focus → 设置卡刷新读到提交前的旧配置, 且旧
+    // 实现按「请求代次」丢弃了选择器结果 — 新目录显示不出来, 切页签才刷新。
+    const harness = installWecomApi({
+      status: { kind: 'connected', appId: 'app' },
+      botId: 'bot',
+      ownerUserId: 'A',
+    });
+    const picked: WecomChannelSettingsState = {
+      version: 1,
+      workingDir: 'D:/newly-picked',
+      workingDirAvailable: true,
+    };
+    const { result } = renderHook(() => useWecomBot());
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('A')));
+
+    let resolveChoose!: (result: { canceled: boolean; state: WecomChannelSettingsState }) => void;
+    harness.api.chooseWorkingDirectory.mockReturnValueOnce(
+      new Promise<{ canceled: boolean; state: WecomChannelSettingsState }>((resolve) => {
+        resolveChoose = resolve;
+      }),
+    );
+    let chooseDone: Promise<void> | null = null;
+    act(() => {
+      chooseDone = result.current.chooseWorkingDirectory();
+    });
+    // 更新在途时 focus 刷新到达 — 必须被跳过, 不发起读取。
+    await act(async () => {
+      await result.current.refreshChannelSettings();
+    });
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveChoose({ canceled: false, state: picked });
+      await chooseDone;
+    });
+    expect(result.current.channelSettings).toEqual(picked);
+    expect(result.current.isUpdatingWorkingDir).toBe(false);
+  });
+
+  it('drops a stale read that was dispatched before a working-dir update landed', async () => {
+    // 竞态另一半: 读取在更新提交前出发(读到旧配置), 却在更新结果之后返回 —
+    // 按更新落地序号丢弃, 不得把新目录又盖回旧值。
+    const harness = installWecomApi({
+      status: { kind: 'connected', appId: 'app' },
+      botId: 'bot',
+      ownerUserId: 'A',
+    });
+    let resolveStaleRead!: (state: WecomChannelSettingsState) => void;
+    harness.api.getChannelSettings.mockReturnValueOnce(
+      new Promise<WecomChannelSettingsState>((resolve) => {
+        resolveStaleRead = resolve;
+      }),
+    );
+    const picked: WecomChannelSettingsState = {
+      version: 1,
+      workingDir: 'D:/newly-picked',
+      workingDirAvailable: true,
+    };
+    harness.api.chooseWorkingDirectory.mockResolvedValueOnce({ canceled: false, state: picked });
+    const { result } = renderHook(() => useWecomBot());
+    // owner 首次确定触发挂载读取(挂起中, 携带旧配置)。
+    await waitFor(() => expect(result.current.ownerUserId).toBe('A'));
+    expect(result.current.channelSettings).toBeNull();
+
+    await act(async () => {
+      await result.current.chooseWorkingDirectory();
+    });
+    expect(result.current.channelSettings).toEqual(picked);
+
+    // 旧读取此刻才返回(提交前的旧配置) — 不得覆盖已落位的新目录。
+    await act(async () => {
+      resolveStaleRead(settingsFor('A'));
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings).toEqual(picked);
+  });
+
   it('invalidates in-flight responses on unmount', async () => {
     const harness = installWecomApi();
     // 第一次挂载确立 owner 上下文(''), 重挂载才会挂载即拉。

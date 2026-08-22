@@ -31,22 +31,32 @@ export function useWecomBot() {
   const [validationError, setValidationError] = useState<string | null>(null);
 
   /**
-   * 渠道设置写回的代次。每次发起新请求(挂载/刷新/选择/重置)递增;切号与卸载
-   * 也递增以作废在途响应。异步结果只有发起时的代次仍是当前代次才允许写回 —
-   * 否则账号 A 的旧请求晚于账号 B 的请求返回时, 会把 A 的绝对路径覆盖给 B。
+   * owner 代次: 仅在 owner 变化(含首次确定)与卸载时递增。所有渠道设置的异步
+   * 写回(读取/选择/重置)只有发起时的 owner 代次仍有效才允许落地 — 迟到的旧
+   * owner 响应不得把上一账号的绝对路径写给新账号。同 owner 内的并发请求**不**
+   * 递增: focus 触发的并发刷新与选择器结果互相竞争时丢弃后者, 会让新选的
+   * 目录显示不出来(实测回归)。
    */
-  const settingsEpochRef = useRef(0);
+  const ownerEpochRef = useRef(0);
+  /**
+   * 工作目录更新落地序号: choose/reset 结果写回时递增。早于一次更新出发的
+   * 读取可能带着提交前的旧配置、在更新结果之后才返回 — 这种读取按序号丢弃。
+   */
+  const updateSeqRef = useRef(0);
+  /** isUpdatingWorkingDir 的 ref 镜像: refreshChannelSettings 的在途守卫用。 */
+  const isUpdatingWorkingDirRef = useRef(false);
   /** null = 尚未确定 owner(冷启动, 无模块缓存种子)。 */
   const ownerRef = useRef<string | null>(cachedState?.ownerUserId ?? null);
   /** 推送代次: 挂载快照归来前已有推送先行到达时, 丢弃过期快照(同 useWechatBot)。 */
   const pushVersionRef = useRef(0);
 
-  /** 拉取当前 owner 的渠道设置;递增代次, 迟到的旧响应不写回。 */
+  /** 拉取当前 owner 的渠道设置;owner 或更新序号已推进的迟到响应不写回。 */
   const fetchChannelSettings = useCallback(async (): Promise<void> => {
-    const epoch = ++settingsEpochRef.current;
+    const ownerEpoch = ownerEpochRef.current;
+    const updateSeq = updateSeqRef.current;
     try {
       const settings = await window.electronAPI.wecomBot.getChannelSettings();
-      if (settingsEpochRef.current !== epoch) return;
+      if (ownerEpochRef.current !== ownerEpoch || updateSeqRef.current !== updateSeq) return;
       setChannelSettings(settings);
     } catch (error) {
       log.error(
@@ -68,7 +78,7 @@ export function useWecomBot() {
       setBotId(next.botId);
       if (ownerRef.current !== next.ownerUserId) {
         ownerRef.current = next.ownerUserId;
-        settingsEpochRef.current += 1;
+        ownerEpochRef.current += 1;
         setChannelSettings(null);
         void fetchChannelSettings();
       }
@@ -102,7 +112,7 @@ export function useWecomBot() {
     return () => {
       cancelled = true;
       // 卸载作废在途响应(比 cancelled 标志多覆盖 fetchChannelSettings 一路)。
-      settingsEpochRef.current += 1;
+      ownerEpochRef.current += 1;
     };
   }, [applyState, fetchChannelSettings]);
 
@@ -203,11 +213,15 @@ export function useWecomBot() {
   const chooseWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
     setIsUpdatingWorkingDir(true);
-    const epoch = ++settingsEpochRef.current;
+    isUpdatingWorkingDirRef.current = true;
+    const ownerEpoch = ownerEpochRef.current;
     try {
       const result = await window.electronAPI.wecomBot.chooseWorkingDirectory();
-      // 原生弹窗 + Main 侧异步探测期间可能切号: 迟到结果不得写回。
-      if (settingsEpochRef.current !== epoch) return;
+      // 原生弹窗 + Main 侧异步探测期间可能切号: 仅 owner 变化才丢弃。
+      // 同 owner 内 focus 触发的并发刷新不构成丢弃理由 — 这里返回的是刚
+      // 落盘的最新状态, 丢弃它会让新目录显示不出来(实测回归)。
+      if (ownerEpochRef.current !== ownerEpoch) return;
+      updateSeqRef.current += 1;
       setChannelSettings(result.state);
       if (!result.canceled) toast.success(t('settings.wecomBot.workingDirSaved'));
     } catch (error) {
@@ -217,6 +231,7 @@ export function useWecomBot() {
       );
       toast.error(t('settings.wecomBot.workingDirFailed'));
     } finally {
+      isUpdatingWorkingDirRef.current = false;
       setIsUpdatingWorkingDir(false);
     }
   }, [isUpdatingWorkingDir, t]);
@@ -224,10 +239,12 @@ export function useWecomBot() {
   const resetWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
     setIsUpdatingWorkingDir(true);
-    const epoch = ++settingsEpochRef.current;
+    isUpdatingWorkingDirRef.current = true;
+    const ownerEpoch = ownerEpochRef.current;
     try {
       const next = await window.electronAPI.wecomBot.resetWorkingDirectory();
-      if (settingsEpochRef.current !== epoch) return;
+      if (ownerEpochRef.current !== ownerEpoch) return;
+      updateSeqRef.current += 1;
       setChannelSettings(next);
       toast.success(t('settings.wecomBot.workingDirReset'));
     } catch (error) {
@@ -237,9 +254,18 @@ export function useWecomBot() {
       );
       toast.error(t('settings.wecomBot.workingDirFailed'));
     } finally {
+      isUpdatingWorkingDirRef.current = false;
       setIsUpdatingWorkingDir(false);
     }
   }, [isUpdatingWorkingDir, t]);
+
+  /** 拉取最新渠道设置 — 设置卡展开时刷新, 让「目录不可用」警告及时出现。 */
+  const refreshChannelSettings = useCallback(async (): Promise<void> => {
+    // 工作目录更新在途时跳过: 原生选择器关窗会触发 focus 刷新, 这次读取
+    // 大概率读到提交前的旧配置; choose/reset 返回的状态才是最新的。
+    if (isUpdatingWorkingDirRef.current) return;
+    await fetchChannelSettings();
+  }, [fetchChannelSettings]);
 
   return {
     botId,
@@ -278,7 +304,7 @@ export function useWecomBot() {
     disconnect,
     chooseWorkingDirectory,
     resetWorkingDirectory,
-    refreshChannelSettings: fetchChannelSettings,
+    refreshChannelSettings,
   };
 }
 
