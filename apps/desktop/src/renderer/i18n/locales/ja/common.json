@@ -7683,6 +7683,8 @@
       "waiting": "少々お待ちください…",
       "working": "作業中…",
       "running": "実行中…",
+      "waitingWorkflow": "Workflow を待機中…",
+      "waitingWorkflowProgress": "Workflow を待機中 · {{done}}/{{total}} Agent",
       "turnStart": "{{name}} さん、対応中です…",
       "issueTip": "{{name}} さん、/issue でフィードバックや提案をお寄せください",
       "runningTool": "{{tool}} を実行中…"

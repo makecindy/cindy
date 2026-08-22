@@ -89,6 +89,7 @@ import {
 } from '@/components/chat/InterruptedTurnBanner';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
+import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
 import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import {
   APP_EXIT_INTERRUPTED_REASON,
@@ -550,6 +551,34 @@ function findLatestWorkflowTask(
     }
   }
   return latest;
+}
+
+function summarizeRunningWorkflow(taskUpdates: ReadonlyMap<string, AgentTaskUpdate>): {
+  done: number;
+  total: number;
+} | null {
+  let workflow: AgentTaskUpdate | undefined;
+  let latestTs = Number.NEGATIVE_INFINITY;
+  const seen = new Set<AgentTaskUpdate>();
+  for (const update of taskUpdates.values()) {
+    if (update.taskType !== 'local_workflow' || update.status !== 'running' || seen.has(update)) continue;
+    seen.add(update);
+    const timestamp = Date.parse(update.updatedAt ?? update.createdAt ?? '');
+    if ((Number.isFinite(timestamp) ? timestamp : 0) >= latestTs) {
+      workflow = update;
+      latestTs = Number.isFinite(timestamp) ? timestamp : 0;
+    }
+  }
+  if (!workflow) return null;
+  const agents = (workflow.workflowProgress ?? []).filter((entry) => entry.type === 'workflow_agent');
+  if (agents.length === 0) return { done: 0, total: 0 };
+  return {
+    done: agents.filter((entry) => {
+      const visual = workflowAgentVisualState(entry.state);
+      return visual === 'done' || visual === 'failed';
+    }).length,
+    total: agents.length,
+  };
 }
 
 export function CCAgentSessionView({
@@ -1724,6 +1753,17 @@ export function CCAgentSessionView({
     !agentStatus.isRunning &&
     !isStreaming &&
     Boolean(sessionId);
+  // SSH 与 device-link 镜像的 task 终态都可能在断连窗口丢失，不能用本地事件永久撑住状态栏。
+  const runningWorkflow = useMemo(
+    () => (isRemoteSession || remoteDeviceId ? null : summarizeRunningWorkflow(taskUpdates)),
+    [isRemoteSession, remoteDeviceId, taskUpdates],
+  );
+  const composerStatus =
+    runningWorkflow
+      ? runningWorkflow.total > 0
+        ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
+        : t('ccAgent.agentStatus.waitingWorkflow')
+      : agentStatus.status;
 
   // error-tail-banner:会话尾部停在未忽略的 role='error' 行 → 输入框上方显示
   // 可操作红条(与 live ErrorBanner 同风格;2026-07-05 产品决策统一——所有尾部
@@ -4271,16 +4311,20 @@ export function CCAgentSessionView({
               {(!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed)) && (
                 <RunningStatusBar
                   key={sessionId}
-                  status={agentStatus.status}
+                  status={composerStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
                   startedAt={agentStatus.startedAt}
-                  visible={!pendingPlanReview && (agentStatus.isRunning || backgroundTasksActive)}
+                  visible={
+                    !pendingPlanReview &&
+                    (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null)
+                  }
                   inputWidth={inputWidth}
                   sideTaskRunning={agentStatus.sideTaskRunning ?? false}
                   backgroundTasksRunning={backgroundTasksActive}
+                  workflowStatus={runningWorkflow ? composerStatus : undefined}
                   // 仅后台 Bash 在跑(无模型调用)时换专属文案 + 温和停止语义:
                   // 逐任务 stopTask,不关常驻子进程。proxy 信号在时维持原语义
                   // (关子进程止损,bash 任务随之终止,无需再逐个停)。
@@ -5035,6 +5079,7 @@ function RunningStatusBar({
   inputWidth,
   sideTaskRunning = false,
   backgroundTasksRunning = false,
+  workflowStatus,
   backgroundBashOnlyCount = 0,
   backgroundStopping = false,
   onStopBackgroundTasks,
@@ -5064,6 +5109,8 @@ function RunningStatusBar({
    * 计数在此语义下都是误导信息。替代原独立横幅(2026-07-13 假停止治理)。
    */
   backgroundTasksRunning?: boolean;
+  /** 本机 Workflow 在运行时的专属状态文案；保留后台停止语义，但优先解释等待进度。 */
+  workflowStatus?: string;
   /**
    * 后台模式细分:>0 表示当前只有后台 Bash 任务在跑(无模型调用)。左段换
    * 「后台任务运行中(N 个)」文案,「全部停止」tooltip 换成逐任务停止语义
@@ -5122,6 +5169,7 @@ function RunningStatusBar({
   }, [startedAt]);
 
   const isHidden = suppressContent || (!showContent && !visible);
+  const workflowWaiting = workflowStatus !== undefined;
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
@@ -5129,11 +5177,11 @@ function RunningStatusBar({
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
   // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
-  const displayStatus = backgroundTasksRunning
+  const displayStatus = workflowStatus ?? (backgroundTasksRunning
     ? backgroundBashOnlyCount > 0
       ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
       : t('chat.backgroundActivity.status')
-    : localizeAgentStatus(status, t);
+    : localizeAgentStatus(status, t));
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -5300,7 +5348,7 @@ function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : (
+            ) : workflowWaiting ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}

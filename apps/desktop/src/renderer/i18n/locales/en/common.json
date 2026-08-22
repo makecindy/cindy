@@ -7695,6 +7695,8 @@
       "waiting": "Just wait…",
       "working": "Working…",
       "running": "Running…",
+      "waitingWorkflow": "Waiting for Workflow…",
+      "waitingWorkflowProgress": "Waiting for Workflow · {{done}}/{{total}} agents",
       "turnStart": "{{status}}",
       "issueTip": "{{name}}, try /issue to send us feedback or suggestions",
       "runningTool": "{{tool}} running…"

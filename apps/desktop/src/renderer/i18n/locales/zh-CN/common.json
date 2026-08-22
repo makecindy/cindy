@@ -7683,6 +7683,8 @@
       "waiting": "请稍候…",
       "working": "正在工作…",
       "running": "运行中…",
+      "waitingWorkflow": "正在等待 Workflow…",
+      "waitingWorkflowProgress": "正在等待 Workflow · {{done}}/{{total}} Agent",
       "turnStart": "正在处理，{{name}}",
       "issueTip": "{{name}}，试试用 /issue 给我们提反馈或建议",
       "runningTool": "{{tool}} 运行中…"
