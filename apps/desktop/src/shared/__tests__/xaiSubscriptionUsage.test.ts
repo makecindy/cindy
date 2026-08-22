@@ -92,8 +92,26 @@ describe('parseXaiBillingCreditsConfig', () => {
       },
     }, nowMs);
     expect(parsed?.creditUsagePercent).toBeNull();
-    expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000)).toBeNull();
-    expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000 - 1)).toBe(0);
+    expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000, true)).toBeNull();
+    expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000 - 1, true)).toBe(0);
+    expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000 - 1, false)).toBeNull();
+  });
+
+  it('does not invent 0% when creditUsagePercent is present but unparseable', () => {
+    const nowMs = Date.parse('2026-08-15T00:00:00.000Z');
+    const weekly = {
+      type: 'USAGE_PERIOD_TYPE_WEEKLY',
+      end: '2026-08-18T09:53:45.527500+00:00',
+    };
+    expect(parseXaiBillingCreditsConfig({
+      config: { currentPeriod: weekly, creditUsagePercent: 'nope' },
+    }, nowMs)?.creditUsagePercent).toBeNull();
+    expect(parseXaiBillingCreditsConfig({
+      config: { currentPeriod: weekly, creditUsagePercent: { val: 2 } },
+    }, nowMs)?.creditUsagePercent).toBeNull();
+    expect(parseXaiBillingCreditsConfig({
+      config: { currentPeriod: weekly, creditUsagePercent: null },
+    }, nowMs)?.creditUsagePercent).toBeNull();
   });
 
   it('does not invent 0% from a future billingPeriodEnd or non-weekly period', () => {
