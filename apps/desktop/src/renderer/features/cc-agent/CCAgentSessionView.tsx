@@ -51,6 +51,7 @@ import {
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
@@ -1114,6 +1115,20 @@ export function CCAgentSessionView({
       navigate('/cc-agent', { replace: true });
     }
   }, [session?.status, sessionId, navigate, ownsWindowRoute]);
+
+  // 副窗口("在新窗口打开")里的会话被主窗口归档后,副窗不能继续停留在该会话上
+  // 发消息(那会把已归档会话自动恢复成 active,绕过归档语义)。主窗口里归档保持可
+  // 浏览 + 发消息自动恢复的既有行为;只有副窗归档后直接关窗,回到主窗口。
+  // 见 #3175。deleted 已在上方 effect 处理(导航回 /cc-agent),这里只管 archived。
+  useEffect(() => {
+    if (!sessionId) return;
+    if (session?.status !== 'archived') return;
+    if (!isSecondaryWindow()) return;
+    log.info('archived session in secondary window, closing window', { sessionId });
+    splitGroupStore.removeSession(sessionId);
+    window.electronAPI?.windowClose();
+  }, [session?.status, sessionId]);
+
   const vendorAuthGate = useVendorAuthGate();
 
   useEffect(() => {
