@@ -6,7 +6,8 @@
  *   1. `oauth-endpoint` — GET api.anthropic.com/api/oauth/usage(未文档化端点,Claude Code
  *      自己的 /usage 命令同源)。utilization 为 0-100;新 schema 以 `limits[]` 数组为准
  *      (kind: session / weekly_all / weekly_scoped,scoped 带 scope.model),旧 schema 的
- *      `five_hour` / `seven_day` / `seven_day_opus` / `seven_day_sonnet` 顶层键做兜底。
+ *      `five_hour` / `seven_day` / `seven_day_opus` / `seven_day_sonnet` /
+ *      `seven_day_fable` 顶层键做兜底。
  *      仅端点源有分模型周窗口(Fable / Opus / Sonnet 各自独立)与 extra usage。
  *   2. `unified-headers` — 订阅直连响应上的 `anthropic-ratelimit-unified-*` headers
  *      (每次 API call 都带,由本地 proxy 旁路读取)。utilization 为 0.0-1.0 分数,
@@ -188,9 +189,14 @@ export function parseClaudeOAuthUsageResponse(
   if (!fiveHour) fiveHour = parseLegacyWindow(data.five_hour);
   if (!sevenDay) sevenDay = parseLegacyWindow(data.seven_day);
   if (scoped.length === 0) {
+    // 旧 schema 兜底:limits[] 没给 weekly_scoped 时,从顶层 seven_day_<model> 键取。
+    // Fable 是较新加的家族,旧兜底原先只列了 Opus/Sonnet,导致走旧端点或降级快照
+    // 时 Fable 周限丢失(会话信息栏不显示,issue #3244)。补齐 Fable;Mythos/Haiku
+    // 端点目前不下发分模型周窗口,如未来新增在此追加。
     const legacyScoped: Array<[unknown, string]> = [
       [data.seven_day_opus, 'Opus'],
       [data.seven_day_sonnet, 'Sonnet'],
+      [(data as { seven_day_fable?: unknown }).seven_day_fable, 'Fable'],
     ];
     for (const [raw, displayName] of legacyScoped) {
       const window = parseLegacyWindow(raw);
@@ -341,8 +347,11 @@ export function claudeModelFamily(modelId: string | null | undefined): string | 
 
 /**
  * 找当前会话模型对应的分模型周窗口(chip 方案 B:第二栏跟随当前模型)。
- * 匹配口径:scoped.modelDisplayName 小写 == 模型家族名。找不到 → null,调用方回退
- * sevenDay 总周限(绝不臆造)。
+ * 匹配口径:scoped.modelDisplayName 小写后**包含**模型家族名(而非精确相等)——
+ * 端点对 display_name 的口径历史上有 "Fable" / "Claude Fable" / "Fable 5" 等
+ * 形态,精确等于会把变体漏掉(issue #3244:Fable 周限不显示,Opus/Sonnet 正常)。
+ * 家族名互斥出现在 model id 里(claudeModelFamily 已保证),不会跨家族误命中。
+ * 找不到 → null,调用方回退 sevenDay 总周限(绝不臆造)。
  */
 export function matchScopedWindowForModel(
   scoped: ClaudeScopedUsageWindow[] | null | undefined,
@@ -351,7 +360,9 @@ export function matchScopedWindowForModel(
   if (!scoped || scoped.length === 0) return null;
   const family = claudeModelFamily(modelId);
   if (!family) return null;
-  return scoped.find((w) => w.modelDisplayName.trim().toLowerCase() === family) ?? null;
+  return (
+    scoped.find((w) => w.modelDisplayName.trim().toLowerCase().includes(family)) ?? null
+  );
 }
 
 // ── 告警判定(chip 变红的口径;tooltip 另有 status 分流,见 TodaySpendChip) ───
