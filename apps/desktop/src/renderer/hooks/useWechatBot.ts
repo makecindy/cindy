@@ -37,6 +37,13 @@ export function useWechatBot(): UseWechatBotReturn {
   const [isUnbinding, setIsUnbinding] = useState(false);
   const [isUpdatingWorkingDir, setIsUpdatingWorkingDir] = useState(false);
   const pushVersionRef = useRef(0);
+  /**
+   * 工作目录更新落地序号: choose/reset 结果写回时递增。读取请求出发时捕获,
+   * 返回时序号已变(期间有一次更新落地)则丢弃 — 挂载读取会异步探测已配置
+   * 目录, 网络盘下可能挂数秒, 迟到返回携带的是提交前的旧配置, 不得覆盖
+   * 较新的选择/重置结果(与企微 hook 同款竞态防护)。
+   */
+  const updateSeqRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,6 +54,7 @@ export function useWechatBot(): UseWechatBotReturn {
       setState(next);
     });
     const initialPushVersion = pushVersionRef.current;
+    const initialUpdateSeq = updateSeqRef.current;
     void Promise.all([
       window.electronAPI.wechatBot.getState(),
       window.electronAPI.wechatBot.getChannelSettings(),
@@ -57,6 +65,7 @@ export function useWechatBot(): UseWechatBotReturn {
           cachedState = nextState;
           setState(nextState);
         }
+        if (updateSeqRef.current !== initialUpdateSeq) return;
         setChannelSettings(nextChannelSettings);
       })
       .catch(() => {
@@ -114,6 +123,7 @@ export function useWechatBot(): UseWechatBotReturn {
     setIsUpdatingWorkingDir(true);
     try {
       const result = await window.electronAPI.wechatBot.chooseWorkingDirectory();
+      updateSeqRef.current += 1;
       setChannelSettings(result.state);
       if (!result.canceled) toast.success(t('settings.wechatBot.toasts.workingDirSaved'));
     } catch {
@@ -129,6 +139,7 @@ export function useWechatBot(): UseWechatBotReturn {
     setIsUpdatingWorkingDir(true);
     try {
       const next = await window.electronAPI.wechatBot.resetWorkingDirectory();
+      updateSeqRef.current += 1;
       setChannelSettings(next);
       toast.success(t('settings.wechatBot.toasts.workingDirReset'));
     } catch {

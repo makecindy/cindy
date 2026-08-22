@@ -44,6 +44,19 @@ export function writeWechatWorkingDir(
   return store.writeWorkingDir(selectedPath, rootPath);
 }
 
+/** 只校验/规整用户所选目录(异步探测用户盘), 不落盘 — 供 IPC 两段式提交。 */
+export function normalizeWechatSelectedDirectory(selectedPath: string): Promise<string> {
+  return store.normalizeSelectedDirectory(selectedPath);
+}
+
+/** 落盘已规整目录(只碰本地 userData)— 在 IM account generation 二次校验之后调用。 */
+export function commitWechatWorkingDir(
+  normalizedDir: string,
+  rootPath?: string,
+): Promise<WechatChannelSettingsState> {
+  return store.commitWorkingDir(normalizedDir, rootPath);
+}
+
 export function resetWechatWorkingDir(rootPath?: string): Promise<WechatChannelSettingsState> {
   return store.resetWorkingDir(rootPath);
 }

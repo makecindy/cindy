@@ -96,20 +96,23 @@ import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import {
+  commitWechatWorkingDir,
+  normalizeWechatSelectedDirectory,
   readWechatChannelSettings,
   resetWechatWorkingDir,
-  writeWechatWorkingDir,
 } from './wechat/channelSettings';
+import { registerWechatWorkingDirIpc } from './wechat/workingDirIpc';
 import {
   commitWecomWorkingDir,
   normalizeWecomSelectedDirectory,
   readWecomChannelSettings,
   resetWecomWorkingDir,
 } from './wecom/channelSettings';
+import { registerWecomWorkingDirIpc } from './wecom/workingDirIpc';
 import {
-  createWecomWorkingDirIpcHandlers,
-  registerWecomWorkingDirIpc,
-} from './wecom/workingDirIpc';
+  createChannelWorkingDirIpcHandlers,
+  type ChannelWorkingDirIpcDeps,
+} from './shared/channelWorkingDirIpc';
 
 export {
   registerTelegramBotConfigIpc,
@@ -125,6 +128,31 @@ export {
 const log = createLogger('main:im');
 
 let wired = false;
+
+/**
+ * 个人微信/企业微信工作目录 IPC 的公共 deps — 目录选择器(可信宿主窗口 +
+ * Main 原生弹窗)、IM account generation 快照与日志出口相同, 渠道 store 的
+ * 四个操作由调用方注入。业务体见 shared/channelWorkingDirIpc。
+ */
+function workingDirIpcDeps(
+  store: Pick<
+    ChannelWorkingDirIpcDeps,
+    'readSettings' | 'normalizeSelectedDirectory' | 'commitWorkingDir' | 'resetWorkingDir'
+  >,
+): ChannelWorkingDirIpcDeps {
+  return {
+    ...store,
+    showDirectoryPicker: async (sender) => {
+      const owner = BrowserWindow.fromWebContents(sender as WebContents);
+      if (!owner || owner.isDestroyed()) return null;
+      return dialog.showOpenDialog(owner, {
+        properties: ['openDirectory', 'createDirectory'],
+      });
+    },
+    captureGeneration: captureImAccountGeneration,
+    warn: (message, context) => log.warn(message, context),
+  };
+}
 
 export interface DesktopCcPrefs {
   model: string;
@@ -259,67 +287,35 @@ export function startImOrchestrators(): void {
       return { ok: true };
     });
   });
-  ipcMain.handle('wechatBot:get-channel-settings', async (event) => {
-    assertTrustedAppRendererEvent(event);
-    return readWechatChannelSettings();
+  // 个人微信 / 企业微信渠道工作目录 — 业务体同工厂(generation 三处校验 +
+  // 两段式提交 + 日志只记错误码, 见 shared/channelWorkingDirIpc), 固定 channel
+  // 注册与可信 sender 校验各渠道各自保留。目录只能经 Main 原生选择器进入,
+  // Renderer 不提交路径。
+  registerWechatWorkingDirIpc({
+    ipc: ipcMain,
+    handlers: createChannelWorkingDirIpcHandlers({
+      updateFailedCode: 'WECHAT_WORKING_DIR_UPDATE_FAILED',
+      channelLabel: 'personal WeChat',
+      deps: workingDirIpcDeps({
+        readSettings: () => readWechatChannelSettings(),
+        normalizeSelectedDirectory: (selectedPath) => normalizeWechatSelectedDirectory(selectedPath),
+        commitWorkingDir: (normalizedDir) => commitWechatWorkingDir(normalizedDir),
+        resetWorkingDir: () => resetWechatWorkingDir(),
+      }),
+    }),
+    assertTrustedEvent: assertTrustedAppRendererEvent,
   });
-  ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
-    assertTrustedAppRendererEvent(event);
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    if (!owner || owner.isDestroyed()) throw new Error('WECHAT_SETTINGS_WINDOW_UNAVAILABLE');
-    const result = await dialog.showOpenDialog(owner, {
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    if (result.canceled || !result.filePaths[0]) {
-      return { canceled: true as const, state: await readWechatChannelSettings() };
-    }
-    try {
-      return {
-        canceled: false as const,
-        state: await writeWechatWorkingDir(result.filePaths[0]),
-      };
-    } catch (error) {
-      log.warn('failed to save user-picked personal WeChat working directory', {
-        errorCode:
-          typeof error === 'object' &&
-          error !== null &&
-          'code' in error &&
-          typeof (error as { code?: unknown }).code === 'string'
-            ? (error as { code: string }).code
-            : 'UNKNOWN',
-        errorMessage: error instanceof Error ? error.message : String(error),
-      });
-      throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
-    }
-  });
-  ipcMain.handle('wechatBot:reset-working-directory', async (event) => {
-    assertTrustedAppRendererEvent(event);
-    try {
-      return await resetWechatWorkingDir();
-    } catch {
-      throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
-    }
-  });
-
-  // 企业微信渠道工作目录 — 与个人微信同构:目录只能经 Main 原生选择器进入,
-  // Renderer 不提交路径。业务体与可信 sender 边界的注册都在 wecom/workingDirIpc.ts,
-  // 两者的回归测试(含不可信 sender 拒绝)锁在 workingDirIpc.test.ts。
   registerWecomWorkingDirIpc({
     ipc: ipcMain,
-    handlers: createWecomWorkingDirIpcHandlers({
-      readSettings: () => readWecomChannelSettings(),
-      normalizeSelectedDirectory: (selectedPath) => normalizeWecomSelectedDirectory(selectedPath),
-      commitWorkingDir: (normalizedDir) => commitWecomWorkingDir(normalizedDir),
-      resetWorkingDir: () => resetWecomWorkingDir(),
-      showDirectoryPicker: async (sender) => {
-        const owner = BrowserWindow.fromWebContents(sender as WebContents);
-        if (!owner || owner.isDestroyed()) return null;
-        return dialog.showOpenDialog(owner, {
-          properties: ['openDirectory', 'createDirectory'],
-        });
-      },
-      captureGeneration: captureImAccountGeneration,
-      warn: (message, context) => log.warn(message, context),
+    handlers: createChannelWorkingDirIpcHandlers({
+      updateFailedCode: 'WECOM_WORKING_DIR_UPDATE_FAILED',
+      channelLabel: 'WeCom',
+      deps: workingDirIpcDeps({
+        readSettings: () => readWecomChannelSettings(),
+        normalizeSelectedDirectory: (selectedPath) => normalizeWecomSelectedDirectory(selectedPath),
+        commitWorkingDir: (normalizedDir) => commitWecomWorkingDir(normalizedDir),
+        resetWorkingDir: () => resetWecomWorkingDir(),
+      }),
     }),
     assertTrustedEvent: assertTrustedAppRendererEvent,
   });

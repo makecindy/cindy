@@ -118,16 +118,23 @@ export function createChannelWorkingDirStore(options: {
   }
 
   async function normalizeSelectedDirectory(selectedPath: string): Promise<string> {
+    // 校验错误自带 .code(= 渠道错误码): IPC 层日志只记错误码即可区分
+    // WECOM_WORKING_DIR_INVALID / NOT_DIRECTORY / EACCES..., 不需要
+    // error.message —— 原生 fs 错误的 message 含完整用户目录, 不能进日志。
     if (typeof selectedPath !== 'string' || !path.isAbsolute(selectedPath)) {
-      throw new Error(invalidErrorCode);
+      throw Object.assign(new Error(invalidErrorCode), { code: invalidErrorCode });
     }
     // 用户所选目录可能是网络盘/可移动盘 — realpath/stat 全异步, 挂起不冻结 Main。
     // fs.promises 没有 realpath.native(那只有同步版), 用标准 fsp.realpath —
     // 同样解析符号链接, Node 22 实测与 realpathSync.native 结果一致。
     const realPath = await realpath(selectedPath);
-    if (!(await stat(realPath)).isDirectory()) throw new Error(notDirectoryErrorCode);
+    if (!(await stat(realPath)).isDirectory()) {
+      throw Object.assign(new Error(notDirectoryErrorCode), { code: notDirectoryErrorCode });
+    }
     const normalized = normalizeWorkingDirForStorage(realPath);
-    if (!normalized) throw new Error(invalidErrorCode);
+    if (!normalized) {
+      throw Object.assign(new Error(invalidErrorCode), { code: invalidErrorCode });
+    }
     return normalized;
   }
 

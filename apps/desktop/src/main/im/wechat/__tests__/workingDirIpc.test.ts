@@ -1,9 +1,9 @@
 /**
- * workingDirIpc.test.ts(企微注册层)
+ * workingDirIpc.test.ts(个人微信注册层)
  * ---------------------------------------------------------------------------
  * 业务体矩阵在 shared/__tests__/channelWorkingDirIpc.test.ts(双渠道同一套)。
- * 这里只锁企微自己的注册面:固定三个 channel、可信 sender 校验**先于一切
- * 业务依赖**、可信事件放行到业务体。channel 名刻意不做参数化。
+ * 这里只锁个人微信自己的注册面:固定三个 channel、可信 sender 校验**先于
+ * 一切业务依赖**、可信事件放行到业务体。channel 名刻意不做参数化。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ import {
   createChannelWorkingDirIpcHandlers,
   type ChannelWorkingDirIpcDeps,
 } from '../../shared/channelWorkingDirIpc';
-import { registerWecomWorkingDirIpc, type IpcHandleSink } from '../workingDirIpc';
+import { registerWechatWorkingDirIpc, type IpcHandleSink } from '../workingDirIpc';
 
 const STATE = { version: 1, workingDir: null, workingDirAvailable: true } as const;
 const PICKED_STATE = { version: 1, workingDir: 'D:/picked', workingDirAvailable: true } as const;
@@ -29,7 +29,7 @@ function makeDeps(): ChannelWorkingDirIpcDeps {
   };
 }
 
-describe('wecomBot working directory IPC 安全边界', () => {
+describe('wechatBot working directory IPC 安全边界', () => {
   type Listener = (event: unknown) => unknown;
   const UNTRUSTED_EVENT = { sender: { id: 1 }, senderFrame: { url: 'https://evil.example' } };
 
@@ -41,11 +41,11 @@ describe('wecomBot working directory IPC 安全边界', () => {
         listeners.set(channel, listener as Listener);
       },
     };
-    registerWecomWorkingDirIpc({
+    registerWechatWorkingDirIpc({
       ipc: sink,
       handlers: createChannelWorkingDirIpcHandlers({
-        updateFailedCode: 'WECOM_WORKING_DIR_UPDATE_FAILED',
-        channelLabel: 'WeCom',
+        updateFailedCode: 'WECHAT_WORKING_DIR_UPDATE_FAILED',
+        channelLabel: 'personal WeChat',
         deps,
       }),
       assertTrustedEvent: (event) => {
@@ -58,9 +58,9 @@ describe('wecomBot working directory IPC 安全边界', () => {
   it('registers exactly the three working-directory channels', () => {
     const { listeners } = registerWith(true);
     expect([...listeners.keys()].sort()).toEqual([
-      'wecomBot:choose-working-directory',
-      'wecomBot:get-channel-settings',
-      'wecomBot:reset-working-directory',
+      'wechatBot:choose-working-directory',
+      'wechatBot:get-channel-settings',
+      'wechatBot:reset-working-directory',
     ]);
   });
 
@@ -68,15 +68,13 @@ describe('wecomBot working directory IPC 安全边界', () => {
     const { deps, listeners } = registerWith(false);
 
     // 安全边界必须先于业务体: 任何一个业务 dep 都不允许被触碰。
-    // (listener 同步抛出 — Electron handle 会把它变成 renderer 侧的 rejected
-    // invocation, 这里按同步抛出断言。)
-    expect(() => listeners.get('wecomBot:get-channel-settings')!(UNTRUSTED_EVENT)).toThrow(
+    expect(() => listeners.get('wechatBot:get-channel-settings')!(UNTRUSTED_EVENT)).toThrow(
       'UNTRUSTED_RENDERER',
     );
-    expect(() => listeners.get('wecomBot:reset-working-directory')!(UNTRUSTED_EVENT)).toThrow(
+    expect(() => listeners.get('wechatBot:reset-working-directory')!(UNTRUSTED_EVENT)).toThrow(
       'UNTRUSTED_RENDERER',
     );
-    expect(() => listeners.get('wecomBot:choose-working-directory')!(UNTRUSTED_EVENT)).toThrow(
+    expect(() => listeners.get('wechatBot:choose-working-directory')!(UNTRUSTED_EVENT)).toThrow(
       'UNTRUSTED_RENDERER',
     );
 
@@ -90,14 +88,14 @@ describe('wecomBot working directory IPC 安全边界', () => {
   it('passes trusted senders through to the business body', async () => {
     const { deps, listeners } = registerWith(true);
 
-    await expect(listeners.get('wecomBot:get-channel-settings')!({ sender: 'wc' })).resolves.toBe(
+    await expect(listeners.get('wechatBot:get-channel-settings')!({ sender: 'wc' })).resolves.toBe(
       PICKED_STATE,
     );
     await expect(
-      listeners.get('wecomBot:reset-working-directory')!({ sender: 'wc' }),
+      listeners.get('wechatBot:reset-working-directory')!({ sender: 'wc' }),
     ).resolves.toBe(STATE);
     await expect(
-      listeners.get('wecomBot:choose-working-directory')!({ sender: 'wc' }),
+      listeners.get('wechatBot:choose-working-directory')!({ sender: 'wc' }),
     ).resolves.toMatchObject({ canceled: false });
 
     expect(deps.readSettings).toHaveBeenCalled();

@@ -155,6 +155,59 @@ describe('useWechatBot', () => {
     expect(result.current.channelSettings?.workingDir).toBeNull();
     expect(api.resetWorkingDirectory).toHaveBeenCalledTimes(1);
   });
+
+  it('drops the stale mount read that returns after a working-dir update (choose)', async () => {
+    // 挂载读取会异步探测已配置目录(网络盘可挂数秒), 可能晚于用户的选择落定 —
+    // 携带提交前旧配置的迟到读取不得覆盖较新的结果。
+    const { api } = installWechatApi();
+    let resolveMountRead!: (state: WechatChannelSettingsState) => void;
+    api.getChannelSettings.mockReturnValueOnce(
+      new Promise<WechatChannelSettingsState>((resolve) => {
+        resolveMountRead = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useWechatBot());
+    api.chooseWorkingDirectory.mockResolvedValueOnce({
+      canceled: false,
+      state: { version: 1, workingDir: 'D:/new-pick', workingDirAvailable: true },
+    });
+    await act(async () => {
+      await result.current.chooseWorkingDirectory();
+    });
+    expect(result.current.channelSettings?.workingDir).toBe('D:/new-pick');
+
+    await act(async () => {
+      resolveMountRead({ version: 1, workingDir: 'D:/old', workingDirAvailable: true });
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings?.workingDir).toBe('D:/new-pick');
+  });
+
+  it('drops the stale mount read that returns after a working-dir reset', async () => {
+    const { api } = installWechatApi();
+    let resolveMountRead!: (state: WechatChannelSettingsState) => void;
+    api.getChannelSettings.mockReturnValueOnce(
+      new Promise<WechatChannelSettingsState>((resolve) => {
+        resolveMountRead = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useWechatBot());
+    api.resetWorkingDirectory.mockResolvedValueOnce({
+      version: 1,
+      workingDir: null,
+      workingDirAvailable: true,
+    });
+    await act(async () => {
+      await result.current.resetWorkingDirectory();
+    });
+    expect(result.current.channelSettings?.workingDir).toBeNull();
+
+    await act(async () => {
+      resolveMountRead({ version: 1, workingDir: 'D:/old', workingDirAvailable: true });
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings?.workingDir).toBeNull();
+  });
 });
 
 function disconnectedState(): WechatBotState {
