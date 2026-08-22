@@ -1132,6 +1132,37 @@ describe('removeWorktreeForSession', () => {
     expect(pendingSafeDirectoryCleanups).toEqual([]);
   });
 
+  it('reconcile skips and drops pending paths re-created by a live worktree', async () => {
+    // 旧删除留下的待办 + 同名新 worktree 已在 store 里占用该路径
+    const reusedPath = path.join(BASE_REPO, '.xdt-worktrees', 'reused');
+    const orphanPath = path.join(BASE_REPO, '.xdt-worktrees', 'orphan');
+    pendingSafeDirectoryCleanups.push(reusedPath, orphanPath);
+    storeMap.set('s-new', { ...makeMeta('reused'), path: reusedPath });
+    crossProcessLockMock.mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: true }),
+    );
+
+    await manager.reconcilePendingSafeDirectoryCleanups();
+
+    // 复用路径: 不 --unset-all(条目归新 worktree), 只从待办移除
+    expect(
+      gitExecMock.mock.calls.some(
+        ([args]) => Array.isArray(args) && args.includes(reusedPath),
+      ),
+    ).toBe(false);
+    // 孤儿路径: 正常清理并出队
+    expect(gitExecMock).toHaveBeenCalledWith([
+      'config',
+      '--global',
+      '--unset-all',
+      '--fixed-value',
+      'safe.directory',
+      orphanPath,
+    ]);
+    expect(pendingSafeDirectoryCleanups).toEqual([]);
+  });
+
   it('does not move a worktree when quarantine state cannot be persisted', async () => {
     const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-quarantine-persist-'));
     try {

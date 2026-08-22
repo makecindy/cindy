@@ -235,20 +235,65 @@ async function removeWorktreeSafeDirectory(
 }
 
 /**
+ * 计算当前仍被活跃 worktree 占用的全部 safe.directory 拼写。对账清理前用于区分
+ * 「孤儿条目」与「路径已被同名新 worktree 复用」: 删除把路径留在待办队列后, 同名
+ * 预创建 worktree 可能重建并依赖(或重新 add)同一 safe.directory 值, 此时旧待办
+ * 绝不能再 --unset-all(会删掉新条目, 让 Agent 在异所有权环境再次报 dubious
+ * ownership)。git config 条目本身没有代际信息, store 的活跃 meta 是唯一权威。
+ */
+async function computeInUseSafeDirectorySpellings(): Promise<Set<string>> {
+  const inUse = new Set<string>();
+  for (const meta of store.getAll()) {
+    const candidates = [meta.path, meta.quarantinePath].filter(
+      (p): p is string => typeof p === 'string' && p.length > 0,
+    );
+    if (candidates.length === 0) continue;
+    for (const spelling of await resolveSafeDirectorySpellings(candidates, meta.baseRepo)) {
+      inUse.add(spelling);
+    }
+  }
+  return inUse;
+}
+
+/**
  * 启动期对账: 补清 removeWorktreeSafeDirectory 因拿不到锁(或 --unset-all 失败)而
  * 落盘的 safe.directory 残留路径。成功(exit 0)或本就不存在(exit 5)的路径从 store
  * 移除; 仍失败的留待下次启动。fire-and-forget, 不阻塞启动。
+ *
+ * 清理前先剔除仍被活跃 worktree 占用的路径(同名复用场景): 这些待办已作废——条目
+ * 归新一代 worktree 所有, 由它自己的删除流程负责, 这里只出队不清理。
  */
 export async function reconcilePendingSafeDirectoryCleanups(): Promise<void> {
   const pending = store.getPendingSafeDirectoryCleanups();
   if (pending.length === 0) return;
+
+  const inUse = await computeInUseSafeDirectorySpellings();
+  const targets = pending.filter((p) => !inUse.has(p));
+  const reclaimed = pending.filter((p) => inUse.has(p));
+
+  // 复用路径的旧待办作废: 只出队, 不动 git config(条目归新 worktree)。
+  if (reclaimed.length > 0) {
+    log.info(
+      '[worktree] drop stale safe.directory cleanups for re-created paths:',
+      reclaimed.join(', '),
+    );
+    try {
+      await store.removePendingSafeDirectoryCleanups(reclaimed);
+    } catch (err) {
+      log.warn(
+        '[worktree] remove reclaimed safe.directory paths from store failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  if (targets.length === 0) return;
 
   const cleaned = await withCrossProcessLock(
     globalSafeDirectoryLockPath(),
     { label: 'git-safe-directory', waitMs: 1_000 },
     async (status) => {
       if (!status.held) return [];
-      return unsetSafeDirectoryEntriesLocked(pending);
+      return unsetSafeDirectoryEntriesLocked(targets);
     },
   );
 
