@@ -33,6 +33,7 @@ interface CodexModelRaw {
   priority?: unknown;
   /** [{id:'priority', name:'Fast', ...}] —— 含 priority 即支持 Fast(bridge 映射 service_tier)。 */
   service_tiers?: unknown;
+  input_modalities?: unknown;
 }
 
 /** service_tiers 里是否声明了 priority(=Fast)档。 */
@@ -59,9 +60,19 @@ const DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4-mini']);
 
 /** Cindy 内部路由专用的 Codex 模型 ID，不应出现在任何用户可见模型目录。 */
 const INTERNAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set(['codex-auto-review']);
+const CODEX_INPUT_MODALITIES: ReadonlySet<string> = new Set(['text', 'image', 'audio']);
 
 function isInternalCodexModelId(id: string): boolean {
   return INTERNAL_CODEX_MODEL_IDS.has(id);
+}
+
+/** Only provider-declared, fully understood modality lists may grant image input. */
+function imageInputSupportFromModalities(value: unknown): boolean | undefined {
+  if (!Array.isArray(value)) return undefined;
+  if (!value.every((modality) => typeof modality === 'string' && CODEX_INPUT_MODALITIES.has(modality))) {
+    return undefined;
+  }
+  return value.includes('image');
 }
 
 function str(v: unknown): string | null {
@@ -145,6 +156,8 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
     if (hasPriorityTier(m.service_tiers)) model.supportsFastMode = true;
+    const supportsImageInput = imageInputSupportFromModalities(m.input_modalities);
+    if (supportsImageInput !== undefined) model.supportsImageInput = supportsImageInput;
     out.push(model);
   }
   return out;
@@ -193,6 +206,7 @@ export function mapCodexAppServerModelsToCatalog(
       ...(Array.isArray(raw.additionalSpeedTiers) ? raw.additionalSpeedTiers : []),
     ];
     const supportsFastMode = tiers.some((tier) => tier === 'priority' || tier === 'fast');
+    const supportsImageInput = imageInputSupportFromModalities(raw.inputModalities);
     const model: CatalogModel = {
       id: slug,
       name: str(raw.displayName) ?? slug,
@@ -209,6 +223,7 @@ export function mapCodexAppServerModelsToCatalog(
       status: 'active',
       defaultEnabled: !DEFAULT_HIDDEN_SLUGS.has(slug),
       ...(supportsFastMode ? { supportsFastMode: true } : {}),
+      ...(supportsImageInput !== undefined ? { supportsImageInput } : {}),
     };
     if (efforts.includes('xhigh')) model.effortDisplayNames = { xhigh: 'Extra High' };
     out.push(model);

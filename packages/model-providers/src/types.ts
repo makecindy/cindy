@@ -405,7 +405,7 @@ export interface CatalogModel {
    */
   newSessionDefault?: AgentKind[];
   /**
-   * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
+   * 该来源下的模型是否明确支持图片输入。可来自用户配置或 provider 运行期的显式声明；
    * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与
    * `modelSignature` 的同 id 跨供应商一致性校验。
    */
