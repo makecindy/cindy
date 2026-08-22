@@ -227,6 +227,29 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   });
 
+  it('reads receipts through a state-root path with a linked ancestor', async () => {
+    const realRoot = path.join(workDir, 'real-state');
+    const linkedRoot = path.join(workDir, 'linked-state');
+    await fs.promises.mkdir(realRoot);
+    try {
+      await fs.promises.symlink(
+        realRoot,
+        linkedRoot,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch {
+      return;
+    }
+    const linkedStore = new GhostInstallReceiptStore(
+      () => linkedRoot,
+      async () => {},
+    );
+
+    await linkedStore.write(createSetupReceipt());
+
+    expect(linkedStore.read('hello')).toMatchObject({ state: 'approved' });
+  });
+
   it('treats only a missing migration marker as absent', () => {
     expect(store.hasMigrationMarker('hello')).toBe(false);
   });
