@@ -50,8 +50,6 @@ export interface CardActionDispatchDeps {
    * session 归属时返回 null，card-action 仍照常投递。
    */
   issueUserActionToken?(ghostId: string, sessionId: string | null): string | null;
-  /** 卡片点击本身就是用户手势，派活切任务认这一下。 */
-  noteUserGesture?(ghostId: string): void;
   /**
    * 后台活动起点(会话呼吸链路,可选):点击成功投递给意识后上报——
    * 从用户点下按钮那刻起会话侧栏就该亮呼吸,不等意识的第一版过程卡。
@@ -163,8 +161,8 @@ export class GhostCardActionDispatcher {
         await this.deps.wake(ghost);
         if (!ownerUsable()) return rejectStaleOwner(ghostId);
       }
+      // 卡片路径只发这一张一次性票；不另记面板手势，避免一次点击两份凭据。
       const userActionToken = this.deps.issueUserActionToken?.(ghostId, sessionId) ?? null;
-      this.deps.noteUserGesture?.(ghostId);
       if (!ownerUsable()) return rejectStaleOwner(ghostId);
       this.deps.sendToGhost(ghostId, {
         type: 'event',

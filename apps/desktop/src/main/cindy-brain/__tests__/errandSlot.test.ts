@@ -541,6 +541,27 @@ describe('可见任务自动切过去', () => {
     expect(reveal).toHaveBeenCalledTimes(1);
   });
 
+  it('消费卡片票时顺手清掉同一次点击留下的面板手势', async () => {
+    const reveal = vi.fn();
+    const live = new Set(['click-1']);
+    const { slot, clock } = makeSlot({
+      onRevealSession: reveal,
+      consumeUserActionToken: (token) => {
+        if (!live.has(token)) return false;
+        live.delete(token);
+        return true;
+      },
+    });
+    slot.noteUserGesture('helper');
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'click-1' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledOnce();
+    clock.now += GHOST_ERRAND_MIN_INTERVAL_MS + 1;
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
   it('过期的面板手势不能再切任务', async () => {
     const reveal = vi.fn();
     const { slot, clock } = makeSlot({ onRevealSession: reveal });

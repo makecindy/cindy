@@ -448,6 +448,7 @@ export class GhostErrandSlot {
       userActionToken &&
       this.deps.consumeUserActionToken?.(userActionToken, ghostId) === true
     ) {
+      this.userGestures.delete(ghostId);
       return 'user-action';
     }
     if (this.consumeUserGesture(ghostId)) return 'user-action';

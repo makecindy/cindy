@@ -1752,7 +1752,6 @@ export function getGhostCardActionDispatcher(): GhostCardActionDispatcher {
       },
       issueUserActionToken: (ghostId, sessionId) =>
         getGhostAgentSlot().issueUserActionToken(ghostId, sessionId),
-      noteUserGesture: (ghostId) => getGhostErrandSlot().noteUserGesture(ghostId),
       // 呼吸起点:点击成功投递即把该会话标为"意识活动中"(结束由 card-update
       // state / TTL 收口)。
       onActivityStart: (key, sessionId) => getGhostSessionActivityTracker().begin(key, sessionId),
