@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 import {
+  projectInteractionDismissedForRemote,
   GhostSetupInteractionBridge,
   parseGhostSetupInlineSubmit,
   parseGhostSetupInlineSubmitRequest,
   parseGhostSetupInteractionCommand,
+  projectInteractionRequestForRemote,
   projectPendingInteractionsForRemote,
   sanitizeGhostSetupRequestForRemote,
   sanitizeGhostSetupSnapshotForRemote,
@@ -392,16 +394,40 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
 
     const remote = projectPendingInteractionsForRemote(pending, true);
     expect(remote).not.toBe(pending);
-    expect(remote).toHaveLength(3);
+    expect(remote).toHaveLength(6);
     expect(JSON.stringify(remote[0])).not.toContain('desktop-only.example');
     expect(remote[1].request).toBe(permission.request);
     expect(remote[2].request).toBe(future.request);
     expect(JSON.stringify(remote)).not.toContain('private');
     expect(JSON.stringify(remote)).not.toContain('/Users/me/private.png');
+    for (const entry of remote.slice(3)) {
+      expect(entry.request).toEqual({
+        kind: expect.any(String),
+        requestId: expect.stringMatching(/^desktop-confirm-/),
+      });
+      expect(entry.request.requestId).not.toMatch(/issue-1|rename-1|grant-1/);
+    }
     expect(localSetup.request.steps[0].action.form.fields[0].externalLink).toEqual({
       url: 'https://desktop-only.example/keys',
     });
     expect(local).toEqual(pending);
+  });
+
+  it('maps a desktop-only confirmation dismissal to its opaque remote request id', () => {
+    const sourceRequest = { kind: 'issue_confirm', requestId: 'private-request-id', draft: { title: 'private' } };
+    const projected = projectInteractionRequestForRemote(sourceRequest)!;
+    const dismissed = projectInteractionDismissedForRemote({
+      sessionId: 'session-1',
+      requestId: sourceRequest.requestId,
+      reason: 'resolved',
+    });
+
+    expect(dismissed).toEqual({
+      sessionId: 'session-1',
+      requestId: projected.requestId,
+      reason: 'resolved',
+    });
+    expect(JSON.stringify(dismissed)).not.toContain('private-request-id');
   });
 });
 

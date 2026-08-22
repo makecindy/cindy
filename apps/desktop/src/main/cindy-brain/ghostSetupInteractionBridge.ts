@@ -11,6 +11,7 @@ import type {
   GhostSetupErrorCode,
   GhostSetupStepPhase,
 } from '../../shared/ghost.js';
+import { randomUUID } from 'node:crypto';
 import { GHOST_SECRET_VALUE_MAX_CHARS, isGhostSetupErrorCode } from '../../shared/ghost.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 
@@ -367,6 +368,29 @@ function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
   );
 }
 
+interface DesktopOnlyConfirmationProjection {
+  remoteRequestId: string;
+}
+
+// Device Link must not receive a host confirmation's real request id: it is the
+// capability checked by the trusted Desktop resolver. Keep the opaque id only
+// long enough to translate the paired dismissal event for remote read-only UI.
+const desktopOnlyConfirmationProjections = new Map<string, DesktopOnlyConfirmationProjection>();
+
+function projectDesktopOnlyConfirmation(request: Record<string, unknown>): Record<string, unknown> | null {
+  const requestId = request.requestId;
+  if (typeof requestId !== 'string' || requestId.length === 0) return null;
+  let projection = desktopOnlyConfirmationProjections.get(requestId);
+  if (!projection) {
+    projection = { remoteRequestId: `desktop-confirm-${randomUUID()}` };
+    desktopOnlyConfirmationProjections.set(requestId, projection);
+  }
+  // Preserve only the known kind so mobile can render its existing read-only
+  // guidance. Drafts, file paths, previews, identities, and the real id stay
+  // on the controlled Desktop.
+  return { kind: request.kind, requestId: projection.remoteRequestId };
+}
+
 /**
  * Host-owned confirmations stay on the trusted Desktop. This keeps their
  * request ids and local payload details (for example file paths and previews)
@@ -374,8 +398,21 @@ function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
  * projection used for remote status/cancellation.
  */
 export function projectInteractionRequestForRemote<T>(request: T): T | null {
-  if (isDesktopOnlyConfirmationRequest(request)) return null;
+  if (isDesktopOnlyConfirmationRequest(request)) {
+    return projectDesktopOnlyConfirmation(request as Record<string, unknown>) as T | null;
+  }
   return sanitizeGhostSetupRequestForRemote(request);
+}
+
+/** Rewrites the paired dismissal to the opaque id exposed by the request projection. */
+export function projectInteractionDismissedForRemote<T>(payload: T): T {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const requestId = (payload as { requestId?: unknown }).requestId;
+  if (typeof requestId !== 'string') return payload;
+  const projection = desktopOnlyConfirmationProjections.get(requestId);
+  if (!projection) return payload;
+  desktopOnlyConfirmationProjections.delete(requestId);
+  return { ...(payload as Record<string, unknown>), requestId: projection.remoteRequestId } as T;
 }
 
 export function projectPendingInteractionsForRemote<T extends { request: unknown }>(
