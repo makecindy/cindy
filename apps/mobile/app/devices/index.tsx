@@ -95,6 +95,7 @@ import {
 } from '@/scheduler/remoteScheduleEvents';
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
 import {
+  conversationSearchAllowsLocalWrites,
   conversationSearchOriginsFromDeviceModels,
   listConversationSearchProjects,
   shouldReplaceListWithSearchResults,
@@ -968,6 +969,14 @@ export default function HomeScreen() {
     statusDetail: item.statusDetail,
     statusLabel: item.statusLabel,
   })), [deviceRows]);
+  useEffect(() => {
+    remoteSessionStore.setConversationSearchDeviceModels(deviceModels.map((item) => ({
+      canOpen: item.canOpen,
+      deviceId: item.deviceId,
+      name: item.name,
+      state: item.state,
+    })));
+  }, [deviceModels]);
   const searchOrigins = useMemo(() => conversationSearchOriginsFromDeviceModels(
     deviceModels,
     {
@@ -2661,7 +2670,7 @@ function ProjectRow({
             );
             // 与顶层同一条规则:普通会话子行挂滑动,自动化组行不挂(组行语义含混,
             // 其展开子行由 AutomationGroupChildren 内的透传包裹)。
-            if (!swipe || item.automationGroup) {
+            if (!swipe || item.automationGroup || !conversationSearchAllowsLocalWrites(item)) {
               return <Fragment key={item.automationGroup?.key ?? item.session.id}>{row}</Fragment>;
             }
             return (
@@ -2807,7 +2816,7 @@ function HomeListRowInner({
   // 普通会话行(含置顶区)在这里挂滑动操作;自动化组行不挂 —— 组行代表多次运行,
   // 「置顶/归档这一组」语义含混,但其展开的子行经 swipe 透传同样可滑。
   // 项目组子行 / 自动化子行的滑动在各自渲染路径内包裹;选择态不传 swipe。
-  if (item.item.automationGroup) return row;
+  if (item.item.automationGroup || !conversationSearchAllowsLocalWrites(item.item)) return row;
   return (
     <SwipeableSessionRow
       onArchive={onArchive}

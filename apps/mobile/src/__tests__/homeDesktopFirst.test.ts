@@ -183,6 +183,7 @@ describe('mobile home desktop-first surface', () => {
     expect(filterSheet).toContain('devices.list.search.filter.label');
     expect(filterSheet).toContain("'all', 'cc', 'codex', 'pi'");
     expect(source).toContain('conversationSearchOriginsFromDeviceModels');
+    expect(source).toContain('setConversationSearchDeviceModels');
     expect(source).not.toContain(': deviceModels.filter((item) => item.canOpen);');
   });
 

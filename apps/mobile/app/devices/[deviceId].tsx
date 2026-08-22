@@ -62,7 +62,11 @@ import {
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
-import { listConversationSearchProjects, shouldReplaceListWithSearchResults } from '@/session/conversationSearch';
+import {
+  conversationSearchAllowsLocalWrites,
+  listConversationSearchProjects,
+  shouldReplaceListWithSearchResults,
+} from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
 import { sessionMatchesProjectDir } from '@/session/mobileHome';
 import { HomeSessionRow } from './index';
@@ -1129,17 +1133,21 @@ export default function DeviceDetailScreen() {
           <DeviceDetailSessionRow
             expandedAutomationGroups={expandedAutomationGroups}
             item={item}
-            onLongPress={() => beginSelection(sessionIdsForListItem(item))}
+            onLongPress={conversationSearchAllowsLocalWrites(item)
+              ? () => beginSelection(sessionIdsForListItem(item))
+              : undefined}
             onOpenAutomationGroup={item.automationGroup ? openAutomationGroup : undefined}
             onOpenSession={(it) => openSession(
                 it.session.id,
                 'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
               )}
-            onPressSelection={() => toggleSelection(sessionIdsForListItem(item))}
+            onPressSelection={conversationSearchAllowsLocalWrites(item)
+              ? () => toggleSelection(sessionIdsForListItem(item))
+              : undefined}
             onToggleAutomationGroup={toggleAutomationGroup}
             selected={sessionIdsForListItem(item).every((id) => selectedSessionIdSet.has(id))}
             selectionMode={selectionMode}
-            swipe={sessionSwipeControls}
+            swipe={conversationSearchAllowsLocalWrites(item) ? sessionSwipeControls : undefined}
             testID="deviceDetail.sessionRow"
           />
         )}

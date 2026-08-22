@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  cachedSessionForSearchResult,
   conversationSearchActiveFilterCount,
+  conversationSearchAllowsLocalWrites,
   conversationSearchOriginsFromDeviceModels,
+  conversationSearchSessionCacheKey,
   isConversationSearchChannelNotAllowed,
   listConversationSearchProjects,
   nextConversationSearchProjectSelection,
@@ -362,5 +365,42 @@ describe('helpers', () => {
     const item = toSearchListItem(page.results[0], Date.parse('2026-08-19T00:00:00.000Z'), '未命名任务');
     expect(item.session.id).toBe('hit');
     expect(item.title).toBe('Remote planning');
+    expect(item.searchLocallyCached).toBe(false);
+    expect(conversationSearchAllowsLocalWrites(item)).toBe(false);
+  });
+
+  it('only attaches a cached session from the same device', () => {
+    const hit = searchCachedDeviceSessions(
+      studio,
+      { query: 'planning' },
+      [session({ id: 'shared', title: 'Remote planning' })],
+    ).results[0];
+    const cachedByKey = new Map([
+      [conversationSearchSessionCacheKey(session({
+        id: 'shared',
+        title: 'Laptop planning',
+        deviceLinkDeviceId: 'dev-b',
+        canonicalDeviceId: 'dev-b',
+      })), session({
+        id: 'shared',
+        title: 'Laptop planning',
+        deviceLinkDeviceId: 'dev-b',
+        canonicalDeviceId: 'dev-b',
+      })],
+      [conversationSearchSessionCacheKey(session({
+        id: 'shared',
+        title: 'Studio planning',
+        canonicalDeviceId: 'dev-a',
+      })), session({
+        id: 'shared',
+        title: 'Studio planning',
+        canonicalDeviceId: 'dev-a',
+      })],
+    ]);
+    expect(cachedSessionForSearchResult(hit, cachedByKey)?.deviceLinkDeviceId ?? cachedSessionForSearchResult(hit, cachedByKey)?.canonicalDeviceId).toBe('dev-a');
+    const item = toSearchListItem(hit, Date.parse('2026-08-19T00:00:00.000Z'), '未命名任务', cachedSessionForSearchResult(hit, cachedByKey));
+    expect(item.searchLocallyCached).toBe(true);
+    expect((item.session as RemoteSession).deviceLinkDeviceId).toBe('dev-a');
+    expect(conversationSearchAllowsLocalWrites(item)).toBe(true);
   });
 });

@@ -9,6 +9,8 @@ import {
   reconcileConversationSearchProjectSelection,
   scopedConversationSearchOrigins,
   searchConversationsAcrossDevices,
+  cachedSessionForSearchResult,
+  conversationSearchSessionCacheKey,
   toSearchListItem,
   type ConversationSearchDeviceOrigin,
   type ConversationSearchListItem,
@@ -147,11 +149,14 @@ export function useConversationSearch({
       ).then((page) => {
         if (seq !== requestSeq.current) return;
         const now = Date.now();
-        const cachedById = new Map(
-          remoteSessionStore.getSessions().map((session) => [session.id, session]),
+        const cachedByKey = new Map(
+          remoteSessionStore.getSessions().map((session) => [
+            conversationSearchSessionCacheKey(session),
+            session,
+          ]),
         );
         setResults(page.results.map((item) => (
-          toSearchListItem(item, now, unnamedLabel, cachedById.get(item.session.id))
+          toSearchListItem(item, now, unnamedLabel, cachedSessionForSearchResult(item, cachedByKey))
         )));
         setStatus('ready');
       }).catch(() => {

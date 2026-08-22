@@ -42,12 +42,14 @@ import { Text } from '@/components/AppText';
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import {
+  conversationSearchOriginsFromDeviceModels,
   listConversationSearchProjects,
   shouldReplaceListWithSearchResults,
+  type ConversationSearchDeviceModel,
   type ConversationSearchDeviceOrigin,
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
-import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
+import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { buildHomeSections, type HomeRow, type HomeSection } from '@/session/homeSections';
@@ -251,13 +253,20 @@ export function SessionListDrawer({
   // 早退,不为收起的抽屉付这份成本。
   const storeVersion = useRemoteSessionStoreVersion();
   const messageVersion = useRemoteMessageVersion();
+  const unresponsiveDevices = useUnresponsiveDevices();
   const searchOrigins = useMemo(() => {
+    const models = remoteSessionStore.getConversationSearchDeviceModels() as ConversationSearchDeviceModel[];
+    if (models.length > 0) {
+      return conversationSearchOriginsFromDeviceModels(models, {
+        unresponsiveDeviceIds: unresponsiveDevices,
+      });
+    }
     const identities = remoteSessionStore.getDeviceIdentity();
     if (identities.length > 0) {
       return identities.map((device) => ({
         deviceId: device.deviceId,
         deviceName: device.name,
-        reachable: !unresponsiveDevicesStore.has(device.deviceId),
+        reachable: false,
       }));
     }
     const byId = new Map<string, ConversationSearchDeviceOrigin>();
@@ -267,11 +276,11 @@ export function SessionListDrawer({
       byId.set(id, {
         deviceId: id,
         deviceName: session.deviceLinkDeviceName ?? id,
-        reachable: !unresponsiveDevicesStore.has(id),
+        reachable: false,
       });
     }
     return [...byId.values()];
-  }, [sessions, storeVersion]);
+  }, [sessions, storeVersion, unresponsiveDevices]);
   const searchProjects = useMemo(
     () => listConversationSearchProjects(excludeOrcaWorkerSessions(sessions)),
     [sessions],

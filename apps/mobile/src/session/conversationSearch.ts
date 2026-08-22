@@ -244,7 +244,30 @@ function sessionToSearchSummary(
 
 export type ConversationSearchListItem = RemoteSessionListItem & {
   searchFocusClientId?: string;
+  searchLocallyCached: boolean;
 };
+
+export function conversationSearchSessionCacheKey(
+  session: Pick<RemoteSession, 'id'> & {
+    canonicalDeviceId?: string | null;
+    deviceLinkDeviceId?: string | null;
+  },
+): string {
+  return `${session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? 'local'}:${session.id}`;
+}
+
+export function conversationSearchAllowsLocalWrites(item: object): boolean {
+  return !('searchLocallyCached' in item) || item.searchLocallyCached !== false;
+}
+
+export function cachedSessionForSearchResult(
+  item: ConversationSearchResultItem,
+  sessionsByCacheKey: ReadonlyMap<string, RemoteSession>,
+): RemoteSession | undefined {
+  const deviceId = item.session.deviceLinkDeviceId;
+  if (!deviceId) return undefined;
+  return sessionsByCacheKey.get(`${deviceId}:${item.session.id}`);
+}
 
 export function toSearchListItem(
   item: ConversationSearchResultItem,
@@ -252,10 +275,12 @@ export function toSearchListItem(
   unnamedLabel?: string,
   cached?: RemoteSession,
 ): ConversationSearchListItem {
+  const deviceId = item.session.deviceLinkDeviceId ?? cached?.deviceLinkDeviceId;
   const stamped = cached
     ? {
         ...cached,
-        deviceLinkDeviceId: item.session.deviceLinkDeviceId ?? cached.deviceLinkDeviceId,
+        canonicalDeviceId: deviceId ?? cached.canonicalDeviceId,
+        deviceLinkDeviceId: deviceId,
         deviceLinkDeviceName: item.session.deviceLinkDeviceName ?? cached.deviceLinkDeviceName,
       }
     : {
@@ -285,7 +310,11 @@ export function toSearchListItem(
     unnamedLabel,
   );
   const searchFocusClientId = item.contentHit?.messageClientId?.trim();
-  return searchFocusClientId ? { ...listItem, searchFocusClientId } : listItem;
+  return {
+    ...listItem,
+    searchLocallyCached: !!cached,
+    ...(searchFocusClientId ? { searchFocusClientId } : {}),
+  };
 }
 
 function requestForOrigin(

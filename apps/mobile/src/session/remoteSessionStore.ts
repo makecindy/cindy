@@ -774,6 +774,12 @@ let storeVersion = 0;
 // 重建身份索引,用于给会话算展示用 canonicalDeviceId(把 re-link 后残留 stale shard 认领回当前设备);
 // 为 null 时不归一,安全退化。
 let deviceList: readonly { deviceId: string; name: string }[] | null = null;
+let conversationSearchDeviceModels: readonly {
+  canOpen: boolean;
+  deviceId: string;
+  name: string | null;
+  state: string;
+}[] = [];
 
 function emit(): void {
   storeVersion += 1;
@@ -1612,6 +1618,31 @@ export const remoteSessionStore = {
    */
   getDeviceIdentity(): readonly { deviceId: string; name: string }[] {
     return deviceList ?? [];
+  },
+
+  getConversationSearchDeviceModels(): readonly {
+    canOpen: boolean;
+    deviceId: string;
+    name: string | null;
+    state: string;
+  }[] {
+    return conversationSearchDeviceModels;
+  },
+
+  setConversationSearchDeviceModels(models: readonly {
+    canOpen: boolean;
+    deviceId: string;
+    name: string | null;
+    state: string;
+  }[]): void {
+    if (conversationSearchDeviceModelsEqual(conversationSearchDeviceModels, models)) return;
+    conversationSearchDeviceModels = models.map((item) => ({
+      canOpen: item.canOpen,
+      deviceId: item.deviceId,
+      name: item.name,
+      state: item.state,
+    }));
+    emit();
   },
 
   getSessionRetention(sessionId: string): SessionRetentionKind {
@@ -3565,6 +3596,24 @@ function deviceListsEqual(
   if (!a || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
     if (a[i].deviceId !== b[i].deviceId || a[i].name !== b[i].name) return false;
+  }
+  return true;
+}
+
+function conversationSearchDeviceModelsEqual(
+  a: readonly { canOpen: boolean; deviceId: string; name: string | null; state: string }[],
+  b: readonly { canOpen: boolean; deviceId: string; name: string | null; state: string }[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (
+      a[i].deviceId !== b[i].deviceId
+      || a[i].name !== b[i].name
+      || a[i].canOpen !== b[i].canOpen
+      || a[i].state !== b[i].state
+    ) {
+      return false;
+    }
   }
   return true;
 }
