@@ -6211,11 +6211,11 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-1']);
   });
 
-  it('does not timeout-clear leftover activeTurn while a live Session is still present', async () => {
+  it('does not reclaim leftover activeTurn in the post-send agent_start gap', async () => {
     vi.useFakeTimers();
     try {
       const h = createHarness();
-      const sid = 'drain-live-present-active-turn';
+      const sid = 'drain-agent-start-gap';
       const first = makeItem('q-1', 'first');
       const second = makeItem('q-2', 'queued-after-idle');
 
@@ -6223,9 +6223,10 @@ describe('AgentInputCoordinator steer transaction', () => {
       await flush();
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
 
+      // sendReservation already released, handle not streaming yet, tracker idle.
       h.setLiveRunning(false);
       h.setLiveSessionPresent(true);
-      h.setRunning(true);
+      h.setRunning(false);
       h.coordinator.enqueue(sid, second);
       await flush();
       expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
@@ -6236,6 +6237,43 @@ describe('AgentInputCoordinator steer transaction', () => {
       expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
       expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reclaims a dispatched leftover activeTurn when the live Session is idle but tracker stays busy', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-lost-terminal-live-idle';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'queued-after-idle');
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, second);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+        type: 'user',
+        content: 'queued-after-idle',
+      });
     } finally {
       vi.useRealTimers();
     }

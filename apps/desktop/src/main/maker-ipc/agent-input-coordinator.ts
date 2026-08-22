@@ -3426,15 +3426,20 @@ export class AgentInputCoordinator {
    * Do not call this while a send is in flight, a permission card is up, or
    * abort/steer already owns the boundary.
    *
-   * Leftover `activeTurn` is only reclaimed when the turn is already dispatched
-   * and the live Session is gone. A present Session that looks idle may still
-   * be in pre-dispatch awaits or waiting for Pi `agent_start`; a timeout must
-   * not drop that owner. Probe unavailable stays fail-closed.
+   * Leftover `activeTurn` is reclaimed only when it is already dispatched and
+   * we can prove the vendor turn is gone: the Session object is missing, or the
+   * live Session is idle while the desktop tracker is still latched. A present
+   * Session with an idle tracker may still be in the Pi gap after handle.send
+   * (reservation released, agent_start not yet observed). Pre-dispatch owners
+   * and unavailable probes stay fail-closed.
    */
   private canReclaimLeftoverActiveTurn(sessionId: string, state: SessionInputState): boolean {
     const active = state.activeTurn;
     if (!active || !isActiveTurnDispatched(active)) return false;
-    return this.deps.isLiveSessionPresent?.(sessionId) === false;
+    const present = this.deps.isLiveSessionPresent?.(sessionId);
+    if (present === false) return true;
+    if (present !== true) return false;
+    return this.deps.isTurnRunning(sessionId) === true;
   }
 
   private tryReconcileStaleDispatchBoundary(
@@ -3483,7 +3488,7 @@ export class AgentInputCoordinator {
       if (!reconciled && !reclaimLeftover) return false;
     }
     if (reclaimLeftover) {
-      log.warn('reconciling leftover dispatched activeTurn after session unload', {
+      log.warn('reconciling leftover dispatched activeTurn after vendor idle', {
         sessionId,
         clientId: state.activeTurn?.item?.clientId ?? null,
         dispatchLifecycle: state.activeTurn?.dispatchLifecycle ?? null,
