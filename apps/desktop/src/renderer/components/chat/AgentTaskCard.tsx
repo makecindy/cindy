@@ -14,6 +14,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
+  isSubagentResultError,
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 
@@ -226,6 +227,8 @@ export function AgentTaskCard({
         resultIsLaunchReceipt:
           subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
           || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
+        // agent_task_update 不落历史；重载后从持久化错误 tool_result 恢复 failed。
+        resultIsError: update === undefined && isSubagentResultError(result),
       });
   const StatusIcon = statusIcon(status);
   const statusIconClassName = cn(

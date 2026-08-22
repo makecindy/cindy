@@ -66,6 +66,23 @@ const withPanelHost = (
   });
 
 describe('AgentTaskCard', () => {
+  it('restores a failed status from a persisted error result without a live update', () => {
+    const { container } = render(
+      React.createElement(AgentTaskCard, {
+        result: '{"ok":false,"error":"model unavailable"}',
+        toolCall: {
+          clientId: 'tool-history-error',
+          role: 'tool_use',
+          content: '',
+          toolName: 'Agent',
+        },
+      }),
+    );
+
+    expect(container.textContent).toContain('chat.agentTask.status.failed');
+    expect(container.textContent).not.toContain('Completed');
+  });
+
   it.each([
     ['failed', 'chat.agentTask.status.failed'],
     ['stopped', 'chat.agentTask.status.stopped'],

@@ -1421,6 +1421,49 @@ describe('Claude Code sidechain launch failure projection', () => {
     expect(ctx.turn.pendingApiError).toBeNull();
   });
 
+  it('projects a pending retryable sidechain when the authoritative turn result fails', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retry_exhausted',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited after all retries.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result: 'API retries exhausted.',
+        usage: { input_tokens: 10, output_tokens: 0 },
+        modelUsage: {
+          'claude-opus-4-6': { inputTokens: 10, outputTokens: 0, contextWindow: 200_000 },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data).toMatchObject({
+      taskId: 'toolu_retry_exhausted',
+      parentToolUseId: 'toolu_retry_exhausted',
+      status: 'failed',
+    });
+    expect(taskUpdates[0].data.description).toContain('all retries');
+  });
+
   it('does not infer a sidechain failure from an identity-less exhausted api_retry', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();

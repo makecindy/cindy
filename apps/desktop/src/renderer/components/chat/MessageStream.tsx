@@ -33,6 +33,7 @@ import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
+  isSubagentResultError,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
   type AgentTaskTerminalStatus,
@@ -2009,6 +2010,7 @@ function isRunningAgentTask(it: RenderItem): boolean {
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(it.toolCall?.toolName, it.toolCall?.toolInput, it.result) !==
         undefined || subagentSpawnResultIndicatesRunning(it.toolCall?.toolName, it.result),
+    resultIsError: it.update === undefined && isSubagentResultError(it.result),
   });
   return status === 'running';
 }

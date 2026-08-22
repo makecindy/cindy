@@ -1272,6 +1272,28 @@ function projectSubagentLaunchFailure(
   });
 }
 
+/**
+ * A failed ResultMessage is the first turn-level fact proving that retryable
+ * pre-task sidechains did not recover. `api_retry` itself has no parent identity,
+ * so projecting earlier can lock a different concurrent sidechain into failed.
+ */
+function projectPendingSubagentLaunchFailures(
+  queue: EventQueue,
+  ctx: TranslateContext,
+): void {
+  const startedParentToolUseIds = new Set(ctx.rt.subagentParentToolUseIdByTaskId.values());
+  for (const [parentToolUseId, state] of ctx.rt.subagentRetryStateByParentToolUseId) {
+    if (state.projected) continue;
+    if (startedParentToolUseIds.has(parentToolUseId)) {
+      ctx.rt.subagentRetryStateByParentToolUseId.delete(parentToolUseId);
+      continue;
+    }
+    projectSubagentLaunchFailure(queue, ctx, parentToolUseId, {
+      errorMessage: state.errorMessage,
+    });
+  }
+}
+
 function handleAssistant(
   msg: {
     message?: { content?: Array<Record<string, unknown>> };
@@ -2111,6 +2133,12 @@ function handleResult(
       turnTextLen: ctx.turn.uiEmittedText.length,
       resultTextLen: full.length,
     });
+  }
+  // 可重试 sidechain envelope 不能靠 identity-less api_retry 提前归因；但整个 turn
+  // 已权威失败时，仍未 task_started / 正常 child assistant 自愈的 pending sidechain
+  // 已没有成功终态可等，必须在 resetTurnState 清理前补发 parent-visible failed。
+  if (msg.is_error && !ctx.turn.interruptRequested) {
+    projectPendingSubagentLaunchFailures(queue, ctx);
   }
   // 空响应兜底: isEmptyResponseTurn 已在上方(endTurn 之前)算好并解释。命中即"本轮发起过
   // API call 但 0 产出且 usage 增量全 0", 典型是模型网关短路返回空 SSE。此前这种 turn 会

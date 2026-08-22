@@ -219,11 +219,27 @@ export function isSubagentResultError(result: string | undefined): boolean {
     if (status === 'error' || status === 'failed' || status === 'failure') return true;
     return ['error', 'errors', 'exception', 'stderr'].some((key) => {
       const raw = record[key];
-      return typeof raw === 'string' ? raw.trim().length > 0 : raw !== undefined && raw !== null;
+      return hasMeaningfulErrorContent(raw);
     });
   } catch {
-    return /^\b(error|failed|failure|exception|unable to start|could not start|启动失败|无法启动)\b/i.test(text);
+    if (/^(?:error|failed|failure|exception|unable to start|could not start)\b/i.test(text)) {
+      return true;
+    }
+    // JavaScript 的 \b 只认识 ASCII word characters，不能用于中文边界；中文失败
+    // 句式按明确前缀识别，避免重载后把“启动失败……”恢复成 completed。
+    return text.startsWith('启动失败') || text.startsWith('无法启动');
   }
+}
+
+function hasMeaningfulErrorContent(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.some(hasMeaningfulErrorContent);
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some(hasMeaningfulErrorContent);
+  }
+  return false;
 }
 
 /**

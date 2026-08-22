@@ -5,6 +5,7 @@ import {
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  isSubagentResultError,
   isSubagentSpawnToolName,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
@@ -104,6 +105,20 @@ describe('deriveAgentTaskStatus', () => {
     expect(deriveAgentTaskStatus(undefined, 'done', {
       persistedStatus: 'cancelled' as never,
     })).toBe('completed');
+  });
+});
+
+describe('isSubagentResultError', () => {
+  it('ignores empty structured error containers', () => {
+    expect(isSubagentResultError('{"items":[],"errors":[]}')).toBe(false);
+    expect(isSubagentResultError('{"stderr":[],"error":{}}')).toBe(false);
+  });
+
+  it('recognizes meaningful structured and Chinese-prefix failures', () => {
+    expect(isSubagentResultError('{"errors":["launch failed"]}')).toBe(true);
+    expect(isSubagentResultError('{"error":{"message":"denied"}}')).toBe(true);
+    expect(isSubagentResultError('启动失败：模型不可用')).toBe(true);
+    expect(isSubagentResultError('无法启动子任务')).toBe(true);
   });
 });
 
