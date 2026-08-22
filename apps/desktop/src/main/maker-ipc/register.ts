@@ -8202,7 +8202,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   };
 
-  // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts。切换后
+  // send-time bootstrap/rebuild 前以 DB 行为真源校正 createOpts。切换后
   // 残留在 renderer store / 排队项里的旧 agentKind/resumeSessionId 若原样 spawn,
   // 会把会话劫持回旧引擎且丢交接注入(规则 9:代码兜底)。send 事务与
   // GET_CONTEXT_USAGE 的 lazy 分支共用(后者无校正曾是审计实锤缺口)。
@@ -8235,7 +8235,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 事务内 apply 之前。agentKind 可能已一致,但 model/resume/providerId/effort/fast
       // 仍是旧值；
       // 尤其 resumeSessionId 可能是**旧引擎**的原生会话 id——resume 会以错误引擎
-      // 解释它)。lazy-create 时刻 DB 行是唯一真源,执行字段无条件对齐。
+      // 解释它)。send-time bootstrap/rebuild 时 DB 行是唯一真源,执行字段无条件对齐。
       co.model = row.model ?? undefined;
       co.resumeSessionId = row.sdkSessionId ?? undefined;
       if (!row.sdkSessionId && co.vendorOptions) {
@@ -10976,7 +10976,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       rollbackAgentIslandUserPrompt(sessionId, clientId, source);
     },
     isSessionRunningError,
-    // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts(定义见
+    // send-time bootstrap/rebuild 前以 DB 行为真源校正 createOpts(定义见
     // reconcileCreateOptsAgainstDb;GET_CONTEXT_USAGE 的 lazy 分支共用)。
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),

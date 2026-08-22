@@ -200,7 +200,7 @@ export interface MakerSendTransactionDeps {
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
   /**
-   * session-agent-switch:lazy-create 前用 DB 行(真源)校正 createOpts。
+   * send-time bootstrap/rebuild 前用 DB 行(真源)校正 createOpts。
    * 切换后 renderer/队列里可能残留旧 agentKind / 旧 resumeSessionId 的 createOpts,
    * 用它 spawn 会把消息发回旧引擎且丢交接注入;此钩子读 sessions 行,发现漂移时
    * 原地覆写 agentKind/model/resumeSessionId/providerId。undefined = 不校正(测试用)。
@@ -445,6 +445,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     sessionId: string,
     createOpts: CreateOpts,
   ): Promise<ResolveSessionResult> {
+    await deps.reconcileCreateOptsWithDb?.(sessionId, createOpts);
     const okRehydrate = await ensureWorkDirWithDbFallback(sessionId, createOpts);
     if (!okRehydrate) {
       return {

@@ -1156,6 +1156,111 @@ describe('maker SEND transaction', () => {
     expect(newSession.send).toHaveBeenCalled();
   });
 
+  it('rehydrates an active Pi Orca session with the DB transcript before dispatch', async () => {
+    const callOrder: string[] = [];
+    const oldSession = createSession({
+      id: 'pi-orca-session',
+      agentKind: 'pi',
+      workDir: '/repo',
+    });
+    const newSession = createSession({
+      id: 'pi-orca-session',
+      agentKind: 'pi',
+      workDir: '/repo',
+      send: vi.fn(async (_message, opts) => {
+        callOrder.push('send');
+        await opts?.onAccepted?.();
+        opts?.onDispatching?.();
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const dbTranscript = '/pi/sessions/original-transcript.jsonl';
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb: vi.fn(async (_sessionId, opts) => {
+        callOrder.push('reconcile');
+        opts.resumeSessionId = dbTranscript;
+      }),
+      closeSession: vi.fn(async () => {
+        callOrder.push('close');
+      }),
+      bootstrapSession: vi.fn(async () => {
+        callOrder.push('bootstrap');
+        return {
+          session: newSession,
+          didInjectOrcaInstructions: true,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('pi-orca-session', 'follow up', {
+        id: 'pi-orca-session',
+        agentKind: 'pi',
+        workingDir: '/repo',
+        model: 'cindy/pi-model',
+        orcaRole: 'lead',
+      }),
+    ).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: dbTranscript,
+    }));
+    expect(callOrder).toEqual(['reconcile', 'close', 'bootstrap', 'send']);
+    expect(oldSession.send).not.toHaveBeenCalled();
+    expect(newSession.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers the DB Pi transcript over a stale caller resumeSessionId during Orca rehydrate', async () => {
+    const oldSession = createSession({
+      id: 'pi-orca-session',
+      agentKind: 'pi',
+      workDir: '/repo',
+    });
+    const newSession = createSession({
+      id: 'pi-orca-session',
+      agentKind: 'pi',
+      workDir: '/repo',
+    });
+    const dbTranscript = '/pi/sessions/latest-transcript.jsonl';
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb: vi.fn(async (_sessionId, opts) => {
+        opts.resumeSessionId = dbTranscript;
+      }),
+      bootstrapSession: vi.fn(async () => ({
+        session: newSession,
+        didInjectOrcaInstructions: true,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('pi-orca-session', 'follow up', {
+      id: 'pi-orca-session',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'cindy/pi-model',
+      orcaRole: 'lead',
+      resumeSessionId: '/pi/sessions/stale-transcript.jsonl',
+    });
+
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: dbTranscript,
+    }));
+    expect(oldSession.send).not.toHaveBeenCalled();
+    expect(newSession.send).toHaveBeenCalledTimes(1);
+  });
+
   it('returns rehydrate failure without sending when active Orca rehydrate fails', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const { deps } = createDeps({
@@ -1187,6 +1292,7 @@ describe('maker SEND transaction', () => {
     });
 
     expect(oldSession.send).not.toHaveBeenCalled();
+    expect(deps.prepareSendUserMessage).not.toHaveBeenCalled();
   });
 
   it('projects a stable marker with a safe fallback when rehydrate Codex resume preparation is blocked', async () => {
