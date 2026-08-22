@@ -69,7 +69,7 @@ describe('AgentTaskCard', () => {
   it('restores a failed status from a persisted error result without a live update', () => {
     const { container } = render(
       React.createElement(AgentTaskCard, {
-        result: '{"ok":false,"error":"model unavailable"}',
+        result: '<tool_use_error>model unavailable</tool_use_error>',
         toolCall: {
           clientId: 'tool-history-error',
           role: 'tool_use',

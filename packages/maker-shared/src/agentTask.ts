@@ -168,8 +168,8 @@ export interface AgentTaskUpdate {
  * overriding an explicit failure or stopped state.
  *
  * 历史回放(Desktop 重载 / Mobile 断线重连)拿不到 live-only 的 agent_task_update,
- * 卡片只能靠持久化的工具结果推导。若结果是结构化错误记录(ok:false / status:"error" /
- * error 字段等),说明子任务以失败收尾 —— 必须推导成 `failed`,不能判成 `completed`
+ * 卡片只能靠持久化的工具结果推导。若结果带 Claude 工具协议的
+ * `<tool_use_error>` 标记，说明工具调用以失败收尾 —— 必须推导成 `failed`,不能判成 `completed`
  * (否则刚显示失败的启动任务恢复后变成“已完成”,Mobile 错过实时帧则从未显示失败)。
  */
 export function deriveAgentTaskStatus(
@@ -200,46 +200,13 @@ export function deriveAgentTaskStatus(
 }
 
 /**
- * 判断子任务工具结果是否以失败收尾(历史回放恢复 failed 的依据)。判定为“是”的
- * 形态:结构化 JSON 错误记录(ok:false / success:false / status ∈ error|failed|failure
- * / 非空 error|errors|exception|stderr 字段)、`<tool_use_error>` 标记、或以
- * Error/失败句式开头的短结果。与 messagePresentation.isErrorRecord 语义对齐
- * (该函数不可达:agentTask 是叶子模块),但只读 result 字符串,不依赖工具元数据。
+ * 历史回放只能从 Claude 工具协议写入的 `<tool_use_error>` 标记恢复失败。
+ * Subagent 的正常返回是任意工作产物：JSON 的 error/errors/stderr 字段、甚至以
+ * “Error/启动失败”开头的报告正文，都不能证明工具调用本身失败。
  */
 export function isSubagentResultError(result: string | undefined): boolean {
   const text = typeof result === 'string' ? result.trim() : '';
-  if (text.length === 0) return false;
-  if (text.startsWith('<tool_use_error>') || text.startsWith('<error>')) return true;
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-    const record = parsed as Record<string, unknown>;
-    if (record.ok === false || record.success === false) return true;
-    const status = typeof record.status === 'string' ? record.status.toLowerCase() : '';
-    if (status === 'error' || status === 'failed' || status === 'failure') return true;
-    return ['error', 'errors', 'exception', 'stderr'].some((key) => {
-      const raw = record[key];
-      return hasMeaningfulErrorContent(raw);
-    });
-  } catch {
-    if (/^(?:error|failed|failure|exception|unable to start|could not start)\b/i.test(text)) {
-      return true;
-    }
-    // JavaScript 的 \b 只认识 ASCII word characters，不能用于中文边界；中文失败
-    // 句式按明确前缀识别，避免重载后把“启动失败……”恢复成 completed。
-    return text.startsWith('启动失败') || text.startsWith('无法启动');
-  }
-}
-
-function hasMeaningfulErrorContent(value: unknown): boolean {
-  if (typeof value === 'string') return value.trim().length > 0;
-  if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'boolean') return value;
-  if (Array.isArray(value)) return value.some(hasMeaningfulErrorContent);
-  if (value && typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).some(hasMeaningfulErrorContent);
-  }
-  return false;
+  return text.startsWith('<tool_use_error>');
 }
 
 /**
@@ -500,7 +467,7 @@ export function buildAgentTaskCardModel(input: {
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
       || subagentSpawnResultIndicatesRunning(toolName, result),
-    // 历史回放:无 live update 时从错误结果恢复 failed(而不是误判 completed)。
+    // 历史回放:无 live update 时只从协议错误标记恢复 failed(而不是解析任意正文)。
     resultIsError: update === undefined && isSubagentResultError(result),
   });
   const provider: 'claude-code' | 'codex' | 'pi' =

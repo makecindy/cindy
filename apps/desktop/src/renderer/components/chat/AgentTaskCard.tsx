@@ -227,7 +227,7 @@ export function AgentTaskCard({
         resultIsLaunchReceipt:
           subagentSpawnReceiptName(toolCall?.toolName, toolCall?.toolInput, result) !== undefined
           || subagentSpawnResultIndicatesRunning(toolCall?.toolName, result),
-        // agent_task_update 不落历史；重载后从持久化错误 tool_result 恢复 failed。
+        // agent_task_update 不落历史；重载后只从协议错误标记恢复 failed。
         resultIsError: update === undefined && isSubagentResultError(result),
       });
   const StatusIcon = statusIcon(status);

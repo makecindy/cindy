@@ -109,16 +109,18 @@ describe('deriveAgentTaskStatus', () => {
 });
 
 describe('isSubagentResultError', () => {
-  it('ignores empty structured error containers', () => {
+  it('does not infer execution failure from arbitrary structured report content', () => {
     expect(isSubagentResultError('{"items":[],"errors":[]}')).toBe(false);
     expect(isSubagentResultError('{"stderr":[],"error":{}}')).toBe(false);
+    expect(isSubagentResultError('{"errors":["发现一处问题"]}')).toBe(false);
+    expect(isSubagentResultError('{"stderr":"example diagnostic"}')).toBe(false);
+    expect(isSubagentResultError('启动失败：这是报告中发现的问题')).toBe(false);
+    expect(isSubagentResultError('Error: reproduced by the successful audit')).toBe(false);
   });
 
-  it('recognizes meaningful structured and Chinese-prefix failures', () => {
-    expect(isSubagentResultError('{"errors":["launch failed"]}')).toBe(true);
-    expect(isSubagentResultError('{"error":{"message":"denied"}}')).toBe(true);
-    expect(isSubagentResultError('启动失败：模型不可用')).toBe(true);
-    expect(isSubagentResultError('无法启动子任务')).toBe(true);
+  it('recognizes the persisted Claude tool-result error marker', () => {
+    expect(isSubagentResultError('<tool_use_error>Unable to start subagent</tool_use_error>'))
+      .toBe(true);
   });
 });
 
@@ -450,15 +452,14 @@ describe('buildAgentTaskCardModel', () => {
       .toBe('stopped');
   });
 
-  it('history replay: recovers failed from a structured error result when no live update exists', () => {
-    // Desktop 重载 / Mobile 断线重连:agent_task_update 是 live-only,卡片只能靠
-    // 持久化的工具结果推导。错误结果必须恢复 failed,不能判成 completed。
+  it('history replay: treats a successful structured report as completed', () => {
+    // Subagent 正文是任意工作产物；字段名 errors 不能代替工具协议终态。
     const model = buildAgentTaskCardModel({
       toolName: 'Task',
       toolInput: { description: 'launch', prompt: 'run' },
-      result: JSON.stringify({ ok: false, error: 'model not found' }),
+      result: JSON.stringify({ errors: ['发现一处问题'], summary: 'audit complete' }),
     });
-    expect(model.status).toBe('failed');
+    expect(model.status).toBe('completed');
   });
 
   it('history replay: recovers failed from a <tool_use_error> result with no live update', () => {

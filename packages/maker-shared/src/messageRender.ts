@@ -1736,7 +1736,7 @@ function isRunningAgentTaskItem<
           toolNameOf(item.toolCall.source),
           item.toolCall.secondaryBody,
         )),
-    // 历史回放(无 live update):错误结果不得判成 completed 而折叠,须保持
+    // 历史回放(无 live update):协议错误标记不得判成 completed 而折叠,须保持
     // failed 可见,与 buildAgentTaskCardModel 同口径。
     resultIsError: item.update === undefined && isSubagentResultError(item.toolCall?.secondaryBody),
   });
