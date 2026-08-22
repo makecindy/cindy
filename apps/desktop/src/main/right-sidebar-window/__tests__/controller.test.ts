@@ -378,6 +378,11 @@ describe('open / close (hide-reuse)', () => {
 
     h.controller.close();
     expect(h.controller.getState().hostSessionId).toBe('s1');
+    expect(h.broadcasts.at(-1)).toMatchObject({
+      detached: true,
+      open: false,
+      hostSessionId: 's1',
+    });
     h.controller.setContext({ ...ctx, sessionId: 's2' });
     expect(h.controller.getState().hostSessionId).toBe('s1');
 
@@ -871,6 +876,19 @@ describe('ensureOpenForAutomation', () => {
       remoteHostId: null,
       available: false,
     });
+  });
+
+  it('does not show a pending window after Main leaves chat', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    expect(h.windows).toHaveLength(1);
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    await expect(pending).rejects.toThrow(/cancelled/);
+    markReady(h.controller, h.windows[0]);
+    expect(h.windows[0].show).not.toHaveBeenCalled();
+    expect(h.windows[0].showInactive).not.toHaveBeenCalled();
+    expect(h.controller.getState().open).toBe(false);
   });
 
   it('fails closed when the target session context never arrives', async () => {

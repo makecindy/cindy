@@ -55,7 +55,11 @@ export interface RsbWindowControllerDeps {
   createWindow: () => BrowserWindow;
   getMainWindow: () => BrowserWindow | null;
   /** 状态变化广播(所有窗口)。bootstrap 注入 getAllWindows 遍历实现。 */
-  broadcastState: (state: { detached: boolean; open: boolean }) => void;
+  broadcastState: (state: {
+    detached: boolean;
+    open: boolean;
+    hostSessionId?: string;
+  }) => void;
   /** 向裁决后的 renderer host 推送 context / command；窗口有效性由 controller 保证。 */
   sendToWindow: (win: BrowserWindow, channel: string, payload: unknown) => void;
   /**
@@ -414,6 +418,7 @@ export class RsbWindowController {
         if (pinned) this.settleHostWaiters(pinned, false);
       }
     }
+    if (!ctx.available) this.cancelPendingOpen();
     this.lastContext = ctx;
     this.rememberLastHostSession(ctx, { onlyIfShowing: true });
     this.revealPendingOpenIfHostReady();
@@ -1185,6 +1190,21 @@ export class RsbWindowController {
   private broadcast(): void {
     const s = this.deps.settings.read();
     // pendingOpen:窗口已创建但等待 presentation-ready,从调用方视角视为 open。
-    this.deps.broadcastState({ detached: s.detached, open: this.isOpen() || this.pendingOpen });
+    this.deps.broadcastState({
+      detached: s.detached,
+      open: this.isOpen() || this.pendingOpen,
+      ...(this.lastHostSessionId ? { hostSessionId: this.lastHostSessionId } : {}),
+    });
+  }
+
+  private cancelPendingOpen(): void {
+    this.pendingOpen = false;
+    this.pendingOpenShouldFocus = true;
+    this.clearOpenTimeout();
+    const waiters = this.readyWaiters.splice(0);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(new Error('right-sidebar host context wait cancelled'));
+    }
   }
 }

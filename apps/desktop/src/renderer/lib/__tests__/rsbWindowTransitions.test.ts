@@ -39,6 +39,12 @@ describe('didUserCloseDetachedSidebarWindow', () => {
   });
 
   it('attributes a detached close to the pinned host, not the focused session', () => {
+    expect(
+      sessionIdForDetachedSidebarClose(
+        { loaded: true, detached: true, open: false, hostSessionId: 'session-a' }.hostSessionId,
+        'session-b',
+      ),
+    ).toBe('session-a');
     expect(sessionIdForDetachedSidebarClose('session-a', 'session-b')).toBe('session-a');
     expect(sessionIdForDetachedSidebarClose(null, 'session-b')).toBe('session-b');
     expect(sessionIdForDetachedSidebarClose(null, null)).toBeNull();
