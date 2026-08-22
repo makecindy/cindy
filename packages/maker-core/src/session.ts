@@ -1751,13 +1751,23 @@ export class Session {
    * 并像用户插话一样暂停 goal,scheduler 的 IM 转播则直接忽略,卡片永不 finalize
    * (review #944 第二轮)。
    */
-  private fanOutEvent(event: AgentEvent, observedGeneration = this.turnGeneration): void {
+  private fanOutEvent(
+    event: AgentEvent,
+    observedGeneration = this.turnGeneration,
+    queuedGeneration = observedGeneration,
+  ): void {
     const isBackgroundEvent = event.turnScope === 'background';
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     const isCurrentGeneration = observedGeneration === this.turnGeneration;
+    if (event.sessionInstanceId === undefined) {
+      event.sessionInstanceId = this.instanceId;
+    }
     if (event.sessionTurnGeneration === undefined) {
-      event.sessionTurnGeneration = observedGeneration;
+      // Stamp the generation that owned this next() wait, not an adopted later
+      // generation. A leftover terminal dequeued after the next send must keep
+      // the older value so host can fence it.
+      event.sessionTurnGeneration = queuedGeneration;
     }
     this.observeTurnControl(event, observedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
@@ -2140,7 +2150,7 @@ export class Session {
         if (this.terminationStarted) continue;
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
         // 见那里的注释）。关闭门一旦占住，旧 handle 的迟到事件不得再改写业务状态。
-        this.fanOutEvent(event, observedGeneration);
+        this.fanOutEvent(event, observedGeneration, awaitingGeneration);
       }
     } catch (e) {
       this.logger.error('event loop crashed', { error: String(e) });

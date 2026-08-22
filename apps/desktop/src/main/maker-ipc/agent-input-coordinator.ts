@@ -643,8 +643,8 @@ interface SessionInputState {
    * flips idle; reconcile only after SESSION_RUNNING_RETRY_DELAY_MS.
    */
   staleLiveIdleSinceMs: number | null;
-  /** Vendor Session.turnGeneration fenced when a leftover dispatched turn was reclaimed. */
-  fencedSessionTurnGeneration: number | null;
+  /** Leftover terminal fence: Session incarnation + the generation that was reclaimed. */
+  fencedStaleTerminal: { instanceId: string; generation: number } | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -709,7 +709,7 @@ function createInitialInputState(
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
     staleLiveIdleSinceMs: null,
-    fencedSessionTurnGeneration: null,
+    fencedStaleTerminal: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -717,6 +717,25 @@ function createInitialInputState(
     generation,
     clearBoundaryMs,
   };
+}
+
+function readSessionInstanceId(identity: object | null | undefined): string | null {
+  if (!identity || typeof identity !== 'object') return null;
+  const id = (identity as { instanceId?: unknown }).instanceId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+export function isMatchingFencedStaleTerminal(
+  fence: { instanceId: string; generation: number } | null | undefined,
+  meta?: { sessionTurnGeneration?: number; sessionInstanceId?: string },
+): boolean {
+  if (!fence) return false;
+  return (
+    typeof meta?.sessionTurnGeneration === 'number' &&
+    typeof meta.sessionInstanceId === 'string' &&
+    meta.sessionInstanceId === fence.instanceId &&
+    meta.sessionTurnGeneration <= fence.generation
+  );
 }
 /**
  * 首次进入 main 队列边界时冻结原始合成指令意图。IPC payload 属不可信输入，
@@ -2956,23 +2975,27 @@ export class AgentInputCoordinator {
    * coordinator 里做那个判断——它是「这条错误是什么」的领域知识，属于 host 侧的
    * interruptedTurnAutoResume；coordinator 只负责回答「有没有可续跑的目标」。
    */
+  isFencedStaleTerminal(
+    sessionId: string,
+    meta?: { sessionTurnGeneration?: number; sessionInstanceId?: string },
+  ): boolean {
+    return isMatchingFencedStaleTerminal(this.getState(sessionId).fencedStaleTerminal, meta);
+  }
+
   onTurnEvent(
     sessionId: string,
     type: 'done' | 'error',
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
-    meta?: { sessionTurnGeneration?: number },
+    meta?: { sessionTurnGeneration?: number; sessionInstanceId?: string },
   ): void {
     const state = this.getState(sessionId);
-    const eventGeneration = meta?.sessionTurnGeneration;
-    if (
-      typeof eventGeneration === 'number' &&
-      state.fencedSessionTurnGeneration === eventGeneration
-    ) {
+    if (this.isFencedStaleTerminal(sessionId, meta)) {
       log.debug('ignored stale terminal after leftover turn reclaim', {
         sessionId,
         type,
-        eventGeneration,
+        eventGeneration: meta?.sessionTurnGeneration ?? null,
+        sessionInstanceId: meta?.sessionInstanceId ?? null,
       });
       return;
     }
@@ -3505,14 +3528,15 @@ export class AgentInputCoordinator {
     }
     if (reclaimLeftover) {
       const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
-      if (typeof vendorGeneration === 'number') {
-        state.fencedSessionTurnGeneration = vendorGeneration;
+      const instanceId = readSessionInstanceId(this.deps.getTurnSessionIdentity?.(sessionId));
+      if (typeof vendorGeneration === 'number' && instanceId) {
+        state.fencedStaleTerminal = { instanceId, generation: vendorGeneration };
       }
       log.warn('reconciling leftover dispatched activeTurn after vendor idle', {
         sessionId,
         clientId: state.activeTurn?.item?.clientId ?? null,
         dispatchLifecycle: state.activeTurn?.dispatchLifecycle ?? null,
-        fencedSessionTurnGeneration: state.fencedSessionTurnGeneration,
+        fencedStaleTerminal: state.fencedStaleTerminal,
       });
       state.activeTurn = null;
     }

@@ -61,6 +61,22 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
+  it('rejects a fenced leftover terminal before register-side turn effects', () => {
+    expect(source).toContain('delete rendererEvent.sessionTurnGeneration');
+    expect(source).toContain('delete rendererEvent.sessionInstanceId');
+    const wireSessionSource = extractWireSessionSource();
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleTerminal(session.id, {',
+      'finalizeTurnChangeSet(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleTerminal(session.id, {',
+      'shouldMarkTurnStatusIdleAfterBroadcast = true',
+    );
+  });
+
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
     const wireSessionSource = extractWireSessionSource();
 

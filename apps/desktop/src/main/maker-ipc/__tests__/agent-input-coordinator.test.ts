@@ -173,7 +173,7 @@ function createHarness(opts?: {
   let liveRunningOverride: boolean | null | 'unknown' = null;
   let liveSessionPresentOverride: boolean | null | 'unknown' = null;
   let turnGeneration = 0;
-  let turnSessionIdentity: object = {};
+  let turnSessionIdentity: object = { instanceId: 'harness-session' };
   let pendingInteraction = false;
   let agentKind: AgentInputCreateOpts['agentKind'] | null = 'claude-code';
   const projections: AgentInputProjection[] = [];
@@ -6303,8 +6303,15 @@ describe('AgentInputCoordinator steer transaction', () => {
       await flush();
       expect(h.sendToAgent).toHaveBeenCalledTimes(2);
 
+      expect(
+        h.coordinator.isFencedStaleTerminal(sid, {
+          sessionTurnGeneration: 0,
+          sessionInstanceId: 'harness-session',
+        }),
+      ).toBe(true);
       h.coordinator.onTurnEvent(sid, 'error', 'old turn died late', undefined, {
-        sessionTurnGeneration: 4,
+        sessionTurnGeneration: 0,
+        sessionInstanceId: 'harness-session',
       });
       await flush();
       expect(latestProjection(h.projections).error).toBeNull();
@@ -6312,10 +6319,52 @@ describe('AgentInputCoordinator steer transaction', () => {
 
       h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
         sessionTurnGeneration: 4,
+        sessionInstanceId: 'harness-session',
       });
       await flush();
       expect(latestProjection(h.projections).pendingQueue).toEqual([]);
       expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fence a replacement Session terminal that reuses the same generation number', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-fence-session-identity';
+      h.setTurnGeneration(1);
+
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.setTurnSessionIdentity({ instanceId: 'replacement-session' });
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 1,
+        sessionInstanceId: 'replacement-session',
+      });
+      h.setRunning(false);
+      await flush();
+      h.coordinator.enqueue(sid, makeItem('q-3', 'third'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(3);
+      expect(h.sendToAgent.mock.calls[2]?.[1]).toEqual({
+        type: 'user',
+        content: 'third',
+      });
     } finally {
       vi.useRealTimers();
     }

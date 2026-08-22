@@ -3665,6 +3665,14 @@ async function handleSilentStopTurnEnd(
   }
 }
 
+function isFencedStaleProductTerminal(event: AgentEvent): boolean {
+  if (event.type === 'done') return true;
+  if (isTerminalTurnErrorEvent(event)) return true;
+  if (event.type !== 'status') return false;
+  const data = event.data as { isRunning?: unknown } | null | undefined;
+  return data?.isRunning === false;
+}
+
 export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void {
   if (!session) return;
   const existing = wiredSessionsById.get(session.id);
@@ -3848,6 +3856,23 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
       let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
+      if (
+        !isContinuationBoundary &&
+        event.turnScope !== 'background' &&
+        isFencedStaleProductTerminal(event) &&
+        agentInputCoordinatorHolder?.isFencedStaleTerminal(session.id, {
+          sessionTurnGeneration: event.sessionTurnGeneration,
+          sessionInstanceId: event.sessionInstanceId,
+        })
+      ) {
+        log.debug('ignored stale terminal after leftover turn reclaim', {
+          sessionId: session.id,
+          eventType: event.type,
+          sessionTurnGeneration: event.sessionTurnGeneration ?? null,
+          sessionInstanceId: event.sessionInstanceId ?? null,
+        });
+        return;
+      }
       // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
       // 若 claim 悬挂会导致 UI 永久「正在生成」。区分「claim 悬挂」与「done 未到达」。
       if (isContinuationBoundary && (event.type === 'done' || event.type === 'status')) {
@@ -3979,6 +4004,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 还没进入 renderer 时就重新被 Chromium 节流。
           agentInputCoordinatorHolder?.onTurnEvent(session.id, 'done', undefined, undefined, {
             sessionTurnGeneration: event.sessionTurnGeneration,
+            sessionInstanceId: event.sessionInstanceId,
           });
         } else {
           // silent-stop 自动续跑:translator 判定本 turn 被上游空内容消息静默收尾时在
@@ -4062,7 +4088,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 ? { errorStatus: errData.errorStatus }
                 : {}),
             },
-            { sessionTurnGeneration: event.sessionTurnGeneration },
+            {
+              sessionTurnGeneration: event.sessionTurnGeneration,
+              sessionInstanceId: event.sessionInstanceId,
+            },
           );
         }
       }
@@ -15204,6 +15233,8 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   const rendererEvent = { ...event };
   delete rendererEvent.turnAttemptToken;
   delete rendererEvent.backgroundTurnStartedAt;
+  delete rendererEvent.sessionTurnGeneration;
+  delete rendererEvent.sessionInstanceId;
   if (!event.data || typeof event.data !== 'object') return rendererEvent;
 
   const data = event.data as Record<string, unknown>;
