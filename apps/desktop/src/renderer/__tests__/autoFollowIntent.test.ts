@@ -29,6 +29,7 @@ import {
   selectTailUserMessageId,
   shouldRepinOnDownIntent,
   shouldRepinOnWheel,
+  shouldUnpinOnScrollbarDrag,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
   REPIN_AT_BOTTOM_PX,
@@ -114,6 +115,52 @@ describe('shouldRepinOnDownIntent', () => {
 
   it('距底超过贴死阈值 → 不恢复', () => {
     expect(shouldRepinOnDownIntent({ distanceFromBottom: REPIN_AT_BOTTOM_PX + 1 })).toBe(false);
+  });
+});
+
+describe('shouldUnpinOnScrollbarDrag', () => {
+  it('指针按下且上移过死区 → 解除', () => {
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: -2,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('只按下未移动 / 下移 → 不解除(点滑块不该掐死跟随)', () => {
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: 0,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: 40,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: true,
+        scrollDelta: -1,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('指针未按下 → 不解除', () => {
+    expect(
+      shouldUnpinOnScrollbarDrag({
+        pointerDown: false,
+        scrollDelta: -40,
+        directionDeadZonePx: 1,
+      }),
+    ).toBe(false);
   });
 });
 

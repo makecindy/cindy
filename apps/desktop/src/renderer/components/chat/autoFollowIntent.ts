@@ -94,6 +94,30 @@ export function shouldUnpinOnUpIntent({ scrollHeight, clientHeight }: UpIntentUn
   return scrollHeight - clientHeight > UNPIN_MIN_SCROLLABLE_PX;
 }
 
+export interface ScrollbarDragUnpinArgs {
+  /** 指针仍按在滚动容器上(滚动条拖拽中)。 */
+  pointerDown: boolean;
+  /** 相对按下时的 scrollTop 增量(负 = 向上)。 */
+  scrollDelta: number;
+  /** 方向判断死区(px)。 */
+  directionDeadZonePx: number;
+}
+
+/**
+ * 滚动条拖拽是否构成「用户想向上离开尾部」。
+ *
+ * 只认按下后的实际上移,不认单纯 mousedown:生成期间点一下滑块不该掐死跟随。
+ * 流式 pin 会把 programmatic scroll 窗口几乎一直打开,handleScroll 的普通
+ * 用户分支看不见这次拖拽,必须用按下态 + scrollTop 上移单独判定。
+ */
+export function shouldUnpinOnScrollbarDrag({
+  pointerDown,
+  scrollDelta,
+  directionDeadZonePx,
+}: ScrollbarDragUnpinArgs): boolean {
+  return pointerDown && scrollDelta < -directionDeadZonePx;
+}
+
 export interface WheelRepinArgs {
   /** wheel 事件的 deltaX(水平分量,用于主轴判定) */
   deltaX: number;
