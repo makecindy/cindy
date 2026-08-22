@@ -1230,7 +1230,18 @@ describe('PluginMarketService migration and defaultInstall', () => {
         publisherName: 'Cindy Plugin Market',
       }),
     );
-    runtime.ghosts = [{ manifest: rawManifest, dir: installDir, enabled: true }];
+    runtime.ghosts = [{
+      manifest: rawManifest,
+      dir: installDir,
+      enabled: true,
+      trust: {
+        level: 'cindy-official',
+        publisherSigned: true,
+        publisherVerified: true,
+        reviewed: true,
+        publisherName: 'Cindy Plugin Market',
+      },
+    }];
     const h = harness([item]);
     h.ledger.upsertInstallation({
       pluginId: item.id,
