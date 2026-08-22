@@ -1443,6 +1443,39 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     );
   });
 
+  it('Y4. 孤岛与尾段间隔不足 HISTORY_GAP_SPLIT_MS 时,裁剪仍保留结构化游标', async () => {
+    const island = Array.from({ length: 260 }, (_, i) =>
+      serverMessage({
+        id: `near-island-${String(i).padStart(3, '0')}`,
+        clientId: `near-island-${String(i).padStart(3, '0')}`,
+        createdAt: new Date(Date.UTC(2026, 6, 25, 11, 40, 0) + i * 1000).toISOString(),
+      }),
+    );
+    const newestTail = Array.from({ length: 50 }, (_, i) =>
+      serverMessage({
+        id: `near-tail-${String(i).padStart(2, '0')}`,
+        clientId: `near-tail-${String(i).padStart(2, '0')}`,
+        createdAt: new Date(Date.UTC(2026, 6, 25, 12, 0, 0) - i * 5_000).toISOString(),
+      }),
+    );
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce(island);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce(newestTail);
+
+    await makerChatStore.loadAroundMessageClientId(SID, 'near-island-000', { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    const contiguousCursor = makerChatStore.getSnapshot(SID).oldestMessageId;
+    expect(contiguousCursor).toBe('near-tail-49');
+    markSessionAutomaticHistoryLoadCompleted(SID);
+
+    const leave = makerChatStore.enterView(SID);
+    leave();
+
+    const trimmed = makerChatStore.getSnapshot(SID);
+    expect(trimmed.messages).toHaveLength(200);
+    expect(trimmed.oldestMessageId).toBe(contiguousCursor);
+    expect(trimmed.messages[0]?.clientId.startsWith('near-island-')).toBe(true);
+  });
+
   it('X. /clear 清空窗口时一并清掉孤岛标记,不把会话永久钉在"不连续"', async () => {
     // review #676（codex P1）：covered 刻意保留孤岛标记（到达本次目标不证明更早的洞都补
     // 上了），所以标记只能由「窗口整体重建」清零。/clear 清了 messages / 游标 / 锁却漏了

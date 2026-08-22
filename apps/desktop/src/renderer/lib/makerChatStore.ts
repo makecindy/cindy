@@ -349,6 +349,8 @@ export interface AskUserQuestionItem {
 
 export interface ChatMessage {
   clientId: string;
+  /** Server message id when this row came from history; used as a pagination cursor. */
+  id?: string;
   /** chat-text-quote:开头 blockquote 为引用功能产出(渲染判据),见 imageRef.ts。 */
   quotesEncoded?: boolean;
   /** Hidden semantic projection metadata for rich user-message references. */
@@ -3420,9 +3422,22 @@ function oldestMessageOfNewestContiguousRun(messages: ChatMessage[]): ChatMessag
   return messages[runStart] ?? null;
 }
 
-function retainedWindowHasLoadedGap(messages: ChatMessage[]): boolean {
-  const oldestOfRun = oldestMessageOfNewestContiguousRun(messages);
-  return oldestOfRun != null && oldestOfRun !== messages[0];
+function messageMatchesHistoryCursor(
+  message: ChatMessage,
+  cursorId: string,
+): boolean {
+  return message.clientId === cursorId || message.id === cursorId;
+}
+
+function retainedWindowKeepsGapCursor(
+  retained: ChatMessage[],
+  oldestMessageId: string | null,
+): boolean {
+  if (typeof oldestMessageId !== 'string' || oldestMessageId.length === 0) return false;
+  const cursorIndex = retained.findIndex((message) =>
+    messageMatchesHistoryCursor(message, oldestMessageId),
+  );
+  return cursorIndex > 0;
 }
 
 function _trimMessagesIfNeeded(sessionId: string): void {
@@ -3451,9 +3466,7 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     // 翻页,填不了孤岛与尾段之间的缺口,未解析计划会一直缺席到整窗重载。
     const keepGapCursor =
       s.historyWindowHasIsland === true &&
-      typeof s.oldestMessageId === 'string' &&
-      s.oldestMessageId.length > 0 &&
-      retainedWindowHasLoadedGap(retained);
+      retainedWindowKeepsGapCursor(retained, s.oldestMessageId);
     return {
       ...s,
       messages: retained,
@@ -15445,6 +15458,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   // mapped ChatMessage uniformly (each branch below builds a different
   // shape, easier to attach the timestamp once at the end).
   const createdAtById = new Map(serverMsgs.map((m) => [m.clientId, m.createdAt]));
+  const serverIdByClientId = new Map(serverMsgs.map((m) => [m.clientId, m.id]));
   const rowidById = new Map(serverMsgs.map((m) => [m.clientId, m.rowid]));
   const remoteContentTruncatedById = new Map(
     serverMsgs.map((m) => [m.clientId, m.agentMeta?.remoteContentTruncated === true]),
@@ -15924,6 +15938,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   return mapped.map((cm): ChatMessage => {
     const ts = createdAtById.get(cm.clientId);
     const iso = mapServerCreatedAt(cm, ts);
+    const serverId = serverIdByClientId.get(cm.clientId);
     const rowid = rowidById.get(cm.clientId);
     const remoteContentTruncated = remoteContentTruncatedById.get(cm.clientId) === true;
     const remoteRowsTrimmed = remoteRowsTrimmedById.get(cm.clientId) === true;
@@ -15933,7 +15948,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       rowid === undefined &&
       !remoteContentTruncated &&
       !remoteRowsTrimmed &&
-      !legacyUserTurnCost
+      !legacyUserTurnCost &&
+      !serverId
     ) {
       return cm;
     }
@@ -15941,6 +15957,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...cm,
       ...(legacyUserTurnCost ?? {}),
       ...(iso ? { createdAt: iso } : {}),
+      ...(typeof serverId === 'string' && serverId.length > 0 ? { id: serverId } : {}),
       ...(rowid !== undefined ? { rowid } : {}),
       ...(remoteContentTruncated ? { remoteContentTruncated: true } : {}),
       ...(remoteRowsTrimmed ? { remoteRowsTrimmed: true } : {}),
