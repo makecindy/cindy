@@ -1156,6 +1156,50 @@ describe('maker SEND transaction', () => {
     expect(newSession.send).toHaveBeenCalled();
   });
 
+  it('rehydrates an active Orca session with the DB-resumed sdkSessionId so the transcript is not lost (#2882)', async () => {
+    const oldSession = createSession({ id: 'pi-session', workDir: '/repo' });
+    const newSession = createSession({ id: 'pi-session', workDir: '/repo' });
+    const reconcile = vi.fn(async (_sessionId: string, co: MakerSessionCreateOpts) => {
+      // 模拟 register.ts reconcileCreateOptsAgainstDb:从 DB 回填旧 sdkSessionId。
+      co.resumeSessionId = 'old-pi-sdk-session';
+    });
+    const bootstrap = vi.fn(async () => ({
+      session: newSession,
+      didInjectOrcaInstructions: true,
+      didInjectProjectContext: false,
+    }));
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => false),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      reconcileCreateOptsWithDb: reconcile,
+      bootstrapSession: bootstrap,
+    });
+    const transaction = createMakerSendTransaction(deps);
+    // renderer 侧 createOpts 不带 resumeSessionId(sdkSessionId 未镜像到 renderer)。
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'pi-session',
+      agentKind: 'pi',
+      workingDir: '/repo',
+      model: 'kimi-k2',
+      orcaRole: 'lead',
+    };
+
+    await expect(transaction.sendToAgentAccepted('pi-session', '继续先前的任务', createOpts)).resolves.toMatchObject({
+      accepted: true,
+    });
+
+    // 必须在 close/bootstrap 前(进入 withRehydrateCloseSuppressed 前)对账。
+    expect(reconcile).toHaveBeenCalledWith('pi-session', expect.any(Object));
+    expect(reconcile.mock.invocationCallOrder[0]).toBeLessThan(
+      bootstrap.mock.invocationCallOrder[0],
+    );
+    // bootstrap 收到旧 sdkSessionId,Pi 据此 switch_session 续接旧 JSONL,而不是开空会话。
+    expect(bootstrap).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: 'old-pi-sdk-session',
+    }));
+  });
+
   it('returns rehydrate failure without sending when active Orca rehydrate fails', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const { deps } = createDeps({
