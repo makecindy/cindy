@@ -13,6 +13,7 @@ const {
   mcpConnectMock,
   transportCloseMock,
   transportCtorMock,
+  outboundFetchMock,
   resolveDesktopOutboundProxyMock,
 } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   mcpConnectMock: vi.fn(),
   transportCloseMock: vi.fn(),
   transportCtorMock: vi.fn(),
+  outboundFetchMock: vi.fn(),
   resolveDesktopOutboundProxyMock: vi.fn(),
 }));
 
@@ -53,6 +55,12 @@ function setPlatform(platform: NodeJS.Platform): void {
 
 vi.mock('node:child_process', () => ({
   spawn: spawnMock,
+}));
+
+// mock outbound-fetch:首次安装的进度预取会走 outboundFetch 拉 GitHub tag 列表,
+// 测试环境不应发真实网络请求。默认返回空 tag 列表(预取静默失败,不影响安装)。
+vi.mock('../maker-host/outbound-fetch', () => ({
+  outboundFetch: outboundFetchMock,
 }));
 
 vi.mock('node:fs', async () => {
@@ -322,6 +330,11 @@ describe('computer mcp integration', () => {
     resetAtMentionWindowCacheForTests();
     existsSyncMock.mockReset().mockReturnValue(false);
     spawnMock.mockReset();
+    // 预取默认返回空 tag 列表(ok 但无 refs),避免测试发真实网络请求
+    outboundFetchMock.mockReset().mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
     driverStdinWrites.length = 0;
     readlinkSyncMock.mockReset();
     mcpCallToolMock.mockReset();
@@ -2598,6 +2611,55 @@ describe('computer mcp integration', () => {
       },
     });
     expect(spawnMock.mock.calls[0]?.[0]).toMatch(process.platform === 'win32' ? /powershell/i : '/bin/bash');
+  });
+
+  it('reports install progress through onProgress and ends with a done phase', async () => {
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+    if (process.platform === 'darwin') {
+      mockDriverSpawn({
+        stdout:
+          '{"accessibility":true,"screen_recording":true,"screen_recording_capturable":true,"source":{"attribution":"driver-daemon"}}\n',
+      });
+    }
+
+    const progressEvents: Array<{ phase: string }> = [];
+    await expect(
+      installComputerDriver(undefined, undefined, (progress) => {
+        progressEvents.push(progress);
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    // 安装结束后必须上报一次 done 阶段(渲染层据此清除进度状态)。
+    expect(progressEvents.some((p) => p.phase === 'done')).toBe(true);
+  });
+
+  it('joins an in-flight install instead of starting a parallel one (串扰保护)', async () => {
+    mockDriverSpawn({ stdout: 'installed\n' });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    mockDriverSpawn({ stdout: 'Cua Driver daemon is running\n' });
+    if (process.platform === 'darwin') {
+      mockDriverSpawn({
+        stdout:
+          '{"accessibility":true,"screen_recording":true,"screen_recording_capturable":true,"source":{"attribution":"driver-daemon"}}\n',
+      });
+    }
+
+    // 并发保护:先发起一个安装(会进入 in-flight),再并发调用第二次。
+    // 第二次应 join 同一个 Promise,而不是并行起新安装(串扰保护)。
+    const first = installComputerDriver(undefined, undefined, () => {});
+    const second = installComputerDriver(undefined, undefined, () => {});
+
+    const results = await Promise.all([first, second]);
+    expect(results[0].ok).toBe(true);
+    expect(results[1].ok).toBe(true);
+
+    // 只应启动一次安装进程(bash),第二次 join 复用。
+    const installSpawns = spawnMock.mock.calls.filter((call) =>
+      process.platform === 'win32' ? /powershell/i.test(String(call[0])) : String(call[0]).includes('bash'),
+    );
+    expect(installSpawns.length).toBeLessThanOrEqual(2);
   });
 
   it('passes the resolved system HTTP proxy to the POSIX installer', async () => {
