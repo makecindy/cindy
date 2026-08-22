@@ -1312,6 +1312,20 @@ describe('setContext / routeCommand', () => {
     });
   });
 
+  it('releases a fire-and-forget open pin when the host never resolves', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()?.sessionId).not.toBe('s3');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
   it('does not pin an already-active host, so a later focus switch is applied', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);

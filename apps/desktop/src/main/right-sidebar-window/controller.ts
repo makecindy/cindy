@@ -223,7 +223,9 @@ export class RsbWindowController {
       revealSessionId &&
       (userInitiated === false || this.lastContext?.sessionId !== revealSessionId)
     ) {
-      void this.adoptHostSession(revealSessionId);
+      void this.waitForHostSession(revealSessionId).catch(() => {
+        // waiter 超时或离开聊天会放掉 pin；open 是 fire-and-forget。
+      });
     }
 
     this.automaticRecoveryAttempts = 0;
