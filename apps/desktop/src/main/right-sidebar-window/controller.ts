@@ -135,6 +135,7 @@ export class RsbWindowController {
     resolve: () => void;
     reject: (err: Error) => void;
     timeout: NodeJS.Timeout;
+    sessionId?: string;
   }> = [];
   private hostWaiters: Array<{
     sessionId: string;
@@ -389,8 +390,9 @@ export class RsbWindowController {
           const idx = this.readyWaiters.findIndex((w) => w.timeout === timeout);
           if (idx >= 0) this.readyWaiters.splice(idx, 1);
           reject(new Error(`right-sidebar window ready timeout after ${READY_TIMEOUT_MS}ms`));
+          if (opts.sessionId) this.releaseUnresolvedHostPin(opts.sessionId);
         }, READY_TIMEOUT_MS);
-        this.readyWaiters.push({ resolve, reject, timeout });
+        this.readyWaiters.push({ resolve, reject, timeout, sessionId: opts.sessionId });
       });
     }
     if (opts.sessionId) await this.waitForHostSession(opts.sessionId);
@@ -407,7 +409,8 @@ export class RsbWindowController {
         this.pokeAdoptRetry(this.pinnedSessionId);
         return;
       } else {
-        this.clearPinnedSession();
+        // 离开聊天 / 空上下文不能拆 pin，否则进行中的异步 adopt 和 waiter 会丢结果。
+        return;
       }
     }
     this.lastContext = ctx;
@@ -1005,6 +1008,7 @@ export class RsbWindowController {
   private releaseUnresolvedHostPin(sessionId: string): void {
     if (this.pinnedSessionId !== sessionId) return;
     if (this.hostWaiters.some((waiter) => waiter.sessionId === sessionId)) return;
+    if (this.readyWaiters.some((waiter) => waiter.sessionId === sessionId)) return;
     this.clearPinnedSession();
     if (this.pendingOpen && !this.visible) {
       this.pendingOpen = false;

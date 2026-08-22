@@ -769,6 +769,18 @@ describe('ensureOpenForAutomation', () => {
     await assertion;
   });
 
+  it('ready timeout with a session pin lets a later context take the host', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const assertion = expect(pending).rejects.toThrow(/ready timeout/);
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    markReady(h.controller, h.windows[0]);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
   it('window closed before ready rejects', async () => {
     const h = makeHarness({ detached: true });
     const pending = h.controller.ensureOpenForAutomation();
@@ -829,6 +841,30 @@ describe('ensureOpenForAutomation', () => {
       sessionId: 's1',
       workdir: '/from-main',
     });
+  });
+
+  it('keeps an in-flight adopt after Main reports unavailable', async () => {
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let finishLookup!: (value: typeof resolved) => void;
+    const lookup = new Promise<typeof resolved>((resolve) => {
+      finishLookup = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    finishLookup(resolved);
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.controller.getContext()).toEqual(resolved);
   });
 
   it('fails closed when the target session context never arrives', async () => {
