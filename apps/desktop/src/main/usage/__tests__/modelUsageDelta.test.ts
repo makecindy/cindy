@@ -39,6 +39,33 @@ describe('computeModelUsageDeltas', () => {
     }));
   });
 
+  it('accepts the first cumulative report when the SDK query explicitly started at zero', () => {
+    const { deltas } = computeModelUsageDeltas(
+      undefined,
+      {
+        'claude-opus-4-8': {
+          costUSD: 0.5,
+          inputTokens: 100,
+          outputTokens: 200,
+          cacheReadInputTokens: 3000,
+          cacheCreationInputTokens: 400,
+        },
+      },
+      undefined,
+      { cumulativeStartsAtZero: true },
+    );
+    expect(deltas).toEqual([
+      {
+        model: 'claude-opus-4-8',
+        costUsdDelta: 0.5,
+        inputTokensDelta: 100,
+        outputTokensDelta: 200,
+        cacheReadTokensDelta: 3000,
+        cacheCreateTokensDelta: 400,
+      },
+    ]);
+  });
+
   it('first report uses independently observed request usage and accepts cost only on an exact match', () => {
     const observed = new Map([
       [

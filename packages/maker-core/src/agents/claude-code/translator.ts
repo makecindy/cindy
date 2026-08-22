@@ -532,6 +532,8 @@ interface TranslateContext {
    * 仅诊断日志用, getter 形式确保读到的是最新值 (system init 那一步会回填)。
    */
   getSdkSessionId: () => string | undefined;
+  /** Whether the current SDK query starts its cumulative modelUsage at zero. */
+  modelUsageCumulativeStartsAtZero?: () => boolean;
   /**
    * 当前 session 的展示 title —— 由调用方 (register.ts) 每次 send 时透传进来,
    * 同样仅用于诊断日志, 不参与业务。允许 undefined / 跨 turn 变化。
@@ -2145,6 +2147,7 @@ function handleResult(
     ...safeResult,
     usageSegments: turnUsageSegments,
     usageSegmentsComplete,
+    modelUsageCumulativeStartsAtZero: ctx.modelUsageCumulativeStartsAtZero?.() === true,
   };
   const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
     ? { ...resultWithUsageSegments, assistant_message_id: ctx.turn.lastAssistantRequestId }

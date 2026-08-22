@@ -2420,6 +2420,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const bridgeStateActive = (): boolean =>
       queuedBridgeTurns > 0 || activeBridgeKind !== null || activeBridgeRewindResumeAt !== undefined;
     let q: Query;
+    // Query-scoped lifecycle fact: modelUsage is cumulative within the SDK
+    // process. A query created without a resume id starts that counter at zero;
+    // resumed queries may include prior transcript usage and must establish a
+    // baseline unless request segments prove the delta independently.
+    const modelUsageStartsAtZeroQueries = new WeakSet<Query>();
     function restoreBridgeAutoCompactSnapshot(reason: string): void {
       const snapshot = bridgeCompactUsageSnapshot;
       bridgeCompactUsageSnapshot = null;
@@ -2742,6 +2747,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // resume 优先用当前的 sdkSessionId (rewind 重启时它指向上一轮 SDK 给的 id);
       // 缺省回到 startSession 入参的 resumeSessionId (新会话首次起 query 时用)。
       let resumeSdkSid = sdkSessionId ?? configuredResumeSessionId;
+      const modelUsageCumulativeStartsAtZero = !resumeSdkSid;
 
       // ── 远端 cc 分支 (Phase 4.3) ──
       // session 标了 remoteHostId 且 host 注入了 remoteCcQueryFactory → 走远端
@@ -3254,6 +3260,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         })().catch(() => undefined);
 
         if (finalRemotePermissionMode === 'auto') nativeAutoQueries.add(remoteQuery);
+        if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(remoteQuery);
         return remoteQuery;
       }
 
@@ -3455,6 +3462,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
       });
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
+      if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
       return query;
     };
 
@@ -4523,6 +4531,8 @@ export class ClaudeCodeAgent extends BaseAgent {
               getPermissionMode: () => mutablePermissionMode,
               getFastMode: () => mutableFastMode,
               getSdkSessionId: () => sdkSessionId,
+              modelUsageCumulativeStartsAtZero: () =>
+                modelUsageStartsAtZeroQueries.has(currentQ),
               getLogTitle: () => lastSendTitle,
               tracker: usageTracker,
               onSessionId: (sid) => {

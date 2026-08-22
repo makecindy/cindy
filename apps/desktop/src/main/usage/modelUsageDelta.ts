@@ -79,6 +79,7 @@ export function computeModelUsageDeltas(
   prev: Map<string, ModelUsageCumulative> | undefined,
   current: Record<string, unknown>,
   observedTurnUsage?: ReadonlyMap<string, ObservedModelTurnUsage>,
+  options: { cumulativeStartsAtZero?: boolean } = {},
 ): { next: Map<string, ModelUsageCumulative>; deltas: ModelUsageDeltaEntry[] } {
   const next = new Map<string, ModelUsageCumulative>();
   const deltas: ModelUsageDeltaEntry[] = [];
@@ -98,6 +99,7 @@ export function computeModelUsageDeltas(
         cum.cacheReadInputTokens < last.cacheReadInputTokens ||
         cum.cacheCreationInputTokens < last.cacheCreationInputTokens);
     const unbaselined = reset || last === undefined;
+    const cumulativeStartsAtZero = options.cumulativeStartsAtZero === true;
     const observed =
       observedTurnUsage?.get(model) ?? observedTurnUsage?.get(model.replace(/\[[^\]]*\]\s*$/, ''));
     const observedMatchesCumulative =
@@ -106,7 +108,17 @@ export function computeModelUsageDeltas(
       cum.outputTokens === observed.outputTokens &&
       cum.cacheReadInputTokens === observed.cacheReadTokens &&
       cum.cacheCreationInputTokens === observed.cacheCreateTokens;
-    const base = unbaselined ? cum : last;
+    const base = unbaselined
+      ? cumulativeStartsAtZero
+        ? {
+            costUSD: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+          }
+        : cum
+      : last;
 
     const entry: ModelUsageDeltaEntry = {
       model,
@@ -114,24 +126,24 @@ export function computeModelUsageDeltas(
       // provider session. Only treat its cumulative cost as this turn when the
       // independently observed request segments prove the token totals match.
       costUsdDelta: unbaselined
-        ? observedMatchesCumulative
+        ? cumulativeStartsAtZero || observedMatchesCumulative
           ? cum.costUSD
           : 0
         : Math.max(0, cum.costUSD - base.costUSD),
       inputTokensDelta:
-        observed && unbaselined
+        observed && unbaselined && !cumulativeStartsAtZero
           ? observed.inputTokens
           : Math.max(0, cum.inputTokens - base.inputTokens),
       outputTokensDelta:
-        observed && unbaselined
+        observed && unbaselined && !cumulativeStartsAtZero
           ? observed.outputTokens
           : Math.max(0, cum.outputTokens - base.outputTokens),
       cacheReadTokensDelta:
-        observed && unbaselined
+        observed && unbaselined && !cumulativeStartsAtZero
           ? observed.cacheReadTokens
           : Math.max(0, cum.cacheReadInputTokens - base.cacheReadInputTokens),
       cacheCreateTokensDelta:
-        observed && unbaselined
+        observed && unbaselined && !cumulativeStartsAtZero
           ? observed.cacheCreateTokens
           : Math.max(0, cum.cacheCreationInputTokens - base.cacheCreationInputTokens),
     };

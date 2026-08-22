@@ -4573,6 +4573,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               modelUsage?: Record<string, unknown>;
               usageSegments?: unknown;
               usageSegmentsComplete?: unknown;
+              modelUsageCumulativeStartsAtZero?: unknown;
               assistant_message_id?: unknown;
               is_error?: unknown;
             }
@@ -4615,6 +4616,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             lastReportedModelUsageBySession.get(session.id),
             modelUsage,
             observedByModel,
+            {
+              cumulativeStartsAtZero: doneData?.modelUsageCumulativeStartsAtZero === true,
+            },
           );
           lastReportedModelUsageBySession.set(session.id, next);
           modelUsageDeltas = deltas;

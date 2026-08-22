@@ -3207,8 +3207,21 @@ export class CodexAgent extends BaseAgent {
     let lastModelContextWindow: number | null = null;
     // tokenUsage.total 是 thread 生命周期内的单调累计 cursor。app-server 会重放
     // 相同快照（包括 compaction 的零帧），也可能让旧通知乱序晚到；只有 total
-    // 真正前进时，last 才代表一条新的可计费用量 segment。
-    const acceptedUsageTotalByThread = new Map<string, TokenUsageBreakdown>();
+    // 真正前进时，last 才代表一条新的可计费用量 segment。daemon 重启后
+    // thread/resume 会开启新的累计代次；旧代次的高水位不能继续挡住新进程的真实用量。
+    let usageExecutionGeneration = 0;
+    const acceptedUsageTotalByThread = new Map<
+      string,
+      { generation: number; total: TokenUsageBreakdown }
+    >();
+    const resetAcceptedUsageCursors = (reason: string): void => {
+      usageExecutionGeneration += 1;
+      acceptedUsageTotalByThread.clear();
+      log.info('resetting Codex usage cursors for a new app-server execution generation', {
+        generation: usageExecutionGeneration,
+        reason,
+      });
+    };
     /**
      * 已产出过模型内容(item 或 reasoning 增量)的 turn id。
      *
@@ -9482,7 +9495,9 @@ export class CodexAgent extends BaseAgent {
         const uncachedInput = Math.max(0, totalInput - cached);
         const cumulativeTotal = params.tokenUsage?.total;
         if (!cumulativeTotal) return;
-        const previousTotal = acceptedUsageTotalByThread.get(params.threadId);
+        const previousCursor = acceptedUsageTotalByThread.get(params.threadId);
+        const previousTotal =
+          previousCursor?.generation === usageExecutionGeneration ? previousCursor.total : undefined;
         const hasBillableLast =
           last.inputTokens > 0 ||
           last.cachedInputTokens > 0 ||
@@ -9499,7 +9514,10 @@ export class CodexAgent extends BaseAgent {
           cumulativeTotal.totalTokens > 0 &&
           (previousTotal === undefined || cumulativeTotal.totalTokens > previousTotal.totalTokens);
         if (isNewUsageSegment) {
-          acceptedUsageTotalByThread.set(params.threadId, { ...cumulativeTotal });
+          acceptedUsageTotalByThread.set(params.threadId, {
+            generation: usageExecutionGeneration,
+            total: { ...cumulativeTotal },
+          });
           usageTracker.ingestApiCallUsage({
             inputTokens: uncachedInput,
             // outputTokens already includes the reasoning subset. Adding
@@ -10910,6 +10928,11 @@ export class CodexAgent extends BaseAgent {
               }
               readonlyReferencesProfileActive = 'permissions' in turnThreadWorkspaceConfig;
               threadMayHaveRollout = true;
+              // The stale-daemon path has crossed an explicit app-server
+              // execution boundary. Reset all thread cursors before the retry;
+              // every thread on the daemon shares the same process-level
+              // cumulative usage source.
+              resetAcceptedUsageCursors('thread/resume after stale daemon');
               if (collaborationMode?.mode === 'default') {
                 planModeDefaultMarkerNeeded = true;
                 if (turnParams.collaborationMode?.mode === 'default') {
