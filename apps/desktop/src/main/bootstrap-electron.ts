@@ -2075,7 +2075,9 @@ registerTabOpResultHandler({
 // an automation tab-op pop the sidebar window first when the user prefers
 // detached mode but has the window closed.
 setMainWindowAccessorForBackend(() => rsbWindowController.getHostWebContents());
-setEnsureHostForBackend(() => rsbWindowController.ensureOpenForAutomation());
+setEnsureHostForBackend((sessionId) =>
+  rsbWindowController.ensureOpenForAutomation({ sessionId }),
+);
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
   try {

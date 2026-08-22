@@ -24,6 +24,12 @@ export function detachedHostAfterOpen(params: {
   previousHostSessionId: string | null | undefined;
 }): string | null {
   if (params.targetSessionId !== params.currentSessionId) return params.targetSessionId;
+  if (
+    params.previousHostSessionId &&
+    params.previousHostSessionId !== params.targetSessionId
+  ) {
+    return null;
+  }
   return params.previousHostSessionId ?? null;
 }
 

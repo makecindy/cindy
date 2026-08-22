@@ -92,6 +92,7 @@ const MAX_DEFERRED_SESSIONS = 8;
 const MAX_KNOWN_CONTEXTS = 32;
 const MAX_ADOPT_RESOLVE_RETRIES = 5;
 const ADOPT_RESOLVE_RETRY_MS = 400;
+const ADOPT_RESOLVE_SLOW_RETRY_MS = 2_000;
 /**
  * 单会话 deferred 队列上限。正常路径远达不到(passive 命令种类有限且有合并
  * 规则);达到时丢最旧一条并记 warn —— 不能静默,登记类命令被丢意味着这次
@@ -364,9 +365,12 @@ export class RsbWindowController {
   /**
    * agent tab-op(浏览器自动化)前置:detached 且窗口未就绪时先开窗并等 ready 握手。
    */
-  ensureOpenForAutomation(opts: { userInitiated?: boolean } = {}): Promise<void> {
+  ensureOpenForAutomation(opts: { userInitiated?: boolean; sessionId?: string } = {}): Promise<void> {
     if (!this.deps.settings.read().detached) return Promise.resolve();
-    this.open({ userInitiated: opts.userInitiated === true });
+    this.open({
+      userInitiated: opts.userInitiated === true,
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+    });
     if (this.presentationReady) return Promise.resolve();
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -880,14 +884,17 @@ export class RsbWindowController {
 
   private scheduleAdoptRetry(sessionId: string): void {
     if (this.disposed || this.pinnedSessionId !== sessionId) return;
-    if (this.adoptRetryAttempts >= MAX_ADOPT_RESOLVE_RETRIES) return;
     this.clearAdoptRetryTimer();
     this.adoptRetryAttempts += 1;
+    const delay =
+      this.adoptRetryAttempts > MAX_ADOPT_RESOLVE_RETRIES
+        ? ADOPT_RESOLVE_SLOW_RETRY_MS
+        : ADOPT_RESOLVE_RETRY_MS;
     this.adoptRetryTimer = setTimeout(() => {
       this.adoptRetryTimer = null;
       if (this.disposed || this.pinnedSessionId !== sessionId) return;
       void this.adoptHostSession(sessionId);
-    }, ADOPT_RESOLVE_RETRY_MS);
+    }, delay);
   }
 
   private clearAdoptRetryTimer(): void {

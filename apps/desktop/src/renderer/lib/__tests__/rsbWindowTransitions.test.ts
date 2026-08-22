@@ -58,6 +58,11 @@ describe('didUserCloseDetachedSidebarWindow', () => {
       targetSessionId: 'session-a',
       previousHostSessionId: null,
     })).toBe('session-a');
+    expect(detachedHostAfterOpen({
+      currentSessionId: 'session-b',
+      targetSessionId: 'session-b',
+      previousHostSessionId: 'session-a',
+    })).toBeNull();
     expect(sessionIdForDetachedSidebarClose(
       nextDetachedHostAfterFocus(
         detachedHostAfterOpen({

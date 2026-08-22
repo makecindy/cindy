@@ -992,6 +992,33 @@ describe('setContext / routeCommand', () => {
     expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
   });
 
+  it('keeps retrying a missed lookup after the fast budget without another focus change', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(h.controller.getContext()).toEqual(focused);
+    lookup = resolved;
+    h.sends.length = 0;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
   it('retries an exhausted lookup when the main window reports another context', async () => {
     const focused = { ...ctx, sessionId: 's2' };
     const resolved = {
