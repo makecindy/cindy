@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildXaiSubscriptionUsageSnapshot,
   formatXaiProductLabel,
+  inferXaiWeeklyUsagePercent,
   isXaiSubscriptionAlerting,
   isXaiWeeklyUsageCurrent,
   parseXaiBillingCreditsConfig,
@@ -64,6 +65,32 @@ describe('parseXaiBillingCreditsConfig', () => {
   it('returns null when neither percent nor reset exists', () => {
     expect(parseXaiBillingCreditsConfig({ config: { prepaidBalance: { val: 0 } } })).toBeNull();
     expect(parseXaiBillingCreditsConfig(null)).toBeNull();
+  });
+
+  it('treats an omitted percent as 0% while the weekly window is still open', () => {
+    const nowMs = Date.parse('2026-08-15T00:00:00.000Z');
+    const parsed = parseXaiBillingCreditsConfig({
+      config: {
+        currentPeriod: {
+          type: 'USAGE_PERIOD_TYPE_WEEKLY',
+          end: '2026-08-18T09:53:45.527500+00:00',
+        },
+      },
+    }, nowMs);
+    expect(parsed?.creditUsagePercent).toBe(0);
+    expect(parsed?.resetsAt).toBe(Math.floor(Date.parse('2026-08-18T09:53:45.527500+00:00') / 1000));
+  });
+
+  it('does not invent 0% after the weekly window has already ended', () => {
+    const nowMs = Date.parse('2026-08-19T00:00:00.000Z');
+    const parsed = parseXaiBillingCreditsConfig({
+      config: {
+        currentPeriod: { end: '2026-08-18T09:53:45.527500+00:00' },
+      },
+    }, nowMs);
+    expect(parsed?.creditUsagePercent).toBeNull();
+    expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000)).toBeNull();
+    expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000 - 1)).toBe(0);
   });
 
   it('skips malformed product rows', () => {
