@@ -250,6 +250,31 @@ export class MemoryStorage {
   }
 
   /**
+   * 读单条 + 返回同一读的原始字节 (record 与 hash 绑定同一读 — 供清理工具
+   * 校验「分类字节 = 归档字节」, 避免 list 后宿主重写导致 hash 绑定新内容
+   * 而分类仍是旧记录, cleanup.ts on #2561 第二十八轮)。
+   */
+  async readWithRaw(filename: string): Promise<{ rec: MemoryRecord; raw: string } | null> {
+    const parsed = parseFilename(filename);
+    if (!parsed) return null;
+    const fullPath = path.join(this.dir, filename);
+    const raw = await this.tryReadRaw(fullPath);
+    if (!raw) return null;
+    const shard = parseRawShard(raw, filename);
+    if (!shard) return null;
+    return {
+      rec: {
+        filename,
+        slug: parsed.slug,
+        frontmatter: shard.frontmatter,
+        body: shard.body,
+        sizeBytes: Buffer.byteLength(raw, 'utf8'),
+      },
+      raw,
+    };
+  }
+
+  /**
    * 写入. mode 语义:
    *  - 'create' (默认): 撞名抛 already-exists
    *  - 'update'       : 覆盖, 不存在抛 not-found

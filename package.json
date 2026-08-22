@@ -133,6 +133,7 @@
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
-    "spdx-expression-parse": "3.0.1"
+    "spdx-expression-parse": "3.0.1",
+    "tsx": "^4.19.0"
   }
 }
