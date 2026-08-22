@@ -21,8 +21,20 @@ function parsePositiveLineAttribute(element: HTMLElement, name: string): number 
   return Number.isInteger(value) && value > 0 ? value : null;
 }
 
-function ComposerQuoteNodeView({ node, selected }: NodeViewProps) {
+function ComposerQuoteNodeView({ node, selected, editor, getPos }: NodeViewProps) {
   const quote = composerQuoteAttrsToChatQuote(node.attrs as ComposerQuoteAttrs);
+
+  const handleRemove = () => {
+    if (editor.isDestroyed || !editor.isEditable) return;
+    const pos = typeof getPos === 'function' ? getPos() : undefined;
+    if (pos === undefined) return;
+    // Delete the atom node (nodeSize = 1 for inline atoms).
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: pos, to: pos + 1 })
+      .run();
+  };
 
   return (
     <NodeViewWrapper
@@ -34,7 +46,7 @@ function ComposerQuoteNodeView({ node, selected }: NodeViewProps) {
       style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
       className="inline-flex max-w-[min(240px,55vw)] cursor-grab select-none align-middle active:cursor-grabbing"
     >
-      <QuoteChip quote={quote} selected={selected} />
+      <QuoteChip quote={quote} selected={selected} onRemove={handleRemove} />
     </NodeViewWrapper>
   );
 }

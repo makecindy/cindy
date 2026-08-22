@@ -4,7 +4,7 @@ import Document from '@tiptap/extension-document';
 import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import { EditorContent, useEditor } from '@tiptap/react';
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -148,8 +148,12 @@ describe('composer atomic chip presentation', () => {
       expect(atom?.querySelector('[data-inline-reference-chip]')?.className).toContain(
         'text-[var(--text-primary)]',
       );
-      expect(atom?.querySelector('button')).toBeNull();
     }
+    expect(container.querySelector('[data-mention-chip] button')).toBeNull();
+    expect(container.querySelector('[data-pasted-text-chip] button')).toBeNull();
+    expect(
+      container.querySelector('[data-composer-quote] button[aria-label="Remove quote"]'),
+    ).not.toBeNull();
     expect(container.querySelector('[data-mention-chip][data-kind="slash"]')).toBeNull();
     expect(
       container.querySelector(
@@ -160,7 +164,7 @@ describe('composer atomic chip presentation', () => {
     expect(container.textContent).toContain('/skill');
   });
 
-  it('keeps atoms removable through node selection without close buttons', async () => {
+  it('keeps non-quote atoms removable through node selection', async () => {
     let activeEditor: Editor | null = null;
     const { container } = render(
       <ComposerHarness
@@ -188,6 +192,51 @@ describe('composer atomic chip presentation', () => {
     );
     expect(container.querySelector('[data-mention-chip][data-kind="slash"]')).toBeNull();
     expect(container.querySelector('[data-pasted-text-chip]')).not.toBeNull();
+    expect(container.querySelector('[data-composer-quote]')).not.toBeNull();
+  });
+
+  it('removes only the target quote through the localized overlay action', async () => {
+    const { container } = render(<ComposerHarness />);
+    const removeButton = await screen.findByRole('button', { name: 'Remove quote' });
+
+    fireEvent.focus(removeButton);
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Remove quote');
+    fireEvent.click(removeButton);
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-composer-quote]')).toBeNull(),
+    );
+    expect(container.querySelector('[data-mention-chip][data-kind="file"]')).not.toBeNull();
+    expect(container.querySelector('[data-pasted-text-chip]')).not.toBeNull();
+  });
+
+  it('disables quote removal while the editor is locked', async () => {
+    let activeEditor: Editor | null = null;
+    const { container } = render(
+      <ComposerHarness
+        onEditor={(editor) => {
+          activeEditor = editor;
+        }}
+      />,
+    );
+    const editor = await waitFor(() => {
+      if (!activeEditor) throw new Error('Composer editor was not created');
+      return activeEditor;
+    });
+    const removeButton = await screen.findByRole('button', { name: 'Remove quote' });
+
+    act(() => editor.setEditable(false));
+    await waitFor(() =>
+      expect(container.querySelector('.ProseMirror')?.getAttribute('contenteditable')).toBe(
+        'false',
+      ),
+    );
+    expect(removeButton.hasAttribute('data-composer-quote-remove')).toBe(true);
+    expect(globalsSource).toContain(
+      ".ProseMirror[contenteditable='false'] [data-composer-quote-remove]",
+    );
+    fireEvent.click(removeButton);
+
     expect(container.querySelector('[data-composer-quote]')).not.toBeNull();
   });
 
