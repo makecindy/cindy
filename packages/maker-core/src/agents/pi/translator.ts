@@ -16,7 +16,7 @@
  */
 
 import type { Logger } from '../../interfaces/logger.js';
-import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
@@ -38,6 +38,11 @@ import {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from '../shared/context-overflow-error.js';
+import {
+  UPSTREAM_STREAM_INTERRUPTED_REASON,
+  isStreamInterruptedErrorMessage,
+} from '../shared/stream-interrupt-error.js';
+import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
@@ -67,7 +72,7 @@ interface PiPendingAssistantError {
   sdkError: string;
   errorStatus?: 401 | 429 | 529;
   usageLimit?: true;
-  reason?: typeof CONTEXT_OVERFLOW_REASON;
+  reason?: typeof CONTEXT_OVERFLOW_REASON | typeof UPSTREAM_STREAM_INTERRUPTED_REASON;
 }
 
 interface PiThinkingBlock {
@@ -139,6 +144,10 @@ export interface PiTranslateContext {
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
   /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
   hostAutoCompactInFlight: boolean;
+  /** Optional rewrite for ctx_doctor tool result text (Cindy-managed package paths). */
+  rewriteToolResultText?: (text: string) => string;
+  /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
+  toolNamesByCallId: Map<string, string>;
   /**
    * compaction_start 锁存的 turnScope。end/boundary 必须复用，不能按结束时的
    * isStreaming 重判——idle compact 期间用户开了新 turn 时，重判会把后台边界
@@ -172,6 +181,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
     subagentToolCalls: new Map(),
+    toolNamesByCallId: new Map(),
     pendingAssistantError: null,
     hostAutoCompactInFlight: false,
     compactTurnScope: null,
@@ -195,6 +205,7 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.pendingAssistantError = null;
   ctx.compactTurnScope = null;
   ctx.subagentToolCalls.clear();
+  ctx.toolNamesByCallId.clear();
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -346,7 +357,9 @@ function piAssistantErrorOf(rawError: string): PiPendingAssistantError {
     ...(signals.usageLimit ? { usageLimit: true } : {}),
     ...(isContextOverflowErrorMessage(redactedError)
       ? { reason: CONTEXT_OVERFLOW_REASON }
-      : {}),
+      : isStreamInterruptedErrorMessage(redactedError)
+        ? { reason: UPSTREAM_STREAM_INTERRUPTED_REASON }
+        : {}),
   };
 }
 
@@ -441,6 +454,7 @@ export function translatePiEvent(
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
       ctx.subagentToolCalls.clear();
+      ctx.toolNamesByCallId.clear();
       ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -522,6 +536,7 @@ export function translatePiEvent(
       const toolUseId = String(event.toolCallId ?? '');
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
+      if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
       queue.push({
         type: 'tool_use',
         data: {
@@ -531,17 +546,36 @@ export function translatePiEvent(
         },
         source: 'pi',
       });
-      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId) {
-        const rawTitle = toolArgs.agent;
+      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
+        const rawTitle = toolArgs.title;
+        const taskFallback = typeof toolArgs.task === 'string' && toolArgs.task.trim()
+          ? toolArgs.task.trim().replace(/\s+/g, ' ').slice(0, 120)
+          : Array.isArray(toolArgs.tasks)
+            ? toolArgs.tasks
+                .map((task) => {
+                  if (!task || typeof task !== 'object') return '';
+                  const item = task as Record<string, unknown>;
+                  const value = typeof item.title === 'string' && item.title.trim()
+                    ? item.title
+                    : item.task;
+                  return typeof value === 'string'
+                    ? value.trim().replace(/\s+/g, ' ').slice(0, 60)
+                    : '';
+                })
+                .filter(Boolean)
+                .join(' · ')
+                .slice(0, 120)
+            : '';
         const title = typeof rawTitle === 'string' && rawTitle.trim()
-          ? rawTitle.trim().slice(0, 96)
-          : undefined;
+          ? rawTitle.trim().slice(0, 120)
+          : taskFallback || undefined;
         const update: AgentTaskUpdateEventData = {
           provider: 'pi',
           taskId: toolUseId,
           parentToolUseId: toolUseId,
           status: 'running',
           ...(title ? { title } : {}),
+          ...(toolArgs.async === true ? { taskType: 'pi_subagent' } : {}),
           subagentObservation: {
             kind: 'spawn',
             logicalSubagentId: toolUseId,
@@ -580,7 +614,16 @@ export function translatePiEvent(
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');
       const isError = event.isError === true;
-      const fullText = toolResultFullText(event.result);
+      const rawText = toolResultFullText(event.result);
+      const toolName = String(
+        event.toolName
+          ?? (toolUseId ? ctx.toolNamesByCallId.get(toolUseId) : undefined)
+          ?? '',
+      );
+      if (toolUseId) ctx.toolNamesByCallId.delete(toolUseId);
+      const fullText = isContextModeDoctorToolName(toolName) && ctx.rewriteToolResultText
+        ? ctx.rewriteToolResultText(rawText)
+        : rawText;
       queue.push({
         type: 'tool_result_full',
         data: { toolUseId, fullText, isError },
@@ -599,6 +642,7 @@ export function translatePiEvent(
         // may finish the wrapper with isError=true after the child stopped.
         // Only a still-running child is completed/failed by the wrapper frame.
         const status = subagentToolCall.status === 'running'
+          && !subagentSpawnResultIndicatesRunning(PI_SUBAGENT_TOOL_NAME, fullText)
           ? (isError ? 'failed' : 'completed')
           : subagentToolCall.status;
         queue.push({

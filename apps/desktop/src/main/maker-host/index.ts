@@ -225,7 +225,10 @@ import {
 } from './codex-gateway-config.js';
 import {
   buildCodexSubagentSpawnArgs,
+  codexSubagentRouteUsesChatGptOAuth,
   codexSubagentRouteResolutionFailed,
+  resolveCodexSubagentRoutingProfile,
+  resolveEffectiveCodexSubagentSettings,
   resolveCodexSubagentModelFallback,
   resolveCodexSubagentHostCredentialPlan,
   resolveCodexSubagentRouteSnapshot,
@@ -1242,6 +1245,7 @@ export function getMaker(): Maker {
       runtimeConfig: desktopCodexRuntimeConfig,
       binaryPath: codexPath,
       logger: desktopMakerLogger,
+      disableCodexPluginRuntime: true,
       registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
       // Codex 也接 Cindy MCP providers (跟 claude 共享同一份 provider instances);
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
@@ -1449,19 +1453,18 @@ export function getMaker(): Maker {
         const endpoint = usesIsolatedProxy
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
-        const subagentModelSettings = readSubagentModelSettings();
-        const subagentModelFallback = !isReview
-          ? resolveCodexSubagentModelFallback(subagentModelSettings, ctx.remoteHostId)
-          : undefined;
+        const storedSubagentModelSettings = readSubagentModelSettings();
+        const mainTaskCredentialMode = ctx.requestedCredentialMode ?? credentialMode;
         let subagentProviderViews: ProviderView[] | undefined;
         if (
           !isReview
           && !ctx.remoteHostId
-          && subagentModelSettings.codexSubagentsEnabled
-          && subagentModelSettings.codex?.trim()
+          && storedSubagentModelSettings.codexSubagentsEnabled
+          && storedSubagentModelSettings.codex?.trim()
         ) {
-          // 显式来源同样必须按当前目录严格校验；读取失败时保留空数组，令下面的路由
-          // 解析 fail-closed，而不是信任可能已经断连或删除模型的旧设置。
+          // OAuth 主任务也需要识别固定路由的来源，区分“ChatGPT 路由在两侧都回落默认”
+          // 与“其它路由只在 OAuth 侧临时回落”；读取失败时保留空数组，令显式 OpenAI
+          // 选择仍可按稳定来源 id 识别，其它路由继续 fail-closed。
           subagentProviderViews = [];
           try {
             subagentProviderViews = await getDesktopProviderService().listProviders({
@@ -1473,12 +1476,32 @@ export function getMaker(): Maker {
             });
           }
         }
-        let subagentRoute = !isReview
+        const configuredSubagentRoute = !isReview
           ? resolveCodexSubagentRouteSnapshot(
-              subagentModelSettings,
+              storedSubagentModelSettings,
               ctx.remoteHostId,
               subagentProviderViews,
             )
+          : undefined;
+        const subagentModelSettings = resolveEffectiveCodexSubagentSettings(
+          storedSubagentModelSettings,
+          mainTaskCredentialMode,
+          configuredSubagentRoute,
+          subagentProviderViews,
+        );
+        const codexSubagentRoutingProfile = !isReview && !ctx.remoteHostId
+          ? resolveCodexSubagentRoutingProfile(
+              storedSubagentModelSettings,
+              mainTaskCredentialMode,
+              configuredSubagentRoute,
+              subagentProviderViews,
+            )
+          : 'default';
+        const subagentModelFallback = !isReview
+          ? resolveCodexSubagentModelFallback(subagentModelSettings, ctx.remoteHostId)
+          : undefined;
+        let subagentRoute = subagentModelSettings === storedSubagentModelSettings
+          ? configuredSubagentRoute
           : undefined;
         let forceDisableSubagents = false;
         if (codexSubagentRouteResolutionFailed(subagentModelSettings, subagentRoute, {
@@ -1503,10 +1526,10 @@ export function getMaker(): Maker {
           forceDisableSubagents = true;
           subagentRoute = undefined;
         } else if (subagentRoute) {
-          const selectedRouting = subagentProviderViews
-            ?.find((provider) => provider.id === subagentRoute?.providerId)
-            ?.routing.codex;
-          const hasRequiredOAuth = selectedRouting?.authStrategy === 'oauth-passthrough'
+          const hasRequiredOAuth = codexSubagentRouteUsesChatGptOAuth(
+            subagentRoute,
+            subagentProviderViews,
+          )
             ? await desktopCodexAuthAdapter.hasCodexOAuthLogin().catch(() => false)
             : false;
           const credentialPlan = resolveCodexSubagentHostCredentialPlan(
@@ -1531,7 +1554,6 @@ export function getMaker(): Maker {
             };
           }
         }
-        const openAiWebSocketsEnabled = !subagentRoute;
         return {
           // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
           // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
@@ -1543,14 +1565,15 @@ export function getMaker(): Maker {
                   forceDisableSubagents,
                 })
               : []),
-            ...buildCodexProxySpawnArgs(endpoint, authInjection, { openAiWebSocketsEnabled }),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
           ...(subagentModelFallback ? { subagentModelFallback } : {}),
           ...(subagentRoute ? { subagentRoute } : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
-          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready && openAiWebSocketsEnabled,
+          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
+          codexSubagentRoutingProfile,
           codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
           ...(browserCompanion?.status === 'ready'
             ? {

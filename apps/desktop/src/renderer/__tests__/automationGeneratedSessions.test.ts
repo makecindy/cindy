@@ -573,6 +573,108 @@ describe('automation-generated sessions', () => {
     expect(view.totalCount).toBe(7);
   });
 
+  describe('collapsed automation group keeps unhandled alerts reachable', () => {
+    const alertGroup = (count = 7) => ({
+      id: 'schedule:sched-alert',
+      title: 'Alert',
+      sessions: Array.from({ length: count }, (_, index) =>
+        makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
+      ),
+      attentionSessionIds: [],
+    });
+
+    it('renders nothing extra while no run holds an alert', () => {
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(['run-0']),
+        showAll: false,
+        collapsed: true,
+      });
+      expect(view.visibleSessions).toEqual([]);
+      expect(view.isOverflowing).toBe(false);
+      expect(view.totalCount).toBe(0);
+    });
+
+    it('lifts only the alerting runs out of a collapsed group', () => {
+      // run-3 是「组内第 3 新、turn 从未收尾」那类运行:组头代表的是 run-0,
+      // 收起态若返回空列表,项目折叠头的红点就没有任何一行能对应上。
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(['run-0', 'run-3']),
+        showAll: false,
+        collapsed: true,
+        alertSessionIds: new Set(['run-3']),
+      });
+      expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-3']);
+      expect(view.isOverflowing).toBe(false);
+      expect(view.totalCount).toBe(1);
+    });
+
+    it('caps lifted alerts at five and counts only alerts in the overflow label', () => {
+      const alerts = ['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5'];
+      const view = getAutomationGroupChildView(alertGroup(8), {
+        notifications: new Set(alerts),
+        showAll: false,
+        collapsed: true,
+        alertSessionIds: new Set(alerts),
+      });
+      expect(view.visibleSessions).toHaveLength(5);
+      expect(view.isOverflowing).toBe(true);
+      expect(view.hiddenCount).toBe(1);
+      // 「显示全部 N 个」的 N 是告警数,不是整组运行数(收起态列表语义就是告警)。
+      expect(view.totalCount).toBe(6);
+
+      const expanded = getAutomationGroupChildView(alertGroup(8), {
+        notifications: new Set(alerts),
+        showAll: true,
+        collapsed: true,
+        alertSessionIds: new Set(alerts),
+      });
+      expect(expanded.visibleSessions.map((session) => session.id)).toEqual(alerts);
+      expect(expanded.isOverflowing).toBe(false);
+    });
+
+    it('ignores a frozen expanded layout so collapsing cannot drag non-alert runs back', () => {
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(),
+        showAll: false,
+        collapsed: true,
+        alertSessionIds: new Set(['run-4']),
+        frozenVisibleSessionIds: ['run-0', 'run-1', 'run-2'],
+      });
+      expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-4']);
+    });
+
+    it('goes back to the regular collapse cap once the group is expanded', () => {
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(),
+        showAll: false,
+        collapsed: false,
+        alertSessionIds: new Set(['run-6']),
+      });
+      expect(view.visibleSessions.map((session) => session.id)).toEqual([
+        'run-0',
+        'run-1',
+        'run-2',
+        'run-3',
+        'run-4',
+      ]);
+      expect(view.totalCount).toBe(7);
+    });
+
+    it('does not let a leftover collapsed showAll dump the whole history on expand', () => {
+      // 收起态点过「显示全部」后,showAll 仍为 true;若展开分支把 collapsed 短路排在
+      // showAll 之后,会一次渲染全部历史运行。组件切折叠时会清 showAll,本断言钉住
+      // childView 自己也不依赖那次复位。
+      const view = getAutomationGroupChildView(alertGroup(), {
+        notifications: new Set(),
+        showAll: true,
+        collapsed: false,
+        alertSessionIds: new Set(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5']),
+      });
+      expect(view.visibleSessions).toHaveLength(7);
+      expect(view.totalCount).toBe(7);
+    });
+  });
+
   it('keeps unread automation runs visible past the collapse cap', () => {
     const sessions = Array.from({ length: 8 }, (_, index) =>
       makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
@@ -709,10 +811,15 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('useAutomationGroupCollapsed(');
     expect(source).toContain('group.legacyId');
     expect(source).toContain('toggleCollapsed()');
+    // 切折叠必须复位轴 2:showAll 被收起告警列表和展开历史列表共用。复位挂在
+    // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
+    expect(source).toContain('useLayoutEffect(() => {\n    setShowAll(false);\n  }, [collapsed]);');
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
-    // 轴 1 收起时藏掉全部子运行(只留组头)。
-    expect(source).toContain('const visibleSessions = collapsed ? [] : childView.visibleSessions');
+    // 轴 1 收起时只留组头 + 被提上来的未处理告警行,取舍统一由 childView 决定
+    // (收起态曾经是硬编码的空列表,于是组内非最新一条的告警既不上组头也不成行)。
+    expect(source).toContain('const visibleSessions = childView.visibleSessions;');
+    expect(source).toMatch(/getAutomationGroupChildView\(group, \{[\s\S]*?collapsed,/);
     expect(source).toContain('const hasVisibleChildren = visibleSessions.length > 0');
     expect(source).toContain('{hasVisibleChildren && (');
     // 侧栏侧保留「立即运行」直点,低频的编辑 / 暂停恢复 / 删除收回 More 菜单。

@@ -75,6 +75,12 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     });
   });
 
+  it('renders the process-usage window title from the standing menu item copy', () => {
+    render(<ResourceUsageWindowRoot />);
+
+    expect(screen.getByText('titleBar.menuItems.resourceUsage')).toBeTruthy();
+  });
+
   it('mounts hidden prewarm sampling, reports renderer readiness, then follows main visibility', async () => {
     render(<ResourceUsageWindowRoot />);
 

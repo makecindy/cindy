@@ -43,6 +43,7 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { XAI_X_SEARCH_TOOL_TYPE, xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { describeErrorChain } from '../utils/errorChain.js';
 
 const zstdCompressAsync = promisify(zstdCompress);
 const zstdDecompressAsync = promisify(zstdDecompress);
@@ -753,9 +754,14 @@ export function getPiNativeSubscriptionHandler(
       // which destroys the client response so PI observes a transport failure
       // instead of accepting a cleanly-ended truncated stream.
       if (res.headersSent) throw err;
+      const detail = describeErrorChain(err);
+      const providerLabel = providerId === 'xai' ? 'xAI/Grok' : 'OpenAI/ChatGPT';
       log.warn('PI native subscription forwarding failed', {
         providerId,
-        err: err instanceof Error ? err.message : String(err),
+        endpoint: upstream.url,
+        wireProtocol: upstream.wireProtocol,
+        requestPath: ctx.url,
+        detail,
       });
       res.writeHead(502, {
         'content-type': 'application/json; charset=utf-8',
@@ -764,7 +770,9 @@ export function getPiNativeSubscriptionHandler(
       res.end(JSON.stringify({
         error: {
           type: 'upstream_error',
-          message: err instanceof Error ? err.message : String(err),
+          provider: providerId,
+          endpoint: upstream.url,
+          message: `${providerLabel} upstream request failed: ${err instanceof Error ? err.message : String(err)}`,
         },
       }));
     } finally {

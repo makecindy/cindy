@@ -5075,7 +5075,7 @@ export function NewMakerDraftRoute() {
                     externalDragOver={pageDragOver}
                     visualVariant="create-agent"
                     compactToolbar
-                    placeholder="Hi Cindy!"
+                    placeholder={t('newChat.chatInput.createAgentPlaceholder')}
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
                     remoteHostId={draft.remoteHostId ?? null}

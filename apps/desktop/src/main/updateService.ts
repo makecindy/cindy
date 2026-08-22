@@ -26,6 +26,12 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 
+import {
+  acquirePiSubagentLaunchFence,
+  hasActivePiSubagentRunsSync,
+  requestStopAllPiSubagentRunsSync,
+  stopAllPiSubagentRunsForExit,
+} from '@cindy/maker-core/pi-subagent-runs';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifest } from './manifestService';
@@ -385,7 +391,7 @@ async function requestAutoRelaunch(
     lastAutoRelaunchBlockReason = null;
     autoRelaunchInProgress = true;
     log.info('auto relaunch conditions met (%s), applying update v%s', reason, readyVersion ?? '<unknown>');
-    executeRelaunch(theme);
+    void executeRelaunch(theme);
     return { accepted: true };
   } finally {
     autoRelaunchDecisionDepth = Math.max(0, autoRelaunchDecisionDepth - 1);
@@ -1224,6 +1230,24 @@ function handleApplyFailure(reason: string): void {
   readyChannelEpoch = undefined;
   isRelaunching = false;
   autoRelaunchInProgress = false;
+  // Every failure exit converges here, including the two that fire *after*
+  // `executeRelaunch` has already returned: the Windows updater registers its
+  // `error` and 5s spawn-timeout callbacks and returns immediately, so
+  // `isRelaunching` was still true when the outer `finally` checked it and the
+  // fence was skipped. It then stood for the rest of the process's life, and
+  // every durable Subagent launch this host attempted was refused as "Cindy is
+  // restarting". Releasing here covers the synchronous refusals too, where it
+  // is simply redundant — `clearSubagentLaunchFence` nulls the handle first, so
+  // the outer `finally` finds nothing left to do.
+  //
+  // Not awaited, because nothing here can: this is a `void` handler called from
+  // a child-process event. Nothing reads the outcome — the only consumer is the
+  // next launch attempt — and the release itself is serialised behind the
+  // fence's per-file work chain. The success path never reaches this function:
+  // a spawned updater ends in `forceQuit()`, and the fence is meant to stand.
+  void clearSubagentLaunchFence().catch((err: unknown) => {
+    log.error('clearing the Subagent launch fence after a failed apply failed: %s', String(err));
+  });
   setStatus('error', { errorCode: 'updater_spawn_failed' });
 }
 
@@ -1336,6 +1360,14 @@ function forceQuit(): void {
   // build_app uses detached process groups, so parent exit does not reliably
   // reap xcodebuild. Abort synchronously before process.exit bypasses Host dispose.
   abortIOSSimulatorOperationsForExit();
+  // Residual window only, and now a millisecond-scale one: `executeRelaunch`
+  // reclaimed this runtime's runners and then confirmed the agent home was
+  // still quiet, refusing to get here otherwise. What is left is the gap
+  // between that confirmation and this exit. Stays synchronous by necessity —
+  // awaiting anything here can pop a dialog and stall the updater's pid poll.
+  requestStopAllPiSubagentRunsSync(path.join(app.getPath('userData'), 'pi-agent-home'), {
+    hostPid: process.pid,
+  });
   // Node 子进程同理——before-quit 的 destroyAll 不会触发,这里同步 kill。
   try { getGhostNodeRuntimeBroker().destroyAll(); } catch { /* best-effort */ }
   for (const win of BrowserWindow.getAllWindows()) {
@@ -1384,7 +1416,123 @@ function executeUpdateMacOS(zipPath: string): void {
   forceQuit();
 }
 
-function executeRelaunch(theme: 'light' | 'dark'): void {
+/**
+ * Live launch fence, held from the first reclaim pass until the process exits.
+ * Cleared on every cancellation path, so a refused relaunch cannot leave this
+ * host unable to start Subagents.
+ */
+let releaseSubagentLaunchFence: (() => Promise<void>) | null = null;
+
+async function clearSubagentLaunchFence(): Promise<void> {
+  const release = releaseSubagentLaunchFence;
+  releaseSubagentLaunchFence = null;
+  if (release) await release().catch(() => undefined);
+}
+
+/** Total ceiling for the reclaim, including every re-check round. */
+const SUBAGENT_RECLAIM_TOTAL_MS = 6_000;
+/** Rounds before we stop trying and cancel the relaunch instead. */
+const SUBAGENT_RECLAIM_MAX_ROUNDS = 3;
+
+/**
+ * One reclaim pass over this runtime's durable Subagent runners.
+ *
+ * Budget: 2s for the stop mailbox plus a 1.5s ceiling on the escalation (the
+ * reclaims run concurrently), with a 4s race as the hard stop so a wedged probe
+ * can never hold the update — and never pops a dialog, which is the whole
+ * reason this path bypasses the graceful chain.
+ */
+async function reclaimSubagentRunnersOnce(agentHome: string): Promise<boolean> {
+  try {
+    return await Promise.race([
+      stopAllPiSubagentRunsForExit(agentHome, 2_000, {
+        // Scoped to this process so an update relaunch never kills a concurrent
+        // instance's Subagents out of the shared agent home.
+        hostPid: process.pid,
+        killUnresponsiveRunners: true,
+        // Inside the 4s ceiling below, leaving the 2s stop wait its own room.
+        killBudgetMs: 1_500,
+      }),
+      new Promise<boolean>((resolve) => { setTimeout(() => resolve(false), 4_000); }),
+    ]);
+  } catch (err) {
+    log.error('Subagent reclaim before update relaunch failed: %s', String(err));
+    return false;
+  }
+}
+
+/**
+ * Reclaim until the agent home is *stable*, not merely until one pass says so.
+ *
+ * A single pass proves nothing about the moment after it: the parent task is
+ * still running while we work, so it can launch another durable runner between
+ * the last scan and `process.exit(0)` — and that one would survive the update
+ * with credentials nobody is left holding. Stability here means a pass returned
+ * true and a fresh scan afterwards finds nothing active; anything else gets
+ * another round, up to a hard ceiling. Failing to reach it cancels the
+ * relaunch, which is the same verdict as failing to reclaim.
+ */
+async function reclaimSubagentRunnersForRelaunch(): Promise<boolean> {
+  const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+  // Close the door before the first sweep, not after the last one. The spawn
+  // that has to be prevented happens inside the Pi process, in an extension the
+  // Host never calls, so re-scanning can only ever narrow the window — the
+  // fence removes it. The loop below then clears whatever was already in flight
+  // when the door closed. Released by the caller on every exit path.
+  releaseSubagentLaunchFence = await acquirePiSubagentLaunchFence(agentHome).catch((err) => {
+    log.error('Could not raise the Subagent launch fence: %s', String(err));
+    return null;
+  });
+  if (!releaseSubagentLaunchFence) return false;
+  const deadline = Date.now() + SUBAGENT_RECLAIM_TOTAL_MS;
+  for (let round = 1; round <= SUBAGENT_RECLAIM_MAX_ROUNDS; round += 1) {
+    if (!await reclaimSubagentRunnersOnce(agentHome)) return false;
+    let stillActive: boolean;
+    try {
+      stillActive = hasActivePiSubagentRunsSync(agentHome, { hostPid: process.pid });
+    } catch (err) {
+      // An unreadable agent home cannot be called stable.
+      log.error('Subagent stability re-check failed: %s', String(err));
+      return false;
+    }
+    if (!stillActive) return true;
+    log.warn('A durable Subagent run appeared after reclaim round %d; retrying', round);
+    if (Date.now() >= deadline) break;
+  }
+  return false;
+}
+
+/**
+ * Never rejects.
+ *
+ * This became async so the Subagent reclaim could be awaited before the updater
+ * spawns, and that quietly changed the failure contract: a throw used to reach
+ * the caller synchronously, but both call sites are fire-and-forget, so after
+ * the change *any* throw became an unhandled rejection. CI caught it on the
+ * first `statSync` after the gate (the staged patch had been cleaned up under a
+ * finished test), failing the whole run while every assertion passed. Production
+ * has the same shape: a patch file that disappears between the readiness check
+ * and the spawn.
+ */
+async function executeRelaunch(theme: 'light' | 'dark'): Promise<void> {
+  try {
+    await executeRelaunchUnguarded(theme);
+  } catch (err) {
+    log.error('executeRelaunch() failed: %s', err instanceof Error ? err.stack ?? err.message : String(err));
+    try {
+      handleApplyFailure('relaunch_failed');
+    } catch (cleanupErr) {
+      log.error('executeRelaunch() failure cleanup also failed: %s', String(cleanupErr));
+    }
+  } finally {
+    // Any return from here that is not `process.exit` means the relaunch did
+    // not happen, so the fence must come down — including the early returns
+    // inside the guarded body.
+    if (!isRelaunching) await clearSubagentLaunchFence();
+  }
+}
+
+async function executeRelaunchUnguarded(theme: 'light' | 'dark'): Promise<void> {
   if (isRelaunching) {
     log.info('executeRelaunch() skipped — already in progress');
     return;
@@ -1429,6 +1577,23 @@ function executeRelaunch(theme: 'light' | 'dark'): void {
     return;
   }
 
+  // Gate *before* the updater is spawned, not inside forceQuit: once the
+  // updater script is running it polls our pid and SIGKILLs us after 120s
+  // (`updateScriptMacOS.ts`), so a late decision not to exit does not keep this
+  // process alive — it only delays the kill. Refusing here is the last point
+  // where "do not relaunch" is still a real outcome.
+  //
+  // A runner we cannot confirm stopped holds direct BYOM credentials inherited
+  // through its spawn env, and the relaunched app has no handle to it.
+  if (!await reclaimSubagentRunnersForRelaunch()) {
+    log.error(
+      'executeRelaunch() cancelled — PI Subagent runners could not be confirmed stopped; '
+      + 'update relaunch aborted rather than leaving them running unsupervised',
+    );
+    handleApplyFailure('subagent_reclaim_unconfirmed');
+    return;
+  }
+
   // Increment applyAttempts before spawning so that if the updater itself
   // crashes (spawn succeeds → forceQuit → updater fails → old version boots),
   // the counter persists across restarts and eventually breaks the loop.
@@ -1470,7 +1635,7 @@ export function initUpdateService(): void {
     // default and the .env'd-out look most users have.
     const resolved = theme === 'light' || theme === 'dark' ? theme : 'dark';
     resolvedRelaunchTheme = resolved;
-    executeRelaunch(resolved);
+    void executeRelaunch(resolved);
   });
 
   ipcMain.handle(

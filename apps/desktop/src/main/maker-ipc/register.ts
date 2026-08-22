@@ -15,6 +15,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+import {
+  canHostControlPiSubagentRun,
+  controlPiSubagentRuns,
+  isPiSubagentTerminal,
+  listPiSubagentRuns,
+  piSubagentRunRoot,
+} from '@cindy/maker-core/pi-subagent-runs';
 import type {
   AgentEvent,
   AgentKind,
@@ -268,8 +275,11 @@ import {
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
 } from '../localDb/ipc/sessions.js';
-// sidebar-card-mode: turn-done 后触发任务现状摘要生成
-import { maybeGenerateSessionTaskSummary } from '../sessionTaskSummary.js';
+// sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
+import {
+  maybeGenerateSessionTaskSummary,
+  refreshSessionListPreview,
+} from '../sessionTaskSummary.js';
 import {
   addOrUpdateWorker,
   archiveSingleWorkerSession,
@@ -557,6 +567,10 @@ import {
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import {
+  clearPromptPredictionSessionStopped,
+  notePromptPredictionSessionStopped,
+} from './promptPredictionStopLedger.js';
 import {
   estimateReferenceTokens,
   MAX_REFERENCE_MESSAGES,
@@ -3892,6 +3906,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // 「疑似中断」纯读判定(设计总述见 localDb/sessionActiveTurn.ts 文件头)。
             // SSH remote 会话同样记录:session 行在本地 DB、事件流走本进程,只是
             // agent 跑在远端;device-link 被控会话不进本进程 maker-core,天然不经过。
+            clearPromptPredictionSessionStopped(session.id);
             markSessionTurnStarted(session.id);
           }
           if (
@@ -4447,6 +4462,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (event.type === 'done' && !isContinuationBoundary) {
           void (async () => {
             await drainPersistQueue();
+            // 列表预览与置顶卡片摘要解耦:无论置顶区是不是卡片、这条有没有置顶,
+            // 都要把最近一条可见消息立刻写回 session.preview。摘要生成失败也不能
+            // 让侧栏停在进入本轮前的旧句子。
+            await refreshSessionListPreview(session.id);
             // force:turn-done 是权威刷新点(本轮 assistant 已落库),必须以最新内容覆盖
             // 任何 pin 触发 / 上一轮残留的摘要——绕过 in-flight 早返与 20s 节流
             // (codex review:pin during running turn 会让卡片停在部分/旧摘要)。
@@ -4475,16 +4494,31 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (!isContinuationBoundary) {
           void (async () => {
             try {
-              const doneData = event.data as { result?: unknown } | null;
+              const doneData = event.data as {
+                result?: unknown;
+                message?: unknown;
+                sdkError?: unknown;
+                reason?: unknown;
+                error?: { message?: unknown };
+              } | null;
               const finalText =
                 typeof doneData?.result === 'string' && doneData.result.length > 0
                   ? doneData.result
                   : '';
+              const diagnostic = isTerminalTurnErrorEvent(event)
+                ? [
+                    doneData?.message,
+                    doneData?.sdkError,
+                    doneData?.reason,
+                    doneData?.error?.message,
+                  ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+                : undefined;
               await workerTurnStartSequencer.waitForStart(session.id);
               await orcaTeamServiceForEvents?.handleWorkerTerminalTurn({
                 sessionId: session.id,
                 status: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
                 finalText,
+                diagnostic,
               });
             } catch {
               /* non-fatal */
@@ -5706,6 +5740,103 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 当前 turn 与其他后台任务不受影响 —— 与上面的会话级止损入口互补。
   registerStopAgentTaskHandler(createElectronIpcHandlerRegistry(), {
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? undefined,
+    stopDetachedTask: async (sessionId, taskId) => {
+      const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+      const runRoot = piSubagentRunRoot(agentHome, sessionId);
+      // This fallback enumerates durable runs out of a `pi-agent-home` shared
+      // with any concurrent dev / packaged / --passive instance, so it reaches
+      // runs another live window is driving. Both Subagent stop buttons land
+      // here when no handle is loaded, so it needs the same gate as
+      // CONTROL_PI_SUBAGENT: discover first, refuse before writing anything.
+      const run = (await listPiSubagentRuns(runRoot)).find(
+        (candidate) => candidate.taskId === taskId || candidate.runId === taskId,
+      );
+      if (!run) return false;
+      // A terminal run has nothing to write, so gating it would only turn an
+      // idempotent stop into an error. Refuse only where a control would land.
+      if (!isPiSubagentTerminal(run.state) && !canHostControlPiSubagentRun(run, process.pid)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'This Subagent run belongs to another running Cindy instance. Control it from that window.',
+        );
+      }
+      return (await controlPiSubagentRuns(runRoot, run.runId, 'stop')) > 0;
+    },
+  });
+
+  ipcMain.handle(MAKER_INVOKE.CONTROL_PI_SUBAGENT, async (event, input: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throwIpcError('INVALID_PARAMS', 'PI Subagent control input required');
+    }
+    const body = input as Record<string, unknown>;
+    if (typeof body.sessionId !== 'string' || !body.sessionId) {
+      throwIpcError('INVALID_PARAMS', 'sessionId required');
+    }
+    if (typeof body.taskId !== 'string' || !body.taskId) {
+      throwIpcError('INVALID_PARAMS', 'taskId required');
+    }
+    if (
+      body.action !== 'stop' &&
+      body.action !== 'steer' &&
+      body.action !== 'follow_up' &&
+      body.action !== 'resume'
+    ) {
+      throwIpcError('INVALID_PARAMS', 'action must be stop, steer, follow_up, or resume');
+    }
+    if (
+      body.action !== 'stop' &&
+      (typeof body.message !== 'string' || !body.message.trim() || body.message.length > 32_000)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'message must contain 1..32000 characters');
+    }
+    const agentHome = path.join(app.getPath('userData'), 'pi-agent-home');
+    const runRoot = piSubagentRunRoot(agentHome, body.sessionId);
+    const runs = await listPiSubagentRuns(runRoot);
+    const run = runs.find((candidate) =>
+      candidate.taskId === body.taskId || candidate.runId === body.taskId,
+    );
+    if (!run) throwIpcError('NOT_FOUND', 'PI Subagent run not found');
+    if (body.childId !== undefined && (typeof body.childId !== 'string' || !body.childId)) {
+      throwIpcError('INVALID_PARAMS', 'childId must be a non-empty string');
+    }
+    const childId = typeof body.childId === 'string' ? body.childId : undefined;
+    if (childId && !run.tasks.some((task) => task.childId === childId)) {
+      throwIpcError('NOT_FOUND', 'PI Subagent child not found');
+    }
+    const terminal = isPiSubagentTerminal(run.state);
+    if (body.action === 'resume') {
+      const live = maker.getSession(body.sessionId);
+      if (!terminal || live?.agentKind !== 'pi') {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Resume requires a loaded parent PI task and a terminal run.');
+      }
+      await live.resumeBackgroundTask(run.taskId, body.message as string, childId);
+      return { ok: true, controlled: 1 };
+    }
+    if (terminal) {
+      throwIpcError('UNSUPPORTED_CAPABILITY', 'PI Subagent control requires an active run');
+    }
+    // `pi-agent-home` is shared with any concurrent dev / packaged / --passive
+    // instance, so this run may be driven by another live window. Stop, steer
+    // and follow-up all write into the runner's mailbox, so refuse before the
+    // write and tell the user where the run actually lives. Orphaned and
+    // unattributable runs stay controllable on purpose — that is the only way
+    // to stop work left behind by a crashed instance.
+    if (!canHostControlPiSubagentRun(run, process.pid)) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'This Subagent run belongs to another running Cindy instance. Control it from that window.',
+      );
+    }
+    const controlled = await controlPiSubagentRuns(
+      runRoot,
+      run.runId,
+      body.action,
+      body.action === 'stop'
+        ? { ...(childId ? { childId } : {}) }
+        : { message: body.message as string, ...(childId ? { childId } : {}) },
+    );
+    return { ok: controlled > 0, controlled };
   });
 
   // 会话仍在运行的后台任务快照(只读)。renderer 挂载 / reloadMessages 清空
@@ -13147,6 +13278,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
     const sid = requireSessionId(sessionId);
     await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+    // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
+    // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
+    notePromptPredictionSessionStopped(sid);
     // 这三类续跑撤销都是同步操作，必须早于 goal/DB await；
     // 否则退避 timer 能在用户已点 Stop 后抢先发出下一轮。
     resetAutomaticRecoveryForExplicitStop(sid);
@@ -15036,9 +15170,18 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   // Main consumes this Cindy-owned durable projection marker before the event
   // crosses renderer/device-link boundaries. Live task-card payloads therefore
   // keep their existing wire shape and older mobile clients need no upgrade.
-  if (event.type === 'agent_task_update' && 'subagentObservation' in safeData) {
-    delete safeData.subagentObservation;
-    changed = true;
+  if (event.type === 'agent_task_update') {
+    for (const key of [
+      'subagentObservation',
+      'subagentParentContext',
+      'returnedResult',
+      'returnedResultEmpty',
+      'returnedResultTruncated',
+    ]) {
+      if (!(key in safeData)) continue;
+      delete safeData[key];
+      changed = true;
+    }
   }
   for (const key of ['message', 'sdkError'] as const) {
     if (typeof safeData[key] === 'string') {

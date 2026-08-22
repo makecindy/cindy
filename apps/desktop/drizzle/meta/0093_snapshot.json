@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ef0cf453-150b-4566-a4da-5ae9b4cb1d73",
+  "id": "69107681-c10d-468b-ab20-f20b5cacd802",
   "prevId": "ba4a24fc-8903-415b-9bf9-fee4bd54f907",
   "tables": {
     "account_usage_snapshots": {
@@ -2821,14 +2821,6 @@
           "autoincrement": false,
           "default": false
         },
-        "search_mode_enabled": {
-          "name": "search_mode_enabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
         "cleared_at": {
           "name": "cleared_at",
           "type": "integer",
@@ -2947,6 +2939,13 @@
         "codex_history_has_product_prompt": {
           "name": "codex_history_has_product_prompt",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "codex_plan_json": {
+          "name": "codex_plan_json",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -3574,6 +3573,27 @@
           "notNull": false,
           "autoincrement": false
         },
+        "returned_result": {
+          "name": "returned_result",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "returned_result_empty": {
+          "name": "returned_result_empty",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "returned_result_truncated": {
+          "name": "returned_result_truncated",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "model": {
           "name": "model",
           "type": "text",
@@ -3605,6 +3625,13 @@
         "duration_ms": {
           "name": "duration_ms",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cost_usd": {
+          "name": "cost_usd",
+          "type": "real",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

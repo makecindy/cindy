@@ -123,6 +123,7 @@ import {
   isFoldableBlockExpanded,
   useFoldableExpandedBlocksSnapshot,
 } from '@/session/expandedBlockMemory';
+import { ShareSelectAllButton } from '@/session/ShareSelectAllButton';
 import { ShareSelectionBar } from '@/session/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -8833,6 +8834,12 @@ export default function SessionScreen() {
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
+              shareSelectionLeadingInset={nativeShellLayout.wideViewport
+                ? Math.max(0, (windowDimensions.width - nativeShellLayout.contentMaxWidth) / 2)
+                : 0}
+              shareSelectAllNode={shareSelectionActive ? (
+                <ShareSelectAllButton busy={conversationShareBusy} shareableIds={allShareableIds} />
+              ) : undefined}
               syncing={showSyncingIndicator}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               onBack={goBackToHome}
@@ -9675,7 +9682,6 @@ export default function SessionScreen() {
             <ShareSelectionBar
               busy={conversationShareBusy}
               count={shareSelectionCount}
-              shareableIds={allShareableIds}
               screenshotTriggered={shareSelectionTriggeredByScreenshot}
               onCancel={cancelShareSelection}
               onShare={() => void shareSelectedConversation()}
@@ -9724,6 +9730,8 @@ function SessionHeaderBar({
   currentSession,
   diffCount,
   isDeviceAccessRevoked,
+  shareSelectionLeadingInset,
+  shareSelectAllNode,
   syncing,
   messageCount,
   onBack,
@@ -9744,6 +9752,10 @@ function SessionHeaderBar({
   currentSession: RemoteSession | null;
   diffCount: number;
   isDeviceAccessRevoked: boolean;
+  /** 宽屏下与消息内容列共用的左侧 inset。 */
+  shareSelectionLeadingInset: number;
+  /** 分享选择模式下替换头部动作区。 */
+  shareSelectAllNode?: ReactNode;
   syncing: boolean;
   messageCount: number;
   onBack(): void;
@@ -9799,6 +9811,20 @@ function SessionHeaderBar({
     session: currentSession,
   });
 
+  // 分享选择模式只保留全选；底部关闭按钮负责退出。
+  if (shareSelectAllNode) {
+    return (
+      <View
+        style={[
+          styles.sessionHeaderBar,
+          { paddingLeft: shareSelectionLeadingInset + spacing.sm },
+        ]}
+        testID="session.summary"
+      >
+        {shareSelectAllNode}
+      </View>
+    );
+  }
   return (
     <View style={styles.sessionHeaderBar} testID="session.summary">
       {onOpenSessionList ? (

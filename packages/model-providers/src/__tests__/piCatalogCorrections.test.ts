@@ -51,4 +51,12 @@ describe('Pi xAI catalog corrections', () => {
       defaultEffort: 'high',
     });
   });
+
+  it('keeps every online xAI Pi protocol aligned with the imported Pi catalog', () => {
+    const online = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')?.models.pi;
+    expect(online).toBeDefined();
+    expect(Object.fromEntries(online!.map((model) => [model.id, model.piApi]))).toEqual(
+      Object.fromEntries(piCatalog.providers.xai.map((model) => [model.id, model.api])),
+    );
+  });
 });

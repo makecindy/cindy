@@ -306,6 +306,160 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(setActiveSession).toHaveBeenCalledWith({ sessionId: null }));
   });
 
+  it('hides a persisted Subagents-only sidebar for non-Pi tasks without deleting the tab', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-subagents', kind: 'subagents', state: null }],
+      activeTabId: 'tab-subagents',
+    });
+
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: false,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(onAllTabsClosed).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+    expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: null });
+  });
+
+  it('keeps a persisted Subagents-only sidebar intact while Pi eligibility is loading', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-subagents', kind: 'subagents', state: null }],
+      activeTabId: 'tab-subagents',
+    });
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    // Unknown eligibility keeps the persisted projection rather than folding to
+    // "unavailable" — otherwise the reconciliation below persists a different
+    // active tab and the restored selection is lost before Pi resolves.
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy());
+    // Nothing may be written back while the projection is provisional.
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: true,
+        onAllTabsClosed,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy());
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+    // The restored active marker survived the unknown window untouched.
+    expect(getBucket('s1').activeTabId).toBe('tab-subagents');
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+  });
+
+  it('keeps the restored active Subagents tab when eligibility resolves after a mixed-tab cold load', async () => {
+    // Cold load: the persisted active tab is Subagents and a second, always
+    // eligible tab exists. Folding unknown eligibility into "unavailable" made
+    // the projection pick the file tab and persist it as active, so the user's
+    // restored selection was gone by the time Pi eligibility arrived.
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-subagents', kind: 'subagents', state: null },
+      ],
+      activeTabId: 'tab-subagents',
+    });
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+    expect(getBucket('s1').activeTabId).toBe('tab-subagents');
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: true,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.subagents')).toBeTruthy());
+    expect(getBucket('s1').activeTabId).toBe('tab-subagents');
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+  });
+
+  it('still reconciles the active marker once eligibility resolves to unavailable', async () => {
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-subagents', kind: 'subagents', state: null },
+      ],
+      activeTabId: 'tab-subagents',
+    });
+
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+
+    await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+
+    view.rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+        subagentsAvailable: false,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: 'tab-files' }),
+    );
+    expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+  });
+
   it('mounts only the active body first, then idle-mounts and keeps the rest alive', async () => {
     const idleCallbacks: Array<{ id: number; callback: IdleRequestCallback }> = [];
     let nextIdleCallbackId = 0;

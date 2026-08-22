@@ -378,6 +378,16 @@ export function isRepositoryDesktopDevProcess(proc, checkoutPaths, currentPid = 
   if (!proc.pid || proc.pid === currentPid) return false;
   const command = normalize(proc.command);
   if (command.includes('apps/claude-code-bin') || command.includes('apps/codex-bin')) return false;
+  // Durable PI Subagent runners intentionally outlive the Electron main
+  // process. They use the bundled Electron executable with
+  // ELECTRON_RUN_AS_NODE=1, so the executable path alone looks like a Desktop
+  // dev process. Killing them alongside the app turns a normal dev restart
+  // into an unexpected terminal failure instead of letting the next Desktop
+  // instance reattach to the still-running durable job.
+  if (
+    command.includes('/runtime/pi-subagent-runs/')
+    && command.includes('/runner.cjs')
+  ) return false;
 
   return hasRepositoryCheckoutPath(command, checkoutPaths) && hasDesktopDevSignature(command);
 }

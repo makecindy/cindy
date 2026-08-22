@@ -315,6 +315,26 @@ function subagentRouteFromHeaders(
   return subagentRouteByThread.get(threadId);
 }
 
+/**
+ * Resolve only the independent Subagent route carried by this WS upgrade.
+ *
+ * A registered child already owns a frozen route snapshot. Its first
+ * collab_spawn upgrade can race thread/started, so fall back to the explicit
+ * parent header without mutating thread ownership from the handshake path.
+ */
+function subagentRouteForWebSocketUpgrade(
+  headers: Readonly<Record<string, string>>,
+): CodexSubagentRouteSnapshot | undefined {
+  const registeredRoute = subagentRouteFromHeaders(headers);
+  if (registeredRoute) return registeredRoute;
+  if (!isCollabSpawnRequest(headers)) return undefined;
+
+  const parentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
+  if (!parentThreadId) return undefined;
+  return subagentRouteByThread.get(parentThreadId)
+    ?? subagentRouteByParentThread.get(parentThreadId);
+}
+
 interface ProviderRequestContext {
   sessionId?: string;
   providerId: string | null;
@@ -1527,6 +1547,15 @@ const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
 ]);
+// DeepSeek V4's Responses compatibility endpoint accepts the host's patch
+// custom tool, but rejects every other custom tool (notably Codex's `exec`).
+// Keep ordinary function tools untouched: the restriction is specifically on
+// the Responses `custom` tool dialect, not on function calling as a whole.
+const DEEPSEEK_V4_MODELS = new Set([
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+]);
+const DEEPSEEK_V4_SUPPORTED_CUSTOM_TOOL_NAMES = new Set(['apply_patch']);
 const RESPONSE_TOOL_CALL_TYPES = new Set(['function_call', 'custom_tool_call']);
 const RESPONSE_TOOL_OUTPUT_TYPES = new Set(['function_call_output', 'custom_tool_call_output']);
 
@@ -1683,6 +1712,58 @@ function createStrictGatewayHistoryCompatTransform(): RequestTransform {
     const routingModel = providerContextForRequest(ctx.headers, body.model).catalogModel;
     return normalizeStrictGatewayHistory(body, routingModel);
   };
+}
+
+function deepSeekToolChoiceReferencesRemovedCustomTool(
+  toolChoice: unknown,
+  tools: readonly unknown[],
+): boolean {
+  if (!isPlainObject(toolChoice) || toolChoice.type !== 'custom' || typeof toolChoice.name !== 'string') {
+    return false;
+  }
+  return !tools.some((tool) =>
+    tool === toolChoice.name ||
+    (isPlainObject(tool) && tool.type === 'custom' && tool.name === toolChoice.name),
+  );
+}
+
+/**
+ * DeepSeek V4 rejects Codex's general-purpose custom `exec` tool before it
+ * reaches the model, while accepting `apply_patch`. Filter only that custom
+ * tool dialect so function/MCP declarations keep their existing semantics.
+ */
+function sanitizeDeepSeekV4CustomTools(body: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(body)) return null;
+  if (!DEEPSEEK_V4_MODELS.has(typeof body.model === 'string' ? body.model : '')) return null;
+  if (!Array.isArray(body.tools)) return null;
+
+  let changed = false;
+  const tools: unknown[] = [];
+  for (const tool of body.tools) {
+    const customToolName =
+      typeof tool === 'string'
+        ? tool
+        : isPlainObject(tool) && tool.type === 'custom' && typeof tool.name === 'string'
+          ? tool.name
+          : null;
+    if (customToolName !== null && !DEEPSEEK_V4_SUPPORTED_CUSTOM_TOOL_NAMES.has(customToolName)) {
+      changed = true;
+      continue;
+    }
+    tools.push(tool);
+  }
+  if (!changed) return null;
+
+  const next: Record<string, unknown> = { ...body };
+  if (tools.length > 0) {
+    next.tools = tools;
+    if (deepSeekToolChoiceReferencesRemovedCustomTool(next.tool_choice, tools)) next.tool_choice = 'auto';
+  } else {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+  }
+  return next;
 }
 
 /** Seed accepts the reasoning effort, but rejects Responses' summary selector. */
@@ -2389,6 +2470,7 @@ function createTransformRequestChain(
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
     createXaiModelInputSanitizeTransform(),
+    sanitizeDeepSeekV4CustomTools,
     createXaiResponsesCompatTransform(),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
@@ -2557,20 +2639,18 @@ function createCodexProxyHandle(
         });
         return null;
       }
-      // 独立子代理 Provider 路由的主防线是在 app-server spawn 配置里整体关闭 WS，
-      // 因为 startup-prewarm 的匿名共享连接无法按 thread 安全切分。这里保留线程级
-      // fail-closed 作为第二道防线：若旧调用方或配置漂移仍发来 upgrade，就回 null →
-      // 426，让 Codex 降到 HTTP，避免恢复 codex/ 折扣前缀、换鉴权与档位路由的整条
-      // transform 链被 socket 级透传绕过。
-      if (threadId !== 'unknown') {
-        const carriesSubagentRoute = subagentRouteByThread.has(threadId)
-          || subagentRouteByParentThread.has(threadId);
-        const isCollabSpawn = headerValue(headers, 'x-openai-subagent')
-          .toLowerCase() === CODEX_COLLAB_SPAWN_SUBAGENT;
-        if (carriesSubagentRoute || isCollabSpawn) {
-          log.info('codex websocket declined for subagent HTTP routing', { threadId });
-          return null;
-        }
+      // 独立 Subagent Provider 需要 HTTP body transform，但父 thread 不需要。
+      // bundled Codex 在每次 upgrade 都带 thread/session 身份，collab_spawn 还带
+      // parent thread id；只拒绝确实命中路由快照的子 thread，426 会让该子会话
+      // 自己降到 HTTP，不影响父 thread 的预热/复用 socket。
+      const subagentRoute = subagentRouteForWebSocketUpgrade(headers);
+      if (subagentRoute) {
+        log.info('codex websocket declined for subagent HTTP routing', {
+          threadId,
+          providerId: subagentRoute.providerId,
+          catalogModel: subagentRoute.catalogModel,
+        });
+        return null;
       }
       return CODEX_OAUTH_UPSTREAM;
     },

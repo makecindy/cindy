@@ -40,6 +40,8 @@ import { fingerprintPiProjectSkillEntrypoint } from './agents/pi/project-resourc
 import { Session, generateSessionId } from './session.js';
 import type {
   AgentSessionHandle,
+  AgentSessionTeardownOptions,
+  AgentSessionTeardownReason,
   BaseAgent,
   StartSessionOptions,
   OneShotOptions,
@@ -338,6 +340,19 @@ interface CodexThreadClaimLease {
   release(): void;
 }
 
+/**
+ * What `Maker.shutdown` could not tear down.
+ *
+ * Additive and, until now, unobservable: shutdown collected per-session detach
+ * failures, logged them, and resolved anyway. A caller that hands the runtime to
+ * a different owner afterwards needs to know, because a PI session whose detach
+ * threw may still have a live process — and that process owns durable Subagent
+ * children holding BYOM credentials the outgoing account cannot revoke.
+ */
+export interface MakerShutdownReport {
+  sessionFailures: Array<{ sessionId: string; agentKind: AgentKind; error: unknown }>;
+}
+
 interface FailedHandleCleanup {
   handle: AgentSessionHandle;
   promise: Promise<void> | null;
@@ -466,7 +481,8 @@ export class Maker {
   ): Promise<void> {
     const entry = this.failedHandleCleanups.get(sessionId);
     if (!entry || (expectedEntry && entry !== expectedEntry)) return;
-    const cleanup = entry.promise ?? entry.handle.close();
+    // Startup-failure rollback, not an ownership change.
+    const cleanup = entry.promise ?? entry.handle.close({ reason: 'navigation' });
     entry.promise = cleanup;
     try {
       await cleanup;
@@ -648,7 +664,7 @@ export class Maker {
         }
       } catch (error) {
         try {
-          await handle.close();
+          await handle.close({ reason: 'navigation' });
         } catch (closeError) {
           this.logger.warn('failed to close Codex handle after thread claim conflict', {
             sessionId: id,
@@ -699,7 +715,7 @@ export class Maker {
       // MCP bridge 残留成「用户看不到、Maker 管不到」的半创建状态。
       let cleanupFailed = false;
       try {
-        await handle.close();
+        await handle.close({ reason: 'navigation' });
       } catch (closeError) {
         cleanupFailed = true;
         this.failedHandleCleanups.set(id, {
@@ -973,10 +989,17 @@ export class Maker {
    * 调用方:**只调一次**这个方法就够了。不需要再单独遍历 sessions。
    * 失败一律 swallow + 聚合日志, 不抛 (before-quit 阶段不能阻断退出流程)。
    */
-  async shutdown(): Promise<void> {
+  async shutdown(opts?: { reason?: AgentSessionTeardownReason }): Promise<MakerShutdownReport> {
     this.shutdownStarted = true;
+    // Fail closed: a caller that cannot name its boundary is treated as an
+    // account boundary, so adapters with detached, credential-holding children
+    // (Pi durable Subagents) always stop them rather than letting them run on
+    // into the next owner. The two real callers name themselves explicitly
+    // (`app-quit` from before-quit, `account-boundary` from logout/switch).
+    const teardown: AgentSessionTeardownOptions = { reason: opts?.reason ?? 'account-boundary' };
     const agentEntries = Object.entries(this.agents);
     const errors: Array<{ kind: string; name: string; error: unknown }> = [];
+    const sessionFailures: MakerShutdownReport['sessionFailures'] = [];
 
     // Snapshot current sessions before the creation barrier. Existing local
     // Claude/PI processes must start terminating immediately; a stuck startup
@@ -992,9 +1015,13 @@ export class Maker {
       }
       return sessions.map((session) =>
         Promise.resolve()
-          .then(() => session.detach())
+          .then(() => session.detach(teardown))
           .catch((e) => {
             errors.push({ kind: `session-${phase}`, name: session.id, error: e });
+            // Reported, not just logged: a detach that threw may have left the
+            // agent's process alive, which the caller has to weigh before
+            // handing the runtime to someone else.
+            sessionFailures.push({ sessionId: session.id, agentKind: session.agentKind, error: e });
           }),
       );
     };
@@ -1061,6 +1088,7 @@ export class Maker {
     } catch (e) {
       console.error('[Maker.shutdown] makerMemory.dispose failed', e);
     }
+    return { sessionFailures };
   }
 
   /** 获取某 agent 的能力声明（用于 UI 在创建 session 前就能查能力） */

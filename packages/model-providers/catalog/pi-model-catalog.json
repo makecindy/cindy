@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-13T02:13:00.000Z",
+  "generatedAt": "2026-08-20T08:58:50.000Z",
   "providers": {
     "deepseek": [
       {
@@ -1372,9 +1372,12 @@
       {
         "id": "grok-4.3",
         "name": "Grok 4.3",
-        "api": "openai-completions",
+        "api": "openai-responses",
         "provider": "xai",
         "baseUrl": "https://api.x.ai/v1",
+        "compat": {
+          "supportsLongCacheRetention": false
+        },
         "reasoning": true,
         "input": [
           "text",
@@ -1388,10 +1391,14 @@
         },
         "contextWindow": 1000000,
         "maxTokens": 30000,
-        "compat": {
-          "supportsStore": false,
-          "supportsDeveloperRole": false,
-          "supportsReasoningEffort": false
+        "thinkingLevelMap": {
+          "off": "none",
+          "minimal": null,
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
         }
       },
       {
@@ -1429,9 +1436,13 @@
       {
         "id": "grok-4.6",
         "name": "Grok 4.6",
-        "api": "openai-completions",
+        "api": "openai-responses",
         "provider": "xai",
         "baseUrl": "https://api.x.ai/v1",
+        "compat": {
+          "supportsLongCacheRetention": false,
+          "supportsReasoningEffort": true
+        },
         "reasoning": true,
         "input": [
           "text",
@@ -1445,11 +1456,6 @@
         },
         "contextWindow": 500000,
         "maxTokens": 500000,
-        "compat": {
-          "supportsStore": false,
-          "supportsDeveloperRole": false,
-          "supportsReasoningEffort": true
-        },
         "thinkingLevelMap": {
           "off": null,
           "minimal": null,
@@ -1463,9 +1469,12 @@
       {
         "id": "grok-build-0.1",
         "name": "Grok Build 0.1",
-        "api": "openai-completions",
+        "api": "openai-responses",
         "provider": "xai",
         "baseUrl": "https://api.x.ai/v1",
+        "compat": {
+          "supportsLongCacheRetention": false
+        },
         "reasoning": true,
         "input": [
           "text",
@@ -1479,10 +1488,9 @@
         },
         "contextWindow": 256000,
         "maxTokens": 256000,
-        "compat": {
-          "supportsStore": false,
-          "supportsDeveloperRole": false,
-          "supportsReasoningEffort": false
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null
         }
       }
     ],

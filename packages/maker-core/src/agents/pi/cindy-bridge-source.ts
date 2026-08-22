@@ -71,9 +71,13 @@ import {
 
 const PERMISSION_TITLE = 'cindy:permission';
 const TURN_CHANGE_CAPTURE_TITLE = 'cindy:turn-change-capture';
+const PERMISSION_ALLOW = 'allow';
+const PERMISSION_USER_DENY = 'user-deny';
+const PERMISSION_AUTO_REVIEW_DENY = 'auto-review-deny';
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
+const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR';
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
@@ -89,6 +93,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
+  SUBAGENT_RUN_DIR_ENV,
   'PI_CODING_AGENT_DIR',
 ]);
 try {
@@ -462,8 +467,9 @@ function whichRgOnPath(): string {
 //    与「抢跑改写注入 env」在原实现下同级别,不新增面。
 //  - env 值在已消费(stash 已建立)后再次出现,视为进程内写入:删除并忽略。
 //  - stash 缺失(非 Cindy 初始化的进程,如手工把 bridge 拷进用户 ~/.pi)或双重
-//    验证失败 → 返回 undefined,下游 isolatedBashEnvironment 保持原 fail-closed,
-//    不猜外来 runtime 的路径。
+//    验证失败,但 env 同样未注入 → 尝试 PI_CODING_AGENT_DIR 派生(#3132:subagent
+//    子进程正是此路径);PI_CODING_AGENT_DIR 非绝对路径或缺失时 fail-closed。
+//    PI_CODING_AGENT_DIR 本就常驻可写,控制它与控制注入 env 同级,不新增威胁面。
 //
 // 凭证不走本机制:CINDY_PI_PACKAGE_MANAGEMENT 是 host 签发的 bearer token,
 // 保持读一次即删、仅闭包持有(见入口注释)。
@@ -513,7 +519,9 @@ function resolveBashPackageHome(): string | undefined {
       stashBashPackageHome(injected);
       return injected;
     }
-    return undefined;
+    // env 与 stash 均不可用(subagent 子进程:父 bridge 已消费并删除 env,
+    // 子进程无 stash)—— 从 PI_CODING_AGENT_DIR 派生;非绝对路径时 fail-closed。
+    return derivedBashPackageHome();
   }
   // 重载(env 已被消费;或 env 值又被进程内写入 —— 上面的 delete 已顺手清掉):
   // stash 与 PI_CODING_AGENT_DIR 派生值双重一致才信任,否则 fail-closed。
@@ -2815,6 +2823,7 @@ export default async function cindyBridge(pi: any) {
     // —— 与 permission file 同等级防护(CINDY_PI_PERMISSION_FILE 已在 SECRET_ENV_NAMES
     // 剥离, models.json 走这条统一路径拦截)。
     const agentHomeDir = process.env.PI_CODING_AGENT_DIR;
+    const subagentRunDir = process.env[SUBAGENT_RUN_DIR_ENV];
     // 轮 40-w4-t12 HIGH-2 + 轮 40-w4-t13 HIGH:写目标 symlink 绕过 —— isInsideRoot
     // 只看字面路径。realpathSync(目标) 在文件不存在时抛(null), 只回落字面检查会
     // 漏掉 **symlink 父目录**(agentHome/link/perm.json, link -> /outside)。修:
@@ -2844,10 +2853,15 @@ export default async function cindyBridge(pi: any) {
         isInsideRoot(targetPath, agentHomeDir)
         || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, agentHomeDir))
       );
+    const writeInsideSubagentRun = subagentRunDir
+      && (
+        isInsideRoot(targetPath, subagentRunDir)
+        || (writeTargetResolved !== null && isInsideRoot(writeTargetResolved, subagentRunDir))
+      );
     if (
       targetPath
       && FILE_WRITE_BUILTINS.has(event.toolName)
-      && writeInsideAgentHome
+      && (writeInsideAgentHome || writeInsideSubagentRun)
     ) {
       return { block: true, reason: 'Cindy agent runtime directory is read-only.' };
     }
@@ -2901,9 +2915,12 @@ export default async function cindyBridge(pi: any) {
     if (event.toolName === 'cindy_pi_extension') return;
     if (permission.mode === 'bypassPermissions') return;
     if (READONLY_BUILTINS.has(event.toolName) && !credentialRead) return;
-    let approved = false;
+    let decision: string | undefined;
     try {
-      approved = await ctx.ui.confirm(
+      // input() is used as a private request/response envelope rather than a
+      // visible text box. Unlike confirm(), it can return why Cindy denied the
+      // request, so an automatic review block is not misreported as a user click.
+      decision = await ctx.ui.input(
         PERMISSION_TITLE,
         JSON.stringify({
           toolName: event.toolName,
@@ -2912,10 +2929,17 @@ export default async function cindyBridge(pi: any) {
         }),
       );
     } catch {
-      approved = false;
+      decision = undefined;
     }
-    if (!approved) {
-      return { block: true, reason: 'User denied this tool call via Cindy.' };
+    if (decision !== PERMISSION_ALLOW) {
+      return {
+        block: true,
+        reason: decision === PERMISSION_USER_DENY
+          ? 'User denied this tool call via Cindy.'
+          : decision === PERMISSION_AUTO_REVIEW_DENY
+            ? 'Cindy Auto-review denied this tool call.'
+            : 'Cindy could not approve this tool call.',
+      };
     }
   });
 
