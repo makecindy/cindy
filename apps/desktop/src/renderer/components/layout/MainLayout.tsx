@@ -33,6 +33,7 @@ import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLin
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { useRegionCaptureShortcut } from '@/hooks/useRegionCaptureShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import {
   addOrFocusSingletonTab,
@@ -1011,6 +1012,11 @@ export function MainLayout() {
       });
   }, [navigate]);
 
+  // 区域截图 (默认 ⇧⌘S, 仅 darwin): 全局单点消费, 按当前路由解析目标 composer,
+  // 完成后直接写 composerDraftStore(与挂载状态解耦)。trigger 同时供下方
+  // app-menu:command 'capture-region'(webview guest 内按键的 main 侧转发)复用。
+  const triggerRegionCapture = useRegionCaptureShortcut();
+
   useEffect(() => {
     return window.electronAPI.onApplicationMenuCommand((command) => {
       switch (command) {
@@ -1059,9 +1065,14 @@ export function MainLayout() {
           // 不依赖菜单 accelerator。
           handleToggleSidebar();
           break;
+        case 'capture-region':
+          // webview guest 聚焦时 keydown 不冒泡到 host renderer, main 侧
+          // webview-security 按生效组合命中后经本 channel 转发到这里。
+          triggerRegionCapture();
+          break;
       }
     });
-  }, [isMac, navigate, openNotice, t, handleNewMakerShortcut, handleToggleSidebar]);
+  }, [isMac, navigate, openNotice, t, handleNewMakerShortcut, handleToggleSidebar, triggerRegionCapture]);
 
   // ⌘B / Ctrl+B 切换侧边栏折叠 (组合键定义在 shared/appShortcuts registry,
   // 用户可改绑)。capture 阶段处理, 但需要为真正用到 Bold 的 contenteditable

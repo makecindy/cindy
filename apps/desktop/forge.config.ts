@@ -1598,6 +1598,13 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          // 区域截图选区覆盖层(win/linux)专用 preload:只暴露 ready/init/result
+          // 三个固定方法,不承载主窗口完整桥(最小权限)。
+          entry: 'src/preload/regionCaptureOverlayPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           // RSB 内置浏览器 webview 的 guest 注入层(页面评论 overlay)。由
           // main 的 webview hardener 在 will-attach-webview 时按
           // `path.join(__dirname, 'browserCommentPreload.js')` 强制注入,

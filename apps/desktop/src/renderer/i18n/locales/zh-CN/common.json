@@ -16,6 +16,10 @@
     "REMOTE_WORKDIR_NOT_DIRECTORY": "远程项目路径不是文件夹，请重新选择项目目录。",
     "REMOTE_WORKDIR_UNAVAILABLE": "远程项目目录不可访问，请恢复网络盘连接后重试。"
   },
+  "regionCapture": {
+    "hint": "拖动框选要截取的区域，按 Esc 取消",
+    "failedToast": "截图失败，请重试"
+  },
   "providerError": {
     "AUTH_INVALID": "API 密钥无效或已过期（401），请检查密钥后重试",
     "AUTH_FORBIDDEN": "密钥有效但无权访问（403），请检查套餐或模型权限",
@@ -3889,6 +3893,10 @@
         "open-terminal": {
           "label": "打开命令行",
           "description": "在右侧栏打开终端（已打开则聚焦）"
+        },
+        "capture-region": {
+          "label": "区域截图",
+          "description": "拉框截取屏幕区域，复制到剪贴板并添加到对话输入框（默认未绑定快捷键）"
         },
         "switch-session-1": {
           "label": "切换到第 1 个任务",

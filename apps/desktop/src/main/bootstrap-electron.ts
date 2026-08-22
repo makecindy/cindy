@@ -829,6 +829,7 @@ import {
   subscribeAppShortcutRecording,
 } from './app-shortcuts/index.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
+import { registerScreenCaptureIpc } from './screen-capture/index.js';
 import { registerLayoutIpc } from './layout/index.js';
 import {
   getGhostCindySlot,
@@ -2106,6 +2107,8 @@ registerBrowserBackendIpc();
 // renderer 启动同步拉 overrides、设置页写路径、changed 广播。顶层注册,
 // ipcMain.handle 在 app ready 前注册也有效。
 registerAppShortcutIpc();
+// 区域截图(capture-region 快捷键, 仅 darwin 生效)。
+registerScreenCaptureIpc();
 registerAppearanceSettingsIpc();
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────

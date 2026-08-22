@@ -16,6 +16,10 @@
     "REMOTE_WORKDIR_NOT_DIRECTORY": "遠端專案路徑不是資料夾，請重新選擇專案目錄。",
     "REMOTE_WORKDIR_UNAVAILABLE": "遠端專案目錄不可訪問，請恢復網路盤連線後重試。"
   },
+  "regionCapture": {
+    "hint": "拖曳框選要擷取的區域，按 Esc 取消",
+    "failedToast": "截圖失敗，請重試"
+  },
   "providerError": {
     "AUTH_INVALID": "API 金鑰無效或已過期（401），請檢查金鑰後重試",
     "AUTH_FORBIDDEN": "金鑰有效但無權訪問（403），請檢查套餐或模型權限",
@@ -3889,6 +3893,10 @@
         "open-terminal": {
           "label": "開啟命令列",
           "description": "在右側欄開啟終端（已開啟則聚焦）"
+        },
+        "capture-region": {
+          "label": "區域截圖",
+          "description": "拉框擷取螢幕區域，複製到剪貼簿並加入對話輸入框（預設未設定快捷鍵）"
         },
         "switch-session-1": {
           "label": "切換到第 1 個任務",

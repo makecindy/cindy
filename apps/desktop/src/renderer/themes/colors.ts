@@ -2103,6 +2103,14 @@ registerColor('lightbox-toolbar-hover-bg', {
   light: 'rgba(255, 255, 255, 0.1)',
   dark: 'rgba(255, 255, 255, 0.1)',
 }, 'lightbox 胶囊工具栏按钮 hover 背景(语义豁免,理由同上)');
+// 区域截图选区覆盖层(win/linux)的选框描边:浮在「用户屏幕冻结帧 + overlay-modal
+// 遮罩」上,对比目标是任意屏幕内容而非主题表面,默认跨模式恒白(语义豁免,同
+// lightbox-toolbar 族);仍注册为 token 保留主题 override 能力(规则 16)。遮罩与
+// 信息胶囊分别消费 overlay-modal 与 tooltip-bg/tooltip-text,不另设槽位。
+registerColor('region-capture-selection-border', {
+  light: 'rgba(255, 255, 255, 0.9)',
+  dark: 'rgba(255, 255, 255, 0.9)',
+}, '截图选区覆盖层选框描边(冻结帧遮罩上,语义豁免类)');
 registerColor('error-bg', {
   light: '#fef2f2',
   dark: '#3a2222',

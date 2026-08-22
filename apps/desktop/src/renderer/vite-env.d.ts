@@ -1202,6 +1202,20 @@ interface ElectronAPI {
     ) => () => void;
   };
 
+  /** 区域截图 (capture-region 快捷键) —— 契约见 shared/screenCapture.ts, 三平台。
+   *  overlayHint: win/linux 覆盖层提示条文案(i18n 在 renderer 侧)。
+   *  overlayPalette: 覆盖层主题配色(renderer 解析语义 token 计算值传入,
+   *  main 严格校验后注入样式 —— Light/Dark 双模式与主题 override 生效)。 */
+  screenCapture: {
+    captureRegion: (payload?: {
+      overlayHint?: string;
+      overlayPalette?: import('../shared/screenCapture').ScreenCaptureOverlayPalette;
+    }) => Promise<import('../shared/screenCapture').ScreenCaptureRegionResult>;
+    /** 当前路由是否存在截图目标 composer —— webview guest 快捷键转发的拦截
+     *  依据(无目标时不拦, 保留网页对该组合键的原生处理)。 */
+    setTargetAvailable: (available: boolean) => void;
+  };
+
   /** 主界面布局树 —— 数据模型与校验见 shared/layoutTree.ts,main 端见 main/layout/。 */
   layout: {
     /** 首帧同步拉取(规则 7:布局第一帧就位,不允许默认→用户布局的跳变)。 */

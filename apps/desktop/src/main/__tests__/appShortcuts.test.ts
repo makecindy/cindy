@@ -397,3 +397,26 @@ describe('switch-session slots (mod+1..9)', () => {
     expect(effective.get('save-file')).toEqual([sCombo]);
   });
 });
+
+describe('capture-region (区域截图, 无默认键, 全平台)', () => {
+  const boundCombo = combo('KeyS', { meta: true, shift: true, alt: true });
+
+  // 无默认键是产品决定: 跨平台找不到真正安全的默认组合, 用户在设置页自行
+  // 绑定。条目在三个平台的生效表里都存在(空列表 = 未绑定, 消费端不挂监听)。
+  it('has no default combos but is available on every platform', () => {
+    for (const platform of ['darwin', 'win32', 'linux']) {
+      expect(getEffectiveAppShortcuts({}, platform).get('capture-region')).toEqual([]);
+      expect(isAppShortcutAvailableOnPlatform('capture-region', platform)).toBe(true);
+    }
+  });
+
+  it('user-bound combo takes effect and participates in conflict detection', () => {
+    const overrides = { 'capture-region': boundCombo } as const;
+    expect(getEffectiveAppShortcuts(overrides, 'darwin').get('capture-region')).toEqual([
+      boundCombo,
+    ]);
+    expect(findAppShortcutConflict('toggle-sidebar', boundCombo, overrides, 'darwin')).toBe(
+      'capture-region',
+    );
+  });
+});

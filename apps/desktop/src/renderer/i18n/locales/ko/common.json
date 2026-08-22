@@ -16,6 +16,10 @@
     "DEVICE_LINK_DEVICE_UNRESPONSIVE": "대상 장치가 응답하지 않습니다. 원격 장치를 확인한 후 다시 시도하세요.",
     "INTERNAL": "작업에 실패했습니다. 잠시 후 다시 시도하세요."
   },
+  "regionCapture": {
+    "hint": "드래그로 캡처할 영역을 선택하고 Esc 키로 취소합니다",
+    "failedToast": "스크린샷에 실패했습니다. 다시 시도해 주세요"
+  },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
     "AUTH_FORBIDDEN": "키는 유효하지만 접근 권한이 없습니다(403). 요금제 또는 모델 권한을 확인하세요",
@@ -3889,6 +3893,10 @@
         "open-terminal": {
           "label": "터미널 열기",
           "description": "오른쪽 사이드바에서 터미널을 엽니다(이미 열려 있으면 포커스)"
+        },
+        "capture-region": {
+          "label": "영역 스크린샷",
+          "description": "화면 영역을 선택해 클립보드에 복사하고 채팅 입력창에 첨부합니다(기본 단축키 없음)"
         },
         "switch-session-1": {
           "label": "1번째 세션으로 이동",

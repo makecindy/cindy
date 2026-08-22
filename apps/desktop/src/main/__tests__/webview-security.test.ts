@@ -32,6 +32,22 @@ vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
   attributeRsbNativePopupSurface: nativeSurfaceMocks.attribute,
 }));
 
+// capture-region 目标门(review P2): 无目标路由不拦 guest 按键。全量 mock 避免
+// 把 electron clipboard/nativeImage 拉进本测试图。
+const screenCaptureTargetMocks = vi.hoisted(() => ({ hasTarget: vi.fn(() => false) }));
+vi.mock('../screen-capture/index.js', () => ({
+  hasRegionCaptureTarget: screenCaptureTargetMocks.hasTarget,
+  registerScreenCaptureIpc: vi.fn(),
+}));
+
+const shortcutStoreMocks = vi.hoisted(() => ({
+  getEffectiveCombos: vi.fn<(id: string) => unknown[]>(() => []),
+}));
+vi.mock('../app-shortcuts/index.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  getAppShortcutStore: () => ({ getEffectiveCombos: shortcutStoreMocks.getEffectiveCombos }),
+}));
+
 import {
   BROWSER_PARTITION,
   LOGIN_CAPTCHA_CANCEL_HASH,
@@ -962,6 +978,21 @@ describe('resolveGuestShortcutAction', () => {
     });
   });
 
+  // capture-region: guest 内按用户绑定的组合转发回 host 的全局区域截图入口
+  // (review P2: 设置页展示的快捷键在 webview 聚焦时不能失效)。本条目无默认
+  // 键, 未绑定时生效组合为空 → 不命中, guest 按键保持原生行为。
+  it('forwards the user-bound capture-region combo; unbound does not match', () => {
+    const bound = { code: 'KeyS', meta: true, ctrl: false, alt: true, shift: true };
+    const effective = getEffectiveAppShortcuts({ 'capture-region': bound }, 'darwin');
+    const getCombos = (id: AppShortcutId) => effective.get(id) ?? [];
+    expect(
+      resolveGuestShortcutAction(key('KeyS', { meta: true, alt: true, shift: true }), getCombos),
+    ).toEqual({ kind: 'capture-region' });
+    expect(
+      resolveGuestShortcutAction(key('KeyS', { meta: true, shift: true }), combosFor('darwin')),
+    ).toBeNull();
+  });
+
   it('matches darwin bracket tab cycling in webview input even when code is unreliable', () => {
     const getCombos = combosFor('darwin');
     expect(
@@ -1050,5 +1081,41 @@ describe('resolveGuestShortcutAction', () => {
       resolveGuestShortcutAction(key('KeyW', { meta: true, shift: true }), getCombos),
     ).toBeNull();
     expect(resolveGuestShortcutAction(key('KeyT', { meta: true }), getCombos)).toBeNull();
+  });
+});
+
+describe('installBrowserGuestHandlers(capture-region 目标门)', () => {
+  // 无目标路由(文档浏览等)上拦截只会白吞网页对该组合键的原生处理:
+  // trigger 返回 false 的结果无法传回 guest(review P2)。可用性由 renderer
+  // 随路由上报到 main(screen-capture:target-available), 这里按 host id 查询。
+  it('只在宿主存在截图目标时拦截并转发 guest 按键', () => {
+    setRsbPopupHostResolver(null);
+    const effective = getEffectiveAppShortcuts(
+      { 'capture-region': { code: 'KeyS', meta: true, ctrl: false, alt: true, shift: true } },
+      'darwin',
+    );
+    shortcutStoreMocks.getEffectiveCombos.mockImplementation(
+      (id: string) => effective.get(id as AppShortcutId) ?? [],
+    );
+    const host = { id: 42, isDestroyed: () => false, send: vi.fn() };
+    const guest = new EventEmitter() as EventEmitter & {
+      setWindowOpenHandler: ReturnType<typeof vi.fn>;
+    };
+    guest.setWindowOpenHandler = vi.fn();
+    installBrowserGuestHandlers(host as unknown as WebContents, guest as unknown as WebContents);
+    const input = { type: 'keyDown', code: 'KeyS', meta: true, control: false, alt: true, shift: true };
+
+    screenCaptureTargetMocks.hasTarget.mockReturnValue(false);
+    const kept = { preventDefault: vi.fn() };
+    guest.emit('before-input-event', kept, input);
+    expect(kept.preventDefault).not.toHaveBeenCalled();
+    expect(host.send).not.toHaveBeenCalled();
+    expect(screenCaptureTargetMocks.hasTarget).toHaveBeenCalledWith(42);
+
+    screenCaptureTargetMocks.hasTarget.mockReturnValue(true);
+    const swallowed = { preventDefault: vi.fn() };
+    guest.emit('before-input-event', swallowed, input);
+    expect(swallowed.preventDefault).toHaveBeenCalledTimes(1);
+    expect(host.send).toHaveBeenCalledWith('app-menu:command', 'capture-region');
   });
 });

@@ -1036,6 +1036,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutAppShortcutsChanged,
   },
 
+  // 区域截图 (capture-region 快捷键, shared/screenCapture.ts 契约, 三平台)。
+  // overlayHint: win/linux 选区覆盖层提示条文案(i18n 在 renderer 侧)。
+  // 覆盖层窗口本体用专用最小 preload(regionCaptureOverlayPreload), 不经主桥。
+  screenCapture: {
+    captureRegion: (payload?: {
+      overlayHint?: string;
+      overlayPalette?: {
+        scrim: string;
+        selectionBorder: string;
+        pillBg: string;
+        pillFg: string;
+      };
+    }): Promise<{ ok: true; cancelled: boolean; data?: Uint8Array }> =>
+      ipcRenderer.invoke('screen-capture:region', payload),
+    // 当前路由是否存在截图目标 composer(webview guest 快捷键转发的拦截依据)。
+    setTargetAvailable: (available: boolean): void =>
+      ipcRenderer.send('screen-capture:target-available', available),
+  },
+
   // 主界面布局树 (shared/layoutTree.ts)。getStateSync 走 sendSync:布局必须
   // 首帧就位,禁止"先渲染默认再跳成用户布局"(设计规范规则 7);文件极小,
   // 同步读不卡启动,与 app-shortcuts:get 同模式。
