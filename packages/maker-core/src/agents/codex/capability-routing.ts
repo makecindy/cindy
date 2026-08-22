@@ -2,12 +2,75 @@ import type {
   CapabilityRouteOverride,
   CapabilityRoutingPolicy,
 } from '../../types/capability-routing.js';
+import type { BotRuntimeMcpPolicy, BotRuntimeSkillPolicy } from '../base-agent.js';
 
 const CODEX_HARNESS_ID = 'codex';
 
 interface CodexSkillState {
   path: string;
   enabled: boolean;
+}
+
+/** Build Codex's native per-thread Skill config for a Bot allowlist. */
+export function buildCodexBotSkillConfigOverrides(
+  policy: BotRuntimeSkillPolicy | undefined,
+): Record<string, unknown> {
+  if (!policy || policy.mode !== 'allowlist') return {};
+  const allowed = new Set(policy.configured.map((item) => item.trim()));
+  const byPath = new Map<string, { path: string; enabled: boolean }>();
+  for (const item of policy.catalog) {
+    const skillPath = item.path?.trim();
+    if (!skillPath) continue;
+    const runtimeName = item.runtimeCommandName?.trim();
+    byPath.set(skillPath, {
+      path: skillPath,
+      enabled: item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (allowed.has(item.name.trim()) || (!!runtimeName && allowed.has(runtimeName))),
+    });
+  }
+  return byPath.size > 0
+    ? { 'skills.config': [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)) }
+    : {};
+}
+
+export function mergeCodexSkillConfigOverrides(
+  base: Record<string, unknown>,
+  overlay: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...base, ...overlay };
+  const entries = new Map<string, { path: string; enabled: boolean }>();
+  for (const source of [base['skills.config'], overlay['skills.config']]) {
+    if (!Array.isArray(source)) continue;
+    for (const raw of source) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const item = raw as { path?: unknown; enabled?: unknown };
+      if (typeof item.path !== 'string' || typeof item.enabled !== 'boolean') continue;
+      const previous = entries.get(item.path);
+      entries.set(item.path, {
+        path: item.path,
+        enabled: (previous?.enabled ?? true) && item.enabled,
+      });
+    }
+  }
+  if (entries.size > 0) {
+    merged['skills.config'] = [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }
+  return merged;
+}
+
+/** Disable unselected custom MCP servers through Codex's native thread config. */
+export function buildCodexBotMcpConfigOverrides(
+  policy: BotRuntimeMcpPolicy | undefined,
+): Record<string, unknown> {
+  if (!policy || policy.mode !== 'allowlist') return {};
+  const allowed = new Set(policy.configured.map((item) => item.trim()));
+  const result: Record<string, unknown> = {};
+  for (const item of policy.catalog) {
+    if (item.source !== 'custom') continue;
+    if (item.available !== false && allowed.has(item.name)) continue;
+    result[`mcp_servers.${renderThreadConfigKeySegment(item.name)}.enabled`] = false;
+  }
+  return result;
 }
 
 interface CodexPluginCacheIdentity {

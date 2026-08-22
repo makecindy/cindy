@@ -138,7 +138,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
     expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
     expect(sessionViewSource).toContain(
-      "disabled={remoteHandoffPreparing || session?.source === 'review'}",
+      "disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}",
     );
   });
 

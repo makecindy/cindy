@@ -1043,6 +1043,7 @@ describe('Maker start-option lifecycle hooks', () => {
   it('blocks agent startup when start-option preparation fails', async () => {
     const startSession = vi.fn(async () => createHandle({ id: 'thread-1' }));
     const onStartSucceeded = vi.fn();
+    const onStartFailed = vi.fn();
     const maker = new Maker({
       agents: { codex: createAgent(startSession) },
       storage: createStorage(),
@@ -1052,6 +1053,7 @@ describe('Maker start-option lifecycle hooks', () => {
           throw new Error('prepare failed');
         },
         onStartSucceeded,
+        onStartFailed,
       },
     });
 
@@ -1063,16 +1065,20 @@ describe('Maker start-option lifecycle hooks', () => {
     })).rejects.toThrow('prepare failed');
     expect(startSession).not.toHaveBeenCalled();
     expect(onStartSucceeded).not.toHaveBeenCalled();
+    expect(onStartFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', stage: 'prepare' }),
+    );
     expect(maker.listActiveSessions()).toEqual([]);
   });
 
   it('does not run the success hook when agent startup fails', async () => {
     const onStartSucceeded = vi.fn();
+    const onStartFailed = vi.fn();
     const maker = new Maker({
       agents: { codex: createAgent(vi.fn().mockRejectedValue(new Error('start failed'))) },
       storage: createStorage(),
       logger: createLogger(),
-      lifecycleHooks: { onStartSucceeded },
+      lifecycleHooks: { onStartSucceeded, onStartFailed },
     });
 
     await expect(maker.createSession({
@@ -1082,6 +1088,34 @@ describe('Maker start-option lifecycle hooks', () => {
       model: 'gpt-5.4',
     })).rejects.toThrow('start failed');
     expect(onStartSucceeded).not.toHaveBeenCalled();
+    expect(onStartFailed).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', stage: 'agent-start' }),
+    );
+  });
+
+  it('preserves the original startup error when the failure hook also fails', async () => {
+    const logger = createLogger();
+    const maker = new Maker({
+      agents: { codex: createAgent(vi.fn().mockRejectedValue(new Error('start failed'))) },
+      storage: createStorage(),
+      logger,
+      lifecycleHooks: {
+        onStartFailed: async () => {
+          throw new Error('audit failed');
+        },
+      },
+    });
+
+    await expect(maker.createSession({
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+    })).rejects.toThrow('start failed');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'lifecycleHooks.onStartFailed threw; preserving original startup error',
+      expect.objectContaining({ sessionId: 'session-1', stage: 'agent-start' }),
+    );
   });
 });
 

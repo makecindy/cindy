@@ -66,7 +66,7 @@ import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import { joystickScrollDelta } from '../../../shared/workLouderCodexScroll';
 import { stopAllMedia } from '@/lib/mediaPlaybackBus';
-import { cn } from '@/lib/utils';
+import { basename, cn } from '@/lib/utils';
 import {
   readSessionScroll,
   saveSessionScroll,
@@ -193,6 +193,8 @@ const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
 /** shell-first mount 的首帧空窗口。模块级常量保证引用稳定,不触发下游 memo 重算。 */
 const EMPTY_RENDER_ITEMS: RenderItem[] = [];
+/** 普通任务永远拿这一张空表,引用稳定 —— 成长尾注的 memo 不会因它重算。 */
+const EMPTY_BOT_GROWTH_NOTES: ReadonlyMap<string, BotGrowthNoteData> = new Map();
 
 function eventTargetElement(target: EventTarget | null): HTMLElement | null {
   if (target instanceof HTMLElement) return target;
@@ -218,6 +220,12 @@ function hasNestedScrollableAncestorThatCanScrollUp(
   return false;
 }
 
+import { BotGuestMessage } from '@/features/bots/BotGuestMessage';
+import { BotGrowthNote } from '@/features/bots/BotGrowthNote';
+import {
+  collectBotGrowthNotes,
+  type BotGrowthNote as BotGrowthNoteData,
+} from '@/features/bots/botGrowth';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
@@ -330,6 +338,25 @@ interface MessageStreamProps {
    *  MessageStream via the `key={sessionId}` parent prop), so it never
    *  triggers extra re-renders mid-session. */
   workingDir: string;
+  /**
+   * Identity mark drawn to the left of every assistant bubble.
+   *
+   * Only a Bot conversation passes one — a normal Cindy task has no "who is
+   * speaking" question to answer, so it stays undefined and the layout is
+   * byte-identical to before. The node must be stable across renders (memoize
+   * it at the owner): it is a prop of the memoized `MessageItem`.
+   */
+  assistantAvatar?: ReactNode;
+  /**
+   * 非空 = 这是一场跟伙伴的对话（值 = 该任务 id）。本轮产出文件因此升级为交付物卡,
+   * 并带上「在仓库中查看」。普通任务保持 undefined,渲染路径不变。
+   */
+  botArtifactSessionId?: string | undefined;
+  /**
+   * 非空 = 这是一场跟伙伴的对话（值 = 该伙伴 id）。批次 ε 的成长尾注只在伙伴对话里
+   * 出现:普通任务的消息流一行不变,连判定都不跑。
+   */
+  botGrowthBotId?: string | undefined;
   messages: ChatMessage[];
   historyLoaded: boolean;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
@@ -1410,6 +1437,11 @@ export function buildRenderItems(
     turnChangeSets?: readonly TurnChangeSetSummary[];
     /** Session working directory for opaque generated-file fallback chips. */
     workingDir?: string;
+    /**
+     * 非空 = 这是一场跟伙伴的对话。工程 diff 卡(turn_changes)整张让位给交付物卡,
+     * 且 checkpoint 里的**新建**文件并入交付物候选。普通任务留空,行为逐字节不变。
+     */
+    botSessionId?: string | undefined;
   },
 ): {
   items: RenderItem[];
@@ -1640,7 +1672,14 @@ export function buildRenderItems(
     const changeSets = (opts?.turnChangeSets ?? []).filter(
       (changeSet) => changeSet.anchorClientId === anchorClientId,
     );
+    // 伙伴对话不是工程台:「已更改 N 个文件 +x −y / 撤销 / 审查」是任务视角的
+    // 工程 diff 卡,放进 IM 式对话里既看不懂也不该给。它整张让位给交付物卡
+    // (真机验收:用户只看到 diff 卡,交付物卡一次都没出现)。checkpoint 采集
+    // (main 侧)照旧,只是不在这条对话里渲染。
+    const isBotSession = Boolean(opts?.botSessionId);
     const exactPaths = new Set<string>();
+    /** changeSet 里**新建**的文件 → 交付物候选(结构化实锤,与文件工具新建同级)。 */
+    const changeSetCreated: GeneratedFileRef[] = [];
     const pathKey = (value: string): string => {
       const normalized = value.replace(/\\/g, '/');
       const windowsShape = /^[a-zA-Z]:[\\/]/.test(value) || value.includes('\\');
@@ -1648,19 +1687,28 @@ export function buildRenderItems(
     };
     for (const changeSet of changeSets) {
       for (const file of changeSet.files) {
-        exactPaths.add(pathKey(resolveToolFilePath(file.path, changeSet.cwd)));
+        const resolved = resolveToolFilePath(file.path, changeSet.cwd);
+        // 伙伴会话:新建的并进交付物候选、不再排它剔除;编辑 / 删除 / 改名仍然
+        // 排除 —— 改一个既有文件不是「做出来的东西」。
+        if (isBotSession && (file.status === 'added' || file.status === 'untracked')) {
+          changeSetCreated.push({ path: resolved, name: basename(resolved), source: 'tool' });
+        } else {
+          exactPaths.add(pathKey(resolved));
+        }
         if (file.oldPath) exactPaths.add(pathKey(resolveToolFilePath(file.oldPath, changeSet.cwd)));
       }
     }
-    for (const changeSet of changeSets) {
-      // Zero-file entries have nothing the user can inspect or act on. Keep their
-      // diagnostic sidecars in Main, but do not add a warning-only chat card.
-      if (!hasReviewableTurnChanges(changeSet)) continue;
-      items.push({
-        type: 'turn_changes',
-        key: `turnchanges-${changeSet.id}`,
-        changeSet,
-      });
+    if (!isBotSession) {
+      for (const changeSet of changeSets) {
+        // Zero-file entries have nothing the user can inspect or act on. Keep their
+        // diagnostic sidecars in Main, but do not add a warning-only chat card.
+        if (!hasReviewableTurnChanges(changeSet)) continue;
+        items.push({
+          type: 'turn_changes',
+          key: `turnchanges-${changeSet.id}`,
+          changeSet,
+        });
+      }
     }
     // 子代理工具结果里的媒体产物(出图 / 视频 / 音频 / 模型)。这些工具行本身被隐藏,
     // 不进 tool_segment,所以段级的 pendingSegmentMedia 收不到它们;而 AgentTaskUpdate
@@ -1690,12 +1738,26 @@ export function buildRenderItems(
     }
 
     const workingDir = opts?.workingDir ?? '';
-    if (!workingDir || hi <= lo) return;
+    // changeSet 的路径按它自己的 cwd 解析,不依赖 workingDir;没有 workingDir 时
+    // 只是收不到 tool / command 候选,不该连 checkpoint 新建项也一起丢。
+    if ((!workingDir && changeSetCreated.length === 0) || hi <= lo) return;
     const slice = originalTurnSlice(lo, hi);
-    const generatedFiles = collectGeneratedFiles(slice, workingDir).filter((file) => {
+    const collected = (workingDir ? collectGeneratedFiles(slice, workingDir) : []).filter((file) => {
       const normalized = pathKey(file.path);
       return !exactPaths.has(normalized) || changeSets.length === 0;
     });
+    // changeSet 的新建项补进来(伙伴会话专有):Bash 写出来的产物常常没有文件工具
+    // 记录,命令启发式也不一定认得,checkpoint 是它唯一的结构化证据。
+    const generatedFiles = [...collected];
+    if (changeSetCreated.length > 0) {
+      const seen = new Set(collected.map((file) => pathKey(file.path)));
+      for (const file of changeSetCreated) {
+        const normalized = pathKey(file.path);
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        generatedFiles.push(file);
+      }
+    }
     if (generatedFiles.length === 0) return;
     let turnStartMs: number | null = null;
     for (const message of slice) {
@@ -2804,6 +2866,8 @@ function renderWorkGroupChild(
     );
   }
 
+  // 工作组里的中间过程文字不挂 assistantAvatar:折叠块里逐条画脸只会变噪音,
+  // 身份标记只属于对话流里真正的那句回复(见 MessageItem 的 assistantAvatar)。
   return (
     <div data-message-client-id={item.message.clientId}>
       <MessageItem
@@ -2928,6 +2992,9 @@ export function MessageStream({
   agentKind,
   remoteHostId,
   workingDir,
+  assistantAvatar,
+  botArtifactSessionId,
+  botGrowthBotId,
   messages,
   historyLoaded,
   taskUpdates,
@@ -3186,6 +3253,7 @@ export function MessageStream({
           !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
         turnChangeSets,
         workingDir,
+        botSessionId: botArtifactSessionId,
       }),
     [
       messages,
@@ -3196,6 +3264,7 @@ export function MessageStream({
       historyWindowHasIsland,
       turnChangeSets,
       workingDir,
+      botArtifactSessionId,
     ],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
@@ -3207,6 +3276,31 @@ export function MessageStream({
     () => collectTurnFinalAssistantClientIds(visibleMessages),
     [visibleMessages],
   );
+  // 成长尾注:哪句收尾正文的末尾该挂「✦ 记住了：…」。判定完全在 Renderer 侧
+  // (记忆写入就是一次 tool_use,见 botGrowth.ts),不新增事件也不改引擎。
+  // 普通任务 botGrowthBotId 为空 —— 直接空表,不遍历消息。
+  //
+  // `growthNote` 是 memo 过的 MessageItem 的 prop,所以这里必须做值稳定:流式期间
+  // messages 每个 token 都换数组,若每次都产出新对象,历史气泡会跟着整流重渲染。
+  // 内容没变就复用上一轮的对象引用,把重渲染重新收敛回"只有正在流的那条"。
+  const previousBotGrowthNotesRef =
+    useRef<ReadonlyMap<string, BotGrowthNoteData>>(EMPTY_BOT_GROWTH_NOTES);
+  const botGrowthNotes = useMemo(() => {
+    if (!botGrowthBotId) {
+      previousBotGrowthNotesRef.current = EMPTY_BOT_GROWTH_NOTES;
+      return EMPTY_BOT_GROWTH_NOTES;
+    }
+    const next = collectBotGrowthNotes(visibleMessages, turnFinalAssistantClientIds);
+    const previous = previousBotGrowthNotesRef.current;
+    for (const [clientId, note] of next) {
+      const old = previous.get(clientId);
+      if (old && old.count === note.count && old.title === note.title && old.target === note.target) {
+        next.set(clientId, old);
+      }
+    }
+    previousBotGrowthNotesRef.current = next;
+    return next;
+  }, [botGrowthBotId, visibleMessages, turnFinalAssistantClientIds]);
   // subagent-model-chip: parentToolUseId(Agent/Task 行 id)→ 子代理模型,
   // 供 AgentActionsBlock 给 Agent/Task 行反查并渲染模型 chip。
   const subagentModelByToolUseId = useMemo(() => buildSubagentModelMap(messages), [messages]);
@@ -5707,6 +5801,7 @@ export function MessageStream({
                           files={item.files}
                           turnStartMs={item.turnStartMs}
                           turnEndMs={item.turnEndMs}
+                          botSessionId={botArtifactSessionId}
                         />
                       );
                     }
@@ -5930,6 +6025,9 @@ export function MessageStream({
                           }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
+                          assistantAvatar={assistantAvatar}
+                          growthBotId={botGrowthBotId}
+                          growthNote={botGrowthNotes.get(msg.clientId)}
                         />
                       </div>
                     );
@@ -6004,6 +6102,24 @@ export function MessageStream({
 // thinking messages are now rendered inline by MessageStream (above) so they
 // can receive the live isSessionStreaming flag without breaking this memo.
 // The thinking branch below is kept as a defensive fallback only.
+/**
+ * Hang an identity mark to the left of an assistant bubble.
+ *
+ * Without a mark (every normal Cindy task) the bubble is returned untouched —
+ * no extra wrapper element, so the existing layout and its measurements are
+ * bit-for-bit what they were. With one (a Bot conversation) the row becomes the
+ * IM shape everyone already knows: avatar, then what they said.
+ */
+function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
+  if (!avatar) return bubble;
+  return (
+    <div className="flex items-start gap-2.5">
+      <span className="mt-0.5 shrink-0">{avatar}</span>
+      <div className="min-w-0 flex-1">{bubble}</div>
+    </div>
+  );
+}
+
 const MessageItem = memo(function MessageItem({
   message,
   toolResult,
@@ -6023,6 +6139,9 @@ const MessageItem = memo(function MessageItem({
   continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
+  assistantAvatar,
+  growthBotId,
+  growthNote,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -6070,6 +6189,12 @@ const MessageItem = memo(function MessageItem({
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
+  /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
+  assistantAvatar?: ReactNode;
+  /** Bot 对话:成长尾注点击后要跳去谁的设置页。普通任务不传。 */
+  growthBotId?: string | undefined;
+  /** 这句收尾正文的末尾要挂的成长尾注;没写记忆的轮次为 undefined。 */
+  growthNote?: BotGrowthNoteData | undefined;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -6094,6 +6219,19 @@ const MessageItem = memo(function MessageItem({
   // [UI_ACTION_TRIGGER] 合成指令行:保留在 messages 里参与时序判定(error-tail
   // banner 的尾部判定不能忽视它,review P2),但不渲染任何气泡。
   if (message.isSyntheticTrigger) return null;
+  // 客座气泡:这条 user 行是委派另一方送进本任务的内容(目标伙伴的答复,或收到的
+  // 委派请求),不是本任务主人说的话 —— 换成带对方头像与「客座」标签的气泡。判据是
+  // 主进程写在 agent_meta 上的结构化标记,老镜像消息没有标记,仍走 UserMessage。
+  if (message.role === 'user' && message.guestBot) {
+    return (
+      <BotGuestMessage
+        guest={message.guestBot}
+        content={message.content}
+        workingDir={workingDir}
+        sessionId={sessionId}
+      />
+    );
+  }
   switch (message.role) {
     case 'user':
       return (
@@ -6133,34 +6271,41 @@ const MessageItem = memo(function MessageItem({
           />
         );
       }
-      return (
-        <AssistantMessage
-          workingDir={workingDir}
-          localFileRefs={localFileRefs}
-          currentSessionId={sessionId}
-          currentSessionTitle={sessionTitle}
-          content={message.content}
-          isStreaming={message.isStreaming}
-          createdAt={message.createdAt}
-          messageClientId={message.clientId}
-          agentKind={agentKind}
-          remoteHostId={remoteHostId}
-          forkBlocked={assistantForkBlocked}
-          sessionRunning={sessionRunning}
-          // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
-          // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
-          showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
-          turnMoney={message.turnMoney}
-          turnCostUsd={message.turnCostUsd}
-          turnCostIsEstimate={message.turnCostIsEstimate}
-          userTurnMoney={message.userTurnMoney}
-          userTurnCostUsd={message.userTurnCostUsd}
-          userTurnCostIsEstimate={message.userTurnCostIsEstimate}
-          turnUsageDetails={message.turnUsageDetails}
-          userTurnUsageDetails={userTurnUsageDetails}
-          modelMismatch={message.modelMismatch}
-          ghostReplyPending={message.ghostReplyPending}
-        />
+      return withAssistantAvatar(
+        assistantAvatar,
+        <>
+          <AssistantMessage
+            workingDir={workingDir}
+            localFileRefs={localFileRefs}
+            currentSessionId={sessionId}
+            currentSessionTitle={sessionTitle}
+            content={message.content}
+            isStreaming={message.isStreaming}
+            createdAt={message.createdAt}
+            messageClientId={message.clientId}
+            agentKind={agentKind}
+            remoteHostId={remoteHostId}
+            forkBlocked={assistantForkBlocked}
+            sessionRunning={sessionRunning}
+            // 任务执行过程中(尾部 turn 流式中,forkBlocked=true)不出现操作行;
+            // turn 结束后只有收尾正文出现 —— 中间句彻底不挂 bar。
+            showActionBar={Boolean(assistantIsTurnFinal) && !assistantForkBlocked}
+            turnMoney={message.turnMoney}
+            turnCostUsd={message.turnCostUsd}
+            turnCostIsEstimate={message.turnCostIsEstimate}
+            userTurnMoney={message.userTurnMoney}
+            userTurnCostUsd={message.userTurnCostUsd}
+            userTurnCostIsEstimate={message.userTurnCostIsEstimate}
+            turnUsageDetails={message.turnUsageDetails}
+            userTurnUsageDetails={userTurnUsageDetails}
+            modelMismatch={message.modelMismatch}
+            ghostReplyPending={message.ghostReplyPending}
+          />
+          {/* 成长尾注:只在伙伴对话、且这轮真的写了记忆时出现(见 botGrowth.ts)。 */}
+          {growthBotId && growthNote ? (
+            <BotGrowthNote botId={growthBotId} note={growthNote} />
+          ) : null}
+        </>,
       );
     case 'tool_use':
       return (

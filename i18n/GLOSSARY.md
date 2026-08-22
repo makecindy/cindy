@@ -55,6 +55,7 @@
 | **Thread** | 任务 | 任務 | スレッド | 스레드 | zh-CN: 线程；zh-TW: 執行緒 |
 | **Turn** | 轮 | 輪 | ターン | 턴 | — |
 | **Usage** | 用量 | 用量 | 使用量 | 사용량 | zh-CN: 使用情况；zh-CN: 使用表现；zh-TW: 使用情況；zh-TW: 使用表現；ja: 使用状況；ja: 利用状況；ko: 사용 현황 |
+| **Work** | 作品 | 作品 | 作品 | 작품 | — |
 | **Worker** | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | — |
 | **Working directory** | 工作目录 | 工作目錄 | 作業ディレクトリ | 작업 디렉터리 | zh-CN: 任务空间；zh-CN: 工作空间；zh-TW: 任務空間；zh-TW: 工作空間 |
 | **Worktree** | worktree | worktree | worktree | worktree | zh-CN: 工作树（仅当英文含 Worktree）；zh-CN: 工作区（仅当英文含 Worktree）；zh-TW: 工作樹（仅当英文含 Worktree）；zh-TW: 工作區（仅当英文含 Worktree） |
@@ -144,6 +145,7 @@
 - **Turn** — 一次提问到一次回答结束。**内部概念，不作为界面术语**：面向用户一律说「消息」，只在确实要强调一次完整往返时说「一轮」（如「上一轮」）。不要引入「轮次」作为界面用词。
 - **Usage** — 中文用「用量」（现状 37:6 压倒性）。「使用情况」「使用表现」是同义漂移，禁用。注意 usage 在英文里也有「用法」义（如 CLI usage），那属于另一个概念，不在本条约束范围。豁免遥测说明两处:那里的 usage 指「启动与留存情况」这类使用行为,不是计费口径的用量指标。硬套成「用量」会写出「启动与留存用量」这种不通的话——zh-CN 用的是「留存情况」+「使用环境」,ja/ko 的「継続利用状況」「지속 사용 현황」同理。
   - 豁免范围：`desktop:settings.about.analyticsDescription`、`mobile/settings:legal.analyticsHint`
+- **Work** — 伙伴做出来的、用户能打开的产物:文件(PDF/Word/Excel/PPT)、图片、视频。集合叫「作品集」。2026-08-21 用户裁决:此前的「交付物 / Deliverable」太工程腔,面向普通用户改叫「作品」。右栏面板、对话里的作品卡、会话头部入口统一用它。代码标识符(BotArtifact / bot-artifacts)不跟随改名。
 - **Worker** — Orca 协同角色名，五语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。
 - **Working directory** — Agent 干活所在的那个目录，中文一律「工作目录」（现状 43:0，五语唯一译法）。**不绑项目的任务也有工作目录**：Cindy 在 userData/dialogues/<日期>/<sessionId>/ 下自动分配一个空目录，用来存 Agent 产出的文件；对话消息存在数据库里，与该目录无关。这个目录不要另起名字——「独立任务空间」「任务空间」「工作空间」一类新造说法一并禁用（2026-07-31 裁决），免得同一个东西攒出多套称呼。「工作区」不入 forbidden：它是 Workspace 的合法译法，见 worktree 条目 note（那里已裁定「工作区」只留给 Workspace、working directory 用「工作目录」，本条把该裁决提为独立条目并加上门禁）。
 - **Worktree** — Git worktree 是外部工具的既定概念，五语一律保留英文小写原词（现状 21 处最多）。desktop:chat 一个模块里就有 worktree / 工作区 / 工作树 三种写法。特别要紧的是「工作区」——它同时被用于 worktree、Workspace、working tree 三个不同英文概念，必须让出来只表示 Workspace；working directory 用「工作目录」。条件禁用只在英文源含 Worktree 时生效，不影响 Workspace 的正常翻译。豁免导入提示那一句：英文原文同时出现 worktree 与 main workspace，条件禁用是按整句英文判定的，无法区分句内两个概念——那里的「主工作区」正是 Workspace，必须保留，否则会把「不影响主工作区」这条安全边界说成「不影响主 worktree」。
@@ -218,6 +220,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 ### End-to-end encryption
 
 设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。
+
+### Engine
+
+伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。
 
 ### iOS Simulator
 
@@ -324,6 +330,14 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 ### Skip Sign-In
 
 登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。
+
+### Teammate
+
+Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、事件收件箱、自动化、消息通道，可绑定项目与 worktree，可互相委派。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题、`Teammates this routine may call`），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、rightSidebar.botDelegations.*、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。
+
+### Schedule
+
+伙伴设置页第四块「TA 的日程」——用户视角的名字。它指的是这个伙伴自己会跑的定时指令，实现层叫 automation / Routine。**面向用户一律用本词，不写「Routine」「自动化」**：「Routine」是英文实现词，中文界面里出现它等于要求用户先学一个词才能用这一块；「自动化」是能力名，不是一个可以被列出来、被开关、被立即运行的东西。代码标识（bot_automations 表、bots.automations.* i18n 命名空间、automation capability flag）与设置页「高级」里的技术细节不受本条约束，仍用 automation / Routine。先登记为 proposed：主路径文案刚从「伙伴自动化 / Routine」收敛到本词，等 UI 走查后再定 decided，届时再决定是否把「Routine」登记为中日韩的 forbidden 译法（现在不能登记——高级区与运行记录里的存量文案会被误伤）。
 
 ### Token Plan
 

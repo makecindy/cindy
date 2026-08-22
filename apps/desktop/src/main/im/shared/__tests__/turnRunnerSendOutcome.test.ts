@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => ({
   noteSilentStopUserSend: vi.fn(),
   noteSilentStopSessionReset: vi.fn(),
   onSilentStopSettled: vi.fn(() => vi.fn()),
+  recordUnknownBotFinalDelivery: vi.fn(),
   installDesktopInteractionListener: vi.fn(),
   takePendingInteractionsForSession: vi.fn(),
   // 取消不到时返回 null(取消到了返回 { messageId }, 调用方据此收口卡片)。
@@ -146,6 +147,7 @@ vi.mock('../../../maker-ipc/register', () => ({
   noteSilentStopUserSend: mocks.noteSilentStopUserSend,
   noteSilentStopSessionReset: mocks.noteSilentStopSessionReset,
   onSilentStopSettled: mocks.onSilentStopSettled,
+  recordUnknownBotFinalDelivery: mocks.recordUnknownBotFinalDelivery,
 }));
 
 vi.mock('../../../turn-change-set/store', () => ({
@@ -2344,6 +2346,61 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(handle.finalize).toHaveBeenCalledTimes(1);
     });
     expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
+  });
+
+  it('records an unconfirmed Telegram Bot final as a durable recovery delivery', async () => {
+    const unconfirmed = Object.assign(new Error('content may already be delivered'), {
+      name: 'TelegramFinalUnconfirmedError',
+      firstChunkConfirmed: false,
+      unconfirmedChunks: [0, 2],
+    });
+    const handle = {
+      messageId: 'telegram-progress',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(async () => { throw unconfirmed; }),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    mocks.recordUnknownBotFinalDelivery.mockResolvedValue({ id: 'recovery-1' });
+    const h = setupSession(async () => ({ accepted: true }));
+    const telegramRunner = createTurnRunner(
+      { ...fakeAdapter, channel: 'telegram' },
+      fakeRepo,
+      fakeCards,
+    );
+    try {
+      const onTurnComplete = vi.fn();
+      await telegramRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'telegram-user-message',
+        text: 'question',
+        attachments: [],
+        onTurnComplete,
+      });
+      h.emit({ type: 'text', data: { text: 'final answer', isFinal: true } });
+      await flushMicrotasks();
+      h.emit({ type: 'done', data: {} });
+
+      await waitForAssertion(() => {
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+        expect(mocks.recordUnknownBotFinalDelivery).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionId: 'feishu-session',
+            text: expect.stringContaining('final answer'),
+            errorCode: 'TELEGRAM_FINAL_UNCONFIRMED',
+            progress: {
+              firstChunkConfirmed: false,
+              unconfirmedChunks: [0, 2],
+              mediaCount: 0,
+            },
+          }),
+        );
+      });
+    } finally {
+      await telegramRunner.disposeAllSessions();
+    }
   });
 
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {

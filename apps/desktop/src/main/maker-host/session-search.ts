@@ -20,6 +20,7 @@ import type { SessionSearchOptions, SessionSearchHit, SessionSearchFn } from '@c
 
 import { getDbClient } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
+import { resolveBotHistoryScope } from '../localDb/botHistoryScope.js';
 
 const log = createLogger('session-search');
 const TABLE = 'messages_fts';
@@ -41,6 +42,12 @@ export const searchSessionsFn: SessionSearchFn = async (
     throw new Error('DbClient not ready');
   }
 
+  const callerScope = await resolveBotHistoryScope(
+    opts.callerSessionId,
+    opts.callerMemoryScopeKey,
+  );
+  if (callerScope.kind === 'denied') return [];
+
   // messages_fts 表自带 message_id / session_id / role / content; ts 走 messages 表 join
   let sql = `
     SELECT m.id AS messageId,
@@ -58,6 +65,17 @@ export const searchSessionsFn: SessionSearchFn = async (
   if (opts.sessionId) {
     sql += ` AND m.session_id = ?`;
     params.push(opts.sessionId);
+  }
+  if (callerScope.kind === 'bot') {
+    // Bot ownership is resolved from the current runtime Session. The model can
+    // optionally narrow within that set, but cannot widen it by supplying an
+    // arbitrary sessionId.
+    sql += ` AND m.session_id IN (
+      SELECT scoped.session_id
+        FROM bot_session_links scoped
+       WHERE scoped.bot_id = ?
+    )`;
+    params.push(callerScope.botId);
   }
   if (opts.role) {
     sql += ` AND m.role = ?`;

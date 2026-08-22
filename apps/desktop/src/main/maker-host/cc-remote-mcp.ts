@@ -27,6 +27,7 @@ import {
   withMcpRouteIdentity,
 } from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
+import { isFrozenBuiltinPluginAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { getSessionOrcaRole, getWorkerLink } from '../localDb/orcaTeamStore.js';
 
 /**
@@ -116,6 +117,13 @@ export async function buildCcRemoteHttpMcpServers(
      * 的工具。缺省 false。
      */
     makerMemoryEnabled?: boolean;
+    /**
+     * per-session Maker Memory 作用域键 (maker-core startSession 透传)。
+     * Cindy Bot 会话恒为 `bot:<botId>` —— 必须写进注册的 session ctx,
+     * 否则远端 cindy_memory 的 withStore 只能回落 workdir 键, 与本地
+     * prompt 注入读的伙伴记忆分家。
+     */
+    makerMemoryScopeKey?: string;
   },
   deps: CcRemoteHttpMcpDeps,
 ): Promise<{
@@ -137,18 +145,44 @@ export async function buildCcRemoteHttpMcpServers(
    */
   fingerprint?: string;
 }> {
-  const empty: { servers: Record<string, CcRemoteHttpMcpServerConfig>; cleanup: () => void; needsFreshStart?: boolean } = {
+  const empty: {
+    servers: Record<string, CcRemoteHttpMcpServerConfig>;
+    cleanup: () => void;
+    needsFreshStart?: boolean;
+  } = {
     servers: {},
     cleanup: () => {},
   };
   const started = await deps.ensureBridgeStarted();
   if (!started) return empty;
+  const synthesize = deps.synthesizeVendorOptions ?? synthesizeCcRemoteVendorOptions;
+  const vendorOptions = args.vendorOptions ?? (await synthesize(args.sessionId));
   // collab 全局禁用时 bridge 名单不反映开关 (keepOrcaProviderStable) —
   // 远端注入以同一闸门为准, 协同段整个不注入 (codex-connector R20 P2)。
   // cindy_memory 独立走 per-session Maker Memory 开关, 与 collab 互不牵连。
   // 合成规则唯一真源在 selectRemoteInjectableServerNames (codexHttpBridge.ts)。
+  //
+  // 冻结策略必须走 isFrozenBuiltinPluginAllowed —— 与调用期同一个判据。
+  // ------------------------------------------------------------------
+  // 这里过去只读 disabled 一键 (`!disabled.includes('collab')`),而 bridge 在
+  // **调用期**用的是 isFrozenBuiltinPluginAllowed(ctx.vendorOptions, pluginId)
+  // (codexHttpBridge.ts),它的语义是「allowed 键存在时以 allowed 为准,否则才看
+  // disabled」。伙伴会话恰恰会写 allowed 键:maker-host/index.ts 在
+  // botRuntimeSnapshot 存在时把该伙伴配置的 toolset 白名单塞进
+  // CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,且**不分 agentKind**,所以 SSH 远端的
+  // Claude Code 伙伴会话同样带着它。
+  //
+  // 两边不一致的后果:伙伴的 toolset 白名单里没有 collab、collab 又不在 disabled
+  // 列表里时,注入侧算出「可以注入」→ 协同工具被通告给远端 Claude Code;而调用侧
+  // 一律以 'disabled' 拒绝。远端 agent 看得见一整排协同工具,每次调用都被拒 ——
+  // 摆出来却用不了。改用同一个判据后,注入面永远不会宽于执行面。
+  //
+  // 这个改动只会**收窄**注入(allowed 键不存在时行为逐字不变),不会放开任何原本
+  // 被禁的东西。names 变化会经 computeRemoteMcpFingerprint 变成新代际,策略变更
+  // 触发 forceFresh 正是既定语义。
   const names = selectRemoteInjectableServerNames(started.serverNames, {
-    collabEnabled: deps.isCollabEnabled?.() ?? true,
+    collabEnabled:
+      (deps.isCollabEnabled?.() ?? true) && isFrozenBuiltinPluginAllowed(vendorOptions, 'collab'),
     memoryEnabled: args.makerMemoryEnabled === true,
   });
   if (names.length === 0) {
@@ -172,7 +206,6 @@ export async function buildCcRemoteHttpMcpServers(
     // 的 alive query, 协同 MCP 持续 401 (codex-connector R21 P2)。
     return { ...empty, needsFreshStart: names.length > 0 };
   }
-  const synthesize = deps.synthesizeVendorOptions ?? synthesizeCcRemoteVendorOptions;
   const ctx = {
     agentKind: 'claude-code' as const,
     sessionId: args.sessionId,
@@ -181,8 +214,9 @@ export async function buildCcRemoteHttpMcpServers(
     ...(args.sessionInstanceId ? { sessionInstanceId: args.sessionInstanceId } : {}),
     workingDir: args.workingDir,
     // remote ctx: scope key 语义见 maker-core buildMemoryScopeKey。
+    ...(args.makerMemoryScopeKey ? { memoryScopeKey: args.makerMemoryScopeKey } : {}),
     remoteHostId: args.host.id,
-    vendorOptions: args.vendorOptions ?? (await synthesize(args.sessionId)),
+    vendorOptions,
   };
   // 同 session 重建 (resume/rebuild/reattach) 直接覆盖注册,注册表以 sessionId
   // 为 key,天然不累积。

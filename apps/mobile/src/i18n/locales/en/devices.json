@@ -125,6 +125,8 @@
     },
     "plan": "Schedule",
     "automationsButtonA11y": "Open remote automations",
+    "bots": "Teammates",
+    "botsButtonA11y": "Open teammates on this device",
     "search": {
       "openA11y": "Search remote sessions",
       "closeA11y": "Close remote session search",
@@ -201,6 +203,19 @@
       "openA11y": "Open automation session {{title}}"
     },
     "viewAllRuns": "View all {{count}} runs"
+  },
+  "bots": {
+    "eyebrow": "Long-running assistants",
+    "title": "Teammates",
+    "subtitle": "Teammates on {{deviceName}}",
+    "emptyTitle": "No teammates on this device",
+    "emptyCopy": "Create a teammate on Desktop first, then open its primary task from your phone.",
+    "unsupportedTitle": "Desktop does not support remote teammates yet",
+    "unsupportedCopy": "Update Cindy on this computer. Existing tasks are unaffected.",
+    "noDescription": "No description yet",
+    "openA11y": "Open the primary task for teammate {{name}}",
+    "unavailableA11y": "Teammate {{name}} cannot be opened: {{status}}",
+    "status": { "active": "Active", "paused": "Paused", "error": "Needs attention", "archived": "Archived", "deleting": "Deleting", "needsDesktop": "Set up on Desktop" }
   },
   "automations": {
     "error": {

@@ -29,6 +29,7 @@ import {
   GitPullRequestArrow,
   UsersRound,
   ListTodo,
+  Package,
   Plus,
   Puzzle,
   X,
@@ -36,6 +37,7 @@ import {
   Minimize2,
   PanelRightClose,
   PictureInPicture2,
+  Share2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
@@ -139,6 +141,8 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   review: GitPullRequestArrow,
   'orca-workers': UsersRound,
   subagents: Bot,
+  'bot-delegations': Share2,
+  'bot-artifacts': Package,
   'background-tasks': ListTodo,
   'resource-usage': Activity,
 };
@@ -151,6 +155,8 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   review: 'rightSidebar.tabs.kinds.review',
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
   subagents: 'rightSidebar.tabs.kinds.subagents',
+  'bot-delegations': 'rightSidebar.tabs.kinds.botDelegations',
+  'bot-artifacts': 'rightSidebar.tabs.kinds.botArtifacts',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
 };
@@ -462,6 +468,7 @@ export function TabStrip({
         {dropdownOpen && (
           <AddTabDropdown
             anchorRef={addButtonWrapperRef}
+            sessionId={sessionId}
             onClose={() => setDropdownOpen(false)}
             onSelect={(kind) => {
               onAdd(kind);

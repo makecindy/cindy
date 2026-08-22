@@ -62,6 +62,7 @@ export {
   MemoryStorage,
   sanitizeWorkdir,
   buildMemoryScopeKey,
+  buildBotMemoryScopeKey,
   memoryScopeDirName,
   buildFilename,
   parseFilename,

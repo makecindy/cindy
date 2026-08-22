@@ -194,6 +194,15 @@ function createDb(): void {
   `,
     )
     .run('review-local', '/review/dir', 'codex', null, 'dialogue');
+  sqlite
+    .prepare(
+      `
+    INSERT INTO sessions (
+      id, working_dir, agent_kind, remote_host_id, workspace_kind, source, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'bot', 1, 1)
+  `,
+    )
+    .run('bot-local', '/bot/dir', 'pi', null, 'dialogue');
   h.sqlite = sqlite;
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
 }
@@ -447,6 +456,18 @@ describe('local-db:sessions:update handler wiring', () => {
       .sqlite!.prepare('SELECT effort, title FROM sessions WHERE id = ?')
       .get('review-local') as { effort: string; title: string };
     expect(persisted).toEqual({ effort: 'high', title: '审查记录' });
+  });
+
+  it('keeps Bot metadata editable but rejects ordinary lifecycle writes', async () => {
+    await invokeUpdate('bot-local', { title: 'Release Bot' });
+    await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow(
+      /Bot task lifecycle/,
+    );
+
+    const persisted = h
+      .sqlite!.prepare('SELECT title, status FROM sessions WHERE id = ?')
+      .get('bot-local') as { title: string; status: string };
+    expect(persisted).toEqual({ title: 'Release Bot', status: 'active' });
   });
 
   it('persists and broadcasts title-only patches to device-link subscribers', async () => {

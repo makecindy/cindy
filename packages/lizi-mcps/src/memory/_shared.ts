@@ -52,7 +52,9 @@ export async function withStore(
     const workdir = ctx?.workingDir ?? deps.workdir;
     // SSH remote 会话 (ctx 带 remoteHostId) 的 workdir 是远端路径 — 经 scope
     // key 定位, 与 agent 启动注入 (claude-code/codex index.ts) 同一键规则。
-    store = await manager.getStore(buildMemoryScopeKey(workdir, ctx?.remoteHostId));
+    store = await manager.getStore(
+      ctx?.memoryScopeKey ?? buildMemoryScopeKey(workdir, ctx?.remoteHostId),
+    );
   } catch (err) {
     const { code, message } = classifyMemoryError(err);
     return buildJsonResult({ ok: false, code, message }, true);

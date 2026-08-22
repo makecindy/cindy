@@ -114,12 +114,15 @@ export function buildTelegramAdapter(
         lane: lane ? { provider, chatId: lane.chatId, threadId: lane.threadId } : null,
       };
     },
-    prepareAgentTurnText: async (event) => {
+    prepareAgentTurnText: async (event, context) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
         ? buildTelegramReplyContextBlock(event.replyContext)
         : '';
-      const persona = personaBlock();
+      // A mounted Cindy Bot Route gets its identity from the frozen ProfileVersion
+      // at session bootstrap. Keep Telegram's quote/group/speaker augmentation,
+      // but never stack the legacy channel persona on top of the Bot SOUL.
+      const persona = context?.botRoute === true ? '' : personaBlock();
       if (!lane) {
         // DM: 无群窗口, 但人格块与引用注入(回复某条消息触发)同样生效。
         if (!replyBlock && !persona) return null;

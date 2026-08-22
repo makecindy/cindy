@@ -146,6 +146,30 @@ export type ToolUseDescriptor =
       toolLabel: string;
       /** 从 input 常见字段里抽出的一段人话细节（截断到 80 字）。 */
       detail?: string;
+      /**
+       * 这次调用产出的文件路径（按 `outPath` 约定判定，见 mcpOutputPath）。
+       *
+       * 存在的理由：产物卡此前只认 Write / file_change 两种来源，用 MCP 工具做出来的
+       * 文件在结构上根本不算「本轮产物」——`cindy_docs` 做完一份 PPT，对话里只能得到
+       * 模型自己写的一行路径，没有卡（2026-08-21 实测）。
+       *
+       * 判定走约定而不是工具名单：任何 MCP 工具，只要带一个非空字符串 `outPath`，
+       * 就按「它在那儿产了个文件」处理。这样新增工具与第三方插件遵循同一约定即可
+       * 自动生效，不需要逐个登记。误报由消费端既有的存在性 + 时间窗校验挡掉
+       * （文件不存在就不出 chip）。
+       */
+      createdPath?: string;
+      /**
+       * 这次调用**读进来当素材**的路径候选（只有它自己也产出文件时才有值）。
+       *
+       * 「产出 B 的过程中读了 C」⇒ C 是中间件，不是交付物。`render_pdf` 拿一份自己
+       * 写的 HTML 渲染成 PDF 就是这个形态：那份 HTML 是设计稿，不该跟成品并排摆给
+       * 用户看（2026-08-21 实测，对话里冒出了一张 `q3-summary.html` 卡）。
+       *
+       * 不猜字段名：input 里的字符串值全部作为候选，由消费端与「本轮真的产出过的
+       * 文件」求交集来定。没产出过的字符串自然命不中，误伤不了正文里的普通参数。
+       */
+      sourceCandidates?: string[];
     }
   | {
       kind: 'dynamic';
@@ -231,6 +255,8 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
 
   const parsed = parseToolName(toolName);
   if (parsed.kind === 'mcp') {
+    const createdPath = mcpOutputPath(inp);
+    const sourceCandidates = createdPath ? mcpSourceCandidates(inp, createdPath) : [];
     return {
       kind: 'mcp',
       toolName,
@@ -239,6 +265,8 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
       serverLabel: parsed.server,
       toolLabel: humanizeToolToken(parsed.tool),
       ...withDetail(inp),
+      ...(createdPath ? { createdPath } : {}),
+      ...(sourceCandidates.length > 0 ? { sourceCandidates } : {}),
     };
   }
   if (parsed.kind === 'dynamic') {
@@ -438,6 +466,47 @@ function withCwd(inp: Record<string, unknown> | null): { cwd?: string } {
   return cwd ? { cwd } : {};
 }
 
+/**
+ * MCP 工具产出文件的约定字段。三种写法都收（camel / snake / 全小写），因为
+ * 这条约定要覆盖的不只是内置 server，还有第三方插件自带的工具。
+ *
+ * 只认参数名，不认工具名：见 `createdPath` 的说明。
+ */
+const MCP_OUTPUT_PATH_KEYS = ['outPath', 'out_path', 'outputPath', 'output_path'] as const;
+
+function mcpOutputPath(inp: Record<string, unknown> | null): string | undefined {
+  if (!inp) return undefined;
+  for (const key of MCP_OUTPUT_PATH_KEYS) {
+    const value = readNonEmptyString(inp[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+/**
+ * 产出型调用里可能是「素材路径」的字符串。见 `sourceCandidates` 的说明：
+ * 这里只负责把候选捞出来，是不是真素材由消费端与本轮产物集求交集决定。
+ *
+ * 只看顶层字段，且跳过超长字符串——内联正文（`html`、`markdown`）动辄上千字，
+ * 不可能是路径，也不该被拖进比对。
+ */
+const MCP_SOURCE_CANDIDATE_MAX_CHARS = 512;
+
+function mcpSourceCandidates(
+  inp: Record<string, unknown> | null,
+  createdPath: string,
+): string[] {
+  if (!inp) return [];
+  const out: string[] = [];
+  for (const value of Object.values(inp)) {
+    const text = readNonEmptyString(value);
+    if (!text || text === createdPath) continue;
+    if (text.length > MCP_SOURCE_CANDIDATE_MAX_CHARS) continue;
+    out.push(text);
+  }
+  return out;
+}
+
 function extractDetail(inp: Record<string, unknown> | null): string | undefined {
   if (!inp) return undefined;
   for (const key of DETAIL_KEYS) {
@@ -445,6 +514,39 @@ function extractDetail(inp: Record<string, unknown> | null): string | undefined 
     if (value) return truncateToolText(value, DETAIL_MAX_CHARS);
   }
   return undefined;
+}
+
+/**
+ * 一条 tool_use → 它**新建**的文件原始路径（可能为空）。
+ *
+ * 对话里的产物卡与伙伴作品集是两条独立链路，此前各自抄了一份同样的判定，注释还
+ * 互相写着「同口径」——加一种产物来源就得记得改两处，漏一处就是一边有卡一边没有。
+ * 判定收在这里一份，两条链路都调它。
+ *
+ * 只收新建，不收编辑：改过的文件不是本轮产物。存在性、时间窗这些校验各自在消费端做。
+ */
+/**
+ * 一条 tool_use 引用的素材路径候选（只有产出型调用才有）。与
+ * `createdPathsFromDescriptor` 配套：两条链路都要把「产出成品时读走的中间件」
+ * 从成品列表里摘掉，判定收在这里一份。
+ */
+export function sourcePathCandidatesFromDescriptor(descriptor: ToolUseDescriptor): string[] {
+  return descriptor.kind === 'mcp' ? (descriptor.sourceCandidates ?? []) : [];
+}
+
+export function createdPathsFromDescriptor(descriptor: ToolUseDescriptor): string[] {
+  if (descriptor.kind === 'file') {
+    return descriptor.action === 'create' && descriptor.filePath ? [descriptor.filePath] : [];
+  }
+  if (descriptor.kind === 'fileChange') {
+    return descriptor.changes
+      .filter((change) => change.action === 'add' && change.path)
+      .map((change) => change.path);
+  }
+  if (descriptor.kind === 'mcp') {
+    return descriptor.createdPath ? [descriptor.createdPath] : [];
+  }
+  return [];
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

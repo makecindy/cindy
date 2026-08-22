@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('../../../authManager.js', () => ({ getDeviceId: () => 'test-device' }));
+
 vi.mock('../../../logger', () => ({
   createLogger: () => mocks.logger,
 }));
@@ -27,6 +29,18 @@ vi.mock('../../../logger', () => ({
 // 只用到 looksLikeSlashCommand 这个纯函数, 整模块 mock 掉避免拖进 electron 依赖。
 vi.mock('../slashCommands', () => ({
   looksLikeSlashCommand: (text: string) => text.startsWith('/'),
+}));
+vi.mock('../botRouteTarget', () => ({
+  botRouteSourceForMessage: (channel: string, event: { contextId: string; chatId: string; scopeKey?: string; threadTs?: string }) => {
+    const threadKey = event.threadTs?.trim() || event.scopeKey?.trim() || undefined;
+    return {
+      platform: channel,
+      accountKey: event.contextId,
+      scopeKey: event.contextId,
+      principalKey: event.chatId,
+      ...(threadKey ? { parentPrincipalKey: event.chatId, threadKey } : {}),
+    };
+  },
 }));
 
 import { createMessageHandler, isStopCommand } from '../messageHandler';
@@ -228,12 +242,22 @@ describe('messageHandler !stop routing', () => {
       botContextId: 'bot-ctx',
       userId: 'U123456789',
       scopeKey: '1234.5678',
+      botRouteSource: {
+        platform: 'slack',
+        accountKey: 'bot-ctx',
+        scopeKey: 'bot-ctx',
+        principalKey: 'D123456789',
+        parentPrincipalKey: 'D123456789',
+        threadKey: '1234.5678',
+      },
     });
     expect(runAgentTurn).not.toHaveBeenCalled();
     expect(handleSlashCommand).not.toHaveBeenCalled();
-    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
-      threadTs: '1234.5678',
-    });
+    await vi.waitFor(() =>
+      expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+        threadTs: '1234.5678',
+      }),
+    );
   });
 
   it('mentions dropped queued messages in the stopDone reply', async () => {
@@ -266,6 +290,12 @@ describe('messageHandler !stop routing', () => {
       botContextId: 'bot-ctx',
       userId: 'U123456789',
       scopeKey: undefined,
+      botRouteSource: {
+        platform: 'slack',
+        accountKey: 'bot-ctx',
+        scopeKey: 'bot-ctx',
+        principalKey: 'D123456789',
+      },
     });
   });
 
@@ -437,9 +467,11 @@ describe('messageHandler !stop routing', () => {
     await flushMicrotasks();
 
     expect(consumePendingOpenerCard).toHaveBeenCalledTimes(1);
-    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
-      threadTs: '1234.5678',
-    });
+    await vi.waitFor(() =>
+      expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+        threadTs: '1234.5678',
+      }),
+    );
   });
 
   it('slash 抛错时用内部错误收口开场白卡(sink 未被调用过)', async () => {
@@ -466,10 +498,12 @@ describe('messageHandler !stop routing', () => {
       'U123456789',
       slackUi.agent.sendInternalError('list projects failed'),
     );
-    expect(sendMarkdownText).toHaveBeenCalledWith(
-      'U123456789',
-      slackUi.agent.sendInternalError('list projects failed'),
-      { threadTs: '1234.5678' },
+    await vi.waitFor(() =>
+      expect(sendMarkdownText).toHaveBeenCalledWith(
+        'U123456789',
+        slackUi.agent.sendInternalError('list projects failed'),
+        { threadTs: '1234.5678' },
+      ),
     );
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
@@ -510,9 +544,11 @@ describe('messageHandler !stop routing', () => {
     await flushMicrotasks();
 
     expect(consumePendingOpenerCard).not.toHaveBeenCalled();
-    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
-      threadTs: '1234.5678',
-    });
+    await vi.waitFor(() =>
+      expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+        threadTs: '1234.5678',
+      }),
+    );
   });
 
   it('同话题后续 slash 不注入 opener sink', async () => {
@@ -533,9 +569,11 @@ describe('messageHandler !stop routing', () => {
     deliver(makeEvent({ groupContextLane: { chatId: 'C1', threadId: '' } }));
     await flushMicrotasks();
 
-    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
-      threadTs: '1234.5678',
-    });
+    await vi.waitFor(() =>
+      expect(sendMarkdownText).toHaveBeenCalledWith('U123456789', slackUi.agent.stopDone(0), {
+        threadTs: '1234.5678',
+      }),
+    );
     expect(runAgentTurn).not.toHaveBeenCalled();
   });
 

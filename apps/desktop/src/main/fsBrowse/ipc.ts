@@ -45,6 +45,13 @@ export interface FsStatResult {
   mtimeMs?: number;
   /** 文件创建时间(unix ms);仅 kind==='file'。部分 Linux FS 不支持时为 0,调用方需判 >0。 */
   birthtimeMs?: number;
+  /**
+   * 文件字节数;仅 kind==='file'。这一轮 stat 本来就已经做了(「本轮产出文件」的
+   * 时间窗校验),顺手把 size 一起带回来,交付物卡的「类型 · 体积 · 时间」就不必
+   * 为一张卡再打一轮 IPC。**纯附加字段**:老客户端忽略它,老被控端不返回时调用方
+   * 退回「类型 · 时间」,两个方向都不破。
+   */
+  sizeBytes?: number;
 }
 export interface FsMkdirResult {
   resolvedPath: string;
@@ -103,7 +110,13 @@ export async function statPath(rawPath: string): Promise<FsStatResult> {
     const st = await fs.stat(resolvedPath);
     return st.isDirectory()
       ? { kind: 'dir', resolvedPath }
-      : { kind: 'file', resolvedPath, mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs };
+      : {
+          kind: 'file',
+          resolvedPath,
+          mtimeMs: st.mtimeMs,
+          birthtimeMs: st.birthtimeMs,
+          sizeBytes: st.size,
+        };
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
       return { kind: 'missing', resolvedPath };

@@ -84,6 +84,7 @@ function makeTurnRunner(overrides: Partial<ImTurnRunner> = {}): ImTurnRunner {
   return {
     runAgentTurn: vi.fn(),
     resolveRouteTarget: vi.fn(async () => ({ row: defaultRow, attached: false })),
+    renewBotRouteTarget: vi.fn(async () => ({ row: defaultRow, attached: false, created: true })),
     hasAuthForRoute: vi.fn(async () => true),
     prewireAttachedSession: vi.fn(),
     detachFromSession: vi.fn(),
@@ -308,6 +309,41 @@ describe('IM slash commands', () => {
       'feishu',
     );
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.new);
+  });
+
+  it('renews a mounted Cindy Bot Route without touching the legacy IM task row', async () => {
+    const routeSource = {
+      platform: 'telegram' as const,
+      accountKey: 'telegram-bot-1',
+      principalKey: '-1001',
+    };
+    const renewBotRouteTarget = vi.fn(async () => ({
+      row: { ...defaultRow, id: 'bot-route-next' },
+      attached: false,
+      created: true,
+    }));
+    const turnRunner = makeTurnRunner({
+      resolveRouteTarget: vi.fn(async () => ({
+        row: { ...defaultRow, id: 'bot-route-current' },
+        attached: false,
+        created: false,
+      })),
+      renewBotRouteTarget,
+    });
+    const repo = makeRepo();
+    const { handlers } = makeHarness({ repo, turnRunner });
+
+    await handlers.handleSlashCommand('/new', {
+      botContextId: 'telegram-bot-1',
+      userId: 'owner-1',
+      botRouteSource: routeSource,
+    });
+
+    expect(renewBotRouteTarget).toHaveBeenCalledWith(routeSource);
+    expect(repo.prepareNewSession).not.toHaveBeenCalled();
+    expect(repo.createSession).not.toHaveBeenCalled();
+    expect(mocks.resetSessionToDefaults).not.toHaveBeenCalled();
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('owner-1', ui.slash.new);
   });
 
   it('does not send /model picker when creating the target session would fail auth', async () => {

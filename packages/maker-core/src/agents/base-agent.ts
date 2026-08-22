@@ -97,6 +97,8 @@ export interface CodexMcpThreadContextArgs {
   /** 当前 Maker Session 实例代号；同 business session 重建后必须变化。 */
   sessionInstanceId?: string;
   workingDir: string;
+  /** Host-owned memory namespace override shared with prompt injection and MCP tools. */
+  memoryScopeKey?: string;
   /**
    * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
    * 「远端路径」与「本地同名路径」(buildMemoryScopeKey), 缺省 = 本地会话。
@@ -238,13 +240,20 @@ export interface PiNativeModelSpec {
  *   - rm(清理:configHome / perm / subagent / forkHome)
  * 所有路径都是远端机器上的绝对路径(与 pi 进程 cwd 一致)。
  */
-export interface PiRemoteFileOps {
+export interface RemoteAgentFileOps {
+  stat(file: string): Promise<{ isFile: boolean } | null>;
+  /** Missing/unreadable directories return an empty array. */
+  listDir(dir: string): Promise<string[]>;
+  /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
+  readFile(file: string, maxBytes?: number): Promise<string>;
+  /** Hash the complete remote file without transferring its contents to the client. */
+  sha256File(file: string): Promise<string>;
+}
+
+export interface PiRemoteFileOps extends RemoteAgentFileOps {
   mkdirp(dir: string): Promise<void>;
   writeFile(file: string, content: string, mode?: number): Promise<void>;
-  stat(file: string): Promise<{ isFile: boolean } | null>;
   rm(fileOrDir: string, opts?: { recursive?: boolean }): Promise<void>;
-  /** 列目录子项名(供陈旧 configHome 清理等)。失败返回空数组。 */
-  listDir(dir: string): Promise<string[]>;
 }
 
 /**
@@ -322,6 +331,15 @@ export interface PiExtraSpawnConfigContext {
   /** 当前 Maker Session 实例代号；用于阻断旧 bridge 请求借用新实例权限。 */
   sessionInstanceId?: string;
   workingDir: string;
+  /**
+   * 本会话的 Maker Memory 作用域键 (startSession opts.makerMemoryScopeKey)。
+   *
+   * 必须透到 bridge 注册的 session ctx 上:cindy_memory 的 withStore 优先用
+   * ctx.memoryScopeKey 定位 store, 缺失时才回落 buildMemoryScopeKey(workingDir)。
+   * Cindy Bot 会话的注入索引来自 `bot:<botId>` store —— 这里丢掉就会出现
+   * 「prompt 读伙伴记忆、工具写项目记忆」的两张皮。
+   */
+  memoryScopeKey?: string;
   vendorOptions?: Record<string, unknown>;
   mcpCallerKind?: 'root' | 'descendant' | 'unknown';
   mcpCallerAttested?: boolean;
@@ -893,6 +911,11 @@ export interface AgentDeps {
     remoteHostId: string,
   ) => PiRemoteFileOps;
 
+  /** Read-only filesystem truth used by remote Skill catalog discovery. */
+  getRemoteAgentFileOps?: (
+    remoteHostId: string,
+  ) => RemoteAgentFileOps;
+
 
   /**
    * Codex 专用:读**这个 thread 本次实际出口**的出站代理路径判定,用于把「后端不可达」
@@ -1172,6 +1195,15 @@ export interface AgentDeps {
      */
     makerMemoryEnabled?: boolean;
     /**
+     * 本 session 的 Maker Memory 作用域键 (startSession opts.makerMemoryScopeKey)。
+     *
+     * host 必须把它注册到远端 bridge 的 per-session ctx 上 —— cindy_memory 的
+     * withStore 优先用 ctx.memoryScopeKey 定位 store, 缺失时回落
+     * buildMemoryScopeKey(workingDir, remoteHostId)。Cindy Bot 会话的 prompt
+     * 索引来自 `bot:<botId>` store, 丢掉这个键就会「读伙伴记忆、写远端项目记忆」。
+     */
+    makerMemoryScopeKey?: string;
+    /**
      * Callback for daemon-side subscription OAuth refresh (remote cc hit 401
      * mid-turn). ClaudeCodeAgent wires it to auth.getFreshSubscriptionToken —
      * only when the remote env actually carries CLAUDE_CODE_OAUTH_TOKEN
@@ -1288,6 +1320,80 @@ export class AgentNotAuthenticatedError extends Error {
   }
 }
 
+export interface BotRuntimeSkillEntry {
+  name: string;
+  runtimeCommandName?: string;
+  path?: string;
+  enabled?: boolean;
+  runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
+  scope?: string;
+}
+
+/** A Skill the Bot wrote for itself, stored in Cindy-owned per-Bot storage. */
+export interface BotRuntimeOwnSkillEntry {
+  name: string;
+  description?: string;
+  /** Absolute path to the Skill directory (the folder holding SKILL.md). */
+  path: string;
+}
+
+export interface BotRuntimeSkillPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeSkillEntry[];
+  /**
+   * Skills this Bot distilled from its own finished work.
+   *
+   * These are deliberately kept out of `catalog` / `configured`: the allowlist
+   * describes which of the *harness-discovered* Skills a user let this Bot keep,
+   * while these are Cindy-owned files the Bot authored itself. They are always
+   * mounted, they are never something the user's allowlist can accidentally
+   * switch off, and they must not participate in the runtime resource drift
+   * freeze — a Bot that just learned something has to stay able to resume its
+   * own task.
+   */
+  ownSkills?: BotRuntimeOwnSkillEntry[];
+  /**
+   * Directories to mount as Claude Code local plugins so the Skills above reach
+   * a harness that only toggles what it discovered by itself. Other harnesses
+   * take the per-Skill paths in `ownSkills` instead.
+   */
+  ownSkillPluginRoots?: string[];
+}
+
+export interface BotRuntimeMcpEntry {
+  name: string;
+  source: 'builtin' | 'custom';
+  available?: boolean;
+}
+
+export interface BotRuntimeMcpPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeMcpEntry[];
+}
+
+export interface BotRuntimeToolsetEntry {
+  id: string;
+  name: string;
+  essential?: boolean;
+  available?: boolean;
+}
+
+export interface BotRuntimeToolsetPolicy {
+  mode: 'inherit' | 'allowlist';
+  configured: string[];
+  catalog: BotRuntimeToolsetEntry[];
+}
+
+export interface BotRuntimeProfile {
+  botId: string;
+  profileVersion: number;
+  skillPolicy: BotRuntimeSkillPolicy;
+  mcpPolicy: BotRuntimeMcpPolicy;
+  toolsetPolicy: BotRuntimeToolsetPolicy;
+}
+
 /**
  * The adapter dispatched a turn request but could not determine whether the
  * provider accepted it. The Session wrapper must fence the ambiguous handle
@@ -1373,6 +1479,30 @@ export interface StartSessionOptions {
    */
   userPrompt?: string;
   /**
+   * Bot Profile runtime context, resolved by the main/DB authority at session
+   * start. It is a startup system-prompt segment, not a per-turn user prefix.
+   * Harness adapters place it before the user personalization segment.
+   */
+  botProfilePrompt?: string;
+  /**
+   * Stable profile-binding metadata rendered separately from the Bot SOUL.
+   * Hermes keeps the active-profile marker outside the identity document so
+   * profile metadata never mutates user-authored identity bytes.
+   */
+  botProfileContextPrompt?: string;
+  /**
+   * Hermes USER.md equivalent for a Bot Profile. This is frozen with the
+   * Profile/runtime snapshot and belongs in the volatile prompt tier after
+   * memory, not inside the Bot's SOUL identity.
+   */
+  botUserProfilePrompt?: string;
+  /**
+   * Native Bot capability snapshot resolved by the host before the harness
+   * starts. Adapters must enforce this through their own Skill/MCP/tool config;
+   * it must never be converted into natural-language capability claims.
+   */
+  botRuntimeProfile?: BotRuntimeProfile;
+  /**
    * 是否启用 Maker Memory (本次 session 内). 跟 userPrompt 同模式 — renderer 启 session
    * 时透传当前 memoryMode='maker' → true, 'native' / 'off' → false。main 不持久化。
    *
@@ -1386,11 +1516,37 @@ export interface StartSessionOptions {
    */
   makerMemoryEnabled?: boolean;
   /**
+   * Stable host-owned Maker Memory scope. Cindy Bots use this to keep memory
+   * isolated by Bot identity instead of sharing it with every task in a workdir.
+   */
+  makerMemoryScopeKey?: string;
+  /**
+   * Exact host-frozen memory bytes for this runtime start. When present the
+   * harness must inject these bytes instead of re-reading MEMORY.md later in
+   * startup, otherwise the persisted runtime snapshot and the actual prompt
+   * can observe different memory generations.
+   */
+  makerMemoryIndexSnapshot?: string;
+  /**
    * Host-owned Cindy Review policy. This is not a user permission preset:
    * adapters must keep the session local, fresh, memory-free and hard
    * read-only even if a later control request tries to widen permissions.
    */
   reviewMode?: true;
+  /**
+   * Host-owned workspace access boundary. Unlike Review this keeps the normal
+   * Bot profile, Skills, MCPs, memory and remote capabilities available while
+   * preventing the harness from mutating the bound project workspace. A later
+   * permission-mode control request must never widen this boundary.
+   */
+  workspaceAccess?: 'read-write' | 'read-only';
+  /**
+   * Host-frozen writable subtrees for this workspace. Undefined/empty keeps
+   * the legacy whole-workspace write scope; a non-empty list narrows writes
+   * to these exact files or directory subtrees and must be enforced by the
+   * harness even when permissionMode is Full Access.
+   */
+  workspaceWritePaths?: string[];
   /**
    * Exact local files or directories that a host-owned Review may inspect in
    * addition to workingDir. Adapters must treat files as exact grants and

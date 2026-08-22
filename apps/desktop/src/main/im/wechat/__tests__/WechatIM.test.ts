@@ -62,6 +62,18 @@ describe('WechatIM host boundary', () => {
     expect(__testing.normalizeFinalOutputText('hello')).toBe('hello');
   });
 
+  it('uses the caller idempotency key as the provider client id', () => {
+    expect(__testing.outboundClientId(' bot-outbox:delivery-1 ')).toBe(
+      'bot-outbox:delivery-1',
+    );
+    expect(__testing.outboundClientId(' bot-outbox:delivery-1:media:0 ')).toBe(
+      'bot-outbox:delivery-1:media:0',
+    );
+    expect(__testing.outboundClientId()).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
   it('distinguishes agent-unsupported from permission-mode-unsupported pre-dispatch failures', () => {
     // Agent 未声明 turnPermissionPolicy(如 Pi):换权限模式无效,文案引导换 Agent。
     expect(__testing.wechatPreDispatchFailureText('TURN_PERMISSION_POLICY_UNSUPPORTED:agent:ask')).toContain(

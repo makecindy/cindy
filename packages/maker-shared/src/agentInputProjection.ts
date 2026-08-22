@@ -77,6 +77,13 @@ export interface AgentInputPluginResourceReference extends AgentInputReferenceBa
   description?: string;
 }
 
+/** One persistent Cindy Bot selected as the intended delegation or handoff target. */
+export interface AgentInputBotReference extends AgentInputReferenceBase {
+  kind: 'bot';
+  botId: string;
+  name: string;
+}
+
 /** Structured Composer references preserved beside the human-facing wire text. */
 export type AgentInputReference =
   | AgentInputMessageReference
@@ -84,7 +91,8 @@ export type AgentInputReference =
   | AgentInputProjectReference
   | AgentInputBrowserTabReference
   | AgentInputDesktopWindowReference
-  | AgentInputPluginResourceReference;
+  | AgentInputPluginResourceReference
+  | AgentInputBotReference;
 
 /** Immutable inputs required to derive the text sent to semantic consumers. */
 export interface AgentFacingTextSource {
@@ -115,13 +123,28 @@ function nonEmptyString(value: unknown): value is string {
 
 function stripDeepLinkPrefix(
   href: string,
-  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/',
+  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/' | 'bot/',
 ): string | null {
   for (const scheme of allDeepLinkSchemes()) {
     const prefix = `${scheme}://${route}`;
     if (href.startsWith(prefix)) return href.slice(prefix.length);
   }
   return null;
+}
+
+export function buildBotReferenceHref(botId: string): string {
+  const scheme = allDeepLinkSchemes()[0];
+  return `${scheme}://bot/${encodeURIComponent(botId)}`;
+}
+
+export function parseBotReferenceHref(href: string): { botId: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'bot/');
+  if (rest === null || rest.length > 256 || rest.includes('/') || rest.includes('?') || rest.includes('#')) {
+    return null;
+  }
+  const botId = decodeBoundedComponent(rest, 128);
+  if (!botId || botId.includes('/') || /[\u0000-\u001f\u007f\u2028\u2029]/.test(botId)) return null;
+  return { botId };
 }
 
 export function buildPluginResourceReferenceHref(args: {
@@ -394,6 +417,22 @@ function readReference(
         : {}),
     };
   }
+  if (
+    candidate.kind === 'bot'
+    && nonEmptyString(candidate.name)
+    && candidate.name.length <= 128
+  ) {
+    const target = parseBotReferenceHref(candidate.href);
+    if (!target) return null;
+    return {
+      kind: 'bot',
+      start,
+      end,
+      href: candidate.href,
+      botId: target.botId,
+      name: oneLine(candidate.name),
+    };
+  }
   return null;
 }
 
@@ -484,6 +523,17 @@ function formatReference(reference: AgentInputReference): string {
       '[/Referenced plugin resource]',
     ].join('\n');
   }
+  if (reference.kind === 'bot') {
+    return [
+      '[Referenced Cindy Bot]',
+      `Name: ${quotedMetadata(oneLine(reference.name))}`,
+      `Bot ID: ${quotedMetadata(reference.botId)}`,
+      'Intent: the user explicitly selected this Bot as a delegation or handoff target.',
+      'Action: discover the current Bot capabilities, then use the available Bot delegation flow when the request calls for work by this Bot.',
+      'Boundary: delegation transfers a bounded task and returns its result; it does not change either Bot identity or require obedience.',
+      '[/Referenced Cindy Bot]',
+    ].join('\n');
+  }
   return [
     '[Referenced project]',
     `Name: ${oneLine(reference.name)}`,
@@ -556,6 +606,7 @@ export function describeAgentInputReference(reference: AgentInputReference): str
     return oneLine(reference.title ?? reference.appName) || null;
   }
   if (reference.kind === 'plugin-resource') return oneLine(reference.label) || null;
+  if (reference.kind === 'bot') return oneLine(reference.name) || null;
   return oneLine(reference.text ?? '') || null;
 }
 

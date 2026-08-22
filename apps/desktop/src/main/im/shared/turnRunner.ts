@@ -84,6 +84,7 @@ import type {
   UserMessage,
 } from '@cindy/maker-core';
 import type { IMAttachment, InteractiveCardSpec, StreamingTextHandle } from '@cindy/im';
+import type { BotRouteSource } from '../../../shared/botRoute.js';
 
 import { persistUserMessage } from '../messagePersistence';
 import { bindingStore } from '../binding';
@@ -95,6 +96,7 @@ import {
   noteSilentStopUserSend,
   noteSilentStopSessionReset,
   onSilentStopSettled,
+  recordUnknownBotFinalDelivery,
 } from '../../maker-ipc/register';
 import { clearPendingTurnChangeSets } from '../../turn-change-set/store';
 import {
@@ -349,6 +351,8 @@ interface ScheduledTranspond {
 export interface RouteTarget {
   row: ImSessionRow;
   attached: boolean;
+  /** The lane is owned by a Cindy Bot Profile rather than the legacy IM task. */
+  botRoute?: boolean;
   /** 路由时使用的会话维度键(thread root ts)— 透传给出站回复定位 thread。 */
   scopeKey?: string;
   /** true = 这次路由新建了 session 行(thread 名片卡 / 标题生成的触发依据)。 */
@@ -370,6 +374,8 @@ export interface ImRunAgentTurnArgs {
   attachments: IMAttachment[];
   /** thread = session 模型的会话维度键(slack);feishu 不传。 */
   scopeKey?: string;
+  /** Optional Cindy Bot Route source. Missing/unmatched sources preserve legacy IM routing. */
+  botRouteSource?: BotRouteSource;
   /**
    * 发给 agent 的正文覆盖(群上下文前缀拼装, 见 adapter.prepareAgentTurnText)。
    * 缺省 = text。落库(persistUserMessage)与标题生成恒用 text(渠道原文)。
@@ -467,6 +473,7 @@ export interface ImTurnRunner {
     botContextId: string;
     userId: string;
     scopeKey?: string;
+    botRouteSource?: BotRouteSource;
     text: string;
     attachments?: readonly IMAttachment[];
     protectedContent?: boolean;
@@ -484,6 +491,11 @@ export interface ImTurnRunner {
   resolveRouteTarget(
     botContextId: string,
     userId: string,
+    scopeKey?: string,
+    botRouteSource?: BotRouteSource,
+  ): Promise<RouteTarget | null>;
+  renewBotRouteTarget(
+    botRouteSource: BotRouteSource,
     scopeKey?: string,
   ): Promise<RouteTarget | null>;
   hasAuthForRoute(row: Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId'>): Promise<boolean>;
@@ -517,12 +529,22 @@ export interface ImTurnRunner {
     botContextId: string;
     userId: string;
     scopeKey?: string;
+    botRouteSource?: BotRouteSource;
   }): Promise<{ stopped: boolean; droppedQueued: number }>;
 }
 
 export interface ImTurnRunnerDeps {
   /** 锁住 session 并落实 deferred switch；IM 在刷新 live session + send 后 release。 */
   acquirePendingAgentSwitch?: (sessionId: string) => Promise<() => void>;
+  /** Resolve a mounted Cindy Bot Route. Returning null keeps the existing IM task path byte-for-byte. */
+  resolveBotRouteTarget?: (args: {
+    source: BotRouteSource;
+    scopeKey?: string;
+  }) => Promise<RouteTarget | null>;
+  renewBotRouteTarget?: (args: {
+    source: BotRouteSource;
+    scopeKey?: string;
+  }) => Promise<{ target: RouteTarget; previousSessionId?: string } | null>;
 }
 
 export function createTurnRunner(
@@ -592,10 +614,32 @@ export function createTurnRunner(
     botContextId: string,
     userId: string,
     scopeKey?: string,
+    botRouteSource?: BotRouteSource,
   ): Promise<RouteTarget | null> {
-    const existing = await resolveExistingRouteTarget(botContextId, userId, scopeKey);
+    const existing = await resolveExistingRouteTarget(
+      botContextId,
+      userId,
+      scopeKey,
+      botRouteSource,
+    );
     if (existing) return existing;
     return (await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey)).target;
+  }
+
+  async function renewBotRouteTarget(
+    botRouteSource: BotRouteSource,
+    scopeKey?: string,
+  ): Promise<RouteTarget | null> {
+    if (!deps.renewBotRouteTarget) return null;
+    const renewed = await deps.renewBotRouteTarget({ source: botRouteSource, scopeKey });
+    if (!renewed) return null;
+    if (
+      renewed.previousSessionId
+      && renewed.previousSessionId !== renewed.target.row.id
+    ) {
+      await disposeOneSession(renewed.previousSessionId);
+    }
+    return renewed.target;
   }
 
   async function createAuthenticatedDefaultRouteTarget(
@@ -620,7 +664,15 @@ export function createTurnRunner(
     botContextId: string,
     userId: string,
     scopeKey?: string,
+    botRouteSource?: BotRouteSource,
   ): Promise<RouteTarget | null> {
+    // A configured Bot Route owns this IM lane. Resolve it before the legacy
+    // /ctr binding so attaching a Channel to Cindy Bots cannot be silently
+    // shadowed by an older desktop-session takeover record.
+    if (botRouteSource && deps.resolveBotRouteTarget) {
+      const mounted = await deps.resolveBotRouteTarget({ source: botRouteSource, scopeKey });
+      if (mounted) return mounted;
+    }
     // 优先查 binding 是否命中 — bindingStore.get 走进程内 Map, 同步且 O(1)。
     // threadScoped 渠道的 binding 按 (identity, scopeKey) 维度存(多重接管)。
     const targetSessionId = bindingStore.get({
@@ -695,11 +747,24 @@ export function createTurnRunner(
       beforeProviderStart?: () => Promise<void>;
     },
   ): Promise<ImTurnDispatch> {
-    const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    const {
+      botContextId,
+      userId,
+      userMessageId,
+      text,
+      attachments,
+      scopeKey,
+      botRouteSource,
+    } = args;
 
     // 路由分流 — 先查 binding: 命中走 desktop session (接管模式 C),
     // 未命中走渠道默认 session (B' 行为)。这是 /ctr 接管能生效的关键入口。
-    let target = await resolveExistingRouteTarget(botContextId, userId, scopeKey);
+    let target = await resolveExistingRouteTarget(
+      botContextId,
+      userId,
+      scopeKey,
+      botRouteSource,
+    );
     if (!target) {
       const created = await createAuthenticatedDefaultRouteTarget(botContextId, userId, scopeKey);
       if (!created.target) {
@@ -2864,10 +2929,41 @@ export function createTurnRunner(
       }
     }
     if (turn.streamingHandle) {
+      const finalView = composeStreamingView(turn) || '_(空回复)_';
       try {
-        const finalView = composeStreamingView(turn) || '_(空回复)_';
         await turn.streamingHandle.finalize(finalView);
       } catch (err) {
+        if (
+          channel === 'telegram'
+          && err instanceof Error
+          && err.name === 'TelegramFinalUnconfirmedError'
+        ) {
+          const diagnostic = err as Error & {
+            firstChunkConfirmed?: boolean;
+            unconfirmedChunks?: readonly number[];
+          };
+          try {
+            await recordUnknownBotFinalDelivery({
+              sessionId: state.makerSession.id,
+              recoveryKey: turn.turnId,
+              text: finalView,
+              mediaAbsPaths: turn.mediaAbsPaths,
+              errorCode: 'TELEGRAM_FINAL_UNCONFIRMED',
+              message: diagnostic.message,
+              progress: {
+                firstChunkConfirmed: diagnostic.firstChunkConfirmed === true,
+                unconfirmedChunks: [...(diagnostic.unconfirmedChunks ?? [])],
+                mediaCount: turn.mediaAbsPaths.length,
+              },
+            });
+          } catch (recordError) {
+            log.error(
+              `telegram final recovery record failed: ${
+                recordError instanceof Error ? recordError.message : String(recordError)
+              }`,
+            );
+          }
+        }
         if (output.kind === 'chunked-text') {
           turn.terminalKind = 'error';
           turn.terminalErrorCode = 'terminal_output_commit_failed';
@@ -3399,6 +3495,7 @@ export function createTurnRunner(
     botContextId: string;
     userId: string;
     scopeKey?: string;
+    botRouteSource?: BotRouteSource;
     text: string;
     attachments?: readonly IMAttachment[];
     protectedContent?: boolean;
@@ -3410,7 +3507,12 @@ export function createTurnRunner(
     try {
       // 只解析既有路由: 提前落库不该新建 session 行, 也不该抢在认证预检之前
       // 制造出一条会话(新会话仍按原路径在 dispatch 时建行 + 落库)。
-      target = await resolveExistingRouteTarget(args.botContextId, args.userId, args.scopeKey);
+      target = await resolveExistingRouteTarget(
+        args.botContextId,
+        args.userId,
+        args.scopeKey,
+        args.botRouteSource,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`early persist route resolve failed (skipped): ${msg}`);
@@ -3439,10 +3541,16 @@ export function createTurnRunner(
     botContextId: string;
     userId: string;
     scopeKey?: string;
+    botRouteSource?: BotRouteSource;
   }): Promise<{ stopped: boolean; droppedQueued: number }> {
-    const { botContextId, userId, scopeKey } = args;
+    const { botContextId, userId, scopeKey, botRouteSource } = args;
     // 只解析既有路由 — !stop 不该为不存在的会话新建 session 行。
-    const target = await resolveExistingRouteTarget(botContextId, userId, scopeKey);
+    const target = await resolveExistingRouteTarget(
+      botContextId,
+      userId,
+      scopeKey,
+      botRouteSource,
+    );
     const state = target ? sessionStates.get(target.row.id) : undefined;
     if (!state) return { stopped: false, droppedQueued: 0 };
     const running =
@@ -3516,6 +3624,7 @@ export function createTurnRunner(
     persistInboundUserMessageEarly,
     dispatchAgentTurn,
     resolveRouteTarget,
+    renewBotRouteTarget,
     hasAuthForRoute: (row) => hasAuthForImRoute(row, undefined, authCheckDeps()),
     getAuthStatusForRoute: (row) => checkImRouteAuthDetailed(row, undefined, authCheckDeps()),
     prewireAttachedSession,

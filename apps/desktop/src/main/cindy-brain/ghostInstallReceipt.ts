@@ -200,8 +200,12 @@ export class GhostInstallReceiptStore {
     const receiptPath = this.receiptPath(id);
     let bytes: Buffer | null;
     try {
+      // readBoundedFileNoFollowSync 的 containWithin 契约要求传入 realpath。
+      // macOS 的 os.tmpdir()/用户目录可能经过 /var -> /private/var 等系统链接；
+      // 直接传 path.resolve 结果会把根内普通 receipt 误判成越界。
+      const realRoot = fs.realpathSync(this.rootDir());
       bytes = readBoundedFileNoFollowSync(receiptPath, MAX_RECEIPT_BYTES, {
-        containWithin: this.rootDir(),
+        containWithin: realRoot,
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {

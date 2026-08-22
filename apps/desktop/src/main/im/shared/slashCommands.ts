@@ -43,6 +43,7 @@ import {
   resolvePermissionMode,
 } from './permissionModeControl';
 import { isBotCommandAvailableOnChannel, tokenizeBotCommand } from './botCommands';
+import type { BotRouteSource } from '../../../shared/botRoute.js';
 
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
@@ -52,6 +53,7 @@ export function looksLikeSlashCommand(text: string): boolean {
 export interface SlashCtx {
   botContextId: string;
   userId: string;
+  botRouteSource?: BotRouteSource;
   /**
    * 群主流 @ 开话题的首条 slash 时由 messageHandler 注入: slash 的**首个**
    * 回复(文本或卡片)就地消费开场白卡(patch 文本 / 替换卡片)而不是另发 —
@@ -233,6 +235,7 @@ export function createSlashHandlers(
           const result = await turnRunner.stopActiveTurn({
             botContextId: ctx.botContextId,
             userId: ctx.userId,
+            botRouteSource: ctx.botRouteSource,
           });
           reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
         } catch (err) {
@@ -248,6 +251,41 @@ export function createSlashHandlers(
         // thread = session 模型: 发新顶层消息即新会话, /new 无意义 → 废弃提示。
         if (threadScoped && threadUi) {
           await safeSendText(ctx, threadUi.newDeprecated);
+          return true;
+        }
+        if (ctx.botRouteSource) {
+          const current = await turnRunner.resolveRouteTarget(
+            ctx.botContextId,
+            ctx.userId,
+            undefined,
+            ctx.botRouteSource,
+          );
+          if (!current) {
+            await safeSendText(ctx, ui.agent.apiKeyMissing);
+            return true;
+          }
+          const auth = await turnRunner.getAuthStatusForRoute?.(current.row);
+          if (auth ? !auth.ok : !(await turnRunner.hasAuthForRoute(current.row))) {
+            await safeSendText(
+              ctx,
+              auth && ui.agent.authMissing
+                ? ui.agent.authMissing({
+                    ...auth,
+                    agentKind: current.row.agentKind,
+                    model: current.row.model,
+                  })
+                : ui.agent.apiKeyMissing,
+            );
+            return true;
+          }
+          // A missing Route task was just created by resolveRouteTarget and is
+          // already a fresh context. Existing Route tasks renew atomically:
+          // the old task becomes history and the Route points at the new task.
+          if (!current.created) {
+            const renewed = await turnRunner.renewBotRouteTarget(ctx.botRouteSource);
+            if (!renewed) throw new Error('Bot Route disappeared while renewing');
+          }
+          await safeSendText(ctx, ui.slash.new);
           return true;
         }
         const prepared = await repo.prepareNewSession(ctx.botContextId, ctx.userId);
@@ -288,7 +326,12 @@ export function createSlashHandlers(
           await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
           return true;
         }
-        const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
+        const target = await turnRunner.resolveRouteTarget(
+          ctx.botContextId,
+          ctx.userId,
+          undefined,
+          ctx.botRouteSource,
+        );
         if (!target) {
           await safeSendText(ctx, ui.agent.apiKeyMissing);
           return true;
@@ -556,7 +599,12 @@ export function createSlashHandlers(
           await safeSendText(ctx, threadUi.perThreadConfigUnsupported);
           return true;
         }
-        const target = await turnRunner.resolveRouteTarget(ctx.botContextId, ctx.userId);
+        const target = await turnRunner.resolveRouteTarget(
+          ctx.botContextId,
+          ctx.userId,
+          undefined,
+          ctx.botRouteSource,
+        );
         if (!target) {
           await safeSendText(ctx, ui.agent.apiKeyMissing);
           return true;

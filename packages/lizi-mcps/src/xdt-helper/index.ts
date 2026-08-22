@@ -127,6 +127,17 @@ export {
   type SearchChatHistoryToolDeps,
 } from './search_chat_history.js';
 export {
+  registerBotDurableNoteTools,
+  type BotDurableNoteCallbacks,
+  type BotDurableNoteToolDeps,
+} from './bot_durable_notes.js';
+export {
+  registerBotSkillTools,
+  type BotSkillCallbacks,
+  type BotSkillSummaryWire,
+  type BotSkillToolDeps,
+} from './bot_skills.js';
+export {
   registerSubmitGithubIssueTool,
   type SubmitGithubIssueDeps,
   type SubmitGithubIssueHostResult,

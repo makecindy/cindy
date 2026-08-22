@@ -206,7 +206,13 @@ export interface ImChannelAdapter {
    * transcript**(它们不是触发用户发的)。与用户自己 attachments 的语义边界
    * 正在于此: 触发消息附件照常走 attachments 落库。
    */
-  prepareAgentTurnText?(event: IMMessageEvent): Promise<{
+  prepareAgentTurnText?(
+    event: IMMessageEvent,
+    context?: {
+      /** Suppress legacy per-channel identity when a Cindy Bot Profile owns the lane. */
+      botRoute: boolean;
+    },
+  ): Promise<{
     agentText: string;
     contextAttachments?: IMAttachment[];
     commit?: () => void | Promise<void>;

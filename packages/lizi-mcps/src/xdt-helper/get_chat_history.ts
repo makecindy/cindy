@@ -19,6 +19,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
+import { resolveHistoryScope } from './_history_scope.js';
 
 const ROLE_VALUES = [
   'user',
@@ -85,6 +86,7 @@ const DESCRIPTION = [
 
 export interface GetChatHistoryToolDeps {
   history: XdtHelperHistoryDeps;
+  getSessionContext?: () => import('../types.js').LiziMcpSessionContext | undefined;
 }
 
 export function registerGetChatHistoryTool(
@@ -157,6 +159,12 @@ export function registerGetChatHistoryTool(
       cursor,
       order,
     }) => {
+      const scope = await resolveHistoryScope(
+        deps.history,
+        deps.getSessionContext,
+        session_ids ?? null,
+      );
+      if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       // 至少一个主过滤
       const hasMainFilter =
         (session_ids !== undefined && session_ids.length > 0) ||
@@ -200,7 +208,7 @@ export function registerGetChatHistoryTool(
         : fromMs;
 
       const result = await deps.history.getMessages({
-        sessionIds: session_ids ?? null,
+        sessionIds: scope.sessionIds,
         workdir: workdir ?? null,
         fromMs: effectiveFromMs,
         toMs,

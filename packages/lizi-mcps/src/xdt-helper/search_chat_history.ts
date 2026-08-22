@@ -29,6 +29,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { resolveHistoryScope } from './_history_scope.js';
 
 const ROLE_VALUES = [
   'user',
@@ -71,6 +72,7 @@ const DESCRIPTION = [
 
 export interface SearchChatHistoryToolDeps {
   history: XdtHelperHistoryDeps;
+  getSessionContext?: () => import('../types.js').LiziMcpSessionContext | undefined;
 }
 
 export function registerSearchChatHistoryTool(
@@ -124,6 +126,12 @@ export function registerSearchChatHistoryTool(
       limit,
       cursor,
     }) => {
+      const scope = await resolveHistoryScope(
+        deps.history,
+        deps.getSessionContext,
+        session_ids ?? null,
+      );
+      if (!scope.ok) return errorPayload(scope.errorCode, scope.message);
       const fromMs = parseIsoMs(from);
       if (fromMs === 'invalid') {
         return errorPayload('INVALID_ARGS', `from 不是合法 ISO 8601 时间字符串: "${from}"`);
@@ -139,7 +147,7 @@ export function registerSearchChatHistoryTool(
 
       const res = await deps.history.searchChatHistory({
         query: query.trim(),
-        sessionIds: session_ids ?? null,
+        sessionIds: scope.sessionIds,
         workdir: workdir ?? null,
         fromMs,
         toMs,

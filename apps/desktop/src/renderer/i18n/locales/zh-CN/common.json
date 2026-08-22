@@ -150,7 +150,8 @@
       "remoteControl": "远程连接",
       "windowBehavior": "应用行为",
       "shortcuts": "键盘快捷键",
-      "mcpServers": "自定义 MCP"
+      "mcpServers": "自定义 MCP",
+      "bots": "伙伴"
     },
     "remote": {
       "title": "远端机器",
@@ -3083,6 +3084,10 @@
           "name": "Cindy 记忆",
           "description": "跨 Agent 的长期记忆，让上下文在任务之间持续"
         },
+        "docs": {
+          "name": "文档工坊",
+          "description": "把内容做成真文件 —— PDF、Word、Excel、PPT，并能回读核对产出。不需要另装任何软件。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "宿主能力自省 —— 告诉 Agent 当前可用的工具与模型"
@@ -3453,6 +3458,15 @@
     },
     "imBot": {
       "beta": "Beta",
+      "unreachableTarget": {
+        "names": {
+          "cindyGroup": "官方机器人",
+          "discord": "Discord 机器人",
+          "telegram": "Telegram 机器人"
+        },
+        "cnPersonal": "你要找的{{name}}，中国大陆版的个人账号暂时不提供；换成企业账号就能用。",
+        "localMode": "你要找的{{name}}需要先登录 Cindy 账号。"
+      },
       "groups": {
         "cindy": "官方",
         "personal": "个人"
@@ -5272,11 +5286,13 @@
         "terminal": "终端",
         "review": "审查",
         "subagents": "Subagent",
+        "botDelegations": "伙伴协同",
         "backgroundTasks": "后台任务",
         "resourceUsage": "资源监视器",
         "collaboration": "协同",
         "unknown": "未知标签页",
-        "ghostPanel": "插件面板"
+        "ghostPanel": "插件面板",
+        "botArtifacts": "作品"
       },
       "controls": {
         "showAria": "显示侧栏",
@@ -5294,6 +5310,12 @@
         "eyebrow": "右侧栏",
         "title": "开始一个面板",
         "desc": "在右侧打开文件、审查、资源监视器、内置浏览器或终端，与左侧对话并行工作。",
+        "botTitle": "作品和协同",
+        "botDesc": "伙伴任务默认打开作品集和协同。审查、终端这些工程面板需要时再加。",
+        "openArtifacts": "打开作品集",
+        "artifactsSub": "{{pronoun}}交出来的东西",
+        "openDelegations": "打开{{pronoun}}的协同",
+        "delegationsSub": "委派和回传",
         "openFile": "打开文件",
         "fileSub": "Files",
         "openReview": "打开审查",
@@ -5859,6 +5881,33 @@
       "expandAllAria": "展开所有文件",
       "collapseAllAria": "收起所有文件"
     },
+    "botDelegations": {
+      "retry": "重试",
+      "back": "返回",
+      "duration": "耗时",
+      "tokens": "Token",
+      "depth": "委派层级",
+      "objective": "任务目标",
+      "result": "回传结果",
+      "openTask": "打开任务",
+      "stop": "停止",
+      "empty": "还没有伙伴协同",
+      "emptyDetail": "当前伙伴委派其它伙伴后，进度与结果会保留在这里。",
+      "activity": {
+        "single": "正在委派 {{name}} 处理…",
+        "multiple": "{{count}} 个伙伴委派进行中",
+        "openAria": "查看伙伴委派进度"
+      },
+      "status": {
+        "queued": "排队中",
+        "waiting": "等待启动",
+        "running": "运行中",
+        "completed": "已完成",
+        "failed": "失败",
+        "cancelled": "已取消",
+        "timed-out": "已超时"
+      }
+    },
     "subagents": {
       "running": "运行中",
       "finished": "已结束",
@@ -6089,7 +6138,8 @@
       "projects": "项目",
       "skillhub": "技能",
       "plugins": "插件",
-      "issues": "Issue"
+      "issues": "Issue",
+      "bots": "伙伴"
     },
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
@@ -6127,7 +6177,989 @@
       "loading": "加载中"
     }
   },
+  "bots": {
+    "eyebrow": "长期助手",
+    "title": "伙伴",
+    "subtitle": "把每个助手的身份、技能、消息通道和主任务放在一起管理。",
+    "add": "添加伙伴",
+    "addTitle": "添加伙伴",
+    "addDescription": "先创建一个本地伙伴，再按需挂载 IM 消息通道。",
+    "createWizard": {
+      "createFailed": "无法创建伙伴，请重试。",
+      "templates": {
+        "ashu": {
+          "description": "你的总控",
+          "intro": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。",
+          "name": "阿枢",
+          "skill": "总控调度",
+          "welcome": "我是阿枢。各处任务的动静我都盯着，出事我第一个知道，也第一个告诉你。\n\n先忙你的，有要你定的事我再开口。",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "只报结论和要决定的事",
+              "description": "过程不复述，说清楚结论和要拍板的地方",
+              "body": "汇报只讲两件事：现在的结论，和需要拍板的地方。中间过程不复述，说不准的地方直说说不准。"
+            }
+          }
+        },
+        "butler": {
+          "description": "你的项目管家",
+          "intro": "我是本本。流程我来盯：评审、检查、交付，你只看结果。",
+          "name": "本本",
+          "skill": "项目管家",
+          "welcome": "我是本本。流程我来盯：评审、检查、交付，你只看结果。\n\n有在跑的事跟我说一声，我替你追。",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "先说结论，风险单列",
+              "description": "结论一句话说完，风险单独一段",
+              "body": "汇报时先用一句话说结论，风险和待决定的事单独列一段，不混在过程描述里。没有证据的完成状态不报。"
+            }
+          }
+        },
+        "cindy": {
+          "description": "你的贴身助理",
+          "intro": "嗨，我是 Cindy。工作生活里的杂事都可以丢给我——写东西、查资料、盯日程、看消息。你忙你的，需要就叫我。",
+          "name": "Cindy",
+          "skill": "什么都会一点",
+          "welcome": "嗨，我是 Cindy 👋 以后写东西、查资料、整理文件这些事直接丢给我。\n\n把消息通道连上的话，你不在的时候我还能帮你盯着消息。",
+          "seedMemories": {
+            "ask_before_guessing": {
+              "title": "拿不准就先问",
+              "description": "不确定要什么的时候先问一句，不自己猜",
+              "body": "信息不够的时候，先用一句话确认到底要什么，再动手。宁可多问一句，也不交一份猜出来的东西。"
+            }
+          }
+        },
+        "counsel": {
+          "description": "你的法务",
+          "intro": "我是林律，做法务的。合同、条款、风险、合规，我先帮你把关。",
+          "name": "林律",
+          "skill": "看合同",
+          "welcome": "我是林律，做法务的。合同、条款、风险、合规，我先帮你把关。\n\n把文件发我，我逐条标风险，再给能落地的改法。注意：我做的是初步梳理，不替代执业律师意见。",
+          "seedMemories": {
+            "conclusion_then_basis": {
+              "title": "先结论和风险，再讲依据",
+              "description": "先说结论与风险等级，再展开依据",
+              "body": "先说结论和风险等级，再讲依据，最后给能落地的改法。拿不准的地方明说需要执业律师确认，不把不确定说成定论。"
+            }
+          }
+        },
+        "designer": {
+          "description": "你的设计师",
+          "intro": "我是小满，做设计的。界面、海报、PPT 排版、配色，都可以交给我。",
+          "name": "小满",
+          "skill": "做设计",
+          "welcome": "我是小满，做设计的。界面、海报、PPT 排版、配色，都可以交给我。\n\n先告诉我这东西给谁看、在哪看，我给你两三版挑。",
+          "seedMemories": {
+            "two_versions_first": {
+              "title": "先给两三版让他挑",
+              "description": "出稿先给两三个方向，讲清取舍",
+              "body": "出稿先给两三个方向，每版说清取舍（更稳 / 更醒目 / 更省时间），让他挑，不要一上来只给一版。"
+            }
+          }
+        },
+        "melody": {
+          "description": "你的程序大佬",
+          "intro": "我是老陈，写了十几年代码。架构、疑难 bug、上线部署，找我。",
+          "name": "老陈",
+          "skill": "写代码",
+          "welcome": "我是老陈，写了十几年代码。架构、疑难 bug、上线部署，找我。\n\n把项目丢过来，我先摸清结构再说话。",
+          "seedMemories": {
+            "small_changes": {
+              "title": "改动做小，做完先自己跑",
+              "description": "一次只改一处，汇报前先自己验一遍",
+              "body": "一次只改一处，改完先自己跑一遍再汇报。没验过的部分要明说没验，不拿「应该没问题」顶上去。"
+            }
+          }
+        },
+        "shiba": {
+          "description": "你的生活管家",
+          "intro": "汪！我是小柴。提醒、日程、代办、记账，家里的事包在我身上。",
+          "name": "小柴",
+          "skill": "生活管家",
+          "welcome": "汪！我是小柴 🐕 提醒、日程、代办、记账，家里的事包在我身上。\n\n有什么要记的直接跟我说，我给你盯着。",
+          "seedMemories": {
+            "one_thing_per_reminder": {
+              "title": "一条提醒只说一件事",
+              "description": "提醒写短，一条只放一件事",
+              "body": "提醒要短。一条提醒只说一件事，说完就停，不把好几件事塞进同一句里。"
+            },
+            "read_back_what_i_wrote": {
+              "title": "记完念一遍",
+              "description": "记下来之后复述一次，确认没记错",
+              "body": "把事情记下来之后，用一句话复述一遍：时间、地点、要做什么。确认没记错再结束这一轮。"
+            }
+          }
+        },
+        "star": {
+          "description": "你的内容搭子",
+          "intro": "我是星星✨ 文案、配图、发帖子，保证有网感。",
+          "name": "星星",
+          "skill": "内容创作",
+          "welcome": "我是星星✨ 文案、配图、发帖子，保证有网感。\n\n想发什么？给我个主题就行～",
+          "seedMemories": {
+            "three_drafts_first": {
+              "title": "先给三版再定稿",
+              "description": "文案先给几版让人挑，不一上来就定稿",
+              "body": "写文案先给三版调性不同的，挑中哪版再往细里修。不一上来就交一个定稿。"
+            }
+          }
+        }
+      }
+    },
+    "portability": {
+      "title": "导出",
+      "description": "导出可分享的行为配置，不包含凭证、IM 账号、任务历史、记忆、项目路径或运行状态。导入伙伴在设置 › 伙伴里。",
+      "export": "导出伙伴配置",
+      "exporting": "正在导出…",
+      "exported": "伙伴配置已导出。",
+      "exportedRedacted": "伙伴配置已导出，并自动移除了 {{count}} 处敏感内容。",
+      "imported": "伙伴已导入；{{channels}} 个外部通道等待重新绑定，{{automations}} 个自动化保持暂停。"
+    },
+    "nameLabel": "名称",
+    "namePlaceholder": "例如：发布助手",
+    "channelLabel": "消息入口",
+    "descriptionLabel": "描述",
+    "descriptionPlaceholder": "这个伙伴负责什么？",
+    "skillsLabel": "Skills",
+    "skillsPlaceholder": "用逗号分隔多个 Skill 名称",
+    "skillsDescription": "这里只保存已安装 Skill 的引用；运行时仍由原生 Skill 机制解析和加载。",
+    "skillCatalogLoading": "正在读取当前 Harness 可用的 Skills…",
+    "skillCatalogError": "Skills 读取失败，已保存的选择会继续保留。",
+    "skillCatalogEmpty": "当前 Harness 和项目中没有可用的 Skill。",
+    "skillConfiguredUnavailable": "当前不可用 · 点按移除",
+    "close": "关闭",
+    "avatarPicker": {
+      "open": "更换头像",
+      "official": "Cindy 官方头像",
+      "charactersLabel": "角色",
+      "emojiLabel": "表情",
+      "hueLabel": "颜色",
+      "hint": "选一个角色或表情，再配个底色，列表里更容易认出这个伙伴。",
+      "presets": {
+        "shiba": "柴犬",
+        "whitecat": "白猫",
+        "robot": "小机器人",
+        "dino": "小恐龙",
+        "melody": "耳机少女",
+        "star": "星星少女",
+        "butler": "眼镜小熊",
+        "owl": "猫头鹰"
+      }
+    },
+    "list": {
+      "startChat": "开始对话",
+      "typing": "正在输入…",
+      "unread": "{{count}} 条未读消息"
+    },
+    "cancel": "取消",
+    "save": "保存",
+    "autosave": {
+      "saving": "正在保存…",
+      "saved": "已保存",
+      "retry": "重新保存"
+    },
+    "retry": "重试",
+    "backToBot": "返回伙伴",
+    "sessionLoadFailedTitle": "无法加载这个伙伴任务",
+    "sessionLoadFailedDescription": "任务关联仍然存在，但 Cindy 暂时无法读取伙伴状态。你可以重试，或返回伙伴总览。",
+    "sessionUnavailableTitle": "这个伙伴任务已不可用",
+    "sessionUnavailableDescription": "它可能已经被新任务接替、收进了历史，或不再属于这个伙伴。返回就能打开当前那个。",
+    "settings": "设置",
+    "settingsNav": {
+      "title": "设置分组"
+    },
+    "emptyTitle": "还没有伙伴",
+    "emptyDescription": "挑一个合拍的，或者自己捏一个。",
+    "noDescription": "还没有描述",
+    "sessions": "个任务",
+    "sessionsTitle": "伙伴任务",
+    "sessionsDescription": "伙伴主任务、消息通道任务和已归档任务分开保存。",
+    "canonicalChat": "伙伴主任务",
+    "historySession": "历史任务",
+    "open": "打开",
+    "archived": "已归档",
+    "sessionLifecycleTitle": "任务生命周期",
+    "sessionLifecycleDescription": "开新任务会用上最新的设置，当前这个收进历史，里面的内容不会丢。",
+    "renew": "开个新任务",
+    "renewing": "正在开…",
+    "historyTitle": "归档历史",
+    "historyDescription": "查看之前的主任务中的完整对话记录。",
+    "historyEmpty": "还没有归档的伙伴任务。",
+    "historySearch": {
+      "title": "搜索伙伴历史",
+      "description": "搜索这个伙伴的主任务、通道任务、委派任务和归档记录，不会把全部历史塞进提示词。",
+      "placeholder": "你记得讨论过什么？",
+      "search": "搜索",
+      "searching": "正在搜索…",
+      "failed": "无法搜索伙伴历史，请重试。",
+      "empty": "没有找到匹配的伙伴历史。"
+    },
+    "lifecycle": {
+      "archivedBots": "已归档伙伴",
+      "title": "健康与历史",
+      "description": "检查主任务、Route、自动化、工作区、归档记录和生命周期事件。",
+      "refresh": "刷新伙伴健康状态",
+      "activeTitle": "伙伴正在运行",
+      "activeDescription": "通道 Route、自动化、投递和伙伴间协作可以正常执行。",
+      "pausedTitle": "伙伴已暂停",
+      "pausedDescription": "不会接收新工作；用户原本手动暂停的自动化在恢复伙伴后仍保持暂停。",
+      "archivedTitle": "伙伴已归档",
+      "archivedDescription": "历史任务保持只读；恢复时会创建新的主任务，不会复活旧任务。",
+      "pause": "暂停伙伴",
+      "resume": "恢复伙伴",
+      "archive": "归档伙伴",
+      "restore": "恢复伙伴",
+      "delete": "永久删除",
+      "archiveTitle": "归档这个伙伴？",
+      "archiveDescription": "伙伴会停止接收工作，当前主任务与 Route 任务会进入历史。",
+      "deleteTitle": "永久删除伙伴",
+      "deleteDescription": "这会删掉 {{name}}：性格、已连的通道、定的日程都会没。删了找不回来。",
+      "keepHistory": "保留任务记录，将它们转为普通的已归档任务。",
+      "confirmName": "输入“{{name}}”确认永久删除",
+      "worktree": {
+        "retain": "保留 Worktree",
+        "retainDescription": "解除伙伴绑定，但保留磁盘上的工作目录和 Git 分支。",
+        "recycle": "安全回收 Worktree",
+        "recycleDescription": "通过现有安全检查后移除工作目录；Git 分支仍然保留。"
+      },
+      "working": "正在更新…",
+      "actionFailed": "伙伴生命周期操作未完整结束，请查看健康状态后重试。",
+      "loadFailed": "无法读取伙伴健康状态和生命周期事件。",
+      "health": "当前健康状态",
+      "noIssues": "主任务和已挂载能力没有已知问题。",
+      "timeline": "生命周期时间线",
+      "noEvents": "还没有生命周期事件。",
+      "routesCount": "{{count}} 个 Route",
+      "automationsCount": "{{count}} 个自动化",
+      "deliveriesCount": "{{count}} 条投递记录",
+      "workspacesCount": "{{count}} 个工作区",
+      "healthStatus": {
+        "healthy": "健康",
+        "attention": "需要处理",
+        "recovering": "正在恢复",
+        "paused": "已暂停"
+      },
+      "issues": {
+        "profile-error": "这个伙伴的设置出错了。",
+        "missing-canonical": "伙伴主任务尚未创建。",
+        "canonical-session-missing": "主任务记录缺失，需要恢复。",
+        "canonical-session-deleted": "主任务已被删除，需要创建替代任务。",
+        "canonical-link-missing": "主任务丢失了伙伴归属关系。",
+        "canonical-link-mismatch": "主任务的伙伴归属关系不一致。",
+        "profile-update-pending": "有更新的设置已保存，下个任务生效。",
+        "runtime-degraded": "当前运行环境启动时缺少部分已配置能力。",
+        "runtime-failed": "当前运行环境启动失败。",
+        "routes-recovering": "{{count}} 个 Route 正在恢复。",
+        "routes-error": "{{count}} 个 Route 需要处理。",
+        "automation-error": "{{count}} 个自动化需要处理。",
+        "delivery-failed": "{{count}} 条消息正在等待重新投递。",
+        "delivery-dead-letter": "{{count}} 条消息需要人工确认后恢复投递。",
+        "workspace-error": "{{count}} 个工作区需要处理。",
+        "lifecycle-incomplete": "上一次伙伴生命周期操作没有完整结束。"
+      },
+      "deliveries": {
+        "title": "可靠投递",
+        "description": "查看这个伙伴的通道、Route、自动化和协同结果投递；高风险重试会明确提示可能重复。",
+        "empty": "还没有投递记录。",
+        "local": "本地",
+        "attempts": "尝试 {{count}} 次",
+        "textSent": "正文已发送",
+        "mediaSent": "{{count}} 个附件已发送",
+        "finalCommitted": "最终消息已确认",
+        "retry": "重新投递",
+        "retrying": "正在重新投递…",
+        "duplicateTitle": "可能产生重复消息",
+        "duplicateDescription": "本地消息通道可能已经发送正文或 {{count}} 个附件，但没有拿到完整回执。继续会再次发送整条结果。",
+        "duplicateConfirm": "仍然重新投递",
+        "status": {
+          "pending": "等待中",
+          "sending": "投递中",
+          "suspended": "已暂停",
+          "delivered": "已送达",
+          "failed": "等待重试",
+          "dead-letter": "需要处理",
+          "cancelled": "已取消"
+        }
+      },
+      "events": {
+        "created": "已创建伙伴",
+        "canonical-created": "已创建主任务",
+        "canonical-renewed": "开了新任务",
+        "canonical-linked": "已绑定主任务",
+        "session-linked": "已关联伙伴历史任务",
+        "legacy-profile-migrated": "从旧版伙伴设置搬过来了",
+        "legacy-session-skipped": "旧任务无法关联",
+        "project-binding-upserted": "已更新项目绑定",
+        "workspace-lease-released": "已释放工作区",
+        "im-migration-applied": "已迁移消息通道",
+        "im-migration-rolled-back": "已回滚消息通道迁移",
+        "pause-requested": "已开始暂停伙伴",
+        "paused": "已暂停伙伴",
+        "paused-with-warnings": "伙伴已暂停，但部分收尾需要处理",
+        "resumed": "已恢复伙伴",
+        "resume-failed": "恢复伙伴失败"
+      }
+    },
+    "inbox": {
+      "title": "关注其它任务",
+      "description": "订阅其它任务的动静：完成、失败或需要决策时，这个伙伴会自动醒来处理，并把结果发到已挂载的消息通道。",
+      "defaultSubscriptionName": "任务结果与待决策状态",
+      "watchTaskStates": "自动关注其它任务",
+      "saving": "正在保存…",
+      "pending": "待处理",
+      "processing": "处理中",
+      "failed": "需关注",
+      "timeline": "最近的动静",
+      "ruleSummary": "任务完成、失败，或者在等拍板、等验收、等总控时，都会通知这个伙伴。",
+      "pausedSummary": "已关闭：这个伙伴不会自动接手其它任务的动静。",
+      "refresh": "刷新任务事件",
+      "loading": "正在加载任务事件…",
+      "emptyWatching": "已开启。其它任务有动静时会出现在这里，并自动唤醒这个伙伴。",
+      "emptyPaused": "打开上面的开关，让这个伙伴自动接手其它任务的完成、失败和待决策。",
+      "loadFailed": "无法加载任务事件。",
+      "saveFailed": "无法保存任务事件订阅。",
+      "retryFailed": "无法重试这个任务事件。",
+      "retry": "重试任务事件",
+      "openTask": "打开来源任务",
+      "untitledTask": "未命名任务",
+      "sidebarAttention": "有 {{count}} 个任务事件需要关注",
+      "guardianAnomalies": {
+        "stale-running": "运行中但长时间没有活动",
+        "expected-event-missing": "应到的状态事件没有到达",
+        "unclaimed-decision": "等待决策但无人认领"
+      },
+      "status": {
+        "pending": "待处理",
+        "processing": "处理中",
+        "handled": "已处理",
+        "failed": "失败",
+        "skipped": "已跳过"
+      },
+      "events": {
+        "session": {
+          "state": {
+            "transition": "任务状态已变迁",
+            "guardian-anomaly": "任务像是卡住了"
+          },
+          "turn": {
+            "completed": "任务回合已完成",
+            "failed": "任务回合失败"
+          },
+          "metadata": {
+            "changed": "任务状态已变化"
+          },
+          "decision": {
+            "required": "任务需要决策"
+          }
+        }
+      },
+      "archivedNote": "已归档的伙伴不接手任何任务动静。先恢复{{pronoun}}，这里才能重新打开。"
+    },
+    "adapterBoundaryTitle": "保留消息层边界",
+    "adapterBoundaryDescription": "Telegram 引用、飞书卡片、Slack thread 和本地投递仍由各自 adapter 负责。本页面只负责伙伴身份和任务投影。",
+    "backToChat": "返回对话",
+    "identityTitle": "身份",
+    "identitySourceLabel": "伙伴身份说明（SOUL）",
+    "identitySourcePlaceholder": "描述这个伙伴的性格、职责和长期行为方式。",
+    "identitySourceDescription": "这段写的是「它是谁」。任务开始时给它一次，不会每条消息都重复念一遍。",
+    "userContextSourceLabel": "用户资料（USER）",
+    "userContextSourcePlaceholder": "告诉这个伙伴你是谁、如何称呼你，以及长期不变的偏好。",
+    "userContextSourceDescription": "它该知道的关于你的事。和它的性格、和它自己记下的东西分开存，跟其它设置一起冻在同一个版本里。",
+    "chooseAvatar": "选择头像 {{avatar}}",
+    "chooseAvatarColor": "选择头像颜色 {{color}}",
+    "advancedCapabilities": {
+      "title": "这些能力背后的技术细节",
+      "description": "跑在哪个引擎和模型上，以及工具和技能。日常使用不用动这里。"
+    },
+    "memoryRecovery": {
+      "title": "这个伙伴的长期记忆当前是关的",
+      "description": "长期记忆现在对新伙伴恒开。这个伙伴是早先被关掉的，这里是重新打开的入口。",
+      "action": "重新开启记忆"
+    },
+    "capabilitiesTitle": "能力配置",
+    "capabilitiesDescription": "任务开始时，它真正拿到的就是这些本事。",
+    "capabilitiesDeferred": "这里改完下个任务生效；当前任务继续用它开始时的那套本事。",
+    "profileApply": {
+      "title": "设置已保存",
+      "description": "新设置已经存好了，但当前这个任务还在按旧设置跑。开个新任务才会用上，当前这个会收进历史。",
+      "keepCurrent": "先不换，继续现在这个",
+      "renewAndApply": "开个新任务",
+      "saveFailed": "伙伴设置未能保存，变更没有生效。",
+      "renewFailed": "新设置已经存好了，但没能开出新任务。当前这个任务没有变化。"
+    },
+    "runtimeState": {
+      "saved": "已保存，启动后生效",
+      "prepared": "启动配置已准备，尚未确认生效",
+      "applied": "当前任务已生效",
+      "pendingRenew": "下个任务生效",
+      "degraded": "部分能力不可用",
+      "failed": "上次启动失败，配置未生效"
+    },
+    "modelLabel": "模型",
+    "modelUnavailable": "{{model}}（当前不可用）",
+    "harnessLabel": "引擎",
+    "capabilityMode": {
+      "inherit": "使用当前可用能力",
+      "allowlist": "逐项选择"
+    },
+    "capabilityCatalogLoading": "正在读取当前项目可用的能力…",
+    "capabilityCatalogError": "能力目录读取失败，已保存的选择会继续保留。",
+    "toolsetsLabel": "Cindy 工具",
+    "toolsetCatalogEmpty": "当前项目没有可配置的 Cindy 工具。",
+    "mcpServersLabel": "自定义 MCP Server",
+    "mcpCatalogEmpty": "还没有配置自定义 MCP Server。",
+    "capabilityApplied": "当前已用",
+    "capabilityUnavailable": "当前不可用",
+    "capabilityDisabledBySystem": "已被当前项目或账号设置停用。",
+    "capabilityNotInstalled": "已不再安装",
+    "memoryLabel": "长期记忆",
+    "memoryDescription": "使用只属于这个伙伴的独立记忆空间。",
+    "automationLabel": "自动化",
+    "automationDescription": "让这个伙伴在你不在的时候按计划干活。每次运行都会锁定当时的设置、项目和送达对象。",
+    "automations": {
+      "title": "伙伴自动化",
+      "description": "这个伙伴自己会跑的 Routine——按时间表跑，或者你点「立即运行」时跑。",
+      "trustedRequired": "无人值守跑的时候没人能点同意。先在和{{pronoun}}的对话里，把输入框的权限切成「完全访问」，再回来建。",
+      "name": "名称",
+      "dailyTime": "每天运行时间",
+      "intervalMinutes": "间隔分钟数",
+      "timezone": "时区",
+      "project": "项目",
+      "defaultProject": "使用伙伴默认项目",
+      "deliveryRoute": "结果投递",
+      "canonicalTask": "投递到伙伴主任务",
+      "noteNamespace": "运行笔记空间",
+      "create": "创建 Routine",
+      "creating": "正在创建…",
+      "empty": "还没有日程。一句话告诉{{pronoun}}每天 / 每周做什么。",
+      "loading": "正在读取自动化…",
+      "refresh": "刷新自动化",
+      "runNow": "立即运行",
+      "archive": "归档",
+      "nextRun": "下次运行",
+      "activeRuns": "{{count}} 个运行中",
+      "noRuns": "还没有运行记录。",
+      "worktree": "Worktree",
+      "delivery": "投递",
+      "openTask": "查看任务",
+      "retryDelivery": "重试投递",
+      "retryingDelivery": "正在重试…",
+      "edit": "编辑",
+      "saving": "正在保存…",
+      "nextProfileVersion": "下次运行用现在存好的设置",
+      "executionPolicy": "运行上限",
+      "executionPolicyDescription": "最长运行分钟数到点即中止本次运行。",
+      "timeoutMinutes": "最长运行分钟数",
+      "budgetTokens": "协同 Token 预算",
+      "unlimited": "不限制",
+      "maxDelegationDepth": "最大协同深度",
+      "delegateTargets": "可协作的伙伴",
+      "delegateNone": "不允许调用其它伙伴",
+      "delegateAllowlist": "仅允许选择的伙伴",
+      "delegateAllActive": "运行开始时冻结全部启用伙伴",
+      "noDelegateBots": "还没有其它可用伙伴。",
+      "status": {
+        "active": "运行中",
+        "paused": "已暂停",
+        "error": "需要处理",
+        "archived": "已归档"
+      },
+      "runStatus": {
+        "claimed": "正在认领",
+        "running": "正在运行",
+        "success": "已完成",
+        "failed": "失败",
+        "aborted": "已中止",
+        "interrupted": "被中断",
+        "skipped": "已跳过",
+        "unknown": "状态未知"
+      },
+      "deliveryStatus": {
+        "not-requested": "无需投递",
+        "enqueue-failed": "未能加入投递队列",
+        "pending": "等待投递",
+        "sending": "正在投递",
+        "failed": "等待重试",
+        "delivered": "已送达",
+        "dead-letter": "需要人工处理",
+        "cancelled": "已取消"
+      },
+      "deliveryProgressText": "正文已送达",
+      "deliveryProgressMedia": "已送达 {{count}} 个附件",
+      "deliveryCommitted": "最终消息已提交",
+      "outputArtifacts": "{{count}} 个输出产物",
+      "retryDuplicateTitle": "重新投递可能产生重复消息",
+      "retryDuplicateDescription": "此通道无法安全续传。已送达的正文或 {{count}} 个附件可能会再次发送。",
+      "retryDuplicateConfirm": "仍然重新投递",
+      "newRoutine": "新建",
+      "whatToDo": "做什么？",
+      "whatToDoPlaceholder": "例如：汇总昨天完成的工作，整理成一份进展摘要。",
+      "whenToRun": "什么时候跑？",
+      "mode": {
+        "manual": "手动",
+        "daily": "每天",
+        "interval": "每隔",
+        "cron": "自定义"
+      },
+      "manualHint": "只有你点「立即运行」时才会跑。",
+      "cronExpr": "Cron 表达式",
+      "cronHint": "标准五段 cron，例如 0 9 * * 1-5 表示工作日 09:00。",
+      "timezoneHint": "时间按 {{timezone}} 计算。",
+      "nameAuto": "按指令自动取名",
+      "advanced": "高级",
+      "advancedHint": "项目、结果投递、运行上限、时区",
+      "noteNamespaceHint": "这条 Routine 在多次运行之间存放自己笔记的地方。",
+      "scheduleSummary": {
+        "manual": "仅手动",
+        "daily": "每天 {{time}}",
+        "interval": "每 {{count}} 分钟",
+        "cron": "Cron：{{expr}}"
+      },
+      "lastRun": "上次运行",
+      "runHistory": "运行记录",
+      "enableRoutine": "开启这条 Routine",
+      "templates": {
+        "hint": "从一个例子开始：",
+        "dailyDigest": {
+          "name": "每天 9:00 · 汇总昨天的进展",
+          "prompt": "汇总昨天完成的工作，写一份简短的进展摘要。"
+        },
+        "inboxTriage": {
+          "name": "每小时 · 整理收件箱",
+          "prompt": "检查收件箱，把新内容整理成一份简短的待办清单。"
+        },
+        "weeklyReport": {
+          "name": "每周五 17:00 · 本周小结",
+          "prompt": "写一份本周完成事项的简短小结。"
+        }
+      },
+      "delegateLimitsHint": "下面两项只约束这条 Routine 派给其它伙伴的子任务，不封顶它自己的用量。"
+    },
+    "permissionsLabel": "权限模式",
+    "permissionAsk": "操作前询问",
+    "permissionTrusted": "信任操作",
+    "codexAutomaticCompact": "Codex 伙伴会自己压缩上下文，/new 也会保留当前任务。只有确实需要从头开始时，才去开新任务。",
+    "chatWelcome": "与 {{name}} 对话",
+    "previewHint": "本地预览——消息暂时不会发送给真实 Agent。",
+    "chatPlaceholder": "给这个伙伴发消息…",
+    "attach": "添加文件",
+    "image": "添加图片",
+    "enterToSend": "按 Enter 发送",
+    "send": "发送消息",
+    "channelsTitle": "消息通道",
+    "channelsDescription": "在不改变伙伴身份和本地主任务的前提下，挂载 Telegram、飞书、Slack 等消息入口。",
+    "channelLocalOwned": "本地伙伴主入口",
+    "channelLocalAdapter": "本机适配器",
+    "channelServerRelay": "服务器转发",
+    "channelConnected": "在线",
+    "channelOffline": "离线或连接不可用",
+    "channelConnectionRequired": "请先在设置中连接 {{channel}} Bot，再挂载这个通道。",
+    "migration": {
+      "title": "迁移并挂载消息通道",
+      "description": "Cindy 会先检查旧 IM 任务和现有接管关系，再原子切换到这个伙伴。",
+      "legacyTaskCount": "发现 {{count}} 个旧任务",
+      "blocked": "存在阻断冲突，暂时不能迁移",
+      "conflicts": {
+        "connection-unavailable": "这个通道没有可用的账号身份。",
+        "connection-not-routable": "这个通道目前不能接收伙伴路由。",
+        "channel-owned-by-another-bot": "这个账号已经挂载到另一个伙伴。",
+        "session-owned-by-another-bot": "有旧任务已经关联到另一个伙伴。",
+        "session-role-conflict": "有旧任务已经承担其它伙伴角色。",
+        "im-takeover-active": "仍有旧的 /ctr 接管指向这些任务。",
+        "ambiguous-legacy-binding": "部分旧 Slack 任务缺少工作区身份。请先用当前 Slack 连接打开一次这些任务，再进行迁移。",
+        "route-overlap": "这个账号存在重叠的默认伙伴路由。",
+        "channel-busy": "这个通道正在执行另一项迁移。"
+      },
+      "warnings": {
+        "connection-offline": "通道当前离线；重新连接后会自动恢复挂载。",
+        "no-legacy-tasks": "这个账号没有发现旧 IM 任务。",
+        "binding-restore-conflict": "回滚时保留了 {{count}} 条较新的通道绑定，没有用旧记录覆盖。"
+      },
+      "errors": {
+        "load": "无法读取通道和迁移状态，请重试。",
+        "preflight": "迁移预检失败，请刷新通道状态后重试。",
+        "apply": "通道迁移失败，Cindy 没有接受未完成的切换。",
+        "rollback": "回滚尚未完成；再次重试会从已保存状态继续。"
+      },
+      "preserveData": "旧任务会保持原来源并作为只读历史归档；群消息库、引用、卡片、回复链和附件数据不会移动。",
+      "apply": "确认迁移并挂载",
+      "applying": "正在迁移…",
+      "rollbackTitle": "回滚通道迁移？",
+      "rollbackDescription": "这会停用迁移创建的伙伴路由、恢复仍可安全恢复的旧任务，并保留迁移后产生的伙伴历史。",
+      "rollback": "回滚迁移",
+      "rollingBack": "正在回滚…"
+    },
+    "routes": {
+      "title": "通道路由",
+      "description": "指定哪些传入对话和回复链交给这个伙伴。比通道默认规则更具体的路由会优先生效。",
+      "add": "添加路由",
+      "addTitle": "添加通道路由",
+      "addDescription": "填写平台里的对话或回复链标识；只有要做整个通道的兜底时才留空。",
+      "mountChannelFirst": "先挂载一个 IM 通道，才能添加路由。",
+      "empty": "还没有可用的通道路由。",
+      "channel": "通道",
+      "routeKey": "路由名称",
+      "routeKeyPlaceholder": "例如：release-team",
+      "principalKey": "对话或私聊标识",
+      "principalKeyPlaceholder": "平台中的对话标识",
+      "threadKey": "回复链或话题标识",
+      "threadKeyPlaceholder": "可选的回复链标识",
+      "project": "此路由使用的项目",
+      "botDefaultProject": "使用伙伴默认项目",
+      "create": "创建路由",
+      "saving": "正在保存…",
+      "openTask": "查看任务",
+      "unknownChannel": "不可用通道",
+      "allMessages": "此通道的所有消息",
+      "lastActivity": "上次活动：{{time}}",
+      "projectBound": "使用此路由专属项目",
+      "pause": "暂停",
+      "pausing": "正在暂停…",
+      "resume": "恢复",
+      "resuming": "正在开启…",
+      "archive": "归档",
+      "archiving": "正在归档…",
+      "status": {
+        "active": "使用中",
+        "paused": "已暂停",
+        "offline": "就绪",
+        "recovering": "正在恢复",
+        "error": "需要处理",
+        "archived": "已归档"
+      }
+    },
+    "projects": {
+      "title": "项目与 worktree",
+      "description": "为伙伴绑定项目，并决定任务直接使用项目目录，还是使用受 Cindy 管理的 worktree。",
+      "empty": "这个伙伴还没有绑定项目。",
+      "addTitle": "绑定本地项目",
+      "chooseDirectory": "选择目录",
+      "directoryPlaceholder": "选择一个项目目录",
+      "add": "绑定项目",
+      "adding": "正在绑定…",
+      "archive": "移除绑定",
+      "archiving": "正在移除…",
+      "saveBinding": "保存绑定",
+      "saving": "正在保存…",
+      "releaseLease": "释放 worktree",
+      "releasingLease": "正在释放…",
+      "localProject": "本地项目",
+      "remoteProject": "远程项目",
+      "defaultBadge": "默认",
+      "makeDefault": "作为伙伴新任务的默认项目",
+      "policyLabel": "工作区策略",
+      "defaultBranchLabel": "基础分支",
+      "defaultBranchPlaceholder": "HEAD 或分支名称",
+      "allowedPathsLabel": "额外允许路径",
+      "allowedPathsPlaceholder": "每行一个位于项目内的绝对路径",
+      "leaseTitle": "当前工作区租约",
+      "leaseGeneration": "所有者代次 {{generation}}",
+      "policies": {
+        "none": "直接使用项目目录",
+        "reuse": "复用一个共享 worktree",
+        "per-task": "每个任务创建独立 worktree",
+        "read-only": "只读访问项目"
+      },
+      "leaseStatus": {
+        "acquiring": "正在创建",
+        "active": "使用中",
+        "releasing": "正在释放",
+        "released": "已释放",
+        "retained": "已保留在磁盘",
+        "error": "需要处理"
+      },
+      "errors": {
+        "chooseDirectory": "请先选择项目目录。",
+        "activeLease": "该绑定仍持有使用中的 worktree。请先结束或释放引用它的任务、自动化和伙伴委派，再移除绑定。",
+        "invalid": "项目或路径设置无效。",
+        "generic": "项目绑定更新失败，请重试。"
+      }
+    },
+    "roster": {
+      "backToRoster": "返回阵容",
+      "customAction": "自己捏一个",
+      "customHint": "性格、记忆和日程，加入之后都能在各自的设置里慢慢调。",
+      "customIntro": "说一句你想要个什么样的伙伴，我先替你写一版；也可以完全自己来。",
+      "customName": "自定义",
+      "customNameLabel": "叫什么",
+      "customNamePlaceholder": "比如：阿橘",
+      "customSkill": "你说了算",
+      "customSubtitle": "起个名字，挑张脸，就可以加入了。",
+      "customTitle": "捏一个自己的伙伴",
+      "footerHint": "加入后，新伙伴会先跟你打个招呼。消息通道可以之后在各自的设置里连（每个伙伴一个）。",
+      "goodAt": "擅长 · {{skill}}",
+      "importLink": "已经有伙伴文件？导入一个",
+      "join": "让{{pronoun}}加入",
+      "joined": "已加入",
+      "subtitle": "挑一个合拍的，或者自己捏一个。",
+      "title": "认识你的伙伴",
+      "customAvatarLabel": "挑张头像",
+      "generate": {
+        "title": "想要个什么样的伙伴？",
+        "subtitle": "一句话就行——名字、性格、背景我先替你写一版，你再改。",
+        "inputLabel": "一句话说说你想要的伙伴",
+        "inputPlaceholder": "比如：设计师 / 能帮我盯娃学习的助理",
+        "action": "帮我生成",
+        "generating": "生成中…",
+        "skip": "跳过，自己写",
+        "previewTitle": "你看看这位",
+        "previewSubtitle": "哪儿不对就直接改，改完再让{{pronoun}}加入。",
+        "descriptionLabel": "一句话简介",
+        "memoriesLabel": "{{pronoun}}一开始就记得的",
+        "memoriesEmpty": "这次没生成初始记忆。",
+        "confirm": "就这样，创建",
+        "regenerate": "换句话重说",
+        "errors": {
+          "emptyInput": "先写一句你想要个什么样的伙伴。",
+          "providerNotReady": "还没有可用的模型来源——先登录或连一个再生成。你也可以直接自己写。",
+          "invalidOutput": "这次生成的内容没看懂。再试一次，或者自己写。",
+          "failed": "这次没生成出来。再试一次，或者自己写。",
+          "unavailable": "这个版本还用不了角色生成，请自己写。"
+        }
+      }
+    },
+    "chat": {
+      "composerPlaceholder": "跟{{name}}说点什么…",
+      "composerPlaceholderLatin": "跟 {{name}} 说点什么…"
+    },
+    "globalSettings": {
+      "title": "伙伴",
+      "description": "和伙伴有关的通用设置。单个伙伴的设置在{{pronoun}}自己的页面里。",
+      "notifications": {
+        "title": "新消息提醒",
+        "note": "伙伴的新消息会在左边的伙伴列表上标出未读，不弹系统横幅、也不响声音。",
+        "footnote": "像「总控」这类伙伴会自己关注任务动静——那是{{pronoun}}的本事，不在这里设置。"
+      },
+      "portability": {
+        "importTitle": "导入伙伴",
+        "importHint": "从一个伙伴文件里恢复{{pronoun}}。",
+        "importAction": "选择文件",
+        "exportTitle": "导出伙伴",
+        "exportHint": "把{{pronoun}}的性格和设置打包带走。",
+        "exportAction": "导出",
+        "exportEmpty": "还没有伙伴可以导出。"
+      },
+      "rosterNote": "预置阵容会随版本更新。"
+    },
+    "settingsBlocks": {
+      "who": "{{pronoun}}是谁",
+      "can": "{{pronoun}}会的",
+      "understand": "{{pronoun}}懂的",
+      "schedule": "{{pronoun}}的日程",
+      "advanced": "高级",
+      "whoDescription": "性格不用你写——选几下就好。",
+      "canDescription": "这些不用你开——{{pronoun}}生下来就会。",
+      "understandDescription": "给{{pronoun}}一个文件夹，{{pronoun}}就懂你的项目。",
+      "scheduleDescription": "到点自己干，不用你在。"
+    },
+    "advancedLinkLabel": "高级（模型、技术细节、导出）",
+    "persona": {
+      "title": "调整性格",
+      "description": "选三下就好，{{pronoun}}会照着改口气。",
+      "adjustButton": "调整性格",
+      "stepStyle": "说话风格",
+      "stepProactivity": "主动程度",
+      "stepCall": "怎么称呼你",
+      "style": {
+        "concise": {
+          "label": "简洁利落",
+          "description": "一句能说完绝不说两句"
+        },
+        "lively": {
+          "label": "活泼爱聊",
+          "description": "语气轻松，带点表情"
+        },
+        "steady": {
+          "label": "稳重周到",
+          "description": "先讲清楚，再动手"
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "有事才说",
+          "description": "不主动打扰你"
+        },
+        "proactive": {
+          "label": "会主动提醒",
+          "description": "该提醒的会开口"
+        },
+        "reportAll": {
+          "label": "什么都汇报",
+          "description": "做完一件说一件"
+        }
+      },
+      "call": {
+        "name": "直呼名字",
+        "boss": "老板",
+        "custom": "自定义"
+      },
+      "customCallPlaceholder": "让{{pronoun}}怎么叫你",
+      "previewTitle": "现在的{{pronoun}}",
+      "summaryUnset": "还没设置",
+      "summaryCallName": "直呼你名字",
+      "summaryCallBoss": "叫你老板",
+      "summaryCallCustom": "叫你{{name}}",
+      "ack": {
+        "concise": "好，以后就这么说话。",
+        "conciseBoss": "好，老板，以后就这么说话。",
+        "conciseCalled": "好，{{call}}，以后就这么说话。",
+        "lively": "收到～以后我就这个调调啦，你会习惯的 😉",
+        "livelyBoss": "收到～老板，以后我就这个调调啦，你会习惯的 😉",
+        "livelyCalled": "收到～{{call}}，以后我就这个调调啦，你会习惯的 😉",
+        "steady": "明白了。之后我会按这个方式跟你说话，先讲清楚，再动手。",
+        "steadyBoss": "明白了，老板。之后我会按这个方式跟你说话，先讲清楚，再动手。",
+        "steadyCalled": "明白了，{{call}}。之后我会按这个方式跟你说话，先讲清楚，再动手。"
+      }
+    },
+    "memoryList": {
+      "title": "{{pronoun}}记得的",
+      "empty": "还没记住什么——多聊几句就有了。",
+      "clearAll": "清空记忆",
+      "clearing": "清空中…",
+      "clearTitle": "清空记忆",
+      "clearDescription": "清空后{{pronoun}}会忘掉这些事，聊过的内容不受影响。要继续吗？",
+      "clearConfirm": "清空",
+      "deleteTitle": "删除这条记忆",
+      "deleteDescription": "删除“{{title}}”？删除后无法恢复。",
+      "deleteConfirm": "删除",
+      "deleteAria": "删除“{{title}}”",
+      "footnote": "{{pronoun}}会自己往这里记东西，你随时可以删。",
+      "footnoteWithSeed": "有几条是{{pronoun}}加入时自带的，之后{{pronoun}}会自己往这里记。你随时可以删。",
+      "seedBack": "补写{{pronoun}}的开场笔记",
+      "seedingBack": "补写中…"
+    },
+    "learned": {
+      "title": "{{pronoun}}学会的",
+      "empty": "还没长出什么本事——多让{{pronoun}}做几件事。",
+      "notesTitle": "{{pronoun}}给自己记的做法",
+      "deleteTitle": "删除这个技能",
+      "deleteDescription": "删除“{{title}}”？从下一次任务起{{pronoun}}就不会再用它了。",
+      "deleteConfirm": "删除",
+      "deleteAria": "删除“{{title}}”",
+      "loadingBody": "打开中…"
+    },
+    "growth": {
+      "rememberedOne": "记住了：{{title}}",
+      "rememberedMany": "记住了 {{count}} 件事",
+      "rememberedFallback": "记住了一件事",
+      "learnedOne": "学会了一个新本事：{{title}}",
+      "learnedMany": "学会了 {{count}} 个新本事",
+      "learnedFallback": "学会了一个新本事",
+      "hint": "点开看{{pronoun}}记下了什么"
+    },
+    "abilityWall": {
+      "builtinTitle": "自带",
+      "connectableTitle": "可以连上",
+      "abilities": {
+        "writing": "✍️ 写作与文件",
+        "research": "🔍 查资料",
+        "doing": "🛠 动手做事",
+        "schedule": "⏰ 定时干活",
+        "collab": "🤝 和伙伴协作"
+      },
+      "connectAccount": "连接账号",
+      "imBlocked": "一个伙伴只能连一个 IM——先断开 {{channel}}",
+      "connectedTitle": "已连上"
+    },
+    "folders": {
+      "addButton": "＋ 给{{pronoun}}一个文件夹",
+      "adding": "添加中…",
+      "remove": "移除"
+    },
+    "advancedIdentity": {
+      "title": "描述与背景"
+    },
+    "collab": {
+      "joined": "{{name}} 加入了对话",
+      "inboundJoined": "{{name}} 把活交给了你",
+      "guestTag": "客座",
+      "nudge": "催一下",
+      "nudgeSend": "发送",
+      "nudgePlaceholder": "怎么样了？",
+      "nudgeAria": "给 {{name}} 补一句话",
+      "interjected": "你催了 {{name}} 一下",
+      "stop": "停止",
+      "openTask": "看 {{name}} 的对话",
+      "watchWork": "看工作过程",
+      "actionFailed": "没发出去，再试一次。",
+      "retrying": "还没开始，正在重试…",
+      "status": {
+        "queued": "正在开始",
+        "waiting": "等待开始",
+        "running": "正在做",
+        "completed": "已完成",
+        "failed": "失败了",
+        "cancelled": "已停止",
+        "timed-out": "已超时",
+        "unknown": "{{name}} 那边的状态查不到了"
+      },
+      "report": {
+        "done": "{{name}} · 用时 {{duration}} · 完成",
+        "failed": "{{name}} · 用时 {{duration}} · 失败",
+        "failedReason": "{{name}} · 失败：{{reason}}",
+        "stopped": "{{name}} · 用时 {{duration}} · 已停止",
+        "delivered": "{{name}} · 用时 {{duration}} · 交付 {{count}} 件",
+        "timedOut": "{{name}} · 用时 {{duration}} · 超时"
+      },
+      "duration": {
+        "seconds": "{{n}} 秒",
+        "minutes": "{{n}} 分钟",
+        "hoursMinutes": "{{h}} 小时 {{m}} 分"
+      }
+    },
+    "artifacts": {
+      "open": "打开",
+      "openLibrary": "打开作品集",
+      "openFailed": "打不开这件作品，再试一次。",
+      "reveal": "在作品集中查看",
+      "retry": "重试",
+      "subtitle": "{{pronoun}}做出来的东西",
+      "empty": "{{pronoun}}还没交付过东西。做完一件就会收进这里。",
+      "emptyFiltered": "这一类还没有。",
+      "truncated": "只显示最近 200 件。",
+      "remoteUnavailable": "远程任务暂不支持作品集。",
+      "category": {
+        "all": "全部",
+        "doc": "文档",
+        "sheet": "表格",
+        "image": "图片",
+        "deck": "演示",
+        "video": "视频",
+        "other": "其它"
+      },
+      "time": {
+        "justNow": "刚刚",
+        "minutes": "{{n}} 分钟前",
+        "hours": "{{n}} 小时前",
+        "days": "{{n}} 天前"
+      },
+      "subtitleNamed": "{{name}} 做出来的东西",
+      "deliveredBy": "由 {{name}} 交付"
+    },
+    "channelConnect": "连接",
+    "channelDisconnect": "断开",
+    "joined": {
+      "today": "今天加入",
+      "yesterday": "昨天加入",
+      "days": "{{n}} 天前加入",
+      "months": "{{n}} 个月前加入",
+      "years": "{{n}} 年前加入"
+    },
+    "background": {
+      "title": "背景设定",
+      "edit": "编辑",
+      "done": "完成",
+      "placeholder": "{{pronoun}}是谁、负责什么、做事的分寸。",
+      "empty": "还没写背景设定——写几句，{{pronoun}}就更像{{pronoun}}。",
+      "footnote": "这段会跟着{{pronoun}}一起进对话。上面那三档口气单独调，改这里不会动到它。"
+    },
+    "welcome": {
+      "generic": "嗨，我是{{name}}。以后有事直接跟我说，我先熟悉一下这儿。",
+      "withRole": "嗨，我是{{name}}——{{description}}。有事直接跟我说。"
+    }
+  },
   "commonUi": {
+    "retry": "重试",
     "crossAgentConvert": {
       "asking": {
         "title": "检测到工作区配置可转换",
@@ -6700,6 +7732,7 @@
       "browserTab": "浏览器标签",
       "desktopWindow": "应用窗口",
       "task": "任务",
+      "bot": "伙伴委派",
       "pluginResources": "插件资源",
       "pluginResource": "插件资源",
       "backToAll": "返回全部 @ 内容",

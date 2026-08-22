@@ -30,6 +30,12 @@ describe('conversationSearch source invariants', () => {
     expect(conversationSearchSource).toContain('title: row.title,');
   });
 
+  it('keeps ordinary task search on the desktop-visible source boundary by default', () => {
+    expect(conversationSearchSource).toContain(
+      'hostScope.sessionSources === undefined\n    ? DESKTOP_VISIBLE_SESSION_SOURCES',
+    );
+  });
+
   it('applies grouping-normalized workingDirs so remote project search is not window-bound', () => {
     expect(conversationSearchSource).toContain('applyWorkingDirFilter');
     expect(conversationSearchSource).toContain('normalizeWorkingDirForGrouping');

@@ -100,6 +100,91 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  it("exposes Bot delegation through live discovery for a Bot-bound session", async () => {
+    const listBots = vi.fn(async () => ({
+      ok: true as const,
+      bots: [{ id: "bot-b", name: "Dash Bot" }],
+    }));
+    const delegateToBot = vi.fn(async () => ({
+      ok: true as const,
+      delegationId: "delegation-1",
+      childSessionId: "bot-child-session",
+      status: "running",
+    }));
+    const listDelegations = vi.fn(async () => ({ ok: true as const, delegations: [] }));
+    const cancelDelegation = vi.fn(async () => ({
+      ok: true as const,
+      delegationId: "delegation-1",
+      childSessionId: "bot-child-session",
+    }));
+    const interjectDelegation = vi.fn(async () => ({
+      ok: true as const,
+      delegationId: "delegation-1",
+      childSessionId: "bot-child-session",
+      queued: true,
+    }));
+    const server = createXdtHelperMcpServer(
+      {
+        botDelegation: {
+          listBots,
+          delegateToBot,
+          listDelegations,
+          cancelDelegation,
+          interjectDelegation,
+        },
+      },
+      {
+        agentKind: "claude-code",
+        workingDir: "/repo",
+        sessionId: "bot-parent-session",
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "cindy-bot-delegation-test", version: "0.0.0" });
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const discovered = parsePayload(
+        await client.callTool({ name: "list_tools", arguments: { category: "bots" } }),
+      );
+      expect(discovered).toMatchObject({ ok: true, category: "bots" });
+      expect((discovered.tools as Array<{ name: string }>).map((tool) => tool.name).sort()).toEqual([
+        "cancel_bot_delegation",
+        "delegate_to_bot",
+        "interject_bot_delegation",
+        "list_bot_delegations",
+        "list_bots",
+      ]);
+
+      const interjected = await client.callTool({
+        name: "call_tool",
+        arguments: {
+          name: "interject_bot_delegation",
+          args: { delegation_id: "delegation-1", text: "先别写代码，等我确认口径" },
+        },
+      });
+      expect(parsePayload(interjected)).toMatchObject({ ok: true, queued: true });
+      expect(interjectDelegation).toHaveBeenCalledWith({
+        callerSessionId: "bot-parent-session",
+        delegationId: "delegation-1",
+        text: "先别写代码，等我确认口径",
+      });
+
+      const listed = await client.callTool({
+        name: "call_tool",
+        arguments: { name: "list_bots", args: {} },
+      });
+      expect(parsePayload(listed)).toMatchObject({
+        ok: true,
+        bots: [{ id: "bot-b", name: "Dash Bot" }],
+      });
+      expect(listBots).toHaveBeenCalledWith({ callerSessionId: "bot-parent-session" });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("discovers and calls the arbitrary session queue tool through the entry tools", async () => {
     const listSessionQueue = vi.fn(async () => ({
       ok: true as const,

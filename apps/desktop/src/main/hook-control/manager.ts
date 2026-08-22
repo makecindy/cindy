@@ -52,6 +52,7 @@ import {
   type HelloInput,
   type HookMessage,
   type HookProvider,
+  type MessageOpResultPayload,
   type ProviderBindStatusPayload,
   type ProviderBehaviorSetPayload,
   type ProviderBehaviorStatePayload,
@@ -357,6 +358,14 @@ export interface HookControlManager {
     chatId: string,
     mode: TelegramHookGroupActivationMode,
   ): Promise<TelegramHookBehaviorState>;
+  /** Proactive Bot notification through the relay's msg.op receipt path. */
+  sendBotRouteMessage(input: {
+    provider: 'telegram' | 'slack';
+    accountKey: string;
+    externalKey: string;
+    opId: string;
+    text: string;
+  }): Promise<MessageOpResultPayload>;
   /** 登录/切账号后重新打开 account ingress。 */
   activateAccount(): void;
   /** 同步关闭 ingress、取消/中止旧账号任务并等它们越过最终异步边界。 */
@@ -2163,7 +2172,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
     if (msg.type === 'msg.op.result') {
       // 表情回执: 纯装饰动作的结果, 失败只记一行 —— 不重试也不影响任务本身。
-      dispatcher?.onMessageOpResult(msg.payload);
+      dispatcher?.onMessageOpResult(dispatchId(expectedProvider), msg.payload);
       return;
     }
     if (msg.type === 'tool.response') {
@@ -3181,6 +3190,43 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           groupActivation: { chatId, value: mode === 'always' ? 'always' : null },
         }),
       );
+    },
+    sendBotRouteMessage(input) {
+      const provider = providerForExternalKey(input.externalKey);
+      if (provider !== input.provider) {
+        return Promise.resolve({
+          opId: input.opId,
+          ok: false,
+          error: 'ROUTE_PROVIDER_MISMATCH',
+        });
+      }
+      if (input.provider === 'telegram') {
+        const binding = telegramLane.binding;
+        if (
+          binding?.state !== 'confirmed'
+          || binding.scopeId !== input.accountKey
+        ) {
+          return Promise.resolve({
+            opId: input.opId,
+            ok: false,
+            error: 'ROUTE_ACCOUNT_MISMATCH',
+          });
+        }
+      } else if (!activeBindings().some((binding) => binding.teamId === input.accountKey)) {
+        return Promise.resolve({
+          opId: input.opId,
+          ok: false,
+          error: 'ROUTE_ACCOUNT_MISMATCH',
+        });
+      }
+      if (!dispatcher) {
+        return Promise.resolve({ opId: input.opId, ok: false, error: 'DISPATCHER_UNAVAILABLE' });
+      }
+      return dispatcher.sendMessageOp(dispatchId(input.provider), {
+        opId: input.opId,
+        scope: { externalKey: input.externalKey },
+        action: { kind: 'send', text: input.text, tier: 'html' },
+      });
     },
     activateAccount() {
       if (accountDeactivation !== null) {

@@ -27,12 +27,26 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('../../../authManager.js', () => ({ getDeviceId: () => 'test-device' }));
+
 vi.mock('../../../logger', () => ({
   createLogger: () => mocks.logger,
 }));
 
 vi.mock('../slashCommands', () => ({
   looksLikeSlashCommand: (text: string) => text.startsWith('/'),
+}));
+vi.mock('../botRouteTarget', () => ({
+  botRouteSourceForMessage: (channel: string, event: { contextId: string; chatId: string; scopeKey?: string; threadTs?: string }) => {
+    const threadKey = event.threadTs?.trim() || event.scopeKey?.trim() || undefined;
+    return {
+      platform: channel,
+      accountKey: event.contextId,
+      scopeKey: event.contextId,
+      principalKey: event.chatId,
+      ...(threadKey ? { parentPrincipalKey: event.chatId, threadKey } : {}),
+    };
+  },
 }));
 
 import { createMessageHandler } from '../messageHandler';
@@ -106,6 +120,7 @@ function wire(opts: { withPrepare: boolean } = { withPrepare: true }): Harness {
     {
       runAgentTurn,
       persistInboundUserMessageEarly: persistEarly,
+      resolveRouteTarget: vi.fn(async () => null),
       stopActiveTurn: vi.fn(async () => ({ stopped: false, droppedQueued: 0 })),
     } as unknown as ImTurnRunner,
   );

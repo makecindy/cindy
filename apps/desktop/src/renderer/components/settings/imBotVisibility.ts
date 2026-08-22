@@ -51,3 +51,43 @@ export function showLarkBot(identity: ImBotIdentity): boolean {
 export function showTelegramBot(identity: ImBotIdentity): boolean {
   return !isCnPersonalIdentity(identity);
 }
+
+/**
+ * 深链指名了一个当前身份下**根本不存在**的目标 —— 这是能力墙「连接账号」按钮的
+ * 落地问题:那颗按钮只按渠道给路由,不判可见性(判了就会在两处各留一份判据、
+ * 必然漂移)。于是国区个人账号点「连接 Telegram」会跳到 IM 机器人页,而那张卡
+ * 压根没渲染;Slack 更远,它指向的整个「官方」分区都不存在。
+ *
+ * 正确的收口点在设置页自己 —— 它本来就是可见性的权威。这里给出「你要找的东西
+ * 为什么不在」,由页面显示一句说明,而不是让用户对着一页找不到的东西发呆。
+ *
+ * 只覆盖会被深链指名、又真的可能不可见的三个目标。飞书卡在任何身份下都渲染
+ * (Lark 只是它内部的一个开关),微信/企业微信/钉钉同理,都不会落空。
+ */
+export type UnreachableImBotTargetName = 'cindy-group' | 'discord' | 'telegram';
+
+export interface UnreachableImBotTarget {
+  name: UnreachableImBotTargetName;
+  /** `cn-personal` = 中国大陆版个人账号不提供;`local-mode` = 没登录 Cindy 账号。 */
+  reason: 'cn-personal' | 'local-mode';
+}
+
+export function unreachableImBotTarget(
+  identity: ImBotIdentity,
+  target: { group?: string | null; channel?: string | null },
+): UnreachableImBotTarget | null {
+  // 渠道比分区具体,先判它。
+  if (target.channel === 'discord' && !showDiscordBot(identity)) {
+    return { name: 'discord', reason: 'cn-personal' };
+  }
+  if (target.channel === 'telegram' && !showTelegramBot(identity)) {
+    return { name: 'telegram', reason: 'cn-personal' };
+  }
+  if (target.group === 'cindy' && !showCindyGroup(identity)) {
+    return {
+      name: 'cindy-group',
+      reason: identity.mode === 'local' ? 'local-mode' : 'cn-personal',
+    };
+  }
+  return null;
+}

@@ -42,6 +42,7 @@ import type {
   PreRunHookRunResult,
 } from '@cindy/maker-scheduler';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
+import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
@@ -304,6 +305,7 @@ export function sessionCreateToRow(
          * create 由 renderer 透传用户在草稿里选定的来源,使新会话首个请求就走对供应商。
          */
         providerId?: string | null;
+        source?: 'bot';
       }
     | undefined,
   now: number,
@@ -342,6 +344,7 @@ export function sessionCreateToRow(
       typeof body?.providerId === 'string' && body.providerId.trim().length > 0
         ? body.providerId.trim()
         : null,
+    source: body?.source ?? 'desktop',
     createdAt: now,
     updatedAt: now,
   };
@@ -566,7 +569,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
-    source: row.source === 'project' ? 'project' : 'user',
+    source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
     kind: row.kind,
     cronExpr: row.cronExpr,

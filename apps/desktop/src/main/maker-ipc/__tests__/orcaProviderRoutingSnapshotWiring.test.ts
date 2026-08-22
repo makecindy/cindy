@@ -30,6 +30,20 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(registerSource).toContain('getProviderRoutingContext,');
   });
 
+  it('resumes an idle parent with the stored provider so Bot completions can wake it', () => {
+    const start = registerSource.indexOf('async function sendToSessionInternal(params: {');
+    const resume = registerSource.indexOf('const createOpts = buildCreateOptsWithStderr({',
+      registerSource.indexOf('const persistUserMessage = async (): Promise<void> => {', start),
+    );
+    const end = registerSource.indexOf('await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);', resume);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(resume).toBeGreaterThan(start);
+    expect(end).toBeGreaterThan(resume);
+    const lazyResume = registerSource.slice(resume, end);
+    expect(lazyResume).toContain('resumeSessionId: meta.sdkSessionId');
+    expect(lazyResume).toContain('...(dbRow.providerId ? { providerId: dbRow.providerId } : {})');
+  });
+
   it('validates explicit execution config before allocating a handoff worktree', () => {
     const start = registerSource.indexOf('async function sendToSessionInternal(params: {');
     const end = registerSource.indexOf('const newTitle =', start);

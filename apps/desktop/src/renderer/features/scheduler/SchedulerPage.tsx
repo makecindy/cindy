@@ -581,6 +581,9 @@ export function SchedulerPage() {
 
   const handleDelete = useCallback(
     (s: Schedule) => {
+      // Bot automation has a dedicated lifecycle/API. Keep this defensive
+      // guard even though the generic list filters bot-owned schedules.
+      if (s.source === 'bot') return;
       requestDeleteSchedule({
         id: s.id,
         name: s.name,

@@ -13,6 +13,8 @@ import {
 } from './openInSidebarFileBrowser';
 import { openBackgroundTasksTab } from './openBackgroundTasksTab';
 import { openSubagentsTab } from './openSubagentsTab';
+import { openBotDelegationsTab } from './openBotDelegationsTab';
+import { openBotArtifactsTab } from './openBotArtifactsTab';
 import { openTurnReview } from './openTurnReview';
 import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
@@ -57,6 +59,26 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
       ...(command.focusRunId && command.focusProvider
         ? { focusRunId: command.focusRunId, focusProvider: command.focusProvider }
         : {}),
+      focusTab: command.focusTab !== false,
+      revealSidebar: command.revealSidebar !== false,
+      userInitiated: false,
+    });
+    return;
+  }
+  if (command.type === 'open-bot-delegations-tab') {
+    await openBotDelegationsTab(command.sessionId, {
+      ...(command.focusDelegationId
+        ? { focusDelegationId: command.focusDelegationId }
+        : {}),
+      focusTab: command.focusTab !== false,
+      revealSidebar: command.revealSidebar !== false,
+      userInitiated: false,
+    });
+    return;
+  }
+  if (command.type === 'open-bot-artifacts-tab') {
+    await openBotArtifactsTab(command.sessionId, {
+      ...(command.focusArtifactId ? { focusArtifactId: command.focusArtifactId } : {}),
       focusTab: command.focusTab !== false,
       revealSidebar: command.revealSidebar !== false,
       userInitiated: false,

@@ -498,6 +498,10 @@ export const sessionsStore = {
    */
   prependCreated(session: Session): void {
     if (!session?.id) return;
+    // Bot canonical sessions have their own sidebar/history projection. They must
+    // never leak into the regular desktop Session cache through the optimistic
+    // prepend path (the IPC list already excludes source='bot').
+    if (session.source === 'bot') return;
     // 插入前叠乐观预览:createSession 往往先于 sessions:created 刷新返回,但预览
     // 必须在入库前就登记。若不在这里叠,第一帧仍是哨兵,用户会先看到「未命名任务」。
     const [withPreview] = applyAutoTitlePreviews([session]);

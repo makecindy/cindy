@@ -24,6 +24,7 @@ import type { FeishuIM } from '@cindy/im';
 
 import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
 import { sessions } from '../localDb/schema.js';
+import { setSessionsStatusInDb } from '../localDb/ipc/sessions.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import {
   resolveDefaultScheduleRoute,
@@ -43,6 +44,7 @@ import {
   isSchedulerTargetSessionBusy,
   onSchedulerAutoResumeFailed,
   removeQueuedSchedulerPrompt,
+  enqueueBotDelivery,
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
@@ -53,6 +55,10 @@ import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
 import { withScheduleLock } from './scheduleLock';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
+import {
+  BotAutomationScheduleRunner,
+  reconcileBotAutomationRuns,
+} from './bot-automation-runner.js';
 
 export interface StartSchedulerDeps {
   maker: Maker;
@@ -116,12 +122,23 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     notifier,
     getDb: deps.getDb,
   });
+  const botAutomationRunner = new BotAutomationScheduleRunner({
+    delegate: promptRunner,
+    maker: deps.maker,
+    getDb: deps.getDb,
+    logger: deps.logger,
+    onSessionCreated: broadcastSessionCreated,
+    archiveSession: async (sessionId) => {
+      await setSessionsStatusInDb([sessionId], 'archived');
+    },
+    enqueueDelivery: enqueueBotDelivery,
+  });
   const runner: ScheduleRunner = {
     fire: (schedule, ctx) =>
       withScheduleLock(schedule.id, ctx.signal, () =>
         schedule.executionMode === 'script'
           ? scriptRunner.fire(schedule, ctx)
-          : promptRunner.fire(schedule, ctx),
+          : botAutomationRunner.fire(schedule, ctx),
       ),
   };
 
@@ -180,6 +197,38 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
       );
     },
   });
+  let botAutomationReconcileRunning = false;
+  let botAutomationReconcileRequested = false;
+  const reconcileBotRuns = async (): Promise<void> => {
+    botAutomationReconcileRequested = true;
+    if (botAutomationReconcileRunning) return;
+    botAutomationReconcileRunning = true;
+    try {
+      while (botAutomationReconcileRequested) {
+        botAutomationReconcileRequested = false;
+        await reconcileBotAutomationRuns({
+          getDb: deps.getDb,
+          maker: deps.maker,
+          logger: deps.logger,
+          archiveSession: async (sessionId) => {
+            await setSessionsStatusInDb([sessionId], 'archived');
+          },
+          enqueueDelivery: enqueueBotDelivery,
+        });
+      }
+    } finally {
+      botAutomationReconcileRunning = false;
+    }
+  };
+  // A recently crashed Scheduler run may still look live during startup's
+  // heartbeat grace period. When the periodic stale-run sweep later marks it
+  // interrupted, `changed` is the durable handoff that closes the matching Bot
+  // run and archives its hidden task without waiting for another app restart.
+  scheduler.on('changed', () => {
+    void reconcileBotRuns().catch((err) => {
+      deps.logger.warn?.(`[bot-automation] event reconcile failed (non-fatal): ${String(err)}`);
+    });
+  });
   const loader = new ProjectAutomationLoader({
     scheduler,
     storage,
@@ -191,6 +240,11 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
   scriptRunner.attachScheduler(scheduler);
 
   await scheduler.start();
+  try {
+    await reconcileBotRuns();
+  } catch (err) {
+    deps.logger.warn?.(`[bot-automation] startup reconcile failed (non-fatal): ${String(err)}`);
+  }
   try {
     const orphans = await storage.deleteOrphanRuns();
     if (orphans > 0) deps.logger.info?.(`[scheduler-host] cleaned ${orphans} orphan run(s)`);

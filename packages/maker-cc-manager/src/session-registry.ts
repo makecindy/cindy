@@ -14,6 +14,9 @@
  * real @anthropic-ai/claude-agent-sdk. Production binary wires the real SDK.
  */
 
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import path from 'node:path';
+
 import type {
   QueryEventNotification,
   QueryToolGuard,
@@ -163,6 +166,8 @@ export interface CreateSessionOptions {
   disallowedTools?: string[];
   tools?: unknown;
   toolGuards?: QueryToolGuard[];
+  workspaceReadOnly?: boolean;
+  workspaceWritePaths?: string[];
   resumeSdkSessionId?: string;
   extraOptions?: Record<string, unknown>;
 }
@@ -519,19 +524,37 @@ export class SessionRegistry {
         }
       : undefined;
 
-    const hooks = createToolGuardHooks(
-      opts.toolGuards,
-      resolveSubagentModelAccess,
-      () => sessionRef?.toolGuardSelectionText ?? '',
-      () => sessionRef?.toolGuardMcpServerNames ?? EMPTY_MCP_SERVER_NAMES,
-      (toolName, guard) => {
-        this.logger.warn('tool denied by host routing guard', {
-          sessionId: opts.sessionId,
-          toolName,
-          toolNamePrefix: guard.toolNamePrefix,
-          invocation: guard.invocation,
-        });
-      },
+    // 两套 host 闸门叠加(合并 upstream 时保留双方):工作区策略(伙伴任务的
+    // 只读 / 限定可写路径)在前,工具路由与 subagent 模型准入在后。两者都挂
+    // PreToolUse,互不替代——前者管"这个路径能不能写",后者管"这个工具/模型
+    // 能不能用"。
+    const hooks = mergeSdkHooks(
+      createWorkspacePolicyHooks({
+        cwd: opts.cwd,
+        readOnly: opts.workspaceReadOnly === true,
+        writePaths: opts.workspaceWritePaths,
+        onDeny: (toolName, reason) => {
+          this.logger.warn('tool denied by host workspace policy', {
+            sessionId: opts.sessionId,
+            toolName,
+            reason,
+          });
+        },
+      }),
+      createToolGuardHooks(
+        opts.toolGuards,
+        resolveSubagentModelAccess,
+        () => sessionRef?.toolGuardSelectionText ?? '',
+        () => sessionRef?.toolGuardMcpServerNames ?? EMPTY_MCP_SERVER_NAMES,
+        (toolName, guard) => {
+          this.logger.warn('tool denied by host routing guard', {
+            sessionId: opts.sessionId,
+            toolName,
+            toolNamePrefix: guard.toolNamePrefix,
+            invocation: guard.invocation,
+          });
+        },
+      ),
     );
 
     const sdkOpts: SdkQueryFactoryOptions = {
@@ -1141,6 +1164,168 @@ function toolGuardSelectionAddedByPlanEdit(
     }
   }
   return [...added].filter(Boolean).join('\n');
+}
+
+const WORKSPACE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+const PROTECTED_WORKSPACE_CONTROL_DIRS = new Set(['.git', '.agents', '.codex']);
+
+function invalidWorkspacePolicy(message: string): never {
+  const error = new Error(message) as Error & { code: 'INVALID_PARAMS' };
+  error.code = 'INVALID_PARAMS';
+  throw error;
+}
+
+function resolveThroughExistingParent(candidate: string): string | null {
+  const absolute = path.resolve(candidate);
+  if (existsSync(absolute)) {
+    try {
+      return realpathSync(absolute);
+    } catch {
+      return null;
+    }
+  }
+  const missing: string[] = [];
+  let cursor = absolute;
+  for (let depth = 0; depth < 128; depth += 1) {
+    missing.unshift(path.basename(cursor));
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return null;
+    cursor = parent;
+    if (!existsSync(cursor)) continue;
+    try {
+      return path.resolve(realpathSync(cursor), ...missing);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function isInsidePath(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+function isProtectedWorkspaceControlPath(candidate: string, cwd: string): boolean {
+  const relative = path.relative(path.resolve(cwd), path.resolve(candidate));
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`)) return false;
+  return PROTECTED_WORKSPACE_CONTROL_DIRS.has(relative.split(path.sep)[0] ?? '');
+}
+
+function normalizeWorkspaceWritePaths(cwd: string, writePaths: readonly string[]): string[] {
+  const resolvedCwd = resolveThroughExistingParent(cwd);
+  if (!resolvedCwd) invalidWorkspacePolicy('Bot workspace cwd cannot be resolved');
+  return writePaths.map((candidate) => {
+    if (!path.isAbsolute(candidate)) {
+      invalidWorkspacePolicy('workspaceWritePaths must contain absolute paths');
+    }
+    const resolved = resolveThroughExistingParent(candidate);
+    if (!resolved || !isInsidePath(resolved, resolvedCwd)) {
+      invalidWorkspacePolicy('workspaceWritePaths must remain inside cwd');
+    }
+    if (
+      isProtectedWorkspaceControlPath(candidate, cwd)
+      || isProtectedWorkspaceControlPath(resolved, resolvedCwd)
+    ) {
+      invalidWorkspacePolicy('workspaceWritePaths cannot include workspace control directories');
+    }
+    return resolved;
+  });
+}
+
+function structuredWorkspaceWriteTarget(toolName: string, input: unknown): string | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const body = input as Record<string, unknown>;
+  const fields = toolName === 'NotebookEdit'
+    ? ['notebook_path', 'file_path', 'path']
+    : ['file_path', 'path'];
+  for (const field of fields) {
+    const value = body[field];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function workspaceWriteTargetAllowed(
+  candidate: string,
+  cwd: string,
+  writePaths: readonly string[],
+): boolean {
+  const resolved = resolveThroughExistingParent(path.resolve(cwd, candidate));
+  const resolvedCwd = resolveThroughExistingParent(cwd);
+  if (!resolved || !resolvedCwd) return false;
+  if (
+    isProtectedWorkspaceControlPath(path.resolve(cwd, candidate), cwd)
+    || isProtectedWorkspaceControlPath(resolved, resolvedCwd)
+  ) return false;
+  return writePaths.some((grant) => {
+    try {
+      if (existsSync(grant) && statSync(grant).isFile()) return resolved === grant;
+    } catch {
+      return false;
+    }
+    return isInsidePath(resolved, grant);
+  });
+}
+
+function createWorkspacePolicyHooks(input: {
+  cwd: string;
+  readOnly: boolean;
+  writePaths?: readonly string[];
+  onDeny: (toolName: string, reason: string) => void;
+}): SdkHooks | undefined {
+  if (input.readOnly && input.writePaths && input.writePaths.length > 0) {
+    invalidWorkspacePolicy('workspaceReadOnly and workspaceWritePaths cannot both be set');
+  }
+  const writePaths = input.writePaths && input.writePaths.length > 0
+    ? normalizeWorkspaceWritePaths(input.cwd, input.writePaths)
+    : [];
+  if (!input.readOnly && writePaths.length === 0) return undefined;
+
+  const guardWorkspace: SdkHookCallback = async (rawInput) => {
+    if (typeof rawInput !== 'object' || rawInput === null) return { continue: true };
+    const hook = rawInput as Record<string, unknown>;
+    if (hook.hook_event_name !== 'PreToolUse' || typeof hook.tool_name !== 'string') {
+      return { continue: true };
+    }
+    const toolName = hook.tool_name;
+    let reason: string | null = null;
+    if (input.readOnly && (toolName === 'Bash' || WORKSPACE_WRITE_TOOLS.has(toolName))) {
+      reason = 'This Cindy Bot project is mounted read-only.';
+    } else if (writePaths.length > 0 && toolName === 'Bash') {
+      reason = 'This Cindy Bot has a restricted write scope. Shell commands are disabled because their write targets cannot be proven safe.';
+    } else if (writePaths.length > 0 && WORKSPACE_WRITE_TOOLS.has(toolName)) {
+      const target = structuredWorkspaceWriteTarget(toolName, hook.tool_input);
+      if (!target || !workspaceWriteTargetAllowed(target, input.cwd, writePaths)) {
+        reason = 'This path is outside the Cindy Bot project write allowlist.';
+      }
+    }
+    if (!reason) return { continue: true };
+    input.onDeny(toolName, reason);
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: reason,
+      },
+    };
+  };
+  return { PreToolUse: [{ hooks: [guardWorkspace] }] };
+}
+
+function mergeSdkHooks(...sets: Array<SdkHooks | undefined>): SdkHooks | undefined {
+  const merged: SdkHooks = {};
+  for (const set of sets) {
+    for (const [event, groups] of Object.entries(set ?? {})) {
+      merged[event] = [...(merged[event] ?? []), ...groups];
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 const EMPTY_MCP_SERVER_NAMES: ReadonlySet<string> = new Set();

@@ -29,6 +29,7 @@ import {
   reviewFailureCodeFromLegacyError,
   type ReviewFailureCode,
 } from '../../../shared/reviewRun';
+import { BotCollaborationCard } from '@/features/bots/BotCollaborationCard';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -53,6 +54,7 @@ interface SystemCardProps {
     | 'auto-resume'
     | 'auto-resume-pending'
     | 'agent-switch'
+    | 'bot-collab'
     | 'context-rebuild';
   data?: Record<string, unknown>;
   /**
@@ -1309,6 +1311,8 @@ export function SystemCard({
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':
       return <ReviewCard data={data} workingDir={workingDir} />;
+    case 'bot-collab':
+      return <BotCollaborationCard data={data} sessionId={sessionId} />;
     default:
       return null;
   }

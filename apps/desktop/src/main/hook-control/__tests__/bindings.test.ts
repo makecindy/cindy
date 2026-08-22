@@ -115,4 +115,45 @@ describe('hook binding store', () => {
 
     expect(store.get('conn-1', 'k')).toBeNull();
   });
+
+  it('migration snapshot 批量删除并可恢复，且不覆盖无关绑定', () => {
+    const store = makeStore();
+    store.set('conn-1', 'a', 'sess-a');
+    store.set('conn-1', 'b', 'sess-b');
+    store.set('conn-2', 'c', 'sess-c');
+    const snapshot = store.list().filter((row) => row.connectionId === 'conn-1');
+
+    store.removeMany(snapshot);
+    expect(store.get('conn-1', 'a')).toBeNull();
+    expect(store.get('conn-1', 'b')).toBeNull();
+    expect(store.get('conn-2', 'c')).toBe('sess-c');
+
+    store.set('conn-2', 'new', 'sess-new');
+    store.restoreMany(snapshot);
+    expect(store.get('conn-1', 'a')).toBe('sess-a');
+    expect(store.get('conn-1', 'b')).toBe('sess-b');
+    expect(store.get('conn-2', 'c')).toBe('sess-c');
+    expect(store.get('conn-2', 'new')).toBe('sess-new');
+  });
+
+  it('removeMany 只删除仍指向快照 session 的行', () => {
+    const store = makeStore();
+    store.set('conn-1', 'a', 'old-session');
+    const [snapshot] = store.list();
+    store.set('conn-1', 'a', 'new-session');
+
+    store.removeMany([snapshot]);
+    expect(store.get('conn-1', 'a')).toBe('new-session');
+  });
+
+  it('restoreMany 不覆盖迁移后新建的同 lane binding', () => {
+    const store = makeStore();
+    store.set('conn-1', 'a', 'old-session');
+    const [snapshot] = store.list();
+    store.removeMany([snapshot]);
+    store.set('conn-1', 'a', 'new-session');
+
+    expect(store.restoreMany([snapshot])).toEqual({ restored: 0, skippedConflicts: 1 });
+    expect(store.get('conn-1', 'a')).toBe('new-session');
+  });
 });

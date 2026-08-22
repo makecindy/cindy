@@ -43,14 +43,26 @@ export interface TextChannelIM {
   sendText(
     userId: string,
     text: string,
-    opts?: { threadTs?: string; fallbackOpenerId?: string },
+    opts?: {
+      threadTs?: string;
+      /** Stable provider operation id when the transport supports native dedupe. */
+      idempotencyKey?: string;
+      /** Consume a pending group opener when the rich adapter supports it. */
+      fallbackOpenerId?: string;
+    },
   ): Promise<{ messageId: string }>;
 
   /** 渲染 markdown 的文本消息(粗体 / 行内 code / 链接等)。 */
   sendMarkdownText(
     userId: string,
     markdown: string,
-    opts?: { threadTs?: string; fallbackOpenerId?: string },
+    opts?: {
+      threadTs?: string;
+      /** Stable provider operation id when the transport supports native dedupe. */
+      idempotencyKey?: string;
+      /** Consume a pending group opener when the rich adapter supports it. */
+      fallbackOpenerId?: string;
+    },
   ): Promise<{ messageId: string }>;
 
   /** 发送本地文件;失败原因见 SendFileResult.reason。 */
@@ -58,7 +70,11 @@ export interface TextChannelIM {
     userId: string,
     absPath: string,
     displayName?: string,
-    opts?: { threadTs?: string },
+    opts?: {
+      threadTs?: string;
+      /** Stable provider operation id when the transport supports native dedupe. */
+      idempotencyKey?: string;
+    },
   ): Promise<SendFileResult>;
 
   // ── optional capabilities ──────────────────────────────────────────────────

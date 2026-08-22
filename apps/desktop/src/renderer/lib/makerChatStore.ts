@@ -68,6 +68,10 @@ import { normalizeAgentInputClearBoundaryMs } from '../../shared/agentInputQueue
 import { hasUserVisibleText } from '../../shared/visibleText';
 import { readReviewRunMeta } from '../../shared/reviewRun';
 import {
+  readBotCollaborationMeta,
+  readBotDelegationCompletionBody,
+} from '../../shared/botCollaboration';
+import {
   deriveAutoTitleSeed,
   reconcileSessionRefsForText,
   type AutoTitleFallbackLabels,
@@ -483,8 +487,26 @@ export interface ChatMessage {
      */
     | 'auto-resume-pending'
     | 'agent-switch'
+    /**
+     * 伙伴协作卡：委派创建时落在发起方消息流里的锚点（「<目标> 加入了对话」），
+     * 以及对进行中委派的插话留痕。同 'goal-complete'，由持久化的
+     * agentMeta.botCollaboration 派生，重开会话仍在。
+     */
+    | 'bot-collab'
     | 'context-rebuild';
   systemCardData?: Record<string, unknown>;
+  /**
+   * 客座标记：这条气泡的作者不是本任务的主人，而是一次委派里的另一方（发起方任务里
+   * 目标伙伴回传的结果，或目标主任务里收到的委派请求）。renderer 据此换头像、加
+   * 「客座」标签，并提供跳到对方任务的入口。
+   */
+  guestBot?: {
+    botId: string;
+    name: string;
+    delegationId: string;
+    /** 点「看 TA 的对话」要跳去的任务；两侧方向相反，由投影时决定。 */
+    linkedSessionId: string | null;
+  };
   /** FP-3: plan_review message fields */
   planReviewStatus?: 'pending' | 'approved' | 'revised' | 'expired' | 'cancelled';
   planReviewRequestId?: string;
@@ -15709,6 +15731,32 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         },
       };
     }
+    // 伙伴协作：委派锚点与插话留痕 → 'bot-collab' 内联卡(同 goal-complete,从持久化
+    // 的 agentMeta 派生,重开会话仍在)。没有标记的老镜像消息不会命中,继续按普通文本
+    // 渲染 —— 本批不回填历史。
+    const collaboration = readBotCollaborationMeta(m.agentMeta?.botCollaboration);
+    if (
+      m.role === 'assistant'
+      && (
+        collaboration?.role === 'delegation-request'
+        || collaboration?.role === 'interjection'
+        || collaboration?.role === 'guest-request'
+        || collaboration?.role === 'result-mirror'
+      )
+    ) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'bot-collab' as const,
+        systemCardData: {
+          ...collaboration,
+          // 插话卡要显示催的是哪句话；锚点卡正文为空。
+          text: typeof m.content === 'string' ? m.content : '',
+        },
+      };
+    }
     // image-local-cache: user role messages may have JSON-shaped content
     // ({ text, images: ImageRef[], files: FileRef[] }) — pull text + images
     // + files out, keep all three. Older plain-text messages fall through
@@ -15759,7 +15807,32 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           },
         };
       }
-      const parsed = parseUserContent(m.content);
+      // 客座气泡：这条 user 行不是「用户说的话」，是委派另一方送进本任务的内容
+      // ——发起方任务里目标伙伴回传的结果，或目标主任务里收到的委派请求。作者身份
+      // 与跳转方向都来自结构化标记，不靠正文猜。
+      const guestBot = collaboration?.role === 'guest-result'
+        ? {
+            botId: collaboration.toBotId,
+            name: collaboration.toBotName,
+            delegationId: collaboration.delegationId,
+            linkedSessionId: collaboration.childSessionId,
+          }
+        : collaboration?.role === 'guest-request'
+          ? {
+              botId: collaboration.fromBotId,
+              name: collaboration.fromBotName,
+              delegationId: collaboration.delegationId,
+              linkedSessionId: collaboration.parentSessionId,
+            }
+          : null;
+      const parsed = parseUserContent(
+        guestBot && collaboration?.role === 'guest-result' && typeof m.content === 'string'
+          ? (() => {
+              const body = readBotDelegationCompletionBody(m.content);
+              return body.error ? [body.text, body.error].filter(Boolean).join('\n\n') : body.text;
+            })()
+          : m.content,
+      );
       // scheduler 注入的消息带 agentMeta.origin(历史加载与 messages:created
       // 直推两条路径都经过这里),透传给 UserMessage 渲染来源标签。
       const origin = m.agentMeta?.origin;
@@ -15790,6 +15863,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         ...(delivery === 'turn' || delivery === 'steer' ? { delivery } : {}),
         ...(goalObjective ? { goalBadge: goalObjective } : {}),
         ...(hookSource ? { hookSource } : {}),
+        ...(guestBot ? { guestBot } : {}),
         // 子代理内部的 user 行(SDK parent_tool_use_id):投影给计划归属判定,
         // 否则 maker-shared 会把它当成"用户开新话题"切断主线程计划 session。
         // 只提升 SDK tool-parent 形态:legacy Claude 导入把 transcript 链边

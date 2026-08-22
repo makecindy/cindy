@@ -28,7 +28,7 @@ import { getScheduler } from '../scheduler-host/index.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { searchSessionsFn } from '../maker-host/session-search.js';
 import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
-import { tryGetOrcaCollabService } from '../maker-ipc/register.js';
+import { tryGetBotDelegationService, tryGetOrcaCollabService } from '../maker-ipc/register.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
 import {
   listWorkdirsForHistory,
@@ -40,6 +40,17 @@ import {
   tryGetDbClient,
 } from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
+import { resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
+import {
+  deleteBotDurableNote,
+  getBotDurableNote,
+  listBotDurableNotes,
+  setBotDurableNote,
+} from '../maker-ipc/botDurableNoteService.js';
+import {
+  listBotSkillsForSession,
+  saveBotSkillForSession,
+} from '../maker-ipc/botSkillService.js';
 import {
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
@@ -51,12 +62,13 @@ import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js'
 import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 import { readContactsSettings } from '../maker-host/contacts-settings-store.js';
 import { readSystemContacts, writeSystemContacts } from '../maker-host/system-contacts.js';
-import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
-import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
-  readChatHistoryMessages,
-  type ChatHistoryReaderDeps,
-} from './remoteChatHistory.js';
+  BUILTIN_LIZI_MCP_IDS,
+  pluginIdForProviderName,
+} from '../maker-host/plugins/builtin-plugins.js';
+import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
+import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
+import { readChatHistoryMessages, type ChatHistoryReaderDeps } from './remoteChatHistory.js';
 
 export interface DesktopMcpProvidersDeps {
   getMakerMemoryManager: () => MakerMemoryManager;
@@ -64,9 +76,7 @@ export interface DesktopMcpProvidersDeps {
   /** 按会话控制启用状态的 plugin registry。 */
   pluginRegistry: PluginRegistry;
   /** Live installed/enabled plugin gate; evaluated again for every tool call. */
-  resolveIOSSimulatorAccess: (
-    context?: { workingDir?: string },
-  ) => IOSSimulatorMcpAccessDecision;
+  resolveIOSSimulatorAccess: (context?: { workingDir?: string }) => IOSSimulatorMcpAccessDecision;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: ChatHistoryReaderDeps['invokeRemote'];
   /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
@@ -92,7 +102,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
 
   // 辅助桥接 OrcaCollabService → OrcaMcpDeps / sendToSession，
   // 并在边界捕获 HOST_NOT_READY / INTERNAL。
-  function wrap<Args extends unknown[], R>(fn: (svc: NonNullable<ReturnType<typeof tryGetOrcaCollabService>>, ...args: Args) => Promise<R>): (...args: Args) => Promise<R> {
+  function wrap<Args extends unknown[], R>(
+    fn: (svc: NonNullable<ReturnType<typeof tryGetOrcaCollabService>>, ...args: Args) => Promise<R>,
+  ): (...args: Args) => Promise<R> {
     return async (...args) => {
       const s = tryGetOrcaCollabService();
       if (!s) return { ok: false, errorCode: 'HOST_NOT_READY' as const, message: 'orca collab service not initialized' } as R;
@@ -164,7 +176,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const { messageId } = await feishuIm.sendMarkdownText(chatId, markdown);
           return { ok: true, messageId };
         } catch (err) {
-          const r = (err as { response?: { data?: { code?: number; msg?: string }; status?: number } }).response;
+          const r = (
+            err as { response?: { data?: { code?: number; msg?: string }; status?: number } }
+          ).response;
           const detail = r
             ? `status=${r.status ?? 'n/a'} code=${r.data?.code ?? '?'} msg=${r.data?.msg ?? '?'}`
             : err instanceof Error
@@ -181,8 +195,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_feishu_bot'),
     },
     wechatBot: {
-      getActivePeerIdForSession: (sessionId) =>
-        wechatIm.getActivePeerIdForSession(sessionId),
+      getActivePeerIdForSession: (sessionId) => wechatIm.getActivePeerIdForSession(sessionId),
       getMostRecentPeerId: () => wechatIm.getMostRecentPeerId(),
       sendMessage: async (peerId, text) => {
         try {
@@ -386,14 +399,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }) => {
         const svc = tryGetOrcaCollabService();
         if (!svc) {
-          return { ok: false, errorCode: 'HOST_NOT_READY', message: 'orca collab service not initialized' };
+          return {
+            ok: false,
+            errorCode: 'HOST_NOT_READY',
+            message: 'orca collab service not initialized',
+          };
         }
         try {
           const hasExecutionOverrides =
-            agentKind !== undefined
-            || model !== undefined
-            || effort !== undefined
-            || fast !== undefined;
+            agentKind !== undefined ||
+            model !== undefined ||
+            effort !== undefined ||
+            fast !== undefined;
           return await svc.sendToSession({
             targetSessionId,
             message,
@@ -413,10 +430,103 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               : {}),
           });
         } catch (err) {
-          return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+          return {
+            ok: false,
+            errorCode: 'INTERNAL',
+            message: err instanceof Error ? err.message : String(err),
+          };
         }
       },
+      botDelegation: {
+        listBots: async ({ callerSessionId }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Bot delegation service not initialized',
+            };
+          }
+          return svc.listBots(callerSessionId);
+        },
+        delegateToBot: async (params) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Bot delegation service not initialized',
+            };
+          }
+          try {
+            return await svc.delegateToBot(params);
+          } catch (err) {
+            return {
+              ok: false,
+              errorCode: 'INTERNAL',
+              message: err instanceof Error ? err.message : String(err),
+            };
+          }
+        },
+        listDelegations: async ({ callerSessionId, status }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Bot delegation service not initialized',
+            };
+          }
+          return svc.listDelegations(callerSessionId, status);
+        },
+        cancelDelegation: async ({ callerSessionId, delegationId }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Bot delegation service not initialized',
+            };
+          }
+          return svc.cancelDelegation(callerSessionId, delegationId);
+        },
+        interjectDelegation: async ({ callerSessionId, delegationId, text, idempotencyKey }) => {
+          const svc = tryGetBotDelegationService();
+          if (!svc) {
+            return {
+              ok: false,
+              errorCode: 'HOST_NOT_READY',
+              message: 'Bot delegation service not initialized',
+            };
+          }
+          return svc.interjectDelegation(callerSessionId, delegationId, text, idempotencyKey);
+        },
+      },
+      botDurableNotes: {
+        list: listBotDurableNotes,
+        get: getBotDurableNote,
+        set: setBotDurableNote,
+        delete: deleteBotDurableNote,
+      },
+      // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
+      botSkills: {
+        save: (params) => saveBotSkillForSession(params),
+        list: (params) => listBotSkillsForSession(params),
+      },
       history: {
+        resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {
+          try {
+            const sessionIds = await resolveBotHistorySessionIds(
+              callerSessionId,
+              callerMemoryScopeKey,
+            );
+            return { ok: true, sessionIds };
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const errorCode = /localDb not ready/i.test(message) ? 'HOST_NOT_READY' : 'INTERNAL';
+            return { ok: false, errorCode, message };
+          }
+        },
         listWorkdirs: async (args) => {
           try { const page = await listWorkdirsForHistory(args); return { ok: true, page }; }
           catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
@@ -477,9 +587,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // 全局启用但项目停用的工具仍暴露、反向配置则永久缺席，codex review）。机器级工具
         // 仍沿用现有 spawn-time gate + 环境重建语义。
         const deferOrdinaryGate =
-          (ctx.agentKind === 'codex' || ctx.agentKind === 'pi')
-          && !ctx.workingDir
-          && !GLOBAL_PLUGIN_IDS.has(pluginId);
+          (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') &&
+          !ctx.workingDir &&
+          !GLOBAL_PLUGIN_IDS.has(pluginId);
         // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
         // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
         const keepOrcaProviderStable = pluginId === 'collab';
@@ -487,6 +597,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         // is installed. Its live call gate returns an actionable install/enable
         // result, while every runtime mutation remains blocked in Main.
         const keepIOSSimulatorGatewayStable = pluginId === 'ios-simulator';
+        // Stable providers may ignore a live global/project toggle so an
+        // already-running ordinary task can recover, but a Bot Profile is an
+        // immutable per-runtime capability boundary and must always win.
+        if (!isFrozenBuiltinPluginAllowed(ctx.vendorOptions, pluginId)) {
+          return false;
+        }
         // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
         if (
           !keepOrcaProviderStable &&

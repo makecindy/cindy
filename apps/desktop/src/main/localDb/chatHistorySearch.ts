@@ -113,6 +113,18 @@ interface SearchChatHistoryEngineArgs extends SearchChatHistoryArgs {
 export async function searchChatHistoryHybrid(
   args: SearchChatHistoryEngineArgs,
 ): Promise<SearchChatHistoryResult> {
+  if (args.sessionIds !== null && args.sessionIds.length === 0) {
+    return {
+      hits: [],
+      sessions: {},
+      vectorUsed: false,
+      vectorSkipReason: '当前任务没有可访问的历史。',
+      nextOffset: null,
+      hasMore: false,
+      poolSize: 0,
+      poolCapped: false,
+    };
+  }
   // 1) 两路召回(FTS 同步; vector 异步, 失败静默跳过)
   // workdir 候选按 DB 实际拼写解析一次, 两路 arm 复用(见 workingDirHistoryFilter)
   const workdirCandidates =

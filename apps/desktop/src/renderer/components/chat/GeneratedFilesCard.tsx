@@ -39,6 +39,10 @@ import {
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
+import { BotArtifactCard } from '@/features/bots/BotArtifactCard';
+import { useBotArtifactOpen } from '@/features/bots/useBotArtifactOpen';
+import { openBotArtifactsTab } from '@/features/right-sidebar/lib/openBotArtifactsTab';
+import { makeBotArtifact } from '../../../shared/botArtifact';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
@@ -179,14 +183,71 @@ export function isLocalGeneratedFileInTurn(
 /** 折叠阈值:约两行 chip。超过则收起为「前 N 个 + 再显示 M 个文件」。 */
 const MAX_VISIBLE_FILES = 6;
 
+/**
+ * 伙伴会话的产出:同一批文件换成交付物卡。存在性判定、时间窗过滤、远程复核
+ * 全部沿用上面那套 —— 这里只换外观与动作,不换「哪些文件算本轮产出」的口径。
+ *
+ * 体积来自**上面那一轮已经做过的 stat**(存在性 + 时间窗校验那一轮),不为一张卡
+ * 再打一轮 IPC。远程会话与老被控端的 stat 不带 size,那时元信息退回「类型 · 时间」
+ * ——少一段,但不编。
+ */
+function BotDeliverablesBlock({
+  files,
+  sizeByPath,
+  sessionId,
+  createdAt,
+}: {
+  files: readonly GeneratedFileRef[];
+  sizeByPath: ReadonlyMap<string, number>;
+  sessionId: string;
+  createdAt: number;
+}) {
+  const { t } = useTranslation();
+  const { openArtifact, artifactLightboxes } = useBotArtifactOpen();
+  const items = files.map((file) => {
+    const sizeBytes = sizeByPath.get(file.path);
+    return makeBotArtifact({
+      source: 'generated',
+      target: file.path,
+      isRef: false,
+      name: file.name,
+      createdAt,
+      ...(typeof sizeBytes === 'number' ? { sizeBytes } : {}),
+    });
+  });
+  return (
+    <div className="my-1 flex flex-col gap-1.5">
+      <span className="text-12 text-[var(--text-secondary)]">{t('chat.generatedFiles.title')}</span>
+      {items.map((item) => (
+        <BotArtifactCard
+          key={item.id}
+          item={item}
+          onOpen={(target) => void openArtifact(target)}
+          onReveal={(target) =>
+            void openBotArtifactsTab(sessionId, { focusArtifactId: target.id })
+          }
+        />
+      ))}
+      {artifactLightboxes}
+    </div>
+  );
+}
+
 export function GeneratedFilesCard({
   files,
   turnStartMs,
   turnEndMs,
+  botSessionId,
 }: {
   files: readonly GeneratedFileRef[];
   turnStartMs: number | null;
   turnEndMs: number | null;
+  /**
+   * 非空 = 这是一场跟伙伴的对话:本轮产出升级为「交付物卡」(类型区 + 标题 +
+   * 元信息 + hover 动作),并可以就地跳去 TA 的交付物仓库。普通任务传 undefined,
+   * 渲染路径与本改动前逐字节一致。
+   */
+  botSessionId?: string | undefined;
 }) {
   const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
@@ -197,6 +258,11 @@ export function GeneratedFilesCard({
   const [existing, setExisting] = useState<GeneratedFileRef[] | null>(
     remoteOrigin ? files.filter((f) => f.source === 'tool') : null,
   );
+  /**
+   * 本地 stat 顺手带回的字节数(path → size)。伙伴对话的交付物卡拿它补「体积」那
+   * 一段;远程分支不 stat 本机文件,留空即可。
+   */
+  const [sizeByPath, setSizeByPath] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
@@ -220,17 +286,22 @@ export function GeneratedFilesCard({
       };
     }
     void (async () => {
+      const sizes = new Map<string, number>();
       const checks = await Promise.all(
         files.map(async (f) => {
           try {
             const r = await window.electronAPI.fsBrowse.statPath(f.path);
+            if (typeof r.sizeBytes === 'number') sizes.set(f.path, r.sizeBytes);
             return isLocalGeneratedFileInTurn(f, r, turnStartMs, turnEndMs);
           } catch {
             return false;
           }
         }),
       );
-      if (!cancelled) setExisting(files.filter((_, idx) => checks[idx]));
+      if (!cancelled) {
+        setSizeByPath(sizes);
+        setExisting(files.filter((_, idx) => checks[idx]));
+      }
     })();
     return () => {
       cancelled = true;
@@ -238,6 +309,17 @@ export function GeneratedFilesCard({
   }, [files, remoteOrigin, turnStartMs, turnEndMs, fileCtx.workingDir]);
 
   if (!existing || existing.length === 0) return null;
+
+  if (botSessionId) {
+    return (
+      <BotDeliverablesBlock
+        files={existing}
+        sizeByPath={sizeByPath}
+        sessionId={botSessionId}
+        createdAt={turnEndMs ?? turnStartMs ?? Date.now()}
+      />
+    );
+  }
 
   // 折叠(对标 Codex 的可展开产物列表):超过 MAX_VISIBLE_FILES 时只显示前
   // MAX_VISIBLE_FILES 个 + 「再显示 N 个文件」;展开后提供「收起」回折。

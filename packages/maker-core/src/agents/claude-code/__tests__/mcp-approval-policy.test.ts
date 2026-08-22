@@ -923,6 +923,36 @@ describe('a custom server cannot take over a builtin name', () => {
     await handle.close();
   });
 
+  it('omits a locally hosted MCP server disabled by the frozen Bot Toolset snapshot', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const deps = createDeps();
+    deps.mcpProviders = [{
+      name: 'cindy_browser',
+      isEnabled: (context) => {
+        const disabled = context.vendorOptions?.__cindyDisabledBuiltinPluginIds;
+        return !Array.isArray(disabled) || !disabled.includes('browser');
+      },
+      toClaudeSdkConfig: () => ({ type: 'sdk', marker: 'browser' }),
+    }] as McpProvider[];
+
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'bot-local-claude-toolset',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+      vendorOptions: { __cindyDisabledBuiltinPluginIds: ['browser'] },
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, unknown>
+      | undefined;
+    expect(mcpServers?.cindy_browser).toBeUndefined();
+    await handle.close();
+  });
+
   it('keeps the first registration when two providers share a name', async () => {
     const configs: Array<{ name: string; marker: string }> = [];
     const contexts: McpToolApprovalContext[] = [];

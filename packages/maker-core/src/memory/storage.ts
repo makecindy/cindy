@@ -75,8 +75,22 @@ export function buildMemoryScopeKey(workingDir: string, remoteHostId?: string | 
   return remoteHostId ? `ssh:${encodeURIComponent(remoteHostId)}:${workingDir}` : workingDir;
 }
 
+/**
+ * Cindy Bot 的长期记忆作用域。
+ *
+ * Bot 可以在多个项目、route 和远端 Host 上工作；用 workingDir 分区会让同一个 Bot
+ * 的记忆被切碎，也会让两个 Bot 在同一项目里互相污染。Profile runtime 因此把
+ * Bot id 映射成独立且稳定的 scope key，所有 harness prompt 与 cindy_memory MCP
+ * 都使用同一个 key。
+ */
+export function buildBotMemoryScopeKey(botId: string): string {
+  if (!botId.trim()) throw new Error('buildBotMemoryScopeKey: botId required');
+  return `bot:${encodeURIComponent(botId.trim())}`;
+}
+
 /** buildMemoryScopeKey 的远端键前缀。本地键恒为绝对路径, 不会以它开头。 */
 const SSH_SCOPE_KEY_PREFIX = 'ssh:';
+const BOT_SCOPE_KEY_PREFIX = 'bot:';
 
 /**
  * scope key → 落盘目录名。本地键沿用 sanitizeWorkdir(既有目录不迁移);远端
@@ -88,6 +102,11 @@ const SSH_SCOPE_KEY_PREFIX = 'ssh:';
  * 只为肉眼可辨识。
  */
 export function memoryScopeDirName(scopeKey: string): string {
+  if (scopeKey.startsWith(BOT_SCOPE_KEY_PREFIX)) {
+    const botSegment = scopeKey.slice(BOT_SCOPE_KEY_PREFIX.length);
+    const digest = createHash('sha256').update(scopeKey, 'utf8').digest('hex').slice(0, 16);
+    return `bot-${sanitizeWorkdir(botSegment).slice(0, 24)}-${digest}`;
+  }
   if (!scopeKey.startsWith(SSH_SCOPE_KEY_PREFIX)) return sanitizeWorkdir(scopeKey);
   const hostSegment = scopeKey.slice(SSH_SCOPE_KEY_PREFIX.length).split(':', 1)[0] ?? '';
   const digest = createHash('sha256').update(scopeKey, 'utf8').digest('hex').slice(0, 16);

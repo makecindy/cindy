@@ -17,7 +17,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getLiziMcpSessionContext } from '@cindy/mcps';
 import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
 
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => '/tmp/cindy-pi-environment-test') },
+}));
+
 import type { Logger, McpProvider } from '@cindy/maker-core';
+import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
 import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
@@ -39,7 +44,10 @@ function noopLogger(): Logger {
   return logger;
 }
 
-function recordingLogger(): { logger: Logger; entries: Array<{ message: string; ctx?: Record<string, unknown> }> } {
+function recordingLogger(): {
+  logger: Logger;
+  entries: Array<{ message: string; ctx?: Record<string, unknown> }>;
+} {
   const entries: Array<{ message: string; ctx?: Record<string, unknown> }> = [];
   const record = (message: string, ctx?: Record<string, unknown>): void => {
     entries.push({ message, ...(ctx ? { ctx } : {}) });
@@ -62,20 +70,49 @@ function recordingLogger(): { logger: Logger; entries: Array<{ message: string; 
 function createTestServer(name: string): McpServer {
   const server = new McpServer({ name, version: '1.0.0' });
   server.tool('current_session', 'Return the active lizi MCP session id.', {}, async () => ({
-    content: [{ type: 'text' as const, text: getLiziMcpSessionContext()?.sessionId ?? 'no-session' }],
+    content: [
+      { type: 'text' as const, text: getLiziMcpSessionContext()?.sessionId ?? 'no-session' },
+    ],
   }));
-  server.tool('current_instance', 'Return the active runtime session instance id.', {}, async () => ({
-    content: [{
-      type: 'text' as const,
-      text: getLiziMcpSessionContext()?.sessionInstanceId ?? 'no-instance',
-    }],
-  }));
-  server.tool('current_vendor_options', 'Return the active lizi MCP vendor options.', {}, async () => ({
-    content: [{
-      type: 'text' as const,
-      text: JSON.stringify(getLiziMcpSessionContext()?.vendorOptions ?? {}),
-    }],
-  }));
+  server.tool(
+    'current_instance',
+    'Return the active runtime session instance id.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: getLiziMcpSessionContext()?.sessionInstanceId ?? 'no-instance',
+        },
+      ],
+    }),
+  );
+  server.tool(
+    'current_memory_scope',
+    'Return the active Maker Memory scope key.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: getLiziMcpSessionContext()?.memoryScopeKey ?? 'no-scope',
+        },
+      ],
+    }),
+  );
+  server.tool(
+    'current_vendor_options',
+    'Return the active lizi MCP vendor options.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(getLiziMcpSessionContext()?.vendorOptions ?? {}),
+        },
+      ],
+    }),
+  );
   return server;
 }
 
@@ -183,6 +220,58 @@ describe('piEnvironment per-session identity', () => {
     await after.text();
   });
 
+  /**
+   * Cindy Bot 会话的 Maker Memory scope key(`bot:<botId>`)必须随注册的 ctx
+   * 走到工具侧:cindy_memory 的 withStore 优先用 ctx.memoryScopeKey 定位 store,
+   * 拿不到就回落 buildMemoryScopeKey(workingDir) —— 那会造成「prompt 段注入
+   * 伙伴记忆索引、memory_write 却写进项目记忆」的两张皮(伙伴记忆终验发现)。
+   */
+  it('threads the Bot Maker Memory scope key into the tool-side session ctx', async () => {
+    const config = await getPiExtraSpawnConfig([makeProvider('custom_probe')], noopLogger(), {
+      sessionId: 'pi-bot-memory',
+      workingDir: '/repo',
+      memoryScopeKey: 'bot:bot-release-helper',
+      vendorOptions: {},
+      mcpCallerKind: 'root',
+      mcpCallerAttested: true,
+    });
+    const server = config!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${config!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initResp = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(1) });
+    const mcpSessionId = initResp.headers.get('mcp-session-id');
+    await initResp.text();
+    const scopeResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'current_memory_scope', arguments: {} },
+      }),
+    });
+    expect(await readRpcText(scopeResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'bot:bot-release-helper' }] },
+    });
+    config!.disposeSessionCtx!();
+  });
+
+  it('omits a stable built-in server when the frozen Bot Toolset disables it', async () => {
+    const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'pi-bot-no-collab',
+      workingDir: '/repo',
+      vendorOptions: {
+        [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['collab'],
+      },
+    });
+    expect(config?.mcpBridge?.servers).toEqual([]);
+    config?.disposeSessionCtx?.();
+  });
+
   it('keeps the registered Pi MCP vendorOptions live for start_team Lead activation', async () => {
     const vendorOptions: Record<string, unknown> = { source: 'draft' };
     const config = await getPiExtraSpawnConfig([makeProvider('custom_probe')], noopLogger(), {
@@ -219,7 +308,7 @@ describe('piEnvironment per-session identity', () => {
       }),
     });
     expect(callResp.status).toBe(200);
-    const result = await readRpcText(callResp) as {
+    const result = (await readRpcText(callResp)) as {
       result?: { content?: Array<{ text?: string }> };
     };
     expect(JSON.parse(result.result?.content?.[0]?.text ?? '{}')).toMatchObject({
@@ -348,7 +437,11 @@ describe('piEnvironment per-session identity', () => {
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
     };
-    const oldInit = await fetch(oldServer.url, { method: 'POST', headers: oldHeaders, body: INIT_BODY(41) });
+    const oldInit = await fetch(oldServer.url, {
+      method: 'POST',
+      headers: oldHeaders,
+      body: INIT_BODY(41),
+    });
     expect(oldInit.status).toBe(200);
     await oldInit.text();
 
@@ -357,7 +450,11 @@ describe('piEnvironment per-session identity', () => {
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
     };
-    const newInit = await fetch(newServer.url, { method: 'POST', headers: newHeaders, body: INIT_BODY(42) });
+    const newInit = await fetch(newServer.url, {
+      method: 'POST',
+      headers: newHeaders,
+      body: INIT_BODY(42),
+    });
     expect(newInit.status).toBe(200);
     await newInit.text();
 
@@ -467,7 +564,9 @@ describe('piEnvironment per-session identity', () => {
       {
         name: 'missing_bearer',
         toCodexMcpConfig: () => ({
-          type: 'http', url: 'https://missing.example.test/mcp', bearerTokenEnvVar: 'MISSING',
+          type: 'http',
+          url: 'https://missing.example.test/mcp',
+          bearerTokenEnvVar: 'MISSING',
         }),
         getExtraEnv: () => ({ UNUSED: logCanary }),
       },
@@ -509,11 +608,15 @@ describe('piEnvironment per-session identity', () => {
       {
         name: 'throwing_environment',
         toCodexMcpConfig: () => ({ type: 'http', url: 'https://throw-env.example.test/mcp' }),
-        getExtraEnv: () => { throw new Error(logCanary); },
+        getExtraEnv: () => {
+          throw new Error(logCanary);
+        },
       },
       {
         name: 'throwing_config',
-        toCodexMcpConfig: () => { throw new Error(logCanary); },
+        toCodexMcpConfig: () => {
+          throw new Error(logCanary);
+        },
       },
       valid,
       validLoopback,
@@ -607,7 +710,9 @@ describe('piEnvironment per-session identity', () => {
       }),
     });
     expect(callResp.status).toBe(200);
-    const result = await readRpcText(callResp) as { result?: { isError?: boolean; content?: { text?: string }[] } };
+    const result = (await readRpcText(callResp)) as {
+      result?: { isError?: boolean; content?: { text?: string }[] };
+    };
     expect(result.result?.isError).toBe(true);
     expect(result.result?.content?.[0]?.text).toContain('verified Cindy session');
   });
@@ -632,9 +737,7 @@ describe('piEnvironment per-session identity', () => {
       },
     });
 
-    expect(config?.mcpBridge?.servers.map((server) => server.name)).toContain(
-      'orca_worker_bridge',
-    );
+    expect(config?.mcpBridge?.servers.map((server) => server.name)).toContain('orca_worker_bridge');
   });
 
   // ── 轮 40-w4 HIGH 回归保护:ensureBridge 成功路径的 30s 超时 timer 必须取消 ──
@@ -660,7 +763,9 @@ describe('piEnvironment per-session identity', () => {
       // 断言仍复用同一 bridge:两次返回的 URL 端口一致 = 未重建新 HTTP server
       // (URL 的 ?session= 因 sessionId 不同而不同, 只比端口)。
       const portOf = (u: string | undefined) => new URL(u ?? '').port;
-      expect(portOf(second?.mcpBridge?.servers[0]?.url)).toBe(portOf(first?.mcpBridge?.servers[0]?.url));
+      expect(portOf(second?.mcpBridge?.servers[0]?.url)).toBe(
+        portOf(first?.mcpBridge?.servers[0]?.url),
+      );
     } finally {
       vi.useRealTimers();
     }

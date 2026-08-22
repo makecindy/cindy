@@ -185,6 +185,29 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
   return rows.map(rowToConfig);
 }
 
+/** Secret-free generation markers for freezing a Bot task's MCP capability set. */
+export async function listCustomMcpRuntimeGenerations(): Promise<Array<{
+  id: string;
+  transport: McpTransport;
+  updatedAt: number;
+}>> {
+  const rows = await getDbClient().drizzle
+    .select({
+      id: customMcpServers.id,
+      transport: customMcpServers.transport,
+      updatedAt: customMcpServers.updatedAt,
+    })
+    .from(customMcpServers)
+    .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
+  return rows.map((row) => ({
+    id: row.id,
+    transport: (MCP_TRANSPORTS.includes(row.transport as McpTransport)
+      ? row.transport
+      : 'http') as McpTransport,
+    updatedAt: row.updatedAt,
+  }));
+}
+
 /** 取单个；不存在返回 null。 */
 export async function getCustomMcpServer(id: string): Promise<CustomMcpConfig | null> {
   const db = getDbClient().drizzle;

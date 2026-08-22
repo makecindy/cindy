@@ -24,6 +24,11 @@ import { SkillhubMarketListView } from '@/features/skillhub/SkillhubMarketListVi
 import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperimentalView';
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
+import { BotsFeatureLayout } from '@/features/bots/BotsFeatureLayout';
+import { BotsHomeView } from '@/features/bots/BotsHomeView';
+import { BotHistorySessionView } from '@/features/bots/BotHistorySessionView';
+import { BotRosterView } from '@/features/bots/BotRosterView';
+import { BotSessionView } from '@/features/bots/BotSessionView';
 
 /**
  * 三层路由架构：
@@ -36,6 +41,7 @@ import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
  *         └── MainLayout            → 主功能区
  *              ├── /                → Navigate to /cc-agent
  *              ├── /cc-agent/...    → CCAgentFeatureLayout
+ *              ├── /bots/...        → BotsFeatureLayout
  *              └── /settings        → SettingsView
  *
  * LocalDbGate 下沉在路由层：AuthProvider 在 RouterProvider 之外无法 useNavigate。
@@ -105,6 +111,20 @@ export const router = createHashRouter([
                       { path: 'orca/new', element: <Navigate to="/cc-agent/new" replace /> },
                       { path: 'orca/:sessionId', element: <OrcaWorkflowRoute /> },
                       { path: ':sessionId', element: <CCAgentSessionView /> },
+                    ],
+                  },
+                  {
+                    path: 'bots',
+                    element: <BotsFeatureLayout />,
+                    children: [
+                      { index: true, element: <BotsHomeView /> },
+                      // 阵容是主区的一页,不是浮在对话上的模态。静态段排在 :botId
+                      // 之前(React Router 也按静态优先定级),所以 /bots/roster 不会
+                      // 被当成一个叫 "roster" 的伙伴。
+                      { path: 'roster', element: <BotRosterView /> },
+                      { path: ':botId', element: <BotsHomeView /> },
+                      { path: ':botId/session/:sessionId', element: <BotSessionView /> },
+                      { path: ':botId/history/:sessionId', element: <BotHistorySessionView /> },
                     ],
                   },
                   {

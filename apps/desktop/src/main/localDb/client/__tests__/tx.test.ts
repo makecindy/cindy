@@ -40,6 +40,7 @@ CREATE TABLE sessions (
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
+  source TEXT NOT NULL DEFAULT 'desktop',
   workspace_kind TEXT NOT NULL DEFAULT 'project',
   codex_history_has_product_prompt INTEGER,
   codex_plan_json TEXT,
@@ -159,6 +160,7 @@ interface TestSessionRow {
   userSendAt: number | null;
   agentKind: string;
   orcaRole: string | null;
+  source: string;
   workspaceKind: string;
   codexHistoryHasProductPrompt: boolean | null;
   parentSessionId: string | null;
@@ -923,6 +925,32 @@ describe('db worker tx handlers', () => {
       });
     });
   });
+
+  it.each([false, true])(
+    'sessions.setStatus rejects Bot tasks atomically (inline=%s)',
+    async (useInlineWorker) => {
+      await withClient(
+        async (client) => {
+          await seedSession(client, 'regular');
+          await seedSession(client, 'bot', { source: 'bot' });
+
+          await expect(
+            client.tx('sessions.setStatus', {
+              sessionIds: ['regular', 'bot'],
+              status: 'archived',
+            }),
+          ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+          await expect(
+            client.query('SELECT id, status FROM sessions ORDER BY id'),
+          ).resolves.toEqual([
+            { id: 'bot', status: 'active' },
+            { id: 'regular', status: 'active' },
+          ]);
+        },
+        { useInlineWorker },
+      );
+    },
+  );
 
   it('rewind.commit follows transcript parent links and preserves the prior assistant when timestamps are inverted', async () => {
     await withClient(async (client) => {
@@ -2246,8 +2274,8 @@ async function seedSession(
       sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
       context_window, fast_mode, cleared_at, pinned_at, user_send_at,
       agent_kind, orca_role, workspace_kind, parent_session_id, forked_at_message_id,
-      created_at, updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      source, created_at, updated_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       s.id,
       s.title,
@@ -2270,6 +2298,7 @@ async function seedSession(
       s.workspaceKind,
       s.parentSessionId,
       s.forkedAtMessageId,
+      s.source,
       s.createdAt,
       s.updatedAt,
     ],
@@ -2297,6 +2326,7 @@ function sessionRow(id: string, overrides: Partial<TestSessionRow> = {}): TestSe
     userSendAt: 1,
     agentKind: 'cc',
     orcaRole: null,
+    source: 'desktop',
     workspaceKind: 'project',
     codexHistoryHasProductPrompt: null,
     parentSessionId: null,

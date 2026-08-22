@@ -35,6 +35,7 @@ const SESSION_SOURCES = [
   'review',
   'shared',
   'plugin',
+  'bot',
 ] as const satisfies readonly SessionSource[];
 
 export const sessions = sqliteTable(
@@ -243,6 +244,628 @@ export const sessions = sqliteTable(
     ),
     // IM 通用标识查询(slack 等渠道按 (source, botContextId, userId) 找会话行)
     idxImLookup: index('idx_sessions_im_lookup').on(t.source, t.imBotContextId, t.imUserId),
+  }),
+);
+
+/**
+ * Cindy Bots 的 Profile 权威记录。
+ *
+ * Renderer 只能通过 local-db:bots:* 读取/修改，不能把 Bot 身份或 canonical
+ * Session 关系留在 localStorage。JSON 字段保留 Profile runtime 的版本化扩展空间；
+ * 具体 Skill/MCP/Memory 引用仍由各自能力系统解析，不在这里复制凭证。
+ */
+export const botProfiles = sqliteTable(
+  'bot_profiles',
+  {
+    id: text('id').primaryKey(),
+    displayName: text('display_name').notNull(),
+    description: text('description').notNull().default(''),
+    avatar: text('avatar').notNull().default('🤖'),
+    avatarColor: text('avatar_color').notNull().default('violet'),
+    status: text('status', { enum: ['active', 'paused', 'error', 'archived', 'deleting'] })
+      .notNull()
+      .default('active'),
+    currentVersion: integer('current_version').notNull().default(1),
+    canonicalSessionId: text('canonical_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxStatusUpdated: index('idx_bot_profiles_status_updated').on(t.status, t.updatedAt),
+    idxCanonicalSession: index('idx_bot_profiles_canonical_session').on(t.canonicalSessionId),
+  }),
+);
+
+/** Immutable-ish Profile snapshots used for runtime binding, audit and rollback. */
+export const botProfileVersions = sqliteTable(
+  'bot_profile_versions',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    identitySource: text('identity_source').notNull().default(''),
+    capabilitiesJson: text('capabilities_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqBotVersion: uniqueIndex('uniq_bot_profile_versions_bot_version').on(t.botId, t.version),
+    idxBotCreated: index('idx_bot_profile_versions_bot_created').on(t.botId, t.createdAt),
+  }),
+);
+
+/** A Bot may mount multiple message surfaces; local is the default mount. */
+export const botChannels = sqliteTable(
+  'bot_channels',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    kind: text('kind', {
+      enum: [
+        'local',
+        'telegram',
+        'feishu',
+        'slack',
+        'discord',
+        'wechat',
+        'dingtalk',
+        'wecom',
+        'x',
+      ],
+    }).notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    configJson: text('config_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxBotKind: index('idx_bot_channels_bot_kind').on(t.botId, t.kind),
+    idxEnabled: index('idx_bot_channels_enabled').on(t.enabled),
+  }),
+);
+
+/** Canonical, route and archived/history Session projections for a Bot. */
+export const botSessionLinks = sqliteTable(
+  'bot_session_links',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    /** ProfileVersion pinned when this Session became canonical/route. */
+    profileVersion: integer('profile_version').notNull().default(1),
+    role: text('role', { enum: ['canonical', 'route', 'history'] }).notNull(),
+    channelId: text('channel_id').references(() => botChannels.id, { onDelete: 'set null' }),
+    routeKey: text('route_key'),
+    createdAt: integer('created_at').notNull(),
+    archivedAt: integer('archived_at'),
+  },
+  (t) => ({
+    uniqSession: uniqueIndex('uniq_bot_session_links_session').on(t.sessionId),
+    uniqCanonicalPerBot: uniqueIndex('uniq_bot_session_links_canonical_per_bot')
+      .on(t.botId)
+      .where(sql`${t.role} = 'canonical'`),
+    idxBotRole: index('idx_bot_session_links_bot_role').on(t.botId, t.role),
+    uniqRoute: uniqueIndex('uniq_bot_session_links_route')
+      .on(t.channelId, t.routeKey)
+      .where(sql`${t.role} = 'route' AND ${t.channelId} IS NOT NULL AND ${t.routeKey} IS NOT NULL`),
+  }),
+);
+
+/** Prepared and terminal native runtime capability snapshot for each Bot Session start. */
+export const botRuntimeSnapshots = sqliteTable(
+  'bot_runtime_snapshots',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    profileVersion: integer('profile_version').notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    workingDir: text('working_dir').notNull(),
+    memoryScopeKey: text('memory_scope_key'),
+    configuredJson: text('configured_json').notNull().default('{}'),
+    resolvedJson: text('resolved_json').notNull().default('{}'),
+    status: text('status', { enum: ['prepared', 'applied', 'degraded', 'failed'] }).notNull(),
+    /** Resolution finished and the exact Profile/runtime bytes were frozen. */
+    preparedAt: integer('prepared_at').notNull().default(0),
+    /** Agent startup returned and Session storage succeeded. */
+    appliedAt: integer('applied_at'),
+    /** Startup failed before the Session became visible. */
+    failedAt: integer('failed_at'),
+    /** Sanitized stage/error metadata only; never stores prompt or user content. */
+    failureJson: text('failure_json'),
+  },
+  (t) => ({
+    idxBotPrepared: index('idx_bot_runtime_snapshots_bot_prepared').on(t.botId, t.preparedAt),
+    idxSessionPrepared: index('idx_bot_runtime_snapshots_session_prepared').on(
+      t.sessionId,
+      t.preparedAt,
+    ),
+  }),
+);
+
+/** Lifecycle audit trail for renew/archive/recovery and future migration events. */
+export const botLifecycleEvents = sqliteTable(
+  'bot_lifecycle_events',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    eventType: text('event_type').notNull(),
+    payloadJson: text('payload_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    idxBotCreated: index('idx_bot_lifecycle_events_bot_created').on(t.botId, t.createdAt),
+    idxSessionCreated: index('idx_bot_lifecycle_events_session_created').on(t.sessionId, t.createdAt),
+  }),
+);
+
+/**
+ * Bot consumption ledger for authoritative task-state transitions. This is a
+ * dedupe/audit receipt, not another task-state publisher or source of truth.
+ * Payloads are bounded projection metadata only.
+ */
+export const botSessionEventLedger = sqliteTable(
+  'bot_session_event_ledger',
+  {
+    id: text('id').primaryKey(),
+    eventKey: text('event_key').notNull(),
+    sessionId: text('session_id').notNull(),
+    eventType: text('event_type').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    originBotId: text('origin_bot_id'),
+    lineageJson: text('lineage_json').notNull().default('[]'),
+    hopCount: integer('hop_count').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqEventKey: uniqueIndex('uniq_bot_session_event_ledger_key').on(t.eventKey),
+    idxSessionCreated: index('idx_bot_session_event_ledger_session_created').on(
+      t.sessionId,
+      t.createdAt,
+    ),
+    idxTypeCreated: index('idx_bot_session_event_ledger_type_created').on(
+      t.eventType,
+      t.createdAt,
+    ),
+  }),
+);
+
+/** Logical Bot subscriptions; rules match state facets/relationships, never task IDs. */
+export const botEventSubscriptions = sqliteTable(
+  'bot_event_subscriptions',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    status: text('status', { enum: ['active', 'paused'] }).notNull().default('active'),
+    ruleJson: text('rule_json').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxBotStatus: index('idx_bot_event_subscriptions_bot_status').on(t.botId, t.status),
+  }),
+);
+
+/** Per-Bot durable inbox and processing/delivery facts. */
+export const botInboxItems = sqliteTable(
+  'bot_inbox_items',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    subscriptionId: text('subscription_id')
+      .notNull()
+      .references(() => botEventSubscriptions.id, { onDelete: 'cascade' }),
+    eventId: text('event_id')
+      .notNull()
+      .references(() => botSessionEventLedger.id, { onDelete: 'cascade' }),
+    processingSessionId: text('processing_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    status: text('status', {
+      enum: ['pending', 'processing', 'handled', 'failed', 'skipped'],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    resultText: text('result_text'),
+    resultDeliveryStatus: text('result_delivery_status', {
+      enum: ['none', 'queued', 'partial', 'failed'],
+    })
+      .notNull()
+      .default('none'),
+    resultDeliveryError: text('result_delivery_error'),
+    receivedAt: integer('received_at').notNull(),
+    startedAt: integer('started_at'),
+    handledAt: integer('handled_at'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqSubscriptionEvent: uniqueIndex('uniq_bot_inbox_subscription_event').on(
+      t.subscriptionId,
+      t.eventId,
+    ),
+    idxBotStatusReceived: index('idx_bot_inbox_bot_status_received').on(
+      t.botId,
+      t.status,
+      t.receivedAt,
+    ),
+    idxProcessingSession: index('idx_bot_inbox_processing_session').on(t.processingSessionId),
+  }),
+);
+
+/** Stable project/workspace policy owned by a Bot Profile, not by one Session. */
+export const botProjectBindings = sqliteTable(
+  'bot_project_bindings',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    /** host + canonical workingDir fingerprint supplied by main-side normalization. */
+    projectKey: text('project_key').notNull(),
+    workingDir: text('working_dir').notNull(),
+    remoteHostId: text('remote_host_id'),
+    defaultBranch: text('default_branch'),
+    workspacePolicy: text('workspace_policy', {
+      enum: ['none', 'reuse', 'per-task', 'read-only'],
+    })
+      .notNull()
+      .default('none'),
+    isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+    allowedPathsJson: text('allowed_paths_json').notNull().default('[]'),
+    status: text('status', { enum: ['active', 'paused', 'error', 'archived'] })
+      .notNull()
+      .default('active'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqBotProject: uniqueIndex('uniq_bot_project_bindings_bot_project').on(
+      t.botId,
+      t.projectKey,
+    ),
+    idxBotStatus: index('idx_bot_project_bindings_bot_status').on(t.botId, t.status),
+    uniqDefaultPerBot: uniqueIndex('uniq_bot_project_bindings_default_per_bot')
+      .on(t.botId)
+      .where(sql`${t.isDefault} = true AND ${t.status} = 'active'`),
+  }),
+);
+
+/** A concrete channel/thread/principal route mounted on a Bot Channel. */
+export const botRoutes = sqliteTable(
+  'bot_routes',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    channelId: text('channel_id')
+      .notNull()
+      .references(() => botChannels.id, { onDelete: 'cascade' }),
+    routeKey: text('route_key').notNull(),
+    principalKey: text('principal_key').notNull(),
+    scopeKey: text('scope_key').notNull(),
+    threadKey: text('thread_key'),
+    currentSessionId: text('current_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    projectBindingId: text('project_binding_id').references(() => botProjectBindings.id, {
+      onDelete: 'set null',
+    }),
+    capabilitiesJson: text('capabilities_json').notNull().default('{}'),
+    ownerDeviceId: text('owner_device_id'),
+    ownerGeneration: integer('owner_generation').notNull().default(0),
+    status: text('status', {
+      enum: ['active', 'paused', 'offline', 'recovering', 'error', 'archived'],
+    })
+      .notNull()
+      .default('active'),
+    /**
+     * Status captured when the whole Bot is paused. Null means this Route was
+     * already paused by the user and must not be resumed automatically.
+     */
+    suspendedStatus: text('suspended_status', {
+      enum: ['active', 'offline', 'recovering', 'error'],
+    }),
+    lastActivityAt: integer('last_activity_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqChannelRoute: uniqueIndex('uniq_bot_routes_channel_route').on(t.channelId, t.routeKey),
+    idxBotStatus: index('idx_bot_routes_bot_status').on(t.botId, t.status),
+    idxSession: index('idx_bot_routes_session').on(t.currentSessionId),
+  }),
+);
+
+/** Stable Bot/project lease; Sessions attach to it but do not own its lifetime. */
+export const botWorkspaceLeases = sqliteTable(
+  'bot_workspace_leases',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    projectBindingId: text('project_binding_id')
+      .notNull()
+      .references(() => botProjectBindings.id, { onDelete: 'cascade' }),
+    /** reuse='shared'; per-task uses a durable task/session key. */
+    leaseKey: text('lease_key').notNull().default('shared'),
+    /** Compatibility owner used by the existing Session-keyed WorktreeManager store. */
+    anchorSessionId: text('anchor_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    worktreePath: text('worktree_path'),
+    baseRepo: text('base_repo').notNull(),
+    branch: text('branch'),
+    sourceBranch: text('source_branch'),
+    remoteHostId: text('remote_host_id'),
+    generation: integer('generation').notNull().default(1),
+    status: text('status', {
+      enum: ['acquiring', 'active', 'releasing', 'released', 'retained', 'error'],
+    })
+      .notNull()
+      .default('acquiring'),
+    lastHeartbeatAt: integer('last_heartbeat_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    releasedAt: integer('released_at'),
+  },
+  (t) => ({
+    uniqActiveBindingLease: uniqueIndex('uniq_bot_workspace_leases_active_binding_key')
+      .on(t.projectBindingId, t.leaseKey)
+      .where(sql`${t.status} IN ('acquiring', 'active', 'releasing')`),
+    idxBotStatus: index('idx_bot_workspace_leases_bot_status').on(t.botId, t.status),
+    idxAnchorSession: index('idx_bot_workspace_leases_anchor_session').on(t.anchorSessionId),
+  }),
+);
+
+/** Session access to a stable workspace lease; detach preserves historical lineage. */
+export const botWorkspaceAttachments = sqliteTable(
+  'bot_workspace_attachments',
+  {
+    id: text('id').primaryKey(),
+    leaseId: text('lease_id')
+      .notNull()
+      .references(() => botWorkspaceLeases.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    generation: integer('generation').notNull(),
+    access: text('access', { enum: ['read-write', 'read-only'] })
+      .notNull()
+      .default('read-write'),
+    createdAt: integer('created_at').notNull(),
+    detachedAt: integer('detached_at'),
+  },
+  (t) => ({
+    uniqLeaseSession: uniqueIndex('uniq_bot_workspace_attachments_lease_session').on(
+      t.leaseId,
+      t.sessionId,
+      t.generation,
+    ),
+    uniqActiveSessionLease: uniqueIndex('uniq_bot_workspace_attachments_active_session')
+      .on(t.sessionId)
+      .where(sql`${t.detachedAt} IS NULL`),
+    idxLeaseActive: index('idx_bot_workspace_attachments_lease_active').on(
+      t.leaseId,
+      t.detachedAt,
+    ),
+  }),
+);
+
+/** Durable Bot-to-Bot handoff lineage using Cindy child Sessions as execution units. */
+export const botDelegations = sqliteTable(
+  'bot_delegations',
+  {
+    id: text('id').primaryKey(),
+    requestingBotId: text('requesting_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    targetBotId: text('target_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    parentSessionId: text('parent_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    childSessionId: text('child_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    objective: text('objective').notNull(),
+    contextRefsJson: text('context_refs_json').notNull().default('[]'),
+    artifactRefsJson: text('artifact_refs_json').notNull().default('[]'),
+    permissionSnapshotJson: text('permission_snapshot_json').notNull().default('{}'),
+    lineageJson: text('lineage_json').notNull().default('[]'),
+    targetProfileVersion: integer('target_profile_version').notNull(),
+    depth: integer('depth').notNull().default(1),
+    budgetTokens: integer('budget_tokens'),
+    tokensUsed: integer('tokens_used').notNull().default(0),
+    status: text('status', {
+      enum: ['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'timed-out'],
+    })
+      .notNull()
+      .default('queued'),
+    resultSummary: text('result_summary'),
+    /** Output artifacts produced by the child task; never input authorization refs. */
+    outputArtifactsJson: text('output_artifacts_json').notNull().default('[]'),
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    acceptedAt: integer('accepted_at'),
+    completedAt: integer('completed_at'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxRequesterStatus: index('idx_bot_delegations_requester_status').on(
+      t.requestingBotId,
+      t.status,
+    ),
+    idxTargetStatus: index('idx_bot_delegations_target_status').on(t.targetBotId, t.status),
+    idxParentSession: index('idx_bot_delegations_parent_session').on(t.parentSessionId),
+    uniqChildSession: uniqueIndex('uniq_bot_delegations_child_session').on(t.childSessionId),
+  }),
+);
+
+/** Small durable Bot/automation state; large transcripts remain in sessions/messages. */
+export const botDurableNotes = sqliteTable(
+  'bot_durable_notes',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    namespace: text('namespace').notNull(),
+    noteKey: text('note_key').notNull(),
+    valueJson: text('value_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqBotNote: uniqueIndex('uniq_bot_durable_notes_bot_namespace_key').on(
+      t.botId,
+      t.namespace,
+      t.noteKey,
+    ),
+    idxBotNamespace: index('idx_bot_durable_notes_bot_namespace').on(t.botId, t.namespace),
+  }),
+);
+
+/** Delivery is durable and idempotent; adapters still own the final message format. */
+export const botDeliveryOutbox = sqliteTable(
+  'bot_delivery_outbox',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    channelId: text('channel_id').references(() => botChannels.id, { onDelete: 'set null' }),
+    routeId: text('route_id').references(() => botRoutes.id, { onDelete: 'set null' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    payloadRefJson: text('payload_ref_json').notNull().default('{}'),
+    ownerGeneration: integer('owner_generation').notNull().default(0),
+    status: text('status', {
+      enum: ['pending', 'sending', 'suspended', 'delivered', 'failed', 'dead-letter', 'cancelled'],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at'),
+    lastError: text('last_error'),
+    /** Adapter/server ACK retained for support diagnostics and later edit/delete operations. */
+    deliveryReceiptJson: text('delivery_receipt_json'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    deliveredAt: integer('delivered_at'),
+  },
+  (t) => ({
+    uniqIdempotency: uniqueIndex('uniq_bot_delivery_outbox_idempotency').on(t.idempotencyKey),
+    idxDue: index('idx_bot_delivery_outbox_due').on(t.status, t.nextAttemptAt),
+    idxRouteCreated: index('idx_bot_delivery_outbox_route_created').on(t.routeId, t.createdAt),
+  }),
+);
+
+/**
+ * Audited ownership transfer from a legacy IM account/session set to a Bot.
+ *
+ * The original IM Session rows and adapter-specific message stores are never
+ * rewritten.  Snapshots make the cross-store hook binding cleanup recoverable
+ * and let rollback restore only state owned by this migration.
+ */
+export const botImMigrations = sqliteTable(
+  'bot_im_migrations',
+  {
+    id: text('id').primaryKey(),
+    requestId: text('request_id').notNull(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    channelId: text('channel_id')
+      .notNull()
+      .references(() => botChannels.id, { onDelete: 'cascade' }),
+    routeId: text('route_id')
+      .notNull()
+      .references(() => botRoutes.id, { onDelete: 'cascade' }),
+    connectionId: text('connection_id').notNull(),
+    ownership: text('ownership', { enum: ['local-adapter', 'server-relay'] }).notNull(),
+    kind: text('kind', {
+      enum: ['telegram', 'feishu', 'slack', 'discord', 'wechat', 'dingtalk', 'wecom', 'x'],
+    }).notNull(),
+    accountKey: text('account_key').notNull(),
+    planHash: text('plan_hash').notNull(),
+    status: text('status', {
+      enum: ['applying', 'applied', 'rolling-back', 'rolled-back', 'failed'],
+    })
+      .notNull()
+      .default('applying'),
+    channelBeforeJson: text('channel_before_json'),
+    routeBeforeJson: text('route_before_json'),
+    adapterBindingsJson: text('adapter_bindings_json').notNull().default('[]'),
+    errorJson: text('error_json'),
+    createdAt: integer('created_at').notNull(),
+    appliedAt: integer('applied_at'),
+    rolledBackAt: integer('rolled_back_at'),
+  },
+  (t) => ({
+    uniqRequest: uniqueIndex('uniq_bot_im_migrations_request').on(t.requestId),
+    idxBotCreated: index('idx_bot_im_migrations_bot_created').on(t.botId, t.createdAt),
+    idxConnectionStatus: index('idx_bot_im_migrations_connection_status').on(
+      t.connectionId,
+      t.status,
+    ),
+  }),
+);
+
+/** Per-Session rollback facts for one IM migration batch. */
+export const botImMigrationItems = sqliteTable(
+  'bot_im_migration_items',
+  {
+    id: text('id').primaryKey(),
+    migrationId: text('migration_id')
+      .notNull()
+      .references(() => botImMigrations.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    originalStatus: text('original_status', { enum: ['active', 'archived'] }).notNull(),
+    historyLinkCreated: integer('history_link_created', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    sessionArchived: integer('session_archived', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    /** sessions.updated_at written by apply; rollback uses it as a CAS guard. */
+    appliedSessionUpdatedAt: integer('applied_session_updated_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+    rolledBackAt: integer('rolled_back_at'),
+  },
+  (t) => ({
+    uniqMigrationSession: uniqueIndex('uniq_bot_im_migration_items_batch_session').on(
+      t.migrationId,
+      t.sessionId,
+    ),
+    idxSession: index('idx_bot_im_migration_items_session').on(t.sessionId),
   }),
 );
 
@@ -1068,6 +1691,110 @@ export const scheduleRuns = sqliteTable(
   }),
 );
 
+/** Stable Bot ownership for a Scheduler definition; no expiring Session identity. */
+export const botAutomationLinks = sqliteTable(
+  'bot_automation_links',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    scheduleId: text('schedule_id').references(() => schedules.id, { onDelete: 'set null' }),
+    projectBindingId: text('project_binding_id').references(() => botProjectBindings.id, {
+      onDelete: 'set null',
+    }),
+    targetRouteId: text('target_route_id').references(() => botRoutes.id, {
+      onDelete: 'set null',
+    }),
+    createdWithProfileVersion: integer('created_with_profile_version').notNull(),
+    durableNoteNamespace: text('durable_note_namespace'),
+    /** Mutable definition policy; every fire normalizes and freezes it into the run plan. */
+    executionPolicyJson: text('execution_policy_json').notNull().default('{}'),
+    status: text('status', { enum: ['active', 'paused', 'error', 'archived'] })
+      .notNull()
+      .default('active'),
+    /**
+     * Status captured when the owning Bot is paused. Null means the user had
+     * already paused this Automation, so Bot resume must leave it paused.
+     */
+    suspendedStatus: text('suspended_status', { enum: ['active', 'error'] }),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    uniqSchedule: uniqueIndex('uniq_bot_automation_links_schedule').on(t.scheduleId),
+    idxBotStatus: index('idx_bot_automation_links_bot_status').on(t.botId, t.status),
+  }),
+);
+
+/** Per-fire Bot snapshot layered on top of the existing Scheduler run row. */
+export const botAutomationRuns = sqliteTable(
+  'bot_automation_runs',
+  {
+    id: text('id').primaryKey(),
+    automationLinkId: text('automation_link_id')
+      .notNull()
+      .references(() => botAutomationLinks.id, { onDelete: 'cascade' }),
+    scheduleRunId: text('schedule_run_id').references(() => scheduleRuns.id, {
+      onDelete: 'set null',
+    }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    workspaceLeaseId: text('workspace_lease_id').references(() => botWorkspaceLeases.id, {
+      onDelete: 'set null',
+    }),
+    profileVersion: integer('profile_version').notNull(),
+    /** Immutable per-run routing/workspace snapshot; deliberately no FK. */
+    projectBindingIdSnapshot: text('project_binding_id_snapshot'),
+    targetRouteIdSnapshot: text('target_route_id_snapshot'),
+    targetRouteOwnerGenerationSnapshot: integer('target_route_owner_generation_snapshot'),
+    workingDirSnapshot: text('working_dir_snapshot'),
+    remoteHostIdSnapshot: text('remote_host_id_snapshot'),
+    worktreePathSnapshot: text('worktree_path_snapshot'),
+    deliveryOutboxId: text('delivery_outbox_id').references(() => botDeliveryOutbox.id, {
+      onDelete: 'set null',
+    }),
+    deliveryStatus: text('delivery_status', {
+      enum: ['not-requested', 'enqueue-failed', 'queued'],
+    })
+      .notNull()
+      .default('not-requested'),
+    deliveryError: text('delivery_error'),
+    /** Result captured before delivery/archive so restart recovery cannot lose completion. */
+    resultTextSnapshot: text('result_text_snapshot'),
+    /** Structured, transport-neutral outputs extracted before task archival. */
+    outputArtifactsJson: text('output_artifacts_json').notNull().default('[]'),
+    /** Runtime/deadline/budget failure owned by the Bot Automation layer. */
+    errorMessage: text('error_message'),
+    /** Immutable profile/capability/workspace/delegation/deadline plan for this fire. */
+    executionPlanJson: text('execution_plan_json').notNull().default('{}'),
+    status: text('status', {
+      enum: [
+        'claimed',
+        'running',
+        'completing',
+        'success',
+        'failed',
+        'aborted',
+        'interrupted',
+        'skipped',
+        'unknown',
+      ],
+    })
+      .notNull()
+      .default('claimed'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    finishedAt: integer('finished_at'),
+  },
+  (t) => ({
+    uniqScheduleRun: uniqueIndex('uniq_bot_automation_runs_schedule_run').on(t.scheduleRunId),
+    idxAutomationCreated: index('idx_bot_automation_runs_link_created').on(
+      t.automationLinkId,
+      t.createdAt,
+    ),
+  }),
+);
+
 /**
  * embedding-host (Phase 1.1): 待处理 embedding 任务队列。
  *
@@ -1442,6 +2169,12 @@ export const rightSidebarTabs = sqliteTable(
     uniqSubagents: uniqueIndex('right_sidebar_tabs_subagents_singleton_idx')
       .on(t.sessionId)
       .where(sql`${t.kind} = 'subagents'`),
+    uniqBotDelegations: uniqueIndex('right_sidebar_tabs_bot_delegations_singleton_idx')
+      .on(t.sessionId)
+      .where(sql`${t.kind} = 'bot-delegations'`),
+    uniqBotArtifacts: uniqueIndex('right_sidebar_tabs_bot_artifacts_singleton_idx')
+      .on(t.sessionId)
+      .where(sql`${t.kind} = 'bot-artifacts'`),
   }),
 );
 

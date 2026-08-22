@@ -59,7 +59,7 @@ import {
 
 // Minimal stand-ins — holder 只持有引用并 resolve 出去,不调任何方法。
 const scheduler1 = { id: 'scheduler-1' } as never;
-const storage1 = { id: 'storage-1' } as never;
+const storage1 = { id: 'storage-1', get: vi.fn(async () => ({ source: 'user' })) } as never;
 const scheduler2 = { id: 'scheduler-2' } as never;
 const storage2 = { id: 'storage-2' } as never;
 
@@ -69,6 +69,7 @@ beforeEach(() => {
   h.getAllWindows.mockClear();
   h.tapWindowBroadcast.mockClear();
   h.handleScheduleEvent.mockClear();
+  (storage1 as unknown as { get: ReturnType<typeof vi.fn> }).get.mockResolvedValue({ source: 'user' });
 });
 
 afterEach(() => {
@@ -224,7 +225,7 @@ describe('scheduler readiness holder', () => {
     expect(r.scheduler).toBe(scheduler2);
   });
 
-  it('broadcasts scheduler events before isolated Agent Island updates', () => {
+  it('broadcasts scheduler events before isolated Agent Island updates', async () => {
     const handlers = new Map<string, (event: never) => void>();
     const scheduler = {
       on: vi.fn((name: string, handler: (event: never) => void) => {
@@ -243,11 +244,39 @@ describe('scheduler readiness holder', () => {
     const event = { type: 'completed', scheduleId: 'schedule-1', runId: 'run-1' } as never;
     expect(() => handlers.get('completed')!(event)).not.toThrow();
 
+    await vi.waitFor(() => expect(h.tapWindowBroadcast).toHaveBeenCalled());
+
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('maker:schedule:event', event);
     expect(h.webContentsSend).toHaveBeenCalledWith('maker:schedule:event', event);
     expect(h.handleScheduleEvent).toHaveBeenCalledWith(event);
     expect(h.webContentsSend.mock.invocationCallOrder[0]).toBeLessThan(
       h.handleScheduleEvent.mock.invocationCallOrder[0],
     );
+  });
+
+  it('does not project Bot automation events into the generic Scheduler surface', async () => {
+    const handlers = new Map<string, (event: never) => void>();
+    const scheduler = {
+      on: vi.fn((name: string, handler: (event: never) => void) => {
+        handlers.set(name, handler);
+      }),
+    } as never;
+    (storage1 as unknown as { get: ReturnType<typeof vi.fn> }).get.mockResolvedValue({ source: 'bot' });
+
+    attachSchedulerEventListeners(scheduler, storage1);
+    h.webContentsSend.mockClear();
+    h.tapWindowBroadcast.mockClear();
+    h.handleScheduleEvent.mockClear();
+
+    handlers.get('completed')!({
+      type: 'completed',
+      scheduleId: 'bot-schedule-1',
+      runId: 'run-1',
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.webContentsSend).not.toHaveBeenCalled();
+    expect(h.handleScheduleEvent).not.toHaveBeenCalled();
   });
 });

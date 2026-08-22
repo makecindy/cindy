@@ -178,7 +178,7 @@ export interface Schedule {
   jobType?: JobType;
   /** Release-compat tombstone：老 issue-triage 的 JSON 配置；新代码不读不写。 */
   jobConfig?: string;
-  source?: 'user' | 'project';
+  source?: 'user' | 'project' | 'bot';
   projectConfigId?: string;
   kind: ScheduleKind;
   cronExpr: string;

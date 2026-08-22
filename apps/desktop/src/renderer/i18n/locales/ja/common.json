@@ -150,7 +150,8 @@
       "remoteControl": "リモート接続",
       "windowBehavior": "アプリの動作",
       "shortcuts": "キーボードショートカット",
-      "mcpServers": "カスタム MCP"
+      "mcpServers": "カスタム MCP",
+      "bots": "パートナー"
     },
     "remote": {
       "title": "リモートマシン",
@@ -3083,6 +3084,10 @@
           "name": "Cindy メモリ",
           "description": "セッションをまたいでコンテキストを保持する Agent 横断の長期メモリ"
         },
+        "docs": {
+          "name": "ドキュメント工房",
+          "description": "内容を実ファイルに — PDF / Word / Excel / PowerPoint を生成し、読み返して仕上がりを確認。追加ソフトのインストールは不要。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "ホスト機能の開示 — 利用可能なツールとモデルを Agent に伝える"
@@ -3453,6 +3458,15 @@
     },
     "imBot": {
       "beta": "Beta",
+      "unreachableTarget": {
+        "names": {
+          "cindyGroup": "公式ボット",
+          "discord": "Discord ボット",
+          "telegram": "Telegram ボット"
+        },
+        "cnPersonal": "お探しの{{name}}は、中国本土版の個人アカウントでは提供されていません。組織アカウントなら利用できます。",
+        "localMode": "お探しの{{name}}を使うには、Cindy アカウントにサインインしてください。"
+      },
       "groups": {
         "cindy": "公式",
         "personal": "個人"
@@ -5272,11 +5286,13 @@
         "terminal": "ターミナル",
         "review": "レビュー",
         "subagents": "サブエージェント",
+        "botDelegations": "仲間連携",
         "backgroundTasks": "バックグラウンドタスク",
         "resourceUsage": "アクティビティモニタ",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
-        "ghostPanel": "プラグインパネル"
+        "ghostPanel": "プラグインパネル",
+        "botArtifacts": "作品"
       },
       "controls": {
         "showAria": "サイドバーを表示",
@@ -5294,6 +5310,12 @@
         "eyebrow": "右サイドバー",
         "title": "パネルを開く",
         "desc": "ファイル、レビュー、アクティビティモニタ、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
+        "botTitle": "作品と相手の協同",
+        "botDesc": "仲間の会話では作品ライブラリと相手の協同が最初に開きます。レビューやターミナルは必要なときだけ足してください。",
+        "openArtifacts": "作品を開く",
+        "artifactsSub": "相手が渡したもの",
+        "openDelegations": "相手の協同を開く",
+        "delegationsSub": "委譲と返答",
         "openFile": "ファイルを開く",
         "fileSub": "Files",
         "openReview": "レビューを開く",
@@ -5859,6 +5881,33 @@
       "expandAllAria": "すべてのファイルを展開",
       "collapseAllAria": "すべてのファイルを折りたたむ"
     },
+    "botDelegations": {
+      "retry": "再試行",
+      "back": "戻る",
+      "duration": "所要時間",
+      "tokens": "トークン",
+      "depth": "委任の深さ",
+      "objective": "タスク目標",
+      "result": "返却結果",
+      "openTask": "タスクを開く",
+      "stop": "停止",
+      "empty": "仲間連携はまだありません",
+      "emptyDetail": "この仲間が他の仲間に委任すると、進捗と結果がここに保存されます。",
+      "activity": {
+        "single": "{{name}} に委任中…",
+        "multiple": "仲間委任 {{count}} 件が進行中",
+        "openAria": "仲間連携の進捗を見る"
+      },
+      "status": {
+        "queued": "キュー待ち",
+        "waiting": "開始待ち",
+        "running": "実行中",
+        "completed": "完了",
+        "failed": "失敗",
+        "cancelled": "キャンセル済み",
+        "timed-out": "タイムアウト"
+      }
+    },
     "subagents": {
       "running": "実行中",
       "finished": "終了",
@@ -6089,7 +6138,8 @@
       "projects": "プロジェクト",
       "skillhub": "SkillHub",
       "plugins": "プラグイン",
-      "issues": "問題"
+      "issues": "問題",
+      "bots": "仲間"
     },
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
@@ -6127,7 +6177,989 @@
       "loading": "読み込み中"
     }
   },
+  "bots": {
+    "eyebrow": "長期アシスタント",
+    "title": "仲間",
+    "subtitle": "各アシスタントの ID、スキル、メッセージチャンネル、メインタスクをまとめて管理します。",
+    "add": "仲間を追加",
+    "addTitle": "仲間を追加",
+    "addDescription": "まずローカル仲間を作成し、必要に応じて IM チャンネルを追加します。",
+    "createWizard": {
+      "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
+      "templates": {
+        "ashu": {
+          "description": "全体の司令塔",
+          "intro": "アーシューです。あちこちのタスクの動きは全部見ています。何かあれば私が最初に気づき、最初にお伝えします。",
+          "name": "アーシュー",
+          "skill": "全体調整",
+          "welcome": "アーシューです。あちこちのタスクの動きは全部見ています。何かあれば私が最初に気づき、最初にお伝えします。\n\nどうぞご自分の作業を。判断が要るときだけ声をかけます。",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "結論と判断が要ることだけ伝える",
+              "description": "経過は繰り返さず、結論と判断待ちだけを伝える",
+              "body": "報告で伝えるのは二つだけです。今の結論と、判断が必要な点。途中の経過は繰り返しません。はっきりしないことは、はっきりしないと言います。"
+            }
+          }
+        },
+        "butler": {
+          "description": "進行の世話役",
+          "intro": "ベンベンです。レビュー、チェック、納品——進行は私が見ます。あなたは結果だけ見てください。",
+          "name": "ベンベン",
+          "skill": "進行管理",
+          "welcome": "ベンベンです。レビュー、チェック、納品——進行は私が見ます。あなたは結果だけ見てください。\n\n動いている案件があれば教えてください。代わりに追いかけます。",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "結論を先に、リスクは別立て",
+              "description": "結論は一言で、リスクは別の段落にまとめる",
+              "body": "報告はまず一言で結論から。リスクと判断待ちの事項は別の段落にまとめ、経過の説明に混ぜません。証拠のない完了状態は報告しません。"
+            }
+          }
+        },
+        "cindy": {
+          "description": "あなたの専属アシスタント",
+          "intro": "こんにちは、Cindy です。仕事も生活も、こまごました用事は私に投げてください——文章、調べもの、予定、メッセージ。あなたはあなたの仕事を。必要なときに呼んでください。",
+          "name": "Cindy",
+          "skill": "ひととおり何でも",
+          "welcome": "こんにちは、Cindy です 👋 これからは文章、調べもの、ファイル整理は私に任せてください。\n\nメッセージチャネルをつなげば、席を外している間もメッセージを見ておけます。",
+          "seedMemories": {
+            "ask_before_guessing": {
+              "title": "迷ったらまず聞く",
+              "description": "何が必要かは推測せずに確認する",
+              "body": "情報が足りないときは、まず一言で「何が必要か」を確認してから着手します。推測で仕上げるくらいなら、一度多く聞くほうがましです。"
+            }
+          }
+        },
+        "counsel": {
+          "description": "あなたの法務",
+          "intro": "リンです、法務担当です。契約、条項、リスク、コンプライアンスの一次チェックをします。",
+          "name": "リン",
+          "skill": "契約",
+          "welcome": "リンです、法務担当です。契約、条項、リスク、コンプライアンスの一次チェックをします。\n\n書類をお送りください。条項ごとにリスクを示し、実際に使える修正案を添えます。なお、これは一次整理であり弁護士の意見に代わるものではありません。",
+          "seedMemories": {
+            "conclusion_then_basis": {
+              "title": "結論とリスクを先に、根拠は後に",
+              "description": "まず判断とリスク度合いを述べる",
+              "body": "まず結論とリスクの度合いを述べ、次に根拠、最後に実際に使える修正案を示します。判断がつかない点は弁護士の確認が必要と明言し、不確実を断定に変えません。"
+            }
+          }
+        },
+        "designer": {
+          "description": "あなたのデザイナー",
+          "intro": "マンです、デザイナーです。UI、ポスター、スライドのレイアウト、配色はお任せください。",
+          "name": "マン",
+          "skill": "デザイン",
+          "welcome": "マンです、デザイナーです。UI、ポスター、スライドのレイアウト、配色はお任せください。\n\n誰がどこで見るかを教えてください。二、三案お出しします。",
+          "seedMemories": {
+            "two_versions_first": {
+              "title": "まず二、三案を出して選んでもらう",
+              "description": "トレードオフを明示した複数案を提示",
+              "body": "最初に二、三の方向性を出し、それぞれの狙い（堅実／目立つ／短時間）を明示して選んでもらいます。いきなり一案だけ出すことはしません。"
+            }
+          }
+        },
+        "melody": {
+          "description": "あなたのベテランエンジニア",
+          "intro": "チェンです。十数年コードを書いてきました。設計、厄介なバグ、デプロイはお任せを。",
+          "name": "チェン",
+          "skill": "開発",
+          "welcome": "チェンです。十数年コードを書いてきました。設計、厄介なバグ、デプロイはお任せを。\n\nプロジェクトをください。まず構造を把握してから話します。",
+          "seedMemories": {
+            "small_changes": {
+              "title": "変更は小さく、報告前に自分で実行",
+              "description": "一度に一箇所、報告前に必ず検証",
+              "body": "一度に一箇所だけ変更し、報告の前に自分で実行して確かめます。検証していない部分は「していない」と明言し、「たぶん大丈夫」で済ませません。"
+            }
+          }
+        },
+        "shiba": {
+          "description": "暮らしの世話役",
+          "intro": "ワン！シャオチャイです。リマインド、予定、やること、家計。家まわりのことは任せてください。",
+          "name": "シャオチャイ",
+          "skill": "暮らしの管理",
+          "welcome": "ワン！シャオチャイです 🐕 リマインド、予定、やること、家計。家まわりのことは任せてください。\n\n覚えておいてほしいことは、そのまま言ってくれれば見ておきます。",
+          "seedMemories": {
+            "one_thing_per_reminder": {
+              "title": "リマインドは 1 件ずつ",
+              "description": "リマインドは短く、1 件だけにする",
+              "body": "リマインドは短く。1 通に 1 件だけ入れて、そこで止めます。いくつもの用件を同じ文に詰め込みません。"
+            },
+            "read_back_what_i_wrote": {
+              "title": "書き留めたら読み上げる",
+              "description": "メモした内容を一度復唱して確認する",
+              "body": "書き留めたあとは一言で復唱します。いつ・どこで・何をするか。間違いがないと確認できてから、このやり取りを終えます。"
+            }
+          }
+        },
+        "star": {
+          "description": "コンテンツの相棒",
+          "intro": "シンシンです✨ コピー、画像、投稿。ちゃんと刺さるものにします。",
+          "name": "シンシン",
+          "skill": "コンテンツ制作",
+          "welcome": "シンシンです✨ コピー、画像、投稿。ちゃんと刺さるものにします。\n\n何を出しましょう？テーマだけくれれば大丈夫です。",
+          "seedMemories": {
+            "three_drafts_first": {
+              "title": "先に 3 案、それから仕上げ",
+              "description": "コピーは何案か出して選んでもらい、いきなり完成稿にしない",
+              "body": "コピーはトーンの違う 3 案を先に出します。選ばれた案を細かく仕上げます。最初からひとつの完成稿を渡すことはしません。"
+            }
+          }
+        }
+      }
+    },
+    "portability": {
+      "title": "エクスポート",
+      "description": "認証情報、IM アカウント、タスク履歴、メモリ、プロジェクトパス、実行状態を含まない共有可能な動作設定を書き出します。仲間の取り込みは 設定 › 仲間 にあります。",
+      "export": "仲間設定をエクスポート",
+      "exporting": "エクスポート中…",
+      "exported": "仲間設定をエクスポートしました。",
+      "exportedRedacted": "仲間設定をエクスポートし、機密情報 {{count}} 件を自動的に削除しました。",
+      "imported": "仲間をインポートしました。外部チャンネル {{channels}} 件は再接続待ちで、自動化 {{automations}} 件は一時停止のままです。"
+    },
+    "nameLabel": "名前",
+    "namePlaceholder": "例：リリースアシスタント",
+    "channelLabel": "メッセージ入口",
+    "descriptionLabel": "説明",
+    "descriptionPlaceholder": "この仲間の担当は？",
+    "skillsLabel": "スキル",
+    "skillsPlaceholder": "スキル名をカンマで区切って入力",
+    "skillsDescription": "インストール済み Skill の参照だけを保存し、実行時の解決と読み込みはネイティブ機構が行います。",
+    "skillCatalogLoading": "この Harness で利用できる Skill を読み込んでいます…",
+    "skillCatalogError": "Skill を読み込めませんでした。保存済みの選択は保持されます。",
+    "skillCatalogEmpty": "この Harness とプロジェクトで利用できる Skill はありません。",
+    "skillConfiguredUnavailable": "現在利用不可 — 選択して削除",
+    "close": "閉じる",
+    "avatarPicker": {
+      "open": "アバターを変更",
+      "official": "Cindy 公式アバター",
+      "charactersLabel": "キャラクター",
+      "emojiLabel": "絵文字",
+      "hueLabel": "色",
+      "hint": "キャラクターか絵文字と背景色を選ぶと、一覧でこの仲間を見分けやすくなります。",
+      "presets": {
+        "shiba": "柴犬",
+        "whitecat": "白猫",
+        "robot": "ロボット",
+        "dino": "恐竜",
+        "melody": "ヘッドホンの少女",
+        "star": "星の少女",
+        "butler": "メガネのクマ",
+        "owl": "フクロウ"
+      }
+    },
+    "list": {
+      "startChat": "会話を始める",
+      "typing": "入力中…",
+      "unread": "{{count}} 件の未読メッセージ"
+    },
+    "cancel": "キャンセル",
+    "save": "保存",
+    "autosave": {
+      "saving": "保存中…",
+      "saved": "保存しました",
+      "retry": "再保存"
+    },
+    "retry": "再試行",
+    "backToBot": "仲間に戻る",
+    "sessionLoadFailedTitle": "この仲間タスクを読み込めませんでした",
+    "sessionLoadFailedDescription": "タスクの関連付けは存在しますが、Cindy が仲間の状態を読み取れませんでした。再試行するか、仲間の概要に戻ってください。",
+    "sessionUnavailableTitle": "この仲間タスクは利用できません",
+    "sessionUnavailableDescription": "新しいタスクに引き継がれたか、履歴に移ったか、この相棒のものではなくなった可能性があります。戻ると今のタスクを開けます。",
+    "settings": "設定",
+    "settingsNav": {
+      "title": "設定セクション"
+    },
+    "emptyTitle": "仲間はまだありません",
+    "emptyDescription": "気の合う子を選ぶか、自分でつくってください。",
+    "noDescription": "説明はありません",
+    "sessions": "タスク",
+    "sessionsTitle": "仲間タスク",
+    "sessionsDescription": "メインタスク、チャンネルタスク、アーカイブ済みタスクは分けて保存されます。",
+    "canonicalChat": "仲間メインタスク",
+    "historySession": "履歴タスク",
+    "open": "開く",
+    "archived": "アーカイブ済み",
+    "sessionLifecycleTitle": "タスクのライフサイクル",
+    "sessionLifecycleDescription": "新しいタスクを始めると最新の設定が反映されます。今のタスクは履歴に移り、中身は失われません。",
+    "renew": "新しいタスクを始める",
+    "renewing": "開始中…",
+    "historyTitle": "アーカイブ履歴",
+    "historyDescription": "以前のメインタスクの記録を確認します。",
+    "historyEmpty": "アーカイブされた仲間タスクはまだありません。",
+    "historySearch": {
+      "title": "仲間履歴を検索",
+      "description": "すべての履歴をプロンプトへ追加せず、メイン、チャネル、委任、アーカイブ済みタスクを検索します。",
+      "placeholder": "何を話したか覚えていますか？",
+      "search": "検索",
+      "searching": "検索中…",
+      "failed": "仲間履歴を検索できませんでした。もう一度お試しください。",
+      "empty": "一致する仲間履歴はありません。"
+    },
+    "lifecycle": {
+      "archivedBots": "アーカイブ済み仲間",
+      "title": "ヘルスと履歴",
+      "description": "メインタスク、Route、自動化、worktree、アーカイブ記録、ライフサイクルイベントを確認します。",
+      "refresh": "仲間ヘルスを更新",
+      "activeTitle": "仲間は稼働中です",
+      "activeDescription": "チャネル Route、自動化、配信、仲間同士の連携を実行できます。",
+      "pausedTitle": "仲間は一時停止中です",
+      "pausedDescription": "新しい作業を受け付けません。ユーザーが停止した自動化は再開後も停止したままです。",
+      "archivedTitle": "仲間はアーカイブ済みです",
+      "archivedDescription": "履歴タスクは読み取り専用です。復元時は古いタスクを再開せず、新しいメインタスクを作成します。",
+      "pause": "仲間を一時停止",
+      "resume": "仲間を再開",
+      "archive": "仲間をアーカイブ",
+      "restore": "仲間を復元",
+      "delete": "完全に削除",
+      "archiveTitle": "この仲間をアーカイブしますか？",
+      "archiveDescription": "仲間は作業の受付を停止し、メインタスクと Route タスクは履歴に移動します。",
+      "deleteTitle": "仲間を完全に削除",
+      "deleteDescription": "{{name}} を削除します。性格・つないだチャネル・予定した実行がすべてなくなり、元に戻せません。",
+      "keepHistory": "タスク履歴を通常のアーカイブ済みタスクとして残す。",
+      "confirmName": "完全削除を確認するには「{{name}}」と入力してください",
+      "worktree": {
+        "retain": "Worktree を保持",
+        "retainDescription": "仲間との関連付けを解除し、作業ディレクトリと Git ブランチをディスクに残します。",
+        "recycle": "Worktree を安全に回収",
+        "recycleDescription": "既存の安全チェック後に作業ディレクトリを削除します。Git ブランチは保持されます。"
+      },
+      "working": "更新中…",
+      "actionFailed": "仲間のライフサイクル変更が完了しませんでした。ヘルスを確認して再試行してください。",
+      "loadFailed": "仲間ヘルスとライフサイクルイベントを読み込めませんでした。",
+      "health": "現在のヘルス",
+      "noIssues": "メインタスクと接続された機能に既知の問題はありません。",
+      "timeline": "ライフサイクルのタイムライン",
+      "noEvents": "ライフサイクルイベントはまだありません。",
+      "routesCount": "Route {{count}} 件",
+      "automationsCount": "自動化 {{count}} 件",
+      "deliveriesCount": "配信記録 {{count}} 件",
+      "workspacesCount": "worktree {{count}} 件",
+      "healthStatus": {
+        "healthy": "正常",
+        "attention": "要対応",
+        "recovering": "復旧中",
+        "paused": "一時停止"
+      },
+      "issues": {
+        "profile-error": "この相棒の設定にエラーがあります。",
+        "missing-canonical": "仲間のメインタスクがまだ作成されていません。",
+        "canonical-session-missing": "メインタスクの記録がなく、復旧が必要です。",
+        "canonical-session-deleted": "メインタスクが削除され、置き換えが必要です。",
+        "canonical-link-missing": "メインタスクの仲間所有リンクがありません。",
+        "canonical-link-mismatch": "メインタスクの仲間所有リンクが一致しません。",
+        "profile-update-pending": "新しい設定が保存されています。次のタスクから反映されます。",
+        "runtime-degraded": "現在のランタイムは設定済み機能の一部なしで起動しました。",
+        "runtime-failed": "現在のランタイムを起動できませんでした。",
+        "routes-recovering": "{{count}} 件の Route が復旧中です。",
+        "routes-error": "{{count}} 件の Route に対応が必要です。",
+        "automation-error": "{{count}} 件の自動化に対応が必要です。",
+        "delivery-failed": "{{count}} 件のメッセージが再配信待ちです。",
+        "delivery-dead-letter": "{{count}} 件のメッセージは配信を復旧する前に手動確認が必要です。",
+        "workspace-error": "{{count}} 件の worktree に対応が必要です。",
+        "lifecycle-incomplete": "前回の仲間ライフサイクル操作が完了していません。"
+      },
+      "deliveries": {
+        "title": "信頼できる配信",
+        "description": "この仲間のチャンネル、Route、自動化、連携結果の配信を確認します。重複の恐れがある再試行は明示的に警告します。",
+        "empty": "配信履歴はまだありません。",
+        "local": "ローカル",
+        "attempts": "{{count}} 回試行",
+        "textSent": "本文を送信済み",
+        "mediaSent": "添付 {{count}} 件を送信済み",
+        "finalCommitted": "最終メッセージ確認済み",
+        "retry": "再配信",
+        "retrying": "再配信中…",
+        "duplicateTitle": "メッセージが重複する可能性があります",
+        "duplicateDescription": "ローカルチャンネルは本文または添付 {{count}} 件を送信済みでも、完全な受領確認がない可能性があります。続行すると結果全体を再送します。",
+        "duplicateConfirm": "それでも再配信",
+        "status": {
+          "pending": "待機中",
+          "sending": "配信中",
+          "suspended": "一時停止",
+          "delivered": "配信済み",
+          "failed": "再試行待ち",
+          "dead-letter": "要対応",
+          "cancelled": "キャンセル済み"
+        }
+      },
+      "events": {
+        "created": "仲間を作成",
+        "canonical-created": "メインタスクを作成",
+        "canonical-renewed": "新しいタスクを開始",
+        "canonical-linked": "メインタスクをリンク",
+        "session-linked": "タスクを仲間履歴へリンク",
+        "legacy-profile-migrated": "以前の相棒設定から引き継ぎました",
+        "legacy-session-skipped": "旧タスクをリンクできませんでした",
+        "project-binding-upserted": "プロジェクトの関連付けを更新",
+        "workspace-lease-released": "worktree を解放",
+        "im-migration-applied": "メッセージチャネルを移行",
+        "im-migration-rolled-back": "メッセージチャネルの移行を元に戻しました",
+        "pause-requested": "仲間の一時停止を開始",
+        "paused": "仲間を一時停止",
+        "paused-with-warnings": "仲間を一時停止しましたが、後処理に注意が必要です",
+        "resumed": "仲間を再開",
+        "resume-failed": "仲間の再開に失敗"
+      }
+    },
+    "inbox": {
+      "title": "他のタスクを見る",
+      "description": "他のタスクの動きを購読します。完了、失敗、判断待ちになると、この仲間が自動で起きて対応し、結果を接続済みのメッセージチャネルへ送ります。",
+      "defaultSubscriptionName": "タスク結果と判断待ち",
+      "watchTaskStates": "他のタスクを自動で見る",
+      "saving": "保存中…",
+      "pending": "待機中",
+      "processing": "処理中",
+      "failed": "要確認",
+      "timeline": "最近の動き",
+      "ruleSummary": "タスクが完了・失敗したとき、または判断待ち・検収待ち・総合管理待ちのときに、この仲間に通知します。",
+      "pausedSummary": "オフ: この仲間は他のタスクの動きを引き受けません。",
+      "refresh": "タスクイベントを更新",
+      "loading": "タスクイベントを読み込み中…",
+      "emptyWatching": "オンです。他のタスクで何か起きるとここに表示され、この仲間を起こします。",
+      "emptyPaused": "上のスイッチをオンにすると、他のタスクの完了・失敗・判断待ちをこの仲間が引き受けます。",
+      "loadFailed": "タスクイベントを読み込めませんでした。",
+      "saveFailed": "タスクイベント購読を保存できませんでした。",
+      "retryFailed": "このタスクイベントを再試行できませんでした。",
+      "retry": "タスクイベントを再試行",
+      "openTask": "元のタスクを開く",
+      "untitledTask": "無題のタスク",
+      "sidebarAttention": "{{count}} 件のタスクイベントに確認が必要です",
+      "guardianAnomalies": {
+        "stale-running": "実行中ですが長時間アクティビティがありません",
+        "expected-event-missing": "到着すべき状態イベントが届いていません",
+        "unclaimed-decision": "判断待ちですが担当がいません"
+      },
+      "status": {
+        "pending": "待機中",
+        "processing": "処理中",
+        "handled": "処理済み",
+        "failed": "失敗",
+        "skipped": "スキップ"
+      },
+      "events": {
+        "session": {
+          "state": {
+            "transition": "タスク状態が遷移しました",
+            "guardian-anomaly": "タスクが止まっているようです"
+          },
+          "turn": {
+            "completed": "タスクのターンが完了しました",
+            "failed": "タスクのターンが失敗しました"
+          },
+          "metadata": {
+            "changed": "タスク状態が変更されました"
+          },
+          "decision": {
+            "required": "タスクに判断が必要です"
+          }
+        }
+      },
+      "archivedNote": "アーカイブ済みの仲間はタスクの動きを引き受けません。ここを再び有効にするには、まず復元してください。"
+    },
+    "adapterBoundaryTitle": "アダプター境界を維持",
+    "adapterBoundaryDescription": "Telegram の返信、Feishu カード、Slack スレッド、ローカル配信は各アダプターが担当します。この画面は仲間の ID とタスク投影のみを扱います。",
+    "backToChat": "チャットに戻る",
+    "identityTitle": "アイデンティティ",
+    "identitySourceLabel": "仲間のアイデンティティ（SOUL）",
+    "identitySourcePlaceholder": "この仲間の性格、役割、長期的な振る舞いを説明します。",
+    "identitySourceDescription": "「その子が何者か」を書く欄です。タスクの開始時に一度渡され、メッセージごとに繰り返されることはありません。",
+    "userContextSourceLabel": "ユーザープロフィール（USER）",
+    "userContextSourcePlaceholder": "あなたが誰か、呼び方、長期的な好みをこの仲間に伝えます。",
+    "userContextSourceDescription": "あなたについて知っておいてほしいこと。性格や、その子が自分で覚えた内容とは分けて保存され、他の設定と一緒に固定されます。",
+    "chooseAvatar": "アバター {{avatar}} を選択",
+    "chooseAvatarColor": "アバターの色 {{color}} を選択",
+    "advancedCapabilities": {
+      "title": "これらの能力の裏側にある技術設定",
+      "description": "どのエンジンとモデルで動くか、それに道具とスキル。普段の利用では触る必要はありません。"
+    },
+    "memoryRecovery": {
+      "title": "この仲間の長期メモリは現在オフです",
+      "description": "長期メモリは新しい仲間では常にオンです。この仲間は以前オフにされたため、ここから戻せます。",
+      "action": "メモリをオンに戻す"
+    },
+    "capabilitiesTitle": "機能",
+    "capabilitiesDescription": "タスクが始まるとき、この子が実際に持つ能力です。",
+    "capabilitiesDeferred": "ここでの変更は次のタスクから反映されます。今のタスクは開始時の能力のまま動きます。",
+    "profileApply": {
+      "title": "設定を保存しました",
+      "description": "新しい設定は保存済みですが、今のタスクはまだ以前の設定で動いています。新しいタスクを始めると反映され、今のタスクは履歴に移ります。",
+      "keepCurrent": "今のタスクを続ける",
+      "renewAndApply": "新しいタスクを始める",
+      "saveFailed": "仲間設定を保存できませんでした。変更は適用されていません。",
+      "renewFailed": "新しい設定は保存できましたが、新しいタスクを開始できませんでした。今のタスクはそのままです。"
+    },
+    "runtimeState": {
+      "saved": "保存済み・起動後に反映",
+      "prepared": "起動設定を準備済み・反映は未確認",
+      "applied": "現在のタスクに反映済み",
+      "pendingRenew": "次のタスクから反映",
+      "degraded": "一部の機能が利用不可",
+      "failed": "前回の起動に失敗・未反映"
+    },
+    "modelLabel": "モデル",
+    "modelUnavailable": "{{model}}（現在利用できません）",
+    "harnessLabel": "エンジン",
+    "capabilityMode": {
+      "inherit": "現在利用可能な機能を使用",
+      "allowlist": "個別に選択"
+    },
+    "capabilityCatalogLoading": "このプロジェクトで利用可能な機能を読み込んでいます…",
+    "capabilityCatalogError": "機能カタログを読み込めませんでした。保存済みの選択は保持されます。",
+    "toolsetsLabel": "Cindy ツール",
+    "toolsetCatalogEmpty": "このプロジェクトには設定可能な Cindy ツールがありません。",
+    "mcpServersLabel": "カスタム MCP サーバー",
+    "mcpCatalogEmpty": "カスタム MCP サーバーはまだ設定されていません。",
+    "capabilityApplied": "使用中",
+    "capabilityUnavailable": "利用不可",
+    "capabilityDisabledBySystem": "現在のプロジェクトまたはアカウント設定で無効です。",
+    "capabilityNotInstalled": "インストールされていません",
+    "memoryLabel": "長期メモリ",
+    "memoryDescription": "この仲間専用の独立したメモリ領域を使用します。",
+    "automationLabel": "自動化",
+    "automationDescription": "不在のあいだ、この子に予定どおり働いてもらえます。各実行は開始時点の設定・プロジェクト・送り先で固定されます。",
+    "automations": {
+      "title": "仲間の自動化",
+      "description": "この仲間が自分で実行する Routine。スケジュール、または「今すぐ実行」で動きます。",
+      "trustedRequired": "無人実行では承認できる人がいません。まずこの仲間とのチャットで、入力欄の権限を「フルアクセス」に切り替えてから作成してください。",
+      "name": "名前",
+      "dailyTime": "毎日の実行時刻",
+      "intervalMinutes": "間隔（分）",
+      "timezone": "タイムゾーン",
+      "project": "プロジェクト",
+      "defaultProject": "仲間の既定プロジェクト",
+      "deliveryRoute": "結果の配信先",
+      "canonicalTask": "仲間のメインタスク",
+      "noteNamespace": "メモ領域",
+      "create": "Routine を作成",
+      "creating": "作成中…",
+      "empty": "スケジュールはまだありません。毎日 / 毎週何をするか、一言で伝えてください。",
+      "loading": "自動化を読み込み中…",
+      "refresh": "自動化を更新",
+      "runNow": "今すぐ実行",
+      "archive": "アーカイブ",
+      "nextRun": "次回実行",
+      "activeRuns": "{{count}} 件実行中",
+      "noRuns": "実行履歴はまだありません。",
+      "worktree": "Worktree",
+      "delivery": "配信",
+      "openTask": "タスクを開く",
+      "retryDelivery": "配信を再試行",
+      "retryingDelivery": "再試行中…",
+      "edit": "編集",
+      "saving": "保存中…",
+      "nextProfileVersion": "次回の実行は今保存されている設定を使います",
+      "executionPolicy": "実行の上限",
+      "executionPolicyDescription": "最長実行分数に達すると、その実行は中止されます。",
+      "timeoutMinutes": "最大実行時間（分）",
+      "budgetTokens": "連携 Token 予算",
+      "unlimited": "無制限",
+      "maxDelegationDepth": "最大協力階層",
+      "delegateTargets": "協力できる仲間",
+      "delegateNone": "他の仲間を呼び出さない",
+      "delegateAllowlist": "選択した仲間のみ",
+      "delegateAllActive": "実行開始時点で有効なすべての仲間",
+      "noDelegateBots": "利用できる他の仲間はありません。",
+      "status": {
+        "active": "実行中",
+        "paused": "一時停止",
+        "error": "要確認",
+        "archived": "アーカイブ済み"
+      },
+      "runStatus": {
+        "claimed": "取得中",
+        "running": "実行中",
+        "success": "完了",
+        "failed": "失敗",
+        "aborted": "中止",
+        "interrupted": "中断",
+        "skipped": "スキップ",
+        "unknown": "不明"
+      },
+      "deliveryStatus": {
+        "not-requested": "配信なし",
+        "enqueue-failed": "キュー追加失敗",
+        "pending": "配信待ち",
+        "sending": "配信中",
+        "failed": "再試行待ち",
+        "delivered": "配信済み",
+        "dead-letter": "手動復旧が必要",
+        "cancelled": "キャンセル済み"
+      },
+      "deliveryProgressText": "本文を配信済み",
+      "deliveryProgressMedia": "添付ファイル {{count}} 件を配信済み",
+      "deliveryCommitted": "最終メッセージを確定済み",
+      "outputArtifacts": "出力作品 {{count}} 件",
+      "retryDuplicateTitle": "再配信するとメッセージが重複する可能性があります",
+      "retryDuplicateDescription": "このチャンネルでは安全に途中から再開できません。配信済みの本文または添付ファイル {{count}} 件が再送される可能性があります。",
+      "retryDuplicateConfirm": "それでも再配信",
+      "newRoutine": "新規",
+      "whatToDo": "何をしますか？",
+      "whatToDoPlaceholder": "例：昨日終わった作業をまとめて、短い進捗サマリーを書く。",
+      "whenToRun": "いつ実行しますか？",
+      "mode": {
+        "manual": "手動",
+        "daily": "毎日",
+        "interval": "間隔",
+        "cron": "カスタム"
+      },
+      "manualHint": "「今すぐ実行」を押したときだけ実行されます。",
+      "cronExpr": "Cron 式",
+      "cronHint": "5 項目の cron 式。例：0 9 * * 1-5 は平日 09:00。",
+      "timezoneHint": "時刻は {{timezone}} で計算します。",
+      "nameAuto": "指示から自動で付ける",
+      "advanced": "詳細",
+      "advancedHint": "プロジェクト、配信先、実行の上限、タイムゾーン",
+      "noteNamespaceHint": "この Routine が実行のあいだ自分のメモを置く場所です。",
+      "scheduleSummary": {
+        "manual": "手動のみ",
+        "daily": "毎日 {{time}}",
+        "interval": "{{count}} 分ごと",
+        "cron": "Cron: {{expr}}"
+      },
+      "lastRun": "前回の実行",
+      "runHistory": "実行履歴",
+      "enableRoutine": "この Routine をオンにする",
+      "templates": {
+        "hint": "例から始める:",
+        "dailyDigest": {
+          "name": "毎日 9:00 · 昨日の進捗をまとめる",
+          "prompt": "昨日終わった作業をまとめて、短い進捗サマリーを書く。"
+        },
+        "inboxTriage": {
+          "name": "1 時間ごと · 受信箱を整理",
+          "prompt": "受信箱を確認して、新しい内容を短い ToDo リストにまとめる。"
+        },
+        "weeklyReport": {
+          "name": "毎週金曜 17:00 · 今週のまとめ",
+          "prompt": "今週終わったことを短くまとめる。"
+        }
+      },
+      "delegateLimitsHint": "以下の 2 つは、この Routine が他の仲間に渡すサブタスクだけを制限し、自身の使用量には上限を設けません。"
+    },
+    "permissionsLabel": "権限モード",
+    "permissionAsk": "実行前に確認",
+    "permissionTrusted": "信頼済みの操作",
+    "codexAutomaticCompact": "Codex の相棒は自分で文脈を圧縮し、/new でも今のタスクは残ります。本当に仕切り直したいときだけ新しいタスクを始めてください。",
+    "chatWelcome": "{{name}} とチャット",
+    "previewHint": "ローカルプレビュー — まだ実際の Agent には送信されません。",
+    "chatPlaceholder": "この仲間にメッセージを送信…",
+    "attach": "ファイルを添付",
+    "image": "画像を追加",
+    "enterToSend": "Enter で送信",
+    "send": "メッセージを送信",
+    "channelsTitle": "メッセージチャネル",
+    "channelsDescription": "仲間の身元やローカルチャットを変えずに、Telegram、Feishu、Slack などの入口を追加します。",
+    "channelLocalOwned": "ローカル仲間のメイン入口",
+    "channelLocalAdapter": "ローカルアダプター",
+    "channelServerRelay": "サーバー中継",
+    "channelConnected": "オンライン",
+    "channelOffline": "オフラインまたは利用不可",
+    "channelConnectionRequired": "このチャネルを追加する前に、設定で {{channel}} Bot を接続してください。",
+    "migration": {
+      "title": "メッセージチャネルを移行して接続",
+      "description": "Cindy は旧 IM タスクと既存の引き継ぎを確認してから、このアカウントを仲間にアトミックに切り替えます。",
+      "legacyTaskCount": "旧タスク {{count}} 件",
+      "blocked": "競合を解消するまで移行できません",
+      "conflicts": {
+        "connection-unavailable": "このチャネルには利用可能なアカウント識別情報がありません。",
+        "connection-not-routable": "このチャネルは現在仲間ルートを受信できません。",
+        "channel-owned-by-another-bot": "このアカウントは別の仲間にマウントされています。",
+        "session-owned-by-another-bot": "以前のタスクが別の仲間に関連付けられています。",
+        "session-role-conflict": "以前のタスクには別の仲間ロールがあります。",
+        "im-takeover-active": "以前の /ctr 引き継ぎがこれらのタスクを参照しています。",
+        "ambiguous-legacy-binding": "一部の古い Slack タスクにワークスペース識別情報がありません。現在の Slack 接続で一度開いてから移行してください。",
+        "route-overlap": "このアカウントには重複する既定の仲間ルートがあります。",
+        "channel-busy": "このチャネルでは別の移行を実行中です。"
+      },
+      "warnings": {
+        "connection-offline": "チャネルはオフラインです。再接続するとマウントを再開します。",
+        "no-legacy-tasks": "このアカウントの以前の IM タスクは見つかりませんでした。",
+        "binding-restore-conflict": "ロールバックでは {{count}} 件の新しいチャネル紐付けを上書きせず保持しました。"
+      },
+      "errors": {
+        "load": "チャネルと移行状態を読み込めませんでした。再試行してください。",
+        "preflight": "移行の事前確認に失敗しました。チャネル状態を更新して再試行してください。",
+        "apply": "チャネルを移行できませんでした。不完全な切り替えは適用されていません。",
+        "rollback": "ロールバックはまだ完了していません。再試行すると保存済み状態から続行します。"
+      },
+      "preserveData": "旧タスクは元のソースを保持した読み取り専用履歴になります。グループ履歴、返信、カード、スレッド、添付は各アダプターに残ります。",
+      "apply": "移行して接続",
+      "applying": "移行中…",
+      "rollbackTitle": "チャネル移行を元に戻しますか？",
+      "rollbackDescription": "移行した仲間ルートを無効にし、安全に復元できる旧タスクを戻し、移行後の仲間履歴は保持します。",
+      "rollback": "移行を元に戻す",
+      "rollingBack": "復元中…"
+    },
+    "routes": {
+      "title": "チャンネルルート",
+      "description": "この仲間が処理する受信チャットとスレッドを指定します。チャンネルの既定より具体的なルートが優先されます。",
+      "add": "ルートを追加",
+      "addTitle": "チャンネルルートを追加",
+      "addDescription": "プラットフォームのチャットまたはスレッド ID を入力します。チャンネル全体のフォールバック以外では空にしないでください。",
+      "mountChannelFirst": "ルートを追加する前に IM チャンネルを追加してください。",
+      "empty": "有効なチャンネルルートはまだありません。",
+      "channel": "チャンネル",
+      "routeKey": "ルート名",
+      "routeKeyPlaceholder": "例：release-team",
+      "principalKey": "チャットまたは DM ID",
+      "principalKeyPlaceholder": "プラットフォームのチャット ID",
+      "threadKey": "スレッドまたはトピック ID",
+      "threadKeyPlaceholder": "任意のスレッド ID",
+      "project": "このルートのプロジェクト",
+      "botDefaultProject": "仲間の既定プロジェクトを使用",
+      "create": "ルートを作成",
+      "saving": "保存中…",
+      "openTask": "タスクを開く",
+      "unknownChannel": "利用できないチャンネル",
+      "allMessages": "このチャンネルのすべてのメッセージ",
+      "lastActivity": "最終アクティビティ：{{time}}",
+      "projectBound": "ルート固有のプロジェクトを使用",
+      "pause": "一時停止",
+      "pausing": "一時停止中…",
+      "resume": "再開",
+      "resuming": "再開中…",
+      "archive": "アーカイブ",
+      "archiving": "アーカイブ中…",
+      "status": {
+        "active": "有効",
+        "paused": "一時停止",
+        "offline": "準備完了",
+        "recovering": "復旧中",
+        "error": "要対応",
+        "archived": "アーカイブ済み"
+      }
+    },
+    "projects": {
+      "title": "プロジェクトと worktree",
+      "description": "仲間にプロジェクトを紐付け、タスクでプロジェクトディレクトリまたは Cindy 管理の worktree を使用します。",
+      "empty": "この仲間にはまだプロジェクトが紐付けられていません。",
+      "addTitle": "ローカルプロジェクトを紐付ける",
+      "chooseDirectory": "フォルダを選択",
+      "directoryPlaceholder": "プロジェクトフォルダを選択",
+      "add": "プロジェクトを紐付ける",
+      "adding": "紐付け中…",
+      "archive": "紐付けを解除",
+      "archiving": "解除中…",
+      "saveBinding": "紐付けを保存",
+      "saving": "保存中…",
+      "releaseLease": "worktree を解放",
+      "releasingLease": "解放中…",
+      "localProject": "ローカルプロジェクト",
+      "remoteProject": "リモートプロジェクト",
+      "defaultBadge": "デフォルト",
+      "makeDefault": "仲間の新しいタスクのデフォルトプロジェクトにする",
+      "policyLabel": "ワークスペースポリシー",
+      "defaultBranchLabel": "ベースブランチ",
+      "defaultBranchPlaceholder": "HEAD またはブランチ名",
+      "allowedPathsLabel": "追加で許可するパス",
+      "allowedPathsPlaceholder": "プロジェクト内の絶対パスを1行に1つ",
+      "leaseTitle": "現在のワークスペースリース",
+      "leaseGeneration": "所有者世代 {{generation}}",
+      "policies": {
+        "none": "プロジェクトディレクトリを使用",
+        "reuse": "共有 worktree を再利用",
+        "per-task": "タスクごとに worktree を作成",
+        "read-only": "プロジェクトを読み取り専用で使用"
+      },
+      "leaseStatus": {
+        "acquiring": "作成中",
+        "active": "使用中",
+        "releasing": "解放中",
+        "released": "解放済み",
+        "retained": "ディスクに保持",
+        "error": "要確認"
+      },
+      "errors": {
+        "chooseDirectory": "先にプロジェクトフォルダを選択してください。",
+        "activeLease": "この紐付けには使用中の worktree があります。参照しているタスク、自動化、仲間委任を終了または解放してから解除してください。",
+        "invalid": "プロジェクトまたはパスの設定が無効です。",
+        "generic": "プロジェクトの紐付けを更新できませんでした。もう一度お試しください。"
+      }
+    },
+    "roster": {
+      "backToRoster": "一覧に戻る",
+      "customAction": "自分でつくる",
+      "customHint": "性格・記憶・スケジュールは、迎え入れたあとにその子の設定でゆっくり調整できます。",
+      "customIntro": "どんな子かを一言くれれば下書きします。もちろん、全部自分で書いても構いません。",
+      "customName": "カスタム",
+      "customNameLabel": "名前",
+      "customNamePlaceholder": "例：アジュ",
+      "customSkill": "あなた次第",
+      "customSubtitle": "名前と顔だけ決めれば、まずは迎え入れられます。",
+      "customTitle": "自分のパートナーをつくる",
+      "footerHint": "迎え入れると、まず挨拶してくれます。メッセージチャネルは後からその子の設定でつなげます（1 人につき 1 つ）。",
+      "goodAt": "得意 · {{skill}}",
+      "importLink": "パートナーのファイルがありますか？インポートする",
+      "join": "迎え入れる",
+      "joined": "参加済み",
+      "subtitle": "気の合う子を選ぶか、自分でつくってください。",
+      "title": "パートナーに会う",
+      "customAvatarLabel": "顔を選ぶ",
+      "generate": {
+        "title": "どんな子ですか？",
+        "subtitle": "一言で大丈夫です。名前も性格も背景も、まず私が下書きします。あとから直せます。",
+        "inputLabel": "一言で説明してください",
+        "inputPlaceholder": "例：デザイナー / 子どもの勉強を見てくれるアシスタント",
+        "action": "下書きしてもらう",
+        "generating": "作成中…",
+        "skip": "スキップして自分で書く",
+        "previewTitle": "この子はどうですか",
+        "previewSubtitle": "気になるところはその場で直してから迎え入れてください。",
+        "descriptionLabel": "一言の紹介",
+        "memoriesLabel": "最初から覚えていること",
+        "memoriesEmpty": "今回は初期メモリーがありません。",
+        "confirm": "これで作成",
+        "regenerate": "言い方を変えてやり直す",
+        "errors": {
+          "emptyInput": "まず、どんな子かを一言書いてください。",
+          "providerNotReady": "使えるモデルの接続元がありません。ログインするか 1 つ接続してからお試しください。自分で書くこともできます。",
+          "invalidOutput": "今回の下書きは読み取れませんでした。もう一度試すか、自分で書いてください。",
+          "failed": "今回は生成できませんでした。もう一度試すか、自分で書いてください。",
+          "unavailable": "このバージョンでは下書き生成を使えません。自分で書いてください。"
+        }
+      }
+    },
+    "chat": {
+      "composerPlaceholder": "{{name}}に話しかける…",
+      "composerPlaceholderLatin": "{{name}} に話しかける…"
+    },
+    "globalSettings": {
+      "title": "パートナー",
+      "description": "パートナー全体に共通する設定です。個々のパートナーの設定は、その子のページにあります。",
+      "notifications": {
+        "title": "新着メッセージの知らせ方",
+        "note": "仲間からの新着は、左の仲間リストに未読マークとして出ます。システムのバナーや音は鳴りません。",
+        "footnote": "「全体の司令塔」のような仲間は、自分でタスクの動きを見ています——それは本人の能力であって、ここの設定ではありません。"
+      },
+      "portability": {
+        "importTitle": "パートナーをインポート",
+        "importHint": "パートナーファイルからその子を復元します。",
+        "importAction": "ファイルを選ぶ",
+        "exportTitle": "パートナーをエクスポート",
+        "exportHint": "その子の性格と設定をまとめて持ち出せます。",
+        "exportAction": "エクスポート",
+        "exportEmpty": "まだエクスポートできるパートナーがいません。"
+      },
+      "rosterNote": "あらかじめ用意された顔ぶれは、バージョンごとに増えていきます。"
+    },
+    "settingsBlocks": {
+      "who": "プロフィール",
+      "can": "できること",
+      "understand": "把握しているフォルダ",
+      "schedule": "スケジュール",
+      "advanced": "詳細設定",
+      "whoDescription": "性格を書く必要はありません——何回か選ぶだけです。",
+      "canDescription": "これらはオンにする必要はありません——生まれつきできます。",
+      "understandDescription": "フォルダを 1 つ渡せば、あなたのプロジェクトが分かります。",
+      "scheduleDescription": "時間になれば自分でやります。あなたがいなくても大丈夫です。"
+    },
+    "advancedLinkLabel": "詳細設定（モデル・技術詳細・エクスポート）",
+    "persona": {
+      "title": "性格を調整",
+      "description": "3つ選ぶだけで話し方が変わります。",
+      "adjustButton": "性格を調整",
+      "stepStyle": "話し方",
+      "stepProactivity": "積極さ",
+      "stepCall": "呼び方",
+      "style": {
+        "concise": {
+          "label": "簡潔で率直",
+          "description": "一言で済むことは一言で。"
+        },
+        "lively": {
+          "label": "明るくおしゃべり",
+          "description": "砕けた口調で、表情も少し添える。"
+        },
+        "steady": {
+          "label": "落ち着いて丁寧",
+          "description": "先に説明してから取りかかる。"
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "必要な時だけ話す",
+          "description": "普段は話しかけません。"
+        },
+        "proactive": {
+          "label": "積極的に知らせる",
+          "description": "知らせるべきことは自分から話します。"
+        },
+        "reportAll": {
+          "label": "何でも報告する",
+          "description": "終わったことから順に報告します。"
+        }
+      },
+      "call": {
+        "name": "名前で呼ぶ",
+        "boss": "ボス",
+        "custom": "その他"
+      },
+      "customCallPlaceholder": "呼び方を入力",
+      "previewTitle": "今のプロフィール",
+      "summaryUnset": "未設定",
+      "summaryCallName": "名前で呼びます",
+      "summaryCallBoss": "ボスと呼びます",
+      "summaryCallCustom": "{{name}}と呼びます",
+      "ack": {
+        "concise": "了解。これからはこの話し方で。",
+        "conciseBoss": "了解です、ボス。これからはこの話し方で。",
+        "conciseCalled": "了解です、{{call}}。これからはこの話し方で。",
+        "lively": "りょーかい！これからはこの調子でいくね、すぐ慣れるよ 😉",
+        "livelyBoss": "りょーかい、ボス！これからはこの調子でいくね、すぐ慣れるよ 😉",
+        "livelyCalled": "りょーかい、{{call}}！これからはこの調子でいくね、すぐ慣れるよ 😉",
+        "steady": "承知しました。これからはこの話し方で、まず説明してから動きます。",
+        "steadyBoss": "承知しました、ボス。これからはこの話し方で、まず説明してから動きます。",
+        "steadyCalled": "承知しました、{{call}}。これからはこの話し方で、まず説明してから動きます。"
+      }
+    },
+    "memoryList": {
+      "title": "覚えていること",
+      "empty": "まだ何も覚えていません——もう少し話せば増えていきます。",
+      "clearAll": "記憶を消去",
+      "clearing": "消去中…",
+      "clearTitle": "記憶を消去",
+      "clearDescription": "消去すると、これらの内容を忘れます。これまでの会話には影響しません。続けますか？",
+      "clearConfirm": "消去",
+      "deleteTitle": "この記憶を削除",
+      "deleteDescription": "「{{title}}」を削除しますか？元に戻せません。",
+      "deleteConfirm": "削除",
+      "deleteAria": "「{{title}}」を削除",
+      "footnote": "自分でここに書きためていきます。いつでも削除できます。",
+      "footnoteWithSeed": "いくつかは迎え入れたときから持っているものです。そのあとは自分でここに書きためていきます。いつでも削除できます。",
+      "seedBack": "最初のメモを書き直す",
+      "seedingBack": "書き込み中…"
+    },
+    "learned": {
+      "title": "学んだこと",
+      "empty": "まだ得意なことはありません——いくつか任せてみてください。",
+      "notesTitle": "自分用に書きとめたやり方",
+      "deleteTitle": "このスキルを削除",
+      "deleteDescription": "「{{title}}」を削除しますか？次のタスクからは使わなくなります。",
+      "deleteConfirm": "削除",
+      "deleteAria": "「{{title}}」を削除",
+      "loadingBody": "開いています…"
+    },
+    "growth": {
+      "rememberedOne": "覚えました：{{title}}",
+      "rememberedMany": "{{count}} 件覚えました",
+      "rememberedFallback": "ひとつ覚えました",
+      "learnedOne": "できることが増えました：{{title}}",
+      "learnedMany": "できることが {{count}} 個増えました",
+      "learnedFallback": "できることが増えました",
+      "hint": "何をメモしたか見る"
+    },
+    "abilityWall": {
+      "builtinTitle": "標準搭載",
+      "connectableTitle": "接続できるもの",
+      "abilities": {
+        "writing": "✍️ 文章作成・ファイル",
+        "research": "🔍 調べもの",
+        "doing": "🛠 実作業",
+        "schedule": "⏰ スケジュール実行",
+        "collab": "🤝 仲間との連携"
+      },
+      "connectAccount": "アカウントを接続",
+      "imBlocked": "チームメイトが接続できるIMは1つだけです — 先に{{channel}}を切断してください",
+      "connectedTitle": "接続済み"
+    },
+    "folders": {
+      "addButton": "+ フォルダーを追加",
+      "adding": "追加中…",
+      "remove": "削除"
+    },
+    "advancedIdentity": {
+      "title": "説明と背景情報"
+    },
+    "collab": {
+      "joined": "{{name}} が会話に加わりました",
+      "inboundJoined": "{{name}} から仕事が届きました",
+      "guestTag": "ゲスト",
+      "nudge": "催促する",
+      "nudgeSend": "送信",
+      "nudgePlaceholder": "進み具合はどう？",
+      "nudgeAria": "{{name}} に一言送る",
+      "interjected": "{{name}} に催促しました",
+      "stop": "停止",
+      "openTask": "{{name}} の会話を見る",
+      "watchWork": "作業の様子を見る",
+      "actionFailed": "送信できませんでした。もう一度お試しください。",
+      "retrying": "まだ開始できていません。再試行中…",
+      "status": {
+        "queued": "開始しています",
+        "waiting": "開始待ち",
+        "running": "作業中",
+        "completed": "完了",
+        "failed": "失敗",
+        "cancelled": "停止済み",
+        "timed-out": "タイムアウト",
+        "unknown": "{{name}} の状況を確認できません"
+      },
+      "report": {
+        "done": "{{name}} · {{duration}} · 完了",
+        "failed": "{{name}} · {{duration}} · 失敗",
+        "failedReason": "{{name}} · 失敗：{{reason}}",
+        "stopped": "{{name}} · {{duration}} · 停止",
+        "delivered": "{{name}} · {{duration}} · {{count}} 件納品",
+        "timedOut": "{{name}} · {{duration}} · タイムアウト"
+      },
+      "duration": {
+        "seconds": "{{n}} 秒",
+        "minutes": "{{n}} 分",
+        "hoursMinutes": "{{h}} 時間 {{m}} 分"
+      }
+    },
+    "artifacts": {
+      "open": "開く",
+      "openLibrary": "作品ライブラリを開く",
+      "openFailed": "作品を開けませんでした。もう一度お試しください。",
+      "reveal": "ライブラリで表示",
+      "retry": "再試行",
+      "subtitle": "このメンバーが作ったもの",
+      "empty": "まだ作品はありません。仕上がるとここに入ります。",
+      "emptyFiltered": "この種類はまだありません。",
+      "truncated": "最新 200 件のみ表示しています。",
+      "remoteUnavailable": "リモートタスクでは作品ライブラリをまだ利用できません。",
+      "category": {
+        "all": "すべて",
+        "doc": "ドキュメント",
+        "sheet": "スプレッドシート",
+        "image": "画像",
+        "deck": "スライド",
+        "video": "動画",
+        "other": "その他"
+      },
+      "time": {
+        "justNow": "たった今",
+        "minutes": "{{n}} 分前",
+        "hours": "{{n}} 時間前",
+        "days": "{{n}} 日前"
+      },
+      "subtitleNamed": "{{name}} が作ったもの",
+      "deliveredBy": "{{name}} が納品"
+    },
+    "channelConnect": "接続",
+    "channelDisconnect": "切断",
+    "joined": {
+      "today": "今日加入",
+      "yesterday": "昨日加入",
+      "days": "{{n}} 日前に加入",
+      "months": "{{n}} か月前に加入",
+      "years": "{{n}} 年前に加入"
+    },
+    "background": {
+      "title": "背景設定",
+      "edit": "編集",
+      "done": "完了",
+      "placeholder": "この子が誰で、何を担当し、どこまでやるか。",
+      "empty": "まだ背景設定がありません。数行あるだけで、ぐっとその子らしくなります。",
+      "footnote": "この文章は会話にそのまま持ち込まれます。上の 3 つの性格設定は別枠なので、ここを直しても影響しません。"
+    },
+    "welcome": {
+      "generic": "こんにちは、{{name}} です。これから何かあれば遠慮なく言ってください。まずはこのあたりを把握しておきます。",
+      "withRole": "こんにちは、{{name}} です——{{description}}。何かあればそのまま言ってください。"
+    }
+  },
   "commonUi": {
+    "retry": "再試行",
     "crossAgentConvert": {
       "asking": {
         "title": "変換できるワークスペース設定を検出",
@@ -6700,6 +7732,7 @@
       "browserTab": "ブラウザタブ",
       "desktopWindow": "アプリウィンドウ",
       "task": "タスク",
+      "bot": "仲間への委任",
       "pluginResources": "プラグインリソース",
       "pluginResource": "プラグインリソース",
       "backToAll": "すべての @ コンテンツに戻る",
@@ -10087,7 +11120,7 @@
       "remoteUnsupported": "このバージョンではローカルタスクのみレビューできます"
     },
     "externalArtifactConfirm": {
-      "title": "ワークスペース外の成果物をレビューしますか？",
+      "title": "ワークスペース外の作品をレビューしますか？",
       "message": "このレビューでは、ワークスペース外またはメモリ内の {{count}} 件を設定済みモデルへ送信します。",
       "detail": "今回許可されるのは以下の項目だけです。続行前に確認してください。",
       "inline": "メモリ内の添付ファイル",
@@ -10120,7 +11153,7 @@
       "ariaLabel": "スキル提案レビューパネル",
       "title": "スキル提案：{{name}}",
       "errorTitle": "提案の読み込みに失敗しました",
-      "redactionWarning": "成果物に機密の可能性がある内容が検出されました（{{categories}}）。適用前に diff をよくご確認ください。",
+      "redactionWarning": "作品に機密の可能性がある内容が検出されました（{{categories}}）。適用前に diff をよくご確認ください。",
       "overwriteWarning": "同名のローカルスキルが既に存在します。適用すると既存バージョンが上書きされます（旧バージョンは自動でバックアップされます）。",
       "apply": "ローカルスキルに適用",
       "applying": "適用中…",

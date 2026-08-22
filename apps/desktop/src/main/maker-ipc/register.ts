@@ -35,6 +35,15 @@ import type {
   SessionSendResult,
   UserMessage,
 } from '@cindy/maker-core';
+import { buildBotMemoryScopeKey } from '@cindy/maker-core';
+import {
+  normalizeBotMemorySeedEntries,
+  selectMissingBotMemorySeedEntries,
+} from '../../shared/botMemorySeed.js';
+import {
+  defaultBotPersonaGenerationDeps,
+  generateBotPersonaDraft,
+} from './botPersonaGeneration.js';
 import { storedCustomProviderId } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
@@ -92,6 +101,10 @@ import {
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
+import { ingestMedia } from '../cindy-media/ingest.js';
+import { removeRefs as removeMediaRefs } from '../cindy-media/ledger.js';
+import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
@@ -274,6 +287,7 @@ import {
   getSessionRowSnapshotStrict,
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
+  setSessionsStatusInDb,
 } from '../localDb/ipc/sessions.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
 import {
@@ -303,7 +317,18 @@ import {
   setWorkerFocus,
   updateWorkerStatus,
 } from '../localDb/orcaTeamStore.js';
-import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import {
+  botLifecycleEvents,
+  botChannels,
+  botDeliveryOutbox,
+  botProfiles,
+  botRoutes,
+  botSessionLinks,
+  messages,
+  orcaTeams,
+  orcaWorkers,
+  sessions,
+} from '../localDb/schema.js';
 import {
   isOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -316,6 +341,11 @@ import {
   readClaudeApiKey,
 } from '../maker-host/auth-adapters.js';
 import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skills.js';
+import {
+  deleteBotSkillForBot,
+  listBotSkillsForBot,
+  readBotSkillForBot,
+} from './botSkillService.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -339,6 +369,32 @@ import {
   writeAgentResourceSetting,
 } from '../maker-host/agent-resource-settings-store.js';
 import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js';
+import {
+  createBotDelegationService,
+  type BotDelegationService,
+} from './botDelegationService.js';
+import {
+  createBotDeliveryOutboxService,
+  type EnqueueBotDeliveryInput,
+  type RecordUnknownBotDeliveryInput,
+  type BotDeliveryOutboxService,
+} from './botDeliveryOutboxService.js';
+import { deliverMountedBotRoute } from './botMountedRouteDelivery.js';
+import { registerBotLifecycleHandlers } from './botLifecycleService.js';
+import {
+  createBotSessionEventService,
+  type BotSessionEventService,
+} from './botSessionEventService.js';
+import {
+  createBotCompactRuntimeRefreshCoordinator,
+  replaceBotRuntimeAfterPreflight,
+  type BotCompactBoundary,
+  type BotCompactRuntimeRefreshOutcome,
+  type BotCompactRuntimeSession,
+} from './botCompactRuntimeRefresh.js';
+import { isBotCanonicalReplacementBusy } from './botCanonicalReplacementGuard.js';
+import { configureBotCanonicalReplacementCoordinator } from './botCanonicalReplacementCoordinator.js';
+import { botSessionInputBlockReason } from './botSessionInputGuard.js';
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host.js';
 import {
   cancelCodexAuthModeChange,
@@ -347,6 +403,7 @@ import {
   getMaker,
   getMakerIfReady,
   getPluginRegistry,
+  preflightBotRuntimeResources,
   prepareCodexForAuthModeChange,
   restartCodexAfterAuthModeChange,
   setBeforeLocalCodexSessionStartHook,
@@ -464,6 +521,7 @@ import {
   recordSessionContextSnapshot,
   recordSessionTurnSpend,
   recordSessionTurnTokens,
+  setSessionTokenUsageObserver,
 } from '../sessionSpendBroadcaster.js';
 import {
   codexUsageToTokens,
@@ -581,6 +639,7 @@ import { registerAndroidAutomationHandlers } from './androidHandlers.js';
 import { registerIOSSimulatorHandlers } from './iosSimulatorHandlers.js';
 import { cancelIOSSimulatorSessionOperations } from '../mcp-integrations/ios-simulator.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
+import { BOT_DELEGATION_STATUSES } from '../../shared/botDelegation.js';
 import type { CollabDispatchOutcome } from './collabSendOutcome.js';
 import { runAcceptedCallback } from './acceptedCallbackRunner.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
@@ -1880,6 +1939,160 @@ interface EnableOrcaOptions {
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
+let botDelegationServiceHolder: BotDelegationService | null = null;
+let botDeliveryOutboxServiceHolder: BotDeliveryOutboxService | null = null;
+let botSessionEventServiceHolder: BotSessionEventService | null = null;
+
+export function enqueueBotDelivery(input: EnqueueBotDeliveryInput): Promise<{ id: string }> {
+  const outbox = botDeliveryOutboxServiceHolder;
+  if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+  return outbox.enqueue(input);
+}
+
+export function retryBotDelivery(id: string, botId: string): Promise<{ id: string }> {
+  const outbox = botDeliveryOutboxServiceHolder;
+  if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+  return outbox.retry(id, botId);
+}
+
+export async function recordUnknownBotFinalDelivery(input: {
+  sessionId: string;
+  recoveryKey: string;
+  text: string;
+  mediaAbsPaths?: readonly string[];
+  errorCode: string;
+  message: string;
+  progress?: Record<string, unknown>;
+}): Promise<{ id: string } | null> {
+  const outbox = botDeliveryOutboxServiceHolder;
+  if (!outbox) return null;
+  const [route] = await getDbClient()
+    .drizzle.select({
+      id: botRoutes.id,
+      botId: botRoutes.botId,
+      channelId: botRoutes.channelId,
+      ownerGeneration: botRoutes.ownerGeneration,
+      status: botRoutes.status,
+    })
+    .from(botRoutes)
+    .where(eq(botRoutes.currentSessionId, input.sessionId))
+    .limit(1);
+  if (!route || route.status !== 'active') return null;
+  const idempotencyKey = `bot-turn-final-recovery:${input.recoveryKey}`;
+  const [existing] = await getDbClient()
+    .drizzle.select({
+      id: botDeliveryOutbox.id,
+      botId: botDeliveryOutbox.botId,
+      routeId: botDeliveryOutbox.routeId,
+      sessionId: botDeliveryOutbox.sessionId,
+      ownerGeneration: botDeliveryOutbox.ownerGeneration,
+    })
+    .from(botDeliveryOutbox)
+    .where(eq(botDeliveryOutbox.idempotencyKey, idempotencyKey))
+    .limit(1);
+  if (existing) {
+    if (
+      existing.botId !== route.botId
+      || existing.routeId !== route.id
+      || existing.sessionId !== input.sessionId
+      || existing.ownerGeneration !== route.ownerGeneration
+    ) {
+      throw new Error(`Bot delivery idempotency conflict for ${idempotencyKey}`);
+    }
+    return { id: existing.id };
+  }
+  const initialPayload = {
+    version: 1 as const,
+    kind: 'channel-final-recovery',
+    text: input.text,
+    mediaRefs: [] as string[],
+  };
+  const recorded = await outbox.recordUnknown({
+    botId: route.botId,
+    channelId: route.channelId,
+    routeId: route.id,
+    sessionId: input.sessionId,
+    ownerGeneration: route.ownerGeneration,
+    idempotencyKey,
+    payload: initialPayload,
+    errorCode: input.errorCode,
+    message: input.message,
+    transport: 'local-adapter',
+    progress: input.progress,
+  } satisfies RecordUnknownBotDeliveryInput);
+  if (!input.mediaAbsPaths?.length) return recorded;
+
+  const mediaRefs: string[] = [];
+  const capturedRealPaths = new Set<string>();
+  try {
+    for (const rawPath of input.mediaAbsPaths ?? []) {
+      if (mediaRefs.length >= 4) break;
+      const realPath = await fsp.realpath(rawPath);
+      if (capturedRealPaths.has(realPath)) continue;
+      capturedRealPaths.add(realPath);
+      const stat = await fsp.stat(realPath);
+      if (!stat.isFile() || stat.size <= 0 || stat.size > 20 * 1024 * 1024) {
+        throw new Error('Bot delivery recovery media is unavailable or too large');
+      }
+      const buffer = await fsp.readFile(realPath);
+      if (buffer.byteLength !== stat.size) {
+        throw new Error('Bot delivery recovery media changed while being captured');
+      }
+      const mimeType = sniffMediaMime(buffer);
+      if (!mimeType?.startsWith('image/')) {
+        throw new Error('Bot delivery recovery only accepts validated images');
+      }
+      const ingested = await ingestMedia({
+        buffer,
+        mimeType,
+        refs: [{
+          refKind: 'bot-delivery',
+          refId: idempotencyKey,
+          originSessionId: input.sessionId,
+          originKind: 'tool',
+          originId: 'bot-final-recovery',
+        }],
+      });
+      if (!mediaRefs.includes(ingested.url)) mediaRefs.push(ingested.url);
+    }
+    const payloadRefJson = JSON.stringify({ ...initialPayload, mediaRefs });
+    const [updated] = await getDbClient()
+      .drizzle.update(botDeliveryOutbox)
+      .set({ payloadRefJson, updatedAt: Date.now() })
+      .where(
+        and(
+          eq(botDeliveryOutbox.id, recorded.id),
+          eq(botDeliveryOutbox.payloadRefJson, JSON.stringify(initialPayload)),
+        ),
+      )
+      .returning({ id: botDeliveryOutbox.id });
+    if (!updated) {
+      const [persisted] = await getDbClient()
+        .drizzle.select({ payloadRefJson: botDeliveryOutbox.payloadRefJson })
+        .from(botDeliveryOutbox)
+        .where(eq(botDeliveryOutbox.id, recorded.id))
+        .limit(1);
+      if (persisted?.payloadRefJson !== payloadRefJson) {
+        throw new Error('Bot delivery recovery media commit lost ownership');
+      }
+    }
+    return recorded;
+  } catch (error) {
+    const [persisted] = await getDbClient()
+      .drizzle.select({ payloadRefJson: botDeliveryOutbox.payloadRefJson })
+      .from(botDeliveryOutbox)
+      .where(eq(botDeliveryOutbox.id, recorded.id))
+      .limit(1)
+      .catch(() => []);
+    const finalPayloadRefJson = JSON.stringify({ ...initialPayload, mediaRefs });
+    if (persisted?.payloadRefJson !== finalPayloadRefJson) {
+      await removeMediaRefs({ refKind: 'bot-delivery', refId: idempotencyKey }).catch(
+        () => undefined,
+      );
+    }
+    throw error;
+  }
+}
 // session event wiring 是模块级函数；service 在 registerMakerIpc 内构造后注入给事件回调。
 let orcaTeamServiceForEvents: OrcaTeamService | null = null;
 
@@ -1939,6 +2152,10 @@ let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
  */
 export function tryGetOrcaCollabService(): OrcaCollabService | null {
   return orcaCollabServiceHolder;
+}
+
+export function tryGetBotDelegationService(): BotDelegationService | null {
+  return botDelegationServiceHolder;
 }
 
 function createBridgeWorkerLabel(task: string): string {
@@ -2251,6 +2468,42 @@ function hasPendingAgentInteractionForSession(sessionId: string): boolean {
       (entry) => entry.sessionId === sessionId,
     ) || ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
   );
+}
+
+type BotCompactRuntimeRefreshHandler = (
+  session: BotCompactRuntimeSession,
+  boundary: BotCompactBoundary,
+) => Promise<BotCompactRuntimeRefreshOutcome>;
+
+/**
+ * `wireSessionToIpc` is module-scoped because IM adapters and scheduler paths
+ * create Sessions outside the renderer IPC handler.  The real refresh routine
+ * needs the register-time Maker/bootstrap closure, so keep one narrow holder
+ * and let the instance-scoped coordinator own all compact settle signals.
+ */
+let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
+const botCompactRuntimeRefreshCoordinator = createBotCompactRuntimeRefreshCoordinator({
+  hasPendingInteraction: hasPendingAgentInteractionForSession,
+  refresh: (session, boundary) =>
+    botCompactRuntimeRefreshHandler?.(session, boundary) ?? Promise.resolve('deferred'),
+  onError: (sessionId, error) => {
+    log.warn('Bot compact runtime refresh failed; lazy resume remains available', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  },
+});
+
+function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string): void {
+  if (!botCompactRuntimeRefreshCoordinator.hasPending(session.id)) return;
+  void botCompactRuntimeRefreshCoordinator.attempt(session).then((outcome) => {
+    if (outcome === 'refreshed') {
+      log.info('Bot compact runtime refreshed at idle boundary', {
+        sessionId: session.id,
+        trigger,
+      });
+    }
+  });
 }
 
 function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
@@ -2736,6 +2989,35 @@ const sessionTurnLeaseTracker = new SessionTurnLeaseTracker({
   now: Date.now,
   warn: (message, fields) => log.warn(message, fields),
 });
+
+/**
+ * Renew replaces the canonical task and closes its live runtime.  The same
+ * per-session lock used by message dispatch must therefore cover the final
+ * busy check and the SQLite CAS; otherwise a turn can start between a renderer
+ * precheck and the archive transaction and lose its terminal output.
+ */
+export async function assertBotCanonicalReplacementIdle(sessionId: string): Promise<void> {
+  const live = getMakerIfReady()?.getSession(sessionId);
+  const busy = isBotCanonicalReplacementBusy({
+    turnRunning: live?.isTurnRunning() === true,
+    backgroundTaskCount: live?.listBackgroundTasks().length ?? 0,
+    trackedTurn: sessionTurnActivityTracker.isSessionInTurn(sessionId),
+    leasedTurn: await sessionTurnLeaseTracker.isTurnActive(sessionId),
+    pendingInteraction: hasPendingAgentInteractionForSession(sessionId),
+  });
+  if (busy) {
+    throwIpcError(
+      'SESSION_RUNNING',
+      'Bot 主任务仍在运行或等待交互，请等待本轮结束后再 Renew',
+    );
+  }
+}
+configureBotCanonicalReplacementCoordinator((sessionId, operation) =>
+  withSendToSessionLock(sessionId, async () => {
+    await assertBotCanonicalReplacementIdle(sessionId);
+    return operation();
+  }),
+);
 const silentStopTurnLeaseGate = new SilentStopTurnLeaseGate();
 function providerTurnLeaseId(sessionInstanceId: string, turnGeneration: number): string {
   return `${sessionInstanceId}:${turnGeneration}`;
@@ -3762,6 +4044,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
       // potentially multi-megabyte payload to every renderer and device-link controller.
       if (event.type === 'turn_diff') return;
+      if (event.type === 'compact_boundary') {
+        // A provider may continue the same product turn after compacting.  Only
+        // remember the exact runtime incarnation here; the final idle boundary
+        // below owns close/bootstrap so paired done/usage events are not lost.
+        botCompactRuntimeRefreshCoordinator.noteBoundary(session);
+      }
       if (
         event.turnScope === 'background' &&
         Object.prototype.hasOwnProperty.call(event, 'backgroundTurnStartedAt') &&
@@ -4243,6 +4531,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (event.type === 'done' && !isContinuationBoundary) {
         void gitSnapshotCoordinator?.onTurnEnd(session.id);
       }
+      if (
+        (event.type === 'done' && !isContinuationBoundary) ||
+        (event.type === 'status' && shouldMarkTurnStatusIdleAfterBroadcast) ||
+        event.type === 'agent_task_update'
+      ) {
+        attemptBotCompactRuntimeRefresh(session, `event:${event.type}`);
+      }
       if (isTerminalTurnErrorEvent(event)) {
         gitSnapshotCoordinator?.onTurnAbort(session.id);
       }
@@ -4522,6 +4817,55 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               });
             } catch {
               /* non-fatal */
+            }
+          })();
+          void (async () => {
+            try {
+              const doneData = event.data as {
+                result?: unknown;
+                message?: unknown;
+                reason?: unknown;
+              } | null;
+              const finalText =
+                typeof doneData?.result === 'string' ? doneData.result : '';
+              const errorText = [doneData?.message, doneData?.reason]
+                .find((value): value is string => typeof value === 'string' && value.length > 0);
+              await botDelegationServiceHolder?.settleSession({
+                childSessionId: session.id,
+                outcome: isTerminalTurnErrorEvent(event) ? 'error' : 'done',
+                resultText: finalText,
+                error: errorText,
+              });
+            } catch (error) {
+              log.warn('Bot delegation terminal settlement failed', {
+                sessionId: session.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          })();
+          void (async () => {
+            try {
+              await drainPersistQueue();
+              const doneData = event.data as {
+                result?: unknown;
+                message?: unknown;
+                reason?: unknown;
+              } | null;
+              const finalText = typeof doneData?.result === 'string' ? doneData.result : '';
+              const errorText = [doneData?.message, doneData?.reason]
+                .find((value): value is string => typeof value === 'string' && value.length > 0);
+              const failed = isTerminalTurnErrorEvent(event);
+              await botSessionEventServiceHolder?.settleProcessingForSession({
+                sessionId: session.id,
+                outcome: failed ? 'failed' : 'completed',
+                resultText: finalText,
+                error: errorText,
+              });
+            } catch (error) {
+              log.warn('Bot Session event settlement failed', {
+                sessionId: session.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
             }
           })();
         }
@@ -5378,6 +5722,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // session reachable from the in-memory routing map.
           cancelDirectAbortReconciliation(session.id);
           pendingFailedTurnAssistantPersistId.delete(session.id);
+          botCompactRuntimeRefreshCoordinator.clearForClosedSession(session);
           wiredSessionsById.delete(session.id);
           for (const dispose of registration.disposers) {
             try {
@@ -5477,6 +5822,24 @@ export interface RegisterMakerIpcOptions {
   waitForAccountProviderModelsReady(): Promise<void>;
   /** Provider 刷新协调器已可用；紧跟 configure 发出，避免后续 handler 失败造成永久等待。 */
   onProviderModelAutoRefreshConfigured(): void;
+  /** Final adapter-owned delivery for proactive Bot route notifications. */
+  deliverBotRouteMessage?(input: {
+    channel: string;
+    ownership: 'local-adapter' | 'server-relay';
+    accountKey: string;
+    principalKey: string;
+    threadKey?: string | null;
+    deliveryKey?: string | null;
+    idempotencyKey: string;
+    text: string;
+    mediaAbsPaths?: readonly string[];
+    sessionId?: string | null;
+    workingDir?: string | null;
+    onProgress?: (receipt: Record<string, unknown>) => Promise<void>;
+  }): Promise<
+    | { ok: true; receipt: Record<string, unknown> }
+    | { ok: false; retryable: boolean; errorCode: string; message: string }
+  >;
 }
 
 let disposePiPackagesChangedBroadcast: (() => void) | null = null;
@@ -6495,14 +6858,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const kind = requireAgentKind(agentKind);
         const skillParams = (params ?? {}) as {
           workingDir?: string;
+          remoteHostId?: string;
           forceReload?: boolean;
           sessionId?: string;
         };
-        const linksChanged = await prepareProjectSkillLinksFailSoft(skillParams?.workingDir);
+        const linksChanged = skillParams.remoteHostId
+          ? false
+          : await prepareProjectSkillLinksFailSoft(skillParams.workingDir);
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;
         }
-        if (kind === 'codex') {
+        if (kind === 'codex' && !skillParams.remoteHostId) {
           await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
         } else {
           // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
@@ -7170,6 +7536,205 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
     return { session, didInjectOrcaInstructions, didInjectProjectContext };
   }
+
+  async function recordBotCompactRuntimeLifecycle(input: {
+    botId: string;
+    sessionId: string;
+    eventType: 'compact-runtime-refresh-requested' | 'compact-runtime-refresh-applied' |
+      'compact-runtime-refresh-deferred' | 'compact-runtime-refresh-failed';
+    boundary: BotCompactBoundary;
+    profileVersion: number;
+    reason?: string;
+  }): Promise<void> {
+    await getDbClient().drizzle.insert(botLifecycleEvents).values({
+      id: randomUUID(),
+      botId: input.botId,
+      sessionId: input.sessionId,
+      eventType: input.eventType,
+      payloadJson: JSON.stringify({
+        profileVersion: input.profileVersion,
+        runtimeInstanceId: input.boundary.sessionInstanceId,
+        compactBoundaryCount: input.boundary.boundaryCount,
+        firstObservedAt: input.boundary.firstObservedAt,
+        lastObservedAt: input.boundary.lastObservedAt,
+        ...(input.reason ? { reason: input.reason } : {}),
+      }),
+      createdAt: Date.now(),
+    });
+  }
+
+  botCompactRuntimeRefreshHandler = async (
+    compactSession,
+    boundary,
+  ): Promise<BotCompactRuntimeRefreshOutcome> => {
+    const expectedSession = compactSession as WiredSession;
+    return withSendToSessionLock(expectedSession.id, async () => {
+      if (maker.getSession(expectedSession.id) !== expectedSession) return 'not-bot';
+
+      const db = getDbClient().drizzle;
+      const [row] = await db
+        .select({
+          botId: botSessionLinks.botId,
+          role: botSessionLinks.role,
+          routeKey: botSessionLinks.routeKey,
+          profileVersion: botSessionLinks.profileVersion,
+          source: sessions.source,
+          status: sessions.status,
+          title: sessions.title,
+          workingDir: sessions.workingDir,
+          workspaceKind: sessions.workspaceKind,
+          agentKind: sessions.agentKind,
+          model: sessions.model,
+          providerId: sessions.providerId,
+          effort: sessions.effort,
+          fastMode: sessions.fastMode,
+          permissionMode: sessions.permissionMode,
+          planModeEnabled: sessions.planModeEnabled,
+          sdkSessionId: sessions.sdkSessionId,
+          remoteHostId: sessions.remoteHostId,
+          orcaRole: sessions.orcaRole,
+          codexHistoryHasProductPrompt: sessions.codexHistoryHasProductPrompt,
+        })
+        .from(sessions)
+        .innerJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+        .where(eq(sessions.id, expectedSession.id))
+        .limit(1);
+      if (
+        !row ||
+        row.source !== 'bot' ||
+        row.status !== 'active' ||
+        (row.role !== 'canonical' && row.role !== 'route')
+      ) {
+        return 'not-bot';
+      }
+      if (
+        row.role === 'route' &&
+        (row.routeKey?.startsWith('automation:') || row.routeKey?.startsWith('delegation:'))
+      ) {
+        // These short-lived runs own their own terminal archive transaction.
+        // Rebuilding one here would race that owner and could resurrect it.
+        return 'not-bot';
+      }
+      if (
+        expectedSession.isTurnRunning() ||
+        expectedSession.listBackgroundTasks().length > 0 ||
+        hasPendingAgentInteractionForSession(expectedSession.id)
+      ) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-deferred',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason: 'runtime-busy',
+        });
+        return 'deferred';
+      }
+      if (!row.workingDir) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-failed',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason: 'working-dir-missing',
+        });
+        return 'not-bot';
+      }
+
+      const createOpts = buildCreateOptsWithStderr({
+        id: expectedSession.id,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        workspaceKind: row.workspaceKind,
+        model: row.model ?? undefined,
+        providerId: row.providerId,
+        effort: (row.effort ?? undefined) as CreateOpts['effort'],
+        fastMode: !!row.fastMode,
+        permissionMode: permissionModeOrAsk(row.permissionMode),
+        planMode: !!row.planModeEnabled,
+        title: row.title ?? undefined,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+        orcaRole: row.orcaRole as CreateOpts['orcaRole'],
+        codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
+      });
+      await synthesizeOrcaVendorOptionsFromDb(expectedSession.id, createOpts);
+      const extraDirs = await readSessionExtraDirsFromDb(expectedSession.id).catch((error) => {
+        log.warn('Bot compact refresh could not read extra dirs; continuing without them', {
+          sessionId: expectedSession.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return [];
+      });
+      if (extraDirs.length > 0) createOpts.extraDirs = extraDirs;
+
+      const workDirReady = await checkWorkDirExists(
+        expectedSession.id,
+        createOpts.workingDir,
+        createOpts.agentKind,
+        createOpts.remoteHostId,
+      );
+      if (!workDirReady) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-failed',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason: 'working-dir-unavailable',
+        });
+        return 'not-bot';
+      }
+
+      await recordBotCompactRuntimeLifecycle({
+        botId: row.botId,
+        sessionId: expectedSession.id,
+        eventType: 'compact-runtime-refresh-requested',
+        boundary,
+        profileVersion: row.profileVersion,
+      });
+      try {
+        await ensureRemoteReadyForSessionStart({ createOpts });
+        // Resource drift is a Renew boundary, not a reason to destroy the
+        // currently healthy runtime. Resolve the exact native Skill/MCP/
+        // Toolset bundle before closeSession so a failed preflight leaves the
+        // old process and its resume ownership untouched.
+        await withRehydrateCloseSuppressed(expectedSession.id, async () => {
+          const refreshed = await replaceBotRuntimeAfterPreflight({
+            preflight: () =>
+              preflightBotRuntimeResources(createOpts as MakerSessionCreateOpts),
+            isCurrentOwner: () => maker.getSession(expectedSession.id) === expectedSession,
+            close: () => maker.closeSession(expectedSession.id, 'runtime-refresh'),
+            bootstrap: async () => (await bootstrapSession(createOpts)).session,
+          });
+          await markOrcaRoleIfNeeded(refreshed.id, createOpts.orcaRole);
+          broadcastSessionCreated(refreshed.id);
+        });
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-applied',
+          boundary,
+          profileVersion: row.profileVersion,
+        });
+        return 'refreshed';
+      } catch (error) {
+        await recordBotCompactRuntimeLifecycle({
+          botId: row.botId,
+          sessionId: expectedSession.id,
+          eventType: 'compact-runtime-refresh-failed',
+          boundary,
+          profileVersion: row.profileVersion,
+          reason:
+            error instanceof Error && error.name.trim()
+              ? error.name.trim().slice(0, 120)
+              : 'Error',
+        }).catch(() => undefined);
+        throw error;
+      }
+    });
+  };
 
   // switchFocus 和 sendToWorker 都可能唤醒 idle worker；统一走这里才能保留 extraDirs。
   async function resumeOrcaWorkerSessionIfMissing(target: {
@@ -8645,6 +9210,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: error instanceof Error ? error.message : String(error),
         };
       }
+      const compactedRuntime = maker.getSession(targetSessionId);
+      if (compactedRuntime && botCompactRuntimeRefreshCoordinator.hasPending(targetSessionId)) {
+        await botCompactRuntimeRefreshCoordinator.attempt(compactedRuntime);
+      }
     }
 
     // ── create 分支 ──────────────────────────────────────────────────────────
@@ -9179,6 +9748,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           model: meta.model,
           resumeSessionId: meta.sdkSessionId,
           permissionMode: 'bypassPermissions',
+          // 发起方回合结束后进程常被释放。漏掉 providerId = 回落到隐式默认路由,
+          // 订阅 / 自定义来源的伙伴会以 AGENT_NOT_READY 起不来,委派结果停在外发
+          // 队列里,表现就是「对方做完了,发起方没被叫醒」。
+          ...(dbRow.providerId ? { providerId: dbRow.providerId } : {}),
         });
         await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);
         if (createOpts.extraDirs === undefined) {
@@ -9278,6 +9851,488 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sendToSessionLocks.set(targetSessionId, tracked);
     return tracked;
   }
+
+  const dispatchBotSessionMessage = async (params: {
+    targetSessionId: string;
+    message: string;
+    persistedContent?: string;
+    clientId?: string;
+    onAccepted?: () => void | Promise<void>;
+  }) => {
+    if (params.clientId) {
+      const [persisted] = await getDbClient()
+        .drizzle.select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.sessionId, params.targetSessionId),
+            eq(messages.clientId, params.clientId),
+          ),
+        )
+        .limit(1);
+      if (persisted) {
+        await params.onAccepted?.();
+        return {
+          ok: true as const,
+          targetSessionId: params.targetSessionId,
+          wakeKind: 'already-active' as const,
+        };
+      }
+    }
+    return sendToSessionInternal(params);
+  };
+
+  botDeliveryOutboxServiceHolder?.dispose();
+  botDeliveryOutboxServiceHolder = createBotDeliveryOutboxService({
+    onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_DELIVERY_CHANGED, payload),
+    releaseResources: async (row, payload) => {
+      if (payload.kind !== 'channel-final-recovery') return;
+      await removeMediaRefs({ refKind: 'bot-delivery', refId: row.idempotencyKey });
+    },
+    deliver: async (row, payload, attempt) => {
+      const deliverMountedRoute = async (
+        persistedContent: string,
+        mediaAbsPaths: readonly string[] = [],
+        targetSessionId: string | null = row.sessionId,
+        requireCurrentSessionMatch = false,
+      ) => deliverMountedBotRoute(
+        {
+          row,
+          persistedContent,
+          mediaAbsPaths,
+          targetSessionId,
+          requireCurrentSessionMatch,
+          attempt,
+        },
+        {
+          loadWorkingDir: async (sessionId) => {
+            const [targetTask] = await getDbClient()
+              .drizzle.select({ workingDir: sessions.workingDir })
+              .from(sessions)
+              .where(eq(sessions.id, sessionId))
+              .limit(1);
+            return targetTask?.workingDir ?? null;
+          },
+          loadRoute: async (routeId) => {
+            const [route] = await getDbClient()
+              .drizzle.select({
+                botId: botRoutes.botId,
+                channelId: botRoutes.channelId,
+                currentSessionId: botRoutes.currentSessionId,
+                ownerGeneration: botRoutes.ownerGeneration,
+                principalKey: botRoutes.principalKey,
+                threadKey: botRoutes.threadKey,
+                capabilitiesJson: botRoutes.capabilitiesJson,
+                routeStatus: botRoutes.status,
+                channelKind: botChannels.kind,
+                channelEnabled: botChannels.enabled,
+                channelConfigJson: botChannels.configJson,
+              })
+              .from(botRoutes)
+              .innerJoin(botChannels, eq(botChannels.id, botRoutes.channelId))
+              .where(eq(botRoutes.id, routeId))
+              .limit(1);
+            return route ?? null;
+          },
+          deliver: options.deliverBotRouteMessage,
+        },
+      );
+
+      if (payload.kind === 'channel-final-recovery') {
+        const text = typeof payload.text === 'string' ? payload.text : '';
+        const mediaRefs = Array.isArray(payload.mediaRefs)
+          ? payload.mediaRefs.filter((value): value is string => typeof value === 'string')
+          : [];
+        if (!text) {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'INVALID_PAYLOAD',
+            message: 'Bot Channel recovery requires final text.',
+          };
+        }
+        const mediaAbsPaths: string[] = [];
+        try {
+          for (const ref of mediaRefs) {
+            const resolved = resolveCindyMediaUrl(ref);
+            await fsp.access(resolved.absPath);
+            mediaAbsPaths.push(resolved.absPath);
+          }
+        } catch {
+          return {
+            ok: false as const,
+            retryable: false,
+            errorCode: 'RECOVERY_MEDIA_UNAVAILABLE',
+            message: 'A managed Bot recovery attachment is no longer available.',
+          };
+        }
+        return deliverMountedRoute(text, mediaAbsPaths, row.sessionId, true);
+      }
+      if (payload.kind !== 'session-message') {
+        return {
+          ok: false as const,
+          retryable: false,
+          errorCode: 'UNSUPPORTED_DELIVERY_KIND',
+          message: `Unsupported Bot delivery kind: ${payload.kind}`,
+        };
+      }
+      const targetSessionId =
+        typeof payload.targetSessionId === 'string' ? payload.targetSessionId : row.sessionId;
+      const fallbackBotId =
+        typeof payload.fallbackBotId === 'string' ? payload.fallbackBotId : row.botId;
+      const clientId =
+        typeof payload.clientId === 'string' && payload.clientId
+          ? payload.clientId
+          : `bot-outbox:${row.id}`;
+      const message = typeof payload.message === 'string' ? payload.message : '';
+      const persistedContent =
+        typeof payload.persistedContent === 'string' ? payload.persistedContent : message;
+      if (!targetSessionId || !message) {
+        return {
+          ok: false as const,
+          retryable: false,
+          errorCode: 'INVALID_PAYLOAD',
+          message: 'Bot session delivery requires targetSessionId and message',
+        };
+      }
+
+      const [fallback] = await getDbClient()
+        .drizzle.select({ canonicalSessionId: botProfiles.canonicalSessionId })
+        .from(botProfiles)
+        .where(eq(botProfiles.id, fallbackBotId))
+        .limit(1);
+      const candidates = [...new Set([targetSessionId, fallback?.canonicalSessionId].filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      ))];
+      let lastFailure: { errorCode: string; message: string } | null = null;
+      // 呈现标记随 payload 持久化，在消息**落库那一刻**按实际收下它的会话补上。
+      // 必须挂在 onAccepted 而不是 dispatch 返回后:目标忙时这条会先进输入队列,
+      // 真正落库要等它排到,那时才有行可打补丁。补不上只是少一层客座外观,不影响
+      // 投递本身,因此吞掉异常。
+      const presentationAgentMeta =
+        payload.presentationAgentMeta
+        && typeof payload.presentationAgentMeta === 'object'
+        && !Array.isArray(payload.presentationAgentMeta)
+          ? (payload.presentationAgentMeta as Record<string, unknown>)
+          : null;
+      const markPresentation = async (sessionId: string): Promise<void> => {
+        if (!presentationAgentMeta) return;
+        try {
+          if (await patchMessageAgentMeta(sessionId, clientId, presentationAgentMeta)) {
+            await broadcastMessageAgentMetaUpdate(sessionId, clientId);
+          }
+        } catch (err) {
+          log.warn('Bot delivery presentation meta patch failed (non-fatal)', {
+            deliveryId: row.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      for (const candidate of candidates) {
+        const result = await dispatchBotSessionMessage({
+          targetSessionId: candidate,
+          message,
+          persistedContent,
+          clientId,
+          ...(presentationAgentMeta
+            ? { onAccepted: () => markPresentation(candidate) }
+            : {}),
+        });
+        if (result.ok) {
+          if (!row.routeId) return { ok: true as const };
+          return deliverMountedRoute(persistedContent, [], candidate);
+        }
+        lastFailure = { errorCode: result.errorCode, message: result.message };
+        if (result.errorCode !== 'ARCHIVED' && result.errorCode !== 'DELETED' && result.errorCode !== 'NOT_FOUND') {
+          break;
+        }
+      }
+      return {
+        ok: false as const,
+        retryable: true,
+        errorCode: lastFailure?.errorCode ?? 'TARGET_UNAVAILABLE',
+        message: lastFailure?.message ?? 'No active Bot task is available for delivery',
+      };
+    },
+  });
+  botDelegationServiceHolder?.dispose();
+  botDelegationServiceHolder = createBotDelegationService({
+    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
+      dispatchBotSessionMessage({
+        targetSessionId,
+        message,
+        persistedContent,
+        clientId,
+        onAccepted,
+      }),
+    enqueueDelivery: (params) => {
+      const outbox = botDeliveryOutboxServiceHolder;
+      if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+      return outbox.enqueue(params);
+    },
+    abortSession: (async (sessionId) => {
+      const session = maker.getSession(sessionId);
+      if (session?.isTurnRunning?.()) await session.abort();
+    }),
+    archiveSession: async (sessionId) => {
+      await setSessionsStatusInDb([sessionId], 'archived');
+    },
+    closeSession: (sessionId) => maker.closeSession(sessionId),
+    broadcastSessionCreated,
+    markTimelineMessage: async ({ sessionId, clientId, agentMeta }) => {
+      if (await patchMessageAgentMeta(sessionId, clientId, agentMeta)) {
+        await broadcastMessageAgentMetaUpdate(sessionId, clientId);
+      }
+    },
+    onChanged: (payload) => {
+      broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload);
+      void botSessionEventServiceHolder?.refreshGuardian();
+    },
+    requireRuntimeSnapshot: true,
+  });
+  botSessionEventServiceHolder?.dispose();
+  botSessionEventServiceHolder = createBotSessionEventService({
+    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
+      dispatchBotSessionMessage({
+        targetSessionId,
+        message,
+        persistedContent,
+        clientId,
+        onAccepted,
+      }),
+    enqueueDelivery: (params) => {
+      const outbox = botDeliveryOutboxServiceHolder;
+      if (!outbox) throw new Error('Bot delivery outbox is not initialized');
+      return outbox.enqueue(params);
+    },
+    onChanged: (payload) => broadcastToAllWindows(MAKER_PUSH.BOT_INBOX_CHANGED, payload),
+  });
+  registerBotLifecycleHandlers({
+    maker,
+    getDelegationService: () => botDelegationServiceHolder,
+    getOutboxService: () => botDeliveryOutboxServiceHolder,
+    onResumed: (botId) => botSessionEventServiceHolder?.drainBot(botId),
+    onLifecycleChanged: () => botSessionEventServiceHolder?.refreshGuardian(),
+  });
+  const outboxForRestore = botDeliveryOutboxServiceHolder;
+  const delegationForRestore = botDelegationServiceHolder;
+  const sessionEventsForRestore = botSessionEventServiceHolder;
+  setSessionTokenUsageObserver(async ({ sessionId, totalTokens }) => {
+    await delegationForRestore.enforceBudgetForSession(sessionId, totalTokens);
+  });
+  void (async () => {
+    try {
+      await outboxForRestore.restore();
+    } catch (error) {
+      log.warn('Bot delivery outbox restore failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      await delegationForRestore.restore();
+    } catch (error) {
+      log.warn('Bot delegation restore failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      await sessionEventsForRestore.restore();
+    } catch (error) {
+      log.warn('Bot Session event inbox restore failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  })();
+
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELEGATIONS_LIST,
+    async (event, parentSessionId: unknown, status?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof parentSessionId !== 'string' || parentSessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'parentSessionId required');
+      }
+      if (
+        status !== undefined
+        && (typeof status !== 'string'
+          || !BOT_DELEGATION_STATUSES.includes(
+            status as (typeof BOT_DELEGATION_STATUSES)[number],
+          ))
+      ) {
+        throwIpcError('INVALID_PARAMS', 'invalid Bot delegation status');
+      }
+      return delegationForRestore.listDelegations(
+        parentSessionId,
+        status as (typeof BOT_DELEGATION_STATUSES)[number] | undefined,
+      );
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELEGATION_CANCEL,
+    async (event, parentSessionId: unknown, delegationId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof parentSessionId !== 'string'
+        || parentSessionId.length === 0
+        || typeof delegationId !== 'string'
+        || delegationId.length === 0
+      ) {
+        throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
+      }
+      return delegationForRestore.cancelDelegation(parentSessionId, delegationId);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELEGATION_INTERJECT,
+    async (
+      event,
+      parentSessionId: unknown,
+      delegationId: unknown,
+      text: unknown,
+      idempotencyKey?: unknown,
+    ) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof parentSessionId !== 'string'
+        || parentSessionId.length === 0
+        || typeof delegationId !== 'string'
+        || delegationId.length === 0
+      ) {
+        throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
+      }
+      if (typeof text !== 'string' || text.trim().length === 0) {
+        throwIpcError('INVALID_PARAMS', 'text required');
+      }
+      if (
+        idempotencyKey !== undefined
+        && (typeof idempotencyKey !== 'string' || idempotencyKey.length === 0)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'idempotencyKey must be a non-empty string');
+      }
+      // 归属（委派必须由这个父任务发起）、状态（只接受进行中）与幂等都在服务里做，
+      // 这里只挡住形状不对的调用。幂等键由调用方（渲染进程一次插话一个 uuid）给，
+      // 双击 / 重挂载 / 网络重放落到同一个 clientId 上，只会催一次。
+      return delegationForRestore.interjectDelegation(
+        parentSessionId,
+        delegationId,
+        text,
+        idempotencyKey as string | undefined,
+      );
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELIVERIES_LIST,
+    async (event, botId: unknown, limit?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof botId !== 'string' || botId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'botId required');
+      }
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isFinite(limit))) {
+        throwIpcError('INVALID_PARAMS', 'limit must be a finite number');
+      }
+      return outboxForRestore.listForBot(botId, limit as number | undefined);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_DELIVERY_RETRY,
+    async (event, botId: unknown, deliveryId: unknown, allowDuplicateRisk?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof botId !== 'string'
+        || botId.length === 0
+        || typeof deliveryId !== 'string'
+        || deliveryId.length === 0
+      ) {
+        throwIpcError('INVALID_PARAMS', 'botId + deliveryId required');
+      }
+      if (allowDuplicateRisk !== undefined && typeof allowDuplicateRisk !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'allowDuplicateRisk must be boolean');
+      }
+      return outboxForRestore.retry(deliveryId, botId, {
+        allowDuplicateRisk: allowDuplicateRisk === true,
+      });
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_EVENT_SUBSCRIPTIONS_LIST,
+    async (event, botId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof botId !== 'string' || botId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'botId required');
+      }
+      return sessionEventsForRestore.listSubscriptions(botId);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_EVENT_SUBSCRIPTION_UPSERT,
+    async (event, input: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        throwIpcError('INVALID_PARAMS', 'subscription input must be an object');
+      }
+      const value = input as Record<string, unknown>;
+      if (
+        typeof value.botId !== 'string'
+        || !value.botId
+        || typeof value.name !== 'string'
+        || !value.name.trim()
+        || !value.rule
+        || typeof value.rule !== 'object'
+        || Array.isArray(value.rule)
+      ) {
+        throwIpcError('INVALID_PARAMS', 'botId + name + rule required');
+      }
+      if (
+        value.id !== undefined
+        && (typeof value.id !== 'string' || !value.id.trim())
+      ) {
+        throwIpcError('INVALID_PARAMS', 'subscription id must be a non-empty string');
+      }
+      if (
+        value.status !== undefined
+        && value.status !== 'active'
+        && value.status !== 'paused'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'subscription status must be active or paused');
+      }
+      return sessionEventsForRestore.upsertSubscription({
+        ...(typeof value.id === 'string' ? { id: value.id } : {}),
+        botId: value.botId,
+        name: value.name,
+        ...(value.status === 'active' || value.status === 'paused'
+          ? { status: value.status }
+          : {}),
+        rule: value.rule as Record<string, unknown>,
+      });
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_INBOX_LIST,
+    async (event, botId: unknown, limit?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof botId !== 'string' || botId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'botId required');
+      }
+      if (limit !== undefined && (typeof limit !== 'number' || !Number.isFinite(limit))) {
+        throwIpcError('INVALID_PARAMS', 'limit must be a finite number');
+      }
+      return sessionEventsForRestore.listInbox(botId, limit as number | undefined);
+    },
+  );
+  ipcMain.handle(
+    MAKER_INVOKE.BOT_INBOX_RETRY,
+    async (event, botId: unknown, inboxItemId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof botId !== 'string'
+        || !botId
+        || typeof inboxItemId !== 'string'
+        || !inboxItemId
+      ) {
+        throwIpcError('INVALID_PARAMS', 'botId + inboxItemId required');
+      }
+      await sessionEventsForRestore.retryInboxItem(botId, inboxItemId);
+    },
+  );
 
   // Ghost 的 Agent 槽只负责验证权限和整理 prompt；真正的新回合仍走
   // sendToSessionInternal 这一条主机通路，因此会话恢复、繁忙排队、消息落库与
@@ -11019,7 +12074,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [sessionId] = args;
     if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
     await assertReviewExternalInputAllowed(sessionId);
+    const compactedRuntime = maker.getSession(sessionId);
+    if (compactedRuntime && botCompactRuntimeRefreshCoordinator.hasPending(sessionId)) {
+      await botCompactRuntimeRefreshCoordinator.attempt(compactedRuntime);
+    }
     return await withSendToSessionLock(sessionId, async () => {
+      const [botInput] = await getDbClient()
+        .drizzle.select({
+          source: sessions.source,
+          role: botSessionLinks.role,
+          profileStatus: botProfiles.status,
+        })
+        .from(sessions)
+        .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+        .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const blocked = botSessionInputBlockReason(botInput ?? null);
+      if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
       return sendToAgentAcceptedUnlocked(...args);
     });
   };
@@ -11150,6 +12222,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ): Promise<void> => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     await assertReviewExternalInputAllowed(sessionId);
+    const [botInput] = await getDbClient()
+      .drizzle.select({
+        source: sessions.source,
+        role: botSessionLinks.role,
+        profileStatus: botProfiles.status,
+      })
+      .from(sessions)
+      .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+      .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    const blocked = botSessionInputBlockReason(botInput ?? null);
+    if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
     const so = (sendOpts ?? {}) as {
       messageUuid?: string;
       userName?: string;
@@ -14591,6 +15676,149 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log.info('maker-memory:reset');
     return maker.makerMemory.resetAll();
   });
+
+  // Per-bot Maker Memory ("TA 记得的" — 批次 β). Bot memory lives in the same
+  // makerMemory engine as workdir memory, keyed by buildBotMemoryScopeKey(botId)
+  // (see botProfileRuntime.ts's startSession wiring) — completely independent
+  // of any workdir. skipDisabledCheck: true throughout, same choice
+  // MAKER_MEMORY_RESET/resetWorkdir already makes: a user who turned the
+  // global Maker Memory toggle off must still be able to see and clear a
+  // bot's already-written memory, not get MAKER_MEMORY_NOT_READY on their own
+  // data.
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_LIST, async (_e, botId: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
+      skipDisabledCheck: true,
+    });
+    return store.list();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_DELETE, async (_e, botId: unknown, filename: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (typeof filename !== 'string' || !filename.trim()) {
+      throwIpcError('INVALID_PARAMS', 'filename required (string)');
+    }
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
+      skipDisabledCheck: true,
+    });
+    await store.delete(filename);
+    log.info('bot-memory:delete', { botId });
+    return { ok: true };
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_CLEAR, async (_e, botId: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    log.info('bot-memory:clear', { botId });
+    return maker.makerMemory.resetWorkdir(buildBotMemoryScopeKey(botId));
+  });
+
+  /*
+    「初始记忆」落地。模板选卡与 AI 角色生成都走这一条 —— 一个伙伴刚加入时就该
+    有几条自己的开场笔记,而不是让「TA 记得的」空到用户以为这块坏了。
+
+    幂等以 **slug** 为准(见 shared/botMemorySeed.ts):重复调用、重装、重试都只补
+    缺的那几条,已经在库里的一律跳过。用户把某条改写成自己的说法之后,再触发一次
+    也不会被冲掉 —— 那是他的记忆,不是我们的默认值。
+
+    skipDisabledCheck 与 list/delete/clear 一致:全局 Maker Memory 开关的状态不该
+    决定「这个伙伴自带的东西有没有落地」,否则用户开回开关时看到的是一个空列表。
+  */
+  ipcMain.handle(MAKER_INVOKE.BOT_MEMORY_SEED, async (_e, botId: unknown, entries: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    const normalized = normalizeBotMemorySeedEntries(entries);
+    if (normalized.length === 0) return { written: 0, skipped: 0 };
+    if (!maker.makerMemory) {
+      throwIpcError('MAKER_MEMORY_NOT_READY', 'maker memory not initialized');
+    }
+    const store = await maker.makerMemory.getStore(buildBotMemoryScopeKey(botId), {
+      skipDisabledCheck: true,
+    });
+    const existing = (await store.list()).map((record) => record.slug);
+    const missing = selectMissingBotMemorySeedEntries(normalized, existing);
+    let written = 0;
+    for (const entry of missing) {
+      try {
+        await store.write({
+          type: entry.type,
+          name: entry.slug,
+          title: entry.title,
+          description: entry.description,
+          body: entry.body,
+          mode: 'create',
+        });
+        written += 1;
+      } catch (cause) {
+        // 一条写不进去(撞名竞态 / size 硬上限)不该让其余几条跟着丢。
+        log.warn('bot-memory:seed entry failed', { botId, slug: entry.slug, error: String(cause) });
+      }
+    }
+    log.info('bot-memory:seed', { botId, written, skipped: normalized.length - written });
+    return { written, skipped: normalized.length - written };
+  });
+
+  /*
+    Per-bot 真技能(「TA 学会的」)。三个入口都是只读或删除 —— 设置页不提供
+    「手写一个技能」的写入口:这个列表回答的是「TA 自己长出了什么本事」,用户手写
+    进来的东西会让它变成另一个 Skill 管理器,与产品口径不符。
+
+    与记忆那一组不同,这里不需要 skipDisabledCheck 之类的开关判断:技能是独立的
+    文件存储,不经 makerMemory 引擎。
+  */
+  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_LIST, async (_e, botId: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    return listBotSkillsForBot(botId);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_READ, async (_e, botId: unknown, slug: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (typeof slug !== 'string' || !slug.trim()) {
+      throwIpcError('INVALID_PARAMS', 'slug required (string)');
+    }
+    return readBotSkillForBot(botId, slug);
+  });
+
+  ipcMain.handle(MAKER_INVOKE.BOT_SKILL_DELETE, async (_e, botId: unknown, slug: unknown) => {
+    if (typeof botId !== 'string' || !botId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'botId required (string)');
+    }
+    if (typeof slug !== 'string' || !slug.trim()) {
+      throwIpcError('INVALID_PARAMS', 'slug required (string)');
+    }
+    const deleted = await deleteBotSkillForBot(botId, slug);
+    log.info('bot-skill:delete', { botId, deleted });
+    return { ok: true as const, deleted };
+  });
+
+  /*
+    角色生成助手:一句话角色 → 一份可编辑的伙伴草稿。模型调用复用既有的一次性
+    通道(见 maker-ipc/botPersonaGeneration.ts 顶部对通道选型的说明),这里只做
+    入参把关与结果透传 —— 失败一律带分类码回 renderer,由它给一句人话 +「自己写」
+    出路,不静默。
+  */
+  ipcMain.handle(MAKER_INVOKE.BOT_PERSONA_GENERATE, async (_e, role: unknown) =>
+    generateBotPersonaDraft(role, defaultBotPersonaGenerationDeps()),
+  );
 
   // 占位：MetaAgent 入口
   ipcMain.handle(MAKER_INVOKE.RUN, () => {

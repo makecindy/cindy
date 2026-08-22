@@ -150,7 +150,8 @@
       "remoteControl": "Remote Connection",
       "windowBehavior": "App Behavior",
       "shortcuts": "Keyboard Shortcuts",
-      "mcpServers": "Custom MCP"
+      "mcpServers": "Custom MCP",
+      "bots": "Teammates"
     },
     "remote": {
       "title": "Remote machines",
@@ -3084,6 +3085,10 @@
           "name": "Cindy Memory",
           "description": "Cross-agent long-term memory for persistent context across sessions"
         },
+        "docs": {
+          "name": "Document Toolkit",
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install."
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "Host capability disclosure — tells agents what tools and models are available"
@@ -3454,6 +3459,15 @@
     },
     "imBot": {
       "beta": "Beta",
+      "unreachableTarget": {
+        "names": {
+          "cindyGroup": "the official bots",
+          "discord": "the Discord bot",
+          "telegram": "the Telegram bot"
+        },
+        "cnPersonal": "{{name}} isn't offered on personal accounts in the Chinese mainland edition. An organization account has it.",
+        "localMode": "Sign in to your Cindy account to use {{name}}."
+      },
       "groups": {
         "cindy": "Official",
         "personal": "Personal"
@@ -5274,11 +5288,13 @@
         "terminal": "Terminal",
         "review": "Review",
         "subagents": "Subagent",
+        "botDelegations": "Teammate collaboration",
         "backgroundTasks": "Background tasks",
         "resourceUsage": "Activity Monitor",
         "collaboration": "Team",
         "unknown": "Unknown tab",
-        "ghostPanel": "Plugin panel"
+        "ghostPanel": "Plugin panel",
+        "botArtifacts": "Works"
       },
       "controls": {
         "showAria": "Show sidebar",
@@ -5296,6 +5312,12 @@
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
         "desc": "Open files, review, Activity Monitor, a built-in browser, or a terminal here to work alongside the chat on the left.",
+        "botTitle": "Works and their collaboration",
+        "botDesc": "A teammate chat opens to works and their collaboration. Review and terminal stay available if you need them.",
+        "openArtifacts": "Open works",
+        "artifactsSub": "What they handed back",
+        "openDelegations": "Open their collaboration",
+        "delegationsSub": "Delegations and replies",
         "openFile": "Open files",
         "fileSub": "Files",
         "openReview": "Open review",
@@ -5861,6 +5883,33 @@
       "expandAllAria": "Expand all files",
       "collapseAllAria": "Collapse all files"
     },
+    "botDelegations": {
+      "retry": "Retry",
+      "back": "Back",
+      "duration": "Duration",
+      "tokens": "Tokens",
+      "depth": "Delegation depth",
+      "objective": "Objective",
+      "result": "Returned result",
+      "openTask": "Open task",
+      "stop": "Stop",
+      "empty": "No teammate collaboration yet",
+      "emptyDetail": "Delegations from this teammate will keep their progress and results here.",
+      "activity": {
+        "single": "Delegating to {{name}}…",
+        "multiple": "{{count}} teammate delegations in progress",
+        "openAria": "View teammate collaboration progress"
+      },
+      "status": {
+        "queued": "Queued",
+        "waiting": "Waiting",
+        "running": "Running",
+        "completed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "timed-out": "Timed out"
+      }
+    },
     "subagents": {
       "running": "Running",
       "finished": "Finished",
@@ -6091,7 +6140,8 @@
       "projects": "Projects",
       "skillhub": "SkillHub",
       "plugins": "Plugins",
-      "issues": "Issues"
+      "issues": "Issues",
+      "bots": "Teammates"
     },
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
@@ -6129,7 +6179,989 @@
       "loading": "loading"
     }
   },
+  "bots": {
+    "eyebrow": "Persistent assistants",
+    "title": "Teammates",
+    "subtitle": "Keep each assistant's identity, skills, message channels, and canonical task together.",
+    "add": "Add teammate",
+    "addTitle": "Add a teammate",
+    "addDescription": "Create a local teammate first, then mount IM message channels when needed.",
+    "createWizard": {
+      "createFailed": "The teammate could not be created. Try again.",
+      "templates": {
+        "ashu": {
+          "description": "Your coordinator",
+          "intro": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.",
+          "name": "Ashu",
+          "skill": "Coordination",
+          "welcome": "I'm Ashu. I watch what happens across your tasks. If something breaks I know first, and you hear it first.\n\nCarry on — I will speak up when something needs you.",
+          "seedMemories": {
+            "conclusion_first": {
+              "title": "Only the conclusion and the calls to make",
+              "description": "Skip the play-by-play; state the outcome and what needs deciding",
+              "body": "A report carries two things: where it stands now, and what needs a decision. No replay of the steps in between, and anything uncertain gets called uncertain."
+            }
+          }
+        },
+        "butler": {
+          "description": "Your delivery steward",
+          "intro": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.",
+          "name": "Benben",
+          "skill": "Delivery",
+          "welcome": "I'm Benben. I watch the process — reviews, checks, delivery — so you only look at results.\n\nTell me what is in flight and I will chase it for you.",
+          "seedMemories": {
+            "risks_said_separately": {
+              "title": "Conclusion first, risks on their own line",
+              "description": "One line for the outcome, a separate block for risks",
+              "body": "Lead every report with one line of conclusion. Risks and pending decisions go in their own block, never buried in the play-by-play. Never claim a finished state without evidence."
+            }
+          }
+        },
+        "cindy": {
+          "description": "Your personal assistant",
+          "intro": "Hi, I'm Cindy. Hand me the odds and ends of work and life — writing, research, your calendar, your messages. You do your thing; call me when you need me.",
+          "name": "Cindy",
+          "skill": "A bit of everything",
+          "welcome": "Hi, I'm Cindy 👋 From now on, hand me the writing, the research and the file tidying.\n\nConnect a messaging channel and I can keep an eye on things while you are away.",
+          "seedMemories": {
+            "ask_before_guessing": {
+              "title": "Ask before guessing",
+              "description": "Confirm what is wanted instead of assuming",
+              "body": "When the request is thin, ask one short question to confirm what is actually wanted before starting. Better one extra question than a guessed-at result."
+            }
+          }
+        },
+        "counsel": {
+          "description": "Your counsel",
+          "intro": "I'm Lin, in-house counsel. Contracts, clauses, risk, compliance — I'll do the first pass.",
+          "name": "Lin",
+          "skill": "Contracts",
+          "welcome": "I'm Lin, in-house counsel. Contracts, clauses, risk, compliance — I'll do the first pass.\n\nSend the document; I'll flag risk clause by clause with wording you can actually use. Note: this is a first pass, not a substitute for a licensed attorney.",
+          "seedMemories": {
+            "conclusion_then_basis": {
+              "title": "Conclusion and risk first, basis after",
+              "description": "Lead with the call and its risk level",
+              "body": "Lead with the conclusion and risk level, then the basis, then wording that can actually be used. Where it is genuinely unclear, say a licensed attorney must confirm — never state uncertainty as settled."
+            }
+          }
+        },
+        "designer": {
+          "description": "Your designer",
+          "intro": "I'm Man, a designer. Interfaces, posters, deck layout, color — hand them over.",
+          "name": "Man",
+          "skill": "Design",
+          "welcome": "I'm Man, a designer. Interfaces, posters, deck layout, color — hand them over.\n\nTell me who sees it and where, and I'll bring you two or three directions to pick from.",
+          "seedMemories": {
+            "two_versions_first": {
+              "title": "Bring two or three directions first",
+              "description": "Offer options with stated trade-offs",
+              "body": "Open with two or three directions, each with its trade-off stated (safer / bolder / faster), and let him pick. Never hand over a single take."
+            }
+          }
+        },
+        "melody": {
+          "description": "Your senior engineer",
+          "intro": "I'm Chen. Fifteen years of shipping code — architecture, nasty bugs, deploys. Bring them to me.",
+          "name": "Chen",
+          "skill": "Engineering",
+          "welcome": "I'm Chen. Fifteen years of shipping code — architecture, nasty bugs, deploys. Bring them to me.\n\nSend the project over; I'll read the structure before I say anything.",
+          "seedMemories": {
+            "small_changes": {
+              "title": "Small changes, verified before reporting",
+              "description": "One thing at a time; run it myself first",
+              "body": "Change one thing at a time and run it myself before reporting. Say plainly what I did not verify instead of implying it works."
+            }
+          }
+        },
+        "shiba": {
+          "description": "Your everyday helper",
+          "intro": "Woof! I'm Xiaochai. Reminders, schedules, errands, expenses — leave the household side to me.",
+          "name": "Xiaochai",
+          "skill": "Everyday life",
+          "welcome": "Woof! I'm Xiaochai 🐕 Reminders, schedules, errands, expenses — leave the household side to me.\n\nJust tell me anything you need remembered and I will keep watch.",
+          "seedMemories": {
+            "one_thing_per_reminder": {
+              "title": "One thing per reminder",
+              "description": "Keep reminders short — one item each",
+              "body": "Reminders stay short. One reminder carries one thing and then stops; never pack several errands into the same line."
+            },
+            "read_back_what_i_wrote": {
+              "title": "Read back what I wrote down",
+              "description": "Repeat the note once to confirm it landed right",
+              "body": "After writing something down, repeat it back in one line — when, where, what. Only close the turn once it is confirmed correct."
+            }
+          }
+        },
+        "star": {
+          "description": "Your content buddy",
+          "intro": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.",
+          "name": "Xingxing",
+          "skill": "Content",
+          "welcome": "I'm Xingxing ✨ Copy, visuals, posts — I make sure they land.\n\nWhat do you want to publish? Just give me a topic.",
+          "seedMemories": {
+            "three_drafts_first": {
+              "title": "Three takes before a final",
+              "description": "Offer a few versions to pick from, never one finished take",
+              "body": "Copy comes in three takes with different tones. Whichever one gets picked is the one I polish. Never hand over a single finished draft up front."
+            }
+          }
+        }
+      }
+    },
+    "portability": {
+      "title": "Export",
+      "description": "Export shareable behavior configuration without credentials, IM accounts, task history, memory, project paths, or runtime state. Importing a teammate lives in Settings › Teammates.",
+      "export": "Export teammate configuration",
+      "exporting": "Exporting…",
+      "exported": "Teammate configuration exported.",
+      "exportedRedacted": "Teammate configuration exported with {{count}} sensitive items removed.",
+      "imported": "Teammate imported. {{channels}} external channels need rebinding and {{automations}} automations remain paused."
+    },
+    "nameLabel": "Name",
+    "namePlaceholder": "e.g. Release assistant",
+    "channelLabel": "Message surface",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "What should this teammate be responsible for?",
+    "skillsLabel": "Skills",
+    "skillsPlaceholder": "Comma-separated skill names",
+    "skillsDescription": "Stores references to installed Skills; the native Skill mechanism resolves and loads them at runtime.",
+    "skillCatalogLoading": "Loading the Skills available to this Harness…",
+    "skillCatalogError": "Skills could not be loaded. Saved selections are preserved.",
+    "skillCatalogEmpty": "No available Skills were found for this Harness and project.",
+    "skillConfiguredUnavailable": "Unavailable — select to remove",
+    "close": "Close",
+    "avatarPicker": {
+      "open": "Change Avatar",
+      "official": "Official Cindy avatar",
+      "charactersLabel": "Characters",
+      "emojiLabel": "Emoji",
+      "hueLabel": "Color",
+      "hint": "Pick a character or emoji and a color so this teammate is easy to spot in the list.",
+      "presets": {
+        "shiba": "Shiba dog",
+        "whitecat": "White cat",
+        "robot": "Little robot",
+        "dino": "Little dinosaur",
+        "melody": "Headphone girl",
+        "star": "Starry girl",
+        "butler": "Bespectacled bear",
+        "owl": "Owl"
+      }
+    },
+    "list": {
+      "startChat": "Start the conversation",
+      "typing": "Typing…",
+      "unread": "{{count}} unread messages"
+    },
+    "cancel": "Cancel",
+    "save": "Save",
+    "autosave": {
+      "saving": "Saving…",
+      "saved": "Saved",
+      "retry": "Save Again"
+    },
+    "retry": "Retry",
+    "backToBot": "Back to teammate",
+    "sessionLoadFailedTitle": "This teammate task could not be loaded",
+    "sessionLoadFailedDescription": "The task link is valid, but Cindy could not read the teammate state. Retry or return to the teammate overview.",
+    "sessionUnavailableTitle": "This teammate task is no longer available",
+    "sessionUnavailableDescription": "It may have been replaced by a newer task, moved to history, or it no longer belongs to this teammate. Go back to open the current one.",
+    "settings": "Settings",
+    "settingsNav": {
+      "title": "Settings sections"
+    },
+    "emptyTitle": "No teammates yet",
+    "emptyDescription": "Pick one you click with, or shape your own.",
+    "noDescription": "No description yet",
+    "sessions": "tasks",
+    "sessionsTitle": "Teammate tasks",
+    "sessionsDescription": "The canonical task, channel tasks, and archived tasks are stored separately.",
+    "canonicalChat": "Canonical teammate task",
+    "historySession": "Historical task",
+    "open": "Open",
+    "archived": "Archived",
+    "sessionLifecycleTitle": "Task lifecycle",
+    "sessionLifecycleDescription": "Starting a new task picks up the latest settings. The current task moves to history — nothing in it is lost.",
+    "renew": "Start a new task",
+    "renewing": "Starting…",
+    "historyTitle": "Archived history",
+    "historyDescription": "Review transcripts from previous canonical tasks.",
+    "historyEmpty": "No archived teammate tasks yet.",
+    "historySearch": {
+      "title": "Search teammate history",
+      "description": "Search this teammate's canonical, channel, delegated, and archived tasks without loading all history into its prompt.",
+      "placeholder": "What do you remember discussing?",
+      "search": "Search",
+      "searching": "Searching…",
+      "failed": "Teammate history could not be searched. Try again.",
+      "empty": "No matching teammate history was found."
+    },
+    "lifecycle": {
+      "archivedBots": "Archived teammates",
+      "title": "Health and history",
+      "description": "Inspect the canonical task, routes, automation, workspaces, archived transcripts, and lifecycle events.",
+      "refresh": "Refresh teammate health",
+      "activeTitle": "Teammate is active",
+      "activeDescription": "Channel routes, automation, deliveries, and teammate-to-teammate work can run.",
+      "pausedTitle": "Teammate is paused",
+      "pausedDescription": "New work is blocked. User-paused automations remain paused after the teammate resumes.",
+      "archivedTitle": "Teammate is archived",
+      "archivedDescription": "Historical tasks stay read-only. Restore creates a new canonical task instead of reviving history.",
+      "pause": "Pause teammate",
+      "resume": "Resume teammate",
+      "archive": "Archive teammate",
+      "restore": "Restore teammate",
+      "delete": "Delete permanently",
+      "archiveTitle": "Archive this teammate?",
+      "archiveDescription": "The teammate stops accepting work and its canonical and route tasks move into history.",
+      "deleteTitle": "Permanently delete teammate",
+      "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
+      "keepHistory": "Keep task transcripts as ordinary archived tasks.",
+      "confirmName": "Enter “{{name}}” to confirm permanent deletion",
+      "worktree": {
+        "retain": "Keep worktrees",
+        "retainDescription": "Detach them from the teammate while keeping working directories and Git branches on disk.",
+        "recycle": "Safely recycle worktrees",
+        "recycleDescription": "Remove working directories after existing safety checks pass. Git branches are preserved."
+      },
+      "working": "Updating…",
+      "actionFailed": "The teammate lifecycle change did not finish. Review health and try again.",
+      "loadFailed": "Teammate health and lifecycle events could not be loaded.",
+      "health": "Current health",
+      "noIssues": "The canonical task and attached capabilities have no known issues.",
+      "timeline": "Lifecycle timeline",
+      "noEvents": "No lifecycle events yet.",
+      "routesCount": "{{count}} routes",
+      "automationsCount": "{{count}} automations",
+      "deliveriesCount": "{{count}} delivery records",
+      "workspacesCount": "{{count}} workspaces",
+      "healthStatus": {
+        "healthy": "Healthy",
+        "attention": "Needs attention",
+        "recovering": "Recovering",
+        "paused": "Paused"
+      },
+      "issues": {
+        "profile-error": "This teammate’s settings are in an error state.",
+        "missing-canonical": "The canonical teammate task has not been created.",
+        "canonical-session-missing": "The canonical task record is missing and must be recovered.",
+        "canonical-session-deleted": "The canonical task was deleted and must be replaced.",
+        "canonical-link-missing": "The canonical task lost its teammate ownership link.",
+        "canonical-link-mismatch": "The canonical task ownership link is inconsistent.",
+        "profile-update-pending": "Newer settings are saved; they take effect in the next task.",
+        "runtime-degraded": "The current runtime started without every configured capability.",
+        "runtime-failed": "The current runtime failed to start.",
+        "routes-recovering": "{{count}} routes are recovering.",
+        "routes-error": "{{count}} routes need attention.",
+        "automation-error": "{{count}} automations need attention.",
+        "delivery-failed": "{{count}} messages are waiting to be delivered again.",
+        "delivery-dead-letter": "{{count}} messages need confirmation before delivery can recover.",
+        "workspace-error": "{{count}} workspaces need attention.",
+        "lifecycle-incomplete": "A previous teammate lifecycle operation did not finish."
+      },
+      "deliveries": {
+        "title": "Reliable delivery",
+        "description": "Inspect channel, Route, automation, and collaboration deliveries. Risky retries clearly warn about possible duplicates.",
+        "empty": "No deliveries yet.",
+        "local": "Local",
+        "attempts": "{{count}} attempt(s)",
+        "textSent": "Text sent",
+        "mediaSent": "{{count}} attachment(s) sent",
+        "finalCommitted": "Final message confirmed",
+        "retry": "Retry delivery",
+        "retrying": "Retrying…",
+        "duplicateTitle": "This may duplicate messages",
+        "duplicateDescription": "The local channel may already have sent the text or {{count}} attachment(s) without a complete receipt. Continuing sends the full result again.",
+        "duplicateConfirm": "Retry anyway",
+        "status": {
+          "pending": "Pending",
+          "sending": "Sending",
+          "suspended": "Suspended",
+          "delivered": "Delivered",
+          "failed": "Retry pending",
+          "dead-letter": "Needs attention",
+          "cancelled": "Cancelled"
+        }
+      },
+      "events": {
+        "created": "Teammate created",
+        "canonical-created": "Canonical task created",
+        "canonical-renewed": "Started a new task",
+        "canonical-linked": "Canonical task linked",
+        "session-linked": "Task linked to teammate history",
+        "legacy-profile-migrated": "Moved over from an older teammate setup",
+        "legacy-session-skipped": "Legacy task could not be linked",
+        "project-binding-upserted": "Project binding updated",
+        "workspace-lease-released": "Workspace released",
+        "im-migration-applied": "Message channel migrated",
+        "im-migration-rolled-back": "Message channel migration rolled back",
+        "pause-requested": "Teammate pause started",
+        "paused": "Teammate paused",
+        "paused-with-warnings": "Teammate paused with cleanup warnings",
+        "resumed": "Teammate resumed",
+        "resume-failed": "Teammate resume failed"
+      }
+    },
+    "inbox": {
+      "title": "Watch other tasks",
+      "description": "Subscribe to what happens in other tasks: when one finishes, fails, or needs a decision, this teammate wakes up, handles it, and sends the result to its mounted channels.",
+      "defaultSubscriptionName": "Task outcomes and decisions",
+      "watchTaskStates": "Watch other tasks automatically",
+      "saving": "Saving…",
+      "pending": "Waiting",
+      "processing": "Handling",
+      "failed": "Needs attention",
+      "timeline": "Recent activity",
+      "ruleSummary": "This teammate is told when a task finishes, fails, or is waiting on a decision, an acceptance, or a controller.",
+      "pausedSummary": "Off — this teammate will not pick up anything from other tasks.",
+      "refresh": "Refresh task events",
+      "loading": "Loading task events…",
+      "emptyWatching": "On. When something happens in another task it shows up here and wakes this teammate.",
+      "emptyPaused": "Turn on the switch above to let this teammate pick up other tasks that finish, fail, or need a decision.",
+      "loadFailed": "Task events could not be loaded.",
+      "saveFailed": "The task-event subscription could not be saved.",
+      "retryFailed": "This task event could not be retried.",
+      "retry": "Retry task event",
+      "openTask": "Open source task",
+      "untitledTask": "Untitled task",
+      "sidebarAttention": "{{count}} task events need attention",
+      "guardianAnomalies": {
+        "stale-running": "Running without activity for too long",
+        "expected-event-missing": "An expected state event did not arrive",
+        "unclaimed-decision": "Waiting for a decision with no owner"
+      },
+      "status": {
+        "pending": "Waiting",
+        "processing": "Handling",
+        "handled": "Handled",
+        "failed": "Failed",
+        "skipped": "Skipped"
+      },
+      "events": {
+        "session": {
+          "state": {
+            "transition": "Task state changed",
+            "guardian-anomaly": "A task looks stuck"
+          },
+          "turn": {
+            "completed": "Task turn completed",
+            "failed": "Task turn failed"
+          },
+          "metadata": {
+            "changed": "Task state changed"
+          },
+          "decision": {
+            "required": "Task needs a decision"
+          }
+        }
+      },
+      "archivedNote": "An archived teammate never picks up task activity. Restore them first to turn this back on."
+    },
+    "adapterBoundaryTitle": "Adapter boundary preserved",
+    "adapterBoundaryDescription": "Telegram replies, Feishu cards, Slack threads and local delivery remain owned by their adapters. This screen only provides teammate identity and task projection.",
+    "backToChat": "Back to chat",
+    "identityTitle": "Identity",
+    "identitySourceLabel": "Teammate identity (SOUL)",
+    "identitySourcePlaceholder": "Describe this teammate's personality, role, and durable behavior.",
+    "identitySourceDescription": "This is who they are. It is given to them once when a task starts, not repeated with every message.",
+    "userContextSourceLabel": "User profile (USER)",
+    "userContextSourcePlaceholder": "Tell this teammate who you are, how to address you, and your durable preferences.",
+    "userContextSourceDescription": "What they should know about you. Kept separate from their personality and from what they remember on their own, and frozen alongside the rest of the settings.",
+    "chooseAvatar": "Choose avatar {{avatar}}",
+    "chooseAvatarColor": "Choose avatar color {{color}}",
+    "advancedCapabilities": {
+      "title": "Technical details behind these abilities",
+      "description": "Which engine and model it runs on, plus tools and skills. You do not need to touch this for everyday use."
+    },
+    "memoryRecovery": {
+      "title": "Long-term memory is off for this teammate",
+      "description": "Memory is now always on for new teammates. This one was turned off earlier, so here is the way back.",
+      "action": "Turn memory back on"
+    },
+    "capabilitiesTitle": "Capabilities",
+    "capabilitiesDescription": "These are the abilities it actually gets when a task starts.",
+    "capabilitiesDeferred": "Changes here take effect in the next task; the current one keeps the abilities it started with.",
+    "profileApply": {
+      "title": "Settings saved",
+      "description": "The new settings are saved, but this task is still running the old ones. Start a new task to use them — this one moves to history.",
+      "keepCurrent": "Stay on this task",
+      "renewAndApply": "Start a new task",
+      "saveFailed": "Teammate settings could not be saved. No changes were applied.",
+      "renewFailed": "The new settings are saved, but a new task could not be started. This task is unchanged."
+    },
+    "runtimeState": {
+      "saved": "Saved; applies on start",
+      "prepared": "Startup prepared; not yet confirmed",
+      "applied": "Active in current task",
+      "pendingRenew": "Takes effect in the next task",
+      "degraded": "Some capabilities unavailable",
+      "failed": "Last startup failed; not applied"
+    },
+    "modelLabel": "Model",
+    "modelUnavailable": "{{model}} (currently unavailable)",
+    "harnessLabel": "Engine",
+    "capabilityMode": {
+      "inherit": "Use currently available",
+      "allowlist": "Choose individually"
+    },
+    "capabilityCatalogLoading": "Reading capabilities available to this project…",
+    "capabilityCatalogError": "The capability catalog could not be loaded. Saved selections are preserved.",
+    "toolsetsLabel": "Cindy tools",
+    "toolsetCatalogEmpty": "This project has no configurable Cindy tools.",
+    "mcpServersLabel": "Custom MCP servers",
+    "mcpCatalogEmpty": "No custom MCP servers are configured yet.",
+    "capabilityApplied": "In use",
+    "capabilityUnavailable": "Unavailable",
+    "capabilityDisabledBySystem": "Disabled by the current project or account settings.",
+    "capabilityNotInstalled": "No longer installed",
+    "memoryLabel": "Persistent memory",
+    "memoryDescription": "Uses a private memory namespace for this teammate.",
+    "automationLabel": "Automation",
+    "automationDescription": "Let this teammate work on a schedule while you are away. Each run is pinned to the settings, project and delivery target in effect when it starts.",
+    "automations": {
+      "title": "Teammate automation",
+      "description": "Routines this teammate runs on its own — on a schedule, or when you press Run now.",
+      "trustedRequired": "An unattended run has nobody to approve it. Open your chat with this teammate, set the permission control in the composer to “Full access”, then come back and create one.",
+      "name": "Name",
+      "dailyTime": "Daily time",
+      "intervalMinutes": "Interval in minutes",
+      "timezone": "Time zone",
+      "project": "Project",
+      "defaultProject": "Use the teammate default project",
+      "deliveryRoute": "Deliver result to",
+      "canonicalTask": "Canonical teammate task",
+      "noteNamespace": "Notes space",
+      "create": "Create routine",
+      "creating": "Creating…",
+      "empty": "No schedule yet. Tell them in one line what to do each day or week.",
+      "loading": "Loading automation…",
+      "refresh": "Refresh automation",
+      "runNow": "Run now",
+      "archive": "Archive",
+      "nextRun": "Next run",
+      "activeRuns": "{{count}} active",
+      "noRuns": "No runs yet.",
+      "worktree": "Worktree",
+      "delivery": "Delivery",
+      "openTask": "Open task",
+      "retryDelivery": "Retry delivery",
+      "retryingDelivery": "Retrying…",
+      "edit": "Edit",
+      "saving": "Saving…",
+      "nextProfileVersion": "The next run uses the settings saved now",
+      "executionPolicy": "Run limits",
+      "executionPolicyDescription": "The timeout aborts the run when it is reached.",
+      "timeoutMinutes": "Maximum run time (minutes)",
+      "budgetTokens": "Handoff token budget",
+      "unlimited": "Unlimited",
+      "maxDelegationDepth": "Maximum collaboration depth",
+      "delegateTargets": "Teammates this routine may call",
+      "delegateNone": "Do not call other teammates",
+      "delegateAllowlist": "Only selected teammates",
+      "delegateAllActive": "All enabled teammates when the run starts",
+      "noDelegateBots": "No other enabled teammates are available.",
+      "status": {
+        "active": "Active",
+        "paused": "Paused",
+        "error": "Needs attention",
+        "archived": "Archived"
+      },
+      "runStatus": {
+        "claimed": "Claimed",
+        "running": "Running",
+        "success": "Completed",
+        "failed": "Failed",
+        "aborted": "Aborted",
+        "interrupted": "Interrupted",
+        "skipped": "Skipped",
+        "unknown": "Unknown"
+      },
+      "deliveryStatus": {
+        "not-requested": "Not requested",
+        "enqueue-failed": "Could not enqueue",
+        "pending": "Pending",
+        "sending": "Sending",
+        "failed": "Waiting to retry",
+        "delivered": "Delivered",
+        "dead-letter": "Needs manual recovery",
+        "cancelled": "Cancelled"
+      },
+      "deliveryProgressText": "Text delivered",
+      "deliveryProgressMedia": "{{count}} attachment(s) delivered",
+      "deliveryCommitted": "Final message committed",
+      "outputArtifacts": "{{count}} output artifact(s)",
+      "retryDuplicateTitle": "Retrying may duplicate messages",
+      "retryDuplicateDescription": "This channel cannot resume safely. Delivered text or {{count}} attachment(s) may be sent again.",
+      "retryDuplicateConfirm": "Retry anyway",
+      "newRoutine": "New",
+      "whatToDo": "What should it do?",
+      "whatToDoPlaceholder": "e.g. Summarise yesterday's progress and post the digest.",
+      "whenToRun": "When should it run?",
+      "mode": {
+        "manual": "Manual",
+        "daily": "Daily",
+        "interval": "Interval",
+        "cron": "Custom"
+      },
+      "manualHint": "Runs only when you press Run now.",
+      "cronExpr": "Cron expression",
+      "cronHint": "Five cron fields, e.g. 0 9 * * 1-5 for 09:00 on weekdays.",
+      "timezoneHint": "Times are in {{timezone}}.",
+      "nameAuto": "Taken from the instruction",
+      "advanced": "Advanced",
+      "advancedHint": "Project, delivery, run limits, time zone",
+      "noteNamespaceHint": "Where this routine keeps its own notes between runs.",
+      "scheduleSummary": {
+        "manual": "Manual only",
+        "daily": "Every day at {{time}}",
+        "interval": "Every {{count}} minutes",
+        "cron": "Cron: {{expr}}"
+      },
+      "lastRun": "Last run",
+      "runHistory": "Run history",
+      "enableRoutine": "Turn this routine on",
+      "templates": {
+        "hint": "Start from an example:",
+        "dailyDigest": {
+          "name": "Daily 09:00 · Yesterday's progress",
+          "prompt": "Summarise what got done yesterday and write a short progress digest."
+        },
+        "inboxTriage": {
+          "name": "Hourly · Triage the inbox",
+          "prompt": "Check the inbox and turn anything new into a short to-do list."
+        },
+        "weeklyReport": {
+          "name": "Fridays 17:00 · Weekly summary",
+          "prompt": "Write a short summary of what got finished this week."
+        }
+      },
+      "delegateLimitsHint": "These two only bound sub-tasks this routine hands to other teammates — they do not cap its own usage."
+    },
+    "permissionsLabel": "Permission mode",
+    "permissionAsk": "Ask before acting",
+    "permissionTrusted": "Trusted actions",
+    "codexAutomaticCompact": "Codex teammates compact context on their own, and /new keeps the current task. Only start a new task when you actually need a clean slate.",
+    "chatWelcome": "Chat with {{name}}",
+    "previewHint": "Local preview — messages are not sent to a real Agent yet.",
+    "chatPlaceholder": "Message this teammate…",
+    "attach": "Attach file",
+    "image": "Add image",
+    "enterToSend": "Enter to send",
+    "send": "Send message",
+    "channelsTitle": "Message channels",
+    "channelsDescription": "Mount Telegram, Feishu, Slack and other message surfaces without changing this teammate's identity or local chat.",
+    "channelLocalOwned": "Local teammate primary surface",
+    "channelLocalAdapter": "Local adapter",
+    "channelServerRelay": "Server relay",
+    "channelConnected": "Online",
+    "channelOffline": "Offline or unavailable",
+    "channelConnectionRequired": "Connect a {{channel}} Bot in Settings before mounting this channel.",
+    "migration": {
+      "title": "Migrate and mount channel",
+      "description": "Cindy checks legacy IM tasks and active takeovers before atomically transferring this account to the teammate.",
+      "legacyTaskCount": "{{count}} legacy tasks found",
+      "blocked": "Blocking conflicts must be resolved before migration",
+      "conflicts": {
+        "connection-unavailable": "This channel has no usable account identity.",
+        "connection-not-routable": "This channel cannot currently receive teammate routes.",
+        "channel-owned-by-another-bot": "This account is already mounted by another teammate.",
+        "session-owned-by-another-bot": "A legacy task is already linked to another teammate.",
+        "session-role-conflict": "A legacy task already has another teammate role.",
+        "im-takeover-active": "A legacy /ctr takeover still points to one of these tasks.",
+        "ambiguous-legacy-binding": "Some legacy Slack tasks do not include a workspace identity. Open them once with the current Slack connection before migrating.",
+        "route-overlap": "This account has overlapping default teammate routes.",
+        "channel-busy": "This channel is processing another migration."
+      },
+      "warnings": {
+        "connection-offline": "The channel is offline. The mount will resume when it reconnects.",
+        "no-legacy-tasks": "No legacy IM tasks were found for this account.",
+        "binding-restore-conflict": "Rollback kept {{count}} newer channel binding(s) instead of overwriting them."
+      },
+      "errors": {
+        "load": "Channel and migration status could not be loaded. Try again.",
+        "preflight": "Migration preflight failed. Refresh the channel status and try again.",
+        "apply": "The channel could not be migrated. No incomplete switch was accepted.",
+        "rollback": "Rollback did not finish. Retry to continue from the saved state."
+      },
+      "preserveData": "Legacy tasks keep their original source and become read-only history. Group history, replies, cards, threads, and attachments stay in their adapter stores.",
+      "apply": "Migrate and mount",
+      "applying": "Migrating…",
+      "rollbackTitle": "Roll back channel migration?",
+      "rollbackDescription": "This disables the migrated teammate route, safely restores eligible legacy tasks, and preserves teammate history created after migration.",
+      "rollback": "Roll back migration",
+      "rollingBack": "Rolling back…"
+    },
+    "routes": {
+      "title": "Channel routes",
+      "description": "Choose which incoming conversations and reply chains are handled by this teammate. A more specific route takes precedence over the channel default.",
+      "add": "Add route",
+      "addTitle": "Add a channel route",
+      "addDescription": "Use the platform's conversation or reply-chain identifier. Leave it empty only for a channel-wide fallback.",
+      "mountChannelFirst": "Mount an IM channel before adding a route.",
+      "empty": "No active channel routes yet.",
+      "channel": "Channel",
+      "routeKey": "Route name",
+      "routeKeyPlaceholder": "e.g. release-team",
+      "principalKey": "Conversation or DM identifier",
+      "principalKeyPlaceholder": "Platform conversation identifier",
+      "threadKey": "Reply-chain or topic identifier",
+      "threadKeyPlaceholder": "Optional reply-chain identifier",
+      "project": "Project for this route",
+      "botDefaultProject": "Use the teammate default project",
+      "create": "Create route",
+      "saving": "Saving…",
+      "openTask": "Open task",
+      "unknownChannel": "Unavailable channel",
+      "allMessages": "all messages on this channel",
+      "lastActivity": "Last activity: {{time}}",
+      "projectBound": "Uses a route-specific project",
+      "pause": "Pause",
+      "pausing": "Pausing…",
+      "resume": "Resume",
+      "resuming": "Resuming…",
+      "archive": "Archive",
+      "archiving": "Archiving…",
+      "status": {
+        "active": "Active",
+        "paused": "Paused",
+        "offline": "Ready",
+        "recovering": "Recovering",
+        "error": "Needs attention",
+        "archived": "Archived"
+      }
+    },
+    "projects": {
+      "title": "Projects and worktrees",
+      "description": "Bind projects to this teammate and choose whether tasks use the project directory or a managed worktree.",
+      "empty": "No project is bound to this teammate yet.",
+      "addTitle": "Bind a local project",
+      "chooseDirectory": "Choose folder",
+      "directoryPlaceholder": "Choose a project folder",
+      "add": "Bind project",
+      "adding": "Binding…",
+      "archive": "Remove binding",
+      "archiving": "Removing…",
+      "saveBinding": "Save binding",
+      "saving": "Saving…",
+      "releaseLease": "Release worktree",
+      "releasingLease": "Releasing…",
+      "localProject": "Local project",
+      "remoteProject": "Remote project",
+      "defaultBadge": "Default",
+      "makeDefault": "Use as the default project for new teammate tasks",
+      "policyLabel": "Workspace policy",
+      "defaultBranchLabel": "Base branch",
+      "defaultBranchPlaceholder": "HEAD or a branch name",
+      "allowedPathsLabel": "Additional allowed paths",
+      "allowedPathsPlaceholder": "One absolute path inside this project per line",
+      "leaseTitle": "Current workspace lease",
+      "leaseGeneration": "Owner generation {{generation}}",
+      "policies": {
+        "none": "Use the project directory",
+        "reuse": "Reuse one shared worktree",
+        "per-task": "Create a worktree for each task",
+        "read-only": "Read-only project access"
+      },
+      "leaseStatus": {
+        "acquiring": "Creating",
+        "active": "Active",
+        "releasing": "Releasing",
+        "released": "Released",
+        "retained": "Retained on disk",
+        "error": "Needs attention"
+      },
+      "errors": {
+        "chooseDirectory": "Choose a project folder first.",
+        "activeLease": "This binding still owns an active worktree. Release or finish its referenced tasks, automations, and delegations before removing it.",
+        "invalid": "The project or path settings are invalid.",
+        "generic": "Couldn’t update the project binding. Try again."
+      }
+    },
+    "roster": {
+      "backToRoster": "Back to the roster",
+      "customAction": "Shape your own",
+      "customHint": "Personality, memory and schedules can all be tuned later in their own settings.",
+      "customIntro": "Say who they are in one line and I will draft it — or write the whole thing yourself.",
+      "customName": "Custom",
+      "customNameLabel": "Name",
+      "customNamePlaceholder": "e.g. Juju",
+      "customSkill": "Whatever you say",
+      "customSubtitle": "A name and a face — that is enough to get started.",
+      "customTitle": "Shape your own teammate",
+      "footerHint": "They will say hello as soon as they join. A messaging channel can be connected later in their own settings (one per teammate).",
+      "goodAt": "Good at · {{skill}}",
+      "importLink": "Already have a teammate file? Import one",
+      "join": "Bring them in",
+      "joined": "Already here",
+      "subtitle": "Pick one you click with, or shape your own.",
+      "title": "Meet your teammates",
+      "customAvatarLabel": "Pick a face",
+      "generate": {
+        "title": "Who are they?",
+        "subtitle": "One line is enough — I will draft the name, personality and background, and you edit from there.",
+        "inputLabel": "Describe them in one line",
+        "inputPlaceholder": "e.g. a designer / someone to keep my kid on track with homework",
+        "action": "Draft one for me",
+        "generating": "Drafting…",
+        "skip": "Skip, I will write it",
+        "previewTitle": "Meet the draft",
+        "previewSubtitle": "Change anything that feels off, then bring them in.",
+        "descriptionLabel": "One-line summary",
+        "memoriesLabel": "What they already remember",
+        "memoriesEmpty": "No starting notes this time.",
+        "confirm": "Looks right, create",
+        "regenerate": "Say it differently",
+        "errors": {
+          "emptyInput": "Say who they are first.",
+          "providerNotReady": "No model source is connected yet — sign in or connect one, then try again. You can always write it yourself.",
+          "invalidOutput": "That draft came back unreadable. Try again, or write it yourself.",
+          "failed": "Nothing came back this time. Try again, or write it yourself.",
+          "unavailable": "This build cannot draft teammates yet. Please write it yourself."
+        }
+      }
+    },
+    "chat": {
+      "composerPlaceholder": "Say something to {{name}}…",
+      "composerPlaceholderLatin": "Say something to {{name}}…"
+    },
+    "globalSettings": {
+      "title": "Teammates",
+      "description": "Settings shared by all teammates. Anything about one teammate lives on their own page.",
+      "notifications": {
+        "title": "New message alerts",
+        "note": "New messages from a teammate show up as an unread mark in the teammate list on the left. No system banner, no sound.",
+        "footnote": "A teammate like a \"coordinator\" keeps an eye on task activity by itself — that is a capability of theirs, not a setting here."
+      },
+      "portability": {
+        "importTitle": "Import a teammate",
+        "importHint": "Restore someone from a teammate file.",
+        "importAction": "Choose a file",
+        "exportTitle": "Export a teammate",
+        "exportHint": "Pack up their personality and settings and take them with you.",
+        "exportAction": "Export",
+        "exportEmpty": "No teammate to export yet."
+      },
+      "rosterNote": "The shipped roster grows with each release."
+    },
+    "settingsBlocks": {
+      "who": "Who they are",
+      "can": "What they can do",
+      "understand": "What they understand",
+      "schedule": "Their schedule",
+      "advanced": "Advanced",
+      "whoDescription": "You don't have to write a personality — just pick a few things.",
+      "canDescription": "You don't have to switch these on — they come with them.",
+      "understandDescription": "Give them a folder and they understand your project.",
+      "scheduleDescription": "They get on with it on time, whether you're around or not."
+    },
+    "advancedLinkLabel": "Advanced (model, technical details, export)",
+    "persona": {
+      "title": "Adjust their personality",
+      "description": "Three quick picks and they will change how they talk.",
+      "adjustButton": "Adjust personality",
+      "stepStyle": "Speaking style",
+      "stepProactivity": "How proactive",
+      "stepCall": "What they call you",
+      "style": {
+        "concise": {
+          "label": "Crisp and to the point",
+          "description": "Says it once, never twice."
+        },
+        "lively": {
+          "label": "Warm and chatty",
+          "description": "Relaxed tone, the odd bit of expression."
+        },
+        "steady": {
+          "label": "Steady and thorough",
+          "description": "Explains first, then gets to work."
+        }
+      },
+      "proactivity": {
+        "reactive": {
+          "label": "Speaks up only when needed",
+          "description": "Won't interrupt you otherwise."
+        },
+        "proactive": {
+          "label": "Gives proactive reminders",
+          "description": "Speaks up when something needs a heads-up."
+        },
+        "reportAll": {
+          "label": "Reports everything",
+          "description": "Tells you as soon as something is done."
+        }
+      },
+      "call": {
+        "name": "Your first name",
+        "boss": "Boss",
+        "custom": "Something else"
+      },
+      "customCallPlaceholder": "What should they call you?",
+      "previewTitle": "They are now",
+      "summaryUnset": "Not set yet",
+      "summaryCallName": "uses your name",
+      "summaryCallBoss": "calls you Boss",
+      "summaryCallCustom": "calls you {{name}}",
+      "ack": {
+        "concise": "Got it. This is how I'll talk from now on.",
+        "conciseBoss": "Got it, boss. This is how I'll talk from now on.",
+        "conciseCalled": "Got it, {{call}}. This is how I'll talk from now on.",
+        "lively": "Got it! This is my voice from now on — you'll get used to it 😉",
+        "livelyBoss": "Got it, boss! This is my voice from now on — you'll get used to it 😉",
+        "livelyCalled": "Got it, {{call}}! This is my voice from now on — you'll get used to it 😉",
+        "steady": "Understood. From now on I'll talk to you this way: explain first, then act.",
+        "steadyBoss": "Understood, boss. From now on I'll talk to you this way: explain first, then act.",
+        "steadyCalled": "Understood, {{call}}. From now on I'll talk to you this way: explain first, then act."
+      }
+    },
+    "memoryList": {
+      "title": "What they remember",
+      "empty": "Nothing remembered yet — talk a bit more and it will come.",
+      "clearAll": "Clear memory",
+      "clearing": "Clearing…",
+      "clearTitle": "Clear memory",
+      "clearDescription": "Once cleared, they'll forget these things. Past conversations are not affected. Continue?",
+      "clearConfirm": "Clear",
+      "deleteTitle": "Delete this memory",
+      "deleteDescription": "Delete \"{{title}}\"? This cannot be undone.",
+      "deleteConfirm": "Delete",
+      "deleteAria": "Delete \"{{title}}\"",
+      "footnote": "They jot things down here on their own, and you can delete any of it.",
+      "footnoteWithSeed": "A few came with them when they joined; after that they jot things down here on their own. You can delete any of it.",
+      "seedBack": "Write their starting notes back",
+      "seedingBack": "Writing…"
+    },
+    "learned": {
+      "title": "What they've learned",
+      "empty": "No know-how yet — give them a few things to do.",
+      "notesTitle": "Notes they wrote for themselves",
+      "deleteTitle": "Delete this skill",
+      "deleteDescription": "Delete \"{{title}}\"? They will stop using it from the next task on.",
+      "deleteConfirm": "Delete",
+      "deleteAria": "Delete \"{{title}}\"",
+      "loadingBody": "Opening…"
+    },
+    "growth": {
+      "rememberedOne": "Remembered: {{title}}",
+      "rememberedMany": "Remembered {{count}} things",
+      "rememberedFallback": "Remembered something",
+      "learnedOne": "Picked up a new knack: {{title}}",
+      "learnedMany": "Picked up {{count}} new knacks",
+      "learnedFallback": "Picked up a new knack",
+      "hint": "See what they wrote down"
+    },
+    "abilityWall": {
+      "builtinTitle": "Built in",
+      "connectableTitle": "Can connect to",
+      "abilities": {
+        "writing": "✍️ Writing & files",
+        "research": "🔍 Research",
+        "doing": "🛠 Hands-on tasks",
+        "schedule": "⏰ Working on a schedule",
+        "collab": "🤝 Teaming up with other teammates"
+      },
+      "connectAccount": "Connect an account",
+      "imBlocked": "A teammate can only connect to one IM — disconnect {{channel}} first",
+      "connectedTitle": "Connected"
+    },
+    "folders": {
+      "addButton": "+ Give them a folder",
+      "adding": "Adding…",
+      "remove": "Remove"
+    },
+    "advancedIdentity": {
+      "title": "Description & background"
+    },
+    "collab": {
+      "joined": "{{name}} joined the conversation",
+      "inboundJoined": "{{name}} handed you this work",
+      "guestTag": "Guest",
+      "nudge": "Nudge",
+      "nudgeSend": "Send",
+      "nudgePlaceholder": "How's it going?",
+      "nudgeAria": "Send {{name}} a note about this work",
+      "interjected": "You nudged {{name}}",
+      "stop": "Stop",
+      "openTask": "Open {{name}}'s conversation",
+      "watchWork": "Watch the work",
+      "actionFailed": "That didn't go through. Try again.",
+      "retrying": "Hasn't started yet — retrying…",
+      "status": {
+        "queued": "Getting started",
+        "waiting": "Waiting to start",
+        "running": "Working on it",
+        "completed": "Done",
+        "failed": "Failed",
+        "cancelled": "Stopped",
+        "timed-out": "Timed out",
+        "unknown": "Can't tell what {{name}} is up to"
+      },
+      "report": {
+        "done": "{{name}} · {{duration}} · done",
+        "failed": "{{name}} · {{duration}} · failed",
+        "failedReason": "{{name}} · failed: {{reason}}",
+        "stopped": "{{name}} · {{duration}} · stopped",
+        "delivered": "{{name}} · {{duration}} · delivered {{count}}",
+        "timedOut": "{{name}} · {{duration}} · timed out"
+      },
+      "duration": {
+        "seconds": "{{n}}s",
+        "minutes": "{{n}} min",
+        "hoursMinutes": "{{h}} h {{m}} min"
+      }
+    },
+    "artifacts": {
+      "open": "Open",
+      "openLibrary": "Open the works library",
+      "openFailed": "Couldn't open works. Try again.",
+      "reveal": "View in library",
+      "retry": "Retry",
+      "subtitle": "What this teammate has made",
+      "empty": "Nothing delivered yet. Finished work lands here.",
+      "emptyFiltered": "Nothing of this kind yet.",
+      "truncated": "Showing the 200 most recent.",
+      "remoteUnavailable": "The works library is not available for remote tasks yet.",
+      "category": {
+        "all": "All",
+        "doc": "Document",
+        "sheet": "Spreadsheet",
+        "image": "Image",
+        "deck": "Slides",
+        "video": "Video",
+        "other": "Other"
+      },
+      "time": {
+        "justNow": "Just now",
+        "minutes": "{{n}} min ago",
+        "hours": "{{n}} h ago",
+        "days": "{{n}} d ago"
+      },
+      "subtitleNamed": "What {{name}} has made",
+      "deliveredBy": "delivered by {{name}}"
+    },
+    "channelConnect": "Connect",
+    "channelDisconnect": "Disconnect",
+    "joined": {
+      "today": "joined today",
+      "yesterday": "joined yesterday",
+      "days": "joined {{n}} days ago",
+      "months": "joined {{n}} months ago",
+      "years": "joined {{n}} years ago"
+    },
+    "background": {
+      "title": "Background",
+      "edit": "Edit",
+      "done": "Done",
+      "placeholder": "Who they are, what they own, how far they go.",
+      "empty": "No background yet — a few lines make them feel like themselves.",
+      "footnote": "This travels with them into every conversation. The three personality steps above are kept separate, so editing here leaves them alone."
+    },
+    "welcome": {
+      "generic": "Hi, I'm {{name}}. Tell me anything you need from now on — I will get my bearings in the meantime.",
+      "withRole": "Hi, I'm {{name}} — {{description}}. Just tell me what you need."
+    }
+  },
   "commonUi": {
+    "retry": "Try again",
     "crossAgentConvert": {
       "asking": {
         "title": "Convertible workspace config detected",
@@ -6702,6 +7734,7 @@
       "browserTab": "Browser tab",
       "desktopWindow": "App window",
       "task": "Task",
+      "bot": "Teammate delegation",
       "pluginResources": "Plugin resources",
       "pluginResource": "Plugin resource",
       "backToAll": "Back to all @ resources",
@@ -8943,7 +9976,7 @@
         "weekly-work-draft": {
           "name": "Weekly report drafter",
           "description": "Compile this week's work from documents in the working directory into a report draft",
-          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+          "prompt": "Based on this week's changes to documents, notes, and works in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
         },
         "knowledge-freshness": {
           "name": "Knowledge base freshness check",

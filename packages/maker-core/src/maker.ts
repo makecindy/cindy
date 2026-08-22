@@ -68,6 +68,13 @@ export interface SessionBeforeStartContext {
   remoteHostId?: string;
 }
 
+export interface SessionStartFailureContext {
+  sessionId: string;
+  options: CreateSessionOptions;
+  stage: 'prepare' | 'agent-start' | 'storage';
+  error: unknown;
+}
+
 export interface SessionLifecycleHooks {
   /**
    * Agent 启动前补齐 start options。该步骤属于正确启动的前置条件，失败会阻断创建。
@@ -78,6 +85,11 @@ export interface SessionLifecycleHooks {
   onBeforeStart?: (context: SessionBeforeStartContext) => void | Promise<void>;
   /** Agent 和 Session 均创建成功后、对外发布前调用。失败只记日志，不阻断创建。 */
   onStartSucceeded?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
+  /**
+   * Session 尚未发布前的启动失败。Host 可据此收口 prepare 阶段创建的审计记录；
+   * hook 自身失败只记日志，绝不覆盖原始启动错误。
+   */
+  onStartFailed?: (context: SessionStartFailureContext) => void | Promise<void>;
   /** session 关闭时 (Maker.closeSession 主动 / 内部异常 / handle 自然结束)。 */
   onClose?: (sessionId: string) => void | Promise<void>;
   /**
@@ -138,7 +150,11 @@ export interface CreateSessionOptions extends StartSessionOptions {
   id?: string;
 }
 
-export type MakerSessionCloseReason = 'requested' | 'agent-switch' | 'unexpected';
+export type MakerSessionCloseReason =
+  | 'requested'
+  | 'agent-switch'
+  | 'runtime-refresh'
+  | 'unexpected';
 
 export type MakerEvent =
   | { type: 'session:created'; session: Session }
@@ -577,8 +593,33 @@ export class Maker {
 
     const startedAt = Date.now();
     const startOpts: CreateSessionOptions = { ...opts };
+    const notifyStartFailed = async (
+      stage: SessionStartFailureContext['stage'],
+      error: unknown,
+    ): Promise<void> => {
+      if (!this.lifecycleHooks.onStartFailed) return;
+      try {
+        await this.lifecycleHooks.onStartFailed({
+          sessionId: id,
+          options: startOpts,
+          stage,
+          error,
+        });
+      } catch (hookError) {
+        this.logger.warn('lifecycleHooks.onStartFailed threw; preserving original startup error', {
+          sessionId: id,
+          stage,
+          error: String(hookError),
+        });
+      }
+    };
     if (this.lifecycleHooks.prepareStartOptions) {
-      await this.lifecycleHooks.prepareStartOptions(id, startOpts);
+      try {
+        await this.lifecycleHooks.prepareStartOptions(id, startOpts);
+      } catch (error) {
+        await notifyStartFailed('prepare', error);
+        throw error;
+      }
     }
     if (this.lifecycleHooks.onBeforeStart) {
       try {
@@ -648,6 +689,7 @@ export class Maker {
       });
     } catch (error) {
       codexThreadClaim?.release();
+      await notifyStartFailed('agent-start', error);
       throw error;
     }
     if (opts.agentKind === 'codex' && isClaimableCodexThreadId(handle.id)) {
@@ -672,6 +714,7 @@ export class Maker {
           });
         }
         codexThreadClaim?.release();
+        await notifyStartFailed('agent-start', error);
         throw error;
       }
     }
@@ -733,6 +776,7 @@ export class Maker {
       if (!cleanupFailed && codexThreadClaim) {
         codexThreadClaim.release();
       }
+      await notifyStartFailed('storage', error);
       throw error;
     }
 

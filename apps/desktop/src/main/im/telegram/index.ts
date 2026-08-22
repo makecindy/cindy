@@ -36,12 +36,14 @@ export function wireTelegramOrchestrator(
   telegramIm.onGroupWindowMessage((entry) => {
     const generation = captureImAccountGeneration();
     if (generation === null) return;
-    void runInImAccountGeneration(generation, () => recordTelegramGroupMessage(entry)).catch(
-      (err) => {
-        if (isImAccountScopeClosedError(err)) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        log.warn(`telegram group window record failed (non-fatal): ${msg}`);
-      },
-    );
+    void runInImAccountGeneration(
+      generation,
+      () => recordTelegramGroupMessage(entry),
+      'telegram',
+    ).catch((err) => {
+      if (isImAccountScopeClosedError(err)) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`telegram group window record failed (non-fatal): ${msg}`);
+    });
   });
 }

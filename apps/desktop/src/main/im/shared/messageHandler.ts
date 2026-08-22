@@ -32,6 +32,7 @@ import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
+import { botRouteSourceForMessage } from './botRouteTarget';
 
 /**
  * `!stop` 控制指令 — 半角/全角感叹号、大小写不敏感(issue #867)。
@@ -77,10 +78,7 @@ export function createMessageHandler(
    * .ackReactionIdPromise), 由它负责撤掉, 这里不自己清理。
    * 渠道没有表情能力或打失败 ⇒ null, turn 也不会再补打。
    */
-  async function ackProcessingEarly(
-    im: TextChannelIM,
-    messageId: string,
-  ): Promise<string | null> {
+  async function ackProcessingEarly(im: TextChannelIM, messageId: string): Promise<string | null> {
     try {
       return (await im.reactToMessage?.(messageId, adapter.processingEmoji)) ?? null;
     } catch {
@@ -93,6 +91,7 @@ export function createMessageHandler(
     event: IMMessageEvent,
     accountGeneration: ImAccountGeneration,
   ): Promise<void> {
+    const botRouteSource = botRouteSourceForMessage(channel, event);
     log.info(
       `processOne sender=...${event.senderId.slice(-8)} chat=...${event.chatId.slice(-8)} ` +
         `textLen=${event.text.length} att=${event.attachments.length} unsupported=${event.unsupported.length}`,
@@ -163,6 +162,7 @@ export function createMessageHandler(
           botContextId: event.contextId,
           userId: event.senderId,
           scopeKey: threadScoped ? event.scopeKey : undefined,
+          botRouteSource,
         });
         reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
         log.info(
@@ -232,6 +232,7 @@ export function createMessageHandler(
         await slash.handleSlashCommand(event.text, {
           botContextId: event.contextId,
           userId: event.senderId,
+          botRouteSource,
           consumePendingOpener: sink,
         });
       } catch (err) {
@@ -331,6 +332,7 @@ export function createMessageHandler(
             botContextId: event.contextId,
             userId: event.senderId,
             scopeKey: threadScoped ? event.scopeKey : undefined,
+            botRouteSource,
             text: event.text,
             attachments: event.attachments,
             ...(event.protectedContent === true ? { protectedContent: true } : {}),
@@ -339,8 +341,23 @@ export function createMessageHandler(
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`early user-message persist failed (non-fatal): ${msg}`);
       }
+      let botRoute = false;
+      if (botRouteSource) {
+        try {
+          const resolved = await turnRunner.resolveRouteTarget(
+            event.contextId,
+            event.senderId,
+            threadScoped ? event.scopeKey : undefined,
+            botRouteSource,
+          );
+          botRoute = resolved?.botRoute === true;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.warn(`Bot Route identity resolve failed before turn preparation: ${msg}`);
+        }
+      }
       try {
-        prepared = await adapter.prepareAgentTurnText(event);
+        prepared = await adapter.prepareAgentTurnText(event, { botRoute });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`prepareAgentTurnText failed (degraded to raw text): ${msg}`);
@@ -389,10 +406,11 @@ export function createMessageHandler(
         attachments: event.attachments,
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
         scopeKey: threadScoped ? event.scopeKey : undefined,
+        botRouteSource,
         // Title generation and similar detached work must stay visible to the
         // same account drain without delaying the foreground message dispatch.
         trackBackgroundTask: (operation) => {
-          void runInImAccountGeneration(accountGeneration, operation).catch((err) => {
+          void runInImAccountGeneration(accountGeneration, operation, channel).catch((err) => {
             if (isImAccountScopeClosedError(err)) {
               log.info(`drop background task from stale account generation channel=${channel}`);
               return;
@@ -441,8 +459,10 @@ export function createMessageHandler(
           /* prior turn failure should not block subsequent messages */
         })
         .then(() =>
-          runInImAccountGeneration(accountGeneration, () =>
-            processOne(im, event, accountGeneration),
+          runInImAccountGeneration(
+            accountGeneration,
+            () => processOne(im, event, accountGeneration),
+            channel,
           ).catch((err) => {
             if (isImAccountScopeClosedError(err)) {
               log.info(`drop inbound message from stale account generation channel=${channel}`);

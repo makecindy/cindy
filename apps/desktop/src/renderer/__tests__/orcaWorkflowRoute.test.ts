@@ -453,7 +453,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
       /sidebarPanelHostSessionId=\{\s*ownsRoute \|\| navigationMode === 'split-pane' \? sessionId : undefined\s*\}/,
     );
     expect(sessionViewSource).toContain(
-      'onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}',
+      '!readOnly && canNavigateSession ? handleForkStripEncrypted : undefined',
     );
   });
 

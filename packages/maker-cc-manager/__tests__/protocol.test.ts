@@ -19,7 +19,11 @@ describe('protocol constants', () => {
   });
 
   it('requires v4 so old daemons cannot ignore subagent model preflight', () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+    expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(4);
+  });
+
+  it('requires v5 so old daemons cannot ignore host Bot workspace policies', () => {
+    expect(PROTOCOL_VERSION).toBe(5);
   });
 
   it('METHODS has expected method names', () => {

@@ -908,6 +908,67 @@ registerColor('file-badge-fg', {
   light: '#FFFFFF',
   dark: '#FFFFFF',
 }, '文件类型角标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
+// Bot 头像底色族(DESIGN.md §2 / §10 登记的窄作用域彩色例外,双模式各一档):
+// 颜色跟「这是哪个 Bot」绑定,是身份识别线索而不是状态/健康信号 —— 与文件类型角标
+// 同性质。Light 用柔和浅 tint、Dark 用同色相深 tint,两侧都保证 emoji 与首字母兜底
+// (恒用 --text-primary)清晰可读:浅 tint × #262626 ≥ 10:1,深 tint × #d4d4d4 ≥ 7:1。
+// 作用域严格限定为 Bot 头像填充,不得外溢到状态点、徽标、行背景或任何其它表面。
+registerColor('bot-avatar-red-bg', {
+  light: '#f7ded9',
+  dark: '#4a2e2a',
+}, 'Bot 头像底色 — red(登记例外族)');
+registerColor('bot-avatar-orange-bg', {
+  light: '#f9e3d2',
+  dark: '#4a3527',
+}, 'Bot 头像底色 — orange(登记例外族)');
+registerColor('bot-avatar-amber-bg', {
+  light: '#f6ebcd',
+  dark: '#473a22',
+}, 'Bot 头像底色 — amber(登记例外族)');
+registerColor('bot-avatar-green-bg', {
+  light: '#dceedd',
+  dark: '#26402a',
+}, 'Bot 头像底色 — green(登记例外族)');
+registerColor('bot-avatar-teal-bg', {
+  light: '#d6ebea',
+  dark: '#21403e',
+}, 'Bot 头像底色 — teal(登记例外族)');
+registerColor('bot-avatar-blue-bg', {
+  light: '#dce6f5',
+  dark: '#263449',
+}, 'Bot 头像底色 — blue(登记例外族)');
+registerColor('bot-avatar-violet-bg', {
+  light: '#e3ddf3',
+  dark: '#322b48',
+}, 'Bot 头像底色 — violet(登记例外族)');
+registerColor('bot-avatar-pink-bg', {
+  light: '#f6deea',
+  dark: '#452b39',
+}, 'Bot 头像底色 — pink(登记例外族)');
+registerColor('bot-avatar-graphite-bg', {
+  light: '#e5e5e5',
+  dark: '#3c3c3a',
+}, 'Bot 头像底色 — graphite 中性档(旧 graphite 数据映射到这里)');
+// 伙伴列表未读徽标(DESIGN.md §10 登记的窄作用域例外,双模式同值):
+// 「有新消息」在 IM 里是一个所有人都认得的蓝色药丸,不是一个反相的 CTA。反相白底
+// 药丸落在浅灰选中态上会和选中态互相抢焦点 —— 一行里最亮的东西应该是「有几条没看」,
+// 不是「你现在站在这一行」。值与 focus-ring / Auto Approval / Toast info 同族 #417CDD,
+// 前景恒白(--accent-pure-cta-fg 在 Dark 会翻成黑,不能借)。
+// 作用域严格限定为伙伴列表的未读徽标与待办点,不得外溢到别的徽标、状态点或表面。
+// 客座气泡描边:比 Board(--border-default)亮一档的中性描边。「有人来串门」应该在
+// 一屏里被扫到,而不是要逐条读名字才发现;灰阶,不是新的语义色。
+registerColor('bot-guest-border', {
+  light: '#bdbdb9',
+  dark: '#525250',
+}, '客座气泡描边 — 比 Board 亮一档的中性描边(伙伴对话专用)');
+registerColor('bot-unread-bg', {
+  light: '#417CDD',
+  dark: '#417CDD',
+}, '伙伴列表未读徽标底色 — IM 未读语义(登记例外,theme-invariant;× bot-unread-fg = 4.53:1)');
+registerColor('bot-unread-fg', {
+  light: '#FFFFFF',
+  dark: '#FFFFFF',
+}, '伙伴列表未读徽标前景 — 恒白(不能借 accent-pure-cta-fg:那个会在 Dark 翻成黑)');
 registerColor('chat-input-chip-bg', {
   light: 'var(--surface-chip)',
   dark: 'var(--surface-chip)',
@@ -2138,6 +2199,38 @@ registerColor('warning-fg', {
   light: '#F3A115',
   dark: '#F3A115',
 }, '警示强调文字/图标(设计定稿 2026-07-17 #F3A115;与 Toast amber #F59E0B 解耦——Toast 维持 B 组现状,本 token 走定稿前景)');
+// 伙伴(Bot)界面的状态语义四件套。
+//
+// 这四个 token 此前被 Bot 各面(设置页错误文案、自动化状态点、健康态勾、
+// 委派进行中指示器)裸引用却从未注册,:root 读不到值 → `color` / `background-color`
+// 声明在计算值阶段整条作废:错误文字继承成正文色(报错看着不像报错)、成功勾和
+// 状态点直接没颜色。属于 tokenRegistry.test.ts 里写明的「幽灵 token」,按该文件
+// 的规矩补注册,不在消费点撒 fallback。
+//
+// 三个走 alias:错误族直接复用既有 error-* 语义槽,info 复用 info-700
+// (与 BotDelegationActivityIndicator 原先写死的 fallback 同源),这样非默认
+// 主题对 error-* / info-700 的 override 能自动流下来,不会有一族颜色脱队。
+registerColor('text-danger', {
+  light: 'var(--error-fg)',
+  dark: 'var(--error-fg)',
+}, '伙伴界面 danger 前景 — alias 到 error-fg(错误文案 / 删除类动作 hover)');
+registerColor('danger-bg-soft', {
+  light: 'var(--error-bg)',
+  dark: 'var(--error-bg)',
+}, '伙伴界面 danger 软背景 — alias 到 error-bg(危险区块底 / destructive 按钮 hover)');
+registerColor('status-info', {
+  light: 'var(--info-700)',
+  dark: 'var(--info-700)',
+}, '伙伴界面「进行中」状态色 — alias 到 info-700');
+// success 不 alias 到状态点 card-status-done:那颗绿(#2AAE5B)是按**非文字** 3:1
+// 选的,而本 token 同时被当正文色用(健康态标签、自动化「已启用」),压在 Light 的
+// surface 上只有 2.56:1。故 Light 取同色相压深的 #177C3C(surface 4.69 /
+// elevated 5.17 / chip 4.53,三种底都过 4.5),Dark 维持定稿 #2AAE5B(5.73~6.18)。
+// 深浅两侧一深一浅的走法与 error-fg(#dc2626 / #f87171)一致。
+registerColor('status-success', {
+  light: '#177C3C',
+  dark: '#2AAE5B',
+}, '伙伴界面「成功 / 健康 / 已启用」状态色(Light 压深至文字可读档,Dark 用状态族定稿绿)');
 // cc-mgr 远端升级 banner (UpgradeBanner.tsx) — amber warning 语义,跨主题统一、语义豁免
 // (规则 15:warning/amber 在豁免范围,不被非默认主题 override,但仍走 token)。
 registerColor('upgrade-banner-bg', {

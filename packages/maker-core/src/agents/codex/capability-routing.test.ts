@@ -2,11 +2,57 @@ import { describe, expect, it } from 'vitest';
 
 import type { CapabilityRoutingPolicy } from '../../types/capability-routing.js';
 import {
+  buildCodexBotSkillConfigOverrides,
+  buildCodexBotMcpConfigOverrides,
   buildCodexCapabilityConfigOverrides,
   buildCodexCapabilitySkillConfigOverrides,
   buildCodexSessionCapabilityRoutingPolicy,
+  mergeCodexSkillConfigOverrides,
   requiresCodexCapabilitySkillDiscovery,
 } from './capability-routing.js';
+
+describe('Bot Skill config', () => {
+  it('maps a Bot allowlist to native per-thread Codex Skill state', () => {
+    expect(buildCodexBotSkillConfigOverrides({
+      mode: 'allowlist',
+      configured: ['release'],
+      catalog: [
+        { name: 'release-notes', runtimeCommandName: 'release', path: '/skills/release/SKILL.md' },
+        { name: 'incident-response', path: '/skills/incident/SKILL.md' },
+      ],
+    })).toEqual({
+      'skills.config': [
+        { path: '/skills/incident/SKILL.md', enabled: false },
+        { path: '/skills/release/SKILL.md', enabled: true },
+      ],
+    });
+  });
+
+  it('keeps the stricter disabled state when Bot and host policies overlap', () => {
+    expect(mergeCodexSkillConfigOverrides(
+      { 'skills.config': [{ path: '/skills/release/SKILL.md', enabled: false }] },
+      { 'skills.config': [{ path: '/skills/release/SKILL.md', enabled: true }] },
+    )).toEqual({
+      'skills.config': [{ path: '/skills/release/SKILL.md', enabled: false }],
+    });
+  });
+});
+
+describe('Bot MCP config', () => {
+  it('disables only unselected custom MCP servers', () => {
+    expect(buildCodexBotMcpConfigOverrides({
+      mode: 'allowlist',
+      configured: ['custom-a'],
+      catalog: [
+        { name: 'cindy_memory', source: 'builtin' },
+        { name: 'custom-a', source: 'custom' },
+        { name: 'custom.with.dot', source: 'custom' },
+      ],
+    })).toEqual({
+      'mcp_servers."custom.with.dot".enabled': false,
+    });
+  });
+});
 
 describe('buildCodexSessionCapabilityRoutingPolicy', () => {
   const compatibilityRoute = {

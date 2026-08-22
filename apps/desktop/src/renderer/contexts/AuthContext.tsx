@@ -42,6 +42,7 @@ import { setFavoriteAnchorMemoryOwner } from '@/state/favoriteAnchorMemory';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setModelVisibilityOwner } from '@/state/modelVisibilityPrefs';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
+import { setBotReadStateOwner } from '@/features/bots/botReadState';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
 import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
@@ -195,6 +196,7 @@ export function AuthProvider({
       // 收藏**锚点**记忆(面板上哪一行打勾)与收藏本体同分区:漏接同样是多账号串号。
       setFavoriteAnchorMemoryOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
+      setBotReadStateOwner(state.dataOwnerId);
       setPendingHandoffOwner(state.dataOwnerId);
       setDeferredUiAssignmentOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);

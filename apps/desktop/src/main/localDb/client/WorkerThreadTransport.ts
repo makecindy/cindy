@@ -651,7 +651,7 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
     'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
@@ -664,6 +664,11 @@ function sessionsSetStatus(readyDb, args) {
       if (!existing) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       if (existing.status === 'deleted') {
         throw Object.assign(new Error('已删除的任务不能恢复或归档: ' + sessionId), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }
+      if (existing.source === 'bot') {
+        throw Object.assign(new Error('Bot 任务必须通过 Bot 生命周期管理: ' + sessionId), {
           code: 'PRECONDITION_FAILED',
         });
       }

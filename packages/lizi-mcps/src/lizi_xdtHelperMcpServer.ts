@@ -56,6 +56,18 @@ import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_sessio
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
+import {
+  registerBotDelegationTools,
+  type BotDelegationCallbacks,
+} from './xdt-helper/bot_delegation.js';
+import {
+  registerBotDurableNoteTools,
+  type BotDurableNoteCallbacks,
+} from './xdt-helper/bot_durable_notes.js';
+import {
+  registerBotSkillTools,
+  type BotSkillCallbacks,
+} from './xdt-helper/bot_skills.js';
 import type { XdtHelperHistoryDeps } from './xdt-helper/_history_types.js';
 import type { SessionQueueDeps } from './xdt-helper/list_session_queue.js';
 import type { SessionControlDeps } from './xdt-helper/session_control.js';
@@ -102,7 +114,7 @@ const D_CALL_TOOL =
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff'] as const;
+const CATEGORY_ENUM = ['cindy', 'control', 'history', 'feedback', 'handoff', 'bots'] as const;
 
 // ── Entry tool registration ──────────────────────────────────────────────────
 
@@ -244,6 +256,16 @@ export interface XdtHelperMcpDeps {
    * 路由的原语, 放在 essential 的 cindy_helper 下常开保证 skill 永不断。
    */
   sendToSession?: SendToSessionCallback;
+  /** Cindy Bot-only collaboration surface. Host validates the caller Session. */
+  botDelegation?: BotDelegationCallbacks;
+  /** Cindy Bot-only durable notepad. Host resolves Bot ownership from the caller Session. */
+  botDurableNotes?: BotDurableNoteCallbacks;
+  /**
+   * Cindy Bot-only skill shelf: the Bot turns a finished way of working into a
+   * real Skill file that the next task mounts. Host resolves Bot ownership from
+   * the caller Session, same as the durable notepad.
+   */
+  botSkills?: BotSkillCallbacks;
   /**
    * 官方反馈 issue 提交回调(弹确认卡片 → 用户确认 → POST server)。host 注入后,
    * feedback 类工具 submit_github_issue 会被注册; 不注入则不出现在 list_tools 里。
@@ -318,13 +340,17 @@ export function createXdtHelperMcpServer(
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
   if (deps.history) {
-    registerListWorkdirsTool(registry, { history: deps.history });
-    registerListSessionsTool(registry, {
+    const historyDeps = {
       history: deps.history,
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+    };
+    registerListWorkdirsTool(registry, historyDeps);
+    registerListSessionsTool(registry, {
+      ...historyDeps,
       ...(deps.sessionQueue ? { sessionQueue: deps.sessionQueue } : {}),
     });
-    registerGetChatHistoryTool(registry, { history: deps.history });
-    registerSearchChatHistoryTool(registry, { history: deps.history });
+    registerGetChatHistoryTool(registry, historyDeps);
+    registerSearchChatHistoryTool(registry, historyDeps);
   }
   if (deps.sessionQueue) {
     registerListSessionQueueTool(registry, deps.sessionQueue);
@@ -354,6 +380,24 @@ export function createXdtHelperMcpServer(
     registerSendToSessionTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       sendToSession: deps.sendToSession,
+    });
+  }
+  if (deps.botDelegation) {
+    registerBotDelegationTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.botDelegation,
+    });
+  }
+  if (deps.botDurableNotes) {
+    registerBotDurableNoteTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.botDurableNotes,
+    });
+  }
+  if (deps.botSkills) {
+    registerBotSkillTools(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      callbacks: deps.botSkills,
     });
   }
 

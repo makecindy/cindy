@@ -1092,6 +1092,9 @@ function ExpandedView({
         return;
       }
 
+      // Bot automation is owned by the Bots domain and must never be mutated
+      // through the generic Scheduler sidebar, even if a stale cache leaks it.
+      if (group.scheduleSource === 'bot') return;
       requestDeleteSchedule({
         id: scheduleId,
         name: scheduleName,
