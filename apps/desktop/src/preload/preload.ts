@@ -1631,7 +1631,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 幂等开窗。缺省(用户手势)已开则 show + focus;
      * userInitiated:false(启动恢复 / 插件 / agent 自发)已开则完全不动窗口。
      */
-    open: (options?: { userInitiated?: boolean }): Promise<void> =>
+    open: (options?: { userInitiated?: boolean; sessionId?: string }): Promise<void> =>
       ipcRenderer.invoke('maker:rsb-window:open', options),
     close: (): Promise<void> => ipcRenderer.invoke('maker:rsb-window:close'),
     /** 写偏好;true 附带开窗,false 附带关窗。返回新 state。 */

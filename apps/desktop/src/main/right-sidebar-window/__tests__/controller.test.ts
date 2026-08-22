@@ -5,6 +5,7 @@
 //  - 崩溃恢复有界
 //  - getHostWebContents 三态(detached+open → 子窗;否则主窗)
 //  - setContext 缓存 + 仅窗口活跃时转发;routeCommand 原子裁决宿主
+//  - 跨 session 呼起 adopt/pin,不被主窗焦点抢回
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContents } from 'electron';
@@ -912,10 +913,44 @@ describe('setContext / routeCommand', () => {
     });
   });
 
-  it('context mismatch returns stale-context', async () => {
+  it('context mismatch adopts the command session and routes', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext({ ...ctx, sessionId: 's2' });
-    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('stale-context');
+    const pending = h.controller.routeCommand(terminalRequest());
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toEqual({
+      sessionId: 's1',
+      workdir: null,
+      remoteHostId: null,
+      available: true,
+    });
+    expect(h.sends.at(-1)).toEqual({
+      channel: 'cmd-channel',
+      payload: { type: 'open-terminal', sessionId: 's1' },
+    });
+  });
+
+  it('pinned host session ignores later focus switches until the user arrives', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getContext()).toEqual(ctx);
+
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/adopted',
+    });
+    expect(h.controller.getContext()).toEqual({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/adopted',
+    });
   });
 
   it('allowOpen=false + window hidden: stays queued through prewarm and flushes on open', async () => {

@@ -130,6 +130,12 @@ export class RsbWindowController {
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
   private automaticRecoveryAttempts = 0;
   private lastContext: RsbWindowContext | null = null;
+  /**
+   * Agent / 跨 session 呼起把子窗口钉在发起方 session 上。
+   * 钉住期间主窗 setContext 的焦点切换不能把展示抢回台前 session；
+   * 用户切到被 pin 的 session、离开聊天视图或关掉子窗口时解除。
+   */
+  private pinnedSessionId: string | null = null;
   /** 冷启动分离窗尚未 presentation-ready 时暂存主窗交来的内存态 tab。 */
   private pendingDetachedTabHandoff: RsbWindowTabHandoff | null = null;
   /**
@@ -177,9 +183,16 @@ export class RsbWindowController {
    * 幂等打开:热窗口(presentationReady)立即显示；冷窗口等待首份业务内容，
    * 超时按 Loading 壳兜底。
    */
-  open(opts: { userInitiated?: boolean } = {}): void {
+  open(opts: { userInitiated?: boolean; sessionId?: string } = {}): void {
     if (this.disposed) return;
     const userInitiated = opts.userInitiated !== false;
+    const revealSessionId = typeof opts.sessionId === 'string' ? opts.sessionId.trim() : '';
+    if (
+      revealSessionId &&
+      (userInitiated === false || this.lastContext?.sessionId !== revealSessionId)
+    ) {
+      this.adoptHostSession(revealSessionId);
+    }
 
     this.automaticRecoveryAttempts = 0;
     this.clearRecoveryStabilityTimeout();
@@ -349,6 +362,16 @@ export class RsbWindowController {
 
   /** 主窗上报渲染上下文:缓存 + 窗口活跃就转发。 */
   setContext(ctx: RsbWindowContext): void {
+    if (this.pinnedSessionId) {
+      if (ctx.available && ctx.sessionId === this.pinnedSessionId) {
+        this.clearPinnedSession();
+      } else if (ctx.available && ctx.sessionId) {
+        // 钉住中: 主窗切到别的焦点 session 不能把子窗口抢走。
+        return;
+      } else {
+        this.clearPinnedSession();
+      }
+    }
     const previousSessionId = this.lastContext?.sessionId ?? null;
     this.lastContext = ctx;
     if (!ctx.available || !ctx.sessionId) {
@@ -377,6 +400,10 @@ export class RsbWindowController {
     const { command, allowOpen } = request;
     const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
+    const hostSessionId = commandHostSessionId(command);
+    if (userInitiated === false || this.lastContext?.sessionId !== hostSessionId) {
+      this.adoptHostSession(hostSessionId);
+    }
     if (!this.canDispatchCommand(command)) return 'stale-context';
 
     const windowAlive = this.winRef && !this.winRef.isDestroyed();
@@ -558,6 +585,7 @@ export class RsbWindowController {
       // 窗口可能在 isVisible 检查与 send 之间被系统销毁
     }
     this.deps.settings.writePatch({ lastOpen: false });
+    this.clearPinnedSession();
     this.broadcast();
     this.deps.log.info('right-sidebar window hidden');
   }
@@ -601,6 +629,7 @@ export class RsbWindowController {
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = true;
     this.destroyingWindow = false;
+    this.clearPinnedSession();
 
     const waiters = this.readyWaiters.splice(0);
     for (const w of waiters) {
@@ -788,6 +817,33 @@ export class RsbWindowController {
   }
 
   // ── 命令路由辅助 ─────────────────────────────────────────────────
+
+  private adoptHostSession(sessionId: string): void {
+    if (!sessionId) return;
+    this.pinnedSessionId = sessionId;
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
+    const previousSessionId = this.lastContext?.sessionId ?? null;
+    const next: RsbWindowContext = {
+      sessionId,
+      workdir: null,
+      remoteHostId: null,
+      available: true,
+    };
+    this.lastContext = next;
+    if (previousSessionId && previousSessionId !== sessionId) {
+      for (const queuedSessionId of this.deferredCommands.keys()) {
+        if (queuedSessionId !== sessionId) this.deferredCommands.delete(queuedSessionId);
+      }
+    }
+    if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
+      this.deps.sendToWindow(this.winRef, this.deps.contextChannel, next);
+    }
+    this.flushDeferredCommandsToDetachedHost();
+  }
+
+  private clearPinnedSession(): void {
+    this.pinnedSessionId = null;
+  }
 
   private canDispatchCommand(cmd: RsbWindowCommand): boolean {
     return Boolean(

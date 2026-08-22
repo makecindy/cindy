@@ -486,12 +486,18 @@ describe('right-sidebar-window IPC', () => {
     open({}, undefined);
     open({}, {});
     open({}, { userInitiated: false });
+    open({}, { userInitiated: false, sessionId: 'agent-session' });
 
     expect(controller.open).toHaveBeenNthCalledWith(1, { userInitiated: true });
     expect(controller.open).toHaveBeenNthCalledWith(2, { userInitiated: true });
     expect(controller.open).toHaveBeenNthCalledWith(3, { userInitiated: false });
+    expect(controller.open).toHaveBeenNthCalledWith(4, {
+      userInitiated: false,
+      sessionId: 'agent-session',
+    });
 
     expect(() => open({}, { userInitiated: 1 })).toThrow(/options.userInitiated/);
+    expect(() => open({}, { sessionId: '' })).toThrow(/options.sessionId/);
   });
 
   it('accepts a memory-only tab handoff only from the detached sidebar sender', () => {
