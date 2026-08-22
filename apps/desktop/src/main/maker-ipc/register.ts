@@ -3411,7 +3411,42 @@ export function installDesktopInteractionListener(session: {
     l: ((req: InteractionRequest) => Promise<InteractionDecision>) | null,
   ) => void;
 }): void {
+  // Serialise permission interactions per session at the Desktop boundary.
+  //
+  // Renderer's permission slot is a SINGLETON (makerChatStore.pendingPermission
+  // is `PendingPermission | null`). When the agent emits two permission
+  // requests in parallel — common in Auto mode when one tool is in-workspace
+  // (auto-allow) and another is out-of-workspace (needs confirm), or any two
+  // tools that both hit the confirm path — the second INTERACTION_REQUEST
+  // overwrites the first in the renderer. The first request's resolve is
+  // then never invoked, so its canUseTool Promise hangs until the 10-minute
+  // PERMISSION_INTERACTION_TIMEOUT_MS fires, stalling the turn for 600s while
+  // the second (later) request resolves instantly. The "first of the batch
+  // always hangs" pattern matches issue #3092 exactly.
+  //
+  // Serialising here means each permission's broadcast waits for the previous
+  // permission to settle, so the renderer's single slot is handed one card at
+  // a time. The agent's per-tool Promises remain independent (they just
+  // resolve in arrival order). ask_user_question / plan_review are NOT
+  // serialised: they have different lifecycle (no timeout) and the renderer
+  // queues them separately today.
+  let permissionChain: Promise<InteractionDecision> = Promise.resolve(
+    permissionQueueSeed(),
+  );
+  const permissionChainRef = { current: permissionChain };
+
   installDesktopInteractionHandler(session, async (req: InteractionRequest) => {
+    if (req.kind === 'permission') {
+      return serializePermissionDispatch(permissionChainRef, () =>
+        handleDesktopInteractionRequest(req),
+      );
+    }
+    return handleDesktopInteractionRequest(req);
+  });
+
+  async function handleDesktopInteractionRequest(
+    req: InteractionRequest,
+  ): Promise<InteractionDecision> {
     const agentIslandInteractionEpoch = shouldNotifyAgentIslandForSession(session.id)
       ? (getAgentIslandService()?.captureInteractionEpoch(session.id) ?? null)
       : null;
@@ -3471,7 +3506,47 @@ export function installDesktopInteractionListener(session: {
         agentIslandInteractionEpoch,
       );
     });
-  });
+  }
+}
+
+/**
+ * Default deny decision used as the permission serialization chain's
+ * starting sentinel. A real permission interaction never settles to this
+ * value — the handler's decision overwrites it — but the chain needs a
+ * concrete initial value and a rejected-promise recovery so one failure
+ * cannot wedge the queue for later permissions.
+ */
+function permissionQueueSeed(): InteractionDecision {
+  return { kind: 'permission', behavior: 'deny', reason: 'interaction queue reset' };
+}
+
+/**
+ * Append a new permission run onto an existing serialization chain.
+ *
+ * Exported so the serialisation contract (run-on-previous-settle, recover on
+ * rejection, never queue-poison) can be tested without spinning up the full
+ * Desktop fallback handler. `chainRef` carries the tail of the queue and is
+ * mutated in-place to the new tail after this run starts.
+ *
+ * Returned promise resolves with the run's decision; the chain itself stays
+ * alive regardless of the run's outcome so subsequent permissions are not
+ * blocked by a rejected run.
+ */
+export function serializePermissionDispatch(
+  chainRef: { current: Promise<InteractionDecision> },
+  run: () => Promise<InteractionDecision>,
+): Promise<InteractionDecision> {
+  // Run on the previous chain's settle (resolve OR reject) so a single
+  // rejected run never poisons the queue.
+  const next = chainRef.current.then(
+    () => run(),
+    () => run(),
+  );
+  chainRef.current = next.then(
+    (d) => d,
+    () => permissionQueueSeed(),
+  );
+  return next;
 }
 
 /**
