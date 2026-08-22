@@ -73,6 +73,101 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('does not project management commands as Subagent runs', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_start',
+        toolCallId: 'sa-list',
+        toolName: 'subagent',
+        args: { action: 'list' },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({ type: 'tool_execution_end', toolCallId: 'sa-list', result: 'PASS', isError: false }),
+      queue,
+      ctx,
+    );
+    expect(events.filter((event) => event.type === 'agent_task_update')).toEqual([]);
+  });
+
+  it('uses the explicit value-oriented title for a Subagent run', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_start',
+        toolCallId: 'sa-title',
+        toolName: 'subagent',
+        args: { title: 'Grok 连通性验证', agent: 'worker' },
+      }),
+      queue,
+      ctx,
+    );
+    expect(events.find((event) => event.type === 'agent_task_update')?.data).toMatchObject({
+      title: 'Grok 连通性验证',
+    });
+  });
+
+  it('derives a batch title from task value instead of role labels', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_start',
+        toolCallId: 'sa-batch-title',
+        toolName: 'subagent',
+        args: {
+          tasks: [
+            { agent: 'worker', task: 'Verify Grok routing and usage' },
+            { agent: 'worker', task: 'Review retry classification' },
+          ],
+        },
+      }),
+      queue,
+      ctx,
+    );
+    expect(events.find((event) => event.type === 'agent_task_update')?.data).toMatchObject({
+      title: 'Verify Grok routing and usage · Review retry classification',
+    });
+  });
+
+  it('keeps a durable PI launch receipt running after tool_execution_end', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(
+      ev({ type: 'tool_execution_start', toolCallId: 'sa-bg', toolName: 'subagent', args: { async: true } }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(
+      ev({
+        type: 'tool_execution_end',
+        toolCallId: 'sa-bg',
+        result: {
+          content: [{
+            type: 'text',
+            text: 'Cindy subagent launched. The agent is working in the background.',
+          }],
+        },
+        isError: false,
+      }),
+      queue,
+      ctx,
+    );
+
+    const updates = events.filter((event) => event.type === 'agent_task_update');
+    expect(updates.at(-1)?.data).toMatchObject({
+      taskId: 'sa-bg',
+      status: 'running',
+      taskType: 'pi_subagent',
+    });
+  });
+
   it.each([
     ['failed', false, 'failed'],
     ['stopped', false, 'stopped'],

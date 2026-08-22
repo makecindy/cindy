@@ -16,7 +16,7 @@
  */
 
 import type { Logger } from '../../interfaces/logger.js';
-import { PI_SUBAGENT_TOOL_NAME } from '@cindy/maker-shared/agent-task';
+import { PI_SUBAGENT_TOOL_NAME, subagentSpawnResultIndicatesRunning } from '@cindy/maker-shared/agent-task';
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
@@ -546,17 +546,36 @@ export function translatePiEvent(
         },
         source: 'pi',
       });
-      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId) {
-        const rawTitle = toolArgs.agent;
+      if (toolName === PI_SUBAGENT_TOOL_NAME && toolUseId && (toolArgs.action === undefined || toolArgs.action === 'run')) {
+        const rawTitle = toolArgs.title;
+        const taskFallback = typeof toolArgs.task === 'string' && toolArgs.task.trim()
+          ? toolArgs.task.trim().replace(/\s+/g, ' ').slice(0, 120)
+          : Array.isArray(toolArgs.tasks)
+            ? toolArgs.tasks
+                .map((task) => {
+                  if (!task || typeof task !== 'object') return '';
+                  const item = task as Record<string, unknown>;
+                  const value = typeof item.title === 'string' && item.title.trim()
+                    ? item.title
+                    : item.task;
+                  return typeof value === 'string'
+                    ? value.trim().replace(/\s+/g, ' ').slice(0, 60)
+                    : '';
+                })
+                .filter(Boolean)
+                .join(' · ')
+                .slice(0, 120)
+            : '';
         const title = typeof rawTitle === 'string' && rawTitle.trim()
-          ? rawTitle.trim().slice(0, 96)
-          : undefined;
+          ? rawTitle.trim().slice(0, 120)
+          : taskFallback || undefined;
         const update: AgentTaskUpdateEventData = {
           provider: 'pi',
           taskId: toolUseId,
           parentToolUseId: toolUseId,
           status: 'running',
           ...(title ? { title } : {}),
+          ...(toolArgs.async === true ? { taskType: 'pi_subagent' } : {}),
           subagentObservation: {
             kind: 'spawn',
             logicalSubagentId: toolUseId,
@@ -623,6 +642,7 @@ export function translatePiEvent(
         // may finish the wrapper with isError=true after the child stopped.
         // Only a still-running child is completed/failed by the wrapper frame.
         const status = subagentToolCall.status === 'running'
+          && !subagentSpawnResultIndicatesRunning(PI_SUBAGENT_TOOL_NAME, fullText)
           ? (isError ? 'failed' : 'completed')
           : subagentToolCall.status;
         queue.push({

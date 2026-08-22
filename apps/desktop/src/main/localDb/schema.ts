@@ -432,11 +432,16 @@ export const subagentRuns = sqliteTable(
     title: text('title'),
     description: text('description'),
     summary: text('summary'),
+    /** Complete bounded terminal return; kept separate from the short summary. */
+    returnedResult: text('returned_result'),
+    returnedResultEmpty: integer('returned_result_empty'),
+    returnedResultTruncated: integer('returned_result_truncated'),
     model: text('model'),
     reasoningEffort: text('reasoning_effort'),
     totalTokens: integer('total_tokens'),
     toolUses: integer('tool_uses'),
     durationMs: integer('duration_ms'),
+    costUsd: real('cost_usd'),
     /** JSON SubagentCapabilities; optional fields are fail-closed by readers. */
     capabilities: text('capabilities').notNull().default('{}'),
     /** JSON SubagentActivityEntry[]; writer enforces count/text bounds. */

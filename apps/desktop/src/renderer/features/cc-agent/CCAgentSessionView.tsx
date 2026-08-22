@@ -31,6 +31,7 @@ import {
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
 import { connectedProvidersForAgent, providerOffersModel } from '@cindy/model-providers';
+import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -170,6 +171,8 @@ import {
 } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
+import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';
+import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
 import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -470,22 +473,28 @@ function RightSidebarAvailabilityRegistration({
  */
 function RightSidebarSessionIdRegistration({
   sessionId,
+  subagentsAvailable,
   initialCollapsed,
   writeInitialCollapsedRecord = false,
   declare,
 }: {
   sessionId: string;
+  subagentsAvailable?: boolean;
   initialCollapsed?: boolean;
   writeInitialCollapsedRecord?: boolean;
   declare: (
     sessionId: string | null,
-    opts?: { initialCollapsed?: boolean; writeInitialCollapsedRecord?: boolean },
+    opts?: {
+      initialCollapsed?: boolean;
+      writeInitialCollapsedRecord?: boolean;
+      subagentsAvailable?: boolean;
+    },
   ) => void;
 }) {
   useLayoutEffect(() => {
-    declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord });
+    declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });
     return () => declare(null);
-  }, [sessionId, initialCollapsed, writeInitialCollapsedRecord, declare]);
+  }, [sessionId, subagentsAvailable, initialCollapsed, writeInitialCollapsedRecord, declare]);
   return null;
 }
 
@@ -587,43 +596,6 @@ export function CCAgentSessionView({
     });
   }, [navigate, sessionId, viewVisible]);
 
-  // A task that has Subagents owns one durable Subagent tab. Both on history
-  // mount and on the first live child we only ensure the tab exists — never
-  // stealing OS focus, replacing an already-active tab, or opening the sidebar.
-  useEffect(() => {
-    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
-    let disposed = false;
-    const requestOwner = getDataOwnerGeneration();
-    void window.electronAPI.localDb.subagentRuns
-      .list({ sessionId })
-      .then((response) => {
-        if (
-          disposed ||
-          !isDataOwnerGenerationCurrent(requestOwner) ||
-          !response.supported ||
-          response.runs.length === 0
-        ) {
-          return;
-        }
-        return openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY);
-      })
-      .catch(() => undefined);
-    const unsubscribe = window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
-      if (
-        disposed ||
-        !isDataOwnerPushCurrent(ownerStamp) ||
-        payload.runId === null ||
-        payload.sessionId !== sessionId
-      ) {
-        return;
-      }
-      void openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY).catch(() => undefined);
-    });
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, [ownsWindowRoute, sessionId, viewVisible]);
   // MainLayout 经 Outlet context 下发右栏相关能力(二级路由由 CCAgentFeatureLayout
   // 透传,否则这里会断链拿不到):
   //   - rightSidebarCollapsed:折叠态,用于 useProportionalWidth 的 compact 判定;
@@ -865,6 +837,65 @@ export function CCAgentSessionView({
   // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
   const rightSidebarDeviceLinkDeviceId =
     remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
+
+  /**
+   * Does this task own durable Pi Subagent runs?
+   *
+   * The entry used to be decided by the parent's *current* harness, which is
+   * not what owns the children. Switching a Pi task to Claude Code or Codex
+   * leaves its detached runners going — they hold credentials and write the
+   * workspace, and `stopAgentTaskHandler` keeps a path to stop them — while the
+   * sidebar tab that monitors them and offers the per-child stop disappeared
+   * the moment the harness changed.
+   */
+  const [sessionOwningDurablePiRuns, setSessionOwningDurablePiRuns] = useState<string | null>(null);
+  // Keyed by the session it was observed for, so navigating to another task
+  // cannot inherit the previous one's answer while its own read is still out.
+  const durablePiRunsPresent = Boolean(sessionId) && sessionOwningDurablePiRuns === sessionId;
+
+  // A task that has Subagents owns one durable Subagent tab. Both on history
+  // mount and on the first live child we only ensure the tab exists — never
+  // stealing OS focus, replacing an already-active tab, or opening the sidebar.
+  //
+  // Not gated on `agentKind`: discovery decides by what is actually on disk. It
+  // registers nothing for a task with no Pi runs, so widening the gate costs a
+  // non-Pi task one list read (plus a session-filtered change subscription) and
+  // opens no tab.
+  //
+  // The durable truth lives on the data-owning device, so a device-link task
+  // must discover through `deviceLink.invoke`: the controller's own DB has no
+  // row for it and answers `unsupported`, which used to leave the tab
+  // unregistered forever even though the panel itself already reads remotely.
+  // This effect sits below `remoteDeviceId` because it depends on it.
+  useEffect(() => {
+    if (!ownsWindowRoute || !viewVisible || !sessionId) return;
+    const requestOwner = getDataOwnerGeneration();
+    return startSubagentTabDiscovery({
+      sessionId,
+      deviceId: remoteDeviceId ?? null,
+      listLocal: () => window.electronAPI.localDb.subagentRuns.list({ sessionId }),
+      listRemote: async (deviceId) =>
+        (await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:subagent-runs:list', [
+          { sessionId },
+        ])) as SubagentRunsListResponse,
+      // The same predicate the panel uses, and deliberately not a local copy of
+      // it. This one used to drop `runId === null`, which is exactly the
+      // *whole-session invalidation* a `/clear` or a rewind past the Subagent's
+      // start emits: the records go away and nothing here noticed, so a task
+      // that switched to Claude Code or Codex kept declaring an entry whose
+      // runs no longer existed. `sessionId` is always a real id on that
+      // payload — only `runId` is nullable — so the scoping is unchanged.
+      subscribeLocalChanges: (onChanged) =>
+        window.electronAPI.localDb.subagentRuns.onChanged((payload, ownerStamp) => {
+          if (!isCurrentSubagentRunsChange(payload, ownerStamp, sessionId)) return;
+          onChanged();
+        }),
+      registerTab: () => openSubagentsTab(sessionId, SUBAGENT_TAB_REGISTER_ONLY),
+      isRequestOwnerCurrent: () => isDataOwnerGenerationCurrent(requestOwner),
+      onPresenceChange: (present) => setSessionOwningDurablePiRuns(present ? sessionId : null),
+    });
+  }, [ownsWindowRoute, remoteDeviceId, sessionId, viewVisible]);
+
   // device-link 远程会话:重 topic 订阅(含 WS 重连 / 被控端回在线时重建)+ 消息对账触发
   // (重连 / presence / turn 结束 / 窗口聚焦 / 手动)。修「控制端丢消息」—— 以被控端为准重新同步。
   // 本机会话(remoteDeviceId 为 undefined)整体 no-op。resync 供连接 banner 的「重新同步」按钮用。
@@ -4014,6 +4045,33 @@ export function CCAgentSessionView({
       {ownsRoute && sessionId && setRightSidebarSessionId && (
         <RightSidebarSessionIdRegistration
           sessionId={sessionId}
+          // A local Pi task always offers the tab, as before. A task that is no
+          // longer on Pi keeps offering it for exactly as long as its durable
+          // runs exist — terminal ones included, matching what a Pi task shows
+          // — and stops once cleanup has removed them. `undefined` while the
+          // session is unresolved stays untouched: the shell reads that as
+          // "not known yet", not as "unavailable".
+          //
+          // `remoteHostId` mirrors the capability gate rather than adding one:
+          // `agents/pi` computes `remote` as `Boolean(opts.remoteHostId)` and
+          // skips installing the durable Subagent extension and runner for such
+          // a session, so an SSH-hosted Pi task can never produce a run. Without
+          // this the harness alone opened a tab that stays empty forever and
+          // whose controls address the *local* filesystem, not the remote host.
+          // This is not SSH-hosted Subagent support — that needs the wire
+          // protocol to own the run files end-to-end and is out of scope here;
+          // this only stops advertising an entry the capability gate disabled.
+          //
+          // `durablePiRunsPresent` is deliberately left ungated: device-link is
+          // a supported path and discovers through `listRemote`, while an SSH
+          // task has no deviceId (`remoteHostId` and `deviceLinkDeviceId` are
+          // separate fields) so its local list is always empty and presence
+          // always false — it cannot leak back in through this branch.
+          subagentsAvailable={
+            session
+              ? (session.agentKind === 'pi' && !session.remoteHostId) || durablePiRunsPresent
+              : undefined
+          }
           initialCollapsed={shouldFirstFrameRevealOrcaWorkers ? false : undefined}
           writeInitialCollapsedRecord={shouldFirstFrameRevealOrcaWorkers}
           declare={setRightSidebarSessionId}

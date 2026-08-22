@@ -205,7 +205,12 @@ describe('account provider readiness wiring', () => {
     const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
     const suspendHardware = bootstrapSource.indexOf('suspendInputDeviceTaskSlots();', teardown);
     const clearCustomProviders = bootstrapSource.indexOf('setCustomProviders([])', teardown);
-    const makerShutdown = bootstrapSource.indexOf('await maker.shutdown()', teardown);
+    // The boundary must name itself: an unlabelled shutdown fails closed to
+    // 'account-boundary' in Maker, but the real logout path states it.
+    const makerShutdown = bootstrapSource.indexOf(
+      "await maker.shutdown({ reason: 'account-boundary' })",
+      teardown,
+    );
     const joinPrevious = bootstrapSource.indexOf(
       'waitForPreviousScope(',
       makerShutdown,
@@ -222,5 +227,64 @@ describe('account provider readiness wiring', () => {
     expect(makerShutdown).toBeGreaterThan(clearCustomProviders);
     expect(joinPrevious).toBeGreaterThan(makerShutdown);
     expect(clearAfterJoin).toBeGreaterThan(joinPrevious);
+  });
+
+  it('stops every PI Subagent runner of the outgoing owner at the account boundary', () => {
+    const teardown = bootstrapSource.indexOf('async function teardownAuthAccountBoundary');
+    const makerShutdown = bootstrapSource.indexOf(
+      "await maker.shutdown({ reason: 'account-boundary' })",
+      teardown,
+    );
+    // maker.shutdown only reaches tasks that still hold a live handle. A
+    // detached runner whose parent task was closed earlier has none, so the
+    // boundary must also sweep the agent home before the owner DB goes away.
+    const sweep = bootstrapSource.indexOf('stopAllPiSubagentRunsForExit(', makerShutdown);
+    const resetMakerCall = bootstrapSource.indexOf('resetMaker();', sweep);
+    const closeDb = bootstrapSource.indexOf('close local DB on', sweep);
+
+    expect(teardown).toBeGreaterThanOrEqual(0);
+    expect(makerShutdown).toBeGreaterThan(teardown);
+    expect(sweep).toBeGreaterThan(makerShutdown);
+    expect(resetMakerCall).toBeGreaterThan(sweep);
+    expect(closeDb).toBeGreaterThan(sweep);
+  });
+
+  it('refuses Subagent control for a run owned by another live instance', () => {
+    // stop / steer / follow_up all fall through to the same control write, so
+    // gating once between the resume early-return and that write covers all
+    // three. It must sit *before* the write: the point is not to touch another
+    // live instance's mailbox at all.
+    const handler = makerIpcSource.indexOf('MAKER_INVOKE.CONTROL_PI_SUBAGENT');
+    const resumeBranch = makerIpcSource.indexOf("body.action === 'resume'", handler);
+    const gate = makerIpcSource.indexOf('canHostControlPiSubagentRun(run, process.pid)', handler);
+    const controlWrite = makerIpcSource.indexOf('await controlPiSubagentRuns(', handler);
+
+    expect(handler).toBeGreaterThanOrEqual(0);
+    expect(gate).toBeGreaterThan(resumeBranch);
+    expect(controlWrite).toBeGreaterThan(gate);
+    // Refusal has to reach the user, not fail silently as "0 controlled".
+    expect(makerIpcSource).toContain(
+      'This Subagent run belongs to another running Cindy instance.',
+    );
+  });
+
+  it('gates the detached stop fallback on the same ownership check', () => {
+    // Both Subagent stop buttons reach STOP_AGENT_TASK, which falls back to
+    // enumerating durable runs when no handle is loaded. That fallback bypassed
+    // the gate that only guarded CONTROL_PI_SUBAGENT.
+    const fallback = makerIpcSource.indexOf('stopDetachedTask: async (sessionId, taskId)');
+    const discovery = makerIpcSource.indexOf('await listPiSubagentRuns(runRoot)', fallback);
+    const gate = makerIpcSource.indexOf('canHostControlPiSubagentRun(run, process.pid)', fallback);
+    const stopWrite = makerIpcSource.indexOf("controlPiSubagentRuns(runRoot, run.runId, 'stop')", fallback);
+
+    expect(fallback).toBeGreaterThanOrEqual(0);
+    expect(discovery).toBeGreaterThan(fallback);
+    expect(gate).toBeGreaterThan(discovery);
+    expect(stopWrite).toBeGreaterThan(gate);
+  });
+
+  it('names the quit boundary so it is never mistaken for an ownership change', () => {
+    expect(bootstrapSource).toContain("await m.shutdown({ reason: 'app-quit' })");
+    expect(bootstrapSource).not.toContain('await m.shutdown();');
   });
 });

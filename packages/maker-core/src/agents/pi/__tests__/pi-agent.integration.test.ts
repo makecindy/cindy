@@ -1989,6 +1989,45 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'auto mode: an automatic review block is not reported as a user rejection',
+    { timeout: 60_000 },
+    async () => {
+      const tempRoot = mkdtempSync(path.join(tmpdir(), 'pi-auto-review-denial-copy-'));
+      const workingDir = path.join(tempRoot, 'workspace');
+      mkdirSync(workingDir);
+      const marker = path.join(tempRoot, 'must-not-exist.txt');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('write', { path: marker, content: 'must not land' }),
+          anthropicStreamBody('automatic denial observed'),
+        );
+        const deps = buildDeps();
+        deps.reviewAutoPermissionAction = async () => ({ verdict: 'block' });
+        const reqBefore = seenRequests.length;
+        const { resolverTools } = await runPermissionTurn({
+          sessionId: 'pi-auto-review-source-copy',
+          workingDir,
+          permissionMode: 'auto',
+          resolverBehavior: 'deny',
+          deps,
+        });
+
+        expect(resolverTools).toEqual([]);
+        expect(existsSync(marker)).toBe(false);
+        const followUp = seenRequests.slice(reqBefore).map((request) => request.body);
+        expect(followUp.some((body) => body.includes('Cindy Auto-review denied this tool call.')))
+          .toBe(true);
+        expect(followUp.some((body) => body.includes('User denied this tool call via Cindy.')))
+          .toBe(false);
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
     'credential read escalates through the real bridge even though read is a readonly builtin',
     { timeout: 60_000 },
     async () => {
@@ -2730,8 +2769,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           await handle?.close();
         }
 
-        // 派子代理本身要过审批门(它不是只读内置工具)—— 这是有意的安全属性。
-        expect(resolverTools).toContain('subagent');
+        // Ask 档仍逐次由用户确认 spawn；Auto 档另有回归证明 spawn 本身静默放行。
+        expect(resolverTools).toEqual(['subagent']);
 
         // 卡片走的是与 Claude / Codex 同一条 agent_task_update 通道。
         const cardUpdates = events
@@ -2751,6 +2790,49 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(seenRequests.some((r) => r.body.includes('auth starts at src/auth/index.ts:42'))).toBe(true);
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
+
+  it(
+    'auto mode: Subagent spawn is silent while a dangerous child tool call is still denied',
+    { timeout: 120_000 },
+    async () => {
+      const tempRoot = mkdtempSync(path.join(tmpdir(), 'pi-subagent-auto-approval-'));
+      const workingDir = path.join(tempRoot, 'workspace');
+      mkdirSync(workingDir);
+      const marker = path.join(tempRoot, 'must-not-exist.txt');
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('subagent', {
+            agent: 'worker',
+            task: 'try the requested shell command',
+          }),
+          // Spawn itself is safe, but the worker's concrete side effect must return to the
+          // parent approval surface. The resolver denies this command below.
+          anthropicToolUseBody('write', { path: marker, content: 'must not land' }),
+          anthropicStreamBody('the requested command was denied'),
+          anthropicStreamBody('parent turn finished'),
+        );
+
+        const deps = buildDeps();
+        deps.reviewAutoPermissionAction = async () => ({ verdict: 'block' });
+        const { resolverTools } = await runPermissionTurn({
+          sessionId: 'pi-subagent-auto-child-deny',
+          workingDir,
+          permissionMode: 'auto',
+          resolverBehavior: 'deny',
+          deps,
+        });
+
+        // Auto-review blocks the concrete child side effect silently. The child receives
+        // the source-aware reason through the durable mailbox (covered by the protocol tests).
+        expect(resolverTools).toEqual([]);
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(tempRoot, { recursive: true, force: true });
         scriptedResponses.length = 0;
       }
     },

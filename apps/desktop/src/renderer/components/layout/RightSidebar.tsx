@@ -67,6 +67,8 @@ interface RightSidebarProps {
   remoteHostId: string | null;
   /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
   deviceLinkDeviceId?: string | null;
+  /** Pi-only product gate for the Subagents tab and detail surface. */
+  subagentsAvailable?: boolean;
   /** Maximize 态(Phase 6):RSB 撑满整个非左栏区,主区 hidden。本组件用来隐藏
    *  resize handle(maximize 不允许拖宽)+ 把 TabBar maximize 按钮图标切到"还原"。 */
   isMaximized?: boolean;
@@ -99,6 +101,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     workdir,
     remoteHostId,
     deviceLinkDeviceId,
+    subagentsAvailable,
     onDetach,
     panelSide,
     onAllTabsClosed,
@@ -261,6 +264,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           workdir={workdir}
           remoteHostId={remoteHostId}
           deviceLinkDeviceId={deviceLinkDeviceId}
+          subagentsAvailable={subagentsAvailable}
           shellVisible={!displayCollapsed}
           isMac={isMac}
           unifiedTopbar={isMac}

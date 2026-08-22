@@ -2793,6 +2793,7 @@ function renderWorkGroupChild(
         update={item.update}
         result={item.result}
         persistedStatus={item.persistedStatus}
+        sessionAgentKind={props.agentKind}
         {...(props.sessionId ? { sessionId: props.sessionId } : {})}
         subagentModel={
           item.toolCall?.toolUseId
@@ -5730,6 +5731,7 @@ export function MessageStream({
                           update={item.update}
                           result={item.result}
                           persistedStatus={item.persistedStatus}
+                          sessionAgentKind={agentKind}
                           {...(sessionId ? { sessionId } : {})}
                           subagentModel={
                             item.toolCall?.toolUseId

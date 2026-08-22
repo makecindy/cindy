@@ -70,7 +70,7 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
-  it('forwards the optional device-link origin in window context', () => {
+  it('forwards the optional device-link origin and Pi-only Subagents eligibility', () => {
     const controller = makeController();
     const { mainWebContents } = registerController(controller);
     const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
@@ -88,6 +88,7 @@ describe('right-sidebar-window IPC', () => {
         workdir: '/remote/workdir',
         remoteHostId: null,
         deviceLinkDeviceId: 'device-1',
+        subagentsAvailable: true,
         available: true,
       },
     );
@@ -97,6 +98,36 @@ describe('right-sidebar-window IPC', () => {
       workdir: '/remote/workdir',
       remoteHostId: null,
       deviceLinkDeviceId: 'device-1',
+      subagentsAvailable: true,
+      available: true,
+    });
+  });
+
+  it('preserves unknown Subagents eligibility so cold Pi restore cannot auto-collapse', () => {
+    const controller = makeController();
+    const { mainWebContents } = registerController(controller);
+    const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([channel]) => channel === MAKER_SEND.RSB_WINDOW_SET_CONTEXT,
+    );
+    const setContext = setContextCall?.[1] as
+      | ((event: { sender: unknown }, payload: unknown) => void)
+      | undefined;
+    if (!setContext) throw new Error('RSB_WINDOW_SET_CONTEXT handler not registered');
+
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 's1',
+        workdir: '/workspace',
+        remoteHostId: null,
+        available: true,
+      },
+    );
+
+    expect(controller.setContext).toHaveBeenCalledWith({
+      sessionId: 's1',
+      workdir: '/workspace',
+      remoteHostId: null,
       available: true,
     });
   });

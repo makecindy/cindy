@@ -4775,6 +4775,7 @@
     "expandControlledNotice": "リモート操作の通知を展開: {{label}}",
     "versionMismatch": "相手のバージョンが異なります。一部機能が制限される場合があります"
   },
+
   "accountDeletion": {
     "entryButton": "アカウントを削除",
     "entryAria": "現在のアカウントを削除",
@@ -5177,7 +5178,7 @@
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
-      "resourceUsage": "リソース使用量",
+      "resourceUsage": "アクティビティモニタ",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
@@ -5272,7 +5273,7 @@
         "review": "レビュー",
         "subagents": "サブエージェント",
         "backgroundTasks": "バックグラウンドタスク",
-        "resourceUsage": "リソース使用量",
+        "resourceUsage": "アクティビティモニタ",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
         "ghostPanel": "プラグインパネル"
@@ -5292,7 +5293,7 @@
       "empty": {
         "eyebrow": "右サイドバー",
         "title": "パネルを開く",
-        "desc": "ファイル、レビュー、リソース使用量、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
+        "desc": "ファイル、レビュー、アクティビティモニタ、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
         "openFile": "ファイルを開く",
         "fileSub": "Files",
         "openReview": "レビューを開く",
@@ -5301,7 +5302,7 @@
         "subagentsSub": "後から確認できる子タスク",
         "openBackgroundTasks": "バックグラウンドタスクを開く",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "リソース使用量を開く",
+        "openResourceUsage": "アクティビティモニタを開く",
         "openBrowser": "ブラウザを開く",
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
@@ -5877,26 +5878,85 @@
       "context": "親タスクのコンテキスト",
       "contextValues": {
         "unknown": "Harness から報告されていません",
+        "none": "新しい分離コンテキスト",
         "snapshot": "親タスクのスナップショット",
         "live": "親タスクをリアルタイム参照"
       },
       "assignment": "担当内容",
+      "overview": "概要",
+      "children": "サブエージェント",
+      "queued": "待機中",
+      "queuedDetail": "依存関係が完了し、実行枠が空くとこのサブエージェントが開始されます。",
+      "awaitingApproval": "承認待ち",
+      "awaitingApprovalDetail": "このサブエージェントは親タスクでの権限判断を待っています。",
+      "childError": "エラー：{{error}}",
+      "sendDirection": "指示を送る",
+      "composerPlaceholders": {
+        "runningWithSteer": "フォローアップを送る · {{steerShortcut}} で軌道修正…",
+        "follow_up": "フォローアップを送る — 完了した結果は上書きされません…",
+        "resume": "この Subagent を続行…"
+      },
+      "sendShortcutHint": "{{shortcut}} で送信 · Shift+Enter で改行",
+      "childEndedControlHint": "このサブエージェントは終了しました。概要または実行中のサブエージェントを選んで指示を送ってください。",
+      "controlFailed": "指示を送信できませんでした。サブエージェントが利用可能か確認して再試行してください。",
+      "controlActions": {
+        "steer": "現在のツール完了後に修正",
+        "follow_up": "フォローアップを追加",
+        "resume": "サブエージェントを再開"
+      },
       "returnedResult": "返された結果",
+      "copyResult": "コピー",
+      "copiedResult": "コピー済み",
       "resultTruncated": "返された結果は表示用に省略されています。",
       "latestUpdate": "最新の更新",
+      "technicalDetails": "技術詳細",
+      "waitingForReply": "サブエージェントが処理中…",
+      "noReply": "サブエージェントから応答がありません。技術詳細で失敗理由を確認してください。",
+      "failedNoReply": "サブエージェントは失敗しましたが、読み取り可能な詳細を返しませんでした。",
+      "stoppedNoReply": "サブエージェントは結果を返す前に停止しました。",
+      "completedNoReply": "サブエージェントは完了しましたが、結果を返しませんでした。",
+      "errors": {
+        "providerNotConnected": "このプロバイダーは接続されていません。アカウントまたは認証情報を設定してから再試行してください。",
+        "credentialInvalid": "プロバイダーの認証情報が期限切れか拒否されました。再接続してから再試行してください。",
+        "modelInvalid": "選択したモデルは利用できないか、名前が無効です。このタスクで利用可能なモデルを選んでください。",
+        "rateLimited": "プロバイダーがリクエストを制限しています。少し待ってから再試行してください。",
+        "serviceUnavailable": "プロバイダーのサービスは一時的に利用できません。後でもう一度お試しください。",
+        "requestInvalid": "プロバイダーがリクエストを拒否しました。モデルとタスクの設定を確認してください。",
+        "unknown": "サブエージェントが失敗しました。下の元の詳細を開いて原因を確認してください。",
+        "rawDetails": "元の詳細を表示"
+      },
       "activity": "アクティビティ",
       "noActivity": "アクティビティの詳細は報告されていません。",
-      "transcript": "記録",
-      "noTranscript": "記録は報告されていません。",
+      "systemLog": "実行ログ",
+      "noSystemLog": "実行ログはありません。",
+      "loadMoreTranscript": "記録をさらに読み込む",
       "transcriptUnavailable": "この Harness は完全な子タスク記録をまだ Cindy に提供していません。返された結果とライフサイクルは保持されます。",
-      "transcriptRoles": {
-        "parent": "親タスク",
-        "subagent": "サブエージェント",
-        "tool": "ツール",
-        "system": "システム"
+      "tool": {
+        "fallbackName": "ツール",
+        "running": "実行中…",
+        "failed": "失敗",
+        "input": "入力",
+        "result": "出力",
+        "noDetails": "入力も出力も記録されていません。"
+      },
+      "controlBadges": {
+        "steer": "修正",
+        "follow_up": "フォローアップ",
+        "resume": "再開",
+        "stop": "停止"
       },
       "lastTool": "最後のツール：{{tool}}",
       "tokens": "{{value}} tokens",
+      "toolUses_one": "ツール呼び出し {{count}} 回",
+      "toolUses_other": "ツール呼び出し {{count}} 回",
+      "systemEvents": {
+        "stop-requested": "親タスクから停止が要求されました。",
+        "control-requested": "親タスクから制御リクエストが送信されました。",
+        "transcript-truncated": "記録の保存上限に達しました。",
+        "turn-ended": "サブエージェントのターンが終了しました。",
+        "command-refused": "PI が子エージェントのコマンドを拒否しました。",
+        "generation-unreadable": "この会話の以前の部分を読み取れませんでした。"
+      },
       "activityKinds": {
         "started": "開始",
         "progress": "進行",
@@ -5955,9 +6015,9 @@
       "processCount_one": "プロセスツリー：{{count}} 個",
       "processCount_other": "プロセスツリー：{{count}} 個",
       "agentsEmpty": "実行中の Agent プロセスはありません。タスクを開始するとここに表示されます",
-      "tableLabel": "プロセス別のリソース使用量",
+      "tableLabel": "アクティビティモニタ",
       "sortBy": "{{column}}で並べ替え",
-      "loading": "リソース使用量を読み込んでいます…",
+      "loading": "プロセスを読み込んでいます…",
       "remoteUnavailableTitle": "リモートセッションでは利用できません",
       "remoteUnavailableDescription": "このパネルはこのデバイス上のプロセスだけを読み取ります。このデバイスでローカルに実行されるセッションでのみ利用できます。",
       "selectHint": "プロセスを選択",
@@ -6840,6 +6900,8 @@
       "subagentStarted": "サブエージェント {{name}} を起動しました",
       "showDetails": "サブエージェント詳細を表示",
       "hideDetails": "サブエージェント詳細を隠す",
+      "showFullResult": "結果をすべて表示",
+      "hideFullResult": "結果を折りたたむ",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",

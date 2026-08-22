@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import {
   isIOSSimulatorPluginAvailable,
+  mergeAvailableTabOrder,
   mergeIOSSimulatorVisibleTabOrder,
+  projectAvailableTabs,
   projectIOSSimulatorTabs,
 } from '../iosSimulatorPluginAvailability';
 import type { TabState } from '../types';
@@ -20,6 +22,12 @@ const TABS: TabState[] = [
   { id: 'sim-a', kind: 'ios-simulator', state: { instanceId: 'instance-a' } },
   { id: 'web-a', kind: 'web-browser', state: null },
   { id: 'sim-b', kind: 'ios-simulator', state: { instanceId: 'instance-b' } },
+];
+
+const TABS_WITH_SUBAGENTS: TabState[] = [
+  TABS[0],
+  { id: 'subagents-a', kind: 'subagents', state: { selectedRunId: null } },
+  TABS[2],
 ];
 
 describe('iOS Simulator plugin availability', () => {
@@ -62,5 +70,18 @@ describe('iOS Simulator plugin availability', () => {
     expect(mergeIOSSimulatorVisibleTabOrder(TABS, ['web-a'], false)).toEqual(
       TABS.map((tab) => tab.id),
     );
+  });
+
+  it('hides and preserves the Subagents tab outside Pi tasks', () => {
+    const unavailable = { iosSimulatorAvailable: true, subagentsAvailable: false };
+    expect(projectAvailableTabs(TABS_WITH_SUBAGENTS, 'subagents-a', unavailable)).toEqual({
+      tabs: [TABS[0], TABS[2]],
+      activeTabId: 'file-a',
+    });
+    expect(mergeAvailableTabOrder(TABS_WITH_SUBAGENTS, ['web-a', 'file-a'], unavailable)).toEqual([
+      'web-a',
+      'subagents-a',
+      'file-a',
+    ]);
   });
 });

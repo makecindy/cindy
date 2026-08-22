@@ -852,6 +852,28 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
     }
   });
 
+  it('seedBackgroundTaskSnapshots 保留 Pi provider,不把持久子会话标成 Claude', () => {
+    const sid = `seed-pi-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      makerChatStore.seedBackgroundTaskSnapshots(sid, [
+        {
+          taskId: 'pi-run-1',
+          taskType: 'pi_subagent',
+          toolUseId: 'pi-run-1',
+          title: 'Inspect auth',
+          provider: 'pi',
+        },
+      ]);
+      const update = makerChatStore.getSnapshot(sid).taskUpdates?.get('pi-run-1');
+      expect(update?.provider).toBe('pi');
+      expect(update?.taskType).toBe('pi_subagent');
+      expect(update?.status).toBe('running');
+      expect(update?.title).toBe('Inspect auth');
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
   it('seedBackgroundTaskSnapshots 只补未见过的任务,绝不复活已终态条目', () => {
     const sid = `seed-${Math.random().toString(36).slice(2, 8)}`;
     try {

@@ -4775,6 +4775,7 @@
     "expandControlledNotice": "展开被控提示：{{label}}",
     "versionMismatch": "对方版本不一致，部分功能可能受限"
   },
+
   "accountDeletion": {
     "entryButton": "注销账号",
     "entryAria": "注销当前账号",
@@ -5177,7 +5178,7 @@
     "close": "关闭",
     "menuItems": {
       "settings": "设置",
-      "resourceUsage": "资源用量",
+      "resourceUsage": "资源监视器",
       "help": "帮助",
       "issues": "问题反馈",
       "checkForUpdates": "检查更新"
@@ -5272,7 +5273,7 @@
         "review": "审查",
         "subagents": "Subagent",
         "backgroundTasks": "后台任务",
-        "resourceUsage": "资源用量",
+        "resourceUsage": "资源监视器",
         "collaboration": "协同",
         "unknown": "未知标签页",
         "ghostPanel": "插件面板"
@@ -5292,7 +5293,7 @@
       "empty": {
         "eyebrow": "右侧栏",
         "title": "开始一个面板",
-        "desc": "在右侧打开文件、审查、资源用量、内置浏览器或终端，与左侧对话并行工作。",
+        "desc": "在右侧打开文件、审查、资源监视器、内置浏览器或终端，与左侧对话并行工作。",
         "openFile": "打开文件",
         "fileSub": "Files",
         "openReview": "打开审查",
@@ -5301,7 +5302,7 @@
         "subagentsSub": "可持续回看的子任务",
         "openBackgroundTasks": "打开后台任务",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "打开资源用量",
+        "openResourceUsage": "打开资源监视器",
         "openBrowser": "打开浏览器",
         "browserSub": "Browser",
         "openTerminal": "打开终端",
@@ -5877,26 +5878,85 @@
       "context": "父任务上下文",
       "contextValues": {
         "unknown": "Harness 未报告",
+        "none": "全新隔离上下文",
         "snapshot": "父任务快照",
         "live": "实时父任务"
       },
       "assignment": "任务内容",
+      "overview": "总览",
+      "children": "Subagent",
+      "queued": "排队中",
+      "queuedDetail": "该 Subagent 正在排队，依赖完成且有空闲并发位后会自动开始。",
+      "awaitingApproval": "等待批准",
+      "awaitingApprovalDetail": "该 Subagent 正在等待你在父任务中处理权限请求。",
+      "childError": "错误：{{error}}",
+      "sendDirection": "发送指令",
+      "composerPlaceholders": {
+        "runningWithSteer": "排队跟进；{{steerShortcut}} 插话纠正…",
+        "follow_up": "排队跟进，已完成的结果不会被覆盖…",
+        "resume": "继续这个 Subagent…"
+      },
+      "sendShortcutHint": "{{shortcut}} 发送 · Shift+Enter 换行",
+      "childEndedControlHint": "该 Subagent 已结束。请选择“总览”或仍在运行的 Subagent 再发送指令。",
+      "controlFailed": "指令未能送达。请确认 Subagent 仍可用后重试。",
+      "controlActions": {
+        "steer": "当前工具结束后纠正",
+        "follow_up": "排队跟进",
+        "resume": "继续 Subagent"
+      },
       "returnedResult": "回传结果",
+      "copyResult": "复制",
+      "copiedResult": "已复制",
       "resultTruncated": "回传结果过长，当前仅显示部分内容。",
       "latestUpdate": "最近更新",
+      "technicalDetails": "技术详情",
+      "waitingForReply": "Subagent 正在处理…",
+      "noReply": "Subagent 未返回回复，请展开技术详情查看失败原因。",
+      "failedNoReply": "Subagent 运行失败，但没有返回可读详情。",
+      "stoppedNoReply": "Subagent 已停止，尚未返回结果。",
+      "completedNoReply": "Subagent 已完成，但没有返回结果。",
+      "errors": {
+        "providerNotConnected": "当前供应商尚未连接。请先连接对应账号或配置凭证后重试。",
+        "credentialInvalid": "供应商凭证已失效或被拒绝。请重新连接后重试。",
+        "modelInvalid": "所选模型不可用或名称无效。请改用当前任务可用的模型。",
+        "rateLimited": "供应商请求过于频繁。请稍后再试。",
+        "serviceUnavailable": "供应商服务暂时不可用。请稍后再试。",
+        "requestInvalid": "供应商拒绝了这次请求。请检查模型和任务设置后重试。",
+        "unknown": "Subagent 运行失败，可展开下方原始详情查看原因。",
+        "rawDetails": "查看原始详情"
+      },
       "activity": "活动记录",
       "noActivity": "Harness 暂未提供活动详情。",
-      "transcript": "完整记录",
-      "noTranscript": "Harness 暂未提供完整记录。",
+      "systemLog": "运行日志",
+      "noSystemLog": "暂无运行日志。",
+      "loadMoreTranscript": "加载更多记录",
       "transcriptUnavailable": "该 Harness 尚未向 Cindy 提供完整的子任务记录；已回传的结果和生命周期活动仍会保留。",
-      "transcriptRoles": {
-        "parent": "父任务",
-        "subagent": "Subagent",
-        "tool": "工具",
-        "system": "系统"
+      "tool": {
+        "fallbackName": "工具",
+        "running": "运行中…",
+        "failed": "失败",
+        "input": "输入",
+        "result": "输出",
+        "noDetails": "没有记录输入或输出。"
+      },
+      "controlBadges": {
+        "steer": "插话纠正",
+        "follow_up": "跟进",
+        "resume": "继续",
+        "stop": "停止"
       },
       "lastTool": "最近工具：{{tool}}",
       "tokens": "{{value}} tokens",
+      "toolUses_one": "{{count}} 次工具调用",
+      "toolUses_other": "{{count}} 次工具调用",
+      "systemEvents": {
+        "stop-requested": "父任务请求了停止。",
+        "control-requested": "父任务发来了一条控制请求。",
+        "transcript-truncated": "已达到记录的存储上限。",
+        "turn-ended": "Subagent 本轮已结束。",
+        "command-refused": "PI 拒绝了一条子任务命令。",
+        "generation-unreadable": "这段对话中较早的部分无法读取。"
+      },
       "activityKinds": {
         "started": "已启动",
         "progress": "进展",
@@ -5955,9 +6015,9 @@
       "processCount_one": "进程树：{{count}} 个进程",
       "processCount_other": "进程树：{{count}} 个进程",
       "agentsEmpty": "当前没有运行中的 Agent 进程，启动任务后会在这里展示占用",
-      "tableLabel": "按进程展示的资源用量",
+      "tableLabel": "资源监视器",
       "sortBy": "按{{column}}排序",
-      "loading": "正在读取资源用量…",
+      "loading": "正在读取进程…",
       "remoteUnavailableTitle": "远程任务暂不可用",
       "remoteUnavailableDescription": "此面板仅读取本机进程，仅适用于在此设备上运行的本机任务。",
       "selectHint": "选择一个进程",
@@ -6840,6 +6900,8 @@
       "subagentStarted": "Subagent {{name}} 已启动",
       "showDetails": "展开 Subagent 详情",
       "hideDetails": "收起 Subagent 详情",
+      "showFullResult": "展开完整结果",
+      "hideFullResult": "收起结果",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",

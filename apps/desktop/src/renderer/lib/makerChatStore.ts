@@ -14879,7 +14879,13 @@ export const makerChatStore = {
    */
   seedBackgroundTaskSnapshots: (
     sessionId: string,
-    tasks: Array<{ taskId: string; taskType?: string; toolUseId?: string; title?: string }>,
+    tasks: Array<{
+      taskId: string;
+      taskType?: string;
+      toolUseId?: string;
+      title?: string;
+      provider?: 'pi' | 'claude-code';
+    }>,
     opts?: {
       staleRunningCandidates?: ReadonlySet<string>;
       reconcileWakeBridge?: { count: number; gen: number };
@@ -14897,12 +14903,13 @@ export const makerChatStore = {
           next.taskUpdates?.has(t.taskId) ||
           (t.toolUseId ? next.taskUpdates?.has(t.toolUseId) : false);
         if (seen) continue;
+        const provider = t.provider === 'pi' ? 'pi' : 'claude-code';
         next = handleStreamEvent(next, {
           sessionId,
           type: 'agent_task_update',
-          source: 'claude-code',
+          source: provider,
           data: {
-            provider: 'claude-code',
+            provider,
             taskId: t.taskId,
             status: 'running',
             ...(t.taskType ? { taskType: t.taskType } : {}),

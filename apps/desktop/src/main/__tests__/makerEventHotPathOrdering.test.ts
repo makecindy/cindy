@@ -22,6 +22,21 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
+    const redactor = source.slice(
+      source.indexOf('function redactEventForRenderer'),
+      source.indexOf('\nfunction ', source.indexOf('function redactEventForRenderer') + 1),
+    );
+    for (const key of [
+      'subagentObservation',
+      'returnedResult',
+      'returnedResultEmpty',
+      'returnedResultTruncated',
+    ]) {
+      expect(redactor).toContain(`'${key}'`);
+    }
+  });
+
   it('rewires a replacement Session instance that retains the same business id', () => {
     const wireSessionSource = extractWireSessionSource();
 

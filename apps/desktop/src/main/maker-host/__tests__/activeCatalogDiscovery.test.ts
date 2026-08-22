@@ -128,6 +128,7 @@ describe('active-catalog discovered augment', () => {
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
     expect(xai?.agents).toContain('pi');
     expect(xai?.routing.pi?.upstream).toBe('https://api.x.ai/v1');
+    expect(xai?.models.pi?.find((model) => model.id === 'grok-4.6')?.piApi).toBe('openai-responses');
     expect(xai?.models.pi?.map((model) => model.id)).toEqual([
       'grok-4.3',
       'grok-4.5',
@@ -144,8 +145,8 @@ describe('active-catalog discovered augment', () => {
       defaultEffort: 'high',
     });
     expect(xai?.models.pi?.find((model) => model.id === 'grok-4.3')).toMatchObject({
-      efforts: [],
-      defaultEffort: null,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'medium',
     });
   });
 

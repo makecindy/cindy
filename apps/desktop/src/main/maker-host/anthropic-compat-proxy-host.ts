@@ -72,6 +72,7 @@ import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
   resolvePendingSessionRouteDecision,
+  resolveProviderRouteDecision,
   resolveSessionRouteDecision,
 } from './provider-route.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
@@ -103,6 +104,7 @@ import {
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
 
@@ -186,6 +188,26 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
   return null;
 }
 
+function unavailablePiProviderRoute(providerId: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'routing_error',
+          code: 'pi_provider_unavailable',
+          message: `PI provider route is unavailable: ${providerId}`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
 /**
  * per-request 路由 transform。两段:
  *   ① 会话显式选了供应商 → 据 catalog 统一路由(per-session,取代全局开关推断)。
@@ -205,11 +227,12 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
 export function createModelRoutingTransform(): RoutingTransform {
   const route: RoutingTransform = (body, ctx) => {
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
+    const claimedPiSessionToken = headerValue(ctx.headers, 'x-cindy-pi-session-token');
     if (
       claimedPiSessionId
       && !authenticatePiProxySession(
         claimedPiSessionId,
-        headerValue(ctx.headers, 'x-cindy-pi-session-token'),
+        claimedPiSessionToken,
       )
     ) {
       // Loopback is not an authentication boundary: another local process can
@@ -238,28 +261,31 @@ export function createModelRoutingTransform(): RoutingTransform {
       ? headerValue(ctx.headers, 'x-cindy-pi-provider-id')
       : null;
     const registeredPiProviderId = piSessionId
-      ? getPiProxySessionProvider(piSessionId)
+      ? getPiProxySessionProvider(piSessionId, claimedPiSessionToken)
       : null;
+    const subagentRoute = piSessionId
+      ? isPiProxySubagentRoute(piSessionId, claimedPiSessionToken)
+      : false;
     const selectedPiProviderId = piSessionId ? getSessionProvider(piSessionId) : null;
     if (
       piSessionId
       && (
         piProviderId !== registeredPiProviderId
-        || (
+        || (!subagentRoute && (
           piProviderId !== null
           && selectedPiProviderId !== null
           && piProviderId !== selectedPiProviderId
-        )
-        || (
+        ))
+        || (!subagentRoute && (
           (selectedPiProviderId === 'openai' || selectedPiProviderId === 'xai')
           && piProviderId !== selectedPiProviderId
-        )
+        ))
       )
     ) {
-      // A valid loopback session token authorizes only the provider that the
-      // host resolved for this exact Pi process. The persisted session choice
-      // remains a second constraint when present. Do not let a child process or
-      // extension swap this header and borrow another subscription credential.
+      // A valid loopback token authorizes only its registered provider. Root
+      // tokens remain additionally pinned to the persisted session choice;
+      // subagent-route tokens are separately generated for one frozen child
+      // provider and therefore may cross that parent-session choice.
       return {
         localHandler: async ({ res }) => {
           const payload = JSON.stringify({
@@ -375,6 +401,16 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
 
     const gatewayKey = _readGatewayKey();
+
+    if (subagentRoute && piProviderId) {
+      // A provider-pinned child token is both the authorization boundary and
+      // the route source. Re-reading the parent session provider here would
+      // authenticate Anthropic but still route through an OpenAI/XD parent,
+      // eventually falling into the proxy's default upstream.
+      return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
+        .then((resolved) => resolved?.decision ?? unavailablePiProviderRoute(piProviderId))
+        .catch(() => unavailablePiProviderRoute(piProviderId));
+    }
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。

@@ -130,6 +130,7 @@ function writeCollapsedFor(sessionId: string | null, collapsed: boolean): void {
 interface RightSidebarSessionDeclarationOptions {
   initialCollapsed?: boolean;
   writeInitialCollapsedRecord?: boolean;
+  subagentsAvailable?: boolean;
 }
 
 const applicationMenuLog = createLogger('ApplicationMenu');
@@ -275,6 +276,9 @@ export function MainLayout() {
   // 当前 cc-agent session id —— 由 CCAgentSessionView 的路由主实例(ownsRoute=true)经 outlet context
   // 推上来,Shell 据此从 module-level store 拉对应桶的 tab 列表持久化数据。null = 不在聊天会话内。
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
+  const [rightSidebarSubagentsAvailable, setRightSidebarSubagentsAvailable] = useState<
+    boolean | undefined
+  >(undefined);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
   const isRightSidebarCollapsedRef = useRef(isRightSidebarCollapsed);
@@ -285,6 +289,7 @@ export function MainLayout() {
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
       setRightSidebarSessionId(sessionId);
+      setRightSidebarSubagentsAvailable(sessionId ? opts.subagentsAvailable : undefined);
       if (!sessionId || !rsbWindow.loaded || rsbDetached) return;
       const hasInitialCollapsed = typeof opts.initialCollapsed === 'boolean';
       const nextCollapsed = hasInitialCollapsed
@@ -928,9 +933,15 @@ export function MainLayout() {
       workdir: rightSidebarWorkdirInfo.workdir || null,
       remoteHostId: rightSidebarWorkdirInfo.remoteHostId,
       deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
+      subagentsAvailable: rightSidebarSubagentsAvailable,
       available: rightSidebarAvailable,
     });
-  }, [rightSidebarSessionId, rightSidebarWorkdirInfo, rightSidebarAvailable]);
+  }, [
+    rightSidebarSessionId,
+    rightSidebarWorkdirInfo,
+    rightSidebarSubagentsAvailable,
+    rightSidebarAvailable,
+  ]);
 
   // detached-closed 的 allowOpen=false intent 由 main 暂存；偏好切回 attached 时，
   // main 通过同一 command channel 把 ownership 交回当前主 renderer。
@@ -1525,6 +1536,7 @@ export function MainLayout() {
                   workdir={rightSidebarWorkdirInfo.workdir}
                   remoteHostId={rightSidebarWorkdirInfo.remoteHostId}
                   deviceLinkDeviceId={rightSidebarWorkdirInfo.deviceLinkDeviceId}
+                  subagentsAvailable={rightSidebarSubagentsAvailable}
                   onDetach={isSecondaryWindow() ? undefined : handleDetachRightSidebar}
                   // M2:面板贴左时 detach / maximize 由 Shell 顶栏右端自渲染
                   // (面板自属控件跟面板走);折叠 toggle 恒在窗口右上浮层,不下沉。
