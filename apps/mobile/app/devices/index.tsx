@@ -94,7 +94,11 @@ import {
   useRemoteScheduleMirrorInvalidations,
 } from '@/scheduler/remoteScheduleEvents';
 import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
-import { listConversationSearchProjects, shouldReplaceListWithSearchResults } from '@/session/conversationSearch';
+import {
+  conversationSearchOriginsFromDeviceModels,
+  listConversationSearchProjects,
+  shouldReplaceListWithSearchResults,
+} from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
 import {
   buildMobileHomePresentation,
@@ -964,16 +968,13 @@ export default function HomeScreen() {
     statusDetail: item.statusDetail,
     statusLabel: item.statusLabel,
   })), [deviceRows]);
-  const searchOrigins = useMemo(() => {
-    const targets = selectedDeviceId
-      ? deviceModels.filter((item) => item.deviceId === selectedDeviceId)
-      : deviceModels.filter((item) => item.canOpen);
-    return targets.map((item) => ({
-      deviceId: item.deviceId,
-      deviceName: item.name,
-      reachable: item.canOpen && !unresponsiveDevices.has(item.deviceId),
-    }));
-  }, [deviceModels, selectedDeviceId, unresponsiveDevices]);
+  const searchOrigins = useMemo(() => conversationSearchOriginsFromDeviceModels(
+    deviceModels,
+    {
+      selectedDeviceId,
+      unresponsiveDeviceIds: unresponsiveDevices,
+    },
+  ), [deviceModels, selectedDeviceId, unresponsiveDevices]);
   const searchProjects = useMemo(
     () => listConversationSearchProjects(
       excludeOrcaWorkerSessions(sessions),

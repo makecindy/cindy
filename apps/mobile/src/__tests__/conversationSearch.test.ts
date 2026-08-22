@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   conversationSearchActiveFilterCount,
+  conversationSearchOriginsFromDeviceModels,
   isConversationSearchChannelNotAllowed,
   listConversationSearchProjects,
   nextConversationSearchProjectSelection,
@@ -297,6 +298,32 @@ describe('helpers', () => {
       projectSelection: ['/repo'],
       status: 'all',
     })).toBe(0);
+  });
+
+  it('keeps offline devices in the all-tasks search origins and drops hard-cleared peers', () => {
+    const origins = conversationSearchOriginsFromDeviceModels([
+      { canOpen: true, deviceId: 'dev-a', name: 'Studio', state: 'ready' },
+      { canOpen: false, deviceId: 'dev-b', name: 'Laptop', state: 'offline' },
+      { canOpen: false, deviceId: 'dev-c', name: 'Revoked', state: 'access_revoked' },
+      { canOpen: false, deviceId: 'dev-d', name: 'Closed', state: 'remote_disabled' },
+    ], {
+      unresponsiveDeviceIds: new Set(['dev-a']),
+    });
+    expect(origins).toEqual([
+      { deviceId: 'dev-a', deviceName: 'Studio', reachable: false },
+      { deviceId: 'dev-b', deviceName: 'Laptop', reachable: false },
+    ]);
+  });
+
+  it('keeps a selected offline device as an unreachable origin', () => {
+    expect(conversationSearchOriginsFromDeviceModels([
+      { canOpen: true, deviceId: 'dev-a', name: 'Studio', state: 'ready' },
+      { canOpen: false, deviceId: 'dev-b', name: 'Laptop', state: 'offline' },
+    ], {
+      selectedDeviceId: 'dev-b',
+    })).toEqual([
+      { deviceId: 'dev-b', deviceName: 'Laptop', reachable: false },
+    ]);
   });
 
   it('keeps an empty indexed search visible so filters are not silently dropped', () => {

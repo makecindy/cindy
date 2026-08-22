@@ -24,8 +24,10 @@ import {
   toRemoteSessionListItem,
   type RemoteSessionListItem,
 } from '@cindy/maker-shared/session-list';
+import type { DeviceAccessState } from '@cindy/maker-shared/device-list';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { deviceMirrorCleanupDisposition } from '@/device-link/presenceDevices';
 import type { RemoteSession } from '@/session/types';
 
 export const CONVERSATION_SEARCH_LIMIT = 24;
@@ -41,6 +43,38 @@ export interface ConversationSearchDeviceOrigin {
   deviceName: string | null;
   reachable: boolean;
   workingDirs?: string[] | null;
+}
+
+export interface ConversationSearchDeviceModel {
+  canOpen: boolean;
+  deviceId: string;
+  name: string | null;
+  state: DeviceAccessState;
+}
+
+/**
+ * 搜索源与会话镜像清理边界对齐:
+ * - 全部范围:keep / soft(含短暂 offline)进源,hard(撤权 / 关远控)排除;
+ * - 单台范围:只保留选中的那台,即使它暂时 offline;
+ * - reachable 只看当前能否 invoke,离线或熔断都走缓存回退。
+ */
+export function conversationSearchOriginsFromDeviceModels(
+  devices: readonly ConversationSearchDeviceModel[],
+  options: {
+    selectedDeviceId?: string | null;
+    unresponsiveDeviceIds?: ReadonlySet<string>;
+  } = {},
+): ConversationSearchDeviceOrigin[] {
+  const selectedDeviceId = options.selectedDeviceId ?? null;
+  const unresponsiveDeviceIds = options.unresponsiveDeviceIds;
+  const targets = selectedDeviceId
+    ? devices.filter((item) => item.deviceId === selectedDeviceId)
+    : devices.filter((item) => deviceMirrorCleanupDisposition(item.state) !== 'hard');
+  return targets.map((item) => ({
+    deviceId: item.deviceId,
+    deviceName: item.name,
+    reachable: item.canOpen && !unresponsiveDeviceIds?.has(item.deviceId),
+  }));
 }
 
 export interface SearchConversationsAcrossDevicesDeps {
