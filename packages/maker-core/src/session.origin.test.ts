@@ -408,16 +408,14 @@ describe('Session per-turn origin 打标', () => {
     const second = session.send('second');
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await emit({
-      type: 'error',
-      data: { message: 'first late failure', isTerminal: true },
-      source: 'codex',
-    });
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({ type: 'done', data: {}, source: 'codex' });
 
-    const late = seen.find((event) =>
-      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
-    expect(late?.sessionTurnGeneration).toBe(1);
-    expect(late?.sessionInstanceId).toBe(session.instanceId);
+    const idle = seen.find((event) => event.type === 'status');
+    const done = seen.find((event) => event.type === 'done');
+    expect(idle?.sessionTurnGeneration).toBe(1);
+    expect(done?.sessionTurnGeneration).toBe(1);
+    expect(done?.sessionInstanceId).toBe(session.instanceId);
     releaseDispatch();
     await second;
     await session.close();

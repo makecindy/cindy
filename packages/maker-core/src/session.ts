@@ -428,8 +428,10 @@ export class Session {
   private eventLoopAwaiting = false;
   /** The blocked next() that was pending when the current send entered handle.send. */
   private inFlightSendOwnsBlockedWait = false;
-  /** True only for the synchronous body of handle.send plus its first microtask. */
+  /** True from handle.send() start until that send settles. */
   private insideProviderSendSync = false;
+  /** Keep a leftover status/done tail on the generation that started it. */
+  private staleTerminalQueuedGeneration: number | null = null;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
    * AgentEvent.turnOrigin 上,turn 终止(isTerminalTurnEvent)后清空 — 共享
@@ -659,20 +661,14 @@ export class Session {
         this.beginTurnControl(reservedTurnGeneration);
         onDispatching?.();
         this.insideProviderSendSync = true;
-        let sendPromise: Promise<void>;
         try {
-          sendPromise = this.handle.send(msg, {
+          await this.handle.send(msg, {
             ...handleOpts,
             signal: reservation.abortController.signal,
           });
-        } catch (error) {
+        } finally {
           this.insideProviderSendSync = false;
-          throw error;
         }
-        setTimeout(() => {
-          this.insideProviderSendSync = false;
-        }, 0);
-        await sendPromise;
       } catch (e) {
         if (e instanceof TurnDispatchRejectedError) {
           // The provider returned a trustworthy rejection before accepting any
@@ -1769,7 +1765,45 @@ export class Session {
    * 并像用户插话一样暂停 goal,scheduler 的 IM 转播则直接忽略,卡片永不 finalize
    * (review #944 第二轮)。
    */
-  private resolveSessionTurnGeneration(queuedGeneration: number): number {
+  private isIdleStatusEvent(event: AgentEvent): boolean {
+    if (event.type !== 'status') return false;
+    const data = event.data as { isRunning?: unknown } | null | undefined;
+    return data?.isRunning === false;
+  }
+
+  private isLeftoverTailEvent(event: AgentEvent): boolean {
+    return (
+      event.type === 'done' ||
+      this.isIdleStatusEvent(event) ||
+      (isTerminalAgentErrorEvent(event) && this.staleTerminalQueuedGeneration !== null)
+    );
+  }
+
+  private resolveSessionTurnGeneration(
+    waitStartGeneration: number,
+    observedGeneration: number,
+    event: AgentEvent,
+  ): number {
+    if (observedGeneration > waitStartGeneration) {
+      this.staleTerminalQueuedGeneration = null;
+      return observedGeneration;
+    }
+    const leftoverTail = this.isLeftoverTailEvent(event);
+    if (leftoverTail && this.staleTerminalQueuedGeneration !== null) {
+      const stamped = this.staleTerminalQueuedGeneration;
+      if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+        this.staleTerminalQueuedGeneration = null;
+      }
+      return stamped;
+    }
+    if (leftoverTail && waitStartGeneration > 0 && waitStartGeneration < this.turnGeneration) {
+      if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+        this.staleTerminalQueuedGeneration = null;
+      } else {
+        this.staleTerminalQueuedGeneration = waitStartGeneration;
+      }
+      return waitStartGeneration;
+    }
     const inFlightGeneration = this.sendReservation?.generation;
     const belongsToInFlightSend =
       this.insideProviderSendSync &&
@@ -1779,13 +1813,15 @@ export class Session {
       this.turnControlState?.generation === inFlightGeneration;
     if (belongsToInFlightSend) {
       this.inFlightSendOwnsBlockedWait = false;
+      this.staleTerminalQueuedGeneration = null;
       return inFlightGeneration;
     }
-    // The constructor wait starts at generation 0. The first send owns that wait.
-    if (queuedGeneration === 0 && this.turnGeneration > 0) {
+    if (waitStartGeneration === 0 && this.turnGeneration > 0) {
+      this.staleTerminalQueuedGeneration = null;
       return this.turnGeneration;
     }
-    return queuedGeneration;
+    this.staleTerminalQueuedGeneration = null;
+    return waitStartGeneration;
   }
 
   private fanOutEvent(
@@ -1803,6 +1839,8 @@ export class Session {
     if (event.sessionTurnGeneration === undefined) {
       event.sessionTurnGeneration = this.resolveSessionTurnGeneration(
         queuedGeneration,
+        observedGeneration,
+        event,
       );
     }
     this.observeTurnControl(event, observedGeneration);
