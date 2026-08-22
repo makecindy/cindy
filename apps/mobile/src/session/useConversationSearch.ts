@@ -7,9 +7,12 @@ import {
   conversationSearchActiveFilterCount,
   conversationSearchWorkingDirs,
   reconcileConversationSearchProjectSelection,
+  scopedConversationSearchOrigins,
   searchConversationsAcrossDevices,
   toSearchListItem,
   type ConversationSearchDeviceOrigin,
+  type ConversationSearchListItem,
+  type ConversationSearchProjectOption,
   type ConversationSearchProjectSelection,
 } from '@/session/conversationSearch';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
@@ -19,7 +22,6 @@ import type {
   ConversationSearchSortBy,
   ConversationSearchStatusFilter,
 } from '@cindy/maker-shared/conversation-search';
-import type { RemoteSessionListItem } from '@/session/sessionList';
 
 export const CONVERSATION_SEARCH_DEBOUNCE_MS = 250;
 
@@ -29,17 +31,17 @@ export function useConversationSearch({
   origins,
   enabled,
   lockedWorkingDirs,
-  visibleProjectKeys,
+  projects,
 }: {
   origins: readonly ConversationSearchDeviceOrigin[];
   enabled: boolean;
   lockedWorkingDirs?: string[] | null;
-  visibleProjectKeys?: readonly string[];
+  projects?: readonly ConversationSearchProjectOption[];
 }): {
   query: string;
   setQuery: (value: string) => void;
   status: ConversationSearchStatus;
-  results: RemoteSessionListItem[];
+  results: ConversationSearchListItem[];
   sortBy: ConversationSearchSortBy;
   setSortBy: (value: ConversationSearchSortBy) => void;
   statusFilter: ConversationSearchStatusFilter;
@@ -58,7 +60,7 @@ export function useConversationSearch({
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<ConversationSearchStatus>('idle');
-  const [results, setResults] = useState<RemoteSessionListItem[]>([]);
+  const [results, setResults] = useState<ConversationSearchListItem[]>([]);
   const [sortBy, setSortBy] = useState<ConversationSearchSortBy>('relevance');
   const [statusFilter, setStatusFilter] = useState<ConversationSearchStatusFilter>('all');
   const [agentFilter, setAgentFilter] = useState<ConversationSearchAgentFilter>('all');
@@ -67,27 +69,34 @@ export function useConversationSearch({
   const [projectSelection, setProjectSelection] = useState<ConversationSearchProjectSelection>('all');
   const requestSeq = useRef(0);
   const unnamedLabel = t('session.menu.unnamedTitle');
-  const originKey = useMemo(
-    () => origins.map((origin) => `${origin.deviceId}:${origin.reachable ? '1' : '0'}`).join('|'),
-    [origins],
+  const visibleProjectKeys = useMemo(
+    () => (projects ?? []).map((project) => project.key),
+    [projects],
   );
-  const visibleKey = visibleProjectKeys?.join('|') ?? '';
+  const visibleKey = visibleProjectKeys.join('|');
   const lockedDirs = useMemo(
     () => (lockedWorkingDirs?.length ? [...lockedWorkingDirs] : null),
     [lockedWorkingDirs?.join('|') ?? ''],
   );
+  const scopedOrigins = useMemo(
+    () => (lockedDirs ? [...origins] : scopedConversationSearchOrigins(origins, projectSelection, projects ?? [])),
+    [lockedDirs, origins, projectSelection, projects],
+  );
+  const originKey = useMemo(
+    () => scopedOrigins.map((origin) => (
+      `${origin.deviceId}:${origin.reachable ? '1' : '0'}:${(origin.workingDirs ?? []).join(',')}`
+    )).join('|'),
+    [scopedOrigins],
+  );
 
   useEffect(() => {
-    if (!visibleProjectKeys) return;
+    if (!projects) return;
     setProjectSelection((current) => reconcileConversationSearchProjectSelection(current, visibleProjectKeys));
-  }, [visibleKey, visibleProjectKeys]);
+  }, [projects, visibleKey, visibleProjectKeys]);
 
   const workingDirs = useMemo(
-    () => conversationSearchWorkingDirs({
-      lockedWorkingDirs: lockedDirs,
-      projectSelection,
-    }),
-    [lockedDirs, projectSelection],
+    () => conversationSearchWorkingDirs({ lockedWorkingDirs: lockedDirs }),
+    [lockedDirs],
   );
   const activeFilterCount = conversationSearchActiveFilterCount({
     agentKind: agentFilter,
@@ -100,8 +109,8 @@ export function useConversationSearch({
     setStatusFilter('all');
     setAgentFilter('all');
     setLastActivityFilter('all');
-    setProjectSelection(lockedDirs ? [...lockedDirs] : 'all');
-  }, [lockedDirs]);
+    setProjectSelection('all');
+  }, []);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -116,7 +125,7 @@ export function useConversationSearch({
     const seq = ++requestSeq.current;
     const timer = setTimeout(() => {
       void searchConversationsAcrossDevices(
-        origins,
+        scopedOrigins,
         {
           query: trimmed,
           limit: CONVERSATION_SEARCH_LIMIT,
@@ -161,7 +170,7 @@ export function useConversationSearch({
     invoke,
     lastActivityFilter,
     originKey,
-    origins,
+    scopedOrigins,
     query,
     sortBy,
     statusFilter,

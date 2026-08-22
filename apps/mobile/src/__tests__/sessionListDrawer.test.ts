@@ -79,6 +79,7 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('resolveMobileSessionRightStatus({');
     expect(text).toContain('buildRemoteSessionCardPreview(item, { running })');
     expect(text).toContain('formatRemoteSessionSidebarTime(lastActivityAt)');
+    expect(text).toContain('remoteSessionStore.getDeviceIdentity()');
   });
 
   it('exposes stable testIDs and modal accessibility semantics', () => {

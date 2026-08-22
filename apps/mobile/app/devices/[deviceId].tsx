@@ -179,15 +179,11 @@ export default function DeviceDetailScreen() {
     () => listConversationSearchProjects(sessions, deviceId ? new Set([deviceId]) : undefined),
     [deviceId, sessions],
   );
-  const visibleSearchProjectKeys = useMemo(
-    () => searchProjects.map((project) => project.key),
-    [searchProjects],
-  );
   const indexedSearch = useConversationSearch({
     enabled: !automationScopeKey && !!deviceId,
     lockedWorkingDirs: projectWorkingDir ? [projectWorkingDir] : null,
     origins: searchOrigins,
-    visibleProjectKeys: visibleSearchProjectKeys,
+    projects: searchProjects,
   });
   const searchQuery = indexedSearch.query;
   const setSearchQuery = indexedSearch.setQuery;
@@ -428,7 +424,7 @@ export default function DeviceDetailScreen() {
     setBulkNotice(null);
   }, []);
 
-  const openSession = useCallback((targetSessionId: string) => {
+  const openSession = useCallback((targetSessionId: string, focusClientId?: string) => {
     if (swipeRegistry.closeOpenRow()) return;
     // 打开会话是远端交互,用当前(可达)设备 endpoint = 页面级 deviceId(对被认领会话即 canonical 当前设备,
     // 其物理机就是当前设备、可达)。不用会话物理旧 shard id:re-link 后旧设备不可达会导致会话根本打不开。
@@ -436,7 +432,12 @@ export default function DeviceDetailScreen() {
     // 副本)的本地乐观回显不完美是已知限制,与 Home 页固有一致(见 PR 描述「已知限制」)。
     guardedPush({
       pathname: '/sessions/[sessionId]',
-      params: { sessionId: targetSessionId, deviceId, deviceName },
+      params: {
+        sessionId: targetSessionId,
+        deviceId,
+        deviceName,
+        ...(focusClientId ? { focusClientId } : {}),
+      },
     });
   }, [deviceId, deviceName, guardedPush, swipeRegistry]);
 
@@ -648,7 +649,10 @@ export default function DeviceDetailScreen() {
           renderItem={({ item }) => (
             <DeviceDetailSessionRow
               item={item}
-              onOpenSession={(it) => openSession(it.session.id)}
+              onOpenSession={(it) => openSession(
+                it.session.id,
+                'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+              )}
               swipe={sessionSwipeControls}
               testID={`deviceDetail.automationRunRow.${item.session.id}`}
             />
@@ -719,6 +723,7 @@ export default function DeviceDetailScreen() {
               filterA11y={searchFilterA11y}
               filterActive={indexedSearch.activeFilterCount > 0}
               onChangeQuery={setSearchQuery}
+              onDismiss={() => setSearchOpen(false)}
               onOpenFilter={() => setSearchFilterOpen(true)}
               padded={false}
               query={searchQuery}
@@ -762,7 +767,10 @@ export default function DeviceDetailScreen() {
               hideDivider={!!section.data[index + 1]?.automationGroup}
               item={item}
               onOpenAutomationGroup={openAutomationGroup}
-              onOpenSession={(it) => openSession(it.session.id)}
+              onOpenSession={(it) => openSession(
+                it.session.id,
+                'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+              )}
               onToggleAutomationGroup={toggleAutomationGroup}
               suppressBlockTopBorder={!!section.data[index - 1]?.automationGroup}
               swipe={sessionSwipeControls}
@@ -1123,7 +1131,10 @@ export default function DeviceDetailScreen() {
             item={item}
             onLongPress={() => beginSelection(sessionIdsForListItem(item))}
             onOpenAutomationGroup={item.automationGroup ? openAutomationGroup : undefined}
-            onOpenSession={(it) => openSession(it.session.id)}
+            onOpenSession={(it) => openSession(
+                it.session.id,
+                'searchFocusClientId' in it ? (it as { searchFocusClientId?: string }).searchFocusClientId : undefined,
+              )}
             onPressSelection={() => toggleSelection(sessionIdsForListItem(item))}
             onToggleAutomationGroup={toggleAutomationGroup}
             selected={sessionIdsForListItem(item).every((id) => selectedSessionIdSet.has(id))}

@@ -2584,7 +2584,10 @@ export default function SessionScreen() {
   }, [navigation, sessionListDrawerOverlayMounted]);
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
-    if (targetSession.id === sessionId) {
+    const focusClientId = 'searchFocusClientId' in item
+      ? (item as { searchFocusClientId?: string }).searchFocusClientId
+      : undefined;
+    if (targetSession.id === sessionId && !focusClientId) {
       closeSessionListDrawer();
       return;
     }
@@ -2612,6 +2615,7 @@ export default function SessionScreen() {
         deviceId: targetDeviceId,
         deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
         sessionId: targetSession.id,
+        ...(focusClientId ? { focusClientId } : {}),
       });
     });
   }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);

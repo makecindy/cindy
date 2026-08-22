@@ -5,6 +5,7 @@ import {
   listConversationSearchProjects,
   nextConversationSearchProjectSelection,
   reconcileConversationSearchProjectSelection,
+  scopedConversationSearchOrigins,
   searchCachedDeviceSessions,
   searchConversationsAcrossDevices,
   sessionBelongsToDevice,
@@ -240,12 +241,42 @@ describe('helpers', () => {
       session({ id: 'd', title: 'Chat', workspaceKind: 'dialogue', workingDir: null }),
       session({ id: 'w', title: 'Worker', orcaRole: 'worker', workingDir: '/Users/dash/hidden' }),
     ]);
-    expect(projects.map((project) => project.title)).toEqual(['other', 'repo']);
+    expect(projects.map((project) => project.key)).toEqual([
+      'dev-a:/Users/dash/other',
+      'dev-a:/Users/dash/repo',
+    ]);
     expect(projects.find((project) => project.title === 'repo')?.count).toBe(2);
-    expect(nextConversationSearchProjectSelection('all', 'repo')).toEqual(['repo']);
-    expect(nextConversationSearchProjectSelection(['repo'], 'other')).toEqual(['repo', 'other']);
-    expect(nextConversationSearchProjectSelection(['repo'], 'repo')).toBe('all');
-    expect(reconcileConversationSearchProjectSelection(['gone'], ['repo'])).toBe('all');
+    const mixed = listConversationSearchProjects([
+      session({ id: 'a', title: 'A', workingDir: '/Users/dash/repo' }),
+      session({
+        id: 'b',
+        title: 'B',
+        workingDir: '/Users/dash/repo',
+        deviceLinkDeviceId: 'dev-b',
+        deviceLinkDeviceName: 'Laptop',
+      }),
+    ]);
+    expect(mixed.map((project) => project.key)).toEqual([
+      'dev-a:/Users/dash/repo',
+      'dev-b:/Users/dash/repo',
+    ]);
+    const scoped = scopedConversationSearchOrigins(
+      [
+        studio,
+        { deviceId: 'dev-b', deviceName: 'Laptop', reachable: true },
+      ],
+      ['dev-b:/Users/dash/repo'],
+      mixed,
+    );
+    expect(scoped).toEqual([{
+      deviceId: 'dev-b',
+      deviceName: 'Laptop',
+      reachable: true,
+      workingDirs: ['/Users/dash/repo'],
+    }]);
+    expect(nextConversationSearchProjectSelection('all', 'dev-a:/Users/dash/repo')).toEqual(['dev-a:/Users/dash/repo']);
+    expect(nextConversationSearchProjectSelection(['dev-a:/Users/dash/repo'], 'dev-a:/Users/dash/repo')).toBe('all');
+    expect(reconcileConversationSearchProjectSelection(['gone'], ['dev-a:/Users/dash/repo'])).toBe('all');
   });
 
   it('counts search filters like desktop: sort is ignored, locked projects are ignored', () => {

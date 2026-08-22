@@ -981,14 +981,10 @@ export default function HomeScreen() {
     ),
     [searchOrigins, sessions],
   );
-  const visibleSearchProjectKeys = useMemo(
-    () => searchProjects.map((project) => project.key),
-    [searchProjects],
-  );
   const indexedSearch = useConversationSearch({
     enabled: true,
     origins: searchOrigins,
-    visibleProjectKeys: visibleSearchProjectKeys,
+    projects: searchProjects,
   });
   const searchQuery = indexedSearch.query;
   const searchFilterA11y = t('devices.list.search.filterAria', {
@@ -1271,12 +1267,16 @@ export default function HomeScreen() {
       setError(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
+    const focusClientId = 'searchFocusClientId' in item
+      ? (item as { searchFocusClientId?: string }).searchFocusClientId
+      : undefined;
     guardedPush({
       pathname: '/sessions/[sessionId]',
       params: {
         deviceId,
         deviceName: session.deviceLinkDeviceName ?? deviceId,
         sessionId: session.id,
+        ...(focusClientId ? { focusClientId } : {}),
       },
     });
   }, [guardedPush, priorityContext, swipeRegistry, t]);

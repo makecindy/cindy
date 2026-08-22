@@ -75,6 +75,7 @@ export function ConversationSearchFilterSheet({
     outMs: 110,
   });
   const selectedProjects = projectSelection === 'all' ? null : new Set(projectSelection);
+  const showProjectDevice = new Set(projects.map((project) => project.deviceId)).size > 1;
 
   return (
     <HomeMenuScrim
@@ -140,7 +141,9 @@ export function ConversationSearchFilterSheet({
                 <FilterMenuItem
                   key={project.key}
                   label={project.title}
-                  meta={String(project.count)}
+                  meta={showProjectDevice && project.deviceName
+                    ? `${project.deviceName} · ${project.count}`
+                    : String(project.count)}
                   onPress={() => onProjectsChange(nextConversationSearchProjectSelection(projectSelection, project.key))}
                   selected={selectedProjects?.has(project.key) === true}
                   testID={`home.searchFilter.project.${sanitizeFilterTestId(project.key)}`}

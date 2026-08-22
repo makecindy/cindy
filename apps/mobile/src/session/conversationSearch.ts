@@ -40,6 +40,7 @@ export interface ConversationSearchDeviceOrigin {
   deviceId: string;
   deviceName: string | null;
   reachable: boolean;
+  workingDirs?: string[] | null;
 }
 
 export interface SearchConversationsAcrossDevicesDeps {
@@ -101,7 +102,7 @@ async function searchOneDevice(
 ): Promise<ConversationSearchResponse | null> {
   const unresponsive = deps.isDeviceUnresponsive?.(origin.deviceId) === true;
   if (!origin.reachable || unresponsive) {
-    return searchCachedDeviceSessions(origin, request, deps.getCachedSessions());
+    return searchCachedDeviceSessions(origin, requestForOrigin(origin, request), deps.getCachedSessions());
   }
 
   try {
@@ -109,13 +110,14 @@ async function searchOneDevice(
       deviceId: origin.deviceId,
       invoke: deps.invoke,
     });
-    const raw = await maker.searchConversations(request);
-    if (remoteIndexedSearchIgnoredWorkingDirs(raw, request.filters?.workingDirs)) {
-      return searchCachedDeviceSessions(origin, request, deps.getCachedSessions());
+    const deviceRequest = requestForOrigin(origin, request);
+    const raw = await maker.searchConversations(deviceRequest);
+    if (remoteIndexedSearchIgnoredWorkingDirs(raw, deviceRequest.filters?.workingDirs)) {
+      return searchCachedDeviceSessions(origin, deviceRequest, deps.getCachedSessions());
     }
-    return finalizeRemotePage(raw, origin, request);
+    return finalizeRemotePage(raw, origin, deviceRequest);
   } catch (error) {
-    return searchCachedDeviceSessions(origin, request, deps.getCachedSessions());
+    return searchCachedDeviceSessions(origin, requestForOrigin(origin, request), deps.getCachedSessions());
   }
 }
 
@@ -192,12 +194,16 @@ function sessionToSearchSummary(
   };
 }
 
+export type ConversationSearchListItem = RemoteSessionListItem & {
+  searchFocusClientId?: string;
+};
+
 export function toSearchListItem(
   item: ConversationSearchResultItem,
   now: number,
   unnamedLabel?: string,
   cached?: RemoteSession,
-): RemoteSessionListItem {
+): ConversationSearchListItem {
   const stamped = cached
     ? {
         ...cached,
@@ -221,7 +227,7 @@ export function toSearchListItem(
         deviceLinkDeviceId: item.session.deviceLinkDeviceId,
         deviceLinkDeviceName: item.session.deviceLinkDeviceName,
       };
-  return toRemoteSessionListItem(
+  const listItem = toRemoteSessionListItem(
     stamped,
     now,
     undefined,
@@ -230,12 +236,30 @@ export function toSearchListItem(
     null,
     unnamedLabel,
   );
+  const searchFocusClientId = item.contentHit?.messageClientId?.trim();
+  return searchFocusClientId ? { ...listItem, searchFocusClientId } : listItem;
+}
+
+function requestForOrigin(
+  origin: ConversationSearchDeviceOrigin,
+  request: ConversationSearchRequest,
+): ConversationSearchRequest {
+  if (!origin.workingDirs?.length) return request;
+  return {
+    ...request,
+    filters: {
+      ...request.filters,
+      workingDirs: origin.workingDirs,
+    },
+  };
 }
 
 export type ConversationSearchProjectSelection = 'all' | string[];
 
 export interface ConversationSearchProjectOption {
   count: number;
+  deviceId: string;
+  deviceName: string | null;
   key: string;
   title: string;
   workingDir: string;
@@ -296,15 +320,34 @@ export function reconcileConversationSearchProjectSelection(
 
 export function conversationSearchWorkingDirs(input: {
   lockedWorkingDirs?: string[] | null;
-  projectSelection?: ConversationSearchProjectSelection;
 }): string[] | null {
   if (input.lockedWorkingDirs?.length) return [...input.lockedWorkingDirs];
-  if (!input.projectSelection || input.projectSelection === 'all') return null;
-  return [...input.projectSelection];
+  return null;
+}
+
+export function scopedConversationSearchOrigins(
+  origins: readonly ConversationSearchDeviceOrigin[],
+  selection: ConversationSearchProjectSelection,
+  projects: readonly ConversationSearchProjectOption[],
+): ConversationSearchDeviceOrigin[] {
+  if (selection === 'all') return [...origins];
+  const selected = new Set(selection);
+  const dirsByDevice = new Map<string, string[]>();
+  for (const project of projects) {
+    if (!selected.has(project.key)) continue;
+    const dirs = dirsByDevice.get(project.deviceId) ?? [];
+    if (!dirs.includes(project.workingDir)) dirs.push(project.workingDir);
+    dirsByDevice.set(project.deviceId, dirs);
+  }
+  return origins.flatMap((origin) => {
+    const dirs = dirsByDevice.get(origin.deviceId);
+    if (!dirs?.length) return [];
+    return [{ ...origin, workingDirs: dirs }];
+  });
 }
 
 export function listConversationSearchProjects(
-  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'orcaRole' | 'workingDir' | 'workspaceKind'>[],
+  sessions: readonly Pick<RemoteSession, 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'deviceLinkDeviceName' | 'orcaRole' | 'workingDir' | 'workspaceKind'>[],
   deviceIds?: ReadonlySet<string>,
 ): ConversationSearchProjectOption[] {
   const byKey = new Map<string, ConversationSearchProjectOption>();
@@ -312,9 +355,12 @@ export function listConversationSearchProjects(
     if (session.orcaRole === 'worker') continue;
     if (deviceIds && !sessionBelongsToSelectedDevice(session, deviceIds)) continue;
     if (session.workspaceKind === 'dialogue') continue;
+    const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
+    if (!deviceId) continue;
     const workingDir = stripTrailingPathSeparators(session.workingDir?.trim() ?? '');
     if (!workingDir) continue;
-    const key = collapseWorktreeDirForGrouping(workingDir) ?? workingDir;
+    const dirKey = collapseWorktreeDirForGrouping(workingDir) ?? workingDir;
+    const key = `${deviceId}:${dirKey}`;
     const existing = byKey.get(key);
     if (existing) {
       existing.count += 1;
@@ -322,12 +368,16 @@ export function listConversationSearchProjects(
     }
     byKey.set(key, {
       count: 1,
+      deviceId,
+      deviceName: session.deviceLinkDeviceName ?? null,
       key,
       title: conversationSearchProjectTitle(workingDir),
-      workingDir,
+      workingDir: dirKey,
     });
   }
-  return [...byKey.values()].sort((a, b) => a.title.localeCompare(b.title) || a.key.localeCompare(b.key));
+  return [...byKey.values()].sort((a, b) => (
+    a.title.localeCompare(b.title) || a.deviceId.localeCompare(b.deviceId) || a.key.localeCompare(b.key)
+  ));
 }
 
 function sessionBelongsToSelectedDevice(

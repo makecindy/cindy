@@ -14,6 +14,7 @@ export function HomeSearchBar({
   filterA11y,
   filterActive,
   onChangeQuery,
+  onDismiss,
   onOpenFilter,
   padded = true,
   query,
@@ -23,6 +24,7 @@ export function HomeSearchBar({
   filterA11y?: string;
   filterActive: boolean;
   onChangeQuery(value: string): void;
+  onDismiss?: () => void;
   onOpenFilter(): void;
   padded?: boolean;
   query: string;
@@ -57,12 +59,18 @@ export function HomeSearchBar({
           testID={testIDs?.input ?? 'home.searchInput'}
           value={query}
         />
-        {trimmed ? (
+        {trimmed || onDismiss ? (
           <Pressable
-            accessibilityLabel={t('devices.detail.search.clearA11y')}
+            accessibilityLabel={trimmed ? t('devices.detail.search.clearA11y') : t('devices.detail.search.closeInputA11y')}
             accessibilityRole="button"
             hitSlop={6}
-            onPress={() => onChangeQuery('')}
+            onPress={() => {
+              if (trimmed) {
+                onChangeQuery('');
+                return;
+              }
+              onDismiss?.();
+            }}
             style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
             testID={testIDs?.clear ?? 'home.searchClearButton'}
           >

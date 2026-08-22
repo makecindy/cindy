@@ -252,6 +252,14 @@ export function SessionListDrawer({
   const storeVersion = useRemoteSessionStoreVersion();
   const messageVersion = useRemoteMessageVersion();
   const searchOrigins = useMemo(() => {
+    const identities = remoteSessionStore.getDeviceIdentity();
+    if (identities.length > 0) {
+      return identities.map((device) => ({
+        deviceId: device.deviceId,
+        deviceName: device.name,
+        reachable: !unresponsiveDevicesStore.has(device.deviceId),
+      }));
+    }
     const byId = new Map<string, ConversationSearchDeviceOrigin>();
     for (const session of sessions) {
       const id = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
@@ -268,14 +276,10 @@ export function SessionListDrawer({
     () => listConversationSearchProjects(excludeOrcaWorkerSessions(sessions)),
     [sessions],
   );
-  const visibleSearchProjectKeys = useMemo(
-    () => searchProjects.map((project) => project.key),
-    [searchProjects],
-  );
   const indexedSearch = useConversationSearch({
     enabled: mounted,
     origins: searchOrigins,
-    visibleProjectKeys: visibleSearchProjectKeys,
+    projects: searchProjects,
   });
   const searchQuery = indexedSearch.query;
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
