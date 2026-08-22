@@ -7,6 +7,9 @@ export const CINDY_ACRYLIC_WINDOW_BACKING = {
   dark: 'rgba(5, 5, 5, 0.85)',
 } as const;
 
+export const WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL =
+  'window-backdrop-material:changed';
+
 const WINDOW_BACKDROP_MATERIAL_ARGUMENT = '--cindy-window-backdrop-material=';
 
 export function isWindowsBackdropMaterial(value: string): value is WindowsBackdropMaterial {

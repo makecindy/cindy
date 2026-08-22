@@ -29,7 +29,10 @@ import {
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
 import { resolveVibrancyConfig } from './vibrancyConfig.js';
-import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
+import {
+  createWindowBackdropMaterialArgument,
+  WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+} from '../shared/windowBackdrop.js';
 import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
 import { applyAppearanceToWindow } from './appearance-settings-ipc.js';
@@ -274,7 +277,13 @@ export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolea
       const withMaterial = win as typeof win & {
         setBackgroundMaterial?: (material: WindowsBackdropMaterial) => void;
       };
-      withMaterial.setBackgroundMaterial?.(config.backgroundMaterial);
+      if (withMaterial.setBackgroundMaterial) {
+        withMaterial.setBackgroundMaterial(config.backgroundMaterial);
+        win.webContents.send(
+          WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+          config.backgroundMaterial,
+        );
+      }
     }
     win.setBackgroundColor(config.backgroundColor);
   }

@@ -48,6 +48,21 @@ describe('Windows Acrylic resize backing contract', () => {
     );
   });
 
+  it('keeps the root material attribute in sync with runtime material changes', () => {
+    expect(bootstrapSource).toContain(
+      'win.webContents.send(\n        WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,\n        config.backgroundMaterial,\n      )',
+    );
+    expect(secondaryWindowsSource).toContain(
+      'win.webContents.send(\n          WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,\n          config.backgroundMaterial,\n        )',
+    );
+    expect(preloadSource).toContain(
+      'fanOutWindowBackdropMaterialChanged((material) => {\n      if (typeof material === \'string\' && isWindowsBackdropMaterial(material))',
+    );
+    expect(mainEntrySource).toContain(
+      'window.electronAPI.onWindowBackdropMaterialChanged?.((material) => {\n    document.documentElement.dataset.windowBackdropMaterial = material;',
+    );
+  });
+
   it('lets only the ordinary Acrylic sidebar show the creation-time backing', () => {
     expect(globalsSource).toContain(
       "[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']",

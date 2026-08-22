@@ -28,7 +28,10 @@ import {
   readWindowThemeSnapshot,
   writeWindowThemeSnapshot,
 } from './window-theme-mode-store';
-import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
+import {
+  createWindowBackdropMaterialArgument,
+  WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+} from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -3727,6 +3730,10 @@ const registerIpcHandlers = () => {
     }
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);
+      win.webContents.send(
+        WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+        config.backgroundMaterial,
+      );
     }
     win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);

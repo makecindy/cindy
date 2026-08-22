@@ -86,6 +86,11 @@ const isAppearanceUtilityView =
 document.documentElement.dataset.platform = window.electronAPI.platform;
 document.documentElement.dataset.windowBackdropMaterial =
   window.electronAPI.windowBackdropMaterial ?? 'none';
+const disposeWindowBackdropMaterialChanged =
+  window.electronAPI.onWindowBackdropMaterialChanged?.((material) => {
+    document.documentElement.dataset.windowBackdropMaterial = material;
+  }) ?? (() => {});
+import.meta.hot?.dispose(disposeWindowBackdropMaterialChanged);
 if (isVoiceInputOverlay || isVoiceInputDictionaryToast) {
   document.documentElement.dataset.voiceInputOverlay = 'true';
 }
