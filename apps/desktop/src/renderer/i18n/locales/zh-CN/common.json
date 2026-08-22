@@ -94,6 +94,7 @@
     "tabs": {
       "general": "通用",
       "billing": "用量和计费",
+      "usage": "用量历史",
       "personalization": "个性化",
       "apiKeys": "工具密钥",
       "voiceInput": "语音输入",
@@ -5141,6 +5142,70 @@
     "noBilledCost": "本轮费用暂不可用，仅显示用量",
     "suggestion": {
       "lowCache": "缓存命中率偏低，本轮较多上下文重新计费"
+    }
+  },
+  "usageHistory": {
+    "description": "这台设备上 Cindy 内部产生的 token 用量。记录从该功能上线起积累，不回填更早的历史。",
+    "empty": "还没有用量记录。跑过对话之后，这里会开始积累。",
+    "cacheHitTooltip": "缓存读取 ÷（输入 + 缓存读取 + 缓存写入），与消息卡片同口径。",
+    "summary": {
+      "title": "概览"
+    },
+    "stats": {
+      "todayTokens": "今日 token",
+      "totalTokens": "近 30 天 token",
+      "streak": "连续活跃天数",
+      "cacheHitRate": "缓存命中率(近 30 天)",
+      "models": "用到的模型"
+    },
+    "heatmap": {
+      "title": "活跃热力图",
+      "subtitle": "近 20 周",
+      "emptyCell": "当天没有用量记录"
+    },
+    "daily": {
+      "title": "近 30 天每日 token",
+      "subtitle": "按模型堆叠"
+    },
+    "byAgent": {
+      "title": "按 Agent / harness",
+      "subtitle": "近 30 天",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "近 30 天 token",
+        "share": "占比",
+        "today": "今日",
+        "hitRate": "缓存命中率",
+        "models": "用到的模型"
+      }
+    },
+    "byModel": {
+      "title": "按模型",
+      "subtitle": "近 30 天",
+      "col": {
+        "model": "模型",
+        "total": "总 token",
+        "share": "占比",
+        "input": "输入",
+        "output": "输出",
+        "cacheRead": "缓存读取",
+        "cacheCreate": "缓存写入",
+        "hitRate": "缓存命中率"
+      }
+    },
+    "tasks": {
+      "title": "最耗 token 的任务",
+      "subtitle": "近 30 天内活跃过的任务，按累计 token 排序",
+      "col": {
+        "task": "任务",
+        "model": "模型",
+        "provider": "供应商",
+        "tokens": "累计 token",
+        "context": "上下文占用",
+            "lastActive": "最后活跃"
+      },
+      "providerTooltip": "取该任务当前选定的供应商；未指定时留空。",
+      "tokensTooltip": "该任务的生命周期累计，不是近 30 天内的增量。"
     }
   },
   "usageDashboard": {

@@ -49,6 +49,8 @@ import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BillingSettingsSection } from '@/features/billing/BillingPage';
 import { canAccessBillingSettings } from './billingVisibility';
+import { canAccessUsageSettings } from './usageVisibility';
+import { UsageHistorySection } from './usage/UsageHistorySection';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -76,6 +78,9 @@ export function SettingsView() {
     membershipKind: user?.membershipKind ?? null,
   });
   const shouldRedirectLegacyPluginTabs = rawTab === 'api-keys' || rawTab === 'connections';
+  // 用量历史对所有**已登录**身份开放 (local / cloud personal / cloud org),
+  // 与 billing 的 canAccessBillingSettings 无关 —— #2785 维护者裁决。
+  const canAccessUsage = canAccessUsageSettings({ mode });
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;
@@ -86,9 +91,10 @@ export function SettingsView() {
     // legacy 别名:旧独立「Tina」(tina) 已并入「IM 机器人」(im-bot)。
     if (raw === 'tina') return 'im-bot';
     if (raw === 'billing' && !canAccessBilling) return 'general';
+    if (raw === 'usage' && !canAccessUsage) return 'general';
     if (raw === 'agent-island' && !isMac) return 'general';
     return isSettingsTab(raw) ? raw : 'general';
-  }, [canAccessBilling, isMac, rawTab]);
+  }, [canAccessBilling, canAccessUsage, isMac, rawTab]);
   const piExtensionsPanelOpen =
     activeTab === 'general' &&
     (rawTab === 'pi-extensions' || searchParams.get('openPanel') === 'pi-extensions');
@@ -174,9 +180,12 @@ export function SettingsView() {
   const visibleTabIds = useMemo(
     () =>
       TAB_IDS.filter(
-        (tabId) => (isMac || tabId !== 'agent-island') && (canAccessBilling || tabId !== 'billing'),
+        (tabId) =>
+          (isMac || tabId !== 'agent-island') &&
+          (canAccessBilling || tabId !== 'billing') &&
+          (canAccessUsage || tabId !== 'usage'),
       ),
-    [canAccessBilling, isMac],
+    [canAccessBilling, canAccessUsage, isMac],
   );
 
   // deep-link: ?section=... → scroll to a section inside the active tab.
@@ -402,6 +411,14 @@ export function SettingsView() {
                     key={`billing:${dataOwnerId ?? 'none'}`}
                     accountId={dataOwnerId}
                   />
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'usage' && (
+              <div role="tabpanel" id="settings-panel-usage" aria-labelledby="settings-tab-usage">
+                <section aria-label={t('settings.tabs.usage')}>
+                  <UsageHistorySection />
                 </section>
               </div>
             )}

@@ -94,6 +94,7 @@
     "tabs": {
       "general": "General",
       "billing": "Usage and billing",
+      "usage": "Usage history",
       "personalization": "Personalization",
       "apiKeys": "Tool Keys",
       "voiceInput": "Voice Input",
@@ -5143,6 +5144,70 @@
     "noBilledCost": "Cost unavailable for this turn; showing usage only",
     "suggestion": {
       "lowCache": "Cache hit rate is low; more context was billed again this turn"
+    }
+  },
+  "usageHistory": {
+    "description": "Token usage produced inside Cindy on this device. Records start accumulating when the feature ships; earlier history is not backfilled.",
+    "empty": "No usage recorded yet. This fills in once you start a chat.",
+    "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
+    "summary": {
+      "title": "Overview"
+    },
+    "stats": {
+      "todayTokens": "Tokens today",
+      "totalTokens": "Tokens (30d)",
+      "streak": "Active streak",
+      "cacheHitRate": "Cache hit rate (30d)",
+      "models": "Models used"
+    },
+    "heatmap": {
+      "title": "Activity heatmap",
+      "subtitle": "Last 20 weeks",
+      "emptyCell": "No usage recorded"
+    },
+    "daily": {
+      "title": "Daily tokens (30d)",
+      "subtitle": "Stacked by model"
+    },
+    "byAgent": {
+      "title": "By Agent / harness",
+      "subtitle": "Last 30 days",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "Tokens (30d)",
+        "share": "Share",
+        "today": "Today",
+        "hitRate": "Cache hit rate",
+        "models": "Models"
+      }
+    },
+    "byModel": {
+      "title": "By model",
+      "subtitle": "Last 30 days",
+      "col": {
+        "model": "Model",
+        "total": "Total tokens",
+        "share": "Share",
+        "input": "Input",
+        "output": "Output",
+        "cacheRead": "Cache read",
+        "cacheCreate": "Cache write",
+        "hitRate": "Cache hit rate"
+      }
+    },
+    "tasks": {
+      "title": "Top sessions by tokens",
+      "subtitle": "Sessions active in the last 30 days, ranked by lifetime tokens",
+      "col": {
+        "task": "Session",
+        "model": "Model",
+        "provider": "Provider",
+        "tokens": "Total tokens",
+        "context": "Context used",
+            "lastActive": "Last active"
+      },
+      "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
+      "tokensTooltip": "The session's lifetime total, not the tokens spent within the last 30 days."
     }
   },
   "usageDashboard": {

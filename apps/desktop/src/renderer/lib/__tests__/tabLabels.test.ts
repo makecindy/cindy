@@ -9,6 +9,12 @@ describe('Settings tab order', () => {
     expect(TAB_IDS.slice(providersIndex, providersIndex + 2)).toEqual(['providers', 'billing']);
   });
 
+  it('places usage history immediately after billing', () => {
+    const billingIndex = TAB_IDS.indexOf('billing');
+
+    expect(TAB_IDS.slice(billingIndex, billingIndex + 2)).toEqual(['billing', 'usage']);
+  });
+
   it('keeps Pi extensions inside General instead of exposing a top-level tab', () => {
     expect(TAB_IDS).not.toContain('pi-extensions');
     expect(isSettingsTab('pi-extensions')).toBe(false);

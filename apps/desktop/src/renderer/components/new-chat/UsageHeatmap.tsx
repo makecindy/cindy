@@ -4,6 +4,9 @@
  * 数据: useUsageHistory 的 days (稀疏, 无消费日无行) + todayKey 锚点。
  * 日期推算一律从 todayKey 出发 (renderer 不自己取系统日期, 与 main 同口径)。
  *
+ * 强度口径由 `metric` 决定: 'money' (默认, 首页仪表盘) 或 'tokens' (设置 → 用量历史,
+ * 那个页面不出现任何金额, 见 issue #2785)。两种口径共用同一套分位分桶与色阶。
+ *
  * 视觉: 7 行 (周日起) × ~20 列周网格, 单色阶 — 非零值按 4 分位分桶,
  * 用 color-mix 在 --accent-emphasis 上做透明度阶梯 (黑白反色设计, 不引入彩色)。
  * 140 个格子用原生 title 做 tooltip (Radix per-cell 实例太重)。
@@ -59,17 +62,22 @@ export function UsageHeatmap({
   days,
   todayKey,
   windowDays,
+  metric = 'money',
 }: {
   days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
   todayKey: string;
   windowDays: number;
+  /** 格子深浅按哪一维分桶。'tokens' 下 tooltip 也只显示 token, 不出现金额。 */
+  metric?: 'money' | 'tokens';
 }): React.JSX.Element {
   const { t, i18n } = useTranslation();
 
   const { columns, monthLabels } = useMemo(() => {
     const spendByDay = new Map(days.map((d) => [d.day, d.money]));
     const tokensByDay = new Map(days.map((d) => [d.day, d.tokens ?? 0]));
-    const nonZero = days.map((d) => d.money.amount).filter((v) => v > 0).sort((a, b) => a - b);
+    const intensityOf = (row: { money: RegionalMoney; tokens?: number }): number =>
+      metric === 'tokens' ? (row.tokens ?? 0) : row.money.amount;
+    const nonZero = days.map(intensityOf).filter((v) => v > 0).sort((a, b) => a - b);
     const q = (p: number): number => (nonZero.length ? nonZero[Math.min(nonZero.length - 1, Math.floor(p * nonZero.length))] : 0);
     const thresholds: [number, number, number] = [q(0.25), q(0.5), q(0.75)];
 
@@ -92,7 +100,7 @@ export function UsageHeatmap({
         day: key,
         money,
         tokens: tokensByDay.get(key) ?? 0,
-        level: levelFor(money.amount, thresholds),
+        level: levelFor(intensityOf({ money, tokens: tokensByDay.get(key) ?? 0 }), thresholds),
         placeholder: false,
       });
       cursor.setDate(cursor.getDate() + 1);
@@ -127,7 +135,7 @@ export function UsageHeatmap({
     });
 
     return { columns: cols, monthLabels: labels };
-  }, [days, todayKey, windowDays, i18n.language]);
+  }, [days, todayKey, windowDays, i18n.language, metric]);
 
   const colPitch = CELL_PX + GAP_PX;
 
@@ -155,11 +163,21 @@ export function UsageHeatmap({
               ) : (
                 <div
                   key={ri}
-                  title={`${cell.day} · ${formatMoney(cell.money)}${
-                    cell.tokens > 0
-                      ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
-                      : ''
-                  }`}
+                  title={
+                    metric === 'tokens'
+                      ? `${cell.day} · ${
+                          cell.tokens > 0
+                            ? t('usageDashboard.tokensOnly', {
+                                tokens: formatCompactTokens(cell.tokens),
+                              })
+                            : t('usageHistory.heatmap.emptyCell')
+                        }`
+                      : `${cell.day} · ${formatMoney(cell.money)}${
+                          cell.tokens > 0
+                            ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
+                            : ''
+                        }`
+                  }
                   className="rounded-[3px]"
                   style={{
                     width: CELL_PX,
