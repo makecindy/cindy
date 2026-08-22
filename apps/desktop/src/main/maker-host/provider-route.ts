@@ -778,6 +778,24 @@ export function resolveSessionRouteDecision(
     .catch(() => withRequestPath(buildRouteDecision(routing, gatewayKey, agent, apiKey, null)));
 }
 
+/**
+ * 用户自定义来源(buildUserProvider)对 agent 的原生 wire protocol 会省略不写:
+ * claude-code 缺省 = anthropic-messages,codex 缺省 = openai-responses(见
+ * model-providers/user-provider.ts 的 defaultWireProtocol)。隐式 bridge 判定必须
+ * 用这条缺省口径,否则用户的 Anthropic 兼容上游(如智谱)因 routing.wireProtocol
+ * 为 undefined 而永远落不进 bridge 候选——这是 #3210 裸 id 被透传默认网关的第二环。
+ */
+function implicitBridgeWireProtocol(
+  routing: RoutingDescriptor | null,
+  agent: AgentKind,
+): 'anthropic-messages' | 'openai-chat' | 'openai-responses' | null {
+  if (!routing) return null;
+  if (routing.wireProtocol) return routing.wireProtocol;
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'codex') return 'openai-responses';
+  return null;
+}
+
 function providersForModel(modelId: string, agent: AgentKind) {
   return getActiveCatalog().providers.filter(
     (provider) =>
@@ -789,20 +807,10 @@ function providersForModel(modelId: string, agent: AgentKind) {
   );
 }
 
-async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
-  const providers = await providerViewsReader();
-  // This runs while dispatching an already-created implicit-source session. Admission for new
-  // sessions/model switches happened earlier; keep its retired/disabled source usable for resume.
-  const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
-  return providers.find((provider) => provider.id === defaultId) ?? null;
-}
-
 function hasImplicitLocalBridgeCandidate(modelId: string, agent: AgentKind): boolean {
   return providersForModel(modelId, agent).some((provider) => {
-    const routing = providerRoutingForModel(provider, agent, modelId);
-    return (
-      routing?.wireProtocol === 'openai-chat' || routing?.wireProtocol === 'anthropic-messages'
-    );
+    const wire = implicitBridgeWireProtocol(providerRoutingForModel(provider, agent, modelId), agent);
+    return wire === 'openai-chat' || wire === 'anthropic-messages';
   });
 }
 
@@ -825,6 +833,14 @@ export function inferProviderIdForModel(modelId: string, agent: AgentKind): stri
  *
  * 这里不能使用 uniqueProviderForModel：Claude 模型通常同时由 Anthropic 与 XD 提供，
  * 但 Codex 的默认来源仍应稳定选择 XD；XD 不可用时才落到候选首项（如 Anthropic）。
+ *
+ * 歧义保护(#3210 P1)：会话启动/切模竞态下 getSessionProvider 可能暂时为 null。
+ * 若两个**已连接的用户自定义** bridge 来源暴露同一个裸 catalog id(如两家
+ * Anthropic 兼容上游都配了 glm-5.3),按默认规则猜测会把首批提示词发往用户**未**
+ * 为该会话选择的供应商 → 数据外发 + 错计费。因此当已连接的 user-source bridge
+ * 候选多于一个时,本函数放弃隐式接管(回落默认路由;首包可能被网关 400,但 provider
+ * 绑定完成后重试即恢复),绝不把内容发往歧义来源。内置来源(anthropic/xd/openai/xai)
+ * 之间的既定默认优先级(XD 优先)不受影响。
  */
 export function resolveImplicitLocalBridgeRoute(
   modelId: string,
@@ -837,10 +853,69 @@ export function resolveImplicitLocalBridgeRoute(
   if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
     return Promise.resolve(null);
   }
-  return connectedDefaultProviderForModel(catalogModelId, agent).then((provider) => {
+  return providerViewsReader().then((providers) => {
+    const connectedBridgeCandidates = providers.filter((provider) => {
+      if (!provider.connected) return false;
+      // 用户在设置页停用某供应商时凭证仍保留(connected 不变),但 suspended=true
+      // 表示该来源不可用于新路由(#3210 codex review P1)。必须排除,否则停用后
+      // 仍可能被选作未绑定会话首包的隐式上游,违背用户的显式停用动作。
+      if ('suspended' in provider && (provider as { suspended?: boolean }).suspended) {
+        return false;
+      }
+      if (!provider.agents.includes(agent)) return false;
+      // 必须真的暴露该 catalog model id —— 否则 providerRoutingForModel 会回落
+      // 到 provider 级 routing,把首包转发到无关上游(典型:原内置来源已断连,
+      // 但一个不提供此 model 的 BYOM 仍 connected,歧义检查看到「唯一」候选就把
+      // 凭证塞过去)。还要排除被用户逐模型停用的条目(disabled=true),否则停用
+      // 单个 model 后隐式首包仍会打到该上游(#3210 codex review P1)。这一步
+      // 是歧义保护的前置必要条件,不检查等于把数据外发给一个不相关供应商。
+      if (
+        !(provider.models[agent] ?? []).some(
+          (model) => model.id === catalogModelId && !model.disabled,
+        )
+      ) {
+        return false;
+      }
+      const wire = implicitBridgeWireProtocol(
+        providerRoutingForModel(provider, agent, catalogModelId),
+        agent,
+      );
+      return wire === 'openai-chat' || wire === 'anthropic-messages';
+    });
+    const connectedUserBridgeCandidates = connectedBridgeCandidates.filter(
+      (provider) => provider.source === 'user',
+    );
+    if (connectedUserBridgeCandidates.length > 1) {
+      // 多个已连接的用户自定义来源暴露同一裸 id → 不猜测,等会话 provider 绑定落定。
+      return null;
+    }
+    // 恰好一个已连接的 bridge 候选(单用户来源,或单内置来源)→ 直接用它,避免
+    // 被 nativeDefault 的内置优先级(XD 优先)带偏到不提供该模型的来源。候选为 0
+    // 时回落默认来源解析,但同样要排除 suspended 与逐模型 disabled —— 否则停用某
+    // 来源或单个 model 后它仍可能被 actualSourceIdForModel 选回(#3210 codex P1)。
+    const provider = connectedBridgeCandidates.length === 1
+      ? connectedBridgeCandidates[0]!
+      : (() => {
+          const eligible = providers.filter((candidate) => {
+            if (
+              'suspended' in candidate
+              && (candidate as { suspended?: boolean }).suspended
+            ) {
+              return false;
+            }
+            const model = (candidate.models[agent] ?? []).find(
+              (m) => m.id === catalogModelId,
+            );
+            if (model?.disabled) return false;
+            return true;
+          });
+          const defaultId = actualSourceIdForModel(eligible, null, catalogModelId, agent);
+          return eligible.find((candidate) => candidate.id === defaultId) ?? null;
+        })();
     if (!provider) return null;
     const routing = providerRoutingForModel(provider, agent, modelId);
-    if (routing?.wireProtocol !== 'openai-chat' && routing?.wireProtocol !== 'anthropic-messages') {
+    const wire = implicitBridgeWireProtocol(routing, agent);
+    if (wire !== 'openai-chat' && wire !== 'anthropic-messages') {
       return null;
     }
     return resolveProviderRouteById(provider.id, agent, modelId);
