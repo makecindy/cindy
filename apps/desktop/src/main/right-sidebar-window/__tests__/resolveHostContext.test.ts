@@ -51,4 +51,21 @@ describe('resolveHostContext mappers', () => {
       subagentsAvailable: true,
     });
   });
+
+  it('leaves a truncated device-link workdir unresolved', () => {
+    expect(
+      contextFromDeviceLinkMirror('device-9', {
+        id: 'remote-1',
+        workingDir: `/${'a'.repeat(239)}`,
+        agentKind: 'pi',
+      })?.workdir,
+    ).toBeNull();
+    expect(
+      contextFromDeviceLinkMirror('device-9', {
+        id: 'remote-1',
+        worktreePath: `/${'b'.repeat(239)}`,
+        agentKind: 'codex',
+      })?.workdir,
+    ).toBeNull();
+  });
 });

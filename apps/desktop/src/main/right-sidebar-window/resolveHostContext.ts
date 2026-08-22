@@ -8,7 +8,10 @@
  */
 import { eq } from 'drizzle-orm';
 
-import { getMirrorCache } from '../device-link/mirrorCacheStore.js';
+import {
+  getMirrorCache,
+  MAX_CACHED_TEXT_CHARS,
+} from '../device-link/mirrorCacheStore.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import type { RsbWindowContext } from '../../shared/rightSidebarWindow.js';
@@ -29,18 +32,25 @@ export function contextFromLocalSessionRow(row: {
   };
 }
 
+function workdirFromDeviceLinkMirror(session: Record<string, unknown>): string | null {
+  const raw =
+    typeof session.workingDir === 'string'
+      ? session.workingDir
+      : typeof session.worktreePath === 'string'
+        ? session.worktreePath
+        : null;
+  // 冷镜像把路径截到 240 字给列表显示。截断值不能当操作目录。
+  if (!raw || raw.length >= MAX_CACHED_TEXT_CHARS) return null;
+  return raw;
+}
+
 export function contextFromDeviceLinkMirror(
   deviceId: string,
   session: Record<string, unknown>,
 ): RsbWindowContext | null {
   const sessionId = typeof session.id === 'string' ? session.id : '';
   if (!deviceId || !sessionId) return null;
-  const workdir =
-    typeof session.workingDir === 'string'
-      ? session.workingDir
-      : typeof session.worktreePath === 'string'
-        ? session.worktreePath
-        : null;
+  const workdir = workdirFromDeviceLinkMirror(session);
   return {
     sessionId,
     workdir,
