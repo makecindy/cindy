@@ -156,7 +156,10 @@ function NavigationGate() {
           // iOS < 26 默认就是边缘返回,本配置不改变其行为;Android 返回手势不走这条路径,不受影响。
           gestureResponseDistance: { end: 44 },
         }}
-      />
+      >
+        {/* 设置从左侧抽屉进入:接着抽屉方向从左边推出,不要默认从右边盖上来。 */}
+        <Stack.Screen name="settings" options={{ animation: 'slide_from_left' }} />
+      </Stack>
     </NavigationThemeProvider>
   );
 }

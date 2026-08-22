@@ -2503,6 +2503,7 @@
       "unspecified": "既定の設定を使用",
       "hint": "Claude Code の変更は新しいセッションから適用されます。Codex の変更はアイドル時に自動で適用されます。",
       "codexV2ModelHint": "Claude Code は選択したモデルを既定値として使用します。ローカルの Codex サブエージェントはすべて、選択したモデルと推論強度に固定されます。",
+      "codexOauthCompatibilityHint": "固定したサブエージェントのルーティングと ChatGPT OAuth は安全に併用できません。メインタスクが ChatGPT OAuth を使用する場合、または非 OAuth のメインタスクで ChatGPT OAuth のサブエージェントを指定した場合、ここで選択したモデル、プロバイダー、推論強度は適用されず、メインタスクの Codex デフォルトサブエージェントが使用されます。",
       "saveFailed": "サブエージェント設定の保存に失敗しました",
       "guardrails": {
         "title": "Codex サブエージェントガードレール",
@@ -3188,12 +3189,14 @@
           "copyLink": "リンクをコピー",
           "copied": "リンクをコピーしました",
           "state": {
-            "denied": "Slack の認可ページで認可がキャンセルされました",
+            "denied": "Slack の認可はキャンセルされ、アカウントはまだ連携されていません",
             "expired": "認可がタイムアウトしました。再接続してください",
             "failed": "連携に失敗しました",
             "revoked": "連携が解除されました"
           },
-          "retryHint": "スイッチをもう一度オンにすると再接続して連携し直せます。"
+          "reauthorize": "Slack を再認可",
+          "reauthorizing": "Slack を再認可しています…",
+          "retryHint": "Slack を再認可すると再接続して連携し直せます。"
         },
         "toast": {
           "saveFailed": "保存に失敗しました",
@@ -3203,6 +3206,8 @@
         "loginRequired": "先に {{appName}} アカウントにログインしてください。ログイン後、接続は自動的に復旧します。",
         "standbyHint": "このコンピューター上の別の Cindy インスタンスが Slack 接続を使用しています。それを閉じてから、このスイッチをもう一度オンにすると引き継げます。",
         "authorizing": "認可中…",
+        "transportStatus": "通信接続：{{status}}",
+        "accountStatus": "Slack アカウント：{{status}}",
         "statusBound": "連携済み @{{name}}",
         "statusBoundTeam": "{{team}} に連携済み @{{name}}",
         "statusUnbound": "未連携",
@@ -4775,6 +4780,7 @@
     "expandControlledNotice": "リモート操作の通知を展開: {{label}}",
     "versionMismatch": "相手のバージョンが異なります。一部機能が制限される場合があります"
   },
+
   "accountDeletion": {
     "entryButton": "アカウントを削除",
     "entryAria": "現在のアカウントを削除",
@@ -5177,7 +5183,7 @@
     "close": "閉じる",
     "menuItems": {
       "settings": "設定",
-      "resourceUsage": "リソース使用量",
+      "resourceUsage": "アクティビティモニタ",
       "help": "ヘルプ",
       "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
@@ -5273,7 +5279,7 @@
         "subagents": "サブエージェント",
         "botDelegations": "仲間連携",
         "backgroundTasks": "バックグラウンドタスク",
-        "resourceUsage": "リソース使用量",
+        "resourceUsage": "アクティビティモニタ",
         "collaboration": "コラボ",
         "unknown": "不明なタブ",
         "ghostPanel": "プラグインパネル",
@@ -5294,7 +5300,7 @@
       "empty": {
         "eyebrow": "右サイドバー",
         "title": "パネルを開く",
-        "desc": "ファイル、レビュー、リソース使用量、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
+        "desc": "ファイル、レビュー、アクティビティモニタ、内蔵ブラウザ、ターミナルを開いて、左側のチャットと並行して作業できます。",
         "botTitle": "作品と相手の協同",
         "botDesc": "仲間の会話では作品ライブラリと相手の協同が最初に開きます。レビューやターミナルは必要なときだけ足してください。",
         "openArtifacts": "作品を開く",
@@ -5309,7 +5315,7 @@
         "subagentsSub": "後から確認できる子タスク",
         "openBackgroundTasks": "バックグラウンドタスクを開く",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "リソース使用量を開く",
+        "openResourceUsage": "アクティビティモニタを開く",
         "openBrowser": "ブラウザを開く",
         "browserSub": "Browser",
         "openTerminal": "ターミナルを開く",
@@ -5912,26 +5918,85 @@
       "context": "親タスクのコンテキスト",
       "contextValues": {
         "unknown": "Harness から報告されていません",
+        "none": "新しい分離コンテキスト",
         "snapshot": "親タスクのスナップショット",
         "live": "親タスクをリアルタイム参照"
       },
       "assignment": "担当内容",
+      "overview": "概要",
+      "children": "サブエージェント",
+      "queued": "待機中",
+      "queuedDetail": "依存関係が完了し、実行枠が空くとこのサブエージェントが開始されます。",
+      "awaitingApproval": "承認待ち",
+      "awaitingApprovalDetail": "このサブエージェントは親タスクでの権限判断を待っています。",
+      "childError": "エラー：{{error}}",
+      "sendDirection": "指示を送る",
+      "composerPlaceholders": {
+        "runningWithSteer": "フォローアップを送る · {{steerShortcut}} で軌道修正…",
+        "follow_up": "フォローアップを送る — 完了した結果は上書きされません…",
+        "resume": "この Subagent を続行…"
+      },
+      "sendShortcutHint": "{{shortcut}} で送信 · Shift+Enter で改行",
+      "childEndedControlHint": "このサブエージェントは終了しました。概要または実行中のサブエージェントを選んで指示を送ってください。",
+      "controlFailed": "指示を送信できませんでした。サブエージェントが利用可能か確認して再試行してください。",
+      "controlActions": {
+        "steer": "現在のツール完了後に修正",
+        "follow_up": "フォローアップを追加",
+        "resume": "サブエージェントを再開"
+      },
       "returnedResult": "返された結果",
+      "copyResult": "コピー",
+      "copiedResult": "コピー済み",
       "resultTruncated": "返された結果は表示用に省略されています。",
       "latestUpdate": "最新の更新",
+      "technicalDetails": "技術詳細",
+      "waitingForReply": "サブエージェントが処理中…",
+      "noReply": "サブエージェントから応答がありません。技術詳細で失敗理由を確認してください。",
+      "failedNoReply": "サブエージェントは失敗しましたが、読み取り可能な詳細を返しませんでした。",
+      "stoppedNoReply": "サブエージェントは結果を返す前に停止しました。",
+      "completedNoReply": "サブエージェントは完了しましたが、結果を返しませんでした。",
+      "errors": {
+        "providerNotConnected": "このプロバイダーは接続されていません。アカウントまたは認証情報を設定してから再試行してください。",
+        "credentialInvalid": "プロバイダーの認証情報が期限切れか拒否されました。再接続してから再試行してください。",
+        "modelInvalid": "選択したモデルは利用できないか、名前が無効です。このタスクで利用可能なモデルを選んでください。",
+        "rateLimited": "プロバイダーがリクエストを制限しています。少し待ってから再試行してください。",
+        "serviceUnavailable": "プロバイダーのサービスは一時的に利用できません。後でもう一度お試しください。",
+        "requestInvalid": "プロバイダーがリクエストを拒否しました。モデルとタスクの設定を確認してください。",
+        "unknown": "サブエージェントが失敗しました。下の元の詳細を開いて原因を確認してください。",
+        "rawDetails": "元の詳細を表示"
+      },
       "activity": "アクティビティ",
       "noActivity": "アクティビティの詳細は報告されていません。",
-      "transcript": "記録",
-      "noTranscript": "記録は報告されていません。",
+      "systemLog": "実行ログ",
+      "noSystemLog": "実行ログはありません。",
+      "loadMoreTranscript": "記録をさらに読み込む",
       "transcriptUnavailable": "この Harness は完全な子タスク記録をまだ Cindy に提供していません。返された結果とライフサイクルは保持されます。",
-      "transcriptRoles": {
-        "parent": "親タスク",
-        "subagent": "サブエージェント",
-        "tool": "ツール",
-        "system": "システム"
+      "tool": {
+        "fallbackName": "ツール",
+        "running": "実行中…",
+        "failed": "失敗",
+        "input": "入力",
+        "result": "出力",
+        "noDetails": "入力も出力も記録されていません。"
+      },
+      "controlBadges": {
+        "steer": "修正",
+        "follow_up": "フォローアップ",
+        "resume": "再開",
+        "stop": "停止"
       },
       "lastTool": "最後のツール：{{tool}}",
       "tokens": "{{value}} tokens",
+      "toolUses_one": "ツール呼び出し {{count}} 回",
+      "toolUses_other": "ツール呼び出し {{count}} 回",
+      "systemEvents": {
+        "stop-requested": "親タスクから停止が要求されました。",
+        "control-requested": "親タスクから制御リクエストが送信されました。",
+        "transcript-truncated": "記録の保存上限に達しました。",
+        "turn-ended": "サブエージェントのターンが終了しました。",
+        "command-refused": "PI が子エージェントのコマンドを拒否しました。",
+        "generation-unreadable": "この会話の以前の部分を読み取れませんでした。"
+      },
       "activityKinds": {
         "started": "開始",
         "progress": "進行",
@@ -5990,9 +6055,9 @@
       "processCount_one": "プロセスツリー：{{count}} 個",
       "processCount_other": "プロセスツリー：{{count}} 個",
       "agentsEmpty": "実行中の Agent プロセスはありません。タスクを開始するとここに表示されます",
-      "tableLabel": "プロセス別のリソース使用量",
+      "tableLabel": "アクティビティモニタ",
       "sortBy": "{{column}}で並べ替え",
-      "loading": "リソース使用量を読み込んでいます…",
+      "loading": "プロセスを読み込んでいます…",
       "remoteUnavailableTitle": "リモートセッションでは利用できません",
       "remoteUnavailableDescription": "このパネルはこのデバイス上のプロセスだけを読み取ります。このデバイスでローカルに実行されるセッションでのみ利用できます。",
       "selectHint": "プロセスを選択",
@@ -7579,6 +7644,7 @@
     },
     "chatInput": {
       "defaultPlaceholder": "今日は何をしましょうか〜",
+      "createAgentPlaceholder": "{{appName}}さん、こんにちは！",
       "voiceInput": {
         "start": "音声入力を開始",
         "stop": "音声入力を停止",
@@ -7858,6 +7924,8 @@
       "subagentStarted": "サブエージェント {{name}} を起動しました",
       "showDetails": "サブエージェント詳細を表示",
       "hideDetails": "サブエージェント詳細を隠す",
+      "showFullResult": "結果をすべて表示",
+      "hideFullResult": "結果を折りたたむ",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
@@ -8003,6 +8071,8 @@
       "rateLimitRetrying": "リクエストがレート制限されました。自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "モデルサービスが混雑しています。上流に空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください",
       "overloadBusyNoRetry": "モデルサービスが混雑しています。上流に空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください",
+      "streamInterrupted": "モデル出力が途中で中断されました。一時的な上流障害であることが多いので、「再試行」を押してください",
+      "streamInterruptedNoRetry": "モデル出力が途中で中断されました。一時的な上流障害であることが多いので、しばらくしてから再試行してください",
       "networkShowRaw": "元のエラーを表示",
       "networkHideRaw": "元のエラーを隠す",
       "silentStopContinue": "続行",

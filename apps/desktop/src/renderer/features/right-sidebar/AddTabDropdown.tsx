@@ -60,6 +60,8 @@ interface AddTabDropdownProps {
   existingKinds?: ReadonlySet<TabKindId>;
   /** Host viewer is a public surface only while the product plugin is enabled. */
   iosSimulatorAvailable?: boolean;
+  /** Pi is the only harness with the complete Subagents detail contract. */
+  subagentsAvailable?: boolean;
 }
 
 // Phase 1 硬编码。Phase 2 之后由 plugin registry 自动汇总。
@@ -125,6 +127,7 @@ export function AddTabDropdown({
   onSelect,
   existingKinds,
   iosSimulatorAvailable = false,
+  subagentsAvailable = false,
 }: AddTabDropdownProps) {
   const { t } = useTranslation();
   const bots = useBotProfiles();
@@ -233,6 +236,7 @@ export function AddTabDropdown({
 
   const visibleItems = MENU_ITEMS.filter((item) => {
     if (item.kind === 'ios-simulator' && !iosSimulatorAvailable) return false;
+    if (item.kind === 'subagents' && !subagentsAvailable) return false;
     if (isBotSession && BOT_SECONDARY_KINDS.has(item.kind)) return false;
     return true;
   });

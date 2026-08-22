@@ -119,6 +119,7 @@ export function LoginPage() {
     dispatch,
     dispatchWithResult,
     clearError,
+    enterLocalMode,
   } = useLogin();
   const { t } = useTranslation();
   const handoff = useLoginHandoff();
@@ -154,17 +155,19 @@ export function LoginPage() {
    * 在会话切过去之后落,不能由 requireConsent 提前落(竞态原因见那里的注释)。
    */
   const openLocalMode = async () => {
-    if (isLoading || localModePendingRef.current || !window.electronAPI?.authEnterLocal) return;
+    if (isLoading || localModePendingRef.current || !enterLocalMode) return;
     markLocalModeTransition(true);
     try {
-      await window.electronAPI.authEnterLocal();
+      // 必须走 AuthContext.enterLocalMode():它调同一条 IPC,并用返回值立刻改
+      // mode / canEnterApp。登录页自己调 authEnterLocal 只改主进程会话,界面
+      // 仍当自己没进来;广播一旦没赶上,再点一次也不会重播,登录页就钉死。
+      // GuestRoute 看到 mode === 'local' 后自己切走,不要在这里改 hash——
+      // canEnterApp 还是 false 时冲进受保护路由会被踢回 /login。
+      await enterLocalMode();
       // 顺序是硬要求:先 enter-local(main 侧 isLocalMode() 转真)再落同意,这样
       // acceptPrivacyConsent 广播出来的 allowed 恒为 false,TapDB 不会被拉起来发
       // device_login。反过来会开出一个真实的上报窗口(codex 审查 P1,#907)。
       persistPrivacyConsent();
-      // The auth state event normally redirects through GuestRoute. Keep the
-      // transition deterministic when the IPC response wins that race.
-      window.location.hash = '#/';
     } catch (error) {
       // 两个调用点都是 requireConsent(() => void openLocalMode()):抛出去没人接,
       // 会变成 unhandled rejection。IPC 失败(main 未就绪/通道异常)时停在登录页

@@ -741,4 +741,31 @@ describe('createResponsesChatHandler', () => {
     expect(response.output[0].content?.[0].text).toBe('bounded');
     expect(cancel).toHaveBeenCalledOnce();
   });
+
+  it('surfaces Ollama prompt-validation 500 without relabeling it as overload', async () => {
+    const warn = vi.fn();
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ error: { message: 'system message must be at the beginning' } }),
+      { status: 500, headers: { 'content-type': 'application/json' } },
+    )) as typeof fetch;
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'http://127.0.0.1:11434/v1',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl, logger: { warn } });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: { model: 'qwen3.8:27b-mxfp8', input: 'hi' },
+      res: res as never,
+    });
+    expect(res.status).toBe(500);
+    expect(res.chunks.join('')).toContain('system message must be at the beginning');
+    expect(warn).toHaveBeenCalledWith(
+      'responses-chat bridge upstream error',
+      expect.objectContaining({
+        status: 500,
+        errorKind: 'json',
+      }),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('system message must be at the beginning');
+  });
 });

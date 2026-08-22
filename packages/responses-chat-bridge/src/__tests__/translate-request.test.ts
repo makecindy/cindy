@@ -75,6 +75,29 @@ describe('translateResponsesRequest', () => {
     expect(keep.messages[1]).toEqual({ role: 'developer', content: 'mid-conversation dev note' });
   });
 
+  it('coalesces mid-conversation system/developer into one leading system when asked', () => {
+    const source = base({
+      instructions: 'top-level',
+      input: [
+        { type: 'message', role: 'user', content: 'first' },
+        { type: 'message', role: 'assistant', content: 'ok' },
+        { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'later note' }] },
+        { type: 'message', role: 'user', content: 'second' },
+      ],
+    });
+    const out = translateResponsesRequest(source, {
+      capabilities: { systemMessagePolicy: 'coalesce-leading' },
+    });
+    expect(out.messages).toEqual([
+      { role: 'system', content: 'top-level\n\nlater note' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'second' },
+    ]);
+    const unchanged = translateResponsesRequest(source);
+    expect(unchanged.messages.filter((message) => message.role === 'system')).toHaveLength(2);
+  });
+
   it.each([
     { type: 'input_image', image_url: 'https://example.com/image.png' },
     { type: 'input_file', file_data: 'data:text/plain;base64,eA==' },
@@ -983,6 +1006,22 @@ describe('translateResponsesRequest', () => {
     expect((out.messages[0] as {
       tool_calls?: Array<{ function: { name: string } }>;
     }).tool_calls?.[0]?.function.name).not.toBe('tool_search');
+  });
+
+  it('does not duplicate a large custom tool description in Chat metadata', () => {
+    const description = 'x'.repeat(200);
+    const out = translateResponsesRequest(base({
+      tools: [{
+        type: 'custom',
+        name: 'exec',
+        description,
+        format: { type: 'text' },
+      }],
+    }));
+    const chatDescription = out.tools?.[0]?.function.description ?? '';
+    expect(chatDescription.split(description)).toHaveLength(2);
+    expect(chatDescription).toContain('"format":{"type":"text"}');
+    expect(chatDescription).not.toContain(`"description":"${description}"`);
   });
 
   it('keeps function and custom tools with the same name distinct', () => {

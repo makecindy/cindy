@@ -169,6 +169,8 @@ export interface WorkerTerminalTurnParams {
   sessionId: string;
   status: 'done' | 'error';
   finalText: string;
+  /** Provider/session diagnostic used when an error turn has no assistant output. */
+  diagnostic?: string;
 }
 
 /** INPUT_STOP / ABORT_SESSION 记录的手动中断快照，用来让 terminal handler 静默收尾。 */
@@ -280,6 +282,7 @@ interface AutoBridgeState {
   deferred?: {
     status: 'done' | 'error';
     finalText: string;
+    diagnostic?: string;
   };
 }
 
@@ -398,7 +401,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
   async function bridgeWorkerCompletion(
     sessionId: string,
-    turn: { status: 'done' | 'error'; finalText: string },
+    turn: { status: 'done' | 'error'; finalText: string; diagnostic?: string },
   ): Promise<'accepted' | 'deferred' | 'rejected' | 'skipped'> {
     const state = autoBridge.get(sessionId);
     if (!state) return 'skipped';
@@ -411,7 +414,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     state.inFlight = true;
     state.retryAfterRejectedDelivery = false;
     const version = state.version;
-    const finalText = turn.finalText || (state.capturedText.trim().length > 0 ? state.capturedText.trim() : '(no output captured)');
+    const finalText =
+      turn.finalText.trim() ||
+      state.capturedText.trim() ||
+      turn.diagnostic?.trim() ||
+      '(no output captured)';
     const header = turn.status === 'error'
       ? '[Auto-bridged: worker 异常终止]'
       : '[Auto-bridged: worker 完成但未调 send_to_lead]';
@@ -1033,6 +1040,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           await bridgeWorkerCompletion(params.sessionId, {
             status: params.status,
             finalText: params.finalText,
+            diagnostic: params.diagnostic,
           });
           return;
         }
@@ -1060,6 +1068,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       await bridgeWorkerCompletion(params.sessionId, {
         status: params.status,
         finalText: params.finalText,
+        diagnostic: params.diagnostic,
       });
     },
   };

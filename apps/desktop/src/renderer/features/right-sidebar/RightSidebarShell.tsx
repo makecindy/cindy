@@ -67,8 +67,8 @@ import { useBotProfiles } from '@/features/bots/botStore';
 import { BotPronounProvider } from '@/features/bots/botPronounContext';
 import {
   isIOSSimulatorPluginAvailable,
-  mergeIOSSimulatorVisibleTabOrder,
-  projectIOSSimulatorTabs,
+  mergeAvailableTabOrder,
+  projectAvailableTabs,
 } from './iosSimulatorPluginAvailability';
 
 const log = createLogger('rightSidebar.shell');
@@ -95,6 +95,8 @@ interface RightSidebarShellProps {
   remoteHostId: string | null;
   /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
   deviceLinkDeviceId?: string | null;
+  /** Pi-only product gate for Subagents navigation and detail rendering. */
+  subagentsAvailable?: boolean;
   /** RightSidebar aside 当前是否真实展开。折叠时 keep-alive body 仍挂载但不可见。 */
   shellVisible?: boolean;
   isMac: boolean;
@@ -142,6 +144,7 @@ export function RightSidebarShell({
   workdir,
   remoteHostId,
   deviceLinkDeviceId,
+  subagentsAvailable,
   shellVisible = true,
   isMac,
   unifiedTopbar = false,
@@ -224,6 +227,8 @@ export function RightSidebarShell({
   const getBucketSnapshot = useCallback(() => getBucket(sessionId), [sessionId]);
   const bucket = useSyncExternalStore(subscribeBucket, getBucketSnapshot);
   const previousShellVisibleRef = useRef(shellVisible);
+  const subagentsEligibilityKnown = typeof subagentsAvailable === 'boolean';
+  const subagentsEnabled = subagentsAvailable === true;
 
   useEffect(() => {
     // Phase 5: 推送当前焦点 RSB sessionId 给 main,让 RsbWebviewBackend 拿到。
@@ -248,9 +253,23 @@ export function RightSidebarShell({
     });
   }, [sessionId, shellVisible]);
 
+  // Subagents eligibility is tri-state: `undefined` while the session row is
+  // still loading, then true/false once the harness is known. Folding unknown
+  // into "unavailable" would filter a *persisted* active Subagents tab out of
+  // the projection, and the active-tab reconciliation below would immediately
+  // persist a different tab (or null) as active — the user's selection is gone
+  // by the time eligibility resolves to true. Keep the tab projected while
+  // unknown and only converge once we actually know.
+  const tabAvailability = useMemo(
+    () => ({
+      iosSimulatorAvailable: iosSimulatorPluginAvailable,
+      subagentsAvailable: subagentsEnabled || !subagentsEligibilityKnown,
+    }),
+    [iosSimulatorPluginAvailable, subagentsEligibilityKnown, subagentsEnabled],
+  );
   const projectedTabs = useMemo(
-    () => projectIOSSimulatorTabs(bucket.tabs, bucket.activeTabId, iosSimulatorPluginAvailable),
-    [bucket.activeTabId, bucket.tabs, iosSimulatorPluginAvailable],
+    () => projectAvailableTabs(bucket.tabs, bucket.activeTabId, tabAvailability),
+    [bucket.activeTabId, bucket.tabs, tabAvailability],
   );
   const tabs = projectedTabs.tabs;
   const activeTabId = projectedTabs.activeTabId;
@@ -321,7 +340,12 @@ export function RightSidebarShell({
   // If a now-hidden simulator tab owned the active marker, move the persisted
   // marker to a visible tab (or null). The simulator tab itself remains stored
   // and returns when the plugin is enabled again.
+  //
+  // Never write while Subagents eligibility is still unknown: the projection is
+  // provisional during that window, so converging it would persist a decision
+  // taken from incomplete information and destroy the restored selection.
   useEffect(() => {
+    if (!subagentsEligibilityKnown) return;
     if (!bucket.hydrated || !sessionId || bucket.activeTabId === activeTabId) return;
     void setActiveTab(sessionId, activeTabId).catch((err) => {
       log.error('hidden simulator active-tab reconciliation failed', {
@@ -330,16 +354,15 @@ export function RightSidebarShell({
         err,
       });
     });
-  }, [activeTabId, bucket.activeTabId, bucket.hydrated, sessionId]);
+  }, [activeTabId, bucket.activeTabId, bucket.hydrated, sessionId, subagentsEligibilityKnown]);
 
   const prevTabCountRef = useRef<number | null>(null);
   useEffect(() => {
     prevTabCountRef.current = null;
   }, [sessionId]);
 
-  // A historical simulator-only bucket must not leave an empty public sidebar
-  // open before the plugin is installed. Preserve the hidden tab, but collapse
-  // the shell each time the user/session makes it visible in this state.
+  // A bucket containing only unavailable product surfaces must not leave an
+  // empty public sidebar open. Preserve hidden state for later eligibility.
   const hiddenOnlyCollapseRef = useRef<string | null>(null);
   useEffect(() => {
     if (!shellVisible) {
@@ -350,8 +373,11 @@ export function RightSidebarShell({
       bucket.hydrated &&
       bucket.tabs.length > 0 &&
       tabs.length === 0 &&
-      bucket.tabs.some((tab) => tab.kind === 'ios-simulator') &&
-      !iosSimulatorPluginAvailable &&
+      bucket.tabs.some(
+        (tab) =>
+          (tab.kind === 'ios-simulator' && !iosSimulatorPluginAvailable) ||
+          (tab.kind === 'subagents' && subagentsEligibilityKnown && !subagentsEnabled),
+      ) &&
       prevTabCountRef.current === null;
     if (!shouldCollapse || !sessionId) {
       hiddenOnlyCollapseRef.current = null;
@@ -364,6 +390,8 @@ export function RightSidebarShell({
     bucket.hydrated,
     bucket.tabs,
     iosSimulatorPluginAvailable,
+    subagentsEligibilityKnown,
+    subagentsEnabled,
     onAllTabsClosed,
     sessionId,
     shellVisible,
@@ -412,6 +440,10 @@ export function RightSidebarShell({
         log.warn('handleAdd ignored: iOS Simulator plugin is unavailable');
         return;
       }
+      if (kind === 'subagents' && !subagentsEnabled) {
+        log.warn('handleAdd ignored: Subagents surface is unavailable for this harness');
+        return;
+      }
       const plugin = getTabKind(kind);
       // Plugin 未注册的 kind(早期 Phase 还没接的 web-browser / terminal):
       // 仍允许建 tab,但 TabBody 会落到 PlaceholderBody。用户体感上点了「+」总有
@@ -428,7 +460,7 @@ export function RightSidebarShell({
         log.error('handleAdd failed', { sessionId, kind, err });
       });
     },
-    [iosSimulatorPluginAvailable, sessionId],
+    [iosSimulatorPluginAvailable, sessionId, subagentsEnabled],
   );
 
   const handleClose = useCallback(
@@ -454,16 +486,12 @@ export function RightSidebarShell({
   const handleReorder = useCallback(
     (orderedIds: string[]) => {
       if (!sessionId) return;
-      const fullOrder = mergeIOSSimulatorVisibleTabOrder(
-        bucket.tabs,
-        orderedIds,
-        iosSimulatorPluginAvailable,
-      );
+      const fullOrder = mergeAvailableTabOrder(bucket.tabs, orderedIds, tabAvailability);
       void reorderTabs(sessionId, fullOrder).catch((err) => {
         log.error('handleReorder failed', { sessionId, orderedIds, err });
       });
     },
-    [bucket.tabs, iosSimulatorPluginAvailable, sessionId],
+    [bucket.tabs, sessionId, tabAvailability],
   );
 
   const handleCycleTab = useCallback(
@@ -623,6 +651,7 @@ export function RightSidebarShell({
             pillVariant="chip"
             addButtonWrapperClassName="h-[30px]"
             iosSimulatorAvailable={iosSimulatorPluginAvailable}
+            subagentsAvailable={subagentsEnabled}
           />
           {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
               面板收起或分离时存在；展开态不渲染无效的 show 按钮，也不预留空位。 */}
@@ -677,6 +706,7 @@ export function RightSidebarShell({
           onCloseAll={handleCloseAll}
           chromeWindowDrag={chromeWindowDrag}
           iosSimulatorAvailable={iosSimulatorPluginAvailable}
+          subagentsAvailable={subagentsEnabled}
         />
       )}
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--panel-bg)]">
@@ -694,6 +724,7 @@ export function RightSidebarShell({
             onAddReviewTab={() => handleAdd('review')}
             onAddSubagentsTab={() => handleAdd('subagents')}
             onAddBackgroundTasksTab={() => handleAdd('background-tasks')}
+            subagentsAvailable={subagentsEnabled}
             onAddBrowserTab={() => handleAdd('web-browser')}
             onAddTerminalTab={() => handleAdd('terminal')}
           />

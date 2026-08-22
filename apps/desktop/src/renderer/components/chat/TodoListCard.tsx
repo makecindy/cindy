@@ -21,7 +21,15 @@
  */
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { CircleCheck, CircleDot, Circle, X } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  CircleDot,
+  Circle,
+  ListTodo,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
 
@@ -92,6 +100,133 @@ function ProgressRing({
         className="transition-[stroke-dashoffset] duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:transition-none"
       />
     </svg>
+  );
+}
+
+/**
+ * InlinePlanCard —— 计划在聊天时间线里的主呈现。
+ *
+ * 计划默认留在产生它的消息位置，用户滚回任务经过时能直接看到完整清单；
+ * composer 上方的 TodoListCard 只在这张卡离开可见区域后接力。两者消费同一份
+ * todos，但交互职责不同：流内卡负责阅读与历史，胶囊负责滚动后的轻量提醒。
+ */
+export function InlinePlanCard({
+  todos,
+  animated = false,
+}: {
+  todos: TodoItem[];
+  /** 只有会话确实在跑时，进行中行才呼吸；失败/中断后的历史卡保持静止。 */
+  animated?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(true);
+
+  if (!todos || todos.length === 0) return null;
+
+  const completed = todos.filter((todo) => todo.status === 'completed').length;
+  const total = todos.length;
+  const progress = total > 0 ? (completed / total) * 100 : 0;
+  const activeItem = todos.find((todo) => todo.status === 'in_progress');
+  const summary = activeItem?.content ?? todos[todos.length - 1]?.content ?? '';
+
+  return (
+    <div className="flex w-full justify-start" data-inline-plan-card="true">
+      <div
+        className={cn(
+          'max-w-full overflow-hidden rounded-[12px] border border-[var(--msg-tool-card-border)]',
+          'bg-[var(--msg-tool-card-bg)]',
+        )}
+      >
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+          className={cn(
+            'flex w-full cursor-pointer select-none items-center gap-2 px-[14px] py-[10px]',
+            'transition-opacity hover:opacity-80',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset',
+            'focus-visible:ring-[var(--focus-ring)]',
+          )}
+        >
+          {expanded ? (
+            <ChevronDown size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+          ) : (
+            <ChevronRight size={14} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+          )}
+          <ListTodo size={16} className="shrink-0 text-[var(--msg-tool-card-text)]" />
+          <span className="shrink-0 font-mono text-13 font-medium leading-none text-[var(--msg-tool-card-text)]">
+            {completed}/{total}
+          </span>
+          <span className="shrink-0 text-13 leading-none text-[var(--msg-tool-card-chevron)]">
+            ·
+          </span>
+          <span className="mt-px truncate text-13 leading-none text-[var(--msg-tool-card-text)]">
+            {summary}
+          </span>
+        </button>
+
+        {!expanded && (
+          <div className="h-[2px] w-full bg-[var(--todo-bar-track)]">
+            <div
+              className="h-full bg-[var(--msg-tool-card-text)] transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
+
+        {expanded && (
+          <div className="border-t border-[var(--msg-tool-card-border)] px-[14px] pb-[12px] pt-[10px]">
+            <div className="flex flex-col gap-[2px]">
+              {todos.map((todo, index) => (
+                <div
+                  key={`${todo.content}:${index}`}
+                  className="flex min-h-[30px] items-center gap-[10px]"
+                >
+                  {todo.status === 'completed' && (
+                    <CircleCheck
+                      size={18}
+                      strokeWidth={1.5}
+                      className="shrink-0 text-[var(--msg-tool-card-chevron)]"
+                    />
+                  )}
+                  {todo.status === 'in_progress' && (
+                    <span
+                      data-inline-plan-step-active="true"
+                      data-inline-plan-step-breathing={animated ? 'true' : 'false'}
+                      className={cn('inline-flex shrink-0', animated && 'session-status-breathing')}
+                    >
+                      <CircleDot
+                        size={18}
+                        strokeWidth={1.5}
+                        className="shrink-0 text-[var(--msg-tool-card-text)]"
+                      />
+                    </span>
+                  )}
+                  {todo.status === 'pending' && (
+                    <Circle
+                      size={18}
+                      strokeWidth={1.5}
+                      className="shrink-0 text-[var(--msg-tool-card-text)]"
+                    />
+                  )}
+                  <span
+                    className={cn(
+                      'min-w-0 break-words text-13 leading-[1.45]',
+                      todo.status === 'completed' &&
+                        'font-normal text-[var(--msg-tool-card-chevron)]',
+                      todo.status === 'in_progress' &&
+                        'font-medium text-[var(--msg-tool-card-text)]',
+                      todo.status === 'pending' && 'font-normal text-[var(--msg-tool-card-text)]',
+                    )}
+                  >
+                    {todo.content}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

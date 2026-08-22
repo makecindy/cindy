@@ -301,6 +301,21 @@ export interface PiNativeProvidersResult {
 }
 
 /**
+ * The host could not construct the first-party Pi provider because its local
+ * compatibility proxy is not ready. This is a fatal startup condition for
+ * every SuperGrok route, including provider-less and legacy sessions; it must
+ * not be converted into a silent fallback to the Cindy gateway.
+ */
+export class PiNativeProviderProxyNotReadyError extends Error {
+  readonly code = 'PI_NATIVE_PROVIDER_PROXY_NOT_READY';
+
+  constructor(message = 'SuperGrok Pi provider unavailable: local compatibility proxy is not ready') {
+    super(message);
+    this.name = 'PiNativeProviderProxyNotReadyError';
+  }
+}
+
+/**
  * pi MCP 桥的 per-session 身份上下文(host 用它在 bridge 上注册当前 pi 会话)。
  *
  * 为什么需要:pi 是独立子进程,其 MCP 请求不带 codex 那样的 _meta.threadId。控制类
@@ -332,6 +347,8 @@ export interface PiExtraSpawnConfigContext {
   remoteHostId?: string | null;
 }
 
+export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default';
+
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
@@ -349,6 +366,8 @@ export interface CodexExtraSpawnConfig {
   codexBrowserUseAvailable?: boolean;
   /** Whether the OpenAI identity provider on this app-server may use Responses WebSocket. */
   codexOpenAiWebSocketsEnabled?: boolean;
+  /** Host-level Subagent route profile used to prevent incompatible local host reuse. */
+  codexSubagentRoutingProfile?: CodexSubagentRoutingProfile;
   /** Exact verified Chrome plugin version provisioned into this app-server. */
   codexBrowserUseVersion?: string;
   /** Maximum startup wait copied from the verified companion descriptor. */
@@ -588,6 +607,7 @@ export interface AgentDeps {
     sessionId: string,
     token: string,
     resolveProviderId: () => string | null,
+    options?: { scope?: 'session' | 'subagent-route' },
   ) => (() => void) | void;
 
   /**
@@ -742,10 +762,19 @@ export interface AgentDeps {
     ctx: {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
+      /** Original session request when the shared host was upgraded to a credential superset. */
+      requestedCredentialMode?: AgentCredentialMode;
       /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
       hostPurpose?: 'control-plane' | 'review';
     },
   ) => Promise<CodexExtraSpawnConfig>;
+
+  /**
+   * Codex-only host policy: disable local app-server plugin runtimes even when
+   * dynamic spawn configuration degrades after a non-fatal preparation error.
+   * Remote transports own their runtime and ignore this local policy.
+   */
+  disableCodexPluginRuntime?: boolean;
 
   /**
    * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
@@ -1438,6 +1467,8 @@ export interface StartSessionOptions {
    * Undefined means do not override the agent/server default.
    */
   fastMode?: boolean;
+  /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
+  thinkingEnabled?: boolean;
   /**
    * 用户级 system prompt 追加段，跨 agent (claude-code / codex) 公用，
    * 拼接顺序最末（优先级最高），覆盖 engine 与 host 段。空串 / undefined 跳过。
@@ -1697,6 +1728,12 @@ export interface BackgroundTaskSnapshot {
   taskType?: string;
   toolUseId?: string;
   title?: string;
+  /**
+   * Agent that produced this task. Renderer hydration must preserve it so a
+   * durable Pi Subagent is not synthesized as claude-code after reload.
+   * Omitted snapshots default to claude-code.
+   */
+  provider?: 'pi' | 'claude-code';
 }
 
 /**
@@ -1710,6 +1747,31 @@ export interface BackgroundTaskSnapshot {
  * session-status paths instead.
  */
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
+
+/**
+ * Why a session handle is being torn down.
+ *
+ * This is a *lifecycle identity*, not a hint: adapters that own detached,
+ * parent-independent resources (currently the Pi durable Subagent runners)
+ * branch on it.
+ *
+ * - `navigation` — ordinary session close / agent switch. The account and its
+ *   database stay the same, so detached work keeps running.
+ * - `account-boundary` — logout or account switch. The owner database and
+ *   gateway credentials are being replaced, so every detached child of the old
+ *   owner must be stopped and its credential leases revoked immediately.
+ * - `app-quit` — process shutdown. Detached children are stopped by the
+ *   dedicated quit step; this reason exists so quit is never mistaken for an
+ *   ownership change.
+ *
+ * Callers that cannot identify their boundary must omit the reason: teardown
+ * then fails closed to `account-boundary`.
+ */
+export type AgentSessionTeardownReason = 'navigation' | 'account-boundary' | 'app-quit';
+
+export interface AgentSessionTeardownOptions {
+  readonly reason: AgentSessionTeardownReason;
+}
 
 /**
  * 一个已启动的 agent 会话句柄。
@@ -1728,6 +1790,11 @@ export interface AgentSessionHandle {
   ): () => void;
   /** Codex-only: 当前会话绑定的 app-server host 是否经 loopback proxy 出口。 */
   readonly codexProxyActive?: boolean;
+  /**
+   * Codex-only: thread/start 或 thread/resume 响应确认的实际 model provider。
+   * 这是 thread 级冻结身份，不随 thread/settings/update 的模型切换改变。
+   */
+  readonly codexThreadModelProviderId?: string;
   /**
    * Codex-only: start/resume 成功后,产品 prompt 这一次到底有没有进入
    * codex thread history。Maker 用这个事实更新 host 持久化 bit,避免再从
@@ -1784,6 +1851,9 @@ export interface AgentSessionHandle {
    */
   stopBackgroundTask?(taskId: string): Promise<void>;
 
+  /** Resume a terminal durable child on its existing provider session. */
+  resumeBackgroundTask?(taskId: string, message: string, childId?: string): Promise<void>;
+
   /**
    * 当前仍在运行的后台任务快照(含 local_bash)。事件流(agent_task_update)是
    * 唯一实时源;本方法只服务「订阅者挂载/重载晚于任务启动」的存量补齐场景。
@@ -1816,13 +1886,13 @@ export interface AgentSessionHandle {
   ): () => void;
 
   /** 关闭会话，清理子进程 */
-  close(): Promise<void>;
+  close(opts?: AgentSessionTeardownOptions): Promise<void>;
 
   /**
    * Detach from a long-lived remote session without terminating the upstream
    * process. Agents without detach semantics leave this undefined.
    */
-  detach?(): Promise<void>;
+  detach?(opts?: AgentSessionTeardownOptions): Promise<void>;
 
   /** 事件流（streaming + 翻译后的统一事件） */
   events(): AsyncIterable<AgentEvent>;
@@ -1888,6 +1958,8 @@ export interface AgentSessionHandle {
 
   /** 运行时切换 Fast mode；不支持的 agent 不实现。 */
   setFastMode?(enabled: boolean): Promise<void>;
+  /** Pi thinking-toggle 模型：运行时开关思考。 */
+  setThinkingEnabled?(enabled: boolean): Promise<void>;
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。

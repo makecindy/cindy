@@ -1402,6 +1402,27 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.refreshCatalog).not.toHaveBeenCalled();
   });
 
+  it('rejects managed local provider ids on the generic create/update path', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, {
+        ...validConfig,
+        id: 'cindy-local-ollama',
+      }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+        ...validConfig,
+        id: 'cindy-local-ollama',
+      }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(await listCustomProviders()).toEqual([]);
+  });
+
   it('reserves xai for new providers while preserving edits to an existing legacy row', async () => {
     mountDb();
     const harness = new IpcHarness();

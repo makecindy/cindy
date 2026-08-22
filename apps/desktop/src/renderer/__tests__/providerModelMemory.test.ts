@@ -130,12 +130,12 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
     });
   });
 
-  it('首页在一个来源调整模型后,其它来源 / 对话读取同一份最新 effort', async () => {
+  it('不同来源的同 model id effort 互不串', async () => {
     const m = await loadModule();
     m.setProviderModelChoice('claude-code', 'anthropic', 'claude-opus-4-8', 'high');
-    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBe('high');
+    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
     m.setProviderModelChoice('claude-code', 'xd', 'claude-opus-4-8', 'medium');
-    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('medium');
+    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('high');
     expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBe('medium');
   });
 
@@ -147,26 +147,38 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
       model: 'claude-sonnet-4-6',
       effort: 'medium',
     });
-    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBe('high');
+    expect(m.getProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8')).toBe('high');
+    expect(m.getProviderModelEffort('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
   });
 
-  it('getProviderModelEffort:未记录模型 / 空参 → undefined,来源不再隔离同模型', async () => {
+  it('getProviderModelEffort:未记录模型 / 空参 / 其它来源 → undefined', async () => {
     const m = await loadModule();
     m.setProviderModelChoice('codex', 'openai', 'gpt-5.5', 'high');
     expect(m.getProviderModelEffort('codex', 'openai', 'gpt-5.5')).toBe('high');
     expect(m.getProviderModelEffort('codex', 'openai', 'unknown-model')).toBeUndefined();
-    expect(m.getProviderModelEffort('codex', 'xd', 'gpt-5.5')).toBe('high');
+    expect(m.getProviderModelEffort('codex', 'xd', 'gpt-5.5')).toBeUndefined();
     expect(m.getProviderModelEffort('codex', '', 'gpt-5.5')).toBeUndefined();
     expect(m.getProviderModelEffort('codex', 'openai', '')).toBeUndefined();
   });
 
-  it('snapshot 带 `${agent}:*` 权威槽,供 device-link 跨来源镜像', async () => {
+  it('snapshot 只含真实 provider 槽', async () => {
     const m = await loadModule();
     m.setProviderModelEffort('claude-code', 'anthropic', 'claude-opus-4-8', 'xhigh');
     m.setProviderModelFast('claude-code', 'xd', 'claude-opus-4-8', true);
-    expect(m.snapshotForSeed()['claude-code:*']).toEqual({
-      effortByModel: { 'claude-opus-4-8': 'xhigh' },
-      fastByModel: { 'claude-opus-4-8': true },
+    expect(m.snapshotForSeed()['claude-code:anthropic']?.effortByModel).toEqual({
+      'claude-opus-4-8': 'xhigh',
+    });
+    expect(m.snapshotForSeed()['claude-code:xd']?.fastByModel).toEqual({
+      'claude-opus-4-8': true,
+    });
+    expect(m.snapshotForSeed()['claude-code:*']).toBeUndefined();
+  });
+
+  it('snapshot 带上思考开关', async () => {
+    const m = await loadModule();
+    m.setProviderModelThinking('pi', 'cindy-local-ollama', 'qwen3.8:27b-mxfp8', false);
+    expect(m.snapshotForSeed()['pi:cindy-local-ollama']?.thinkingByModel).toEqual({
+      'qwen3.8:27b-mxfp8': false,
     });
   });
 
@@ -246,12 +258,12 @@ describe('providerModelMemory v2 —— (agent, model) 全局 effort + provider 
 // fast 与 effort 同维度:per-(agent, model) 全局共享。providerId 只保留 capability / 旧 v2 回退用途。
 // ---------------------------------------------------------------------------
 describe('providerModelMemory —— (agent, model) fast 全局预设', () => {
-  it('同一 model id 跨来源读取最后一次 fast 设置', async () => {
+  it('同一 model id 的 fast 按来源隔离', async () => {
     const m = await loadModule();
     m.setProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8', true);
-    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBe(true);
+    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
     m.setProviderModelFast('claude-code', 'xd', 'claude-opus-4-8', false);
-    expect(m.getProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8')).toBe(false);
+    expect(m.getProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8')).toBe(true);
     expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBe(false);
   });
 
@@ -272,7 +284,7 @@ describe('providerModelMemory —— (agent, model) fast 全局预设', () => {
     m.setProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8', false);
     expect(m.getProviderModelFast('claude-code', 'anthropic', 'claude-opus-4-8')).toBe(false);
     expect(m.getProviderModelFast('claude-code', 'anthropic', 'unknown-model')).toBeUndefined();
-    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBe(false);
+    expect(m.getProviderModelFast('claude-code', 'xd', 'claude-opus-4-8')).toBeUndefined();
     expect(m.getProviderModelFast('claude-code', '', 'claude-opus-4-8')).toBeUndefined();
     expect(m.getProviderModelFast('claude-code', 'anthropic', '')).toBeUndefined();
   });

@@ -31,6 +31,9 @@
     },
     "a11y": {
       "selectScope": "選擇任務範圍",
+      "openMenu": "打開選單",
+      "closeMenu": "關閉選單",
+      "openDisplaySettings": "打開顯示設定",
       "openSettings": "開啟設定",
       "syncing": "正在重新同步",
       "sync": "重新同步",
@@ -38,6 +41,7 @@
       "newRemoteConversation": "新建遠端任務",
       "renameDevice": "重新命名 {{label}}",
       "project": "專案 {{title}}",
+      "dialogue": "對話",
       "openAutomationLatest": "開啟自動化 {{title}} 的最新任務",
       "automationTask": "自動化 {{title}}",
       "openConversation": "開啟任務 {{title}}",
@@ -51,7 +55,24 @@
       "cancelRename": "取消重新命名"
     },
     "menu": {
-      "groupByProject": "按專案分組"
+      "groupByProject": "按專案分組",
+      "groupDialogue": "對話歸為一組",
+      "sortByTime": "按時間排序",
+      "sortByPriority": "優先級",
+      "statusActive": "活躍",
+      "statusArchived": "已歸檔",
+      "statusAll": "全部",
+      "dialogueFolder": "對話",
+      "settings": "設定",
+      "remoteSettings": "遠端連線設定",
+      "displaySettings": "顯示設定",
+      "groupHeading": "分組",
+      "sortHeading": "任務排序",
+      "projectOrderHeading": "專案順序",
+      "projectOrderActivity": "按最近活動",
+      "projectOrderManual": "手動",
+      "projectOrderManualTip": "長按專案行拖動調整順序，組內任務仍按上面的排序",
+      "statusHeading": "狀態"
     },
     "renameDevice": {
       "title": "重新命名裝置",

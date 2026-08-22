@@ -40,12 +40,16 @@ vi.mock('@/lib/sessionService', () => ({
 }));
 
 vi.mock('@/lib/editLastUserMessage', () => ({
-  commitEditAndResendWithRunningRetry: vi.fn(async () => {}),
+  commitEditAndResendWithRunningRetry: vi.fn(async () => true),
 }));
 
 import { toast } from '@/lib/toast';
 import { rewindPreview } from '@/lib/sessionService';
 import { commitEditAndResendWithRunningRetry } from '@/lib/editLastUserMessage';
+import {
+  readFollowLatestRequestKey,
+  bumpSendFollowCancelGeneration,
+} from '../components/chat/autoFollowIntent';
 import { UserMessageEditBox } from '../components/chat/UserMessageEditBox';
 
 const commitMock = commitEditAndResendWithRunningRetry as unknown as ReturnType<typeof vi.fn>;
@@ -96,6 +100,50 @@ describe('UserMessageEditBox — idle 发送', () => {
     });
     expect(props.onRequestStop).not.toHaveBeenCalled();
   });
+
+  it('编辑重发受理后请求跟底;入队失败或等待期间上翻则不跟底', async () => {
+    const acceptedId = `edit-follow-ok-${Date.now()}`;
+    commitMock.mockResolvedValueOnce(true);
+    const accepted = renderBox({ sessionId: acceptedId });
+    fireEvent.click(accepted.sendBtn);
+    await waitFor(() => expect(accepted.props.onSent).toHaveBeenCalledTimes(1));
+    expect(readFollowLatestRequestKey(acceptedId)).toBe(1);
+    accepted.unmount();
+    vi.clearAllMocks();
+
+    const failedId = `edit-follow-fail-${Date.now()}`;
+    commitMock.mockResolvedValueOnce(false);
+    const failed = renderBox({ sessionId: failedId });
+    fireEvent.click(failed.sendBtn);
+    await waitFor(() => expect(failed.props.onSent).toHaveBeenCalledTimes(1));
+    expect(readFollowLatestRequestKey(failedId)).toBe(0);
+    failed.unmount();
+    vi.clearAllMocks();
+
+    const cancelledId = `edit-follow-cancel-${Date.now()}`;
+    let release: (value: boolean) => void = () => {};
+    commitMock.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { release = resolve; }),
+    );
+    const cancelled = renderBox({ sessionId: cancelledId });
+    fireEvent.click(cancelled.sendBtn);
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    bumpSendFollowCancelGeneration(cancelledId);
+    await act(async () => { release(true); });
+    await waitFor(() => expect(cancelled.props.onSent).toHaveBeenCalledTimes(1));
+    expect(readFollowLatestRequestKey(cancelledId)).toBe(0);
+  });
+
+  it('被拦消息重发成功后请求跟底', async () => {
+    const sessionId = `blocked-follow-${Date.now()}`;
+    const override = vi.fn(async () => {});
+    const box = renderBox({ sessionId, onCommitOverride: override });
+    fireEvent.click(box.sendBtn);
+    await waitFor(() => expect(box.props.onSent).toHaveBeenCalledTimes(1));
+    expect(override).toHaveBeenCalledTimes(1);
+    expect(readFollowLatestRequestKey(sessionId)).toBe(1);
+  });
+
 
   it('引用编辑框隐藏 marker，未修改时仍提交保序原文，修改后只提交可见文本', async () => {
     const encoded = '> <!-- cindy-composer-quote -->\n> quoted\n\nreply';

@@ -835,6 +835,51 @@ describe('官方渠道预设契约', () => {
     }));
   });
 
+  it('LM Studio 同时提供 Anthropic、Codex Chat 与 Pi', () => {
+    const lmstudio = preset('lmstudio');
+    expect(lmstudio?.authMethod).toBe('none');
+    expect(lmstudio?.runtimes['claude-code']).toEqual({
+      baseUrl: 'http://127.0.0.1:1234',
+      wireProtocol: 'anthropic-messages',
+      baseUrlEditable: true,
+      models: [],
+    });
+    expect(lmstudio?.runtimes.codex).toEqual({
+      baseUrl: 'http://127.0.0.1:1234/v1',
+      wireProtocol: 'openai-chat',
+      baseUrlEditable: true,
+      models: [],
+    });
+    expect(lmstudio?.runtimes.pi).toEqual({
+      baseUrl: 'http://127.0.0.1:1234/v1',
+      wireProtocol: 'openai-chat',
+      baseUrlEditable: true,
+      models: [],
+    });
+  });
+
+  it('llama.cpp 与 vLLM 提供 Codex Chat 与 Pi，不含 Claude Code', () => {
+    for (const [id, baseUrl] of [
+      ['llamacpp', 'http://127.0.0.1:8080/v1'],
+      ['vllm', 'http://127.0.0.1:8000/v1'],
+    ] as const) {
+      const local = preset(id);
+      expect(local?.runtimes['claude-code']).toBeUndefined();
+      expect(local?.runtimes.codex).toEqual({
+        baseUrl,
+        wireProtocol: 'openai-chat',
+        baseUrlEditable: true,
+        models: [],
+      });
+      expect(local?.runtimes.pi).toEqual({
+        baseUrl,
+        wireProtocol: 'openai-chat',
+        baseUrlEditable: true,
+        models: [],
+      });
+    }
+  });
+
   it('LongCat 同时提供 Anthropic Messages、Codex 与 Pi Chat 端点', () => {
     expect(preset('longcat')?.runtimes).toEqual({
       'claude-code': {

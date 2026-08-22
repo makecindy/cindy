@@ -2504,6 +2504,7 @@
       "unspecified": "Use default setting",
       "hint": "Claude Code changes apply to new sessions. Codex changes apply automatically when it is idle.",
       "codexV2ModelHint": "Claude Code uses the selected model as its default. All local Codex Subagents are locked to the selected model and reasoning effort.",
+      "codexOauthCompatibilityHint": "Fixed Subagent routing cannot safely share a task with ChatGPT OAuth. When the main Codex task uses ChatGPT OAuth, or a non-OAuth main task selects a ChatGPT OAuth Subagent, Cindy ignores the model, provider, and reasoning effort selected here and uses that task’s default Codex Subagent.",
       "saveFailed": "Failed to save subagent settings",
       "guardrails": {
         "title": "Codex subagent guardrails",
@@ -3189,12 +3190,14 @@
           "copyLink": "Copy link",
           "copied": "Link copied",
           "state": {
-            "denied": "Authorization was cancelled on the Slack page",
+            "denied": "Slack authorization was cancelled; the account is not linked",
             "expired": "Authorization timed out, please reconnect",
             "failed": "Binding failed",
             "revoked": "Binding revoked"
           },
-          "retryHint": "Turn the switch back on to reconnect and link again."
+          "reauthorize": "Reauthorize Slack",
+          "reauthorizing": "Reauthorizing Slack…",
+          "retryHint": "Reauthorize Slack to reconnect and link the account."
         },
         "toast": {
           "saveFailed": "Failed to save",
@@ -3204,6 +3207,8 @@
         "loginRequired": "Sign in to your {{appName}} account first; the connection resumes automatically after login.",
         "standbyHint": "Another Cindy instance on this computer is using the Slack connection. Close it, then turn this switch back on to take over.",
         "authorizing": "Authorizing…",
+        "transportStatus": "Transport: {{status}}",
+        "accountStatus": "Slack Account: {{status}}",
         "statusBound": "Linked as @{{name}}",
         "statusBoundTeam": "Linked to {{team}} as @{{name}}",
         "statusUnbound": "Not linked",
@@ -4777,6 +4782,7 @@
     "expandControlledNotice": "Expand remote control notice: {{label}}",
     "versionMismatch": "Version mismatch with the other device; some features may be limited"
   },
+
   "accountDeletion": {
     "entryButton": "Delete account",
     "entryAria": "Delete the current account",
@@ -5179,7 +5185,7 @@
     "close": "Close",
     "menuItems": {
       "settings": "Settings",
-      "resourceUsage": "Resource Usage",
+      "resourceUsage": "Activity Monitor",
       "help": "Help",
       "issues": "Issues",
       "checkForUpdates": "Check for Updates"
@@ -5275,7 +5281,7 @@
         "subagents": "Subagent",
         "botDelegations": "Teammate collaboration",
         "backgroundTasks": "Background tasks",
-        "resourceUsage": "Resource Usage",
+        "resourceUsage": "Activity Monitor",
         "collaboration": "Team",
         "unknown": "Unknown tab",
         "ghostPanel": "Plugin panel",
@@ -5296,7 +5302,7 @@
       "empty": {
         "eyebrow": "Right Sidebar",
         "title": "Add a panel",
-        "desc": "Open files, review, resource usage, a built-in browser, or a terminal here to work alongside the chat on the left.",
+        "desc": "Open files, review, Activity Monitor, a built-in browser, or a terminal here to work alongside the chat on the left.",
         "botTitle": "Works and their collaboration",
         "botDesc": "A teammate chat opens to works and their collaboration. Review and terminal stay available if you need them.",
         "openArtifacts": "Open works",
@@ -5311,7 +5317,7 @@
         "subagentsSub": "Durable child work",
         "openBackgroundTasks": "Open background tasks",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "Open Resource Usage",
+        "openResourceUsage": "Open Activity Monitor",
         "openBrowser": "Open browser",
         "browserSub": "Browser",
         "openTerminal": "Open terminal",
@@ -5914,26 +5920,85 @@
       "context": "Parent context",
       "contextValues": {
         "unknown": "Not reported by the Harness",
+        "none": "Fresh isolated context",
         "snapshot": "Parent task snapshot",
         "live": "Live parent task"
       },
       "assignment": "Assignment",
+      "overview": "Overview",
+      "children": "Children",
+      "queued": "Queued",
+      "queuedDetail": "This child is queued and will start when its dependencies and a worker slot are ready.",
+      "awaitingApproval": "Waiting for approval",
+      "awaitingApprovalDetail": "This child is waiting for a permission decision in the parent task.",
+      "childError": "Error: {{error}}",
+      "sendDirection": "Send direction",
+      "composerPlaceholders": {
+        "runningWithSteer": "Queue a follow-up · {{steerShortcut}} to steer…",
+        "follow_up": "Queue a follow-up — the returned result stays intact…",
+        "resume": "Continue this Subagent…"
+      },
+      "sendShortcutHint": "{{shortcut}} to send · Shift+Enter for a new line",
+      "childEndedControlHint": "This child has ended. Choose Overview or a running child to send another instruction.",
+      "controlFailed": "The instruction could not be delivered. Check that the Subagent is still available and try again.",
+      "controlActions": {
+        "steer": "Steer after current tools",
+        "follow_up": "Queue follow-up",
+        "resume": "Resume Subagent"
+      },
       "returnedResult": "Returned result",
+      "copyResult": "Copy",
+      "copiedResult": "Copied",
       "resultTruncated": "The returned result was truncated for display.",
       "latestUpdate": "Latest update",
+      "technicalDetails": "Technical details",
+      "waitingForReply": "Subagent is working…",
+      "noReply": "The Subagent did not return a reply. Open technical details to see why.",
+      "failedNoReply": "The Subagent failed without returning readable details.",
+      "stoppedNoReply": "The Subagent stopped before returning a result.",
+      "completedNoReply": "The Subagent completed without returning a result.",
+      "errors": {
+        "providerNotConnected": "This provider is not connected. Connect the account or configure its credentials, then try again.",
+        "credentialInvalid": "The provider credentials expired or were rejected. Reconnect the provider, then try again.",
+        "modelInvalid": "The selected model is unavailable or its name is invalid. Choose a model available to this task.",
+        "rateLimited": "The provider is rate-limiting requests. Wait a moment, then try again.",
+        "serviceUnavailable": "The provider service is temporarily unavailable. Try again later.",
+        "requestInvalid": "The provider rejected this request. Check the model and task settings, then try again.",
+        "unknown": "The Subagent failed. Open the raw details below for the reported cause.",
+        "rawDetails": "Show raw details"
+      },
       "activity": "Activity",
       "noActivity": "No activity details were reported.",
-      "transcript": "Transcript",
-      "noTranscript": "No transcript entries were reported.",
+      "systemLog": "Runtime log",
+      "noSystemLog": "No runtime log lines were reported.",
+      "loadMoreTranscript": "Load more transcript",
       "transcriptUnavailable": "This Harness has not exposed a full child transcript to Cindy yet. Returned results and lifecycle activity remain available.",
-      "transcriptRoles": {
-        "parent": "Parent",
-        "subagent": "Subagent",
-        "tool": "Tool",
-        "system": "System"
+      "tool": {
+        "fallbackName": "Tool",
+        "running": "Running…",
+        "failed": "Failed",
+        "input": "Input",
+        "result": "Result",
+        "noDetails": "No input or output was recorded."
+      },
+      "controlBadges": {
+        "steer": "Steer",
+        "follow_up": "Follow-up",
+        "resume": "Resume",
+        "stop": "Stop"
       },
       "lastTool": "Last tool: {{tool}}",
       "tokens": "{{value}} tokens",
+      "toolUses_one": "{{count}} tool use",
+      "toolUses_other": "{{count}} tool uses",
+      "systemEvents": {
+        "stop-requested": "A stop was requested from the parent task.",
+        "control-requested": "A control request was sent from the parent task.",
+        "transcript-truncated": "Transcript storage limit reached.",
+        "turn-ended": "Subagent turn ended.",
+        "command-refused": "PI rejected a child command.",
+        "generation-unreadable": "An earlier part of this conversation could not be read."
+      },
       "activityKinds": {
         "started": "Started",
         "progress": "Progress",
@@ -5991,10 +6056,10 @@
       },
       "processCount_one": "Process tree: {{count}} process",
       "processCount_other": "Process tree: {{count}} processes",
-      "agentsEmpty": "No agent processes are running. Start a task and its usage will show up here.",
-      "tableLabel": "Resource Usage by Process",
+      "agentsEmpty": "No agent processes are running. Start a task and they will show up here.",
+      "tableLabel": "Activity Monitor",
       "sortBy": "Sort by {{column}}",
-      "loading": "Reading resource usage…",
+      "loading": "Reading processes…",
       "remoteUnavailableTitle": "Unavailable for remote sessions",
       "remoteUnavailableDescription": "This panel only reads processes on this device. It is available only for local sessions running on this device.",
       "selectHint": "Select a process",
@@ -7581,6 +7646,7 @@
     },
     "chatInput": {
       "defaultPlaceholder": "What shall we work on today~",
+      "createAgentPlaceholder": "Hi {{appName}}!",
       "voiceInput": {
         "start": "Start voice input",
         "stop": "Stop voice input",
@@ -7860,6 +7926,8 @@
       "subagentStarted": "Subagent {{name}} started",
       "showDetails": "Show subagent details",
       "hideDetails": "Hide subagent details",
+      "showFullResult": "Show full result",
+      "hideFullResult": "Collapse result",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
@@ -8006,6 +8074,8 @@
       "rateLimitRetrying": "Request rate limited — retrying automatically ({{attempt}}/{{maxAttempts}})…",
       "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click \"Retry\", or switch to another model.",
       "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
+      "streamInterrupted": "The model stream was interrupted. This is usually a temporary upstream issue — click Retry.",
+      "streamInterruptedNoRetry": "The model stream was interrupted. This is usually a temporary upstream issue. Try again in a little while.",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "silentStopContinue": "Continue",

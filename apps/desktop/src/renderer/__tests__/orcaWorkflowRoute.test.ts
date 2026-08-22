@@ -364,7 +364,23 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('sets passive collaboration sidebar collapsed state during the route layout declaration', () => {
     expect(sessionViewSource).toContain('useLayoutEffect(() => {');
-    expect(sessionViewSource).toContain('declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord });');
+    expect(sessionViewSource).toContain(
+      'declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });',
+    );
+    // The declaration is multi-line since the Subagents entry also follows
+    // durable Pi runs (a task switched off Pi keeps the tab while its runs
+    // exist), so the attribute and its expression are pinned separately.
+    expect(sessionViewSource).toContain('subagentsAvailable={');
+    expect(sessionViewSource).toContain(
+      "(session.agentKind === 'pi' && !session.remoteHostId) || durablePiRunsPresent",
+    );
+    // The harness alone must not declare the entry for an SSH-hosted task:
+    // `agents/pi` disables the durable Subagent extension whenever
+    // `remoteHostId` is set, so such a task can never produce a run and the tab
+    // would stay empty while its controls addressed the local filesystem.
+    expect(sessionViewSource).not.toContain(
+      "session ? session.agentKind === 'pi' || durablePiRunsPresent : undefined",
+    );
     expect(mainLayoutSource).toContain('const declareRightSidebarSessionId = useCallback');
     expect(mainLayoutSource).toContain('const nextCollapsed = hasInitialCollapsed');
     expect(mainLayoutSource).toContain('setIsRightSidebarCollapsed(nextCollapsed);');

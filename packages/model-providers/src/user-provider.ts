@@ -20,9 +20,9 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
   RoutingDescriptor,
-} from './types.js';
-import type { ModelRegistry } from './modelAccessBean.js';
-import { isLoopbackProviderUrl } from './provider-url.js';
+} from "./types.js";
+import type { ModelRegistry } from "./modelAccessBean.js";
+import { isLoopbackProviderUrl } from "./provider-url.js";
 
 /** 自定义模型缺省上下文窗口（用户不填元数据时的保守默认，仅用于展示）。 */
 export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
@@ -31,14 +31,18 @@ export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
  * Older releases allowed a user provider to occupy `xai`, which is now the built-in SuperGrok
  * source. Preserve the stored id, but project that legacy row under a collision-free runtime id.
  */
-export const LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID = 'custom:xai';
+export const LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID = "custom:xai";
 
 export function runtimeCustomProviderId(providerId: string): string {
-  return providerId === 'xai' ? LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID : providerId;
+  return providerId === "xai"
+    ? LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID
+    : providerId;
 }
 
 export function storedCustomProviderId(providerId: string): string {
-  return providerId === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID ? 'xai' : providerId;
+  return providerId === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID
+    ? "xai"
+    : providerId;
 }
 
 /**
@@ -53,43 +57,21 @@ export function storedCustomProviderId(providerId: string): string {
  * 默认档保持 high，存量行为不变（见 #2964）。
  */
 const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
-  'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['low', 'medium', 'high', 'xhigh', 'max'],
+  "claude-code": ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh", "max"],
 };
 /** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
-const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
+const DEFAULT_CUSTOM_EFFORT: Effort = "high";
 
 interface RegistryEffortMetadata {
   efforts: Effort[];
   defaultEffort: Effort | null;
 }
 
-/**
- * 仅在模型能由当前 agent 的 Registry route 唯一识别时复用 effort 元数据。
- * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
- */
-function registryEffortMetadata(
-  registry: ModelRegistry | null | undefined,
-  modelId: string,
+function toRegistryEffortMetadata(
+  entry: { efforts?: readonly Effort[]; defaultEffort?: Effort | null; perAgent?: Partial<Record<string, { efforts?: readonly Effort[]; defaultEffort?: Effort | null }>> },
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  if (agent === 'pi' || !registry) return undefined;
-
-  const candidates = new Set([modelId]);
-  if (modelId.startsWith('chatgpt/')) {
-    candidates.add(modelId.slice('chatgpt/'.length));
-  }
-  const matches = registry.models.filter((entry) =>
-    entry.routes.some(
-      (route) =>
-        route.agents.includes(agent) &&
-        (candidates.has(entry.id) || candidates.has(route.modelId)),
-    ),
-  );
-  const uniqueEntries = [...new Map(matches.map((entry) => [entry.id, entry])).values()];
-  if (uniqueEntries.length !== 1) return undefined;
-
-  const entry = uniqueEntries[0]!;
   const perAgent = entry.perAgent?.[agent];
   const efforts = perAgent?.efforts ?? entry.efforts;
   if (!efforts) return undefined;
@@ -103,8 +85,56 @@ function registryEffortMetadata(
   return { efforts: [...efforts], defaultEffort };
 }
 
+/**
+ * 仅在模型能由当前 agent 的 Registry route 唯一识别时复用 effort 元数据。
+ * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
+ */
+function registryEffortMetadata(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  if (agent === "pi" || !registry) return undefined;
+
+  // Stage 1 — exact lookup: only the original modelId.
+  const exactMatches = registry.models.filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (entry.id === modelId || route.modelId === modelId),
+    ),
+  );
+  const exactUnique = [
+    ...new Map(exactMatches.map((entry) => [entry.id, entry])).values(),
+  ];
+  if (exactUnique.length === 1) return toRegistryEffortMetadata(exactUnique[0]!, agent);
+  if (exactUnique.length > 1) return undefined; // ambiguous, don't strip
+
+  // Stage 2 — prefix fallback: only when Stage 1 found nothing.
+  // Strip common provider prefixes so third-party custom API models
+  // (e.g. "openai/gpt-5.6-sol") can match registry entries whose
+  // route.modelId is just "gpt-5.6-sol".
+  const stripped = new Set<string>();
+  for (const prefix of ['openai/', 'xd/', 'chatgpt/']) {
+    if (modelId.startsWith(prefix)) stripped.add(modelId.slice(prefix.length));
+  }
+  if (stripped.size === 0) return undefined;
+  const fallbackMatches = registry.models.filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (stripped.has(entry.id) || stripped.has(route.modelId)),
+    ),
+  );
+  const fallbackUnique = [
+    ...new Map(fallbackMatches.map((entry) => [entry.id, entry])).values(),
+  ];
+  if (fallbackUnique.length !== 1) return undefined;
+  return toRegistryEffortMetadata(fallbackUnique[0]!, agent);
+}
+
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
-const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const AGENT_ORDER: readonly AgentKind[] = ["claude-code", "codex", "pi"];
 
 /** 单个用户填写的模型 → CatalogModel（补默认元数据；effort 按所属 agent 参考内置默认）。 */
 function toCatalogModel(
@@ -113,19 +143,26 @@ function toCatalogModel(
   agent: AgentKind,
   modelRegistry: ModelRegistry | null | undefined,
 ): CatalogModel {
-  // Pi BYOM 不从 runtime / 协议猜模型能力：只有用户逐模型明确确认后才向 catalog 暴露
-  // effort。这样 catalog/UI 与稍后写入 models.json 的能力保持同一份契约，旧配置安全关闭。
+  // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
+  // 字段缺省才走历史 fallback（Pi 空档 / 其它自定义 Provider 的 CUSTOM_EFFORTS）。
   const efforts: Effort[] =
-    agent === 'pi'
-      ? m.reasoning === true
-        ? [...(m.reasoningEfforts ?? [])]
-        : []
-      : (CUSTOM_EFFORTS[agent] ?? []);
-  const registryEfforts = registryEffortMetadata(modelRegistry, m.id, agent);
+    m.reasoning === true
+      ? [...(m.reasoningEfforts ?? [])]
+      : m.reasoning === false
+        ? []
+        : agent === "pi"
+          ? []
+          : (CUSTOM_EFFORTS[agent] ?? []);
+  const registryEfforts =
+    m.reasoning !== undefined
+      ? undefined
+      : registryEffortMetadata(modelRegistry, m.id, agent);
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
   const defaultEffort =
     registryEfforts?.defaultEffort ??
-    (agent === 'pi' && m.reasoningDefaultEffort && effectiveEfforts.includes(m.reasoningDefaultEffort)
+    (m.reasoning === true &&
+    m.reasoningDefaultEffort &&
+    effectiveEfforts.includes(m.reasoningDefaultEffort)
       ? m.reasoningDefaultEffort
       : effectiveEfforts.includes(DEFAULT_CUSTOM_EFFORT)
         ? DEFAULT_CUSTOM_EFFORT
@@ -133,7 +170,7 @@ function toCatalogModel(
   return {
     id: m.id,
     name: m.name,
-    ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+    ...(agent === "pi" && m.piApi ? { piApi: m.piApi } : {}),
     ...(m.route ? { route: { ...m.route } } : {}),
     contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
     // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
@@ -150,12 +187,17 @@ function toCatalogModel(
     defaultEnabled: m.defaultEnabled ?? true,
     // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。
     ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+    ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
   };
 }
 
 function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
-  if (agent === 'claude-code') return 'anthropic-messages';
-  return 'openai-responses';
+  // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
+  // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
+  // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
+  if (agent === "claude-code") return "anthropic-messages";
+  if (agent === "pi") return "openai-chat";
+  return "openai-responses";
 }
 
 /** baseUrl + 自定义 headers → 路由描述符（**不含密钥**）。 */
@@ -164,18 +206,18 @@ function toRouting(
   baseUrl: string,
   requestPath: string | undefined,
   headers: Record<string, string> | undefined,
-  headersState: 'configured' | 'unknown' | undefined,
-  strategy: 'api-key-header' | 'oauth-token' | 'none',
+  headersState: "configured" | "unknown" | undefined,
+  strategy: "api-key-header" | "oauth-token" | "none",
   modelsUrl?: string,
-  wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
+  wireProtocol?: "anthropic-messages" | "openai-responses" | "openai-chat",
   piCatalogProviderId?: string,
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
-    ...(strategy === 'none'
-      && (!isLoopbackProviderUrl(baseUrl)
-        || (modelsUrl !== undefined && !isLoopbackProviderUrl(modelsUrl)))
+    ...(strategy === "none" &&
+    (!isLoopbackProviderUrl(baseUrl) ||
+      (modelsUrl !== undefined && !isLoopbackProviderUrl(modelsUrl)))
       ? { disabled: true }
       : {}),
     ...(requestPath ? { requestPath } : {}),
@@ -185,9 +227,9 @@ function toRouting(
   };
   if (headers && Object.keys(headers).length > 0) {
     r.headerOverride = { ...headers };
-    r.headerOverrideState = 'configured';
-  } else if (headersState === 'unknown') {
-    r.headerOverrideState = 'unknown';
+    r.headerOverrideState = "configured";
+  } else if (headersState === "unknown") {
+    r.headerOverrideState = "unknown";
   }
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
@@ -210,10 +252,10 @@ export function buildUserProvider(
 ): Provider {
   const runtimeProviderId = runtimeCustomProviderId(config.id);
   // OAuth 形态路由走 Runner Bearer；none 明确走无鉴权且由 host 剥凭证；缺省保持历史 API key。
-  const oauth = config.auth?.method === 'oauth' ? config.auth.oauth : undefined;
+  const oauth = config.auth?.method === "oauth" ? config.auth.oauth : undefined;
   const isOAuth = oauth !== undefined;
-  const noAuth = config.auth?.method === 'none';
-  const strategy = isOAuth ? 'oauth-token' : noAuth ? 'none' : 'api-key-header';
+  const noAuth = config.auth?.method === "none";
+  const strategy = isOAuth ? "oauth-token" : noAuth ? "none" : "api-key-header";
   const routing: Partial<Record<AgentKind, RoutingDescriptor>> = {};
   const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
   const agents: AgentKind[] = [];
@@ -239,15 +281,15 @@ export function buildUserProvider(
   return {
     id: runtimeProviderId,
     name: config.name,
-    source: 'user',
+    source: "user",
     agents,
     auth: isOAuth
-      ? { method: 'oauth', oauth }
+      ? { method: "oauth", oauth }
       : noAuth
-        ? { method: 'none' }
-        : { method: 'apiKey' },
+        ? { method: "none" }
+        : { method: "apiKey" },
     // API key / 无鉴权代理都属于用户自备接口；通用 OAuth 可能订阅也可能按量，未声明前不猜。
-    ...(isOAuth ? {} : { access: { kind: 'api' as const } }),
+    ...(isOAuth ? {} : { access: { kind: "api" as const } }),
     routing,
     models,
   };

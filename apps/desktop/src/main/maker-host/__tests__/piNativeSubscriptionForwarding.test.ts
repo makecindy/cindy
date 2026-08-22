@@ -773,6 +773,38 @@ describe('PI native subscription forwarding', () => {
     });
   });
 
+  it('labels pre-response xAI failures with the real provider and endpoint', async () => {
+    const injected = deps({
+      fetch: vi.fn(async () => {
+        throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+      }) as PiNativeSubscriptionHandlerDeps['fetch'],
+    });
+    const handler = getPiNativeSubscriptionHandler('xai', 'session-network-error', injected);
+    const res = responseRecorder();
+
+    await handler({
+      rawBody: Buffer.from('{"model":"grok-4.6"}'),
+      parsedBody: { model: 'grok-4.6' },
+      ctx: {
+        reqId: 14,
+        method: 'POST',
+        url: '/v1/responses',
+        headers: { 'content-type': 'application/json' },
+      },
+      res,
+    } as never);
+
+    expect(res.status).toBe(502);
+    expect(JSON.parse(Buffer.concat(res.chunks).toString('utf8'))).toMatchObject({
+      error: {
+        type: 'upstream_error',
+        provider: 'xai',
+        endpoint: 'https://api.x.ai/v1/responses',
+        message: 'xAI/Grok upstream request failed: fetch failed',
+      },
+    });
+  });
+
   it('rejects unsupported native paths without contacting an upstream', async () => {
     const injected = deps();
     const handler = getPiNativeSubscriptionHandler('openai', 'session-3', injected);

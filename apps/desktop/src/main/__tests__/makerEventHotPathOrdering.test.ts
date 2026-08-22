@@ -22,6 +22,21 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
+    const redactor = source.slice(
+      source.indexOf('function redactEventForRenderer'),
+      source.indexOf('\nfunction ', source.indexOf('function redactEventForRenderer') + 1),
+    );
+    for (const key of [
+      'subagentObservation',
+      'returnedResult',
+      'returnedResultEmpty',
+      'returnedResultTruncated',
+    ]) {
+      expect(redactor).toContain(`'${key}'`);
+    }
+  });
+
   it('rewires a replacement Session instance that retains the same business id', () => {
     const wireSessionSource = extractWireSessionSource();
 
@@ -186,6 +201,19 @@ describe('maker:event hot path ordering', () => {
     expect(coordinatorSource).toContain(
       "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
     );
+    expect(coordinatorSource).toContain('isLiveTurnRunning: (sessionId) =>');
+    expect(coordinatorSource).toContain('if (!sess) return undefined;');
+  });
+
+  it('does not latch product-turn bookkeeping on background status events', () => {
+    const statusStart = source.indexOf('if (event.type === \'status\') {');
+    const statusEnd = source.indexOf("if (event.type === 'done')", statusStart);
+    const statusSource = source.slice(statusStart, statusEnd);
+    expect(statusStart).toBeGreaterThanOrEqual(0);
+    expect(statusEnd).toBeGreaterThan(statusStart);
+    expect(statusSource).toContain("data.isRunning === true && event.turnScope !== 'background'");
+    expect(statusSource).toContain("event.turnScope !== 'background'");
+    expect(statusSource).toContain('sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning)');
   });
 
   it('persists a terminal Codex plan before clearing its turn-owned lookup maps', () => {
@@ -915,6 +943,19 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain('buildClaudeTurnUsageDetails(');
     // 窄兜底: modelUsage 缺失时仍用 total_cost_usd delta 记总额, 别漏整轮 (review #4)。
     expect(claudeDoneSource).toContain('const rawDelta = Math.max(0, cumulative - prevReportedCost);');
+  });
+
+  it('pi subscription turns estimate value from the shared reference-price helper', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const piDoneIndex = wireSessionSource.indexOf("event.type === 'done' && event.source === 'pi'");
+    expect(piDoneIndex).toBeGreaterThanOrEqual(0);
+    const piDoneSource = wireSessionSource.slice(piDoneIndex);
+    expect(piDoneSource).toContain('const pricing = isCustomProviderRoute');
+    expect(piDoneSource).toContain('? getReferenceModelPricing()');
+    expect(piDoneSource).toContain("getSubscriptionValuePriceFor('pi', pricingModel, pricing)");
+    expect(piDoneSource).not.toMatch(/getModelPriceQuote\(\s*null\s*,\s*effectiveProvider/);
+    expect(piDoneSource).toContain('if (!isSubscriptionValue)');
+    expect(piDoneSource).toContain('await recordSchedulerTurnCost({');
   });
 
   it('refreshes Claude credential cache before dropping mismatched header snapshots', () => {

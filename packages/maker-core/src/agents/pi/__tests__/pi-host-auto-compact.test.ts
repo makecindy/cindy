@@ -89,7 +89,10 @@ describe('PiAgent host auto-compact', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  function buildDeps(threshold: number | undefined): AgentDeps {
+  function buildDeps(
+    threshold: number | undefined,
+    extra?: { shouldHandoff?: (tokens: number, window: number) => boolean },
+  ): AgentDeps {
     return {
       auth: {
         getState: async () => ({ authenticated: true, identity: 't', authSource: 'api-key' as const }),
@@ -100,6 +103,9 @@ describe('PiAgent host auto-compact', () => {
       runtimeConfig: {
         endpoint: 'http://127.0.0.1:9',
         ...(threshold === undefined ? {} : { autoCompactThresholdPct: threshold }),
+        ...(extra?.shouldHandoff
+          ? { shouldHandoffAfterContextAssessment: extra.shouldHandoff }
+          : {}),
       },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
@@ -114,8 +120,11 @@ describe('PiAgent host auto-compact', () => {
     };
   }
 
-  async function start(threshold: number | undefined): Promise<AgentSessionHandle> {
-    return new PiAgent(buildDeps(threshold)).startSession({
+  async function start(
+    threshold: number | undefined,
+    extra?: { shouldHandoff?: (tokens: number, window: number) => boolean },
+  ): Promise<AgentSessionHandle> {
+    return new PiAgent(buildDeps(threshold, extra)).startSession({
       sessionId: 's1',
       workingDir: cwd,
       model: 'm',
@@ -151,6 +160,24 @@ describe('PiAgent host auto-compact', () => {
     // 160k / 200k = 80%
     settleWithUsage(160_000);
     await vi.waitFor(() => expect(knobs.compactCalls).toEqual([{ type: 'compact' }]));
+    await handle.close();
+  });
+
+  it('does not compact after agent_settled when host assessment requires rollover', async () => {
+    const handle = await start(75, { shouldHandoff: () => true });
+    settleWithUsage(160_000);
+    await Promise.resolve();
+    expect(knobs.compactCalls).toEqual([]);
+    await handle.close();
+  });
+
+  it('does not compact after setModel when host assessment requires rollover', async () => {
+    const handle = await start(75, { shouldHandoff: () => true });
+    // 80k / 200k = 40% — 旧窗口未达阈值;切到 100k 后是 80%。
+    settleWithUsage(80_000);
+    await handle.setModel!('n');
+    await Promise.resolve();
+    expect(knobs.compactCalls).toEqual([]);
     await handle.close();
   });
 

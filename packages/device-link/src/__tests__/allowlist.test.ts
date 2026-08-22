@@ -120,6 +120,18 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
   });
 
+  it('routes durable PI Subagent reads and controls to the data-owning device', () => {
+    for (const channel of [
+      'local-db:subagent-runs:list',
+      'local-db:subagent-runs:detail',
+      'local-db:subagent-runs:transcript',
+      'maker:pi-subagent:control',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(channel)).toBe(true);
+    }
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:agent-task:stop')).toBe(false);
+  });
+
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
     for (const ch of [
       'maker:fork-strip-encrypted',
@@ -150,6 +162,12 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('放行 Codex 官方额度读取与 desktop 绑定的人工 reset offer', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limits')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:codex-rate-limit-reset')).toBe(true);
+  });
+
+  it('放行被控端项目顺序读写(显示偏好,真相在被控端)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-order')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-order')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:set-project-order')).toBe(false);
   });
 
   it('放行 Git safety 只读查询(远程 Codex Rewind 按被控端 snapshot 设置 gate)', () => {
@@ -353,6 +371,7 @@ describe('PUSH_FORWARD_ALLOWLIST', () => {
       'local-db:messages:created',
       'local-db:messages:deleted',
       'local-db:session:error-persisted',
+      'sidebar-settings:project-order-changed',
       SESSION_ACTIVITY_CHANNEL,
     ]) {
       expect(PUSH_FORWARD_ALLOWLIST.has(ch)).toBe(true);

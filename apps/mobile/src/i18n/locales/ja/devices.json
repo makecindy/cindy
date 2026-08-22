@@ -31,6 +31,9 @@
     },
     "a11y": {
       "selectScope": "セッションの範囲を選択",
+      "openMenu": "メニューを開く",
+      "closeMenu": "メニューを閉じる",
+      "openDisplaySettings": "表示設定を開く",
       "openSettings": "設定を開く",
       "syncing": "再同期中",
       "sync": "再同期",
@@ -38,6 +41,7 @@
       "newRemoteConversation": "新しいリモートセッション",
       "renameDevice": "{{label}} の名前を変更",
       "project": "プロジェクト {{title}}",
+      "dialogue": "チャット",
       "openAutomationLatest": "自動化タスク {{title}} の最新セッションを開く",
       "automationTask": "自動化タスク {{title}}",
       "openConversation": "セッション {{title}} を開く",
@@ -51,7 +55,24 @@
       "cancelRename": "名前の変更をキャンセル"
     },
     "menu": {
-      "groupByProject": "プロジェクトごとにグループ化"
+      "groupByProject": "プロジェクトごとにグループ化",
+      "groupDialogue": "チャットをまとめる",
+      "sortByTime": "時間順",
+      "sortByPriority": "優先度",
+      "statusActive": "アクティブ",
+      "statusArchived": "アーカイブ済み",
+      "statusAll": "すべて",
+      "dialogueFolder": "チャット",
+      "settings": "設定",
+      "remoteSettings": "リモート接続設定",
+      "displaySettings": "表示設定",
+      "groupHeading": "グループ",
+      "sortHeading": "タスクの並び替え",
+      "projectOrderHeading": "プロジェクト順",
+      "projectOrderActivity": "最近のアクティビティ順",
+      "projectOrderManual": "手動",
+      "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
+      "statusHeading": "ステータス"
     },
     "renameDevice": {
       "title": "デバイス名を変更",

@@ -1007,6 +1007,28 @@ describe('OrcaTeamService', () => {
     expect(leadMessages).toEqual(['[Auto-bridged: worker 完成但未调 send_to_lead]\n\n部分输出']);
   });
 
+  it('bridges the terminal diagnostic when an errored worker produced no output', async () => {
+    const leadMessages: string[] = [];
+    const { service } = createDeps({
+      sendAutoBridgeToLead: vi.fn(async (_leadSessionId, message) => {
+        leadMessages.push(message);
+        return { accepted: true };
+      }),
+    });
+
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '只读审计' });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'error',
+      finalText: '',
+      diagnostic: 'Claude session exited before producing a result',
+    });
+
+    expect(leadMessages).toEqual([
+      '[Auto-bridged: worker 异常终止]\n\nClaude session exited before producing a result',
+    ]);
+  });
+
   it('marks worker idle and clears bridge state before closing its session', async () => {
     const { calls, service, setWorker } = createDeps();
     setWorker(createWorker({ status: 'running' }));

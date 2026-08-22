@@ -52,12 +52,18 @@ function parseContext(raw: unknown): RsbWindowContext {
   if (typeof r.available !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'available must be boolean');
   }
+  if (r.subagentsAvailable !== undefined && typeof r.subagentsAvailable !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'subagentsAvailable must be boolean when provided');
+  }
   const deviceLinkDeviceId = optionalNullableString(r.deviceLinkDeviceId, 'deviceLinkDeviceId');
   return {
     sessionId: nullableString(r.sessionId, 'sessionId'),
     workdir: nullableString(r.workdir, 'workdir'),
     remoteHostId: nullableString(r.remoteHostId, 'remoteHostId'),
     ...(deviceLinkDeviceId === undefined ? {} : { deviceLinkDeviceId }),
+    ...(r.subagentsAvailable === undefined
+      ? {}
+      : { subagentsAvailable: r.subagentsAvailable }),
     available: r.available,
   };
 }

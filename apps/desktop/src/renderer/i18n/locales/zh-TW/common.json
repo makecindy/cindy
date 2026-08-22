@@ -2503,6 +2503,7 @@
       "unspecified": "跟隨預設設定",
       "hint": "Claude Code 的設定從新任務開始生效；Codex 的設定會在閒置後自動套用。",
       "codexV2ModelHint": "Claude Code 使用所選模型作為預設值。Codex 的所有本機 Subagent 都固定使用所選模型和推理強度。",
+      "codexOauthCompatibilityHint": "固定 Subagent 路由與 ChatGPT OAuth 無法安全共用。主任務使用 ChatGPT OAuth，或非 OAuth 主任務指定 ChatGPT OAuth Subagent 時，Cindy 會忽略這裡的模型、來源和推理強度，改用主任務的 Codex 預設 Subagent。",
       "saveFailed": "儲存 Subagent 設定失敗",
       "guardrails": {
         "title": "Codex Subagent 護欄",
@@ -3188,12 +3189,14 @@
           "copyLink": "複製連結",
           "copied": "連結已複製",
           "state": {
-            "denied": "在 Slack 授權頁取消了授權",
+            "denied": "Slack 授權已取消，帳號尚未繫結",
             "expired": "授權超時，請重新連線",
             "failed": "繫結失敗",
             "revoked": "繫結已解除"
           },
-          "retryHint": "重新開啟開關即可再次連線並繫結。"
+          "reauthorize": "重新授權 Slack",
+          "reauthorizing": "正在重新授權 Slack…",
+          "retryHint": "重新授權 Slack 即可再次連線並繫結。"
         },
         "toast": {
           "saveFailed": "儲存失敗",
@@ -3203,6 +3206,8 @@
         "loginRequired": "需要先登入 {{appName}} 帳號，連線會在登入後自動恢復。",
         "standbyHint": "本機另一 Cindy 例項正在使用 Slack 連線。關閉它後，重新開啟此開關即可接管。",
         "authorizing": "授權中…",
+        "transportStatus": "傳輸連線：{{status}}",
+        "accountStatus": "Slack 帳號：{{status}}",
         "statusBound": "已繫結 @{{name}}",
         "statusBoundTeam": "已繫結 {{team}} @{{name}}",
         "statusUnbound": "未繫結",
@@ -4775,6 +4780,7 @@
     "expandControlledNotice": "展開被控提示：{{label}}",
     "versionMismatch": "對方版本不一致，部分功能可能受限"
   },
+
   "accountDeletion": {
     "entryButton": "刪除帳號",
     "entryAria": "刪除目前帳號",
@@ -5177,7 +5183,7 @@
     "close": "關閉",
     "menuItems": {
       "settings": "設定",
-      "resourceUsage": "資源用量",
+      "resourceUsage": "資源監視器",
       "help": "幫助",
       "issues": "問題反饋",
       "checkForUpdates": "檢查更新"
@@ -5273,7 +5279,7 @@
         "subagents": "Subagent",
         "botDelegations": "夥伴協同",
         "backgroundTasks": "後臺任務",
-        "resourceUsage": "資源用量",
+        "resourceUsage": "資源監視器",
         "collaboration": "協同",
         "unknown": "未知標籤頁",
         "ghostPanel": "插件面板",
@@ -5294,7 +5300,7 @@
       "empty": {
         "eyebrow": "右側欄",
         "title": "開始一個面板",
-        "desc": "在右側開啟檔案、審查、資源用量、內建瀏覽器或終端，與左側對話並行工作。",
+        "desc": "在右側開啟檔案、審查、資源監視器、內建瀏覽器或終端，與左側對話並行工作。",
         "botTitle": "作品和協同",
         "botDesc": "夥伴任務預設開啟作品倉庫和{{pronoun}}的協同。審查、終端這些工程面板需要時再加。",
         "openArtifacts": "開啟作品",
@@ -5309,7 +5315,7 @@
         "subagentsSub": "可持續回看的子任務",
         "openBackgroundTasks": "開啟後臺任務",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "開啟資源用量",
+        "openResourceUsage": "開啟資源監視器",
         "openBrowser": "開啟瀏覽器",
         "browserSub": "Browser",
         "openTerminal": "開啟終端",
@@ -5912,26 +5918,85 @@
       "context": "父任務上下文",
       "contextValues": {
         "unknown": "Harness 未回報",
+        "none": "全新隔離上下文",
         "snapshot": "父任務快照",
         "live": "即時父任務"
       },
       "assignment": "任務內容",
+      "overview": "總覽",
+      "children": "Subagent",
+      "queued": "排隊中",
+      "queuedDetail": "該 Subagent 正在排隊，依賴完成且有空閒並行位置後會自動開始。",
+      "awaitingApproval": "等待核准",
+      "awaitingApprovalDetail": "該 Subagent 正在等待你在父任務中處理權限要求。",
+      "childError": "錯誤：{{error}}",
+      "sendDirection": "傳送指令",
+      "composerPlaceholders": {
+        "runningWithSteer": "排隊跟進；{{steerShortcut}} 插話糾正…",
+        "follow_up": "排隊跟進，已完成的結果不會被覆蓋…",
+        "resume": "繼續這個 Subagent…"
+      },
+      "sendShortcutHint": "{{shortcut}} 傳送 · Shift+Enter 換行",
+      "childEndedControlHint": "該 Subagent 已結束。請選擇「總覽」或仍在執行的 Subagent 再傳送指令。",
+      "controlFailed": "指令未能送達。請確認 Subagent 仍可用後再試一次。",
+      "controlActions": {
+        "steer": "目前工具結束後修正",
+        "follow_up": "排入跟進",
+        "resume": "繼續 Subagent"
+      },
       "returnedResult": "回傳結果",
+      "copyResult": "複製",
+      "copiedResult": "已複製",
       "resultTruncated": "回傳結果過長，目前僅顯示部分內容。",
       "latestUpdate": "最近更新",
+      "technicalDetails": "技術詳情",
+      "waitingForReply": "Subagent 正在處理…",
+      "noReply": "Subagent 未傳回回覆，請展開技術詳情查看失敗原因。",
+      "failedNoReply": "Subagent 執行失敗，但沒有傳回可讀詳情。",
+      "stoppedNoReply": "Subagent 已停止，尚未傳回結果。",
+      "completedNoReply": "Subagent 已完成，但沒有傳回結果。",
+      "errors": {
+        "providerNotConnected": "目前尚未連接此供應商。請先連接帳號或設定憑證後再試。",
+        "credentialInvalid": "供應商憑證已失效或遭拒。請重新連接後再試。",
+        "modelInvalid": "所選模型無法使用或名稱無效。請改用目前任務可用的模型。",
+        "rateLimited": "供應商目前限制請求頻率。請稍後再試。",
+        "serviceUnavailable": "供應商服務暫時無法使用。請稍後再試。",
+        "requestInvalid": "供應商拒絕了這次請求。請檢查模型與任務設定後再試。",
+        "unknown": "Subagent 執行失敗，可展開下方原始詳情查看原因。",
+        "rawDetails": "查看原始詳情"
+      },
       "activity": "活動記錄",
       "noActivity": "Harness 暫未提供活動詳情。",
-      "transcript": "完整記錄",
-      "noTranscript": "Harness 暫未提供完整記錄。",
+      "systemLog": "執行日誌",
+      "noSystemLog": "暫無執行日誌。",
+      "loadMoreTranscript": "載入更多記錄",
       "transcriptUnavailable": "該 Harness 尚未向 Cindy 提供完整的子任務記錄；已回傳的結果和生命週期活動仍會保留。",
-      "transcriptRoles": {
-        "parent": "父任務",
-        "subagent": "Subagent",
-        "tool": "工具",
-        "system": "系統"
+      "tool": {
+        "fallbackName": "工具",
+        "running": "執行中…",
+        "failed": "失敗",
+        "input": "輸入",
+        "result": "輸出",
+        "noDetails": "沒有記錄輸入或輸出。"
+      },
+      "controlBadges": {
+        "steer": "插話修正",
+        "follow_up": "跟進",
+        "resume": "繼續",
+        "stop": "停止"
       },
       "lastTool": "最近工具：{{tool}}",
       "tokens": "{{value}} tokens",
+      "toolUses_one": "{{count}} 次工具呼叫",
+      "toolUses_other": "{{count}} 次工具呼叫",
+      "systemEvents": {
+        "stop-requested": "父任務要求停止。",
+        "control-requested": "父任務送出了一則控制要求。",
+        "transcript-truncated": "已達到記錄的儲存上限。",
+        "turn-ended": "Subagent 本輪已結束。",
+        "command-refused": "PI 拒絕了一則子任務命令。",
+        "generation-unreadable": "這段對話中較早的部分無法讀取。"
+      },
       "activityKinds": {
         "started": "已啟動",
         "progress": "進度",
@@ -5990,9 +6055,9 @@
       "processCount_one": "處理程序樹：{{count}} 個處理程序",
       "processCount_other": "處理程序樹：{{count}} 個處理程序",
       "agentsEmpty": "當前沒有執行中的 Agent 處理程序，啟動任務後會在這裡展示佔用",
-      "tableLabel": "按處理程序展示的資源用量",
+      "tableLabel": "資源監視器",
       "sortBy": "按{{column}}排序",
-      "loading": "正在讀取資源用量…",
+      "loading": "正在讀取處理程序…",
       "remoteUnavailableTitle": "遠端任務暫不可用",
       "remoteUnavailableDescription": "此面板僅讀取本機處理程序，僅適用於在此裝置上執行的本機任務。",
       "selectHint": "選擇一個處理程序",
@@ -7579,6 +7644,7 @@
     },
     "chatInput": {
       "defaultPlaceholder": "今天我們做點什麼呢~",
+      "createAgentPlaceholder": "你好，{{appName}}！",
       "voiceInput": {
         "start": "開始語音輸入",
         "stop": "停止語音輸入",
@@ -7857,6 +7923,8 @@
       "subagentStarted": "Subagent {{name}} 已啟動",
       "showDetails": "展開 Subagent 詳情",
       "hideDetails": "收起 Subagent 詳情",
+      "showFullResult": "展開完整結果",
+      "hideFullResult": "收起結果",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
@@ -8002,6 +8070,8 @@
       "rateLimitRetrying": "請求受到限流，正在自動重試（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "模型服務繁忙，上游暫時沒有可用容量。可點選「重試」，或換一個模型。",
       "overloadBusyNoRetry": "模型服務繁忙，上游暫時沒有可用容量。可稍後重試，或換一個模型。",
+      "streamInterrupted": "模型輸出中途中斷了。通常是上游暫時故障，可點選「重試」。",
+      "streamInterruptedNoRetry": "模型輸出中途中斷了。通常是上游暫時故障，請稍後重試。",
       "networkShowRaw": "檢視原始錯誤",
       "networkHideRaw": "收起原始錯誤",
       "silentStopContinue": "繼續",

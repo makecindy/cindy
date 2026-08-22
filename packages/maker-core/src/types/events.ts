@@ -68,6 +68,7 @@ export interface AgentTaskUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+  costUsd?: number;
 }
 
 export interface AgentTaskUpdateEventData {
@@ -83,10 +84,17 @@ export interface AgentTaskUpdateEventData {
   description?: string;
   /** Provider summary or final subagent answer. */
   summary?: string;
+  /** Host-only complete terminal return; stripped before renderer/device-link broadcast. */
+  returnedResult?: string;
+  /** Distinguishes an explicit empty terminal return from an omitted field. */
+  returnedResultEmpty?: boolean;
+  /** The durable runner bounded the complete terminal return. */
+  returnedResultTruncated?: boolean;
   outputFile?: string;
   usage?: AgentTaskUsage;
   lastToolName?: string;
   taskType?: string;
+  subagentParentContext?: 'none' | 'snapshot' | 'live';
   workflowName?: string;
   /**
    * 实际模型名；`null` 是子代理多 receiver 观测冲突/显式清除的合法值，
@@ -94,6 +102,8 @@ export interface AgentTaskUpdateEventData {
    */
   model?: string | null;
   reasoningEffort?: string;
+  createdAt?: string;
+  updatedAt?: string;
   receiverThreadIds?: string[];
   /** Explicit durable-workspace identity; control/task-card-only updates omit it. */
   subagentObservation?: SubagentObservation;
@@ -323,6 +333,14 @@ export interface UsageSnapshot {
   contextTokens: number;
   contextWindow: number;
   costUsd: number;
+  /** Turn-cumulative output tokens (includes reasoning). */
+  outputTokens?: number;
+  /** Generation-only milliseconds for this turn, including any open interval. */
+  generationDurationMs?: number;
+  /** True while the model currently owns the turn (renderer may tick locally). */
+  generationActive?: boolean;
+  /** False when live TPS must be hidden. Omitted on placeholder status frames. */
+  generationReliable?: boolean;
 }
 
 /**

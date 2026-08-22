@@ -42,7 +42,6 @@ import {
   computeSelectedRowScrollTop,
   priceTierOf,
   railItemKey,
-  resolveActiveFavoriteAnchorUid,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
   sameAnchor,
@@ -172,6 +171,12 @@ export interface UnifiedModelPanelProps {
    */
   sessionEngineFilter?: {
     currentAgent: AgentKind;
+    /**
+     * 任务**正在跑**的引擎(不跟随切换意图)。跨引擎确认与切换路由拿它和行上的生效引擎比:
+     * 意图期 currentAgent 会翻到目标,用 currentAgent 判断会把「点 Pi 收藏」当成同引擎、
+     * 跳过确认框(Chris 2026-08-20)。缺省 = 回落 currentAgent(草稿 / 无 runtime 的入口)。
+     */
+    runtimeAgent?: AgentKind;
     /**
      * 返回 `false` = 调用方**没有**执行这次切换(典型:跨引擎确认弹窗被取消)。
      * 面板本身不消费返回值,但包在外面的 ModelSelector 靠它决定「收起面板」还是
@@ -418,30 +423,16 @@ export function UnifiedModelPanel({
   // 选中的收藏锚点**必须仍然存在**才算数(规格 §1.5「删除选中条目时选中回落到对应模型
   // 默认」)。同一条兜底也覆盖切账号:收藏 store 按 dataOwnerId 分区,换号后旧 uid 在新
   // 分区里查无此条 —— 不做这层解析就会两头落空(收藏行没了、模型行的勾又被抑制)。
-  // 存在之外还要**完整配置仍然相等**(2026-08-19 review P2):上游锚点校验只比身份三维
-  // (模型/来源/引擎),外部(device-link seed / 另一窗口 / 另一控制端)只改同一模型的
-  // 深度或 Fast 时,身份照样全对 —— 副本 ≠ live 的收藏不能再勾住。逐维口径与误杀
-  // 分析见 resolveActiveFavoriteAnchorUid 头注;所有锚点入口都汇到这一个派生点。
+  //
+  // 收藏是独立选中项(Chris 2026-08-20):只认 uid 还在不在,不拿正在跑的引擎/思维/加速
+  // 去对副本。对上才打勾,等于让下面同名模型行把焦点抢走 —— 点了 Pi 收藏、任务还停在
+  // Claude 时必现。
   const activeFavoriteUid = useMemo(
     () =>
-      resolveActiveFavoriteAnchorUid({
-        selectedFavoriteUid,
-        favorites,
-        entries,
-        liveEffort: selectedEffort,
-        liveFast: fastMode,
-        liveAgent: liveEngineAgent,
-        agentFastModeCapable,
-      }),
-    [
-      agentFastModeCapable,
-      entries,
-      fastMode,
-      favorites,
-      liveEngineAgent,
-      selectedEffort,
-      selectedFavoriteUid,
-    ],
+      selectedFavoriteUid && favorites.some((item) => item.uid === selectedFavoriteUid)
+        ? selectedFavoriteUid
+        : null,
+    [favorites, selectedFavoriteUid],
   );
 
   // ★ 引擎那一半(engineOverride / pinnedEngine / forceEngine 的合成与 isSelectedModelRow
@@ -619,6 +610,9 @@ export function UnifiedModelPanel({
       rowTop: rowRect.top - listRect.top + el.scrollTop,
       rowBottom: rowRect.bottom - listRect.top + el.scrollTop,
     });
+    // 只滚动、不抢焦点(DESIGN.md §14.2:弹层打开焦点在搜索框)。打开/改搜索词时
+    // 把焦点搬到选中行,第一个字符就会把搜索框失焦。勾选与居中已经能让收藏行可见;
+    // 键盘在行上 ←/Enter 仍由行自己的 tabIndex 接手。
     if (alignment.oversized) {
       // 行比可视区还高:此刻只能顶对齐,但**保持在途**(2026-08-19 预审 P1-3)——morph 生长
       // 途中的一串中间尺寸都可能暂时「装不下一行」,在这里收工的话面板长开后不再复核,
@@ -747,9 +741,8 @@ export function UnifiedModelPanel({
     return () => document.removeEventListener('scroll', onAnyScroll, true);
   }, [cancelClose, closeFlyout, flyAnchor]);
 
-  useEffect(() => {
-    if (interactionDisabled) closeFlyout();
-  }, [closeFlyout, interactionDisabled]);
+  // 切换事务 in-flight 时面板会 interactionDisabled 置灰,但浮层不能收 —— 收了就是
+  // 「改思维闪关菜单」(Chris 2026-08-20):改档走 performAgentSwitch → disabled → 浮层没了。
 
   const isSelectedRow = useCallback(
     (anchor: UnifiedAnchor, entry: UnifiedModelEntry): boolean => {
@@ -789,9 +782,10 @@ export function UnifiedModelPanel({
   } = useUnifiedRowActions({
     interactionDisabled,
     isLiveRow,
-    // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值 —— 与 configOf 里
-    // 「选中行读 live 值」取的是同一个格子(见 useUnifiedRowActions.liveEffort)。
+    // 两笔实时写入(深度 + Fast)里第二笔失败时回滚第一笔用的原值,以及收藏 live 判定
+    // 要比的实时深度 / Fast —— 与 configOf 里「选中行读 live 值」取的是同一个格子。
     liveEffort: selectedEffort,
+    liveFast: fastMode,
     modelMemory,
     onEffortChangeLive,
     onFastModeChangeLive,

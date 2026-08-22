@@ -80,6 +80,7 @@ import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -199,9 +200,14 @@ export function SessionCard({
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
-  // 卡片/列表的正文固定给预览区域。list 保留 main 既有实时执行文案;
-  // card 模式不跟随 runningDetail 跳动,只显示稳定任务摘要 / 最近消息,完成后由 summary 更新。
-  const summaryPreview = session.summary ?? session.preview ?? null;
+  // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;
+  // card + 置顶才用稳定任务摘要,完成后由 summary 更新。
+  const bodyPreview = resolveSessionCardBody({
+    variant,
+    pinned: isPinned,
+    summary: session.summary,
+    preview: session.preview,
+  });
 
   // awaiting 角标数据源:优先 Agent Island 的实时活动(mac);但 Agent Island 仅在
   // macOS Sonoma+ 可用(service 在其它平台 return null),故非 mac / 旧系统平台中立兜底
@@ -227,9 +233,16 @@ export function SessionCard({
     islandActivity?.phase === 'running' && islandActivity.compactDetail
       ? islandActivity.compactDetail
       : null;
-  const listPreview = awaitingText ?? runningDetail ?? summaryPreview;
-  const cardPreview = awaitingText ?? summaryPreview;
-  const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2;
+  const listPreview = awaitingText ?? runningDetail ?? bodyPreview;
+  const cardPreview = awaitingText ?? bodyPreview;
+  const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
+  const cardPreviewLineClamp = usesPinnedCardSummary
+    ? 3
+    : isRunning
+      ? 2
+      : isAutomationGenerated
+        ? 1
+        : 2;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
   const cardPrRefs = usePrRefsForSession(session.id);

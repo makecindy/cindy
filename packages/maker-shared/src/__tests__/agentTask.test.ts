@@ -58,6 +58,14 @@ describe('subagentSpawnResultIndicatesRunning', () => {
     expect(subagentSpawnResultIndicatesRunning('Agent', undefined)).toBe(false);
     expect(subagentSpawnResultIndicatesRunning('Task', null)).toBe(false);
     expect(subagentSpawnResultIndicatesRunning('collab:spawnAgent', undefined)).toBe(false);
+    expect(subagentSpawnResultIndicatesRunning('subagent', undefined)).toBe(false);
+  });
+
+  it('recognises the durable PI launch receipt', () => {
+    expect(subagentSpawnResultIndicatesRunning(
+      'subagent',
+      'Cindy subagent launched. The agent is working in the background.',
+    )).toBe(true);
   });
 });
 

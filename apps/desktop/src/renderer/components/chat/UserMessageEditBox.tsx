@@ -42,6 +42,10 @@ import { ListComposerTextarea } from '@/components/new-chat/ListComposerTextarea
 import { toast } from '@/lib/toast';
 import { ApiError } from '@/lib/httpClient';
 import { rewindPreview } from '@/lib/sessionService';
+import {
+  readSendFollowCancelGeneration,
+  tryRequestFollowLatest,
+} from '@/components/chat/autoFollowIntent';
 import { commitEditAndResendWithRunningRetry } from '@/lib/editLastUserMessage';
 import type { RewindDraftImage } from '@/lib/rewindDraftAttachments';
 import type { FileRef, PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
@@ -204,6 +208,8 @@ export function UserMessageEditBox({
         : submitTokenIsRuntimeAlias && originalHadConfirmedRange && rebuiltSlashRange
           ? [rebuiltSlashRange]
           : undefined;
+      const followStartGeneration = readSendFollowCancelGeneration(sessionId);
+      let accepted = true;
       if (onCommitOverride) {
         // 被拦消息:普通重发(不 rewind)。失败抛错落入下方 catch 保留编辑态。
         await onCommitOverride({
@@ -214,7 +220,7 @@ export function UserMessageEditBox({
           ...(preservedSlashCommandRanges !== undefined ? { slashCommandRanges: preservedSlashCommandRanges } : {}),
         });
       } else {
-        await commitEditAndResendWithRunningRetry({
+        accepted = await commitEditAndResendWithRunningRetry({
           sessionId,
           clientId: messageClientId,
           text: submitText,
@@ -229,6 +235,16 @@ export function UserMessageEditBox({
       }
       // 先归零守卫再 onSent:onSent 让父组件立刻卸载本组件,晚于它的 setState
       // 在已卸载组件上是无效 no-op(bot review 指出的死代码顺序问题)。
+      // 编辑框挂在 MessageStream(key=sessionId) 里,切走即卸载;跟底 store 按
+      // session 隔离,这里 bump 不会钉到别的会话。CCAgentSessionView 会在
+      // `/cc-agent/:id` 切换后存活,所以那边才比对 sessionIdRef.current。
+      if (accepted) {
+        tryRequestFollowLatest({
+          sourceSessionId: sessionId,
+          currentSessionId: sessionId,
+          startGeneration: followStartGeneration,
+        });
+      }
       submittingRef.current = false;
       setSubmitting(false);
       onSent();

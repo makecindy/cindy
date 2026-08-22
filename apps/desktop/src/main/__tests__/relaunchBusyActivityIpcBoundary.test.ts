@@ -56,6 +56,7 @@ function countingSources(busy: boolean) {
     anyGhostSessionBusy: (): boolean => { h.reads += 1; return false; },
     anyBackgroundBashRunning: (): boolean => { h.reads += 1; return false; },
     anyCindySlotJobRunning: (): boolean => { h.reads += 1; return false; },
+    anyPiSubagentRunning: (): boolean => { h.reads += 1; return false; },
     anySchedulerRunRunning: async (): Promise<boolean> => { h.reads += 1; return false; },
   });
 }

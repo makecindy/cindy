@@ -1808,6 +1808,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         reason: null,
         installUrl: null,
         teamId: null,
+        intent: 'add',
       };
     } else {
       markBindingPending();
@@ -1832,6 +1833,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       reason: null,
       installUrl: null,
       teamId,
+      intent: teamId !== null ? 'rebind' : 'add',
     };
     armBindWatchdog();
     notifyStatus(toView());
@@ -1925,6 +1927,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             reason: HOOK_BIND_REASON_ALREADY_BOUND,
             installUrl: null,
             teamId,
+            intent: 'add',
           };
         }
         if (idx >= 0) multiBindings[idx] = row;
@@ -1985,6 +1988,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 授权流早期 server 不带 teamId(用户尚未选 workspace), 保留本地发起时
       // 记下的目标 team(重绑场景)供 UI 定位
       teamId: payload.teamId ?? pendingBind?.teamId ?? null,
+      // 发起意图在本地记录并全程保留(server 回放/终止态更新都不改写):
+      // add 流终止态即使带 teamId 也是新增失败, 重试必须回 add 流程。
+      // 进程重启/重连后内存 pendingBind 丢失时 fallback 恒为 add —— 不能靠
+      // teamId 猜: rebind 流丢失意图后走 add 授权页不预选, 用户仍能选到目标
+      // team 完成重绑(仅少一步预选); add 流被误判 rebind 则授权页固定到旧
+      // workspace, 用户无法切换, 完全卡死。两害相权取前者。
+      intent: pendingBind?.intent ?? 'add',
     };
     // 授权/安装看门狗跟随真实状态(语义同老路径, 见各 arm 函数注释)
     if (state !== 'pending') clearBindWatchdog();

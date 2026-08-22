@@ -49,8 +49,7 @@ describe('performMessageDeletion', () => {
       source.indexOf('export function broadcastMessageDeleted'),
     );
 
-    expect(deletionBlock).toContain('const visibleMessageProjection = and(');
-    expect(deletionBlock).toContain('.where(visibleMessageProjection)');
+    expect(deletionBlock).toContain('preview = await latestVisiblePreview(sessionId);');
     expect(deletionBlock).not.toContain('.where(eq(messages.sessionId, sessionId))');
   });
 
