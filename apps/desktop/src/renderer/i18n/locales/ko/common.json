@@ -7795,6 +7795,10 @@
       "waitForReply": "문서 영역에서 회신을 기다리는 중…",
       "modelSwitchedFastModeOff": "모델이 전환되었으며 Fast Mode가 비활성화되었습니다"
     },
+    "remoteDesktopConfirmation": {
+      "title": "제어 대상 컴퓨터에서 확인이 필요합니다",
+      "description": "제어 대상 컴퓨터에서 Cindy를 열어 내용을 검토하고 응답하세요."
+    },
     "handoff": {
       "card": {
         "lastActive": {

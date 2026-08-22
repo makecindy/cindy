@@ -44,6 +44,7 @@ import {
   type PendingIssueConfirm,
   type PendingRenameSessionsConfirm,
   type PendingGhostGrantConfirm,
+  type PendingRemoteDesktopConfirmation,
   type PendingPlanReview,
   type PlanViewerState,
   type QueuedMessage,
@@ -255,6 +256,8 @@ interface UseCCAgentChatReturn {
   respondToRenameSessionsConfirm: (result: { confirmed: true } | { confirmed: false }) => void;
   /** ghost_grant_confirm: Currently pending ghost file-grant confirm card */
   pendingGhostGrantConfirm: PendingGhostGrantConfirm | null;
+  /** Device Link Desktop controller: read-only host confirmation status. */
+  pendingRemoteDesktopConfirmation: PendingRemoteDesktopConfirmation | null;
   /** ghost_grant_confirm: Respond to the pending ghost file-grant confirm card */
   respondToGhostGrantConfirm: (
     result: { confirmed: true; allowDirs?: boolean } | { confirmed: false },
@@ -885,6 +888,7 @@ export function useCCAgentChat(
     pendingRenameSessionsConfirm: lightState.pendingRenameSessionsConfirm,
     respondToRenameSessionsConfirm,
     pendingGhostGrantConfirm: lightState.pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation: lightState.pendingRemoteDesktopConfirmation,
     respondToGhostGrantConfirm,
     planViewerState: lightState.planViewerState,
     setPlanViewerState,
