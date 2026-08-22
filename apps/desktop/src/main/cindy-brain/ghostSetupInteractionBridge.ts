@@ -14,6 +14,7 @@ import type {
 import { randomUUID } from 'node:crypto';
 import { GHOST_SECRET_VALUE_MAX_CHARS, isGhostSetupErrorCode } from '../../shared/ghost.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
+import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
 export interface GhostSetupInteractionStep {
   id: string;
@@ -370,25 +371,50 @@ function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
 
 interface DesktopOnlyConfirmationProjection {
   remoteRequestId: string;
+  expiresAt: number;
 }
 
 // Device Link must not receive a host confirmation's real request id: it is the
 // capability checked by the trusted Desktop resolver. Keep the opaque id only
 // long enough to translate the paired dismissal event for remote read-only UI.
 const desktopOnlyConfirmationProjections = new Map<string, DesktopOnlyConfirmationProjection>();
+const MAX_DESKTOP_CONFIRMATION_PROJECTIONS = 128;
+
+function pruneDesktopOnlyConfirmationProjections(now = Date.now()): void {
+  for (const [requestId, projection] of desktopOnlyConfirmationProjections) {
+    if (projection.expiresAt <= now) desktopOnlyConfirmationProjections.delete(requestId);
+  }
+  while (desktopOnlyConfirmationProjections.size >= MAX_DESKTOP_CONFIRMATION_PROJECTIONS) {
+    const oldest = desktopOnlyConfirmationProjections.keys().next().value;
+    if (oldest === undefined) break;
+    desktopOnlyConfirmationProjections.delete(oldest);
+  }
+}
 
 function projectDesktopOnlyConfirmation(request: Record<string, unknown>): Record<string, unknown> | null {
   const requestId = request.requestId;
   if (typeof requestId !== 'string' || requestId.length === 0) return null;
+  pruneDesktopOnlyConfirmationProjections();
   let projection = desktopOnlyConfirmationProjections.get(requestId);
   if (!projection) {
-    projection = { remoteRequestId: `desktop-confirm-${randomUUID()}` };
+    projection = { remoteRequestId: `desktop-confirm-${randomUUID()}`, expiresAt: Date.now() + HOST_CONFIRM_TIMEOUT_MS };
     desktopOnlyConfirmationProjections.set(requestId, projection);
   }
   // Preserve only the known kind so mobile can render its existing read-only
   // guidance. Drafts, file paths, previews, identities, and the real id stay
   // on the controlled Desktop.
   return { kind: request.kind, requestId: projection.remoteRequestId };
+}
+
+/** Register before broadcast so a later Device Link activation cannot leak the source id on dismissal. */
+export function rememberDesktopOnlyConfirmation(requestId: string): void {
+  pruneDesktopOnlyConfirmationProjections();
+  if (!desktopOnlyConfirmationProjections.has(requestId)) {
+    desktopOnlyConfirmationProjections.set(requestId, {
+      remoteRequestId: `desktop-confirm-${randomUUID()}`,
+      expiresAt: Date.now() + HOST_CONFIRM_TIMEOUT_MS,
+    });
+  }
 }
 
 /**
@@ -405,11 +431,15 @@ export function projectInteractionRequestForRemote<T>(request: T): T | null {
 }
 
 /** Rewrites the paired dismissal to the opaque id exposed by the request projection. */
-export function projectInteractionDismissedForRemote<T>(payload: T): T {
+export function projectInteractionDismissedForRemote<T>(payload: T): T | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
   const requestId = (payload as { requestId?: unknown }).requestId;
   if (typeof requestId !== 'string') return payload;
   const projection = desktopOnlyConfirmationProjections.get(requestId);
+  if (projection && projection.expiresAt <= Date.now()) {
+    desktopOnlyConfirmationProjections.delete(requestId);
+    return null;
+  }
   if (!projection) return payload;
   desktopOnlyConfirmationProjections.delete(requestId);
   return { ...(payload as Record<string, unknown>), requestId: projection.remoteRequestId } as T;

@@ -38,6 +38,7 @@
     "composerBlockedByPending": "Handle the pending request from your computer before typing again.",
     "missingRequestId": "This remote interaction has no requestId, so the decision can't be sent back.",
     "issueConfirmUnsupported": "Issue submission is confirmed only on your computer. Go back to the desktop app to confirm or cancel.",
+    "desktopConfirmUnsupported": "This confirmation is handled only on the controlled computer. Go back to the desktop app to continue.",
     "unsupportedType": "This remote interaction type isn't supported on mobile yet.",
     "unsupportedKind": "Unsupported",
     "desktopOnlyKind": "On Computer",

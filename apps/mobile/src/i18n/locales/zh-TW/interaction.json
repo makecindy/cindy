@@ -38,6 +38,7 @@
     "composerBlockedByPending": "先處理電腦端的待處理請求後才能繼續輸入。",
     "missingRequestId": "這個遠端互動缺少 requestId，無法回傳決定。",
     "issueConfirmUnsupported": "Issue 提交確認只在電腦端處理。請回到桌面端確認或取消提交。",
+    "desktopConfirmUnsupported": "此確認只能在被控電腦處理。請回到桌面端繼續。",
     "unsupportedType": "手機版暫不支援這個遠端互動型別。",
     "unsupportedKind": "暫不支援",
     "desktopOnlyKind": "電腦端處理",
