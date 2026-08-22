@@ -79,6 +79,8 @@ describe('EmptyState 面板收束(2026-08)', () => {
     fireEvent.click(screen.getByText('rightSidebar.tabs.empty.openDelegations'));
     expect(onAddArtifactsTab).toHaveBeenCalledOnce();
     expect(onAddDelegationsTab).toHaveBeenCalledOnce();
+  });
+
   it('Claude Code/Codex 任务不显示 Subagent 快捷入口', () => {
     renderEmptyState(vi.fn(), false);
     expect(screen.queryByText('rightSidebar.tabs.empty.openSubagents')).toBeNull();
