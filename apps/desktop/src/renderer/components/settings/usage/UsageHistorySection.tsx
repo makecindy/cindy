@@ -28,7 +28,7 @@ import { USAGE_TOP_MODELS, usageModelKey } from '@/components/new-chat/usagePale
 import { UsageStatRow } from './UsageStatRow';
 import { UsageTokenBars } from './UsageTokenBars';
 import { UsageAgentTable, UsageModelTable } from './UsageBreakdownTables';
-import { UsageTaskTable } from './UsageTaskTable';
+import { UsageTaskTable, useTopTokenSessions } from './UsageTaskTable';
 import {
   buildAgentRows,
   buildModelRows,
@@ -78,14 +78,17 @@ export function UsageHistorySection(): React.JSX.Element {
   const summary = useMemo(() => buildSummary(history), [history]);
   const modelRows = useMemo(() => buildModelRows(history), [history]);
   const agentRows = useMemo(() => buildAgentRows(history), [history]);
+  // 配色顺序必须来自 modelRows 而不是 history.models: 后者由 main 按**可比金额**降序排
+  // (usageHistory.ts 的 comparable), 本页只讲 token —— 直接用它会让同一个模型在柱图与
+  // 模型表里配到不同颜色, 还会让"金额高但 token 很少"的模型挤掉真正的 token 前 N 名。
   const colorOrder = useMemo(
-    () =>
-      (history?.models ?? [])
-        .slice(0, USAGE_TOP_MODELS)
-        .map((m) => usageModelKey(m.agentKind, m.model)),
-    [history],
+    () => modelRows.slice(0, USAGE_TOP_MODELS).map((m) => usageModelKey(m.agentKind, m.model)),
+    [modelRows],
   );
 
+  // 任务行与用量聚合是两条数据源: 聚合里有 token, 本地任务却可能一条都没有
+  // (用户删光了会话, 或列表还没加载完)。空时整张卡片不渲染, 不留空壳。
+  const taskRows = useTopTokenSessions();
   const empty = isUsageHistoryEmpty(history);
 
   return (
@@ -148,12 +151,14 @@ export function UsageHistorySection(): React.JSX.Element {
             </Card>
           )}
 
-          <Card
-            title={t('usageHistory.tasks.title')}
-            subtitle={t('usageHistory.tasks.subtitle')}
-          >
-            <UsageTaskTable />
-          </Card>
+          {taskRows.length > 0 && (
+            <Card
+              title={t('usageHistory.tasks.title')}
+              subtitle={t('usageHistory.tasks.subtitle')}
+            >
+              <UsageTaskTable rows={taskRows} />
+            </Card>
+          )}
         </>
       )}
     </div>

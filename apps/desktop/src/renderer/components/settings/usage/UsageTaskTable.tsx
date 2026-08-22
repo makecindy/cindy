@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
 import { useCCSessions } from '@/hooks/useCCSessions';
+import type { Session } from '@/lib/ccAgent.types';
 import { formatSidebarTime } from '@/features/cc-agent/lib/formatSidebarTime';
 import { useProviders } from '@/hooks/useProviders';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
@@ -61,13 +62,15 @@ function activeWithinWindow(iso: string | null | undefined, cutoffMs: number): b
   return Number.isFinite(ts) && ts >= cutoffMs;
 }
 
-export function UsageTaskTable(): React.JSX.Element | null {
-  const { t } = useTranslation();
+/**
+ * 候选行 —— 单独暴露成 hook, 让调用方能在**渲染卡片之前**知道有没有行。
+ * 组件内部返回 null 会留下一张只有标题、正文全空的卡片 (会话被删光 / 列表首次加载中)。
+ */
+export function useTopTokenSessions(): Session[] {
   // 归档的任务同样消耗过 token, 统计口径不该因为用户归档而变。
   const { sessions } = useCCSessions({ includeArchived: 'all' });
-  const { providers } = useProviders();
 
-  const rows = useMemo(() => {
+  return useMemo(() => {
     const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
     return sessions
       .filter(
@@ -79,8 +82,11 @@ export function UsageTaskTable(): React.JSX.Element | null {
       .sort((a, b) => b.totalTokenUsage - a.totalTokenUsage)
       .slice(0, TOP_TASKS);
   }, [sessions]);
+}
 
-  if (rows.length === 0) return null;
+export function UsageTaskTable({ rows }: { rows: Session[] }): React.JSX.Element {
+  const { t } = useTranslation();
+  const { providers } = useProviders();
 
   return (
     <table className="w-full border-collapse">
