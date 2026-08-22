@@ -3205,7 +3205,11 @@ const createWindow = () => {
     : nativeTheme.shouldUseDarkColors;
   const bgColor =
     process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
-  const winBackdropConfig = resolveVibrancyConfig('cindy', isDark, process.platform);
+  const winBackdropConfig = resolveVibrancyConfig(
+    persistedTheme?.familyId ?? 'cindy',
+    isDark,
+    process.platform,
+  );
 
   // Window state persistence (F-WST-1): remembers position / size / maximized
   // / fullscreen across launches. Falls back to the defaults below on first

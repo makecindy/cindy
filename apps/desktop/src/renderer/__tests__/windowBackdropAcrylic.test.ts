@@ -27,6 +27,12 @@ describe('Windows Acrylic resize backing contract', () => {
     expect(cindyDark.colors['surface-translucent-sidebar']).toBe(CINDY_ACRYLIC_WINDOW_BACKING.dark);
   });
 
+  it('uses the persisted family when choosing the creation-time material', () => {
+    expect(bootstrapSource).toContain(
+      "persistedTheme?.familyId ?? 'cindy',\n    isDark,\n    process.platform,",
+    );
+  });
+
   it('publishes the actual window material to a root data attribute', () => {
     expect(bootstrapSource).toContain(
       "createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none')",
