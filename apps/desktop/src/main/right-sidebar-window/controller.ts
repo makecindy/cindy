@@ -153,6 +153,8 @@ export class RsbWindowController {
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
   private automaticRecoveryAttempts = 0;
   private lastContext: RsbWindowContext | null = null;
+  /** 主窗最近一次上报的焦点上下文；pin 期间 lastContext 可能仍是侧栏宿主。 */
+  private lastReportedContext: RsbWindowContext | null = null;
   /**
    * Agent / 跨 session 呼起把子窗口钉在发起方 session 上。
    * 钉住期间主窗 setContext 的焦点切换不能把展示抢回台前 session；
@@ -415,6 +417,7 @@ export class RsbWindowController {
   /** 主窗上报渲染上下文:缓存 + 窗口活跃就转发。 */
   setContext(ctx: RsbWindowContext): void {
     this.rememberContext(ctx);
+    this.lastReportedContext = ctx;
     if (this.pinnedSessionId) {
       if (ctx.available && ctx.sessionId === this.pinnedSessionId) {
         this.clearPinnedSession();
@@ -1246,10 +1249,13 @@ export class RsbWindowController {
     if (this.deps.settings.read().detached) return;
     const main = this.deps.getMainWindow();
     if (!main || main.isDestroyed()) return;
+    const focusedSessionId =
+      sessionId ??
+      (this.lastReportedContext?.available ? this.lastReportedContext.sessionId : null);
     this.flushDeferredCommands(
       () => !main.isDestroyed(),
       (command) => this.deps.sendToWindow(main, this.deps.commandChannel, command),
-      sessionId,
+      focusedSessionId,
     );
   }
 

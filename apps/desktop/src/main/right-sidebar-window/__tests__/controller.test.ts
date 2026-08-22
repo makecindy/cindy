@@ -1392,6 +1392,24 @@ describe('setContext / routeCommand', () => {
     ]);
   });
 
+  it('flushes the main-window focus queue when merging back from a pinned host', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const closeB = { type: 'close-orca-workers-tab' as const, sessionId: 's2' };
+    await expect(
+      h.controller.routeCommand({ command: closeB, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setDetached(false);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeB,
+    ]);
+  });
+
   it('lets a user raise of the current host cancel a foreign pin', async () => {
     const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
     let finishA!: (value: typeof resolvedA) => void;
