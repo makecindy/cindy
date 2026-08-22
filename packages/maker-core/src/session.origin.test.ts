@@ -735,6 +735,34 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('clears leftover prior after an in-flight terminal so the live done can settle', async () => {
+    const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    queue({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'done', data: { reason: 'new-turn' }, source: 'codex' });
+
+    const liveDone = seen.find((event) => event.type === 'done');
+    expect(liveDone?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('terminal error 后先排空尾部，再允许新 attempt', async () => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);

@@ -1870,7 +1870,11 @@ export class Session {
     if (belongsToInFlightSend) {
       this.inFlightSendOwnsBlockedWait = false;
       this.staleTerminalQueuedGeneration = null;
-      if (this.isNewTurnProgressEvent(event)) {
+      if (
+        this.isNewTurnProgressEvent(event) ||
+        event.type === 'done' ||
+        isTerminalAgentErrorEvent(event)
+      ) {
         this.pendingPriorGeneration = null;
       }
       return inFlightGeneration;
