@@ -577,7 +577,10 @@ function BranchWorktreeChip({
                   className={cn(
                     'h-8 w-full rounded-[8px] border border-border bg-transparent',
                     'pl-7 pr-2 text-13 text-foreground outline-none',
-                    'placeholder:text-muted-foreground focus:border-primary/50',
+                    // DESIGN.md §4 Inputs & Forms:input focus 走 --focus-ring 一对
+                    // token(对齐 FileFilterInput),不开单独的 primary 边框。
+                    'placeholder:text-muted-foreground',
+                    'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
                   )}
                 />
               </div>
