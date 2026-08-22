@@ -389,3 +389,62 @@ describe('clearGhost', () => {
     expect(await slot.handleRequest('helper', RUN)).toMatchObject({ ok: true, status: 'running' });
   });
 });
+
+describe('可见任务自动切过去', () => {
+  it('onSession 一回填就切，收口不再切第二次', async () => {
+    const reveal = vi.fn();
+    let hooks: { onSession?: (sid: string) => void } | undefined;
+    let finish: (() => void) | null = null;
+    const runner = vi.fn((_req: unknown, h?: { onSession?: (sid: string) => void }) => {
+      hooks = h;
+      return new Promise((resolve) => {
+        finish = () => resolve({ ok: true, sessionId: 'sess-9', text: 'done' });
+      });
+    });
+    const { slot } = makeSlot({
+      runner: runner as unknown as GhostErrandRunner,
+      onRevealSession: reveal,
+    });
+    await slot.handleRequest('helper', RUN);
+    expect(reveal).not.toHaveBeenCalled();
+    hooks?.onSession?.('sess-9');
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal).toHaveBeenCalledWith('sess-9');
+    finish!();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('runner 没回调 onSession、只在收口给 sessionId 也切一次', async () => {
+    const reveal = vi.fn();
+    const { slot } = makeSlot({ onRevealSession: reveal });
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('runner 失败且从未给出 sessionId 不切', async () => {
+    const reveal = vi.fn();
+    const { slot } = makeSlot({
+      onRevealSession: reveal,
+      runner: vi.fn(async () => ({
+        ok: false as const,
+        errorCode: 'TIMEOUT' as const,
+        message: '超时了',
+      })) as unknown as GhostErrandRunner,
+    });
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('setRevealSession 可以后接线', async () => {
+    const reveal = vi.fn();
+    const { slot } = makeSlot();
+    slot.setRevealSession(reveal);
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledWith('sess-1');
+  });
+});

@@ -1597,6 +1597,7 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
 /** maker-ipc 完成初始化后注入「切到这条可见任务」；保持 cindy-brain 不反向依赖 deepLink。 */
 export function setGhostSessionRevealer(reveal: ((sessionId: string) => void) | null): void {
   getGhostAgentSlot().setRevealSession(reveal);
+  getGhostErrandSlot().setRevealSession(reveal);
 }
 
 let errandSlotSingleton: GhostErrandSlot | null = null;

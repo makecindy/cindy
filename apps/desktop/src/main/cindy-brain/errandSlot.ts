@@ -98,6 +98,11 @@ export interface GhostErrandSlotDeps {
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
   };
+  /**
+   * 派活落到专属可见任务时，由主机把左侧切过去。
+   * 签字门「执行」走这条：插件自己开一间 errand 会话干活。
+   */
+  onRevealSession?: (sessionId: string) => void;
 }
 
 /** 在途/完成的派活任务记录(内存表;语义同 cindySlot 的 CindyAsyncJob)。 */
@@ -107,6 +112,8 @@ interface ErrandJob {
   status: 'running' | 'done' | 'failed';
   /** runner 一旦确定 errand 会话即回填(running 期即可见)。 */
   sessionId?: string;
+  /** 本单已经切过左侧，onSession + 收口只切一次。 */
+  revealed?: boolean;
   result?: { sessionId: string; text: string; agentKind?: string; model?: string };
   errorCode?: GhostAgentErrandErrorCode;
   error?: string;
@@ -135,14 +142,21 @@ export class GhostErrandSlot {
   private readonly inFlightGhosts = new Set<string>();
   private readonly lastRunAt = new Map<string, number>();
   private runner: GhostErrandRunner | null;
+  private onRevealSession: ((sessionId: string) => void) | null;
 
   constructor(private readonly deps: GhostErrandSlotDeps) {
     this.runner = deps.runner ?? null;
+    this.onRevealSession = deps.onRevealSession ?? null;
   }
 
   /** maker-ipc 初始化完成后注入真实 runner;传 null 用于退出清理。 */
   setRunner(runner: GhostErrandRunner | null): void {
     this.runner = runner;
+  }
+
+  /** maker-ipc 初始化完成后注入任务聚焦；传 null 用于退出清理。 */
+  setRevealSession(reveal: ((sessionId: string) => void) | null): void {
+    this.onRevealSession = reveal;
   }
 
   /** clearGhost 只删 jobs，不删 inFlightGhosts；收口前两者可能短暂不一致。 */
@@ -279,12 +293,14 @@ export class GhostErrandSlot {
           {
             onSession: (sessionId) => {
               job.sessionId = sessionId;
+              this.revealSessionOnce(job, sessionId);
             },
           },
         );
         if (outcome.ok) {
           job.status = 'done';
           job.sessionId = outcome.sessionId;
+          this.revealSessionOnce(job, outcome.sessionId);
           job.result = {
             sessionId: outcome.sessionId,
             text: clampErrandResultText(outcome.text),
@@ -385,6 +401,16 @@ export class GhostErrandSlot {
       };
     }
     return fail(job.errorCode ?? 'TURN_FAILED', job.error ?? '派活失败');
+  }
+
+  private revealSessionOnce(job: ErrandJob, sessionId: string): void {
+    if (job.revealed) return;
+    job.revealed = true;
+    try {
+      this.onRevealSession?.(sessionId);
+    } catch {
+      // 聚焦失败不能让已经受理的派活对插件变失败。
+    }
   }
 
   private now(): number {
