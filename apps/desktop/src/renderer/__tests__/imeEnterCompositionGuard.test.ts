@@ -98,7 +98,10 @@ describe('PermissionPrompt global Enter guard', () => {
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
     expect(onRespond).toHaveBeenCalledTimes(1);
-    expect(onRespond).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'allow' }));
+    expect(onRespond).toHaveBeenCalledWith(
+      'perm-1',
+      expect.objectContaining({ behavior: 'allow' }),
+    );
   });
 
   it('Enter/Escape from an editable element are not hijacked', () => {

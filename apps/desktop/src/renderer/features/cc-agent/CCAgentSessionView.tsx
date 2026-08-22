@@ -1520,7 +1520,7 @@ export function CCAgentSessionView({
       if (!sessionId || !ownsHardwareTaskActions) return false;
       if (action.commandId === 'approval.approve') {
         if (pendingPermission) {
-          respondToPermission({ behavior: 'allow' });
+          respondToPermission(pendingPermission.requestId, { behavior: 'allow' });
           return true;
         }
         if (pendingPlanReview) {
@@ -1531,7 +1531,7 @@ export function CCAgentSessionView({
       }
       if (action.commandId === 'approval.decline') {
         if (pendingPermission) {
-          respondToPermission({
+          respondToPermission(pendingPermission.requestId, {
             behavior: 'deny',
             message: 'User denied',
             decisionClassification: 'user_reject',
@@ -4459,6 +4459,7 @@ export function CCAgentSessionView({
                   </>
                 ) : pendingPermission ? (
                   <PermissionPrompt
+                    key={pendingPermission.requestId}
                     permission={pendingPermission}
                     onRespond={respondToPermission}
                   />

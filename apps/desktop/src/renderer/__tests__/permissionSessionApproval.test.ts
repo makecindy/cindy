@@ -216,7 +216,7 @@ describe('permission interaction IPC', () => {
       },
     });
 
-    makerChatStore.respondToPermission(SESSION_ID, {
+    makerChatStore.respondToPermission(SESSION_ID, 'perm-2', {
       behavior: 'allow',
       updatedPermissions: permissionUpdates,
       decisionClassification: 'user_permanent',

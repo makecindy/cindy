@@ -27,7 +27,7 @@ import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope'
 
 interface PermissionPromptProps {
   permission: PendingPermission;
-  onRespond: (result: CCAgentPermissionResult) => void;
+  onRespond: (requestId: string, result: CCAgentPermissionResult) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,30 +102,36 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
   // ── Action handlers ──
 
   const handleAllowOnce = useCallback(() => {
-    onRespond({
+    onRespond(permission.requestId, {
       behavior: 'allow',
     });
-  }, [onRespond]);
+  }, [onRespond, permission.requestId]);
 
   const handleAlwaysAllow = useCallback(() => {
     if (!canAlwaysAllowForSession) {
       handleAllowOnce();
       return;
     }
-    onRespond({
+    onRespond(permission.requestId, {
       behavior: 'allow',
       updatedPermissions: sessionSuggestions,
       decisionClassification: 'user_permanent',
     });
-  }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions]);
+  }, [
+    canAlwaysAllowForSession,
+    handleAllowOnce,
+    onRespond,
+    permission.requestId,
+    sessionSuggestions,
+  ]);
 
   const handleDeny = useCallback(() => {
-    onRespond({
+    onRespond(permission.requestId, {
       behavior: 'deny',
       message: 'User denied',
       decisionClassification: 'user_reject',
     });
-  }, [onRespond]);
+  }, [onRespond, permission.requestId]);
 
   // ── Keyboard shortcuts ──
 
@@ -133,7 +139,7 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
     const handler = (e: KeyboardEvent) => {
       // IME 组合期间的 Enter(确认候选词)不算快捷键;焦点在可编辑元素上时
       // (侧栏重命名/查找栏等)也不劫持按键,避免把输入操作误判成授权决定。
-      if (e.isComposing) return;
+      if (e.isComposing || e.repeat) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;

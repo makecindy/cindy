@@ -157,7 +157,7 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
       screen.getByText('newChat.permissionPrompt.alwaysAllowScoped:{"scope":"Bash(curl:*)"}'),
     );
 
-    expect(onRespond).toHaveBeenCalledWith({
+    expect(onRespond).toHaveBeenCalledWith('req-1', {
       behavior: 'allow',
       updatedPermissions: [bashRule],
       decisionClassification: 'user_permanent',
@@ -171,7 +171,17 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', ctrlKey: true });
 
     expect(onRespond).toHaveBeenCalledWith(
+      'req-1',
       expect.objectContaining({ decisionClassification: 'user_permanent' }),
     );
+  });
+
+  it('忽略键盘自动重复，避免把长按 Enter 当成下一张卡的独立确认', () => {
+    const onRespond = vi.fn();
+    render(<PermissionPrompt permission={permission()} onRespond={onRespond} />);
+
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter', repeat: true });
+
+    expect(onRespond).not.toHaveBeenCalled();
   });
 });
