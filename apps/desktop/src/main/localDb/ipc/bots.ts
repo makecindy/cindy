@@ -40,7 +40,12 @@ import { readGitSafetySettings } from '../../maker-host/git-safety-settings-stor
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace.js';
 import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
 import { botProfileContentChanged, mergeBotProfileCapabilities } from './botProfileVersioning.js';
-import { writeBotProfileFolder } from '../../maker-ipc/botProfileFolder.js';
+import {
+  migrateBotProfileFolder,
+  readBotProfileFolder,
+  writeBotProfileFolder,
+} from '../../maker-ipc/botProfileFolder.js';
+import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
 import { createLogger } from '../../logger.js';
 
 const log = createLogger('bots');
@@ -165,6 +170,66 @@ export async function createBotCanonicalSession(
     throwIpcError('PRECONDITION_FAILED', 'Bot 数据服务尚未初始化');
   }
   return createBotCanonicalSessionImpl(input);
+}
+
+/**
+ * 把伙伴家里的文件收进数据库 —— 用户拿编辑器改完 SOUL.md、或者伙伴自己用文件
+ * 工具改完自己的灵魂之后,由这里派生一个新版本。
+ *
+ * 派生而不是就地改:运行中的任务认版本号,**进行中的对话仍跑在旧版本上,下一轮
+ * 才换过去**。就地改会让一个跑到一半的任务中途换身份。
+ *
+ * 挂在开新任务之前 —— 那正是「下一轮」的起点。整个过程失败不阻断开任务:最坏是
+ * 这一轮还用旧身份,下一轮再收。
+ */
+export async function reconcileBotProfileFolder(botId: string): Promise<void> {
+  const userDataDir = app.getPath('userData');
+  const db = getDbClient().drizzle;
+  try {
+    await syncBotProfileFromFolder(botId, {
+      readSnapshot: async (id) => {
+        const [profile] = await db
+          .select({ currentVersion: botProfiles.currentVersion })
+          .from(botProfiles)
+          .where(eq(botProfiles.id, id))
+          .limit(1);
+        if (!profile) return null;
+        const [version] = await db
+          .select()
+          .from(botProfileVersions)
+          .where(
+            and(
+              eq(botProfileVersions.botId, id),
+              eq(botProfileVersions.version, profile.currentVersion),
+            ),
+          )
+          .limit(1);
+        if (!version) return null;
+        return {
+          identitySource: version.identitySource,
+          config: parseJson(version.capabilitiesJson),
+          currentVersion: profile.currentVersion,
+        };
+      },
+      readFolder: (id) => readBotProfileFolder(userDataDir, id),
+      // 播种顺带把技能从旧目录搬进来 —— 存量伙伴第一次走到这里时一并完成。
+      seedFolder: async (id, seed) => {
+        await migrateBotProfileFolder(userDataDir, id, seed);
+      },
+      deriveVersion: async (input) => {
+        await getDbClient().tx('bots.updateProfile', {
+          id: input.botId,
+          identitySource: input.identitySource,
+          capabilitiesJson: safeJson(input.config),
+          profileContentChanged: true,
+          expectedCurrentVersion: input.expectedCurrentVersion,
+          now: Date.now(),
+        });
+      },
+    });
+  } catch (cause) {
+    log.warn('reconcile bot profile folder failed', { botId, error: String(cause) });
+  }
 }
 
 async function cancelBotDelegationChildren(sessionId: string, reason: string): Promise<void> {
@@ -1714,6 +1779,15 @@ export function registerBotIpc(): void {
   };
 
   createBotCanonicalSessionImpl = async (input) => {
+    /*
+      开新任务之前先把家里的文件收进来 —— 这正是「下一轮」的起点。用户拿编辑器
+      改完 SOUL.md、或者伙伴自己改完自己的灵魂,都在这一刻变成一个新版本;这一轮
+      任务随即按新版本组装。
+
+      放在锁外面:它只读文件、按需派生版本,不碰 canonical 指针,与替换协调器
+      要保护的东西不重叠。失败已在内部吞掉并记一笔,最坏是这一轮还用旧身份。
+    */
+    await reconcileBotProfileFolder(input.botId);
     const previousSessionId = input.expectedCanonicalSessionId;
     if (!previousSessionId) return createBotCanonicalSessionUnlocked(input);
     return coordinateBotCanonicalReplacement(
