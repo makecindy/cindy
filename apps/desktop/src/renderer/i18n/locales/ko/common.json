@@ -6917,6 +6917,7 @@
       },
       "stop": "이 작업 중지",
       "openInPanel": "백그라운드 작업 패널에서 열기",
+      "viewSubagentDetails": "하위 에이전트 세부 정보 보기",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
       "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",
