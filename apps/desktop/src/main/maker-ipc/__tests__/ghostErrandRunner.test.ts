@@ -132,20 +132,25 @@ describe('Pi 代办路由', () => {
 });
 
 describe('专属会话建/复用', () => {
-  it('无映射时创建会话并写映射,onSession 尽早回报', async () => {
+  it('无映射时创建会话并写映射,onSession 尽早回报,投递成功才 onDispatched', async () => {
     const { deps, emitters, writes } = makeDeps();
     const runner = createGhostErrandRunner(deps);
     const seen: string[] = [];
-    const p = runner(REQUEST, { onSession: (sid) => seen.push(sid) });
+    const dispatched: string[] = [];
+    const p = runner(REQUEST, {
+      onSession: (sid) => seen.push(sid),
+      onDispatched: (sid) => dispatched.push(sid),
+    });
     await vi.waitFor(() => {
       expect(emitters.has('sess-new')).toBe(true);
     });
+    expect(seen).toEqual(['sess-new']);
+    expect(dispatched).toEqual(['sess-new']);
     const e = emitters.get('sess-new')!;
     e.emit(textEvent('答案'));
     e.emit(doneEvent());
     const r = await p;
     expect(r).toMatchObject({ ok: true, sessionId: 'sess-new', text: '答案', agentKind: 'cc' });
-    expect(seen).toEqual(['sess-new']);
     expect(writes).toContainEqual(['helper', 'sess-new']);
   });
 
@@ -331,11 +336,20 @@ describe('忙检与投递', () => {
       isSessionBusy: () => true,
       dispatch: dispatch as unknown as GhostErrandRunnerDeps['dispatch'],
     });
-    expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({
+    const seen: string[] = [];
+    const dispatched: string[] = [];
+    expect(
+      await createGhostErrandRunner(deps)(REQUEST, {
+        onSession: (sid) => seen.push(sid),
+        onDispatched: (sid) => dispatched.push(sid),
+      }),
+    ).toMatchObject({
       ok: false,
       errorCode: 'BUSY',
     });
     expect(dispatch).not.toHaveBeenCalled();
+    expect(seen).toEqual(['sess-1']);
+    expect(dispatched).toEqual([]);
   });
 
   it('投递返回 queued(竞态窗口)→ 如实报 BUSY', async () => {
@@ -343,10 +357,16 @@ describe('忙检与投递', () => {
       readSessionId: () => 'sess-1',
       dispatch: async () => ({ ok: true as const, wakeKind: 'queued' as const }),
     });
-    expect(await createGhostErrandRunner(deps)(REQUEST)).toMatchObject({
+    const dispatched: string[] = [];
+    expect(
+      await createGhostErrandRunner(deps)(REQUEST, {
+        onDispatched: (sid) => dispatched.push(sid),
+      }),
+    ).toMatchObject({
       ok: false,
       errorCode: 'BUSY',
     });
+    expect(dispatched).toEqual([]);
   });
 
   it('投递失败映射:NOT_FOUND/ARCHIVED → SESSION_UNAVAILABLE 并解除映射', async () => {

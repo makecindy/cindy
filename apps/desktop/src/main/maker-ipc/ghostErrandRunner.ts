@@ -245,6 +245,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
         'errand 会话恰好正忙,本单任务已排队进该会话但结果不再取回;请稍后查看会话或重新提交',
       );
     }
+    hooks?.onDispatched?.(sessionId);
 
     // ── 收口:观察这一轮直到 done / 终态错误 / 超时 ─────────────────────
     const session = deps.getObservableSession(sessionId);

@@ -75,7 +75,7 @@ export interface GhostAgentSlotDeps {
   };
   /**
    * 执行落到一条可见任务时，由主机把左侧切过去。
-   * 后台 continue 不调用 — 调度器静默续跑不能抢当前任务。
+   * 只对 user-action 调用 — 后台 continue/new/fork 不能抢当前任务。
    */
   onRevealSession?: (sessionId: string) => void;
 }
@@ -344,12 +344,11 @@ export class GhostAgentSlot {
 
   private maybeRevealSession(
     trigger: string,
-    mode: GhostAgentRunMode,
+    _mode: GhostAgentRunMode,
     sessionId: string,
   ): void {
-    // 用户点击，或插件新建 / 分叉出一条可见任务：切到那条。
-    // 后台 continue 不切 —— 那是调度器静默续跑。
-    if (trigger !== 'user-action' && mode !== 'new' && mode !== 'fork') return;
+    // 只认用户当次点击。后台 new/fork 也会开可见任务，但不能抢前台。
+    if (trigger !== 'user-action') return;
     try {
       this.onRevealSession?.(sessionId);
     } catch {

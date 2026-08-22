@@ -391,23 +391,29 @@ describe('clearGhost', () => {
 });
 
 describe('可见任务自动切过去', () => {
-  it('onSession 一回填就切，收口不再切第二次', async () => {
+  it('onSession 只回填 id，投递成功后再切；收口不再切第二次', async () => {
     const reveal = vi.fn();
-    let hooks: { onSession?: (sid: string) => void } | undefined;
+    let hooks: {
+      onSession?: (sid: string) => void;
+      onDispatched?: (sid: string) => void;
+    } | undefined;
     let finish: (() => void) | null = null;
-    const runner = vi.fn((_req: unknown, h?: { onSession?: (sid: string) => void }) => {
-      hooks = h;
-      return new Promise((resolve) => {
-        finish = () => resolve({ ok: true, sessionId: 'sess-9', text: 'done' });
-      });
-    });
+    const runner = vi.fn(
+      (_req: unknown, h?: { onSession?: (sid: string) => void; onDispatched?: (sid: string) => void }) => {
+        hooks = h;
+        return new Promise((resolve) => {
+          finish = () => resolve({ ok: true, sessionId: 'sess-9', text: 'done' });
+        });
+      },
+    );
     const { slot } = makeSlot({
       runner: runner as unknown as GhostErrandRunner,
       onRevealSession: reveal,
     });
     await slot.handleRequest('helper', RUN);
-    expect(reveal).not.toHaveBeenCalled();
     hooks?.onSession?.('sess-9');
+    expect(reveal).not.toHaveBeenCalled();
+    hooks?.onDispatched?.('sess-9');
     expect(reveal).toHaveBeenCalledOnce();
     expect(reveal).toHaveBeenCalledWith('sess-9');
     finish!();
@@ -422,6 +428,27 @@ describe('可见任务自动切过去', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(reveal).toHaveBeenCalledOnce();
     expect(reveal).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('只回填了 onSession、随后失败不切', async () => {
+    const reveal = vi.fn();
+    const runner = vi.fn(
+      async (_req: unknown, h?: { onSession?: (sid: string) => void }) => {
+        h?.onSession?.('sess-busy');
+        return {
+          ok: false as const,
+          errorCode: 'BUSY' as const,
+          message: '正忙',
+        };
+      },
+    );
+    const { slot } = makeSlot({
+      runner: runner as unknown as GhostErrandRunner,
+      onRevealSession: reveal,
+    });
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).not.toHaveBeenCalled();
   });
 
   it('runner 失败且从未给出 sessionId 不切', async () => {

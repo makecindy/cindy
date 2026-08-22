@@ -321,22 +321,28 @@ describe('agentSlot · 可见任务自动切过去', () => {
     expect(reveal).not.toHaveBeenCalled();
   });
 
-  it('后台 new 仍切到新建任务', async () => {
+  it('后台 new / fork 也不切任务', async () => {
+    let now = 20_000;
     const reveal = vi.fn();
     const slot = makeSlot({
       ghosts: [fakeGhost('alpha', { background: true })],
       runner: acceptedRunner(),
       onRevealSession: reveal,
+      now: () => now,
     });
     slot.issueUserActionToken('alpha', 'session-1');
-    await slot.handleRequest('alpha', {
-      ...userRequest('unused'),
-      trigger: 'background',
-      mode: 'new',
-      title: '插件新任务',
-      sessionId: 'session-1',
-    });
-    expect(reveal).toHaveBeenCalledWith('target-new');
+    for (const mode of ['new', 'fork'] as const) {
+      const result = await slot.handleRequest('alpha', {
+        ...userRequest('unused'),
+        trigger: 'background',
+        mode,
+        title: mode === 'new' ? '插件新任务' : undefined,
+        sessionId: 'session-1',
+      });
+      expect(result.ok).toBe(true);
+      now += 10_000;
+    }
+    expect(reveal).not.toHaveBeenCalled();
   });
 
   it('runner 失败不切', async () => {

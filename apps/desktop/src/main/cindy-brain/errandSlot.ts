@@ -63,6 +63,8 @@ export interface GhostErrandRunRequest {
 export interface GhostErrandRunHooks {
   /** errand 会话 id 一旦确定即回报(异步单据此让 query 尽早可见 sessionId)。 */
   onSession?(sessionId: string): void;
+  /** 忙检通过且消息已投进会话后再回报；切任务只认这一下。 */
+  onDispatched?(sessionId: string): void;
 }
 
 export type GhostErrandRunOutcome =
@@ -292,6 +294,9 @@ export class GhostErrandSlot {
           },
           {
             onSession: (sessionId) => {
+              job.sessionId = sessionId;
+            },
+            onDispatched: (sessionId) => {
               job.sessionId = sessionId;
               this.revealSessionOnce(job, sessionId);
             },
