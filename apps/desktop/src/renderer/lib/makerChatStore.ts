@@ -3054,6 +3054,7 @@ function _touchSession(sessionId: string): void {
 const _lastInboundEventAt = new Map<string, number>();
 const rendererClearBoundaryBySession = new Map<string, number>();
 const rendererClearGenerationBySession = new Map<string, number>();
+const rendererQueueDiscardGenerationBySession = new Map<string, number>();
 
 type RemoteInputClearBoundary = number | null | undefined;
 
@@ -3265,6 +3266,13 @@ function bumpRendererClearGeneration(sessionId: string): void {
   rendererClearGenerationBySession.set(
     sessionId,
     (rendererClearGenerationBySession.get(sessionId) ?? 0) + 1,
+  );
+}
+
+function bumpRendererQueueDiscardGeneration(sessionId: string): void {
+  rendererQueueDiscardGenerationBySession.set(
+    sessionId,
+    (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) + 1,
   );
 }
 
@@ -8254,6 +8262,7 @@ function __teardownGlobalListeners(): void {
   remoteInputClearBoundaryBySession.clear();
   rendererClearBoundaryBySession.clear();
   rendererClearGenerationBySession.clear();
+  rendererQueueDiscardGenerationBySession.clear();
   // Stage 2 C1: 老的 cc-agent:* fan-out 已退役, __resetCCAgentFanOuts 也跟着删了。
   // 新链路 maker:* fan-out 当前不会泄漏 (initGlobalListeners 顶部 if guard +
   // dispose 时调对应 unsub()), 不需要 reset 兜底; 真发现 HMR fan-out 重复时
@@ -9001,6 +9010,7 @@ interface InputProjectionOperation {
   pinnedDeviceId?: string;
   dataOwner: DataOwnerGeneration;
   epoch: number;
+  clearGeneration: number;
 }
 
 /**
@@ -9024,7 +9034,21 @@ function beginInputProjectionOperation(
     ...(pinnedDeviceId ? { pinnedDeviceId } : {}),
     dataOwner: getDataOwnerGeneration(),
     epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
+    clearGeneration: rendererClearGenerationBySession.get(sessionId) ?? 0,
   };
+}
+
+function isInputProjectionOperationAuthorityCurrent(
+  sessionId: string,
+  operation: InputProjectionOperation,
+): boolean {
+  return (
+    isDataOwnerGenerationCurrent(operation.dataOwner) &&
+    (rendererClearGenerationBySession.get(sessionId) ?? 0) === operation.clearGeneration &&
+    (operation.pinnedDeviceId
+      ? getStickySessionDeviceId(sessionId) === operation.pinnedDeviceId
+      : isCurrentInputProjectionOrigin(sessionId, operation.origin))
+  );
 }
 
 function applyInputProjectionOperationResponse(
@@ -9033,10 +9057,7 @@ function applyInputProjectionOperationResponse(
   projection: AgentInputProjection,
 ): boolean {
   if (
-    !isDataOwnerGenerationCurrent(operation.dataOwner) ||
-    (operation.pinnedDeviceId
-      ? getStickySessionDeviceId(sessionId) !== operation.pinnedDeviceId
-      : !isCurrentInputProjectionOrigin(sessionId, operation.origin)) ||
+    !isInputProjectionOperationAuthorityCurrent(sessionId, operation) ||
     (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) !== operation.epoch
   ) {
     return false;
@@ -12441,6 +12462,7 @@ function steerMessage(
   }
   const clearGenerationAtStart =
     remoteScopeAtStart?.clearGeneration ?? rendererClearGenerationBySession.get(sessionId) ?? 0;
+  const queueDiscardGenerationAtStart = rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0;
   const current = getOrCreateState(sessionId);
   if (!canStartComposerSteer(current)) {
     // 镜像里有在飞 steer 事务 → 静默拒绝对用户就是"没反应", 留痕 + 主动向
@@ -12470,6 +12492,7 @@ function steerMessage(
           mentions,
           opts,
           clearGenerationAtStart,
+          queueDiscardGenerationAtStart,
           remoteScopeAtStart,
         );
       }
@@ -12490,6 +12513,7 @@ function steerMessage(
           mentions,
           opts,
           clearGenerationAtStart,
+          queueDiscardGenerationAtStart,
           remoteScopeAtStart,
           files,
           identity,
@@ -12545,6 +12569,7 @@ function steerMessage(
             mentions,
             opts,
             clearGenerationAtStart,
+            queueDiscardGenerationAtStart,
             remoteScopeAtStart,
             files,
           ),
@@ -12573,6 +12598,7 @@ async function steerMessageCore(
     onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
   },
   clearGenerationAtStart = 0,
+  queueDiscardGenerationAtStart = 0,
   remoteScopeAtStart: RemoteOptimisticSendScope | null = null,
   recoveryFiles?: readonly AttachedFile[],
   identity?: { clientId: string; createdAt: string },
@@ -12582,7 +12608,8 @@ async function steerMessageCore(
     (remoteClearInFlight.has(sessionId) && !remoteScopeAtStart) ||
     (remoteScopeAtStart
       ? !isRemoteOptimisticSendScopeActive(sessionId, remoteScopeAtStart)
-      : (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGenerationAtStart)
+      : (rendererClearGenerationBySession.get(sessionId) ?? 0) !== clearGenerationAtStart) ||
+    (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) !== queueDiscardGenerationAtStart
   ) {
     return false;
   }
@@ -12685,17 +12712,33 @@ async function steerMessageCore(
       try {
         const operation = beginInputProjectionOperation(sessionId, remoteDeviceId);
         const latest = await operation.api.input.getProjection(sessionId);
+        // authority 代际变化时旧 projection 不能覆盖当前镜像，但其中与本次
+        // clientId 精确匹配的队列行仍证明 main 已接管输入，不能因此诱导重复发送。
+        // 但 owner / origin 变化是内容归属边界：旧 owner 或旧设备的队列行不能确认
+        // 当前 composer，只放宽 Stop 等终态推进的 authority epoch。
         const latestHasQueuedItem = latest.pendingQueue.some((q) => q.clientId === queued.clientId);
-        if (!applyInputProjectionOperationResponse(sessionId, operation, latest)) {
-          rollbackOptimisticSteer();
-          return false;
-        }
-        if (latestHasQueuedItem) {
+        const operationAuthorityCurrent = isInputProjectionOperationAuthorityCurrent(
+          sessionId,
+          operation,
+        );
+        const projectionApplied = applyInputProjectionOperationResponse(
+          sessionId,
+          operation,
+          latest,
+        );
+        const queueDiscardGenerationCurrent =
+          (rendererQueueDiscardGenerationBySession.get(sessionId) ?? 0) ===
+          queueDiscardGenerationAtStart;
+        if (operationAuthorityCurrent && queueDiscardGenerationCurrent && latestHasQueuedItem) {
           // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
           // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
           // (review P1)。是否真该改名仍由 main 权威判定。
           commitAutoTitle();
           return true;
+        }
+        if (!projectionApplied) {
+          rollbackOptimisticSteer();
+          return false;
         }
       } catch (err) {
         log.warn('steer materialization check failed:', err);
@@ -12896,6 +12939,7 @@ function stopSession(
   // 否则 duration:0 的 loading toast 会残留到下一次同 session 输出才消失。
   dismissVisionBridgeToast(sessionId);
   const remoteDeviceId = getStickySessionDeviceId(sessionId);
+  if (opts?.keepQueue !== true) bumpRendererQueueDiscardGeneration(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
   // 让 Stop 自己的权威响应仍属于新代际。
