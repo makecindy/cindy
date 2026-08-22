@@ -202,10 +202,12 @@ describe('maker:event hot path ordering', () => {
       "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
     );
     expect(coordinatorSource).toContain('isLiveTurnRunning: (sessionId) =>');
+    expect(coordinatorSource).toContain('isLiveSessionPresent: (sessionId) =>');
     expect(source).toContain('lookupStableSessionForTurnBoundary');
     expect(source).toContain("status: 'unavailable'");
     expect(coordinatorSource).toContain("if (lookup.status === 'unavailable') return undefined;");
     expect(coordinatorSource).toContain("if (lookup.status === 'missing') return false;");
+    expect(coordinatorSource).toContain("return lookup.status === 'found';");
   });
 
   it('does not latch product-turn bookkeeping on background status events', () => {
