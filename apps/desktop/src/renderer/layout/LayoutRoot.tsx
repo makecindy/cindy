@@ -394,6 +394,8 @@ interface RootDividerPropsExtra {
 }
 
 interface RootDividerProps extends RootDividerPropsExtra {
+  /** 当前 Renderer 布局快照；起拖时用于同步对齐尚未自愈的 clamp 份额。 */
+  layout: Layout;
   splitId: string;
   left: SplitChildEntry;
   right: SplitChildEntry;
@@ -448,6 +450,7 @@ function rawPanePx(node: LayoutNode): number | null {
  * 松手经 transferSplitFraction 一次性写树;双击 = 两侧份额均分。
  */
 function RootDivider({
+  layout,
   splitId,
   left,
   right,
@@ -462,7 +465,7 @@ function RootDivider({
   const draggingRef = useRef(false);
 
   /** amountToLeft:**在场份额**增量(> 0 = 左侧变宽);写树前乘 shareScale 换成树份额。 */
-  const commit = (amountToLeft: number, relay: RelayPlan | null) => {
+  const commit = (amountToLeft: number, relay: RelayPlan | null, baseLayout?: Layout) => {
     const treeAmount = amountToLeft * shareScale;
     if (treeAmount === 0) return;
     // 压缩 chat 的提交走接力:chat 先扣到 0.05 下限,差额由折叠兄弟出账 ——
@@ -470,7 +473,7 @@ function RootDivider({
     const compressingChat =
       relay !== null && (relay.receiver === right.treeIndex ? treeAmount < 0 : treeAmount > 0);
     try {
-      const current = window.electronAPI.layout.getStateSync().layout;
+      const current = baseLayout ?? window.electronAPI.layout.getStateSync().layout;
       const op = compressingChat
         ? transferSplitFractionRelay(
             current,
@@ -565,8 +568,6 @@ function RootDivider({
     e.preventDefault();
     draggingRef.current = true;
     const startX = e.clientX;
-    const startL = left.share;
-    const startR = right.share;
     const measuredAvailable = availableWidthRootRef.current?.getBoundingClientRect().width ?? 0;
     const available =
       availableWidthHint && availableWidthHint > 0
@@ -574,6 +575,19 @@ function RootDivider({
         : measuredAvailable > 0
           ? measuredAvailable
           : AVAILABLE_WIDTH_FALLBACK;
+    // The settle-time self-heal can still be pending when the user grabs the divider immediately
+    // after a window resize. Align this gesture's baseline synchronously so a pane held up by the
+    // CSS floor responds from the first pixel; persist only if the gesture actually moves.
+    const alignedLayout = normalizeSubMinFractions(layout, available, isPanelKindVisible);
+    const alignedLedger =
+      alignedLayout?.content.type === 'split' && alignedLayout.content.direction === 'row'
+        ? activeSplitLedger(alignedLayout.content.children)
+        : null;
+    const alignedLeft = alignedLedger?.entries.find((entry) => entry.treeIndex === left.treeIndex);
+    const alignedRight = alignedLedger?.entries.find((entry) => entry.treeIndex === right.treeIndex);
+    const dragBaseLayout = alignedLeft && alignedRight ? alignedLayout : undefined;
+    const startL = alignedLeft?.share ?? left.share;
+    const startR = alignedRight?.share ?? right.share;
     // 起拖只量一次(拖动期间界面静止,没有失效场景);chat 量不到时回落账本估值。
     const chatEntry = isChatPane(left.node) ? left : isChatPane(right.node) ? right : null;
     const shrinkPlan = chatEntry
@@ -605,7 +619,7 @@ function RootDivider({
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       document.removeEventListener('pointercancel', onCancel);
-      if (commitIt && lastD !== 0) commit(lastD, relay);
+      if (commitIt && lastD !== 0) commit(lastD, relay, dragBaseLayout ?? undefined);
       onLive(null);
     };
     const onUp = () => finish(true);
@@ -965,6 +979,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
           items.push(
             <RootDivider
               key={`divider-${entry.node.id}`}
+              layout={layout}
               splitId={content.id}
               left={prev}
               right={entry}

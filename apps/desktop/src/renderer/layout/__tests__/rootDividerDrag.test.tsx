@@ -78,10 +78,10 @@ const bridge: BuiltinPanelBridge = {
   ),
 };
 
-function renderLayoutRoot() {
+function renderLayoutRoot(availableWidth = AVAIL) {
   return render(
     <BuiltinPanelBridgeProvider value={bridge}>
-      <ContentAvailableWidthProvider value={AVAIL}>
+      <ContentAvailableWidthProvider value={availableWidth}>
         <div data-testid="row">
           <LayoutRoot />
         </div>
@@ -211,6 +211,34 @@ describe('RootDivider 拖宽 · 在场份额口径', () => {
     expect(after['ghost:project-opener'].fraction).toBe(0.22);
     const sum = (setCalls[0].content as SplitNode).children.reduce((s, c) => s + c.fraction, 0);
     expect(sum).toBeCloseTo(1, 6);
+  });
+
+  it('120px clamp 自愈尚未执行时起拖，也从眼前宽度第一像素跟手', () => {
+    const layout = createDefaultLayout();
+    const split = layout.content as SplitNode;
+    split.children[0].fraction = 0.9;
+    split.children[1].fraction = 0.1;
+    currentLayout = layout;
+    const { container } = renderLayoutRoot(800);
+    mockPaneWidth('chat-main', 680);
+    mockPaneWidth('right-tabs', 120);
+
+    const grab = container.querySelector('[data-testid="layout-divider"] > div');
+    expect(grab).not.toBeNull();
+    fireEvent.pointerDown(grab!, { button: 0, pointerId: 1, clientX: 1000 });
+    fireEvent.pointerMove(document, { pointerId: 1, clientX: 992 });
+
+    const liveWidth = screen.getByTestId('w-right-tabs').textContent ?? '';
+    const liveShare = liveWidth.match(
+      /^clamp\(120px, ([\d.]+)cqw, calc\(100cqw - 400px\)\)$/,
+    )?.[1];
+    expect(Number(liveShare)).toBeCloseTo(16, 6);
+
+    fireEvent.pointerUp(document, { pointerId: 1, clientX: 992 });
+    expect(setCalls).toHaveLength(1);
+    const committed = (setCalls[0].content as SplitNode).children;
+    expect(committed[0].fraction).toBeCloseTo(0.84, 6);
+    expect(committed[1].fraction).toBeCloseTo(0.16, 6);
   });
 
   it('干净的两栏树:同样能把聊天流拖到最小宽,且写树成功', () => {
