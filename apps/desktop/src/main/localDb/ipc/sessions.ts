@@ -627,6 +627,7 @@ export interface SessionRowSnapshot {
   agentKind?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
+  searchModeEnabled?: boolean | null;
 }
 
 async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
@@ -645,6 +646,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       remoteHostId: sessions.remoteHostId,
       orcaRole: sessions.orcaRole,
       agentKind: sessions.agentKind,
+      searchModeEnabled: sessions.searchModeEnabled,
     })
     .from(sessions)
     .where(eq(sessions.id, id))

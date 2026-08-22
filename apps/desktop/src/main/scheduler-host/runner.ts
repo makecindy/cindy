@@ -625,6 +625,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 持续会话当前选定的来源(供应商)id —— schedule.providerId 留空时沿用它
     // （与 model 留空沿用 meta.model 对称）。取自 sessions.provider_id 快照,null=未选。
     let heartbeatProviderId: string | null = null;
+    let heartbeatSearchMode = false;
 
     // 2. heartbeat archived/missing 兜底
     if (isHeartbeat) {
@@ -717,6 +718,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         heartbeatAgentKind = meta?.agentKind;
         heartbeatFastMode = meta?.fastMode;
         heartbeatProviderId = row?.providerId ?? null;
+        heartbeatSearchMode = row?.searchModeEnabled === true;
       }
     }
 
@@ -993,6 +995,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         effort: reconciledEffort,
         fastMode,
         permissionMode,
+        ...(isHeartbeat && heartbeatSearchMode ? { searchMode: true } : {}),
         title: isHeartbeat ? undefined : `[Schedule] ${schedule.name}`,
         resumeSessionId,
         // Pi distinguishes an explicit null (Cindy default route) from undefined

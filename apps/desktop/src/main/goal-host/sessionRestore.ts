@@ -16,6 +16,7 @@ interface GoalSessionRestoreMaker {
 
 interface GoalSessionRow {
   providerId: string | null;
+  searchModeEnabled?: boolean | null;
 }
 
 /** Injectable seams keep the dormant-session restore ordering deterministic in tests. */
@@ -65,6 +66,7 @@ export async function restoreSessionForGoal(
       // A persisted null explicitly selects the Cindy default route for Pi;
       // only a missing row has no route value to pass through.
       providerId: row?.providerId,
+      searchMode: row?.searchModeEnabled === true,
     };
 
     await (deps.prepareOrcaStart ?? preparePersistedOrcaSessionStart)(sessionId, opts);

@@ -253,6 +253,30 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
   });
 
+  it('heartbeat 冷恢复把 sessions.search_mode_enabled 传进 createSession', async () => {
+    const h = createSessionHarness();
+    const { runner, maker } = createRunnerHarness(h.session);
+    (maker.getSessionMeta as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sdkSessionId: 'sdk-1',
+      workDir: '/hb/dir',
+      model: 'gpt-5.5',
+    });
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      searchModeEnabled: true,
+    });
+
+    await fireToCompletion(
+      runner,
+      baseSchedule({ targetSessionId: 'scheduler-session', workspaceKind: 'project' }),
+      h,
+    );
+
+    expect(maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true }),
+    );
+  });
+
   it('persistentSession(持续会话)不关闭 —— 跨 fire 复用同一 session', async () => {
     const h = createSessionHarness();
     const { runner, closeSession } = createRunnerHarness(h.session);

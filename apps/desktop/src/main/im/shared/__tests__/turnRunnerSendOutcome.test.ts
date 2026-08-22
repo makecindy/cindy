@@ -693,6 +693,30 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  it('passes persisted searchMode into createSession on cold restore', async () => {
+    mocks.findActiveSession.mockResolvedValue({
+      id: 'feishu_bot_user',
+      agentKind: 'codex',
+      workingDir: 'F:\\XDMaker',
+      model: 'gpt-5.5',
+      effort: 'high',
+      permissionMode: 'auto',
+      fastMode: false,
+      searchModeEnabled: true,
+      sdkSessionId: 'sdk-1',
+      providerId: null,
+    });
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const maker = createMakerHarness(h.session);
+    mocks.getMaker.mockReturnValue(maker);
+
+    await runDefaultTurn();
+
+    expect(maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true }),
+    );
+  });
+
   it('attaches a Main-owned IM origin proof to every channel dispatch', async () => {
     const h = setupSession(async () => ({ accepted: true }));
 

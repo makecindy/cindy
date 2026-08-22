@@ -648,6 +648,7 @@ export function createTurnRunner(
             effort: row.effort,
             permissionMode: row.permissionMode,
             fastMode: row.fastMode,
+            searchModeEnabled: row.searchModeEnabled === true,
             sdkSessionId: row.sdkSessionId,
             providerId: row.providerId ?? null,
           },
@@ -1352,6 +1353,7 @@ export function createTurnRunner(
         effort: row.effort,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
+        searchMode: row.searchModeEnabled === true,
         // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
         providerId: row.providerId,
         resumeSessionId: row.sdkSessionId ?? undefined,
@@ -1552,6 +1554,7 @@ export function createTurnRunner(
       effort: row.effort,
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
+      searchMode: row.searchModeEnabled === true,
       // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
       providerId: row.providerId,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
