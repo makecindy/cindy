@@ -476,17 +476,18 @@ describe('right-sidebar-window IPC', () => {
 
   it('open payload:缺省/空 = 用户手势;显式 false 透传;野值拒绝', async () => {
     const controller = makeController();
-    registerController(controller);
+    const { mainWebContents } = registerController(controller);
     const handlers = (
       ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown) => unknown> }
     ).__handlers;
     const open = handlers.get(MAKER_INVOKE.RSB_WINDOW_OPEN);
     if (!open) throw new Error('RSB_WINDOW_OPEN handler not registered');
+    const mainEvent = { sender: mainWebContents };
 
-    open({}, undefined);
-    open({}, {});
-    open({}, { userInitiated: false });
-    open({}, { userInitiated: false, sessionId: 'agent-session' });
+    open(mainEvent, undefined);
+    open(mainEvent, {});
+    open(mainEvent, { userInitiated: false });
+    open(mainEvent, { userInitiated: false, sessionId: 'agent-session' });
 
     expect(controller.open).toHaveBeenNthCalledWith(1, { userInitiated: true });
     expect(controller.open).toHaveBeenNthCalledWith(2, { userInitiated: true });
@@ -496,8 +497,12 @@ describe('right-sidebar-window IPC', () => {
       sessionId: 'agent-session',
     });
 
-    expect(() => open({}, { userInitiated: 1 })).toThrow(/options.userInitiated/);
-    expect(() => open({}, { sessionId: '' })).toThrow(/options.sessionId/);
+    expect(() => open(mainEvent, { userInitiated: 1 })).toThrow(/options.userInitiated/);
+    expect(() => open(mainEvent, { sessionId: '' })).toThrow(/options.sessionId/);
+
+    (controller.open as ReturnType<typeof vi.fn>).mockClear();
+    open({ sender: { id: 99 } }, { userInitiated: false, sessionId: 'other-session' });
+    expect(controller.open).not.toHaveBeenCalled();
   });
 
   it('accepts a memory-only tab handoff only from the detached sidebar sender', () => {

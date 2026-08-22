@@ -941,6 +941,22 @@ describe('setContext / routeCommand', () => {
     });
   });
 
+  it('does not forge a local host when resolve misses', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('routed');
+    expect(h.controller.getContext()).toEqual(focused);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+    expect(h.sends.at(-1)).toEqual({
+      channel: 'cmd-channel',
+      payload: { type: 'open-terminal', sessionId: 's1' },
+    });
+  });
+
   it('reuses a previously reported host context instead of forging a local one', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext({

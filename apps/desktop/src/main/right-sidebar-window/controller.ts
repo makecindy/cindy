@@ -847,17 +847,13 @@ export class RsbWindowController {
     this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null);
   }
 
-  private finishAdoptHostSession(sessionId: string, resolved: RsbWindowContext | null): void {
-    if (resolved) this.rememberContext(resolved);
-    this.applyAdoptedContext(
-      resolved ?? {
-        sessionId,
-        workdir: null,
-        remoteHostId: null,
-        deviceLinkDeviceId: null,
-        available: true,
-      },
-    );
+  private finishAdoptHostSession(_sessionId: string, resolved: RsbWindowContext | null): void {
+    if (!resolved) {
+      this.flushDeferredCommandsToDetachedHost();
+      return;
+    }
+    this.rememberContext(resolved);
+    this.applyAdoptedContext(resolved);
   }
 
   private rememberContext(ctx: RsbWindowContext): void {
@@ -882,10 +878,12 @@ export class RsbWindowController {
   }
 
   private canDispatchCommand(cmd: RsbWindowCommand): boolean {
+    const hostSessionId = commandHostSessionId(cmd);
+    if (this.pinnedSessionId) return this.pinnedSessionId === hostSessionId;
     return Boolean(
       this.lastContext?.available &&
         this.lastContext.sessionId &&
-        this.lastContext.sessionId === commandHostSessionId(cmd),
+        this.lastContext.sessionId === hostSessionId,
     );
   }
 
@@ -948,7 +946,9 @@ export class RsbWindowController {
     isHostAlive: () => boolean,
     send: (command: RsbWindowCommand) => void,
   ): void {
-    const sessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
+    const sessionId =
+      this.pinnedSessionId ??
+      (this.lastContext?.available ? this.lastContext.sessionId : null);
     if (!sessionId) return;
     const queue = this.deferredCommands.get(sessionId);
     if (!queue || queue.length === 0) return;

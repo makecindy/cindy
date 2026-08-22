@@ -339,8 +339,14 @@ export function registerRsbWindowIpc(opts: {
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_GET_STATE, () => controller.getState());
 
-  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, (_e, payload: unknown) => {
-    controller.open(parseOpenOptions(payload));
+  ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_OPEN, (event, payload: unknown) => {
+    const options = parseOpenOptions(payload);
+    const main = getMainWindow();
+    if (!main || main.isDestroyed() || event.sender !== main.webContents) {
+      log.warn('RSB_WINDOW_OPEN from non-main-window sender, dropped');
+      return;
+    }
+    controller.open(options);
   });
 
   ipcMain.handle(MAKER_INVOKE.RSB_WINDOW_CLOSE, () => {
