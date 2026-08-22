@@ -3977,7 +3977,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 兜底: 有些 vendor 的 done 不必先发 status:isRunning=false。
           // 但 idle 恢复不能挡在 EVENT broadcast 前，否则隐藏窗口可能在 done
           // 还没进入 renderer 时就重新被 Chromium 节流。
-          agentInputCoordinatorHolder?.onTurnEvent(session.id, 'done');
+          agentInputCoordinatorHolder?.onTurnEvent(session.id, 'done', undefined, undefined, {
+            sessionTurnGeneration: event.sessionTurnGeneration,
+          });
         } else {
           // silent-stop 自动续跑:translator 判定本 turn 被上游空内容消息静默收尾时在
           // done.data 附加 silentStop 标记(见 maker-core translator)。延迟一拍再决策,
@@ -4060,6 +4062,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 ? { errorStatus: errData.errorStatus }
                 : {}),
             },
+            { sessionTurnGeneration: event.sessionTurnGeneration },
           );
         }
       }

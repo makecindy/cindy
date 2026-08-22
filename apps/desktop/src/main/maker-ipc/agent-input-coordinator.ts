@@ -643,6 +643,8 @@ interface SessionInputState {
    * flips idle; reconcile only after SESSION_RUNNING_RETRY_DELAY_MS.
    */
   staleLiveIdleSinceMs: number | null;
+  /** Vendor Session.turnGeneration fenced when a leftover dispatched turn was reclaimed. */
+  fencedSessionTurnGeneration: number | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -707,6 +709,7 @@ function createInitialInputState(
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
     staleLiveIdleSinceMs: null,
+    fencedSessionTurnGeneration: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -2958,8 +2961,21 @@ export class AgentInputCoordinator {
     type: 'done' | 'error',
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    meta?: { sessionTurnGeneration?: number },
   ): void {
     const state = this.getState(sessionId);
+    const eventGeneration = meta?.sessionTurnGeneration;
+    if (
+      typeof eventGeneration === 'number' &&
+      state.fencedSessionTurnGeneration === eventGeneration
+    ) {
+      log.debug('ignored stale terminal after leftover turn reclaim', {
+        sessionId,
+        type,
+        eventGeneration,
+      });
+      return;
+    }
     const active = state.activeTurn;
     state.staleLiveIdleSinceMs = null;
     this.clearAbortReconcileRetry(state);
@@ -3488,10 +3504,15 @@ export class AgentInputCoordinator {
       if (!reconciled && !reclaimLeftover) return false;
     }
     if (reclaimLeftover) {
+      const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);
+      if (typeof vendorGeneration === 'number') {
+        state.fencedSessionTurnGeneration = vendorGeneration;
+      }
       log.warn('reconciling leftover dispatched activeTurn after vendor idle', {
         sessionId,
         clientId: state.activeTurn?.item?.clientId ?? null,
         dispatchLifecycle: state.activeTurn?.dispatchLifecycle ?? null,
+        fencedSessionTurnGeneration: state.fencedSessionTurnGeneration,
       });
       state.activeTurn = null;
     }

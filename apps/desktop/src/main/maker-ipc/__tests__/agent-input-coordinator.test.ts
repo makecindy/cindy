@@ -6279,6 +6279,48 @@ describe('AgentInputCoordinator steer transaction', () => {
     }
   });
 
+  it('ignores a late terminal from a reclaimed leftover turn after the next turn starts', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-fence-late-terminal';
+      h.setTurnGeneration(4);
+
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.reconcileTurnIdle.mockImplementation(() => {
+        h.setRunning(false);
+        return true;
+      });
+      h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.coordinator.onTurnEvent(sid, 'error', 'old turn died late', undefined, {
+        sessionTurnGeneration: 4,
+      });
+      await flush();
+      expect(latestProjection(h.projections).error).toBeNull();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+      h.coordinator.onTurnEvent(sid, 'done', undefined, undefined, {
+        sessionTurnGeneration: 4,
+      });
+      await flush();
+      expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not timeout-clear a pre-dispatch activeTurn even after the Session unloads', async () => {
     vi.useFakeTimers();
     try {

@@ -168,6 +168,12 @@ export interface AgentEvent {
   /** Host-owned per-turn correlation for lifecycle bookkeeping; never comes from vendor metadata. */
   turnAttemptToken?: number;
   /**
+   * Session.turnGeneration observed when this event was dequeued. Late terminals
+   * from a previous attempt keep the older value so host can ignore them after
+   * reclaiming a leftover turn. Host-only; never vendor metadata.
+   */
+  sessionTurnGeneration?: number;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later

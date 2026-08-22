@@ -1756,6 +1756,9 @@ export class Session {
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     const isCurrentGeneration = observedGeneration === this.turnGeneration;
+    if (event.sessionTurnGeneration === undefined) {
+      event.sessionTurnGeneration = observedGeneration;
+    }
     this.observeTurnControl(event, observedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
