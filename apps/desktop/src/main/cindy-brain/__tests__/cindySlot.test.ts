@@ -2464,12 +2464,16 @@ describe('文本转向量(embed_text)· 失败码与时间预算', () => {
 
   it.each([
     ['INVALID_MODEL', 'INVALID_PARAMS'],
+    // BAD_REQUEST(400/422 输入/参数错误):不是型号永久失效,修正请求后可重试,
+    // 不能当 INTERNAL 让插件盲目重试同一个坏请求,也不能当型号永久失效。
+    ['BAD_REQUEST', 'INVALID_PARAMS'],
     ['RATE_LIMITED', 'RATE_LIMITED'],
     ['TIMEOUT', 'TIMEOUT'],
     ['AUTH_FAILED', 'NO_CANDIDATE'],
     // 用户在设置里停用了供应商/型号 —— 主机没得选,与"目录里没有可用型号"同一
     // 语义面。FORGE_GUIDE 明确承诺这种情况报 NO_CANDIDATE。
     ['DISABLED', 'NO_CANDIDATE'],
+    ['TRANSIENT_ERROR', 'INTERNAL'],
     ['NETWORK_ERROR', 'INTERNAL'],
     ['SERVER_ERROR', 'INTERNAL'],
   ])('执行层 %s → 协议 %s', async (upstream, expected) => {

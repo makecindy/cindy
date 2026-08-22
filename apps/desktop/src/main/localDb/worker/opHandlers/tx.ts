@@ -1446,14 +1446,35 @@ function embeddingCommit(db: Database.Database, args: unknown): void {
   transaction();
 }
 
+/**
+ * Terminal (INVALID_MODEL) failures snooze the job instead of marking it failed:
+ * the process-internal blockedModels map prevents network calls while alive,
+ * and the snooze keeps the job eligible for re-probe after restart or model
+ * recovery, avoiding permanent index loss from a transient gateway misreport.
+ */
+const TERMINAL_SNOOZE_MS = 30 * 60_000;
+
 function embeddingRecordFailures(db: Database.Database, args: unknown): { failCount: number } {
   const payload = asRecord(args, 'embedding.recordFailures args');
   const jobs = expectArray(payload.jobs, 'jobs');
   const errMsg = truncate(expectString(payload.errMsg, 'errMsg'), 2000);
   const now = expectNumber(payload.now, 'now');
+  if (payload.terminal !== undefined && typeof payload.terminal !== 'boolean') {
+    throw invalidArgs('terminal must be boolean');
+  }
+  const terminal = payload.terminal === true;
+  const snoozeUntil =
+    typeof payload.snoozeUntil === 'number'
+      ? payload.snoozeUntil
+      : now + TERMINAL_SNOOZE_MS;
   const updReschedule = db.prepare(
     `UPDATE embedding_jobs
         SET attempts = ?, last_error = ?, scheduled_at = ?
+      WHERE rowid = ?`,
+  );
+  const updSnooze = db.prepare(
+    `UPDATE embedding_jobs
+        SET last_error = ?, scheduled_at = ?
       WHERE rowid = ?`,
   );
   const updFail = db.prepare(
@@ -1466,13 +1487,16 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
     for (const rawJob of jobs) {
       const job = asRecord(rawJob, 'failure job');
       const rowid = expectNumber(job.rowid, 'job.rowid');
-      const nextAttempts = expectNumber(job.attempts, 'job.attempts') + 1;
-      if (nextAttempts >= MAX_ATTEMPTS) {
-        updFail.run(nextAttempts, errMsg, rowid);
+      const currentAttempts = expectNumber(job.attempts, 'job.attempts');
+      if (terminal) {
+        // Snooze, don't fail — blockedModels handles the process-lifetime block.
+        updSnooze.run(errMsg, snoozeUntil, rowid);
+      } else if (currentAttempts + 1 >= MAX_ATTEMPTS) {
+        updFail.run(currentAttempts + 1, errMsg, rowid);
         failCount++;
       } else {
-        const backoff = RETRY_BACKOFF_MS[Math.min(nextAttempts - 1, RETRY_BACKOFF_MS.length - 1)];
-        updReschedule.run(nextAttempts, errMsg, now + backoff, rowid);
+        const backoff = RETRY_BACKOFF_MS[Math.min(currentAttempts, RETRY_BACKOFF_MS.length - 1)];
+        updReschedule.run(currentAttempts + 1, errMsg, now + backoff, rowid);
       }
     }
     return failCount;

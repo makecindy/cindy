@@ -8,6 +8,8 @@
  *   4. 剩下有 text 的按 model_id 再分组, 同组一次 client.embed()
  *   5. 成功 → 一个事务内: INSERT INTO {vec_table}(rowid, embedding) + UPDATE jobs.status='done'
  *   6. 失败 → attempts++, last_error, scheduled_at += 退避; attempts >= MAX → status='failed'
+ *      INVALID_MODEL (确定性模型不可用) → snooze (保持 pending, 不增加 attempts,
+ *      推后 scheduled_at 30 分钟); 进程内 blockedModels 短路出网, 重启后重新探测。
  *
  * 重要约束 (better-sqlite3 同步事务 vs async embed):
  *   embed() 是 async, 不能在 db.transaction 内 await; 所以流程是
@@ -15,6 +17,7 @@
  *
  * 重试退避由 worker 侧 embedding.recordFailures tx 统一计算;
  *   attempts >= tx 内部上限时不再 schedule, 走 status='failed'。
+ *   terminal (INVALID_MODEL) 走 snooze 而非 failed, 避免网关误报导致永久索引缺失。
  *
  * 不做:
  *   - 不并发 (单 worker 串行, 简单可预期; 真到瓶颈再说)
@@ -36,6 +39,29 @@ import {
 
 const TICK_INTERVAL_MS = 5_000;
 const BATCH_SIZE = 32;
+/**
+ * 熔断 TTL,必须与 DB 层 TERMINAL_SNOOZE_MS 保持一致。
+ * 到期后放行一次探测:成功清熔断,失败重新阻断并递增 probeCount。
+ */
+const MODEL_BLOCK_TTL_MS = 30 * 60_000;
+/**
+ * 自动重探上限:首次阻断后最多再放行这么多次探测,避免对永久无效模型
+ * 每 30 分钟无限出网 (PR #2288 Greptile P1)。达到上限后继续 snooze 但
+ * 不再调 embed(),直至应用重启清空 blockedModels。
+ */
+const MODEL_BLOCK_MAX_REPROBES = 2;
+
+/**
+ * 只有 INVALID_MODEL 才触发永久熔断。
+ *
+ * mapStatusToCode 已收紧:仅在错误体明确包含 model_not_found / deployment_not_found
+ * 等确定性信号时才将 HTTP 错误归类为 INVALID_MODEL;400/422 输入错误映射为
+ * BAD_REQUEST,404 路由错误映射为 TRANSIENT_ERROR,均不触发熔断。维度不匹配等
+ * 客户端本地判定的 INVALID_MODEL 同样是确定性的模型/参数不兼容,不可自愈。
+ */
+function isTerminalInvalidModelError(error: unknown): boolean {
+  return error instanceof EmbeddingError && error.code === 'INVALID_MODEL';
+}
 
 interface JobRow {
   rowid: number;
@@ -74,6 +100,18 @@ export class EmbeddingWorker {
   private lastTickProcessed: number | null = null;
   private vecWarned = false;
   private suspendedWarned = false;
+  /**
+   * INVALID_MODEL (错误体明确包含 model_not_found) 熔断表。
+   *
+   * TTL 与 DB 层 TERMINAL_SNOOZE_MS 一致 (30 分钟):阻断期间新 job snooze 不出网,
+   * TTL 到期且 probeCount < MAX_REPROBES 时放行一次探测;探测成功则清除条目,
+   * 失败则重新阻断并递增 probeCount。达到重探上限后停止出网,等重启再试,
+   * 避免对永久无效模型无限周期请求 (PR #2288 review)。
+   */
+  private readonly blockedModels = new Map<
+    string,
+    { error: string; blockedAt: number; probeCount: number }
+  >();
   // 关闭 / 切账号时由 stop() 置 true。in-flight tick 在每个 await 点之后检查它,
   // 一旦为 true 就立刻放弃后续写库直接返回 —— 那批 job 保持 status='pending',
   // 下次启动自动续跑 (零丢失)。目的是退出时让 worker 立即让出 SQLite 写连接,
@@ -285,6 +323,8 @@ export class EmbeddingWorker {
       for (const [modelId, modelJobs] of byModel.entries()) {
         // 逐模型停用(PR #744 review 第十九轮):该 embedding 模型被点名停用时本组
         // 不下单,job 保持 pending,恢复启用后续跑。
+        // 必须在 blockedModels 熔断检查之前:模型被用户停用时新任务应保持 pending,
+        // 而不是被熔断标为 failed (PR #2288 review)。
         if (this.opts.isRouteSuspended?.(modelId as string)) {
           this.opts.log.warn(
             JSON.stringify({
@@ -294,6 +334,56 @@ export class EmbeddingWorker {
             }),
           );
           continue;
+        }
+        const blocked = this.blockedModels.get(modelId);
+        // Set when this tick performs a TTL-expired reprobe; the catch block
+        // rolls blockedAt back to this value if the probe is interrupted by a
+        // route suspension so the budget is not consumed by a non-result.
+        let probeStartedAt: number | undefined;
+        if (blocked !== undefined) {
+          const now = Date.now();
+          const age = now - blocked.blockedAt;
+          if (age < MODEL_BLOCK_TTL_MS || blocked.probeCount >= MODEL_BLOCK_MAX_REPROBES) {
+            // 熔断 TTL 内,或已耗尽自动重探次数:snooze 这批,不出网。
+            // TTL 内按当前窗口结束时刻排程(而不是 now + 30min),否则第 29 分钟
+            // 到达的任务会被排到第 59 分钟,即使第 30 分钟探测已成功也不会提前
+            // 恢复 (PR #2288 Codex P1)。
+            // 预算已耗尽时窗口可能已经过期,blockedAt + TTL 会是过去时刻 → 这批
+            // 任务会每个 5 秒 tick 都被选中、重复写库、挤占其他模型的待处理配额
+            // (调度热循环);此时它们要等重启清空 blockedModels 才会再探,排到
+            // now + TTL 的未来时刻,既避免热循环也保持 snooze 语义 (Greptile/Codex P1)。
+            const withinWindow = age < MODEL_BLOCK_TTL_MS;
+            const snoozeUntil = withinWindow
+              ? blocked.blockedAt + MODEL_BLOCK_TTL_MS
+              : now + MODEL_BLOCK_TTL_MS;
+            await this.recordFailureBatch(modelJobs, blocked.error, true, snoozeUntil);
+            if (this.aborted) return;
+            this.opts.log.debug?.(
+              JSON.stringify({
+                event: 'embeddingWorker.batch.skip.invalidModel',
+                modelId,
+                count: modelJobs.length,
+                remainingMs: age < MODEL_BLOCK_TTL_MS ? MODEL_BLOCK_TTL_MS - age : 0,
+                probeCount: blocked.probeCount,
+              }),
+            );
+            continue;
+          }
+          // TTL 到期且仍有探测预算:放行一次探测。不在此处递增 probeCount —
+          // 预算只在探测**再次确认 INVALID_MODEL** 时才消耗(catch 的 terminal
+          // 分支);瞬时错误、探测期间模型被停用 / stop() 都不应消耗这次预算,否则
+          // 两次偶发故障或停用-重启就会让已恢复的模型在重启前永不再探
+          // (PR #2288 Codex/Greptile P1)。刷新 blockedAt 作为探测起点,失败时
+          // catch 会按结果决定是保留、刷新还是回滚。
+          probeStartedAt = blocked.blockedAt;
+          blocked.blockedAt = Date.now();
+          this.opts.log.info(
+            JSON.stringify({
+              event: 'embeddingWorker.model.blockExpired.reprobe',
+              modelId,
+              probeCount: blocked.probeCount,
+            }),
+          );
         }
         const inputs = modelJobs.map((j) => textByRowid.get(j.rowid) as string);
         try {
@@ -307,8 +397,19 @@ export class EmbeddingWorker {
           // 写事务 (这是保证 db.backup 无争用的关键)。该批 job 保持 pending, 下次续跑。
           if (this.aborted) return;
           if (isProviderSuspended(source)) break;
+          // 探测成功 — 若之前熔断过,清除条目恢复正常节奏。
+          if (this.blockedModels.has(modelId)) {
+            this.blockedModels.delete(modelId);
+            this.opts.log.info(
+              JSON.stringify({
+                event: 'embeddingWorker.model.unblocked',
+                modelId,
+              }),
+            );
+          }
           // 5. 同步事务: INSERT vec + UPDATE jobs
           await this.commitEmbeddings(modelJobs, res.embeddings);
+          if (this.aborted) return;
           doneCount += modelJobs.length;
           this.opts.log.info(
             JSON.stringify({
@@ -321,8 +422,23 @@ export class EmbeddingWorker {
             }),
           );
         } catch (err) {
+          // Snapshot before any early-out so the route-suspended branch below
+          // can roll back the pre-probe blockedAt refresh.
+          const prev = this.blockedModels.get(modelId);
+          // stop() 可能在 embed() 网络往返期间触发:此时不应记录熔断或写失败状态,
+          // 那批 job 保持 pending, 下次启动续跑 (PR #2288 review)。
+          if (this.aborted) return;
           // availability 可能在网络往返期间丢失;保留 pending,不要把它记成失败重试。
           if (isProviderSuspended(source)) break;
+          // 逐模型停用也可能在网络往返期间发生:该批保持 pending,恢复启用后续跑,
+          // 不要把它写成 failed / 写进 blockedModels (PR #2288 review)。
+          // 回滚探测前刷新的 blockedAt 且不递增 probeCount:这次探测被停用打断,
+          // 不算一次确认,模型重新启用后下个 TTL 窗口应能再次探测而不是被预算耗尽
+          // 永久冻结 (PR #2288 Greptile P1)。
+          if (this.opts.isRouteSuspended?.(modelId as string)) {
+            if (prev && probeStartedAt !== undefined) prev.blockedAt = probeStartedAt;
+            continue;
+          }
           const code = err instanceof EmbeddingError ? err.code : 'UNKNOWN';
           const msg = err instanceof Error ? err.message : String(err);
           this.opts.log.error(
@@ -335,10 +451,50 @@ export class EmbeddingWorker {
               count: modelJobs.length,
             }),
           );
-          // AUTH_FAILED / INVALID_MODEL 在 client 内已经判断为不可重试 — 但 worker 这层
-          // 不分代码, 一律走 backoff + attempts 计数, MAX_ATTEMPTS 后 → 'failed'。
-          // 这样 INVALID_MODEL 不会立刻冲 5 次烧 token, 因为 client 抛错前没打 API。
-          const fc = await this.recordFailureBatch(modelJobs, `[${code}] ${msg}`);
+          const errorText = `[${code}] ${msg}`;
+          const terminal = isTerminalInvalidModelError(err);
+          if (terminal) {
+            // 首次熔断(无 prev)probeCount 记 0(还没执行过重探);TTL 到期后
+            // 的重探再次确认 INVALID_MODEL 才 +1 消耗预算。瞬时错误不计数,探测
+            // 被停用打断也不计数(见上方 probeStartedAt 回滚),让已恢复模型不会
+            // 因偶发故障耗尽预算 (PR #2288 Codex/Greptile P1)。
+            const nextProbeCount = prev ? prev.probeCount + 1 : 0;
+            this.blockedModels.set(modelId, {
+              error: errorText,
+              blockedAt: Date.now(),
+              probeCount: nextProbeCount,
+            });
+            this.opts.log.warn(
+              JSON.stringify({
+                event: 'embeddingWorker.model.blocked.invalidModel',
+                modelId,
+                reason: msg,
+                probeCount: nextProbeCount,
+              }),
+            );
+          } else if (prev) {
+            // TTL 重探遇到瞬时错误 (NETWORK / RATE_LIMITED / 5xx):不删除条目,
+            // 刷新 blockedAt 重新开始 30 分钟 snooze,同时保留 probeCount。
+            // 删除会导致下一次 INVALID_MODEL 以 probeCount=0 重建,预算永远耗不尽
+            // (PR #2288 Greptile P1)。
+            prev.blockedAt = Date.now();
+            this.opts.log.info(
+              JSON.stringify({
+                event: 'embeddingWorker.model.reprobeTransient',
+                modelId,
+                code,
+                error: msg,
+                probeCount: prev.probeCount,
+              }),
+            );
+          }
+          // 正在熔断/重探期间的失败(无论是再次确认 INVALID_MODEL,还是重探遇到瞬时
+          // 错误)都按 terminal 记录:snooze 到下一窗口、不递增 attempts。否则一个已
+          // 累计了若干普通失败的任务会因重探的瞬时错误被推到 MAX_ATTEMPTS 永久写
+          // failed,模型恢复或重启后也不再续跑 (PR #2288 Greptile P1)。首次进入熔断
+          // 前的普通失败仍走 terminal=false 的正常退避。
+          const snoozeTerminal = terminal || prev !== undefined;
+          const fc = await this.recordFailureBatch(modelJobs, errorText, snoozeTerminal);
           failCount += fc;
         }
       }
@@ -390,12 +546,19 @@ export class EmbeddingWorker {
    * attempts >= MAX → status='failed' 终态。
    * 返回失败数量 (>= MAX 进 'failed' 终态的部分)。
    */
-  private async recordFailureBatch(jobs: JobRow[], errMsg: string): Promise<number> {
+  private async recordFailureBatch(
+    jobs: JobRow[],
+    errMsg: string,
+    terminal = false,
+    snoozeUntil?: number,
+  ): Promise<number> {
     const now = Date.now();
     const result = await this.opts.getDbClient().tx('embedding.recordFailures', {
       jobs: jobs.map((job) => ({ rowid: job.rowid, attempts: job.attempts })),
       errMsg: truncate(errMsg, 2000),
       now,
+      terminal,
+      snoozeUntil,
     });
     return result.failCount;
   }
