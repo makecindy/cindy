@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_PUSH } from '../../maker-ipc/channels';
 import {
+  rememberDesktopOnlyConfirmation,
   projectInteractionDismissedForRemote,
   GhostSetupInteractionBridge,
   parseGhostSetupInlineSubmit,
@@ -428,6 +429,37 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
       reason: 'resolved',
     });
     expect(JSON.stringify(dismissed)).not.toContain('private-request-id');
+  });
+
+  it('maps a dismissal when the desktop-only confirmation predates Device Link activation', () => {
+    const requestId = 'preexisting-private-request-id';
+    rememberDesktopOnlyConfirmation(requestId);
+
+    const dismissed = projectInteractionDismissedForRemote({
+      sessionId: 'session-1',
+      requestId,
+      reason: 'resolved',
+    });
+
+    expect(dismissed).toMatchObject({
+      sessionId: 'session-1',
+      requestId: expect.stringMatching(/^desktop-confirm-/),
+      reason: 'resolved',
+    });
+    expect(JSON.stringify(dismissed)).not.toContain(requestId);
+  });
+
+  it('drops a dismissal after its desktop-only confirmation projection expires', () => {
+    vi.useFakeTimers();
+    try {
+      const requestId = 'expired-private-request-id';
+      rememberDesktopOnlyConfirmation(requestId);
+      vi.advanceTimersByTime(9 * 60 * 1000);
+
+      expect(projectInteractionDismissedForRemote({ requestId })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

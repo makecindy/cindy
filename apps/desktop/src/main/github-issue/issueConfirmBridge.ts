@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
+import { rememberDesktopOnlyConfirmation } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
@@ -142,6 +143,7 @@ export class IssueConfirmBridge {
         resolve,
         timeoutId,
       });
+      rememberDesktopOnlyConfirmation(requestId);
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
         request,

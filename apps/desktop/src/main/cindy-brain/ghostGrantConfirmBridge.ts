@@ -113,6 +113,7 @@ export class GhostGrantConfirmBridge {
         this.settle(requestId, { confirmed: false, reason: 'timeout' }, 'timeout');
       }, timeoutMs);
       this.pending.set(requestId, { sessionId, request, resolve, timeoutId });
+      rememberDesktopOnlyConfirmation(requestId);
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
         request,

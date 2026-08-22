@@ -1282,7 +1282,9 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     remotePayload = { ...payload, request };
   }
   if (channel === MAKER_PUSH.INTERACTION_DISMISSED) {
-    remotePayload = projectInteractionDismissedForRemote(remotePayload);
+    const dismissed = projectInteractionDismissedForRemote(remotePayload);
+    if (dismissed === null) return;
+    remotePayload = dismissed;
   }
   const dsts = subscriptions.getControllersForTopic(topic);
   // The active registry describes peer topic intent, not whether this host can

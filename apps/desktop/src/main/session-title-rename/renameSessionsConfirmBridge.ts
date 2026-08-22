@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { rememberDesktopOnlyConfirmation } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
@@ -71,6 +72,7 @@ export class RenameSessionsConfirmBridge {
         this.settle(requestId, { confirmed: false, reason: 'timeout' }, 'timeout');
       }, timeoutMs);
       this.pending.set(requestId, { sessionId, request, resolve, timeoutId });
+      rememberDesktopOnlyConfirmation(requestId);
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
         request,
