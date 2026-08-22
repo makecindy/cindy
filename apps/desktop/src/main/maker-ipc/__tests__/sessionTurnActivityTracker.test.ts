@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isSessionTurnDispatchBoundaryBusy,
+  listSessionIdsInTurn,
   SessionTurnActivityTracker,
 } from '../sessionTurnActivityTracker';
 
@@ -18,6 +19,28 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('SessionTurnActivityTracker.isSessionInTurn', () => {
+  it('lists only sessions that are active at the snapshot boundary', () => {
+    const t = new SessionTurnActivityTracker();
+    t.setSessionInTurn('active-a', true);
+    t.setSessionInTurn('idle', false);
+    t.setSessionInTurn('active-b', true);
+
+    expect(t.sessionIdsInTurn()).toEqual(['active-a', 'active-b']);
+  });
+
+  it('includes live running sessions before their status event reaches the tracker', () => {
+    const t = new SessionTurnActivityTracker();
+    t.setSessionInTurn('tracked', true);
+
+    expect(
+      listSessionIdsInTurn(t, [
+        { id: 'tracked', isTurnRunning: () => true },
+        { id: 'live-dispatch-gap', isTurnRunning: () => true },
+        { id: 'idle', isTurnRunning: () => false },
+      ]),
+    ).toEqual(['tracked', 'live-dispatch-gap']);
+  });
+
   it('setSessionInTurn 翻起/落下', () => {
     const t = new SessionTurnActivityTracker();
     expect(t.isSessionInTurn('s')).toBe(false); // 未知 session → false(安全默认)

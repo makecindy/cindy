@@ -209,6 +209,7 @@ import {
 import { invalidateWorkersByLeadSingleFlight } from '../localDb/ipc/orcaWorkerListSingleFlight.js';
 import { messageToCamel } from '../localDb/mapper.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
+import { shouldSuppressWindowsSessionEndClaudeError } from '../windowsSessionEnd.js';
 import { buildReviewPrompt } from '../reviewer/reviewPrompt.js';
 import {
   listReviewHistoricalAttachments,
@@ -860,6 +861,7 @@ import {
   hasAnySessionInTurn,
   isSessionTurnDispatchBoundaryBusy,
   isTerminalTurnErrorEvent,
+  listSessionIdsInTurn as listTrackedAndLiveSessionIdsInTurn,
   SessionTurnActivityTracker,
 } from './sessionTurnActivityTracker.js';
 import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnLease.js';
@@ -2835,6 +2837,15 @@ export function isSessionInTurn(sessionId: string): boolean {
   return sessionTurnActivityTracker.isSessionInTurn(sessionId);
 }
 
+export function listSessionIdsInTurn(
+  maker?: Pick<Maker, 'listActiveSessions'> | null,
+): string[] {
+  return listTrackedAndLiveSessionIdsInTurn(
+    sessionTurnActivityTracker,
+    maker?.listActiveSessions() ?? [],
+  );
+}
+
 /**
  * 标题素材读取需要覆盖 `status:isRunning=false` 到 terminal event 的短窗口：
  * 逻辑 running 已结束，但最后一条 Assistant 还没有拿到 durable turn seal。
@@ -3847,6 +3858,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let pendingCodexAccountUsageSnapshot: unknown | null = null;
       let shouldMarkTurnStatusIdleAfterBroadcast = false;
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
+      let suppressWindowsSessionEndError = false;
       let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
       // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
@@ -4007,6 +4019,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let isPlannedUpgradeClose = false;
       let isRemoteAuthRetry = false;
       if (isTerminalTurnErrorEvent(event)) {
+        suppressWindowsSessionEndError = shouldSuppressWindowsSessionEndClaudeError({
+          sessionId: session.id,
+          source: event.source,
+          isTerminalError: true,
+        });
         finalizeTurnChangeSet(session.id, null, 'partial');
         // **任何**终态失败都先把上一条重连记录钉成失败 —— 不管这次错误本身是否值得自愈。
         // 只在"命中白名单、准备再接管"时才 settle 的话,非白名单的终态(认证 / 计费 /
@@ -4044,7 +4061,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
         // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
         isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
-        if (!isPlannedUpgradeClose) {
+        if (!isPlannedUpgradeClose && !suppressWindowsSessionEndError) {
           agentInputCoordinatorHolder?.onTurnEvent(
             session.id,
             'error',
@@ -4318,10 +4335,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 的出口回调 onResumableTurnErrorDiscarded 让它补落。
         const autoResumeSuppressesPersist =
           event.type === 'error' &&
+          !suppressWindowsSessionEndError &&
           (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
             agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
         const overflowClaim =
           event.type === 'error' &&
+          !suppressWindowsSessionEndError &&
           !session.remoteHostId &&
           isTerminalTurnErrorEvent(event) &&
           !isPlannedUpgradeClose &&
@@ -4369,6 +4388,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 同一 turn 的重复终态 error：继续压住，避免污染历史。
         } else if (
           event.type === 'error' &&
+          !suppressWindowsSessionEndError &&
           !isPlannedUpgradeClose &&
           !isRemoteAuthRetry &&
           !autoResumeSuppressesPersist

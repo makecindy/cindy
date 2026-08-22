@@ -344,7 +344,7 @@ import {
   stopAllPiSubagentRunsForExit,
 } from '@cindy/maker-core/pi-subagent-runs';
 
-import { onQuit, installQuitHandler } from './lifecycle';
+import { installQuitHandler, installWindowsSessionEndHandler, onQuit } from './lifecycle';
 import {
   cancelIOSSimulatorSessionOperations,
   cleanupIOSSimulatorRemovedSession,
@@ -562,6 +562,7 @@ import {
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
+  listSessionIdsInTurn,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
   isSessionTurnPendingCompletion,
@@ -3272,6 +3273,11 @@ const createWindow = () => {
     },
   });
   markAppContentWindow(mainWindow);
+  installWindowsSessionEndHandler(mainWindow, {
+    timeoutMs: 6000,
+    freezeActiveTurnMarkers: freezeSessionActiveTurnMarkers,
+    listActiveTurnSessionIds: () => listSessionIdsInTurn(getMakerCore()),
+  });
   installSelectionContextMenu(mainWindow);
   installWindowResponsivenessDiagnostics(mainWindow, { label: 'main' });
   mainWindowRef = mainWindow;

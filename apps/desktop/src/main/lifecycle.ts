@@ -52,6 +52,7 @@ import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
 import { isGhostPanelWebContentsId } from './ghost-panel-window/registry.js';
+import { markWindowsSessionEnding } from './windowsSessionEnd';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -509,6 +510,30 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
       log.error('runQuitDisposers threw', err);
     });
   return _disposeStarted;
+}
+
+/**
+ * Connect Windows shutdown, restart, and logoff to Cindy's existing bounded
+ * shutdown path. The handler deliberately does not prevent the OS session end.
+ */
+export function installWindowsSessionEndHandler(
+  window: BrowserWindow,
+  options: {
+    platform?: NodeJS.Platform;
+    timeoutMs?: number;
+    freezeActiveTurnMarkers: () => void;
+    listActiveTurnSessionIds: () => Iterable<string>;
+  },
+): void {
+  if ((options.platform ?? process.platform) !== 'win32') return;
+  const handleSessionEnd = () => {
+    options.freezeActiveTurnMarkers();
+    markWindowsSessionEnding(options.listActiveTurnSessionIds());
+    if (_isDisposing) return;
+    void beginShutdown(options.timeoutMs ?? 2000, 'windows-session-end').finally(() => app.exit(0));
+  };
+  window.on('query-session-end', handleSessionEnd);
+  window.on('session-end', handleSessionEnd);
 }
 
 export function installQuitHandler(timeoutMs = 2000): void {

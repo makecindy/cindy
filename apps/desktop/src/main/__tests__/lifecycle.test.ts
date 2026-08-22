@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserWindow } from 'electron';
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
 // 真实退出路径 (信号 / before-quit) 不在本文件覆盖。
@@ -670,5 +671,52 @@ describe('installQuitHandler', () => {
     } finally {
       snapshot.restore();
     }
+  });
+});
+
+describe('installWindowsSessionEndHandler', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('starts the existing shutdown chain without blocking Windows session end', async () => {
+    const { installWindowsSessionEndHandler, onQuit } = await freshLifecycle();
+    const freeze = vi.fn();
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const window = {
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        listeners.set(event, listener);
+      }),
+    };
+    onQuit('other-sync-cleanup', vi.fn(), 'sync');
+    installWindowsSessionEndHandler(window as unknown as BrowserWindow, {
+      platform: 'win32',
+      timeoutMs: 50,
+      freezeActiveTurnMarkers: freeze,
+      listActiveTurnSessionIds: () => ['active-session'],
+    });
+
+    expect(listeners.has('query-session-end')).toBe(true);
+    expect(listeners.has('session-end')).toBe(true);
+    const event = { preventDefault: vi.fn() };
+    listeners.get('query-session-end')?.(event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(freeze).toHaveBeenCalledTimes(1);
+    const { app } = await import('electron');
+    await vi.waitFor(() => expect(app.exit).toHaveBeenCalledWith(0));
+  });
+
+  it('does not register session-end listeners outside Windows', async () => {
+    const { installWindowsSessionEndHandler } = await freshLifecycle();
+    const window = { on: vi.fn() };
+
+    installWindowsSessionEndHandler(window as unknown as BrowserWindow, {
+      platform: 'darwin',
+      freezeActiveTurnMarkers: vi.fn(),
+      listActiveTurnSessionIds: () => [],
+    });
+
+    expect(window.on).not.toHaveBeenCalled();
   });
 });
