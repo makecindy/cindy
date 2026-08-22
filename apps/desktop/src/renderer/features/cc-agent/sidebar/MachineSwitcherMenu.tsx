@@ -141,10 +141,11 @@ export function MachineSwitcherMenu({
   };
   // 状态项(#3214):点击只走 filter.setStatus 的统一出口,复用全局筛选状态;
   // 与机器单选同语义——点行即切换并关菜单。
+  // 分隔线不在组首:设备列表末尾已有分隔线(有设备时组首会连出两条,无设备时
+  // 菜单会以分隔线开头);组后统一补一条,把状态项与设置项分开(review P1)。
   const statusItems =
     onStatusSelect && status ? (
       <>
-        <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
         <StatusMenuItem
           label={t('ccAgent.sidebar.machineSwitcher.statusActiveTasks')}
           selected={status === 'active'}
@@ -218,12 +219,27 @@ export function MachineSwitcherMenu({
 
   // 点击展开(2026-08-13 定稿,推翻 2026-07-12 的 hover 展开——作为段头标题,
   // hover 扫过就弹菜单太吵)。modal={false}:侧栏是常驻面板,不锁列表滚动。
+  // 无障碍名称必须包含当前状态(review P1):内部图标的 aria-label 进不了父按钮
+  // 名称,读屏只听得到「任务范围:全部任务」不知道在看归档;状态文字直接拼进
+  // 按钮名称(「… · 已归档」),同时段头渲染可见的文字徽标(不只靠图标 + title)。
+  const statusText =
+    status === 'archived'
+      ? t('ccAgent.sidebar.filterStatus.archived')
+      : status === 'all'
+        ? t('ccAgent.sidebar.filterStatus.all')
+        : status === 'active'
+          ? t('ccAgent.sidebar.filterStatus.active')
+          : null;
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`${triggerLabel}: ${triggerText}`}
+          aria-label={
+            statusText
+              ? `${triggerLabel}: ${triggerText} · ${statusText}`
+              : `${triggerLabel}: ${triggerText}`
+          }
           aria-busy={remoteSessionBootstrapLoading}
           className={cn(
             'flex min-w-0 items-center gap-1 focus:outline-none',
@@ -234,17 +250,21 @@ export function MachineSwitcherMenu({
           )}
         >
           <span className="truncate leading-none">{triggerText}</span>
-          {/* 归档视图的常驻状态表达(#3214):不展开菜单也能看出当前看的是已归档列表。
-              不用 Tip 组件——嵌在 DropdownMenuTrigger 按钮里再挂一层 Radix tooltip
-              容易抢指针事件,与右侧 ✓ 同口径用原生 title。 */}
+          {/* 归档视图的常驻状态表达(#3214):图标 + 可见文字,不展开菜单也能看出当前
+              在看已归档列表。不用 Tip 组件——嵌在 DropdownMenuTrigger 按钮里再挂一层
+              Radix tooltip 容易抢指针事件,与右侧 ✓ 同口径用原生 title;状态语义已进
+              按钮名称,视觉块整体对读屏隐藏避免重复播报。 */}
           {status === 'archived' && (
             <span
-              role="img"
-              aria-label={t('ccAgent.sidebar.filterStatus.archived')}
+              aria-hidden="true"
               title={t('ccAgent.sidebar.filterStatus.archived')}
-              className="inline-flex shrink-0 text-[var(--sidebar-nav-text)]"
+              // 颜色不单设——继承触发器文字色(淡灰、hover / 菜单展开随按钮一起加深)。
+              className="inline-flex shrink-0 items-center gap-0.5"
             >
               <Archive size={13} strokeWidth={2} />
+              <span className="text-xs leading-none">
+                {t('ccAgent.sidebar.filterStatus.archived')}
+              </span>
             </span>
           )}
           <ChevronDown size={13} strokeWidth={2} className="shrink-0" />
@@ -305,6 +325,7 @@ export function MachineSwitcherMenu({
           </>
         ) : null}
         {statusItems}
+        {statusItems ? <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} /> : null}
         {settingsItems}
       </DropdownMenuContent>
     </DropdownMenu>

@@ -718,11 +718,27 @@ describe('#3214 已归档任务入口前置到范围菜单一级', () => {
     expect(group).toContain("onStatusSelect('all')");
   });
 
-  it('归档视图时段头常驻 Archive 状态图标,不依赖展开菜单', () => {
-    expect(menuSource).toContain("status === 'archived' && (");
-    // 原生 title 表达 tooltip(嵌在 DropdownMenuTrigger 内不再挂 Radix tooltip)。
-    expect(menuSource).toContain("aria-label={t('ccAgent.sidebar.filterStatus.archived')}");
+  it('状态组分隔线:组首不带线(设备列表末尾已有),状态与设置项之间补一条', () => {
+    const statusGroupIdx = menuSource.indexOf('const statusItems =');
+    expect(statusGroupIdx).toBeGreaterThanOrEqual(0);
+    const groupEndIdx = menuSource.indexOf(') : null;', statusGroupIdx);
+    const group = menuSource.slice(statusGroupIdx, groupEndIdx);
+    // 组首不再渲染分隔线——有设备时会连出两条,无设备时菜单会以分隔线开头(review P1)。
+    expect(group).not.toContain('<DropdownMenuSeparator');
+    // 状态项之后、设置项之前统一补分隔线。
+    expect(menuSource).toContain(
+      '{statusItems ? <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} /> : null}',
+    );
+  });
+
+  it('触发器无障碍名称包含当前状态;归档时段头有图标 + 可见文字徽标', () => {
+    // 内部图标的 aria-label 进不了父按钮名称,状态必须拼进 aria-label(review P1)。
+    expect(menuSource).toContain('`${triggerLabel}: ${triggerText} · ${statusText}`');
+    // 徽标 = 图标 + 可见文字(不只靠 title);语义已进按钮名称,视觉块对读屏隐藏。
+    expect(menuSource).toContain("aria-hidden=\"true\"");
     expect(menuSource).toContain("title={t('ccAgent.sidebar.filterStatus.archived')}");
+    expect(menuSource).toContain("{t('ccAgent.sidebar.filterStatus.archived')}");
+    expect(menuSource).not.toContain('role="img"');
   });
 
   it('MainListScopeHeader 把全局 filter.status 传进范围菜单,出口是 setStatus 本尊', () => {
