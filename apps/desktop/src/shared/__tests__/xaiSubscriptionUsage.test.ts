@@ -85,12 +85,35 @@ describe('parseXaiBillingCreditsConfig', () => {
     const nowMs = Date.parse('2026-08-19T00:00:00.000Z');
     const parsed = parseXaiBillingCreditsConfig({
       config: {
-        currentPeriod: { end: '2026-08-18T09:53:45.527500+00:00' },
+        currentPeriod: {
+          type: 'USAGE_PERIOD_TYPE_WEEKLY',
+          end: '2026-08-18T09:53:45.527500+00:00',
+        },
       },
     }, nowMs);
     expect(parsed?.creditUsagePercent).toBeNull();
     expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000)).toBeNull();
     expect(inferXaiWeeklyUsagePercent(null, 1_800_000_000, 1_800_000_000 * 1000 - 1)).toBe(0);
+  });
+
+  it('does not invent 0% from a future billingPeriodEnd or non-weekly period', () => {
+    const nowMs = Date.parse('2026-08-15T00:00:00.000Z');
+    expect(parseXaiBillingCreditsConfig({
+      config: { billingPeriodEnd: '2026-09-18T00:00:00.000Z' },
+    }, nowMs)?.creditUsagePercent).toBeNull();
+    expect(parseXaiBillingCreditsConfig({
+      config: {
+        currentPeriod: {
+          type: 'USAGE_PERIOD_TYPE_MONTHLY',
+          end: '2026-09-18T00:00:00.000Z',
+        },
+      },
+    }, nowMs)?.creditUsagePercent).toBeNull();
+    expect(parseXaiBillingCreditsConfig({
+      config: {
+        currentPeriod: { end: '2026-09-18T00:00:00.000Z' },
+      },
+    }, nowMs)?.creditUsagePercent).toBeNull();
   });
 
   it('skips malformed product rows', () => {

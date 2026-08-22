@@ -8,8 +8,9 @@
  *
  * 这是账号级「每周包含限额」,不是单次任务配额,也不是 api.x.ai 的 RPM/TPM 限流。
  * 解析必须 fail-safe:字段缺失 / 形状不符就跳过,绝不从 token 数反推百分比。
- * 例外:未结束的周窗口若省略 creditUsagePercent,按 proto3 默认值当成 0% ——
- * 手动重置 / 新窗口刚开始时上游经常不发这个字段,缺了不能继续沿用打满时的缓存。
+ * 例外:仅当 currentPeriod.type 明确是 USAGE_PERIOD_TYPE_WEEKLY、窗口尚未结束、
+ * 且省略 creditUsagePercent 时,按 proto3 默认值当成 0%。只有未来的 billingPeriodEnd、
+ * 或非周窗口,都不能推断 0%,否则会把打满缓存盖成剩余 100%。
  */
 
 /** 分产品周用量(页面「Grok Build 2%」)。 */
@@ -94,21 +95,31 @@ function parseProductUsage(raw: unknown): XaiProductUsage[] {
   return out;
 }
 
+const XAI_WEEKLY_PERIOD_TYPE = 'USAGE_PERIOD_TYPE_WEEKLY';
+
+/** 只有上游标明的周窗口才能用来推断省略的 creditUsagePercent。 */
+export function isXaiWeeklyUsagePeriod(period: unknown): period is Record<string, unknown> {
+  if (!isPlainObject(period)) return false;
+  const type = toOptionalString(period.type);
+  return type === XAI_WEEKLY_PERIOD_TYPE;
+}
+
 /**
  * 未结束的周窗口里,省略的 creditUsagePercent 就是 0%。
- * 已过期窗口缺百分比则保持 null,让 fetch 保缓存,避免把打满快照改成 0。
+ * weeklyResetsAt 必须来自 USAGE_PERIOD_TYPE_WEEKLY 的 currentPeriod.end;
+ * 月度 billingPeriodEnd / 非周窗口 / 已过期窗口缺百分比都保持 null,让 fetch 保缓存。
  */
 export function inferXaiWeeklyUsagePercent(
   creditUsagePercent: number | null,
-  resetsAt: number | null,
+  weeklyResetsAt: number | null,
   nowMs: number,
 ): number | null {
   if (creditUsagePercent !== null) return clampPercent(creditUsagePercent);
   if (
-    typeof resetsAt === 'number'
-    && Number.isFinite(resetsAt)
-    && resetsAt > 0
-    && nowMs < resetsAt * 1000
+    typeof weeklyResetsAt === 'number'
+    && Number.isFinite(weeklyResetsAt)
+    && weeklyResetsAt > 0
+    && nowMs < weeklyResetsAt * 1000
   ) {
     return 0;
   }
@@ -132,13 +143,17 @@ export function parseXaiBillingCreditsConfig(
   const config = isPlainObject(data.config) ? data.config : data;
   const creditUsagePercent = toFiniteNumber(config.creditUsagePercent);
   const period = isPlainObject(config.currentPeriod) ? config.currentPeriod : null;
+  const weeklyResetsAt = isXaiWeeklyUsagePeriod(period)
+    ? toXaiUsageEpochSeconds(period.end)
+    : null;
   const resetsAt =
-    toXaiUsageEpochSeconds(period?.end)
+    weeklyResetsAt
+    ?? toXaiUsageEpochSeconds(period?.end)
     ?? toXaiUsageEpochSeconds(config.billingPeriodEnd);
   const prepaidBalance = toFiniteNumber(unwrapVal(config.prepaidBalance));
   if (creditUsagePercent === null && resetsAt === null) return null;
   return {
-    creditUsagePercent: inferXaiWeeklyUsagePercent(creditUsagePercent, resetsAt, nowMs),
+    creditUsagePercent: inferXaiWeeklyUsagePercent(creditUsagePercent, weeklyResetsAt, nowMs),
     resetsAt,
     productUsage: parseProductUsage(config.productUsage),
     prepaidBalance,
