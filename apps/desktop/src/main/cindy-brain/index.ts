@@ -1611,6 +1611,7 @@ export function getGhostErrandSlot(): GhostErrandSlot {
       holdPipeCall: (ghostId, callId, budgetMs) =>
         getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
       releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
+      hasPendingToolCall: (ghostId) => getGhostPipeDispatcher().hasPendingCallsFor(ghostId),
       log,
     });
   }

@@ -97,7 +97,12 @@ function makeDeps(overrides: Partial<GhostErrandRunnerDeps> = {}): {
   return { deps, emitters, writes };
 }
 
-const REQUEST = { ghostId: 'helper', ghostVersion: '1.0.0', message: '干活' };
+const REQUEST = {
+  ghostId: 'helper',
+  ghostVersion: '1.0.0',
+  origin: 'user-action' as const,
+  message: '干活',
+};
 
 describe('权限档钳制', () => {
   it('白名单外/缺省一律收敛到 plan;bypassPermissions 不存在', () => {

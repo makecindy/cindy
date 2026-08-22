@@ -41,9 +41,14 @@ const MAX_JOB_ID_LEN = 64;
 /** 每插件完成态任务记录保留上限(同 cindySlot 的第二道闸)。 */
 const MAX_SETTLED_JOBS_PER_GHOST = 16;
 
+/** 派活来源：面板/卡片点击 vs MCP/调度器静默回合。由主机归因，插件不能自报。 */
+export type GhostErrandOrigin = 'user-action' | 'background';
+
 export interface GhostErrandRunRequest {
   ghostId: string;
   ghostVersion: string;
+  /** 主机归因的来源；切任务只认 user-action。 */
+  origin: GhostErrandOrigin;
   /** 已组装的最终任务消息(task + 结构化上下文;本层组装,runner 原样投递)。 */
   message: string;
   /** 首次创建对应 errand 会话时的标题提示。 */
@@ -96,6 +101,8 @@ export interface GhostErrandSlotDeps {
   releasePipeCall?(ghostId: string, callId: string): void;
   now?: () => number;
   createJobId?: () => string;
+  /** 该插件此刻是否有在途 MCP tool-call（调度器/Agent 静默回合）。 */
+  hasPendingToolCall?(ghostId: string): boolean;
   log?: {
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
@@ -116,6 +123,8 @@ interface ErrandJob {
   sessionId?: string;
   /** 本单已经切过左侧，onSession + 收口只切一次。 */
   revealed?: boolean;
+  /** 主机归因：只有 user-action 才切任务。 */
+  origin: GhostErrandOrigin;
   result?: { sessionId: string; text: string; agentKind?: string; model?: string };
   errorCode?: GhostAgentErrandErrorCode;
   error?: string;
@@ -264,7 +273,8 @@ export class GhostErrandSlot {
     this.lastRunAt.set(ghostId, now);
     this.evictSettledJobs(ghostId);
     const jobId = (this.deps.createJobId ?? randomUUID)();
-    const job: ErrandJob = { ghostId, startedAt: now, status: 'running' };
+    const origin = this.resolveOrigin(ghostId);
+    const job: ErrandJob = { ghostId, startedAt: now, status: 'running', origin };
     this.jobs.set(jobId, job);
     this.inFlightGhosts.add(ghostId);
 
@@ -278,6 +288,7 @@ export class GhostErrandSlot {
       ghostId,
       jobId,
       callId,
+      origin,
       mode: payload.mode === 'wait' ? 'wait' : 'submit',
     });
 
@@ -287,6 +298,7 @@ export class GhostErrandSlot {
           {
             ghostId,
             ghostVersion: ghost.manifest.version,
+            origin,
             message,
             ...(typeof payload.title === 'string' ? { title: payload.title.trim() } : {}),
             ...(typeof payload.workingDir === 'string' ? { workingDir: payload.workingDir } : {}),
@@ -408,7 +420,14 @@ export class GhostErrandSlot {
     return fail(job.errorCode ?? 'TURN_FAILED', job.error ?? '派活失败');
   }
 
+  private resolveOrigin(ghostId: string): GhostErrandOrigin {
+    // MCP / 调度器静默回合里调 errand 时，管子上必有一单在途 tool-call。
+    // 面板点「执行」没有在途 tool-call，算用户发起。
+    return this.deps.hasPendingToolCall?.(ghostId) ? 'background' : 'user-action';
+  }
+
   private revealSessionOnce(job: ErrandJob, sessionId: string): void {
+    if (job.origin !== 'user-action') return;
     if (job.revealed) return;
     job.revealed = true;
     try {

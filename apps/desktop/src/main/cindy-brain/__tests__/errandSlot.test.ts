@@ -474,4 +474,27 @@ describe('可见任务自动切过去', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(reveal).toHaveBeenCalledWith('sess-1');
   });
+
+  it('MCP / 调度器静默回合里的派活不切任务', async () => {
+    const reveal = vi.fn();
+    const runner = vi.fn(async (req: { origin?: string }, h?: { onDispatched?: (sid: string) => void }) => {
+      h?.onDispatched?.('sess-bg');
+      return { ok: true as const, sessionId: 'sess-bg', text: 'done' };
+    });
+    const { slot } = makeSlot({
+      runner: runner as unknown as GhostErrandRunner,
+      onRevealSession: reveal,
+      hasPendingToolCall: () => true,
+    });
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runner.mock.calls[0][0].origin).toBe('background');
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('没有在途 tool-call 的派活按 user-action 交给 runner', async () => {
+    const { slot, runner } = makeSlot();
+    await slot.handleRequest('helper', RUN);
+    expect(runner.mock.calls[0][0]).toMatchObject({ origin: 'user-action' });
+  });
 });
