@@ -384,15 +384,7 @@ export class RsbWindowController {
         this.clearPinnedSession();
       }
     }
-    const previousSessionId = this.lastContext?.sessionId ?? null;
     this.lastContext = ctx;
-    if (!ctx.available || !ctx.sessionId) {
-      this.deferredCommands.clear();
-    } else if (previousSessionId !== ctx.sessionId) {
-      for (const sessionId of this.deferredCommands.keys()) {
-        if (sessionId !== ctx.sessionId) this.deferredCommands.delete(sessionId);
-      }
-    }
     if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, ctx);
     }
@@ -426,10 +418,8 @@ export class RsbWindowController {
       this.enqueueDeferredCommand(command);
       return 'queued';
     }
-    if (userInitiated === false || this.lastContext?.sessionId !== hostSessionId) {
-      const adopted = this.adoptHostSession(hostSessionId);
-      if (adopted) await adopted;
-    }
+    const adopted = this.adoptHostSession(hostSessionId);
+    if (adopted) await adopted;
     if (!this.canDispatchCommand(command)) return 'stale-context';
 
     if (allowOpen && (!this.isOpen() || !this.presentationReady)) {
@@ -864,6 +854,7 @@ export class RsbWindowController {
         sessionId,
         workdir: null,
         remoteHostId: null,
+        deviceLinkDeviceId: null,
         available: true,
       },
     );

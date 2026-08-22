@@ -1072,14 +1072,36 @@ describe('setContext / routeCommand', () => {
     expect(h.sends.filter(e => e.channel === 'cmd-channel')).toEqual([]);
   });
 
-  it('context switch during ready wait: returns stale-context', async () => {
+  it('pins the opening session so a focus switch during ready wait cannot drop it', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
     const pending = h.controller.routeCommand(terminalRequest());
     h.controller.setContext({ ...ctx, sessionId: 's2' });
     const win = h.windows[0];
     markReady(h.controller, win);
-    await expect(pending).resolves.toBe('stale-context');
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toEqual(ctx);
+    expect(h.sends.at(-1)).toEqual({
+      channel: 'cmd-channel',
+      payload: { type: 'open-terminal', sessionId: 's1' },
+    });
+  });
+
+  it('keeps another session queued across an ordinary focus switch', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const first = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://a.example' };
+    await expect(
+      h.controller.routeCommand({ command: first, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    const pending = h.controller.routeCommand(terminalRequest('s1'));
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: first },
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
   });
 });
 
