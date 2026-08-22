@@ -26,7 +26,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, FileText } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -47,6 +47,7 @@ import { TextLightbox } from './TextLightbox';
 import { ModelLightbox } from './ModelLightbox';
 
 function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
+  const { t } = useTranslation();
   const fileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
   const ctxMenu = useFileChipContextMenu({
@@ -101,6 +102,14 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
     setTextLightboxOpen(true);
   };
 
+  const artifact = file.artifact;
+  const format = artifact?.format;
+  const formatLabel = format ? t(`chat.generatedFiles.formats.${format}`) : null;
+  const artifactTitle = artifact?.title || file.name;
+  const summaryLabel = artifact?.summary
+    ? t(`chat.generatedFiles.summary.${artifact.summary.kind}`, { count: artifact.summary.value })
+    : null;
+
   return (
     <>
       <button
@@ -109,17 +118,47 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
         onClick={() => void open()}
         onContextMenu={ctxMenu.onContextMenu}
         className={cn(
-          'inline-flex items-center gap-1.5',
-          'h-7 px-2.5 py-1.5 max-w-[280px]',
-          'rounded-[9999px]',
-          'bg-[var(--msg-md-inline-code-bg)]',
-          'text-13 font-medium text-[var(--msg-assistant-text)]',
-          'hover:bg-[var(--cmd-palette-item-hover)]',
-          'transition-colors cursor-pointer',
+          artifact
+            ? 'group flex min-h-[76px] w-full max-w-[420px] items-stretch gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2 text-left shadow-sm transition-colors hover:border-[var(--accent-cta-bg)] hover:bg-[var(--surface-hover)]'
+            : 'inline-flex h-7 max-w-[280px] items-center gap-1.5 rounded-[9999px] bg-[var(--msg-md-inline-code-bg)] px-2.5 py-1.5 text-13 font-medium text-[var(--msg-assistant-text)] transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
         )}
       >
-        <FileText size={14} className="shrink-0 opacity-70" />
-        <span className="truncate">{file.name}</span>
+        {artifact ? (
+          <>
+            <span className="flex w-[58px] shrink-0 flex-col justify-between rounded-[9px] bg-[var(--accent-cta-bg)] px-2 py-2 text-[var(--accent-pure-cta-fg)]">
+              <span className="text-11 font-semibold uppercase tracking-[0.12em] opacity-80">
+                {t('chat.generatedFiles.artifactLabel')}
+              </span>
+              <span className="text-18 font-semibold leading-none">{formatLabel}</span>
+            </span>
+            <span className="min-w-0 flex-1 py-0.5">
+              <span className="block truncate text-14 font-semibold leading-5 text-[var(--text-primary)]">
+                {artifactTitle}
+              </span>
+              <span className="mt-0.5 block truncate text-12 text-[var(--text-secondary)]">
+                {artifact.subtitle || formatLabel}
+              </span>
+              <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-11 text-[var(--text-tertiary)]">
+                {summaryLabel && <span>{summaryLabel}</span>}
+                <span className="truncate">{file.name}</span>
+              </span>
+            </span>
+            <span className="flex shrink-0 items-start pt-1 text-[var(--text-tertiary)]">
+              {artifact.qa?.status === 'warning' ? (
+                <AlertTriangle size={15} aria-label={t('chat.generatedFiles.qaWarning')} />
+              ) : artifact.qa?.status === 'passed' ? (
+                <CheckCircle2 size={15} aria-label={t('chat.generatedFiles.qaPassed')} />
+              ) : (
+                <FileText size={15} aria-label={t('chat.generatedFiles.qaPending')} />
+              )}
+            </span>
+          </>
+        ) : (
+          <>
+            <FileText size={14} className="shrink-0 opacity-70" />
+            <span className="truncate">{file.name}</span>
+          </>
+        )}
       </button>
       {ctxMenu.menu}
       {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
@@ -167,13 +206,8 @@ export function isLocalGeneratedFileInTurn(
   const ts = file.source === 'tool' ? birthtimeMs : (birthtimeMs ?? stat.mtimeMs);
   // tool 来源的 birthtime 是同机 FS 事实,不放宽下界:放 2 分钟 slack 会把本轮
   // 覆盖的旧文件误当新建。command 来源保留消息落库/执行时序抖动余量。
-  const lowerBound =
-    file.source === 'tool' ? turnStartMs : turnStartMs - TURN_START_SLACK_MS;
-  return (
-    typeof ts === 'number' &&
-    ts >= lowerBound &&
-    (turnEndMs === null || ts < turnEndMs)
-  );
+  const lowerBound = file.source === 'tool' ? turnStartMs : turnStartMs - TURN_START_SLACK_MS;
+  return typeof ts === 'number' && ts >= lowerBound && (turnEndMs === null || ts < turnEndMs);
 }
 
 /** 折叠阈值:约两行 chip。超过则收起为「前 N 个 + 再显示 M 个文件」。 */
@@ -244,12 +278,14 @@ export function GeneratedFilesCard({
   const visible = expanded ? existing : existing.slice(0, MAX_VISIBLE_FILES);
   const hiddenCount = existing.length - visible.length;
 
+  const hasArtifacts = existing.some((file) => file.artifact);
+
   return (
-    <div className="my-1 flex flex-col gap-1.5">
-      <span className="text-12 text-[var(--text-secondary)]">
+    <div className="my-1 flex flex-col gap-2">
+      <span className="text-12 font-medium text-[var(--text-secondary)]">
         {t('chat.generatedFiles.title')}
       </span>
-      <div className="flex flex-wrap gap-1.5">
+      <div className={cn('flex flex-wrap gap-2', hasArtifacts && 'flex-col')}>
         {visible.map((f) => (
           <GeneratedFileChip key={f.path} file={f} />
         ))}

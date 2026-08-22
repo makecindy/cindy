@@ -3083,6 +3083,10 @@
           "name": "Cindy 記憶",
           "description": "跨 Agent 的長期記憶，讓上下文在任務之間持續"
         },
+        "docs": {
+          "name": "文件工坊",
+          "description": "把內容做成真檔案 —— PDF、Word、Excel、PPT，並能回讀核對產出。不需要另裝任何軟體。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "宿主能力自省 —— 告訴 Agent 當前可用的工具與模型"
@@ -7569,7 +7573,13 @@
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
       "showMore": "顯示另外 {{count}} 個",
-      "showLess": "收起"
+      "showLess": "收起",
+      "artifactLabel": "成品",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} 頁", "slides": "{{count}} 張投影片", "sheets": "{{count}} 個工作表", "rows": "{{count}} 列" },
+      "qaPassed": "已完成檢查",
+      "qaWarning": "需要留意",
+      "qaPending": "待檢查"
     },
     "turnChanges": {
       "title": "已更改 {{count}} 個檔案",

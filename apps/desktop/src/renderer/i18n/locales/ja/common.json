@@ -3083,6 +3083,10 @@
           "name": "Cindy メモリ",
           "description": "セッションをまたいでコンテキストを保持する Agent 横断の長期メモリ"
         },
+        "docs": {
+          "name": "ドキュメント工房",
+          "description": "内容を実ファイルに — PDF / Word / Excel / PowerPoint を生成し、読み返して仕上がりを確認。追加ソフトのインストールは不要。"
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "ホスト機能の開示 — 利用可能なツールとモデルを Agent に伝える"
@@ -7570,7 +7574,13 @@
     "generatedFiles": {
       "title": "このメッセージで作成されたファイル",
       "showMore": "さらに {{count}} 件表示",
-      "showLess": "折りたたむ"
+      "showLess": "折りたたむ",
+      "artifactLabel": "成果物",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} ページ", "slides": "{{count}} 枚のスライド", "sheets": "{{count}} シート", "rows": "{{count}} 行" },
+      "qaPassed": "確認済み",
+      "qaWarning": "要確認",
+      "qaPending": "確認待ち"
     },
     "turnChanges": {
       "title": "{{count}} ファイルを変更",

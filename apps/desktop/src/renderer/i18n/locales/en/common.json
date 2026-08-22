@@ -3084,6 +3084,10 @@
           "name": "Cindy Memory",
           "description": "Cross-agent long-term memory for persistent context across sessions"
         },
+        "docs": {
+          "name": "Document Toolkit",
+          "description": "Turn content into real files — PDF, Word, Excel, and PowerPoint — and read them back to verify the result. No extra software to install."
+        },
         "xdt_helper": {
           "name": "Cindy Helper",
           "description": "Host capability disclosure — tells agents what tools and models are available"
@@ -7573,7 +7577,13 @@
     "generatedFiles": {
       "title": "Files created this message",
       "showMore": "Show {{count}} more",
-      "showLess": "Show less"
+      "showLess": "Show less",
+      "artifactLabel": "Artifact",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows" },
+      "qaPassed": "Checked",
+      "qaWarning": "Review needed",
+      "qaPending": "Check pending"
     },
     "turnChanges": {
       "title": "Changed {{count}} files",
