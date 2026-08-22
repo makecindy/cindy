@@ -7574,7 +7574,13 @@
     "generatedFiles": {
       "title": "本条消息生成的文件",
       "showMore": "显示另外 {{count}} 个",
-      "showLess": "收起"
+      "showLess": "收起",
+      "artifactLabel": "成品",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}} 页", "slides": "{{count}} 张幻灯片", "sheets": "{{count}} 个工作表", "rows": "{{count}} 行" },
+      "qaPassed": "已完成检查",
+      "qaWarning": "需要留意",
+      "qaPending": "待检查"
     },
     "turnChanges": {
       "title": "已更改 {{count}} 个文件",

@@ -34,12 +34,146 @@ export interface GeneratedFileRef {
    * 'command' = 命令文本启发式候选,渲染前还需 mtime 时间窗校验。
    */
   source: 'tool' | 'command';
+  /** 文档工具返回的轻量交付信息；普通源码文件没有此字段。 */
+  artifact?: DocumentArtifactMetadata;
+}
+
+export type DocumentArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
+export type DocumentArtifactSummary = {
+  kind: 'pages' | 'slides' | 'sheets' | 'rows';
+  value: number;
+};
+export type DocumentArtifactQaStatus = 'pending' | 'passed' | 'warning';
+
+export interface DocumentArtifactMetadata {
+  format: DocumentArtifactFormat;
+  title?: string;
+  subtitle?: string;
+  theme?: 'light' | 'dark' | 'navy';
+  cover?: boolean;
+  summary?: DocumentArtifactSummary;
+  qa?: { status: DocumentArtifactQaStatus; warning?: string };
 }
 
 interface ToolUseLike {
   role: string;
   toolName?: string;
   toolInput?: unknown;
+  toolUseId?: string;
+  content?: string;
+}
+
+function documentToolName(toolName: string): string | null {
+  const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
+  const name = normalized.split(':').at(-1) ?? normalized;
+  return /^(make_docx|make_pptx|make_xlsx|render_pdf)$/.test(name) ? name : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseToolResult(content: string | undefined): Record<string, unknown> | null {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function stringField(record: Record<string, unknown> | null, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+export function extractDocumentArtifactMetadata(
+  toolName: string,
+  input: unknown,
+  resultContent?: string,
+): DocumentArtifactMetadata | undefined {
+  const name = documentToolName(toolName);
+  if (!name) return undefined;
+  const inputRecord = asRecord(input);
+  const result = parseToolResult(resultContent);
+  const resultArtifact = asRecord(result?.artifact);
+  const format =
+    name === 'make_docx'
+      ? 'docx'
+      : name === 'make_pptx'
+        ? 'pptx'
+        : name === 'make_xlsx'
+          ? 'xlsx'
+          : 'pdf';
+  const theme =
+    stringField(resultArtifact, 'theme') ??
+    stringField(result, 'theme') ??
+    stringField(inputRecord, 'theme');
+  const validTheme = theme === 'light' || theme === 'dark' || theme === 'navy' ? theme : undefined;
+  const title =
+    stringField(resultArtifact, 'title') ??
+    stringField(result, 'title') ??
+    stringField(inputRecord, 'title') ??
+    (name === 'make_pptx'
+      ? stringField(
+          asRecord(Array.isArray(inputRecord?.slides) ? inputRecord.slides[0] : null),
+          'title',
+        )
+      : name === 'make_xlsx'
+        ? stringField(
+            asRecord(Array.isArray(inputRecord?.sheets) ? inputRecord.sheets[0] : null),
+            'name',
+          )
+        : undefined);
+  const subtitle =
+    stringField(resultArtifact, 'subtitle') ??
+    stringField(result, 'subtitle') ??
+    stringField(inputRecord, 'subtitle');
+  const rawSummary = asRecord(resultArtifact?.summary) ?? asRecord(result?.summary);
+  const summaryKind = rawSummary?.kind;
+  const summaryValue = rawSummary?.value;
+  const summary =
+    (summaryKind === 'pages' ||
+      summaryKind === 'slides' ||
+      summaryKind === 'sheets' ||
+      summaryKind === 'rows') &&
+    typeof summaryValue === 'number' &&
+    Number.isFinite(summaryValue)
+      ? { kind: summaryKind, value: summaryValue }
+      : name === 'make_pptx' && Array.isArray(inputRecord?.slides)
+        ? { kind: 'slides' as const, value: inputRecord.slides.length }
+        : name === 'make_xlsx' && Array.isArray(inputRecord?.sheets)
+          ? { kind: 'sheets' as const, value: inputRecord.sheets.length }
+          : undefined;
+  const rawQa = asRecord(resultArtifact?.qa) ?? asRecord(result?.qa);
+  const qaStatus = rawQa?.status;
+  const warning = stringField(rawQa, 'warning') ?? stringField(result, 'warning');
+  const qa =
+    qaStatus === 'passed' || qaStatus === 'warning' || qaStatus === 'pending'
+      ? {
+          status: qaStatus as DocumentArtifactQaStatus,
+          ...(warning ? { warning } : {}),
+        }
+      : {
+          status: warning ? ('warning' as const) : ('pending' as const),
+          ...(warning ? { warning } : {}),
+        };
+  return {
+    format,
+    ...(title ? { title } : {}),
+    ...(subtitle ? { subtitle } : {}),
+    ...(validTheme ? { theme: validTheme } : {}),
+    ...(typeof resultArtifact?.cover === 'boolean'
+      ? { cover: resultArtifact.cover }
+      : typeof inputRecord?.cover === 'boolean'
+        ? { cover: inputRecord.cover }
+        : {}),
+    ...(summary ? { summary: summary as DocumentArtifactSummary } : {}),
+    qa,
+  };
 }
 
 /**
@@ -504,6 +638,16 @@ export function collectGeneratedFiles(
   messages: readonly ToolUseLike[],
   workingDir: string,
 ): GeneratedFileRef[] {
+  const resultByToolUseId = new Map<string, string>();
+  for (const message of messages) {
+    if (
+      message.role === 'tool_result' &&
+      message.toolUseId &&
+      typeof message.content === 'string'
+    ) {
+      resultByToolUseId.set(message.toolUseId, message.content);
+    }
+  }
   // 第一遍:收「本轮被文件工具**修改**过」的路径。它们是编辑不是新建,命令文本
   // 里再出现也不算产物候选——否则跑测试 / 构建命令引用刚编辑过的源码文件
   // (`vitest run src/x.test.ts`)会被 mtime 窗口放行,把编码会话的改动文件全
@@ -543,6 +687,24 @@ export function collectGeneratedFiles(
 
     for (const rawPath of createdPathsFromToolUse(toolName, msg.toolInput)) {
       addPath(rawPath, 'tool');
+    }
+    const artifact = extractDocumentArtifactMetadata(
+      toolName,
+      msg.toolInput,
+      msg.toolUseId ? resultByToolUseId.get(msg.toolUseId) : undefined,
+    );
+    if (artifact) {
+      const outputPath =
+        typeof asRecord(msg.toolInput)?.outPath === 'string'
+          ? (asRecord(msg.toolInput)!.outPath as string)
+          : undefined;
+      if (outputPath) {
+        const abs = canonicalizeWindowsShape(resolveToolFilePath(outputPath, workingDir));
+        const key = dedupeKeyForPath(abs);
+        const existing = byKey.get(key);
+        if (existing) existing.artifact = artifact;
+        else byKey.set(key, { path: abs, name: basename(abs), source: 'tool', artifact });
+      }
     }
     const descriptor = describeToolUse(toolName, msg.toolInput);
     if (descriptor.kind === 'command' && descriptor.command) {

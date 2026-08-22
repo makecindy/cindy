@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectGeneratedFiles, extractCommandOutputPathCandidates } from '../lib/generatedFiles';
+import {
+  collectGeneratedFiles,
+  extractCommandOutputPathCandidates,
+  extractDocumentArtifactMetadata,
+} from '../lib/generatedFiles';
 
 const WORKDIR = '/work';
 
@@ -9,6 +13,64 @@ function toolUse(toolName: string, toolInput: unknown) {
 }
 
 describe('collectGeneratedFiles', () => {
+  it('turns a top-level cindy docs tool result into artifact metadata', () => {
+    const files = collectGeneratedFiles(
+      [
+        {
+          role: 'tool_use',
+          toolName: 'mcp__cindy_docs__make_pptx',
+          toolUseId: 'ppt-1',
+          toolInput: {
+            outPath: 'documents/roadmap.pptx',
+            title: '产品路线图',
+            theme: 'navy',
+            slides: [{ title: '封面', layout: 'cover' }],
+          },
+        },
+        {
+          role: 'tool_result',
+          toolUseId: 'ppt-1',
+          content: JSON.stringify({
+            ok: true,
+            artifact: {
+              format: 'pptx',
+              title: '产品路线图',
+              theme: 'navy',
+              summary: { kind: 'slides', value: 5 },
+              qa: { status: 'pending' },
+            },
+          }),
+        },
+      ],
+      WORKDIR,
+    );
+    expect(files).toHaveLength(1);
+    expect(files[0].artifact).toEqual({
+      format: 'pptx',
+      title: '产品路线图',
+      theme: 'navy',
+      summary: { kind: 'slides', value: 5 },
+      qa: { status: 'pending' },
+    });
+  });
+
+  it('recognizes document metadata without a result for replayed tool calls', () => {
+    expect(
+      extractDocumentArtifactMetadata('mcp:cindy_docs:make_docx', {
+        outPath: 'documents/report.docx',
+        title: '季度报告',
+        subtitle: '内部版',
+        theme: 'light',
+      }),
+    ).toMatchObject({
+      format: 'docx',
+      title: '季度报告',
+      subtitle: '内部版',
+      theme: 'light',
+      qa: { status: 'pending' },
+    });
+  });
+
   it('collects Write (claude) and write (pi) created files', () => {
     const files = collectGeneratedFiles(
       [

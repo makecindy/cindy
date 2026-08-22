@@ -20,7 +20,7 @@ import {
   resolveSessionRoot,
   writeOutputFile,
 } from './_paths.js';
-import { errorPayload, okPayload } from './_payload.js';
+import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import {
   bodyFontSize,
   DEFAULT_PPTX_LAYOUT,
@@ -82,10 +82,18 @@ const SlideSchema = z.object({
   layout: z
     .enum(PPTX_LAYOUT_NAMES)
     .default(DEFAULT_PPTX_LAYOUT)
-    .describe('版式:cover 封面 / section 分节 / content 内容页。默认 content。'),
-  subtitle: z.string().optional().describe('封面副题、分节导语或内容页标题下的一行说明。'),
+    .describe(
+      '版式:cover 封面 / section 分节 / content 内容页。默认 content。',
+    ),
+  subtitle: z
+    .string()
+    .optional()
+    .describe('封面副题、分节导语或内容页标题下的一行说明。'),
   bullets: z.array(z.string()).optional().describe('要点数组,建议 3-5 条。'),
-  body: z.string().optional().describe('整段正文。与 bullets 可并存(正文排在要点之后)。'),
+  body: z
+    .string()
+    .optional()
+    .describe('整段正文。与 bullets 可并存(正文排在要点之后)。'),
   notes: z.string().optional().describe('演讲者备注。'),
   imagePath: z
     .string()
@@ -103,8 +111,14 @@ export function registerMakePptxTool(
     description: DESCRIPTION,
     inputShape: {
       slides: z.array(SlideSchema).min(1).describe('幻灯片列表,至少一页。'),
-      outPath: z.string().min(1).describe('输出 .pptx 路径,工作目录内的相对路径或绝对路径。'),
-      title: z.string().optional().describe('可选演示文稿标题,写进文件属性,并作为页脚标签。'),
+      outPath: z
+        .string()
+        .min(1)
+        .describe('输出 .pptx 路径,工作目录内的相对路径或绝对路径。'),
+      title: z
+        .string()
+        .optional()
+        .describe('可选演示文稿标题,写进文件属性,并作为页脚标签。'),
       theme: z
         .enum(['light', 'dark', 'navy'])
         .default('light')
@@ -112,8 +126,13 @@ export function registerMakePptxTool(
       footer: z
         .boolean()
         .default(true)
-        .describe('分节页和内容页是否显示页脚与页码。封面始终不显示页码。默认 true。'),
-      overwrite: z.boolean().default(false).describe('目标文件已存在时是否覆盖。默认 false。'),
+        .describe(
+          '分节页和内容页是否显示页脚与页码。封面始终不显示页码。默认 true。',
+        ),
+      overwrite: z
+        .boolean()
+        .default(false)
+        .describe('目标文件已存在时是否覆盖。默认 false。'),
     },
     handler: async ({ slides, outPath, title, theme, footer, overwrite }) => {
       try {
@@ -210,7 +229,10 @@ export function registerMakePptxTool(
           const hasBody = Boolean(slide.body && slide.body.trim().length > 0);
           if (hasBullets || hasBody) {
             const bulletBlockH = hasBullets
-              ? Math.min(slots.body.h * 0.72, 0.42 * (slide.bullets?.length ?? 0) + 0.25)
+              ? Math.min(
+                  slots.body.h * 0.72,
+                  0.42 * (slide.bullets?.length ?? 0) + 0.25,
+                )
               : 0;
             if (hasBullets) {
               page.addText(
@@ -227,7 +249,10 @@ export function registerMakePptxTool(
                   // 试过垂直居中,目检下来标题与正文之间裂开一条空白,更糟。
                   fontSize: hasBody
                     ? slots.body.fontSize
-                    : bodyFontSize(slots.body.fontSize, slide.bullets?.length ?? 0),
+                    : bodyFontSize(
+                        slots.body.fontSize,
+                        slide.bullets?.length ?? 0,
+                      ),
                   color: palette.body,
                   // 行距放到 1.5:1.3 在实机目检里几行要点糊成一坨,读起来很挤。
                   lineSpacingMultiple: 1.5,
@@ -237,7 +262,9 @@ export function registerMakePptxTool(
               );
             }
             if (hasBody) {
-              const bodyY = hasBullets ? slots.body.y + bulletBlockH + 0.12 : slots.body.y;
+              const bodyY = hasBullets
+                ? slots.body.y + bulletBlockH + 0.12
+                : slots.body.y;
               page.addText(slide.body!.trim(), {
                 x: slots.body.x,
                 y: bodyY,
@@ -265,7 +292,9 @@ export function registerMakePptxTool(
           if (slide.notes && slide.notes.length > 0) page.addNotes(slide.notes);
         }
 
-        const buffer = (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
+        const buffer = (await pptx.write({
+          outputType: 'nodebuffer',
+        })) as Buffer;
         await writeOutputFile(abs, buffer, overwrite);
         return okPayload({
           ...(await describeOutput(root, abs)),
@@ -274,13 +303,31 @@ export function registerMakePptxTool(
           footer,
           slides: slides.length,
           layouts: usedLayouts,
+          artifact: artifactMetadata({
+            format: 'pptx',
+            ...(title?.trim()
+              ? { title: title.trim() }
+              : slides[0]?.title
+                ? { title: slides[0].title }
+                : {}),
+            theme,
+            cover: slides.some(
+              (slide) => (slide.layout ?? DEFAULT_PPTX_LAYOUT) === 'cover',
+            ),
+            summary: { kind: 'slides', value: slides.length },
+            qa: { status: 'pending' },
+          }),
         });
       } catch (err) {
         if (err instanceof DocsPathError) {
           return errorPayload(err.code, err.hint, { message: err.message });
         }
         const message = err instanceof Error ? err.message : String(err);
-        return errorPayload('PPTX_BUILD_FAILED', `生成演示文稿失败:${message}`, { message });
+        return errorPayload(
+          'PPTX_BUILD_FAILED',
+          `生成演示文稿失败:${message}`,
+          { message },
+        );
       }
     },
   });

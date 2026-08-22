@@ -22,13 +22,22 @@ import {
   resolveSessionRoot,
   writeOutputFile,
 } from './_paths.js';
-import { errorPayload, okPayload } from './_payload.js';
+import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import {
   applyReportTemplate,
+  extractHtmlTitle,
   htmlHasRelativeResources,
 } from './pdfTemplate.js';
-import { DEFAULT_DOCS_THEME, resolveDocsTheme, type DocsThemeName } from './themes.js';
-import type { DocsMcpSessionCtx, DocsPdfPageSize, RenderHtmlToPdfFn } from './types.js';
+import {
+  DEFAULT_DOCS_THEME,
+  resolveDocsTheme,
+  type DocsThemeName,
+} from './themes.js';
+import type {
+  DocsMcpSessionCtx,
+  DocsPdfPageSize,
+  RenderHtmlToPdfFn,
+} from './types.js';
 
 /** 与设计一致的渲染硬超时。加载卡死的页面不能拖着任务不放。 */
 export const RENDER_PDF_TIMEOUT_MS = 30_000;
@@ -74,7 +83,14 @@ const DESCRIPTION = [
   '【输出】outPath 必须在本任务的工作目录内。同名文件默认不覆盖,确要覆盖再传 overwrite: true。',
 ].join('\n');
 
-const PAGE_SIZES: readonly DocsPdfPageSize[] = ['A3', 'A4', 'A5', 'Legal', 'Letter', 'Tabloid'];
+const PAGE_SIZES: readonly DocsPdfPageSize[] = [
+  'A3',
+  'A4',
+  'A5',
+  'Legal',
+  'Letter',
+  'Tabloid',
+];
 
 export function registerRenderPdfTool(
   registry: DocsToolRegistry,
@@ -93,9 +109,15 @@ export function registerRenderPdfTool(
       html: z
         .string()
         .optional()
-        .describe('内联 HTML 源码。与 htmlPath 二选一。相对路径的本地资源不会被解析。'),
-      outPath: z.string().min(1).describe('输出 .pdf 路径,工作目录内的相对路径或绝对路径。'),
-      pageSize: z.enum(PAGE_SIZES as unknown as [DocsPdfPageSize, ...DocsPdfPageSize[]])
+        .describe(
+          '内联 HTML 源码。与 htmlPath 二选一。相对路径的本地资源不会被解析。',
+        ),
+      outPath: z
+        .string()
+        .min(1)
+        .describe('输出 .pdf 路径,工作目录内的相对路径或绝对路径。'),
+      pageSize: z
+        .enum(PAGE_SIZES as unknown as [DocsPdfPageSize, ...DocsPdfPageSize[]])
         .default('A4')
         .describe('纸张尺寸,默认 A4。'),
       landscape: z.boolean().default(false).describe('是否横向。默认纵向。'),
@@ -115,12 +137,17 @@ export function registerRenderPdfTool(
       template: z
         .enum(['auto', 'report', 'none'])
         .default('auto')
-        .describe('auto=无样式时套内置报告模板;report=同样只套无样式 HTML;none=不套。'),
+        .describe(
+          'auto=无样式时套内置报告模板;report=同样只套无样式 HTML;none=不套。',
+        ),
       theme: z
         .enum(['light', 'dark', 'navy'])
         .default('light')
         .describe('自动套模板时使用的色板。已有样式的 HTML 不受影响。'),
-      overwrite: z.boolean().default(false).describe('目标文件已存在时是否覆盖。默认 false。'),
+      overwrite: z
+        .boolean()
+        .default(false)
+        .describe('目标文件已存在时是否覆盖。默认 false。'),
     },
     handler: async ({
       htmlPath,
@@ -149,9 +176,15 @@ export function registerRenderPdfTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareOutputPath(root, outPath, overwrite);
-        const sourcePath = hasPath ? await prepareInputPath(root, htmlPath!) : undefined;
-        const sourceHtml = sourcePath ? await fs.readFile(sourcePath, 'utf8') : html!;
-        const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
+        const sourcePath = hasPath
+          ? await prepareInputPath(root, htmlPath!)
+          : undefined;
+        const sourceHtml = sourcePath
+          ? await fs.readFile(sourcePath, 'utf8')
+          : html!;
+        const palette = resolveDocsTheme(
+          (theme ?? DEFAULT_DOCS_THEME) as DocsThemeName,
+        );
         const wrapped = applyReportTemplate(sourceHtml, palette, template);
         const userSetMargins = margins !== undefined;
         const effectiveMargins = userSetMargins
@@ -172,7 +205,9 @@ export function registerRenderPdfTool(
 
         const { buffer, fontsReady } = await renderHtmlToPdf({
           // 套了模板就必须走内联 html:不能改用户的源文件,相对路径也会因此失效。
-          ...(wrapped.applied || !sourcePath ? { html: wrapped.html } : { htmlPath: sourcePath }),
+          ...(wrapped.applied || !sourcePath
+            ? { html: wrapped.html }
+            : { htmlPath: sourcePath }),
           pageSize,
           landscape,
           printBackground,
@@ -216,7 +251,17 @@ export function registerRenderPdfTool(
           template,
           theme,
           templateApplied: wrapped.applied,
-          nextStep: '用 inspect_pdf 回读这份 PDF,确认页数、纸张与是否有空白页,再交付。',
+          nextStep:
+            '用 inspect_pdf 回读这份 PDF,确认页数、纸张与是否有空白页,再交付。',
+          artifact: artifactMetadata({
+            format: 'pdf',
+            title: extractHtmlTitle(sourceHtml),
+            theme,
+            qa: {
+              status: warnings.length > 0 ? 'warning' : 'pending',
+              ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
+            },
+          }),
           ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
         });
       } catch (err) {

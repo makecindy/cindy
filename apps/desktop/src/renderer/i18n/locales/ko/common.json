@@ -7574,7 +7574,13 @@
     "generatedFiles": {
       "title": "이 메시지에서 생성된 파일",
       "showMore": "{{count}}개 더 보기",
-      "showLess": "간략히 보기"
+      "showLess": "간략히 보기",
+      "artifactLabel": "산출물",
+      "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
+      "summary": { "pages": "{{count}}페이지", "slides": "{{count}}개 슬라이드", "sheets": "{{count}}개 시트", "rows": "{{count}}행" },
+      "qaPassed": "확인 완료",
+      "qaWarning": "확인 필요",
+      "qaPending": "확인 대기"
     },
     "turnChanges": {
       "title": "파일 {{count}}개 변경",

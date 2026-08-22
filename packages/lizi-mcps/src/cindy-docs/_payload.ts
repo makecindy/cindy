@@ -19,6 +19,31 @@ export interface DocsPayloadResult {
   [k: string]: unknown;
 }
 
+/** 生成工具交给上层作品卡的稳定元数据。字段刻意保持小而语义化，避免把排版旋钮泄漏到 UI。 */
+export type DocsArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
+
+export interface DocsArtifactMetadata {
+  format: DocsArtifactFormat;
+  title?: string;
+  subtitle?: string;
+  theme?: 'light' | 'dark' | 'navy';
+  cover?: boolean;
+  summary?: {
+    kind: 'pages' | 'slides' | 'sheets' | 'rows';
+    value: number;
+  };
+  qa?: {
+    status: 'pending' | 'passed' | 'warning';
+    warning?: string;
+  };
+}
+
+export function artifactMetadata(
+  metadata: DocsArtifactMetadata,
+): DocsArtifactMetadata {
+  return metadata;
+}
+
 export function okPayload(data: Record<string, unknown>): DocsPayloadResult {
   return {
     content: [{ type: 'text', text: JSON.stringify({ ok: true, ...data }) }],

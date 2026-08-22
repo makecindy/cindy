@@ -16,7 +16,7 @@ import {
   resolveSessionRoot,
   writeOutputFile,
 } from './_paths.js';
-import { errorPayload, okPayload } from './_payload.js';
+import { artifactMetadata, errorPayload, okPayload } from './_payload.js';
 import {
   DEFAULT_DOCS_THEME,
   resolveDocsTheme,
@@ -69,7 +69,9 @@ const FormulaCellSchema = z.object({
     .describe('Excel 公式,不带开头的等号,如 "SUM(B2:B10)"。'),
   result: z
     .union([z.string(), z.number(), z.boolean(), z.null()])
-    .describe('公式的计算结果(缓存值)。必填 —— 没有它,打开文件重算前这格是空的。'),
+    .describe(
+      '公式的计算结果(缓存值)。必填 —— 没有它,打开文件重算前这格是空的。',
+    ),
 });
 
 const CellSchema = z.union([
@@ -99,7 +101,10 @@ function normalizeFormula(formula: string): string {
 /** 落到 exceljs 的实际单元格值。公式格走 { formula, result } 形态(原生支持缓存值)。 */
 function toExcelValue(cell: unknown): unknown {
   if (isFormulaCell(cell)) {
-    return { formula: normalizeFormula(cell.formula), result: cell.result ?? undefined };
+    return {
+      formula: normalizeFormula(cell.formula),
+      result: cell.result ?? undefined,
+    };
   }
   return cell === null ? null : cell;
 }
@@ -107,7 +112,8 @@ function toExcelValue(cell: unknown): unknown {
 function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';
   // 列宽按「用户会看到的东西」估:公式格显示的是结果,不是公式文本。
-  if (isFormulaCell(value)) return value.result === null ? '' : String(value.result);
+  if (isFormulaCell(value))
+    return value.result === null ? '' : String(value.result);
   return String(value);
 }
 
@@ -118,7 +124,11 @@ function numericSamples(values: unknown[]): number[] {
       out.push(value);
       continue;
     }
-    if (isFormulaCell(value) && typeof value.result === 'number' && Number.isFinite(value.result)) {
+    if (
+      isFormulaCell(value) &&
+      typeof value.result === 'number' &&
+      Number.isFinite(value.result)
+    ) {
       out.push(value.result);
     }
   }
@@ -126,7 +136,10 @@ function numericSamples(values: unknown[]): number[] {
 }
 
 /** 按表头语义 + 列里的数推断一种对人友好的默认数字格式。 */
-export function inferNumberFormat(header: string | undefined, values: unknown[]): string | undefined {
+export function inferNumberFormat(
+  header: string | undefined,
+  values: unknown[],
+): string | undefined {
   const nums = numericSamples(values);
   if (nums.length === 0) return undefined;
   const label = header ?? '';
@@ -138,7 +151,9 @@ export function inferNumberFormat(header: string | undefined, values: unknown[])
     放宽到单字不会误伤:下面那道 0–1 区间闸把「汇率」「频率」这类大于 1 的挡在
     外面,匹配上了也不会套百分号。
   */
-  const looksPercent = /[%％]|率|占比|比例|百分|percent|rate|ratio|share/i.test(label);
+  const looksPercent = /[%％]|率|占比|比例|百分|percent|rate|ratio|share/i.test(
+    label,
+  );
   if (looksPercent && nums.every((n) => n >= 0 && n <= 1)) return '0.0%';
   if (nums.every((n) => Number.isInteger(n))) return '#,##0';
   return '#,##0.00';
@@ -153,7 +168,10 @@ export function inferNumberFormat(header: string | undefined, values: unknown[])
  *
  * 只做宽度估算用,不追求和 Excel 的渲染逐像素一致。
  */
-export function formattedWidthSample(text: string, numFmt: string | undefined): string {
+export function formattedWidthSample(
+  text: string,
+  numFmt: string | undefined,
+): string {
   if (!numFmt) return text;
   const n = Number(text);
   if (!Number.isFinite(n) || text.trim() === '') return text;
@@ -175,7 +193,9 @@ export function formattedWidthSample(text: string, numFmt: string | undefined): 
  * 只看最后一行:整表都是公式的场景(比如一张纯计算表)不该每行都被强调。
  */
 export function isSummaryRow(row: readonly unknown[]): boolean {
-  const filled = row.filter((cell) => cell !== null && cell !== undefined && cell !== '');
+  const filled = row.filter(
+    (cell) => cell !== null && cell !== undefined && cell !== '',
+  );
   if (filled.length === 0) return false;
   const formulas = filled.filter((cell) => isFormulaCell(cell)).length;
   return formulas * 2 > filled.length;
@@ -196,7 +216,12 @@ function paintRow(
   });
 }
 
-function applyThinBorder(ws: ExcelJS.Worksheet, theme: DocsTheme, rows: number, cols: number): void {
+function applyThinBorder(
+  ws: ExcelJS.Worksheet,
+  theme: DocsTheme,
+  rows: number,
+  cols: number,
+): void {
   if (rows === 0 || cols === 0 || rows * cols > BORDER_ROW_CAP * 8) return;
   const border = {
     style: 'thin' as const,
@@ -265,7 +290,10 @@ export function registerMakeXlsxTool(
         .enum(['light', 'dark', 'navy'])
         .default('light')
         .describe('配色主题:light / dark / navy。影响表头色带和斑马纹。'),
-      zebra: z.boolean().default(true).describe('数据行是否打斑马纹。默认 true。'),
+      zebra: z
+        .boolean()
+        .default(true)
+        .describe('数据行是否打斑马纹。默认 true。'),
       overwrite: z
         .boolean()
         .default(false)
@@ -275,7 +303,9 @@ export function registerMakeXlsxTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         const abs = await prepareOutputPath(root, outPath, overwrite);
-        const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
+        const palette = resolveDocsTheme(
+          (theme ?? DEFAULT_DOCS_THEME) as DocsThemeName,
+        );
 
         const workbook = new ExcelJS.Workbook();
         workbook.creator = 'Cindy';
@@ -298,19 +328,23 @@ export function registerMakeXlsxTool(
           const ws = workbook.addWorksheet(unique);
           if (sheet.header && sheet.header.length > 0) {
             const headerRow = ws.addRow(sheet.header);
-            headerRow.font = { bold: true, color: { argb: themeToArgb(palette.accentOn) } };
-            paintRow(
-              headerRow,
-              themeToArgb(palette.accent),
-              { bold: true, color: { argb: themeToArgb(palette.accentOn) } },
-            );
+            headerRow.font = {
+              bold: true,
+              color: { argb: themeToArgb(palette.accentOn) },
+            };
+            paintRow(headerRow, themeToArgb(palette.accent), {
+              bold: true,
+              color: { argb: themeToArgb(palette.accentOn) },
+            });
             headerRow.alignment = { vertical: 'middle' };
             ws.views = [{ state: 'frozen', ySplit: 1 }];
           }
           // 最后一行是不是汇总行,决定它不打斑马纹、而是单独强调(见 isSummaryRow)。
           const lastIndex = sheet.rows.length - 1;
           const summaryIndex =
-            lastIndex >= 0 && isSummaryRow(sheet.rows[lastIndex]!) ? lastIndex : -1;
+            lastIndex >= 0 && isSummaryRow(sheet.rows[lastIndex]!)
+              ? lastIndex
+              : -1;
 
           for (const [rowIndex, row] of sheet.rows.entries()) {
             const excelRow = ws.addRow(row.map(toExcelValue));
@@ -325,7 +359,10 @@ export function registerMakeXlsxTool(
               excelRow.eachCell({ includeEmpty: true }, (cell) => {
                 cell.border = {
                   ...(cell.border ?? {}),
-                  top: { style: 'thin', color: { argb: themeToArgb(palette.accent) } },
+                  top: {
+                    style: 'thin',
+                    color: { argb: themeToArgb(palette.accent) },
+                  },
                 };
               });
             } else if (zebra && rowIndex % 2 === 1) {
@@ -354,7 +391,10 @@ export function registerMakeXlsxTool(
               );
             }
             const column = ws.getColumn(col + 1);
-            column.width = Math.min(MAX_COL_WIDTH, Math.max(MIN_COL_WIDTH, width + 2));
+            column.width = Math.min(
+              MAX_COL_WIDTH,
+              Math.max(MIN_COL_WIDTH, width + 2),
+            );
             if (numFmt) {
               column.numFmt = numFmt;
               column.alignment = { horizontal: 'right' };
@@ -370,20 +410,33 @@ export function registerMakeXlsxTool(
         }
 
         const arrayBuffer = await workbook.xlsx.writeBuffer();
-        await writeOutputFile(abs, Buffer.from(arrayBuffer as ArrayBuffer), overwrite);
+        await writeOutputFile(
+          abs,
+          Buffer.from(arrayBuffer as ArrayBuffer),
+          overwrite,
+        );
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'xlsx',
           theme,
           zebra,
           sheets: sheets.map((s) => ({ name: s.name, rows: s.rows.length })),
+          artifact: artifactMetadata({
+            format: 'xlsx',
+            ...(sheets[0]?.name ? { title: sheets[0].name } : {}),
+            theme,
+            summary: { kind: 'sheets', value: sheets.length },
+            qa: { status: 'pending' },
+          }),
         });
       } catch (err) {
         if (err instanceof DocsPathError) {
           return errorPayload(err.code, err.hint, { message: err.message });
         }
         const message = err instanceof Error ? err.message : String(err);
-        return errorPayload('XLSX_BUILD_FAILED', `生成 Excel 失败:${message}`, { message });
+        return errorPayload('XLSX_BUILD_FAILED', `生成 Excel 失败:${message}`, {
+          message,
+        });
       }
     },
   });
