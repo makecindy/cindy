@@ -7,8 +7,13 @@ const bootstrapSource = readFileSync(resolve(__dirname, '..', 'bootstrap-electro
 
 describe('window theme vibrancy IPC trust boundary', () => {
   it('validates the sender and payload before persistence or window mutations', () => {
-    const start = bootstrapSource.indexOf("ipcMain.on(\n    'theme:apply-vibrancy'");
-    const end = bootstrapSource.indexOf("ipcMain.on('get-app-version'", start);
+    const start = bootstrapSource.search(
+      /ipcMain\.on\(\s*['"]theme:apply-vibrancy['"]/u,
+    );
+    const endMatch = /ipcMain\.on\(\s*['"]get-app-version['"]/u.exec(
+      bootstrapSource.slice(start),
+    );
+    const end = endMatch ? start + endMatch.index : -1;
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
 
