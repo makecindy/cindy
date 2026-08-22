@@ -29,6 +29,11 @@
     "UPSTREAM_UNREACHABLE": "Cannot reach the endpoint. Check your network and the base URL",
     "TIMEOUT": "Connection timed out. Check your network and the base URL",
     "UNKNOWN": "Unknown error. Check the logs for details",
+    "openLogs": "Open Logs",
+    "openLogsFailed": "Failed to open logs directory",
+    "copyDiagnostics": "Copy Diagnostics",
+    "diagnosticsCopied": "Diagnostics copied",
+    "copyDiagnosticsFailed": "Failed to copy diagnostics",
     "upstreamToast": "Provider \"{{provider}}\" request failed: {{message}}"
   },
   "appError": {

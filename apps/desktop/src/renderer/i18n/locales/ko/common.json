@@ -29,6 +29,11 @@
     "UPSTREAM_UNREACHABLE": "엔드포인트에 연결할 수 없습니다. 네트워크와 기본 URL을 확인하세요",
     "TIMEOUT": "연결 시간이 초과되었습니다. 네트워크와 기본 URL을 확인하세요",
     "UNKNOWN": "알 수 없는 오류입니다. 자세한 내용은 로그를 확인하세요",
+    "openLogs": "로그 열기",
+    "openLogsFailed": "로그 폴더를 열지 못했습니다",
+    "copyDiagnostics": "진단 정보 복사",
+    "diagnosticsCopied": "진단 정보를 복사했습니다",
+    "copyDiagnosticsFailed": "진단 정보를 복사하지 못했습니다",
     "upstreamToast": "제공자 \"{{provider}}\" 요청 실패: {{message}}"
   },
   "appError": {

@@ -29,6 +29,11 @@
     "UPSTREAM_UNREACHABLE": "无法连接到端点，请检查网络与基础 URL",
     "TIMEOUT": "连接超时，请检查网络与基础 URL",
     "UNKNOWN": "未知错误，请查看日志了解详情",
+    "openLogs": "打开日志",
+    "openLogsFailed": "打开日志目录失败",
+    "copyDiagnostics": "复制诊断信息",
+    "diagnosticsCopied": "诊断信息已复制",
+    "copyDiagnosticsFailed": "复制诊断信息失败",
     "upstreamToast": "供应商「{{provider}}」请求失败：{{message}}"
   },
   "appError": {

@@ -29,6 +29,11 @@
     "UPSTREAM_UNREACHABLE": "エンドポイントに接続できません。ネットワークとベース URL を確認してください",
     "TIMEOUT": "接続がタイムアウトしました。ネットワークとベース URL を確認してください",
     "UNKNOWN": "不明なエラーです。詳細はログを確認してください",
+    "openLogs": "ログを開く",
+    "openLogsFailed": "ログフォルダーを開けませんでした",
+    "copyDiagnostics": "診断情報をコピー",
+    "diagnosticsCopied": "診断情報をコピーしました",
+    "copyDiagnosticsFailed": "診断情報をコピーできませんでした",
     "upstreamToast": "プロバイダー「{{provider}}」のリクエストに失敗しました：{{message}}"
   },
   "appError": {
