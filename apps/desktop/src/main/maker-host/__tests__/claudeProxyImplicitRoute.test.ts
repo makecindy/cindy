@@ -138,7 +138,7 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     });
   });
 
-  it('同一裸 model 有多个已连接来源时不猜测,等待 session provider 绑定', async () => {
+  it('同一裸 model 有多个已连接来源时拒绝请求,不外发默认网关或写计费路由', async () => {
     const provider = (id: string, baseUrl: string) => buildUserProvider({
       id,
       name: id,
@@ -168,10 +168,16 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
       ),
     );
 
-    // The safe fallback is the pre-existing gateway path; neither custom
-    // Provider may receive the prompt until the session's explicit choice is known.
-    expect(decision).toBeNull();
-    expect(readClaudeSessionRoute('sess-race')).toBe('gateway');
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'provider_route_ambiguous' },
+    });
+    expect(readClaudeSessionRoute('sess-race')).toBeNull();
   });
 
   it('网关命名空间 id(z-ai/glm-5.3)不受 ①.5 影响,保持默认 passthrough', async () => {

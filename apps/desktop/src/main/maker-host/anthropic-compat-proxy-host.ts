@@ -72,7 +72,7 @@ import {
   buildRouteDecision,
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
-  resolveImplicitLocalBridgeRoute,
+  resolveImplicitLocalBridgeRouteResolution,
   resolveImplicitProviderOAuthRouteDecision,
   resolvePendingSessionRouteDecision,
   resolveSessionRouteDecision,
@@ -167,6 +167,28 @@ function refuseExclusiveXaiDefaultGateway(wireModel: string): RoutingDecision {
       res.writeHead(400, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
+function refuseAmbiguousImplicitProviderRoute(wireModel: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'provider_route_ambiguous',
+          code: 'provider_route_ambiguous',
+          message:
+            `model '${wireModel}' matches multiple connected Providers; retry after the session Provider is bound`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'retry-after': '1',
       });
       res.end(payload);
     },
@@ -417,7 +439,7 @@ export function createModelRoutingTransform(): RoutingTransform {
     //     来源(网关即默认上游,② 段处理且带计费路由记账,这里接管会漏记)、PI 会话
     //     (PI 有自己的 per-model 路由解析 resolvePiModelRoute,不受隐式推断接管)。
     //     解析复用
-    //     resolveImplicitLocalBridgeRoute —— 与模型选择器共用连接态(providerViewsReader),
+    //     resolveImplicitLocalBridgeRouteResolution —— 与模型选择器共用连接态(providerViewsReader),
     //     目录无 bridge 候选的模型同步短路,热路径零额外开销。
     const implicitRouteEligible =
       !piSessionId
@@ -425,7 +447,11 @@ export function createModelRoutingTransform(): RoutingTransform {
       && wireModel
       && !isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()));
     if (implicitRouteEligible) {
-      return resolveImplicitLocalBridgeRoute(wireModel, 'claude-code').then((bridgeRoute) => {
+      return resolveImplicitLocalBridgeRouteResolution(wireModel, 'claude-code').then((resolution) => {
+        if (resolution.kind === 'ambiguous') {
+          return refuseAmbiguousImplicitProviderRoute(wireModel);
+        }
+        const bridgeRoute = resolution.kind === 'route' ? resolution.route : null;
         // wire 缺省推断与 provider-route 的 implicitBridgeWire 同口径:claude-code 的
         // 用户 Anthropic 兼容上游在目录里省略 wireProtocol(buildUserProvider 约定)。
         const bridgeWire = bridgeRoute?.routing.wireProtocol ?? 'anthropic-messages';

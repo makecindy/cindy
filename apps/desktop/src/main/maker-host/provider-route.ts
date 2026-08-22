@@ -790,7 +790,15 @@ function providersForModel(modelId: string, agent: AgentKind) {
   );
 }
 
-async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
+type ConnectedDefaultProviderResolution =
+  | { kind: 'provider'; provider: ProviderView }
+  | { kind: 'ambiguous' }
+  | { kind: 'none' };
+
+async function connectedDefaultProviderForModel(
+  modelId: string,
+  agent: AgentKind,
+): Promise<ConnectedDefaultProviderResolution> {
   const providers = await providerViewsReader();
   const eligible = chatEligibleSourcesForModel(providers, modelId, agent, {
     includeDisabled: true,
@@ -801,11 +809,12 @@ async function connectedDefaultProviderForModel(modelId: string, agent: AgentKin
   // that prompt to a Provider the user did not select. Fail closed until the
   // session binding arrives; Codex retains its established native-default
   // semantics because its implicit bridge is also used for explicit prefixes.
-  if (agent === 'claude-code' && eligible.length !== 1) return null;
+  if (agent === 'claude-code' && eligible.length > 1) return { kind: 'ambiguous' };
   // This runs while dispatching an already-created implicit-source session. Admission for new
   // sessions/model switches happened earlier; keep its retired/disabled source usable for resume.
   const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
-  return eligible.find((provider) => provider.id === defaultId) ?? null;
+  const provider = eligible.find((candidate) => candidate.id === defaultId);
+  return provider ? { kind: 'provider', provider } : { kind: 'none' };
 }
 
 /**
@@ -846,6 +855,35 @@ export function inferProviderIdForModel(modelId: string, agent: AgentKind): stri
   return uniqueProviderForModel(modelId, agent)?.id ?? null;
 }
 
+export type ImplicitLocalBridgeRouteResolution =
+  | { kind: 'route'; route: ResolvedSessionRoute }
+  | { kind: 'ambiguous' }
+  | { kind: 'none' };
+
+/**
+ * Resolve an implicit bridge route while preserving the distinction between
+ * no connected source and multiple connected sources. Claude Code callers
+ * must refuse the latter until the session's explicit Provider binding arrives.
+ */
+export async function resolveImplicitLocalBridgeRouteResolution(
+  modelId: string,
+  agent: AgentKind,
+): Promise<ImplicitLocalBridgeRouteResolution> {
+  const catalogModelId = modelId.replace(/\[1m\]$/, '');
+  if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
+    return { kind: 'none' };
+  }
+  const source = await connectedDefaultProviderForModel(catalogModelId, agent);
+  if (source.kind !== 'provider') return source;
+  const routing = providerRoutingForModel(source.provider, agent, modelId);
+  const wire = implicitBridgeWire(routing, agent);
+  if (wire !== 'openai-chat' && wire !== 'anthropic-messages') {
+    return { kind: 'none' };
+  }
+  const route = await resolveProviderRouteById(source.provider.id, agent, modelId);
+  return route ? { kind: 'route', route } : { kind: 'none' };
+}
+
 /**
  * 隐式本地 bridge 来源：会话未显式选 Provider 时，按模型选择器相同的原生默认来源
  * 解析 Provider；只有最终来源明确声明 Chat / Anthropic Messages wire 才接管。
@@ -857,22 +895,9 @@ export function resolveImplicitLocalBridgeRoute(
   modelId: string,
   agent: AgentKind,
 ): Promise<ResolvedSessionRoute | null> {
-  const catalogModelId = modelId.replace(/\[1m\]$/, '');
-  // Most Codex requests are native OpenAI Responses and do not need provider
-  // connection resolution. Keep credential-store reads off that hot path; only
-  // bridge-capable catalog models need the live connected-provider snapshot.
-  if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
-    return Promise.resolve(null);
-  }
-  return connectedDefaultProviderForModel(catalogModelId, agent).then((provider) => {
-    if (!provider) return null;
-    const routing = providerRoutingForModel(provider, agent, modelId);
-    const wire = implicitBridgeWire(routing, agent);
-    if (wire !== 'openai-chat' && wire !== 'anthropic-messages') {
-      return null;
-    }
-    return resolveProviderRouteById(provider.id, agent, modelId);
-  });
+  return resolveImplicitLocalBridgeRouteResolution(modelId, agent).then((resolution) =>
+    resolution.kind === 'route' ? resolution.route : null,
+  );
 }
 
 /**

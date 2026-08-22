@@ -44,7 +44,7 @@ vi.mock('../provider-route', () => ({
   gatewayDefaultRouteDecision: vi.fn((_agent: string, gatewayKey: string | null) =>
     gatewayKey ? { headerOverride: { 'x-api-key': gatewayKey } } : null),
   // ①.5 隐式来源解析恒落空 → 回落 ② 段默认,与本套件锁定的记账语义一致。
-  resolveImplicitLocalBridgeRoute: vi.fn(async () => null),
+  resolveImplicitLocalBridgeRouteResolution: vi.fn(async () => ({ kind: 'none' })),
   resolveImplicitProviderOAuthRouteDecision: vi.fn(() => null),
 }));
 
