@@ -2425,6 +2425,25 @@ export interface SessionChatState {
   sdkSessionId: string | null;
   /** F-PERM-2: Currently pending permission request; null when none. */
   pendingPermission: PendingPermission | null;
+  /**
+   * Additional permission requests for this session, in arrival order. Parallel
+   * tool_use in one assistant message can broadcast several permission requests
+   * near-simultaneously; a single slot would let the later card overwrite the
+   * earlier one, which then can never be shown or answered — its main-process
+   * resolver just waits out the 10-minute timeout and the engine records
+   * deny('timeout') (issue #3092). Mirrors pendingPluginSetupQueue: show one
+   * card at a time, advance when the current card is answered or dismissed.
+   */
+  pendingPermissionQueue: PendingPermission[];
+  /**
+   * requestId of the permission the user just answered, until main's
+   * settlement (permission_dismissed) arrives. While set, new requests queue
+   * instead of taking the empty slot, and only THIS requestId's dismissal
+   * promotes the queue head — an unrelated ask/plan dismissal or a fresh
+   * request must not surface a card during the repeat-input window
+   * (Codex/Greptile review on #3104).
+   */
+  settlingPermissionRequestId: string | null;
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
@@ -2713,6 +2732,8 @@ function createInitialState(): SessionChatState {
     streamingClientId: null,
     streamingText: '',
     pendingPermission: null,
+    pendingPermissionQueue: [],
+    settlingPermissionRequestId: null,
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -2789,6 +2810,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   historyLoaded: true,
   sdkSessionId: null,
   pendingPermission: null,
+  pendingPermissionQueue: [],
+  settlingPermissionRequestId: null,
   pendingAskUser: null,
   pendingPluginSetup: null,
   pendingPluginSetupQueue: [],
@@ -5276,6 +5299,8 @@ export function handleStreamEvent(
         activeTurnRetryText: null,
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
+        pendingPermissionQueue: [],
+        settlingPermissionRequestId: null,
         pendingAskUser: null,
         continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
@@ -5486,6 +5511,8 @@ export function handleStreamEvent(
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
         pendingPermission: null,
+        pendingPermissionQueue: [],
+        settlingPermissionRequestId: null,
         pendingAskUser: null,
         // F-AUQ-MIN-5: same reset as the 'done' path.
         askUserViewerState: 'expanded',
@@ -5518,18 +5545,51 @@ export function handleStreamEvent(
         suggestions?: unknown[];
         autoReviewUnavailable?: boolean;
       };
+      const incoming: PendingPermission = {
+        requestId: data.requestId,
+        toolName: data.toolName,
+        input: data.input,
+        title: data.title,
+        displayName: data.displayName,
+        description: data.description,
+        suggestions: data.suggestions,
+        autoReviewUnavailable: data.autoReviewUnavailable === true,
+      };
+      // 并发 tool_use 会几乎同时广播多个 permission 请求。单槽覆盖会让先到的卡
+      // 永远失去展示与应答机会 —— main 侧 resolver 等满 10 分钟超时,引擎把该
+      // tool_use 记成 deny('timeout')(issue #3092)。与 pendingPluginSetup 同构:
+      // 一次展示一张,其余按到达顺序排队;同 requestId 重复投递(重连 reconcile
+      // 重放)只刷新内容、不重复排队。
+      if (state.pendingPermission?.requestId === incoming.requestId) {
+        return { ...state, pendingPermission: incoming };
+      }
+      if (state.settlingPermissionRequestId === incoming.requestId) {
+        // 已被本端应答、正等 main 收敛的请求被重复投递(reconcile 重放拉到在途
+        // 快照)→ 不重新展示;应答若真丢了,main 的超时 dismissal 会经 settling
+        // 分支收口并推进队列。
+        return state;
+      }
+      // 空槽也必须同时满足「无在途应答、队列为空」才能直接上位:settling 窗口内
+      // 或队列有存货时,新请求直接上位等于插队,且长按 Enter 的重复输入会落在
+      // 这张未审阅的新卡上(Greptile review on #3104)。
+      if (
+        !state.pendingPermission
+        && !state.settlingPermissionRequestId
+        && state.pendingPermissionQueue.length === 0
+      ) {
+        return { ...state, pendingPermission: incoming };
+      }
+      const queuedIndex = state.pendingPermissionQueue.findIndex(
+        (item) => item.requestId === incoming.requestId,
+      );
+      if (queuedIndex >= 0) {
+        const nextQueue = state.pendingPermissionQueue.slice();
+        nextQueue[queuedIndex] = incoming;
+        return { ...state, pendingPermissionQueue: nextQueue };
+      }
       return {
         ...state,
-        pendingPermission: {
-          requestId: data.requestId,
-          toolName: data.toolName,
-          input: data.input,
-          title: data.title,
-          displayName: data.displayName,
-          description: data.description,
-          suggestions: data.suggestions,
-          autoReviewUnavailable: data.autoReviewUnavailable === true,
-        },
+        pendingPermissionQueue: [...state.pendingPermissionQueue, incoming],
       };
     }
 
@@ -5547,7 +5607,35 @@ export function handleStreamEvent(
           ? (data.decision as Record<string, unknown>)
           : null;
       if (state.pendingPermission?.requestId === data.requestId) {
-        return { ...state, pendingPermission: null };
+        const [nextPermission = null, ...remainingPermissions] = state.pendingPermissionQueue;
+        return {
+          ...state,
+          pendingPermission: nextPermission,
+          pendingPermissionQueue: remainingPermissions,
+        };
+      }
+      if (state.settlingPermissionRequestId === data.requestId) {
+        // 本端应答后的收敛广播(resolved,或应答丢失时 main 的 timeout 兜底)。
+        // 只有这个精确 requestId 才推进队首 —— ask/plan 等其它交互乐观清后的无
+        // 归属 dismissal 若恰好落在此窗口,不得替它放行下一张权限卡(Codex
+        // review on #3104)。
+        const [nextPermission = null, ...remainingPermissions] = state.pendingPermissionQueue;
+        return {
+          ...state,
+          settlingPermissionRequestId: null,
+          pendingPermission: nextPermission,
+          pendingPermissionQueue: remainingPermissions,
+        };
+      }
+      if (state.pendingPermissionQueue.some((item) => item.requestId === data.requestId)) {
+        // 排队中的请求也可能被 main 侧先行收口(超时 / mode 切换 / 对端应答),
+        // 从队列摘除即可,不影响当前展示的卡。
+        return {
+          ...state,
+          pendingPermissionQueue: state.pendingPermissionQueue.filter(
+            (item) => item.requestId !== data.requestId,
+          ),
+        };
       }
       if (state.pendingPluginSetup?.requestId === data.requestId) {
         const [nextSetup = null, ...remainingSetups] = state.pendingPluginSetupQueue;
@@ -5865,6 +5953,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.streamingClientId &&
     !state.isStreaming &&
     !state.pendingPermission &&
+    state.pendingPermissionQueue.length === 0 &&
+    !state.settlingPermissionRequestId &&
     !state.pendingAskUser &&
     !state.pendingPluginSetup &&
     state.pendingPluginSetupQueue.length === 0 &&
@@ -5914,6 +6004,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     activeTurnRetryText: null,
     errorRetryText: null,
     pendingPermission: null,
+    pendingPermissionQueue: [],
+    settlingPermissionRequestId: null,
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -12945,6 +13037,8 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingPermissionQueue: [],
+      settlingPermissionRequestId: null,
       continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
@@ -13389,6 +13483,10 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      // /clear 期间远端 dismissal 可能丢失;残留队列会在新会话把 clear 前的幽灵
+      // 权限卡顶上来(Codex review on #3104)→ 与当前卡、settling 标记一起本地清空。
+      pendingPermissionQueue: [],
+      settlingPermissionRequestId: null,
       pendingAskUser: null,
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
@@ -13699,8 +13797,20 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
   const { requestId } = state.pendingPermission;
   bumpInteractionReconcileEpoch(sessionId);
 
-  // Clear the pending permission immediately so the UI updates
-  setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
+  // Clear the pending permission immediately so the UI updates. Deliberately do
+  // NOT promote the next queued card here: a held-down Enter (keydown repeat)
+  // or a double click would land the same "allow" on a card the user has not
+  // reviewed yet (Codex review on #3104). Record the requestId being settled —
+  // the queue advances only when main's permission_dismissed for exactly this
+  // id arrives (reason='resolved', or the timeout/mode-change fallback when
+  // the response was lost). Repeat inputs in that window land on the empty slot and are
+  // ignored by the guard above; unrelated dismissals and fresh requests cannot
+  // surface a card during the window either.
+  setState(sessionId, (s) => ({
+    ...s,
+    pendingPermission: null,
+    settlingPermissionRequestId: requestId,
+  }));
 
   // Send to maker (InteractionDecision kind: 'permission')
   makerApiFor(sessionId)
