@@ -1559,6 +1559,7 @@ describe('FORGE_GUIDE', () => {
       'cindy.agent.errand',
       'queryErrand',
       '"errand": true',
+      'userActionToken',
       'node 槽',
       'cindy.node.request',
       'json-rpc-stdio',

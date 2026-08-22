@@ -374,6 +374,23 @@ describe('忙检与投递', () => {
     expect(dispatched).toEqual([]);
   });
 
+  it('投递成功但会话进程不可观察 → SESSION_UNAVAILABLE,不 onDispatched', async () => {
+    const { deps } = makeDeps({
+      readSessionId: () => 'sess-1',
+      getObservableSession: () => null,
+    });
+    const dispatched: string[] = [];
+    expect(
+      await createGhostErrandRunner(deps)(REQUEST, {
+        onDispatched: (sid) => dispatched.push(sid),
+      }),
+    ).toMatchObject({
+      ok: false,
+      errorCode: 'SESSION_UNAVAILABLE',
+    });
+    expect(dispatched).toEqual([]);
+  });
+
   it('投递失败映射:NOT_FOUND/ARCHIVED → SESSION_UNAVAILABLE 并解除映射', async () => {
     const { deps, writes } = makeDeps({
       readSessionId: () => 'sess-1',

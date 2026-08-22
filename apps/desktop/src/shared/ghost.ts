@@ -5601,6 +5601,12 @@ export type GhostPipeAgentErrandRequest =
       mode?: 'wait';
       /** 归因号(tool-call 触发时把 callId 原样带上;同 cindy-request 语义)。 */
       callId?: string;
+      /**
+       * 可选:把 `card-action` 事件里主机签发的点击票原样带上。
+       * 主机校验通过才把这次派活当成用户发起并切到 errand 任务；
+       * 票一次性消费，不能再拿去 agent.run 或再派一次。
+       */
+      userActionToken?: string;
     }
   | {
       type: 'agent-errand-request';

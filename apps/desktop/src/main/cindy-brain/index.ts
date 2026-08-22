@@ -1611,8 +1611,8 @@ export function getGhostErrandSlot(): GhostErrandSlot {
       holdPipeCall: (ghostId, callId, budgetMs) =>
         getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
       releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
-      hasValidUserActionToken: (token, ghostId) =>
-        getGhostAgentSlot().hasValidUserActionToken(token, ghostId),
+      consumeUserActionToken: (token, ghostId) =>
+        getGhostAgentSlot().consumeUserActionToken(token, ghostId),
       log,
     });
   }

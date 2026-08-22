@@ -494,23 +494,33 @@ describe('可见任务自动切过去', () => {
     expect(reveal).not.toHaveBeenCalled();
   });
 
-  it('Host 铸造的卡片点击票可以把派活标成 user-action', async () => {
+  it('Host 铸造的卡片点击票可以把派活标成 user-action，且一次作废', async () => {
     const reveal = vi.fn();
-    const { slot, runner } = makeSlot({
+    const live = new Set(['click-1']);
+    const { slot, runner, clock } = makeSlot({
       onRevealSession: reveal,
-      hasValidUserActionToken: (token, ghostId) => token === 'click-1' && ghostId === 'helper',
+      consumeUserActionToken: (token, ghostId) => {
+        if (ghostId !== 'helper' || !live.has(token)) return false;
+        live.delete(token);
+        return true;
+      },
     });
     await slot.handleRequest('helper', { ...RUN, userActionToken: 'click-1' });
     await new Promise((r) => setTimeout(r, 0));
     expect(runner.mock.calls[0][0]).toMatchObject({ origin: 'user-action' });
-    expect(reveal).toHaveBeenCalledWith('sess-1');
+    expect(reveal).toHaveBeenCalledOnce();
+    clock.now += GHOST_ERRAND_MIN_INTERVAL_MS + 1;
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'click-1' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runner.mock.calls[1][0].origin).toBe('background');
+    expect(reveal).toHaveBeenCalledTimes(1);
   });
 
   it('假票或过期票不能切任务', async () => {
     const reveal = vi.fn();
     const { slot, runner } = makeSlot({
       onRevealSession: reveal,
-      hasValidUserActionToken: () => false,
+      consumeUserActionToken: () => false,
     });
     await slot.handleRequest('helper', { ...RUN, userActionToken: 'forged' });
     await new Promise((r) => setTimeout(r, 0));
@@ -529,5 +539,15 @@ describe('可见任务自动切过去', () => {
     await slot.handleRequest('helper', RUN);
     await new Promise((r) => setTimeout(r, 0));
     expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('过期的面板手势不能再切任务', async () => {
+    const reveal = vi.fn();
+    const { slot, clock } = makeSlot({ onRevealSession: reveal });
+    slot.noteUserGesture('helper');
+    clock.now += 3_001;
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).not.toHaveBeenCalled();
   });
 });

@@ -101,8 +101,8 @@ export interface GhostErrandSlotDeps {
   releasePipeCall?(ghostId: string, callId: string): void;
   now?: () => number;
   createJobId?: () => string;
-  /** 校验卡片点击票（与 agent.run 同一套 Host 铸造票，只 peek 不消费）。 */
-  hasValidUserActionToken?(token: string, ghostId: string): boolean;
+  /** 消费卡片点击票（与 agent.run 同一套 Host 铸造票，一次作废）。 */
+  consumeUserActionToken?(token: string, ghostId: string): boolean;
   log?: {
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
@@ -148,7 +148,8 @@ export function clampErrandResultText(text: string): string {
   return `${text.slice(0, GHOST_ERRAND_MAX_RESULT_CHARS)}\n…[结果超长,已截断]`;
 }
 
-const USER_GESTURE_TTL_MS = 2 * 60_000;
+/** 面板点击到派活必须紧挨着；订阅/定时器不能吃到几分钟前的一次乱点。 */
+const USER_GESTURE_TTL_MS = 3_000;
 
 export class GhostErrandSlot {
   private readonly jobs = new Map<string, ErrandJob>();
@@ -445,7 +446,7 @@ export class GhostErrandSlot {
     // 只认 Host 铸造的当次点击：卡片票，或面板 webview 上真实的 mouse/key。
     if (
       userActionToken &&
-      this.deps.hasValidUserActionToken?.(userActionToken, ghostId) === true
+      this.deps.consumeUserActionToken?.(userActionToken, ghostId) === true
     ) {
       return 'user-action';
     }
