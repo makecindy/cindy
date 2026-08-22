@@ -669,7 +669,7 @@ interface CodexUsageSnapshot {
   completionTokens: number;
   reasoningTokens: number;
   cachedTokens: number;
-  /** = prompt + completion + reasoning + cached */
+  /** = prompt + completion + cached; reasoning is a diagnostic subset of completion */
   total: number;
 }
 

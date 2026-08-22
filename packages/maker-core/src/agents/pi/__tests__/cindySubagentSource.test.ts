@@ -349,6 +349,15 @@ describe('cindy-subagent extension source', () => {
     for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'cost']) {
       expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(field + ': totals.usage.' + field + ',');
     }
+    // Request boundaries come from the durable runner status. Dropping them in
+    // the generated extension would force the parent back to an unpriceable
+    // turn aggregate even though the child recorded each provider request.
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      'usageSegments: Array.isArray(task.usageSegments) ? task.usageSegments : [],',
+    );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      'usageSegments: totals.usageSegments.map(function (segment)',
+    );
   });
 
 

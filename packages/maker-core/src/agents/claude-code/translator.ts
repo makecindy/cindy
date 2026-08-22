@@ -169,6 +169,9 @@ export interface RuntimeState {
    * 发出可见正文，不能看整轮 `uiEmittedText`，也不能跨 text block 复用。
    */
   streamStopTokenByKey: Map<string, StandaloneStopTokenHold>;
+  /** Per-parent active provider request used to merge message_start + message_delta usage. */
+  activeUsageSegmentByParent: Map<string, string>;
+  usageSegmentSeq: number;
   generation: ClaudeGenerationState;
 }
 
@@ -186,6 +189,8 @@ export function newRuntimeState(): RuntimeState {
     lastAssistantMeta: null,
     lastResultUsageAggregate: null,
     streamStopTokenByKey: new Map(),
+    activeUsageSegmentByParent: new Map(),
+    usageSegmentSeq: 0,
     generation: newClaudeGenerationState(),
   };
 }
@@ -519,6 +524,7 @@ interface TranslateContext {
   getModelContextWindow?: () => number | undefined;
   getEffort: () => string;
   getPermissionMode: () => string;
+  getFastMode?: () => boolean;
   /** SDK session_id 第一次出现时的回调, agent 用来回填 sdkSessionId */
   onSessionId: (sdkSessionId: string | undefined) => void;
   /**
@@ -1534,11 +1540,25 @@ function handleStreamEvent(
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
       // 累加进 tracker (跨多个 message_delta 会一直涨 —— 对标老 agentManager.ts:2362-2365
       // 的 session.currentTurn{Input,Output,CacheRead,CacheCreate}Tokens += dX)
-      ctx.tracker.ingestApiCallUsage({
+      const segmentId =
+        ctx.rt.activeUsageSegmentByParent.get(parentStreamKey) ??
+        `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
+      ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
+      const hasCompleteUsageSnapshot = [
+        'input_tokens',
+        'output_tokens',
+        'cache_read_input_tokens',
+        'cache_creation_input_tokens',
+      ].every((field) => Object.prototype.hasOwnProperty.call(usage, field));
+      ctx.tracker.upsertApiCallUsage(segmentId, {
+        id: segmentId,
+        model: streamModel ?? ctx.getModel(),
+        priceVariant: ctx.getFastMode?.() ? 'priority' : 'standard',
         inputTokens: dIn,
         outputTokens: dOut,
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
+        complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId && dOut > 0) markClaudeGenerationUnreliable(ctx.rt.generation);
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
@@ -1571,6 +1591,8 @@ function handleStreamEvent(
       model: event.message?.model ?? ctx.getModel(),
     });
     ctx.turn.apiCalls += 1;
+    const segmentId = `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
+    ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
 
     // 第三方 proxy(如 litellm)或官方端点通常在 message_start 给出 input_tokens
     const usage = event.message?.usage as Record<string, number> | undefined;
@@ -1579,11 +1601,15 @@ function handleStreamEvent(
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
       if (dIn > 0 || dCacheRead > 0 || dCacheCreate > 0) {
-        ctx.tracker.ingestApiCallUsage({
+        ctx.tracker.upsertApiCallUsage(segmentId, {
+          id: segmentId,
+          model: event.message?.model ?? streamModel ?? ctx.getModel(),
+          priceVariant: ctx.getFastMode?.() ? 'priority' : 'standard',
           inputTokens: dIn,
           outputTokens: 0,
           cacheReadTokens: dCacheRead,
           cacheCreateTokens: dCacheCreate,
+          complete: false,
         });
       }
     }
@@ -1823,6 +1849,34 @@ function handleResult(
 
   // turn 桶快照 — endTurn 会清掉 turn 桶, 必须在调用之前先取出来给后面日志用
   const preTurnEndCacheStats = ctx.tracker.getCacheStats();
+  const turnUsageSegments = ctx.tracker.getTurnUsageSegments();
+  const segmentTotals = turnUsageSegments.reduce<{
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreateTokens: number;
+  }>(
+    (sum, segment) => ({
+      inputTokens: sum.inputTokens + segment.inputTokens,
+      outputTokens: sum.outputTokens + segment.outputTokens,
+      cacheReadTokens: sum.cacheReadTokens + (segment.cacheReadTokens ?? 0),
+      cacheCreateTokens: sum.cacheCreateTokens + (segment.cacheCreateTokens ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+  );
+  const segmentsMatchResult = resultUsage
+    ? segmentTotals.inputTokens === resultUsage.inputTokens &&
+      segmentTotals.outputTokens === resultUsage.outputTokens &&
+      segmentTotals.cacheReadTokens === (resultUsage.cacheReadTokens ?? 0) &&
+      segmentTotals.cacheCreateTokens === (resultUsage.cacheCreateTokens ?? 0)
+    : false;
+  // Only declare request segments complete when an independent turn delta
+  // proves that they cover every token bucket. A matching request count is not
+  // enough: some providers report cache usage only in the terminal aggregate.
+  // On the first result after resume that aggregate may still include history,
+  // so a mismatch must fail closed to token-only accounting rather than price
+  // an incomplete set of requests.
+  const usageSegmentsComplete = segmentsMatchResult;
   const finalTextForLogs = msg.is_error ? redactSensitiveText(finalText) : finalText;
 
   // turn end usage 锁定: Claude Code result.usage 是 session aggregate,
@@ -2087,9 +2141,14 @@ function handleResult(
     msg.is_error && typeof msg.result === 'string'
       ? { ...msg, result: redactSensitiveText(msg.result) }
       : msg;
+  const resultWithUsageSegments = {
+    ...safeResult,
+    usageSegments: turnUsageSegments,
+    usageSegmentsComplete,
+  };
   const resultWithAssistantMessageId = ctx.turn.lastAssistantRequestId
-    ? { ...safeResult, assistant_message_id: ctx.turn.lastAssistantRequestId }
-    : safeResult;
+    ? { ...resultWithUsageSegments, assistant_message_id: ctx.turn.lastAssistantRequestId }
+    : resultWithUsageSegments;
   queue.push({
     type: 'done',
     data:
@@ -2100,6 +2159,7 @@ function handleResult(
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)
   resetTurnState(ctx.turn);
+  ctx.rt.activeUsageSegmentByParent.clear();
   resetClaudeGenerationTiming(ctx.rt.generation);
   // turn 结束钩子 — agent 用来清 turnInFlight 标记 (rewind preview/commit 前置守卫读它)
   ctx.onTurnEnd?.();

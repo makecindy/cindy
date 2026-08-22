@@ -3205,6 +3205,10 @@ export class CodexAgent extends BaseAgent {
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
     let lastTurnTokenUsage: TokenUsageBreakdown | null = null;
     let lastModelContextWindow: number | null = null;
+    // tokenUsage.total 是 thread 生命周期内的单调累计 cursor。app-server 会重放
+    // 相同快照（包括 compaction 的零帧），也可能让旧通知乱序晚到；只有 total
+    // 真正前进时，last 才代表一条新的可计费用量 segment。
+    const acceptedUsageTotalByThread = new Map<string, TokenUsageBreakdown>();
     /**
      * 已产出过模型内容(item 或 reasoning 增量)的 turn id。
      *
@@ -8329,7 +8333,23 @@ export class CodexAgent extends BaseAgent {
       // usage 用它, 不用 contextTokens 降级值 (那是整个上下文快照, 不是本 turn 增量)。
       // 必须在 endTurn 之前取: endTurn 会用降级 aggregate 覆盖后 reset。
       const realTurnUsage = usageTracker.getTurnUsage();
+      const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
+      const generationDurationMs = codexGenerationDurationMs(translatorRt);
+      const codexDoneUsage = {
+        promptTokens: realTurnUsage.input,
+        completionTokens: realTurnUsage.output,
+        reasoningTokens: realTurnUsageSegments.reduce(
+          (sum, segment) => sum + (segment.reasoningTokens ?? 0),
+          0,
+        ),
+        cachedTokens: realTurnUsage.cacheRead,
+        segments: realTurnUsageSegments,
+        ...(generationDurationMs !== undefined ? { durationMs: generationDurationMs } : {}),
+        ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
+          ? { turnDurationMs: turn.durationMs }
+          : {}),
+      };
       usageTracker.endTurn({
         inputTokens: lastSnap.contextTokens ?? 0,
         outputTokens: 0,
@@ -8448,7 +8468,12 @@ export class CodexAgent extends BaseAgent {
         }
         eventQueue.push({
           type: 'done',
-          data: { type: 'codex/event/task_complete', cancelled: turn.status === 'interrupted', raw: turn },
+          data: {
+            type: 'codex/event/task_complete',
+            cancelled: turn.status === 'interrupted',
+            usage: codexDoneUsage,
+            raw: turn,
+          },
           source: 'codex',
         });
         latestPlanByTurn.delete(turn.id);
@@ -8472,24 +8497,15 @@ export class CodexAgent extends BaseAgent {
       });
       // 真实 per-turn 用量 (host 的 today chip / daily_model_usage 记账消费):
       //   promptTokens     = 本 turn 未命中缓存的输入 (不再是 contextTokens 上下文快照)
-      //   completionTokens = 本 turn 输出+推理合并 (ingest 时已合并, 拆不回, 总量正确)
-      //   reasoningTokens  = 0 (已并入 completionTokens, 消费方求和口径不变)
+      //   completionTokens = 本 turn outputTokens（已包含 reasoning 子集，不重复相加）
+      //   reasoningTokens  = reasoning 明细子集，仅展示/诊断，不再参与总量求和
       //   cachedTokens     = 本 turn 命中缓存的输入
+      //   segments         = 每次 total cursor 前进对应的请求级 usage；定价方必须
+      //                      逐段选长上下文档位后再求和，不能拿 turn aggregate 选档
       // 契约: 本 payload **永远是 per-turn 增量语义**, 消费方 (today chip /
       // daily_model_usage 记账) 直接累加, 不做任何 delta 化。整个 turn 没收到
       // tokenUsage/updated 时就是全 0 (该 turn 不记账) — 不退回 contextTokens:
       // 在直接累加的消费方手里, 上下文快照会被当成一笔巨额输入, 高估远糟于漏记。
-      const generationDurationMs = codexGenerationDurationMs(translatorRt);
-      const codexDoneUsage = {
-        promptTokens: realTurnUsage.input,
-        completionTokens: realTurnUsage.output,
-        reasoningTokens: 0,
-        cachedTokens: realTurnUsage.cacheRead,
-        ...(generationDurationMs !== undefined ? { durationMs: generationDurationMs } : {}),
-        ...(typeof turn.durationMs === 'number' && Number.isFinite(turn.durationMs)
-          ? { turnDurationMs: turn.durationMs }
-          : {}),
-      };
       eventQueue.push({
         type: 'done',
         data: {
@@ -9456,26 +9472,58 @@ export class CodexAgent extends BaseAgent {
       tokenUsageUpdated: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.tokenUsageUpdated?.(params))) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        lastModelContextWindow = capContextWindow(params.tokenUsage?.modelContextWindow ?? null);
+        usageTracker.setContextWindow(lastModelContextWindow ?? 0);
         const last = params.tokenUsage?.last;
         if (!last) return;
         lastTurnTokenUsage = last;
-        lastModelContextWindow = capContextWindow(params.tokenUsage?.modelContextWindow ?? null);
-        usageTracker.setContextWindow(lastModelContextWindow ?? 0);
         const cached = last.cachedInputTokens ?? 0;
         const totalInput = last.inputTokens ?? 0;
         const uncachedInput = Math.max(0, totalInput - cached);
-        const totalOutput = (last.outputTokens ?? 0) + (last.reasoningOutputTokens ?? 0);
-        usageTracker.ingestApiCallUsage({
-          inputTokens: uncachedInput,
-          outputTokens: totalOutput,
-          cacheReadTokens: cached,
-          cacheCreateTokens: 0,
-        });
-        maybePushUsageRefresh();
-        // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
-        if (memoryFlushController) {
-          const snap = usageTracker.snapshot();
-          memoryFlushController.onUsageUpdate(snap.contextTokens, snap.contextWindow);
+        const cumulativeTotal = params.tokenUsage?.total;
+        if (!cumulativeTotal) return;
+        const previousTotal = acceptedUsageTotalByThread.get(params.threadId);
+        const hasBillableLast =
+          last.inputTokens > 0 ||
+          last.cachedInputTokens > 0 ||
+          last.outputTokens > 0 ||
+          last.reasoningOutputTokens > 0;
+        // A lower cursor can be an out-of-order frame, so it is not sufficient
+        // evidence of a new execution generation. A genuinely new thread gets
+        // a distinct threadId and therefore a fresh map entry. Same-thread
+        // resets need an explicit host/process generation before they can be
+        // accepted safely; guessing here would double-charge delayed frames.
+        const isNewUsageSegment =
+          hasBillableLast &&
+          Number.isFinite(cumulativeTotal.totalTokens) &&
+          cumulativeTotal.totalTokens > 0 &&
+          (previousTotal === undefined || cumulativeTotal.totalTokens > previousTotal.totalTokens);
+        if (isNewUsageSegment) {
+          acceptedUsageTotalByThread.set(params.threadId, { ...cumulativeTotal });
+          usageTracker.ingestApiCallUsage({
+            inputTokens: uncachedInput,
+            // outputTokens already includes the reasoning subset. Adding
+            // reasoningOutputTokens again double-counts completion usage.
+            outputTokens: last.outputTokens ?? 0,
+            cacheReadTokens: cached,
+            cacheCreateTokens: 0,
+            reasoningTokens: last.reasoningOutputTokens ?? 0,
+            model: turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
+            priceVariant: isFastServiceTier(mutableServiceTier) ? 'priority' : 'standard',
+          });
+          maybePushUsageRefresh();
+          // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
+          if (memoryFlushController) {
+            const snap = usageTracker.snapshot();
+            memoryFlushController.onUsageUpdate(snap.contextTokens, snap.contextWindow);
+          }
+        } else {
+          log.debug('ignoring duplicate or out-of-order Codex usage snapshot', {
+            threadId: params.threadId,
+            turnId: params.turnId,
+            previousTotal: previousTotal?.totalTokens ?? null,
+            cumulativeTotal: cumulativeTotal.totalTokens,
+          });
         }
         // 压缩风暴熔断 (见 compaction-storm.ts)。喂**上报的 input 总量**而不是
         // usageTracker 快照: 判据比的是「压缩前后同一口径的水位」, 而 tracker 的

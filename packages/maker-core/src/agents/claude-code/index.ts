@@ -2352,6 +2352,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
       resetClaudeGenerationTiming(runtimeState.generation);
+      runtimeState.activeUsageSegmentByParent.clear();
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
@@ -4520,6 +4521,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               getModelContextWindow: () => resolveModelContextWindow(mutableModel),
               getEffort: () => mutableEffort,
               getPermissionMode: () => mutablePermissionMode,
+              getFastMode: () => mutableFastMode,
               getSdkSessionId: () => sdkSessionId,
               getLogTitle: () => lastSendTitle,
               tracker: usageTracker,
