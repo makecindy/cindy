@@ -1004,12 +1004,16 @@ export class RsbWindowController {
   private applyAdoptedContext(next: RsbWindowContext): void {
     this.lastContext = next;
     this.rememberLastHostSession(next);
+    this.submitHostContext();
     this.revealPendingOpenIfHostReady();
-    if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
-      this.deps.sendToWindow(this.winRef, this.deps.contextChannel, next);
-    }
     this.flushDeferredCommandsToDetachedHost();
     this.settleHostWaiters(next.sessionId, true);
+  }
+
+  private submitHostContext(): void {
+    if (!this.lastContext || !this.winRef || this.winRef.isDestroyed()) return;
+    if (!this.presentationReady) return;
+    this.deps.sendToWindow(this.winRef, this.deps.contextChannel, this.lastContext);
   }
 
   private revealPendingOpenIfHostReady(): void {
@@ -1027,6 +1031,7 @@ export class RsbWindowController {
 
   private waitForHostSession(sessionId: string): Promise<void> {
     if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+      this.adoptHostSession(sessionId);
       return Promise.resolve();
     }
     const adopted = this.adoptHostSession(sessionId);

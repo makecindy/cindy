@@ -1415,6 +1415,45 @@ describe('setContext / routeCommand', () => {
     expect(h.controller.getContext()?.sessionId).toBe('s2');
   });
 
+  it('lets ensureOpen for the visible host cancel a foreign pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    await expect(h.controller.ensureOpenForAutomation({ sessionId: 's2' })).resolves.toBeUndefined();
+    finishA(resolvedA);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('submits adopted context before revealing a pending window', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open();
+    h.controller.close();
+    h.sends.length = 0;
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    const channels = h.sends.map((entry) => entry.channel);
+    expect(channels.indexOf('ctx-channel')).toBeGreaterThanOrEqual(0);
+    expect(channels.indexOf('ctx-channel')).toBeLessThan(
+      channels.indexOf('rsb-window:visibility-changed'),
+    );
+    expect(h.sends.find((entry) => entry.channel === 'ctx-channel')?.payload).toMatchObject({
+      sessionId: 's1',
+    });
+  });
+
   it('cancels an earlier ready waiter when a later pin takes the host', async () => {
     const h = makeHarness({ detached: true }, {
       resolveHostContext: (sessionId) => {
