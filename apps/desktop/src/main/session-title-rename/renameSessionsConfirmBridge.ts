@@ -7,9 +7,7 @@
  * 在 confirmed 后继续。
  */
 
-import { randomUUID } from 'node:crypto';
-
-import { rememberDesktopOnlyConfirmation } from '../cindy-brain/ghostSetupInteractionBridge.js';
+import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection.js';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
@@ -60,7 +58,7 @@ export class RenameSessionsConfirmBridge {
     sessionId: string,
     changes: RenameSessionsConfirmItem[],
   ): Promise<RenameSessionsConfirmDecision> {
-    const requestId = randomUUID();
+    const requestId = createDesktopOnlyConfirmationRequestId();
     const request: RenameSessionsConfirmInteractionSnapshot = {
       kind: 'rename_sessions_confirm',
       requestId,
@@ -72,7 +70,6 @@ export class RenameSessionsConfirmBridge {
         this.settle(requestId, { confirmed: false, reason: 'timeout' }, 'timeout');
       }, timeoutMs);
       this.pending.set(requestId, { sessionId, request, resolve, timeoutId });
-      rememberDesktopOnlyConfirmation(requestId);
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
         request,
