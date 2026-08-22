@@ -64,8 +64,16 @@ describe('serializePermissionDispatch (issue #3092)', () => {
 
     const [firstDecision, secondDecision] = await Promise.all([first, second]);
 
-    expect(firstDecision.behavior).toBe('allow');
-    expect(secondDecision.behavior).toBe('deny');
+    // Both runs return permission decisions (kind discriminator narrows the
+    // InteractionDecision union so .behavior is accessible without a cast).
+    expect(firstDecision.kind).toBe('permission');
+    expect(secondDecision.kind).toBe('permission');
+    if (firstDecision.kind === 'permission') {
+      expect(firstDecision.behavior).toBe('allow');
+    }
+    if (secondDecision.kind === 'permission') {
+      expect(secondDecision.behavior).toBe('deny');
+    }
     // Ordering must be preserved: each run is queued behind the previous.
     expect(decisions).toEqual(['allow', 'deny']);
   });
@@ -81,7 +89,11 @@ describe('serializePermissionDispatch (issue #3092)', () => {
     await expect(rejected).rejects.toThrow('broadcast failed');
 
     const after = serializePermissionDispatch(chain, async () => allow());
-    await expect(after).resolves.toMatchObject({ behavior: 'allow' });
+    const afterDecision = await after;
+    expect(afterDecision.kind).toBe('permission');
+    if (afterDecision.kind === 'permission') {
+      expect(afterDecision.behavior).toBe('allow');
+    }
   });
 
   it('never invokes a run before the previous one settles even under microtask bursts', async () => {
