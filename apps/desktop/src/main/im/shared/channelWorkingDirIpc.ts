@@ -8,10 +8,14 @@
  *
  * 安全不变量(六轮 review 裁决的延续):
  *   - 目录授权只来自 Main 原生选择器, Renderer 不提交路径;
+ *   - **每个操作(get/choose/reset)入口都绑定一个非空 generation**: null =
+ *     IM 账号边界未激活(启动早期/登出/换号窗口), 一律直接拒绝 — null→null
+ *     不构成"稳定账号", 否则换号窗口的慢读取会把 A 的路径交给 B(review P1);
  *   - 选择器与用户目录探测都是异步的: 打开/探测期间登出/换号会推进 IM
- *     account generation, **三个异步边界归来后都必须重校验** —
- *     ① 选择器返回后、② 异步探测返回后(commit 前, 必检)、③ 本地 commit
- *     返回后(切号期间已落盘的状态不返回给 Renderer, 报错代替);
+ *     account generation(或回落 null), **三个异步边界归来后都必须复检仍是
+ *     同一个非空 generation** — ① 选择器返回后、② 异步探测返回后
+ *     (commit 前, 必检)、③ 本地 commit 返回后(切号期间已落盘的状态不返回
+ *     给 Renderer, 报错代替);
  *   - 校验/探测(normalizeSelectedDirectory)与落盘(commitWorkingDir)拆开:
  *     ② 与 ③ 之间只剩一次本地 userData 写入, 敏感窗口收敛到本机盘 IO;
  *   - 取消选择不是错误, 也不改变配置;
@@ -55,19 +59,39 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
   const { updateFailedCode, channelLabel, deps } = options;
 
   /**
+   * 捕获并**要求非空**的 generation 作为本次操作的绑定代次。null 表示 IM
+   * 账号边界未激活(启动早期/登出/换号窗口) — 期间配置属于哪个账号是未定义
+   * 的, 读配置、弹选择器、重置、提交一律拒绝, 不能把 null→null 当成"稳定
+   * 账号"(review P1: 换号窗口的慢读取会把 A 的路径交给 B)。
+   */
+  function requireStableGeneration(): number {
+    const generation = deps.captureGeneration();
+    if (generation === null) {
+      deps.warn(`${channelLabel} working directory IPC rejected: no active IM account boundary`);
+      throwIpcError(updateFailedCode, 'no active account');
+    }
+    return generation;
+  }
+
+  /** 异步边界归来后复检: 仍是同一个非空 generation 才放行(null 同样算变化)。 */
+  function assertSameGeneration(expected: number, phase: string): void {
+    if (deps.captureGeneration() !== expected) {
+      deps.warn(`${channelLabel} working directory ${phase} crossed an account switch; dropped`);
+      throwIpcError(updateFailedCode, `account changed while ${phase}`);
+    }
+  }
+
+  /**
    * 读取渠道设置并做 generation 守卫: A 账号的目录在慢速网络盘上时,
    * readSettings 可能挂到 deadline 才返回 — 期间切到 B 账号后, A 的绝对
    * 路径不得交给当前 Renderer。读取前捕获、返回前复检, generation 变化
-   * 即丢弃结果并抛渠道 UPDATE_FAILED(renderer 无法可靠拦截跨账号响应,
-   * 守卫必须在 Main 侧)。
+   * (含回落 null)即丢弃结果并抛渠道 UPDATE_FAILED(renderer 无法可靠拦截
+   * 跨账号响应, 守卫必须在 Main 侧)。
    */
   async function readSettingsForCurrentGeneration(): Promise<ChannelWorkingDirSettingsState> {
-    const generationAtRead = deps.captureGeneration();
+    const expected = requireStableGeneration();
     const state = await deps.readSettings();
-    if (deps.captureGeneration() !== generationAtRead) {
-      deps.warn(`${channelLabel} working directory settings read crossed an account switch; dropped`);
-      throwIpcError(updateFailedCode, 'account changed while reading settings');
-    }
+    assertSameGeneration(expected, 'settings read');
     return state;
   }
 
@@ -79,7 +103,7 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
     async chooseWorkingDirectory(
       sender: unknown,
     ): Promise<{ canceled: boolean; state: ChannelWorkingDirSettingsState }> {
-      const generationAtOpen = deps.captureGeneration();
+      const expected = requireStableGeneration();
 
       let result: { canceled: boolean; filePaths: string[] } | null = null;
       try {
@@ -98,12 +122,7 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
       if (picked === undefined) {
         return { canceled: true, state: await readSettingsForCurrentGeneration() };
       }
-      if (deps.captureGeneration() !== generationAtOpen) {
-        // ① 弹窗期间登出/换号: 选中的路径属于上一个账号的语境, 不落盘。
-        // 前后代次相等(含双双为 null 的未激活窗口)才允许继续。
-        deps.warn(`${channelLabel} working directory pick crossed an account switch; dropped`);
-        throwIpcError(updateFailedCode, 'account changed while picking');
-      }
+      assertSameGeneration(expected, 'pick');
 
       let normalized: string;
       try {
@@ -115,12 +134,7 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
         });
         throwIpcError(updateFailedCode, 'failed to save working directory');
       }
-      if (deps.captureGeneration() !== generationAtOpen) {
-        // ② 探测期间登出/换号: 必检。校验通过后的提交只碰本地 userData,
-        // 代次校验到落盘之间不再有用户盘 IO。
-        deps.warn(`${channelLabel} working directory probe crossed an account switch; dropped`);
-        throwIpcError(updateFailedCode, 'account changed while probing');
-      }
+      assertSameGeneration(expected, 'probe');
       let state: ChannelWorkingDirSettingsState;
       try {
         state = await deps.commitWorkingDir(normalized);
@@ -130,19 +144,18 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
         });
         throwIpcError(updateFailedCode, 'failed to save working directory');
       }
-      if (deps.captureGeneration() !== generationAtOpen) {
-        // ③ commit 期间切号: 已落盘的状态属于上一个账号的语境, 不返回给
-        // Renderer — 报错让界面回落到重新读取, 而不是展示跨账号路径。
-        deps.warn(`${channelLabel} working directory commit crossed an account switch; dropped`);
-        throwIpcError(updateFailedCode, 'account changed while committing');
-      }
+      assertSameGeneration(expected, 'commit');
       return { canceled: false, state };
     },
 
     async resetWorkingDir(): Promise<ChannelWorkingDirSettingsState> {
+      const expected = requireStableGeneration();
       try {
-        return await deps.resetWorkingDir();
+        const state = await deps.resetWorkingDir();
+        assertSameGeneration(expected, 'reset');
+        return state;
       } catch (error) {
+        if ((error as { code?: unknown }).code === updateFailedCode) throw error;
         deps.warn(`failed to reset ${channelLabel} working directory`, {
           errorCode: nodeErrorCodeOf(error),
         });

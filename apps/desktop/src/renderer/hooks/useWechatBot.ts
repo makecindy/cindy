@@ -27,6 +27,7 @@ export interface UseWechatBotReturn {
   unbind: () => Promise<boolean>;
   chooseWorkingDirectory: () => Promise<void>;
   resetWorkingDirectory: () => Promise<void>;
+  refreshChannelSettings: () => Promise<void>;
 }
 
 export function useWechatBot(): UseWechatBotReturn {
@@ -44,6 +45,32 @@ export function useWechatBot(): UseWechatBotReturn {
    * 较新的选择/重置结果(与企微 hook 同款竞态防护)。
    */
   const updateSeqRef = useRef(0);
+  /** Cindy 数据 owner 代次(auth:state-change 的 mode+dataOwnerId+ownerGeneration)。 */
+  const ownerEpochRef = useRef(0);
+  const cindyOwnerRef = useRef<string | null>(null);
+  /** isUpdatingWorkingDir 的 ref 镜像: refreshChannelSettings 的在途守卫用。 */
+  const isUpdatingWorkingDirRef = useRef(false);
+
+  /** 拉取当前账号的渠道设置;owner 代次或更新序号已推进的迟到响应不写回。 */
+  const fetchChannelSettings = useCallback(async (): Promise<void> => {
+    const ownerEpoch = ownerEpochRef.current;
+    const updateSeq = updateSeqRef.current;
+    try {
+      const settings = await window.electronAPI.wechatBot.getChannelSettings();
+      if (ownerEpochRef.current !== ownerEpoch || updateSeqRef.current !== updateSeq) return;
+      setChannelSettings(settings);
+    } catch {
+      log.error('failed to load personal WeChat channel settings');
+    }
+  }, []);
+
+  /** 拉取最新渠道设置 — 设置卡展开/窗口聚焦时刷新, 让「不可用」警告及时出现。 */
+  const refreshChannelSettings = useCallback(async (): Promise<void> => {
+    // 工作目录更新在途时跳过: 原生选择器关窗会触发 focus 刷新, 这次读取
+    // 大概率读到提交前的旧配置; choose/reset 返回的状态才是最新的。
+    if (isUpdatingWorkingDirRef.current) return;
+    await fetchChannelSettings();
+  }, [fetchChannelSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,7 +81,6 @@ export function useWechatBot(): UseWechatBotReturn {
       setState(next);
     });
     const initialPushVersion = pushVersionRef.current;
-    const initialUpdateSeq = updateSeqRef.current;
     void Promise.all([
       window.electronAPI.wechatBot.getState(),
       window.electronAPI.wechatBot.getChannelSettings(),
@@ -65,7 +91,7 @@ export function useWechatBot(): UseWechatBotReturn {
           cachedState = nextState;
           setState(nextState);
         }
-        if (updateSeqRef.current !== initialUpdateSeq) return;
+        if (updateSeqRef.current !== 0 || ownerEpochRef.current !== 0) return;
         setChannelSettings(nextChannelSettings);
       })
       .catch(() => {
@@ -74,9 +100,25 @@ export function useWechatBot(): UseWechatBotReturn {
       });
     return () => {
       cancelled = true;
+      ownerEpochRef.current += 1;
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    // Cindy 账号切换(登录/登出/换号)即时失效渠道设置: 微信状态推送不含任何
+    // Cindy 身份, 不订阅 auth 的话旧账号的绝对路径会一直留在界面上; Main
+    // 侧守卫只拦得住迟到响应, 清不掉已渲染状态。
+    const unsubscribe = window.electronAPI.onAuthStateChange((auth) => {
+      const next = `${auth.mode}/${auth.dataOwnerId ?? '-'}/${auth.ownerGeneration}`;
+      if (cindyOwnerRef.current === next) return;
+      cindyOwnerRef.current = next;
+      ownerEpochRef.current += 1;
+      setChannelSettings(null);
+      void fetchChannelSettings();
+    });
+    return unsubscribe;
+  }, [fetchChannelSettings]);
 
   const authorize = useCallback(async (): Promise<boolean> => {
     if (isAuthorizing) return false;
@@ -121,8 +163,12 @@ export function useWechatBot(): UseWechatBotReturn {
   const chooseWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
     setIsUpdatingWorkingDir(true);
+    isUpdatingWorkingDirRef.current = true;
+    const ownerEpoch = ownerEpochRef.current;
     try {
       const result = await window.electronAPI.wechatBot.chooseWorkingDirectory();
+      // 弹窗/探测期间 Cindy 账号切换: 迟到结果不得写回新账号界面。
+      if (ownerEpochRef.current !== ownerEpoch) return;
       updateSeqRef.current += 1;
       setChannelSettings(result.state);
       if (!result.canceled) toast.success(t('settings.wechatBot.toasts.workingDirSaved'));
@@ -130,6 +176,7 @@ export function useWechatBot(): UseWechatBotReturn {
       log.error('failed to choose personal WeChat working directory');
       toast.error(t('settings.wechatBot.toasts.workingDirFailed'));
     } finally {
+      isUpdatingWorkingDirRef.current = false;
       setIsUpdatingWorkingDir(false);
     }
   }, [isUpdatingWorkingDir, t]);
@@ -137,8 +184,11 @@ export function useWechatBot(): UseWechatBotReturn {
   const resetWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
     setIsUpdatingWorkingDir(true);
+    isUpdatingWorkingDirRef.current = true;
+    const ownerEpoch = ownerEpochRef.current;
     try {
       const next = await window.electronAPI.wechatBot.resetWorkingDirectory();
+      if (ownerEpochRef.current !== ownerEpoch) return;
       updateSeqRef.current += 1;
       setChannelSettings(next);
       toast.success(t('settings.wechatBot.toasts.workingDirReset'));
@@ -146,6 +196,7 @@ export function useWechatBot(): UseWechatBotReturn {
       log.error('failed to reset personal WeChat working directory');
       toast.error(t('settings.wechatBot.toasts.workingDirFailed'));
     } finally {
+      isUpdatingWorkingDirRef.current = false;
       setIsUpdatingWorkingDir(false);
     }
   }, [isUpdatingWorkingDir, t]);
@@ -161,6 +212,7 @@ export function useWechatBot(): UseWechatBotReturn {
     unbind,
     chooseWorkingDirectory,
     resetWorkingDirectory,
+    refreshChannelSettings,
   };
 }
 

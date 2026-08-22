@@ -27,8 +27,24 @@ vi.mock('@/lib/logger', () => ({
   }),
 }));
 
+function authState(dataOwnerId: string, ownerGeneration = 1): AuthStateChangePayload {
+  return {
+    user: null,
+    mode: 'cloud',
+    dataOwnerId,
+    ownerGeneration,
+    canEnterApp: true,
+    isAuthenticated: true,
+    isCanary: false,
+    deviceId: 'dev-test',
+    hasAccountDeletionReceipt: false,
+    accountDeletionRestored: false,
+  } as AuthStateChangePayload;
+}
+
 function installWechatApi(initial: WechatBotState = disconnectedState()) {
   const listeners = new Set<(state: WechatBotState) => void>();
+  const authListeners = new Set<(auth: AuthStateChangePayload) => void>();
   const channelState: WechatChannelSettingsState = {
     version: 1,
     workingDir: null,
@@ -52,13 +68,25 @@ function installWechatApi(initial: WechatBotState = disconnectedState()) {
   };
   (
     window as unknown as {
-      electronAPI: { wechatBot: typeof api };
+      electronAPI: {
+        wechatBot: typeof api;
+        onAuthStateChange: (cb: (auth: AuthStateChangePayload) => void) => () => void;
+      };
     }
-  ).electronAPI = { wechatBot: api };
+  ).electronAPI = {
+    wechatBot: api,
+    onAuthStateChange: vi.fn((callback: (auth: AuthStateChangePayload) => void) => {
+      authListeners.add(callback);
+      return () => authListeners.delete(callback);
+    }),
+  };
   return {
     api,
     push(state: WechatBotState) {
       for (const listener of listeners) listener(state);
+    },
+    pushAuth(auth: AuthStateChangePayload) {
+      for (const listener of authListeners) listener(auth);
     },
   };
 }
@@ -207,6 +235,97 @@ describe('useWechatBot', () => {
       await Promise.resolve();
     });
     expect(result.current.channelSettings?.workingDir).toBeNull();
+  });
+
+  it('invalidates the displayed path immediately when the Cindy account switches', async () => {
+    // 微信状态推送不含任何 Cindy 身份 — 不订阅 auth 的话旧账号路径会一直
+    // 留在界面上(Main 守卫只拦得住迟到响应, 清不掉已渲染状态)。
+    const harness = installWechatApi();
+    const ownerA: WechatChannelSettingsState = {
+      version: 1,
+      workingDir: 'D:/owner-a/project',
+      workingDirAvailable: true,
+    };
+    const ownerB: WechatChannelSettingsState = {
+      version: 1,
+      workingDir: null,
+      workingDirAvailable: true,
+    };
+    let current = ownerA;
+    harness.api.getChannelSettings.mockImplementation(async () => current);
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(result.current.channelSettings).toEqual(ownerA));
+
+    current = ownerB;
+    act(() => {
+      harness.pushAuth(authState('owner-b'));
+    });
+    expect(result.current.channelSettings).toBeNull();
+    await waitFor(() => expect(result.current.channelSettings).toEqual(ownerB));
+  });
+
+  it('drops a hanging mount read that crosses a Cindy account switch', async () => {
+    const harness = installWechatApi();
+    let resolveMountRead!: (state: WechatChannelSettingsState) => void;
+    harness.api.getChannelSettings.mockReturnValueOnce(
+      new Promise<WechatChannelSettingsState>((resolve) => {
+        resolveMountRead = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useWechatBot());
+    // 挂载读取在途(慢速网络盘探测), Cindy 换号: 失效 + 为新账号重拉。
+    harness.api.getChannelSettings.mockResolvedValue({
+      version: 1,
+      workingDir: 'D:/owner-b/project',
+      workingDirAvailable: true,
+    });
+    act(() => {
+      harness.pushAuth(authState('owner-b'));
+    });
+    await waitFor(() =>
+      expect(result.current.channelSettings?.workingDir).toBe('D:/owner-b/project'),
+    );
+
+    // 旧账号语境的挂载读取此刻才返回 — 不得覆盖。
+    await act(async () => {
+      resolveMountRead({ version: 1, workingDir: 'D:/owner-a/project', workingDirAvailable: true });
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings?.workingDir).toBe('D:/owner-b/project');
+  });
+
+  it('skips the focus refresh while a working-dir update is in flight', async () => {
+    const harness = installWechatApi();
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(result.current.channelSettings).not.toBeNull());
+    const readsBefore = harness.api.getChannelSettings.mock.calls.length;
+
+    let resolveChoose!: (result: {
+      canceled: boolean;
+      state: { version: 1; workingDir: string; workingDirAvailable: boolean };
+    }) => void;
+    harness.api.chooseWorkingDirectory.mockReturnValueOnce(
+      new Promise<{
+        canceled: boolean;
+        state: { version: 1; workingDir: string; workingDirAvailable: boolean };
+      }>((resolve) => {
+        resolveChoose = resolve;
+      }),
+    );
+    let chooseDone: Promise<void> | null = null;
+    act(() => {
+      chooseDone = result.current.chooseWorkingDirectory();
+    });
+    await act(async () => {
+      await result.current.refreshChannelSettings();
+    });
+    expect(harness.api.getChannelSettings.mock.calls.length).toBe(readsBefore);
+
+    await act(async () => {
+      resolveChoose({ canceled: false, state: { version: 1, workingDir: 'D:/picked', workingDirAvailable: true } });
+      await chooseDone;
+    });
+    expect(result.current.channelSettings?.workingDir).toBe('D:/picked');
   });
 });
 

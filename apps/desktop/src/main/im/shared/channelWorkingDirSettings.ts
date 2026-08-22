@@ -163,13 +163,20 @@ export function createChannelWorkingDirStore(options: {
       if (!(await stat(realPath)).isDirectory()) {
         throw Object.assign(new Error(notDirectoryErrorCode), { code: notDirectoryErrorCode });
       }
-      if (!(await probeUsability(realPath))) {
-        // 目录存在但探针写不进(权限/只读/独占碰撞) — 绝不提交。
+      // 写探针走统一调度(同目录复用/冷却/并发上限) — 目录存在但探针写不进
+      // (权限/只读/独占碰撞)绝不提交; 超时或被调度拒绝同样不提交。
+      const probe = await probeWithDiscipline(realPath, userDirTimeoutMs);
+      if (probe === 'unusable') {
         throw Object.assign(new Error(notWritableErrorCode), { code: notWritableErrorCode });
+      }
+      if (probe !== 'usable') {
+        throw Object.assign(new Error(probeTimeoutErrorCode), { code: probeTimeoutErrorCode });
       }
       return realPath;
     }, userDirTimeoutMs);
     if (checked === null) {
+      // 链条(realpath/stat)超时: 对该路径进入冷却, 重复选择不再占线程。
+      probeCooldownUntil.set(selectedPath, Date.now() + PROBE_COOLDOWN_MS);
       throw Object.assign(new Error(probeTimeoutErrorCode), { code: probeTimeoutErrorCode });
     }
     const normalized = normalizeWorkingDirForStorage(checked);
@@ -293,14 +300,62 @@ export function createChannelWorkingDirStore(options: {
  */
 const WORKDIR_PROBE_PREFIX = '.cindy-workdir-probe-';
 
+/**
+ * 探针调度(review P2: deadline 只让调用者提前返回, 底层 fs 调用仍占着
+ * libuv 线程 — 反复聚焦设置页//new 会累积挂起探针, 拖住其它异步文件操作)。
+ * 最低可接受修法, 模块级共享(跨渠道, 同一台机器):
+ *   - **同目录复用**: 相同目录的在途探针只跑一份底层 IO, 并发调用共享结果;
+ *   - **超时冷却**: 某目录探测超时后进入冷却期(PROBE_COOLDOWN_MS), 期间
+ *     不再为它发起底层探针, 直接按不可用/超时返回;
+ *   - **全局并发上限**: 在途用户目录探针超过 MAX_CONCURRENT_USER_DIR_PROBES
+ *     时新请求直接拒绝(不占线程)。真·硬终止需要把探测挪进可杀死的子进程,
+ *     不在本轮范围。
+ */
+const PROBE_COOLDOWN_MS = 30_000;
+const MAX_CONCURRENT_USER_DIR_PROBES = 8;
+const inflightProbes = new Map<string, Promise<boolean>>();
+const probeCooldownUntil = new Map<string, number>();
+let inflightProbeCount = 0;
+
+function acquireProbe(candidate: string): Promise<boolean> | null {
+  // 冷却判定优先于复用: 该目录已经让某次调用等超时了, 不该让后续调用再
+  // 挂在(仍挂起的)旧探针上等满自己的 deadline — 直接拒绝, 立即按不可用
+  // 返回; 旧探针继续自跑自清理。
+  if ((probeCooldownUntil.get(candidate) ?? 0) > Date.now()) return null;
+  const shared = inflightProbes.get(candidate);
+  if (shared) return shared;
+  if (inflightProbeCount >= MAX_CONCURRENT_USER_DIR_PROBES) return null;
+  const attempt = probeUsability(candidate).finally(() => {
+    inflightProbes.delete(candidate);
+    // resetProbeScheduler 清空计数后迟到的释放不得把计数打成负数。
+    inflightProbeCount = Math.max(0, inflightProbeCount - 1);
+  });
+  inflightProbes.set(candidate, attempt);
+  inflightProbeCount += 1;
+  return attempt;
+}
+
+type ProbeVerdict = 'usable' | 'unusable' | 'timeout' | 'skipped';
+
+async function probeWithDiscipline(candidate: string, timeoutMs: number): Promise<ProbeVerdict> {
+  const attempt = acquireProbe(candidate);
+  if (attempt === null) return 'skipped';
+  // deadline 只决定「现在能不能信这个目录」; 底层探针继续执行, 迟到的 'wx'
+  // 创建一旦成功, 仍由 probeUsability 自己的 finally 按所有权纪律清理。
+  const verdict = await withUserDirDeadline(() => attempt, timeoutMs);
+  if (verdict === null) {
+    probeCooldownUntil.set(candidate, Date.now() + PROBE_COOLDOWN_MS);
+    return 'timeout';
+  }
+  return verdict ? 'usable' : 'unusable';
+}
+
 async function isUsableWorkingDirectory(
   candidate: string,
   timeoutMs: number = USER_DIR_IO_TIMEOUT_MS,
 ): Promise<boolean> {
-  // deadline 只决定「现在能不能信这个目录」; 探测本体超时后继续执行,
-  // 迟到的 'wx' 创建一旦成功, 由 probeUsability 自己的 finally 清理。
-  const verdict = await withUserDirDeadline(() => probeUsability(candidate), timeoutMs);
-  return verdict === true;
+  // 冷却/超限(skipped)与超时一样按「当前不可用」处理 — 拒绝占用更多线程。
+  return (await probeWithDiscipline(candidate, timeoutMs)) === 'usable';
 }
 
 async function probeUsability(candidate: string): Promise<boolean> {
@@ -350,4 +405,16 @@ function nodeErrorCode(error: unknown): string {
     : 'UNKNOWN';
 }
 
-export const __testing = { isUsableWorkingDirectory };
+export const __testing = {
+  isUsableWorkingDirectory,
+  /** 清空探针调度状态(在途表/冷却表/计数) — 测试隔离用。 */
+  resetProbeScheduler(): void {
+    inflightProbes.clear();
+    probeCooldownUntil.clear();
+    inflightProbeCount = 0;
+  },
+  probeLimits: {
+    maxConcurrent: MAX_CONCURRENT_USER_DIR_PROBES,
+    cooldownMs: PROBE_COOLDOWN_MS,
+  },
+};

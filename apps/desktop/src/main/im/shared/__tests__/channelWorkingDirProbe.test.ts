@@ -106,6 +106,7 @@ function releaseProbeHang(): void {
 
 beforeEach(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), 'cindy-workdir-probe-'));
+  __testing.resetProbeScheduler();
   failState.rmFailuresRemaining = 0;
   failState.probeWriteEexistNext = false;
   failState.tmpWriteEexistNext = false;
@@ -223,6 +224,74 @@ describe('用户目录 IO 异步化(Main 事件循环不被冻结)', () => {
     expect(state.workingDir).toBeTruthy();
     expect(state.workingDirAvailable).toBe(true);
     expect(await readdir(selected)).toEqual([]);
+  });
+});
+
+describe('探针调度(同目录复用 / 超时冷却 / 全局并发上限)', () => {
+  const probeWriteCount = (): number =>
+    failState.writeFileCalls.filter((c) => c.includes('.cindy-workdir-probe-')).length;
+
+  it('相同目录的并发探测复用同一份底层探针, 不叠加占线程', async () => {
+    const dir = path.join(root, 'shared');
+    await mkdir(dir);
+    failState.probeWriteHang = true;
+
+    const first = __testing.isUsableWorkingDirectory(dir, 5_000);
+    const second = __testing.isUsableWorkingDirectory(dir, 5_000);
+    // stat 是异步的, 等底层 'wx' 写真正发出后断言只有一份。
+    await vi.waitFor(() => expect(probeWriteCount()).toBe(1));
+
+    releaseProbeHang();
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(await probeNames(dir)).toEqual([]);
+  });
+
+  it('探测超时进入冷却: 冷却期内的再次探测直接按不可用返回, 不再发起底层写', async () => {
+    const dir = path.join(root, 'cooldown');
+    await mkdir(dir);
+    failState.probeWriteHang = true;
+
+    const startedFirst = Date.now();
+    expect(await __testing.isUsableWorkingDirectory(dir, 120)).toBe(false);
+    expect(Date.now() - startedFirst).toBeLessThan(2_000);
+    await vi.waitFor(() => expect(probeWriteCount()).toBe(1));
+
+    // 冷却期内再探: 立即 false, 且没有第二次底层写(冷却优先于复用 — 不再
+    // 挂到仍在挂起的旧探针上等满自己的 deadline)。
+    failState.probeWriteHang = false;
+    const startedSecond = Date.now();
+    expect(await __testing.isUsableWorkingDirectory(dir, 5_000)).toBe(false);
+    expect(Date.now() - startedSecond).toBeLessThan(2_000);
+    expect(probeWriteCount()).toBe(1);
+
+    releaseProbeHang();
+    await vi.waitFor(async () => {
+      expect(await probeNames(dir)).toEqual([]);
+    });
+  });
+
+  it('在途探针超过全局上限时, 新目录的探测直接拒绝, 不再占用线程', async () => {
+    const max = __testing.probeLimits.maxConcurrent;
+    const dirs: string[] = [];
+    for (let i = 0; i <= max; i += 1) {
+      const dir = path.join(root, `cap-${i}`);
+      await mkdir(dir);
+      dirs.push(dir);
+    }
+    failState.probeWriteHang = true;
+
+    const pending = dirs.slice(0, max).map((dir) => __testing.isUsableWorkingDirectory(dir, 5_000));
+    await vi.waitFor(() => expect(probeWriteCount()).toBe(max));
+
+    // 第 max+1 个不同目录: 超上限 → 立即 false, 底层写数量不变。
+    const started = Date.now();
+    expect(await __testing.isUsableWorkingDirectory(dirs[max]!, 5_000)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(probeWriteCount()).toBe(max);
+
+    releaseProbeHang();
+    await Promise.all(pending);
   });
 });
 

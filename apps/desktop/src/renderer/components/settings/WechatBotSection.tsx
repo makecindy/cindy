@@ -1,5 +1,5 @@
 import { Check, Loader2, RotateCw, Trash2, Unplug } from 'lucide-react';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -61,8 +61,28 @@ export function WechatBotSection({
     unbind,
     chooseWorkingDirectory,
     resetWorkingDirectory,
+    refreshChannelSettings,
   } = useWechatBot();
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wechat');
+
+  // 展开设置卡 / 窗口重新聚焦时重拉渠道设置(与企微同款): 目录可能在折叠或
+  // 失焦期间被删/拔盘/收回权限, 只在挂载时读一次会让「不可用」警告永远不
+  // 出现。展开首帧由 hook 的挂载请求覆盖, 跳过避免双拉。
+  const firstExpandRun = useRef(true);
+  useEffect(() => {
+    if (firstExpandRun.current) {
+      firstExpandRun.current = false;
+      return;
+    }
+    if (expanded) void refreshChannelSettings();
+  }, [expanded, refreshChannelSettings]);
+  useEffect(() => {
+    const refreshOnFocus = (): void => {
+      void refreshChannelSettings();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    return () => window.removeEventListener('focus', refreshOnFocus);
+  }, [refreshChannelSettings]);
 
   const authorizationSteps = (
     <ol className="mt-1 grid gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12 leading-[1.55] text-[var(--text-secondary)]">

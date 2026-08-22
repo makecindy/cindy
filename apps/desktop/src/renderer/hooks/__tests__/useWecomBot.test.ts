@@ -43,8 +43,24 @@ function settingsFor(owner: string): WecomChannelSettingsState {
 
 const IDLE: StatusPush = { status: { kind: 'idle' }, botId: null, ownerUserId: null };
 
+function authState(dataOwnerId: string, ownerGeneration = 1): AuthStateChangePayload {
+  return {
+    user: null,
+    mode: 'cloud',
+    dataOwnerId,
+    ownerGeneration,
+    canEnterApp: true,
+    isAuthenticated: true,
+    isCanary: false,
+    deviceId: 'dev-test',
+    hasAccountDeletionReceipt: false,
+    accountDeletionRestored: false,
+  } as AuthStateChangePayload;
+}
+
 function installWecomApi(initial: StatusPush = IDLE) {
   const listeners = new Set<(update: StatusPush) => void>();
+  const authListeners = new Set<(auth: AuthStateChangePayload) => void>();
   const api = {
     getStatus: vi.fn(async () => initial),
     setConfig: vi.fn(async () => ({
@@ -71,13 +87,25 @@ function installWecomApi(initial: StatusPush = IDLE) {
   };
   (
     window as unknown as {
-      electronAPI: { wecomBot: typeof api };
+      electronAPI: {
+        wecomBot: typeof api;
+        onAuthStateChange: (cb: (auth: AuthStateChangePayload) => void) => () => void;
+      };
     }
-  ).electronAPI = { wecomBot: api };
+  ).electronAPI = {
+    wecomBot: api,
+    onAuthStateChange: vi.fn((callback: (auth: AuthStateChangePayload) => void) => {
+      authListeners.add(callback);
+      return () => authListeners.delete(callback);
+    }),
+  };
   return {
     api,
     push(update: StatusPush) {
       for (const listener of listeners) listener(update);
+    },
+    pushAuth(auth: AuthStateChangePayload) {
+      for (const listener of authListeners) listener(auth);
     },
   };
 }
@@ -295,5 +323,43 @@ describe('useWecomBot', () => {
       await Promise.resolve();
     });
     expect(__testing.getCache()).toMatchObject({ ownerUserId: '' });
+  });
+
+  it('invalidates immediately when the Cindy account switches but the WeCom ownerUserId stays the same', async () => {
+    // 两个 Cindy 账号绑同一个企微用户: 企微推送维度看不到任何变化, 只有
+    // auth 推送(dataOwnerId/ownerGeneration)区分得了。
+    const harness = installWecomApi({
+      status: { kind: 'connected', appId: 'app' },
+      botId: 'bot',
+      ownerUserId: 'A',
+    });
+    let cindyOwner = 'one';
+    harness.api.getChannelSettings.mockImplementation(async () => settingsFor(cindyOwner));
+    const { result } = renderHook(() => useWecomBot());
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('one')));
+
+    cindyOwner = 'two';
+    act(() => {
+      harness.pushAuth(authState('owner-two'));
+    });
+    // 企微 ownerUserId 全程未变, 渠道设置仍立即失效并重拉。
+    expect(result.current.channelSettings).toBeNull();
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('two')));
+  });
+
+  it('invalidates on Cindy account switch when neither side configured the WeCom bot (empty ownerUserId)', async () => {
+    // 两边都没配置企微: ownerUserId 同为空串, 换号同样只有 auth 推送可见。
+    const harness = installWecomApi();
+    let cindyOwner = 'one';
+    harness.api.getChannelSettings.mockImplementation(async () => settingsFor(cindyOwner));
+    const { result } = renderHook(() => useWecomBot());
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('one')));
+
+    cindyOwner = 'two';
+    act(() => {
+      harness.pushAuth(authState('owner-two'));
+    });
+    expect(result.current.channelSettings).toBeNull();
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('two')));
   });
 });

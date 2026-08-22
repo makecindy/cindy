@@ -136,12 +136,65 @@ describe.each(CHANNELS)('channelWorkingDirIpc handlers ($label)', ({ code, label
     );
   });
 
-  it('allows the write when the generation stays equal, including both null', async () => {
-    const deps = makeDeps({ captureGeneration: vi.fn((): number | null => null) });
+  it('allows the write when a non-null generation stays equal', async () => {
+    const deps = makeDeps();
     const handlers = makeHandlers(deps);
 
     await expect(handlers.chooseWorkingDirectory({})).resolves.toMatchObject({ canceled: false });
     expect(deps.commitWorkingDir).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects every operation at the entry when the generation is null (no active account boundary)', async () => {
+    // null→null 不构成「稳定账号」: 换号窗口期间配置归属未定义, 一律拒绝,
+    // 且不得触碰任何业务依赖(读配置/弹选择器/重置/提交)。
+    const deps = makeDeps({ captureGeneration: vi.fn((): number | null => null) });
+    const handlers = makeHandlers(deps);
+
+    await expect(handlers.getChannelSettings()).rejects.toMatchObject({ code });
+    await expect(handlers.chooseWorkingDirectory({})).rejects.toMatchObject({ code });
+    await expect(handlers.resetWorkingDir()).rejects.toMatchObject({ code });
+    expect(deps.readSettings).not.toHaveBeenCalled();
+    expect(deps.showDirectoryPicker).not.toHaveBeenCalled();
+    expect(deps.resetWorkingDir).not.toHaveBeenCalled();
+    expect(deps.normalizeSelectedDirectory).not.toHaveBeenCalled();
+    expect(deps.commitWorkingDir).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the generation falls back to null mid-flight (number → null)', async () => {
+    // 弹窗/探测/提交期间 stopImConnection 关闭账号边界 → generation 回落 null:
+    // 与变成另一个数字一样, 都算切号。
+    const generations: Array<number | null> = [7, null];
+    const deps = makeDeps({
+      captureGeneration: vi.fn((): number | null => {
+        const next = generations.shift();
+        return next === undefined ? 7 : next;
+      }),
+    });
+    const handlers = makeHandlers(deps);
+
+    await expect(handlers.chooseWorkingDirectory({})).rejects.toMatchObject({ code });
+    expect(deps.normalizeSelectedDirectory).not.toHaveBeenCalled();
+    expect(deps.commitWorkingDir).not.toHaveBeenCalled();
+    expect(deps.warn).toHaveBeenCalledWith(
+      `${label} working directory pick crossed an account switch; dropped`,
+    );
+  });
+
+  it('rejects a settings read that falls back to null mid-flight', async () => {
+    let resolveRead!: (state: typeof PICKED_STATE) => void;
+    const generations: Array<number | null> = [7];
+    const deps = makeDeps({
+      readSettings: vi.fn(
+        () => new Promise<typeof PICKED_STATE>((resolve) => { resolveRead = resolve; }),
+      ),
+      captureGeneration: vi.fn((): number | null => generations.shift() ?? null),
+    });
+    const handlers = makeHandlers(deps);
+
+    const pending = handlers.getChannelSettings();
+    await Promise.resolve();
+    resolveRead(PICKED_STATE);
+    await expect(pending).rejects.toMatchObject({ code });
   });
 
   it('maps validation failures to the structured IPC error without writing', async () => {

@@ -49,6 +49,12 @@ export function useWecomBot() {
   const ownerRef = useRef<string | null>(cachedState?.ownerUserId ?? null);
   /** 推送代次: 挂载快照归来前已有推送先行到达时, 丢弃过期快照(同 useWechatBot)。 */
   const pushVersionRef = useRef(0);
+  /**
+   * Cindy 数据 owner 的真身(mode+dataOwnerId+ownerGeneration)。企微的
+   * ownerUserId 不是身份判据: 两个 Cindy 账号可能绑同一个企微用户, 两边
+   * 都没配置企微时又同为空串 — 这些换号只有 auth 推送区分得了。
+   */
+  const cindyOwnerRef = useRef<string | null>(null);
 
   /** 拉取当前 owner 的渠道设置;owner 或更新序号已推进的迟到响应不写回。 */
   const fetchChannelSettings = useCallback(async (): Promise<void> => {
@@ -128,6 +134,20 @@ export function useWecomBot() {
       }),
     [applyState],
   );
+
+  useEffect(() => {
+    // Cindy 账号切换(登录/登出/换号)即时失效渠道设置: Main 侧守卫只拦得住
+    // 迟到响应, 清不掉已经渲染出来的旧路径 — 失效必须在 renderer 侧做。
+    const unsubscribe = window.electronAPI.onAuthStateChange((auth) => {
+      const next = `${auth.mode}/${auth.dataOwnerId ?? '-'}/${auth.ownerGeneration}`;
+      if (cindyOwnerRef.current === next) return;
+      cindyOwnerRef.current = next;
+      ownerEpochRef.current += 1;
+      setChannelSettings(null);
+      void fetchChannelSettings();
+    });
+    return unsubscribe;
+  }, [fetchChannelSettings]);
 
   const connect = useCallback(async () => {
     if (isSaving) return false;
