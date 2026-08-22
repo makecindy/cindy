@@ -17,6 +17,9 @@ export function pluginMarketErrorKey(error: unknown): string {
       return 'settings.ghosts.market.errors.notConfigured';
     case 'GHOST_FILE_INVALID':
       return 'settings.ghosts.market.errors.invalidPackage';
+    case 'GHOST_HOST_UNSUPPORTED':
+      // 复用插件装入失败的升级文案(包合法但本端 Cindy 版本过旧)。
+      return 'settings.ghosts.errors.hostUnsupported';
     default:
       return 'settings.ghosts.market.errors.generic';
   }

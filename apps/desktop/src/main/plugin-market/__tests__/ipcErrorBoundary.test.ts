@@ -1,7 +1,63 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { GHOST_MANIFEST_SCHEMA_VERSION, parseGetPluginResponse } from '@cindy/plugin-protocol';
 import { describe, expect, it } from 'vitest';
+
+import {
+  isPluginHostUnsupportedError,
+  isPluginManifestIncompatibilityError,
+} from '../protocolErrors';
+
+function parserError(parse: () => unknown): unknown {
+  try {
+    parse();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('Expected the protocol parser to reject the response');
+}
+
+function invalidManifestResponse(
+  manifestSchemaVersion: unknown = GHOST_MANIFEST_SCHEMA_VERSION,
+  manifestOverrides: Record<string, unknown> = {},
+  omitSchemaVersion = false,
+): Record<string, unknown> {
+  const manifest: Record<string, unknown> = {
+    schemaVersion: manifestSchemaVersion,
+    id: 'acme-helper',
+    name: 'Acme Helper',
+    version: '1.0.0',
+    kind: 'chip',
+    entry: 'index.js',
+    slots: ['tool'],
+    tools: 'not an array',
+    ...manifestOverrides,
+  };
+  if (omitSchemaVersion) delete manifest.schemaVersion;
+
+  return {
+    schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+    plugin: {
+      id: `c${'a'.repeat(24)}`,
+      ghostId: 'acme-helper',
+      name: 'Acme Helper',
+      description: null,
+      author: null,
+      scope: 'public',
+      organizationId: null,
+      defaultInstall: false,
+      currentRelease: {
+        id: 'release-1',
+        version: '1.0.0',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 42,
+        publishedAt: '2026-07-23T00:00:00.000Z',
+        manifest,
+      },
+    },
+  };
+}
 
 /**
  * The IPC registration module imports Electron and the full Ghost host graph,
@@ -36,6 +92,8 @@ describe('Plugin Market IPC error boundary', () => {
     const body = registerSource.slice(start, end);
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
+    expect(body).toContain('isPluginManifestIncompatibilityError(error)');
+    expect(body).toContain("throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');");
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
     expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(13);
   });
@@ -52,6 +110,138 @@ describe('Plugin Market IPC error boundary', () => {
     expect(body).toContain(
       "throwIpcError('PRECONDITION_FAILED', 'Too many local Plugin icon requests');",
     );
+  });
+
+  it.each([
+    {
+      label: 'an ordinary malformed manifest',
+      response: invalidManifestResponse(),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a future schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION + 1),
+      hostUnsupported: true,
+      manifestIncompatible: false,
+    },
+    {
+      label: 'a much newer schema version',
+      response: invalidManifestResponse(99),
+      hostUnsupported: true,
+      manifestIncompatible: false,
+    },
+    {
+      label: 'the legacy schema version',
+      response: invalidManifestResponse(1),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a missing schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {}, true),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a non-numeric schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        schemaVersion: '3',
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a fractional future schema version',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION + 0.5,
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'an unknown string slot in an otherwise valid manifest',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: ['future-capability'],
+        // 声明了未知卡槽时不再声明 tool 槽相关字段,保证除此之外清单结构合法。
+        tools: undefined,
+      }),
+      hostUnsupported: true,
+      manifestIncompatible: false,
+    },
+    {
+      label: 'a duplicated unknown string slot',
+      // 同一个未知 slot 出现两次:新 Host 识别后仍会因重复声明而拒包,所以不该
+      // 提示升级,应判为包本身无效(GHOST_FILE_INVALID)。
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: ['future-capability', 'future-capability'],
+        tools: undefined,
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'an unknown string slot alongside another malformed field',
+      // slots 的未知字符串项本可提示升级,但 tools 字段也畸形——包本身有问题,
+      // 必须报文件无效而非让用户升级 Cindy(其余字段先校验,错误不被升级提示掩盖)。
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: ['future-capability'],
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a numeric slot',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: [42],
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+    {
+      label: 'a null slot',
+      response: invalidManifestResponse(GHOST_MANIFEST_SCHEMA_VERSION, {
+        slots: [null],
+      }),
+      hostUnsupported: false,
+      manifestIncompatible: true,
+    },
+  ])(
+    'classifies $label without widening the compatibility boundary',
+    ({ response, hostUnsupported, manifestIncompatible }) => {
+      const error = parserError(() => parseGetPluginResponse(response));
+
+      expect(isPluginHostUnsupportedError(error)).toBe(hostUnsupported);
+      expect(isPluginManifestIncompatibilityError(error)).toBe(manifestIncompatible);
+    },
+  );
+
+  it('does not classify unrelated protocol or network failures as manifest errors', () => {
+    expect(isPluginHostUnsupportedError(new Error('network failed'))).toBe(false);
+    expect(isPluginManifestIncompatibilityError(new Error('network failed'))).toBe(false);
+    expect(
+      isPluginHostUnsupportedError(
+        Object.assign(new Error('plugin.currentRelease.manifest is missing'), {
+          name: 'PluginProtocolError',
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  // Non-parse protocol errors whose message merely mentions currentRelease.manifest
+  // (oidc scope mismatch, name/description/author consistency) are envelope-level
+  // failures, not a bad package. They must stay INTERNAL rather than being mapped
+  // to GHOST_FILE_INVALID by the broad `.includes('currentRelease.manifest')` match.
+  it.each([
+    'response.plugin.currentRelease.manifest 的 oidc-token 仅允许 organization scope',
+    'response.plugin.name 与 currentRelease.manifest.name 不一致',
+    'response.plugin.description 与 currentRelease.manifest.description 不一致',
+    'response.plugin.author 与 currentRelease.manifest.author 不一致',
+    'response.plugin.currentRelease.manifest.id 与 ghostId 不一致',
+  ])('does not map non-parse protocol error %j to a manifest/package failure', (message) => {
+    const error = Object.assign(new Error(message), { name: 'PluginProtocolError' });
+    expect(isPluginHostUnsupportedError(error)).toBe(false);
+    expect(isPluginManifestIncompatibilityError(error)).toBe(false);
   });
 
   it('guards removal notice consumption and signals trusted app windows only', () => {

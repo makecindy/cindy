@@ -20,6 +20,10 @@ import { parseMarketSource } from './sources/parse.js';
 import { LocalIconRequestGate } from './localIconRequestGate.js';
 import { PluginMarketPackagePermissionReviewBridge } from './packagePermissionReviewBridge.js';
 import {
+  isPluginHostUnsupportedError,
+  isPluginManifestIncompatibilityError,
+} from './protocolErrors.js';
+import {
   PluginMarketService,
   type PluginMarketSnapshotOptions,
 } from './service.js';
@@ -122,6 +126,18 @@ async function invokePluginMarket<T>(operation: () => Promise<T>): Promise<T> {
     return await operation();
   } catch (error) {
     if (isIpcError(error)) throw error;
+    if (isPluginHostUnsupportedError(error)) {
+      log.warn('plugin market protocol manifest requires a newer host', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('GHOST_HOST_UNSUPPORTED', 'This Plugin requires a newer Cindy host');
+    }
+    if (isPluginManifestIncompatibilityError(error)) {
+      log.warn('plugin market protocol manifest is incompatible', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+    }
     log.warn('plugin market IPC failed', {
       error: error instanceof Error ? error.message : String(error),
     });
