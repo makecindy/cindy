@@ -21,6 +21,15 @@ vi.mock('../localDb/ipc/sessions', () => ({
   setWorktreePathInDb: (...args: unknown[]) => setWorktreePathInDbMock(...args),
 }));
 
+// 队列读改写走跨进程锁; 单测里直通持锁, 聚焦合并/去重语义, 不落真实锁文件。
+vi.mock('../device-link/crossProcessLock', () => ({
+  withCrossProcessLock: (
+    _lockPath: string,
+    _opts: unknown,
+    task: (status: unknown) => Promise<unknown>,
+  ) => task({ held: true }),
+}));
+
 describe('worktreeStore', () => {
   beforeEach(async () => {
     backingStore.worktrees = {};
@@ -54,13 +63,13 @@ describe('worktreeStore', () => {
 
     expect(store.getPendingSafeDirectoryCleanups()).toEqual([]);
 
-    store.addPendingSafeDirectoryCleanups(['/a', '/a', '/b']);
+    await store.addPendingSafeDirectoryCleanups(['/a', '/a', '/b']);
     expect(store.getPendingSafeDirectoryCleanups()).toEqual(['/a', '/b']);
 
-    store.removePendingSafeDirectoryCleanups(['/a']);
+    await store.removePendingSafeDirectoryCleanups(['/a']);
     expect(store.getPendingSafeDirectoryCleanups()).toEqual(['/b']);
 
-    store.removePendingSafeDirectoryCleanups(['/b']);
+    await store.removePendingSafeDirectoryCleanups(['/b']);
     expect(store.getPendingSafeDirectoryCleanups()).toEqual([]);
   });
 });

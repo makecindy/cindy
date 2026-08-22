@@ -465,6 +465,28 @@ export function globalSafeDirectoryLockPath(): string {
 }
 
 /**
+ * 把一条路径规范成 git 呈现/比较 safe.directory 时用的拼写。
+ *
+ * Windows 上 git 在错误信息里以 `C:/...`(正斜杠)输出路径, 而 `path.join` 产出的是
+ * 原生 `C:\...`。`git config --fixed-value` 是字符串精确相等, 若 add 写正斜杠、清理
+ * 用反斜杠, 会永远匹配不到并残留条目。所以 add 与清理都必须经过同一个规范化函数。
+ */
+export function normalizeSafeDirectorySpelling(p: string): string {
+  return process.platform === 'win32' ? p.replace(/\\/g, '/') : p;
+}
+
+/**
+ * 给定一个逻辑路径, 返回需要精确清理的 safe.directory 拼写集合。覆盖两类来源:
+ *   - 规范化拼写(C:/...): gitExec 从 dubious-ownership 报错提取并 add 的拼写;
+ *   - 原生拼写(C:\...): 历史版本无条件 add、或 gitExec 用 cwd 兜底时写下的拼写。
+ * 两边都删, 才能把历史遗留的反斜杠条目一并清掉。
+ */
+export function safeDirectorySpellings(p: string): string[] {
+  const normalized = normalizeSafeDirectorySpelling(p);
+  return normalized === p ? [p] : [normalized, p];
+}
+
+/**
  * 读取当前全局 safe.directory 的值列表。仅当「键不存在」(git config --get-all 对
  * 缺失键返回退出码 1)时按空列表处理;其余读取错误(配置锁冲突/权限/配置损坏/spawn
  * 失败)必须向上抛,否则会把「读不到」误判成「未配置」而重复 --add,反而制造出
@@ -500,8 +522,10 @@ async function ensureGlobalSafeDirectory(targetPath: string): Promise<void> {
       if (!status.held) {
         throw new Error('could not acquire the global safe.directory lock');
       }
-      if ((await readGlobalSafeDirectories()).some((p) => p === targetPath)) return;
-      await execFileOnce(['config', '--global', '--add', 'safe.directory', targetPath]);
+      // 统一成 git 的拼写再读写: 让幂等检查与后续清理命中同一个值。
+      const normalized = normalizeSafeDirectorySpelling(targetPath);
+      if ((await readGlobalSafeDirectories()).some((p) => p === normalized)) return;
+      await execFileOnce(['config', '--global', '--add', 'safe.directory', normalized]);
     },
   );
 }

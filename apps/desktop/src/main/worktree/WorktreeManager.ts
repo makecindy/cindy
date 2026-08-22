@@ -26,7 +26,7 @@ import {
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { classifyError, type ClassifyInput } from './errorClassifier';
-import { gitExec, GitExecError, globalSafeDirectoryLockPath } from './gitExec';
+import { gitExec, GitExecError, globalSafeDirectoryLockPath, safeDirectorySpellings } from './gitExec';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
@@ -107,35 +107,38 @@ function activeWorktreePath(meta: WorktreeMeta): string {
 
 /**
  * 在持有全局 safe.directory 跨进程锁的前提下, 按精确值移除一组路径的 safe.directory
- * 条目(#2627)。返回实际成功清理(exit 0)或本就不存在(exit 5)的路径; 其余失败仅告警、
- * 不算已清理, 由调用方决定是否落盘推迟到下次启动再试。
+ * 条目(#2627)。每个目标按 safeDirectorySpellings 展开成「规范化 + 原生」两种拼写逐一
+ * --unset-all(Windows 上 add 写 C:/...、历史条目可能写 C:\..., 只删一种会残留另一种)。
+ * 返回实际成功清理或本就不存在(exit 5)的目标; 其余失败仅告警、不算已清理, 由调用方
+ * 决定是否落盘推迟到下次启动再试。
  */
 async function unsetSafeDirectoryEntriesLocked(
   targets: Iterable<string>,
 ): Promise<string[]> {
   const cleaned: string[] = [];
   for (const target of targets) {
-    try {
-      await gitExec([
-        'config',
-        '--global',
-        '--unset-all',
-        '--fixed-value',
-        'safe.directory',
-        target,
-      ]);
-      cleaned.push(target);
-    } catch (err) {
-      // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
-      if (err instanceof GitExecError && err.exitCode === 5) {
-        cleaned.push(target);
-        continue;
+    let failed = false;
+    for (const spelling of safeDirectorySpellings(target)) {
+      try {
+        await gitExec([
+          'config',
+          '--global',
+          '--unset-all',
+          '--fixed-value',
+          'safe.directory',
+          spelling,
+        ]);
+      } catch (err) {
+        // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
+        if (err instanceof GitExecError && err.exitCode === 5) continue;
+        failed = true;
+        log.warn(
+          `[worktree] remove safe.directory entry for ${spelling} failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
       }
-      log.warn(
-        `[worktree] remove safe.directory entry for ${target} failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
     }
+    if (!failed) cleaned.push(target);
   }
   return cleaned;
 }
@@ -176,7 +179,7 @@ async function removeWorktreeSafeDirectory(
   const pending = [...candidates].filter((p) => !cleaned.includes(p));
   if (pending.length > 0) {
     try {
-      store.addPendingSafeDirectoryCleanups(pending);
+      await store.addPendingSafeDirectoryCleanups(pending);
     } catch (err) {
       // 落盘失败只是丢失一次「下次启动补清」的机会, 绝不能反向中断删除主流程
       log.warn(
@@ -212,7 +215,7 @@ export async function reconcilePendingSafeDirectoryCleanups(): Promise<void> {
 
   if (cleaned.length > 0) {
     try {
-      store.removePendingSafeDirectoryCleanups(cleaned);
+      await store.removePendingSafeDirectoryCleanups(cleaned);
     } catch (err) {
       log.warn(
         '[worktree] remove cleaned safe.directory paths from store failed:',

@@ -16,11 +16,15 @@
  * v8 是 ESM-only(项目 main 用 CJS 输出), 所以锁 v7 — CJS 兼容, API 完全一致。
  */
 
+import os from 'node:os';
+import path from 'node:path';
+
 import Store from 'electron-store';
 
 import type { WorktreeMeta } from './types';
 import { setWorktreePathInDb } from '../localDb/ipc/sessions';
 import { createLogger } from '../logger';
+import { withCrossProcessLock } from '../device-link/crossProcessLock';
 
 const log = createLogger('worktreeStore');
 
@@ -96,6 +100,18 @@ function readPendingSafeDirectoryCleanups(): string[] {
 }
 
 /**
+ * pendingSafeDirectoryCleanups 队列「读改写」的专用跨进程锁。
+ *
+ * 与 gitExec 的 safe.directory 锁分开: 这里只保护 electron-store 上「读列表 → 合并
+ * → 写回」这微秒级的一步;若与 --add/--unset-all 共用同一把锁, 删除侧拿不到锁时连
+ * 落盘兜底都做不了, 反而复现「两个进程各读同一份列表、后写覆盖先写」的丢路径窗口。
+ */
+function pendingSafeDirectoryCleanupLockPath(): string {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  return path.join(os.tmpdir(), `cindy-git-safe-directory-cleanup-${uid}.lock`);
+}
+
+/**
  * 读取当前推迟清理的 safe.directory 路径(供启动期 reconcile 补清)。
  */
 export function getPendingSafeDirectoryCleanups(): string[] {
@@ -103,28 +119,49 @@ export function getPendingSafeDirectoryCleanups(): string[] {
 }
 
 /**
- * 追加推迟清理的路径(去重)。删除 worktree 时拿不到锁才走到这里。
+ * 追加推迟清理的路径(去重)。读改写全程持队列锁, 避免并发实例丢更新。
  */
-export function addPendingSafeDirectoryCleanups(paths: readonly string[]): void {
-  const unique = new Set(readPendingSafeDirectoryCleanups());
-  let changed = false;
-  for (const p of paths) {
-    if (p && !unique.has(p)) {
-      unique.add(p);
-      changed = true;
-    }
-  }
-  if (changed) getStore().set('pendingSafeDirectoryCleanups', [...unique]);
+export async function addPendingSafeDirectoryCleanups(paths: readonly string[]): Promise<void> {
+  const unique = [...new Set(paths)].filter((p) => p && p.length > 0);
+  if (unique.length === 0) return;
+  await withCrossProcessLock(
+    pendingSafeDirectoryCleanupLockPath(),
+    { label: 'git-safe-directory-cleanup', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) {
+        throw new Error('could not acquire the safe.directory cleanup queue lock');
+      }
+      const existing = new Set(readPendingSafeDirectoryCleanups());
+      let changed = false;
+      for (const p of unique) {
+        if (!existing.has(p)) {
+          existing.add(p);
+          changed = true;
+        }
+      }
+      if (changed) getStore().set('pendingSafeDirectoryCleanups', [...existing]);
+    },
+  );
 }
 
 /**
- * 移除已成功清理的路径。
+ * 移除已成功清理的路径。读改写全程持队列锁, 与 add 串行化避免覆盖。
  */
-export function removePendingSafeDirectoryCleanups(paths: readonly string[]): void {
-  const current = readPendingSafeDirectoryCleanups();
+export async function removePendingSafeDirectoryCleanups(paths: readonly string[]): Promise<void> {
   const toRemove = new Set(paths);
-  const next = current.filter((p) => !toRemove.has(p));
-  if (next.length !== current.length) getStore().set('pendingSafeDirectoryCleanups', next);
+  if (toRemove.size === 0) return;
+  await withCrossProcessLock(
+    pendingSafeDirectoryCleanupLockPath(),
+    { label: 'git-safe-directory-cleanup', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) {
+        throw new Error('could not acquire the safe.directory cleanup queue lock');
+      }
+      const current = readPendingSafeDirectoryCleanups();
+      const next = current.filter((p) => !toRemove.has(p));
+      if (next.length !== current.length) getStore().set('pendingSafeDirectoryCleanups', next);
+    },
+  );
 }
 
 /**

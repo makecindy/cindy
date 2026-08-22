@@ -23,7 +23,12 @@ vi.mock('../../device-link/crossProcessLock', () => ({
   withCrossProcessLock: mocks.withCrossProcessLock,
 }));
 
-import { gitExec, GitExecError } from '../gitExec';
+import {
+  gitExec,
+  GitExecError,
+  normalizeSafeDirectorySpelling,
+  safeDirectorySpellings,
+} from '../gitExec';
 
 const realPlatform = process.platform;
 
@@ -656,5 +661,33 @@ describe('gitExec dubious-ownership safe.directory', () => {
     await expect(p).rejects.toMatchObject({
       stderr: expect.stringContaining('dubious ownership'),
     });
+  });
+});
+
+describe('safe.directory path spelling', () => {
+  it('normalizes Windows backslashes to forward slashes', () => {
+    setPlatform('win32');
+    expect(normalizeSafeDirectorySpelling('C:\\repo\\.xdt-worktrees\\s1')).toBe(
+      'C:/repo/.xdt-worktrees/s1',
+    );
+    expect(normalizeSafeDirectorySpelling('C:/repo/.xdt-worktrees/s1')).toBe(
+      'C:/repo/.xdt-worktrees/s1',
+    );
+  });
+
+  it('returns the native spelling only on POSIX', () => {
+    setPlatform('linux');
+    expect(normalizeSafeDirectorySpelling('/repo/.xdt-worktrees/s1')).toBe(
+      '/repo/.xdt-worktrees/s1',
+    );
+    expect(safeDirectorySpellings('/repo/.xdt-worktrees/s1')).toEqual([
+      '/repo/.xdt-worktrees/s1',
+    ]);
+  });
+
+  it('covers both spellings on Windows for exact --fixed-value cleanup', () => {
+    setPlatform('win32');
+    expect(safeDirectorySpellings('C:\\repo\\s1')).toEqual(['C:/repo/s1', 'C:\\repo\\s1']);
+    expect(safeDirectorySpellings('C:/repo/s1')).toEqual(['C:/repo/s1']);
   });
 });

@@ -36,6 +36,10 @@ vi.mock('../worktree/gitExec', () => ({
   gitExec: (...args: unknown[]) => gitExecMock(...args),
   GitExecError: class GitExecError extends Error {},
   globalSafeDirectoryLockPath: () => '/tmp/cindy-git-safe-directory.lock',
+  safeDirectorySpellings: (p: string) => {
+    const normalized = process.platform === 'win32' ? p.replace(/\\/g, '/') : p;
+    return normalized === p ? [p] : [normalized, p];
+  },
 }));
 
 vi.mock('../device-link/crossProcessLock', () => ({
