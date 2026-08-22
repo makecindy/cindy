@@ -3673,6 +3673,22 @@ function isFencedStaleProductTerminal(event: AgentEvent): boolean {
   return data?.isRunning === false;
 }
 
+function isFencedStaleSessionTerminal(
+  sessionId: string,
+  event: AgentEvent,
+): boolean {
+  if (isTurnContinuationBoundaryEvent(event) || event.turnScope === 'background') {
+    return false;
+  }
+  return (
+    isFencedStaleProductTerminal(event) &&
+    agentInputCoordinatorHolder?.isFencedStaleTerminal(sessionId, {
+      sessionTurnGeneration: event.sessionTurnGeneration,
+      sessionInstanceId: event.sessionInstanceId,
+    }) === true
+  );
+}
+
 export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void {
   if (!session) return;
   const existing = wiredSessionsById.get(session.id);
@@ -3754,6 +3770,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   });
   registration.disposers.push(
     session.onEvent((event: AgentEvent) => {
+      if (isFencedStaleSessionTerminal(session.id, event)) return;
       noteTurnDiffEvent(session.id, event, session.remoteHostId !== null);
       ghostSessionTap.handleEvent(
         event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },
@@ -3856,15 +3873,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
       let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
-      if (
-        !isContinuationBoundary &&
-        event.turnScope !== 'background' &&
-        isFencedStaleProductTerminal(event) &&
-        agentInputCoordinatorHolder?.isFencedStaleTerminal(session.id, {
-          sessionTurnGeneration: event.sessionTurnGeneration,
-          sessionInstanceId: event.sessionInstanceId,
-        })
-      ) {
+      if (!isContinuationBoundary && isFencedStaleSessionTerminal(session.id, event)) {
         log.debug('ignored stale terminal after leftover turn reclaim', {
           sessionId: session.id,
           eventType: event.type,

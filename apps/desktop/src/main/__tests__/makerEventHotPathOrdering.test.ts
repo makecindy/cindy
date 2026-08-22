@@ -67,12 +67,17 @@ describe('maker:event hot path ordering', () => {
     const wireSessionSource = extractWireSessionSource();
     expectOrder(
       wireSessionSource,
-      'isFencedStaleTerminal(session.id, {',
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'ghostSessionTap.handleEvent(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
       'finalizeTurnChangeSet(',
     );
     expectOrder(
       wireSessionSource,
-      'isFencedStaleTerminal(session.id, {',
+      'isFencedStaleSessionTerminal(session.id, event)',
       'shouldMarkTurnStatusIdleAfterBroadcast = true',
     );
   });
