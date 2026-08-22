@@ -495,7 +495,36 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
-  it('keeps a leftover terminal error on the prior generation after handle.send yields', async () => {
+  it('keeps a leftover terminal error on the prior generation after leftover idle', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+
+    const late = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
+    expect(late?.sessionTurnGeneration).toBe(1);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('stamps an immediate new-turn 401 after running as the live generation', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,
       holdOnSend: 2,
@@ -512,13 +541,13 @@ describe('Session per-turn origin 打标', () => {
     await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
     await emit({
       type: 'error',
-      data: { message: 'first late failure', isTerminal: true },
+      data: { message: 'quota exceeded', isTerminal: true },
       source: 'codex',
     });
 
-    const late = seen.find((event) =>
-      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
-    expect(late?.sessionTurnGeneration).toBe(1);
+    const fail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'quota exceeded');
+    expect(fail?.sessionTurnGeneration).toBe(2);
     releaseDispatch();
     await second;
     await session.close();

@@ -1863,11 +1863,6 @@ export class Session {
       }
       return inFlightGeneration;
     }
-    if (prior !== null && isTerminalAgentErrorEvent(event) && waitStartGeneration !== 0) {
-      this.pendingPriorGeneration = null;
-      this.staleTerminalQueuedGeneration = null;
-      return prior;
-    }
     if (waitStartGeneration === 0 && this.turnGeneration > 0) {
       this.staleTerminalQueuedGeneration = null;
       return this.turnGeneration;
