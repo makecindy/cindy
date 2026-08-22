@@ -694,44 +694,24 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
   });
 });
 
-describe('#3214 已归档任务入口前置到范围菜单一级', () => {
-  it('范围菜单接收 Status 筛选并渲染三态状态组,不建第二份状态', () => {
-    // 状态真源仍是 useSidebarFilter;菜单只读 + 回调,不出现本地 useState / 新 store。
+describe('#3214 段头归档状态徽标(2026-08-22 维护者裁决:范围菜单不放状态项)', () => {
+  it('范围菜单只读 status,不再有状态切换项', () => {
+    // 状态真源是 useSidebarFilter;菜单只读 status 用于段头表达,不出现
+    // onStatusSelect 回调或状态切换项(信息架构:范围菜单只管设备/范围)。
     expect(menuSource).toContain('status?: FilterStatus;');
-    expect(menuSource).toContain('onStatusSelect?: (status: FilterStatus) => void;');
-    expect(menuSource).toContain("t('ccAgent.sidebar.machineSwitcher.statusActiveTasks')");
-    expect(menuSource).toContain("t('ccAgent.sidebar.machineSwitcher.statusArchivedTasks')");
-    expect(menuSource).toContain("t('ccAgent.sidebar.machineSwitcher.statusAllStatuses')");
-    expect(menuSource).toMatch(/selected=\{status === 'archived'\}/);
+    expect(menuSource).not.toContain('onStatusSelect');
     expect(menuSource).not.toMatch(/useState<FilterStatus/);
+    for (const key of ['statusActiveTasks', 'statusArchivedTasks', 'statusAllStatuses']) {
+      expect(menuSource).not.toContain(key);
+      for (const lang of ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']) {
+        expect(read('i18n', 'locales', lang, 'common.json'), `${lang} 孤儿键 ${key}`).not.toContain(
+          `"${key}"`,
+        );
+      }
+    }
   });
 
-  it('状态项点击统一走 onStatusSelect 出口,且保证会话列表可见', () => {
-    const statusGroupIdx = menuSource.indexOf('const statusItems =');
-    expect(statusGroupIdx).toBeGreaterThanOrEqual(0);
-    const group = menuSource.slice(statusGroupIdx);
-    // 三态都带 ensureConversationListVisible(与机器单选同一惯例)。
-    const onSelectCount = (group.match(/ensureConversationListVisible\(\);/g) ?? []).length;
-    expect(onSelectCount).toBeGreaterThanOrEqual(3);
-    expect(group).toContain("onStatusSelect('active')");
-    expect(group).toContain("onStatusSelect('archived')");
-    expect(group).toContain("onStatusSelect('all')");
-  });
-
-  it('状态组分隔线:组首不带线(设备列表末尾已有),状态与设置项之间补一条', () => {
-    const statusGroupIdx = menuSource.indexOf('const statusItems =');
-    expect(statusGroupIdx).toBeGreaterThanOrEqual(0);
-    const groupEndIdx = menuSource.indexOf(') : null;', statusGroupIdx);
-    const group = menuSource.slice(statusGroupIdx, groupEndIdx);
-    // 组首不再渲染分隔线——有设备时会连出两条,无设备时菜单会以分隔线开头(review P1)。
-    expect(group).not.toContain('<DropdownMenuSeparator');
-    // 状态项之后、设置项之前统一补分隔线。
-    expect(menuSource).toContain(
-      '{statusItems ? <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} /> : null}',
-    );
-  });
-
-  it('触发器无障碍名称包含当前状态;归档时段头有图标 + 可见文字徽标', () => {
+  it('触发器无障碍名称包含当前状态;归档视图时段头有图标 + 可见文字徽标', () => {
     // 内部图标的 aria-label 进不了父按钮名称,状态必须拼进 aria-label(review P1)。
     expect(menuSource).toContain('`${triggerLabel}: ${triggerText} · ${statusText}`');
     // 徽标 = 图标 + 可见文字(不只靠 title);语义已进按钮名称,视觉块对读屏隐藏。
@@ -741,18 +721,9 @@ describe('#3214 已归档任务入口前置到范围菜单一级', () => {
     expect(menuSource).not.toContain('role="img"');
   });
 
-  it('MainListScopeHeader 把全局 filter.status 传进范围菜单,出口是 setStatus 本尊', () => {
+  it('MainListScopeHeader 把全局 filter.status 只读传进范围菜单', () => {
     const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
     expect(headerSource).toContain('status={filter.status}');
-    expect(headerSource).toContain('onStatusSelect={filter.setStatus}');
-  });
-
-  it('五语言补齐三个状态键,与既有 filterStatus 语义一致', () => {
-    for (const lang of ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']) {
-      const source = read('i18n', 'locales', lang, 'common.json');
-      for (const key of ['statusActiveTasks', 'statusArchivedTasks', 'statusAllStatuses']) {
-        expect(source, `${lang} 缺 ${key}`).toContain(`"${key}"`);
-      }
-    }
+    expect(headerSource).not.toContain('onStatusSelect');
   });
 });

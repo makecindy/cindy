@@ -7834,9 +7834,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "statusActiveTasks": "Active tasks",
-        "statusArchivedTasks": "Archived tasks",
-        "statusAllStatuses": "All statuses",
         "allMachines": "All",
         "localMachine": "This device",
         "connecting": "Connecting…",

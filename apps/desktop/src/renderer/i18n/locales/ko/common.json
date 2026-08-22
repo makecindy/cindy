@@ -7822,9 +7822,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "statusActiveTasks": "활성 작업",
-        "statusArchivedTasks": "보관된 작업",
-        "statusAllStatuses": "전체 상태",
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",

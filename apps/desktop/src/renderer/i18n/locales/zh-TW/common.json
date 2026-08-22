@@ -7822,9 +7822,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "statusActiveTasks": "活躍任務",
-        "statusArchivedTasks": "已歸檔任務",
-        "statusAllStatuses": "全部狀態",
         "allMachines": "所有",
         "localMachine": "本機",
         "connecting": "連線中…",
