@@ -7431,6 +7431,8 @@
     "markdownRenderer": {
       "codeCopied": "コピー済み",
       "copyCode": "コードをコピー",
+      "runInTerminal": "ターミナルで実行",
+      "runInTerminalFailed": "ターミナルの準備ができていません。後でもう一度お試しください",
       "annotateImage": "画像に注釈",
       "copy": "コピー",
       "blockCopied": "コピー済み",

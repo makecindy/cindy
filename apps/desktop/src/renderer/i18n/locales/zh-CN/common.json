@@ -7431,6 +7431,8 @@
     "markdownRenderer": {
       "codeCopied": "已复制",
       "copyCode": "复制代码",
+      "runInTerminal": "在终端执行",
+      "runInTerminalFailed": "终端未就绪，请稍后重试",
       "annotateImage": "标注图片",
       "copy": "复制",
       "blockCopied": "已复制",

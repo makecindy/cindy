@@ -7431,6 +7431,8 @@
     "markdownRenderer": {
       "codeCopied": "복사됨",
       "copyCode": "코드 복사",
+      "runInTerminal": "터미널에서 실행",
+      "runInTerminalFailed": "터미널이 준비되지 않았습니다. 잠시 후 다시 시도해 주세요",
       "annotateImage": "이미지 주석",
       "copy": "복사",
       "blockCopied": "복사됨",

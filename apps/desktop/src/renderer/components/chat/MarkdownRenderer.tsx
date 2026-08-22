@@ -46,7 +46,7 @@ import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
-import { Check, Copy, FolderOpen } from 'lucide-react';
+import { Check, Copy, FolderOpen, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
@@ -119,6 +119,7 @@ import {
   openUrlByPreference,
   useOpenWithMenu,
 } from './useOpenWithMenu';
+import { runInTerminal } from './runInTerminal';
 
 /**
  * Recursively flatten an arbitrary react-markdown children tree into a
@@ -163,6 +164,33 @@ function isMermaidCodeChild(child: ReactNode): boolean {
   if (!isValidElement(child)) return false;
   const className = (child.props as { className?: string })?.className ?? '';
   return /\b(language-)?mermaid\b/.test(className);
+}
+
+/**
+ * 从 `<code>` 子元素提取 rehype-highlight 注入的语言标记(class `language-xxx`)。
+ * 无语言标注(裸围栏 / 4 空格缩进)返回 undefined。
+ */
+function extractCodeLanguage(child: ReactNode): string | undefined {
+  if (!isValidElement(child)) return undefined;
+  const className = (child.props as { className?: string })?.className ?? '';
+  const match = /language-([\w-]+)/.exec(className);
+  return match?.[1]?.toLowerCase();
+}
+
+/**
+ * 命令行类语言集合 —— 这些语言的代码块才显示「在终端执行」按钮。
+ * bash/sh/zsh/fish 等 unix shell + powershell/cmd 系列。其它语言(python/js/...)
+ * 即便能写进终端,语义也不是「逐行执行命令」,不显示按钮避免误用。
+ */
+const SHELL_LIKE_LANGUAGES = new Set([
+  'bash', 'sh', 'shell', 'zsh', 'fish', 'dash', 'ksh',
+  'powershell', 'pwsh', 'ps1', 'ps',
+  'cmd', 'bat', 'batch',
+]);
+
+function isShellLikeLanguage(language: string | undefined): boolean {
+  if (!language) return false;
+  return SHELL_LIKE_LANGUAGES.has(language.toLowerCase());
 }
 
 // Module-level constants — defined once, never recreated across renders.
@@ -437,16 +465,30 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
 }
 
 /**
- * CodeBlockPre — fenced code block with a hover-revealed copy button at the
- * top-right corner. The button reads `innerText` from the live <pre>, so it
- * always copies the latest text even mid-stream. We use group-hover to keep
- * the chrome out of the way until the user reaches for it.
+ * CodeBlockPre — fenced code block with hover-revealed chrome (copy + run-in-
+ * terminal) at the top-right corner. Buttons read `innerText` from the live
+ * <pre>, so they always act on the latest text even mid-stream. We use
+ * group-hover to keep the chrome out of the way until the user reaches for it.
+ *
+ * 「在终端执行」按钮仅对 shell-like 语言(bash/sh/powershell/cmd...)且
+ * `sessionId` 存在时显示。`sessionId` 由调用方显式传入:聊天会话流内传入
+ * `currentSessionId`,TextLightbox / 设置页等不传 → 按钮不显示。不读
+ * ChatSessionFileContext,因为 TextLightbox 可能挂在会话树内、渲染的却是
+ * 与当前会话无关的文件,context 里仍可能带着外层 session id。
  */
-function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
+function CodeBlockPre({
+  children,
+  language,
+  sessionId,
+  ...props
+}: HTMLAttributes<HTMLPreElement> & { language?: string; sessionId?: string }) {
   const { t } = useTranslation();
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
+  const [running, setRunning] = useState(false);
   const timerRef = useRef<number | null>(null);
+
+  const canRunInTerminal = isShellLikeLanguage(language) && !!sessionId;
 
   useEffect(() => {
     return () => {
@@ -470,6 +512,21 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
     }
   }
 
+  async function handleRun() {
+    if (!sessionId || running) return;
+    const text = preRef.current?.innerText ?? '';
+    if (!text) return;
+    setRunning(true);
+    try {
+      const ok = await runInTerminal(sessionId, text);
+      if (!ok) toast.error(t('chat.markdownRenderer.runInTerminalFailed'));
+    } catch {
+      toast.error(t('chat.markdownRenderer.runInTerminalFailed'));
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <div className="group relative my-3">
       <pre
@@ -487,23 +544,83 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       >
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
-        title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
+      <div
         className={cn(
-          'absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center',
-          'rounded-md border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+          'absolute right-2 top-2 flex items-center gap-1',
           'opacity-0 transition-opacity duration-150',
-          'group-hover:opacity-100 focus-visible:opacity-100',
-          'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+          'group-hover:opacity-100 focus-within:opacity-100',
         )}
       >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
+        {canRunInTerminal && (
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={running}
+            aria-label={t('chat.markdownRenderer.runInTerminal')}
+            title={t('chat.markdownRenderer.runInTerminal')}
+            className={cn(
+              'inline-flex h-7 w-7 items-center justify-center',
+              'rounded-md border border-[var(--msg-code-block-border)]',
+              'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+              'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+            )}
+          >
+            <Terminal className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
+          title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
+          className={cn(
+            'inline-flex h-7 w-7 items-center justify-center',
+            'rounded-md border border-[var(--msg-code-block-border)]',
+            'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+            'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
+          )}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </div>
     </div>
+  );
+}
+
+/**
+ * 渲染 fenced code block:```diff → MarkdownDiffBlock,```mermaid →
+ * MarkdownMermaidBlock,其余 → CodeBlockPre。
+ *
+ * 抽成 helper 是因为 `pre` renderer 有两处入口:
+ *   - `baseComponents.pre`(模块级,doc-mode / TextLightbox 用)—— 不传
+ *     sessionId,「在终端执行」按钮不显示
+ *   - instance-level `pre` override(聊天流用,见下方 useMemo)—— 传入
+ *     currentSessionId,shell-like 代码块显示按钮
+ * 两处共享 diff / mermaid 分派逻辑,放在一起避免分叉。
+ */
+function renderCodeBlock(
+  children: ReactNode,
+  props: Record<string, unknown>,
+  sessionId?: string,
+): ReactNode {
+  const firstChild = Array.isArray(children) ? children[0] : children;
+  if (isDiffCodeChild(firstChild)) {
+    const codeChildren = (firstChild as { props: { children?: ReactNode } })
+      .props.children;
+    const raw = nodeToText(codeChildren);
+    return <MarkdownDiffBlock raw={raw} />;
+  }
+  if (isMermaidCodeChild(firstChild)) {
+    const codeChildren = (firstChild as { props: { children?: ReactNode } })
+      .props.children;
+    const raw = nodeToText(codeChildren);
+    return <MarkdownMermaidBlock raw={raw} />;
+  }
+  return (
+    <CodeBlockPre {...props} language={extractCodeLanguage(firstChild)} sessionId={sessionId}>
+      {children}
+    </CodeBlockPre>
   );
 }
 
@@ -516,27 +633,10 @@ const baseComponents: Components = {
   // simpler renderer there. See line ~310 for the implementation.
 
   pre({ children, ...props }) {
-    // Intercept ```diff fenced blocks before they fall through to highlight.js
-    // — we render them with our own row/gutter/symbol layout (MarkdownDiffBlock)
-    // so the visual matches the Edit-tool DiffView card and the GitHub red/green
-    // tokens (`--diff-add-fg` / `--diff-del-fg`) get applied predictably.
-    // Other languages (js/ts/python/...) still go through the default pre+code
-    // path with rehype-highlight.
-    const firstChild = Array.isArray(children) ? children[0] : children;
-    if (isDiffCodeChild(firstChild)) {
-      const codeChildren = (firstChild as { props: { children?: ReactNode } })
-        .props.children;
-      const raw = nodeToText(codeChildren);
-      return <MarkdownDiffBlock raw={raw} />;
-    }
-    if (isMermaidCodeChild(firstChild)) {
-      const codeChildren = (firstChild as { props: { children?: ReactNode } })
-        .props.children;
-      const raw = nodeToText(codeChildren);
-      return <MarkdownMermaidBlock raw={raw} />;
-    }
-
-    return <CodeBlockPre {...props}>{children}</CodeBlockPre>;
+    // baseComponents.pre 不传 sessionId —— doc-mode(TextLightbox 等)走这条
+    // 路径,「在终端执行」按钮不应在文件预览里出现。聊天流的 instance-level
+    // override 会显式传入 currentSessionId。
+    return renderCodeBlock(children, props);
   },
 
   // Tables (GFM)。外层 CopyAsImageBlock 承载「复制为图片 / 标注」hover 工具栏,
@@ -1735,6 +1835,16 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       // renderer 整体替换成带 data-source-line 注入的版本。chat 调用方不传 prop
       // → 默认 false → 整段是 falsy 短路, components 对象与之前完全一致。
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
+      // 聊天流(非 doc-mode)override pre:传入 currentSessionId 让 shell-like
+      // 代码块显示「在终端执行」按钮。doc-mode(TextLightbox 等)走
+      // makeSourceLineWrappers 包装的 baseComponents.pre,不传 sessionId →
+      // 按钮不显示,避免在文件预览里出现与当前会话无关的执行入口。
+      ...(!emitSourceLines
+        ? {
+            pre: ({ children, ...props }: HTMLAttributes<HTMLPreElement>) =>
+              renderCodeBlock(children, props as Record<string, unknown>, currentSessionId),
+          }
+        : {}),
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
         const normalized = normalizeMarkdownImageSrc(

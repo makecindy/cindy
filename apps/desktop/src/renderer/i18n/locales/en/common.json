@@ -7434,6 +7434,8 @@
     "markdownRenderer": {
       "codeCopied": "Copied",
       "copyCode": "Copy code",
+      "runInTerminal": "Run in terminal",
+      "runInTerminalFailed": "Terminal not ready, please retry later",
       "annotateImage": "Annotate image",
       "copy": "Copy",
       "blockCopied": "Copied",
