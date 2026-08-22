@@ -380,7 +380,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
   it('空态 / 远程 loading-error / 连接中占位都挂范围标题(2026-08-13 第 4 轮 P1)', () => {
     const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
-    expect(headerSource).toContain('<MachineSwitcherMenu onOpenDisplaySettings=');
+    expect(headerSource).toMatch(/<MachineSwitcherMenu\s*\n\s*onOpenDisplaySettings=/);
     expect(headerSource).not.toContain('filterActiveBadge');
     expect(headerSource).toContain('<SidebarFilterPopover');
     expect(projectsSectionSource).toContain('<MainListScopeHeader');
@@ -554,8 +554,15 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
     expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
     expect(menuSource).toMatch(
-      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
+      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*\{\/\*[^]*?<ChevronDown/,
     );
+    // #3214:归档徽标插在标题与箭头之间(仅 archived 时渲染),spinner 仍在箭头后。
+    const titleIdx = menuSource.indexOf('{triggerText}</span>');
+    const archiveIdx = menuSource.indexOf("<Archive size={13}");
+    const chevronIdx = menuSource.indexOf('<ChevronDown');
+    expect(titleIdx).toBeGreaterThanOrEqual(0);
+    expect(archiveIdx).toBeGreaterThan(titleIdx);
+    expect(chevronIdx).toBeGreaterThan(archiveIdx);
     expect(menuSource).toContain('<Loader2 size={12} strokeWidth={1.8} />');
   });
 
@@ -684,5 +691,39 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(hookSource).not.toContain('localHostSeedStarted = true');
     expect(hookSource).toContain('void load(1)');
     expect(hookSource).toContain('attempt < 3 && entries.some(([, result]) => result.kind === \'transient\')');
+  });
+});
+
+describe('#3214 段头归档状态徽标(2026-08-22 维护者裁决:范围菜单不放状态项)', () => {
+  it('范围菜单只读 status,不再有状态切换项', () => {
+    // 状态真源是 useSidebarFilter;菜单只读 status 用于段头表达,不出现
+    // onStatusSelect 回调或状态切换项(信息架构:范围菜单只管设备/范围)。
+    expect(menuSource).toContain('status?: FilterStatus;');
+    expect(menuSource).not.toContain('onStatusSelect');
+    expect(menuSource).not.toMatch(/useState<FilterStatus/);
+    for (const key of ['statusActiveTasks', 'statusArchivedTasks', 'statusAllStatuses']) {
+      expect(menuSource).not.toContain(key);
+      for (const lang of ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']) {
+        expect(read('i18n', 'locales', lang, 'common.json'), `${lang} 孤儿键 ${key}`).not.toContain(
+          `"${key}"`,
+        );
+      }
+    }
+  });
+
+  it('触发器无障碍名称包含当前状态;归档视图时段头有图标 + 可见文字徽标', () => {
+    // 内部图标的 aria-label 进不了父按钮名称,状态必须拼进 aria-label(review P1)。
+    expect(menuSource).toContain('`${triggerLabel}: ${triggerText} · ${statusText}`');
+    // 徽标 = 图标 + 可见文字(不只靠 title);语义已进按钮名称,视觉块对读屏隐藏。
+    expect(menuSource).toContain("aria-hidden=\"true\"");
+    expect(menuSource).toContain("title={t('ccAgent.sidebar.filterStatus.archived')}");
+    expect(menuSource).toContain("{t('ccAgent.sidebar.filterStatus.archived')}");
+    expect(menuSource).not.toContain('role="img"');
+  });
+
+  it('MainListScopeHeader 把全局 filter.status 只读传进范围菜单', () => {
+    const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
+    expect(headerSource).toContain('status={filter.status}');
+    expect(headerSource).not.toContain('onStatusSelect');
   });
 });
