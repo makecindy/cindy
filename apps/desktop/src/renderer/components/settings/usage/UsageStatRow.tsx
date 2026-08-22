@@ -2,16 +2,18 @@
  * UsageStatRow — 用量历史页顶部统计条 (五格)。
  *
  * 未知值统一用 "—" 占位, 不显示误导性的 0 —— 与首页仪表盘同一处理。
- * 缓存命中率低于 LOW_CACHE_HIT_RATE 时标 warning 色, 与消息卡片的「缓存命中率偏低」同阈值。
+ *
+ * 缓存命中率**不着色**: DESIGN.md §2 把 --warning-accent 限定给已登记的消费者
+ * (运行状态栏、呼吸图标、权限高亮等), 用量页的效率指标不在名单内, 新增消费者要先改规范。
+ * 口径说明放表头 tooltip, 数值本身保持中性。
  */
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { formatCompactTokens } from '@/lib/usageFormat';
-import { LOW_CACHE_HIT_RATE, type UsageSummary } from './usageHistoryStats';
+import { type UsageSummary } from './usageHistoryStats';
 import { formatUsagePercent } from './formatUsagePercent';
 
 const UNKNOWN_VALUE = '—';
@@ -19,22 +21,15 @@ const UNKNOWN_VALUE = '—';
 function StatCell({
   value,
   label,
-  warning,
   tip,
 }: {
   value: string;
   label: string;
-  warning?: boolean;
   tip?: string | null;
 }): React.JSX.Element {
   const cell = (
     <div className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg bg-[var(--surface-chip)] px-3 py-2">
-      <span
-        className={cn(
-          'truncate text-14 font-semibold leading-[1.429] tabular-nums',
-          warning ? 'text-[var(--warning-accent)]' : 'text-[var(--text-primary)]',
-        )}
-      >
+      <span className="truncate text-14 font-semibold leading-[1.429] tabular-nums text-[var(--text-primary)]">
         {value}
       </span>
       <span className="truncate text-11 leading-[1.273] text-[var(--text-tertiary)]">{label}</span>
@@ -45,8 +40,6 @@ function StatCell({
 
 export function UsageStatRow({ summary }: { summary: UsageSummary }): React.JSX.Element {
   const { t } = useTranslation();
-  const lowCache =
-    summary.cacheHitRate !== null && summary.cacheHitRate < LOW_CACHE_HIT_RATE;
 
   return (
     <div className="flex gap-2">
@@ -78,7 +71,6 @@ export function UsageStatRow({ summary }: { summary: UsageSummary }): React.JSX.
             : formatUsagePercent(summary.cacheHitRate)
         }
         label={t('usageHistory.stats.cacheHitRate')}
-        warning={lowCache}
         tip={t('usageHistory.cacheHitTooltip')}
       />
       <StatCell

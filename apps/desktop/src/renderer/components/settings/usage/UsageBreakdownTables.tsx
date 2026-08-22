@@ -5,7 +5,8 @@
  * 避免为了共享 5 行 class 再拆一层。
  *
  * 缓存命中率与 shared/turnUsageDetails.ts 的逐轮口径一致 (见 usageHistoryStats.cacheHitRate),
- * 低于阈值标 warning 色 —— 用户在消息卡片与本页看到的是同一个判断。
+ * 但**不着色**: DESIGN.md §2 的 --warning-accent 是 sanctioned-consumers-only, 用量页的
+ * 效率指标不在名单内。要给"偏低"一个视觉信号, 得先在规范里登记这个消费者。
  */
 
 import React from 'react';
@@ -15,7 +16,6 @@ import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
 import { usageRankColor } from '@/components/new-chat/usagePalette';
 import {
-  LOW_CACHE_HIT_RATE,
   type AgentTokenRow,
   type ModelTokenRow,
   type UsageAgentKind,
@@ -45,11 +45,8 @@ function Swatch({ rank }: { rank: number }): React.JSX.Element {
 }
 
 function HitRateCell({ value }: { value: number | null }): React.JSX.Element {
-  const low = value !== null && value < LOW_CACHE_HIT_RATE;
   return (
-    <td className={cn(TD_CLASS, low && 'text-[var(--warning-accent)]')}>
-      {value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}
-    </td>
+    <td className={TD_CLASS}>{value === null ? UNKNOWN_VALUE : formatUsagePercent(value)}</td>
   );
 }
 

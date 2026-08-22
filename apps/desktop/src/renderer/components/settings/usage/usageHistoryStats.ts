@@ -15,9 +15,6 @@ import type {
   UsageHistoryPayload,
 } from '@/hooks/useUsageHistory';
 
-/** 缓存命中率低于此值时标记提示, 与消息卡片的「缓存命中率偏低」同阈值。 */
-export const LOW_CACHE_HIT_RATE = 0.2;
-
 export type UsageAgentKind = UsageHistoryModel['agentKind'];
 
 export interface UsageDay {
