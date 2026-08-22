@@ -377,6 +377,9 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(takeover).toContain("root.addEventListener('mousedown', onMouseDown)");
     expect(takeover).toContain("window.addEventListener('mousemove', onMouseMove)");
     expect(takeover).toContain('shouldUnpinOnScrollbarDrag({');
+    expect(takeover).toContain(
+      'if (wasDragging && isNearBottomRef.current) pinToBottomRef.current()',
+    );
     expect(takeover).toContain('shouldRepinOnWheel({');
     expect(takeover).toContain('pinAutoFollowForUserDownIntent()');
   });

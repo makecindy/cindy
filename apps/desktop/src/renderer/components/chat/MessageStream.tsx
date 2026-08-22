@@ -4213,6 +4213,7 @@ export function MessageStream({
   // 滚动条拖拽:只记按下时的 scrollTop。单纯 mousedown 不解除;上移过死区才 unpin。
   // 按下期间停掉流式 pin,避免 programmatic 窗口把拖拽 scroll 吞掉后再钉回。
   const scrollbarDragStartTopRef = useRef<number | null>(null);
+  const pinToBottomRef = useRef<() => void>(() => {});
 
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
@@ -4514,7 +4515,11 @@ export function MessageStream({
       }
     };
     const onMouseUp = () => {
+      const wasDragging = scrollbarDragStartTopRef.current != null;
       scrollbarDragStartTopRef.current = null;
+      // 按住期间 pin 被抑制。若松手前最后一批 token 已经 settle,没有新的
+      // ResizeObserver,视口会停在旧底部。仍在跟随时补一次钉底。
+      if (wasDragging && isNearBottomRef.current) pinToBottomRef.current();
     };
     root.addEventListener('wheel', onWheel, { passive: true });
     root.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -4585,6 +4590,7 @@ export function MessageStream({
       }
     });
   }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor]);
+  pinToBottomRef.current = pinToBottom;
 
   // Composer send is an explicit "show me the result" intent. Don't wait for
   // the tail render item to be a user message — assistant / tool cards often
