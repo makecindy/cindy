@@ -337,13 +337,21 @@ export class EmbeddingWorker {
         }
         const blocked = this.blockedModels.get(modelId);
         if (blocked !== undefined) {
-          const age = Date.now() - blocked.blockedAt;
+          const now = Date.now();
+          const age = now - blocked.blockedAt;
           if (age < MODEL_BLOCK_TTL_MS || blocked.probeCount >= MODEL_BLOCK_MAX_REPROBES) {
             // 熔断 TTL 内,或已耗尽自动重探次数:snooze 这批,不出网。
-            // 按当前窗口结束时刻排程(而不是 now + 30min),否则第 29 分钟到达的
-            // 任务会被排到第 59 分钟,即使第 30 分钟探测已成功也不会提前恢复
-            // (PR #2288 Codex P1)。
-            const snoozeUntil = blocked.blockedAt + MODEL_BLOCK_TTL_MS;
+            // TTL 内按当前窗口结束时刻排程(而不是 now + 30min),否则第 29 分钟
+            // 到达的任务会被排到第 59 分钟,即使第 30 分钟探测已成功也不会提前
+            // 恢复 (PR #2288 Codex P1)。
+            // 预算已耗尽时窗口可能已经过期,blockedAt + TTL 会是过去时刻 → 这批
+            // 任务会每个 5 秒 tick 都被选中、重复写库、挤占其他模型的待处理配额
+            // (调度热循环);此时它们要等重启清空 blockedModels 才会再探,排到
+            // now + TTL 的未来时刻,既避免热循环也保持 snooze 语义 (Greptile/Codex P1)。
+            const withinWindow = age < MODEL_BLOCK_TTL_MS;
+            const snoozeUntil = withinWindow
+              ? blocked.blockedAt + MODEL_BLOCK_TTL_MS
+              : now + MODEL_BLOCK_TTL_MS;
             await this.recordFailureBatch(modelJobs, blocked.error, true, snoozeUntil);
             if (this.aborted) return;
             this.opts.log.debug?.(
@@ -461,7 +469,13 @@ export class EmbeddingWorker {
               }),
             );
           }
-          const fc = await this.recordFailureBatch(modelJobs, errorText, terminal);
+          // 正在熔断/重探期间的失败(无论是再次确认 INVALID_MODEL,还是重探遇到瞬时
+          // 错误)都按 terminal 记录:snooze 到下一窗口、不递增 attempts。否则一个已
+          // 累计了若干普通失败的任务会因重探的瞬时错误被推到 MAX_ATTEMPTS 永久写
+          // failed,模型恢复或重启后也不再续跑 (PR #2288 Greptile P1)。首次进入熔断
+          // 前的普通失败仍走 terminal=false 的正常退避。
+          const snoozeTerminal = terminal || prev !== undefined;
+          const fc = await this.recordFailureBatch(modelJobs, errorText, snoozeTerminal);
           failCount += fc;
         }
       }

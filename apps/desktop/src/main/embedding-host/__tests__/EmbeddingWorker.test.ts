@@ -155,10 +155,11 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
       vi.setSystemTime(now);
       let rowid = 0;
       const query = vi.fn(async () => [{ ...job(++rowid, `msg-${rowid}`) }]);
-      const tx = vi.fn(async () => ({ failCount: 0 }));
+      const tx = vi.fn(async (_name: string, _args: Record<string, unknown>) => ({ failCount: 0 }));
       const embed = vi.fn(async () => {
         throw new EmbeddingError('model not found', 'INVALID_MODEL', 404);
       });
+      const TTL = 30 * 60_000;
 
       registerProvider({
         source: 'chat',
@@ -193,6 +194,80 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
       vi.setSystemTime(now);
       await tick();
       expect(embed.mock.calls.length).toBe(callsAfterReprobes);
+
+      // The exhausted-budget snooze must schedule into the FUTURE (now + TTL),
+      // not blockedAt + TTL which is already in the past once the window
+      // expired — otherwise the batch is re-selected every 5s tick and rewrites
+      // the DB in a hot loop, starving other models (PR #2288 Greptile/Codex P1).
+      const exhaustedCall = tx.mock.calls.find(
+        (call): call is [string, { terminal?: boolean; snoozeUntil?: number }] =>
+          call[0] === 'embedding.recordFailures'
+          && call[1]?.terminal === true
+          && typeof call[1]?.snoozeUntil === 'number'
+          && (call[1]?.snoozeUntil ?? 0) >= now,
+      );
+      expect(exhaustedCall).toBeDefined();
+      expect(exhaustedCall?.[1].snoozeUntil).toBe(now + TTL);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('snoozes a transient reprobe failure without consuming retry attempts (PR #2288 Greptile P1)', async () => {
+    // When a TTL-expired reprobe hits a transient error (NETWORK / RATE_LIMITED
+    // / 5xx) while already circuit-broken, the batch must be snoozed (terminal,
+    // attempts NOT incremented) rather than recorded as an ordinary failure —
+    // a job already near MAX_ATTEMPTS would otherwise be permanently marked
+    // failed by the transient error and never resume after the model recovers.
+    vi.useFakeTimers();
+    try {
+      let now = new Date('2026-08-21T12:00:00Z').getTime();
+      vi.setSystemTime(now);
+      let rowid = 0;
+      const query = vi.fn(async () => [{ ...job(++rowid, `msg-${rowid}`), attempts: 4 }]);
+      const tx = vi.fn(async (_name: string, _args: Record<string, unknown>) => ({ failCount: 0 }));
+      const embed = vi
+        .fn()
+        .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
+        .mockRejectedValueOnce(new EmbeddingError('connection reset', 'NETWORK_ERROR'));
+
+      registerProvider({
+        source: 'chat',
+        getTextsForJobs: async (jobs) =>
+          jobs.map(({ rowid: r, sourceId }) => ({ rowid: r, text: sourceId })),
+      });
+
+      const worker = new EmbeddingWorker({
+        getDbClient: () => ({ query, tx }) as never,
+        getClient: () => ({ embed }) as never,
+        isVecAvailable: () => true,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+      });
+      const tick = (worker as unknown as { tick: () => Promise<void> }).tick.bind(worker);
+
+      // Tick 1: initial INVALID_MODEL block.
+      await tick();
+      // TTL 1: reprobe hits NETWORK_ERROR.
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(2);
+
+      // The transient reprobe failure must be recorded as terminal (snooze,
+      // attempts not incremented) so failCount stays 0 even though the job
+      // entered with attempts=4 (one ordinary failure from permanent fail).
+      const failureCalls = tx.mock.calls.filter(
+        (call): call is [string, { terminal?: boolean; snoozeUntil?: number }] =>
+          call[0] === 'embedding.recordFailures',
+      );
+      expect(failureCalls.length).toBeGreaterThan(0);
+      const lastFailure = failureCalls.at(-1)![1];
+      expect(lastFailure.terminal).toBe(true);
+      // Snooze is either explicit (short-circuit path) or defaults to now +
+      // TTL in the DB layer; either way it must not be a past timestamp.
+      if (lastFailure.snoozeUntil !== undefined) {
+        expect(lastFailure.snoozeUntil).toBeGreaterThanOrEqual(now);
+      }
     } finally {
       vi.useRealTimers();
     }
