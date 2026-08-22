@@ -251,13 +251,12 @@ describe('loginKeyboard 接线(hook 订阅拓扑 + 登录页测量拓扑,读源�
     expect(loginSource).toContain('外层未变换测量 wrapper');
     expect(loginSource).toContain('translateY: -keyboardShift');
     expect(loginSource).toContain('computeLoginKeyboardShift');
-    // 默认停靠贴附锚 = 面板底；历史列表展开时延伸到列表底，union 同步纳入列表。
-    expect(loginSource).toContain(': loginSizes.panelHeight;');
+    // 候选层收在面板内：停靠锚恒为面板底，悬浮键盘 union 仍纳入候选层。
     expect(loginSource).toContain(
       'LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight',
     );
     expect(loginSource).toContain(
-      'panelBottomY: groupBaseline.y + ssoOrgInteractiveBottom * groupScale',
+      'panelBottomY: groupBaseline.y + loginSizes.panelHeight * groupScale',
     );
     expect(loginSource).toContain(
       'height: (controlsUnionBottom - LOGIN_CONTROL.inputY) * groupScale',

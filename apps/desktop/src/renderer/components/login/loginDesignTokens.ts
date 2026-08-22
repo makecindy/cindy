@@ -168,15 +168,16 @@ export const SKIP_ENTRY = {
 /** sso-org 帮助行:顶对齐 ≤2 行,y=输入框底 238+6,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2)。 */
 export const SSO_ORG_HINT = { x: 70, y: 244, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
 /**
- * 最近组织浮层：锚定输入框宽度，放在冻结面板下方的组内空白区，避免覆盖主按钮。
- * 88 设计px 的最小行高在 0.5 桌面缩放下得到 44px 可点击行；浮层露出一行及
- * 下一行提示，其余条目在无可见滚动条的自身滚动区内访问。
+ * 最近组织浮层：紧贴输入框下沿并与输入框等宽，作为浮层覆盖后续提示与主按钮。
+ * 它与输入框同处登录组坐标系，因此大小窗口共享同一个锚点与缩放，不再依赖
+ * 面板下方是否还有视口空间。最大高度收在面板内，88 设计px 的最小行高经
+ * 0.5 桌面缩放后得到 44px 可点击行，其余条目在无可见滚动条的自身滚动区内访问。
  */
 export const SSO_ORG_HISTORY = {
   x: CONTROL.x,
-  y: PANEL.height + 8,
+  y: CONTROL.inputY + CONTROL.height + 8,
   width: CONTROL.width,
-  maxHeight: LOGIN_GROUP.height - (PANEL.height + 8),
+  maxHeight: PANEL.height - (CONTROL.inputY + CONTROL.height + 8) - 10,
   rowMinHeight: 88,
   radius: 22,
   rowRadius: 16,

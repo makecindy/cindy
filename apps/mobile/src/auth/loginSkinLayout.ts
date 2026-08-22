@@ -448,17 +448,19 @@ export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20
 /** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
 export const LOGIN_SSO_ORG_HINT_TOP = 244;
 /**
- * 最近组织浮层：放在登录面板下方的组内空白区，不覆盖主按钮。88 设计px 在
- * 常见 phone 0.5 缩放下提供约 44pt 行高；露出一行及下一行提示，其余在无
- * 可见滚动条的浮层内滚动。
+ * 最近组织浮层：紧贴输入框下沿并与输入框等宽，作为浮层覆盖后续提示与主按钮。
+ * 它与输入框同处登录组坐标系，phone 短屏/长屏与 pad 都随各自 surface scale
+ * 一起移动；最大高度收在手机 440 高面板内，其余条目在无可见滚动条的浮层内滚动。
  */
 export const LOGIN_SSO_ORG_HISTORY = {
   x: LOGIN_CONTROL.x,
-  y: LOGIN_ERROR_TEXT.y + LOGIN_ERROR_TEXT.height + 8,
+  y: LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8,
   width: LOGIN_CONTROL.width,
   maxHeight:
-    LOGIN_GROUP.height -
-    (LOGIN_ERROR_TEXT.y + LOGIN_ERROR_TEXT.height + 8),
+    LOGIN_ERROR_TEXT.y +
+    LOGIN_ERROR_TEXT.height -
+    (LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8) -
+    10,
   rowMinHeight: 88,
   radius: 22,
   rowRadius: 16,

@@ -391,11 +391,20 @@ describe('ssoOrgMode 子视图', () => {
     fireEvent.focus(input);
     const historyList = screen.getByTestId('login-sso-org-history-list');
     const panel = screen.getByTestId('login-panel-sso-org');
-    const continueButton = screen.getByTestId('login-sso-org-continue');
     expect(panel.contains(historyList)).toBe(false);
-    expect(Number.parseFloat(historyList.style.top)).toBeGreaterThanOrEqual(
-      Number.parseFloat(continueButton.style.top) +
-        Number.parseFloat(continueButton.style.height),
+    expect(Number.parseFloat(historyList.style.left)).toBe(
+      Number.parseFloat(input.style.left),
+    );
+    expect(Number.parseFloat(historyList.style.width)).toBe(
+      Number.parseFloat(input.style.width),
+    );
+    expect(Number.parseFloat(historyList.style.top)).toBe(
+      Number.parseFloat(input.style.top) + Number.parseFloat(input.style.height) + 8,
+    );
+    expect(
+      Number.parseFloat(historyList.style.top) + Number.parseFloat(historyList.style.maxHeight),
+    ).toBeLessThanOrEqual(
+      Number.parseFloat(panel.style.height),
     );
     expect(historyList.className).toContain('overflow-y-auto');
     expect(historyList.className).toContain('[scrollbar-width:none]');

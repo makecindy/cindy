@@ -1226,13 +1226,13 @@ export default function LoginScreen() {
       stage.viewportHeight > prev ? stage.viewportHeight : prev,
     );
   }, [stage.viewportHeight]);
-  const ssoOrgInteractiveBottom =
+  const ssoOrgHistoryBottom =
     ssoOrgMode && ssoOrgHistoryOpen && ssoOrgHistory.length > 1
       ? LOGIN_SSO_ORG_HISTORY.y + LOGIN_SSO_ORG_HISTORY.maxHeight
-      : loginSizes.panelHeight;
+      : LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height;
   const controlsUnionBottom = Math.max(
     LOGIN_CONTROL.buttonY + LOGIN_CONTROL.height,
-    ssoOrgInteractiveBottom,
+    ssoOrgHistoryBottom,
   );
   const shiftResult = useMemo(() => {
     if (groupBaseline == null) {
@@ -1242,9 +1242,10 @@ export default function LoginScreen() {
       platform: Platform.OS === 'android' ? 'android' : 'ios',
       visible: keyboard.visible,
       keyboard: keyboard.rect,
-      // 历史列表展开时停靠锚延伸到列表底，保证面板外候选项不被键盘盖住。
-      panelBottomY: groupBaseline.y + ssoOrgInteractiveBottom * groupScale,
-      // 悬浮相交判定锚 = 当前输入框、主按钮与展开后的历史列表并集。
+      // 候选层已收在面板内，停靠锚始终保持面板底；不同屏幕尺寸只通过
+      // groupScale 与基线测量适配，避免展开列表时整组额外跳动。
+      panelBottomY: groupBaseline.y + loginSizes.panelHeight * groupScale,
+      // 悬浮相交判定锚仍覆盖输入框、主按钮与展开后的候选层并集。
       controlsUnion: {
         x: groupBaseline.x + LOGIN_CONTROL.x * groupScale,
         y: groupBaseline.y + LOGIN_CONTROL.inputY * groupScale,
@@ -1261,7 +1262,7 @@ export default function LoginScreen() {
     groupBaseline,
     keyboard,
     groupScale,
-    ssoOrgInteractiveBottom,
+    ssoOrgHistoryBottom,
     controlsUnionBottom,
     stage.viewportWidth,
     stage.viewportHeight,
