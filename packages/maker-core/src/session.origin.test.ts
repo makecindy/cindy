@@ -445,6 +445,30 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('stamps a silent-stop done as the new generation even without progress tokens', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: true }, source: 'claude-code' });
+    await emit({ type: 'done', data: { silentStop: true }, source: 'claude-code' });
+
+    const silentStop = seen.find((event) => event.type === 'done');
+    expect(silentStop?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('keeps a leftover terminal error on the prior generation after handle.send yields', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,

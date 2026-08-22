@@ -1778,9 +1778,15 @@ export class Session {
     return data?.isRunning === false;
   }
 
+  private isSilentStopDoneEvent(event: AgentEvent): boolean {
+    if (event.type !== 'done') return false;
+    const data = event.data as { silentStop?: unknown } | null | undefined;
+    return data?.silentStop === true;
+  }
+
   private isLeftoverTailEvent(event: AgentEvent): boolean {
     return (
-      event.type === 'done' ||
+      (event.type === 'done' && !this.isSilentStopDoneEvent(event)) ||
       this.isIdleStatusEvent(event) ||
       (isTerminalAgentErrorEvent(event) && this.staleTerminalQueuedGeneration !== null)
     );
@@ -1806,7 +1812,9 @@ export class Session {
       return observedGeneration;
     }
     const prior = this.pendingPriorGeneration;
-    const leftoverDoneOrIdle = event.type === 'done' || this.isIdleStatusEvent(event);
+    const leftoverDoneOrIdle =
+      (event.type === 'done' && !this.isSilentStopDoneEvent(event)) ||
+      this.isIdleStatusEvent(event);
     if (prior !== null && leftoverDoneOrIdle && waitStartGeneration !== 0) {
       if (event.type === 'done') {
         this.pendingPriorGeneration = null;
