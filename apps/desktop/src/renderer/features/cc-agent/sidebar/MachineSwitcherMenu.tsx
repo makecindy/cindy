@@ -90,19 +90,18 @@ const SCOPE_TITLE_CLASS =
 export function MachineSwitcherMenu({
   onOpenDisplaySettings,
   status,
-  onStatusSelect,
 }: {
   /** 打开段头同一份「侧边栏显示设置」菜单;不传则不渲染该入口。 */
   onOpenDisplaySettings?: () => void;
   /**
-   * 当前 Status 筛选(#3214)。传入后菜单在机器列表之下追加「状态」组
-   * (活跃任务 / 已归档任务 / 全部状态),把埋在显示设置二级子菜单里的归档查看
-   * 入口前置到一级;选中态用与「所有」同款的纯展示 ✓ 表达。
-   * 状态真源仍是 useSidebarFilter 的 filter.status,这里只读 + 回调,不建第二份状态。
+   * 当前 Status 筛选(#3214)。仅用于段头状态表达:归档视图时段头显示
+   * 「⃞ 已归档」文字徽标,无障碍名称拼入当前状态(「任务范围:… · 已归档」),
+   * 不展开菜单也能看出当前在看什么。
+   * 2026-08-22 维护者裁决(review PR #3231):范围菜单只管设备/范围选择,
+   * 状态筛选留在筛选体系内,不在这里放状态切换项——这里只读,不可写。
+   * 状态真源仍是 useSidebarFilter 的 filter.status。
    */
   status?: FilterStatus;
-  /** 点击状态项的统一出口(实现方负责 setStatus + 列表可见性);不传则不渲染该组。 */
-  onStatusSelect?: (status: FilterStatus) => void;
 } = {}): ReactNode {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -139,40 +138,6 @@ export function MachineSwitcherMenu({
     toggle(id);
     ensureConversationListVisible();
   };
-  // 状态项(#3214):点击只走 filter.setStatus 的统一出口,复用全局筛选状态;
-  // 与机器单选同语义——点行即切换并关菜单。
-  // 分隔线不在组首:设备列表末尾已有分隔线(有设备时组首会连出两条,无设备时
-  // 菜单会以分隔线开头);组后统一补一条,把状态项与设置项分开(review P1)。
-  const statusItems =
-    onStatusSelect && status ? (
-      <>
-        <StatusMenuItem
-          label={t('ccAgent.sidebar.machineSwitcher.statusActiveTasks')}
-          selected={status === 'active'}
-          onSelect={() => {
-            onStatusSelect('active');
-            ensureConversationListVisible();
-          }}
-        />
-        <StatusMenuItem
-          icon={<Archive size={14} strokeWidth={2} />}
-          label={t('ccAgent.sidebar.machineSwitcher.statusArchivedTasks')}
-          selected={status === 'archived'}
-          onSelect={() => {
-            onStatusSelect('archived');
-            ensureConversationListVisible();
-          }}
-        />
-        <StatusMenuItem
-          label={t('ccAgent.sidebar.machineSwitcher.statusAllStatuses')}
-          selected={status === 'all'}
-          onSelect={() => {
-            onStatusSelect('all');
-            ensureConversationListVisible();
-          }}
-        />
-      </>
-    ) : null;
 
   const triggerLabel = t('ccAgent.sidebar.machineSwitcher.menuTrigger');
   const settingsItems = (
@@ -324,40 +289,9 @@ export function MachineSwitcherMenu({
             <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} />
           </>
         ) : null}
-        {statusItems}
-        {statusItems ? <DropdownMenuSeparator className={MENU_SEPARATOR_CLASS} /> : null}
         {settingsItems}
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-/**
- * 状态菜单项(#3214):活跃任务 / 已归档任务 / 全部状态三选一。与机器单选同语义
- * (点行切换、菜单关闭),无多选路径;选中态复用「所有」的纯展示 ✓。
- */
-function StatusMenuItem({
-  icon,
-  label,
-  selected,
-  onSelect,
-}: {
-  /** 行首小图标;只给「已归档」配(与筛选菜单同口径:图标要能帮上忙才给)。 */
-  icon?: ReactNode;
-  label: string;
-  selected: boolean;
-  onSelect: () => void;
-}): ReactNode {
-  return (
-    <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={onSelect}>
-      {icon && <span className="shrink-0 opacity-70">{icon}</span>}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-        {selected && (
-          <Check size={14} strokeWidth={2.5} className="shrink-0 text-foreground" />
-        )}
-      </span>
-    </DropdownMenuItem>
   );
 }
 
