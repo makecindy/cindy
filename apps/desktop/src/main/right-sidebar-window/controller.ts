@@ -320,6 +320,9 @@ export class RsbWindowController {
     // command 可以安全交付的统一边界。不能在 showWindow 后提前返回，否则
     // 点击路径会永久留下此前排队的 passive intent。
     this.flushDeferredCommandsToDetachedHost();
+    if (this.pinnedSessionId && this.lastContext?.sessionId !== this.pinnedSessionId) {
+      this.pokeAdoptRetry(this.pinnedSessionId);
+    }
     return true;
   }
 
@@ -383,6 +386,7 @@ export class RsbWindowController {
         this.clearPinnedSession();
       } else if (ctx.available && ctx.sessionId) {
         // 钉住中: 主窗切到别的焦点 session 不能把子窗口抢走。
+        this.pokeAdoptRetry(this.pinnedSessionId);
         return;
       } else {
         this.clearPinnedSession();
@@ -865,6 +869,15 @@ export class RsbWindowController {
     this.applyAdoptedContext(resolved);
   }
 
+  private pokeAdoptRetry(sessionId: string): void {
+    if (this.disposed || this.pinnedSessionId !== sessionId) return;
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
+    if (this.adoptRetryAttempts >= MAX_ADOPT_RESOLVE_RETRIES) {
+      this.adoptRetryAttempts = MAX_ADOPT_RESOLVE_RETRIES - 1;
+    }
+    this.scheduleAdoptRetry(sessionId);
+  }
+
   private scheduleAdoptRetry(sessionId: string): void {
     if (this.disposed || this.pinnedSessionId !== sessionId) return;
     if (this.adoptRetryAttempts >= MAX_ADOPT_RESOLVE_RETRIES) return;
@@ -977,9 +990,7 @@ export class RsbWindowController {
     isHostAlive: () => boolean,
     send: (command: RsbWindowCommand) => void,
   ): void {
-    const sessionId =
-      this.pinnedSessionId ??
-      (this.lastContext?.available ? this.lastContext.sessionId : null);
+    const sessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
     if (!sessionId) return;
     const queue = this.deferredCommands.get(sessionId);
     if (!queue || queue.length === 0) return;

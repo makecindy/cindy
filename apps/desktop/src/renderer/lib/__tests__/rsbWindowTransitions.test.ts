@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  detachedHostAfterOpen,
   didUserCloseDetachedSidebarWindow,
   nextDetachedHostAfterFocus,
   sessionIdForDetachedSidebarClose,
@@ -45,6 +46,27 @@ describe('didUserCloseDetachedSidebarWindow', () => {
     expect(nextDetachedHostAfterFocus('session-a', 'session-a')).toBeNull();
     expect(sessionIdForDetachedSidebarClose(
       nextDetachedHostAfterFocus('session-a', 'session-a'),
+      'session-c',
+    )).toBe('session-c');
+    expect(detachedHostAfterOpen({
+      currentSessionId: 'session-a',
+      targetSessionId: 'session-a',
+      previousHostSessionId: null,
+    })).toBeNull();
+    expect(detachedHostAfterOpen({
+      currentSessionId: 'session-b',
+      targetSessionId: 'session-a',
+      previousHostSessionId: null,
+    })).toBe('session-a');
+    expect(sessionIdForDetachedSidebarClose(
+      nextDetachedHostAfterFocus(
+        detachedHostAfterOpen({
+          currentSessionId: 'session-a',
+          targetSessionId: 'session-a',
+          previousHostSessionId: null,
+        }),
+        'session-c',
+      ),
       'session-c',
     )).toBe('session-c');
   });

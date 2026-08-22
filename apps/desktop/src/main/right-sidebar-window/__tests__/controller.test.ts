@@ -979,6 +979,47 @@ describe('setContext / routeCommand', () => {
     ]);
   });
 
+  it('does not flush a pinned session queue into a foreign host context', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.refreshContext(h.windows[0].webContents as unknown as WebContents);
+    expect(h.controller.getContext()).toEqual(focused);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+  });
+
+  it('retries an exhausted lookup when the main window reports another context', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(h.controller.getContext()).toEqual(focused);
+    lookup = resolved;
+    h.sends.length = 0;
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
   it('reuses a previously reported host context instead of forging a local one', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext({

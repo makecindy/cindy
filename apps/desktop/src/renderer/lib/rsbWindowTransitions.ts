@@ -17,6 +17,16 @@ export function nextDetachedHostAfterFocus(
   return detachedHostSessionId ?? null;
 }
 
+/** 只有真正跨会话 pin 才记录关窗宿主；同会话 open 不会制造陈旧 ref。 */
+export function detachedHostAfterOpen(params: {
+  currentSessionId: string | null | undefined;
+  targetSessionId: string;
+  previousHostSessionId: string | null | undefined;
+}): string | null {
+  if (params.targetSessionId !== params.currentSessionId) return params.targetSessionId;
+  return params.previousHostSessionId ?? null;
+}
+
 export function didUserCloseDetachedSidebarWindow(
   previous: RsbWindowUiState,
   next: RsbWindowUiState,

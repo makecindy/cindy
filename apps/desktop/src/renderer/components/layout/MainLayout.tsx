@@ -52,6 +52,7 @@ import {
   useRightSidebarWindowState,
 } from '@/lib/rightSidebarWindowState';
 import {
+  detachedHostAfterOpen,
   didUserCloseDetachedSidebarWindow,
   nextDetachedHostAfterFocus,
   sessionIdForDetachedSidebarClose,
@@ -831,7 +832,11 @@ export function MainLayout() {
       if (detachedNow) {
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open') {
-          detachedHostSessionIdRef.current = targetSessionId;
+          detachedHostSessionIdRef.current = detachedHostAfterOpen({
+            currentSessionId,
+            targetSessionId,
+            previousHostSessionId: detachedHostSessionIdRef.current,
+          });
           // userInitiated 透传:插件 preview / agent 自动化(false)只把内容送进
           // 子窗口,不 show+focus 抢用户前台;用户手势(缺省 true)行为不变。
           // sessionId 让 controller 把子窗口钉在发起方 session 上。
