@@ -288,15 +288,18 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
       const tx = vi.fn(async () => ({ failCount: 0 }));
       const embed = vi
         .fn()
-        // Tick 1: initial INVALID_MODEL
+        // Tick 1: initial INVALID_MODEL (probeCount 0)
         .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
-        // TTL 1: first reprobe — transient error
+        // TTL 1: first reprobe — transient error; this does NOT consume the
+        // reprobe budget (probeCount stays 0), otherwise a recovered model
+        // could be frozen forever by two transient failures.
         .mockRejectedValueOnce(new EmbeddingError('connection reset', 'NETWORK_ERROR'))
-        // TTL 2: second reprobe — INVALID_MODEL (probeCount should be 1)
+        // TTL 2: second reprobe — INVALID_MODEL, probeCount 0→1
         .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
-        // TTL 3: third reprobe — INVALID_MODEL (probeCount should be 2, at cap)
+        // TTL 3: third reprobe — INVALID_MODEL, probeCount 1→2 (at cap)
         .mockRejectedValueOnce(new EmbeddingError('model not found', 'INVALID_MODEL', 404))
-        // After cap exhausted, should NOT call embed again
+        // TTL 4: cap exhausted, should NOT call embed; this success must not
+        // be reached.
         .mockResolvedValueOnce({ embeddings: [[0.1]], tokensUsed: 0, cacheHits: 0 });
 
       registerProvider({
@@ -313,29 +316,103 @@ describe('EmbeddingWorker invalid-model circuit breaker', () => {
       });
       const tick = (worker as unknown as { tick: () => Promise<void> }).tick.bind(worker);
 
-      // Tick 1: initial block.
+      // Tick 1: initial block (probeCount 0).
       await tick();
       expect(embed).toHaveBeenCalledTimes(1);
 
-      // TTL 1: first reprobe (probeCount 0→1) returns transient error.
+      // TTL 1: first reprobe returns a transient error. The transient result
+      // does NOT consume the reprobe budget (probeCount stays 0), so the model
+      // is not frozen by a recoverable network blip.
       now += 31 * 60_000;
       vi.setSystemTime(now);
       await tick();
       expect(embed).toHaveBeenCalledTimes(2);
 
-      // TTL 2: second reprobe (probeCount should still be 1, increments to 2)
-      // returns INVALID_MODEL.
+      // TTL 2: second reprobe confirms INVALID_MODEL — probeCount 0→1.
       now += 31 * 60_000;
       vi.setSystemTime(now);
       await tick();
       expect(embed).toHaveBeenCalledTimes(3);
 
-      // TTL 3: probeCount is now 2 (== MAX_REPROBES), so embed must NOT be
-      // called — the batch is snoozed without a network call.
+      // TTL 3: third reprobe confirms INVALID_MODEL again — probeCount 1→2
+      // (== MAX_REPROBES).
       now += 31 * 60_000;
       vi.setSystemTime(now);
       await tick();
-      expect(embed).toHaveBeenCalledTimes(3); // still 3, not 4
+      expect(embed).toHaveBeenCalledTimes(4);
+
+      // TTL 4: budget exhausted, embed must NOT be called — batch snoozes
+      // without a network call until restart.
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(4); // still 4, not 5
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not consume reprobe budget when the model is disabled mid-probe (PR #2288 Greptile P1)', async () => {
+    // A TTL-expired reprobe that is interrupted by the user disabling the
+    // model is not a confirmation of INVALID_MODEL, so it must not increment
+    // probeCount. Otherwise two disable/enable cycles would exhaust the budget
+    // and a recovered model would stop being probed until restart.
+    vi.useFakeTimers();
+    try {
+      let now = new Date('2026-08-21T12:00:00Z').getTime();
+      vi.setSystemTime(now);
+      let rowid = 0;
+      const query = vi.fn(async () => [{ ...job(++rowid, `msg-${rowid}`) }]);
+      const tx = vi.fn(async () => ({ failCount: 0 }));
+      let suspended = false;
+      const embed = vi.fn(async () => {
+        // Flip suspended during the first reprobe so the catch sees the route
+        // disabled.
+        if (embed.mock.calls.length === 2) suspended = true;
+        throw new EmbeddingError('model not found', 'INVALID_MODEL', 404);
+      });
+
+      registerProvider({
+        source: 'chat',
+        getTextsForJobs: async (jobs) =>
+          jobs.map(({ rowid: r, sourceId }) => ({ rowid: r, text: sourceId })),
+      });
+
+      const worker = new EmbeddingWorker({
+        getDbClient: () => ({ query, tx }) as never,
+        getClient: () => ({ embed }) as never,
+        isVecAvailable: () => true,
+        isRouteSuspended: () => suspended,
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+      });
+      const tick = (worker as unknown as { tick: () => Promise<void> }).tick.bind(worker);
+
+      // Tick 1: initial INVALID_MODEL block.
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(1);
+
+      // TTL 1: reprobe interrupted by suspension — budget not consumed.
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      suspended = false;
+      await tick();
+      // The embed call during suspension still happens (probe is dispatched
+      // before the post-call suspended check), but probeCount must stay 0.
+      expect(embed).toHaveBeenCalledTimes(2);
+
+      // TTL 2: model still disabled — short-circuit, no embed call.
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(2);
+
+      // Re-enable and let the TTL pass — the model must be probed again
+      // (budget was not exhausted by the interrupted probe).
+      suspended = false;
+      now += 31 * 60_000;
+      vi.setSystemTime(now);
+      await tick();
+      expect(embed).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

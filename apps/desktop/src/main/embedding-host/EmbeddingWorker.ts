@@ -336,6 +336,10 @@ export class EmbeddingWorker {
           continue;
         }
         const blocked = this.blockedModels.get(modelId);
+        // Set when this tick performs a TTL-expired reprobe; the catch block
+        // rolls blockedAt back to this value if the probe is interrupted by a
+        // route suspension so the budget is not consumed by a non-result.
+        let probeStartedAt: number | undefined;
         if (blocked !== undefined) {
           const now = Date.now();
           const age = now - blocked.blockedAt;
@@ -365,10 +369,14 @@ export class EmbeddingWorker {
             );
             continue;
           }
-          // TTL 到期且仍有探测预算:重置阻断窗口、递增 probeCount,放行一次探测。
-          // 成功会在下面删除条目;失败 catch 会刷新 blockedAt 并保留 probeCount。
+          // TTL 到期且仍有探测预算:放行一次探测。不在此处递增 probeCount —
+          // 预算只在探测**再次确认 INVALID_MODEL** 时才消耗(catch 的 terminal
+          // 分支);瞬时错误、探测期间模型被停用 / stop() 都不应消耗这次预算,否则
+          // 两次偶发故障或停用-重启就会让已恢复的模型在重启前永不再探
+          // (PR #2288 Codex/Greptile P1)。刷新 blockedAt 作为探测起点,失败时
+          // catch 会按结果决定是保留、刷新还是回滚。
+          probeStartedAt = blocked.blockedAt;
           blocked.blockedAt = Date.now();
-          blocked.probeCount++;
           this.opts.log.info(
             JSON.stringify({
               event: 'embeddingWorker.model.blockExpired.reprobe',
@@ -414,6 +422,9 @@ export class EmbeddingWorker {
             }),
           );
         } catch (err) {
+          // Snapshot before any early-out so the route-suspended branch below
+          // can roll back the pre-probe blockedAt refresh.
+          const prev = this.blockedModels.get(modelId);
           // stop() 可能在 embed() 网络往返期间触发:此时不应记录熔断或写失败状态,
           // 那批 job 保持 pending, 下次启动续跑 (PR #2288 review)。
           if (this.aborted) return;
@@ -421,7 +432,13 @@ export class EmbeddingWorker {
           if (isProviderSuspended(source)) break;
           // 逐模型停用也可能在网络往返期间发生:该批保持 pending,恢复启用后续跑,
           // 不要把它写成 failed / 写进 blockedModels (PR #2288 review)。
-          if (this.opts.isRouteSuspended?.(modelId as string)) continue;
+          // 回滚探测前刷新的 blockedAt 且不递增 probeCount:这次探测被停用打断,
+          // 不算一次确认,模型重新启用后下个 TTL 窗口应能再次探测而不是被预算耗尽
+          // 永久冻结 (PR #2288 Greptile P1)。
+          if (this.opts.isRouteSuspended?.(modelId as string)) {
+            if (prev && probeStartedAt !== undefined) prev.blockedAt = probeStartedAt;
+            continue;
+          }
           const code = err instanceof EmbeddingError ? err.code : 'UNKNOWN';
           const msg = err instanceof Error ? err.message : String(err);
           this.opts.log.error(
@@ -436,21 +453,23 @@ export class EmbeddingWorker {
           );
           const errorText = `[${code}] ${msg}`;
           const terminal = isTerminalInvalidModelError(err);
-          const prev = this.blockedModels.get(modelId);
           if (terminal) {
-            // 重探确认 INVALID_MODEL:刷新阻断窗口,保留已累计的 probeCount
-            // (不能因中间夹了一次瞬时错误就清零,否则两次重探上限永远耗不尽)。
+            // 首次熔断(无 prev)probeCount 记 0(还没执行过重探);TTL 到期后
+            // 的重探再次确认 INVALID_MODEL 才 +1 消耗预算。瞬时错误不计数,探测
+            // 被停用打断也不计数(见上方 probeStartedAt 回滚),让已恢复模型不会
+            // 因偶发故障耗尽预算 (PR #2288 Codex/Greptile P1)。
+            const nextProbeCount = prev ? prev.probeCount + 1 : 0;
             this.blockedModels.set(modelId, {
               error: errorText,
               blockedAt: Date.now(),
-              probeCount: prev?.probeCount ?? 0,
+              probeCount: nextProbeCount,
             });
             this.opts.log.warn(
               JSON.stringify({
                 event: 'embeddingWorker.model.blocked.invalidModel',
                 modelId,
                 reason: msg,
-                probeCount: prev?.probeCount ?? 0,
+                probeCount: nextProbeCount,
               }),
             );
           } else if (prev) {
