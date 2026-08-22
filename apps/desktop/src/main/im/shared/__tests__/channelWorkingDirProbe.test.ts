@@ -424,4 +424,72 @@ describe('用户目录探测 deadline(失联网络盘)', () => {
     });
     expect(await readFile(userNote, 'utf8')).toBe('user data');
   });
+
+  it('注入执行器: validate 超时不提交且路径进入冷却, 冷却期重选直接超时收口', async () => {
+    const selected = path.join(root, 'project');
+    const fresh = path.join(root, 'fresh');
+    await mkdir(selected);
+    await mkdir(fresh);
+    const validateCalls: string[] = [];
+    let nextValidate: 'ok' | 'timeout' = 'ok';
+    const store = createChannelWorkingDirStore({
+      logTag: 'im/test/channel-settings',
+      fileName: 'test-channel.json',
+      errorCodePrefix: 'TEST',
+      managedDirNameFor: (botId) => `test-${botId}`,
+      probeExecutor: {
+        validate: async (dir) => {
+          validateCalls.push(dir);
+          return nextValidate === 'ok'
+            ? { ok: true, realPath: dir }
+            : { ok: false, code: 'PROBE_TIMEOUT' };
+        },
+        availability: async () => ({ ok: true, usable: true }),
+      },
+    });
+    await store.writeWorkingDir(selected, root);
+    const configPath = path.join(root, 'test-channel.json');
+    const before = await readFile(configPath, 'utf8');
+
+    // 新选择目录在执行边界内超时 → 不提交 + 该路径进入冷却。
+    nextValidate = 'timeout';
+    await expect(store.writeWorkingDir(fresh, root)).rejects.toMatchObject({
+      code: 'TEST_WORKING_DIR_PROBE_TIMEOUT',
+    });
+    expect(await readFile(configPath, 'utf8')).toBe(before);
+
+    // 冷却期内重选同一失联目录: 直接超时收口, 不再触达执行边界。
+    const callsBefore = validateCalls.length;
+    await expect(store.writeWorkingDir(fresh, root)).rejects.toMatchObject({
+      code: 'TEST_WORKING_DIR_PROBE_TIMEOUT',
+    });
+    expect(validateCalls.length).toBe(callsBefore);
+  });
+
+  it('注入执行器: 执行边界不可用时按不可用返回但不记冷却, 恢复后照常探测', async () => {
+    const selected = path.join(root, 'project');
+    await mkdir(selected);
+    const availabilityCalls: string[] = [];
+    const store = createChannelWorkingDirStore({
+      logTag: 'im/test/channel-settings',
+      fileName: 'test-channel.json',
+      errorCodePrefix: 'TEST',
+      managedDirNameFor: (botId) => `test-${botId}`,
+      probeExecutor: {
+        validate: async (dir) => ({ ok: true, realPath: dir }),
+        availability: async (dir) => {
+          availabilityCalls.push(dir);
+          return availabilityCalls.length === 1
+            ? { ok: false, code: 'PROBE_UNAVAILABLE' }
+            : { ok: true, usable: true };
+        },
+      },
+    });
+    await store.writeWorkingDir(selected, root);
+
+    // 宿主故障(队列满/进程异常): 该次按不可用收口…
+    expect((await store.read(root)).workingDirAvailable).toBe(false);
+    // …但不算目录的错 — 不记冷却, 下一次照常探测并恢复可用。
+    expect((await store.read(root)).workingDirAvailable).toBe(true);
+  });
 });

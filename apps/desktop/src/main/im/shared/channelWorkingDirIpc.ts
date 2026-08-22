@@ -82,14 +82,14 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
   }
 
   /**
-   * 读取渠道设置并做 generation 守卫: A 账号的目录在慢速网络盘上时,
+   * 按既定 generation 读取渠道设置: A 账号的目录在慢速网络盘上时,
    * readSettings 可能挂到 deadline 才返回 — 期间切到 B 账号后, A 的绝对
-   * 路径不得交给当前 Renderer。读取前捕获、返回前复检, generation 变化
-   * (含回落 null)即丢弃结果并抛渠道 UPDATE_FAILED(renderer 无法可靠拦截
-   * 跨账号响应, 守卫必须在 Main 侧)。
+   * 路径不得交给当前 Renderer。返回前复检仍是同一 generation, 变化(含
+   * 回落 null)即丢弃结果并抛渠道 UPDATE_FAILED(renderer 无法可靠拦截
+   * 跨账号响应, 守卫必须在 Main 侧)。**不重新捕获** — 语义上不得在读取
+   * 边界重新绑定账号。
    */
-  async function readSettingsForCurrentGeneration(): Promise<ChannelWorkingDirSettingsState> {
-    const expected = requireStableGeneration();
+  async function readSettingsForGeneration(expected: number): Promise<ChannelWorkingDirSettingsState> {
     const state = await deps.readSettings();
     assertSameGeneration(expected, 'settings read');
     return state;
@@ -97,7 +97,7 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
 
   return {
     async getChannelSettings(): Promise<ChannelWorkingDirSettingsState> {
-      return readSettingsForCurrentGeneration();
+      return readSettingsForGeneration(requireStableGeneration());
     },
 
     async chooseWorkingDirectory(
@@ -118,11 +118,14 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
         throwIpcError(updateFailedCode, 'settings window unavailable');
       }
 
+      // 选择器返回后立即复检 — **取消分支同样不得跨账号返回状态**: 弹窗
+      // 期间 A→B 切号后取消, A 发起的 IPC 不能把 B 的绝对路径带回去
+      // (renderer 的 owner epoch 只是第二道防线, Main 边界不依赖它)。
+      assertSameGeneration(expected, 'pick');
       const picked = result.canceled || !result.filePaths[0] ? undefined : result.filePaths[0];
       if (picked === undefined) {
-        return { canceled: true, state: await readSettingsForCurrentGeneration() };
+        return { canceled: true, state: await readSettingsForGeneration(expected) };
       }
-      assertSameGeneration(expected, 'pick');
 
       let normalized: string;
       try {

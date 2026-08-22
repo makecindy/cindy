@@ -97,6 +97,7 @@ import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import {
   commitWechatWorkingDir,
+  configureWechatChannelProbeExecutor,
   normalizeWechatSelectedDirectory,
   readWechatChannelSettings,
   resetWechatWorkingDir,
@@ -104,6 +105,7 @@ import {
 import { registerWechatWorkingDirIpc } from './wechat/workingDirIpc';
 import {
   commitWecomWorkingDir,
+  configureWecomChannelProbeExecutor,
   normalizeWecomSelectedDirectory,
   readWecomChannelSettings,
   resetWecomWorkingDir,
@@ -113,6 +115,7 @@ import {
   createChannelWorkingDirIpcHandlers,
   type ChannelWorkingDirIpcDeps,
 } from './shared/channelWorkingDirIpc';
+import { createWorkdirProbeHostExecutor } from '../workdir-probe-host/channelProbeExecutor';
 
 export {
   registerTelegramBotConfigIpc,
@@ -290,7 +293,11 @@ export function startImOrchestrators(): void {
   // 个人微信 / 企业微信渠道工作目录 — 业务体同工厂(generation 三处校验 +
   // 两段式提交 + 日志只记错误码, 见 shared/channelWorkingDirIpc), 固定 channel
   // 注册与可信 sender 校验各渠道各自保留。目录只能经 Main 原生选择器进入,
-  // Renderer 不提交路径。
+  // Renderer 不提交路径。用户目录探测接到 utility-process 执行边界: 失联
+  // 网络盘的挂死 IO 被隔离在子进程, 超时即终止回收(workdir-probe-host)。
+  const channelProbeExecutor = createWorkdirProbeHostExecutor();
+  configureWechatChannelProbeExecutor(channelProbeExecutor);
+  configureWecomChannelProbeExecutor(channelProbeExecutor);
   registerWechatWorkingDirIpc({
     ipc: ipcMain,
     handlers: createChannelWorkingDirIpcHandlers({

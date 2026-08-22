@@ -9,10 +9,15 @@
  */
 
 import type {
+  WorkdirAvailabilityResult,
   WorkdirProbeRequest,
   WorkdirProbeResponse,
   WorkdirProbeResult,
+  WorkdirProbeStatResult,
+  WorkdirValidateResult,
 } from './protocol';
+
+type ProbeJobKind = WorkdirProbeRequest['kind'];
 
 export interface WorkdirProbeChildLike {
   postMessage(message: unknown): void;
@@ -52,6 +57,7 @@ export class WorkdirProbeClientError extends Error {
 
 interface ProbeEntry {
   id: number;
+  kind: ProbeJobKind;
   dir: string;
   key: string;
   deadline: number;
@@ -84,7 +90,26 @@ export class WorkdirProbeHostClient {
     this.maxQueued = deps.maxQueued ?? DEFAULT_MAX_QUEUED;
   }
 
-  probe(dir: string, key: string, timeoutMs: number): Promise<WorkdirProbeResult> {
+  probe(dir: string, key: string, timeoutMs: number): Promise<WorkdirProbeStatResult> {
+    return this.request('probe', dir, key, timeoutMs).then(asStatResult);
+  }
+
+  /** validate: realpath → stat → 'wx' 写探针 → 清理(IM 渠道新选择目录严格校验)。 */
+  validate(dir: string, key: string, timeoutMs: number): Promise<WorkdirValidateResult> {
+    return this.request('validate', dir, key, timeoutMs).then(asValidateResult);
+  }
+
+  /** availability: stat → 'wx' 写探针 → 清理(IM 渠道已保存目录可用性探测)。 */
+  availability(dir: string, key: string, timeoutMs: number): Promise<WorkdirAvailabilityResult> {
+    return this.request('availability', dir, key, timeoutMs).then(asAvailabilityResult);
+  }
+
+  private request(
+    kind: ProbeJobKind,
+    dir: string,
+    key: string,
+    timeoutMs: number,
+  ): Promise<WorkdirProbeResult> {
     if (this.disposed) {
       return Promise.reject(
         new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe host is disposed'),
@@ -102,6 +127,7 @@ export class WorkdirProbeHostClient {
     const probe = new Promise<WorkdirProbeResult>((resolve, reject) => {
       entry = {
         id: this.nextId++,
+        kind,
         dir,
         key,
         deadline: Date.now() + timeoutMs,
@@ -221,7 +247,7 @@ export class WorkdirProbeHostClient {
     entry.probeTimer.unref?.();
 
     const request: WorkdirProbeRequest = {
-      kind: 'probe',
+      kind: entry.kind,
       id: entry.id,
       dir: entry.dir,
     };
@@ -315,13 +341,33 @@ export class WorkdirProbeHostClient {
   }
 }
 
+/** 按 job 收窄结果形态;形态不符(协议违例)按执行边界故障 fail-closed。 */
+function asStatResult(result: WorkdirProbeResult): WorkdirProbeStatResult {
+  if (result.ok === false) return result;
+  return 'isDirectory' in result ? result : { ok: false, code: 'WORKDIR_PROBE_UNAVAILABLE' };
+}
+
+function asValidateResult(result: WorkdirProbeResult): WorkdirValidateResult {
+  if (result.ok === false) return result;
+  return 'realPath' in result ? result : { ok: false, code: 'WORKDIR_PROBE_UNAVAILABLE' };
+}
+
+function asAvailabilityResult(result: WorkdirProbeResult): WorkdirAvailabilityResult {
+  if (result.ok === false) return result;
+  return 'usable' in result ? result : { ok: false, code: 'WORKDIR_PROBE_UNAVAILABLE' };
+}
+
 function isProbeResponse(message: unknown): message is WorkdirProbeResponse {
   if (!message || typeof message !== 'object') return false;
   const candidate = message as Partial<WorkdirProbeResponse>;
   if (candidate.kind !== 'result' || typeof candidate.id !== 'number') return false;
   const result = candidate.result as Partial<WorkdirProbeResult> | undefined;
   if (!result || typeof result.ok !== 'boolean') return false;
-  return result.ok
-    ? typeof (result as { isDirectory?: unknown }).isDirectory === 'boolean'
-    : typeof (result as { code?: unknown }).code === 'string';
+  if (!result.ok) return typeof (result as { code?: unknown }).code === 'string';
+  // ok 分支按 job 种类携带 isDirectory / realPath / usable 之一。
+  return (
+    typeof (result as { isDirectory?: unknown }).isDirectory === 'boolean' ||
+    typeof (result as { realPath?: unknown }).realPath === 'string' ||
+    typeof (result as { usable?: unknown }).usable === 'boolean'
+  );
 }

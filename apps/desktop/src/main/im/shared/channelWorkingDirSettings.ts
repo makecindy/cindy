@@ -48,7 +48,59 @@ export interface ChannelWorkingDirSettingsState extends ChannelWorkingDirSetting
   workingDirAvailable: boolean;
 }
 
+/**
+ * 用户目录探测的执行边界。默认实现跑在本进程(单测用它 + fs mock);生产环境
+ * 由 im/index.ts 注入 workdir-probe-host 的 utility-process 执行器 —— Node 的
+ * fs 调用不可取消, 失联网络盘会把挂死 IO 留在 libuv 线程池里, 子进程化后
+ * 超时即终止回收(review P1: 槽位被永久挂起的探针占满会饿死健康目录)。
+ * 同目录 single-flight / 超时冷却 / 并发上限在 store 层保留, 作为减少探测
+ * 次数的优化。
+ */
+export type UserDirValidateOutcome =
+  | { ok: true; realPath: string }
+  /** code: NOT_DIRECTORY / NOT_WRITABLE / PROBE_TIMEOUT / PROBE_UNAVAILABLE / 原生 fs 码 */
+  | { ok: false; code: string };
+export type UserDirAvailabilityOutcome =
+  | { ok: true; usable: boolean }
+  | { ok: false; code: string };
+
+export interface ChannelUserDirProbeExecutor {
+  /** 严格校验新选择目录: realpath → stat → 'wx' 写探针 → 清理。 */
+  validate(selectedPath: string, timeoutMs: number): Promise<UserDirValidateOutcome>;
+  /** 已保存目录可用性: stat → 'wx' 写探针 → 清理(失败宽大降级)。 */
+  availability(candidate: string, timeoutMs: number): Promise<UserDirAvailabilityOutcome>;
+}
+
+/** 进程内默认执行器(单测与兜底); 生产经 setProbeExecutor 换成子进程执行器。 */
+function createInProcessUserDirProbeExecutor(): ChannelUserDirProbeExecutor {
+  return {
+    async validate(selectedPath, timeoutMs) {
+      const checked = await withUserDirDeadline(async () => {
+        const realPath = await realpath(selectedPath);
+        if (!(await stat(realPath)).isDirectory()) {
+          return { ok: false as const, code: 'NOT_DIRECTORY' };
+        }
+        if (!(await probeUsability(realPath))) {
+          return { ok: false as const, code: 'NOT_WRITABLE' };
+        }
+        return { ok: true as const, realPath };
+      }, timeoutMs);
+      return checked ?? { ok: false, code: 'PROBE_TIMEOUT' };
+    },
+    async availability(candidate, timeoutMs) {
+      const verdict = await withUserDirDeadline(() => probeUsability(candidate), timeoutMs);
+      if (verdict === null) return { ok: false, code: 'PROBE_TIMEOUT' };
+      return { ok: true, usable: verdict };
+    },
+  };
+}
+
 export interface ChannelWorkingDirStore {
+  /**
+   * 替换用户目录探测执行边界(im/index.ts 启动时注入 utility-process 执行器)。
+   * 在途请求沿用旧执行器跑完; 只影响后续探测。
+   */
+  setProbeExecutor(executor: ChannelUserDirProbeExecutor): void;
   /** 设置刷新(设置页展开/聚焦 IPC)用: 异步读配置 + 异步探测用户目录可用性。 */
   read(rootPath?: string): Promise<ChannelWorkingDirSettingsState>;
   /** 校验并写入用户所选目录(一步到位版): 异步 normalize + 异步落盘。 */
@@ -94,6 +146,8 @@ export function createChannelWorkingDirStore(options: {
    * 测试缩小。本机盘(userData 配置与托管目录)不受它约束。
    */
   userDirTimeoutMs?: number;
+  /** 用户目录探测执行边界;缺省为进程内执行器(单测), 生产由 im/index.ts 注入。 */
+  probeExecutor?: ChannelUserDirProbeExecutor;
 }): ChannelWorkingDirStore {
   const log = createLogger(options.logTag);
   const invalidErrorCode = `${options.errorCodePrefix}_WORKING_DIR_INVALID`;
@@ -101,7 +155,22 @@ export function createChannelWorkingDirStore(options: {
   const probeTimeoutErrorCode = `${options.errorCodePrefix}_WORKING_DIR_PROBE_TIMEOUT`;
   const notWritableErrorCode = `${options.errorCodePrefix}_WORKING_DIR_NOT_WRITABLE`;
   const userDirTimeoutMs = options.userDirTimeoutMs ?? USER_DIR_IO_TIMEOUT_MS;
+  let probeExecutor: ChannelUserDirProbeExecutor =
+    options.probeExecutor ?? createInProcessUserDirProbeExecutor();
+  const probeScheduler = createProbeScheduler(() => probeExecutor);
   const defaults: ChannelWorkingDirSettings = { version: SETTINGS_VERSION, workingDir: null };
+
+  function setProbeExecutor(executor: ChannelUserDirProbeExecutor): void {
+    probeExecutor = executor;
+  }
+
+  /** 执行器稳定错误码 → 渠道错误码(原生 fs 码原样保留, 只进日志不落文案)。 */
+  function mapValidateCode(code: string): string {
+    if (code === 'NOT_DIRECTORY') return notDirectoryErrorCode;
+    if (code === 'NOT_WRITABLE') return notWritableErrorCode;
+    if (code === 'PROBE_TIMEOUT' || code === 'PROBE_UNAVAILABLE') return probeTimeoutErrorCode;
+    return code;
+  }
 
   function settingsFilePath(rootPath?: string): string {
     return rootPath
@@ -126,7 +195,8 @@ export function createChannelWorkingDirStore(options: {
         ...normalized,
         workingDirAvailable:
           normalized.workingDir === null ||
-          (await isUsableWorkingDirectory(normalized.workingDir, userDirTimeoutMs)),
+          (await probeScheduler.availability(normalized.workingDir, userDirTimeoutMs)) ===
+            'usable',
       };
     } catch (error) {
       log.warn(`failed to read ${options.logTag} settings; using defaults`, {
@@ -151,35 +221,24 @@ export function createChannelWorkingDirStore(options: {
     if (typeof selectedPath !== 'string' || !path.isAbsolute(selectedPath)) {
       throw Object.assign(new Error(invalidErrorCode), { code: invalidErrorCode });
     }
-    // 新选择目录采用「严格校验」: realpath → stat → 'wx' 写探针 → 清理在
-    // 同一个 deadline 内完成, 任一步失败/超时都不进入 commit, 原配置保持
-    // 不变(与「已保存目录宽大保留」相对 — 后者由 read() 降级为不可用)。
-    // 用户所选目录可能是网络盘/可移动盘 — 全异步且套 deadline: 挂起不冻结
-    // Main, 超时抛结构化超时错误; 快速失败的本地校验错误照常穿透。
-    // fs.promises 没有 realpath.native(那只有同步版), 用标准 fsp.realpath —
-    // 同样解析符号链接, Node 22 实测与 realpathSync.native 结果一致。
-    const checked = await withUserDirDeadline(async () => {
-      const realPath = await realpath(selectedPath);
-      if (!(await stat(realPath)).isDirectory()) {
-        throw Object.assign(new Error(notDirectoryErrorCode), { code: notDirectoryErrorCode });
-      }
-      // 写探针走统一调度(同目录复用/冷却/并发上限) — 目录存在但探针写不进
-      // (权限/只读/独占碰撞)绝不提交; 超时或被调度拒绝同样不提交。
-      const probe = await probeWithDiscipline(realPath, userDirTimeoutMs);
-      if (probe === 'unusable') {
-        throw Object.assign(new Error(notWritableErrorCode), { code: notWritableErrorCode });
-      }
-      if (probe !== 'usable') {
-        throw Object.assign(new Error(probeTimeoutErrorCode), { code: probeTimeoutErrorCode });
-      }
-      return realPath;
-    }, userDirTimeoutMs);
-    if (checked === null) {
-      // 链条(realpath/stat)超时: 对该路径进入冷却, 重复选择不再占线程。
-      probeCooldownUntil.set(selectedPath, Date.now() + PROBE_COOLDOWN_MS);
+    // 冷却中的路径直接超时收口, 不再向执行边界排队(重复选择同一失联目录)。
+    if (probeScheduler.inCooldown(selectedPath)) {
       throw Object.assign(new Error(probeTimeoutErrorCode), { code: probeTimeoutErrorCode });
     }
-    const normalized = normalizeWorkingDirForStorage(checked);
+    // 新选择目录采用「严格校验」: realpath → stat → 'wx' 写探针 → 清理整个
+    // 链条跑在探测执行边界内(生产为 utility process, 超时即终止回收), 任一步
+    // 失败/超时都不进入 commit, 原配置保持不变(与「已保存目录宽大保留」相对 —
+    // 后者由 read() 降级为不可用)。
+    const outcome = await probeExecutor.validate(selectedPath, userDirTimeoutMs);
+    if (!outcome.ok) {
+      const code = mapValidateCode(outcome.code);
+      if (code === probeTimeoutErrorCode) {
+        // 探测超时/执行边界不可用: 对该路径进入冷却, 重复选择不再排队。
+        probeScheduler.cooldown(selectedPath);
+      }
+      throw Object.assign(new Error(code), { code });
+    }
+    const normalized = normalizeWorkingDirForStorage(outcome.realPath);
     if (!normalized) {
       throw Object.assign(new Error(invalidErrorCode), { code: invalidErrorCode });
     }
@@ -272,6 +331,7 @@ export function createChannelWorkingDirStore(options: {
   }
 
   return {
+    setProbeExecutor,
     read,
     writeWorkingDir,
     normalizeSelectedDirectory,
@@ -313,49 +373,87 @@ const WORKDIR_PROBE_PREFIX = '.cindy-workdir-probe-';
  */
 const PROBE_COOLDOWN_MS = 30_000;
 const MAX_CONCURRENT_USER_DIR_PROBES = 8;
-const inflightProbes = new Map<string, Promise<boolean>>();
-const probeCooldownUntil = new Map<string, number>();
-let inflightProbeCount = 0;
-
-function acquireProbe(candidate: string): Promise<boolean> | null {
-  // 冷却判定优先于复用: 该目录已经让某次调用等超时了, 不该让后续调用再
-  // 挂在(仍挂起的)旧探针上等满自己的 deadline — 直接拒绝, 立即按不可用
-  // 返回; 旧探针继续自跑自清理。
-  if ((probeCooldownUntil.get(candidate) ?? 0) > Date.now()) return null;
-  const shared = inflightProbes.get(candidate);
-  if (shared) return shared;
-  if (inflightProbeCount >= MAX_CONCURRENT_USER_DIR_PROBES) return null;
-  const attempt = probeUsability(candidate).finally(() => {
-    inflightProbes.delete(candidate);
-    // resetProbeScheduler 清空计数后迟到的释放不得把计数打成负数。
-    inflightProbeCount = Math.max(0, inflightProbeCount - 1);
-  });
-  inflightProbes.set(candidate, attempt);
-  inflightProbeCount += 1;
-  return attempt;
-}
 
 type ProbeVerdict = 'usable' | 'unusable' | 'timeout' | 'skipped';
 
-async function probeWithDiscipline(candidate: string, timeoutMs: number): Promise<ProbeVerdict> {
-  const attempt = acquireProbe(candidate);
-  if (attempt === null) return 'skipped';
-  // deadline 只决定「现在能不能信这个目录」; 底层探针继续执行, 迟到的 'wx'
-  // 创建一旦成功, 仍由 probeUsability 自己的 finally 按所有权纪律清理。
-  const verdict = await withUserDirDeadline(() => attempt, timeoutMs);
-  if (verdict === null) {
-    probeCooldownUntil.set(candidate, Date.now() + PROBE_COOLDOWN_MS);
-    return 'timeout';
-  }
-  return verdict ? 'usable' : 'unusable';
+interface ProbeScheduler {
+  /** 可用性探测(带 single-flight / 冷却 / 并发上限)。 */
+  availability(candidate: string, timeoutMs: number): Promise<ProbeVerdict>;
+  /** 手动记冷却(normalize 链条超时时用)。 */
+  cooldown(candidate: string): void;
+  /** 该目录是否处于冷却期。 */
+  inCooldown(candidate: string): boolean;
+  reset(): void;
 }
+
+function createProbeScheduler(
+  executor: () => ChannelUserDirProbeExecutor,
+): ProbeScheduler {
+  const inflightProbes = new Map<string, Promise<UserDirAvailabilityOutcome>>();
+  const probeCooldownUntil = new Map<string, number>();
+  let inflightProbeCount = 0;
+
+  function acquire(
+    candidate: string,
+    timeoutMs: number,
+  ): Promise<UserDirAvailabilityOutcome> | null {
+    // 冷却判定优先于复用: 该目录已经让某次调用等超时了, 不该让后续调用再
+    // 挂在(仍挂起的)旧探针上等满自己的 deadline — 直接拒绝, 立即按不可用
+    // 返回; 旧探针在执行边界内自跑自清理。
+    if ((probeCooldownUntil.get(candidate) ?? 0) > Date.now()) return null;
+    const shared = inflightProbes.get(candidate);
+    if (shared) return shared;
+    if (inflightProbeCount >= MAX_CONCURRENT_USER_DIR_PROBES) return null;
+    const attempt = executor()
+      .availability(candidate, timeoutMs)
+      .finally(() => {
+        inflightProbes.delete(candidate);
+        // reset 后迟到的释放不得把计数打成负数。
+        inflightProbeCount = Math.max(0, inflightProbeCount - 1);
+      });
+    inflightProbes.set(candidate, attempt);
+    inflightProbeCount += 1;
+    return attempt;
+  }
+
+  return {
+    async availability(candidate, timeoutMs): Promise<ProbeVerdict> {
+      const attempt = acquire(candidate, timeoutMs);
+      if (attempt === null) return 'skipped';
+      // 执行边界保证在 timeoutMs 内 settle(子进程被 kill / 进程内 deadline),
+      // 挂死的底层 IO 不会滞留在 Main 的 libuv 线程池, 槽位必然释放。
+      const outcome = await attempt;
+      if (outcome.ok) return outcome.usable ? 'usable' : 'unusable';
+      if (outcome.code === 'PROBE_UNAVAILABLE') {
+        // 执行边界自身不可用(队列满/宿主故障): 不给目录记冷却, 下次照常尝试。
+        return 'skipped';
+      }
+      probeCooldownUntil.set(candidate, Date.now() + PROBE_COOLDOWN_MS);
+      return 'timeout';
+    },
+    cooldown(candidate) {
+      probeCooldownUntil.set(candidate, Date.now() + PROBE_COOLDOWN_MS);
+    },
+    inCooldown(candidate) {
+      return (probeCooldownUntil.get(candidate) ?? 0) > Date.now();
+    },
+    reset() {
+      inflightProbes.clear();
+      probeCooldownUntil.clear();
+      inflightProbeCount = 0;
+    },
+  };
+}
+
+/** __testing 直测调度行为的默认调度器(默认进程内执行器)。 */
+const defaultProbeScheduler = createProbeScheduler(createInProcessUserDirProbeExecutor);
 
 async function isUsableWorkingDirectory(
   candidate: string,
   timeoutMs: number = USER_DIR_IO_TIMEOUT_MS,
 ): Promise<boolean> {
   // 冷却/超限(skipped)与超时一样按「当前不可用」处理 — 拒绝占用更多线程。
-  return (await probeWithDiscipline(candidate, timeoutMs)) === 'usable';
+  return (await defaultProbeScheduler.availability(candidate, timeoutMs)) === 'usable';
 }
 
 async function probeUsability(candidate: string): Promise<boolean> {
@@ -407,11 +505,9 @@ function nodeErrorCode(error: unknown): string {
 
 export const __testing = {
   isUsableWorkingDirectory,
-  /** 清空探针调度状态(在途表/冷却表/计数) — 测试隔离用。 */
+  /** 清空默认调度器的探针状态(在途表/冷却表/计数) — 测试隔离用。 */
   resetProbeScheduler(): void {
-    inflightProbes.clear();
-    probeCooldownUntil.clear();
-    inflightProbeCount = 0;
+    defaultProbeScheduler.reset();
   },
   probeLimits: {
     maxConcurrent: MAX_CONCURRENT_USER_DIR_PROBES,

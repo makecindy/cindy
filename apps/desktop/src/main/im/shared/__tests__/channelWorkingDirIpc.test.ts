@@ -303,6 +303,33 @@ describe.each(CHANNELS)('channelWorkingDirIpc handlers ($label)', ({ code, label
     await expect(pending).rejects.toMatchObject({ code });
   });
 
+  it('rejects a cancel that crossed an account switch before any settings read', async () => {
+    // A 打开选择器 → 切到 B → 取消: A 发起的 IPC 不得把 B 的配置带回去 —
+    // pick 复检先于取消判断, 且不得发起 readSettings。
+    let resolvePicker!: (result: { canceled: boolean; filePaths: string[] }) => void;
+    let generation = 7;
+    const deps = makeDeps({
+      showDirectoryPicker: vi.fn(
+        () => new Promise<{ canceled: boolean; filePaths: string[] }>((resolve) => {
+          resolvePicker = resolve;
+        }),
+      ),
+      captureGeneration: vi.fn(() => generation),
+    });
+    const handlers = makeHandlers(deps);
+
+    const pending = handlers.chooseWorkingDirectory({});
+    await Promise.resolve();
+    await Promise.resolve();
+    generation = 8;
+    resolvePicker({ canceled: true, filePaths: [] });
+    await expect(pending).rejects.toMatchObject({ code });
+    expect(deps.readSettings).not.toHaveBeenCalled();
+    expect(deps.warn).toHaveBeenCalledWith(
+      `${label} working directory pick crossed an account switch; dropped`,
+    );
+  });
+
   it('never logs the picked absolute path or raw error messages', async () => {
     // 脱敏纪律: 原生 fs 错误的 message 含完整用户目录, warn 上下文只允许
     // errorCode 一个字段。

@@ -9,6 +9,7 @@
 
 import {
   createChannelWorkingDirStore,
+  type ChannelUserDirProbeExecutor,
   type ChannelWorkingDirSettings,
   type ChannelWorkingDirSettingsState,
 } from '../shared/channelWorkingDirSettings';
@@ -31,6 +32,11 @@ const store = createChannelWorkingDirStore({
 
 export function readWecomChannelSettings(rootPath?: string): Promise<WecomChannelSettingsState> {
   return store.read(rootPath);
+}
+
+/** 生产装配(im/index.ts): 用户目录探测切到 utility-process 执行边界。 */
+export function configureWecomChannelProbeExecutor(executor: ChannelUserDirProbeExecutor): void {
+  store.setProbeExecutor(executor);
 }
 
 export function writeWecomWorkingDir(
