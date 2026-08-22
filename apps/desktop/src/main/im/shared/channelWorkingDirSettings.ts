@@ -7,7 +7,12 @@
  * 渠道差异(配置文件名、错误码前缀、托管目录命名)经工厂参数注入。
  *
  * Main 线程纪律: 用户所选目录可能在网络盘/可移动盘上, stat/realpath/写探针/
- * 删除全部走 node:fs/promises —— 挂起只阻塞当前 IPC/解析, 不冻结事件循环。
+ * 删除全部走 node:fs/promises —— 挂起只阻塞当前 IPC/解析, 不冻结事件循环;
+ * 且整条用户目录链路套 deadline(userDirTimeoutMs, 默认 5s): 失联网络盘下
+ * 设置读取限时返回 workingDirAvailable:false, 新对话解析回退托管目录,
+ * 选择新目录不提交配置并抛结构化超时错误。超时不取消底层操作(Node fs
+ * 无法取消) — 迟到的写探针若最终创建成功, 仍由本次调用的 finally 按
+ * 所有权纪律清理; 清理迟到/失败按既有纪律接受 0 字节残留。
  * 只有 userData(rootPath 测试桩)下的托管目录与配置文件属于本机盘, 同步
  * mkdirSync / 异步落盘均可接受。目录解析拆成两层:
  *   - ensureManagedWorkingDir(): 稳定托管目录, 同步, 供 sessionRepo 等热路径;
@@ -25,6 +30,14 @@ import { createLogger, maskPath } from '../../logger';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 
 const SETTINGS_VERSION = 1;
+
+/**
+ * 用户目录 IO 的统一 deadline。取值权衡: 太短会把高延迟但活着的网络盘误判
+ * 不可用(/new 会回退托管目录); 太长则设置读取/选目录让用户久等。5s 覆盖
+ * 常规网盘抖动, 超过它按「当前不可用」处理 —— 目录恢复后的下一次设置刷新
+ * 或新对话会重新探测回来。测试经工厂参数 userDirTimeoutMs 缩小。
+ */
+const USER_DIR_IO_TIMEOUT_MS = 5_000;
 
 export interface ChannelWorkingDirSettings {
   version: typeof SETTINGS_VERSION;
@@ -71,10 +84,17 @@ export function createChannelWorkingDirStore(options: {
   errorCodePrefix: string;
   /** botId → 托管目录名。渠道各自的既定命名,存量目录依赖它保持稳定。 */
   managedDirNameFor(botId: string): string;
+  /**
+   * 用户目录 IO(realpath/stat/写探针/清理)的 deadline, 默认 5s — 主要供
+   * 测试缩小。本机盘(userData 配置与托管目录)不受它约束。
+   */
+  userDirTimeoutMs?: number;
 }): ChannelWorkingDirStore {
   const log = createLogger(options.logTag);
   const invalidErrorCode = `${options.errorCodePrefix}_WORKING_DIR_INVALID`;
   const notDirectoryErrorCode = `${options.errorCodePrefix}_WORKING_DIR_NOT_DIRECTORY`;
+  const probeTimeoutErrorCode = `${options.errorCodePrefix}_WORKING_DIR_PROBE_TIMEOUT`;
+  const userDirTimeoutMs = options.userDirTimeoutMs ?? USER_DIR_IO_TIMEOUT_MS;
   const defaults: ChannelWorkingDirSettings = { version: SETTINGS_VERSION, workingDir: null };
 
   function settingsFilePath(rootPath?: string): string {
@@ -99,7 +119,8 @@ export function createChannelWorkingDirStore(options: {
       return {
         ...normalized,
         workingDirAvailable:
-          normalized.workingDir === null || (await isUsableWorkingDirectory(normalized.workingDir)),
+          normalized.workingDir === null ||
+          (await isUsableWorkingDirectory(normalized.workingDir, userDirTimeoutMs)),
       };
     } catch (error) {
       log.warn(`failed to read ${options.logTag} settings; using defaults`, {
@@ -124,14 +145,22 @@ export function createChannelWorkingDirStore(options: {
     if (typeof selectedPath !== 'string' || !path.isAbsolute(selectedPath)) {
       throw Object.assign(new Error(invalidErrorCode), { code: invalidErrorCode });
     }
-    // 用户所选目录可能是网络盘/可移动盘 — realpath/stat 全异步, 挂起不冻结 Main。
-    // fs.promises 没有 realpath.native(那只有同步版), 用标准 fsp.realpath —
-    // 同样解析符号链接, Node 22 实测与 realpathSync.native 结果一致。
-    const realPath = await realpath(selectedPath);
-    if (!(await stat(realPath)).isDirectory()) {
-      throw Object.assign(new Error(notDirectoryErrorCode), { code: notDirectoryErrorCode });
+    // 用户所选目录可能是网络盘/可移动盘 — realpath/stat 全异步且套 deadline:
+    // 挂起不冻结 Main, 超时则不提交配置, 抛结构化超时错误(快速失败的本地
+    // 校验错误照常穿透)。fs.promises 没有 realpath.native(那只有同步版),
+    // 用标准 fsp.realpath — 同样解析符号链接, Node 22 实测与
+    // realpathSync.native 结果一致。
+    const checked = await withUserDirDeadline(async () => {
+      const realPath = await realpath(selectedPath);
+      if (!(await stat(realPath)).isDirectory()) {
+        throw Object.assign(new Error(notDirectoryErrorCode), { code: notDirectoryErrorCode });
+      }
+      return realPath;
+    }, userDirTimeoutMs);
+    if (checked === null) {
+      throw Object.assign(new Error(probeTimeoutErrorCode), { code: probeTimeoutErrorCode });
     }
-    const normalized = normalizeWorkingDirForStorage(realPath);
+    const normalized = normalizeWorkingDirForStorage(checked);
     if (!normalized) {
       throw Object.assign(new Error(invalidErrorCode), { code: invalidErrorCode });
     }
@@ -236,18 +265,30 @@ export function createChannelWorkingDirStore(options: {
  * 只能证明「存在」— 遍历/写权限被收回时它们仍成功(Windows 上 access 对目录
  * 基本恒过), 随后 /new 会拿到一个无法使用的目录而不是回退托管目录。所以用
  * 真写入探测: `writeFile(flag 'wx')` 独占创建并删除一个一次性 0 字节探针 —
- * 全异步, 不经 open/close 手工描述符生命周期, 挂起的网络盘只阻塞本探测。
+ * 全异步, 不经 open/close 手工描述符生命周期; 整条链路套 deadline, 失联
+ * 网络盘在限时内返回「不可用」, 探测本体超时后继续跑完, 迟到创建成功的
+ * 探针仍由本次调用按所有权纪律清理。
  *
  * 删除的所有权纪律(六轮 review 裁决, 两条都不可退让):
  *   - **绝不按文件名前缀扫描删除** — 用户自建的同前缀文件不属于 Cindy。
  *   - **只删除本次调用确认独占创建的探针** — 'wx' 碰撞(EEXIST)说明那个
  *     路径属于别人; 「记住路径跨时间重试」也不行, 路径被其它进程替换后
- *     重试会删掉替换文件。删除失败(锁)接受 0 字节 UUID 残留, 不设任何
- *     延迟重试队列。
+ *     重试会删掉替换文件。删除失败(锁)与「超时后才创建成功但清理迟到」
+ *     都接受 0 字节 UUID 残留, 不设任何延迟重试队列。
  */
 const WORKDIR_PROBE_PREFIX = '.cindy-workdir-probe-';
 
-async function isUsableWorkingDirectory(candidate: string): Promise<boolean> {
+async function isUsableWorkingDirectory(
+  candidate: string,
+  timeoutMs: number = USER_DIR_IO_TIMEOUT_MS,
+): Promise<boolean> {
+  // deadline 只决定「现在能不能信这个目录」; 探测本体超时后继续执行,
+  // 迟到的 'wx' 创建一旦成功, 由 probeUsability 自己的 finally 清理。
+  const verdict = await withUserDirDeadline(() => probeUsability(candidate), timeoutMs);
+  return verdict === true;
+}
+
+async function probeUsability(candidate: string): Promise<boolean> {
   const probe = path.join(candidate, `${WORKDIR_PROBE_PREFIX}${randomUUID()}`);
   let created = false;
   try {
@@ -265,6 +306,23 @@ async function isUsableWorkingDirectory(candidate: string): Promise<boolean> {
         // 删除被锁挡住: 接受 0 字节残留 — 不记住路径, 不重试, 不扫描。
       }
     }
+  }
+}
+
+/**
+ * 用户目录 IO 的 deadline 包装: 超时返回 null(与业务返回值可区分), 不取消
+ * 底层操作(Node fs 无法取消)。run() 的快速失败/校验错误立即穿透, 不吃满
+ * 时限; 超时后 run() 迟到的 settle 由 Promise.race 吸收, 不产生未处理拒绝。
+ */
+async function withUserDirDeadline<T>(run: () => Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    return await Promise.race([run(), timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

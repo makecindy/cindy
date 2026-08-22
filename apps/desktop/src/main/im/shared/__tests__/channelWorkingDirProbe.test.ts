@@ -25,6 +25,8 @@ const failState = vi.hoisted(() => ({
   tmpWriteEexistNext: false,
   /** 探针写挂起(模拟网络盘失联): 挂起的 promise 由 releaseProbeHang 放行。 */
   probeWriteHang: false,
+  /** realpath 挂起(模拟选目录时网络盘失联): 同上放行。 */
+  realpathHang: false,
   hangResolvers: [] as Array<() => void>,
   rmCalls: [] as string[],
   openCalls: [] as string[],
@@ -35,6 +37,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   const isProbe = (target: string) => target.includes('.cindy-workdir-probe-');
   const wrapped = {
+    async realpath(target: string, options?: Parameters<typeof actual.realpath>[1]) {
+      if (failState.realpathHang) {
+        await new Promise<void>((resolve) => {
+          failState.hangResolvers.push(resolve);
+        });
+      }
+      return actual.realpath(target, options);
+    },
     open(...args: Parameters<typeof actual.open>) {
       failState.openCalls.push(String(args[0]));
       return actual.open(...args);
@@ -77,13 +87,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 import { readFile, mkdtemp, readdir, rm as fspRm, mkdir, writeFile as fspWriteFile } from 'node:fs/promises';
 
-import { __testing } from '../channelWorkingDirSettings';
+import { __testing, createChannelWorkingDirStore } from '../channelWorkingDirSettings';
 import { readWecomChannelSettings, writeWecomWorkingDir } from '../../wecom/channelSettings';
 
 let root = '';
 
-const probeFiles = async (): Promise<string[]> =>
-  (await readdir(root)).filter((n) => n.startsWith('.cindy-workdir-probe-'));
+const probeNames = async (dir: string): Promise<string[]> =>
+  (await readdir(dir)).filter((n) => n.startsWith('.cindy-workdir-probe-'));
+
+const probeFiles = async (): Promise<string[]> => probeNames(root);
 
 /** 放行挂起的探针写并恢复直通。 */
 function releaseProbeHang(): void {
@@ -98,6 +110,7 @@ beforeEach(async () => {
   failState.probeWriteEexistNext = false;
   failState.tmpWriteEexistNext = false;
   failState.probeWriteHang = false;
+  failState.realpathHang = false;
   failState.hangResolvers.length = 0;
   failState.rmCalls.length = 0;
   failState.openCalls.length = 0;
@@ -210,5 +223,87 @@ describe('用户目录 IO 异步化(Main 事件循环不被冻结)', () => {
     expect(state.workingDir).toBeTruthy();
     expect(state.workingDirAvailable).toBe(true);
     expect(await readdir(selected)).toEqual([]);
+  });
+});
+
+describe('用户目录探测 deadline(失联网络盘)', () => {
+  /** 小超时 + TEST 前缀的独立 store — deadline 行为与渠道无关。 */
+  function makeStore(userDirTimeoutMs: number) {
+    return createChannelWorkingDirStore({
+      logTag: 'im/test/channel-settings',
+      fileName: 'test-channel.json',
+      errorCodePrefix: 'TEST',
+      managedDirNameFor: (botId) => `test-${botId}`,
+      userDirTimeoutMs,
+    });
+  }
+
+  it('设置读取在 deadline 内返回不可用, 新对话限时回退托管目录', async () => {
+    const selected = path.join(root, 'project');
+    await mkdir(selected);
+    const store = makeStore(120);
+    await store.writeWorkingDir(selected, root);
+
+    failState.probeWriteHang = true;
+    const startedRead = Date.now();
+    const state = await store.read(root);
+    expect(Date.now() - startedRead).toBeLessThan(2_000);
+    expect(state.workingDir).toBeTruthy();
+    expect(state.workingDirAvailable).toBe(false);
+
+    // 首次对话 / /new 边界同样限时 — 不可用即回退托管目录, 不无限等待。
+    const startedResolve = Date.now();
+    const resolved = await store.resolveWorkingDirForNewConversation('bot-1', root);
+    expect(Date.now() - startedResolve).toBeLessThan(2_000);
+    expect(resolved).toBe(path.join(root, 'im-working-dir', 'test-bot-1'));
+
+    // 迟到的探针写(两次探测各一枚)放行后由各自调用清理, 不留残留。
+    releaseProbeHang();
+    await vi.waitFor(async () => {
+      expect(await probeNames(selected)).toEqual([]);
+    });
+  });
+
+  it('选择新目录探测超时: 不提交配置, 抛结构化超时错误', async () => {
+    const selected = path.join(root, 'project');
+    await mkdir(selected);
+    const store = makeStore(120);
+    await store.writeWorkingDir(selected, root);
+    const configPath = path.join(root, 'test-channel.json');
+    const before = await readFile(configPath, 'utf8');
+
+    // 新目录的 realpath 挂起(失联网络盘), 限时内必须以超时错误收场。
+    const fresh = path.join(root, 'fresh');
+    await mkdir(fresh);
+    failState.realpathHang = true;
+    const started = Date.now();
+    await expect(store.writeWorkingDir(fresh, root)).rejects.toMatchObject({
+      code: 'TEST_WORKING_DIR_PROBE_TIMEOUT',
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // 未提交: 既有配置原样保留。
+    expect(await readFile(configPath, 'utf8')).toBe(before);
+
+    releaseProbeHang();
+  });
+
+  it('超时后迟到完成的探针只清理自己创建的文件, 不误删用户同前缀文件', async () => {
+    const selected = path.join(root, 'project');
+    await mkdir(selected);
+    const userNote = path.join(selected, '.cindy-workdir-probe-user-note');
+    await fspWriteFile(userNote, 'user data');
+    const store = makeStore(120);
+    await store.writeWorkingDir(selected, root);
+
+    failState.probeWriteHang = true;
+    expect((await store.read(root)).workingDirAvailable).toBe(false);
+
+    // 放行: 迟到的 'wx' 创建最终成功 — 由本次调用的 finally 清理自己那枚;
+    // 未确认创建过任何东西的超时路径绝不触碰用户文件。
+    releaseProbeHang();
+    await vi.waitFor(async () => {
+      expect(await probeNames(selected)).toEqual(['.cindy-workdir-probe-user-note']);
+    });
+    expect(await readFile(userNote, 'utf8')).toBe('user data');
   });
 });
