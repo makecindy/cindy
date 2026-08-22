@@ -7822,6 +7822,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "statusActiveTasks": "アクティブなタスク",
+        "statusArchivedTasks": "アーカイブ済みのタスク",
+        "statusAllStatuses": "すべての状態",
         "allMachines": "すべて",
         "localMachine": "このデバイス",
         "connecting": "接続中…",

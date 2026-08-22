@@ -7822,6 +7822,9 @@
     },
     "sidebar": {
       "machineSwitcher": {
+        "statusActiveTasks": "活跃任务",
+        "statusArchivedTasks": "已归档任务",
+        "statusAllStatuses": "全部状态",
         "allMachines": "所有",
         "localMachine": "本机",
         "connecting": "连接中…",

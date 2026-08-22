@@ -380,7 +380,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
 
   it('空态 / 远程 loading-error / 连接中占位都挂范围标题(2026-08-13 第 4 轮 P1)', () => {
     const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
-    expect(headerSource).toContain('<MachineSwitcherMenu onOpenDisplaySettings=');
+    expect(headerSource).toMatch(/<MachineSwitcherMenu\s*\n\s*onOpenDisplaySettings=/);
     expect(headerSource).not.toContain('filterActiveBadge');
     expect(headerSource).toContain('<SidebarFilterPopover');
     expect(projectsSectionSource).toContain('<MainListScopeHeader');
@@ -554,8 +554,15 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(menuSource).toContain('useRemoteSessionBootstrapLoading(selectedDeviceId)');
     expect(menuSource).toContain('aria-busy={remoteSessionBootstrapLoading}');
     expect(menuSource).toMatch(
-      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*<ChevronDown[\s\S]*?animate-spinner motion-reduce:animate-none/,
+      /<span className="truncate leading-none">\{triggerText\}<\/span>\s*\{\/\*[^]*?<ChevronDown/,
     );
+    // #3214:归档徽标插在标题与箭头之间(仅 archived 时渲染),spinner 仍在箭头后。
+    const titleIdx = menuSource.indexOf('{triggerText}</span>');
+    const archiveIdx = menuSource.indexOf("<Archive size={13}");
+    const chevronIdx = menuSource.indexOf('<ChevronDown');
+    expect(titleIdx).toBeGreaterThanOrEqual(0);
+    expect(archiveIdx).toBeGreaterThan(titleIdx);
+    expect(chevronIdx).toBeGreaterThan(archiveIdx);
     expect(menuSource).toContain('<Loader2 size={12} strokeWidth={1.8} />');
   });
 
@@ -684,5 +691,52 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(hookSource).not.toContain('localHostSeedStarted = true');
     expect(hookSource).toContain('void load(1)');
     expect(hookSource).toContain('attempt < 3 && entries.some(([, result]) => result.kind === \'transient\')');
+  });
+});
+
+describe('#3214 已归档任务入口前置到范围菜单一级', () => {
+  it('范围菜单接收 Status 筛选并渲染三态状态组,不建第二份状态', () => {
+    // 状态真源仍是 useSidebarFilter;菜单只读 + 回调,不出现本地 useState / 新 store。
+    expect(menuSource).toContain('status?: FilterStatus;');
+    expect(menuSource).toContain('onStatusSelect?: (status: FilterStatus) => void;');
+    expect(menuSource).toContain("t('ccAgent.sidebar.machineSwitcher.statusActiveTasks')");
+    expect(menuSource).toContain("t('ccAgent.sidebar.machineSwitcher.statusArchivedTasks')");
+    expect(menuSource).toContain("t('ccAgent.sidebar.machineSwitcher.statusAllStatuses')");
+    expect(menuSource).toMatch(/selected=\{status === 'archived'\}/);
+    expect(menuSource).not.toMatch(/useState<FilterStatus/);
+  });
+
+  it('状态项点击统一走 onStatusSelect 出口,且保证会话列表可见', () => {
+    const statusGroupIdx = menuSource.indexOf('const statusItems =');
+    expect(statusGroupIdx).toBeGreaterThanOrEqual(0);
+    const group = menuSource.slice(statusGroupIdx);
+    // 三态都带 ensureConversationListVisible(与机器单选同一惯例)。
+    const onSelectCount = (group.match(/ensureConversationListVisible\(\);/g) ?? []).length;
+    expect(onSelectCount).toBeGreaterThanOrEqual(3);
+    expect(group).toContain("onStatusSelect('active')");
+    expect(group).toContain("onStatusSelect('archived')");
+    expect(group).toContain("onStatusSelect('all')");
+  });
+
+  it('归档视图时段头常驻 Archive 状态图标,不依赖展开菜单', () => {
+    expect(menuSource).toContain("status === 'archived' && (");
+    // 原生 title 表达 tooltip(嵌在 DropdownMenuTrigger 内不再挂 Radix tooltip)。
+    expect(menuSource).toContain("aria-label={t('ccAgent.sidebar.filterStatus.archived')}");
+    expect(menuSource).toContain("title={t('ccAgent.sidebar.filterStatus.archived')}");
+  });
+
+  it('MainListScopeHeader 把全局 filter.status 传进范围菜单,出口是 setStatus 本尊', () => {
+    const headerSource = read('features', 'cc-agent', 'sidebar', 'MainListScopeHeader.tsx');
+    expect(headerSource).toContain('status={filter.status}');
+    expect(headerSource).toContain('onStatusSelect={filter.setStatus}');
+  });
+
+  it('五语言补齐三个状态键,与既有 filterStatus 语义一致', () => {
+    for (const lang of ['zh-CN', 'en', 'zh-TW', 'ja', 'ko']) {
+      const source = read('i18n', 'locales', lang, 'common.json');
+      for (const key of ['statusActiveTasks', 'statusArchivedTasks', 'statusAllStatuses']) {
+        expect(source, `${lang} 缺 ${key}`).toContain(`"${key}"`);
+      }
+    }
   });
 });
