@@ -51,7 +51,13 @@ export function MainListScopeHeader({
   return (
     <div className="group/sidebar-header flex h-6 items-center justify-between pr-0 pl-6">
       <div className="flex min-w-0 items-center gap-1">
-        <MachineSwitcherMenu onOpenDisplaySettings={() => setDisplaySettingsOpen(true)} />
+        {/* #3214:把全局 Status 筛选传进范围菜单,归档查看入口前置到一级。
+            点击统一走 filter.setStatus,不建第二份状态。 */}
+        <MachineSwitcherMenu
+          onOpenDisplaySettings={() => setDisplaySettingsOpen(true)}
+          status={filter.status}
+          onStatusSelect={filter.setStatus}
+        />
       </div>
       <div className="flex items-center gap-0.5 -mt-px">
         <div className={HEADER_ACTIONS_CLASS}>
