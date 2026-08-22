@@ -134,6 +134,21 @@ export interface BotProfileRuntimeDeps {
     path: string;
     remoteHostId?: string;
   }) => Promise<string>;
+  /**
+   * 伙伴家里那些摊开的文件(`botProfileFolder.ts`)。
+   *
+   * 只取**提示词要用的那几样**:整段覆盖、知识与偏好的条目名、还没做完的事。
+   * 身份与用户画像不走这里 —— 它们已经由对账收进冻结快照,运行时认的是快照,
+   * 从文件再读一遍会让同一轮里出现两个版本的身份。
+   *
+   * 远端会话拿不到本机路径,由调用方自行不注入。
+   */
+  readProfileFolder?: (input: { botId: string }) => Promise<{
+    systemPromptOverride: string;
+    knowledge: string[];
+    preferences: string[];
+    todo: unknown[];
+  }>;
 }
 
 function runtimeFailureMetadata(
@@ -265,6 +280,28 @@ export function buildBotCapabilityContextPrompt(): string {
     'When you finish something and a reusable way of working came out of it — a habit worth keeping, not a fact about the user — record it in your own memory with a `learned-` name prefix (for example `learned-weekly-report-shape`). Everything else you remember keeps its ordinary name. Both stay in your memory; the prefix only tells the two apart when they are shown to the user.',
     'After you finish a multi-step task of a kind you have not handled before, turn the way you did it into one of your own skills with `save_bot_skill`: write the repeatable steps, not this run\'s conclusions. Check `list_bot_skills` first — if you already have one for this kind of task, use it as your starting point and save it again under the same name when you find a better way. A saved skill is mounted from your next task onward, so do not expect to call it in this one.',
   ].join('\n');
+}
+
+/**
+ * `todo.json` → 提示词里的一行行文字。
+ *
+ * 容两种写法:纯字符串,或 `{ text, done }` 这样的对象(已完成的不进提示词 ——
+ * 那是干扰,不是待办)。认不出的条目直接丢掉,不猜。
+ */
+export function readOpenTodos(items: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const item of items) {
+    if (typeof item === 'string') {
+      if (item.trim()) out.push(item.trim());
+      continue;
+    }
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    if (row.done === true || row.completed === true) continue;
+    const text = typeof row.text === 'string' ? row.text : typeof row.title === 'string' ? row.title : '';
+    if (text.trim()) out.push(text.trim());
+  }
+  return out.slice(0, 50);
 }
 
 export function buildBotUserProfilePrompt(userContextSource: string): string {
@@ -701,6 +738,21 @@ export async function hydrateBotProfileRuntime(
     delegationEnabled: resolvedToolsets.includes('xdt_helper'),
     ownSkillsEnabled: ownSkillPluginRoot !== null,
   };
+  /*
+    家里那几样进提示词。读失败一律当"没有" —— 一个读不动的 knowledge 目录不该
+    让整个伙伴起不来。整段覆盖只有真的写了才生效。
+  */
+  let folderPrompt: {
+    systemPromptOverride: string;
+    knowledge: string[];
+    preferences: string[];
+    todo: unknown[];
+  } | null = null;
+  if (deps.readProfileFolder) {
+    folderPrompt = await deps
+      .readProfileFolder({ botId: row.botId })
+      .catch(() => null);
+  }
   const promptInput: BotSystemPromptInput = {
     displayName: profile.displayName,
     identity,
@@ -709,6 +761,12 @@ export async function hydrateBotProfileRuntime(
       name: item.name,
       ...(item.description ? { description: item.description } : {}),
     })),
+    ...(folderPrompt?.systemPromptOverride.trim()
+      ? { systemPromptOverride: folderPrompt.systemPromptOverride }
+      : {}),
+    ...(folderPrompt?.knowledge.length ? { knowledgeFiles: folderPrompt.knowledge } : {}),
+    ...(folderPrompt?.preferences.length ? { preferenceFiles: folderPrompt.preferences } : {}),
+    ...(folderPrompt?.todo.length ? { openTodos: readOpenTodos(folderPrompt.todo) } : {}),
     contextSections: [
       buildBotProfileContextPrompt(profile.displayName),
       buildBotSessionControlContext(sessionControlMode),

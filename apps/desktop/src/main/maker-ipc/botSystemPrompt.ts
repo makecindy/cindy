@@ -51,6 +51,19 @@ export interface BotSystemPromptInput {
   memorySnapshot?: string;
   /** 会话控制说明等由调用方给的上下文段。 */
   contextSections?: readonly string[];
+  /**
+   * `system_prompt.md` 的整段覆盖。有内容时**取代**默认组装出来的稳定层
+   * (身份 + 纪律 + 能力说明),空则完全不影响。
+   *
+   * 与 Hermes 同义:那是给「我要完全自己写这个 agent 的提示词」准备的逃生口,
+   * 不是又一个可以叠加的段落 —— 叠加只会让两套说法在同一份上下文里打架。
+   */
+  systemPromptOverride?: string;
+  /** 伙伴家里 `knowledge/` 与 `preferences/` 的条目名。只进索引,正文按需读。 */
+  knowledgeFiles?: readonly string[];
+  preferenceFiles?: readonly string[];
+  /** `todo.json` 里还没做完的事。 */
+  openTodos?: readonly string[];
 }
 
 /**
@@ -136,6 +149,10 @@ function has(signals: BotPromptCapabilitySignals, toolset: string): boolean {
  * 这一层在整个会话里逐字节不变,前缀缓存靠它。
  */
 export function buildBotStableTier(input: BotSystemPromptInput): string {
+  // 整段覆盖:用户自己写了 system_prompt.md 就完全听他的,不在后面偷偷再叠
+  // 一份我们的说法 —— 两套说法在同一份上下文里只会打架。
+  const override = input.systemPromptOverride?.trim();
+  if (override) return override;
   const parts: string[] = [];
   const identity = input.identity.trim();
   if (identity) parts.push(identity);
@@ -181,10 +198,48 @@ export function buildBotSkillIndex(entries: readonly BotPromptSkillIndexEntry[])
  * 易变层:技能索引在最前(它随会话内的 save_bot_skill 变),记忆与用户档案随后。
  * 放在整份提示词末尾,变化时只从这里往后重新计算。
  */
+/**
+ * 家里那两个目录的索引:只报名字,正文让模型自己按需读。
+ *
+ * 与技能索引同一条理由(照搬 Hermes):**看得见名字才知道自己有这份东西**;
+ * 全文塞进提示词则是每轮都付一次钱去带一堆多半用不上的字。
+ */
+export function buildBotFolderIndex(input: {
+  knowledgeFiles?: readonly string[];
+  preferenceFiles?: readonly string[];
+  homeDir?: string;
+}): string {
+  const sections: string[] = [];
+  const list = (title: string, files: readonly string[] | undefined) => {
+    const rows = (files ?? []).map((name) => `- ${name}`);
+    if (rows.length > 0) sections.push([title, ...rows].join('\n'));
+  };
+  list('## 你自己整理的知识', input.knowledgeFiles);
+  list('## 你记下的偏好', input.preferenceFiles);
+  if (sections.length === 0) return '';
+  if (input.homeDir) {
+    sections.push(`这些文件在 \`${input.homeDir}\` 下,要用哪份就自己读哪份。`);
+  }
+  return sections.join('\n\n');
+}
+
+/** 还没做完的事。空的时候一个字都不提。 */
+export function buildBotTodoSection(openTodos: readonly string[] | undefined): string {
+  const rows = (openTodos ?? []).map((text) => text.trim()).filter(Boolean).map((t) => `- ${t}`);
+  return rows.length > 0 ? ['## 你还欠着的事', ...rows].join('\n') : '';
+}
+
 export function buildBotVolatileTier(input: BotSystemPromptInput): string {
   const parts: string[] = [];
   const skillIndex = buildBotSkillIndex(input.skillIndex);
   if (skillIndex) parts.push(skillIndex);
+  const folderIndex = buildBotFolderIndex({
+    ...(input.knowledgeFiles ? { knowledgeFiles: input.knowledgeFiles } : {}),
+    ...(input.preferenceFiles ? { preferenceFiles: input.preferenceFiles } : {}),
+  });
+  if (folderIndex) parts.push(folderIndex);
+  const todos = buildBotTodoSection(input.openTodos);
+  if (todos) parts.push(todos);
   const memory = input.memorySnapshot?.trim();
   if (memory) parts.push(memory);
   const userProfile = input.userProfile?.trim();
