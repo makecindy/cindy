@@ -15,6 +15,12 @@ describe('didUserCloseDetachedSidebarWindow', () => {
         { loaded: true, detached: true, open: false },
       ),
     ).toBe(true);
+    expect(
+      didUserCloseDetachedSidebarWindow(
+        { loaded: true, detached: true, open: true },
+        { loaded: true, detached: true, open: false, userClose: false },
+      ),
+    ).toBe(false);
   });
 
   it('does not treat merge-back, bootstrap, or opening as a user close', () => {

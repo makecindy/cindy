@@ -48,8 +48,18 @@ describe('resolveHostContext mappers', () => {
       remoteHostId: null,
       deviceLinkDeviceId: 'device-9',
       available: true,
-      subagentsAvailable: true,
+      subagentsAvailable: false,
     });
+  });
+
+  it('does not advertise Subagents for a mirrored Pi session', () => {
+    expect(
+      contextFromDeviceLinkMirror('device-9', {
+        id: 'remote-ssh',
+        workingDir: '/remote/app',
+        agentKind: 'pi',
+      })?.subagentsAvailable,
+    ).toBe(false);
   });
 
   it('leaves a truncated device-link workdir unresolved', () => {

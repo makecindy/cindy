@@ -1290,6 +1290,60 @@ describe('setContext / routeCommand', () => {
     ]);
   });
 
+  it('remembers an earlier resolve after a later pin takes the host', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    const resolvedB = { ...ctx, sessionId: 's3', workdir: '/from-b' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return lookupA;
+        if (sessionId === 's3') return resolvedB;
+        return null;
+      },
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    await expect(h.controller.routeCommand(terminalRequest('s3'))).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    expect(h.controller.getContext()).toEqual(resolvedA);
+  });
+
+  it('flushes every deferred session when merging back to attached', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const closeA = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    const closeB = { type: 'close-orca-workers-tab' as const, sessionId: 's2' };
+    await expect(
+      h.controller.routeCommand({ command: closeA, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    await expect(
+      h.controller.routeCommand({ command: closeB, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setDetached(false);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeA,
+      closeB,
+    ]);
+  });
+
+  it('does not advertise a cancelled pending reveal as a user close', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(h.broadcasts.at(-1)).toMatchObject({ open: false, userClose: false });
+  });
+
   it('pinned host session ignores later focus switches until the user arrives', () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);

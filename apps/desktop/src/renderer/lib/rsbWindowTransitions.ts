@@ -45,6 +45,7 @@ export function didUserCloseDetachedSidebarWindow(
     previous.open &&
     next.loaded &&
     next.detached &&
-    !next.open,
+    !next.open &&
+    next.userClose !== false,
   );
 }

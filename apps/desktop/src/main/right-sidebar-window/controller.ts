@@ -59,6 +59,7 @@ export interface RsbWindowControllerDeps {
     detached: boolean;
     open: boolean;
     hostSessionId?: string;
+    userClose?: boolean;
   }) => void;
   /** 向裁决后的 renderer host 推送 context / command；窗口有效性由 controller 保证。 */
   sendToWindow: (win: BrowserWindow, channel: string, payload: unknown) => void;
@@ -901,7 +902,12 @@ export class RsbWindowController {
       if (this.pinnedSessionId === sessionId) this.clearPinnedSession();
       return;
     }
-    if (this.pinnedSessionId !== sessionId) this.resetAdoptRetry();
+    if (this.pinnedSessionId && this.pinnedSessionId !== sessionId) {
+      this.settleHostWaiters(this.pinnedSessionId, false);
+      this.resetAdoptRetry();
+    } else if (this.pinnedSessionId !== sessionId) {
+      this.resetAdoptRetry();
+    }
     this.pinnedSessionId = sessionId;
     const cached = this.knownContexts.get(sessionId);
     if (cached) {
@@ -911,7 +917,9 @@ export class RsbWindowController {
     const pending = this.deps.resolveHostContext?.(sessionId);
     if (pending && typeof (pending as Promise<RsbWindowContext | null>).then === 'function') {
       return Promise.resolve(pending).then((resolved) => {
-        if (this.pinnedSessionId !== sessionId || this.disposed) return;
+        if (this.disposed) return;
+        if (resolved) this.rememberContext(resolved);
+        if (this.pinnedSessionId !== sessionId) return;
         this.finishAdoptHostSession(sessionId, resolved);
       });
     }
@@ -1033,11 +1041,7 @@ export class RsbWindowController {
     if (this.hostWaiters.some((waiter) => waiter.sessionId === sessionId)) return;
     if (this.readyWaiters.some((waiter) => waiter.sessionId === sessionId)) return;
     this.clearPinnedSession();
-    if (this.pendingOpen && !this.visible) {
-      this.pendingOpen = false;
-      this.pendingOpenShouldFocus = true;
-      this.broadcast();
-    }
+    this.cancelPendingOpen();
   }
 
   private settleHostWaiters(sessionId: string | null, ok: boolean): void {
@@ -1137,8 +1141,8 @@ export class RsbWindowController {
   private flushDeferredCommands(
     isHostAlive: () => boolean,
     send: (command: RsbWindowCommand) => void,
+    sessionId = this.lastContext?.available ? this.lastContext.sessionId : null,
   ): void {
-    const sessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
     if (!sessionId) return;
     const queue = this.deferredCommands.get(sessionId);
     if (!queue || queue.length === 0) return;
@@ -1183,23 +1187,28 @@ export class RsbWindowController {
     if (this.deps.settings.read().detached) return;
     const main = this.deps.getMainWindow();
     if (!main || main.isDestroyed()) return;
-    this.flushDeferredCommands(
-      () => !main.isDestroyed(),
-      (command) => this.deps.sendToWindow(main, this.deps.commandChannel, command),
-    );
+    for (const sessionId of [...this.deferredCommands.keys()]) {
+      this.flushDeferredCommands(
+        () => !main.isDestroyed(),
+        (command) => this.deps.sendToWindow(main, this.deps.commandChannel, command),
+        sessionId,
+      );
+    }
   }
 
-  private broadcast(): void {
+  private broadcast(opts: { userClose?: boolean } = {}): void {
     const s = this.deps.settings.read();
     // pendingOpen:窗口已创建但等待 presentation-ready,从调用方视角视为 open。
     this.deps.broadcastState({
       detached: s.detached,
       open: this.isOpen() || this.pendingOpen,
       ...(this.lastHostSessionId ? { hostSessionId: this.lastHostSessionId } : {}),
+      ...(opts.userClose === false ? { userClose: false } : {}),
     });
   }
 
   private cancelPendingOpen(): void {
+    const advertisedPending = this.pendingOpen && !this.visible;
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = true;
     this.clearOpenTimeout();
@@ -1208,5 +1217,6 @@ export class RsbWindowController {
       clearTimeout(waiter.timeout);
       waiter.reject(new Error('right-sidebar host context wait cancelled'));
     }
+    if (advertisedPending) this.broadcast({ userClose: false });
   }
 }

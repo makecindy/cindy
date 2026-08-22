@@ -57,7 +57,8 @@ export function contextFromDeviceLinkMirror(
     remoteHostId: null,
     deviceLinkDeviceId: deviceId,
     available: true,
-    subagentsAvailable: session.agentKind === 'pi',
+    // 冷镜像没有 remoteHostId，不能把 SSH Pi 当成有 Subagents。
+    subagentsAvailable: false,
   };
 }
 

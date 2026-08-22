@@ -1909,6 +1909,7 @@ interface ElectronAPI {
       detached: boolean;
       open: boolean;
       hostSessionId?: string | null;
+      userClose?: boolean;
     }) => void) => () => void;
     onContextChanged: (
       cb: (ctx: {

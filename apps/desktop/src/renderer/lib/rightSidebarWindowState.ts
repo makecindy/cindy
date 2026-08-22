@@ -18,6 +18,7 @@ export interface RsbWindowUiState {
   detached: boolean;
   open: boolean;
   hostSessionId?: string | null;
+  userClose?: boolean;
 }
 
 function initialState(): RsbWindowUiState {
@@ -41,7 +42,8 @@ function setState(next: RsbWindowUiState): void {
     state.loaded === next.loaded &&
     state.detached === next.detached &&
     state.open === next.open &&
-    state.hostSessionId === next.hostSessionId
+    state.hostSessionId === next.hostSessionId &&
+    state.userClose === next.userClose
   ) {
     return;
   }
@@ -59,6 +61,7 @@ function ensureWired(): void {
       detached: s.detached,
       open: s.open,
       ...(s.hostSessionId ? { hostSessionId: s.hostSessionId } : {}),
+      ...(s.userClose === false ? { userClose: false } : {}),
     });
   });
 }
