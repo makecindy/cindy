@@ -38,16 +38,26 @@ const SUBAGENT_PROVIDERS = [
   'pi',
 ] as const satisfies readonly SubagentProvider[];
 
+const MAX_CONTEXT_SESSION_ID_LENGTH = 128;
+const MAX_CONTEXT_PATH_LENGTH = 4096;
+
 function parseContext(raw: unknown): RsbWindowContext {
   const r = requireObject(raw, 'context');
-  const nullableString = (v: unknown, name: string): string | null => {
+  const nullableString = (v: unknown, name: string, maxLength: number): string | null => {
     if (v === null || v === undefined) return null;
     if (typeof v !== 'string') throwIpcError('INVALID_PARAMS', `${name} must be string | null`);
+    if (v.length > maxLength) {
+      throwIpcError('INVALID_PARAMS', `${name} must be at most ${maxLength} characters`);
+    }
     return v;
   };
-  const optionalNullableString = (v: unknown, name: string): string | null | undefined => {
+  const optionalNullableString = (
+    v: unknown,
+    name: string,
+    maxLength: number,
+  ): string | null | undefined => {
     if (v === undefined) return undefined;
-    return nullableString(v, name);
+    return nullableString(v, name, maxLength);
   };
   if (typeof r.available !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'available must be boolean');
@@ -55,11 +65,15 @@ function parseContext(raw: unknown): RsbWindowContext {
   if (r.subagentsAvailable !== undefined && typeof r.subagentsAvailable !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'subagentsAvailable must be boolean when provided');
   }
-  const deviceLinkDeviceId = optionalNullableString(r.deviceLinkDeviceId, 'deviceLinkDeviceId');
+  const deviceLinkDeviceId = optionalNullableString(
+    r.deviceLinkDeviceId,
+    'deviceLinkDeviceId',
+    MAX_CONTEXT_SESSION_ID_LENGTH,
+  );
   return {
-    sessionId: nullableString(r.sessionId, 'sessionId'),
-    workdir: nullableString(r.workdir, 'workdir'),
-    remoteHostId: nullableString(r.remoteHostId, 'remoteHostId'),
+    sessionId: nullableString(r.sessionId, 'sessionId', MAX_CONTEXT_SESSION_ID_LENGTH),
+    workdir: nullableString(r.workdir, 'workdir', MAX_CONTEXT_PATH_LENGTH),
+    remoteHostId: nullableString(r.remoteHostId, 'remoteHostId', MAX_CONTEXT_SESSION_ID_LENGTH),
     ...(deviceLinkDeviceId === undefined ? {} : { deviceLinkDeviceId }),
     ...(r.subagentsAvailable === undefined
       ? {}

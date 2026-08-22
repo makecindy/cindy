@@ -2199,9 +2199,9 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     expect(res.message).toMatch(/t-ghost not in active session s1/);
   });
 
-  it('ensureHost rejection does not mask a resolvable tab', async () => {
+  it('ensureHost rejection fails closed even if a pooled tab still exists', async () => {
     const ensureHost = vi.fn(async () => {
-      throw new Error('ready timeout');
+      throw new Error('host context not ready');
     });
     const wc = fakeWc();
     const registry = fakeRegistry(
@@ -2210,15 +2210,17 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     );
     const backend = new RsbWebviewBackend({
       registry,
-      getActiveSessionId: () => 's1',
+      getActiveSessionId: () => 's2',
       bridge: { getHostWebContents: () => null, ensureHost, logger: logger() },
       logger: logger(),
     });
     const res = await backend.call({
       action: 'screenshot',
       targetId: 't1',
+      __mcpSessionId: 's1',
     } as never);
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.message).toMatch(/host context not ready/);
   });
 
   it('embedded mode (isDetached false) → resolve miss fails fast, no polling', async () => {

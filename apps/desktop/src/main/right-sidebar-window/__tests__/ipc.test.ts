@@ -103,6 +103,38 @@ describe('right-sidebar-window IPC', () => {
     });
   });
 
+  it('drops oversized setContext strings before they reach the controller', () => {
+    const controller = makeController();
+    const { mainWebContents } = registerController(controller);
+    const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([channel]) => channel === MAKER_SEND.RSB_WINDOW_SET_CONTEXT,
+    );
+    const setContext = setContextCall?.[1] as
+      | ((event: { sender: unknown }, payload: unknown) => void)
+      | undefined;
+    if (!setContext) throw new Error('RSB_WINDOW_SET_CONTEXT handler not registered');
+
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 'x'.repeat(129),
+        workdir: '/workspace',
+        remoteHostId: null,
+        available: true,
+      },
+    );
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 's1',
+        workdir: `/${'a'.repeat(4096)}`,
+        remoteHostId: null,
+        available: true,
+      },
+    );
+    expect(controller.setContext).not.toHaveBeenCalled();
+  });
+
   it('preserves unknown Subagents eligibility so cold Pi restore cannot auto-collapse', () => {
     const controller = makeController();
     const { mainWebContents } = registerController(controller);
