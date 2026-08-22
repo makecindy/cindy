@@ -67,6 +67,8 @@ export interface ImSessionRow {
    * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
    */
   workspaceKind?: 'project' | 'dialogue' | null;
+  /** SSH host for a desktop session taken over by this IM binding. */
+  remoteHostId?: string | null;
 }
 
 export interface SessionModelRouteSnapshot {
@@ -228,6 +230,7 @@ export function createImSessionRepo(
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
         workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
+        remoteHostId: row.remoteHostId ?? null,
       };
     },
 
@@ -308,6 +311,7 @@ export function createImSessionRepo(
         // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
         // caller 拿到的和库里落定的才是同一个答案。
         workspaceKind,
+        remoteHostId: row.remoteHostId ?? null,
       };
     },
 
@@ -327,6 +331,7 @@ export function createImSessionRepo(
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
         workspaceKind: row.workspaceKind ?? null,
+        remoteHostId: row.remoteHostId ?? null,
       };
     },
 
@@ -425,6 +430,7 @@ export function createImSessionRepo(
             fastMode: persistedRow.fastMode,
             sdkSessionId: persistedRow.sdkSessionId,
             providerId: persistedRow.providerId ?? null,
+            remoteHostId: persistedRow.remoteHostId ?? null,
           }
         : row;
       log.info(

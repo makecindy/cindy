@@ -60,6 +60,10 @@ export type MaterializedSshRemoteMedia =
       message: string;
     };
 
+export type MaterializedSshRemoteFile =
+  | { ok: true; cachePath: string; size: number; relPath: string }
+  | { ok: false; status: 400 | 403 | 404 | 502; message: string };
+
 function defaultDeps(): SshMediaDeps {
   return {
     request: <T>(hostId: string, method: 'stat' | 'readFileChunk', params: Record<string, unknown>) =>
@@ -81,6 +85,11 @@ export function makeSshChunkExecutor(
   hostId: string,
   workdir: string,
   relPath: string,
+  constraints: {
+    expectedSize?: number;
+    expectedMtimeMs?: number;
+    maxBytes?: number;
+  } = {},
 ): FetchExecutor {
   return async (destPath, progress) => {
     const handle = await fsPromises.open(destPath, 'w');
@@ -92,13 +101,36 @@ export function makeSshChunkExecutor(
           'readFileChunk',
           { workdir, relPath, offset, length: CHUNK_LENGTH },
         );
+        if (
+          (constraints.expectedSize !== undefined && chunk.size !== constraints.expectedSize) ||
+          (constraints.expectedMtimeMs !== undefined &&
+            chunk.mtimeMs !== constraints.expectedMtimeMs)
+        ) {
+          throw new Error('remote file identity changed during download');
+        }
+        if (constraints.maxBytes !== undefined && chunk.size > constraints.maxBytes) {
+          throw new Error('remote file exceeds download limit');
+        }
         const buf = Buffer.from(chunk.dataBase64, 'base64');
+        const nextOffset = offset + buf.length;
+        if (
+          buf.length > CHUNK_LENGTH ||
+          (constraints.expectedSize !== undefined && nextOffset > constraints.expectedSize) ||
+          (constraints.maxBytes !== undefined && nextOffset > constraints.maxBytes)
+        ) {
+          throw new Error('remote chunk exceeds download limit');
+        }
         if (buf.length > 0) {
           await handle.write(buf, 0, buf.length, offset);
           offset += buf.length;
         }
         progress(Math.min(offset, chunk.size), chunk.size, 'download');
-        if (chunk.eof) break;
+        if (chunk.eof) {
+          if (constraints.expectedSize !== undefined && offset !== constraints.expectedSize) {
+            throw new Error('remote file size changed during download');
+          }
+          break;
+        }
         if (buf.length === 0) throw new Error('empty chunk before eof');
       }
     } finally {
@@ -206,6 +238,54 @@ export function serveCachedFile(
 const noopProgress: FetchProgressFn = () => undefined;
 
 /**
+ * Materialize an arbitrary SSH workdir file for an outbound attachment.
+ * Unlike the media protocol helper below, this intentionally has no extension
+ * whitelist: the IM file API can carry general attachments. Workdir confinement
+ * and the size limit are enforced by the remote file-service before bytes are
+ * copied into the desktop cache.
+ */
+export async function materializeSshRemoteFile(
+  origin: { remoteHostId: string; workdir: string },
+  absPath: string,
+  maxBytes: number,
+  deps: SshMediaDeps = defaultDeps(),
+): Promise<MaterializedSshRemoteFile> {
+  const relPath = toWorkdirRelPosix(origin.workdir, absPath);
+  if (!relPath) return { ok: false, status: 403, message: '附件路径不在 SSH 会话工作目录内' };
+  try {
+    const stat = await deps.request<{ type: 'file' | 'directory'; size: number; mtimeMs: number }>(
+      origin.remoteHostId,
+      'stat',
+      { workdir: origin.workdir, relPath },
+    );
+    if (stat.type !== 'file') return { ok: false, status: 404, message: 'SSH 附件不存在' };
+    if (stat.size <= 0 || stat.size > maxBytes) {
+      return { ok: false, status: 403, message: 'SSH 附件大小不在允许范围内' };
+    }
+    const cachePath = await deps.fetchToCache(
+      {
+        transport: 'ssh',
+        endpointId: origin.remoteHostId,
+        workdir: origin.workdir,
+        relPath,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      },
+      makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath, {
+        expectedSize: stat.size,
+        expectedMtimeMs: stat.mtimeMs,
+        maxBytes,
+      }),
+      noopProgress,
+    );
+    return { ok: true, cachePath, size: stat.size, relPath };
+  } catch (err) {
+    log.warn('ssh remote attachment fetch failed', { relPath, error: String(err) });
+    return { ok: false, status: 502, message: 'SSH 远程附件取回失败' };
+  }
+}
+
+/**
  * 把 SSH 会话工作目录内的媒体取回到本地磁盘缓存。
  * 失败语义与 device 分支对齐:上游(SSH / file-service)失败 → 502,renderer
  * 媒体占位 + 可重试;路径不合法(workdir 外 / 无路径语义 / 扩展名不在媒体
@@ -281,7 +361,11 @@ export async function materializeSshRemoteMedia(
         size: stat.size,
         mtimeMs: stat.mtimeMs,
       },
-      makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath),
+      makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath, {
+        expectedSize: stat.size,
+        expectedMtimeMs: stat.mtimeMs,
+        maxBytes: maxBytes ?? stat.size,
+      }),
       noopProgress,
     );
     return { ok: true, cachePath, size: stat.size, mime, relPath };

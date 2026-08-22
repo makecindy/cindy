@@ -1489,6 +1489,88 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(1);
   });
 
+  it.each([
+    ['网络错误', new TypeError('fetch failed')],
+    ['5xx', new TelegramApiError('sendDocument', 500, 'Internal Server Error')],
+    ['429', new TelegramApiError('sendDocument', 429, 'Too Many Requests', 3)],
+  ])('附件发送%s时返回不可重试的不确定结果', async (_label, failure) => {
+    await connect();
+    const absPath = path.join(tmpDir, 'uncertain-document.pdf');
+    fs.writeFileSync(absPath, 'document');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendDocument') throw failure;
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+
+    await expect(im.sendFile(OWNER_ID, absPath)).resolves.toEqual({
+      ok: false,
+      reason: 'UPLOAD_UNCERTAIN',
+    });
+  });
+
+  it('附件被 400 明确拒绝时保留为可安全重试', async () => {
+    await connect();
+    const absPath = path.join(tmpDir, 'rejected-document.pdf');
+    fs.writeFileSync(absPath, 'document');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendDocument') {
+        throw new TelegramApiError('sendDocument', 400, 'Bad Request');
+      }
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+
+    await expect(im.sendFile(OWNER_ID, absPath)).resolves.toEqual({
+      ok: false,
+      reason: 'UPLOAD_FAIL',
+    });
+  });
+
+  it.each([
+    ['网络错误', new TypeError('fetch failed')],
+    ['5xx', new TelegramApiError('sendPhoto', 500, 'Internal Server Error')],
+    ['429', new TelegramApiError('sendPhoto', 429, 'Too Many Requests', 3)],
+  ])('单图发送%s时不确认已交付并标记为不可重试', async (_label, failure) => {
+    await connect();
+    const absPath = path.join(tmpDir, 'failed-single.png');
+    fs.writeFileSync(absPath, 'fake-png');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendPhoto') throw failure;
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+    const handle = await im.startStreamingText(OWNER_ID);
+    handle.addExtraImageAbsPath?.(absPath);
+
+    await handle.finalize('一张发送失败的图');
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
+    expect(handle.getNonRetryableExtraImageAbsPaths?.()).toEqual([absPath]);
+  });
+
+  it('单图被 400 明确拒绝时保留为可安全重试', async () => {
+    await connect();
+    const absPath = path.join(tmpDir, 'rejected-single.png');
+    fs.writeFileSync(absPath, 'fake-png');
+    const originalForm = api.callForm.bind(api);
+    api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
+      if (method === 'sendPhoto') {
+        throw new TelegramApiError('sendPhoto', 400, 'Bad Request: invalid photo');
+      }
+      return originalForm(method, form, signal);
+    }) as FakeApi['callForm'];
+    const handle = await im.startStreamingText(OWNER_ID);
+    handle.addExtraImageAbsPath?.(absPath);
+
+    await expect(handle.finalize('一张被明确拒绝的图')).rejects.toThrow(
+      'telegram single image upload rejected',
+    );
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([]);
+    expect(handle.getNonRetryableExtraImageAbsPaths?.()).toEqual([]);
+  });
+
   describe('相册发送失败的回落判据', () => {
     // Telegram 没有发送端幂等键: 一次 sendMediaGroup 只要被接受, 图片就已经在
     // 聊天里了 —— 哪怕响应在网络上丢了。逐张补发会让用户看到两套同样的图, 且
@@ -1504,7 +1586,7 @@ describe('TelegramIM', () => {
 
     async function sendAlbumWith(
       failure: unknown,
-    ): Promise<{ groups: number; singles: number }> {
+    ): Promise<{ groups: number; singles: number; nonRetryable: readonly string[] }> {
       await connect();
       const originalForm = api.callForm.bind(api);
       api.callForm = (async (method: string, form: FormData, signal?: AbortSignal) => {
@@ -1517,6 +1599,7 @@ describe('TelegramIM', () => {
       return {
         groups: api.calls.filter((c) => c.method === 'sendMediaGroup').length,
         singles: api.calls.filter((c) => c.method === 'sendPhoto').length,
+        nonRetryable: handle.getNonRetryableExtraImageAbsPaths?.() ?? [],
       };
     }
 
@@ -1532,11 +1615,22 @@ describe('TelegramIM', () => {
       const missing = path.join(tmpDir, 'gone.png'); // 故意不创建
       const handle = await im.startStreamingText(Number(OWNER_ID).toString());
       for (const abs of [present[0], missing, present[1]]) handle.addExtraImageAbsPath?.(abs);
-      await handle.finalize('三张图, 其中一张缺失');
+      await expect(handle.finalize('三张图, 其中一张缺失')).rejects.toThrow(
+        'telegram single image upload rejected',
+      );
       // 相册组装即失败, 一次 sendMediaGroup 都没打成
       expect(api.calls.filter((c) => c.method === 'sendMediaGroup')).toHaveLength(0);
       // 两张可读的仍然逐张发了出去; 缺失那张在读盘处失败, 不产生出站
       expect(api.calls.filter((c) => c.method === 'sendPhoto')).toHaveLength(2);
+      expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(present);
+
+      // 连续断点停在缺失图片之前，但后面那张已实际送达。再次 finalize 只重试
+      // 缺失项，不能把断点之后已送达的图片再发一遍。
+      await expect(handle.finalize('三张图, 其中一张缺失')).rejects.toThrow(
+        'telegram single image upload rejected',
+      );
+      expect(api.calls.filter((c) => c.method === 'sendPhoto')).toHaveLength(2);
+      expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual(present);
     });
 
     it('400 拒绝 → 逐张回落(确定一张都没进聊天)', async () => {
@@ -1547,9 +1641,10 @@ describe('TelegramIM', () => {
     });
 
     it('网络错误 → 不逐张补发(可能已经发出去了)', async () => {
-      const { singles } = await sendAlbumWith(new TypeError('fetch failed'));
+      const { singles, nonRetryable } = await sendAlbumWith(new TypeError('fetch failed'));
       // 这一组宁可丢失也不重复 —— 重复的图进了聊天记录就撤不回来了。
       expect(singles).toBe(0);
+      expect(nonRetryable).toHaveLength(3);
     });
 
     it('5xx → 不逐张补发', async () => {

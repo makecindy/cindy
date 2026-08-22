@@ -23,32 +23,915 @@ export interface XdtImageRef {
 
 interface ParsedXdtRef extends XdtImageRef {
   kind: 'image' | 'file';
+  escaped: boolean;
+}
+
+export interface MarkdownCodeRange {
+  start: number;
+  end: number;
+}
+
+function runLength(text: string, start: number, char: string): number {
+  let end = start;
+  while (text[end] === char) end += 1;
+  return end - start;
+}
+
+function isEscapedAt(text: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === '\\'; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function lineEndAfterNewline(text: string, start: number): number {
+  const newline = text.indexOf('\n', start);
+  return newline === -1 ? text.length : newline + 1;
+}
+
+function isBlankLine(text: string, start: number, end: number): boolean {
+  return text.slice(start, end).trim() === '';
+}
+
+function contentLeavesParagraphOpen(content: string): boolean {
+  if (content === '') return false;
+  if (/^#{1,6}(?:[ \t]+|$)/.test(content)) return false;
+  if (/^(?:={1,}|-{1,})[ \t]*$/.test(content)) return false;
+  if (/^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(content)) return false;
+  if (/^(?:`{3,}|~{3,})/.test(content)) return false;
+  return true;
+}
+
+function listItemContentIndent(
+  text: string,
+  start: number,
+  end: number,
+): { indent: number; contentStart: number } | null {
+  const line = text.slice(start, end);
+  const match = line.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])([ \t]+)/);
+  if (!match) return null;
+  let columns = match[0].length - match[2].length;
+  for (const char of match[2]) {
+    columns += char === '\t' ? 4 - (columns % 4) : 1;
+  }
+  return { indent: columns, contentStart: start + match[0].length };
+}
+
+function indentedCodeStartLines(text: string): Set<number> {
+  const starts = new Set<number>();
+  let lineStart = 0;
+  let paragraphOpen = false;
+  let activeListIndent: number | null = null;
+  let activeQuoteDepth = 0;
+  while (lineStart < text.length) {
+    const lineEnd = lineEndAfterNewline(text, lineStart);
+    const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+    if (prefix.quoteDepth !== activeQuoteDepth) {
+      paragraphOpen = false;
+      activeListIndent = null;
+      activeQuoteDepth = prefix.quoteDepth;
+    }
+    const blank = text.slice(prefix.cursor, lineEnd).trim() === '';
+    const indent = prefix.indent;
+    const containedByList =
+      activeListIndent !== null && indent >= activeListIndent && indent < activeListIndent + 4;
+    const startsIndentedCode = indent >= 4 && !paragraphOpen && !containedByList;
+    if (startsIndentedCode) starts.add(lineStart);
+
+    const relativeListIndent = blank
+      ? null
+      : listItemContentIndent(text, prefix.cursor, lineEnd);
+    if (!blank) {
+      if (relativeListIndent !== null) activeListIndent = indent + relativeListIndent.indent;
+      else if (indent === 0) activeListIndent = null;
+    }
+    if (blank || startsIndentedCode) paragraphOpen = false;
+    else if (indent < 4 || containedByList) {
+      const contentStart = relativeListIndent?.contentStart ?? prefix.cursor;
+      paragraphOpen = contentLeavesParagraphOpen(text.slice(contentStart, lineEnd).trim());
+    }
+    lineStart = lineEnd;
+  }
+  return starts;
+}
+
+function isIndentedCodeContinuation(text: string, start: number, end: number): boolean {
+  const prefix = lineContainerPrefix(text, start, end);
+  return prefix.indent >= 4 || text.slice(prefix.cursor, end).trim() === '';
+}
+
+interface LineContainerPrefix {
+  cursor: number;
+  quoteDepth: number;
+  indent: number;
+}
+
+function lineContainerPrefix(text: string, lineStart: number, lineEnd: number): LineContainerPrefix {
+  let cursor = lineStart;
+  let quoteDepth = 0;
+  let indent = 0;
+  while (cursor < lineEnd) {
+    const indentStart = cursor;
+    let spaces = 0;
+    while (cursor < lineEnd && spaces < 3 && text[cursor] === ' ') {
+      cursor += 1;
+      spaces += 1;
+    }
+    if (text[cursor] !== '>') {
+      // The three-space limit applies to a fence relative to its container,
+      // not to the indentation that keeps a continuation inside a list.
+      cursor = indentStart;
+      indent = 0;
+      while (cursor < lineEnd && (text[cursor] === ' ' || text[cursor] === '\t')) {
+        if (text[cursor] === '\t') indent += 4 - (indent % 4);
+        else indent += 1;
+        cursor += 1;
+      }
+      break;
+    }
+    quoteDepth += 1;
+    cursor += 1;
+    if (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+    indent = 0;
+  }
+  return { cursor, quoteDepth, indent };
+}
+
+interface FenceMarker {
+  start: number;
+  marker: '`' | '~';
+  run: number;
+  quoteDepth: number;
+  listContentIndent: number | null;
+}
+
+function fenceMarkerAtLine(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  allowListMarker: boolean,
+  maxIndent: number,
+): FenceMarker | null {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (prefix.indent > maxIndent) return null;
+  let cursor = prefix.cursor;
+  let contentIndent = prefix.indent;
+  let listContentIndent: number | null = null;
+  while (allowListMarker && cursor < lineEnd) {
+    let markerEnd = cursor;
+    if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
+      markerEnd += 1;
+    } else {
+      let digits = 0;
+      while (markerEnd < lineEnd && digits < 9) {
+        const code = text.charCodeAt(markerEnd);
+        if (code < 48 || code > 57) break;
+        markerEnd += 1;
+        digits += 1;
+      }
+      if (digits === 0 || (text[markerEnd] !== '.' && text[markerEnd] !== ')')) break;
+      markerEnd += 1;
+    }
+    if (text[markerEnd] !== ' ' && text[markerEnd] !== '\t') break;
+    contentIndent += markerEnd - cursor;
+    cursor = markerEnd;
+    while (text[cursor] === ' ' || text[cursor] === '\t') {
+      contentIndent += text[cursor] === '\t' ? 4 - (contentIndent % 4) : 1;
+      cursor += 1;
+    }
+    listContentIndent = contentIndent;
+  }
+  const marker = text[cursor];
+  if (marker !== '`' && marker !== '~') return null;
+  const run = runLength(text, cursor, marker);
+  return run >= 3
+    ? { start: cursor, marker, run, quoteDepth: prefix.quoteDepth, listContentIndent }
+    : null;
+}
+
+function isValidFenceOpener(text: string, marker: FenceMarker, lineEnd: number): boolean {
+  return (
+    marker.marker !== '`' ||
+    !text.slice(marker.start + marker.run, lineEnd).includes('`')
+  );
+}
+
+function lineStaysInFenceContainer(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  opening: FenceMarker,
+): boolean {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (opening.quoteDepth > 0 && prefix.quoteDepth < opening.quoteDepth) return false;
+  if (opening.listContentIndent === null || isBlankLine(text, lineStart, lineEnd)) return true;
+  return prefix.indent >= opening.listContentIndent;
+}
+
+const HTML_BLOCK_TAGS =
+  'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+const HTML_BLOCK_TAG_RE = new RegExp(
+  `^</?(?:${HTML_BLOCK_TAGS})(?:\\s|/?>|$)`,
+  'i',
+);
+const HTML_TAG_NAME = '[A-Za-z][A-Za-z0-9-]*';
+const HTML_ATTRIBUTE_NAME = '[A-Za-z_:][A-Za-z0-9_.:-]*';
+const HTML_ATTRIBUTE_VALUE = `(?:[^\\s"'=<>\\x60]+|'[^']*'|"[^"]*")`;
+const COMPLETE_HTML_TAG_RE = new RegExp(
+  `^(?:<${HTML_TAG_NAME}(?:\\s+${HTML_ATTRIBUTE_NAME}(?:\\s*=\\s*${HTML_ATTRIBUTE_VALUE})?)*\\s*/?>|</${HTML_TAG_NAME}\\s*>)[ \\t]*(?:\\r?\\n)?$`,
+);
+
+const INLINE_HTML_TAG_RE = new RegExp(
+  `(?:<${HTML_TAG_NAME}(?:\\s+${HTML_ATTRIBUTE_NAME}(?:\\s*=\\s*${HTML_ATTRIBUTE_VALUE})?)*\\s*/?>|</${HTML_TAG_NAME}\\s*>)`,
+  'y',
+);
+
+interface HtmlBlockLineStart {
+  contentStart: number;
+  quoteDepth: number;
+  listContentIndent: number | null;
+}
+
+function htmlBlockLineStart(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+): HtmlBlockLineStart | null {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (prefix.indent > 3) return null;
+  let cursor = prefix.cursor;
+  let contentIndent = prefix.indent;
+  let listContentIndent: number | null = null;
+  while (cursor < lineEnd) {
+    let markerEnd = cursor;
+    if (text[markerEnd] === '-' || text[markerEnd] === '+' || text[markerEnd] === '*') {
+      markerEnd += 1;
+    } else {
+      let digits = 0;
+      while (markerEnd < lineEnd && digits < 9) {
+        const code = text.charCodeAt(markerEnd);
+        if (code < 48 || code > 57) break;
+        markerEnd += 1;
+        digits += 1;
+      }
+      if (digits === 0 || (text[markerEnd] !== '.' && text[markerEnd] !== ')')) break;
+      markerEnd += 1;
+    }
+    if (text[markerEnd] !== ' ' && text[markerEnd] !== '\t') break;
+    contentIndent += markerEnd - cursor;
+    cursor = markerEnd;
+    while (text[cursor] === ' ' || text[cursor] === '\t') {
+      contentIndent += text[cursor] === '\t' ? 4 - (contentIndent % 4) : 1;
+      cursor += 1;
+    }
+    listContentIndent = contentIndent;
+  }
+  return { contentStart: cursor, quoteDepth: prefix.quoteDepth, listContentIndent };
+}
+
+function lineStaysInHtmlBlockContainer(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  opening: HtmlBlockLineStart,
+): boolean {
+  const prefix = lineContainerPrefix(text, lineStart, lineEnd);
+  if (opening.quoteDepth > 0 && prefix.quoteDepth < opening.quoteDepth) return false;
+  if (opening.listContentIndent === null || isBlankLine(text, lineStart, lineEnd)) return true;
+  return prefix.indent >= opening.listContentIndent;
+}
+
+function lineLeavesParagraphOpen(
+  text: string,
+  lineStart: number,
+  lineEnd: number,
+  start: HtmlBlockLineStart,
+): boolean {
+  const content = text.slice(start.contentStart, lineEnd).trim();
+  return contentLeavesParagraphOpen(content);
+}
+
+function markdownHtmlBlockRanges(text: string): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  const lowerText = text.toLowerCase();
+  let lineStart = 0;
+  let paragraphOpen = false;
+  let paragraphQuoteDepth = 0;
+  while (lineStart < text.length) {
+    const lineEnd = lineEndAfterNewline(text, lineStart);
+    const opening = htmlBlockLineStart(text, lineStart, lineEnd);
+    if (!opening) {
+      paragraphOpen = false;
+      lineStart = lineEnd;
+      continue;
+    }
+    const content = text.slice(opening.contentStart, lineEnd);
+    const contentLower = content.toLowerCase();
+    let closingMarker: string | null = null;
+    let blankTerminated = false;
+    if (content.startsWith('<!--')) closingMarker = '-->';
+    else if (content.startsWith('<?')) closingMarker = '?>';
+    else if (content.startsWith('<![CDATA[')) closingMarker = ']]>';
+    else if (/^<![A-Z]/.test(content)) closingMarker = '>';
+    else {
+      const rawTag = contentLower.match(/^<(pre|script|style|textarea)(?:\s|>|$)/)?.[1];
+      if (rawTag) closingMarker = `</${rawTag}>`;
+      else if (HTML_BLOCK_TAG_RE.test(content)) blankTerminated = true;
+      else if (
+        (!paragraphOpen || paragraphQuoteDepth !== opening.quoteDepth) &&
+        COMPLETE_HTML_TAG_RE.test(content)
+      ) {
+        blankTerminated = true;
+      }
+      else {
+        paragraphOpen = lineLeavesParagraphOpen(text, lineStart, lineEnd, opening);
+        paragraphQuoteDepth = opening.quoteDepth;
+        lineStart = lineEnd;
+        continue;
+      }
+    }
+
+    let blockEnd = text.length;
+    if (closingMarker) {
+      const closingLower = closingMarker.toLowerCase();
+      let searchLine = lineStart;
+      while (searchLine < text.length) {
+        const searchEnd = lineEndAfterNewline(text, searchLine);
+        if (
+          searchLine !== lineStart &&
+          !lineStaysInHtmlBlockContainer(text, searchLine, searchEnd, opening)
+        ) {
+          blockEnd = searchLine;
+          break;
+        }
+        const searchStart =
+          searchLine === lineStart
+            ? opening.contentStart + content.indexOf('<') + 1
+            : lineContainerPrefix(text, searchLine, searchEnd).cursor;
+        const closingInLine = lowerText.slice(searchStart, searchEnd).indexOf(closingLower);
+        if (closingInLine >= 0) {
+          blockEnd = searchEnd;
+          break;
+        }
+        searchLine = searchEnd;
+      }
+    } else if (blankTerminated) {
+      let searchLine = lineEnd;
+      while (searchLine < text.length) {
+        const searchEnd = lineEndAfterNewline(text, searchLine);
+        if (!lineStaysInHtmlBlockContainer(text, searchLine, searchEnd, opening)) {
+          blockEnd = searchLine;
+          break;
+        }
+        if (isBlankLine(text, searchLine, searchEnd)) {
+          blockEnd = searchLine;
+          break;
+        }
+        searchLine = searchEnd;
+      }
+    }
+    ranges.push({ start: lineStart, end: blockEnd });
+    paragraphOpen = false;
+    lineStart = blockEnd;
+  }
+  return ranges;
+}
+
+function mergeMarkdownRanges(ranges: MarkdownCodeRange[]): MarkdownCodeRange[] {
+  const sorted = ranges.sort((a, b) => a.start - b.start);
+  const merged: MarkdownCodeRange[] = [];
+  for (const range of sorted) {
+    const previous = merged.at(-1);
+    if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
+/** CommonMark raw inline HTML tokens; Markdown inside these ranges is not parsed. */
+function markdownInlineHtmlRanges(
+  text: string,
+  excluded: readonly MarkdownCodeRange[],
+): MarkdownCodeRange[] {
+  const ranges: MarkdownCodeRange[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf('<', cursor);
+    if (start === -1) break;
+    const excludedRange = codeRangeAt(excluded, start);
+    if (excludedRange) {
+      cursor = excludedRange.end;
+      continue;
+    }
+
+    let end = -1;
+    if (text.startsWith('<!--', start)) {
+      const close = text.indexOf('-->', start + 4);
+      if (close !== -1) end = close + 3;
+    } else if (text.startsWith('<?', start)) {
+      const close = text.indexOf('?>', start + 2);
+      if (close !== -1) end = close + 2;
+    } else if (text.startsWith('<![CDATA[', start)) {
+      const close = text.indexOf(']]>', start + 9);
+      if (close !== -1) end = close + 3;
+    } else if (
+      text[start + 1] === '!' &&
+      text.charCodeAt(start + 2) >= 65 &&
+      text.charCodeAt(start + 2) <= 90
+    ) {
+      const close = text.indexOf('>', start + 3);
+      if (close !== -1) end = close + 1;
+    } else {
+      INLINE_HTML_TAG_RE.lastIndex = start;
+      const tag = INLINE_HTML_TAG_RE.exec(text)?.[0];
+      if (tag) end = start + tag.length;
+    }
+
+    if (end > start) {
+      ranges.push({ start, end });
+      cursor = end;
+    } else {
+      cursor = start + 1;
+    }
+  }
+  return ranges;
+}
+
+/** Locate non-rendered Markdown regions without copying large model output. */
+export function markdownCodeRanges(text: string): MarkdownCodeRange[] {
+  const fences: MarkdownCodeRange[] = [];
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const openingLineEnd = lineEndAfterNewline(text, lineStart);
+    const opening = fenceMarkerAtLine(text, lineStart, openingLineEnd, true, 3);
+    if (!opening || !isValidFenceOpener(text, opening, openingLineEnd)) {
+      lineStart = openingLineEnd;
+      continue;
+    }
+
+    let searchLine = openingLineEnd;
+    let fenceEnd = text.length;
+    while (searchLine < text.length) {
+      const candidateLineEnd = lineEndAfterNewline(text, searchLine);
+      if (!lineStaysInFenceContainer(text, searchLine, candidateLineEnd, opening)) {
+        fenceEnd = searchLine;
+        break;
+      }
+      // A closing fence inside a list must use the existing container's
+      // continuation indentation. A fresh list marker is code content.
+      const closing = fenceMarkerAtLine(
+        text,
+        searchLine,
+        candidateLineEnd,
+        false,
+        (opening.listContentIndent ?? 0) + 3,
+      );
+      if (
+        closing?.marker === opening.marker &&
+        closing.run >= opening.run &&
+        closing.quoteDepth === opening.quoteDepth &&
+        (opening.listContentIndent !== null || closing.listContentIndent === null)
+      ) {
+        const rest = text.slice(closing.start + closing.run, candidateLineEnd).trim();
+        if (rest === '') {
+          fenceEnd = candidateLineEnd;
+          break;
+        }
+      }
+      searchLine = candidateLineEnd;
+    }
+    fences.push({ start: lineStart, end: fenceEnd });
+    lineStart = fenceEnd;
+  }
+
+  const blocks = [...fences];
+  const indentedStarts = indentedCodeStartLines(text);
+  lineStart = 0;
+  while (lineStart < text.length) {
+    const fence = codeRangeAt(fences, lineStart);
+    if (fence) {
+      lineStart = fence.end;
+      continue;
+    }
+    const lineEnd = lineEndAfterNewline(text, lineStart);
+    if (!indentedStarts.has(lineStart)) {
+      lineStart = lineEnd;
+      continue;
+    }
+    const blockStart = lineStart;
+    let blockEnd = lineEnd;
+    lineStart = lineEnd;
+    while (lineStart < text.length) {
+      const nextFence = codeRangeAt(fences, lineStart);
+      if (nextFence) break;
+      const nextLineEnd = lineEndAfterNewline(text, lineStart);
+      if (
+        !isIndentedCodeContinuation(text, lineStart, nextLineEnd)
+      ) {
+        break;
+      }
+      blockEnd = nextLineEnd;
+      lineStart = nextLineEnd;
+    }
+    blocks.push({ start: blockStart, end: blockEnd });
+  }
+  blocks.push(...markdownHtmlBlockRanges(text));
+  const mergedBlocks = mergeMarkdownRanges(blocks);
+
+  const ranges = [...mergedBlocks];
+  let blockIndex = 0;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const block = mergedBlocks[blockIndex];
+    if (block && cursor >= block.start) {
+      cursor = block.end;
+      blockIndex += 1;
+      continue;
+    }
+    if (text[cursor] !== '`') {
+      cursor += 1;
+      continue;
+    }
+    const openingRun = runLength(text, cursor, '`');
+    if (isEscapedAt(text, cursor)) {
+      cursor += openingRun;
+      continue;
+    }
+    let search = cursor + openingRun;
+    let closingEnd = -1;
+    while (search < text.length && (!block || search < block.start)) {
+      const next = text.indexOf('`', search);
+      if (next === -1 || (block && next >= block.start)) break;
+      const closingRun = runLength(text, next, '`');
+      if (closingRun === openingRun) {
+        closingEnd = next + closingRun;
+        break;
+      }
+      search = next + closingRun;
+    }
+    if (closingEnd === -1) {
+      cursor += openingRun;
+      continue;
+    }
+    ranges.push({ start: cursor, end: closingEnd });
+    cursor = closingEnd;
+  }
+  const sortedRanges = ranges.sort((a, b) => a.start - b.start);
+  ranges.push(...markdownInlineHtmlRanges(text, sortedRanges));
+  return mergeMarkdownRanges(ranges);
+}
+
+/** Remove residual bare internal file URLs while preserving Markdown code examples. */
+export function sanitizeBareXdtFileUrls(text: string): string {
+  const ranges = markdownCodeRanges(text);
+  const lower = text.toLowerCase();
+  const scheme = 'xdt-file://';
+  let cursor = 0;
+  let sanitized = '';
+  while (cursor < text.length) {
+    const start = lower.indexOf(scheme, cursor);
+    if (start < 0) return sanitized + text.slice(cursor);
+    if (isMarkdownCodePosition(ranges, start)) {
+      sanitized += text.slice(cursor, start + scheme.length);
+      cursor = start + scheme.length;
+      continue;
+    }
+    let end = start + scheme.length;
+    while (end < text.length && !/[\s<>"'`\])]/.test(text[end])) end += 1;
+    sanitized += `${text.slice(cursor, start)}附件`;
+    cursor = end;
+  }
+  return sanitized;
+}
+
+function codeRangeAt(
+  ranges: readonly MarkdownCodeRange[],
+  position: number,
+): MarkdownCodeRange | null {
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const range = ranges[mid];
+    if (position < range.start) high = mid - 1;
+    else if (position >= range.end) low = mid + 1;
+    else return range;
+  }
+  return null;
+}
+
+export function isMarkdownCodePosition(
+  ranges: readonly MarkdownCodeRange[],
+  position: number,
+): boolean {
+  return codeRangeAt(ranges, position) !== null;
+}
+
+function markdownLabelEnd(
+  text: string,
+  start: number,
+  closeByOpen: Int32Array,
+): { end: number; nested: boolean } {
+  const closing = closeByOpen[start - 1];
+  if (closing !== -1 && text[closing + 1] === '(') {
+    return { end: closing, nested: false };
+  }
+  const firstNested = text.indexOf('[', closing === -1 ? start : closing + 1);
+  if (firstNested !== -1) return { end: firstNested, nested: true };
+  return { end: text.length, nested: false };
+}
+
+function markdownLinkOpenPrefix(
+  text: string,
+  closeByOpen: Int32Array,
+  codeRanges: readonly MarkdownCodeRange[],
+): Int32Array {
+  const prefix = new Int32Array(text.length + 1);
+  let codeRangeIndex = 0;
+  for (let opening = 0; opening < text.length; opening += 1) {
+    prefix[opening + 1] = prefix[opening];
+    while (codeRanges[codeRangeIndex]?.end <= opening) codeRangeIndex += 1;
+    const codeRange = codeRanges[codeRangeIndex];
+    if (text[opening] !== '[' || (codeRange !== undefined && codeRange.start <= opening)) continue;
+    if (isEscapedAt(text, opening)) continue;
+    const closing = closeByOpen[opening];
+    if (closing === -1 || text[closing + 1] !== '(') continue;
+    const image = opening > 0 && text[opening - 1] === '!' && !isEscapedAt(text, opening - 1);
+    if (!image) prefix[opening + 1] += 1;
+  }
+  return prefix;
+}
+
+function markdownBracketPairs(text: string): Int32Array {
+  const closeByOpen = new Int32Array(text.length);
+  closeByOpen.fill(-1);
+  const stack: number[] = [];
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
+    if (text[cursor] === '\\') {
+      if (text[cursor + 1] === '[' && stack.length === 0) {
+        cursor += 1;
+        stack.push(cursor);
+        continue;
+      }
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === '[') {
+      stack.push(cursor);
+    } else if (text[cursor] === ']' && stack.length > 0) {
+      closeByOpen[stack.pop()!] = cursor;
+    }
+  }
+  return closeByOpen;
+}
+
+function markdownParenPairs(text: string): {
+  closeByOpen: Int32Array;
+  openByClose: Int32Array;
+} {
+  const closeByOpen = new Int32Array(text.length);
+  const openByClose = new Int32Array(text.length);
+  closeByOpen.fill(-1);
+  openByClose.fill(-1);
+  const stack: number[] = [];
+  let titleQuote: '"' | "'" | null = null;
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
+    if (text[cursor] === '\\') {
+      cursor += 1;
+      continue;
+    }
+    if (titleQuote) {
+      if (text[cursor] === titleQuote) titleQuote = null;
+      if (text[cursor] === '\n' || text[cursor] === '\r') titleQuote = null;
+      continue;
+    }
+    if (
+      (text[cursor] === '"' || text[cursor] === "'") &&
+      stack.length > 0 &&
+      (text[cursor - 1] === ' ' ||
+        text[cursor - 1] === '\t' ||
+        text[cursor - 1] === '\n' ||
+        text[cursor - 1] === '\r')
+    ) {
+      titleQuote = text[cursor] as '"' | "'";
+      continue;
+    }
+    if (text[cursor] === '(') {
+      stack.push(cursor);
+    } else if (text[cursor] === ')' && stack.length > 0) {
+      const opening = stack.pop()!;
+      closeByOpen[opening] = cursor;
+      openByClose[cursor] = opening;
+    }
+  }
+  return { closeByOpen, openByClose };
+}
+
+function markdownWhitespacePositions(text: string): number[] {
+  const positions: number[] = [];
+  for (let cursor = 0; cursor < text.length; cursor += 1) {
+    if (text[cursor] === '\\' && isMarkdownEscapablePunctuation(text[cursor + 1])) {
+      cursor += 1;
+      continue;
+    }
+    if (/\s/.test(text[cursor])) positions.push(cursor);
+  }
+  return positions;
+}
+
+function isMarkdownEscapablePunctuation(char: string | undefined): boolean {
+  if (!char) return false;
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x21 && code <= 0x2f) ||
+    (code >= 0x3a && code <= 0x40) ||
+    (code >= 0x5b && code <= 0x60) ||
+    (code >= 0x7b && code <= 0x7e)
+  );
+}
+
+function hasInvalidAngleDestinationChar(text: string, start: number, end: number): boolean {
+  for (let cursor = start; cursor < end; cursor += 1) {
+    if (text[cursor] === '\\' && isMarkdownEscapablePunctuation(text[cursor + 1])) {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === '<' || text[cursor] === '\n' || text[cursor] === '\r') return true;
+  }
+  return false;
+}
+
+function hasWhitespaceBetween(positions: readonly number[], start: number, end: number): boolean {
+  let low = 0;
+  let high = positions.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (positions[mid] < start) low = mid + 1;
+    else high = mid;
+  }
+  return low < positions.length && positions[low] < end;
+}
+
+function markdownTitleWhitespaceEnd(text: string, start: number): number {
+  let cursor = start;
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  if (text[cursor] === '\r') {
+    cursor += text[cursor + 1] === '\n' ? 2 : 1;
+  } else if (text[cursor] === '\n') {
+    cursor += 1;
+  }
+  while (text[cursor] === ' ' || text[cursor] === '\t') cursor += 1;
+  return text[cursor] === '\r' || text[cursor] === '\n' ? -1 : cursor;
+}
+
+function plainTitleUrlEnd(text: string, titleStart: number, schemeStart: number): number {
+  let cursor = titleStart;
+  while (text[cursor - 1] === ' ' || text[cursor - 1] === '\t') cursor -= 1;
+  if (text[cursor - 1] === '\n') {
+    cursor -= text[cursor - 2] === '\r' ? 2 : 1;
+  } else if (text[cursor - 1] === '\r') {
+    cursor -= 1;
+  }
+  while (text[cursor - 1] === ' ' || text[cursor - 1] === '\t') cursor -= 1;
+  if (
+    cursor === titleStart ||
+    cursor <= schemeStart ||
+    text[cursor - 1] === '\r' ||
+    text[cursor - 1] === '\n'
+  ) {
+    return -1;
+  }
+  return cursor;
+}
+
+const MAX_COMMONMARK_LINK_DESTINATION_PAREN_DEPTH = 32;
+
+function exceedsPlainDestinationParenDepth(text: string, start: number, end: number): boolean {
+  let depth = 0;
+  for (let cursor = start; cursor < end; cursor += 1) {
+    if (text[cursor] === '\\' && isMarkdownEscapablePunctuation(text[cursor + 1])) {
+      cursor += 1;
+      continue;
+    }
+    if (text[cursor] === '(') {
+      depth += 1;
+      if (depth > MAX_COMMONMARK_LINK_DESTINATION_PAREN_DEPTH) return true;
+    } else if (text[cursor] === ')') {
+      depth -= 1;
+    }
+  }
+  return false;
+}
+
+function angleReferenceEnd(text: string, closingAngle: number): number {
+  const whitespaceStart = closingAngle + 1;
+  let cursor = markdownTitleWhitespaceEnd(text, whitespaceStart);
+  if (cursor === -1) return -1;
+  if (text[cursor] === ')') return cursor;
+  if (cursor === whitespaceStart) return -1;
+  const opener = text[cursor];
+  const closer = opener === '"' ? '"' : opener === "'" ? "'" : opener === '(' ? ')' : null;
+  if (!closer) return -1;
+  cursor += 1;
+  while (cursor < text.length) {
+    if (text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text[cursor] === closer) break;
+    if (text[cursor] === '\n' || text[cursor] === '\r') return -1;
+    cursor += 1;
+  }
+  if (text[cursor] !== closer) return -1;
+  cursor += 1;
+  cursor = markdownTitleWhitespaceEnd(text, cursor);
+  if (cursor === -1) return -1;
+  return text[cursor] === ')' ? cursor : -1;
+}
+
+function plainReferenceBounds(
+  text: string,
+  schemeStart: number,
+  endParen: number,
+  openByClose: Int32Array,
+  whitespacePositions: readonly number[],
+): { endParen: number; urlEnd: number } {
+  const fallback = (): { endParen: number; urlEnd: number } => ({
+    endParen,
+    urlEnd: hasWhitespaceBetween(whitespacePositions, schemeStart, endParen)
+      ? schemeStart
+      : endParen,
+  });
+  let titleEnd = endParen - 1;
+  while (text[titleEnd] === ' ' || text[titleEnd] === '\t') titleEnd -= 1;
+
+  const closingTitle = text[titleEnd];
+  let openingTitle: '"' | "'";
+  if (closingTitle === '"' || closingTitle === "'") {
+    openingTitle = closingTitle;
+  } else if (closingTitle === ')') {
+    const titleStart = openByClose[titleEnd];
+    if (titleStart <= schemeStart) return fallback();
+    const urlEnd = plainTitleUrlEnd(text, titleStart, schemeStart);
+    if (urlEnd === -1) return fallback();
+    if (hasWhitespaceBetween(whitespacePositions, schemeStart, urlEnd)) {
+      return { endParen, urlEnd: schemeStart };
+    }
+    return { endParen, urlEnd };
+  } else {
+    return fallback();
+  }
+
+  let titleStart = titleEnd - 1;
+  while (titleStart > schemeStart) {
+    if (text[titleStart] === openingTitle) {
+      let slashes = 0;
+      for (let i = titleStart - 1; i >= schemeStart && text[i] === '\\'; i -= 1) slashes += 1;
+      if (slashes % 2 === 0) break;
+    }
+    if (text[titleStart] === '\n' || text[titleStart] === '\r') {
+      return fallback();
+    }
+    titleStart -= 1;
+  }
+  if (text[titleStart] !== openingTitle) {
+    return fallback();
+  }
+  const urlEnd = plainTitleUrlEnd(text, titleStart, schemeStart);
+  if (urlEnd === -1) {
+    return fallback();
+  }
+  if (hasWhitespaceBetween(whitespacePositions, schemeStart, urlEnd)) {
+    return { endParen, urlEnd: schemeStart };
+  }
+  return { endParen, urlEnd };
 }
 
 /**
  * 判定 text[openBracket] 处是否**直接**开始一个 managed-media 引用。判据与
- * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 扫描遇 '[' 即
- * 放弃、']( ' 收尾、按 image 与否认 scheme), 只读、无副作用。
+ * parseXdtRefs 主循环逐条同语义(前一字符 '!' 决定 image、alt 方括号配对、
+ * '](' 收尾、按 image 与否认 scheme), 只读、无副作用。
  *
- * "直接"很关键: alt 里再出现 '[' 时返回 false —— 那个更内层的 '[' 才可能是
- * 起点, 外层的恢复循环会继续迭代到它。
+ * "直接"很关键: 合法嵌套方括号属于当前 label；畸形外层候选则由主循环从
+ * 后续 '[' 恢复。
  */
-function refStartsAt(text: string, openBracket: number): boolean {
+function refStartsAt(
+  text: string,
+  openBracket: number,
+  codeRanges: readonly MarkdownCodeRange[],
+  bracketCloseByOpen: Int32Array,
+): boolean {
+  if (codeRangeAt(codeRanges, openBracket)) return false;
   const image = openBracket > 0 && text[openBracket - 1] === '!';
-  let altEnd = openBracket + 1;
-  while (
-    altEnd < text.length &&
-    text[altEnd] !== '[' &&
-    !(text[altEnd] === ']' && text[altEnd + 1] === '(')
-  ) {
-    altEnd += 1;
-  }
-  if (altEnd >= text.length || text[altEnd] === '[') return false;
+  const label = markdownLabelEnd(text, openBracket + 1, bracketCloseByOpen);
+  if (label.end >= text.length || label.nested) return false;
 
-  const urlStart = altEnd + 2;
+  const urlStart = label.end + 2;
+  const schemeStart = text[urlStart] === '<' ? urlStart + 1 : urlStart;
   return image
-    ? text.startsWith('xdt-image://', urlStart) || text.startsWith('cindy-media://', urlStart)
-    : text.startsWith('xdt-file://', urlStart);
+    ? text.startsWith('xdt-image://', schemeStart) || text.startsWith('cindy-media://', schemeStart)
+    : text.startsWith('xdt-file://', schemeStart);
 }
 
 /**
@@ -58,53 +941,57 @@ function refStartsAt(text: string, openBracket: number): boolean {
  */
 function parseXdtRefs(text: string): ParsedXdtRef[] {
   const refs: ParsedXdtRef[] = [];
+  const codeRanges = markdownCodeRanges(text);
+  const bracketCloseByOpen = markdownBracketPairs(text);
+  const linkOpenPrefix = markdownLinkOpenPrefix(text, bracketCloseByOpen, codeRanges);
+  const parenPairs = markdownParenPairs(text);
+  const whitespacePositions = markdownWhitespacePositions(text);
   let cursor = 0;
-  // ')' 查找的单调缓存。搜索起点跨候选严格递增(scheme 不匹配的路径根本不查
-  // 括号; 恢复后新候选的 urlStart 在恢复点之后; 收下引用后 cursor = endParen
-  // + 1 > 上次命中), 且 [上次起点, 上次命中) 区间内必无 ')' —— 所以起点仍
-  // ≤ 上次命中时可直接复用, 与每次重新 indexOf 等价, 每个文本位置至多被扫
-  // 一次。没有它, 形如 '[a](xdt-file://x'.repeat(N) + ')' 的对抗输入会让 N 个
-  // 候选各自重扫同一个尾括号, 退化成 Θ(n²)(#1856 review 第三轮: 这条平方
-  // 向量是畸形恢复引入的, 收敛前的解析器一次扫到 ')' 就整体跳过)。
-  let cachedParen = -2; // -2 = 尚无缓存
-  const nextParen = (from: number): number => {
-    if (cachedParen >= from) return cachedParen;
-    cachedParen = text.indexOf(')', from);
-    return cachedParen;
+  let cachedAngle = -2;
+  const nextAngle = (from: number): number => {
+    if (cachedAngle === -1 || cachedAngle >= from) return cachedAngle;
+    cachedAngle = text.indexOf('>', from);
+    return cachedAngle;
   };
 
   while (cursor < text.length) {
     const openBracket = text.indexOf('[', cursor);
     if (openBracket === -1) break;
+    const codeRange = codeRangeAt(codeRanges, openBracket);
+    if (codeRange) {
+      cursor = codeRange.end;
+      continue;
+    }
 
     const image = openBracket > 0 && text[openBracket - 1] === '!';
     const start = image ? openBracket - 1 : openBracket;
     const altStart = openBracket + 1;
-    let altEnd = altStart;
-    while (
-      altEnd < text.length &&
-      text[altEnd] !== '[' &&
-      !(text[altEnd] === ']' && text[altEnd + 1] === '(')
-    ) {
-      altEnd += 1;
-    }
+    const label = markdownLabelEnd(text, altStart, bracketCloseByOpen);
+    const altEnd = label.end;
 
-    // A nested opening bracket supersedes the malformed outer candidate. This
-    // both preserves later valid refs and keeps the scan strictly forward.
-    if (text[altEnd] === '[') {
+    // A nested opening bracket only supersedes an unmatched outer label.
+    // Balanced nested brackets are already included in altEnd.
+    if (label.nested) {
       cursor = altEnd;
       continue;
     }
     if (altEnd >= text.length) break;
 
+    if (!image && linkOpenPrefix[altEnd] > linkOpenPrefix[altStart]) {
+      cursor = altStart;
+      continue;
+    }
+
     const urlStart = altEnd + 2;
+    const angleWrapped = text[urlStart] === '<';
+    const schemeStart = angleWrapped ? urlStart + 1 : urlStart;
     const scheme = image
-      ? text.startsWith('xdt-image://', urlStart)
+      ? text.startsWith('xdt-image://', schemeStart)
         ? 'xdt-image://'
-        : text.startsWith('cindy-media://', urlStart)
+        : text.startsWith('cindy-media://', schemeStart)
           ? 'cindy-media://'
           : null
-      : text.startsWith('xdt-file://', urlStart)
+      : text.startsWith('xdt-file://', schemeStart)
         ? 'xdt-file://'
         : null;
     if (!scheme) {
@@ -112,8 +999,37 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       continue;
     }
 
-    const endParen = nextParen(urlStart + scheme.length);
-    if (endParen === -1) break;
+    const closingAngle = angleWrapped ? nextAngle(schemeStart + scheme.length) : -1;
+    const initialEndParen = angleWrapped
+      ? closingAngle === -1 || hasInvalidAngleDestinationChar(text, schemeStart, closingAngle)
+        ? -1
+        : angleReferenceEnd(text, closingAngle)
+      : parenPairs.closeByOpen[altEnd + 1];
+    if (initialEndParen === -1) {
+      // A malformed angle-wrapped candidate must not terminate the whole
+      // scan: a later, independent managed-media reference may still be valid.
+      // Advance beyond this scheme so recovery remains strictly linear.
+      if (angleWrapped) {
+        cursor = schemeStart + scheme.length;
+        continue;
+      }
+      cursor = schemeStart + scheme.length;
+      continue;
+    }
+    const bounds = angleWrapped
+      ? { endParen: initialEndParen, urlEnd: closingAngle }
+      : plainReferenceBounds(
+          text,
+          schemeStart,
+          initialEndParen,
+          parenPairs.openByClose,
+          whitespacePositions,
+        );
+    const { endParen, urlEnd } = bounds;
+    if (!angleWrapped && exceedsPlainDestinationParenDepth(text, schemeStart, urlEnd)) {
+      cursor = schemeStart + scheme.length;
+      continue;
+    }
     // 畸形恢复(#1856 review P2): 未闭合引用会让本候选一路扫到**下一个**引用
     // 的右括号, 把后续合法引用整段吞进自己的 URL —— 收集丢附件, transform 还会
     // 把整段错误改写。判据是 URL 段里出现**构成引用起点**的 '['(#1856 review
@@ -124,16 +1040,15 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
     //
     // cursor 仍严格前进: recovery ≥ urlStart + scheme.length > openBracket。
     // 恢复判定本身是线性(本解析器防 ReDoS/防回扫的前提): refStartsAt 的 alt
-    // 扫描天然停在下一个 '[', 一段里相邻 '[' 的间距之和 ≤ 段长; 且恢复点是本段
-    // 第一个引用起点, 下一候选的 URL 段从它之后才开始, 各候选扫过的区间互不
-    // 重叠。恢复带来的 ')' 重复定位由上面的 nextParen 单调缓存兜住。
+    // 方括号和圆括号都在进入主循环前一次配对；且恢复点是本段第一个引用起点，
+    // 下一候选的 URL 段从它之后才开始，各候选扫描区间不重叠。
     let recovery = -1;
     for (
-      let bracket = text.indexOf('[', urlStart + scheme.length);
-      bracket !== -1 && bracket < endParen;
+      let bracket = text.indexOf('[', schemeStart + scheme.length);
+      bracket !== -1 && bracket < urlEnd;
       bracket = text.indexOf('[', bracket + 1)
     ) {
-      if (refStartsAt(text, bracket)) {
+      if (refStartsAt(text, bracket, codeRanges, bracketCloseByOpen)) {
         recovery = bracket;
         break;
       }
@@ -142,11 +1057,12 @@ function parseXdtRefs(text: string): ParsedXdtRef[] {
       cursor = recovery;
       continue;
     }
-    if (endParen > urlStart + scheme.length) {
+    if (urlEnd > schemeStart + scheme.length) {
       refs.push({
         kind: image ? 'image' : 'file',
+        escaped: isEscapedAt(text, start),
         alt: text.slice(altStart, altEnd),
-        url: text.slice(urlStart, endParen),
+        url: text.slice(schemeStart, urlEnd),
         start,
         end: endParen + 1,
       });
@@ -244,7 +1160,7 @@ export interface XdtFileLink {
 export function collectXdtFileLinks(text: string): XdtFileLink[] {
   const seen = new Map<string, XdtFileLink>();
   for (const ref of parseXdtRefs(text)) {
-    if (ref.kind !== 'file') continue;
+    if (ref.kind !== 'file' || ref.escaped) continue;
     const absPath = xdtFileUrlToAbsPath(ref.url);
     if (seen.has(absPath)) continue;
     seen.set(absPath, { alt: ref.alt, absPath });
@@ -255,7 +1171,7 @@ export function collectXdtFileLinks(text: string): XdtFileLink[] {
 /** Collect managed-image refs in source order, including text offsets. */
 export function collectXdtImageRefs(text: string): XdtImageRef[] {
   return parseXdtRefs(text)
-    .filter((ref) => ref.kind === 'image')
+    .filter((ref) => ref.kind === 'image' && !ref.escaped)
     .map(({ alt, url, start, end }) => ({ alt, url, start, end }));
 }
 
@@ -269,7 +1185,7 @@ export type XdtFileRef = XdtImageRef;
  */
 export function collectXdtFileRefs(text: string): XdtFileRef[] {
   return parseXdtRefs(text)
-    .filter((ref) => ref.kind === 'file')
+    .filter((ref) => ref.kind === 'file' && !ref.escaped)
     .map(({ alt, url, start, end }) => ({ alt, url, start, end }));
 }
 

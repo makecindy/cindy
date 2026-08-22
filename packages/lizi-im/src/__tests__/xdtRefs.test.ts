@@ -12,6 +12,7 @@ import {
   collectXdtFileRefs,
   collectXdtImageRefs,
   collectXdtImageUrls,
+  markdownCodeRanges,
   normalizeXdtAbsPath,
   stripXdtFileLinks,
   stripXdtForStreaming,
@@ -179,6 +180,434 @@ describe('collectXdtFileRefs(hook 出站收敛,#1855)', () => {
 
   it('图片语法 + xdt-file 协议不算文件引用(与个人渠道收口同口径)', () => {
     expect(collectXdtFileRefs('![f](xdt-file:///tmp/x.txt)')).toEqual([]);
+  });
+
+  it('parses an angle-bracket destination with an optional Markdown title', () => {
+    const text = '[报告](<xdt-file:///tmp/report.pdf> "下载")';
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告',
+        url: 'xdt-file:///tmp/report.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
+  });
+
+  it('allows one line ending between an angle destination and its title', () => {
+    for (const lineEnding of ['\n', '\r', '\r\n']) {
+      const text = `[报告](<xdt-file:///tmp/report.pdf>${lineEnding}"说明")`;
+      expect(collectXdtFileRefs(text)).toEqual([
+        {
+          alt: '报告',
+          url: 'xdt-file:///tmp/report.pdf',
+          start: 0,
+          end: text.length,
+        },
+      ]);
+    }
+
+    expect(collectXdtFileRefs('[报告](<xdt-file:///tmp/report.pdf>\n\n"说明")')).toEqual([]);
+  });
+
+  it('continues after a malformed angle-bracket destination and finds the next ref', () => {
+    const text =
+      '[broken](<xdt-file:///tmp/broken.pdf "missing angle" [report](xdt-file:///tmp/report.pdf)';
+
+    expect(collectXdtFileLinks(text)).toEqual([{ alt: 'report', absPath: '/tmp/report.pdf' }]);
+  });
+
+  it('scans repeated unclosed angle destinations in linear time', () => {
+    const text = '[x](<xdt-file://missing'.repeat(20_000);
+    const startedAt = performance.now();
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
+  it('parses a plain destination with an optional Markdown title', () => {
+    const quoted = '[报告](xdt-file:///tmp/report.pdf "下载")';
+    const quotedWithParen = '[报告](xdt-file:///tmp/report.pdf "第 1) 版")';
+    const parenthesized = '[报告](xdt-file:///tmp/report.pdf (下载))';
+
+    for (const text of [quoted, quotedWithParen, parenthesized]) {
+      expect(collectXdtFileRefs(text)).toEqual([
+        {
+          alt: '报告',
+          url: 'xdt-file:///tmp/report.pdf',
+          start: 0,
+          end: text.length,
+        },
+      ]);
+    }
+  });
+
+  it('allows one line ending between a plain destination and its title', () => {
+    const text = '[报告](xdt-file:///tmp/report.pdf\n"第 1) 版")';
+
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告',
+        url: 'xdt-file:///tmp/report.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(collectXdtFileRefs('[报告](xdt-file:///tmp/report.pdf\n\n"说明")')).toEqual([]);
+  });
+
+  it('parses balanced parentheses in a plain file destination', () => {
+    const text = '[报告](xdt-file:///work/a(b)c.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告',
+        url: 'xdt-file:///work/a(b)c.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告');
+  });
+
+  it('limits balanced parentheses in a plain destination to CommonMark depth', () => {
+    const destination = (depth: number): string =>
+      `xdt-file:///work/${'('.repeat(depth)}secret.pdf${')'.repeat(depth)}`;
+    const accepted = `[示例](${destination(32)})`;
+    const rejected = `[示例](${destination(33)})`;
+
+    expect(collectXdtFileRefs(accepted)).toHaveLength(1);
+    expect(collectXdtFileRefs(rejected)).toEqual([]);
+    expect(transformXdtRefs(rejected, { file: ({ alt }) => alt })).toBe(rejected);
+  });
+
+  it('parses nested brackets in an attachment label', () => {
+    const text = '[报告 [最终版]](xdt-file:///work/report.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([
+      {
+        alt: '报告 [最终版]',
+        url: 'xdt-file:///work/report.pdf',
+        start: 0,
+        end: text.length,
+      },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('报告 [最终版]');
+  });
+
+  it('rejects an outer file link whose label already contains a link', () => {
+    const text = '[outer [inner](https://example.com)](xdt-file:///work/secret.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtFileLinks(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+  });
+
+  it('allows code-shaped links and images inside a file label', () => {
+    const code = '[outer `[inner](https://example.com)`](xdt-file:///work/code.pdf)';
+    const image = '[outer ![inner](https://example.com/a.png)](xdt-file:///work/image.pdf)';
+
+    expect(collectXdtFileRefs(`${code}\n${image}`).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: 'outer `[inner](https://example.com)`', url: 'xdt-file:///work/code.pdf' },
+      { alt: 'outer ![inner](https://example.com/a.png)', url: 'xdt-file:///work/image.pdf' },
+    ]);
+  });
+
+  it('requires whitespace before an angle destination title', () => {
+    const text = '[示例](<xdt-file:///work/secret.pdf>"title")';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtFileLinks(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+  });
+
+  it('rejects invalid characters inside an angle file destination', () => {
+    const texts = [
+      '[示例](<xdt-file:///work/secret<draft.pdf>)',
+      '[示例](<xdt-file:///work/secret\nreport.pdf>)',
+    ];
+
+    for (const text of texts) {
+      expect(collectXdtFileRefs(text)).toEqual([]);
+      expect(collectXdtFileLinks(text)).toEqual([]);
+      expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+    }
+  });
+
+  it('rejects a plain file destination with unescaped whitespace', () => {
+    const texts = [
+      '[示例](xdt-file:///work/secret report.pdf)',
+      '[示例](xdt-file:///work/secret report.pdf "title")',
+      '[示例](xdt-file:///work/secret report.pdf (title))',
+      '[示例](xdt-file:///work/secret\\ report.pdf)',
+    ];
+
+    for (const text of texts) {
+      expect(collectXdtFileRefs(text)).toEqual([]);
+      expect(collectXdtFileLinks(text)).toEqual([]);
+      expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(text);
+    }
+  });
+
+  it('ignores file references inside inline code and fenced code blocks', () => {
+    const inline = '`[报告](xdt-file:///tmp/inline.pdf)`';
+    const fenced = '```md\n[报告](xdt-file:///tmp/fenced.pdf)\n```';
+    const text = `${inline}\n${fenced}`;
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('does not treat escaped backticks as an inline code range', () => {
+    const text = '\\`[报告](xdt-file:///tmp/report.pdf)\\`';
+
+    expect(collectXdtFileLinks(text)).toEqual([
+      { alt: '报告', absPath: '/tmp/report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('\\`报告\\`');
+  });
+
+  it('redacts escaped file links without collecting them for upload', () => {
+    const text =
+      '\\[示例](xdt-file:///tmp/secret.pdf) and \\\\[报告](xdt-file:///tmp/report.pdf)';
+
+    expect(collectXdtFileLinks(text)).toEqual([
+      { alt: '报告', absPath: '/tmp/report.pdf' },
+    ]);
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(
+      '\\示例 and \\\\报告',
+    );
+  });
+
+  it('applies the same escaped-marker rule to managed images', () => {
+    const escaped = `cindy-media://blobs/${'e'.repeat(64)}.png`;
+    const deliverable = `cindy-media://blobs/${'d'.repeat(64)}.png`;
+    const text = `\\![示例](${escaped}) and \\\\![图片](${deliverable})`;
+
+    expect(collectXdtImageUrls(text)).toEqual([deliverable]);
+    expect(transformXdtRefs(text, { image: ({ alt }) => alt })).toBe(
+      '\\示例 and \\\\图片',
+    );
+  });
+
+  it('ignores file references inside blockquote and list-container fences', () => {
+    const quoted = '> ~~~md\n> [报告](xdt-file:///tmp/quoted.pdf)\n> ~~~';
+    const listed = '- ```md\n  [报告](xdt-file:///tmp/listed.pdf)\n  ```';
+    const nestedQuote = '> ```md\n> > [报告](xdt-file:///tmp/nested.pdf)\n> ```';
+    const listShapedLiteral = '```md\n- ```\n[报告](xdt-file:///tmp/literal.pdf)\n```';
+
+    expect(collectXdtFileRefs(`${quoted}\n${listed}\n${nestedQuote}\n${listShapedLiteral}`)).toEqual([]);
+  });
+
+  it('does not close a list fence on a new list marker inside the code block', () => {
+    const text =
+      '- ```md\n  - ```\n  [secret](xdt-file:///tmp/secret.pdf)\n  ```';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('keeps four-column list continuation fences inside their container', () => {
+    const text =
+      '1.  ```md\n    [secret](xdt-file:///tmp/secret.pdf)\n    ```';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('rejects a backtick fence opener whose info string contains a backtick', () => {
+    const text =
+      '```lang`\n[报告](xdt-file:///tmp/report.pdf)\n```';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(
+      '```lang`\n报告\n```',
+    );
+  });
+
+  it('ends an unclosed container fence when the container ends', () => {
+    const text = '> ```md\n> example\n\n[报告](xdt-file:///tmp/outside.pdf)';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/outside.pdf' },
+    ]);
+  });
+
+  it('ignores file references inside four-space indented code blocks', () => {
+    const text = '正文\n\n    [报告](xdt-file:///tmp/indented.pdf)\n\n结尾';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('starts indented code immediately after an ATX heading', () => {
+    const text = '# 标题\n    [示例](xdt-file:///tmp/heading-code.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('starts indented code after an ATX heading inside a list item', () => {
+    const text = '- # 标题\n      [示例](xdt-file:///tmp/list-heading-code.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件' })).toBe(text);
+  });
+
+  it('does not let an indented line interrupt an open paragraph', () => {
+    const text = '正文\n    [报告](xdt-file:///tmp/paragraph-continuation.pdf)';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/paragraph-continuation.pdf' },
+    ]);
+  });
+
+  it('ignores managed media references inside tab-indented code blocks', () => {
+    const text = `\t[报告](xdt-file:///tmp/tabbed.pdf)\n\t![图片](${BLOB})`;
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtImageRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => '附件', image: () => '图片' })).toBe(text);
+  });
+
+  it('ignores file references inside blockquote indented code', () => {
+    const text = '>     [报告](xdt-file:///tmp/private.pdf)';
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(transformXdtRefs(text, { file: () => 'sent' })).toBe(text);
+  });
+
+  it('ignores managed media references inside raw HTML blocks and comments', () => {
+    const text = [
+      '<pre>',
+      '[报告](xdt-file:///tmp/private.pdf)',
+      `![图片](${BLOB})`,
+      '</pre>',
+      '',
+      '<!--',
+      '[注释](xdt-file:///tmp/comment.pdf)',
+      '-->',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtImageRefs(text)).toEqual([]);
+  });
+
+  it('ignores managed media references inside raw inline HTML tokens', () => {
+    const text = [
+      `说明 <!-- ![注释图片](${BLOB}) [注释附件](xdt-file:///tmp/comment.pdf) -->`,
+      '<span title="[属性附件](xdt-file:///tmp/attribute.pdf)">正文</span>',
+      '[真实附件](xdt-file:///tmp/outside.pdf)',
+    ].join('\n');
+
+    expect(collectXdtImageRefs(text)).toEqual([]);
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '真实附件', url: 'xdt-file:///tmp/outside.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt, image: () => '图片' })).toBe(
+      [
+        `说明 <!-- ![注释图片](${BLOB}) [注释附件](xdt-file:///tmp/comment.pdf) -->`,
+        '<span title="[属性附件](xdt-file:///tmp/attribute.pdf)">正文</span>',
+        '真实附件',
+      ].join('\n'),
+    );
+  });
+
+  it('ignores managed media references inside generic type-7 HTML blocks', () => {
+    const text = [
+      '<span class="example">',
+      '[报告](xdt-file:///tmp/generic-html.pdf)',
+      `![图片](${BLOB})`,
+      '</span>',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+    expect(collectXdtImageRefs(text)).toEqual([]);
+  });
+
+  it('does not let a type-7 HTML tag interrupt an open paragraph', () => {
+    const text = [
+      '说明',
+      '<span>',
+      '[报告](xdt-file:///tmp/paragraph.pdf)',
+      '</span>',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/paragraph.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toContain('\n报告\n');
+  });
+
+  it('allows a type-7 HTML block after an ATX heading', () => {
+    const text = [
+      '# 标题',
+      '<span>',
+      '[示例](xdt-file:///tmp/heading-html.pdf)',
+      '</span>',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text)).toEqual([]);
+  });
+
+  it('ends an unclosed HTML comment when its blockquote container ends', () => {
+    const text = [
+      '> <!--',
+      '> 示例',
+      '',
+      '[报告](xdt-file:///tmp/outside.pdf)',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/outside.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe(
+      ['> <!--', '> 示例', '', '报告'].join('\n'),
+    );
+  });
+
+  it('ends an unclosed HTML comment when its list container ends', () => {
+    const text = [
+      '- <!--',
+      '  示例',
+      '',
+      '[报告](xdt-file:///tmp/outside-list.pdf)',
+    ].join('\n');
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/outside-list.pdf' },
+    ]);
+  });
+
+  it('keeps a four-space list continuation eligible for attachment delivery', () => {
+    const text = '- 输出：\n    [报告](xdt-file:///tmp/list-report.pdf)';
+    const afterBlank = '- 输出：\n\n    [报告](xdt-file:///tmp/list-report.pdf)';
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: '报告', url: 'xdt-file:///tmp/list-report.pdf' },
+    ]);
+    expect(transformXdtRefs(text, { file: ({ alt }) => alt })).toBe('- 输出：\n    报告');
+    expect(collectXdtFileRefs(afterBlank)).toHaveLength(1);
+  });
+
+  it('classifies long list continuations in linear time', () => {
+    const text = `- output\n${'    continuation\n'.repeat(20_000)}`;
+
+    expect(markdownCodeRanges(text)).toEqual([]);
+  }, 2_000);
+
+  it('parses attachment labels with escaped closing brackets', () => {
+    const text = String.raw`[a\](b](xdt-file:///tmp/report.pdf)`;
+
+    expect(collectXdtFileRefs(text).map(({ alt, url }) => ({ alt, url }))).toEqual([
+      { alt: String.raw`a\](b`, url: 'xdt-file:///tmp/report.pdf' },
+    ]);
   });
 });
 

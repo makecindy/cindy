@@ -23,6 +23,7 @@ vi.mock('../../logger', () => ({
 
 import {
   makeSshChunkExecutor,
+  materializeSshRemoteFile,
   materializeSshRemoteMedia,
   serveSshRemoteMedia,
   toWorkdirRelPosix,
@@ -83,6 +84,41 @@ describe('makeSshChunkExecutor', () => {
       makeSshChunkExecutor(request as unknown as SshMediaDeps['request'], 'h1', '/wd', 'x')(dest, vi.fn()),
     ).rejects.toThrow('empty chunk before eof');
   });
+
+  it('aborts when remote identity or bytes grow beyond the stat snapshot', async () => {
+    const changedIdentity = vi.fn(async () => ({
+      dataBase64: Buffer.from('data').toString('base64'),
+      eof: true,
+      size: 8,
+      mtimeMs: 2,
+    }));
+    const oversizedChunk = vi.fn(async () => ({
+      dataBase64: Buffer.from('12345').toString('base64'),
+      eof: true,
+      size: 4,
+      mtimeMs: 1,
+    }));
+    const constraints = { expectedSize: 4, expectedMtimeMs: 1, maxBytes: 4 };
+
+    await expect(
+      makeSshChunkExecutor(
+        changedIdentity as unknown as SshMediaDeps['request'],
+        'h1',
+        '/wd',
+        'changed.bin',
+        constraints,
+      )(path.join(tmpDir, 'changed.bin'), vi.fn()),
+    ).rejects.toThrow('remote file identity changed');
+    await expect(
+      makeSshChunkExecutor(
+        oversizedChunk as unknown as SshMediaDeps['request'],
+        'h1',
+        '/wd',
+        'grown.bin',
+        constraints,
+      )(path.join(tmpDir, 'grown.bin'), vi.fn()),
+    ).rejects.toThrow('remote chunk exceeds download limit');
+  });
 });
 
 describe('serveSshRemoteMedia', () => {
@@ -120,6 +156,27 @@ describe('serveSshRemoteMedia', () => {
       makeDeps(),
     );
     expect(r.status).toBe(415);
+  });
+
+  it('outbound attachment materialization accepts arbitrary workdir files', async () => {
+    const deps = makeDeps();
+    const result = await materializeSshRemoteFile(
+      origin,
+      '/home/u/proj/report.txt',
+      1024,
+      deps,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      cachePath: path.join(tmpDir, 'cached.png'),
+      size: 4,
+      relPath: 'report.txt',
+    });
+    expect(deps.request).toHaveBeenCalledWith('host-1', 'stat', {
+      workdir: '/home/u/proj',
+      relPath: 'report.txt',
+    });
   });
 
   it('stat 到目录 → 404', async () => {

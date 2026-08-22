@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { chunkDiscordText } from '../chunk.js';
 import { markdownToDiscord } from '../markdown.js';
-import { startStreaming, UPDATE_THROTTLE_MS } from '../streamingText.js';
+import {
+  startStreaming,
+  UPDATE_THROTTLE_MS,
+  type DiscordImageUploadResult,
+} from '../streamingText.js';
 
 describe('discord streaming text', () => {
   beforeEach(() => {
@@ -113,6 +117,26 @@ describe('discord streaming text', () => {
     expect(deps.uploadImages).not.toHaveBeenCalled();
   });
 
+  it('records successful image batches before propagating a later batch failure', async () => {
+    const first = '/tmp/first.png';
+    const second = '/tmp/second.png';
+    const uploadError = new Error('second batch failed');
+    const deps = makeDeps();
+    deps.uploadImages.mockResolvedValueOnce({
+      deliveredAbsPaths: [first],
+      error: uploadError,
+    });
+    const handle = await startStreaming(deps);
+    handle.addExtraImageAbsPath?.(first);
+    handle.addExtraImageAbsPath?.(second);
+
+    await expect(handle.finalize('two batches')).rejects.toBe(uploadError);
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
+    const delivered = handle.getDeliveredExtraImageAbsPaths?.() as string[];
+    delivered.push('/tmp/injected.png');
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
+  });
+
   it('close prevents future edits', async () => {
     const deps = makeDeps();
     const handle = await startStreaming(deps);
@@ -138,8 +162,9 @@ function makeDeps() {
     markdownToDiscord,
     chunk: chunkDiscordText,
     resolveImageUrl: vi.fn((url: string) => `/tmp/${url.replace('xdt-image://', '')}.png`),
-    uploadImages: vi.fn(async (...args: [string, string[]]) => {
+    uploadImages: vi.fn(async (...args: [string, string[]]): Promise<DiscordImageUploadResult> => {
       void args;
+      return { deliveredAbsPaths: args[1] };
     }),
   };
 }

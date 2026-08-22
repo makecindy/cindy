@@ -885,7 +885,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           // 每次之间都有 await —— 所以核验要下沉到每次调用前, 只在批次开头查一次
           // 挡不住"第一组传完才换主人"这个窗口。
           this.assertRoundStillLive(round);
-          await this.uploadImages(
+          return this.uploadImages(
             messageId,
             imageUrls,
             () => this.assertRoundStillLive(round),
@@ -927,15 +927,21 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const api = this.api;
     if (!api) return { ok: false, reason: 'SEND_FAIL' };
 
+    const target = this.targetOf(userId);
+    const form = new FormData();
+    form.set('chat_id', target.chat_id);
+    if (target.message_thread_id !== undefined) {
+      form.set('message_thread_id', String(target.message_thread_id));
+    }
+    const name = displayName ?? path.basename(absPath);
     try {
-      const target = this.targetOf(userId);
-      const form = new FormData();
-      form.set('chat_id', target.chat_id);
-      if (target.message_thread_id !== undefined) {
-        form.set('message_thread_id', String(target.message_thread_id));
-      }
-      const name = displayName ?? path.basename(absPath);
       form.set('document', new Blob([fs.readFileSync(absPath)]), name);
+    } catch {
+      // No request was made, so the local failure is safe to retry.
+      return { ok: false, reason: 'UPLOAD_FAIL' };
+    }
+
+    try {
       const sent = await api.callForm<TgMessage>('sendDocument', form);
       this.recordOwnEcho(userId, '', sent, [name]);
       return { ok: true, messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
@@ -943,7 +949,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (err instanceof TelegramApiError && err.errorCode === 413) {
         return { ok: false, reason: 'TOO_LARGE' };
       }
-      return { ok: false, reason: 'UPLOAD_FAIL' };
+      if (err instanceof TelegramApiError && err.errorCode >= 400 && err.errorCode < 500) {
+        return {
+          ok: false,
+          reason: err.errorCode === 429 ? 'UPLOAD_UNCERTAIN' : 'UPLOAD_FAIL',
+        };
+      }
+      return { ok: false, reason: 'UPLOAD_UNCERTAIN' };
     }
   }
 
@@ -1658,6 +1670,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       ...(inner.addExtraImageAbsPath
         ? { addExtraImageAbsPath: (absPath: string) => inner.addExtraImageAbsPath?.(absPath) }
         : {}),
+      ...(inner.getDeliveredExtraImageAbsPaths
+        ? {
+            getDeliveredExtraImageAbsPaths: () => inner.getDeliveredExtraImageAbsPaths?.() ?? [],
+          }
+        : {}),
+      ...(inner.getNonRetryableExtraImageAbsPaths
+        ? {
+            getNonRetryableExtraImageAbsPaths: () =>
+              inner.getNonRetryableExtraImageAbsPaths?.() ?? [],
+          }
+        : {}),
     };
     return wrapped;
   }
@@ -1975,10 +1998,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     messageId: string,
     imageRefs: string[],
     assertLive?: () => void,
-    opts?: { startIndex?: number; onProgress?: (deliveredCount: number) => void },
-  ): Promise<void> {
+    opts?: {
+      startIndex?: number;
+      settledRefs?: readonly string[];
+      onProgress?: (
+        settledCount: number,
+        result?: { delivered: readonly string[]; nonRetryable: readonly string[] },
+      ) => void;
+    },
+  ): Promise<{ delivered: readonly string[]; nonRetryable: readonly string[] }> {
     const api = this.api;
-    if (!api || imageRefs.length === 0) return;
+    if (!api || imageRefs.length === 0) return { delivered: [], nonRetryable: [] };
     // 图片以 reply 挂回答案锚点消息: 论坛 topic 内自动跟随该 topic(裸发会
     // 落进 General), 视觉上也和答案连成一体; 锚点被删则降级普通发送。
     const { chatId, messageId: anchorNativeId } = decodeMessageId(messageId);
@@ -1990,6 +2020,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     };
     const seen = new Set<string>();
     const absPaths: string[] = [];
+    const refsByAbsPath = new Map<string, string[]>();
     for (const ref of imageRefs) {
       let absPath: string | null = null;
       if (ref.startsWith('abs:')) {
@@ -2001,24 +2032,58 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           absPath = null;
         }
       }
-      if (!absPath || seen.has(absPath)) continue;
-      seen.add(absPath);
-      absPaths.push(absPath);
+      if (!absPath) continue;
+      const refs = refsByAbsPath.get(absPath) ?? [];
+      if (!refs.includes(ref)) refs.push(ref);
+      refsByAbsPath.set(absPath, refs);
+      if (!seen.has(absPath)) {
+        seen.add(absPath);
+        absPaths.push(absPath);
+      }
     }
+    const deliveredRefs = new Set<string>();
+    const nonRetryableRefs = new Set<string>();
+    const markDelivered = (paths: string[]): void => {
+      for (const absPath of paths) {
+        for (const ref of refsByAbsPath.get(absPath) ?? []) deliveredRefs.add(ref);
+      }
+    };
+    const markNonRetryable = (paths: string[]): void => {
+      for (const absPath of paths) {
+        for (const ref of refsByAbsPath.get(absPath) ?? []) nonRetryableRefs.add(ref);
+      }
+    };
+    const result = (): { delivered: readonly string[]; nonRetryable: readonly string[] } => ({
+      delivered: [...deliveredRefs],
+      nonRetryable: [...nonRetryableRefs],
+    });
     // 续传起点按**去重后**的序号切: 与 onProgress 回报的口径一致。
     const startIndex = Math.max(0, Math.min(opts?.startIndex ?? 0, absPaths.length));
-    const pending = absPaths.slice(startIndex);
-    if (pending.length === 0) return;
+    // 连续断点之后也可能已有单张成功(例如相册回落时中间一张明确失败、后面的
+    // 图片照常发出)。只靠 startIndex 会在下一次 finalize 重发这些图片，因此按
+    // ref 再精确跳过已送达/不可重试项；同一路径的别名任一收口即代表文件已处理。
+    const settledRefs = new Set(opts?.settledRefs ?? []);
+    const pending = absPaths.slice(startIndex).filter((absPath) =>
+      (refsByAbsPath.get(absPath) ?? []).every((ref) => !settledRefs.has(ref)),
+    );
+    if (pending.length === 0) return result();
     // 累计计数含已跳过的部分, 这样调用方存的始终是"总共已收口多少张"。
-    let delivered = startIndex;
-    const report = (): void => opts?.onProgress?.(delivered);
+    let settled = startIndex;
+    const report = (): void => opts?.onProgress?.(settled, result());
 
     if (pending.length === 1) {
       assertLive?.();
-      await this.sendSinglePhoto(chatId, pending[0], anchorReply);
-      delivered += 1;
+      const outcome = await this.sendSinglePhoto(chatId, pending[0], anchorReply);
+      if (outcome === 'sent') {
+        markDelivered(pending);
+      } else if (outcome === 'uncertain') {
+        markNonRetryable(pending);
+      } else {
+        throw new Error('telegram single image upload rejected');
+      }
+      settled += 1;
       report();
-      return;
+      return result();
     }
     for (let i = 0; i < pending.length; i += 10) {
       const group = pending.slice(i, i + 10);
@@ -2026,24 +2091,34 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // 单张不成相册, 直接走单发 —— 这条是正常路径, 不是相册失败。
       const outcome =
         group.length > 1 ? await this.sendPhotoAlbum(chatId, group, anchorReply) : 'rejected';
-      if (outcome === 'uncertain') {
-        // 可能已经发出去了, 不补发 —— 同理也要记进已收口, 重试不得重来。
-        delivered += group.length;
-        report();
-        continue;
-      }
-      if (outcome === 'rejected') {
+      if (outcome === 'sent') {
+        markDelivered(group);
+      } else if (outcome === 'uncertain') {
+        markNonRetryable(group);
+      } else {
+        let rejected = false;
+        let contiguous = true;
         for (const absPath of group) {
           assertLive?.();
-          await this.sendSinglePhoto(chatId, absPath, anchorReply);
-          delivered += 1;
+          const singleOutcome = await this.sendSinglePhoto(chatId, absPath, anchorReply);
+          if (singleOutcome === 'sent') {
+            markDelivered([absPath]);
+          } else if (singleOutcome === 'uncertain') {
+            markNonRetryable([absPath]);
+          } else {
+            rejected = true;
+            contiguous = false;
+          }
+          if (contiguous) settled += 1;
           report();
         }
+        if (rejected) throw new Error('telegram single image upload rejected');
         continue;
       }
-      delivered += group.length;
+      settled += group.length;
       report();
     }
+    return result();
   }
 
   private behaviorOf(): TelegramBehaviorConfig {
@@ -2115,18 +2190,36 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     chatId: string,
     absPath: string,
     anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
-  ): Promise<void> {
+  ): Promise<'sent' | 'rejected' | 'uncertain'> {
     const api = this.api;
-    if (!api) return;
+    if (!api) return 'rejected';
+    let form: FormData;
     try {
-      const form = new FormData();
+      form = new FormData();
       form.set('chat_id', chatId);
       if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set('photo', new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
-      await api.callForm('sendPhoto', form);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log.warn(`telegram image upload failed: ${msg}`);
+      this.log.warn(`telegram image assembly failed before send: ${msg}`);
+      return 'rejected';
+    }
+    try {
+      await api.callForm('sendPhoto', form);
+      return 'sent';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        err instanceof TelegramApiError &&
+        err.errorCode >= 400 &&
+        err.errorCode < 500 &&
+        err.errorCode !== 429
+      ) {
+        this.log.warn(`telegram image upload rejected: ${msg}`);
+        return 'rejected';
+      }
+      this.log.warn(`telegram image upload outcome unknown, not retrying: ${msg}`);
+      return 'uncertain';
     }
   }
 

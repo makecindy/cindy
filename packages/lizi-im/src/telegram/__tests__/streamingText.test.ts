@@ -29,6 +29,7 @@ function makeHarness(
     deleteImpl?: (messageId: string) => Promise<void>;
     chunk?: (text: string) => string[];
     extractImageUrls?: (markdown: string) => string[];
+    uploadImagesImpl?: TelegramStreamingDeps['uploadImages'];
     sendFinalImpl?: (markdown: string, reuseReplyTarget: boolean) => Promise<string | null>;
     /** 不提供 repost 时用于验证回落 send 的行为。 */
     withoutRepost?: boolean;
@@ -51,11 +52,17 @@ function makeHarness(
       calls.push(`edit:${messageId}`);
       if (overrides.editImpl) return overrides.editImpl(messageId, markdown);
     },
-    uploadImages: async (messageId, imageUrls) => {
+    uploadImages: async (messageId, imageUrls, opts) => {
       if (imageUrls.length > 0) {
         calls.push(`upload:${messageId}`);
         uploadAnchors.push(messageId);
       }
+      if (overrides.uploadImagesImpl) {
+        return overrides.uploadImagesImpl(messageId, imageUrls, opts);
+      }
+      const result = { delivered: imageUrls, nonRetryable: [] };
+      opts?.onProgress?.(imageUrls.length, result);
+      return result;
     },
     chunk: overrides.chunk ?? ((text) => [text]),
     extractImageUrls: overrides.extractImageUrls ?? (() => []),
@@ -168,6 +175,27 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
 
     // 锚点是补送出来的那条(msg-2), 不是被删掉的 msg-1。
     expect(h.uploadAnchors).toEqual(['msg-2']);
+  });
+
+  it('only acknowledges extra images that the upload layer confirms', async () => {
+    const first = '/tmp/first.png';
+    const second = '/tmp/second.png';
+    const h = makeHarness({
+      uploadImagesImpl: async (_messageId, imageUrls) => ({
+        delivered: [imageUrls[0]],
+        nonRetryable: [],
+      }),
+    });
+    const handle = await startTelegramStreaming(h.deps, 'working');
+    handle.addExtraImageAbsPath?.(first);
+    handle.addExtraImageAbsPath?.(second);
+
+    await handle.finalize('answer');
+
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
+    const delivered = handle.getDeliveredExtraImageAbsPaths?.() as string[];
+    delivered.push('/tmp/injected.png');
+    expect(handle.getDeliveredExtraImageAbsPaths?.()).toEqual([first]);
   });
 
   it('补送后剩余分段照常发出', async () => {
@@ -389,7 +417,7 @@ describe('telegram streaming finalize — 新鲜终稿与 Rich 降级', () => {
 
   it('首段未确认时暂停图片上传, 不把载体 id 当锚点', async () => {
     // messageIdValue 这时还是过程载体 ID: 把图挂上去, 载体一旦被删图就没了。
-    let broken = true;
+    const broken = true;
     const h = makeHarness({
       extractImageUrls: () => ['cindy-media://blobs/a.png'],
       sendImpl: async (markdown) => {

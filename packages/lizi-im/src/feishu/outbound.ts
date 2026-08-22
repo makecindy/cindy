@@ -563,6 +563,33 @@ function isUncertainOpenThreadError(err: unknown): boolean {
   );
 }
 
+function feishuErrorStatus(err: unknown): number | null {
+  if (!err || typeof err !== 'object') return null;
+  const value = err as {
+    status?: unknown;
+    statusCode?: unknown;
+    code?: unknown;
+    response?: { status?: unknown; statusCode?: unknown };
+  };
+  for (const candidate of [
+    value.status,
+    value.statusCode,
+    value.response?.status,
+    value.response?.statusCode,
+    value.code,
+  ]) {
+    if (typeof candidate === 'number' && candidate >= 100 && candidate <= 599) return candidate;
+  }
+  return null;
+}
+
+/** Message creation may already have landed when transport/5xx/429 loses a definitive receipt. */
+function isUncertainMessageSendError(err: unknown): boolean {
+  const status = feishuErrorStatus(err);
+  if (status !== null) return status === 429 || status < 400 || status >= 500;
+  return isUncertainOpenThreadError(err);
+}
+
 async function replyOpenThread(
   c: Lark.Client,
   replyToMessageId: string,
@@ -914,7 +941,10 @@ export async function sendFile(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`[feishu/outbound] sendFile SEND_FAIL: ${msg}`);
-    return { ok: false, reason: 'SEND_FAIL' };
+    return {
+      ok: false,
+      reason: isUncertainMessageSendError(err) ? 'UPLOAD_UNCERTAIN' : 'SEND_FAIL',
+    };
   }
 }
 
@@ -1072,6 +1102,7 @@ async function sendImageMessage(
   absPath: string,
 ): Promise<SendFileResult> {
   const log = getLog();
+  let imageKey: string;
   try {
     const upRes = await c.im.v1.image.create({
       data: {
@@ -1079,14 +1110,24 @@ async function sendImageMessage(
         image: fs.createReadStream(absPath),
       },
     });
-    const imageKey = (upRes as { image_key?: string }).image_key;
-    if (!imageKey) return { ok: false, reason: 'UPLOAD_FAIL' };
+    const key = (upRes as { image_key?: string }).image_key;
+    if (!key) return { ok: false, reason: 'UPLOAD_FAIL' };
+    imageKey = key;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(`[feishu/outbound] sendImageMessage upload failed: ${msg}`);
+    return { ok: false, reason: 'UPLOAD_FAIL' };
+  }
 
+  try {
     const res = await createMessage(target, 'image', JSON.stringify({ image_key: imageKey }));
     return { ok: true, messageId: res.messageId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error(`[feishu/outbound] sendImageMessage failed: ${msg}`);
-    return { ok: false, reason: 'SEND_FAIL' };
+    log.error(`[feishu/outbound] sendImageMessage message failed: ${msg}`);
+    return {
+      ok: false,
+      reason: isUncertainMessageSendError(err) ? 'UPLOAD_UNCERTAIN' : 'SEND_FAIL',
+    };
   }
 }

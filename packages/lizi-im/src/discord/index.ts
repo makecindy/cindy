@@ -31,7 +31,7 @@ import {
   parseInteraction,
 } from './components.js';
 import type { ButtonInteractionLike } from './components.js';
-import { startStreaming } from './streamingText.js';
+import { startStreaming, type DiscordImageUploadResult } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
@@ -408,14 +408,25 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (stat.size === 0) return { ok: false, reason: 'EMPTY' };
     if (stat.size > MAX_OUTBOUND_FILE_BYTES) return { ok: false, reason: 'TOO_LARGE' };
 
+    let channel: Awaited<ReturnType<typeof this.requireDmChannel>>;
     try {
-      const channel = await this.requireDmChannel(userId);
+      channel = await this.requireDmChannel(userId);
+    } catch {
+      // DM resolution failed before an upload request existed, so retrying is safe.
+      return { ok: false, reason: 'UPLOAD_FAIL' };
+    }
+
+    try {
       const sent = await channel.send({
         files: [{ attachment: absPath, name: displayName ?? path.basename(absPath) }],
       });
       return { ok: true, messageId: encodeMessageId(channel.id, sent.id) };
     } catch (err) {
-      return { ok: false, reason: isPayloadTooLarge(err) ? 'TOO_LARGE' : 'UPLOAD_FAIL' };
+      if (isPayloadTooLarge(err)) return { ok: false, reason: 'TOO_LARGE' };
+      return {
+        ok: false,
+        reason: isDiscordUploadOutcomeUncertain(err) ? 'UPLOAD_UNCERTAIN' : 'UPLOAD_FAIL',
+      };
     }
   }
 
@@ -965,21 +976,37 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return channel.messages.fetch(nativeMessageId);
   }
 
-  private async uploadImages(messageId: string, absPaths: string[]): Promise<void> {
+  private async uploadImages(
+    messageId: string,
+    absPaths: string[],
+  ): Promise<DiscordImageUploadResult> {
     const { channelId } = decodeMessageId(messageId);
     const client = this.gateway.client as unknown as {
       channels?: { fetch(channelId: string): Promise<unknown> };
     } | null;
     const channel = await client?.channels?.fetch(channelId);
     const send = isRecord(channel) ? channel.send : null;
-    if (typeof send !== 'function') return;
+    if (typeof send !== 'function') return { deliveredAbsPaths: [] };
     const files = absPaths.map((absPath) => ({
       attachment: absPath,
       name: path.basename(absPath),
     }));
+    const deliveredAbsPaths: string[] = [];
     for (const batch of batchDiscordUploadFiles(files)) {
-      await send.call(channel, { files: batch });
+      try {
+        await send.call(channel, { files: batch });
+        deliveredAbsPaths.push(...batch.map((file) => file.attachment));
+      } catch (error) {
+        return {
+          deliveredAbsPaths,
+          nonRetryableAbsPaths: isDiscordUploadOutcomeUncertain(error)
+            ? batch.map((file) => file.attachment)
+            : [],
+          error,
+        };
+      }
     }
+    return { deliveredAbsPaths };
   }
 
   private async notifyExpiredInteraction(i: ButtonInteractionLike): Promise<void> {
@@ -1111,4 +1138,15 @@ function isPayloadTooLarge(error: unknown): boolean {
     if (status === 413 || code === 413 || code === 'RequestEntityTooLarge') return true;
   }
   return error instanceof Error && /413|payload too large/i.test(error.message);
+}
+
+function isDiscordUploadOutcomeUncertain(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return true;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === 'number') {
+    return status === 429 || status < 400 || status >= 500;
+  }
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'number' && code >= 400 && code < 500) return code === 429;
+  return true;
 }
