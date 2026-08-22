@@ -757,6 +757,47 @@ describe('ensureOpenForAutomation', () => {
     h.windows[0].emitClosed();
     await assertion;
   });
+
+  it('waits for the target session context before resolving a tab-op host', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(h.controller.getContext()).toEqual(focused);
+    lookup = resolved;
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.controller.getContext()).toEqual(resolved);
+  });
+
+  it('fails closed when the target session context never arrives', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const assertion = expect(pending).rejects.toThrow(/host context not ready/);
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════

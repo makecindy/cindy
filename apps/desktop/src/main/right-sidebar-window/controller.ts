@@ -136,6 +136,12 @@ export class RsbWindowController {
     reject: (err: Error) => void;
     timeout: NodeJS.Timeout;
   }> = [];
+  private hostWaiters: Array<{
+    sessionId: string;
+    resolve: () => void;
+    reject: (err: Error) => void;
+    timeout: NodeJS.Timeout;
+  }> = [];
   private openTimeout: NodeJS.Timeout | null = null;
   private prewarmTimeout: NodeJS.Timeout | null = null;
   private recoveryStabilityTimeout: NodeJS.Timeout | null = null;
@@ -371,21 +377,23 @@ export class RsbWindowController {
   /**
    * agent tab-op(浏览器自动化)前置:detached 且窗口未就绪时先开窗并等 ready 握手。
    */
-  ensureOpenForAutomation(opts: { userInitiated?: boolean; sessionId?: string } = {}): Promise<void> {
-    if (!this.deps.settings.read().detached) return Promise.resolve();
+  async ensureOpenForAutomation(opts: { userInitiated?: boolean; sessionId?: string } = {}): Promise<void> {
+    if (!this.deps.settings.read().detached) return;
     this.open({
       userInitiated: opts.userInitiated === true,
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
     });
-    if (this.presentationReady) return Promise.resolve();
-    return new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const idx = this.readyWaiters.findIndex((w) => w.timeout === timeout);
-        if (idx >= 0) this.readyWaiters.splice(idx, 1);
-        reject(new Error(`right-sidebar window ready timeout after ${READY_TIMEOUT_MS}ms`));
-      }, READY_TIMEOUT_MS);
-      this.readyWaiters.push({ resolve, reject, timeout });
-    });
+    if (!this.presentationReady) {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          const idx = this.readyWaiters.findIndex((w) => w.timeout === timeout);
+          if (idx >= 0) this.readyWaiters.splice(idx, 1);
+          reject(new Error(`right-sidebar window ready timeout after ${READY_TIMEOUT_MS}ms`));
+        }, READY_TIMEOUT_MS);
+        this.readyWaiters.push({ resolve, reject, timeout });
+      });
+    }
+    if (opts.sessionId) await this.waitForHostSession(opts.sessionId);
   }
 
   /** 主窗上报渲染上下文:缓存 + 窗口活跃就转发。 */
@@ -668,6 +676,7 @@ export class RsbWindowController {
       clearTimeout(w.timeout);
       w.reject(new Error('right-sidebar window closed before ready'));
     }
+    this.settleHostWaiters(null, false);
 
     if (this.deps.isQuitting()) return;
     this.deps.settings.writePatch({ lastOpen: false });
@@ -931,6 +940,50 @@ export class RsbWindowController {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, next);
     }
     this.flushDeferredCommandsToDetachedHost();
+    this.settleHostWaiters(next.sessionId, true);
+  }
+
+  private waitForHostSession(sessionId: string): Promise<void> {
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+      return Promise.resolve();
+    }
+    const adopted = this.adoptHostSession(sessionId);
+    if (adopted) {
+      return adopted.then(() => {
+        if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
+        return this.queueHostWaiter(sessionId);
+      });
+    }
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+      return Promise.resolve();
+    }
+    return this.queueHostWaiter(sessionId);
+  }
+
+  private queueHostWaiter(sessionId: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const idx = this.hostWaiters.findIndex((w) => w.timeout === timeout);
+        if (idx >= 0) this.hostWaiters.splice(idx, 1);
+        reject(new Error(`right-sidebar host context not ready for ${sessionId}`));
+      }, READY_TIMEOUT_MS);
+      this.hostWaiters.push({ sessionId, resolve, reject, timeout });
+    });
+  }
+
+  private settleHostWaiters(sessionId: string | null, ok: boolean): void {
+    if (this.hostWaiters.length === 0) return;
+    const remaining: typeof this.hostWaiters = [];
+    for (const waiter of this.hostWaiters) {
+      if (sessionId && waiter.sessionId !== sessionId) {
+        remaining.push(waiter);
+        continue;
+      }
+      clearTimeout(waiter.timeout);
+      if (ok) waiter.resolve();
+      else waiter.reject(new Error('right-sidebar host context wait cancelled'));
+    }
+    this.hostWaiters = remaining;
   }
 
   private rememberLastHostSession(
