@@ -60,6 +60,7 @@ import { HomeChromeDrawer } from '@/session/HomeChromeDrawer';
 import { HomeChromeFrost } from '@/session/HomeChromeFrost';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
+import { HomeSearchBar } from '@/session/HomeSearchBar';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
@@ -92,6 +93,9 @@ import {
   remoteScheduleEventStore,
   useRemoteScheduleMirrorInvalidations,
 } from '@/scheduler/remoteScheduleEvents';
+import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
+import { listConversationSearchProjects, shouldReplaceListWithSearchResults } from '@/session/conversationSearch';
+import { useConversationSearch } from '@/session/useConversationSearch';
 import {
   buildMobileHomePresentation,
   excludeOrcaWorkerSessions,
@@ -260,6 +264,8 @@ export default function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchFilterOpen, setSearchFilterOpen] = useState(false);
   // 恢复偏好时暂存的设备名:设备列表尚未同步回来前表头用它兜底,避免显示成占位文案。
   const [restoredDeviceName, setRestoredDeviceName] = useState<string | null>(null);
   // 用户已手动切换过筛选/分组后,迟到的偏好恢复不再覆盖用户操作。
@@ -958,6 +964,42 @@ export default function HomeScreen() {
     statusDetail: item.statusDetail,
     statusLabel: item.statusLabel,
   })), [deviceRows]);
+  const searchOrigins = useMemo(() => {
+    const targets = selectedDeviceId
+      ? deviceModels.filter((item) => item.deviceId === selectedDeviceId)
+      : deviceModels.filter((item) => item.canOpen);
+    return targets.map((item) => ({
+      deviceId: item.deviceId,
+      deviceName: item.name,
+      reachable: item.canOpen && !unresponsiveDevices.has(item.deviceId),
+    }));
+  }, [deviceModels, selectedDeviceId, unresponsiveDevices]);
+  const searchProjects = useMemo(
+    () => listConversationSearchProjects(
+      excludeOrcaWorkerSessions(sessions),
+      new Set(searchOrigins.map((origin) => origin.deviceId)),
+    ),
+    [searchOrigins, sessions],
+  );
+  const visibleSearchProjectKeys = useMemo(
+    () => searchProjects.map((project) => project.key),
+    [searchProjects],
+  );
+  const indexedSearch = useConversationSearch({
+    enabled: true,
+    origins: searchOrigins,
+    visibleProjectKeys: visibleSearchProjectKeys,
+  });
+  const searchQuery = indexedSearch.query;
+  const searchFilterA11y = t('devices.list.search.filterAria', {
+    agent: t(`devices.list.search.filter.agent.${indexedSearch.agentFilter}`),
+    lastActivity: t(`devices.list.search.filter.lastActivity.${indexedSearch.lastActivityFilter}`),
+    projects: indexedSearch.projectSelection === 'all'
+      ? t('devices.list.search.filter.allProjects')
+      : t('devices.list.search.filter.selectedProjects', { count: indexedSearch.projectSelection.length }),
+    sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
+    status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
+  });
   useEffect(() => {
     const ids = deviceModels.filter((item) => item.canOpen).map((item) => item.deviceId);
     if (ids.length === 0) {
@@ -1052,14 +1094,14 @@ export default function HomeScreen() {
       messagePreviewIndex,
       pendingInteractionIndex,
       scheduleIndex,
-      searchQuery: '',
+      searchQuery,
       selectedDeviceId,
       sessions: homeSessions,
       statusFilter,
       // 未起名会话的显示文案:共享层不兜中文串,由这里给已解析的 i18n 值。
       unnamedLabel: t('session.menu.unnamedTitle'),
     }),
-    [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, selectedDeviceId, homeSessions, statusFilter, t],
+    [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId, homeSessions, statusFilter, t],
   );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1090,7 +1132,7 @@ export default function HomeScreen() {
   );
   const displayedProjectOrder = displayed.projectOrder;
   const displayedManualProjectOrder = displayed.manualProjectOrder;
-  const sections = useMemo(
+  const homeSections = useMemo(
     () => buildHomeSections(home, groupByProject, pinnedCollapsed, {
       dialogueTitle: t('devices.list.menu.dialogueFolder'),
       groupDialogue,
@@ -1101,6 +1143,22 @@ export default function HomeScreen() {
     }),
     [displayedManualProjectOrder, displayedProjectOrder, groupByProject, groupDialogue, home, pinnedCollapsed, priorityContext, sortBy, t],
   );
+  const sections = useMemo(() => {
+    if (!shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) return homeSections;
+    return [{
+      data: indexedSearch.results.map((item) => ({
+        item,
+        key: `search:${(item.session as { deviceLinkDeviceId?: string | null }).deviceLinkDeviceId ?? 'local'}:${item.session.id}`,
+        kind: 'session' as const,
+        source: 'search' as const,
+        sourceLabel: selectedDeviceId
+          ? undefined
+          : ((item.session as { deviceLinkDeviceName?: string | null }).deviceLinkDeviceName ?? undefined),
+      })),
+      key: 'search',
+      title: null,
+    }];
+  }, [homeSections, indexedSearch.results, indexedSearch.status, searchQuery, selectedDeviceId]);
   if (displayedProjectOrder !== 'custom') {
     visualProjectKeysRef.current = sections.flatMap((section) => section.data)
       .filter((row): row is Extract<HomeRow, { kind: 'project' }> => row.kind === 'project')
@@ -1676,6 +1734,17 @@ export default function HomeScreen() {
         )}
         </View>
 
+        {searchOpen || !!searchQuery.trim() ? (
+          <HomeSearchBar
+            autoFocus={searchOpen && !searchQuery}
+            filterA11y={searchFilterA11y}
+            filterActive={indexedSearch.activeFilterCount > 0}
+            onChangeQuery={indexedSearch.setQuery}
+            onOpenFilter={() => setSearchFilterOpen(true)}
+            query={searchQuery}
+          />
+        ) : null}
+
         {showConnectionRow ? (
         <View
           style={[styles.connectionRow, (connectionError || activeConnectionIssue) && styles.connectionRowError]}
@@ -1730,6 +1799,7 @@ export default function HomeScreen() {
         onScrollBeginDrag={() => {
           // 列表开始滚动即收起已滑开的行(iOS 惯例,避免打开态跟着列表滚)。
           swipeRegistry.closeOpenRow();
+          if (!searchQuery.trim()) setSearchOpen(false);
         }}
         testID="devices.list"
         renderSectionHeader={({ section }) => {
@@ -1894,6 +1964,11 @@ export default function HomeScreen() {
           setChromeMenuCloseInstant(false);
           handleChromeMenuClosed();
         }}
+        onOpenSearch={() => {
+          setSearchOpen(true);
+          setChromeMenuCloseInstant(false);
+          setChromeMenuOpen(false);
+        }}
         onOpenSettings={() => {
           pendingMenuActionRef.current = null;
           guardedPush('/settings');
@@ -1902,6 +1977,25 @@ export default function HomeScreen() {
         }}
         open={chromeMenuOpen}
         user={user}
+      />
+      <ConversationSearchFilterSheet
+        activeCount={indexedSearch.activeFilterCount}
+        agentKind={indexedSearch.agentFilter}
+        lastActivity={indexedSearch.lastActivityFilter}
+        lockedProjects={false}
+        onAgentKindChange={indexedSearch.setAgentFilter}
+        onClose={() => setSearchFilterOpen(false)}
+        onLastActivityChange={indexedSearch.setLastActivityFilter}
+        onProjectsChange={indexedSearch.setProjectSelection}
+        onReset={indexedSearch.resetFilters}
+        onSortChange={indexedSearch.setSortBy}
+        onStatusChange={indexedSearch.setStatusFilter}
+        projectSelection={indexedSearch.projectSelection}
+        projects={searchProjects}
+        sortBy={indexedSearch.sortBy}
+        status={indexedSearch.statusFilter}
+        topOffset={chromeHeight}
+        visible={searchFilterOpen}
       />
       <HomeDisplaySettingsModal
         groupByProject={groupByProject}
@@ -2706,7 +2800,7 @@ function HomeListRowInner({
       sourceLabel={item.sourceLabel}
       suppressBlockTopBorder={prevIsBlock}
       swipe={swipe}
-      testID={homeSessionRowTestId(item.source)}
+      testID={item.source === 'search' ? 'home.searchSessionRow' : homeSessionRowTestId(item.source)}
     />
   );
   // 普通会话行(含置顶区)在这里挂滑动操作;自动化组行不挂 —— 组行代表多次运行,
@@ -2720,7 +2814,7 @@ function HomeListRowInner({
       onTogglePin={onTogglePin}
       registry={registry}
       session={item.item.session as RemoteSession}
-      testID={`${homeSessionRowTestId(item.source)}.swipe`}
+      testID={`${item.source === 'search' ? 'home.searchSessionRow' : homeSessionRowTestId(item.source)}.swipe`}
     >
       {row}
     </SwipeableSessionRow>

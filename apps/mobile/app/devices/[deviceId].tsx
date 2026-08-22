@@ -9,8 +9,8 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Text, TextInput } from '@/components/AppText';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from '@/components/AppText';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
@@ -60,6 +60,10 @@ import {
   type MobileSessionBulkAction,
 } from '@/session/sessionSelection';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
+import { ConversationSearchFilterSheet } from '@/session/ConversationSearchFilterSheet';
+import { HomeSearchBar } from '@/session/HomeSearchBar';
+import { listConversationSearchProjects, shouldReplaceListWithSearchResults } from '@/session/conversationSearch';
+import { useConversationSearch } from '@/session/useConversationSearch';
 import { sessionMatchesProjectDir } from '@/session/mobileHome';
 import { HomeSessionRow } from './index';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
@@ -159,12 +163,45 @@ export default function DeviceDetailScreen() {
   );
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFilterOpen, setSearchFilterOpen] = useState(false);
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 熔断 open(电脑端未响应):relay 可能仍 online,可见性与 banner 文案单独入参。
   const unresponsiveDevices = useUnresponsiveDevices();
   const deviceUnresponsive = !!deviceId && unresponsiveDevices.has(deviceId);
+  const searchOrigins = useMemo(() => (deviceId ? [{
+    deviceId,
+    deviceName,
+    reachable: !deviceUnresponsive,
+  }] : []), [deviceId, deviceName, deviceUnresponsive]);
+  const searchProjects = useMemo(
+    () => listConversationSearchProjects(sessions, deviceId ? new Set([deviceId]) : undefined),
+    [deviceId, sessions],
+  );
+  const visibleSearchProjectKeys = useMemo(
+    () => searchProjects.map((project) => project.key),
+    [searchProjects],
+  );
+  const indexedSearch = useConversationSearch({
+    enabled: !automationScopeKey && !!deviceId,
+    lockedWorkingDirs: projectWorkingDir ? [projectWorkingDir] : null,
+    origins: searchOrigins,
+    visibleProjectKeys: visibleSearchProjectKeys,
+  });
+  const searchQuery = indexedSearch.query;
+  const setSearchQuery = indexedSearch.setQuery;
+  const searchFilterA11y = t('devices.list.search.filterAria', {
+    agent: t(`devices.list.search.filter.agent.${indexedSearch.agentFilter}`),
+    lastActivity: t(`devices.list.search.filter.lastActivity.${indexedSearch.lastActivityFilter}`),
+    projects: projectWorkingDir
+      ? (projectName ?? projectWorkingDir)
+      : indexedSearch.projectSelection === 'all'
+        ? t('devices.list.search.filter.allProjects')
+        : t('devices.list.search.filter.selectedProjects', { count: indexedSearch.projectSelection.length }),
+    sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
+    status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
+  });
   // 自动化 / 项目分支视图的条件挂载 banner:普通弱网断线也要有可见信号(防闪延迟后)
   const showConnectionBanner = useShowConnectionBanner(status, error, connectionIssue, deviceUnresponsive);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
@@ -321,16 +358,22 @@ export default function DeviceDetailScreen() {
     }),
     [automationScopeKey, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, sessions, statusFilter, t],
   );
+  const displaySections = useMemo(() => {
+    if (automationScopeKey || !shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status)) {
+      return sections;
+    }
+    return [{ key: 'search', title: '', data: indexedSearch.results }];
+  }, [automationScopeKey, indexedSearch.results, indexedSearch.status, searchQuery, sections]);
   const listContext = useMemo(
     () => buildRemoteSessionListContext({
       overview: filterCounts,
       searchQuery,
-      sections,
+      sections: displaySections,
       statusFilter,
     }),
-    [filterCounts, searchQuery, sections, statusFilter],
+    [displaySections, filterCounts, searchQuery, statusFilter],
   );
-  const visibleSessionIds = useMemo(() => visibleSessionIdsFromSections(sections), [sections]);
+  const visibleSessionIds = useMemo(() => visibleSessionIdsFromSections(displaySections), [displaySections]);
   const selectedSessionIdSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds]);
   const selectedSessions = useMemo(() => {
     const selected = new Set(selectedSessionIds);
@@ -516,17 +559,38 @@ export default function DeviceDetailScreen() {
   }, [bulkActionSummaries, t]);
 
   const actionOverlays = (
-    <SessionListActionOverlays
-      actionSheetSession={actionSheetSession}
-      closeRenameSession={closeRenameSession}
-      confirmRenameSession={confirmRenameSession}
-      handleSessionSheetAction={handleSessionSheetAction}
-      handleSessionSheetClosed={handleSessionSheetClosed}
-      renameSessionDraft={renameSessionDraft}
-      renameSessionTarget={renameSessionTarget}
-      setActionSheetSession={setActionSheetSession}
-      setRenameSessionDraft={setRenameSessionDraft}
-    />
+    <>
+      <ConversationSearchFilterSheet
+        activeCount={indexedSearch.activeFilterCount}
+        agentKind={indexedSearch.agentFilter}
+        lastActivity={indexedSearch.lastActivityFilter}
+        lockedProjects={!!projectWorkingDir}
+        onAgentKindChange={indexedSearch.setAgentFilter}
+        onClose={() => setSearchFilterOpen(false)}
+        onLastActivityChange={indexedSearch.setLastActivityFilter}
+        onProjectsChange={indexedSearch.setProjectSelection}
+        onReset={indexedSearch.resetFilters}
+        onSortChange={indexedSearch.setSortBy}
+        onStatusChange={indexedSearch.setStatusFilter}
+        projectSelection={indexedSearch.projectSelection}
+        projects={searchProjects}
+        sortBy={indexedSearch.sortBy}
+        status={indexedSearch.statusFilter}
+        topOffset={insets.top + 56}
+        visible={searchFilterOpen}
+      />
+      <SessionListActionOverlays
+        actionSheetSession={actionSheetSession}
+        closeRenameSession={closeRenameSession}
+        confirmRenameSession={confirmRenameSession}
+        handleSessionSheetAction={handleSessionSheetAction}
+        handleSessionSheetClosed={handleSessionSheetClosed}
+        renameSessionDraft={renameSessionDraft}
+        renameSessionTarget={renameSessionTarget}
+        setActionSheetSession={setActionSheetSession}
+        setRenameSessionDraft={setRenameSessionDraft}
+      />
+    </>
   );
 
   // 自动化任务作用域(从组行「查看全部 N 次运行」进入):干净布局 —— 头部 + 该任务全部运行的
@@ -648,8 +712,41 @@ export default function DeviceDetailScreen() {
             status={status}
           />
         ) : null}
+        <View style={styles.projectSearchChrome}>
+          {searchOpen || !!searchQuery.trim() ? (
+            <HomeSearchBar
+              autoFocus={searchOpen && !searchQuery}
+              filterA11y={searchFilterA11y}
+              filterActive={indexedSearch.activeFilterCount > 0}
+              onChangeQuery={setSearchQuery}
+              onOpenFilter={() => setSearchFilterOpen(true)}
+              padded={false}
+              query={searchQuery}
+              testIDs={{
+                clear: 'deviceDetail.projectSearchCloseButton',
+                filter: 'deviceDetail.projectSearchFilterButton',
+                input: 'deviceDetail.projectSearchInput',
+                row: 'deviceDetail.projectSearchRow',
+              }}
+            />
+          ) : (
+            <MainWindowActionGroup
+              density="compact"
+              secondaryActions={[
+                {
+                  accessibilityLabel: t('devices.detail.search.openA11y'),
+                  active: false,
+                  label: t('devices.detail.search.label'),
+                  onPress: () => setSearchOpen(true),
+                  testID: 'deviceDetail.projectSearchToggleButton',
+                },
+              ]}
+              testID="deviceDetail.projectSearchActions"
+            />
+          )}
+        </View>
         <SectionList
-          sections={sections}
+          sections={displaySections}
           keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
           stickySectionHeadersEnabled={false}
@@ -677,14 +774,14 @@ export default function DeviceDetailScreen() {
           ) : (
             <MainWindowEmptyState
               centered
-              copy={t('devices.detail.projectScope.emptyCopy')}
+              copy={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).copy : t('devices.detail.projectScope.emptyCopy')}
               style={{
                 marginTop: spacing.xxl,
                 minHeight: windowLayout.emptyMinHeight,
                 padding: windowLayout.emptyPadding,
               }}
               testID="deviceDetail.projectEmpty"
-              title={t('devices.detail.projectScope.emptyTitle')}
+              title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
             />
           )}
         />
@@ -837,36 +934,21 @@ export default function DeviceDetailScreen() {
         </View>
 
         {searchOpen || !!searchQuery.trim() ? (
-          <View style={styles.searchRow}>
-            <TextInput
-              accessibilityLabel={t('devices.detail.search.openA11y')}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus={searchOpen && !searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder={t('devices.detail.search.placeholder')}
-              placeholderTextColor={colors.textTertiary}
-              style={styles.searchInput}
-              testID="deviceDetail.searchInput"
-              value={searchQuery}
-            />
-            <MainWindowActionButton
-              action={{
-                accessibilityLabel: searchQuery.trim() ? t('devices.detail.search.clearA11y') : t('devices.detail.search.closeInputA11y'),
-                label: searchQuery.trim() ? t('devices.detail.search.clear') : t('devices.detail.search.close'),
-                onPress: () => {
-                  if (searchQuery.trim()) {
-                    setSearchQuery('');
-                    return;
-                  }
-                  setSearchOpen(false);
-                },
-                testID: 'deviceDetail.searchCloseButton',
-              }}
-              density="compact"
-              style={styles.searchCloseButton}
-            />
-          </View>
+          <HomeSearchBar
+            autoFocus={searchOpen && !searchQuery}
+            filterA11y={searchFilterA11y}
+            filterActive={indexedSearch.activeFilterCount > 0}
+            onChangeQuery={setSearchQuery}
+            onOpenFilter={() => setSearchFilterOpen(true)}
+            padded={false}
+            query={searchQuery}
+            testIDs={{
+              clear: 'deviceDetail.searchCloseButton',
+              filter: 'deviceDetail.searchFilterButton',
+              input: 'deviceDetail.searchInput',
+              row: 'deviceDetail.searchRow',
+            }}
+          />
         ) : null}
 
         {filtersOpen ? (
@@ -1005,7 +1087,7 @@ export default function DeviceDetailScreen() {
       </View>
 
       <SectionList
-        sections={sections}
+        sections={displaySections}
         keyExtractor={(item) => item.automationGroup?.key ?? item.session.id}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={loadSessions} />}
         stickySectionHeadersEnabled={false}
@@ -1018,7 +1100,7 @@ export default function DeviceDetailScreen() {
         ]}
         testID="deviceDetail.sessionList"
         renderSectionHeader={({ section }) => (
-          <Text style={styles.sectionTitle}>{section.title}</Text>
+          section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
         )}
         ListEmptyComponent={suppressListEmptyState ? (
           <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
@@ -1259,6 +1341,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     fontWeight: fontWeight.medium,
     minWidth: 0,
+  },
+  projectSearchChrome: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
   },
   searchRow: {
     alignItems: 'center',

@@ -14,7 +14,7 @@ import { optionalEnum, requireObject, throwIpcError } from '../../utils/ipcValid
 const SORT_VALUES = ['relevance', 'activityDesc', 'activityAsc'] as const;
 const SEMANTIC_MODE_VALUES = ['hybrid', 'keyword'] as const;
 const STATUS_VALUES = ['active', 'archived', 'all'] as const;
-const AGENT_VALUES = ['all', 'cc', 'codex'] as const;
+const AGENT_VALUES = ['all', 'cc', 'codex', 'pi'] as const;
 const LAST_ACTIVITY_VALUES = ['all', '1d', '3d', '7d', '30d'] as const;
 
 export function registerSearchIpc(): void {

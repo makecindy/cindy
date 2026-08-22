@@ -7899,8 +7899,9 @@
       },
       "filterVendor": {
         "all": "All",
-        "cc": "Claude",
-        "codex": "Codex"
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
       },
       "filterGroupBy": {
         "project": "Group by project",
@@ -8421,7 +8422,7 @@
       },
       "filterAria": "Search filters and sort (Sort: {{sort}}, Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
       "filter": {
-        "label": "Filters",
+        "label": "Search criteria",
         "active": "{{count}} filters",
         "reset": "Reset",
         "allProjects": "All projects"

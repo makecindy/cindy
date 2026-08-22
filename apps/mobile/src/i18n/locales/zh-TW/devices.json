@@ -34,6 +34,7 @@
       "openMenu": "打開選單",
       "closeMenu": "關閉選單",
       "openDisplaySettings": "打開顯示設定",
+      "openSearch": "搜尋",
       "openSettings": "開啟設定",
       "syncing": "正在重新同步",
       "sync": "重新同步",
@@ -63,6 +64,7 @@
       "statusArchived": "已歸檔",
       "statusAll": "全部",
       "dialogueFolder": "對話",
+      "search": "搜尋",
       "settings": "設定",
       "remoteSettings": "遠端連線設定",
       "displaySettings": "顯示設定",
@@ -73,6 +75,45 @@
       "projectOrderManual": "手動",
       "projectOrderManualTip": "長按專案行拖動調整順序，組內任務仍按上面的排序",
       "statusHeading": "狀態"
+    },
+    "search": {
+      "placeholder": "搜尋標題或內容…",
+      "filterA11y": "搜尋篩選",
+      "filterAria": "搜尋篩選與排序（排序：{{sort}}，狀態：{{status}}，Agent：{{agent}}，最近活躍：{{lastActivity}}，專案：{{projects}}）",
+      "filter": {
+        "label": "搜尋條件",
+        "reset": "重置",
+        "sortHeading": "排序",
+        "statusHeading": "狀態",
+        "projectsHeading": "專案",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "最近活躍",
+        "allProjects": "所有專案",
+        "selectedProjects": "已選 {{count}} 個",
+        "sort": {
+          "relevance": "相關度",
+          "activityDesc": "最近活躍",
+          "activityAsc": "最早活躍"
+        },
+        "status": {
+          "active": "活躍",
+          "archived": "已歸檔",
+          "all": "全部"
+        },
+        "agent": {
+          "all": "全部",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1 天",
+          "3d": "3 天",
+          "7d": "7 天",
+          "30d": "30 天",
+          "all": "全部"
+        }
+      }
     },
     "renameDevice": {
       "title": "重新命名裝置",
@@ -129,7 +170,7 @@
       "openA11y": "搜尋遠端任務",
       "closeA11y": "關閉搜尋遠端任務",
       "label": "搜尋",
-      "placeholder": "搜尋標題、專案、模型、訊息",
+      "placeholder": "搜尋標題或內容…",
       "clearA11y": "清除搜尋",
       "closeInputA11y": "關閉搜尋",
       "clear": "清除",

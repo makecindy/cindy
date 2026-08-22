@@ -17,6 +17,7 @@
     "./command-display": "./src/commandDisplay.ts",
     "./client-endpoints": "./src/clientEndpoints.ts",
     "./composer-palette": "./src/composerPalette.ts",
+    "./conversation-search": "./src/conversationSearch.ts",
     "./device-list": "./src/deviceList.ts",
     "./device-link-contract": "./src/deviceLinkContract.ts",
     "./device-responsiveness": "./src/deviceResponsiveness.ts",

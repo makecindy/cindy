@@ -34,6 +34,7 @@
       "openMenu": "메뉴 열기",
       "closeMenu": "메뉴 닫기",
       "openDisplaySettings": "표시 설정 열기",
+      "openSearch": "검색",
       "openSettings": "설정 열기",
       "syncing": "다시 동기화하는 중",
       "sync": "다시 동기화",
@@ -63,6 +64,7 @@
       "statusArchived": "보관됨",
       "statusAll": "전체",
       "dialogueFolder": "채팅",
+      "search": "검색",
       "settings": "설정",
       "remoteSettings": "원격 연결 설정",
       "displaySettings": "표시 설정",
@@ -73,6 +75,45 @@
       "projectOrderManual": "수동",
       "projectOrderManualTip": "프로젝트 행을 길게 누른 뒤 드래그하면 순서를 바꿀 수 있습니다. 그룹 안 작업은 위 정렬을 따릅니다.",
       "statusHeading": "상태"
+    },
+    "search": {
+      "placeholder": "제목 또는 내용 검색…",
+      "filterA11y": "검색 필터",
+      "filterAria": "검색 필터 및 정렬(정렬: {{sort}}, 상태: {{status}}, Agent: {{agent}}, 최근 활성: {{lastActivity}}, 프로젝트: {{projects}})",
+      "filter": {
+        "label": "검색 조건",
+        "reset": "초기화",
+        "sortHeading": "정렬",
+        "statusHeading": "상태",
+        "projectsHeading": "프로젝트",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "최근 활성",
+        "allProjects": "모든 프로젝트",
+        "selectedProjects": "{{count}}개 선택됨",
+        "sort": {
+          "relevance": "관련도",
+          "activityDesc": "최근 활성순",
+          "activityAsc": "오래된 활성순"
+        },
+        "status": {
+          "active": "활성",
+          "archived": "보관됨",
+          "all": "전체"
+        },
+        "agent": {
+          "all": "전체",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1일",
+          "3d": "3일",
+          "7d": "7일",
+          "30d": "30일",
+          "all": "전체"
+        }
+      }
     },
     "renameDevice": {
       "title": "기기 이름 변경",
@@ -129,7 +170,7 @@
       "openA11y": "원격 세션 검색",
       "closeA11y": "원격 세션 검색 닫기",
       "label": "검색",
-      "placeholder": "제목, 프로젝트, 모델, 메시지 검색",
+      "placeholder": "제목 또는 내용 검색…",
       "clearA11y": "검색 지우기",
       "closeInputA11y": "검색 닫기",
       "clear": "지우기",

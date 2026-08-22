@@ -648,7 +648,7 @@ function matchesStatusFilter(
   return session.status === filter;
 }
 
-function matchesSearchQuery(
+export function matchesSearchQuery(
   session: RemoteSession,
   query: string,
   options: {

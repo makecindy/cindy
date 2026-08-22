@@ -1,0 +1,287 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  conversationSearchActiveFilterCount,
+  isConversationSearchChannelNotAllowed,
+  listConversationSearchProjects,
+  nextConversationSearchProjectSelection,
+  reconcileConversationSearchProjectSelection,
+  searchCachedDeviceSessions,
+  searchConversationsAcrossDevices,
+  sessionBelongsToDevice,
+  shouldReplaceListWithSearchResults,
+  toSearchListItem,
+  type ConversationSearchDeviceOrigin,
+  type ConversationSearchInvoke,
+} from '@/session/conversationSearch';
+import type { ConversationSearchResponse } from '@cindy/maker-shared/conversation-search';
+import type { RemoteSession } from '@/session/types';
+
+function session(partial: Partial<RemoteSession> & Pick<RemoteSession, 'id' | 'title'>): RemoteSession {
+  return {
+    userId: 'u',
+    workingDir: '/repo',
+    workspaceKind: 'project',
+    model: 'x',
+    effort: 'medium',
+    permissionMode: 'default',
+    fastMode: false,
+    userSendAt: '2026-08-19T00:00:00.000Z',
+    status: 'active',
+    agentKind: 'cc',
+    createdAt: '2026-08-19T00:00:00.000Z',
+    updatedAt: '2026-08-19T00:00:00.000Z',
+    deviceLinkDeviceId: 'dev-a',
+    deviceLinkDeviceName: 'Studio',
+    ...partial,
+  };
+}
+
+function indexedPage(ids: string[]): ConversationSearchResponse {
+  return {
+    query: 'needle',
+    results: ids.map((id, index) => ({
+      session: {
+        id,
+        title: id,
+        workingDir: '/repo',
+        workspaceKind: 'project',
+        agentKind: 'cc',
+        status: 'active',
+        userSendAt: '2026-08-19T00:00:00.000Z',
+        updatedAt: '2026-08-19T00:00:00.000Z',
+        createdAt: '2026-08-19T00:00:00.000Z',
+        _count: { messages: 1 },
+      },
+      matchKind: 'title' as const,
+      titleMatchIndices: [0],
+      titleScore: 1,
+      contentHit: null,
+      contentHits: [],
+      rankScore: 10 - index,
+    })),
+    vectorUsed: false,
+    vectorSkipReason: null,
+    poolCapped: false,
+  };
+}
+
+const studio: ConversationSearchDeviceOrigin = {
+  deviceId: 'dev-a',
+  deviceName: 'Studio',
+  reachable: true,
+};
+
+describe('searchConversationsAcrossDevices', () => {
+  it('stamps indexed hits and keeps one device failure from wiping the rest', async () => {
+    const invoke = vi.fn(async (deviceId: string, channel: string) => {
+      if (channel !== 'local-db:conversations:search') throw new Error(`unexpected ${channel}`);
+      if (deviceId === 'dev-a') return indexedPage(['hit-a']);
+      throw new Error('[TIMEOUT] boom');
+    }) as ConversationSearchInvoke;
+    const page = await searchConversationsAcrossDevices(
+      [
+        studio,
+        { deviceId: 'dev-b', deviceName: 'Laptop', reachable: true },
+      ],
+      { query: 'needle' },
+      {
+        invoke,
+        getCachedSessions: () => [
+          session({ id: 'cached-b', title: 'Needle laptop', deviceLinkDeviceId: 'dev-b' }),
+        ],
+      },
+    );
+    expect(page.results.map((item) => item.session.id).sort()).toEqual(['cached-b', 'hit-a']);
+    expect(page.results.find((item) => item.session.id === 'hit-a')?.session.deviceLinkDeviceName).toBe('Studio');
+  });
+
+  it('falls back to cached title search when the channel is not allowed', async () => {
+    const invoke = vi.fn(async () => {
+      throw Object.assign(new Error("[CHANNEL_NOT_ALLOWED] channel 'local-db:conversations:search'"), {
+        code: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+      });
+    }) as ConversationSearchInvoke;
+    const page = await searchConversationsAcrossDevices(
+      [studio],
+      { query: 'planning' },
+      {
+        invoke,
+        getCachedSessions: () => [
+          session({ id: 'hit', title: 'Remote planning' }),
+          session({ id: 'worker', title: 'Planning worker', orcaRole: 'worker' }),
+          session({ id: 'other', title: 'Unrelated' }),
+        ],
+      },
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['hit']);
+  });
+
+  it('does not invoke a device that is offline or unresponsive', async () => {
+    const invoke = vi.fn();
+    const page = await searchConversationsAcrossDevices(
+      [{ deviceId: 'dev-a', deviceName: 'Studio', reachable: false }],
+      { query: 'planning' },
+      {
+        invoke: invoke as ConversationSearchInvoke,
+        getCachedSessions: () => [session({ id: 'hit', title: 'Remote planning' })],
+        isDeviceUnresponsive: () => false,
+      },
+    );
+    expect(invoke).not.toHaveBeenCalled();
+    expect(page.results.map((item) => item.session.id)).toEqual(['hit']);
+  });
+
+  it('falls back when an old host ignores workingDirs', async () => {
+    const invoke = vi.fn(async () => ({
+      ...indexedPage(['other']),
+      results: indexedPage(['other']).results.map((item) => ({
+        ...item,
+        session: { ...item.session, workingDir: '/other' },
+      })),
+    })) as ConversationSearchInvoke;
+    const page = await searchConversationsAcrossDevices(
+      [studio],
+      { query: 'planning', filters: { workingDirs: ['/repo'] } },
+      {
+        invoke,
+        getCachedSessions: () => [
+          session({ id: 'in-project', title: 'Planning in repo', workingDir: '/repo' }),
+          session({ id: 'out', title: 'Planning elsewhere', workingDir: '/other' }),
+        ],
+      },
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['in-project']);
+  });
+
+  it('forwards keyword search filters and sort to the remote channel', async () => {
+    const invoke = vi.fn(async () => indexedPage(['hit-a'])) as ConversationSearchInvoke;
+    await searchConversationsAcrossDevices(
+      [studio],
+      {
+        query: 'needle',
+        sortBy: 'activityDesc',
+        filters: { agentKind: 'cc', lastActivity: '7d', status: 'archived' },
+      },
+      {
+        invoke,
+        getCachedSessions: () => [],
+      },
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      'dev-a',
+      'local-db:conversations:search',
+      [expect.objectContaining({
+        semanticMode: 'keyword',
+        sortBy: 'activityDesc',
+        filters: expect.objectContaining({
+          agentKind: 'cc',
+          lastActivity: '7d',
+          status: 'archived',
+        }),
+      })],
+    );
+  });
+
+  it('forwards agentKind=pi to the host', async () => {
+    const invoke = vi.fn(async () => indexedPage(['pi-hit'])) as ConversationSearchInvoke;
+    await searchConversationsAcrossDevices(
+      [studio],
+      { query: 'needle', filters: { agentKind: 'pi' } },
+      {
+        invoke,
+        getCachedSessions: () => [],
+      },
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      'dev-a',
+      'local-db:conversations:search',
+      [expect.objectContaining({
+        filters: expect.objectContaining({ agentKind: 'pi' }),
+      })],
+    );
+  });
+});
+
+describe('searchCachedDeviceSessions', () => {
+  it('matches the current device only', () => {
+    const page = searchCachedDeviceSessions(
+      studio,
+      { query: 'planning' },
+      [
+        session({ id: 'hit', title: 'Remote planning' }),
+        session({ id: 'other-device', title: 'Remote planning', deviceLinkDeviceId: 'dev-b' }),
+      ],
+    );
+    expect(page.results.map((item) => item.session.id)).toEqual(['hit']);
+  });
+});
+
+describe('helpers', () => {
+  it('classifies CHANNEL_NOT_ALLOWED wrappers', () => {
+    expect(isConversationSearchChannelNotAllowed({
+      code: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+      message: 'nope',
+    })).toBe(true);
+    expect(isConversationSearchChannelNotAllowed(new Error('TIMEOUT'))).toBe(false);
+  });
+
+  it('prefers canonical device id when matching cache rows', () => {
+    expect(sessionBelongsToDevice({
+      canonicalDeviceId: 'dev-a',
+      deviceLinkDeviceId: 'legacy',
+    }, 'dev-a')).toBe(true);
+  });
+
+  it('lists unique projects and toggles multi-select back to all', () => {
+    const projects = listConversationSearchProjects([
+      session({ id: 'a', title: 'A', workingDir: '/Users/dash/repo' }),
+      session({ id: 'b', title: 'B', workingDir: '/Users/dash/repo/' }),
+      session({ id: 'c', title: 'C', workingDir: '/Users/dash/other' }),
+      session({ id: 'd', title: 'Chat', workspaceKind: 'dialogue', workingDir: null }),
+      session({ id: 'w', title: 'Worker', orcaRole: 'worker', workingDir: '/Users/dash/hidden' }),
+    ]);
+    expect(projects.map((project) => project.title)).toEqual(['other', 'repo']);
+    expect(projects.find((project) => project.title === 'repo')?.count).toBe(2);
+    expect(nextConversationSearchProjectSelection('all', 'repo')).toEqual(['repo']);
+    expect(nextConversationSearchProjectSelection(['repo'], 'other')).toEqual(['repo', 'other']);
+    expect(nextConversationSearchProjectSelection(['repo'], 'repo')).toBe('all');
+    expect(reconcileConversationSearchProjectSelection(['gone'], ['repo'])).toBe('all');
+  });
+
+  it('counts search filters like desktop: sort is ignored, locked projects are ignored', () => {
+    expect(conversationSearchActiveFilterCount({
+      agentKind: 'all',
+      lastActivity: 'all',
+      projectSelection: 'all',
+      status: 'all',
+    })).toBe(0);
+    expect(conversationSearchActiveFilterCount({
+      agentKind: 'cc',
+      lastActivity: '7d',
+      projectSelection: ['/repo'],
+      status: 'active',
+    })).toBe(4);
+    expect(conversationSearchActiveFilterCount({
+      lockedWorkingDirs: ['/repo'],
+      projectSelection: ['/repo'],
+      status: 'all',
+    })).toBe(0);
+  });
+
+  it('keeps an empty indexed search visible so filters are not silently dropped', () => {
+    expect(shouldReplaceListWithSearchResults('pi', 'ready')).toBe(true);
+    expect(shouldReplaceListWithSearchResults('pi', 'searching')).toBe(false);
+    expect(shouldReplaceListWithSearchResults('', 'ready')).toBe(false);
+  });
+
+  it('adapts a search hit into a list item', () => {
+    const page = searchCachedDeviceSessions(
+      studio,
+      { query: 'planning' },
+      [session({ id: 'hit', title: 'Remote planning' })],
+    );
+    const item = toSearchListItem(page.results[0], Date.parse('2026-08-19T00:00:00.000Z'), '未命名任务');
+    expect(item.session.id).toBe('hit');
+    expect(item.title).toBe('Remote planning');
+  });
+});

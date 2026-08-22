@@ -255,6 +255,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:get-capabilities',
   'maker:provider:list',
   'local-db:sessions:get',
+  // 只读任务搜索(对齐桌面侧栏 / Composer @)。老被控端 CHANNEL_NOT_ALLOWED →
+  // 手机端降级为已缓存会话的本地匹配,不阻断搜索。
+  'local-db:conversations:search',
   'local-db:sessions:patch-meta',
   // error-tail / interrupted 收尾入口(对齐桌面 error-tail banner / InterruptedTurnBanner):
   // 「忽略」错误尾行 → 被控端持久化 merge dismissed:true;「忽略」中断提示 → 被控端写

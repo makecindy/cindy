@@ -33,6 +33,7 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:switch-session-agent');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:get-session-agent-switch-intent');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:input:compact');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('local-db:conversations:search');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('local-db:messages:around-client-id');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:message:delete');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:get-session-tree');

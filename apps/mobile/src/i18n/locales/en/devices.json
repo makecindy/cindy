@@ -34,6 +34,7 @@
       "openMenu": "Open menu",
       "closeMenu": "Close menu",
       "openDisplaySettings": "Open display settings",
+      "openSearch": "Search",
       "openSettings": "Open settings",
       "syncing": "Syncing",
       "sync": "Sync again",
@@ -63,6 +64,7 @@
       "statusArchived": "Archived",
       "statusAll": "All",
       "dialogueFolder": "Chat",
+      "search": "Search",
       "settings": "Settings",
       "remoteSettings": "Remote connection settings",
       "displaySettings": "Display settings",
@@ -73,6 +75,45 @@
       "projectOrderManual": "Manual",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
       "statusHeading": "Status"
+    },
+    "search": {
+      "placeholder": "Search titles or content…",
+      "filterA11y": "Search filters",
+      "filterAria": "Search filters and sort (Sort: {{sort}}, Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
+      "filter": {
+        "label": "Search criteria",
+        "reset": "Reset",
+        "sortHeading": "Sort by",
+        "statusHeading": "Status",
+        "projectsHeading": "Projects",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "Last activity",
+        "allProjects": "All projects",
+        "selectedProjects": "{{count}} selected",
+        "sort": {
+          "relevance": "Relevance",
+          "activityDesc": "Recently active",
+          "activityAsc": "Oldest active"
+        },
+        "status": {
+          "active": "Active",
+          "archived": "Archived",
+          "all": "All"
+        },
+        "agent": {
+          "all": "All",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1d",
+          "3d": "3d",
+          "7d": "7d",
+          "30d": "30d",
+          "all": "All"
+        }
+      }
     },
     "renameDevice": {
       "title": "Rename Device",
@@ -129,7 +170,7 @@
       "openA11y": "Search remote sessions",
       "closeA11y": "Close remote session search",
       "label": "Search",
-      "placeholder": "Search titles, projects, models, messages",
+      "placeholder": "Search titles or content…",
       "clearA11y": "Clear search",
       "closeInputA11y": "Close search",
       "clear": "Clear",

@@ -7887,8 +7887,9 @@
       },
       "filterVendor": {
         "all": "全部",
-        "cc": "Claude",
-        "codex": "Codex"
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
       },
       "filterGroupBy": {
         "project": "按專案分組",
@@ -8409,7 +8410,7 @@
       },
       "filterAria": "搜尋篩選與排序（排序：{{sort}}，狀態：{{status}}，Agent：{{agent}}，最近活躍：{{lastActivity}}，專案：{{projects}}）",
       "filter": {
-        "label": "篩選",
+        "label": "搜尋條件",
         "active": "篩選 {{count}}",
         "reset": "重置",
         "allProjects": "所有專案"

@@ -34,6 +34,7 @@
       "openMenu": "メニューを開く",
       "closeMenu": "メニューを閉じる",
       "openDisplaySettings": "表示設定を開く",
+      "openSearch": "検索",
       "openSettings": "設定を開く",
       "syncing": "再同期中",
       "sync": "再同期",
@@ -63,6 +64,7 @@
       "statusArchived": "アーカイブ済み",
       "statusAll": "すべて",
       "dialogueFolder": "チャット",
+      "search": "検索",
       "settings": "設定",
       "remoteSettings": "リモート接続設定",
       "displaySettings": "表示設定",
@@ -73,6 +75,45 @@
       "projectOrderManual": "手動",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
       "statusHeading": "ステータス"
+    },
+    "search": {
+      "placeholder": "タイトルまたは内容を検索…",
+      "filterA11y": "検索フィルター",
+      "filterAria": "検索フィルターと並び順（並び順：{{sort}}、状態：{{status}}、Agent：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
+      "filter": {
+        "label": "検索条件",
+        "reset": "リセット",
+        "sortHeading": "並び替え",
+        "statusHeading": "ステータス",
+        "projectsHeading": "プロジェクト",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "最近のアクティビティ",
+        "allProjects": "すべてのプロジェクト",
+        "selectedProjects": "{{count}} 件選択",
+        "sort": {
+          "relevance": "関連度",
+          "activityDesc": "最近アクティブ",
+          "activityAsc": "古いアクティブ順"
+        },
+        "status": {
+          "active": "アクティブ",
+          "archived": "アーカイブ済み",
+          "all": "すべて"
+        },
+        "agent": {
+          "all": "すべて",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1日",
+          "3d": "3日",
+          "7d": "7日",
+          "30d": "30日",
+          "all": "すべて"
+        }
+      }
     },
     "renameDevice": {
       "title": "デバイス名を変更",
@@ -129,7 +170,7 @@
       "openA11y": "リモートセッションを検索",
       "closeA11y": "リモートセッションの検索を閉じる",
       "label": "検索",
-      "placeholder": "タイトル、プロジェクト、モデル、メッセージを検索",
+      "placeholder": "タイトルまたは内容を検索…",
       "clearA11y": "検索をクリア",
       "closeInputA11y": "検索を閉じる",
       "clear": "クリア",

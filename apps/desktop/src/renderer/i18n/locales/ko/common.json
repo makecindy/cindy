@@ -7887,8 +7887,9 @@
       },
       "filterVendor": {
         "all": "전체",
-        "cc": "Claude",
-        "codex": "Codex"
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
       },
       "filterGroupBy": {
         "project": "프로젝트별 그룹",
@@ -8409,7 +8410,7 @@
       },
       "filterAria": "검색 필터 및 정렬(정렬: {{sort}}, 상태: {{status}}, 에이전트: {{agent}}, 최근 활성: {{lastActivity}}, 프로젝트: {{projects}})",
       "filter": {
-        "label": "필터",
+        "label": "검색 조건",
         "active": "필터 {{count}}개",
         "reset": "초기화",
         "allProjects": "모든 프로젝트"
