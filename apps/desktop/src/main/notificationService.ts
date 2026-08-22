@@ -80,8 +80,10 @@ interface ShowSessionEventPayload {
    * 这层 default 仅为新增调用方留兜底。
    * mobile 通道没有桌面侧开关:是否收到由手机端自行注册/注销推送 token 决定,
    * 发送侧的防打扰(远程正在看该会话 / 短窗去重)在 device-link 模块内收口。
+   * sound = 应用级提示音通道(#3177):renderer 已在本地播过提示音并要求本条
+   * toast 静音(OS 通知音不再叠加);缺省时保持 Electron 默认(silent:false)。
    */
-  channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
+  channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean; sound?: boolean };
 }
 
 /**
@@ -124,12 +126,15 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
  */
 export function showDesktopSessionEvent(
   getWindow: () => BrowserWindow | null,
-  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'>,
+  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & {
+    /** #3177:toast 是否静音(sound 通道开时由 renderer 播放应用提示音,OS 音不叠加)。 */
+    silent?: boolean;
+  },
 ): void {
-  const { sessionId, title, kind } = payload;
+  const { sessionId, title, kind, silent } = payload;
   if (sessionId) markSessionNeedsAttention(sessionId);
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
-  showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId));
+  showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), silent);
 }
 
 export interface NotificationServiceDeps {
@@ -169,7 +174,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const wantFeishu = channels?.feishu === true;
 
       if (wantDesktop) {
-        showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind });
+        // sound 通道开 → toast 静音:提示音已由 renderer 播放,OS 通知音不再叠加,
+        // 保证跨平台单一声源;未传/关闭时保持 Electron 默认(交给 OS)。
+        const silent = channels?.sound === true;
+        showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind, silent });
       } else {
         // Dock/taskbar 角标独立于外发通道；即便只开飞书或两个通知开关都关闭，
         // session 进入终态后仍要在 Cindy 内标记为需要关注。
@@ -233,14 +241,20 @@ function assertValidSessionEventPayload(
     p.title.length > SESSION_TITLE_MAX_LENGTH ||
     typeof p.kind !== 'string' ||
     !SESSION_EVENT_KINDS.has(p.kind) ||
-    (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null))
+    (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
+    (p.channels?.sound !== undefined && typeof p.channels.sound !== 'boolean')
   ) {
     throw new TypeError('invalid session event payload');
   }
 }
 
 /** 桌面 toast 分支 — 原实现保持不变,只是拆出来便于 channels 选择性执行。 */
-function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void): void {
+function showDesktopToast(
+  safeTitle: string,
+  kind: SessionEventKind,
+  onClick: () => void,
+  silent = false,
+): void {
   const body = getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
@@ -252,7 +266,9 @@ function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: ()
   const notif = new Notification({
     title: `${CLIENT_NOTIFICATION_NAME} · ${safeTitle}`,
     body,
-    // silent 默认 false——发声音，与 Electron 默认一致。
+    // silent 默认 false——OS 通知音照常;sound 通道(#3177)开时传 true,
+    // 提示音由应用统一播放,避免 OS 音 + 应用音双响。
+    ...(silent ? { silent: true } : {}),
     // icon 仅在 dev 下传值；packaged 时为 undefined，回到原行为(由 AUMID/.icns 兜底)。
     ...(devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });

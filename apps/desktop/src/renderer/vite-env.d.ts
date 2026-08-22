@@ -2664,8 +2664,15 @@ interface ElectronAPI {
      * notifications.feishuEnabled)后填入。
      * mobile = 手机推送:桌面侧无独立开关(手机端注册/注销 token 决定接收),
      * 发送侧防打扰在 main 的 device-link 模块收口,renderer 恒传 true。
+     * sound = 应用级提示音通道(#3177):true 时 main 把本条 toast 置为静音,
+     * 提示音已由 renderer 本地播放,OS 通知音不再叠加。
      */
-    channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
+    channels?: {
+      desktop?: boolean;
+      feishu?: boolean;
+      mobile?: boolean;
+      sound?: boolean;
+    };
   }) => Promise<void>;
   /** Sync the renderer-owned global desktop-notification preference to main. */
   notificationSetDesktopEnabled?: (enabled: boolean) => Promise<{ ok: true }>;
