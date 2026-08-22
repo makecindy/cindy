@@ -4,6 +4,9 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const electronRuntime = vi.hoisted(() => ({ isPackaged: true }));
+vi.mock('electron', () => ({ app: electronRuntime }));
+
 // 跳过明细只落日志(不进返回值、不进 IPC),所以断言必须打在 logger 上。
 const mocks = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock('../../logger.js', () => ({
@@ -38,6 +41,7 @@ const canSymlink = (() => {
 
 beforeEach(() => {
   mocks.warn.mockClear();
+  electronRuntime.isPackaged = true;
 });
 
 afterEach(() => {
@@ -210,6 +214,59 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual(['good-one']);
     expect(result.marketplace.skippedCount).toBe(1);
   });
+
+  // 保留前缀单源在 shared/ghost.ts 的 GHOST_OFFICIAL_ID_PREFIXES;这里逐个显式列出
+  // 是为了在前缀集合变化时强制测试跟进,不从实现导入(否则实现漏配前缀测试照样绿)。
+  it.each(['cindy-fake', 'filo-fake', 'xd-fake'])(
+    'skips reserved-prefix plugin %s instead of listing an uninstallable entry',
+    async (reservedId) => {
+      const root = makeRoot();
+      writePlugin(root, 'plugins/good', 'good-one');
+      writePlugin(root, 'plugins/reserved', reservedId);
+      writeManifest(root, {
+        name: 'reserved-market',
+        plugins: [
+          { name: 'good', source: 'plugins/good' },
+          { name: 'reserved', source: 'plugins/reserved' },
+        ],
+      });
+
+      const result = await discoverMarketplace(root);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      // 保留前缀条目在发现层就消失:装入管道必拒(rejectReservedGhostIdForCustomMarket),
+      // 列出来只会给用户一个必然失败的安装按钮。正常插件不受影响。
+      expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual(['good-one']);
+      expect(result.marketplace.skippedCount).toBe(1);
+      expect(result.marketplace.unreadableCount).toBe(0);
+      const logged = lastSkipLog();
+      expect(logged.entries).toEqual([
+        { index: 1, path: 'plugins/reserved', reason: 'reserved-ghost-id' },
+      ]);
+    },
+  );
+
+  it.each(['cindy-dev', 'filo-dev', 'xd-dev'])(
+    'keeps reserved-prefix plugin in dev builds: %s',
+    async (reservedId) => {
+      electronRuntime.isPackaged = false;
+      const root = makeRoot();
+      writePlugin(root, 'plugins/reserved', reservedId);
+      writeManifest(root, {
+        name: 'reserved-dev-market',
+        plugins: [{ name: 'reserved', source: 'plugins/reserved' }],
+      });
+
+      const result = await discoverMarketplace(root);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual([reservedId]);
+        expect(result.marketplace.skippedCount).toBe(0);
+      }
+    },
+  );
 
   it('skips duplicate ghostIds keeping the first occurrence', async () => {
     const root = makeRoot();

@@ -12,8 +12,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { app } from 'electron';
 
-import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
+import { isOfficialGhostId, validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
 import { createLogger } from '../../logger.js';
 import {
   GHOST_MANIFEST_MAX_BYTES,
@@ -201,6 +202,7 @@ type PluginSkipReason =
   | 'manifest-unreadable'
   | 'manifest-unparsable'
   | 'manifest-invalid'
+  | 'reserved-ghost-id'
   | 'duplicate-ghost-id';
 
 interface PluginSkipInfo {
@@ -358,6 +360,13 @@ async function resolvePluginDir(
   }
   const validated = validateGhostManifest(raw);
   if (!validated.ok) return { kind: 'invalid', reason: 'manifest-invalid' };
+  // packaged 版本的自定义市场安装闸会拒绝官方保留前缀(cindy- / filo- / xd-),
+  // 因此发现层同步过滤,避免展示必然失败的安装按钮。dev 构建刻意豁免安装闸,
+  // 供官方插件开发迭代,发现层也必须保留这条路径。install 侧闸保留不动
+  // (纵深防御:防发现后目录被改的 TOCTOU)。
+  if (app.isPackaged && isOfficialGhostId(validated.manifest.id)) {
+    return { kind: 'invalid', reason: 'reserved-ghost-id' };
+  }
   return {
     kind: 'ok',
     plugin: {

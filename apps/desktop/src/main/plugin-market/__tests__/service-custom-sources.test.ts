@@ -43,6 +43,7 @@ const pickerDialog = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({
   app: {
+    isPackaged: true,
     getPath: vi.fn(() => os.tmpdir()),
     getVersion: vi.fn(() => '1.0.0'),
   },
@@ -1265,30 +1266,28 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
-  it('custom market 即使自报 cindy-github 也不会获得 server-market 官方标记', async () => {
+  it('custom market 自报 cindy-github 在发现层即被过滤,detail 拒以 NOT_FOUND', async () => {
+    // 原防护:自定义市场自报官方 id(cindy-github)不得获得 server-market 官方
+    // 标记(只能按普通 custom 条目装)。现由发现层的保留前缀过滤覆盖为更强防护:
+    // 该条目根本不进发现结果(见 discover.ts 的 reserved-ghost-id skip reason)——
+    // 自然也拿不到任何标记。install 侧 rejectReservedGhostIdForCustomMarket 闸
+    // 保留作 TOCTOU 纵深(独立用例见 install-manifest-read.test.ts)。
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-github-'));
     roots.push(root);
-    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/github', id: 'cindy-github' }]);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/github', id: 'cindy-github' },
+      { rel: 'plugins/alpha', id: 'alpha' },
+    ]);
     const h = harness([], [{ name: 'team-lib', dir }]);
-    runtime.install.mockResolvedValue({
-      manifest: ghostManifest('cindy-github'),
-      dir: '/ghosts/cindy-github',
-      enabled: true,
-    });
-    const pluginId = customMarketPluginId('team-lib', 'cindy-github');
-    const detail = await h.service.detail(pluginId);
+    // 保留前缀条目不出现在市场快照;同市场的正常插件不受影响。
+    const snapshot = await h.service.snapshot();
+    expect(snapshot.items.map((item) => item.ghostId)).toEqual(['alpha']);
 
-    await h.service.install(pluginId, {
-      expectedReleaseId: customMarketReleaseId("team-lib", "cindy-github", "1.0.0"),
-      expectedManifest: detail.manifest,
-    });
-
-    expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
-      ghostId: 'cindy-github',
-      version: '1.0.0',
-      permissionPolicy: { mode: 'manual', sourceType: 'local-market' },
-    });
-    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('officialCindyGithub');
+    // 直接伪造 pluginId 调 detail 也拿不到条目(发现结果里没有它)。
+    await expect(
+      h.service.detail(customMarketPluginId('team-lib', 'cindy-github')),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 
   it('rejects install when the reviewed release no longer matches', async () => {
