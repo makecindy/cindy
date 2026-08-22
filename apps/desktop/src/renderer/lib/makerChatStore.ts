@@ -830,6 +830,17 @@ export interface PendingRenameSessionsConfirm {
   }>;
 }
 
+/**
+ * Device Link 控制端对 Desktop-only 确认的只读投影。
+ *
+ * 真实 requestId 与确认内容只留在被控 Desktop；控制端只持有不可用于 resolve 的
+ * opaque id，以便显示等待状态并和 INTERACTION_DISMISSED 收敛。
+ */
+export interface PendingRemoteDesktopConfirmation {
+  requestId: string;
+  kind: 'issue_confirm' | 'rename_sessions_confirm' | 'ghost_grant_confirm';
+}
+
 /** FP-3: Plan Viewer Card display state. */
 export type PlanViewerState = 'expanded' | 'half' | 'minimized' | 'edit';
 
@@ -2462,6 +2473,8 @@ export interface SessionChatState {
   pendingRenameSessionsConfirm: PendingRenameSessionsConfirm | null;
   /** ghost_grant_confirm: ghost_call 过户 workdir 外文件的确认卡片; null when none. */
   pendingGhostGrantConfirm: PendingGhostGrantConfirm | null;
+  /** Device Link 控制端上的 Desktop-only 只读确认提示; null when none. */
+  pendingRemoteDesktopConfirmation: PendingRemoteDesktopConfirmation | null;
   /** FP-3: Plan Viewer Card display state (only meaningful when pendingPlanReview != null). */
   planViewerState: PlanViewerState;
   /** FP-3: Last non-minimized state — used to restore from minimized via the "+" button. */
@@ -2663,6 +2676,7 @@ export type SessionChatLightState = Pick<
   | 'pendingIssueConfirm'
   | 'pendingRenameSessionsConfirm'
   | 'pendingGhostGrantConfirm'
+  | 'pendingRemoteDesktopConfirmation'
   | 'planViewerState'
   | 'lastExpandedPlanViewerState'
   | 'pendingQueue'
@@ -2724,6 +2738,7 @@ function createInitialState(): SessionChatState {
     pendingIssueConfirm: null,
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
+    pendingRemoteDesktopConfirmation: null,
     planViewerState: 'expanded',
     lastExpandedPlanViewerState: 'expanded',
     oldestMessageId: null,
@@ -2800,6 +2815,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   pendingIssueConfirm: null,
   pendingRenameSessionsConfirm: null,
   pendingGhostGrantConfirm: null,
+  pendingRemoteDesktopConfirmation: null,
   planViewerState: 'expanded',
   lastExpandedPlanViewerState: 'expanded',
   pendingQueue: [],
@@ -3399,7 +3415,8 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
     s.pendingRenameSessionsConfirm ||
-    s.pendingGhostGrantConfirm
+    s.pendingGhostGrantConfirm ||
+    s.pendingRemoteDesktopConfirmation
   );
 }
 
@@ -5288,6 +5305,7 @@ export function handleStreamEvent(
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
         pendingGhostGrantConfirm: null,
+        pendingRemoteDesktopConfirmation: null,
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
@@ -5495,6 +5513,7 @@ export function handleStreamEvent(
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
         pendingGhostGrantConfirm: null,
+        pendingRemoteDesktopConfirmation: null,
         // agent-meta: turn 异常结束也清空。
         lastAgentMeta: null,
         // 出错也是 turn 终结：清掉 isRunning，否则 RunningStatusBar 会一直停在
@@ -5581,6 +5600,9 @@ export function handleStreamEvent(
       if (state.pendingGhostGrantConfirm?.requestId === data.requestId) {
         // ghost 过户确认卡被 main 兜底关闭(超时/会话清理),ephemeral 无落库,直接清。
         return { ...state, pendingGhostGrantConfirm: null };
+      }
+      if (state.pendingRemoteDesktopConfirmation?.requestId === data.requestId) {
+        return { ...state, pendingRemoteDesktopConfirmation: null };
       }
       if (state.pendingAskUser?.requestId === data.requestId) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
@@ -5872,6 +5894,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.pendingIssueConfirm &&
     !state.pendingRenameSessionsConfirm &&
     !state.pendingGhostGrantConfirm &&
+    !state.pendingRemoteDesktopConfirmation &&
     !state.messages.some((m) => m.isStreaming) &&
     !state.queueAbortPending &&
     state.steeringQueueClientIds.length === 0 &&
@@ -5925,6 +5948,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingIssueConfirm: null,
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
+    pendingRemoteDesktopConfirmation: null,
     queueAbortPending: false,
     steeringQueueClientIds: [],
     continuationTurnClientId: null,
@@ -7105,7 +7129,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   );
 
   // ── Maker interaction request: permission/ask/plan 三合一,按 kind 分发 ──
-  const handleInteractionRequestRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
+  const handleInteractionRequestRaw = (
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+    remoteSnapshotDeviceId?: string,
+  ) => {
     if (!isCurrentLiveIngress(ingress)) return;
     const payload = raw as {
       sessionId?: string;
@@ -7133,6 +7161,25 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     // F1-a Phase 5: ask_user / plan_review 消息由 main 落库并下发 persistId,renderer
     // 用它当气泡 clientId(permission 无此字段)。
     const persistId = payload.persistId;
+
+    if (
+      (ingress.remoteDeviceId || remoteSnapshotDeviceId) &&
+      (kind === 'issue_confirm' ||
+        kind === 'rename_sessions_confirm' ||
+        kind === 'ghost_grant_confirm')
+    ) {
+      setState(sessionId, (s) => ({
+        ...s,
+        pendingIssueConfirm: null,
+        pendingRenameSessionsConfirm: null,
+        pendingGhostGrantConfirm: null,
+        pendingRemoteDesktopConfirmation: {
+          kind,
+          requestId: request.requestId,
+        },
+      }));
+      return;
+    }
 
     if (request.kind === 'permission') {
       const metadata = request.metadata as Record<string, unknown> | undefined;
@@ -7253,6 +7300,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           githubUserIdentity,
           suggestedPublicName,
         },
+        pendingRemoteDesktopConfirmation: null,
       }));
       return;
     }
@@ -7268,6 +7316,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       setState(sessionId, (s) => ({
         ...s,
         pendingRenameSessionsConfirm: { requestId: request.requestId, changes },
+        pendingRemoteDesktopConfirmation: null,
       }));
       return;
     }
@@ -7276,7 +7325,11 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       // ephemeral 卡片(同 permission 语义,无 persistId 不落库),直接写 state。
       const parsed = parseGhostGrantConfirmRequest(request);
       if (!parsed) return;
-      setState(sessionId, (s) => ({ ...s, pendingGhostGrantConfirm: parsed }));
+      setState(sessionId, (s) => ({
+        ...s,
+        pendingGhostGrantConfirm: parsed,
+        pendingRemoteDesktopConfirmation: null,
+      }));
       return;
     }
   };
@@ -7308,7 +7361,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
   );
   // 模块级桥接:供 reconcilePendingInteractions(打开/重连会话时的快照重建)复用同一套
   // 按 kind 分发逻辑。handler 只依赖模块级 setState/handleStreamEvent,无闭包局部状态,引用安全。
-  applyInteractionRequestRef = handleInteractionRequestRaw;
+  applyInteractionRequestRef = (raw, source) =>
+    handleInteractionRequestRaw(raw, {}, source?.remoteDeviceId);
 
   // ── Maker interaction dismissed: setPermissionMode 切换 / close 时关掉对话框 ──
   const handleInteractionDismissedRaw = (raw: unknown, ingress: LiveIngressContext = {}) => {
@@ -8309,6 +8363,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     pendingIssueConfirm: state.pendingIssueConfirm,
     pendingRenameSessionsConfirm: state.pendingRenameSessionsConfirm,
     pendingGhostGrantConfirm: state.pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation: state.pendingRemoteDesktopConfirmation,
     planViewerState: state.planViewerState,
     lastExpandedPlanViewerState: state.lastExpandedPlanViewerState,
     pendingQueue: state.pendingQueue,
@@ -8353,6 +8408,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.pendingIssueConfirm === b.pendingIssueConfirm &&
     a.pendingRenameSessionsConfirm === b.pendingRenameSessionsConfirm &&
     a.pendingGhostGrantConfirm === b.pendingGhostGrantConfirm &&
+    a.pendingRemoteDesktopConfirmation === b.pendingRemoteDesktopConfirmation &&
     a.planViewerState === b.planViewerState &&
     a.lastExpandedPlanViewerState === b.lastExpandedPlanViewerState &&
     a.pendingQueue === b.pendingQueue &&
@@ -8726,7 +8782,8 @@ function setTitleUpdateCallback(sessionId: string, cb: (() => void) | undefined)
  * initGlobalListeners 注入的「interaction-request 分发」引用,供 reconcilePendingInteractions
  * 复用(打开/重连会话时把当前挂起交互重建成可操作面板)。handler 无闭包局部依赖。
  */
-let applyInteractionRequestRef: ((raw: unknown) => void) | null = null;
+let applyInteractionRequestRef:
+  ((raw: unknown, source?: { remoteDeviceId?: string }) => void) | null = null;
 
 /**
  * 快照重建:拉取某会话当前挂起的交互(permission/ask/plan)并重建可操作面板。
@@ -8787,6 +8844,7 @@ function reconcilePendingInteractions(
       // a Device Link reconnect cannot leave cards that the Host already closed.
       // Other interaction kinds keep their existing replay semantics.
       const authoritativePluginSetupIds = new Set<string>();
+      const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
         if (
@@ -8795,6 +8853,15 @@ function reconcilePendingInteractions(
           request.requestId.length > 0
         ) {
           authoritativePluginSetupIds.add(request.requestId);
+        }
+        if (
+          (request?.kind === 'issue_confirm' ||
+            request?.kind === 'rename_sessions_confirm' ||
+            request?.kind === 'ghost_grant_confirm') &&
+          typeof request.requestId === 'string' &&
+          request.requestId.length > 0
+        ) {
+          authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
@@ -8819,8 +8886,22 @@ function reconcilePendingInteractions(
           authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
             ? state.pluginSetupCommandInFlight
             : null;
+        const nextRemoteDesktopConfirmation =
+          stickyDeviceAtStart || interactionOriginAtStart
+            ? state.pendingRemoteDesktopConfirmation &&
+              authoritativeRemoteDesktopConfirmationIds.has(
+                state.pendingRemoteDesktopConfirmation.requestId,
+              )
+              ? state.pendingRemoteDesktopConfirmation
+              : null
+            : state.pendingRemoteDesktopConfirmation;
 
-        if (!currentChanged && !queueChanged && nextCommand === state.pluginSetupCommandInFlight) {
+        if (
+          !currentChanged &&
+          !queueChanged &&
+          nextCommand === state.pluginSetupCommandInFlight &&
+          nextRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation
+        ) {
           return state;
         }
         return {
@@ -8829,15 +8910,21 @@ function reconcilePendingInteractions(
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
           pluginSetupCommandInFlight: nextCommand,
+          pendingRemoteDesktopConfirmation: nextRemoteDesktopConfirmation,
         };
       });
       for (const item of list) {
         if (!isCurrentInteractionReconcile()) return 0;
-        applyInteractionRequestRef?.({
-          sessionId,
-          request: item.request,
-          persistId: item.persistId,
-        });
+        applyInteractionRequestRef?.(
+          {
+            sessionId,
+            request: item.request,
+            persistId: item.persistId,
+          },
+          {
+            remoteDeviceId: stickyDeviceAtStart ?? interactionOriginAtStart ?? undefined,
+          },
+        );
       }
       return list.length;
     });
@@ -13400,6 +13487,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       askUserDraft: null,
       pendingPlanReview: null,
       pendingIssueConfirm: null,
+      pendingRemoteDesktopConfirmation: null,
       pendingQueue: s.pendingQueue.filter((item) =>
         postClearOptimisticClientIds.has(item.clientId),
       ),

@@ -121,6 +121,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   turnStoppedByUser: false,
   lastAgentMeta: null,
   ...overrides,
+  pendingRemoteDesktopConfirmation: overrides.pendingRemoteDesktopConfirmation ?? null,
 });
 
 describe('makerQueueState', () => {
