@@ -6330,6 +6330,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       h.setLiveRunning(false);
       h.setLiveSessionPresent(false);
       h.setRunning(false);
+      h.reconcileTurnIdle.mockReturnValue(true);
       h.coordinator.enqueue(sid, second);
       await flush();
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
@@ -6337,7 +6338,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       await vi.advanceTimersByTimeAsync(250);
       await flush();
 
-      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
       expect(h.sendToAgent).toHaveBeenCalledTimes(2);
       expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
         type: 'user',

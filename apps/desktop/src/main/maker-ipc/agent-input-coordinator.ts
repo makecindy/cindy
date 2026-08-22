@@ -3483,7 +3483,7 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    if (trackerBusy) {
+    if (trackerBusy || reclaimLeftover) {
       const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
       if (!reconciled && !reclaimLeftover) return false;
     }

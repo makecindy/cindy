@@ -147,7 +147,7 @@ describe('maker:event hot path ordering', () => {
     const observerHelperStart = source.indexOf('function notifyGoalIdleAfterTurnSettled(');
     const observerHelperEnd = source.indexOf('\n}\n', observerHelperStart) + 2;
     const observerHelperSource = source.slice(observerHelperStart, observerHelperEnd);
-    const reconcileStart = source.indexOf('const reconcileSessionTurnIdle =');
+    const reconcileStart = source.indexOf('const sealLostTerminalPersistState =');
     const reconcileEnd = source.indexOf('\n\n  const readDirectAbortTurnId =', reconcileStart);
     const reconcileSource = source.slice(reconcileStart, reconcileEnd);
     const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
@@ -170,20 +170,27 @@ describe('maker:event hot path ordering', () => {
 
     expect(reconcileStart).toBeGreaterThanOrEqual(0);
     expect(reconcileEnd).toBeGreaterThan(reconcileStart);
-    expectOrder(
-      reconcileSource,
+    const liveIdleStart = reconcileSource.indexOf(
       'sessionTurnActivityTracker.setSessionInTurn(sessionId, false);',
-      'notifyGoalIdleAfterTurnSettled(sessionId);',
     );
+    expect(liveIdleStart).toBeGreaterThanOrEqual(0);
+    expect(
+      reconcileSource.indexOf('notifyGoalIdleAfterTurnSettled(sessionId);', liveIdleStart),
+    ).toBeGreaterThan(liveIdleStart);
     expectOrder(
       reconcileSource,
-      'markTurnEndedAfterPersistDrain(sessionId);',
-      'clearCodexPlanRowsForSession(sessionId);',
+      'flushAssistantBlock(sessionId, null);',
+      'consumeLastAssistantPersistId(sessionId);',
     );
     expectOrder(
       reconcileSource,
       'clearCodexPlanRowsForSession(sessionId);',
       'resetTurnPersistState(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'sealLostTerminalPersistState(sessionId);',
+      'sessionTurnActivityTracker.deleteSession(sessionId);',
     );
 
     // ABORT_SESSION reconciles from finally, so vendor abort rejection still reaches the
@@ -703,7 +710,7 @@ describe('maker:event hot path ordering', () => {
     const stableLookupStart = source.indexOf('const lookupStableSessionForTurnBoundary =');
     const stableLookupEnd = source.indexOf('\n  const getStableSessionForTurnBoundary =', stableLookupStart);
     const stableLookupSource = source.slice(stableLookupStart, stableLookupEnd);
-    const reconcileStart = source.indexOf('\n  const reconcileSessionTurnIdle =');
+    const reconcileStart = source.indexOf('const sealLostTerminalPersistState =');
     const reconcileEnd = source.indexOf('\n\n  const inputCoordinator:', reconcileStart);
     const reconcileSource = source.slice(reconcileStart, reconcileEnd);
 
@@ -728,8 +735,8 @@ describe('maker:event hot path ordering', () => {
     expectOrder(reconcileSource, 'flushAssistantBlock(sessionId, null);', 'consumeLastAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastAssistantPersistId(sessionId);', 'consumeLastTopLevelAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastTopLevelAssistantPersistId(sessionId);', 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)');
-    expectOrder(reconcileSource, 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)', 'markTurnEndedAfterPersistDrain(sessionId);');
-    expectOrder(reconcileSource, 'markTurnEndedAfterPersistDrain(sessionId);', 'resetTurnPersistState(sessionId);');
+    expectOrder(reconcileSource, 'sealLostTerminalPersistState(sessionId);', 'sessionTurnActivityTracker.deleteSession(sessionId);');
+    expectOrder(reconcileSource, 'clearCodexPlanRowsForSession(sessionId);', 'resetTurnPersistState(sessionId);');
   });
 
   it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
