@@ -74,10 +74,15 @@ describe('parseRangeHeader', () => {
     });
   });
 
-  it('classifies out-of-range as unsatisfiable (not null)', () => {
+  it('clamps an over-long end to the final byte', () => {
     expect(parseRangeHeader('bytes=0-9999', 1000)).toEqual({
-      kind: 'unsatisfiable',
+      kind: 'range',
+      start: 0,
+      end: 999,
     });
+  });
+
+  it('classifies an out-of-range start or inverted range as unsatisfiable', () => {
     expect(parseRangeHeader('bytes=500-100', 1000)).toEqual({
       kind: 'unsatisfiable',
     });
@@ -319,6 +324,19 @@ describe('audio handler range responses', () => {
     expect(res.headers.get('Content-Length')).toBe('4');
     expect(res.headers.get('Accept-Ranges')).toBe('bytes');
     expect(Buffer.from(await res.arrayBuffer()).toString()).toBe('2345');
+  });
+
+  it('serves through EOF when a closed range end exceeds the file size', async () => {
+    const handler = getHandler();
+    const res = await handler(
+      makeRequest('xdt-audio://local/?path=%2Ftmp%2Fclip.mp3', {
+        headers: { Range: 'bytes=2-999' },
+      }),
+    );
+    expect(res.status).toBe(206);
+    expect(res.headers.get('Content-Range')).toBe('bytes 2-9/10');
+    expect(res.headers.get('Content-Length')).toBe('8');
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe('23456789');
   });
 
   it('maps an unsatisfiable range to 416 with full media headers', async () => {
