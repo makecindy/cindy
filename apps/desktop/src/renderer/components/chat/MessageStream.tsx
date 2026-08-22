@@ -4202,13 +4202,15 @@ export function MessageStream({
 
   // 与 unpin 对称:用户已经贴死底部时的向下意图恢复跟随。不经过 scroll 事件 —
   // 贴死底部后再往下滚通常不再改变 scrollTop。历史切片的底不是会话尾,不能从
-  // 那里开始跟随(与 resolveEffectiveNearBottom 同口径)。
+  // 那里开始跟随(与 resolveEffectiveNearBottom 同口径)。覆盖末尾的锚定窗也要
+  // 一并清掉,否则下一条 token 会 uncover 再 unpin。
   const pinAutoFollowForUserDownIntent = useCallback(() => {
     if (!windowCoversEndRef.current) return;
     if (isNearBottomRef.current) return;
     isNearBottomRef.current = true;
     setIsNearBottom(true);
     setUnreadCount(0);
+    setFirstVisibleItemKey(null);
   }, []);
 
   // 滚动条拖拽:只记按下时的 scrollTop。单纯 mousedown 不解除;上移过死区才 unpin。

@@ -368,6 +368,16 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(collapseObserver).toContain('refreshHiddenChildViewportAnchor()');
   });
 
+  it('clears the historical window anchor when wheel or touch restores follow', () => {
+    const pin = sourceBetween(
+      'const pinAutoFollowForUserDownIntent = useCallback(() => {',
+      'const scrollbarDragStartTopRef',
+    );
+    expect(pin).toContain('if (!windowCoversEndRef.current) return');
+    expect(pin).toContain('setUnreadCount(0)');
+    expect(pin).toContain('setFirstVisibleItemKey(null)');
+  });
+
   it('cancels chip jumps on scrollbar mousedown as well as wheel and touch', () => {
     const takeover = sourceBetween(
       'const onWheel = (event: WheelEvent) => {',
