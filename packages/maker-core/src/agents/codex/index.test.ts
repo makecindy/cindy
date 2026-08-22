@@ -882,6 +882,35 @@ describe('CodexAgent permissions', () => {
     await handle.close();
   });
 
+  it('fails closed when search-mode Skill discovery reports an unscoped error', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.SkillsList) {
+          return {
+            data: [{
+              cwd: '/repo',
+              skills: [],
+              errors: [{ message: 'catalog unavailable' }],
+            }],
+          };
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    await expect(agent.startSession({
+      sessionId: 'session-search-unscoped-skill-error',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      searchMode: true,
+    })).rejects.toThrow(
+      'Cannot start Codex search mode because Cindy could not hide Skills, plugins, and MCP servers: catalog unavailable',
+    );
+  });
+
   it('does not register host dynamic tools in search mode', async () => {
     const listTools = vi.fn(() => [
       {

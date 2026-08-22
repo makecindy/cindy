@@ -4055,6 +4055,8 @@ export class CodexAgent extends BaseAgent {
           CRITICAL_THREAD_RPC_TIMEOUT_MS,
         );
         assertCurrentHost('search-mode isolation');
+        const unscopedSkillError = errors.find((error) => !error.path);
+        if (unscopedSkillError) throw new Error(unscopedSkillError.message);
         const configResponse = await host.request<{ config?: Record<string, unknown> }>(
           Method.ConfigRead,
           { includeLayers: false },
