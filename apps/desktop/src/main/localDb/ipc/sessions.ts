@@ -677,6 +677,17 @@ export async function getSessionRowSnapshot(id: string): Promise<SessionRowSnaps
   }
 }
 
+/**
+ * Heartbeat restore must not treat a temporary DB read failure as
+ * "session missing / archived". Swallowing that error would let a
+ * persistent schedule rebind onto a fresh unisolated session.
+ */
+export async function getSessionRowSnapshotForHeartbeat(
+  id: string,
+): Promise<SessionRowSnapshot | null> {
+  return selectSessionRowSnapshot(id);
+}
+
 export async function getSessionSearchModeEnabled(id: string): Promise<boolean> {
   try {
     const db = getDbClient().drizzle;

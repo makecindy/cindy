@@ -57,7 +57,7 @@ import type {
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
-  getSessionRowSnapshot,
+  getSessionRowSnapshotForHeartbeat,
   getSessionSearchModeEnabled,
   touchUserSendInDb,
 } from '../localDb/ipc/sessions.js';
@@ -641,7 +641,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throwIfFireAborted(ctx.signal, 'credential switch setup');
       const [meta, row, persistedSearchMode] = await Promise.all([
         this.deps.maker.getSessionMeta(sessionId).catch(() => null),
-        getSessionRowSnapshot(sessionId),
+        getSessionRowSnapshotForHeartbeat(sessionId),
         getSessionSearchModeEnabled(sessionId),
       ]);
       heartbeatSearchMode = persistedSearchMode;

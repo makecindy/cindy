@@ -31,7 +31,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
-  getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionRowSnapshotForHeartbeat: mocks.getSessionRowSnapshot,
   getSessionSearchModeEnabled: vi.fn(async () => false),
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
