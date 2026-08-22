@@ -94,6 +94,7 @@
     "tabs": {
       "general": "일반",
       "billing": "사용량 및 결제",
+      "usage": "사용 기록",
       "personalization": "개인화",
       "apiKeys": "도구 키",
       "voiceInput": "음성 입력",
@@ -5141,6 +5142,70 @@
     "noBilledCost": "이번 턴의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
     "suggestion": {
       "lowCache": "캐시 적중률이 낮아 이번 턴에서 더 많은 컨텍스트가 다시 과금되었습니다"
+    }
+  },
+  "usageHistory": {
+    "description": "이 기기의 Cindy 내부에서 발생한 토큰 사용량입니다. 기능 출시 시점부터 기록이 쌓이며 이전 기록은 채워지지 않습니다.",
+    "empty": "아직 사용 기록이 없습니다. 대화를 실행하면 쌓이기 시작합니다.",
+    "cacheHitTooltip": "캐시 읽기 ÷ (입력 + 캐시 읽기 + 캐시 쓰기) — 메시지 카드와 동일한 기준입니다.",
+    "summary": {
+      "title": "개요"
+    },
+    "stats": {
+      "todayTokens": "오늘 토큰",
+      "totalTokens": "최근 30일 토큰",
+      "streak": "연속 활동일",
+      "cacheHitRate": "캐시 적중률(30일)",
+      "models": "사용한 모델"
+    },
+    "heatmap": {
+      "title": "활동 히트맵",
+      "subtitle": "최근 20주",
+      "emptyCell": "해당 날짜에 사용 기록 없음"
+    },
+    "daily": {
+      "title": "최근 30일 일별 토큰",
+      "subtitle": "모델별 누적"
+    },
+    "byAgent": {
+      "title": "Agent / harness별",
+      "subtitle": "최근 30일",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "최근 30일 토큰",
+        "share": "비중",
+        "today": "오늘",
+        "hitRate": "캐시 적중률",
+        "models": "모델 수"
+      }
+    },
+    "byModel": {
+      "title": "모델별",
+      "subtitle": "최근 30일",
+      "col": {
+        "model": "모델",
+        "total": "총 토큰",
+        "share": "비중",
+        "input": "입력",
+        "output": "출력",
+        "cacheRead": "캐시 읽기",
+        "cacheCreate": "캐시 쓰기",
+        "hitRate": "캐시 적중률"
+      }
+    },
+    "tasks": {
+      "title": "토큰 사용이 많은 세션",
+      "subtitle": "최근 30일 동안 활동한 세션을 누적 토큰 순으로 정렬",
+      "col": {
+        "task": "세션",
+        "model": "모델",
+        "provider": "제공자",
+        "tokens": "누적 토큰",
+        "context": "컨텍스트 사용률",
+            "lastActive": "마지막 활동"
+      },
+      "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
+      "tokensTooltip": "해당 세션의 누적 값이며 최근 30일 증가분이 아닙니다."
     }
   },
   "usageDashboard": {

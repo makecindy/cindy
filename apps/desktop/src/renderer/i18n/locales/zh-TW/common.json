@@ -94,6 +94,7 @@
     "tabs": {
       "general": "通用",
       "billing": "用量和計費",
+      "usage": "用量歷史",
       "personalization": "個性化",
       "apiKeys": "工具金鑰",
       "voiceInput": "語音輸入",
@@ -5141,6 +5142,70 @@
     "noBilledCost": "本輪費用暫不可用，僅顯示用量",
     "suggestion": {
       "lowCache": "快取命中率偏低，本輪較多上下文重新計費"
+    }
+  },
+  "usageHistory": {
+    "description": "這台裝置上 Cindy 內部產生的 token 用量。紀錄從該功能上線起累積，不回填更早的歷史。",
+    "empty": "還沒有用量紀錄。跑過對話之後，這裡會開始累積。",
+    "cacheHitTooltip": "快取讀取 ÷（輸入 + 快取讀取 + 快取寫入），與訊息卡片同口徑。",
+    "summary": {
+      "title": "概覽"
+    },
+    "stats": {
+      "todayTokens": "今日 token",
+      "totalTokens": "近 30 天 token",
+      "streak": "連續活躍天數",
+      "cacheHitRate": "快取命中率(近 30 天)",
+      "models": "用到的模型"
+    },
+    "heatmap": {
+      "title": "活躍熱力圖",
+      "subtitle": "近 20 週",
+      "emptyCell": "當天沒有用量紀錄"
+    },
+    "daily": {
+      "title": "近 30 天每日 token",
+      "subtitle": "按模型堆疊"
+    },
+    "byAgent": {
+      "title": "按 Agent / harness",
+      "subtitle": "近 30 天",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "近 30 天 token",
+        "share": "佔比",
+        "today": "今日",
+        "hitRate": "快取命中率",
+        "models": "用到的模型"
+      }
+    },
+    "byModel": {
+      "title": "按模型",
+      "subtitle": "近 30 天",
+      "col": {
+        "model": "模型",
+        "total": "總 token",
+        "share": "佔比",
+        "input": "輸入",
+        "output": "輸出",
+        "cacheRead": "快取讀取",
+        "cacheCreate": "快取寫入",
+        "hitRate": "快取命中率"
+      }
+    },
+    "tasks": {
+      "title": "最耗 token 的任務",
+      "subtitle": "近 30 天內活躍過的任務，按累計 token 排序",
+      "col": {
+        "task": "任務",
+        "model": "模型",
+        "provider": "供應商",
+        "tokens": "累計 token",
+        "context": "上下文佔用",
+            "lastActive": "最後活躍"
+      },
+      "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
+      "tokensTooltip": "該任務的生命週期累計，不是近 30 天內的增量。"
     }
   },
   "usageDashboard": {

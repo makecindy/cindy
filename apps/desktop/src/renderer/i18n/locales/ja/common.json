@@ -94,6 +94,7 @@
     "tabs": {
       "general": "一般",
       "billing": "使用量と請求",
+      "usage": "使用履歴",
       "personalization": "パーソナライズ",
       "apiKeys": "ツールキー",
       "voiceInput": "音声入力",
@@ -5141,6 +5142,70 @@
     "noBilledCost": "このターンの料金は現在取得できないため、使用量のみ表示しています",
     "suggestion": {
       "lowCache": "キャッシュヒット率が低く、このターンでは多くのコンテキストが再課金されています"
+    }
+  },
+  "usageHistory": {
+    "description": "このデバイスの Cindy 内で発生したトークン使用量です。記録は機能の提供開始時から蓄積され、それ以前の履歴は補完されません。",
+    "empty": "まだ使用記録がありません。会話を実行すると蓄積が始まります。",
+    "cacheHitTooltip": "キャッシュ読取 ÷（入力 + キャッシュ読取 + キャッシュ書込）。メッセージカードと同じ基準です。",
+    "summary": {
+      "title": "概要"
+    },
+    "stats": {
+      "todayTokens": "今日のトークン",
+      "totalTokens": "直近 30 日のトークン",
+      "streak": "連続稼働日数",
+      "cacheHitRate": "キャッシュヒット率(30 日)",
+      "models": "使用モデル数"
+    },
+    "heatmap": {
+      "title": "アクティビティヒートマップ",
+      "subtitle": "直近 20 週",
+      "emptyCell": "この日は使用記録なし"
+    },
+    "daily": {
+      "title": "直近 30 日の日次トークン",
+      "subtitle": "モデル別の積み上げ"
+    },
+    "byAgent": {
+      "title": "Agent / harness 別",
+      "subtitle": "直近 30 日",
+      "col": {
+        "agent": "Agent / harness",
+        "total": "直近 30 日のトークン",
+        "share": "割合",
+        "today": "今日",
+        "hitRate": "キャッシュヒット率",
+        "models": "モデル数"
+      }
+    },
+    "byModel": {
+      "title": "モデル別",
+      "subtitle": "直近 30 日",
+      "col": {
+        "model": "モデル",
+        "total": "合計トークン",
+        "share": "割合",
+        "input": "入力",
+        "output": "出力",
+        "cacheRead": "キャッシュ読取",
+        "cacheCreate": "キャッシュ書込",
+        "hitRate": "キャッシュヒット率"
+      }
+    },
+    "tasks": {
+      "title": "トークン消費の多いセッション",
+      "subtitle": "直近 30 日に稼働したセッションを累計トークン順に表示",
+      "col": {
+        "task": "セッション",
+        "model": "モデル",
+        "provider": "プロバイダー",
+        "tokens": "累計トークン",
+        "context": "コンテキスト使用率",
+            "lastActive": "最終アクティブ"
+      },
+      "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
+      "tokensTooltip": "セッションの累計値であり、直近 30 日の増分ではありません。"
     }
   },
   "usageDashboard": {
