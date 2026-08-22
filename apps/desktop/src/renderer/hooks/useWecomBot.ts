@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
@@ -30,69 +30,93 @@ export function useWecomBot() {
   const [isUpdatingWorkingDir, setIsUpdatingWorkingDir] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void window.electronAPI.wecomBot
-      .getStatus()
-      .then((state) => {
-        if (cancelled) return;
-        const next = {
-          status: state.status,
-          botId: state.botId ?? '',
-          ownerUserId: state.ownerUserId ?? '',
-        };
-        cachedState = next;
-        setStatus(next.status);
-        setBotId(next.botId);
-        setOwnerUserId(next.ownerUserId);
-      })
-      .catch((error) => {
-        log.error('getStatus failed:', error instanceof Error ? error.message : String(error));
-      });
-    void window.electronAPI.wecomBot
-      .getChannelSettings()
-      .then((settings) => {
-        if (cancelled) return;
-        setChannelSettings(settings);
-      })
-      .catch((error) => {
-        log.error(
-          'getChannelSettings failed:',
-          error instanceof Error ? error.message : String(error),
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  /**
+   * 渠道设置写回的代次。每次发起新请求(挂载/刷新/选择/重置)递增;切号与卸载
+   * 也递增以作废在途响应。异步结果只有发起时的代次仍是当前代次才允许写回 —
+   * 否则账号 A 的旧请求晚于账号 B 的请求返回时, 会把 A 的绝对路径覆盖给 B。
+   */
+  const settingsEpochRef = useRef(0);
+  /** null = 尚未确定 owner(冷启动, 无模块缓存种子)。 */
+  const ownerRef = useRef<string | null>(cachedState?.ownerUserId ?? null);
+  /** 推送代次: 挂载快照归来前已有推送先行到达时, 丢弃过期快照(同 useWechatBot)。 */
+  const pushVersionRef = useRef(0);
 
-  /** 拉取最新渠道设置 — 设置卡展开时刷新, 让「目录不可用」警告及时出现。 */
-  const refreshChannelSettings = useCallback(async (): Promise<void> => {
+  /** 拉取当前 owner 的渠道设置;递增代次, 迟到的旧响应不写回。 */
+  const fetchChannelSettings = useCallback(async (): Promise<void> => {
+    const epoch = ++settingsEpochRef.current;
     try {
-      setChannelSettings(await window.electronAPI.wecomBot.getChannelSettings());
+      const settings = await window.electronAPI.wecomBot.getChannelSettings();
+      if (settingsEpochRef.current !== epoch) return;
+      setChannelSettings(settings);
     } catch (error) {
       log.error(
-        'refreshChannelSettings failed:',
+        'getChannelSettings failed:',
         error instanceof Error ? error.message : String(error),
       );
     }
   }, []);
 
+  /**
+   * 统一的状态落地。ownerUserId 变化(含首次确定)= 数据主人换了: 立即失效
+   * 旧 owner 的渠道设置(绝对路径不得跨账号展示), 作废在途响应, 并重拉新
+   * owner 的设置。在途请求无法保证服务于哪个 owner — 宁可多拉一次本地小数据。
+   */
+  const applyState = useCallback(
+    (next: CachedState) => {
+      cachedState = next;
+      setStatus(next.status);
+      setBotId(next.botId);
+      if (ownerRef.current !== next.ownerUserId) {
+        ownerRef.current = next.ownerUserId;
+        settingsEpochRef.current += 1;
+        setChannelSettings(null);
+        void fetchChannelSettings();
+      }
+      setOwnerUserId(next.ownerUserId);
+      if (next.status.kind === 'connected') setSecret('');
+    },
+    [fetchChannelSettings],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const initialPushVersion = pushVersionRef.current;
+    void window.electronAPI.wecomBot
+      .getStatus()
+      .then((state) => {
+        if (cancelled) return;
+        if (pushVersionRef.current !== initialPushVersion) return;
+        applyState({
+          status: state.status,
+          botId: state.botId ?? '',
+          ownerUserId: state.ownerUserId ?? '',
+        });
+      })
+      .catch((error) => {
+        log.error('getStatus failed:', error instanceof Error ? error.message : String(error));
+      });
+    // owner 上下文已知(有模块缓存种子, 含已断开的 '' owner)才挂载即拉;完全
+    // 未知(首次冷启动)时由 applyState 首次确定 owner 后再拉 — 拉早了无法
+    // 保证请求服务于哪个 owner。
+    if (cachedState) void fetchChannelSettings();
+    return () => {
+      cancelled = true;
+      // 卸载作废在途响应(比 cancelled 标志多覆盖 fetchChannelSettings 一路)。
+      settingsEpochRef.current += 1;
+    };
+  }, [applyState, fetchChannelSettings]);
+
   useEffect(
     () =>
       window.electronAPI.wecomBot.onStatusChange((state) => {
-        const next = {
+        pushVersionRef.current += 1;
+        applyState({
           status: state.status,
           botId: state.botId ?? cachedState?.botId ?? '',
           ownerUserId: state.ownerUserId ?? '',
-        };
-        cachedState = next;
-        setStatus(next.status);
-        setBotId(next.botId);
-        setOwnerUserId(next.ownerUserId);
-        if (next.status.kind === 'connected') setSecret('');
+        });
       }),
-    [],
+    [applyState],
   );
 
   const connect = useCallback(async () => {
@@ -110,16 +134,11 @@ export function useWecomBot() {
         botId: nextBotId,
         secret: nextSecret,
       });
-      const next = {
+      applyState({
         status: result.status,
         botId: result.botId ?? nextBotId,
         ownerUserId: result.ownerUserId ?? '',
-      };
-      cachedState = next;
-      setStatus(next.status);
-      setBotId(next.botId);
-      setOwnerUserId(next.ownerUserId);
-      if (next.status.kind === 'connected') setSecret('');
+      });
       if (result.saveErrorStatus?.kind === 'error' || result.status.kind === 'error') {
         toast.error(t('settings.wecomBot.connectFailed'));
         return false;
@@ -134,7 +153,7 @@ export function useWecomBot() {
     } finally {
       setIsSaving(false);
     }
-  }, [botId, isSaving, secret, t]);
+  }, [applyState, botId, isSaving, secret, t]);
 
   const reconnect = useCallback(async () => {
     if (isSaving || !botId.trim()) return false;
@@ -142,15 +161,11 @@ export function useWecomBot() {
     setIsSaving(true);
     try {
       const result = await window.electronAPI.wecomBot.reconnect();
-      const next = {
+      applyState({
         status: result.status,
         botId: result.botId ?? botId.trim(),
         ownerUserId: result.ownerUserId ?? '',
-      };
-      cachedState = next;
-      setStatus(next.status);
-      setBotId(next.botId);
-      setOwnerUserId(next.ownerUserId);
+      });
       if (result.status.kind === 'error') {
         toast.error(t('settings.wecomBot.connectFailed'));
         return false;
@@ -165,19 +180,15 @@ export function useWecomBot() {
     } finally {
       setIsSaving(false);
     }
-  }, [botId, isSaving, t]);
+  }, [applyState, botId, isSaving, t]);
 
   const disconnect = useCallback(async () => {
     if (isDisconnecting) return;
     setIsDisconnecting(true);
     try {
       const result = await window.electronAPI.wecomBot.disconnect();
-      const next = { status: result.status, botId: '', ownerUserId: '' };
-      cachedState = next;
-      setStatus(next.status);
-      setBotId('');
+      applyState({ status: result.status, botId: '', ownerUserId: '' });
       setSecret('');
-      setOwnerUserId('');
       setValidationError(null);
       toast.success(t('settings.wecomBot.disconnected'));
     } catch (error) {
@@ -187,13 +198,16 @@ export function useWecomBot() {
     } finally {
       setIsDisconnecting(false);
     }
-  }, [isDisconnecting, t]);
+  }, [applyState, isDisconnecting, t]);
 
   const chooseWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
     setIsUpdatingWorkingDir(true);
+    const epoch = ++settingsEpochRef.current;
     try {
       const result = await window.electronAPI.wecomBot.chooseWorkingDirectory();
+      // 原生弹窗 + Main 侧异步探测期间可能切号: 迟到结果不得写回。
+      if (settingsEpochRef.current !== epoch) return;
       setChannelSettings(result.state);
       if (!result.canceled) toast.success(t('settings.wecomBot.workingDirSaved'));
     } catch (error) {
@@ -210,8 +224,10 @@ export function useWecomBot() {
   const resetWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
     setIsUpdatingWorkingDir(true);
+    const epoch = ++settingsEpochRef.current;
     try {
       const next = await window.electronAPI.wecomBot.resetWorkingDirectory();
+      if (settingsEpochRef.current !== epoch) return;
       setChannelSettings(next);
       toast.success(t('settings.wecomBot.workingDirReset'));
     } catch (error) {
@@ -262,6 +278,15 @@ export function useWecomBot() {
     disconnect,
     chooseWorkingDirectory,
     resetWorkingDirectory,
-    refreshChannelSettings,
+    refreshChannelSettings: fetchChannelSettings,
   };
 }
+
+export const __testing = {
+  resetCache(): void {
+    cachedState = null;
+  },
+  getCache(): CachedState | null {
+    return cachedState;
+  },
+};

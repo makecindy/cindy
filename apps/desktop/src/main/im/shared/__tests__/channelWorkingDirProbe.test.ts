@@ -6,10 +6,13 @@
  *     别人, 竞争文件必须原样保留;
  *   - 删除失败接受 0 字节 UUID 残留 — 不记住路径跨时间重试(路径可能已被
  *     其它进程替换, 重试会误删替换文件), 不做前缀扫描;
- *   - 探测不经 openSync/closeSync 手工描述符生命周期, 无句柄泄漏面。
+ *   - 探测不经 open 手工描述符生命周期, 无句柄泄漏面。
  *
- * node:fs 被包装注入(closeSync / rmSync / writeFileSync 可控), 目录准备与
- * 残留断言走未被 mock 的 node:fs/promises。
+ * 另有异步化回归: 用户目录(可能在网络盘上)上的 stat/写探针/删除全走
+ * node:fs/promises — 探针挂起时 Main 事件循环必须仍能运转。
+ *
+ * node:fs/promises 被包装注入(writeFile / rm / open 可控), 目录准备与残留
+ * 断言在包装关闭时直接穿过到真实实现。
  */
 
 import os from 'node:os';
@@ -17,144 +20,143 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const failState = vi.hoisted(() => ({
-  closeSyncFails: false,
-  rmSyncFailuresRemaining: 0,
+  rmFailuresRemaining: 0,
   probeWriteEexistNext: false,
   tmpWriteEexistNext: false,
-  rmSyncCalls: [] as string[],
-  openSyncCalls: [] as string[],
-  writeFileSyncCalls: [] as string[],
+  /** 探针写挂起(模拟网络盘失联): 挂起的 promise 由 releaseProbeHang 放行。 */
+  probeWriteHang: false,
+  hangResolvers: [] as Array<() => void>,
+  rmCalls: [] as string[],
+  openCalls: [] as string[],
+  writeFileCalls: [] as string[],
 }));
 
-vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs')>();
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const isProbe = (target: string) => target.includes('.cindy-workdir-probe-');
   const wrapped = {
-    ...actual,
-    closeSync(fd: number) {
-      if (failState.closeSyncFails) {
-        const err = Object.assign(new Error('EBADF close'), {
-          code: 'EBADF',
-        }) as NodeJS.ErrnoException;
-        throw err;
+    open(...args: Parameters<typeof actual.open>) {
+      failState.openCalls.push(String(args[0]));
+      return actual.open(...args);
+    },
+    async writeFile(
+      target: Parameters<typeof actual.writeFile>[0],
+      data: Parameters<typeof actual.writeFile>[1],
+      options?: Parameters<typeof actual.writeFile>[2],
+    ) {
+      failState.writeFileCalls.push(String(target));
+      if (failState.probeWriteHang && isProbe(String(target))) {
+        await new Promise<void>((resolve) => {
+          failState.hangResolvers.push(resolve);
+        });
       }
-      return actual.closeSync(fd);
-    },
-    openSync(...args: Parameters<typeof actual.openSync>) {
-      failState.openSyncCalls.push(String(args[0]));
-      return actual.openSync(...args);
-    },
-    writeFileSync(...args: Parameters<typeof actual.writeFileSync>) {
-      const target = String(args[0]);
-      failState.writeFileSyncCalls.push(target);
       // 模拟「其它进程抢先占住同一路径」: 真实写一份竞争内容, 再按 'wx'
       // 语义抛 EEXIST。
       const eexist =
-        (failState.probeWriteEexistNext && target.includes('.cindy-workdir-probe-')) ||
-        (failState.tmpWriteEexistNext && target.endsWith('.tmp'));
+        (failState.probeWriteEexistNext && isProbe(String(target))) ||
+        (failState.tmpWriteEexistNext && String(target).endsWith('.tmp'));
       if (eexist) {
         failState.probeWriteEexistNext = false;
         failState.tmpWriteEexistNext = false;
-        actual.writeFileSync(target, 'foreign data');
-        const err = Object.assign(new Error('EEXIST'), {
-          code: 'EEXIST',
-        }) as NodeJS.ErrnoException;
-        throw err;
+        await actual.writeFile(target, 'foreign data', 'utf8');
+        throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' }) as NodeJS.ErrnoException;
       }
-      return actual.writeFileSync(...args);
+      return actual.writeFile(target, data, options);
     },
-    rmSync(target: string, options: fs.RmOptions) {
-      failState.rmSyncCalls.push(target);
-      if (failState.rmSyncFailuresRemaining > 0) {
-        failState.rmSyncFailuresRemaining -= 1;
-        const err = Object.assign(new Error('EBUSY rm'), {
-          code: 'EBUSY',
-        }) as NodeJS.ErrnoException;
-        throw err;
+    async rm(target: string, options?: import('node:fs').RmOptions) {
+      failState.rmCalls.push(target);
+      if (failState.rmFailuresRemaining > 0) {
+        failState.rmFailuresRemaining -= 1;
+        throw Object.assign(new Error('EBUSY rm'), { code: 'EBUSY' }) as NodeJS.ErrnoException;
       }
-      return actual.rmSync(target, options);
+      return actual.rm(target, options);
     },
   };
-  return { ...actual, default: wrapped };
+  return { ...actual, ...wrapped };
 });
 
-// factory 经 default import 消费 fs; 类型引用从 mock 模块借一个名字。
-import type * as fs from 'node:fs';
+import { readFile, mkdtemp, readdir, rm as fspRm, mkdir, writeFile as fspWriteFile } from 'node:fs/promises';
 
 import { __testing } from '../channelWorkingDirSettings';
-import { writeWecomWorkingDir } from '../../wecom/channelSettings';
-
-const fsp = await import('node:fs/promises');
+import { readWecomChannelSettings, writeWecomWorkingDir } from '../../wecom/channelSettings';
 
 let root = '';
 
 const probeFiles = async (): Promise<string[]> =>
-  (await fsp.readdir(root)).filter((n) => n.startsWith('.cindy-workdir-probe-'));
+  (await readdir(root)).filter((n) => n.startsWith('.cindy-workdir-probe-'));
+
+/** 放行挂起的探针写并恢复直通。 */
+function releaseProbeHang(): void {
+  failState.probeWriteHang = false;
+  const resolvers = failState.hangResolvers.splice(0);
+  for (const resolve of resolvers) resolve();
+}
 
 beforeEach(async () => {
-  root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-workdir-probe-'));
-  failState.closeSyncFails = false;
-  failState.rmSyncFailuresRemaining = 0;
+  root = await mkdtemp(path.join(os.tmpdir(), 'cindy-workdir-probe-'));
+  failState.rmFailuresRemaining = 0;
   failState.probeWriteEexistNext = false;
   failState.tmpWriteEexistNext = false;
-  failState.rmSyncCalls.length = 0;
-  failState.openSyncCalls.length = 0;
-  failState.writeFileSyncCalls.length = 0;
+  failState.probeWriteHang = false;
+  failState.hangResolvers.length = 0;
+  failState.rmCalls.length = 0;
+  failState.openCalls.length = 0;
+  failState.writeFileCalls.length = 0;
 });
 
 afterEach(async () => {
-  await fsp.rm(root, { recursive: true, force: true });
+  releaseProbeHang();
+  await fspRm(root, { recursive: true, force: true });
 });
 
 describe('isUsableWorkingDirectory 探针生命周期', () => {
   it('可写目录判定为可用且不留探针残留, 且不经手工 fd 生命周期', async () => {
-    // closeSync 预置为持续抛错: 探测照常成功 = 实现根本不调用 closeSync。
-    failState.closeSyncFails = true;
+    expect(await __testing.isUsableWorkingDirectory(root)).toBe(true);
 
-    expect(__testing.isUsableWorkingDirectory(root)).toBe(true);
-
-    expect(failState.closeSyncFails).toBe(true); // 从未被消耗
-    expect(failState.openSyncCalls).toEqual([]); // 不持 fd
-    expect(failState.writeFileSyncCalls.length).toBe(1); // 单次独占创建
-    expect(failState.rmSyncCalls.length).toBe(1);
-    expect(await fsp.readdir(root)).toEqual([]);
+    expect(failState.openCalls).toEqual([]); // 不持 fd
+    expect(failState.writeFileCalls.length).toBe(1); // 单次独占创建
+    expect(failState.rmCalls.length).toBe(1);
+    expect(await readdir(root)).toEqual([]);
   });
 
   it('目录变成文件后判定为不可用, 且不产生任何写入', async () => {
     const file = path.join(root, 'now-a-file');
-    await fsp.writeFile(file, 'x');
+    await fspWriteFile(file, 'x');
+    // setup 写入也过 wrapper, 清掉记录只观察探测这一次调用。
+    failState.writeFileCalls.length = 0;
 
-    expect(__testing.isUsableWorkingDirectory(file)).toBe(false);
-    expect(failState.writeFileSyncCalls).toEqual([]);
+    expect(await __testing.isUsableWorkingDirectory(file)).toBe(false);
+    expect(failState.writeFileCalls).toEqual([]);
   });
 
   it('独占创建碰撞(EEXIST)时判定不可用, 竞争文件原样保留', async () => {
     failState.probeWriteEexistNext = true;
 
-    expect(__testing.isUsableWorkingDirectory(root)).toBe(false);
+    expect(await __testing.isUsableWorkingDirectory(root)).toBe(false);
 
     // 碰撞路径属于别人: finally 绝不删除未由本次调用创建的文件。
-    const collided = failState.writeFileSyncCalls[0]!;
-    expect(await fsp.readFile(collided, 'utf8')).toBe('foreign data');
-    expect(failState.rmSyncCalls).toEqual([]);
+    const collided = failState.writeFileCalls[0]!;
+    expect(await readFile(collided, 'utf8')).toBe('foreign data');
+    expect(failState.rmCalls).toEqual([]);
   });
 
   it('rm 失败接受 0 字节残留; 旧路径(即使被替换)与用户同前缀文件都不再触碰', async () => {
     const userNote = path.join(root, '.cindy-workdir-probe-user-note');
-    await fsp.writeFile(userNote, 'user data');
+    await fspWriteFile(userNote, 'user data');
 
     // 探测1: 自己的探针删不掉(锁) → 残留, 但不记住路径。
-    failState.rmSyncFailuresRemaining = 1;
-    expect(__testing.isUsableWorkingDirectory(root)).toBe(true);
+    failState.rmFailuresRemaining = 1;
+    expect(await __testing.isUsableWorkingDirectory(root)).toBe(true);
     const residue = (await probeFiles()).find((n) => n !== '.cindy-workdir-probe-user-note')!;
     expect(residue).toBeTruthy();
 
     // 旧路径已被「其它进程」替换成有意义内容。
-    await fsp.writeFile(path.join(root, residue), 'replaced by someone else');
+    await fspWriteFile(path.join(root, residue), 'replaced by someone else');
 
     // 探测2(锁解除): 只清理本次自己的探针, 不触碰旧路径, 不触碰用户文件。
-    expect(__testing.isUsableWorkingDirectory(root)).toBe(true);
-    expect(await fsp.readFile(path.join(root, residue), 'utf8')).toBe('replaced by someone else');
-    expect(await fsp.readFile(userNote, 'utf8')).toBe('user data');
+    expect(await __testing.isUsableWorkingDirectory(root)).toBe(true);
+    expect(await readFile(path.join(root, residue), 'utf8')).toBe('replaced by someone else');
+    expect(await readFile(userNote, 'utf8')).toBe('user data');
     const names = await probeFiles();
     expect(names.sort()).toEqual([residue, '.cindy-workdir-probe-user-note'].sort());
   });
@@ -163,21 +165,50 @@ describe('isUsableWorkingDirectory 探针生命周期', () => {
 describe('配置临时文件的所有权', () => {
   it('tmp 独占碰撞(EEXIST)时写入失败, 碰撞文件与既有配置保留', async () => {
     const selected = path.join(root, 'project');
-    await fsp.mkdir(selected);
+    await mkdir(selected);
     // 已有一份合法配置, 碰撞不应破坏它。
-    writeWecomWorkingDir(selected, root);
+    await writeWecomWorkingDir(selected, root);
     const settingsFile = path.join(root, 'wecom-channel.json');
-    const before = await fsp.readFile(settingsFile, 'utf8');
+    const before = await readFile(settingsFile, 'utf8');
 
     // 清掉 setup 阶段的记录, 只观察碰撞这一次调用。
-    failState.writeFileSyncCalls.length = 0;
+    failState.writeFileCalls.length = 0;
     failState.tmpWriteEexistNext = true;
     const other = path.join(root, 'other');
-    await fsp.mkdir(other);
-    expect(() => writeWecomWorkingDir(other, root)).toThrow('EEXIST');
+    await mkdir(other);
+    await expect(writeWecomWorkingDir(other, root)).rejects.toThrow('EEXIST');
 
-    const collided = failState.writeFileSyncCalls.find((c) => c.endsWith('.tmp'))!;
-    expect(await fsp.readFile(collided, 'utf8')).toBe('foreign data');
-    expect(await fsp.readFile(settingsFile, 'utf8')).toBe(before);
+    const collided = failState.writeFileCalls.find((c) => c.endsWith('.tmp'))!;
+    expect(await readFile(collided, 'utf8')).toBe('foreign data');
+    expect(await readFile(settingsFile, 'utf8')).toBe(before);
+  });
+});
+
+describe('用户目录 IO 异步化(Main 事件循环不被冻结)', () => {
+  it('配置目录的探针挂起时, 定时器仍能如期触发(同步 statSync/writeFileSync 会阻塞到它返回)', async () => {
+    const selected = path.join(root, 'project');
+    await mkdir(selected);
+    await writeWecomWorkingDir(selected, root);
+
+    // 挂起「配置目录上的探针写」: 模拟网络盘失联 — stat 正常, 写入永不落定。
+    failState.probeWriteHang = true;
+    const pending = readWecomChannelSettings(root);
+
+    let loopAlive = false;
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        loopAlive = true;
+        resolve();
+      }, 20);
+    });
+    expect(loopAlive).toBe(true);
+    expect(failState.hangResolvers.length).toBe(1);
+
+    // 放行后探测照常完成, 不留残留。
+    releaseProbeHang();
+    const state = await pending;
+    expect(state.workingDir).toBeTruthy();
+    expect(state.workingDirAvailable).toBe(true);
+    expect(await readdir(selected)).toEqual([]);
   });
 });

@@ -63,7 +63,8 @@ export interface ImSessionRow {
    *
    * schema 里 workspaceKind 与路径是解耦的 —— 只比对目录等于不等于渠道托管目录
    * 判不出来(接管一条 desktop 的 dialogue 会话时路径根本不是渠道自己那条)。
-   * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
+   * 只读路径按需带出;prepareNewSession 也带出渠道声明值(只读展示用),
+   * 建行落列仍由 ns.workspaceKind 决定。
    */
   workspaceKind?: 'project' | 'dialogue' | null;
 }
@@ -326,12 +327,19 @@ export function createImSessionRepo(
 
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId);
+      // 「首次对话 / /new」边界才解析实际目录: 设置页可改托管目录的渠道
+      // (微信/企微)异步读配置 + 探测用户盘, 其余渠道走同步稳定托管目录。
+      const workingDir =
+        (await ns.resolveWorkingDirForNew?.(botContextId)) ?? ns.ensureWorkingDir(botContextId);
       const row = rowFromDefaults(
         id,
         workingDir,
         await resolveImSessionDefaults(config, providerSnapshot, ns.source),
       );
+      // 只读路径(/settings 无会话行时)也要能报对归属分组: 带出渠道声明值,
+      // 否则「无会话行 + 用户已选目录」会被 workspaceDisplayName 误当项目名。
+      // 建行走 createSession 的 ns.workspaceKind 落列, 不读这里的值。
+      if (ns.workspaceKind) row.workspaceKind = ns.workspaceKind;
       // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
       // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
       const overridden = ns.permissionModeFor?.(userId) ?? null;

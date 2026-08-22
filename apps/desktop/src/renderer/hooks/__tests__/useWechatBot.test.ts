@@ -122,10 +122,7 @@ describe('useWechatBot', () => {
       await Promise.resolve();
     });
 
-    expect(__testing.getCache()).toEqual({
-      state: null,
-      channelSettings: null,
-    });
+    expect(__testing.getCache()).toEqual({ state: null });
   });
 
   it('starts and cancels authorization through the credential-free bridge', async () => {

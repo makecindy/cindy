@@ -100,7 +100,12 @@ import {
   resetWechatWorkingDir,
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
-import { readWecomChannelSettings, resetWecomWorkingDir, writeWecomWorkingDir } from './wecom/channelSettings';
+import {
+  commitWecomWorkingDir,
+  normalizeWecomSelectedDirectory,
+  readWecomChannelSettings,
+  resetWecomWorkingDir,
+} from './wecom/channelSettings';
 import {
   createWecomWorkingDirIpcHandlers,
   registerWecomWorkingDirIpc,
@@ -254,7 +259,7 @@ export function startImOrchestrators(): void {
       return { ok: true };
     });
   });
-  ipcMain.handle('wechatBot:get-channel-settings', (event) => {
+  ipcMain.handle('wechatBot:get-channel-settings', async (event) => {
     assertTrustedAppRendererEvent(event);
     return readWechatChannelSettings();
   });
@@ -266,12 +271,12 @@ export function startImOrchestrators(): void {
       properties: ['openDirectory', 'createDirectory'],
     });
     if (result.canceled || !result.filePaths[0]) {
-      return { canceled: true as const, state: readWechatChannelSettings() };
+      return { canceled: true as const, state: await readWechatChannelSettings() };
     }
     try {
       return {
         canceled: false as const,
-        state: writeWechatWorkingDir(result.filePaths[0]),
+        state: await writeWechatWorkingDir(result.filePaths[0]),
       };
     } catch (error) {
       log.warn('failed to save user-picked personal WeChat working directory', {
@@ -287,10 +292,10 @@ export function startImOrchestrators(): void {
       throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
     }
   });
-  ipcMain.handle('wechatBot:reset-working-directory', (event) => {
+  ipcMain.handle('wechatBot:reset-working-directory', async (event) => {
     assertTrustedAppRendererEvent(event);
     try {
-      return resetWechatWorkingDir();
+      return await resetWechatWorkingDir();
     } catch {
       throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
     }
@@ -303,7 +308,8 @@ export function startImOrchestrators(): void {
     ipc: ipcMain,
     handlers: createWecomWorkingDirIpcHandlers({
       readSettings: () => readWecomChannelSettings(),
-      writeWorkingDir: (selectedPath) => writeWecomWorkingDir(selectedPath),
+      normalizeSelectedDirectory: (selectedPath) => normalizeWecomSelectedDirectory(selectedPath),
+      commitWorkingDir: (normalizedDir) => commitWecomWorkingDir(normalizedDir),
       resetWorkingDir: () => resetWecomWorkingDir(),
       showDirectoryPicker: async (sender) => {
         const owner = BrowserWindow.fromWebContents(sender as WebContents);
@@ -570,7 +576,19 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         .where(eq(sessions.source, 'wechat'));
       for (const row of rows) {
         if (!row.botContextId) continue;
+        // 与 telegram 同因(review P1): 设置页选的 override 目录是用户显式
+        // 选择, 且已有会话按产品契约保留旧目录直到 /new — 归一只服务
+        // "跨 owner 命名空间迁移的旧托管路径"。ensureWorkingDir 只回稳定
+        // 托管目录, 判定用它的完整尾段(两种命名都覆盖), 不做子串匹配。
         const scoped = wechatAdapter.sessions.ensureWorkingDir(row.botContextId);
+        const managedTail = path.join('im-working-dir', path.basename(scoped));
+        if (
+          row.workingDir &&
+          !row.workingDir.endsWith(`${path.sep}${managedTail}`) &&
+          !row.workingDir.endsWith(`/${managedTail}`)
+        ) {
+          continue;
+        }
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }

@@ -79,6 +79,14 @@ export interface ImSessionNamespace {
   /** 该渠道 session 的工作目录(必须已创建好)。 */
   ensureWorkingDir(botContextId: string): string;
   /**
+   * 新建会话行实际使用的工作目录(异步)。设置页可改渠道托管目录的渠道
+   * (个人微信/企业微信)声明: 读 owner-scoped 配置并异步探测用户所选目录
+   * (可能在网络盘上, 挂起不冻结 Main), 不可用回退托管目录。
+   * 只在「首次对话 / `/new`」边界(sessionRepo.prepareNewSession)调用;其余
+   * 同步路径一律用 ensureWorkingDir 的稳定托管目录, 不读配置不探测。
+   */
+  resolveWorkingDirForNew?(botContextId: string): Promise<string>;
+  /**
    * `/new` 边界是否把会话行刷到渠道当前解析的工作目录。设置页可改渠道
    * 托管目录的渠道(个人微信/企业微信)声明 true:新目录只在 `/new` 这个
    * 显式边界生效,已有上下文永不静默移动。缺省 false(目录恒定的渠道)。

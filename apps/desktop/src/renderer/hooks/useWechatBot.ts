@@ -13,7 +13,8 @@ const EMPTY_STATE: WechatBotState = {
 };
 
 let cachedState: WechatBotState | null = null;
-let cachedChannelSettings: WechatChannelSettingsState | null = null;
+// 渠道设置不做模块级缓存种子(与 useWecomBot 同因): 缓存不按数据 owner 隔离,
+// 切号后重新挂载会把上一账号的绝对路径闪给新账号。挂载时现拉, 数据本地量小。
 
 export interface UseWechatBotReturn {
   state: WechatBotState;
@@ -31,9 +32,7 @@ export interface UseWechatBotReturn {
 export function useWechatBot(): UseWechatBotReturn {
   const { t } = useTranslation();
   const [state, setState] = useState<WechatBotState>(() => cachedState ?? EMPTY_STATE);
-  const [channelSettings, setChannelSettings] = useState<WechatChannelSettingsState | null>(
-    () => cachedChannelSettings,
-  );
+  const [channelSettings, setChannelSettings] = useState<WechatChannelSettingsState | null>(null);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
   const [isUnbinding, setIsUnbinding] = useState(false);
   const [isUpdatingWorkingDir, setIsUpdatingWorkingDir] = useState(false);
@@ -58,7 +57,6 @@ export function useWechatBot(): UseWechatBotReturn {
           cachedState = nextState;
           setState(nextState);
         }
-        cachedChannelSettings = nextChannelSettings;
         setChannelSettings(nextChannelSettings);
       })
       .catch(() => {
@@ -116,7 +114,6 @@ export function useWechatBot(): UseWechatBotReturn {
     setIsUpdatingWorkingDir(true);
     try {
       const result = await window.electronAPI.wechatBot.chooseWorkingDirectory();
-      cachedChannelSettings = result.state;
       setChannelSettings(result.state);
       if (!result.canceled) toast.success(t('settings.wechatBot.toasts.workingDirSaved'));
     } catch {
@@ -132,7 +129,6 @@ export function useWechatBot(): UseWechatBotReturn {
     setIsUpdatingWorkingDir(true);
     try {
       const next = await window.electronAPI.wechatBot.resetWorkingDirectory();
-      cachedChannelSettings = next;
       setChannelSettings(next);
       toast.success(t('settings.wechatBot.toasts.workingDirReset'));
     } catch {
@@ -160,15 +156,8 @@ export function useWechatBot(): UseWechatBotReturn {
 export const __testing = {
   resetCache(): void {
     cachedState = null;
-    cachedChannelSettings = null;
   },
-  getCache(): {
-    state: WechatBotState | null;
-    channelSettings: WechatChannelSettingsState | null;
-  } {
-    return {
-      state: cachedState,
-      channelSettings: cachedChannelSettings,
-    };
+  getCache(): { state: WechatBotState | null } {
+    return { state: cachedState };
   },
 };
