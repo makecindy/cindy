@@ -158,6 +158,11 @@ export class GhostAgentSlot {
     return token;
   }
 
+  /** 只验票、不消费。派活切任务用同一张卡片点击票。 */
+  hasValidUserActionToken(token: string, ghostId: string): boolean {
+    return this.peekGrant(token, ghostId).ok;
+  }
+
   /** 处理电子脑的 agent-request；所有失败都折叠成结构化返回。 */
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeAgentResult> {
     const ghost = this.deps.getGhost(ghostId);

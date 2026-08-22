@@ -410,6 +410,7 @@ describe('可见任务自动切过去', () => {
       runner: runner as unknown as GhostErrandRunner,
       onRevealSession: reveal,
     });
+    slot.noteUserGesture('helper');
     await slot.handleRequest('helper', RUN);
     hooks?.onSession?.('sess-9');
     expect(reveal).not.toHaveBeenCalled();
@@ -424,6 +425,7 @@ describe('可见任务自动切过去', () => {
   it('runner 没回调 onSession、只在收口给 sessionId 也切一次', async () => {
     const reveal = vi.fn();
     const { slot } = makeSlot({ onRevealSession: reveal });
+    slot.noteUserGesture('helper');
     await slot.handleRequest('helper', RUN);
     await new Promise((r) => setTimeout(r, 0));
     expect(reveal).toHaveBeenCalledOnce();
@@ -470,21 +472,21 @@ describe('可见任务自动切过去', () => {
     const reveal = vi.fn();
     const { slot } = makeSlot();
     slot.setRevealSession(reveal);
+    slot.noteUserGesture('helper');
     await slot.handleRequest('helper', RUN);
     await new Promise((r) => setTimeout(r, 0));
     expect(reveal).toHaveBeenCalledWith('sess-1');
   });
 
-  it('MCP / 调度器静默回合里的派活不切任务', async () => {
+  it('没有主机点击凭据的派活不切任务', async () => {
     const reveal = vi.fn();
-    const runner = vi.fn(async (req: { origin?: string }, h?: { onDispatched?: (sid: string) => void }) => {
+    const runner = vi.fn(async (_req: { origin?: string }, h?: { onDispatched?: (sid: string) => void }) => {
       h?.onDispatched?.('sess-bg');
       return { ok: true as const, sessionId: 'sess-bg', text: 'done' };
     });
     const { slot } = makeSlot({
       runner: runner as unknown as GhostErrandRunner,
       onRevealSession: reveal,
-      hasPendingToolCall: () => true,
     });
     await slot.handleRequest('helper', RUN);
     await new Promise((r) => setTimeout(r, 0));
@@ -492,9 +494,40 @@ describe('可见任务自动切过去', () => {
     expect(reveal).not.toHaveBeenCalled();
   });
 
-  it('没有在途 tool-call 的派活按 user-action 交给 runner', async () => {
-    const { slot, runner } = makeSlot();
-    await slot.handleRequest('helper', RUN);
+  it('Host 铸造的卡片点击票可以把派活标成 user-action', async () => {
+    const reveal = vi.fn();
+    const { slot, runner } = makeSlot({
+      onRevealSession: reveal,
+      hasValidUserActionToken: (token, ghostId) => token === 'click-1' && ghostId === 'helper',
+    });
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'click-1' });
+    await new Promise((r) => setTimeout(r, 0));
     expect(runner.mock.calls[0][0]).toMatchObject({ origin: 'user-action' });
+    expect(reveal).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('假票或过期票不能切任务', async () => {
+    const reveal = vi.fn();
+    const { slot, runner } = makeSlot({
+      onRevealSession: reveal,
+      hasValidUserActionToken: () => false,
+    });
+    await slot.handleRequest('helper', { ...RUN, userActionToken: 'forged' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runner.mock.calls[0][0].origin).toBe('background');
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('面板点击手势只够切一次', async () => {
+    const reveal = vi.fn();
+    const { slot, clock } = makeSlot({ onRevealSession: reveal });
+    slot.noteUserGesture('helper');
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledOnce();
+    clock.now += GHOST_ERRAND_MIN_INTERVAL_MS + 1;
+    await slot.handleRequest('helper', RUN);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reveal).toHaveBeenCalledTimes(1);
   });
 });

@@ -1611,7 +1611,8 @@ export function getGhostErrandSlot(): GhostErrandSlot {
       holdPipeCall: (ghostId, callId, budgetMs) =>
         getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
       releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
-      hasPendingToolCall: (ghostId) => getGhostPipeDispatcher().hasPendingCallsFor(ghostId),
+      hasValidUserActionToken: (token, ghostId) =>
+        getGhostAgentSlot().hasValidUserActionToken(token, ghostId),
       log,
     });
   }
@@ -1629,6 +1630,11 @@ export function hasRunningGhostCindyWork(ghostId: string): boolean {
 /** maker-ipc 完成初始化后注入真实派活 runner;传 null 用于退出清理。 */
 export function setGhostErrandRunner(runner: GhostErrandRunner | null): void {
   getGhostErrandSlot().setRunner(runner);
+}
+
+/** 宿主确认的面板/卡片点击。派活只在这之后才切任务。 */
+export function noteGhostUserGesture(ghostId: string): void {
+  getGhostErrandSlot().noteUserGesture(ghostId);
 }
 
 /** 插件展示名(errand 会话默认标题等宿主侧使用;未装返回 null)。 */
@@ -1746,6 +1752,7 @@ export function getGhostCardActionDispatcher(): GhostCardActionDispatcher {
       },
       issueUserActionToken: (ghostId, sessionId) =>
         getGhostAgentSlot().issueUserActionToken(ghostId, sessionId),
+      noteUserGesture: (ghostId) => getGhostErrandSlot().noteUserGesture(ghostId),
       // 呼吸起点:点击成功投递即把该会话标为"意识活动中"(结束由 card-update
       // state / TTL 收口)。
       onActivityStart: (key, sessionId) => getGhostSessionActivityTracker().begin(key, sessionId),

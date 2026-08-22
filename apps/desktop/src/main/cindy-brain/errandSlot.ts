@@ -101,8 +101,8 @@ export interface GhostErrandSlotDeps {
   releasePipeCall?(ghostId: string, callId: string): void;
   now?: () => number;
   createJobId?: () => string;
-  /** 该插件此刻是否有在途 MCP tool-call（调度器/Agent 静默回合）。 */
-  hasPendingToolCall?(ghostId: string): boolean;
+  /** 校验卡片点击票（与 agent.run 同一套 Host 铸造票，只 peek 不消费）。 */
+  hasValidUserActionToken?(token: string, ghostId: string): boolean;
   log?: {
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
@@ -148,10 +148,14 @@ export function clampErrandResultText(text: string): string {
   return `${text.slice(0, GHOST_ERRAND_MAX_RESULT_CHARS)}\n…[结果超长,已截断]`;
 }
 
+const USER_GESTURE_TTL_MS = 2 * 60_000;
+
 export class GhostErrandSlot {
   private readonly jobs = new Map<string, ErrandJob>();
   private readonly inFlightGhosts = new Set<string>();
   private readonly lastRunAt = new Map<string, number>();
+  /** ghostId → 主机观察到的当次点击过期时刻。 */
+  private readonly userGestures = new Map<string, number>();
   private runner: GhostErrandRunner | null;
   private onRevealSession: ((sessionId: string) => void) | null;
 
@@ -177,9 +181,16 @@ export class GhostErrandSlot {
     );
   }
 
+  /** 宿主确认的真实点击（卡片按钮 / 面板 mouseDown / keyDown）。 */
+  noteUserGesture(ghostId: string): void {
+    this.sweepUserGestures();
+    this.userGestures.set(ghostId, this.now() + USER_GESTURE_TTL_MS);
+  }
+
   /** 插件停用/卸载时清除节流状态与任务记录,防止权限/信息残留。 */
   clearGhost(ghostId: string): void {
     this.lastRunAt.delete(ghostId);
+    this.userGestures.delete(ghostId);
     for (const [jobId, job] of [...this.jobs]) {
       if (job.ghostId === ghostId) this.jobs.delete(jobId);
     }
@@ -242,6 +253,16 @@ export class GhostErrandSlot {
       return fail('INVALID_REQUEST', 'callId 不合法(1–128 字符的字符串,或不传)');
     }
     const callId = (payload.callId as string | undefined) ?? 'unattributed';
+    if (
+      payload.userActionToken !== undefined &&
+      (typeof payload.userActionToken !== 'string' ||
+        payload.userActionToken.length === 0 ||
+        payload.userActionToken.length > MAX_CALL_ID_LEN)
+    ) {
+      return fail('INVALID_REQUEST', 'userActionToken 不合法');
+    }
+    const userActionToken =
+      typeof payload.userActionToken === 'string' ? payload.userActionToken : undefined;
 
     // 结构化上下文:JSON 化由主机做(确定性代码),超限明拒。
     let contextJson: string | null = null;
@@ -273,7 +294,7 @@ export class GhostErrandSlot {
     this.lastRunAt.set(ghostId, now);
     this.evictSettledJobs(ghostId);
     const jobId = (this.deps.createJobId ?? randomUUID)();
-    const origin = this.resolveOrigin(ghostId);
+    const origin = this.resolveOrigin(ghostId, userActionToken);
     const job: ErrandJob = { ghostId, startedAt: now, status: 'running', origin };
     this.jobs.set(jobId, job);
     this.inFlightGhosts.add(ghostId);
@@ -420,10 +441,30 @@ export class GhostErrandSlot {
     return fail(job.errorCode ?? 'TURN_FAILED', job.error ?? '派活失败');
   }
 
-  private resolveOrigin(ghostId: string): GhostErrandOrigin {
-    // MCP / 调度器静默回合里调 errand 时，管子上必有一单在途 tool-call。
-    // 面板点「执行」没有在途 tool-call，算用户发起。
-    return this.deps.hasPendingToolCall?.(ghostId) ? 'background' : 'user-action';
+  private resolveOrigin(ghostId: string, userActionToken?: string): GhostErrandOrigin {
+    // 只认 Host 铸造的当次点击：卡片票，或面板 webview 上真实的 mouse/key。
+    if (
+      userActionToken &&
+      this.deps.hasValidUserActionToken?.(userActionToken, ghostId) === true
+    ) {
+      return 'user-action';
+    }
+    if (this.consumeUserGesture(ghostId)) return 'user-action';
+    return 'background';
+  }
+
+  private consumeUserGesture(ghostId: string): boolean {
+    const expiresAt = this.userGestures.get(ghostId);
+    if (expiresAt === undefined) return false;
+    this.userGestures.delete(ghostId);
+    return expiresAt > this.now();
+  }
+
+  private sweepUserGestures(): void {
+    const now = this.now();
+    for (const [ghostId, expiresAt] of [...this.userGestures]) {
+      if (expiresAt <= now) this.userGestures.delete(ghostId);
+    }
   }
 
   private revealSessionOnce(job: ErrandJob, sessionId: string): void {
