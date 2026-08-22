@@ -89,3 +89,30 @@ describe('capped Review workspace fingerprint', () => {
     ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintLimitError);
   });
 });
+
+describe('git 路径词法校验的平台语义 (#2463 review)', () => {
+  it.skipIf(process.platform === 'win32')(
+    'accepts POSIX filenames containing backslashes (C:\\notes, dir\\..\\file)',
+    async () => {
+      // 反斜杠在 POSIX 上是普通文件名字符,git 会原样输出 —— 不能按 win32
+      // 语义误判为绝对路径/越界而中止 Review。
+      const repoRoot = await makeTempDir();
+      await fs.writeFile(path.join(repoRoot, 'C:\\notes'), 'a');
+      await fs.writeFile(path.join(repoRoot, 'dir\\..\\file'), 'b');
+
+      await expect(
+        fingerprintReviewCappedWorkspaceFiles(repoRoot, ['C:\\notes', 'dir\\..\\file']),
+      ).resolves.toBeTruthy();
+    },
+  );
+
+  it('still rejects "/"-separated parent traversal and absolute paths', async () => {
+    const repoRoot = await makeTempDir();
+    await expect(
+      fingerprintReviewCappedWorkspaceFiles(repoRoot, ['../escape.ts']),
+    ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintError);
+    await expect(
+      fingerprintReviewCappedWorkspaceFiles(repoRoot, ['/abs.ts']),
+    ).rejects.toBeInstanceOf(ReviewCappedWorkspaceFingerprintError);
+  });
+});
