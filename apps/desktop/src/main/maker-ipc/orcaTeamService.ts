@@ -321,6 +321,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   const workerTransitionTails = new Map<string, Promise<void>>();
   /** Active dispatch count stays positive from pre-resume reservation through host dispatch settlement. */
   const activeWorkerDispatches = new Map<string, number>();
+  /**
+   * (#3153) done 确认被「同 turn 仍在收尾」拒绝(active turn / send in progress)时登记,
+   * 在该 turn 的 terminal 边界重试一次。fire-once:重试前即消费,不因重试失败重登记——
+   * 下一次 done 广播仍会走 renderer 的可见性 ack 路径。done 的产品语义是
+   * 「保持到用户看到为止」,所以只在 renderer 已尝试过确认时补收口,不做无条件自动 ack。
+   */
+  const deferredDoneAcknowledgements = new Set<string>();
 
   async function withWorkerTransition<T>(workerId: string, operation: () => Promise<T>): Promise<T> {
     const previous = workerTransitionTails.get(workerId) ?? Promise.resolve();
@@ -742,6 +749,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         return { ok: false, errorCode: 'ALREADY_IDLE', message: `worker ${params.workerId} is already idle` };
       }
       if (params.expectedStatus && deps.getLiveSession(worker.sessionId)?.isTurnRunning()) {
+        // 回报 settle 先落库、worker 自己的 turn 还在收尾:登记后由 terminal 边界重试(#3153)。
+        if (params.expectedStatus === 'done') deferredDoneAcknowledgements.add(worker.id);
         return {
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
@@ -749,6 +758,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         };
       }
       if (params.expectedStatus && deps.hasSendToSessionLock(worker.sessionId)) {
+        if (params.expectedStatus === 'done') deferredDoneAcknowledgements.add(worker.id);
         return {
           ok: false,
           errorCode: 'WORKER_STATE_CHANGED',
@@ -802,6 +812,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       if (!params.expectedStatus) {
         await closeWorkerSessionBestEffort(worker.sessionId, 'idleWorker');
       }
+      deferredDoneAcknowledgements.delete(worker.id);
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       return { ok: true, workerId: worker.id };
     };
@@ -829,6 +840,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
     clearRuntimeState(worker.sessionId);
     deps.forgetWorkerSession?.(worker.sessionId);
+    deferredDoneAcknowledgements.delete(worker.id);
     await deps.cancelWorkerSessionOperations(worker.sessionId);
     await closeWorkerSessionBestEffort(worker.sessionId, 'archiveWorker');
     await deps.archiveWorkerSession(worker.sessionId);
@@ -1015,6 +1027,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
+      // 新 turn 开始意味着旧 done 状态已被取代,悬置的补确认不再有意义(#3153)。
+      deferredDoneAcknowledgements.delete(link.workerId);
 
       const workers = await deps.listWorkersByLead(link.leadSessionId);
       const worker = workers.find((item) => item.id === link.workerId);
@@ -1030,6 +1044,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const workers = await deps.listWorkersByLead(link.leadSessionId);
       const worker = workers.find((item) => item.id === link.workerId);
       if (!worker) {
+        deferredDoneAcknowledgements.delete(link.workerId);
         clearRuntimeState(params.sessionId);
         return;
       }
@@ -1044,7 +1059,28 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           });
           return;
         }
+        // (#3153) done 的回报 settle 会先于本 turn 终止落库,renderer「看到 done
+        // 即 ack」在 active-turn 守卫处被拒后没有重试闭环,worker 会永久停在 done
+        // (runtime/attention 悬置)。这里在该 turn 的 terminal 边界补一次收口;
+        // 没登记过被拒确认的 done 保持原样(维持「done 保持到用户看到为止」语义)。
+        const retryAcknowledgeDone =
+          worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
         clearRuntimeState(params.sessionId);
+        if (!retryAcknowledgeDone) return;
+        const acknowledged = await idleWorker({
+          callerLeadSessionId: link.leadSessionId,
+          workerId: link.workerId,
+          expectedStatus: 'done',
+        });
+        if (!acknowledged.ok) {
+          deps.log.info('orca deferred done acknowledgement skipped', {
+            workerId: link.workerId,
+            leadSessionId: link.leadSessionId,
+            sessionId: params.sessionId,
+            errorCode: acknowledged.errorCode,
+            message: acknowledged.message,
+          });
+        }
         return;
       }
 

@@ -1182,6 +1182,120 @@ describe('OrcaTeamService', () => {
     expect(calls).toEqual([]);
   });
 
+  // (#3153) 回报 settle 先落库、worker 自己的 turn 还在收尾时,renderer 的
+  // 「看到 done 即 ack」会被 active-turn 守卫拒绝;terminal 边界必须补一次收口,
+  // 否则 worker 永久停在 done(runtime/attention 悬置)。
+  it('retries a skipped done acknowledgement at the worker terminal boundary', async () => {
+    let turnRunning = true;
+    const { calls, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toEqual({
+      ok: false,
+      errorCode: 'WORKER_STATE_CHANGED',
+      message: 'worker worker-1 has an active turn',
+    });
+    expect(getWorker().status).toBe('done');
+
+    // worker 的 turn 终止:此时补确认应当成功。
+    turnRunning = false;
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('idle');
+    expect(calls).toEqual([
+      'markWorkerIdleIfStatus',
+      'closeWorkerSessionIfIdle:worker-session-1',
+      'broadcastOrcaWorkerChanged',
+    ]);
+  });
+
+  it('does not auto-acknowledge a done worker at the terminal boundary without a skipped attempt', async () => {
+    const { calls, getWorker, service, setWorker } = createDeps();
+    setWorker(createWorker({ status: 'done' }));
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    // done 的语义是「保持到用户看到为止」:用户从未确认过的 done 不能被 terminal 收口。
+    expect(getWorker().status).toBe('done');
+    expect(calls).toEqual([]);
+  });
+
+  it('does not retry a deferred acknowledgement after a new turn started and re-finished', async () => {
+    let turnRunning = true;
+    const { calls, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+
+    // 新 turn 开始:旧 done 被取代,悬置的补确认必须作废。
+    await service.handleWorkerTurnStarted('worker-session-1');
+    expect(getWorker().status).toBe('running');
+
+    // 新 turn 结束且再次 settle 为 done(模拟下一次 send_to_lead):不应触发旧补确认。
+    turnRunning = false;
+    setWorker(createWorker({ status: 'done' }));
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('done');
+    expect(calls).toEqual(['updateWorkerStatus:running', 'broadcastOrcaWorkerChanged']);
+  });
+
+  it('consumes a deferred acknowledgement even when the terminal retry is rejected', async () => {
+    let turnRunning = true;
+    let queuedInput = false;
+    const { deps, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => turnRunning })),
+      hasPendingWorkerInput: vi.fn(async () => queuedInput),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+
+    // terminal 边界重试时已有新排队输入:确认被拒(fire-once,不重登记),worker 保持 done。
+    turnRunning = false;
+    queuedInput = true;
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+
+    expect(getWorker().status).toBe('done');
+    expect(deps.markWorkerIdleIfStatus).not.toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledWith(
+      'orca deferred done acknowledgement skipped',
+      expect.objectContaining({ workerId: 'worker-1', errorCode: 'WORKER_STATE_CHANGED' }),
+    );
+  });
+
   it('does not close a direct send that wins the atomic idle-close reservation after the CAS', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps({
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
