@@ -1041,15 +1041,23 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     async handleWorkerTurnStarted(sessionId) {
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
+
       // 新 turn 开始意味着旧 done 状态已被取代,悬置的补确认不再有意义(#3153)。
+      // 作废必须放在 transition 临界区内、running 提交之后:ack 的登记同样发生在
+      // 临界区内,若在临界区外提前 delete,旧 done 的 ack 可以插队在 delete 之后、
+      // running 提交之前重新登记(active-turn 守卫只看 live session,不看持久化
+      // status 是否已推进),脏 entry 会存活到新 turn 的 terminal 边界被消费,
+      // 绕过「done 保持到用户看到为止」的可见性语义直接 idle。
+      await withWorkerTransition(link.workerId, async () => {
+        const workers = await deps.listWorkersByLead(link.leadSessionId);
+        const worker = workers.find((item) => item.id === link.workerId);
+        if (!worker || worker.status === 'running') return;
+
+        await deps.updateWorkerStatus(link.workerId, 'running');
+        deps.broadcastOrcaWorkerChanged(link.leadSessionId);
+      });
+      // running 提交后旧 entry 已不可能被重新登记,此时清理才是可靠的。
       deferredDoneAcknowledgements.delete(link.workerId);
-
-      const workers = await deps.listWorkersByLead(link.leadSessionId);
-      const worker = workers.find((item) => item.id === link.workerId);
-      if (!worker || worker.status === 'running') return;
-
-      await deps.updateWorkerStatus(link.workerId, 'running');
-      deps.broadcastOrcaWorkerChanged(link.leadSessionId);
     },
     async handleWorkerTerminalTurn(params) {
       const link = await deps.getWorkerLinkBySessionId(params.sessionId);
