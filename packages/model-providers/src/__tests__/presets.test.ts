@@ -825,6 +825,23 @@ describe('官方渠道预设契约', () => {
   const preset = (id: string) =>
     BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
 
+  it.each(['moonshot-kimi-cn', 'moonshot-kimi-global'])(
+    '%s 的 Claude Code 与 Codex 模型携带真实 contextWindow',
+    (id) => {
+      const moonshot = preset(id);
+      expect(moonshot).toBeDefined();
+      for (const agent of ['claude-code', 'codex'] as const) {
+        expect(
+          moonshot?.runtimes[agent]?.models.map((model) => [model.id, model.contextWindow]),
+        ).toEqual([
+          ['kimi-k3', 1_048_576],
+          ['kimi-k2.7-code', 262_144],
+          ['kimi-k2.6', 262_144],
+        ]);
+      }
+    },
+  );
+
   it('LiteLLM 是可编辑回环端点，并明确走无鉴权而非复用 CLI 订阅凭证', () => {
     const liteLlm = preset('litellm');
     expect(liteLlm?.authMethod).toBe('none');
