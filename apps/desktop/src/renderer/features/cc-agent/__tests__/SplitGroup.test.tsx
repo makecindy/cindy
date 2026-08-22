@@ -10,6 +10,7 @@ import { SplitGroup } from '../SplitGroup';
 import { getSplitPanes, splitGroupStore } from '../splitGroupStore';
 
 const {
+  composerDropMock,
   deferredRouteActionMock,
   navigateMock,
   resolveSessionRouteMock,
@@ -18,6 +19,7 @@ const {
   sessionViewRenderMock,
   useCCSessionsMock,
 } = vi.hoisted(() => ({
+  composerDropMock: vi.fn(),
   deferredRouteActionMock: vi.fn(),
   navigateMock: vi.fn(),
   resolveSessionRouteMock: vi.fn(async (sessionId: string) => `/cc-agent/${sessionId}`),
@@ -122,6 +124,7 @@ vi.mock('../CCAgentSessionView', () => ({
         <div
           data-testid={`composer-drop-target-${sessionIdProp}`}
           data-split-group-composer-drop-target=""
+          onDrop={composerDropMock}
         >
           <span data-testid={`composer-drop-child-${sessionIdProp}`}>Composer drop</span>
         </div>
@@ -143,6 +146,7 @@ function renderSplitGroup(activeSessionId: string) {
 describe('SplitGroup', () => {
   beforeEach(() => {
     localStorage.clear();
+    composerDropMock.mockClear();
     deferredRouteActionMock.mockClear();
     navigateMock.mockClear();
     resolveSessionRouteMock.mockClear();
@@ -1153,6 +1157,121 @@ describe('SplitGroup', () => {
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(4);
   });
 
+  it('从 pane 标题拖动到另一个 pane 时重排，而不是创建重复 pane', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+      splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    });
+    const view = renderSplitGroup('session-a');
+    const sourceHandle = view.container.querySelector(
+      '[data-split-pane-session-id="session-c"] [data-split-pane-drag-handle]',
+    );
+    const targetView = screen.getByTestId('session-view-session-a');
+    const dropTarget = targetView.closest('[data-split-drop-target="pane"]');
+    if (!(sourceHandle instanceof HTMLElement) || !(dropTarget instanceof HTMLElement)) {
+      throw new Error('pane drag handle or drop target missing');
+    }
+    vi.spyOn(dropTarget, 'getBoundingClientRect').mockReturnValue({
+      left: 100,
+      right: 500,
+      top: 50,
+      bottom: 350,
+      width: 400,
+      height: 300,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    });
+    const dragDataTransfer = {
+      effectAllowed: 'none',
+      setData: vi.fn(),
+    };
+    const dropDataTransfer = {
+      types: ['application/x-cindy-split-pane'],
+      dropEffect: 'none',
+      getData: (format: string) =>
+        format === 'application/x-cindy-split-pane' ? 'session-c' : '',
+    };
+
+    await act(async () => {
+      fireEvent.dragStart(sourceHandle, { dataTransfer: dragDataTransfer });
+      fireEvent.dragOver(targetView, { clientX: 110, clientY: 200, dataTransfer: dropDataTransfer });
+      fireEvent.drop(targetView, { clientX: 110, clientY: 200, dataTransfer: dropDataTransfer });
+      await Promise.resolve();
+    });
+
+    expect(dragDataTransfer.setData).toHaveBeenCalledWith(
+      'application/x-cindy-split-pane',
+      'session-c',
+    );
+    expect(dropDataTransfer.dropEffect).toBe('move');
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual(
+      ['session-a', 'session-c', 'session-b'],
+    );
+    expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
+  });
+
+  it('pane 标题按钮以任务标题命名，并将拖动能力作为补充说明', () => {
+    useCCSessionsMock.mockReturnValue({
+      sessions: [
+        { id: 'session-a', title: 'Session A', status: 'active' },
+        { id: 'session-b', title: 'Session B', status: 'active' },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const pane = view.container.querySelector('[data-split-pane-session-id="session-b"]');
+    const handle = pane?.querySelector('[data-split-pane-drag-handle]');
+    if (!(handle instanceof HTMLElement)) throw new Error('pane drag handle missing');
+
+    expect(screen.getByRole('button', { name: 'Session B' })).toBe(handle);
+    expect(handle.getAttribute('aria-label')).toBeNull();
+    const describedBy = handle.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy ?? '')?.textContent).toBe('splitGroup.dragPaneAria');
+  });
+
+  it('未启用 pane drop 的单窗格目标不会吞掉 pane 拖放', async () => {
+    const view = renderSplitGroup('session-a');
+    const dropTarget = view.container.querySelector('[data-split-drop-target="single"]');
+    if (!(dropTarget instanceof HTMLElement)) throw new Error('single drop target missing');
+
+    const preventDefault = vi.fn();
+    const stopPropagation = vi.fn();
+    const dataTransfer = {
+      types: ['application/x-cindy-split-pane'],
+      dropEffect: 'none',
+      getData: () => 'session-b',
+    };
+
+    await act(async () => {
+      fireEvent.dragOver(dropTarget, {
+        clientX: 120,
+        clientY: 180,
+        dataTransfer,
+        preventDefault,
+        stopPropagation,
+      });
+      fireEvent.drop(dropTarget, {
+        clientX: 120,
+        clientY: 180,
+        dataTransfer,
+        preventDefault,
+        stopPropagation,
+      });
+      await Promise.resolve();
+    });
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(stopPropagation).not.toHaveBeenCalled();
+    expect(dropTarget.querySelector('[data-split-drop-side]')).toBeNull();
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root)).toHaveLength(0);
+  });
+
   it('关闭分支后提升 sibling 时保留其它 pane 的已挂载视图', () => {
     act(() => {
       splitGroupStore.addSession('session-b', 'session-a', 'right');
@@ -1355,6 +1474,7 @@ describe('SplitGroup', () => {
       await Promise.resolve();
     });
 
+    expect(dataTransfer.dropEffect).toBe('copy');
     expect(view.container.querySelectorAll('[data-split-direction="column"]')).toHaveLength(1);
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(3);
   });
@@ -1380,6 +1500,47 @@ describe('SplitGroup', () => {
 
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(2);
     expect(sessionViewRenderMock).not.toHaveBeenCalledWith('session-c');
+  });
+
+  it('pane 拖到输入框时交给 composer 清理拖拽状态且不重排', async () => {
+    act(() => {
+      splitGroupStore.addSession('session-b', 'session-a', 'right');
+    });
+    const view = renderSplitGroup('session-a');
+    const composerDropChild = screen.getByTestId('composer-drop-child-session-a');
+    const dropTarget = composerDropChild.closest('[data-split-drop-target="pane"]');
+    if (!(dropTarget instanceof HTMLElement)) throw new Error('pane drop target missing');
+    vi.spyOn(dropTarget, 'getBoundingClientRect').mockReturnValue({
+      left: 100,
+      right: 500,
+      top: 50,
+      bottom: 350,
+      width: 400,
+      height: 300,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    });
+    const dataTransfer = {
+      types: ['application/x-cindy-split-pane'],
+      dropEffect: 'none',
+      getData: (format: string) =>
+        format === 'application/x-cindy-split-pane' ? 'session-b' : '',
+    };
+
+    await act(async () => {
+      fireEvent.dragOver(composerDropChild, { clientX: 300, clientY: 340, dataTransfer });
+      fireEvent.drop(composerDropChild, { clientX: 300, clientY: 340, dataTransfer });
+      await Promise.resolve();
+    });
+
+    expect(composerDropMock).toHaveBeenCalledTimes(1);
+    expect(view.container.querySelectorAll('[data-split-direction="row"]')).toHaveLength(1);
+    expect(view.container.querySelectorAll('[data-split-direction="column"]')).toHaveLength(0);
+    expect(getSplitPanes(splitGroupStore.getSnapshot().root).map((pane) => pane.sessionId)).toEqual([
+      'session-a',
+      'session-b',
+    ]);
   });
 
   it('达到窗格上限时拒绝拖入且不切换路由', async () => {

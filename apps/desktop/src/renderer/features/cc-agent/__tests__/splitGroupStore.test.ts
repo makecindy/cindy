@@ -164,6 +164,120 @@ describe('splitGroupStore', () => {
     expect(after[0].key).toBe(before[0].key);
   });
 
+  it('移动 pane 时从原位置摘出并插入目标方向，同时保留 pane key', async () => {
+    const { getSplitPanes, getSplitSessionIds, splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    const before = getSplitPanes(splitGroupStore.getSnapshot().root);
+    const sourceKey = before.find((pane) => pane.sessionId === 'session-c')?.key;
+
+    expect(splitGroupStore.moveSession('session-c', 'session-a', 'left')).toBe(true);
+    const next = splitGroupStore.getSnapshot().root;
+    expect(getSplitSessionIds(next)).toEqual(['session-c', 'session-a', 'session-b']);
+    expect(getSplitPanes(next).find((pane) => pane.sessionId === 'session-c')?.key).toBe(sourceKey);
+    expect(next).toMatchObject({
+      type: 'split',
+      direction: 'row',
+      first: {
+        type: 'split',
+        first: { type: 'pane', sessionId: 'session-c' },
+        second: { type: 'pane', sessionId: 'session-a' },
+      },
+      second: { type: 'pane', sessionId: 'session-b' },
+    });
+  });
+
+  it('移动嵌套 pane 后会塌缩原分支，并可再次按上下方向插入', async () => {
+    const { getSplitPanes, getSplitSessionIds, splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+
+    expect(splitGroupStore.moveSession('session-b', 'session-a', 'bottom')).toBe(true);
+    const next = splitGroupStore.getSnapshot().root;
+    expect(getSplitSessionIds(next)).toEqual(['session-a', 'session-b', 'session-c']);
+    expect(getSplitPanes(next)).toHaveLength(3);
+    expect(next).toMatchObject({
+      type: 'split',
+      direction: 'row',
+      first: {
+        type: 'split',
+        direction: 'column',
+        first: { type: 'pane', sessionId: 'session-a' },
+        second: { type: 'pane', sessionId: 'session-b' },
+      },
+      second: { type: 'pane', sessionId: 'session-c' },
+    });
+  });
+
+  it('非法来源、目标或拖到自身时不改变布局', async () => {
+    const { splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    const initial = splitGroupStore.getSnapshot();
+
+    expect(splitGroupStore.moveSession('missing', 'session-a', 'left')).toBe(false);
+    expect(splitGroupStore.moveSession('session-a', 'missing', 'left')).toBe(false);
+    expect(splitGroupStore.moveSession('session-a', 'session-a', 'left')).toBe(false);
+    expect(splitGroupStore.getSnapshot()).toBe(initial);
+  });
+
+  it.each(['left', 'right', 'top', 'bottom'] as const)(
+    'pane 已位于目标 %s 侧时保持原比例和布局引用',
+    async (side) => {
+      const { splitGroupStore } = await loadStore();
+      splitGroupStore.addSession('session-b', 'session-a', side);
+      const root = splitGroupStore.getSnapshot().root;
+      if (!root || root.type !== 'split') throw new Error('root split missing');
+      splitGroupStore.setSplitFraction(root.key, 0.7);
+      const before = splitGroupStore.getSnapshot();
+
+      expect(splitGroupStore.moveSession('session-b', 'session-a', side)).toBe(false);
+      expect(splitGroupStore.getSnapshot()).toBe(before);
+      expect(splitGroupStore.getSnapshot().root).toMatchObject({ fraction: 0.7 });
+    },
+  );
+
+  it.each(['left', 'right', 'top', 'bottom'] as const)(
+    '同方向嵌套的边缘 pane 已位于目标 %s 侧时保持原比例和布局引用',
+    async (side) => {
+      const { splitGroupStore } = await loadStore();
+      splitGroupStore.addSession('session-b', 'session-a', side);
+      splitGroupStore.addSession('session-c', 'session-b', side);
+
+      const root = splitGroupStore.getSnapshot().root;
+      if (!root || root.type !== 'split') throw new Error('root split missing');
+      const nested = side === 'left' || side === 'top' ? root.first : root.second;
+      if (nested.type !== 'split') throw new Error('nested split missing');
+
+      splitGroupStore.setSplitFraction(root.key, 0.7);
+      splitGroupStore.setSplitFraction(nested.key, 0.6);
+      const before = splitGroupStore.getSnapshot();
+
+      expect(splitGroupStore.moveSession('session-b', 'session-a', side)).toBe(false);
+      expect(splitGroupStore.getSnapshot()).toBe(before);
+      const next = splitGroupStore.getSnapshot().root;
+      if (!next || next.type !== 'split') throw new Error('root split missing');
+      expect(next).toMatchObject({ fraction: 0.7 });
+      expect(side === 'left' || side === 'top' ? next.first : next.second).toMatchObject({
+        type: 'split',
+        fraction: 0.6,
+      });
+
+      const beforeNonAdjacentMove = splitGroupStore.getSnapshot();
+      expect(splitGroupStore.moveSession('session-c', 'session-a', side)).toBe(true);
+      expect(splitGroupStore.getSnapshot()).not.toBe(beforeNonAdjacentMove);
+    },
+  );
+
+  it('仅部分边缘重合时仍按落点重排 pane', async () => {
+    const { splitGroupStore } = await loadStore();
+    splitGroupStore.addSession('session-b', 'session-a', 'right');
+    splitGroupStore.addSession('session-c', 'session-b', 'bottom');
+    const before = splitGroupStore.getSnapshot();
+
+    expect(splitGroupStore.moveSession('session-b', 'session-a', 'right')).toBe(true);
+    expect(splitGroupStore.getSnapshot()).not.toBe(before);
+  });
+
   it('分支比例夹到下限，并仅切换根方向', async () => {
     const { MIN_SPLIT_CHILD_FRACTION, splitGroupStore } = await loadStore();
     splitGroupStore.addSession('session-b', 'session-a', 'right');

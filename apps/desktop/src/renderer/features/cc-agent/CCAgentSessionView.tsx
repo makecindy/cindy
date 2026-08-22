@@ -224,7 +224,7 @@ import {
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
-import { hasSplitGroupSessionType } from './splitGroupDnd';
+import { hasSplitGroupDragType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
 import {
   attachGhostMediaToSession,
@@ -4095,27 +4095,27 @@ export function CCAgentSessionView({
         className="relative flex h-full w-full flex-col bg-content-area"
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (hasSplitGroupDragType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current += 1;
           if (dragCounterRef.current === 1) setIsDragOver(true);
         }}
         onDragOver={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (hasSplitGroupDragType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = 'copy';
         }}
         onDragLeave={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (hasSplitGroupDragType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current -= 1;
           if (dragCounterRef.current === 0) setIsDragOver(false);
         }}
         onDrop={(e) => {
-          if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
+          if (hasSplitGroupDragType(e.dataTransfer.types)) return;
           e.preventDefault();
           e.stopPropagation();
           dragCounterRef.current = 0;

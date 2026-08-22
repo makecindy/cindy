@@ -10061,6 +10061,7 @@
   },
   "splitGroup": {
     "closeAria": "Close Pane for “{{title}}”",
+    "dragPaneAria": "Drag Pane for “{{title}}”",
     "closeAll": "Close Split",
     "toggleDirection": "Toggle Horizontal / Vertical Split",
     "dropHint": "Drop to Open the Session Here",

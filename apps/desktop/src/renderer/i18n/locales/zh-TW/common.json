@@ -10047,6 +10047,7 @@
   },
   "splitGroup": {
     "closeAria": "關閉任務“{{title}}”的分欄",
+    "dragPaneAria": "拖曳任務「{{title}}」的分欄",
     "closeAll": "關閉分欄",
     "toggleDirection": "切換上下 / 左右分欄",
     "dropHint": "鬆開以在此分欄開啟任務",

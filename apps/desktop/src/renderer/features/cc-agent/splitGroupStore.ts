@@ -112,6 +112,112 @@ function removePane(root: SplitNode, sessionId: string): SplitNode | null {
   return first === root.first && second === root.second ? root : { ...root, first, second };
 }
 
+interface DetachedPane {
+  root: SplitNode | null;
+  pane: SplitPaneNode | null;
+}
+
+function detachPane(root: SplitNode, sessionId: string): DetachedPane {
+  if (root.type === 'pane') {
+    return root.sessionId === sessionId ? { root: null, pane: root } : { root, pane: null };
+  }
+
+  const first = detachPane(root.first, sessionId);
+  if (first.pane) {
+    return { root: first.root ? { ...root, first: first.root } : root.second, pane: first.pane };
+  }
+
+  const second = detachPane(root.second, sessionId);
+  if (second.pane) {
+    return { root: second.root ? { ...root, second: second.root } : root.first, pane: second.pane };
+  }
+
+  return { root, pane: null };
+}
+
+interface PaneRect {
+  sessionId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const ADJACENCY_EPSILON = 1e-6;
+
+function collectPaneRects(
+  root: SplitNode,
+  rect: Omit<PaneRect, 'sessionId'> = { x: 0, y: 0, width: 1, height: 1 },
+): PaneRect[] {
+  if (root.type === 'pane') return [{ ...rect, sessionId: root.sessionId }];
+
+  if (root.direction === 'row') {
+    const firstWidth = rect.width * root.fraction;
+    return [
+      ...collectPaneRects(root.first, { ...rect, width: firstWidth }),
+      ...collectPaneRects(root.second, {
+        ...rect,
+        x: rect.x + firstWidth,
+        width: rect.width - firstWidth,
+      }),
+    ];
+  }
+
+  const firstHeight = rect.height * root.fraction;
+  return [
+    ...collectPaneRects(root.first, { ...rect, height: firstHeight }),
+    ...collectPaneRects(root.second, {
+      ...rect,
+      y: rect.y + firstHeight,
+      height: rect.height - firstHeight,
+    }),
+  ];
+}
+
+function rangesMatch(startA: number, sizeA: number, startB: number, sizeB: number): boolean {
+  return (
+    Math.abs(startA - startB) <= ADJACENCY_EPSILON &&
+    Math.abs(startA + sizeA - (startB + sizeB)) <= ADJACENCY_EPSILON
+  );
+}
+
+function isPaneAlreadyAtSide(
+  root: SplitNode,
+  sessionId: string,
+  anchorSessionId: string,
+  side: DropSide,
+): boolean {
+  const panes = collectPaneRects(root);
+  const source = panes.find((pane) => pane.sessionId === sessionId);
+  const anchor = panes.find((pane) => pane.sessionId === anchorSessionId);
+  if (!source || !anchor) return false;
+
+  switch (side) {
+    case 'left':
+      return (
+        Math.abs(source.x + source.width - anchor.x) <= ADJACENCY_EPSILON &&
+        rangesMatch(source.y, source.height, anchor.y, anchor.height)
+      );
+    case 'right':
+      return (
+        Math.abs(anchor.x + anchor.width - source.x) <= ADJACENCY_EPSILON &&
+        rangesMatch(source.y, source.height, anchor.y, anchor.height)
+      );
+    case 'top':
+      return (
+        Math.abs(source.y + source.height - anchor.y) <= ADJACENCY_EPSILON &&
+        rangesMatch(source.x, source.width, anchor.x, anchor.width)
+      );
+    case 'bottom':
+      return (
+        Math.abs(anchor.y + anchor.height - source.y) <= ADJACENCY_EPSILON &&
+        rangesMatch(source.x, source.width, anchor.x, anchor.width)
+      );
+  }
+
+  return false;
+}
+
 interface CoerceContext {
   seenKeys: Set<string>;
   seenSessionIds: Set<string>;
@@ -366,6 +472,42 @@ export const splitGroupStore = {
         (node) => makeSplit(node as SplitPaneNode),
       ),
     });
+    return true;
+  },
+
+  moveSession(sessionIdInput: string, anchorSessionIdInput: string, side: DropSide): boolean {
+    ensureHydrated();
+    const sessionId = normalizeSessionId(sessionIdInput);
+    const anchorSessionId = normalizeSessionId(anchorSessionIdInput);
+    if (!sessionId || !anchorSessionId || sessionId === anchorSessionId || !state.root) return false;
+
+    const panes = getSplitPanes(state.root);
+    if (!panes.some((pane) => pane.sessionId === sessionId)) return false;
+    if (!panes.some((pane) => pane.sessionId === anchorSessionId)) return false;
+    if (isPaneAlreadyAtSide(state.root, sessionId, anchorSessionId, side)) return false;
+
+    const detached = detachPane(state.root, sessionId);
+    if (!detached.pane || !detached.root) return false;
+
+    const existingKeys = new Set<string>();
+    collectNodeKeys(detached.root, existingKeys);
+    existingKeys.add(detached.pane.key);
+    const makeSplit = (anchorPane: SplitPaneNode): SplitBranchNode => ({
+      type: 'split',
+      key: nextUniqueKey('split', existingKeys),
+      direction: directionForSide(side),
+      fraction: 0.5,
+      first: isBeforeSide(side) ? detached.pane! : anchorPane,
+      second: isBeforeSide(side) ? anchorPane : detached.pane!,
+    });
+
+    const nextRoot = replaceNode(
+      detached.root,
+      (node) => node.type === 'pane' && node.sessionId === anchorSessionId,
+      (node) => makeSplit(node as SplitPaneNode),
+    );
+    if (nextRoot === detached.root) return false;
+    emit({ root: nextRoot });
     return true;
   },
 
