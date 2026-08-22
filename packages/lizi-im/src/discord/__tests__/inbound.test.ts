@@ -37,11 +37,30 @@ describe('normalizeDmMessage', () => {
   });
 
   it('returns null when channel id is missing so the transport suppresses it', async () => {
-    const event = await normalizeDmMessage(
+    // `channelId: ''` flows through the helper because `'' ?? 'dm-1'` is `''`
+    // (only null/undefined triggers the default). Asserts an explicit empty
+    // string is treated as a missing channel.
+    const emptyString = await normalizeDmMessage(
       message({ content: 'hello', channelId: '' }),
       { contextId: 'app-1', mediaDir: tempDir(), download: vi.fn() },
     );
-    expect(event).toBeNull();
+    expect(emptyString).toBeNull();
+
+    // A genuinely channel-less event (no channelId and no channel.id) —
+    // e.g. a partial presence update or a guild event leaking past the DM
+    // filter — must also be suppressed. The `message()` helper defaults a
+    // missing channelId to 'dm-1', so construct the raw object directly.
+    const channelLess = await normalizeDmMessage(
+      {
+        id: 'msg-x',
+        content: 'leaked guild text',
+        author: { id: 'user-1' },
+        attachments: [],
+        stickers: [],
+      } as Parameters<typeof normalizeDmMessage>[0],
+      { contextId: 'app-1', mediaDir: tempDir(), download: vi.fn() },
+    );
+    expect(channelLess).toBeNull();
   });
 
   it('downloads image attachments into the media dir', async () => {
