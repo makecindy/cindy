@@ -48,7 +48,11 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
@@ -1120,6 +1124,10 @@ function ExpandedView({
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
     async (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+      // The sound path may await autoplay permission or resource startup. Capture the
+      // current account boundary before that await and drop the event if the user logs
+      // out or switches accounts while the old session notification is still pending.
+      const dataOwnerAtNotification = getDataOwnerGeneration();
       // 灵动岛启用时,完成提示由灵动岛承载,不再走系统 toast,避免同一事件双重打扰;
       // 灵动岛未启用(或平台不支持)时,继续用系统通知。飞书是独立外发通道,不受影响。
       const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
@@ -1140,6 +1148,7 @@ function ExpandedView({
       // 保持 Electron 默认,OS 通知音照常,用户至少还有一条可听的提醒。
       let soundOn = false;
       if (soundRequested) soundOn = await playSessionEventSound(kind);
+      if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;
       void window.electronAPI.notificationMarkSessionAttention(sessionId);
       // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。
       // (手机推送用的是**桌面侧**语言 —— 标题在 wire payload 里是字面量,让手机按自己
