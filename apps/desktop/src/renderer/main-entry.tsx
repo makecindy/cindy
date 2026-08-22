@@ -157,7 +157,7 @@ void (async () => {
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <ComputerPermissionBackdrop />
       </ThemeProvider>,
     );
@@ -169,7 +169,7 @@ void (async () => {
       './components/settings/ComputerPermissionGuideWindow'
     );
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ComputerPermissionGuideWindow />
         </LocaleProvider>
@@ -181,7 +181,7 @@ void (async () => {
   if (isVoiceInputDictionaryToast) {
     const { VoiceInputDictionaryToast } = await import('./voice-input/VoiceInputDictionaryToast');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <VoiceInputDictionaryToast />
         </LocaleProvider>
@@ -193,7 +193,7 @@ void (async () => {
   if (isVoiceInputOverlay) {
     const { VoiceInputOverlay } = await import('./voice-input/VoiceInputOverlay');
     root.render(
-      <ThemeProvider>
+      <ThemeProvider syncWindowVibrancy={false}>
         <LocaleProvider>
           <ConfirmDialogProvider>
             <VoiceInputOverlay />

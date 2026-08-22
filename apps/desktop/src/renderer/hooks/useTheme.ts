@@ -243,7 +243,13 @@ export function __resetLoginFirstLaunchLightGateForTest(): void {
   firstLaunchLightSession = null;
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
+export function ThemeProvider({
+  children,
+  syncWindowVibrancy = true,
+}: {
+  children: ReactNode;
+  syncWindowVibrancy?: boolean;
+}) {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const [familyId, setFamilyIdState] = useState<string>(getStoredFamilyId);
   // 跟踪系统色偏好, 让 fallbackFromType 在 OS theme 变化时也能正确刷新。
@@ -349,13 +355,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // 通知 main 开关 macOS vibrancy(仅 CINDY family 启用,其他恢复不透明)。覆盖
   // setFamily/storage 跨窗口同步/mount 三个场景(任一变化都重应用)。
   useEffect(() => {
+    if (!syncWindowVibrancy) return;
     window.electronAPI?.theme?.applyVibrancy?.(
       familyId,
       resolveSessionIsDark(theme),
       theme,
       systemModeFollowsSystem(familyId),
     );
-  }, [familyId, localThemeRev, theme, systemPrefersDark]);
+  }, [familyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
 
   const fallbackFromType = useMemo<ThemeType | null>(() => {
     void localThemeRev;

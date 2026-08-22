@@ -35,6 +35,10 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(ThemeProvider, null, children);
 }
 
+function utilityWindowWrapper({ children }: { children: ReactNode }) {
+  return createElement(ThemeProvider, { children, syncWindowVibrancy: false });
+}
+
 // 构造 storage 事件:用普通 Event + 显式 key/newValue,避免依赖 jsdom 对
 // StorageEvent 构造函数第二参数(init)的重载支持(CodeQL: superfluous trailing arguments)。
 // useTheme 的 storage 监听只读 event.key / event.newValue,语义完全等价。
@@ -64,6 +68,13 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     renderHook(() => useTheme(), { wrapper });
 
     expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark', true);
+  });
+
+  it('utility 窗口复用 ThemeProvider 时不写全局窗口材质快照', () => {
+    localStorage.setItem('theme', 'dark');
+    renderHook(() => useTheme(), { wrapper: utilityWindowWrapper });
+
+    expect(applyVibrancyMock).not.toHaveBeenCalled();
   });
 
   it('把单变体家族标记为不随系统模式切换', () => {
