@@ -79,8 +79,18 @@ export function UsageTokenBars({
         segsByDay.set(row.day, daySegs);
       }
       const seg = daySegs.get(rank);
-      if (seg) seg.tokens += row.tokens;
-      else daySegs.set(rank, { rank, label: row.model, tokens: row.tokens });
+      if (seg) {
+        seg.tokens += row.tokens;
+        // 尾部档 (rank === colorOrder.length) 会把所有非前 N 名模型并进同一分段,
+        // 保留首个模型名会把合计错误地挂到它头上 —— 改标「其它」, 与图例同义。
+        if (rank >= colorOrder.length) seg.label = t('usageDashboard.othersLegend');
+      } else {
+        daySegs.set(rank, {
+          rank,
+          label: rank >= colorOrder.length ? t('usageDashboard.othersLegend') : row.model,
+          tokens: row.tokens,
+        });
+      }
     }
 
     const list: DayBar[] = [];
@@ -94,7 +104,7 @@ export function UsageTokenBars({
       });
     }
     return { list, max: Math.max(...list.map((b) => b.tokens), 0) };
-  }, [modelDaily, colorOrder, todayKey]);
+  }, [modelDaily, colorOrder, todayKey, t]);
 
   const ticks = niceTicks(bars.max);
 

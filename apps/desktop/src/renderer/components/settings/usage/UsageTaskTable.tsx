@@ -6,7 +6,8 @@
  *   - 上下文:  contextTokens / contextWindow
  *   - 供应商:  Session.providerId, 经 providerDisplayNameById 映射成展示名
  *              (内置 id 走设置页 i18n 标题, 自定义供应商回退目录里的 name)
- *   - 最后活跃: Session.updatedAt, 走 sidebar 同一套 formatSidebarTime (相对时间)
+ *   - 最后活跃: userSendAt / updatedAt 中较新者 (与 SessionItem 同一条时间轴 ——
+ *              旧版 DB 行只写 userSendAt), 走 sidebar 同一套 formatSidebarTime
  *
  * 两处口径必须在 UI 上讲清楚, 否则会被误读:
  *   1. totalTokenUsage 是该任务的**生命周期累计**, 不是窗口内增量。本表筛的是
@@ -18,6 +19,10 @@
  *      写明"取当前选定的供应商", 不额外标记 (没有可靠的切换记录可依据)。
  *
  * 远程会话 (device-link) 的 token 字段可能缺失或为 0 —— 同样按"无数据不显示"过滤掉。
+ *
+ * 已知取舍: 候选集来自 sessionsStore 的列表桶 (DEFAULT_LIMIT = 1000, 按 updatedAt 降序),
+ * 因此"近 30 天内更新过的会话超过 1000 条"时, 被截断的高用量会话进不了 Top N。
+ * 修它需要一次按 total_token_usage 排序的专用查询 —— 那是新增 IPC, 不进本版。
  */
 
 import React, { useMemo } from 'react';
@@ -42,6 +47,13 @@ const TH_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] pb-2 text-right text-11 font-medium text-[var(--text-tertiary)]';
 const TD_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] py-2 text-right text-12 tabular-nums';
+
+/** 与 SessionItem 一致: 取两者中较新的值, 兼容只写 userSendAt 的存量行。 */
+function lastActiveIso(session: { updatedAt: string; userSendAt: string | null }): string {
+  return session.userSendAt && session.userSendAt > session.updatedAt
+    ? session.userSendAt
+    : session.updatedAt;
+}
 
 function activeWithinWindow(iso: string | null | undefined, cutoffMs: number): boolean {
   if (!iso) return false;
@@ -115,7 +127,7 @@ export function UsageTaskTable(): React.JSX.Element | null {
                 {contextRatio === null ? UNKNOWN_VALUE : formatUsagePercent(contextRatio)}
               </td>
               <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>
-                {formatSidebarTime(session.updatedAt, t) || UNKNOWN_VALUE}
+                {formatSidebarTime(lastActiveIso(session), t) || UNKNOWN_VALUE}
               </td>
             </tr>
           );

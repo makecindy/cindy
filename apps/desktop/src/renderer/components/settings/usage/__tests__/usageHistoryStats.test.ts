@@ -140,6 +140,25 @@ describe('buildModelRows', () => {
     expect(rows[0].share).toBeCloseTo(0.9);
   });
 
+  it('同一模型的 api / subscription 两个计费维度合并成一行', () => {
+    // main 侧按带 #billing= 后缀的原始 model 聚合, 到 payload 时后缀已被剥掉 ——
+    // 不合并会渲染出两行同名模型 + 重复 React key, 并让模型数多算。
+    const rows = buildModelRows(
+      payload({
+        models: [
+          model({ model: 'claude-opus-4-8', inputTokens: 100, cacheReadTokens: 300 }),
+          model({ model: 'claude-opus-4-8', inputTokens: 50, outputTokens: 20 }),
+        ],
+      }),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tokens).toBe(470);
+    expect(rows[0].inputTokens).toBe(150);
+    expect(rows[0].share).toBe(1);
+    // 命中率按合并后的分子分母算: 300 / (150 + 300 + 0)
+    expect(rows[0].cacheHitRate).toBeCloseTo(300 / 450);
+  });
+
   it('同名模型跨 agent 分成两行 (网关模型 id 可能撞名)', () => {
     const rows = buildModelRows(
       payload({
@@ -182,6 +201,20 @@ describe('buildAgentRows', () => {
         tokens: 999,
       },
     ],
+  });
+
+  it('modelCount 不把同一模型的两个计费维度数成两个', () => {
+    const rows = buildAgentRows(
+      payload({
+        models: [
+          model({ agentKind: 'codex', model: 'gpt-5.5', inputTokens: 100 }),
+          model({ agentKind: 'codex', model: 'gpt-5.5', inputTokens: 200 }),
+        ],
+      }),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].modelCount).toBe(1);
+    expect(rows[0].tokens).toBe(300);
   });
 
   it('按 agent 合并模型并数出模型个数', () => {

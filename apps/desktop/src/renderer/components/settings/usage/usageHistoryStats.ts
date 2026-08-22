@@ -123,22 +123,45 @@ export function computeTokenStreak(
   return { current, longest };
 }
 
-/** 近 30 天按模型, 按 token 降序。 */
+/**
+ * 近 30 天按模型, 按 token 降序。
+ *
+ * **必须按 (agentKind, 展示模型名) 再合并一次**: main 侧按原始 model 聚合, 而同一个模型的
+ * API 与订阅两个计费维度带着 `#billing=api` / `#billing=subscription` 后缀分行
+ * (`main/usage/usageHistory.ts` 的 byKey), 暴露到 payload 时后缀已被 displayModelName 剥掉。
+ * 直接用展示名建 key 会渲染出两行看不出区别的同名模型、产生重复 React key,
+ * 并让「用到的模型」数与 Agent 表的模型数多算。本页只统计 token, 不区分计费维度, 合并即可。
+ */
 export function buildModelRows(payload: UsageHistoryPayload | null): ModelTokenRow[] {
   if (!payload) return [];
-  const rows = payload.models
-    .map((model) => ({
-      key: `${model.agentKind} ${model.model}`,
+  const merged = new Map<string, ModelTokenRow>();
+  for (const model of payload.models) {
+    const tokens = modelTokenTotal(model);
+    if (tokens <= 0) continue;
+    const key = `${model.agentKind} ${model.model}`;
+    const existing = merged.get(key);
+    if (existing) {
+      existing.tokens += tokens;
+      existing.inputTokens += model.inputTokens;
+      existing.outputTokens += model.outputTokens;
+      existing.cacheReadTokens += model.cacheReadTokens;
+      existing.cacheCreateTokens += model.cacheCreateTokens;
+      continue;
+    }
+    merged.set(key, {
+      key,
       agentKind: model.agentKind,
       model: model.model,
-      tokens: modelTokenTotal(model),
+      tokens,
       inputTokens: model.inputTokens,
       outputTokens: model.outputTokens,
       cacheReadTokens: model.cacheReadTokens,
       cacheCreateTokens: model.cacheCreateTokens,
-    }))
-    .filter((row) => row.tokens > 0)
-    .sort((a, b) => b.tokens - a.tokens);
+      share: 0,
+      cacheHitRate: null,
+    });
+  }
+  const rows = [...merged.values()].sort((a, b) => b.tokens - a.tokens);
 
   const total = rows.reduce((sum, row) => sum + row.tokens, 0);
   return rows.map((row) => ({
@@ -164,8 +187,10 @@ export function buildAgentRows(payload: UsageHistoryPayload | null): AgentTokenR
     cacheCreateTokens: number;
   }
   const byAgent = new Map<UsageAgentKind, AgentAcc>();
-  for (const model of payload.models) {
-    const tokens = modelTokenTotal(model);
+  // 走合并后的模型行 —— 同一模型的 api / subscription 两个计费维度已并成一行,
+  // 否则 modelCount 会把同一个模型数成两个 (见 buildModelRows 的注释)。
+  for (const model of buildModelRows(payload)) {
+    const tokens = model.tokens;
     if (tokens <= 0) continue;
     const acc = byAgent.get(model.agentKind) ?? {
       agentKind: model.agentKind,
