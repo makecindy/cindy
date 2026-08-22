@@ -1193,10 +1193,11 @@ describe('removeWorktreeForSession', () => {
       ['update-ref', '-d', `refs/heads/${meta.branch}`, 'abc123'],
       BASE_REPO,
     );
-    expect(gitOperations).toEqual([
+    // config 是 safe.directory 清理的副作用, 其次数随平台拼写数(POSIX 1 次 / Windows
+    // 正反斜杠 2 次)变化, 不参与这里的顺序断言。
+    expect(gitOperations.filter((op) => op !== 'config')).toEqual([
       'symbolic-ref',
       'worktree',
-      'config',
       'rev-parse',
       'rev-list',
       'update-ref',

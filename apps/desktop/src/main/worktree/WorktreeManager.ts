@@ -144,6 +144,37 @@ async function unsetSafeDirectoryEntriesLocked(
 }
 
 /**
+ * 计算一组候选路径需要精确清理的全部 safe.directory 拼写:
+ *   - 逻辑拼写: meta 里记录的 path.join 产物;
+ *   - 物理拼写: baseRepo 是 symlink/junction 时, git 在 dubious-ownership 报错里
+ *     给的是 realpath 后的物理路径, ensureGlobalSafeDirectory 写的正是这个值,
+ *     只按逻辑拼写会漏删 —— 用 fs.realpath(baseRepo) + 相对后缀补出物理拼写。
+ * 每种拼写再经 safeDirectorySpellings 展开正/反斜杠两种形式。
+ */
+async function resolveSafeDirectorySpellings(
+  candidates: Iterable<string>,
+  baseRepo: string,
+): Promise<string[]> {
+  const spellings = new Set<string>();
+  let physicalBase: string | null = null;
+  try {
+    physicalBase = await fs.realpath(baseRepo);
+  } catch {
+    physicalBase = null; // baseRepo 解析不到时只清逻辑拼写
+  }
+  for (const candidate of candidates) {
+    for (const s of safeDirectorySpellings(candidate)) spellings.add(s);
+    if (physicalBase) {
+      const rel = path.relative(baseRepo, candidate);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+        for (const s of safeDirectorySpellings(path.join(physicalBase, rel))) spellings.add(s);
+      }
+    }
+  }
+  return [...spellings];
+}
+
+/**
  * 删除/归档成功后, 清理该 worktree 路径残留在全局 git config 里的 safe.directory
  * 条目(#2627)。只按精确值移除, 不触碰用户其它仓库的手动配置; 失败仅日志, 不影响
  * 删除主流程。传入本次删除涉及的所有候选路径:原始 path + 已持久化的 quarantinePath
@@ -151,15 +182,17 @@ async function unsetSafeDirectoryEntriesLocked(
  * `.xdt-removing-*` 目录, 它在 ignored-file 扫描 / 所有权复核时触发过 gitExec 的
  * 按需 safe.directory, 必须一并清理, 否则会永久残留。
  *
- * 与 gitExec 的 ensureGlobalSafeDirectory(--add)共用同一把跨进程锁:一个实例删
- * worktree、另一个实例同时给某仓库按需加 safe.directory 时,两种写操作必须串行,
- * 否则并发写全局 config 会因 .gitconfig.lock 冲突失败(清理侧吞掉失败留残项 /
- * add 侧失败让原 git 操作继续报 dubious ownership)。拿不到锁时**不**做无锁
- * --unset-all, 而是把候选路径落盘到 worktreeStore.pendingSafeDirectoryCleanups,
- * 由下次启动的 reconcilePendingSafeDirectoryCleanups 补清 —— 因为此刻目录已删、
- * store.del(sessionId) 已执行, 进程内已无任何持久状态可再重试, 必须靠落盘兜底。
+ * 写前日志: 先把全部拼写(逻辑 + 物理)落盘到 pendingSafeDirectoryCleanups, 再执行
+ * 精确 --unset-all, 成功后只移除已清理的那部分。调用方保证在 store.del(sessionId)
+ * **之前**调用本函数 —— 这样即便进程在本函数与 store.del 之间崩溃, 队列里仍有这份
+ * 路径, 启动对账还能补清; 反过来(先删元数据再落盘)一旦崩溃就永久丢路径。
+ *
+ * 与 gitExec 的 ensureGlobalSafeDirectory(--add)共用同一把跨进程锁: 两种写操作必须
+ * 串行, 否则并发写全局 config 会因 .gitconfig.lock 冲突失败。拿不到锁时不无锁
+ * --unset-all, 候选路径已在前一步入队, 留给启动对账补清。
  */
 async function removeWorktreeSafeDirectory(
+  baseRepo: string,
   ...paths: (string | null | undefined)[]
 ): Promise<void> {
   const candidates = new Set(
@@ -167,31 +200,37 @@ async function removeWorktreeSafeDirectory(
   );
   if (candidates.size === 0) return;
 
+  const spellings = await resolveSafeDirectorySpellings(candidates, baseRepo);
+
+  // 写前日志: 在 store.del 之前先持久化清理意图。
+  try {
+    await store.addPendingSafeDirectoryCleanups(spellings);
+  } catch (err) {
+    // 落盘失败只是丢失「崩溃后补清」的机会, 不能反向中断删除主流程; 继续尝试即时清理。
+    log.warn(
+      '[worktree] persist safe.directory cleanup intent failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
   const cleaned = await withCrossProcessLock(
     globalSafeDirectoryLockPath(),
     { label: 'git-safe-directory', waitMs: 1_000 },
     async (status) => {
       if (!status.held) return [];
-      return unsetSafeDirectoryEntriesLocked(candidates);
+      return unsetSafeDirectoryEntriesLocked(spellings);
     },
   );
 
-  const pending = [...candidates].filter((p) => !cleaned.includes(p));
-  if (pending.length > 0) {
+  if (cleaned.length > 0) {
     try {
-      await store.addPendingSafeDirectoryCleanups(pending);
+      await store.removePendingSafeDirectoryCleanups(cleaned);
     } catch (err) {
-      // 落盘失败只是丢失一次「下次启动补清」的机会, 绝不能反向中断删除主流程
       log.warn(
-        '[worktree] persist deferred safe.directory cleanup failed:',
+        '[worktree] remove cleaned safe.directory paths from store failed:',
         err instanceof Error ? err.message : String(err),
       );
-      return;
     }
-    log.warn(
-      '[worktree] safe.directory cleanup deferred to next startup:',
-      pending.join(', '),
-    );
   }
 }
 
@@ -1402,8 +1441,9 @@ async function removeWorktreeForSessionInner(
     }
 
     if (removedByGit) {
+      // 写前日志: 先落盘清理意图(物理 + 逻辑拼写), 再删最后一份元数据。
+      await removeWorktreeSafeDirectory(meta.baseRepo, meta.path, meta.quarantinePath, removalPath);
       store.del(sessionId);
-      await removeWorktreeSafeDirectory(meta.path, meta.quarantinePath, removalPath);
     } else if (snapshotted) {
       // Both removal paths failed: put WIP back before restoring the live registration. If apply
       // also fails, keep it unregistered so the send-time restore gate retries the snapshot.
