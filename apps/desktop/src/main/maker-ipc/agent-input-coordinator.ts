@@ -73,6 +73,14 @@ import {
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
 /**
+ * Leftover `activeTurn` plus live-idle is either a lost terminal or the Pi
+ * window after `handle.send` resolves (reservation released) but before
+ * `agent_start` flips `isStreaming`. 250ms is enough for a queued status/done;
+ * it is not enough for that independent start event. Keep the corpse only for
+ * this longer grace, then treat it as a zombie so queued input can drain.
+ */
+const LEFTOVER_ACTIVE_TURN_IDLE_GRACE_MS = 5_000;
+/**
  * Codex 的 reconnect-stalled 清理要等两次 turn/interrupt ACK，每次最多 10s。
  * 自动续跑仍只允许 3 次 SESSION_RUNNING 派发尝试，但退避必须覆盖这段有界
  * cleanup 窗口；终态事件先到时 scheduleDrain 仍会立即放行，不会强制等满该间隔。
@@ -3420,10 +3428,10 @@ export class AgentInputCoordinator {
    * Do not call this while a send is in flight, a permission card is up, or
    * abort/steer already owns the boundary.
    *
-   * Live `isTurnRunning()` already covers Session.send reservations, so a
-   * leftover `activeTurn` plus live-idle after the 250ms grace is a zombie
-   * (done never reached the coordinator, or the process already unloaded).
-   * Missing live probe (`undefined`) stays fail-closed.
+   * Tracker-only stale busy uses the 250ms grace (status/done still in Session).
+   * Leftover `activeTurn` waits longer: Pi may have released sendReservation
+   * after prompt RPC while `agent_start` is still in flight. Probe unavailable
+   * (`undefined`, including owner-boundary lookup failure) stays fail-closed.
    */
   private tryReconcileStaleDispatchBoundary(
     sessionId: string,
@@ -3453,12 +3461,13 @@ export class AgentInputCoordinator {
       return false;
     }
 
-    // Handle may already be idle while status/done is still queued in Session.
-    // Extra drains in this window must not confirm; wait the existing 250ms retry.
+    const graceMs = leftoverActiveTurn
+      ? LEFTOVER_ACTIVE_TURN_IDLE_GRACE_MS
+      : SESSION_RUNNING_RETRY_DELAY_MS;
     if (state.staleLiveIdleSinceMs == null) {
       state.staleLiveIdleSinceMs = Date.now();
     }
-    if (Date.now() - state.staleLiveIdleSinceMs < SESSION_RUNNING_RETRY_DELAY_MS) {
+    if (Date.now() - state.staleLiveIdleSinceMs < graceMs) {
       return false;
     }
 
@@ -4161,6 +4170,12 @@ export class AgentInputCoordinator {
       return { ownerKey: 'compact', delayMs: SESSION_RUNNING_RETRY_DELAY_MS };
     }
     const head = state.pendingQueue[0];
+    if (state.activeTurn !== null) {
+      return {
+        ownerKey: head ? `queue:${head.clientId}` : 'leftover-active-turn',
+        delayMs: LEFTOVER_ACTIVE_TURN_IDLE_GRACE_MS,
+      };
+    }
     return {
       ownerKey: head ? `queue:${head.clientId}` : null,
       delayMs: head?.autoResume

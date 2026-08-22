@@ -11384,22 +11384,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * whether work is still running; the desktop tracker is only an event-driven
    * view and can remain stale across owner-boundary teardown.
    */
-  const getStableSessionForTurnBoundary = (sessionId: string): WiredSession | null => {
+  type StableSessionLookup =
+    | { status: 'found'; session: WiredSession }
+    | { status: 'missing' }
+    | { status: 'unavailable' };
+
+  const lookupStableSessionForTurnBoundary = (sessionId: string): StableSessionLookup => {
     const wired = wiredSessionsById.get(sessionId)?.session;
-    if (wired) return wired;
+    if (wired) return { status: 'found', session: wired };
     try {
-      return maker.getSession(sessionId) ?? null;
+      const sess = maker.getSession(sessionId);
+      return sess ? { status: 'found', session: sess } : { status: 'missing' };
     } catch (err) {
-      // Dynamic Maker intentionally fails closed while an account owner is
-      // being replaced. A missing stable wiring snapshot means we cannot
-      // authoritatively reconcile this session yet; callers must retain their
-      // boundary and wait for the normal close/settle path.
+      // Dynamic Maker throws PRECONDITION_FAILED while an account owner is
+      // being replaced. Callers that need fail-closed must not treat this as
+      // "session process gone".
       log.warn('session lookup unavailable during turn-boundary reconciliation', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return null;
+      return { status: 'unavailable' };
     }
+  };
+
+  const getStableSessionForTurnBoundary = (sessionId: string): WiredSession | null => {
+    const lookup = lookupStableSessionForTurnBoundary(sessionId);
+    return lookup.status === 'found' ? lookup.session : null;
   };
 
   /**
@@ -11425,8 +11435,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
 
   const reconcileSessionTurnIdle = (sessionId: string, source: string): boolean => {
-    const sess = getStableSessionForTurnBoundary(sessionId);
-    if (!sess) {
+    const lookup = lookupStableSessionForTurnBoundary(sessionId);
+    if (lookup.status === 'unavailable') return false;
+    if (lookup.status === 'missing') {
       const trackerStale =
         sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
         sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
@@ -11438,6 +11449,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       sessionTurnActivityTracker.deleteSession(sessionId);
       return true;
     }
+    const sess = lookup.session;
     let liveSessionIdle = false;
     try {
       liveSessionIdle = !sess.isTurnRunning();
@@ -11944,12 +11956,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
     },
     isLiveTurnRunning: (sessionId) => {
+      const lookup = lookupStableSessionForTurnBoundary(sessionId);
+      if (lookup.status === 'unavailable') return undefined;
+      if (lookup.status === 'missing') return false;
       try {
-        const sess = getStableSessionForTurnBoundary(sessionId);
-        // No live Session means the process is gone, so it is not running.
-        // Only a lookup exception is "probe unavailable" (owner-boundary).
-        if (!sess) return false;
-        return sess.isTurnRunning();
+        return lookup.session.isTurnRunning();
       } catch {
         return undefined;
       }

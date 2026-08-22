@@ -6124,6 +6124,11 @@ describe('AgentInputCoordinator steer transaction', () => {
       await flush();
       await vi.advanceTimersByTimeAsync(250);
       await flush();
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flush();
 
       expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
@@ -6222,6 +6227,11 @@ describe('AgentInputCoordinator steer transaction', () => {
 
       await vi.advanceTimersByTimeAsync(250);
       await flush();
+      expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(4_750);
+      await flush();
 
       expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
       expect(h.sendToAgent).toHaveBeenCalledTimes(2);
@@ -6255,6 +6265,10 @@ describe('AgentInputCoordinator steer transaction', () => {
       expect(h.sendToAgent).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(4_750);
       await flush();
 
       expect(h.reconcileTurnIdle).not.toHaveBeenCalled();

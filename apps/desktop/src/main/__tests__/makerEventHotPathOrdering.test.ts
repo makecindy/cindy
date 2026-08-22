@@ -202,7 +202,10 @@ describe('maker:event hot path ordering', () => {
       "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
     );
     expect(coordinatorSource).toContain('isLiveTurnRunning: (sessionId) =>');
-    expect(coordinatorSource).toContain('if (!sess) return false;');
+    expect(source).toContain('lookupStableSessionForTurnBoundary');
+    expect(source).toContain("status: 'unavailable'");
+    expect(coordinatorSource).toContain("if (lookup.status === 'unavailable') return undefined;");
+    expect(coordinatorSource).toContain("if (lookup.status === 'missing') return false;");
   });
 
   it('does not latch product-turn bookkeeping on background status events', () => {
@@ -695,18 +698,25 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {
-    const stableLookupStart = source.indexOf('const getStableSessionForTurnBoundary =');
-    const stableLookupEnd = source.indexOf('\n  const reconcileSessionTurnIdle =', stableLookupStart);
+    const stableLookupStart = source.indexOf('const lookupStableSessionForTurnBoundary =');
+    const stableLookupEnd = source.indexOf('\n  const getStableSessionForTurnBoundary =', stableLookupStart);
     const stableLookupSource = source.slice(stableLookupStart, stableLookupEnd);
-    const reconcileStart = stableLookupEnd;
+    const reconcileStart = source.indexOf('\n  const reconcileSessionTurnIdle =');
     const reconcileEnd = source.indexOf('\n\n  const inputCoordinator:', reconcileStart);
     const reconcileSource = source.slice(reconcileStart, reconcileEnd);
 
     expect(stableLookupStart).toBeGreaterThanOrEqual(0);
     expect(stableLookupEnd).toBeGreaterThan(stableLookupStart);
     expect(stableLookupSource).toContain('wiredSessionsById.get(sessionId)?.session');
-    expectOrder(stableLookupSource, 'if (wired) return wired;', 'return maker.getSession(sessionId) ?? null;');
-    expect(stableLookupSource).toContain('return null;');
+    expectOrder(
+      stableLookupSource,
+      'if (wired) return { status: \'found\', session: wired };',
+      'return sess ? { status: \'found\', session: sess } : { status: \'missing\' };',
+    );
+    expect(stableLookupSource).toContain("return { status: 'unavailable' };");
+    expect(source).toContain(
+      "return lookup.status === 'found' ? lookup.session : null;",
+    );
 
     expect(reconcileStart).toBeGreaterThanOrEqual(0);
     expect(reconcileEnd).toBeGreaterThan(reconcileStart);
