@@ -6523,7 +6523,9 @@
       "loading": "加载分支中…",
       "loadFailed": "分支列表加载失败，点此重试",
       "currentTooltip": "当前分支",
-      "sourceTooltip": "worktree 源分支"
+      "sourceTooltip": "worktree 源分支",
+      "searchPlaceholder": "搜索分支",
+      "noMatch": "无匹配分支"
     },
     "folderPicker": {
       "selectFolder": "选择文件夹",
