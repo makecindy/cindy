@@ -575,11 +575,12 @@ function BranchWorktreeChip({
                   placeholder={t('newChat.branchChip.searchPlaceholder')}
                   aria-label={t('newChat.branchChip.searchPlaceholder')}
                   className={cn(
-                    'h-8 w-full rounded-[8px] border border-border bg-transparent',
+                    'h-8 w-full rounded-full border border-border bg-transparent',
                     'pl-7 pr-2 text-13 text-foreground outline-none',
-                    // DESIGN.md §4 Inputs & Forms:input focus 走 --focus-ring 一对
-                    // token(对齐 FileFilterInput),不开单独的 primary 边框。
-                    'placeholder:text-muted-foreground',
+                    // DESIGN.md §4 Inputs & Forms:单行 input 一律 pill 圆角;
+                    // placeholder 走 --text-placeholder(过浅会像已填写内容);
+                    // focus 走 --focus-ring 一对 token(对齐 FileFilterInput)。
+                    'placeholder:text-[var(--text-placeholder)]',
                     'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
                   )}
                 />
