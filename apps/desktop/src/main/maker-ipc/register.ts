@@ -3793,6 +3793,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       ) {
         return;
       }
+      if (isFencedStaleSessionTerminal(session.id, event)) {
+        log.debug('ignored stale terminal after leftover turn reclaim', {
+          sessionId: session.id,
+          eventType: event.type,
+          sessionTurnGeneration: event.sessionTurnGeneration ?? null,
+          sessionInstanceId: event.sessionInstanceId ?? null,
+        });
+        return;
+      }
       // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
       // terminal-only 路径可能首个事件就是 error。Session 已把 host-owned token
       // 盖到事件上，首个匹配 token 的事件即视为 provider accepted。
@@ -3873,15 +3882,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       let shouldMarkTurnTerminalIdleAfterBroadcast = false;
       let completedTurnWallClockMs: number | undefined;
       const isContinuationBoundary = isTurnContinuationBoundaryEvent(event);
-      if (!isContinuationBoundary && isFencedStaleSessionTerminal(session.id, event)) {
-        log.debug('ignored stale terminal after leftover turn reclaim', {
-          sessionId: session.id,
-          eventType: event.type,
-          sessionTurnGeneration: event.sessionTurnGeneration ?? null,
-          sessionInstanceId: event.sessionInstanceId ?? null,
-        });
-        return;
-      }
       // 探针:continuation 边界命中会跳过 status idle / ended 写 / tracker idle,
       // 若 claim 悬挂会导致 UI 永久「正在生成」。区分「claim 悬挂」与「done 未到达」。
       if (isContinuationBoundary && (event.type === 'done' || event.type === 'status')) {

@@ -73,6 +73,11 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       wireSessionSource,
       'isFencedStaleSessionTerminal(session.id, event)',
+      'consumeClaudeOpusPlanMismatch(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
       'finalizeTurnChangeSet(',
     );
     expectOrder(

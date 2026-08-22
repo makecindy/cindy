@@ -1972,7 +1972,11 @@ export class Session {
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
       this.clearTurnControl(resolvedGeneration);
     }
-    if (isTerminal && !isBackgroundEvent) {
+    const isLeftoverProductTerminal =
+      !isBackgroundEvent &&
+      resolvedGeneration < this.turnGeneration &&
+      (isTerminal || this.isIdleStatusEvent(event));
+    if (isTerminal && !isBackgroundEvent && !isLeftoverProductTerminal) {
       try {
         const pending = this.turnLifecycleObserver?.onTerminal({
           turnGeneration: resolvedGeneration,
@@ -1994,8 +1998,10 @@ export class Session {
         });
       }
     }
-    for (const listener of this.eventListeners) {
-      try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
+    if (!isLeftoverProductTerminal) {
+      for (const listener of this.eventListeners) {
+        try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
+      }
     }
     // A late child update belongs to the completed parent turn. It remains
     // visible to listeners, but must not clear/adopt the current turn or keep
