@@ -41,6 +41,10 @@ export interface InlineReferenceChipProps {
    * `false`:那里 chip 是一个整体被选中 / 删除的原子节点,内部文字不参与 selection。
    */
   textSelectable?: boolean;
+  /** Optional overlay button rendered at the top-right corner of the chip.
+   *  The chip applies `group` and `relative` to its root when this prop is set,
+   *  enabling group-hover reveal on the button. */
+  removeButton?: ReactNode;
 }
 
 /** Theme-aware 12px reference pill with a formal full-content tooltip. */
@@ -59,10 +63,12 @@ export function InlineReferenceChip({
   labelClassName,
   splitPaneRouteAction = false,
   textSelectable = true,
+  removeButton,
 }: InlineReferenceChipProps) {
   const interactive = Boolean(onClick || onContextMenu);
   const sharedClassName = cn(
     'inline-flex min-w-0 max-w-full items-center',
+    removeButton && 'group relative',
     !textSelectable && 'select-none',
     'gap-1.5 rounded-full border px-2 py-0.5 text-12 font-normal leading-5',
     'bg-[var(--surface-chip)] text-[var(--text-primary)]',
@@ -113,6 +119,7 @@ export function InlineReferenceChip({
       data-split-pane-route-action={splitPaneRouteAction ? '' : undefined}
     >
       {contents}
+      {removeButton}
     </span>
   );
 
