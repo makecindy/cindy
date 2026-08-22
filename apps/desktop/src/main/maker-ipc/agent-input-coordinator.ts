@@ -677,6 +677,7 @@ interface PendingAutoResumeRecovery {
 function createInitialInputState(
   generation = 0,
   clearBoundaryMs: number | null = null,
+  fencedStaleTerminal: { instanceId: string; generation: number } | null = null,
 ): SessionInputState {
   return {
     pendingQueue: [],
@@ -709,7 +710,7 @@ function createInitialInputState(
     sessionRunningRetryDelayMs: null,
     sessionRunningRetryToken: null,
     staleLiveIdleSinceMs: null,
-    fencedStaleTerminal: null,
+    fencedStaleTerminal,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -2964,7 +2965,10 @@ export class AgentInputCoordinator {
     // 显式清上下文:强制开启持久化闸门,让 emit 写出空快照(删行),
     // 即使此前该会话从未触发恢复(否则旧快照残留,下次打开会诈尸)。
     this.restoredQueueSessions.add(sessionId);
-    this.states.set(sessionId, createInitialInputState(prev.generation + 1, clearBoundaryMs));
+    this.states.set(
+      sessionId,
+      createInitialInputState(prev.generation + 1, clearBoundaryMs, prev.fencedStaleTerminal),
+    );
     this.emit(sessionId);
     return this.getProjection(sessionId);
   }
