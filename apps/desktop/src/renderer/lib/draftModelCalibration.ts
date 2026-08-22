@@ -279,12 +279,19 @@ export function resolveDraftSessionProviderId({
   // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含
   // claude-opus-5。modelDefault 是 anthropic，但 agentDefault 仍是 xd；若只比较前者
   // 就会错误地省略 providerId，main 随后拿 gateway key 启动 XD 路由(issue #1196)。
-  const agentDefaultProviderId = nativeDefaultSourceId(
-    // main 的 spawn 默认不读取用户的 suspended 开关；这里必须保留 suspended 来源，
-    // 否则 UI 停用 XD 后会把 agentDefault 错算成 Anthropic，再次把必需的来源省略掉。
-    connectedProvidersForAgent([...providers], agent, { includeSuspended: true }),
-    agent,
-  );
+  // pi 例外：pi 的 providerId=null 在 main 恒路由 Cindy 网关（PI_PROVIDER_ID），不按 agent
+  // 原生默认回退。nativeDefaultSourceId 在“仅 BYOM 已连接”时会把 rail[0]（该 BYOM）误算
+  // 成 agent 默认，这里因此误判“可安全省略”→ 会话发往网关，未登录 Cindy 时鉴权失败。
+  // 所以 pi 的“null 落点”恒为网关（renderer 侧即 'xd'），非网关来源必须显式钉住。
+  const agentDefaultProviderId =
+    agent === 'pi'
+      ? 'xd'
+      : nativeDefaultSourceId(
+          // main 的 spawn 默认不读取用户的 suspended 开关；这里必须保留 suspended 来源，
+          // 否则 UI 停用 XD 后会把 agentDefault 错算成 Anthropic，再次把必需的来源省略掉。
+          connectedProvidersForAgent([...providers], agent, { includeSuspended: true }),
+          agent,
+        );
   return modelDefaultProviderId === effectiveProviderId &&
     agentDefaultProviderId === effectiveProviderId
     ? null
