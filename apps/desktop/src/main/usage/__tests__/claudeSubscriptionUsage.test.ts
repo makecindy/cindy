@@ -89,6 +89,27 @@ describe('parseClaudeOAuthUsageResponse', () => {
     ]);
   });
 
+  it('parses legacy seven_day_fable top-level key into a Fable scoped window (#3244)', () => {
+    // 旧 schema 兜底原先只列了 Opus/Sonnet,漏了 Fable,导致走旧端点或降级
+    // 快照时 Fable 周限不显示(同环境 Opus/Sonnet 正常)。
+    const snapshot = parseClaudeOAuthUsageResponse({
+      five_hour: { utilization: 10, resets_at: '2026-04-11T07:00:00Z' },
+      seven_day: { utilization: 13, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_opus: { utilization: 5, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_sonnet: { utilization: 1, resets_at: '2026-04-14T07:00:00Z' },
+      seven_day_fable: { utilization: 87, resets_at: '2026-04-14T07:00:00Z' },
+    }, NOW);
+    expect(snapshot?.scoped).toEqual([
+      expect.objectContaining({ modelDisplayName: 'Opus', utilization: 5 }),
+      expect.objectContaining({ modelDisplayName: 'Sonnet', utilization: 1 }),
+      expect.objectContaining({ modelDisplayName: 'Fable', utilization: 87 }),
+    ]);
+    // 匹配器也能命中这个 legacy Fable 窗口
+    expect(
+      matchScopedWindowForModel(snapshot?.scoped, 'claude-fable-5')?.utilization,
+    ).toBe(87);
+  });
+
   it('parses enabled extra usage', () => {
     const snapshot = parseClaudeOAuthUsageResponse({
       five_hour: { utilization: 10 },
@@ -247,6 +268,20 @@ describe('claudeModelFamily / matchScopedWindowForModel', () => {
     expect(matchScopedWindowForModel(scoped, 'claude-opus-4-8')?.utilization).toBe(5);
     expect(matchScopedWindowForModel(scoped, 'claude-sonnet-4-6')).toBeNull();
     expect(matchScopedWindowForModel(undefined, 'claude-fable-5')).toBeNull();
+  });
+
+  it('matches Fable scoped window across display_name variants (#3244)', () => {
+    // 端点对 display_name 的口径历史上有 "Fable" / "Claude Fable" / "Fable 5"
+    // 等形态;精确等于会把变体漏掉,导致 Fable 周限不显示而 Opus/Sonnet 正常。
+    const scoped = [
+      { utilization: 30, modelDisplayName: 'Claude Fable' },
+      { utilization: 5, modelDisplayName: 'Opus' },
+    ];
+    expect(matchScopedWindowForModel(scoped, 'claude-fable-5')?.utilization).toBe(30);
+    const scoped2 = [
+      { utilization: 41, modelDisplayName: 'Fable 5' },
+    ];
+    expect(matchScopedWindowForModel(scoped2, 'claude-fable-5-20250101')?.utilization).toBe(41);
   });
 });
 
