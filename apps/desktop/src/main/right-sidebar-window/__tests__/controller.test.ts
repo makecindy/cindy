@@ -367,6 +367,25 @@ describe('open / close (hide-reuse)', () => {
     expect(h.controller.getState().open).toBe(true);
   });
 
+  it('hot reopen after a focus switch records the visible host', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+
+    h.controller.close();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+
+    h.controller.open();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+    expect(h.controller.getState().hostSessionId).toBe('s2');
+  });
+
   it('open repairs stale controller visibility using the native window state', () => {
     const h = makeHarness({ detached: true });
     h.controller.prewarm();

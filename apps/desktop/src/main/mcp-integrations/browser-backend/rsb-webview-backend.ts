@@ -1229,7 +1229,7 @@ export class RsbWebviewBackend implements BrowserBackend {
     if (ensureHost) {
       try {
         this.assertActive();
-        await ensureHost();
+        await ensureHost(this.resolveSessionId(req) ?? undefined);
         this.assertActive();
       } catch (err) {
         // Window failed to come up (ready timeout etc.) — fall through, the

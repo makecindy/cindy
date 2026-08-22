@@ -2040,6 +2040,30 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
       url: 'https://example.com',
     } as never);
     expect(ensureHost).toHaveBeenCalledTimes(1);
+    expect(ensureHost).toHaveBeenCalledWith('s1');
+    expect(res.ok).toBe(true);
+  });
+
+  it('direct action asks ensureHost for the request session, not the focused one', async () => {
+    const ensureHost = vi.fn(async () => undefined);
+    const wc = fakeWc();
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's2',
+      bridge: { getHostWebContents: () => null, ensureHost, logger: logger() },
+      logger: logger(),
+    });
+    const res = await backend.call({
+      action: 'navigate',
+      targetId: 't1',
+      url: 'https://example.com',
+      __mcpSessionId: 's1',
+    } as never);
+    expect(ensureHost).toHaveBeenCalledWith('s1');
     expect(res.ok).toBe(true);
   });
 

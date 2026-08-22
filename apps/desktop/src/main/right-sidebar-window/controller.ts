@@ -608,6 +608,7 @@ export class RsbWindowController {
     // 隐藏复用期间的 passive 命令不能在用户看不见时改动子窗口 store；
     // 窗口重新显示后按原顺序统一交付。
     this.flushDeferredCommandsToDetachedHost();
+    if (this.lastContext) this.rememberLastHostSession(this.lastContext);
     this.broadcast();
   }
 
@@ -640,6 +641,7 @@ export class RsbWindowController {
       this.deps.onWindowWillShow?.(win);
       this.visible = true;
       this.pendingOpen = false;
+      if (this.lastContext) this.rememberLastHostSession(this.lastContext);
     } else {
       this.visible = false;
       this.deps.onWindowHidden?.(win);
