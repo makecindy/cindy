@@ -219,6 +219,25 @@ function hasNestedScrollableAncestorThatCanScrollUp(
   return false;
 }
 
+function hasNestedScrollableAncestorThatCanScrollDown(
+  root: HTMLElement,
+  target: EventTarget | null,
+): boolean {
+  let el = eventTargetElement(target);
+  while (el && el !== root) {
+    if (!root.contains(el)) return false;
+    const overflowY = window.getComputedStyle(el).overflowY;
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    const canScroll =
+      (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') &&
+      maxScroll > SCROLL_DIRECTION_DEAD_ZONE_PX &&
+      el.scrollTop < maxScroll - SCROLL_DIRECTION_DEAD_ZONE_PX;
+    if (canScroll) return true;
+    el = el.parentElement;
+  }
+  return false;
+}
+
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
@@ -298,6 +317,9 @@ import {
   readFollowLatestRequestKey,
   shouldBumpSendFollowCancelOnScroll,
   subscribeFollowLatestRequests,
+  REPIN_AT_BOTTOM_PX,
+  shouldRepinOnDownIntent,
+  shouldRepinOnWheel,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
@@ -1493,12 +1515,14 @@ export function buildRenderItems(
       // 不把后续计划事件带进来，避免改变「正在复核哪张 insertion」的语义。
       const validationMessages = [
         ...prefix,
-        ...messages.slice(index + 1).filter(
-          (message) =>
-            message.role === 'tool_result' &&
-            typeof message.toolUseId === 'string' &&
-            prefixPlanToolUseIds.has(message.toolUseId),
-        ),
+        ...messages
+          .slice(index + 1)
+          .filter(
+            (message) =>
+              message.role === 'tool_result' &&
+              typeof message.toolUseId === 'string' &&
+              prefixPlanToolUseIds.has(message.toolUseId),
+          ),
       ];
       const stateAtInsertion = getLatestMessageTodoState(validationMessages, {
         taskHistoryMayBeIncomplete: true,
@@ -3917,6 +3941,21 @@ export function MessageStream({
     if (firstVisibleItemKey !== null && wasCovering && !windowCoversEnd) {
       isNearBottomRef.current = false;
       setIsNearBottom(false);
+      return;
+    }
+    // 锚定窗向下扩到真正盖住尾部,且用户已经贴在当前窗口底 → 切回默认尾窗并
+    // 恢复跟随。扩窗发生在本次 scroll 之后,同一帧的 handleScroll 还看不到
+    // windowCoversEnd=true,没有下一次滚动时会永远停在「已到底、但不跟」。
+    if (!wasCovering && windowCoversEnd && firstVisibleItemKey !== null) {
+      const el = scrollRef.current;
+      if (!el) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom <= REPIN_AT_BOTTOM_PX) {
+        isNearBottomRef.current = true;
+        setIsNearBottom(true);
+        setUnreadCount(0);
+        setFirstVisibleItemKey(null);
+      }
     }
   }, [firstVisibleItemKey, windowCoversEnd]);
 
@@ -4159,6 +4198,17 @@ export function MessageStream({
     setIsNearBottom(false);
   }, [sessionId]);
 
+  // 与 unpin 对称:用户已经贴死底部时的向下意图恢复跟随。不经过 scroll 事件 —
+  // 贴死底部后再往下滚通常不再改变 scrollTop。历史切片的底不是会话尾,不能从
+  // 那里开始跟随(与 resolveEffectiveNearBottom 同口径)。
+  const pinAutoFollowForUserDownIntent = useCallback(() => {
+    if (!windowCoversEndRef.current) return;
+    if (isNearBottomRef.current) return;
+    isNearBottomRef.current = true;
+    setIsNearBottom(true);
+    setUnreadCount(0);
+  }, []);
+
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
   // 与 NewMessageIndicator 互斥(它有未读时优先)。state 用 setter 直接控制,
@@ -4217,14 +4267,14 @@ export function MessageStream({
   );
   // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
   const clearChipJumpSuppression = useCallback(() => {
-    // 跳底会乐观置位贴底。接管后若仍贴底：流式 ResizeObserver 会 pinToBottom 拽回
-    // 视口，延期删除重放也会被补偿 effect 直接跳过。有进行中的 chip / focus /
-    // 跳底 generation 时一律解除，不只在已有延期删除时。
+    // 只在打断真正的导航跳转(chip / focus / 延期删除补偿)时解除跟随。
+    // 流式 pinToBottom 也会打开 programmaticScrollRef,把它算进接管条件会让
+    // 生成期间任意滚轮或点滚动条都把跟随掐死;人已经在底部时再也产生不了
+    // 向下 scroll,跟随就恢复不了。想离开底部走 wheel / 触控 / 键盘的上滚意图。
     if (
       deferredDeleteCompensationRef.current ||
       chipJumpGenerationRef.current !== null ||
-      focusJumpRef.current ||
-      programmaticScrollRef.current
+      focusJumpRef.current
     ) {
       unpinAutoFollowForUserUpIntent();
     }
@@ -4390,6 +4440,20 @@ export function MessageStream({
           unpinAutoFollowForUserUpIntent();
         }
         triggerUserIntentFill();
+        return;
+      }
+      if (event.deltaY > 0) {
+        if (hasNestedScrollableAncestorThatCanScrollDown(root, event.target)) return;
+        const distanceFromBottom = root.scrollHeight - root.scrollTop - root.clientHeight;
+        if (
+          shouldRepinOnWheel({
+            deltaX: event.deltaX,
+            deltaY: event.deltaY,
+            distanceFromBottom,
+          })
+        ) {
+          pinAutoFollowForUserDownIntent();
+        }
       }
     };
     const onTouchStart = (event: TouchEvent) => {
@@ -4412,6 +4476,15 @@ export function MessageStream({
           unpinAutoFollowForUserUpIntent();
         }
         triggerUserIntentFill();
+        return;
+      }
+      if (startY - currentY > TOUCH_HISTORY_INTENT_THRESHOLD_PX) {
+        userHistoryTouchStartYRef.current = currentY;
+        if (hasNestedScrollableAncestorThatCanScrollDown(root, event.target)) return;
+        const distanceFromBottom = root.scrollHeight - root.scrollTop - root.clientHeight;
+        if (shouldRepinOnDownIntent({ distanceFromBottom })) {
+          pinAutoFollowForUserDownIntent();
+        }
       }
     };
     const onTouchEnd = () => {
@@ -4434,7 +4507,12 @@ export function MessageStream({
       root.removeEventListener('touchcancel', onTouchEnd);
       root.removeEventListener('mousedown', onMouseDown);
     };
-  }, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);
+  }, [
+    clearChipJumpSuppression,
+    pinAutoFollowForUserDownIntent,
+    triggerUserIntentFill,
+    unpinAutoFollowForUserUpIntent,
+  ]);
   useEffect(() => {
     const onHistoryNavigationKey = (event: KeyboardEvent) => {
       if (!ownsHardwareScrollActions) return;

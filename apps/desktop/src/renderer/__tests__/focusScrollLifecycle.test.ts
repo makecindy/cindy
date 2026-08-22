@@ -371,13 +371,15 @@ describe('MessageStream focus cancellation wiring', () => {
   it('cancels chip jumps on scrollbar mousedown as well as wheel and touch', () => {
     const takeover = sourceBetween(
       'const onWheel = (event: WheelEvent) => {',
-      '}, [clearChipJumpSuppression, triggerUserIntentFill, unpinAutoFollowForUserUpIntent]);',
+      '}, [\n    clearChipJumpSuppression,\n    pinAutoFollowForUserDownIntent,\n    triggerUserIntentFill,\n    unpinAutoFollowForUserUpIntent,\n  ]);',
     );
     expect(takeover).toContain('clearChipJumpSuppression();');
     expect(takeover).toContain("root.addEventListener('mousedown', onMouseDown)");
+    expect(takeover).toContain('shouldRepinOnWheel({');
+    expect(takeover).toContain('pinAutoFollowForUserDownIntent()');
   });
 
-  it('uses message-level neighbors only when the deleted child\'s render item survives', () => {
+  it("uses message-level neighbors only when the deleted child's render item survives", () => {
     const compensation = sourceBetween(
       '// ── 删除靠前 message 后的视口保位（#2289）──',
       '// ── post-load auto-expand ──',
@@ -390,9 +392,7 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(compensation).toContain('resolveDeleteCompensationLanding(');
     expect(compensation).toContain('queryVisibleAggregateContainer(root, survivorMessageId)');
     expect(compensation).toContain('toRenderItemViewportSnapshot(');
-    expect(compensation).not.toContain(
-      'if (anchor.messageClientId && snapshotMessageGone) {',
-    );
+    expect(compensation).not.toContain('if (anchor.messageClientId && snapshotMessageGone) {');
   });
 
   it('finishes an older chip or rail navigation before starting a jump to bottom', () => {
@@ -417,8 +417,9 @@ describe('MessageStream focus cancellation wiring', () => {
       'const settleChipJump = useCallback(',
     );
     expect(takeover).toContain(
-      'deferredDeleteCompensationRef.current ||\n      chipJumpGenerationRef.current !== null ||\n      focusJumpRef.current ||\n      programmaticScrollRef.current',
+      'deferredDeleteCompensationRef.current ||\n      chipJumpGenerationRef.current !== null ||\n      focusJumpRef.current',
     );
+    expect(takeover).not.toContain('focusJumpRef.current ||\n      programmaticScrollRef.current');
     expect(takeover).toContain('unpinAutoFollowForUserUpIntent()');
     expect(takeover).toContain('if (focusJumpRef.current)');
     expect(takeover).toContain('cancelFocusJump()');
