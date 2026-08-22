@@ -1120,6 +1120,18 @@ describe('setContext / routeCommand', () => {
     expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
   });
 
+  it('starts a bounded waiter when allowOpen arrives before any context', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getContext()?.sessionId).not.toBe('s2');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
+  });
+
   it('releases a visible-window pin when allowOpen host never resolves', async () => {
     const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
     h.controller.setContext({ ...ctx, sessionId: 's2' });

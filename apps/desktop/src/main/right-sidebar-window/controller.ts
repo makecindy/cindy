@@ -482,13 +482,13 @@ export class RsbWindowController {
     }
     if (!this.canDispatchCommand(command)) {
       this.enqueueDeferredCommand(command);
-      if (allowOpen && this.lastContext?.available) {
+      if (allowOpen && hostSessionId && this.pinnedSessionId === hostSessionId) {
         if (!this.isOpen() || !this.presentationReady) {
           this.open({
             userInitiated,
-            ...(hostSessionId ? { sessionId: hostSessionId } : {}),
+            sessionId: hostSessionId,
           });
-        } else if (hostSessionId && this.pinnedSessionId === hostSessionId) {
+        } else {
           void this.waitForHostSession(hostSessionId).catch(() => {
             // 窗口已可见时不会再走 open()；同样用有界 waiter 释放失败 pin。
           });
