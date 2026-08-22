@@ -14,9 +14,43 @@ export interface WindowThemeSnapshot {
   mode: AppThemeMode;
   resolvedIsDark?: boolean;
   systemIsDark?: boolean;
+  familyId?: string;
+  systemModeFollowsSystem?: boolean;
+}
+
+export interface WindowThemeVibrancyPayload {
+  familyId: string;
+  isDark: boolean;
+  mode?: AppThemeMode;
+  systemModeFollowsSystem?: boolean;
 }
 
 const DEFAULTS: WindowThemeSnapshot = { mode: 'system' };
+const MAX_FAMILY_ID_LENGTH = 512;
+
+export function parseWindowThemeVibrancyPayload(raw: unknown): WindowThemeVibrancyPayload | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  if (
+    typeof value.familyId !== 'string'
+    || value.familyId.trim().length === 0
+    || value.familyId.length > MAX_FAMILY_ID_LENGTH
+    || typeof value.isDark !== 'boolean'
+    || (value.mode !== undefined && !isAppThemeMode(value.mode))
+    || (
+      value.systemModeFollowsSystem !== undefined
+      && typeof value.systemModeFollowsSystem !== 'boolean'
+    )
+  ) return null;
+  return {
+    familyId: value.familyId,
+    isDark: value.isDark,
+    ...(isAppThemeMode(value.mode) ? { mode: value.mode } : {}),
+    ...(typeof value.systemModeFollowsSystem === 'boolean'
+      ? { systemModeFollowsSystem: value.systemModeFollowsSystem }
+      : {}),
+  };
+}
 
 function normalize(raw: unknown): WindowThemeSnapshot {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
@@ -30,6 +64,16 @@ function normalize(raw: unknown): WindowThemeSnapshot {
   if (typeof value.systemIsDark === 'boolean') {
     normalized.systemIsDark = value.systemIsDark;
   }
+  if (
+    typeof value.familyId === 'string'
+    && value.familyId.trim().length > 0
+    && value.familyId.length <= MAX_FAMILY_ID_LENGTH
+  ) {
+    normalized.familyId = value.familyId;
+  }
+  if (typeof value.systemModeFollowsSystem === 'boolean') {
+    normalized.systemModeFollowsSystem = value.systemModeFollowsSystem;
+  }
   return normalized;
 }
 
@@ -40,7 +84,10 @@ function resolveSnapshotForSystem(
   if (snapshot.mode !== 'system') return snapshot;
   if (
     snapshot.resolvedIsDark !== undefined
-    && snapshot.systemIsDark === currentSystemIsDark
+    && (
+      snapshot.systemModeFollowsSystem === false
+      || snapshot.systemIsDark === currentSystemIsDark
+    )
   ) {
     return {
       ...snapshot,
@@ -69,7 +116,12 @@ export function readWindowThemeSnapshot(): WindowThemeSnapshot {
   return resolveSnapshotForSystem(store.read(), nativeTheme.shouldUseDarkColors);
 }
 
-export function writeWindowThemeSnapshot(mode: AppThemeMode, resolvedIsDark: boolean): void {
+export function writeWindowThemeSnapshot(
+  mode: AppThemeMode,
+  resolvedIsDark: boolean,
+  familyId: string,
+  systemModeFollowsSystem: boolean,
+): void {
   try {
     const systemIsDark = nativeTheme.shouldUseDarkColors;
     const current = store.read();
@@ -77,8 +129,16 @@ export function writeWindowThemeSnapshot(mode: AppThemeMode, resolvedIsDark: boo
       current.mode === mode
       && current.resolvedIsDark === resolvedIsDark
       && current.systemIsDark === systemIsDark
+      && current.familyId === familyId
+      && current.systemModeFollowsSystem === systemModeFollowsSystem
     ) return;
-    store.writePatch({ mode, resolvedIsDark, systemIsDark });
+    store.writePatch({
+      mode,
+      resolvedIsDark,
+      systemIsDark,
+      familyId,
+      systemModeFollowsSystem,
+    });
   } catch (error) {
     // Theme rendering must remain available even if the best-effort restart mirror cannot persist.
     log.warn('window theme mode write failed', {

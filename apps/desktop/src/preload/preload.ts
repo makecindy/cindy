@@ -2373,8 +2373,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
+      systemModeFollowsSystem: boolean,
     ): void => {
-      ipcRenderer.send('theme:apply-vibrancy', { familyId, isDark, mode });
+      ipcRenderer.send('theme:apply-vibrancy', {
+        familyId,
+        isDark,
+        mode,
+        systemModeFollowsSystem,
+      });
     },
   },
   onAppUpdateProgress: fanOutAppUpdateProgress,

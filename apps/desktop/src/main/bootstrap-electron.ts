@@ -20,12 +20,14 @@ import {
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import {
-  isAppThemeMode,
   rememberResolvedAppTheme,
   resolveAppThemeIsDark,
-  type AppThemeMode,
 } from './resolved-app-theme';
-import { readWindowThemeSnapshot, writeWindowThemeSnapshot } from './window-theme-mode-store';
+import {
+  parseWindowThemeVibrancyPayload,
+  readWindowThemeSnapshot,
+  writeWindowThemeSnapshot,
+} from './window-theme-mode-store';
 import { createWindowBackdropMaterialArgument } from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -3728,16 +3730,21 @@ const registerIpcHandlers = () => {
 
   ipcMain.on(
     'theme:apply-vibrancy',
-    (
-      _event,
-      payload: {
-        familyId: string;
-        isDark: boolean;
-        mode?: AppThemeMode;
-      },
-    ) => {
-      if (process.platform === 'win32' && isAppThemeMode(payload.mode)) {
-        writeWindowThemeSnapshot(payload.mode, payload.isDark);
+    (event, rawPayload: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const payload = parseWindowThemeVibrancyPayload(rawPayload);
+      if (!payload) return;
+      if (
+        process.platform === 'win32'
+        && payload.mode !== undefined
+        && payload.systemModeFollowsSystem !== undefined
+      ) {
+        writeWindowThemeSnapshot(
+          payload.mode,
+          payload.isDark,
+          payload.familyId,
+          payload.systemModeFollowsSystem,
+        );
       }
       rememberResolvedAppTheme(payload.isDark);
       applyWindowVibrancy(payload.familyId, payload.isDark);

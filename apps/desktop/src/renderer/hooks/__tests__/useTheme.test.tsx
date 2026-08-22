@@ -63,7 +63,14 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     localStorage.setItem('theme', 'dark');
     renderHook(() => useTheme(), { wrapper });
 
-    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark');
+    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark', true);
+  });
+
+  it('把单变体家族标记为不随系统模式切换', () => {
+    localStorage.setItem('theme.familyId', 'eclipse');
+    renderHook(() => useTheme(), { wrapper });
+
+    expect(applyVibrancyMock).toHaveBeenCalledWith('eclipse', true, 'system', false);
   });
 
   it('系统深色下真首启按亮色门的实际主题上报 backing，门结束后恢复深色', () => {
@@ -71,12 +78,12 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     expect(getInitialThemeVariant().theme.type).toBe('light');
 
     renderHook(() => useTheme(), { wrapper });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system');
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system', true);
 
     act(() => {
       endLoginFirstLaunchLightGate();
     });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system');
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system', true);
   });
 
   it('其他窗口切 theme → storage 事件 → 本窗口 theme state 跟随并重应用', () => {
