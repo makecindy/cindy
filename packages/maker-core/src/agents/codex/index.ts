@@ -2907,13 +2907,10 @@ export class CodexAgent extends BaseAgent {
     });
 
     // ── Maker Memory: 启动时预拉 MEMORY.md 索引 + 写入规范段 ────────────────
-    // thread/start 仍把 developerInstructions 写入新 thread; thread/resume 在普通非 proxy
-    // 路径只在 host 明确告知历史未含产品 prompt 时补发一次,避免常规 resume 重复堆积。
-    // WS thread 恢复时则始终携带当前值:Codex 的 SessionMeta 不持久化该字段,冷恢复若只
-    // 依赖历史里的旧 developer message,后续 compact 重建 canonical context 时会丢产品
-    // prompt。Codex 0.145 对仍在内存中的 loaded thread 会忽略 resume override,且冷恢复
-    // 首轮的 steady-state diff 不补一条发生变化的 plain developer_instructions；正常
-    // resume 沿用同一份文本时历史里已有它,compact 也会从当前 cold-resume 配置重建。
+    // thread/start 仍把 developerInstructions 写入新 thread; 所有非 proxy 的
+    // thread/resume 也携带当前快照。历史 marker 只能表示曾经写入过产品 prompt，不能
+    // 判断内容是否已更新。Codex 0.145 对仍在内存中的 loaded thread 会忽略 resume
+    // override；冷恢复则用当前配置重建 compact 后的 canonical developer context。
     // proxy active 时两条路径都用同一份构建结果登记到 registry。跟 userPrompt 同语义 — 启动时快照,跨 session 不实时同步。
     let makerMemoryRules = '';
     let makerMemoryIndex = '';
@@ -5052,14 +5049,10 @@ export class CodexAgent extends BaseAgent {
           });
         }
       }
-      // WS proxy 看不到请求体,不能像 HTTP registry 通道那样逐请求补 prompt。即使历史
-      // marker=true,冷恢复时也必须把当前值重新写进 Codex 的 session configuration,
-      // 保证自动 compact 后构建出来的 canonical developer context 仍含 Cindy 指令。
-      // loaded-thread resume 在 Codex 0.145 会忽略 override；同文本仍由既有历史保留。
+      // 历史 marker 无法识别 prompt 内容更新，所以每次 native resume 都携带当前快照。
+      // loaded-thread resume 在 Codex 0.145 会忽略 override；冷恢复会刷新 session 配置。
       const shouldSendNativeDeveloperInstructions =
-        !!developerInstructions
-        && !useProxyChannel
-        && (threadUsesWebSocket || opts.codexHistoryHasProductPrompt !== true);
+        !!developerInstructions && !useProxyChannel;
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
         ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
