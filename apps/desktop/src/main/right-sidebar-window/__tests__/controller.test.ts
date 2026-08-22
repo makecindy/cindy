@@ -332,6 +332,21 @@ describe('open / close (hide-reuse)', () => {
     expect(h.controller.getState().open).toBe(true);
   });
 
+  it('native minimize releases a cross-session pin', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    expect(h.controller.getContext()?.sessionId).toBe('s1');
+    win.emitWindowEvent('minimize');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
   it('native taskbar restore updates the main-window state mirror', () => {
     const h = makeHarness({ detached: true });
     h.controller.prewarm();

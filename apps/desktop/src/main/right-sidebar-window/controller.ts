@@ -701,6 +701,7 @@ export class RsbWindowController {
     } else {
       this.visible = false;
       this.deps.onWindowHidden?.(win);
+      this.clearPinnedSession();
     }
     try {
       this.deps.sendToWindow(win, RSB_WINDOW_VISIBILITY_CHANGED_CHANNEL, { visible });
