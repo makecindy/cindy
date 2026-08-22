@@ -921,7 +921,12 @@ export class RsbWindowController {
     if (!sessionId) return;
     if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
       // 已经在目标宿主上。再钉一次会挡住之后的 setContext。
-      if (this.pinnedSessionId === sessionId) this.clearPinnedSession();
+      // 若 pin 还钉着别人，当前宿主的新请求要先把它拆掉。
+      if (this.pinnedSessionId && this.pinnedSessionId !== sessionId) {
+        this.replacePinnedSession(null);
+      } else if (this.pinnedSessionId === sessionId) {
+        this.clearPinnedSession();
+      }
       return;
     }
     if (this.pinnedSessionId !== sessionId) this.replacePinnedSession(sessionId);

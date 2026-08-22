@@ -1396,6 +1396,25 @@ describe('setContext / routeCommand', () => {
     expect(h.controller.getContext()?.sessionId).toBe('s2');
   });
 
+  it('lets a command for the visible host replace a foreign async pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.routeCommand(terminalRequest('s1'));
+    await expect(h.controller.routeCommand(terminalRequest('s2'))).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).resolves.toBe('queued');
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
   it('cancels an earlier ready waiter when a later pin takes the host', async () => {
     const h = makeHarness({ detached: true }, {
       resolveHostContext: (sessionId) => {
