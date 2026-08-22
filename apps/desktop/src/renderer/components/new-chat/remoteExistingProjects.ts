@@ -15,6 +15,7 @@
 
 import { extractDisplayName } from '@/features/cc-agent/lib/projectGrouping';
 import type { Session } from '@/lib/ccAgent.types';
+import { parseRemoteHostRef } from '../../../shared/remoteHostRef';
 
 export interface ExistingRemoteProject {
   /** 添加时透传给 onProjectAdded 的原始路径(device-link=被控端 native 形态;SSH=远端 POSIX)。 */
@@ -71,11 +72,29 @@ export function recentWorkdirsToProjects(
 export function sshExistingProjects(
   sessions: readonly Session[],
   hostId: string,
+  knownHostRefs: readonly string[] = [],
 ): ExistingRemoteProject[] {
+  const parsed = parseRemoteHostRef(hostId);
+  const alias = parsed?.namespace === 'ssh-config' ? parsed.id : null;
+  // Ordinary aliases are unambiguous. A reserved-prefix alias needs the
+  // current host list to distinguish an old SSH spelling from a real Cindy
+  // profile with the same HostRef; without that list stay conservative.
+  const aliasHasNamespace = alias ? parseRemoteHostRef(alias) !== null : false;
+  const profileRef = alias
+    ? parseRemoteHostRef(alias)?.namespace === 'cindy'
+      ? alias
+      : `cindy:${alias}`
+    : null;
+  const exactCindyProfile = profileRef ? knownHostRefs.includes(profileRef) : false;
+  const legacyAlias = alias && (!aliasHasNamespace || (knownHostRefs.length > 0 && !exactCindyProfile))
+    ? alias
+    : null;
   const seen = new Set<string>();
   const dirs: string[] = [];
   for (const s of sessions) {
-    if (s.remoteHostId !== hostId) continue;
+    if (s.remoteHostId !== hostId && (legacyAlias === null || s.remoteHostId !== legacyAlias)) {
+      continue;
+    }
     if (s.workspaceKind !== 'project') continue;
     const dir = s.workingDir?.trim();
     if (!dir || seen.has(dir)) continue;

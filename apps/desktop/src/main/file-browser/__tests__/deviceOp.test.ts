@@ -97,6 +97,8 @@ vi.mock('../../maker-host/runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => '/nonexistent/rg',
 }));
 vi.mock('../remote-deps.js', () => ({
+  resolveRemoteFileBrowserHostId: (hostId: string) =>
+    hostId.includes(':') ? hostId : `ssh-config:${hostId}`,
   getRemoteFileBrowser: () => ({
     request: sshRequestMock,
     onHostEvent: vi.fn((_hostId: string, cb: (event: unknown) => void) => {
@@ -298,7 +300,7 @@ describe('file-browser device-op', () => {
       name: string;
     }>;
     expect(entries.map((e) => e.name)).toEqual(['r.ts']);
-    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'listDir', {
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'listDir', {
       workdir: sshWorkdir,
       relPath: '',
       hideMetaFiles: true,
@@ -318,7 +320,7 @@ describe('file-browser device-op', () => {
         name: string;
       }>;
       expect(entries.map((entry) => entry.name)).toEqual(['remote.ts']);
-      expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'listDir', {
+      expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'listDir', {
         workdir: sshWorkdir,
         relPath: '',
         hideMetaFiles: true,
@@ -343,6 +345,25 @@ describe('file-browser device-op', () => {
     expect(sshRequestMock).not.toHaveBeenCalled();
   });
 
+  it('deduplicates legacy aliases and HostRefs before resolving a workdir route', async () => {
+    const sshWorkdir = '/remote/home/user/same-host';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([
+      { remoteHostId: 'host-1' },
+      { remoteHostId: 'ssh-config:host-1' },
+    ]);
+    sshRequestMock.mockResolvedValue({ entries: [] });
+
+    await handleRemoteOp({ op: 'listDir', workdir: sshWorkdir });
+
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'listDir', {
+      workdir: sshWorkdir,
+      relPath: '',
+      hideMetaFiles: true,
+      docMode: undefined,
+    });
+  });
+
   it('normalizes an equivalent workdir before looking up its SSH endpoint', async () => {
     const rawWorkdir = '/remote/home/user/proj/';
     guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
@@ -351,7 +372,7 @@ describe('file-browser device-op', () => {
 
     await handleRemoteOp({ op: 'listDir', workdir: rawWorkdir });
 
-    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'listDir', {
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'listDir', {
       workdir: rawWorkdir,
       relPath: '',
       hideMetaFiles: true,
@@ -409,7 +430,7 @@ describe('file-browser device-op', () => {
 
     await onFsWatchSubscribed(sshWorkdir);
 
-    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'watchStart', {
       workdir: sshWorkdir,
       hideMetaFiles: true,
     });
@@ -485,7 +506,7 @@ describe('file-browser device-op', () => {
 
     const starting = onFsWatchSubscribed(sshWorkdir);
     await vi.waitFor(() => {
-      expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
+      expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'watchStart', {
         workdir: sshWorkdir,
         hideMetaFiles: true,
       });
@@ -494,7 +515,7 @@ describe('file-browser device-op', () => {
     resolveStart();
     await starting;
 
-    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'watchStop', {
       workdir: sshWorkdir,
     });
   });
@@ -607,7 +628,7 @@ describe('file-browser device-op', () => {
     await vi.waitFor(() => {
       expect(watchStartCount).toBe(2);
     });
-    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'watchStop', {
       workdir: sshWorkdir,
     });
     onFsWatchReleased(sshWorkdir);
@@ -782,7 +803,7 @@ describe('file-browser device-op', () => {
     await vi.waitFor(() => {
       expect(watchStartCount).toBe(3);
     });
-    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'watchStop', {
       workdir: sshWorkdir,
     });
     const event = {
@@ -941,7 +962,7 @@ describe('file-browser device-op', () => {
       contentGz,
     })) as { ok: boolean };
     expect(res.ok).toBe(true);
-    expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'writeFile', {
+    expect(sshRequestMock).toHaveBeenCalledWith('ssh-config:host-1', 'writeFile', {
       workdir: sshWorkdir,
       relPath: 'a.md',
       content: original,

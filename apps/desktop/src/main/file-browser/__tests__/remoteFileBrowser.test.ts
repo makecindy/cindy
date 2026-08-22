@@ -142,6 +142,23 @@ describe('RemoteFileBrowserManager', () => {
     await mgr.disposeAll();
   });
 
+  it('shares one client between a legacy alias and its canonical HostRef', async () => {
+    const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
+    deps.resolveHostId = (hostId) => hostId.startsWith('ssh-config:')
+      ? hostId
+      : `ssh-config:${hostId}`;
+    const mgr = new RemoteFileBrowserManager(deps);
+    const [a, b] = await Promise.all([
+      mgr.request('h1', 'stat', { workdir, relPath: 'hello.txt' }),
+      mgr.request('ssh-config:h1', 'readFile', { workdir, relPath: 'hello.txt' }),
+    ]);
+    expect(a.type).toBe('file');
+    expect(b.content).toBe('hi\n');
+    expect(calls.spawn).toBe(1);
+    expect(calls.ensure).toBe(1);
+    await mgr.disposeAll();
+  });
+
   it('not-installed → installs then serves', async () => {
     const { deps, calls } = makeDeps({
       probeResults: [
@@ -217,5 +234,23 @@ describe('RemoteFileBrowserManager', () => {
     expect(entries.map((e) => e.name)).toContain('hello.txt');
     expect(calls.spawn).toBe(2);
     await mgr.disposeAll();
+  });
+
+  it('endpoint invalidation fences an in-flight build before it can spawn the old host', async () => {
+    let releaseEnsure!: () => void;
+    const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
+    deps.ensureHostReady = () => new Promise<void>((resolve) => {
+      releaseEnsure = resolve;
+    });
+    const mgr = new RemoteFileBrowserManager(deps);
+    const request = mgr.request('h1', 'listDir', { workdir });
+
+    // This is the same lifecycle used by SSH config/profile hydration when a
+    // stable HostRef now points at a different resolved endpoint.
+    await mgr.disposeHost('h1');
+    releaseEnsure();
+
+    await expect(request).rejects.toMatchObject({ code: 'ENDPOINT_STALE' });
+    expect(calls.spawn).toBe(0);
   });
 });

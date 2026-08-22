@@ -1,5 +1,5 @@
 /**
- * SSH config IO — read/write ~/.ssh/config in OpenSSH format.
+ * SSH config IO — read ~/.ssh/config in OpenSSH format.
  *
  * Phase A surface:
  *   - readSshConfig(): list every concrete host (skipping wildcards
@@ -8,20 +8,54 @@
  *     other entries verbatim.
  *   - removeHost(): drop one host block. No-op if absent.
  *
- * We intentionally do NOT inherit / merge wildcard rules in readSshConfig
- * — the renderer wants concrete hosts to display; `ssh` itself will apply
- * wildcards when we eventually exec it. Concrete-host enumeration is the
- * "user-facing" set.
+ * Reading follows the part of OpenSSH semantics that matters to Cindy:
+ * unconditional top-level Include files are expanded — including an unindented
+ * Include between Host/Match blocks, the usual `config.d` layout — then the
+ * parsed document is computed once for each concrete alias. Indented Include
+ * that is a Host/Match child is left unexpanded. Wildcards participate in
+ * compute but are never emitted as list rows. Writing helpers remain exported
+ * for legacy callers/tests; the Desktop product path must not use them for
+ * imported SSH config hosts.
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import SSHConfig from 'ssh-config';
+import SSHConfig, { glob as matchesHostPattern } from 'ssh-config';
 
-import type { HostConfig } from './types.js';
+import { sshHostRef, type HostConfig } from './types.js';
 
 const DEFAULT_PORT = 22;
+const MAX_INCLUDE_DEPTH = 16;
+const MAX_INCLUDE_FILES = 64;
+const MAX_INCLUDE_BYTES = 1024 * 1024;
+
+export interface SshConfigDiagnostic {
+  path: string;
+  kind: 'io' | 'syntax' | 'limit';
+  message: string;
+  recoveryHint: string;
+}
+
+export interface ReadSshConfigResult {
+  hosts: HostConfig[];
+  diagnostic: SshConfigDiagnostic | null;
+}
+
+interface ExpandedConfig {
+  text: string;
+  /** Origin for each Host directive in expanded text order. */
+  hostOrigins: Array<'main' | 'include'>;
+  files: string[];
+}
+
+interface IncludeState {
+  rootDir: string;
+  visited: Set<string>;
+  hostOrigins: Array<'main' | 'include'>;
+  files: string[];
+  bytes: number;
+}
 
 /** Resolve `~/.ssh/config` on the current OS. */
 export function defaultSshConfigPath(): string {
@@ -56,10 +90,14 @@ interface SshConfigSection {
    * file. See applyDirective insert path.
    */
   separator?: string;
-  value?: string | string[];
+  value?: string | SshConfigValueToken | Array<string | SshConfigValueToken>;
   /** Present on comment nodes (type=2). */
   content?: string;
   config?: SshConfigSection[];
+}
+
+interface SshConfigValueToken {
+  val?: unknown;
 }
 
 /** ssh-config AST: type=1 = directive, type=2 = comment, type=3 = blank line. */
@@ -93,60 +131,419 @@ function isHostDirective(section: SshConfigSection): boolean {
   return section.param?.toLowerCase() === 'host';
 }
 
+function isMatchDirective(section: SshConfigSection): boolean {
+  return section.param?.toLowerCase() === 'match';
+}
+
+/** Normalize ssh-config v5 AST tokens (`{ val }`) and legacy string values. */
+function directiveValues(section: SshConfigSection): string[] {
+  const raw = Array.isArray(section.value) ? section.value : [section.value];
+  const values: string[] = [];
+  for (const value of raw) {
+    if (typeof value === 'string') values.push(value);
+    else if (value && typeof value === 'object' && typeof value.val === 'string') {
+      values.push(value.val);
+    }
+  }
+  return values;
+}
+
 /**
  * Read and parse ~/.ssh/config (or any path). Returns a list of concrete
  * hosts — wildcards and `Match` blocks are skipped. Missing file → [].
  */
 export async function readSshConfig(filePath = defaultSshConfigPath()): Promise<HostConfig[]> {
-  let raw: string;
+  const result = await readSshConfigDetailed(filePath);
+  if (result.diagnostic) throw new Error(result.diagnostic.message);
+  return result.hosts;
+}
+
+/** Read SSH config plus a structured diagnostic suitable for IPC/UI. */
+export async function readSshConfigDetailed(
+  filePath = defaultSshConfigPath(),
+): Promise<ReadSshConfigResult> {
+  let expanded: ExpandedConfig;
   try {
-    raw = await fs.readFile(filePath, 'utf8');
+    expanded = await expandConfig(filePath);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw err;
+    const diagnostic = toConfigDiagnostic(filePath, err);
+    // A missing primary config is a valid empty state. Missing Include files
+    // are skipped by expandConfig and therefore never reach this branch.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { hosts: [], diagnostic: null };
+    }
+    return { hosts: [], diagnostic };
   }
 
-  const parsed = SSHConfig.parse(raw) as SshConfigSection[];
-  const hosts: HostConfig[] = [];
+  let parsed: SshConfigSection[];
+  try {
+    parsed = SSHConfig.parse(expanded.text) as SshConfigSection[];
+  } catch (err) {
+    return {
+      hosts: [],
+      diagnostic: {
+        path: filePath,
+        kind: 'syntax',
+        message: `failed to parse SSH config: ${err instanceof Error ? err.message : String(err)}`,
+        recoveryHint: 'Fix the syntax in ~/.ssh/config or one of its Include files, then refresh.',
+      },
+    };
+  }
 
+  const computeDocument = withoutUnsupportedComputeSections(parsed);
+  const hostOriginBySection = new Map<SshConfigSection, 'main' | 'include'>();
+  let hostOriginIndex = 0;
   for (const section of parsed) {
     if (!isHostDirective(section)) continue;
-    const aliases = Array.isArray(section.value) ? section.value : [section.value];
-    for (const aliasRaw of aliases) {
-      if (typeof aliasRaw !== 'string') continue;
+    hostOriginBySection.set(section, expanded.hostOrigins[hostOriginIndex] ?? 'main');
+    hostOriginIndex += 1;
+  }
+  const hosts: HostConfig[] = [];
+  const seen = new Set<string>();
+  for (const section of parsed) {
+    if (!isHostDirective(section)) continue;
+    for (const aliasRaw of directiveValues(section)) {
       const alias = aliasRaw.trim();
-      if (!alias || alias.includes('*') || alias.includes('?') || alias.startsWith('!')) continue;
+      if (!isConcreteAlias(alias) || seen.has(alias)) continue;
+      seen.add(alias);
 
-      // Pluck params out of this Host block (case-insensitive per spec).
-      const params = new Map<string, string>();
-      for (const child of section.config ?? []) {
-        if (!child.param || typeof child.value !== 'string') continue;
-        params.set(child.param.toLowerCase(), child.value);
-      }
-
-      const identityFile = params.get('identityfile');
-      // Auth-method rules:
-      //   IdentityFile absent → 'agent' (unfiltered, no key pin)
-      //   IdentityFile present + marker says agent → 'agent' + pinned key
-      //   IdentityFile present + marker says key → 'key'
-      //   IdentityFile present + no marker → 'key' (legacy host, backward compat)
-      const marker = readAuthMarker(section);
-      const authMethod: 'agent' | 'key' = identityFile
-        ? (marker === 'agent' ? 'agent' : 'key')
+      const matchingHosts = analyzeMatchingHostSections(parsed, alias, hostOriginBySection);
+      const origin = matchingHosts.origin;
+      const computed = computeConfig(computeDocument, alias);
+      const identityRaw = firstString(getComputedValue(computed, 'identityfile'));
+      const marker = matchingHosts.marker;
+      const authMethod = identityRaw
+        ? marker ?? (origin === 'include' || matchingHosts.ambiguousOrigin ? 'agent' : 'key')
         : 'agent';
+      const hostname = firstString(getComputedValue(computed, 'hostname')) ?? alias;
+      const user = firstString(getComputedValue(computed, 'user')) ?? os.userInfo().username;
+      const port = parseIntSafe(firstString(getComputedValue(computed, 'port')), DEFAULT_PORT);
+
       hosts.push({
-        id: alias,
-        hostname: params.get('hostname') ?? alias,
-        port: parseIntSafe(params.get('port'), DEFAULT_PORT),
-        user: params.get('user') ?? os.userInfo().username,
+        id: sshHostRef(alias),
+        alias,
+        displayName: alias,
+        hostname,
+        port,
+        user,
         authMethod,
-        identityFile: identityFile ? expandHome(identityFile) : undefined,
+        identityFile: identityRaw ? expandIdentityFile(identityRaw, path.dirname(filePath)) : undefined,
         source: 'ssh-config',
+        configOrigin: origin,
+        editable: false,
+        deletable: false,
       });
     }
   }
+  return { hosts, diagnostic: null };
+}
 
-  return hosts;
+function withoutUnsupportedComputeSections(parsed: SshConfigSection[]): SshConfigSection[] {
+  const result = SSHConfig.parse('') as SshConfigSection[];
+  const append = result as unknown as { push(node: SshConfigSection): void };
+  for (const section of parsed) {
+    if (isMatchDirective(section)) continue;
+    if (isCanonicalizationDirective(section)) continue;
+    append.push({
+      ...section,
+      ...(section.config
+        ? { config: section.config.filter((child) => !isCanonicalizationDirective(child)) }
+        : {}),
+    });
+  }
+  return result;
+}
+
+function isCanonicalizationDirective(section: SshConfigSection): boolean {
+  return /^canonicalize/i.test(section.param ?? '') || /^canonicaldomains$/i.test(section.param ?? '');
+}
+
+function isConcreteAlias(alias: string): boolean {
+  // OpenSSH host patterns also support bracket character classes (including
+  // negated classes such as [!0-9]). They are selectors, not concrete rows in
+  // Cindy's host list.
+  return !!alias
+    && !alias.includes('*')
+    && !alias.includes('?')
+    && !alias.includes('[')
+    && !alias.startsWith('!');
+}
+
+function firstString(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) {
+    const first = value.find((v) => typeof v === 'string');
+    return typeof first === 'string' ? first.trim() : undefined;
+  }
+  return undefined;
+}
+
+function getComputedValue(record: Record<string, unknown>, key: string): unknown {
+  const wanted = key.toLowerCase();
+  const entry = Object.entries(record).find(([name]) => name.toLowerCase() === wanted);
+  return entry?.[1];
+}
+
+function computeConfig(parsed: SshConfigSection[], alias: string): Record<string, unknown> {
+  const candidate = parsed as unknown as {
+    compute?: (host: string, options?: { matchExec?: boolean }) => unknown;
+  };
+  // SSH config is user-controlled input. `ssh-config` evaluates Match exec by
+  // default; Cindy deliberately does not support Match and must never execute
+  // a shell command merely because Settings refreshed the host list.
+  const computed = candidate.compute?.(alias, { matchExec: false });
+  if (computed && typeof computed === 'object') return computed as Record<string, unknown>;
+  // Defensive fallback for old ssh-config versions. This is deliberately
+  // shallow; supported runtimes have compute().
+  const section = parsed.find((s) => isHostDirective(s)
+    && directiveValues(s).includes(alias));
+  const out: Record<string, unknown> = {};
+  for (const child of section?.config ?? []) {
+    if (child.param) out[child.param.toLowerCase()] = child.value;
+  }
+  return out;
+}
+
+function analyzeMatchingHostSections(
+  parsed: SshConfigSection[],
+  alias: string,
+  hostOriginBySection: ReadonlyMap<SshConfigSection, 'main' | 'include'>,
+): {
+  origin: 'main' | 'include';
+  ambiguousOrigin: boolean;
+  marker: 'agent' | 'key' | null;
+} {
+  let firstOrigin: 'main' | 'include' | null = null;
+  let marker: 'agent' | 'key' | null = null;
+  const matchingOrigins = new Set<'main' | 'include'>();
+  for (const section of parsed) {
+    if (!isHostDirective(section)) continue;
+    if (!matchesHostPattern(directiveValues(section), alias)) continue;
+    const origin = hostOriginBySection.get(section) ?? 'main';
+    firstOrigin ??= origin;
+    matchingOrigins.add(origin);
+    marker ??= readAuthMarker(section);
+  }
+  return {
+    origin: firstOrigin ?? 'main',
+    ambiguousOrigin: matchingOrigins.size > 1,
+    marker,
+  };
+}
+
+function expandIdentityFile(value: string, configDir: string): string {
+  const expanded = expandHome(value);
+  // OpenSSH accepts relative IdentityFile values. Cindy resolves them against
+  // the config directory (~/.ssh), never Electron's process.cwd().
+  return path.isAbsolute(expanded) ? expanded : path.resolve(configDir, expanded);
+}
+
+async function expandConfig(filePath: string): Promise<ExpandedConfig> {
+  const state: IncludeState = {
+    rootDir: path.dirname(path.resolve(filePath)),
+    visited: new Set(),
+    hostOrigins: [],
+    files: [],
+    bytes: 0,
+  };
+  const text = await expandFile(path.resolve(filePath), state, 0, 'main');
+  return { text, hostOrigins: state.hostOrigins, files: state.files };
+}
+
+async function expandFile(
+  filePath: string,
+  state: IncludeState,
+  depth: number,
+  origin: 'main' | 'include',
+): Promise<string> {
+  if (depth > MAX_INCLUDE_DEPTH) throw limitError(filePath, `Include nesting exceeds ${MAX_INCLUDE_DEPTH} levels`);
+  const normalized = path.normalize(filePath);
+  if (state.visited.has(normalized)) return '';
+  let raw: string;
+  try {
+    raw = await fs.readFile(normalized, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && origin === 'include') return '';
+    throw err;
+  }
+  if (state.files.length >= MAX_INCLUDE_FILES) {
+    throw limitError(normalized, `Include file count exceeds ${MAX_INCLUDE_FILES}`);
+  }
+  if (state.bytes + Buffer.byteLength(raw, 'utf8') > MAX_INCLUDE_BYTES) {
+    throw limitError(normalized, `expanded SSH config exceeds ${MAX_INCLUDE_BYTES} bytes`);
+  }
+  state.visited.add(normalized);
+  state.files.push(normalized);
+  state.bytes += Buffer.byteLength(raw, 'utf8');
+
+  const lines = raw.split(/(?<=\n)/);
+  let out = '';
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const directive = parseDirectiveLine(trimmed);
+    const keyword = directive?.keyword;
+    if (keyword === 'host') {
+      state.hostOrigins.push(origin);
+      out += line;
+      continue;
+    }
+    if (keyword === 'match') {
+      out += line;
+      continue;
+    }
+    // OpenSSH attaches every keyword to the preceding Host/Match until the
+    // next Host/Match, indentation aside. Cindy still expands an unindented
+    // Include between blocks — that is the usual `config.d` layout — and
+    // leaves indented Include as a Host/Match child unexpanded.
+    if (!isIndentedDirective(line) && directive && keyword === 'include') {
+      const patternText = directive.value;
+      const patterns = splitIncludePatterns(patternText);
+      for (const pattern of patterns) {
+        const expandedPattern = expandHome(pattern);
+        const absolutePattern = path.isAbsolute(expandedPattern)
+          ? expandedPattern
+          : path.resolve(state.rootDir, expandedPattern);
+        const matches = await globPaths(absolutePattern);
+        for (const match of matches) out += await expandFile(match, state, depth + 1, 'include');
+      }
+      continue;
+    }
+    // Conditional Include inside Host/Match is intentionally not expanded.
+    // Keeping the directive in the document makes the unsupported construct
+    // visible to syntax/debugging rather than silently changing its scope.
+    out += line;
+  }
+  return out.endsWith('\n') ? out : `${out}\n`;
+}
+
+function isIndentedDirective(line: string): boolean {
+  return /^[ \t]/.test(line);
+}
+
+function parseDirectiveLine(line: string): { keyword: string; value: string } | null {
+  if (!line || line.startsWith('#')) return null;
+  const match = /^([^\s=#]+)(?:\s*=\s*|\s+)(.*)$/.exec(line);
+  if (match) return { keyword: match[1]!.toLowerCase(), value: match[2]!.trim() };
+  return { keyword: line.toLowerCase(), value: '' };
+}
+
+function splitIncludePatterns(value: string): string[] {
+  const words: string[] = [];
+  let word = '';
+  let quote: '"' | "'" | null = null;
+  const pushWord = (): void => {
+    if (!word) return;
+    words.push(word);
+    word = '';
+  };
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!;
+    if (quote) {
+      if (char === quote) quote = null;
+      else if (char === '\\' && quote === '"' && value[index + 1] === '"') {
+        word += '"';
+        index += 1;
+      } else word += char;
+      continue;
+    }
+    if (char === '#') break;
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      pushWord();
+      continue;
+    }
+    if (char === '\\' && /[\s#'"\\]/.test(value[index + 1] ?? '')) {
+      word += value[index + 1];
+      index += 1;
+      continue;
+    }
+    word += char;
+  }
+  pushWord();
+  return words;
+}
+
+async function globPaths(pattern: string): Promise<string[]> {
+  const normalized = path.normalize(pattern);
+  const root = path.parse(normalized).root;
+  // Strip the root before splitting. The previous implementation split the
+  // full absolute path and then skipped index 0, which accidentally dropped
+  // the first real directory (`/var/...` became `/folders/...` on macOS).
+  // Keeping the root separate also handles Windows drive roots (`C:\\`).
+  const segments = normalized.slice(root.length).split(path.sep).filter(Boolean);
+  const start = root || '.';
+  const walk = async (dir: string, index: number): Promise<string[]> => {
+    if (index >= segments.length) {
+      try {
+        const stat = await fs.stat(dir);
+        return stat.isFile() ? [dir] : [];
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+        throw err;
+      }
+    }
+    const segment = segments[index]!;
+    if (!hasGlob(segment)) {
+      const next = path.join(dir, segment);
+      try {
+        await fs.access(next);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+        throw err;
+      }
+      return walk(next, index + 1);
+    }
+    let entries: string[];
+    try {
+      entries = (await fs.readdir(dir)).sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+      throw err;
+    }
+    const out: string[] = [];
+    for (const entry of entries) {
+      // Match glob(3)/OpenSSH: `*` and `?` do not consume a leading dot.
+      // Hidden files require a pattern segment that explicitly starts `.`.
+      if (entry.startsWith('.') && !segment.startsWith('.')) continue;
+      if (path.matchesGlob(entry, segment)) {
+        out.push(...await walk(path.join(dir, entry), index + 1));
+      }
+    }
+    return out;
+  };
+  return walk(start, 0);
+}
+
+function hasGlob(value: string): boolean { return /[*?\[]/.test(value); }
+
+function limitError(pathName: string, message: string): Error & { code: string; path: string } {
+  const error = new Error(message) as Error & { code: string; path: string };
+  error.code = 'SSH_CONFIG_LIMIT';
+  error.path = pathName;
+  error.name = 'SshConfigLimitError';
+  return error;
+}
+
+function toConfigDiagnostic(filePath: string, err: unknown): SshConfigDiagnostic {
+  const message = err instanceof Error ? err.message : String(err);
+  const kind = (err as { code?: string })?.code === 'SSH_CONFIG_LIMIT' ? 'limit' : 'io';
+  const diagnosticPath = typeof (err as { path?: unknown })?.path === 'string'
+    ? (err as { path: string }).path
+    : filePath;
+  return {
+    path: diagnosticPath,
+    kind,
+    message,
+    recoveryHint: kind === 'limit'
+      ? 'Reduce Include nesting, file count, or config size, then refresh.'
+      : 'Check file permissions and the paths named by Include, then refresh.',
+  };
 }
 
 /**
@@ -167,7 +564,7 @@ export async function upsertHost(
   // Remove the complete block before appending the replacement. The ssh-config
   // library's `remove({ Host: alias })` matcher is case-sensitive on the
   // directive name, while OpenSSH treats keywords case-insensitively.
-  removeHostSections(parsed, host.id);
+  removeHostSections(parsed, host.alias ?? host.id);
 
   const append = SSHConfig.parse(formatHostBlock(host)) as SshConfigSection[];
   for (const node of append) {
@@ -183,8 +580,7 @@ function removeHostSections(parsed: SshConfigSection[], alias: string): void {
   for (let index = parsed.length - 1; index >= 0; index -= 1) {
     const section = parsed[index];
     if (!isHostDirective(section)) continue;
-    const values = Array.isArray(section.value) ? section.value : [section.value];
-    if (values.includes(alias)) parsed.splice(index, 1);
+    if (directiveValues(section).includes(alias)) parsed.splice(index, 1);
   }
 }
 
@@ -220,7 +616,7 @@ export async function updateHostFields(
   }
   const parsed = SSHConfig.parse(existing) as SshConfigSection[];
 
-  const section = findHostSection(parsed, host.id);
+  const section = findHostSection(parsed, host.alias ?? host.id);
   if (!section || !section.config) {
     // Block disappeared since we hydrated — recreate it cleanly. Caller's
     // pool will end up consistent with disk on next hydrate.
@@ -263,8 +659,7 @@ function findHostSection(
 ): SshConfigSection | null {
   for (const section of parsed) {
     if (!isHostDirective(section)) continue;
-    const values = Array.isArray(section.value) ? section.value : [section.value];
-    if (values.includes(alias)) return section;
+    if (directiveValues(section).includes(alias)) return section;
   }
   return null;
 }
@@ -390,7 +785,7 @@ async function writeAtomic(filePath: string, content: string): Promise<void> {
 
 function formatHostBlock(host: HostConfig): string {
   const lines = [
-    `Host ${host.id}`,
+    `Host ${host.alias ?? host.id}`,
     `  HostName ${host.hostname}`,
     `  User ${host.user}`,
   ];

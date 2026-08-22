@@ -10,7 +10,11 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { normalizeRemoteHostId, sessionCreateToRow } from '../mapper';
+import {
+  normalizeRemoteHostId,
+  normalizeRemoteHostRefForCreate,
+  sessionCreateToRow,
+} from '../mapper';
 
 describe('normalizeRemoteHostId', () => {
   it('保留 trim 后非空字符串', () => {
@@ -30,9 +34,17 @@ describe('normalizeRemoteHostId', () => {
 describe('sessionCreateToRow remoteHostId 规范化', () => {
   const now = 1_700_000_000_000;
 
-  it('有效 host 透传并 trim', () => {
+  it('新 session 把 legacy SSH alias 写成 canonical HostRef', () => {
     const row = sessionCreateToRow('id1', { workingDir: '/repo', remoteHostId: '  host-a ' }, now);
-    expect(row.remoteHostId).toBe('host-a');
+    expect(row.remoteHostId).toBe('ssh-config:host-a');
+  });
+
+  it('保留已带命名空间的 HostRef，只在第一个冒号处分隔', () => {
+    expect(normalizeRemoteHostRefForCreate('ssh-config:host:with:colons'))
+      .toBe('ssh-config:host:with:colons');
+    expect(normalizeRemoteHostRefForCreate('cindy:profile-id')).toBe('cindy:profile-id');
+    expect(normalizeRemoteHostRefForCreate('host:with:colons'))
+      .toBe('ssh-config:host:with:colons');
   });
 
   it('空串入参落 null(本地语义)', () => {

@@ -13,9 +13,16 @@
  *   2. 其它 IO 错误仍保留原有 "failed to read identityFile" 包装。
  */
 
-import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { KEY_FILE_NOT_FOUND_CODE, resolveAuth } from '../credentials.js';
+import {
+  KEY_FILE_NOT_FOUND_CODE,
+  resolveAuth,
+  resolvePinnedPublicKeyPath,
+} from '../credentials.js';
 import type { HostConfig } from '../types.js';
 
 function keyHost(over: Partial<HostConfig> & Pick<HostConfig, 'identityFile'>): HostConfig {
@@ -58,5 +65,33 @@ describe('resolveAuth key-mode identityFile handling', () => {
     // 指向一个目录,fs.readFile 会抛 EISDIR(而非 ENOENT)→ 保留原包装。
     const host = keyHost({ identityFile: process.cwd() });
     await expect(resolveAuth(host)).rejects.toThrow(/failed to read identityFile .*EISDIR|failed to read identityFile/);
+  });
+});
+
+describe('agent pinned public-key companion resolution', () => {
+  let scratchDir: string | undefined;
+
+  afterEach(async () => {
+    if (scratchDir) await fs.rm(scratchDir, { recursive: true, force: true });
+    scratchDir = undefined;
+  });
+
+  it('resolves guru.key to guru.pub', async () => {
+    scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), 'credentials-test-'));
+    const privatePath = path.join(scratchDir, 'guru.key');
+    const publicPath = path.join(scratchDir, 'guru.pub');
+    await fs.writeFile(privatePath, 'encrypted private key placeholder');
+    await fs.writeFile(publicPath, 'ssh-ed25519 AAAA test');
+
+    await expect(resolvePinnedPublicKeyPath(privatePath)).resolves.toBe(publicPath);
+  });
+
+  it('prefers the conventional foo.key.pub companion when foo.pub is absent', async () => {
+    scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), 'credentials-test-'));
+    const privatePath = path.join(scratchDir, 'foo.key');
+    const publicPath = path.join(scratchDir, 'foo.key.pub');
+    await fs.writeFile(publicPath, 'ssh-ed25519 AAAA test');
+
+    await expect(resolvePinnedPublicKeyPath(privatePath)).resolves.toBe(publicPath);
   });
 });

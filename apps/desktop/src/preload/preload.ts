@@ -4082,36 +4082,48 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ── Remote SSH (Phase A) ───────────────────────────────────────────────
-  // 连接管理 + ~/.ssh/config IO. 暂未涉及 agent-on-remote / session 同步.
-  // `host.config.id` 即 ssh alias, 与 ~/.ssh/config Host 行同名.
+  // SSH config 主机只读 + Cindy 本地 profile；config.id 是 canonical HostRef。
   remoteSsh: {
     list: (): Promise<{
       hosts: Array<{
         config: {
           id: string;
+          alias?: string;
+          displayName?: string;
           hostname: string;
           port: number;
           user: string;
           authMethod: 'agent' | 'key';
           identityFile?: string;
           source: 'ssh-config' | 'manual';
+          configOrigin?: 'main' | 'include';
+          editable?: boolean;
+          deletable?: boolean;
         };
         status:
           'disconnected' | 'connecting' | 'authenticating' | 'ready' | 'reconnecting' | 'failed';
         lastError?: string;
+        lastAuthLabel?: string;
         statusChangedAt: number;
-        /** Phase D — 启动时是否自动连接 (本地 prefs, 不写入 ~/.ssh/config). */
+        /** Phase D — 启动时是否自动连接（来源所属的 Cindy 本地存储，不写 SSH config）。 */
         autoConnect: boolean;
-        /** Agent 流量经 SSH 隧道走本地 Proxy (本地 prefs); 未开启 → null. */
+        /** Agent 流量经 SSH 隧道走本地 Proxy（来源所属的 Cindy 本地存储）；未开启 → null. */
         agentProxy: SshHostAgentProxyPref | null;
         /** 隧道实时状态 (内存态); 无记录 → null. */
         agentProxyTunnel: AgentProxyTunnelState | null;
       }>;
+      configError: { path: string; kind: string; message: string; recoveryHint: string } | null;
+      profileError: { path: string; kind: string; message: string; recoveryHint: string } | null;
     }> => ipcRenderer.invoke('maker:remote-ssh:list'),
-    reloadConfig: (): Promise<{ hosts: unknown[] }> =>
+    reloadConfig: (): Promise<{
+      hosts: unknown[];
+      configError: unknown | null;
+      profileError: unknown | null;
+    }> =>
       ipcRenderer.invoke('maker:remote-ssh:reload-config'),
     add: (host: {
       id: string;
+      displayName?: string;
       hostname: string;
       port?: number;
       user: string;
@@ -4121,6 +4133,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ host: unknown }> => ipcRenderer.invoke('maker:remote-ssh:add', host),
     update: (host: {
       id: string;
+      displayName?: string;
       hostname: string;
       port?: number;
       user: string;
@@ -4130,6 +4143,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }): Promise<{ host: unknown }> => ipcRenderer.invoke('maker:remote-ssh:update', host),
     remove: (id: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:remote-ssh:remove', { id }),
+    copyToCindy: (id: string): Promise<{ host: unknown }> =>
+      ipcRenderer.invoke('maker:remote-ssh:copy-to-cindy', { id }),
     connect: (id: string): Promise<{ host: unknown }> =>
       ipcRenderer.invoke('maker:remote-ssh:connect', { id }),
     disconnect: (id: string): Promise<{ host: unknown }> =>

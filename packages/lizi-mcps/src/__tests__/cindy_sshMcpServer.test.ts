@@ -25,18 +25,29 @@ import type { SshHostSnapshotLike, SshMcpDeps, SshPoolLike } from '../types.js';
 
 function snapshot(partial: {
   id: string;
+  alias?: string;
+  source?: SshHostSnapshotLike['config']['source'];
   hostname?: string;
   status?: SshHostSnapshotLike['status'];
   lastError?: string;
 }): SshHostSnapshotLike {
+  const source = partial.source ?? (partial.id.startsWith('cindy:') ? 'manual' : 'ssh-config');
+  const canonicalId = partial.id.startsWith('ssh-config:') || partial.id.startsWith('cindy:')
+    ? partial.id
+    : `ssh-config:${partial.id}`;
+  const alias = partial.alias ?? (source === 'ssh-config'
+    ? (partial.id.startsWith('ssh-config:') ? partial.id.slice('ssh-config:'.length) : partial.id)
+    : undefined);
   return {
     config: {
-      id: partial.id,
+      id: canonicalId,
+      ...(alias ? { alias } : {}),
+      displayName: alias ?? canonicalId,
       hostname: partial.hostname ?? `${partial.id}.example.com`,
       port: 22,
       user: 'deploy',
       authMethod: 'agent',
-      source: 'manual',
+      source,
     },
     status: partial.status ?? 'ready',
     ...(partial.lastError ? { lastError: partial.lastError } : {}),
@@ -131,14 +142,15 @@ describe('ssh_list_hosts', () => {
     const hosts = payload.hosts as Array<Record<string, unknown>>;
     expect(hosts).toHaveLength(2);
     expect(hosts[0]).toMatchObject({
-      id: 'web-1',
+      hostRef: 'ssh-config:web-1',
+      alias: 'web-1',
       hostname: '10.0.0.5',
       port: 22,
       user: 'deploy',
       authMethod: 'agent',
       status: 'ready',
     });
-    expect(hosts[1]).toMatchObject({ id: 'db-1', status: 'failed', lastError: 'boom' });
+    expect(hosts[1]).toMatchObject({ hostRef: 'ssh-config:db-1', alias: 'db-1', status: 'failed', lastError: 'boom' });
   });
 
   it('empty pool returns ok with guidance hint', async () => {
@@ -162,25 +174,25 @@ describe('host resolution', () => {
     snapshot({ id: 'web-2b', hostname: '10.0.0.6' }),
   ];
 
-  it('resolves by alias (id) exactly', async () => {
+  it('resolves a bare SSH alias and passes the canonical HostRef through', async () => {
     const { pool } = makeFakePool(hosts);
     const { deps } = makeDeps(pool);
     const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_host_status', {
       host: 'web-1',
     });
     expect(isError).toBe(false);
-    expect((payload.host as Record<string, unknown>).id).toBe('web-1');
+    expect((payload.host as Record<string, unknown>).hostRef).toBe('ssh-config:web-1');
     expect(payload.statusChangedAt).toBe(new Date(1_700_000_000_000).toISOString());
   });
 
-  it('resolves by unique hostname/IP', async () => {
+  it('does not resolve by hostname/IP', async () => {
     const { pool } = makeFakePool(hosts);
     const { deps } = makeDeps(pool);
     const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_host_status', {
       host: '10.0.0.5',
     });
-    expect(isError).toBe(false);
-    expect((payload.host as Record<string, unknown>).id).toBe('web-1');
+    expect(isError).toBe(true);
+    expect(payload.errorCode).toBe('HOST_NOT_FOUND');
   });
 
   it('unknown name → HOST_NOT_FOUND with configured host list', async () => {
@@ -192,22 +204,67 @@ describe('host resolution', () => {
     expect(isError).toBe(true);
     expect(payload.errorCode).toBe('HOST_NOT_FOUND');
     const data = payload.data as Record<string, unknown>;
-    expect(String(data.hint)).toContain('远程连接');
+    expect(String(data.hint)).toContain('SSH alias');
     const configured = data.configuredHosts as Array<Record<string, unknown>>;
-    expect(configured.map((h) => h.id)).toEqual(['web-1', 'web-2', 'web-2b']);
+    expect(configured.map((h) => h.hostRef)).toEqual([
+      'ssh-config:web-1',
+      'ssh-config:web-2',
+      'ssh-config:web-2b',
+    ]);
   });
 
-  it('duplicate hostname → AMBIGUOUS_HOST with candidates', async () => {
+  it('does not resolve duplicate hostname/IP or display names', async () => {
     const { pool } = makeFakePool(hosts);
     const { deps } = makeDeps(pool);
     const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_host_status', {
       host: '10.0.0.6',
     });
     expect(isError).toBe(true);
-    expect(payload.errorCode).toBe('AMBIGUOUS_HOST');
-    const data = payload.data as Record<string, unknown>;
-    const candidates = data.candidates as Array<Record<string, unknown>>;
-    expect(candidates.map((h) => h.id)).toEqual(['web-2', 'web-2b']);
+    expect(payload.errorCode).toBe('HOST_NOT_FOUND');
+  });
+
+  it('requires a complete HostRef for Cindy-local profiles', async () => {
+    const { pool } = makeFakePool([
+      snapshot({ id: 'cindy:profile-1', source: 'manual', alias: undefined, hostname: '10.0.0.5' }),
+    ]);
+    const { deps } = makeDeps(pool);
+
+    const byRef = await callParsed(makeRegistry(deps), 'ssh_host_status', {
+      host: 'cindy:profile-1',
+    });
+    expect(byRef.isError).toBe(false);
+    expect((byRef.payload.host as Record<string, unknown>).hostRef).toBe('cindy:profile-1');
+
+    const byDisplayName = await callParsed(makeRegistry(deps), 'ssh_host_status', {
+      host: 'cindy:profile-1.example.com',
+    });
+    expect(byDisplayName.isError).toBe(true);
+    expect(byDisplayName.payload.errorCode).toBe('HOST_NOT_FOUND');
+  });
+
+  it('treats known namespace prefixes as HostRefs, even when an SSH alias contains a colon', async () => {
+    const { pool } = makeFakePool([
+      snapshot({
+        id: 'ssh-config:cindy:build',
+        source: 'ssh-config',
+        alias: 'cindy:build',
+      }),
+    ]);
+    const { deps } = makeDeps(pool);
+
+    const bare = await callParsed(makeRegistry(deps), 'ssh_host_status', {
+      host: 'cindy:build',
+    });
+    expect(bare.isError).toBe(true);
+    expect(bare.payload.errorCode).toBe('HOST_NOT_FOUND');
+
+    const explicit = await callParsed(makeRegistry(deps), 'ssh_host_status', {
+      host: 'ssh-config:cindy:build',
+    });
+    expect(explicit.isError).toBe(false);
+    expect((explicit.payload.host as Record<string, unknown>).hostRef).toBe(
+      'ssh-config:cindy:build',
+    );
   });
 });
 
@@ -218,17 +275,17 @@ describe('ssh_exec', () => {
     const { pool, execCalls } = makeFakePool([snapshot({ id: 'web-1', hostname: '10.0.0.5' })]);
     const { deps, ensureReadyCalls } = makeDeps(pool);
     const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_exec', {
-      host: '10.0.0.5', // hostname 输入也要解析回 alias 再 ensureReady
+      host: 'web-1',
       command: 'uname -a',
     });
 
     expect(isError).toBe(false);
-    expect(payload).toMatchObject({ ok: true, host: 'web-1', exitCode: 0, stdout: 'ok\n' });
-    expect(ensureReadyCalls).toEqual(['web-1']);
+    expect(payload).toMatchObject({ ok: true, host: 'ssh-config:web-1', exitCode: 0, stdout: 'ok\n' });
+    expect(ensureReadyCalls).toEqual(['ssh-config:web-1']);
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0].cmd).toBe('uname -a');
     expect(execCalls[0].opts?.timeoutMs).toBe(60_000);
-    expect(execCalls[0].opts?.label).toContain('web-1');
+    expect(execCalls[0].opts?.label).toContain('ssh-config:web-1');
     // 源头字节 cap 必须透传给 RemoteHost.exec(PR #874 review:防无上限输出攒爆内存)。
     expect(execCalls[0].opts?.maxOutputBytes).toBe(512 * 1024);
   });
@@ -486,9 +543,9 @@ describe('cindy_ssh MCP server (in-process smoke)', () => {
     });
     const callPayload = JSON.parse(
       (callResult.content as Array<{ type: string; text: string }>)[0].text,
-    ) as { ok: boolean; hosts: Array<{ id: string }> };
+    ) as { ok: boolean; hosts: Array<{ hostRef: string }> };
     expect(callPayload.ok).toBe(true);
-    expect(callPayload.hosts.map((h) => h.id)).toEqual(['web-1']);
+    expect(callPayload.hosts.map((h) => h.hostRef)).toEqual(['ssh-config:web-1']);
 
     await cleanup();
   });

@@ -704,6 +704,40 @@ describe('Maker session creation singleflight', () => {
     await Promise.all([local.close(), remote.close(), other.close()]);
   });
 
+  it('uses the canonical runtime remote id for Codex thread claims without rewriting persisted identity', async () => {
+    const sharedThread = '24242424-2424-2424-2424-242424242424';
+    const startSession = vi.fn(async (opts: CreateSessionOptions) =>
+      createHandle({ id: opts.resumeSessionId! }),
+    );
+    const storage = createStorage();
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) },
+      storage,
+      logger: createLogger(),
+    });
+    const base = {
+      agentKind: 'codex' as const,
+      workingDir: '/repo',
+      model: 'gpt-5.4',
+      resumeSessionId: sharedThread,
+      remoteHostRuntimeId: 'ssh-config:ci.example',
+    };
+
+    const legacy = await maker.createSession({
+      ...base,
+      id: 'session-legacy-hostref',
+      remoteHostId: 'ci.example',
+    });
+    await expect(maker.createSession({
+      ...base,
+      id: 'session-canonical-hostref',
+      remoteHostId: 'ssh-config:ci.example',
+    })).rejects.toThrow(/already active in another Cindy task/i);
+
+    expect((await storage.get('session-legacy-hostref'))?.remoteHostId).toBe('ci.example');
+    await legacy.close();
+  });
+
   it('releases a provisional Codex thread claim when startup fails', async () => {
     const threadId = '44444444-4444-4444-4444-444444444444';
     const startSession = vi.fn()

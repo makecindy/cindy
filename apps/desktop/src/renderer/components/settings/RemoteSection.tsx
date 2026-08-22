@@ -1,9 +1,11 @@
 /**
  * RemoteSection — Settings → Remote tab.
  *
- * Phase A: list SSH hosts (sourced from ~/.ssh/config + ones added here),
- * connect/disconnect, add a new host, remove a manually-added host.
- * No agent-on-remote yet — that's Phase B.
+ * Lists two explicit ownership domains:
+ *   - OpenSSH config hosts: discovered through Include + compute, connection
+ *     fields are read-only and follow external config changes.
+ *   - Cindy-local profiles: stored in remote-profiles.json and editable here.
+ * Selecting an existing SSH host never writes ~/.ssh/config.
  *
  * Design: matches ConnectionsSection card layout. Inline add-form
  * (no modal) keeps the surface area small for this first version.
@@ -11,12 +13,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, Server, RefreshCw, Trash2, ChevronRight, ChevronDown, KeyRound, Pencil } from 'lucide-react';
+import { Plus, Server, RefreshCw, Trash2, ChevronRight, ChevronDown, KeyRound, Pencil, Copy } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
 import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { LEGACY_AGENT_PROXY_REMOTE_PORT, normalizeAgentProxyUrl } from '../../../shared/agentProxyConfig';
 
 import { RemoteHostDetail } from './RemoteHostDetail';
@@ -34,6 +37,7 @@ interface RowProps {
   onRemove: () => void;
   onSetupKey: () => void;
   onEdit: () => void;
+  onCopy: () => void;
   onToggleAutoConnect: (next: boolean) => void;
 }
 
@@ -65,6 +69,7 @@ function HostRow({
   onRemove,
   onSetupKey,
   onEdit,
+  onCopy,
   onToggleAutoConnect,
 }: RowProps) {
   const { t } = useTranslation();
@@ -119,7 +124,7 @@ function HostRow({
             className="text-14 font-medium leading-tight"
             style={{ color: 'var(--settings-section-title)' }}
           >
-            {snap.config.id}
+            {snap.config.displayName ?? snap.config.alias ?? snap.config.id}
           </span>
           <span
             className="h-1.5 w-1.5 rounded-full"
@@ -227,9 +232,22 @@ function HostRow({
             <span className="relative top-px">{t('settings.remote.button.disconnect')}</span>
           </button>
         )}
-        {/* Edit always available — surgical update preserves any hand-written
-            directives (ProxyJump, ServerAliveInterval, ...) the user may
-            have added in ~/.ssh/config. */}
+        {snap.config.source === 'ssh-config' && (
+          <button
+            type="button"
+            onClick={onCopy}
+            disabled={busy}
+            aria-label={t('settings.remote.button.copyToCindy')}
+            title={t('settings.remote.button.copyToCindy')}
+            className={cn(
+              'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
+              busy && 'cursor-not-allowed opacity-60',
+            )}
+            style={{ color: 'var(--settings-integration-subtitle)' }}
+          >
+            <Copy size={14} />
+          </button>
+        )}
         <button
           type="button"
           onClick={onEdit}
@@ -244,7 +262,7 @@ function HostRow({
         >
           <Pencil size={14} />
         </button>
-        {snap.config.source === 'manual' && (
+        {snap.config.deletable === true && (
           <button
             type="button"
             onClick={onRemove}
@@ -281,6 +299,13 @@ interface AddFormState {
   agentProxyRemotePort: string;
   /** env 模式: 远端可达的代理 URL。 */
   agentProxyUrl: string;
+}
+
+interface RemoteSourceDiagnostic {
+  path: string;
+  kind: string;
+  message: string;
+  recoveryHint: string;
 }
 
 const DEFAULT_AGENT_PROXY_REMOTE_PORT = String(LEGACY_AGENT_PROXY_REMOTE_PORT);
@@ -373,19 +398,27 @@ export function parseProxyUrlInput(input: string): string | null {
 
 interface HostFormProps {
   /**
-   * 'add' → blank form, alias editable, submit creates a new host.
-   * 'edit' → form pre-filled with `initial`, alias locked (renaming is
-   *          rename + re-add — keeps ~/.ssh/config consistency simple),
-   *          submit updates the existing host.
+   * 'add' → blank form; the first field is the Cindy-local display name.
+   * 'edit' → Cindy profiles expose all literal fields; SSH config hosts expose
+   *          only Cindy-owned display/proxy preferences.
    */
   mode: 'add' | 'edit';
+  /** SSH config hosts only expose Cindy-owned preferences in this form. */
+  connectionReadOnly?: boolean;
   initial?: AddFormState;
   busy: boolean;
   onSubmit: (form: AddFormState) => void;
   onCancel: () => void;
 }
 
-function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
+function HostForm({
+  mode,
+  connectionReadOnly = false,
+  initial,
+  busy,
+  onSubmit,
+  onCancel,
+}: HostFormProps) {
   const { t } = useTranslation();
   const [form, setForm] = useState<AddFormState>(initial ?? EMPTY_FORM);
   // Local dialog state. Three open modes — they share the same dialog but
@@ -399,12 +432,23 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
   //               Pick fills identityFile, KEEPS authMethod=agent.
   const [keysOpenMode, setKeysOpenMode] = useState<'manage' | 'pick' | 'pinPick' | null>(null);
   const isEdit = mode === 'edit';
+  const configuredAuth = form.authMethod === 'agent'
+    ? form.identityFile
+      ? t('settings.remote.copy.authAgentPinned', {
+          key: form.identityFile.split(/[/\\]/).pop(),
+        })
+      : t('settings.remote.copy.authAgent')
+    : t('settings.remote.copy.authKey', {
+        key: form.identityFile.split(/[/\\]/).pop() ?? '',
+      });
 
   const valid = useMemo(() => {
-    if (!form.id.trim() || /\s|[*?!]/.test(form.id)) return false;
-    if (!form.hostname.trim()) return false;
-    if (!form.user.trim()) return false;
-    if (form.authMethod === 'key' && !form.identityFile.trim()) return false;
+    if (!form.id.trim()) return false;
+    if (!connectionReadOnly) {
+      if (!form.hostname.trim()) return false;
+      if (!form.user.trim()) return false;
+      if (form.authMethod === 'key' && !form.identityFile.trim()) return false;
+    }
     if (form.agentProxyEnabled) {
       if (form.agentProxyMode === 'tunnel') {
         if (!parseProxyAddrInput(form.agentProxyAddr)) return false;
@@ -414,7 +458,7 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
       }
     }
     return true;
-  }, [form]);
+  }, [connectionReadOnly, form]);
 
   return (
     <div
@@ -430,38 +474,49 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
           : t('settings.remote.add.title')}
       </p>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className={connectionReadOnly ? 'flex flex-col gap-3' : 'grid grid-cols-2 gap-3'}>
         <LabeledInput
-          label={t('settings.remote.add.alias')}
-          placeholder="my-server"
+          label={t('settings.remote.add.displayName')}
+          placeholder={t('settings.remote.add.displayNamePlaceholder')}
           value={form.id}
           onChange={(v) => setForm({ ...form, id: v })}
-          // Alias / Host directive is the join key between ~/.ssh/config and
-          // our pool, AND the name a user may have typed in terminal scripts.
-          // Renaming via UI = remove + re-add (out of scope to make safe).
-          disabled={isEdit}
         />
-        <LabeledInput
-          label={t('settings.remote.add.hostname')}
-          placeholder="example.com or 1.2.3.4"
-          value={form.hostname}
-          onChange={(v) => setForm({ ...form, hostname: v })}
-        />
-        <LabeledInput
-          label={t('settings.remote.add.user')}
-          placeholder="ubuntu"
-          value={form.user}
-          onChange={(v) => setForm({ ...form, user: v })}
-        />
-        <LabeledInput
-          label={t('settings.remote.add.port')}
-          placeholder="22"
-          value={form.port}
-          onChange={(v) => setForm({ ...form, port: v.replace(/[^0-9]/g, '') })}
-        />
+        {!connectionReadOnly && (
+          <>
+            <LabeledInput
+              label={t('settings.remote.add.hostname')}
+              placeholder="example.com or 1.2.3.4"
+              value={form.hostname}
+              onChange={(v) => setForm({ ...form, hostname: v })}
+            />
+            <LabeledInput
+              label={t('settings.remote.add.user')}
+              placeholder="ubuntu"
+              value={form.user}
+              onChange={(v) => setForm({ ...form, user: v })}
+            />
+            <LabeledInput
+              label={t('settings.remote.add.port')}
+              placeholder="22"
+              value={form.port}
+              onChange={(v) => setForm({ ...form, port: v.replace(/[^0-9]/g, '') })}
+            />
+          </>
+        )}
       </div>
 
-      <div className="flex flex-col gap-2">
+      {connectionReadOnly && (
+        <div className="flex flex-col gap-1">
+          <p className="text-12" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            {t('settings.remote.edit.sshConfigReadOnly')}
+          </p>
+          <p className="text-12" style={{ color: 'var(--settings-integration-subtitle)' }}>
+            {t('settings.remote.edit.authSummary', { auth: configuredAuth })}
+          </p>
+        </div>
+      )}
+
+      {!connectionReadOnly && <div className="flex flex-col gap-2">
         <label
           className="text-12 font-medium"
           style={{ color: 'var(--settings-section-sublabel)' }}
@@ -603,11 +658,12 @@ function HostForm({ mode, initial, busy, onSubmit, onCancel }: HostFormProps) {
             </div>
           </div>
         )}
-      </div>
+      </div>}
 
       {/* ── Agent Proxy ──
-          开关 + 双模式。pref 落 desktop 本地 ssh-host-prefs.json (不写
-          ~/.ssh/config)。tunnel 模式: 远端 127.0.0.1:<固定端口> → 独立 SSH
+          开关 + 双模式。SSH config host 落 ssh-host-prefs.json，Cindy host
+          落 remote-profiles.json；两边都不写 ~/.ssh/config。tunnel 模式:
+          远端 127.0.0.1:<固定端口> → 独立 SSH
           隧道 → 本机 Proxy; env 模式: 只注入用户给的远端可达 URL。
           codex daemon 经 env marker (重启生效), claude 按 session env (即时)。 */}
       <div className="flex flex-col gap-2">
@@ -866,7 +922,10 @@ function RadioOption({
 
 export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}) {
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
   const [hosts, setHosts] = useState<RemoteHostSnapshot[]>([]);
+  const [configError, setConfigError] = useState<RemoteSourceDiagnostic | null>(null);
+  const [profileError, setProfileError] = useState<RemoteSourceDiagnostic | null>(null);
   const [adding, setAdding] = useState(false);
   /** Per-host busy flag so per-row buttons disable independently of each other. */
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -901,6 +960,8 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
     try {
       const res = await window.electronAPI.remoteSsh.list();
       setHosts(res.hosts);
+      setConfigError(res.configError);
+      setProfileError(res.profileError);
       remoteSshHostsStore.replace(res.hosts);
     } catch (err) {
       toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.loadFailed' })));
@@ -927,8 +988,12 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
     try {
       const res = await window.electronAPI.remoteSsh.reloadConfig();
       setHosts(res.hosts as RemoteHostSnapshot[]);
+      setConfigError(res.configError);
+      setProfileError(res.profileError);
       remoteSshHostsStore.replace(res.hosts);
-      toast.success(t('settings.remote.toast.reloaded'));
+      if (!res.configError && !res.profileError) {
+        toast.success(t('settings.remote.toast.reloaded'));
+      }
     } catch (err) {
       toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.loadFailed' })));
     }
@@ -994,6 +1059,17 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
   }, [t]);
 
   const handleRemove = useCallback(async (id: string) => {
+    const snap = hosts.find((host) => host.config.id === id);
+    if (!snap) return;
+    const confirmed = await confirm({
+      title: t('settings.remote.remove.confirmTitle'),
+      description: t('settings.remote.remove.confirmDescription', {
+        name: snap.config.displayName ?? snap.config.id,
+      }),
+      confirmText: t('settings.remote.remove.confirm'),
+      confirmVariant: 'destructive',
+    });
+    if (!confirmed) return;
     setBusy(id, true);
     try {
       await window.electronAPI.remoteSsh.remove(id);
@@ -1004,7 +1080,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
     } finally {
       setBusy(id, false);
     }
-  }, [setBusy, t]);
+  }, [confirm, hosts, setBusy, t]);
 
   const handleEdit = useCallback(async (form: AddFormState) => {
     setEditBusy(true);
@@ -1021,7 +1097,8 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
         return;
       }
       await window.electronAPI.remoteSsh.update({
-        id: form.id.trim(),
+        id: editingId ?? form.id.trim(),
+        displayName: form.id.trim(),
         hostname: form.hostname.trim(),
         user: form.user.trim(),
         port: Number.isFinite(port) && port > 0 ? port : 22,
@@ -1040,7 +1117,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
     } finally {
       setEditBusy(false);
     }
-  }, [refresh, t]);
+  }, [editingId, refresh, t]);
 
   const handleAdd = useCallback(async (form: AddFormState) => {
     setAddBusy(true);
@@ -1055,6 +1132,7 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       }
       await window.electronAPI.remoteSsh.add({
         id: form.id.trim(),
+        displayName: form.id.trim(),
         hostname: form.hostname.trim(),
         user: form.user.trim(),
         port: Number.isFinite(port) && port > 0 ? port : 22,
@@ -1071,6 +1149,97 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
       setAddBusy(false);
     }
   }, [refresh, t]);
+
+  const handleCopyToCindy = useCallback(async (snap: RemoteHostSnapshot) => {
+    const auth = snap.config.authMethod === 'agent'
+      ? snap.config.identityFile
+        ? t('settings.remote.copy.authAgentPinned', { key: snap.config.identityFile.split(/[/\\]/).pop() })
+        : t('settings.remote.copy.authAgent')
+      : t('settings.remote.copy.authKey', { key: snap.config.identityFile?.split(/[/\\]/).pop() ?? '' });
+    const target = `${snap.config.user}@${snap.config.hostname}:${snap.config.port}`;
+    const confirmed = await confirm({
+      title: t('settings.remote.button.copyToCindy'),
+      description: t('settings.remote.copy.confirm', { target, auth }),
+      confirmText: t('settings.remote.button.copyToCindy'),
+      cancelText: t('settings.remote.add.cancel'),
+      autoFocusConfirm: true,
+    });
+    if (!confirmed) return;
+    setBusy(snap.config.id, true);
+    try {
+      await window.electronAPI.remoteSsh.copyToCindy(snap.config.id);
+      await refresh();
+      toast.success(t('settings.remote.copy.done'));
+    } catch (err) {
+      toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'settings.remote.toast.addFailed' })));
+    } finally {
+      setBusy(snap.config.id, false);
+    }
+  }, [confirm, refresh, setBusy, t]);
+
+  const sshConfigHosts = useMemo(
+    () => hosts.filter((host) => host.config.source === 'ssh-config'),
+    [hosts],
+  );
+  const cindyHosts = useMemo(
+    () => hosts.filter((host) => host.config.source === 'manual'),
+    [hosts],
+  );
+
+  const renderHost = (snap: RemoteHostSnapshot, bordered: boolean) => {
+    const expanded = expandedIds.has(snap.config.id) && snap.status === 'ready';
+    return (
+      <div
+        key={snap.config.id}
+        style={bordered ? { borderTop: '1px solid var(--settings-theme-card-border)' } : undefined}
+      >
+        <HostRow
+          snap={snap}
+          busy={busyIds.has(snap.config.id)}
+          expanded={expanded}
+          onToggleExpanded={() => toggleExpanded(snap.config.id)}
+          onConnect={() => handleConnect(snap.config.id)}
+          onDisconnect={() => handleDisconnect(snap.config.id)}
+          onRemove={() => handleRemove(snap.config.id)}
+          onSetupKey={() => setKeySetupHostId(snap.config.id)}
+          onEdit={() => setEditingId(snap.config.id)}
+          onCopy={() => void handleCopyToCindy(snap)}
+          onToggleAutoConnect={(next) => void handleSetAutoConnect(snap.config.id, next)}
+        />
+        {editingId === snap.config.id && (
+          <HostForm
+            mode="edit"
+            connectionReadOnly={snap.config.source === 'ssh-config'}
+            busy={editBusy}
+            initial={{
+              id: snap.config.displayName ?? snap.config.id,
+              hostname: snap.config.hostname,
+              user: snap.config.user,
+              port: String(snap.config.port ?? 22),
+              authMethod: snap.config.authMethod === 'key' ? 'key' : 'agent',
+              identityFile: snap.config.identityFile ?? '',
+              agentProxyEnabled: snap.agentProxy?.enabled === true,
+              agentProxyMode: snap.agentProxy?.mode === 'env' ? 'env' : 'tunnel',
+              agentProxyAddr: snap.agentProxy?.mode === 'tunnel'
+                ? `${snap.agentProxy.localHost}:${snap.agentProxy.localPort}`
+                : '127.0.0.1:7890',
+              agentProxyRemotePort: snap.agentProxy?.mode === 'tunnel'
+                ? String(snap.agentProxy.remotePort)
+                : DEFAULT_AGENT_PROXY_REMOTE_PORT,
+              agentProxyUrl: snap.agentProxy?.mode === 'env'
+                ? snap.agentProxy.proxyUrl
+                : 'http://127.0.0.1:7890',
+            }}
+            onSubmit={handleEdit}
+            onCancel={() => setEditingId(null)}
+          />
+        )}
+        {expanded && editingId !== snap.config.id && (
+          <RemoteHostDetail hostId={snap.config.id} />
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -1112,35 +1281,46 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
             <KeyRound size={14} />
             <span className="relative top-px">{t('settings.remote.button.manageKeys')}</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setAdding((v) => !v)}
-            className="flex h-8 items-center gap-1.5 rounded-full px-[14px] text-13 leading-none font-medium border"
-            style={{
-              backgroundColor: 'var(--settings-btn-secondary-bg)',
-              borderColor: 'var(--settings-btn-secondary-border)',
-              color: 'var(--settings-btn-secondary-text)',
-            }}
-          >
-            <Plus size={14} />
-            <span className="relative top-px">{t('settings.remote.button.add')}</span>
-          </button>
         </div>
       </div>
+
+      {configError && (
+        <div
+          className="rounded-lg border px-4 py-3 text-12"
+          style={{ borderColor: 'var(--error-fg)', color: 'var(--error-fg)' }}
+        >
+          <div>{t('settings.remote.error.config', { message: configError.message })}</div>
+          <div className="mt-1 break-all">
+            {t('settings.remote.error.path', { path: configError.path })}
+          </div>
+          <div className="mt-1">
+            {t(configError.kind === 'limit'
+              ? 'settings.remote.error.configLimitRecovery'
+              : 'settings.remote.error.configRecovery')}
+          </div>
+        </div>
+      )}
+      {profileError && (
+        <div
+          className="rounded-lg border px-4 py-3 text-12"
+          style={{ borderColor: 'var(--error-fg)', color: 'var(--error-fg)' }}
+        >
+          <div>{t('settings.remote.error.profile', { message: profileError.message })}</div>
+          <div className="mt-1 break-all">
+            {t('settings.remote.error.path', { path: profileError.path })}
+          </div>
+          <div className="mt-1">{t('settings.remote.error.profileRecovery')}</div>
+        </div>
+      )}
 
       <div
         className={cn('flex flex-col rounded-xl', 'bg-[var(--settings-theme-card-bg)]')}
         style={{ border: '1px solid var(--settings-theme-card-border)' }}
       >
-        {adding && (
-          <HostForm
-            mode="add"
-            busy={addBusy}
-            onSubmit={handleAdd}
-            onCancel={() => setAdding(false)}
-          />
-        )}
-        {hosts.length === 0 && !adding && (
+        <div className="px-5 py-2 text-12 font-medium" style={{ color: 'var(--settings-section-sublabel)' }}>
+          {t('settings.remote.section.sshConfig')}
+        </div>
+        {sshConfigHosts.length === 0 && (
           <div className="px-5 py-6 text-center">
             <p className="text-13" style={{ color: 'var(--settings-integration-subtitle)' }}>
               {t('settings.remote.empty.title')}
@@ -1153,60 +1333,44 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
             </p>
           </div>
         )}
-        {hosts.map((snap, idx) => {
-          const expanded = expandedIds.has(snap.config.id) && snap.status === 'ready';
-          return (
-            <div
-              key={snap.config.id}
-              style={idx > 0 || adding
-                ? { borderTop: '1px solid var(--settings-theme-card-border)' }
-                : undefined}
-            >
-              <HostRow
-                snap={snap}
-                busy={busyIds.has(snap.config.id)}
-                expanded={expanded}
-                onToggleExpanded={() => toggleExpanded(snap.config.id)}
-                onConnect={() => handleConnect(snap.config.id)}
-                onDisconnect={() => handleDisconnect(snap.config.id)}
-                onRemove={() => handleRemove(snap.config.id)}
-                onSetupKey={() => setKeySetupHostId(snap.config.id)}
-                onEdit={() => setEditingId(snap.config.id)}
-                onToggleAutoConnect={(next) => void handleSetAutoConnect(snap.config.id, next)}
-              />
-              {editingId === snap.config.id && (
-                <HostForm
-                  mode="edit"
-                  busy={editBusy}
-                  initial={{
-                    id: snap.config.id,
-                    hostname: snap.config.hostname,
-                    user: snap.config.user,
-                    port: String(snap.config.port ?? 22),
-                    authMethod: snap.config.authMethod === 'key' ? 'key' : 'agent',
-                    identityFile: snap.config.identityFile ?? '',
-                    agentProxyEnabled: snap.agentProxy?.enabled === true,
-                    agentProxyMode: snap.agentProxy?.mode === 'env' ? 'env' : 'tunnel',
-                    agentProxyAddr: snap.agentProxy?.mode === 'tunnel'
-                      ? `${snap.agentProxy.localHost}:${snap.agentProxy.localPort}`
-                      : '127.0.0.1:7890',
-                    agentProxyRemotePort: snap.agentProxy?.mode === 'tunnel'
-                      ? String(snap.agentProxy.remotePort)
-                      : DEFAULT_AGENT_PROXY_REMOTE_PORT,
-                    agentProxyUrl: snap.agentProxy?.mode === 'env'
-                      ? snap.agentProxy.proxyUrl
-                      : 'http://127.0.0.1:7890',
-                  }}
-                  onSubmit={handleEdit}
-                  onCancel={() => setEditingId(null)}
-                />
-              )}
-              {expanded && editingId !== snap.config.id && (
-                <RemoteHostDetail hostId={snap.config.id} />
-              )}
-            </div>
-          );
-        })}
+        {sshConfigHosts.map((snap) => renderHost(snap, true))}
+
+        {cindyHosts.length > 0 && (
+          <div
+            className="px-5 py-2 text-12 font-medium"
+            style={{
+              borderTop: '1px solid var(--settings-theme-card-border)',
+              color: 'var(--settings-section-sublabel)',
+            }}
+          >
+            {t('settings.remote.section.cindy')}
+          </div>
+        )}
+        {cindyHosts.map((snap) => renderHost(snap, true))}
+
+        <div className="px-5 py-4" style={{ borderTop: '1px solid var(--settings-theme-card-border)' }}>
+          <button
+            type="button"
+            onClick={() => setAdding((value) => !value)}
+            className="flex h-8 items-center gap-1.5 rounded-full px-[14px] text-13 leading-none font-medium border"
+            style={{
+              backgroundColor: 'var(--settings-btn-secondary-bg)',
+              borderColor: 'var(--settings-btn-secondary-border)',
+              color: 'var(--settings-btn-secondary-text)',
+            }}
+          >
+            <Plus size={14} />
+            <span className="relative top-px">{t('settings.remote.button.manualAdd')}</span>
+          </button>
+        </div>
+        {adding && (
+          <HostForm
+            mode="add"
+            busy={addBusy}
+            onSubmit={handleAdd}
+            onCancel={() => setAdding(false)}
+          />
+        )}
       </div>
 
       <SshKeySetupDialog

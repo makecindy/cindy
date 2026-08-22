@@ -1,4 +1,5 @@
 import { normalizeWorkingDirForGrouping } from './workingDir.js';
+import { canonicalRemoteHostRef } from './remoteHostRef.js';
 
 export type ProjectScope = 'local' | 'remote';
 
@@ -71,7 +72,7 @@ export function projectIdentityKey(scope: ProjectScope, workingDir: string, remo
   const normalizedWorkingDir = normalizeWorkingDirForGrouping(workingDir);
   if (normalizedWorkingDir == null) return `local:${workingDir}`;
   if (scope === 'remote' && remoteHostId) {
-    return `remote:${encodeURIComponent(remoteHostId)}:${normalizedWorkingDir}`;
+    return `remote:${encodeURIComponent(canonicalRemoteHostRef(remoteHostId))}:${normalizedWorkingDir}`;
   }
   return `local:${normalizedWorkingDir}`;
 }

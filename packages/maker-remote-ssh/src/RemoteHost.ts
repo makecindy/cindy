@@ -21,7 +21,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetails } from 'ssh2';
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
-import { resolveAuth } from './credentials.js';
+import { pinnedPublicKeyCandidates, resolveAuth } from './credentials.js';
 import { type HostKeyStore, hostKeyFingerprint, hostKeyId, decideHostKey } from './hostKeys.js';
 
 export interface RemoteHostDeps {
@@ -166,6 +166,7 @@ interface ForwardRecord {
  * 在当前连接重试一次, 而不是把隧道误标 active 或等下次 reconnect。
  */
 class StaleForwardArmError extends Error {}
+class StaleConnectionAttemptError extends Error {}
 
 function forwardKey(spec: Pick<RemoteForwardSpec, 'localHost' | 'localPort'>): string {
   return `${spec.localHost}:${spec.localPort}`;
@@ -239,7 +240,11 @@ export function authFailureHint(cfg: HostConfig): string {
   }
   if (cfg.authMethod === 'key') {
     const file = cfg.identityFile ?? '(unset)';
-    return `Identity file ${file} was rejected by the remote. Verify the file is the right key for ${cfg.user}@${cfg.hostname}, or run \`ssh-copy-id ${portArg}-i ${file}.pub ${cfg.user}@${cfg.hostname}\` to install it.`;
+    const candidates = pinnedPublicKeyCandidates(file);
+    const installCommands = candidates
+      .map((publicKey) => `\`ssh-copy-id ${portArg}-i ${publicKey} ${cfg.user}@${cfg.hostname}\``)
+      .join(' or ');
+    return `Identity file ${file} was rejected by the remote. Verify it is the right key, then run ${installCommands} to install the matching public key.`;
   }
   return `Authentication failed connecting as ${cfg.user}@${cfg.hostname}.`;
 }
@@ -338,6 +343,8 @@ export class RemoteHost {
   private lastAuthLabel: string | undefined;
   private statusChangedAt = Date.now();
   private client: Client | null = null;
+  /** Monotonic token that fences callbacks from superseded ssh2 clients. */
+  private connectionGeneration = 0;
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   /** true = user explicitly asked to disconnect; suppress auto-reconnect. */
@@ -439,6 +446,10 @@ export class RemoteHost {
    */
   async disconnect(): Promise<void> {
     this.userDisconnected = true;
+    // Advance before client.end(): ssh2 may emit close synchronously, and its
+    // callbacks must already be stale before a replacement config/connect can
+    // become current.
+    this.connectionGeneration += 1;
     this.clearReconnectTimer();
     this.markForwardsDisarmed();
     if (this.client) {
@@ -1067,11 +1078,17 @@ export class RemoteHost {
    * onError maps to `hostKeyError`). Fails closed: a missing store or a read
    * error refuses the connect rather than trusting an unverified key.
    */
-  private async verifyHostKey(hostKey: Buffer): Promise<boolean> {
+  private async verifyHostKey(
+    hostKey: Buffer,
+    config: HostConfig,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    const setHostKeyError = (message: string): void => {
+      if (isCurrent()) this.hostKeyError = message;
+    };
     const store = this.hostKeys;
     if (!store) {
-      this.hostKeyError =
-        'SSH host key verification is not configured; refusing to connect without it.';
+      setHostKeyError('SSH host key verification is not configured; refusing to connect without it.');
       this.log.error('ssh host key store missing — refusing connect', { id: this.id });
       return false;
     }
@@ -1080,12 +1097,15 @@ export class RemoteHost {
     // update on reconnect without restarting the app.
     store.reload();
     const presented = hostKeyFingerprint(hostKey);
-    const storeKey = hostKeyId(this.cfg.hostname, this.cfg.port);
+    // Use the immutable config captured by this connect attempt. A refresh may
+    // update this.cfg while an old verifier is still awaiting disk I/O; using
+    // the live config would persist the old server's key under the new target.
+    const storeKey = hostKeyId(config.hostname, config.port);
     let stored: string | null;
     try {
       stored = await store.get(storeKey);
     } catch (err) {
-      this.hostKeyError = `failed to read trusted host keys: ${(err as Error).message}`;
+      setHostKeyError(`failed to read trusted host keys: ${(err as Error).message}`);
       this.log.error('ssh known-hosts read failed — refusing connect', {
         id: this.id,
         error: (err as Error).message,
@@ -1094,6 +1114,7 @@ export class RemoteHost {
     }
 
     const decision = decideHostKey(stored, presented);
+    if (!isCurrent()) return false;
     if (decision === 'match') return true;
     if (decision === 'trust-new') {
       try {
@@ -1102,7 +1123,7 @@ export class RemoteHost {
         // Cannot persist the trusted fingerprint — refuse the connection.
         // Proceeding without persistence means the next reconnect would
         // re-enter trust-new and silently accept any key, defeating TOFU.
-        this.hostKeyError = `failed to persist trusted host key: ${(err as Error).message}`;
+        setHostKeyError(`failed to persist trusted host key: ${(err as Error).message}`);
         this.log.error('ssh known-hosts write failed — refusing connect', {
           id: this.id,
           error: (err as Error).message,
@@ -1117,11 +1138,12 @@ export class RemoteHost {
       return true;
     }
     // mismatch
-    this.hostKeyError =
+    setHostKeyError(
       `Remote host key for ${storeKey} changed (${presented}) and no longer matches the ` +
       `previously trusted key. This can mean the server was reinstalled — or a ` +
       `man-in-the-middle. Connection refused. If you trust the change, remove the stale ` +
-      `entry from maker's known hosts and reconnect.`;
+      `entry from maker's known hosts and reconnect.`,
+    );
     this.log.error('ssh host key mismatch — refusing connect', {
       id: this.id,
       host: storeKey,
@@ -1132,14 +1154,17 @@ export class RemoteHost {
   }
 
   private async doConnect(): Promise<void> {
+    const generation = ++this.connectionGeneration;
+    const config = this.cfg;
     this.setStatus('connecting');
     this.hostKeyError = null;
     this.lastAuthError = null;
 
     let auth;
     try {
-      auth = await resolveAuth(this.cfg);
+      auth = await resolveAuth(config);
     } catch (err) {
+      if (generation !== this.connectionGeneration) throw err;
       const msg = (err as Error).message;
       this.lastError = msg;
       // Keep the full error so concurrent connect() joiners can rethrow it
@@ -1149,19 +1174,25 @@ export class RemoteHost {
       throw err;
     }
 
+    if (generation !== this.connectionGeneration || this.userDisconnected) {
+      throw new StaleConnectionAttemptError('SSH connection attempt was superseded');
+    }
+
     const client = new Client();
     this.client = client;
+    const isCurrent = (): boolean =>
+      generation === this.connectionGeneration && this.client === client;
 
     const connectConfig: ConnectConfig = {
-      host: this.cfg.hostname,
-      port: this.cfg.port,
-      username: this.cfg.user,
+      host: config.hostname,
+      port: config.port,
+      username: config.user,
       readyTimeout: READY_TIMEOUT_MS,
       keepaliveInterval: KEEPALIVE_INTERVAL_MS,
       keepaliveCountMax: KEEPALIVE_COUNT_MAX,
       // TOFU host key check — without this ssh2 trusts any presented key (MITM).
       hostVerifier: (hostKey: Buffer, verify: (valid: boolean) => void): void => {
-        void this.verifyHostKey(hostKey).then(verify, () => verify(false));
+        void this.verifyHostKey(hostKey, config, isCurrent).then(verify, () => verify(false));
       },
       ...(auth.agent ? { agent: auth.agent } : {}),
       ...(auth.privateKey ? { privateKey: auth.privateKey } : {}),
@@ -1170,8 +1201,9 @@ export class RemoteHost {
 
     this.log.debug('ssh connecting', {
       id: this.id,
-      hostname: this.cfg.hostname,
-      port: this.cfg.port,
+      alias: config.alias ?? null,
+      resolvedHost: config.hostname,
+      port: config.port,
       auth: auth.label,
     });
 
@@ -1180,12 +1212,24 @@ export class RemoteHost {
 
       const onReady = () => {
         if (settled) return;
+        if (!isCurrent()) {
+          settled = true;
+          try { client.end(); } catch { /* already closed */ }
+          reject(new StaleConnectionAttemptError('SSH connection attempt was superseded'));
+          return;
+        }
         settled = true;
         this.lastError = undefined;
         this.lastAuthLabel = auth.label;
         this.reconnectAttempts = 0;
         this.setStatus('ready');
-        this.log.info('ssh ready', { id: this.id, auth: auth.label });
+        this.log.info('ssh ready', {
+          id: this.id,
+          alias: config.alias ?? null,
+          resolvedHost: config.hostname,
+          port: config.port,
+          auth: auth.label,
+        });
         // 后台重挂已登记的 remote forwards; 不阻塞 connect 返回 (session
         // 路径会自己 await ensureRemoteForward 拿到 arm 错误)。
         void this.rearmForwards();
@@ -1193,6 +1237,13 @@ export class RemoteHost {
       };
 
       const onError = (err: Error) => {
+        if (!isCurrent()) {
+          if (!settled) {
+            settled = true;
+            reject(new StaleConnectionAttemptError('SSH connection attempt was superseded'));
+          }
+          return;
+        }
         if (settled) {
           // Post-ready error — feed into reconnect path, not the connect promise.
           this.handlePostReadyError(err);
@@ -1207,11 +1258,17 @@ export class RemoteHost {
         this.lastError = this.hostKeyError
           ? this.hostKeyError
           : isAuthFailure(err.message)
-            ? authFailureHint(this.cfg)
+            ? authFailureHint(config)
             : err.message;
         this.client = null;
         this.setStatus('failed');
-        this.log.warn('ssh connect failed', { id: this.id, error: err.message });
+        this.log.warn('ssh connect failed', {
+          id: this.id,
+          alias: config.alias ?? null,
+          resolvedHost: config.hostname,
+          port: config.port,
+          error: err.message,
+        });
         // Reject with the friendly message so IPC layer's toast also gets
         // the actionable copy (it pulls from `.message`).
         const rejectErr = new Error(this.lastError);
@@ -1221,6 +1278,13 @@ export class RemoteHost {
       };
 
       const onClose = () => {
+        if (!isCurrent()) {
+          if (!settled) {
+            settled = true;
+            reject(new StaleConnectionAttemptError('SSH connection attempt was superseded'));
+          }
+          return;
+        }
         if (!settled) {
           settled = true;
           const msg = this.lastError ?? 'connection closed before ready';
@@ -1237,7 +1301,9 @@ export class RemoteHost {
       // ssh2 emits 'handshake' before 'ready' — repurpose to advance state
       // so renderer can show "authenticating" instead of staying on
       // "connecting" throughout auth.
-      client.on('handshake', () => this.setStatus('authenticating'));
+      client.on('handshake', () => {
+        if (isCurrent()) this.setStatus('authenticating');
+      });
       client.on('ready', onReady);
       client.on('error', onError);
       client.on('close', onClose);
@@ -1252,7 +1318,13 @@ export class RemoteHost {
 
   private handlePostReadyError(err: Error): void {
     this.lastError = err.message;
-    this.log.warn('ssh post-ready error', { id: this.id, error: err.message });
+    this.log.warn('ssh post-ready error', {
+      id: this.id,
+      alias: this.cfg.alias ?? null,
+      resolvedHost: this.cfg.hostname,
+      port: this.cfg.port,
+      error: err.message,
+    });
     // 'close' will follow — reconnect is handled there to avoid double-scheduling.
   }
 
@@ -1341,6 +1413,13 @@ export class RemoteHost {
 
   /** Wait until status leaves {connecting, authenticating}. */
   private waitForTerminal(): Promise<void> {
+    // The terminal transition may have happened just before the listener was
+    // attached (for example, hydrate invalidation calls disconnect while a
+    // second connect() is joining the in-flight attempt). Re-read first so a
+    // duplicate/no-op status emission cannot leave the caller waiting forever.
+    if (this.status !== 'connecting' && this.status !== 'authenticating') {
+      return Promise.resolve();
+    }
     return new Promise((resolve) => {
       const off = this.onStatus((snap) => {
         if (snap.status !== 'connecting' && snap.status !== 'authenticating') {

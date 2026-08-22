@@ -43,6 +43,13 @@ import {
   type PiManagerInstallEventCallback,
 } from '@cindy/maker-remote-ssh';
 import { setPendingPiUpgrade, clearPendingUpgrade } from '../remote-ssh/cc-manager-install.js';
+import {
+  assertCurrentRemoteEndpointGeneration,
+  currentRemoteEndpointGeneration,
+  isCurrentRemoteEndpointGeneration,
+  remoteEndpointScopedKey,
+  StaleRemoteEndpointError,
+} from '../remote-ssh/endpoint-generation.js';
 
 interface Logger {
   debug(msg: string, ctx?: Record<string, unknown>): void;
@@ -77,8 +84,9 @@ export function resolvePiManagerBundlePath(): string {
   );
 }
 
-/** per-host in-flight dedup(轮 12 MEDIUM-3):preflight 与 transport 创建并发
- *  时只跑一次 probe/install/kill, 防并发 cat > 双写同一 bundle。 */
+/** per-endpoint-generation in-flight dedup(轮 12 MEDIUM-3):preflight 与
+ * transport 创建并发时只跑一次 probe/install/kill, 防并发 cat > 双写同一
+ * bundle；同一 HostRef 改指向新 endpoint 后不得复用旧机器的 promise。 */
 const piManagerInstallInFlight = new Map<string, Promise<void>>();
 
 /**
@@ -95,11 +103,23 @@ export function ensurePiManagerInstalled(
   logger: Logger,
   onEvent?: PiManagerInstallEventCallback,
 ): Promise<void> {
-  const key = host.id;
+  const generation = currentRemoteEndpointGeneration(host.id);
+  const key = remoteEndpointScopedKey(host.id, generation);
   const inFlight = piManagerInstallInFlight.get(key);
   if (inFlight) return inFlight;
-  const promise = ensurePiManagerInstalledInner(host, logger, onEvent)
-    .finally(() => piManagerInstallInFlight.delete(key));
+  const guardedOnEvent = onEvent
+    ? ((event: Parameters<PiManagerInstallEventCallback>[0]) => {
+        if (isCurrentRemoteEndpointGeneration(host.id, generation)) {
+          onEvent(event);
+        }
+      })
+    : undefined;
+  const promise = ensurePiManagerInstalledInner(host, logger, generation, guardedOnEvent)
+    .finally(() => {
+      if (piManagerInstallInFlight.get(key) === promise) {
+        piManagerInstallInFlight.delete(key);
+      }
+    });
   piManagerInstallInFlight.set(key, promise);
   return promise;
 }
@@ -120,11 +140,15 @@ export function resetPiManagerInstallInFlight(): void {
  * 或版本不匹配 → 自动重装新 bundle)→ ensurePiManagerDaemon spawn 新 daemon。
  */
 export async function runPiManagerUpgrade(host: RemoteHost, logger: Logger): Promise<void> {
+  const generation = currentRemoteEndpointGeneration(host.id);
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   logger.info('pi-manager force upgrade: killing daemon', { hostId: host.id });
-  await killRemotePiManagerDaemon(host);
+  await killRemotePiManagerDaemon(host, generation);
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   // 清 in-flight 去重(防并发 ensure 复用旧的 promise 短路跳过重装)。
-  piManagerInstallInFlight.delete(host.id);
+  piManagerInstallInFlight.delete(remoteEndpointScopedKey(host.id, generation));
   await ensurePiManagerInstalled(host, logger);
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   // 轮 22-F2 HIGH:升级成功后清 pending + 广播 available:null —— 否则 banner
   // 仍挂着, 用户可能重复点升级再触发 kill+reinstall。
   clearPendingUpgrade(host.id, 'pi');
@@ -133,9 +157,12 @@ export async function runPiManagerUpgrade(host: RemoteHost, logger: Logger): Pro
 async function ensurePiManagerInstalledInner(
   host: RemoteHost,
   logger: Logger,
+  generation: number,
   onEvent?: PiManagerInstallEventCallback,
 ): Promise<void> {
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   let probe = await probePiManager(host);
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   // 临时诊断(排查 remoteVersion:null / LAZY_CREATE_FAILED):probe 原始结果。
   logger.info('pi-manager probe debug', {
     hostId: host.id,
@@ -163,6 +190,7 @@ async function ensurePiManagerInstalledInner(
         label: 'pi-manager-node-install',
       },
     );
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (nodeResult.exitCode !== 0) {
       throw new Error(
         `remote Node.js install failed (exit ${nodeResult.exitCode}): ${nodeResult.stderr.trim().slice(0, 200) || nodeResult.stdout.trim().slice(0, 200)}`,
@@ -170,6 +198,7 @@ async function ensurePiManagerInstalledInner(
     }
     // 重 probe(node 已就绪, piManager 可能仍未装 → 走下方安装)。
     probe = await probePiManager(host);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (!probe.nodeReady) {
       throw new Error('remote Node.js install completed but bundled node still not runnable');
     }
@@ -190,7 +219,8 @@ async function ensurePiManagerInstalledInner(
       remoteProtocol: probe.piManagerProtocolVersion,
       localProtocol: PROTOCOL_VERSION,
     });
-    await killRemotePiManagerDaemon(host);
+    await killRemotePiManagerDaemon(host, generation);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     // 轮 7 HIGH:协议不兼容必须连带强制重装 bundle —— 否则版本匹配(versionMatch
     // true)但协议不匹配时, 杀 daemon 后 ensurePiManagerDaemon 会重新 spawn 磁盘
     // 上同一份(协议异常的)bundle, 下次连接又检测到不兼容, 死循环。
@@ -210,7 +240,8 @@ async function ensurePiManagerInstalledInner(
     //       spawn 自然加载新 bundle, 没有 alive session 要保护。
     // 注: 与 cc-mgr 的 UpgradeBanner 不同, pi MVP 无 banner —— 跳过升级是
     // 静默的(留 info 日志), 用户下次主动重连/重建时会感知到新版本生效。
-    const daemonAlive = await checkPiManagerDaemonAlive(host, probe.installDir);
+    const daemonAlive = await checkPiManagerDaemonAlive(host, probe.installDir, generation);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (daemonAlive) {
       // 轮 22(对齐 cc-manager-install 的「daemon alive → 不打扰」):版本差但
       // daemon 活着, 跳过升级(磁盘 bundle 保持旧版, alive session 不被打扰)。
@@ -227,6 +258,7 @@ async function ensurePiManagerInstalledInner(
       // 轮 22(对齐 cc-mgr):记 pending + 触发 UpgradeBanner, 让用户主动选时机
       // 升级(点「立即升级」→ runPiManagerUpgrade kill + 重装)。不 kill alive
       // daemon, alive session 不被打扰。
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
       setPendingPiUpgrade(host.id, probe.piManagerVersion ?? 'unknown', PI_MANAGER_BUNDLE_VERSION);
       versionMatch = true; // 跳过 install, 但仍走 ensurePiManagerDaemon 在线校验
     } else {
@@ -251,6 +283,7 @@ async function ensurePiManagerInstalledInner(
       piManagerBundlePath: bundlePath,
       ...(onEvent ? { onEvent } : {}),
     });
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (!result.ready) {
       throw new Error(`pi-manager install failed: ${result.error ?? 'unknown'}`);
     }
@@ -262,6 +295,7 @@ async function ensurePiManagerInstalledInner(
     // 之前 defer 分支(daemon 活 + 版本差)记的 hostId:pi pending, 否则 renderer
     // 继续显示 Pi 升级 banner, 用户误点 runPiManagerUpgrade 会 kill 刚起的新
     // daemon 做一次无意义的重装。
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     clearPendingUpgrade(host.id, 'pi');
   } else {
     // 快速路径诊断日志(轮 7 CRITICAL #2 —— 测试断言引用它, 且「为何跳过
@@ -278,7 +312,9 @@ async function ensurePiManagerInstalledInner(
   // 轮 22-G5 MEDIUM:复用本函数最后一次 probe(避免 ensurePiManagerDaemon
   // 内部再 probe 一次 —— 单次会话启动从 2-3 次降到 1 次远端检查)。
   // 轮 24-I2:probe 已在上方安装成功后更新为 result.probe, 此处传的是最新态。
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   await ensurePiManagerDaemon(host, { protocolVersion: PROTOCOL_VERSION, probe });
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
 }
 
 /**
@@ -375,10 +411,15 @@ export async function piManagerEnsure(
  * 必须 ps -p $PID -o command= 确认 cmdline 含 pi-manager.mjs 才是我们的 daemon。
  * 返回 true = daemon 活着(升级会中断 alive session, 应跳过); false = 死/无。
  */
-export async function checkPiManagerDaemonAlive(host: RemoteHost, installDir: string): Promise<boolean> {
+export async function checkPiManagerDaemonAlive(
+  host: RemoteHost,
+  installDir: string,
+  generation = currentRemoteEndpointGeneration(host.id),
+): Promise<boolean> {
   const pidFile = `${installDir}/pi-manager/pi-manager.pid`;
   // 本 install 的 socket 路径(与 pidfile 同根):身份校验必须匹配 `--socket`。
   const sockPath = `${installDir}/pi-manager/pi-manager.sock`;
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   try {
     const r = await host.exec(
       `bash -c 'PID="$(cat "${pidFile}" 2>/dev/null || true)"; ` +
@@ -394,10 +435,13 @@ export async function checkPiManagerDaemonAlive(host: RemoteHost, installDir: st
         `then echo ALIVE; else echo DEAD; fi'`,
       { timeoutMs: 5_000, label: 'pi-manager-daemon-alive-check' },
     );
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     // 精确匹配 'ALIVE'(trim 后 ===)—— includes('ALIVE') 会误匹配
     // 'STILL_ALIVE'(kill 脚本的输出来自同一套远端命令体系)。
     return r.stdout.trim().split(/\r?\n/).pop() === 'ALIVE';
-  } catch {
+  } catch (error) {
+    if (error instanceof StaleRemoteEndpointError) throw error;
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     // 检查失败按「不确认活着」处理(走升级路径;升级本身幂等)。
     return false;
   }
@@ -430,8 +474,13 @@ export async function piManagerList(
  * 防 pidfile 陈旧 + PID 重用误杀(与 uninstall 同款, 退役审轮 10 CRITICAL)。
  * daemon 的 SIGTERM handler 会 shutdownAll + 清理 env-file/socket。
  */
-export async function killRemotePiManagerDaemon(host: RemoteHost): Promise<void> {
+export async function killRemotePiManagerDaemon(
+  host: RemoteHost,
+  generation = currentRemoteEndpointGeneration(host.id),
+): Promise<void> {
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   const probe = await probePiManager(host);
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   const pidFile = `${probe.installDir}/pi-manager/pi-manager.pid`;
   const killScript = [
     `PID_FILE=${shellQuote(pidFile)}`,
@@ -474,6 +523,7 @@ export async function killRemotePiManagerDaemon(host: RemoteHost): Promise<void>
     timeoutMs: 20_000,
     label: 'pi-manager-daemon-force-kill',
   });
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   const out = result.stdout.trim();
   if (result.exitCode !== 0 && !out.includes('NO_DAEMON')) {
     // 轮 13 MEDIUM-3:STILL_ALIVE(D 状态杀不死)必须抛错 —— 静默继续会让调用方

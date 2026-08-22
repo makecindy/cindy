@@ -26,7 +26,15 @@ export function useProjectGroups(
   const sshHosts = useRemoteSshHosts();
 
   return useMemo(() => {
-    const groups = groupSessions(sessions, { projectAliases, includePinnedInProjects });
+    const groups = groupSessions(sessions, {
+      projectAliases,
+      includePinnedInProjects,
+      remoteHostCandidates: sshHosts.map((host) => ({
+        id: host.config.id,
+        alias: host.config.alias,
+        source: host.config.source,
+      })),
+    });
     // 撞名判定要看全量项目(哪些设备名对应了多个 deviceId),所以先扫一遍再逐个富化。
     const ambiguousDeviceNames = collectAmbiguousDeviceNames(groups.projects);
     return {

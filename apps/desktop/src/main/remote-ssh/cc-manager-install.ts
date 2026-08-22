@@ -49,6 +49,13 @@ import { PROTOCOL_VERSION as CC_MGR_PROTOCOL_VERSION } from '@cindy/maker-cc-man
 
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import {
+  assertCurrentRemoteEndpointGeneration,
+  currentRemoteEndpointGeneration,
+  isCurrentRemoteEndpointGeneration,
+  remoteEndpointScopedKey,
+  StaleRemoteEndpointError,
+} from './endpoint-generation.js';
 // 轮 22:不 import './index.js'(成环 —— index import pi-manager-client,
 // pi-manager-client import 本模块)。broadcast 的 channel 名与实现内联,
 // 与 index 的 REMOTE_SSH_PUSH 同名字符串(同一通道)。
@@ -81,14 +88,24 @@ function broadcastSilentInstallStatus(payload: {
 
 const log = createLogger('remote-ssh/cc-manager-install');
 
-const ccManagerInstalledCache = new Set<string>();
+const ccManagerInstalledCache = new Map<string, number>();
 const inFlightCcManagerInstall = new Map<string, { promise: Promise<void>; withForceReinstall: boolean }>();
 // Per-host cache of `claude` shim absolute path on remote — needed by SDK's
 // `pathToClaudeCodeExecutable` option (SDK can't find native CLI binary on its
 // own when bundled into cc-mgr.mjs: the optional-dep require.resolve gets
 // frozen to desktop's build platform, fails on remote). Populated by piggy-back
 // install of `claude-code` agentKind, or lazily via probeRemoteAgent on cache hit.
-const claudeBinaryPathCache = new Map<string, string>();
+const claudeBinaryPathCache = new Map<string, { generation: number; path: string }>();
+
+function cacheCcManagerInstalled(hostId: string, generation: number): void {
+  assertCurrentRemoteEndpointGeneration(hostId, generation);
+  ccManagerInstalledCache.set(hostId, generation);
+}
+
+function cacheClaudeBinaryPath(hostId: string, generation: number, binaryPath: string): void {
+  assertCurrentRemoteEndpointGeneration(hostId, generation);
+  claudeBinaryPathCache.set(hostId, { generation, path: binaryPath });
+}
 
 /* ============================== Version mgmt ============================== */
 // cc-mgr bundle version 是手动 bump 的常量 (CC_MGR_BUNDLE_VERSION in protocol.ts)。
@@ -281,6 +298,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
 }): Promise<void> {
   const { host, installProxyOnDemand = false, forceReinstall = false } = opts;
   const hostId = host.id;
+  const generation = currentRemoteEndpointGeneration(hostId);
+  const inFlightId = remoteEndpointScopedKey(hostId, generation);
 
   // In-memory cache hit: 上次 install 成功过, fast path return。但 cache 只代表
   // "这个 desktop 进程在此次启动后曾经装过" — 文件可能被外部 rm / 磁盘 cleanup /
@@ -293,7 +312,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
   // bash script (含 node spawn 验证 cc-mgr.mjs --version) 轻得多, 但能覆盖
   // "缺失" 这个最常见的 cache-stale 场景。stat 失败 → 清 cache 走完整 install
   // pipeline (包含上传新 bundle), 自动恢复。
-  if (!forceReinstall && ccManagerInstalledCache.has(hostId)) {
+  if (!forceReinstall && ccManagerInstalledCache.get(hostId) === generation) {
     try {
       const r = await host.exec(
         // 全部双引号 wrap: $HOME 含空格 (macOS 用户合法的 "/Users/Foo Bar/") 时
@@ -302,6 +321,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         `bash -c '[ -f "${REMOTE_CC_MGR_BUNDLE_PATH}" ] && [ -x "${REMOTE_XDT_NODE_PATH}" ] && [ -e "${REMOTE_CLAUDE_SHIM_PATH}" ] && echo OK || echo MISSING'`,
         { timeoutMs: 3000, label: 'cc-mgr-bundle-stat' },
       );
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       if (r.stdout.includes('OK')) return;
       log.info('cc-mgr install: cached "installed" but bundle/node/claude shim missing on remote, reinstalling', {
         hostId,
@@ -309,6 +329,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
       ccManagerInstalledCache.delete(hostId);
       claudeBinaryPathCache.delete(hostId);
     } catch (err) {
+      if (err instanceof StaleRemoteEndpointError) throw err;
       log.warn('cc-mgr install: bundle stat failed (will fall through to full install)', {
         hostId,
         error: err instanceof Error ? err.message : String(err),
@@ -330,9 +351,10 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
   if (!forceReinstall) {
     try {
       const agentProbe = await probeRemoteAgent(host, 'claude-code');
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       claudeRuntimeReady = agentProbe.installed;
       if (agentProbe.installed && agentProbe.binaryPath) {
-        claudeBinaryPathCache.set(hostId, agentProbe.binaryPath);
+        cacheClaudeBinaryPath(hostId, generation, agentProbe.binaryPath);
       } else {
         log.info('cc-mgr install: Claude Code runtime missing or stale, installing current pin', {
           hostId,
@@ -340,6 +362,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         });
       }
     } catch (err) {
+      if (err instanceof StaleRemoteEndpointError) throw err;
       claudeRuntimeReady = false;
       log.warn('cc-mgr install: Claude Code version probe failed (will attempt install)', {
         hostId,
@@ -356,6 +379,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
   if (!forceReinstall && claudeRuntimeReady) {
     try {
       const probe = await probeCcManager(host);
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       if (probe.ccManagerInstalled && probe.nodeReady) {
         // 校验 claude shim 也在 (跟 cache-hit fast path 对称): probeCcManager 自己
         // 不查 shim, 但 SDK 启动需要 pathToClaudeCodeExecutable 指 shim, 没装
@@ -365,6 +389,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
           `bash -c '[ -e "${REMOTE_CLAUDE_SHIM_PATH}" ] && echo OK || echo MISSING'`,
           { timeoutMs: 3_000, label: 'cc-mgr-shim-check' },
         );
+        assertCurrentRemoteEndpointGeneration(hostId, generation);
         if (!shimCheck.stdout.includes('OK')) {
           log.info('cc-mgr probe ok but claude shim missing, falling through to install', { hostId });
         } else {
@@ -404,6 +429,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
                 error: err instanceof Error ? err.message : String(err),
               });
             });
+            assertCurrentRemoteEndpointGeneration(hostId, generation);
             // fall through to install pipeline below
           } else if (localVer !== 'unknown' && remoteVer !== localVer) {
             // 协议同, 仅 bundle 版本 (hash) 差。两种情况:
@@ -436,15 +462,17 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
               });
               return { stdout: 'ALIVE', stderr: '', exitCode: 0 } as const;
             });
+            assertCurrentRemoteEndpointGeneration(hostId, generation);
             const daemonAlive = daemonAliveCheck.stdout.includes('ALIVE');
             if (daemonAlive) {
+              assertCurrentRemoteEndpointGeneration(hostId, generation);
               log.info('cc-mgr version mismatch + daemon alive — upgrade available (banner)', {
                 hostId,
                 remoteVer,
                 localVer,
               });
               setPending({ hostId, currentVersion: remoteVer, availableVersion: localVer, agent: 'cc' });
-              ccManagerInstalledCache.add(hostId);
+              cacheCcManagerInstalled(hostId, generation);
               return;
             }
             log.info('cc-mgr version mismatch + no live daemon — silently upgrading disk bundle', {
@@ -457,12 +485,13 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
             // Versions match (or local hash unknown) — make sure any stale pending
             // state from a previous probe is cleared so the banner disappears.
             clearPending(hostId);
-            ccManagerInstalledCache.add(hostId);
+            cacheCcManagerInstalled(hostId, generation);
             return;
           }
         }
       }
     } catch (err) {
+      if (err instanceof StaleRemoteEndpointError) throw err;
       log.warn('cc-mgr probe failed (will attempt install)', {
         hostId,
         error: err instanceof Error ? err.message : String(err),
@@ -474,7 +503,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
   // install, otherwise UpgradeBanner can finish without uploading the new
   // bundle. Wait for the non-force run to settle, then start/dedup a force run.
   while (true) {
-    const existing = inFlightCcManagerInstall.get(hostId);
+    const existing = inFlightCcManagerInstall.get(inFlightId);
     if (!existing) break;
     if (forceReinstall && !existing.withForceReinstall) {
       try {
@@ -485,12 +514,14 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       continue;
     }
     return existing.promise;
   }
 
   const promise = (async (): Promise<void> => {
+    assertCurrentRemoteEndpointGeneration(hostId, generation);
     log.info('cc-mgr install: starting', { hostId, installProxyOnDemand });
     // Toast 'started' — 让 renderer 立刻显示 "正在准备远端..." 而不是静默等
     // 10-20s。toast 切阶段文案靠后续 progress event 的 eventKind。
@@ -505,6 +536,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
       // `pathToClaudeCodeExecutable`, so we always run the installer (idempotent —
       // it's a fast probe + no-op when already installed) and capture the binaryPath.
       const probe = await probeCcManager(host);
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       if (!probe.nodeReady) {
         // round-15 fix #4 (P2): bundled node 缺失时单纯调 installRemoteAgent 不够 —
         // 它先看 sentinel + claude shim 能不能跑 (verify_binary),如果系统 PATH
@@ -525,8 +557,13 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
             error: err instanceof Error ? err.message : String(err),
           });
         });
+        assertCurrentRemoteEndpointGeneration(hostId, generation);
       }
       const nodeInstall = await installRemoteAgent(host, 'claude-code', (e) => {
+        // installRemoteAgent may keep emitting progress while an endpoint edit
+        // invalidates this run. Never let the old machine publish UI state for
+        // the stable HostRef after its generation has moved on.
+        if (!isCurrentRemoteEndpointGeneration(hostId, generation)) return;
         // install-log 的 e.line 是 bootstrap-script 的 INSTALL_LOG emit 内容
         // (包括 verify-fail 诊断 / npm output 等), kind 不够定位问题, 把 line 也打。
         // 其它 kind (probe / install-dir / node-* / install-start / install-done /
@@ -547,11 +584,12 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
           eventKind: e.kind,
         });
       });
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       if (!nodeInstall.ready) {
         throw new Error(`bundled node install failed: ${nodeInstall.error ?? 'unknown error'}`);
       }
       if (nodeInstall.binaryPath) {
-        claudeBinaryPathCache.set(hostId, nodeInstall.binaryPath);
+        cacheClaudeBinaryPath(hostId, generation, nodeInstall.binaryPath);
       }
 
       // Step 2: upload cc-mgr.mjs bundle. Re-resolve in case dev/packaged layout
@@ -565,6 +603,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         ccManagerBundlePath: ccBundlePath,
         ...(proxyBundlePath ? { proxyBundlePath } : {}),
         onEvent: (e) => {
+          if (!isCurrentRemoteEndpointGeneration(hostId, generation)) return;
           log.debug('cc-mgr install: bundle event', { hostId, event: e });
           // cc-mgr bundle 阶段 event.kind (probe / install-start / install-upload /
           // install-done / ready / error) 跟 toast schema 的 eventKind union 不重叠,
@@ -577,11 +616,12 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
           });
         },
       });
+      assertCurrentRemoteEndpointGeneration(hostId, generation);
       if (!result.ready) {
         throw new Error(`cc-mgr install failed: ${result.error ?? 'unknown error'}`);
       }
 
-      ccManagerInstalledCache.add(hostId);
+      cacheCcManagerInstalled(hostId, generation);
       // round-15 fix #6 (P2): full reinstall path 也要清 pendingUpgrades。否则
       // 之前因 hash-mismatch + alive-daemon 留下的 banner 会一直挂着, 用户点了
       // 等于 force-upgrade 一个其实已经是最新版的 daemon (无谓 kill + restart)。
@@ -597,6 +637,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         proxyInstalled: result.probe.proxyInstalled,
       });
     } catch (err) {
+      if (err instanceof StaleRemoteEndpointError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       broadcastSilentInstallStatus({
         hostId,
@@ -608,7 +649,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
     }
   })();
 
-  inFlightCcManagerInstall.set(hostId, { promise, withForceReinstall: forceReinstall });
+  inFlightCcManagerInstall.set(inFlightId, { promise, withForceReinstall: forceReinstall });
   try {
     await promise;
   } catch (err) {
@@ -618,8 +659,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
     if (err instanceof Error && (err as { code?: string }).code) throw err;
     throwIpcError('SSH_INSTALL_FAILED', msg);
   } finally {
-    if (inFlightCcManagerInstall.get(hostId)?.promise === promise) {
-      inFlightCcManagerInstall.delete(hostId);
+    if (inFlightCcManagerInstall.get(inFlightId)?.promise === promise) {
+      inFlightCcManagerInstall.delete(inFlightId);
     }
   }
 }
@@ -663,16 +704,18 @@ export function clearCcManagerInstallCache(hostId?: string): void {
  */
 export async function getRemoteClaudeBinaryPath(host: RemoteHost): Promise<string> {
   const hostId = host.id;
+  const generation = currentRemoteEndpointGeneration(hostId);
   const cached = claudeBinaryPathCache.get(hostId);
-  if (cached) return cached;
+  if (cached?.generation === generation) return cached.path;
   const probe = await probeRemoteAgent(host, 'claude-code');
+  assertCurrentRemoteEndpointGeneration(hostId, generation);
   if (!probe.binaryPath) {
     throw new Error(
       `claude-code not installed on remote host ${hostId} — cc-mgr install pipeline should have ` +
         'piggy-backed it; check silent install logs',
     );
   }
-  claudeBinaryPathCache.set(hostId, probe.binaryPath);
+  cacheClaudeBinaryPath(hostId, generation, probe.binaryPath);
   return probe.binaryPath;
 }
 
@@ -693,6 +736,7 @@ export async function getRemoteClaudeBinaryPath(host: RemoteHost): Promise<strin
  */
 export async function runCcMgrUpgrade(host: RemoteHost): Promise<void> {
   const hostId = host.id;
+  const generation = currentRemoteEndpointGeneration(hostId);
   log.info('cc-mgr force upgrade: starting', { hostId });
 
   // Step 1: kill existing daemon via pidfile (cmdline-verified) + clean sock/pid.
@@ -708,6 +752,7 @@ export async function runCcMgrUpgrade(host: RemoteHost): Promise<void> {
       error: String(err instanceof Error ? err.message : err),
     });
   });
+  assertCurrentRemoteEndpointGeneration(hostId, generation);
 
   // Step 2: invalidate in-memory caches so ensureCcManagerInstalledOrInstall
   // doesn't short-circuit (cache hit) or treat bundle as up-to-date.
@@ -721,6 +766,7 @@ export async function runCcMgrUpgrade(host: RemoteHost): Promise<void> {
   // skips the fast path and goes straight to the install branch (bundled
   // node install + bundle upload + bin path probe).
   await ensureCcManagerInstalledOrInstall({ host, forceReinstall: true });
+  assertCurrentRemoteEndpointGeneration(hostId, generation);
 
   // Step 4: clear pending banner state (broadcasts available=null so UI
   // banner self-hides). ensureCcMgr ran a fresh probe with new bundle, so

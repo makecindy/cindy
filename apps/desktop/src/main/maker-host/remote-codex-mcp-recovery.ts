@@ -95,6 +95,8 @@ export interface RemoteCcSessionLike {
 
 export interface RemoteCcInvalidationDeps {
   listRemoteCcSessions: () => RemoteCcSessionLike[];
+  /** Canonical HostRef comparison with legacy bare SSH-alias compatibility. */
+  sameHostId: (left: string, right: string) => boolean;
   /** 删除 session 的「本进程已 fresh」标记 (forcedFreshCcBridgeSessions)。 */
   clearFreshMark: (sessionId: string) => void;
   log: { warn: (msg: string, meta?: Record<string, unknown>) => void };
@@ -113,7 +115,7 @@ export function invalidateRemoteCcQueriesForMcpGenerationChange(
 ): void {
   for (const s of deps.listRemoteCcSessions()) {
     if (!s.remoteHostId) continue;
-    if (opts.hostId && s.remoteHostId !== opts.hostId) continue;
+    if (opts.hostId && !deps.sameHostId(s.remoteHostId, opts.hostId)) continue;
     deps.clearFreshMark(s.id);
     if (s.isTurnRunning()) continue;
     void s.detach().catch((err) => {
@@ -153,4 +155,3 @@ export function maybeDetachStaleRemoteCcQuery(deps: RemoteCcTurnSettledDeps, ses
     });
   });
 }
-

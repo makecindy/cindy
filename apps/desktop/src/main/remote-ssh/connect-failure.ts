@@ -30,8 +30,14 @@ export type ConnectFailureClass =
  * never drive classification. Returns the message too so callers can pass it
  * through without re-extracting it.
  */
-export function classifyConnectFailure(err: unknown): { code: ConnectFailureClass; msg: string } {
-  const msg = String((err as Error)?.message ?? err);
+export function classifyConnectFailure(
+  err: unknown,
+  target?: { alias?: string; resolvedHost: string; port: number },
+): { code: ConnectFailureClass; msg: string } {
+  const baseMsg = String((err as Error)?.message ?? err);
+  const targetSuffix = target
+    ? ` (alias=${target.alias ?? '(Cindy profile)'}, resolvedHost=${target.resolvedHost}, port=${target.port})`
+    : '';
   // 轮 21-W2 MEDIUM:本地 key 三类确定性错误(不存在/不可读/pinned-agent 解析
   // 失败)统一归 SSH_KEY_FILE_NOT_FOUND(非重试、引导修本地配置)——
   // 不得落进 SSH_AUTH_FAILED(远端认证语义)或 SSH_CONNECT_FAILED(可重试语义)。
@@ -41,8 +47,8 @@ export function classifyConnectFailure(err: unknown): { code: ConnectFailureClas
     || code === KEY_FILE_UNREADABLE_CODE
     || code === PINNED_AGENT_FAILED_CODE
   ) {
-    return { code: 'SSH_KEY_FILE_NOT_FOUND', msg };
+    return { code: 'SSH_KEY_FILE_NOT_FOUND', msg: baseMsg };
   }
-  if (isAuthFailure(msg)) return { code: 'SSH_AUTH_FAILED', msg };
-  return { code: 'SSH_CONNECT_FAILED', msg };
+  if (isAuthFailure(baseMsg)) return { code: 'SSH_AUTH_FAILED', msg: baseMsg };
+  return { code: 'SSH_CONNECT_FAILED', msg: `${baseMsg}${targetSuffix}` };
 }

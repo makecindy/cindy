@@ -50,6 +50,11 @@ import {
   tunnelNeedsRebuild,
 } from './agent-proxy-tunnel.js';
 import { getSshHostAgentProxy, type SshHostAgentProxyPref } from './ssh-host-prefs-store.js';
+import {
+  assertCurrentRemoteEndpointGeneration,
+  currentRemoteEndpointGeneration,
+  StaleRemoteEndpointError,
+} from './endpoint-generation.js';
 
 const log = createLogger('remote-ssh/agent-proxy');
 
@@ -67,6 +72,17 @@ export function getAgentProxyTunnelState(hostId: string): AgentProxyTunnelState 
 export function clearAgentProxyTunnelState(hostId: string): void {
   tunnelStates.delete(hostId);
   void stopTunnelForHost(hostId);
+}
+
+/**
+ * Config refreshes must finish tearing down an endpoint-derived tunnel before
+ * the same stable HostRef can reconnect to a new target. The fire-and-forget
+ * helper above is retained for legacy cleanup call sites; hydrate uses this
+ * awaited form to avoid a late stop racing with the replacement tunnel.
+ */
+export async function clearAgentProxyTunnelStateAndWait(hostId: string): Promise<void> {
+  tunnelStates.delete(hostId);
+  await stopTunnelForHost(hostId);
 }
 
 /**
@@ -102,7 +118,10 @@ export function initAgentProxy(deps: {
   const { getMainHost } = deps;
   initAgentProxyTunnelKeeper({
     createTunnelHost: deps.createTunnelHost,
-    getPref: (hostId) => getSshHostAgentProxy(hostId),
+    getPref: (hostId) => {
+      const host = getMainHost(hostId);
+      return getSshHostAgentProxy(hostId, host?.config.alias);
+    },
     isMainHostReady: (hostId) => getMainHost(hostId)?.getStatus() === 'ready',
     getMainHost,
     onState: (hostId, state) => {
@@ -205,13 +224,15 @@ export function buildAgentProxyMarkerContent(proxyUrl: string): string {
  *     不静默回落直连, 与旧行为一致)。
  */
 export async function ensureAgentProxyReady(host: RemoteHost): Promise<string | null> {
-  const pref = getSshHostAgentProxy(host.id);
+  const generation = currentRemoteEndpointGeneration(host.id);
+  const pref = getSshHostAgentProxy(host.id, host.config.alias);
   if (!pref?.enabled) return null;
   if (pref.mode === 'env') return pref.proxyUrl;
   // 用 armed 隧道的实际端口而非 pref: pref 刚被编辑而迁移尚未获准 (live
   // turn 挡着 reconcile) 时, 现役隧道还在旧端口上 — 按现役真值注入才可用,
   // 迁移由 reconcile 在安全时机完成 (R1 review P1)。
   const { remotePort } = await ensureTunnelUp(host);
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   return `http://127.0.0.1:${remotePort}`;
 }
 
@@ -392,6 +413,7 @@ export interface ReconcileCodexAgentProxyResult {
 export async function reconcileCodexAgentProxyEnv(
   host: RemoteHost,
 ): Promise<ReconcileCodexAgentProxyResult> {
+  const generation = currentRemoteEndpointGeneration(host.id);
   // per-host 串行链 (codex R9 P2): 并发 reconcile (两个 transport 的
   // beforeDaemonProbe 与 ready-hook 同时触发) 时, 若第一个还在等
   // killRemoteCodexDaemon 而第二个走 marker-match fast path, 第二个会直接去
@@ -399,7 +421,10 @@ export async function reconcileCodexAgentProxyEnv(
   // 所有调用按 host 排队, 后来者等前一个写完 marker + 杀完 daemon 再走自己
   // 的对账 (那时 fast path 才真的代表「环境已一致」)。
   const prev = reconcileChains.get(host.id) ?? Promise.resolve();
-  const run = prev.then(() => reconcileCodexAgentProxyEnvSerialized(host));
+  const run = prev.then(() => {
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
+    return reconcileCodexAgentProxyEnvSerialized(host, generation);
+  });
   // 链上只存 settled 版 (前一个失败不堵后一个); 调用方拿自己的 run 结果。
   const tracked = run.then(
     () => undefined,
@@ -416,10 +441,12 @@ const reconcileChains = new Map<string, Promise<void>>();
 
 async function reconcileCodexAgentProxyEnvSerialized(
   host: RemoteHost,
+  generation: number,
 ): Promise<ReconcileCodexAgentProxyResult> {
   try {
-    return await doReconcileCodexAgentProxyEnv(host);
+    return await doReconcileCodexAgentProxyEnv(host, generation);
   } catch (err) {
+    if (err instanceof StaleRemoteEndpointError) throw err;
     // 任何失败 (marker 读写 / 隧道 armed 超时 / …) 都记 pending — turn-done
     // 补刀是最近的自愈时机, 不能只靠下一次 session start (R2 review P2)。
     pendingReconcileHosts.add(host.id);
@@ -429,13 +456,15 @@ async function reconcileCodexAgentProxyEnvSerialized(
 
 async function doReconcileCodexAgentProxyEnv(
   host: RemoteHost,
+  generation: number,
 ): Promise<ReconcileCodexAgentProxyResult> {
-  const pref = getSshHostAgentProxy(host.id);
+  const pref = getSshHostAgentProxy(host.id, host.config.alias);
   const desired = pref?.enabled ? buildAgentProxyMarkerContent(resolveAgentProxyUrl(pref)) : null;
   const keeperReady = isAgentProxyTunnelKeeperInitialized();
   const wantsTunnel = pref?.enabled === true && pref.mode === 'tunnel';
 
   const current = await readRemoteMarker(host);
+  assertCurrentRemoteEndpointGeneration(host.id, generation);
   const markerDrift = current !== (desired ? desired.trim() : null);
   // marker 只编码远端固定端口 — localHost/localPort 或主机连接配置变更都
   // 不产生 marker 漂移, 必须单独纳入判定, 且与 marker 漂移共用同一个
@@ -452,6 +481,7 @@ async function doReconcileCodexAgentProxyEnv(
         // 收口 (probe 中断 / apply 落 error 状态 / quick test 报错),
         // keeper 继续自愈。
         await ensureTunnelUp(host);
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
       } else {
         // pref 关 / env 模式的残留隧道兜底拆除 (幂等, 常态 no-op):
         // 覆盖「离线期间关了 proxy, 上线时 marker 本就是空」这类路径。
@@ -483,7 +513,9 @@ async function doReconcileCodexAgentProxyEnv(
       enabled: pref != null,
     });
     await writeRemoteMarker(host, desired);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     const kill = await killRemoteCodexDaemon(host);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (!kill.ok) {
       // daemon 没死透 → marker 回滚到原值 (codex R10 P1/P2): 存活 daemon 的
       // env 仍来自原 marker; 若让 marker 停在新值, 下次 reconcile 命中
@@ -494,6 +526,7 @@ async function doReconcileCodexAgentProxyEnv(
       // 隧道不动 (R2 review P1): 存活 daemon 还指着旧端口, 旧隧道保留兜底。
       try {
         await writeRemoteMarker(host, current);
+        assertCurrentRemoteEndpointGeneration(host.id, generation);
       } catch (rollbackErr) {
         log.warn('agent-proxy marker rollback after pkill failure failed', {
           hostId: host.id,
@@ -511,11 +544,14 @@ async function doReconcileCodexAgentProxyEnv(
   // 打断任何在途消费者; 新隧道 armed 不上则抛错 (外层记 pending), 下次
   // reconcile 的 fast path 恒校验 armed, probe 始终 fail-closed。
   if (keeperReady) {
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (wantsTunnel) {
       ensureTunnelForHost(host, { allowRebuild: true });
       await ensureTunnelUp(host);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
     } else {
       await stopTunnelForHost(host.id);
+      assertCurrentRemoteEndpointGeneration(host.id, generation);
     }
   }
   pendingReconcileHosts.delete(host.id);
@@ -532,9 +568,11 @@ async function doReconcileCodexAgentProxyEnv(
  * 失败不抛 — 状态落 tunnelStates 给 UI, session 路径会再显式重试并拿到错误。
  */
 export async function applyAgentProxyForHost(host: RemoteHost): Promise<void> {
-  const pref = getSshHostAgentProxy(host.id);
+  const generation = currentRemoteEndpointGeneration(host.id);
+  const pref = getSshHostAgentProxy(host.id, host.config.alias);
   try {
     const reconciled = await reconcileCodexAgentProxyEnv(host);
+    assertCurrentRemoteEndpointGeneration(host.id, generation);
     if (reconciled.deferredForLiveTurn) {
       // 配置已变但因 live turn 推迟 — 旧 phase='active' 状态不得继续展示
       // (review: PR #992 codex P2): env 模式会把新 URL 显示成已注入, disable
@@ -565,6 +603,7 @@ export async function applyAgentProxyForHost(host: RemoteHost): Promise<void> {
     }
     // tunnel 模式: 状态由 keeper 经 onState 持续汇报, 这里不写。
   } catch (err) {
+    if (err instanceof StaleRemoteEndpointError) return;
     const msg = String((err as Error)?.message ?? err);
     log.warn('apply agent-proxy failed (will retry on next session)', { hostId: host.id, error: msg });
     tunnelStates.set(host.id, { phase: 'error', lastError: msg });

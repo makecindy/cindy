@@ -85,6 +85,11 @@ export function AddRemoteProjectDialog({
   // 可控设备走 live hook;SSH ready hosts 在打开时拉一次。
   const devices = useControllableDevices();
   const [sshHosts, setSshHosts] = useState<RemoteHostSnapshot[]>([]);
+  // Keep the complete registry separately from the ready-only target list.
+  // Reserved-prefix compatibility must see disconnected Cindy profiles too;
+  // otherwise a bare legacy SSH alias could be mistaken for a profile that is
+  // merely offline.
+  const [sshHostRefs, setSshHostRefs] = useState<string[]>([]);
   // SSH「已有项目」数据源:本地 active 会话(按 host 过滤,见 sshExistingProjects)。
   const { sessions } = useCCSessions();
 
@@ -97,7 +102,7 @@ export function AddRemoteProjectDialog({
           key: `ssh:${h.config.id}`,
           kind: 'ssh',
           hostId: h.config.id,
-          label: `${h.config.id} (${h.config.user}@${h.config.hostname})`,
+          label: `${h.config.displayName ?? h.config.alias ?? h.config.id} (${h.config.user}@${h.config.hostname})`,
         }));
     const dev: RemoteTarget[] = devices.map((d) => ({
       key: `device:${d.deviceId}`,
@@ -143,8 +148,12 @@ export function AddRemoteProjectDialog({
   // device-link 已有项目走隧道异步拉(deviceExisting)。existing 列表取二者之一。
   const sshExisting = useMemo<ExistingRemoteProject[] | null>(() => {
     if (!selectedTarget || selectedTarget.kind !== 'ssh') return null;
-    return sshExistingProjects(sessions, selectedTarget.hostId);
-  }, [selectedTarget, sessions]);
+    return sshExistingProjects(
+      sessions,
+      selectedTarget.hostId,
+      sshHostRefs,
+    );
+  }, [selectedTarget, sessions, sshHostRefs]);
   const existingProjects = sshExisting ?? deviceExisting;
 
   // 打开时拉 SSH ready hosts;重置选中(配置可能在设置里改过,不保留上次状态)。
@@ -155,9 +164,13 @@ export function AddRemoteProjectDialog({
       try {
         const res = await window.electronAPI.remoteSsh.list();
         if (cancelled) return;
+        setSshHostRefs(res.hosts.map((host) => host.config.id));
         setSshHosts(res.hosts.filter((h) => h.status === 'ready'));
       } catch {
-        if (!cancelled) setSshHosts([]);
+        if (!cancelled) {
+          setSshHostRefs([]);
+          setSshHosts([]);
+        }
       }
     })();
     return () => {

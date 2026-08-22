@@ -45,6 +45,15 @@ describe('isAuthFailure recognizes every authFailureHint variant', () => {
     expect(isAuthFailure(authFailureHint(cfg({ authMethod: 'key' })))).toBe(true);
   });
 
+  it('key mode hint covers both foo.key.pub and foo.pub companion conventions', () => {
+    const hint = authFailureHint(cfg({
+      authMethod: 'key',
+      identityFile: '/home/u/.ssh/work.key',
+    }));
+    expect(hint).toContain('/home/u/.ssh/work.key.pub');
+    expect(hint).toContain('/home/u/.ssh/work.pub');
+  });
+
   it('fallback hint', () => {
     // authMethod 越界时走兜底文案("Authentication failed connecting as ...")。
     expect(

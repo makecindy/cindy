@@ -8,12 +8,14 @@ import {
 import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
 
 function sshHost(
-  id: string,
+  alias: string,
   overrides: Partial<RemoteHostSnapshot['config']> = {},
 ): RemoteHostSnapshot {
   return {
     config: {
-      id,
+      id: `ssh-config:${alias}`,
+      alias,
+      displayName: alias,
       hostname: '10.0.0.8',
       port: 22,
       user: 'alice',
@@ -44,6 +46,49 @@ describe('resolveRemoteProjectMachineIdentity', () => {
       detail: 'alice@10.0.0.8',
       displayLabel: 'gpu-box · alice@10.0.0.8',
     });
+  });
+
+  it('uses the current display name for canonical HostRefs', () => {
+    const identity = resolveRemoteProjectMachineIdentity(
+      { ...remoteProject, remoteHostId: 'ssh-config:gpu-box' },
+      [sshHost('gpu-box', { displayName: 'Build server' })],
+    );
+    expect(identity?.displayLabel).toBe('Build server · alice@10.0.0.8');
+  });
+
+  it('recovers a pre-namespace SSH alias that itself starts with ssh-config:', () => {
+    const identity = resolveRemoteProjectMachineIdentity(
+      { ...remoteProject, remoteHostId: 'ssh-config:foo' },
+      [sshHost('ssh-config:foo', { displayName: 'Legacy namespaced alias' })],
+    );
+    expect(identity?.displayLabel).toBe('Legacy namespaced alias · alice@10.0.0.8');
+  });
+
+  it('lets a Cindy profile win over a reserved-prefix SSH alias', () => {
+    const identity = resolveRemoteProjectMachineIdentity(
+      { ...remoteProject, remoteHostId: 'cindy:build' },
+      [
+        sshHost('cindy:build', { displayName: 'SSH cindy:build' }),
+        {
+          config: {
+            id: 'cindy:build',
+            alias: 'build',
+            displayName: 'Cindy build',
+            hostname: '10.0.0.9',
+            port: 22,
+            user: 'bob',
+            authMethod: 'agent',
+            source: 'manual',
+          },
+          status: 'ready',
+          statusChangedAt: 0,
+          autoConnect: false,
+          agentProxy: null,
+          agentProxyTunnel: null,
+        },
+      ],
+    );
+    expect(identity?.displayLabel).toBe('Cindy build · bob@10.0.0.9');
   });
 
   it('includes a non-default SSH port', () => {
@@ -227,8 +272,8 @@ describe('remoteSshHostsStore', () => {
   it('removes a deleted host from the shared snapshot', () => {
     remoteSshHostsStore.replace([sshHost('keep'), sshHost('remove')]);
 
-    remoteSshHostsStore.remove('remove');
+    remoteSshHostsStore.remove('ssh-config:remove');
 
-    expect(remoteSshHostsStore.get()?.map((host) => host.config.id)).toEqual(['keep']);
+    expect(remoteSshHostsStore.get()?.map((host) => host.config.id)).toEqual(['ssh-config:keep']);
   });
 });

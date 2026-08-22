@@ -110,7 +110,8 @@ describe('normalizeProjectKey', () => {
   });
 
   it('keeps remote keys canonical', () => {
-    expect(normalizeProjectKey('remote:host-a:/repo/')).toBe('remote:host-a:/repo');
+    expect(normalizeProjectKey('remote:host-a:/repo/'))
+      .toBe('remote:ssh-config%3Ahost-a:/repo');
   });
 });
 
@@ -325,9 +326,30 @@ describe('groupSessions', () => {
     const r = groupSessions([a, b]);
     expect(r.projects).toHaveLength(2);
     expect(r.projects.map((p) => p.projectKey).sort()).toEqual([
-      'remote:host-a:/repo',
-      'remote:host-b:/repo',
+      'remote:ssh-config%3Ahost-a:/repo',
+      'remote:ssh-config%3Ahost-b:/repo',
     ]);
+  });
+
+  it('groups legacy aliases and canonical HostRefs for the same SSH host together', () => {
+    const legacy = s({
+      title: 'legacy',
+      workingDir: '/repo',
+      remoteHostId: 'host-a',
+      updatedAt: '2026-04-19T00:00:00.000Z',
+    });
+    const canonical = s({
+      title: 'canonical',
+      workingDir: '/repo',
+      remoteHostId: 'ssh-config:host-a',
+      updatedAt: '2026-04-20T00:00:00.000Z',
+    });
+    const r = groupSessions([legacy, canonical]);
+    expect(r.projects).toHaveLength(1);
+    expect(r.projects[0]?.projectKey).toBe('remote:ssh-config%3Ahost-a:/repo');
+    expect(r.projects[0]?.remoteHostId).toBe('ssh-config:host-a');
+    expect(r.projects[0]?.sessions.map((session) => session.title))
+      .toEqual(['canonical', 'legacy']);
   });
 
   it('keeps legacy bare keys readable as local projects', () => {
@@ -859,7 +881,7 @@ describe('device-link remote projects', () => {
     if (!devProj) throw new Error('expected device-link project');
     expect(devProj.deviceLinkDeviceId).toBe('dev-B');
     expect(devProj.remoteHostId).toBeNull();
-    const sshProj = r.projects.find((p) => p.remoteHostId === 'my-ssh-host');
+    const sshProj = r.projects.find((p) => p.remoteHostId === 'ssh-config:my-ssh-host');
     if (!sshProj) throw new Error('expected SSH project');
     expect(sshProj.deviceLinkDeviceId).toBeNull();
   });

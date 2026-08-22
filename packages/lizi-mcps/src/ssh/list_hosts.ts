@@ -1,8 +1,9 @@
 /**
  * ssh/list_hosts.ts — ssh_list_hosts tool
  *
- * 列出已配置 SSH 主机（来自 desktop 连接池，与「设置 → 远程连接」同源，含
- * ~/.ssh/config 手写 alias）。agent 收到"ssh 到 xxx"时先用它做名字解析。
+ * 列出已配置远程主机（来自 desktop 连接池，与「设置 → 远程连接」同源，含
+ * 展开 Include 后的 ~/.ssh/config alias 与 Cindy 本地主机）。agent 收到
+ * "ssh 到 xxx"时先用它做 HostRef/alias 解析。
  */
 
 import type { SshMcpDeps } from '../types.js';
@@ -17,8 +18,8 @@ export function registerSshListHostsTool(
     name: 'ssh_list_hosts',
     category: 'ssh',
     description:
-      '列出所有已配置的 SSH 主机（alias、hostname、端口、用户、认证方式、连接状态）。' +
-      '用户要求 ssh 到某台机器时，先用本工具确认目标主机的 alias / IP 是否已配置。',
+      '列出所有已配置的远程主机（HostRef、SSH alias 或 Cindy profileId、目标地址、认证方式、连接状态）。' +
+      '执行或查状态时使用 SSH alias 或完整 HostRef；不会按 IP/hostname/显示名猜测。',
     inputShape: {},
     handler: async () => {
       try {
@@ -29,7 +30,7 @@ export function registerSshListHostsTool(
           ...(hosts.length === 0
             ? {
                 hint:
-                  '当前没有配置任何 SSH 主机。请告知用户到「设置 → 远程连接」添加主机（支持 ~/.ssh/config 已有 alias 自动导入）。',
+                  '当前没有配置任何 SSH 主机。~/.ssh/config 中的 alias 会自动出现；也可以到「设置 → 远程连接」手动添加一台只属于 Cindy 的主机。',
               }
             : {}),
         });

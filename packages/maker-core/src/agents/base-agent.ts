@@ -1349,6 +1349,13 @@ export interface StartSessionOptions {
    * 目前仅 Codex 支持; Claude 不消费此字段 (会被忽略)。
    */
   remoteHostId?: string;
+  /**
+   * Canonical in-process identity for the same remote target. Hosts may set
+   * this while keeping a legacy `remoteHostId` spelling for persisted data or
+   * Maker Memory scope compatibility. Agent runtime caches and transports must
+   * prefer this value; it is never persisted by Maker.
+   */
+  remoteHostRuntimeId?: string;
   model: string;
   /**
    * 本次会话显式选择的供应商来源。maker-core 只用它推导子进程凭证形态;

@@ -20,14 +20,23 @@ const {
   mockProbePiManager,
   mockInstallPiManagerBundle,
   mockEnsurePiManagerDaemon,
+  mockSetPendingPiUpgrade,
+  mockClearPendingUpgrade,
   mockStatSync,
   realShellQuoteRef,
 } = vi.hoisted(() => ({
   mockProbePiManager: vi.fn(),
   mockInstallPiManagerBundle: vi.fn(),
   mockEnsurePiManagerDaemon: vi.fn(),
+  mockSetPendingPiUpgrade: vi.fn(),
+  mockClearPendingUpgrade: vi.fn(),
   mockStatSync: vi.fn(),
   realShellQuoteRef: { fn: null as null | ((s: string) => string) },
+}));
+
+vi.mock('../../remote-ssh/cc-manager-install.js', () => ({
+  setPendingPiUpgrade: mockSetPendingPiUpgrade,
+  clearPendingUpgrade: mockClearPendingUpgrade,
 }));
 
 vi.mock('electron', () => ({
@@ -138,11 +147,20 @@ const PROBE_INCOMPATIBLE_PROTOCOL = { ...FULL_PROBE, piManagerProtocolVersion: 9
 // ensurePiManagerInstalled
 // ---------------------------------------------------------------------------
 
-import { ensurePiManagerInstalled } from '../pi-manager-client.js';
+import {
+  ensurePiManagerInstalled,
+  resetPiManagerInstallInFlight,
+  runPiManagerUpgrade,
+} from '../pi-manager-client.js';
+import {
+  advanceRemoteEndpointGeneration,
+  StaleRemoteEndpointError,
+} from '../../remote-ssh/endpoint-generation.js';
 
 describe('ensurePiManagerInstalled (post-retirement: pi-manager only)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetPiManagerInstallInFlight();
     mockStatSync.mockImplementation(() => {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     });
@@ -396,6 +414,117 @@ describe('ensurePiManagerInstalled (post-retirement: pi-manager only)', () => {
     expect(mockProbePiManager).toHaveBeenCalledTimes(1);
     expect(mockInstallPiManagerBundle).toHaveBeenCalledTimes(1);
     expect(mockEnsurePiManagerDaemon).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse or continue an in-flight install after the HostRef moves endpoints', async () => {
+    const hostId = 'ssh-config:pi-manager-install-generation';
+    let resolveOldProbe!: (value: typeof PROBE_NO_MGR) => void;
+    mockProbePiManager
+      .mockImplementationOnce(async () => await new Promise<typeof PROBE_NO_MGR>((resolve) => {
+        resolveOldProbe = resolve;
+      }))
+      .mockResolvedValueOnce(FULL_PROBE);
+    const host = makeHost(hostId);
+    const logger = makeLogger();
+
+    const oldEndpointInstall = ensurePiManagerInstalled(host, logger);
+    advanceRemoteEndpointGeneration(hostId);
+    const newEndpointInstall = ensurePiManagerInstalled(host, logger);
+    resolveOldProbe(PROBE_NO_MGR);
+
+    await expect(oldEndpointInstall).rejects.toBeInstanceOf(StaleRemoteEndpointError);
+    await expect(newEndpointInstall).resolves.toBeUndefined();
+    expect(mockProbePiManager).toHaveBeenCalledTimes(2);
+    expect(mockInstallPiManagerBundle).not.toHaveBeenCalled();
+    expect(mockEnsurePiManagerDaemon).toHaveBeenCalledTimes(1);
+    expect(mockSetPendingPiUpgrade).not.toHaveBeenCalled();
+    expect(mockClearPendingUpgrade).not.toHaveBeenCalled();
+  });
+
+  it('does not publish a deferred upgrade after a stale daemon-alive check returns', async () => {
+    const hostId = 'ssh-config:pi-manager-pending-generation';
+    mockProbePiManager.mockResolvedValue(PROBE_STALE_VERSION);
+    let resolveAliveCheck!: (value: { exitCode: number; stdout: string; stderr: string }) => void;
+    const host = {
+      id: hostId,
+      exec: vi.fn(async (_cmd: string, opts?: { label?: string }) => {
+        if (opts?.label === 'pi-manager-daemon-alive-check') {
+          return await new Promise((resolve) => {
+            resolveAliveCheck = resolve;
+          });
+        }
+        return { exitCode: 0, stdout: 'NO_DAEMON', stderr: '' };
+      }),
+    } as unknown as RemoteHost;
+    const logger = makeLogger();
+
+    const oldEndpointInstall = ensurePiManagerInstalled(host, logger);
+    await vi.waitFor(() => {
+      expect(host.exec).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ label: 'pi-manager-daemon-alive-check' }),
+      );
+    });
+    advanceRemoteEndpointGeneration(hostId);
+    resolveAliveCheck({ exitCode: 0, stdout: 'ALIVE\n', stderr: '' });
+
+    await expect(oldEndpointInstall).rejects.toBeInstanceOf(StaleRemoteEndpointError);
+    expect(mockSetPendingPiUpgrade).not.toHaveBeenCalled();
+    expect(mockClearPendingUpgrade).not.toHaveBeenCalled();
+    expect(mockInstallPiManagerBundle).not.toHaveBeenCalled();
+    expect(mockEnsurePiManagerDaemon).not.toHaveBeenCalled();
+  });
+
+  it('suppresses late install progress after the endpoint generation changes', async () => {
+    const hostId = 'ssh-config:pi-manager-progress-generation';
+    mockProbePiManager.mockResolvedValue(PROBE_NO_MGR);
+    mockStatSync.mockImplementation((p: string) => {
+      if (p.includes('maker-pi-manager') && p.endsWith('.mjs')) {
+        return { isFile: () => true, size: 1024 };
+      }
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    let publishInstallEvent!: (event: { kind: 'install-log'; line: string }) => void;
+    let finishInstall!: (value: { ready: true; probe: typeof FULL_PROBE }) => void;
+    mockInstallPiManagerBundle.mockImplementationOnce(async (_host, options) => {
+      publishInstallEvent = options.onEvent;
+      return await new Promise((resolve) => {
+        finishInstall = resolve;
+      });
+    });
+    const host = makeHost(hostId);
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+
+    const oldEndpointInstall = ensurePiManagerInstalled(host, logger, onEvent);
+    await vi.waitFor(() => expect(mockInstallPiManagerBundle).toHaveBeenCalled());
+    advanceRemoteEndpointGeneration(hostId);
+    publishInstallEvent({ kind: 'install-log', line: 'late progress' });
+    finishInstall({ ready: true, probe: FULL_PROBE });
+
+    await expect(oldEndpointInstall).rejects.toBeInstanceOf(StaleRemoteEndpointError);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(mockClearPendingUpgrade).not.toHaveBeenCalled();
+    expect(mockEnsurePiManagerDaemon).not.toHaveBeenCalled();
+  });
+
+  it('stops a force upgrade when its daemon probe belongs to an old endpoint', async () => {
+    const hostId = 'ssh-config:pi-manager-force-upgrade-generation';
+    let resolveOldProbe!: (value: typeof FULL_PROBE) => void;
+    mockProbePiManager.mockImplementationOnce(async () => await new Promise((resolve) => {
+      resolveOldProbe = resolve;
+    }));
+    const host = makeHost(hostId);
+    const logger = makeLogger();
+
+    const oldEndpointUpgrade = runPiManagerUpgrade(host, logger);
+    advanceRemoteEndpointGeneration(hostId);
+    resolveOldProbe(FULL_PROBE);
+
+    await expect(oldEndpointUpgrade).rejects.toBeInstanceOf(StaleRemoteEndpointError);
+    expect(host.exec).not.toHaveBeenCalled();
+    expect(mockClearPendingUpgrade).not.toHaveBeenCalled();
+    expect(mockEnsurePiManagerDaemon).not.toHaveBeenCalled();
   });
 
   it('version stale + daemon-alive-check fails → falls through to upgrade (STILL_ALIVE only in protocol-mismatch kill, round 22)', async () => {

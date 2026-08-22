@@ -1,6 +1,7 @@
 import type { Session } from '@/lib/ccAgent.types';
 
 import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
+import type { RemoteHostRefCandidate } from '../../../../shared/remoteHostRef';
 import { sessionActivityMs } from './dateSessionGrouping';
 import { groupSessions, projectIdentityKeyForSession } from './projectGrouping';
 import { isProjectHidden } from './sidebarProjectVisibility';
@@ -49,6 +50,7 @@ interface CollectRestorableProjectKeysOptions {
   lastActivityCutoff: number | null;
   pinnedProjectKeys: ReadonlySet<string>;
   vendorPredicate: RestoreVendorPredicate | null;
+  remoteHostCandidates?: readonly RemoteHostRefCandidate[];
 }
 
 /**
@@ -65,17 +67,22 @@ export function collectRestorableProjectKeys({
   lastActivityCutoff,
   pinnedProjectKeys,
   vendorPredicate,
+  remoteHostCandidates,
 }: CollectRestorableProjectKeysOptions): ReadonlySet<string> {
   const vendorSessions = vendorPredicate ? sessions.filter(vendorPredicate) : sessions;
   const activitySessions =
     lastActivityCutoff === null
       ? vendorSessions
       : vendorSessions.filter((session) => sessionActivityMs(session) >= lastActivityCutoff);
-  const activityGroups = groupSessions(activitySessions, { includePinnedInProjects: true });
+  const groupingOptions = {
+    includePinnedInProjects: true,
+    ...(remoteHostCandidates ? { remoteHostCandidates } : {}),
+  };
+  const activityGroups = groupSessions(activitySessions, groupingOptions);
   const allGroups =
     lastActivityCutoff === null
       ? activityGroups
-      : groupSessions(vendorSessions, { includePinnedInProjects: true });
+      : groupSessions(vendorSessions, groupingOptions);
   const projectKeys = new Set(activityGroups.projects.map((project) => project.projectKey));
 
   for (const project of allGroups.projects) {

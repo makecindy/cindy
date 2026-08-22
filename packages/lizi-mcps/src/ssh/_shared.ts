@@ -53,8 +53,17 @@ export type SshErrorCode =
 
 /** ssh_list_hosts / HOST_NOT_FOUND 候选清单共用的精简视图。 */
 export function hostBrief(s: SshHostSnapshotLike): Record<string, unknown> {
+  const isSshConfig = s.config.source === 'ssh-config';
+  const colon = s.config.id.indexOf(':');
+  const parsedNamespace = colon > 0 ? s.config.id.slice(0, colon) : null;
+  const parsedId = colon > 0 ? s.config.id.slice(colon + 1) : null;
   return {
-    id: s.config.id,
+    hostRef: s.config.id,
+    ...(isSshConfig && s.config.alias ? { alias: s.config.alias } : {}),
+    ...(!isSshConfig && parsedNamespace === 'cindy' && parsedId
+      ? { profileId: parsedId }
+      : {}),
+    ...(s.config.displayName ? { displayName: s.config.displayName } : {}),
     hostname: s.config.hostname,
     port: s.config.port,
     user: s.config.user,
@@ -70,26 +79,42 @@ export type ResolveHostResult =
   | { ok: false; result: SshToolResult };
 
 /**
- * 把用户口中的"某台机器"解析成已配置主机：
- *   1. alias（config.id）精确匹配 —— 唯一主键，直接命中；
- *   2. hostname（IP / 域名）精确匹配 —— 唯一命中放行，多命中要求改用 alias；
- *   3. 都没有 → HOST_NOT_FOUND，附现有主机清单引导用户去「设置 → 远程连接」添加
- *      （v1 刻意不支持连未配置的主机——那会退回"猜 key / 猜 agent"的老路）。
+ * Resolve a host using the same contract as Desktop:
+ *   1. complete HostRef matches exactly;
+ *   2. a bare string matches one SSH-config alias only;
+ *   3. hostname/IP and Cindy displayName are deliberately not selectors.
  */
-export function resolveHost(pool: SshPoolLike, nameOrIp: string): ResolveHostResult {
+export function resolveHost(pool: SshPoolLike, hostSelector: string): ResolveHostResult {
   const snapshots = pool.list();
-  const byId = snapshots.find((s) => s.config.id === nameOrIp);
-  if (byId) return { ok: true, snapshot: byId };
+  const colon = hostSelector.indexOf(':');
+  const namespace = colon > 0 ? hostSelector.slice(0, colon) : null;
+  if (namespace === 'ssh-config' || namespace === 'cindy') {
+    const byRef = snapshots.find((s) => s.config.id === hostSelector);
+    if (byRef) return { ok: true, snapshot: byRef };
+  } else {
+    const byAlias = snapshots.filter(
+      (s) => s.config.source === 'ssh-config' && s.config.alias === hostSelector,
+    );
+    if (byAlias.length === 1) return { ok: true, snapshot: byAlias[0] };
+    if (byAlias.length > 1) {
+      return {
+        ok: false,
+        result: errorPayload(
+          'AMBIGUOUS_HOST',
+          `SSH alias "${hostSelector}" is ambiguous. Use the hostRef from candidates.`,
+          { candidates: byAlias.map(hostBrief) },
+        ),
+      };
+    }
+  }
 
-  const byHostname = snapshots.filter((s) => s.config.hostname === nameOrIp);
-  if (byHostname.length === 1) return { ok: true, snapshot: byHostname[0] };
-  if (byHostname.length > 1) {
+  if (namespace === 'ssh-config' || namespace === 'cindy') {
     return {
       ok: false,
       result: errorPayload(
-        'AMBIGUOUS_HOST',
-        `hostname "${nameOrIp}" 命中多台已配置主机，请改用唯一的 alias（candidates 里的 id 字段）指定。`,
-        { candidates: byHostname.map(hostBrief) },
+        'HOST_NOT_FOUND',
+        `HostRef "${hostSelector}" does not exist. Use ssh_list_hosts to refresh the configured host list.`,
+        { configuredHosts: snapshots.map(hostBrief) },
       ),
     };
   }
@@ -98,7 +123,7 @@ export function resolveHost(pool: SshPoolLike, nameOrIp: string): ResolveHostRes
     ok: false,
     result: errorPayload(
       'HOST_NOT_FOUND',
-      `"${nameOrIp}" 不在已配置的 SSH 主机里。请告知用户到「设置 → 远程连接」添加该主机（或确认 ~/.ssh/config 里的 alias 拼写），不要退回手拼 ssh 命令。`,
+      `"${hostSelector}" is not a configured SSH alias. Use a complete cindy:<uuid> HostRef for Cindy-local hosts; IP/hostname and displayName matching are intentionally unsupported.`,
       { configuredHosts: snapshots.map(hostBrief) },
     ),
   };

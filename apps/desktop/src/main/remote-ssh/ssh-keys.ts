@@ -59,8 +59,7 @@ const SSH_DIR_DEFAULT = path.join(os.homedir(), '.ssh');
  * Each key gets cross-referenced against ssh-agent's currently loaded
  * fingerprints (`ssh-add -l`) so the UI can show "in agent" badges.
  */
-export async function listLocalSshKeys(): Promise<LocalSshKey[]> {
-  const dir = SSH_DIR_DEFAULT;
+export async function listLocalSshKeys(dir = SSH_DIR_DEFAULT): Promise<LocalSshKey[]> {
   let names: string[];
   try {
     names = await fs.readdir(dir);
@@ -69,15 +68,30 @@ export async function listLocalSshKeys(): Promise<LocalSshKey[]> {
     throw err;
   }
 
-  // Find every <name>.pub that has a matching private key <name>.
+  // Find every public key with a conventional private-key companion:
+  //   id_ed25519.pub -> id_ed25519
+  //   work.pub       -> work.key
+  //   work.key.pub   -> work.key
+  // We only inspect filenames here; private key contents are never read.
   const pairs: { priv: string; pub: string }[] = [];
+  const seenPrivateKeys = new Set<string>();
   const nameSet = new Set(names);
-  for (const name of names) {
-    if (!name.endsWith('.pub')) continue;
-    const privName = name.slice(0, -'.pub'.length);
-    if (!nameSet.has(privName)) continue;
+  const publicNames = names
+    .filter((name) => name.endsWith('.pub'))
+    .sort((left, right) => {
+      const rank = (name: string): number => name.endsWith('.key.pub') ? 0 : 1;
+      return rank(left) - rank(right) || left.localeCompare(right);
+    });
+  for (const name of publicNames) {
+    const base = name.slice(0, -'.pub'.length);
+    const candidates = base.endsWith('.key') ? [base] : [base, `${base}.key`];
+    const privName = candidates.find((candidate) => nameSet.has(candidate));
+    if (!privName) continue;
+    const priv = path.join(dir, privName);
+    if (seenPrivateKeys.has(priv)) continue;
+    seenPrivateKeys.add(priv);
     pairs.push({
-      priv: path.join(dir, privName),
+      priv,
       pub: path.join(dir, name),
     });
   }

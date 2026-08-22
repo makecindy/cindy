@@ -165,6 +165,7 @@ describe('invalidateRemoteCcQueriesForMcpGenerationChange', () => {
     invalidateRemoteCcQueriesForMcpGenerationChange(
       {
         listRemoteCcSessions: () => [idle, running, local],
+        sameHostId: (left, right) => left === right,
         clearFreshMark: (id) => cleared.push(id),
         log: { warn: vi.fn() },
       },
@@ -183,6 +184,7 @@ describe('invalidateRemoteCcQueriesForMcpGenerationChange', () => {
     invalidateRemoteCcQueriesForMcpGenerationChange(
       {
         listRemoteCcSessions: () => [onA, onB],
+        sameHostId: (left, right) => left === right,
         clearFreshMark: (id) => cleared.push(id),
         log: { warn: vi.fn() },
       },
@@ -191,6 +193,23 @@ describe('invalidateRemoteCcQueriesForMcpGenerationChange', () => {
     expect(cleared).toEqual(['cc-1']);
     expect(onA.detach).toHaveBeenCalledTimes(1);
     expect(onB.detach).not.toHaveBeenCalled();
+  });
+
+  it('uses the shared host-id matcher for legacy bare SSH aliases', () => {
+    const legacy = ccSession('cc-1', 'host-a');
+    const cleared: string[] = [];
+    invalidateRemoteCcQueriesForMcpGenerationChange(
+      {
+        listRemoteCcSessions: () => [legacy],
+        sameHostId: (left, right) =>
+          left.replace(/^ssh-config:/, '') === right.replace(/^ssh-config:/, ''),
+        clearFreshMark: (id) => cleared.push(id),
+        log: { warn: vi.fn() },
+      },
+      { hostId: 'ssh-config:host-a', reason: 'forward-rearmed' },
+    );
+    expect(cleared).toEqual(['cc-1']);
+    expect(legacy.detach).toHaveBeenCalledTimes(1);
   });
 });
 

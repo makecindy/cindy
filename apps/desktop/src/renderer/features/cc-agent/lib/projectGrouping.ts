@@ -40,6 +40,11 @@
 
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
+import {
+  canonicalRemoteHostRef,
+  resolveRemoteHostRefAgainstCandidates,
+  type RemoteHostRefCandidate,
+} from '../../../../shared/remoteHostRef';
 import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
 import {
   deviceLinkProjectKey,
@@ -107,6 +112,8 @@ export interface ProjectGroupsResult {
 
 export interface GroupSessionsOptions {
   projectAliases?: ReadonlyMap<string, string> | Record<string, string>;
+  /** Current remote registry, used to recover old reserved-prefix SSH aliases. */
+  remoteHostCandidates?: readonly RemoteHostRefCandidate[];
   /**
    * Build a project catalogue that also contains individually pinned sessions.
    * The normal sidebar keeps this false so a pinned conversation only appears
@@ -157,7 +164,7 @@ export function getProjectIdentity(session: Session): ProjectIdentity | null {
   return {
     scope: session.remoteHostId ? 'remote' : 'local',
     workingDir,
-    remoteHostId: session.remoteHostId ?? null,
+    remoteHostId: session.remoteHostId ? canonicalRemoteHostRef(session.remoteHostId) : null,
     deviceLinkDeviceId: null,
     deviceLinkDeviceName: null,
     deviceLinkConnectionStatus: null,
@@ -440,9 +447,14 @@ export function groupSessions(
       // device-link 远程会话也归 'remote' scope(复用隐藏本机 FS 入口的渲染分支),
       // 但用独立 device: key,且不带 remoteHostId(与 SSH 维度互斥)。
       const scope: ProjectScope = isDeviceLink || s.remoteHostId ? 'remote' : 'local';
+      const remoteHostId = !isDeviceLink && s.remoteHostId
+        ? options.remoteHostCandidates
+          ? resolveRemoteHostRefAgainstCandidates(s.remoteHostId, options.remoteHostCandidates)
+          : canonicalRemoteHostRef(s.remoteHostId)
+        : null;
       const projectKey = isDeviceLink
         ? deviceLinkProjectKey(s.deviceLinkDeviceId as string, dir)
-        : projectIdentityKey(scope, dir, s.remoteHostId ?? null);
+        : projectIdentityKey(scope, dir, remoteHostId);
       const arr = groups.get(projectKey);
       if (arr) arr.push(s);
       else groups.set(projectKey, [s]);
@@ -450,7 +462,7 @@ export function groupSessions(
         identityByKey.set(projectKey, {
           scope,
           workingDir: dir,
-          remoteHostId: isDeviceLink ? null : s.remoteHostId ?? null,
+          remoteHostId,
           deviceLinkDeviceId: isDeviceLink ? (s.deviceLinkDeviceId as string) : null,
           deviceLinkDeviceName: isDeviceLink ? s.deviceLinkDeviceName ?? null : null,
           deviceLinkConnectionStatus: isDeviceLink ? s.deviceLinkConnectionStatus ?? 'connected' : null,

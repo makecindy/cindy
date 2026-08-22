@@ -9,14 +9,17 @@ const source = readFileSync(resolve(__dirname, '..', 'RemoteSection.tsx'), 'utf8
 );
 
 describe('RemoteSection add form order', () => {
-  it('keeps the add form before every existing host', () => {
+  it('keeps SSH and Cindy host lists before the manual add form', () => {
     const cardStart = source.indexOf("className={cn('flex flex-col rounded-xl'");
-    const addForm = source.indexOf('{adding && (', cardStart);
-    const hostList = source.indexOf('{hosts.map(', cardStart);
+    const sshHostList = source.indexOf('{sshConfigHosts.map(', cardStart);
+    const cindyHostList = source.indexOf('{cindyHosts.map(', sshHostList);
+    const manualAdd = source.indexOf("t('settings.remote.button.manualAdd')", cindyHostList);
+    const addForm = source.indexOf('{adding && (', manualAdd);
 
     expect(cardStart).toBeGreaterThanOrEqual(0);
-    expect(addForm).toBeGreaterThan(cardStart);
-    expect(hostList).toBeGreaterThan(addForm);
-    expect(source).toContain('idx > 0 || adding');
+    expect(sshHostList).toBeGreaterThan(cardStart);
+    expect(cindyHostList).toBeGreaterThan(sshHostList);
+    expect(manualAdd).toBeGreaterThan(cindyHostList);
+    expect(addForm).toBeGreaterThan(manualAdd);
   });
 });

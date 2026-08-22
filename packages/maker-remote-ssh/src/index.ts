@@ -1,7 +1,9 @@
 /**
  * @cindy/maker-remote-ssh — SSH remote host management for xdt-maker.
  *
- * Phase A: connection lifecycle + ~/.ssh/config IO + credential resolution.
+ * Phase A: connection lifecycle + OpenSSH config discovery + credential resolution.
+ * Include files are expanded and concrete aliases are computed once to their
+ * effective HostName. ProxyJump / ProxyCommand / ControlMaster remain out of scope.
  * Phase B (next): bootstrap agent CLI on remote + RemoteAgent that spawns
  * claude/codex over an exec channel + session ingest.
  */
@@ -103,11 +105,13 @@ export type { HostKeyStore, HostKeyDecision } from './hostKeys.js';
 export {
   defaultSshConfigPath,
   readSshConfig,
+  readSshConfigDetailed,
   upsertHost,
   updateHostFields,
   removeHost,
   expandHome,
 } from './sshConfig.js';
+export type { ReadSshConfigResult, SshConfigDiagnostic } from './sshConfig.js';
 
 export {
   defaultAgentEndpoint,
@@ -115,6 +119,8 @@ export {
   KEY_FILE_NOT_FOUND_CODE,
   KEY_FILE_UNREADABLE_CODE,
   PINNED_AGENT_FAILED_CODE,
+  pinnedPublicKeyCandidates,
+  resolvePinnedPublicKeyPath,
 } from './credentials.js';
 export type { ResolvedAuth } from './credentials.js';
 
@@ -124,5 +130,16 @@ export type {
   HostConfig,
   HostSnapshot,
   HostSource,
+  HostRef,
+  HostRefNamespace,
+  ConfigOrigin,
   RemoteStatus,
+} from './types.js';
+export {
+  canonicalHostRef,
+  cindyHostRef,
+  legacySshAliasForHostRef,
+  parseHostRef,
+  sameHostRef,
+  sshHostRef,
 } from './types.js';

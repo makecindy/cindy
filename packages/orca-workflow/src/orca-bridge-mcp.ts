@@ -149,6 +149,8 @@ export interface OrcaBridgeMcpDeps {
      * 保守处理, 不得在未归一化的情况下注入记忆 (review R6 P2)。
      */
     makerMemoryEnabled?: boolean;
+    /** Canonical HostRef produced by the host preflight for runtime caches/claims. */
+    remoteHostRuntimeId?: string;
   }>;
   orcaTeamStore?: OrcaTeamStore;
   /**
@@ -526,6 +528,7 @@ async function ensureSessionFromMeta(
   // 远端 MCP 注入):bridge 直调 core createSession 不经 maker-ipc, 跳过这步
   // 会让 app 重启后的首次 worker 回报 host-not-ready 或远端无协同 MCP。
   let remoteMakerMemoryEnabled = false;
+  let remoteHostRuntimeId: string | undefined;
   if (meta.remoteHostId) {
     const preflight = await deps.ensureRemoteSessionStart?.({
       sessionId: meta.sessionId,
@@ -539,6 +542,7 @@ async function ensureSessionFromMeta(
     // 注入 (review R6 P2:此前这里硬编码 false, 把远端 rehydrate 会话的
     // 记忆永久关死, 与已放开的其余路径分叉)。
     remoteMakerMemoryEnabled = preflight?.makerMemoryEnabled === true;
+    remoteHostRuntimeId = preflight?.remoteHostRuntimeId;
   }
   const session = await maker.createSession({
     id: meta.sessionId,
@@ -556,7 +560,11 @@ async function ensureSessionFromMeta(
     ...(meta.sdkSessionId ? { resumeSessionId: meta.sdkSessionId } : {}),
     // 远端 lead 在同一台 SSH 主机上重建; 本地 lead 无这两个字段。
     ...(meta.remoteHostId
-      ? { remoteHostId: meta.remoteHostId, makerMemoryEnabled: remoteMakerMemoryEnabled }
+      ? {
+          remoteHostId: meta.remoteHostId,
+          ...(remoteHostRuntimeId ? { remoteHostRuntimeId } : {}),
+          makerMemoryEnabled: remoteMakerMemoryEnabled,
+        }
       : {}),
   });
   deps.wireSession(session);

@@ -23,7 +23,7 @@ import type {
 
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { normalizeRemoteHostId } from '../localDb/mapper.js';
+import { normalizeRemoteHostRefForCreate } from '../localDb/mapper.js';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
@@ -88,7 +88,7 @@ export class DesktopSessionStorage implements SessionStorage {
       // 与 localDb sessions:create 同一规范化:trim 后非空才算 remote,空串/空白落 null,
       // 避免 maker.createSession (maker:create-session / scheduler / Feishu / Orca 等入口)
       // 把空白 host 原样入库,导致 renderer 按 local 分组、maker 按 remote-like 处理的分裂。
-      remoteHostId: normalizeRemoteHostId(meta.remoteHostId),
+      remoteHostId: normalizeRemoteHostRefForCreate(meta.remoteHostId),
       source: meta.reviewMode === true ? 'review' : 'desktop',
       createdAt: now,
       updatedAt: now,
