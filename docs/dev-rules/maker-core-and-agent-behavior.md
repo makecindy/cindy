@@ -19,7 +19,9 @@ Orca 多 Agent 协同另见 [`orca-team-architecture.md`](orca-team-architecture
 `host-controlled rollover + model-controlled bounded retrieval`：host 关闭旧原生窗口、写交接并
 在下一次发送前 fresh bootstrap，不再继续 compact。Claude Code 普通用户轮次结束后的静默
 `/compact` 与 rewind／cancellation 桥接 `/compact` 必须共用同一套失败分类：确定性失败锁存
-`needsRollover`，瞬时失败 `onCompactCanceled` 等下一轮再压。该锁存只活在当前 live
+`needsRollover`，瞬时失败 `onCompactCanceled` 等下一轮再压。Stop、graceful-stop 或
+upstream idle watchdog 打断静默 `/compact` 时只清 fired，不得在本次 compact 收尾立刻再注入。
+该锁存只活在当前 live
 controller／进程内；重启后没有 live handle 时不凭估算换窗。Orca 空闲 live 直发必须先走与
 `sendToSessionInternal` 相同的 `prepareUnhealthySession`，不能把消息打进应被关闭的旧窗口。切到更小窗口模型的 `danger`／`overflow`
 预检仍按 `assessModelSwitchContext`，与同模型 compact 解耦。不要关闭 Claude Code SDK 的自动

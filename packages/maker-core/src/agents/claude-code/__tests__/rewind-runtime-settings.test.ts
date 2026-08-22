@@ -929,6 +929,140 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  async function waitForIdleHostAutoCompact(
+    handle: Awaited<ReturnType<typeof startRewindableSession>>['handle'],
+    firstQuery: ReturnType<typeof createFakeQuery>,
+    infoCalls: string[],
+  ): Promise<void> {
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+    });
+  }
+
+  it('does not re-inject idle host auto-compact after abort until the next user turn', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.abort();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('does not re-inject idle host auto-compact after the upstream idle watchdog', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+      idleTimeoutMs: 20,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+    await vi.waitFor(() => {
+      expect(firstQuery.interrupt).toHaveBeenCalled();
+    });
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
+  it('clears idle host auto-compact fired after requestGracefulStop', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 80,
+    });
+    await waitForIdleHostAutoCompact(handle, firstQuery, infoCalls);
+
+    await handle.requestGracefulStop?.();
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      result: 'error_during_execution',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 437_712, output_tokens: 0 },
+    });
+    await vi.waitFor(() => {
+      expect(handle.isTurnRunning?.()).toBe(false);
+    });
+    expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(1);
+
+    await handle.send({ type: 'user', content: 'again' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 438_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toHaveLength(2);
+    });
+
+    await handle.close();
+  });
+
   it('rebuild replays auto-compact when a large→small window switch crossed the threshold during rewind', async () => {
     const { handle, firstQuery } = await startRewindableSession({ autoCompactThresholdPct: 50 });
     const eventIterator = handle.events()[Symbol.asyncIterator]();

@@ -2586,10 +2586,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         },
         source: 'claude-code',
       });
-      if (hostAutoCompactInFlight) {
-        autoCompactController?.onCompactCanceled('host_auto_compact_idle_timeout');
-        hostAutoCompactInFlight = false;
-      }
+      cancelIdleHostAutoCompact('host_auto_compact_idle_timeout');
       // 先关 turn-in-flight + 清 pending 再 interrupt: 这样 SDK drain 出 ResultMessage 时,
       // translator 的 onTurnEnd 还会再清一次 (幂等), 但中间任何 message 都不会重新 arm timer。
       turnInFlight = false;
@@ -2653,6 +2650,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       } else {
         autoCompactController?.onCompactCanceled('host_auto_compact_failed');
       }
+    }
+
+    function cancelIdleHostAutoCompact(reason: string): boolean {
+      if (!hostAutoCompactInFlight) return false;
+      autoCompactController?.onCompactCanceled(reason);
+      // 只清 fired。hostAutoCompactInFlight 留给 onTurnEnd，避免取消收尾立刻再注入。
+      return true;
     }
 
     // Rewind preview/commit intentionally skip injecting /compact because they
@@ -5640,6 +5644,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const generation = turnState.generation;
         turnState.interruptRequested = true;
         turnState.interruptGeneration = generation;
+        cancelIdleHostAutoCompact('host_auto_compact_graceful_stop');
         dismissAllPending('graceful_stop', 'deny');
         // A parent result can leave the foreground idle while wake tasks still
         // own an awaiting continuation. Interrupting that idle Query alone does
@@ -5746,10 +5751,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 前台仍在跑或 provider continuation 正在 awaiting 时都要锁定本代 Stop。
         // 后者的 turnInFlight 已经是 false，但 interrupt ACK 前的迟到 result 同样
         // 不得重新铸造 continuation claim。
-        if (hostAutoCompactInFlight) {
-          autoCompactController?.onCompactCanceled('host_auto_compact_aborted');
-          hostAutoCompactInFlight = false;
-        }
+        cancelIdleHostAutoCompact('host_auto_compact_aborted');
         const awaitingContinuationAtUserStop = activeContinuationClaim();
         if (turnInFlight || awaitingContinuationAtUserStop?.state === 'awaiting') {
           turnState.interruptRequested = true;
