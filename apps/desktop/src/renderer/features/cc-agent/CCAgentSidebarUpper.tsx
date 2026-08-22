@@ -1119,7 +1119,7 @@ function ExpandedView({
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+    async (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
       // 灵动岛启用时,完成提示由灵动岛承载,不再走系统 toast,避免同一事件双重打扰;
       // 灵动岛未启用(或平台不支持)时,继续用系统通知。飞书是独立外发通道,不受影响。
       const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
@@ -1127,7 +1127,7 @@ function ExpandedView({
       const feishuEnabled = getFeishuNotificationsEnabled();
       // 应用级提示音(#3177):与桌面通知同一去重形状——岛已承载该事件时岛会播
       // 自己的音效,这里不再重响。
-      const soundEnabled = getSoundNotificationsEnabled() && !islandActive;
+      const soundRequested = getSoundNotificationsEnabled() && !islandActive;
       // 失焦才推 —— 见上注释。
       if (typeof document !== 'undefined' && document.hasFocus()) return;
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -1135,10 +1135,11 @@ function ExpandedView({
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
-      // 声音只在确认真实外发后播放(过了失焦 gate 与 worker 聚合),且与 toast 的
-      // OS 通知音互斥:声音开了 → toast 静音,由应用提示音统一发声;
-      // 关了 → 保持 Electron 默认(silent:false),交给 OS。
-      if (soundEnabled) playSessionEventSound(kind);
+      // 先播应用提示音,拿到真实播放结果再决定 toast 是否静音(review P2):
+      // 播放成功 → 静音 OS 通知音,单一声源;失败(autoplay 被拒/资源缺失)→
+      // 保持 Electron 默认,OS 通知音照常,用户至少还有一条可听的提醒。
+      let soundOn = false;
+      if (soundRequested) soundOn = await playSessionEventSound(kind);
       void window.electronAPI.notificationMarkSessionAttention(sessionId);
       // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。
       // (手机推送用的是**桌面侧**语言 —— 标题在 wire payload 里是字面量,让手机按自己
@@ -1155,7 +1156,7 @@ function ExpandedView({
           desktop: desktopEnabled,
           feishu: feishuEnabled,
           mobile: true,
-          sound: soundEnabled,
+          sound: soundOn,
         },
       });
     },

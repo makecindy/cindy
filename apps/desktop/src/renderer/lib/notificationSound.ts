@@ -28,17 +28,23 @@ const SOUND_URL_BY_KIND: Record<SessionNotificationSoundKind, string> = {
 };
 
 /**
- * 播放一次会话事件提示音。任何失败(自动播放策略、资源缺失、解码错误)都
- * 静默降级——声音是锦上添花,不能影响通知本体与审批流程。
+ * 播放一次会话事件提示音,返回是否真的开始播放。
+ *
+ * 返回值驱动调用方决定是否把系统 toast 置静音(review P2):
+ *   - true  = play() 已 resolve(实际出声)→ 调用方静音 OS 通知音,单一声源;
+ *   - false = 自动播放被策略拒绝 / 资源缺失或解码失败 → 调用方保持 Electron
+ *             默认(silent:false),OS 通知音照常,用户至少还有一条可听的提醒。
  */
-export function playSessionEventSound(kind: SessionNotificationSoundKind): void {
+export async function playSessionEventSound(
+  kind: SessionNotificationSoundKind,
+): Promise<boolean> {
   try {
     const audio = new Audio(SOUND_URL_BY_KIND[kind]);
-    // toast 本体已发出;播放失败只留 debug 级痕迹,不抛出。
-    void audio.play().catch(() => {
-      /* autoplay blocked or device muted — silent degrade */
-    });
+    // play() resolve 表示实际开始出声;资源加载/解码失败与 autoplay 拒绝都会 reject。
+    await audio.play();
+    return true;
   } catch (err) {
     log.debug('notification sound skipped', err);
+    return false;
   }
 }
