@@ -3666,6 +3666,30 @@ async function handleSilentStopTurnEnd(
   }
 }
 
+function isFencedStaleProductTerminal(event: AgentEvent): boolean {
+  if (event.type === 'done') return true;
+  if (isTerminalTurnErrorEvent(event)) return true;
+  if (event.type !== 'status') return false;
+  const data = event.data as { isRunning?: unknown } | null | undefined;
+  return data?.isRunning === false;
+}
+
+function isFencedStaleSessionTerminal(
+  sessionId: string,
+  event: AgentEvent,
+): boolean {
+  if (isTurnContinuationBoundaryEvent(event) || event.turnScope === 'background') {
+    return false;
+  }
+  return (
+    isFencedStaleProductTerminal(event) &&
+    agentInputCoordinatorHolder?.isFencedStaleTerminal(sessionId, {
+      sessionTurnGeneration: event.sessionTurnGeneration,
+      sessionInstanceId: event.sessionInstanceId,
+    }) === true
+  );
+}
+
 export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void {
   if (!session) return;
   const existing = wiredSessionsById.get(session.id);
@@ -3747,6 +3771,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   });
   registration.disposers.push(
     session.onEvent((event: AgentEvent) => {
+      if (isFencedStaleSessionTerminal(session.id, event)) return;
       noteTurnDiffEvent(session.id, event, session.remoteHostId !== null);
       ghostSessionTap.handleEvent(
         event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },
@@ -3767,6 +3792,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         Object.prototype.hasOwnProperty.call(event, 'backgroundTurnStartedAt') &&
         backgroundTurnPredatesSessionClear(session.id, event.backgroundTurnStartedAt)
       ) {
+        return;
+      }
+      if (isFencedStaleSessionTerminal(session.id, event)) {
+        log.debug('ignored stale terminal after leftover turn reclaim', {
+          sessionId: session.id,
+          eventType: event.type,
+          sessionTurnGeneration: event.sessionTurnGeneration ?? null,
+          sessionInstanceId: event.sessionInstanceId ?? null,
+        });
         return;
       }
       // 自动续跑的 pending 不能只靠 status(isRunning=true) 清理：Pi/Claude 的
@@ -3978,7 +4012,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 兜底: 有些 vendor 的 done 不必先发 status:isRunning=false。
           // 但 idle 恢复不能挡在 EVENT broadcast 前，否则隐藏窗口可能在 done
           // 还没进入 renderer 时就重新被 Chromium 节流。
-          agentInputCoordinatorHolder?.onTurnEvent(session.id, 'done');
+          agentInputCoordinatorHolder?.onTurnEvent(session.id, 'done', undefined, undefined, {
+            sessionTurnGeneration: event.sessionTurnGeneration,
+            sessionInstanceId: event.sessionInstanceId,
+          });
         } else {
           // silent-stop 自动续跑:translator 判定本 turn 被上游空内容消息静默收尾时在
           // done.data 附加 silentStop 标记(见 maker-core translator)。延迟一拍再决策,
@@ -4060,6 +4097,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               ...(typeof errData?.errorStatus === 'number'
                 ? { errorStatus: errData.errorStatus }
                 : {}),
+            },
+            {
+              sessionTurnGeneration: event.sessionTurnGeneration,
+              sessionInstanceId: event.sessionInstanceId,
             },
           );
         }
@@ -11389,22 +11430,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * whether work is still running; the desktop tracker is only an event-driven
    * view and can remain stale across owner-boundary teardown.
    */
-  const getStableSessionForTurnBoundary = (sessionId: string): WiredSession | null => {
+  type StableSessionLookup =
+    | { status: 'found'; session: WiredSession }
+    | { status: 'missing' }
+    | { status: 'unavailable' };
+
+  const lookupStableSessionForTurnBoundary = (sessionId: string): StableSessionLookup => {
     const wired = wiredSessionsById.get(sessionId)?.session;
-    if (wired) return wired;
+    if (wired) return { status: 'found', session: wired };
     try {
-      return maker.getSession(sessionId) ?? null;
+      const sess = maker.getSession(sessionId);
+      return sess ? { status: 'found', session: sess } : { status: 'missing' };
     } catch (err) {
-      // Dynamic Maker intentionally fails closed while an account owner is
-      // being replaced. A missing stable wiring snapshot means we cannot
-      // authoritatively reconcile this session yet; callers must retain their
-      // boundary and wait for the normal close/settle path.
+      // Dynamic Maker throws PRECONDITION_FAILED while an account owner is
+      // being replaced. Callers that need fail-closed must not treat this as
+      // "session process gone".
       log.warn('session lookup unavailable during turn-boundary reconciliation', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return null;
+      return { status: 'unavailable' };
     }
+  };
+
+  const getStableSessionForTurnBoundary = (sessionId: string): WiredSession | null => {
+    const lookup = lookupStableSessionForTurnBoundary(sessionId);
+    return lookup.status === 'found' ? lookup.session : null;
   };
 
   /**
@@ -11429,9 +11480,57 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return true;
   };
 
+  const sealLostTerminalPersistState = (sessionId: string): void => {
+    // Same persist boundary as a lost-terminal live-idle reconcile. The next
+    // turn on this sessionId must not append to a half-open streaming block.
+    flushAssistantBlock(sessionId, null);
+    const abortedAssistantPersistId = consumeLastAssistantPersistId(sessionId);
+    const abortedBoundaryAssistantPersistId = consumeLastTopLevelAssistantPersistId(sessionId);
+    flushOrphanToolResults(sessionId, null);
+    if (abortedAssistantPersistId) {
+      pendingFailedTurnAssistantPersistId.set(sessionId, abortedAssistantPersistId);
+    }
+    if (abortedBoundaryAssistantPersistId) {
+      void markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId);
+    }
+    clearCodexPlanRowsForSession(sessionId);
+    resetTurnPersistState(sessionId);
+  };
+
   const reconcileSessionTurnIdle = (sessionId: string, source: string): boolean => {
-    const sess = getStableSessionForTurnBoundary(sessionId);
-    if (!sess) return false;
+    const lookup = lookupStableSessionForTurnBoundary(sessionId);
+    if (lookup.status === 'unavailable') return false;
+    if (lookup.status === 'missing') {
+      const trackerStale =
+        sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
+        sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
+      sealLostTerminalPersistState(sessionId);
+      if (trackerStale) {
+        log.warn('reconciling stale session turn boundary after session unload', {
+          sessionId,
+          source,
+        });
+      }
+      sessionTurnActivityTracker.deleteSession(sessionId);
+      void sessionTurnLeaseTracker.markTurnEnded(sessionId);
+      notifyGoalIdleAfterTurnSettled(sessionId);
+      try {
+        markTurnEndedAfterPersistDrain(sessionId);
+        noteClaudeSessionTurnState(sessionId, false);
+        settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
+        deferredCodexRestartHolder?.onSessionSettled();
+        agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
+        refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
+      } catch (err) {
+        log.warn('stale session turn side-effect cleanup failed', {
+          sessionId,
+          source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return true;
+    }
+    const sess = lookup.session;
     let liveSessionIdle = false;
     try {
       liveSessionIdle = !sess.isTurnRunning();
@@ -11445,20 +11544,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     if (!liveSessionIdle) return false;
     // The vendor is authoritative that this turn is over, but no terminal event
-    // reached the host. Flush and fail-seal the latest top-level Assistant before
-    // releasing the boundary; otherwise its last progress line is later treated
-    // as a legacy final answer by title regeneration. Preserve the last Assistant
-    // id for a rare late paired done so usage attribution still has a target.
-    flushAssistantBlock(sessionId, null);
-    const abortedAssistantPersistId = consumeLastAssistantPersistId(sessionId);
-    const abortedBoundaryAssistantPersistId = consumeLastTopLevelAssistantPersistId(sessionId);
-    flushOrphanToolResults(sessionId, null);
-    if (abortedAssistantPersistId) {
-      pendingFailedTurnAssistantPersistId.set(sessionId, abortedAssistantPersistId);
-    }
-    if (abortedBoundaryAssistantPersistId) {
-      void markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId);
-    }
+    // reached the host. Seal persist state before releasing the boundary;
+    // otherwise its last progress line is later treated as a legacy final
+    // answer by title regeneration.
+    sealLostTerminalPersistState(sessionId);
     const trackerStale =
       sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
       sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
@@ -11490,11 +11579,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // The marker write is best-effort and ordered behind pending message
       // persistence. It may retry/settle after an owner boundary is available.
       markTurnEndedAfterPersistDrain(sessionId);
-      // This is a logical turn boundary even though the vendor terminal event
-      // was lost. Drop the cross-segment plan ownership here so a later turn's
-      // id-less terminal error cannot fail-stamp an older plan.
-      clearCodexPlanRowsForSession(sessionId);
-      resetTurnPersistState(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
       settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
       deferredCodexRestartHolder?.onSessionSettled();
@@ -11938,13 +12022,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
     },
     isLiveTurnRunning: (sessionId) => {
+      const lookup = lookupStableSessionForTurnBoundary(sessionId);
+      if (lookup.status === 'unavailable') return undefined;
+      if (lookup.status === 'missing') return false;
       try {
-        const sess = getStableSessionForTurnBoundary(sessionId);
-        if (!sess) return undefined;
-        return sess.isTurnRunning();
+        return lookup.session.isTurnRunning();
       } catch {
         return undefined;
       }
+    },
+    isLiveSessionPresent: (sessionId) => {
+      const lookup = lookupStableSessionForTurnBoundary(sessionId);
+      if (lookup.status === 'unavailable') return undefined;
+      return lookup.status === 'found';
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
@@ -15157,6 +15247,8 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   const rendererEvent = { ...event };
   delete rendererEvent.turnAttemptToken;
   delete rendererEvent.backgroundTurnStartedAt;
+  delete rendererEvent.sessionTurnGeneration;
+  delete rendererEvent.sessionInstanceId;
   if (!event.data || typeof event.data !== 'object') return rendererEvent;
 
   const data = event.data as Record<string, unknown>;

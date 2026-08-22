@@ -424,6 +424,16 @@ export class Session {
   private terminalErrorDrainGeneration: number | null = null;
   private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private sendReservation: SendReservation | null = null;
+  /** True while runEventLoop is blocked in iterator.next(). */
+  private eventLoopAwaiting = false;
+  /** The blocked next() that was pending when the current send entered handle.send. */
+  private inFlightSendOwnsBlockedWait = false;
+  /** True from handle.send() start until that send settles. */
+  private insideProviderSendSync = false;
+  /** Keep a leftover status/done tail on the generation that started it. */
+  private staleTerminalQueuedGeneration: number | null = null;
+  /** Previous turn generation, kept until leftover tail or new-turn progress. */
+  private pendingPriorGeneration: number | null = null;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
    * AgentEvent.turnOrigin 上,turn 终止(isTerminalTurnEvent)后清空 — 共享
@@ -570,6 +580,14 @@ export class Session {
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     const previousTurnGeneration = this.turnGeneration;
     this.turnGeneration += 1;
+    if (
+      previousTurnGeneration > 0 &&
+      this.terminalEventObservedGeneration !== previousTurnGeneration
+    ) {
+      this.pendingPriorGeneration = previousTurnGeneration;
+    } else {
+      this.pendingPriorGeneration = null;
+    }
     const reservedTurnGeneration = this.turnGeneration;
     const reservation = createSendReservation(reservedTurnGeneration);
     this.sendReservation = reservation;
@@ -652,10 +670,15 @@ export class Session {
       try {
         this.beginTurnControl(reservedTurnGeneration);
         onDispatching?.();
-        await this.handle.send(msg, {
-          ...handleOpts,
-          signal: reservation.abortController.signal,
-        });
+        this.insideProviderSendSync = true;
+        try {
+          await this.handle.send(msg, {
+            ...handleOpts,
+            signal: reservation.abortController.signal,
+          });
+        } finally {
+          this.insideProviderSendSync = false;
+        }
       } catch (e) {
         if (e instanceof TurnDispatchRejectedError) {
           // The provider returned a trustworthy rejection before accepting any
@@ -699,6 +722,7 @@ export class Session {
           this.currentTurnOrigin = previousTurnOrigin;
           this.currentTurnAttemptToken = previousTurnAttemptToken;
           this.turnGeneration = previousTurnGeneration;
+          this.pendingPriorGeneration = null;
           originInstalled = false;
         }
         await this.close();
@@ -719,15 +743,26 @@ export class Session {
       //     turn 的剩余事件(含 done)继续带正确 origin。若这里强行清 null,正在跑的
       //     turn 的 done 会丢 origin → IM 转播收不到 done → 转播卡永不 finalize、残留
       //     state 污染下一轮(见 PR #129 review)。
-      if (originInstalled && !turnDispatched) {
-        this.currentTurnOrigin = previousTurnOrigin;
-        this.currentTurnAttemptToken = previousTurnAttemptToken;
+      if (!turnDispatched) {
+        if (originInstalled) {
+          this.currentTurnOrigin = previousTurnOrigin;
+          this.currentTurnAttemptToken = previousTurnAttemptToken;
+          originInstalled = false;
+          // Confirmed provider rejection cannot produce a turn tail, so it may
+          // immediately reuse the rolled-back generation. Other failures retain
+          // the bounded tail fence before another turn can enter.
+          if (!dispatchConfirmedUndispatched) {
+            this.armTerminalErrorDrain(previousTurnGeneration);
+          }
+        }
         this.turnGeneration = previousTurnGeneration;
-        // Confirmed provider rejection cannot produce a turn tail, so it may
-        // immediately reuse the rolled-back generation. Other failures retain
-        // the bounded tail fence before another turn can enter.
-        if (!dispatchConfirmedUndispatched) {
-          this.armTerminalErrorDrain(previousTurnGeneration);
+        if (
+          previousTurnGeneration > 0 &&
+          this.terminalEventObservedGeneration !== previousTurnGeneration
+        ) {
+          this.pendingPriorGeneration = previousTurnGeneration;
+        } else {
+          this.pendingPriorGeneration = null;
         }
       }
       if (turnLifecyclePrepared && !turnDispatched) {
@@ -1603,6 +1638,7 @@ export class Session {
       gracefulStopState: 'none',
       gracefulStopPromise: null,
     };
+    this.inFlightSendOwnsBlockedWait = this.eventLoopAwaiting;
   }
 
   private clearTurnControl(generation: number): void {
@@ -1751,12 +1787,139 @@ export class Session {
    * 并像用户插话一样暂停 goal,scheduler 的 IM 转播则直接忽略,卡片永不 finalize
    * (review #944 第二轮)。
    */
-  private fanOutEvent(event: AgentEvent, observedGeneration = this.turnGeneration): void {
+  private isIdleStatusEvent(event: AgentEvent): boolean {
+    if (event.type !== 'status') return false;
+    const data = event.data as { isRunning?: unknown } | null | undefined;
+    return data?.isRunning === false;
+  }
+
+  private isSilentStopDoneEvent(event: AgentEvent): boolean {
+    if (event.type !== 'done') return false;
+    const data = event.data as { silentStop?: unknown } | null | undefined;
+    return data?.silentStop === true;
+  }
+
+  private isLeftoverTailEvent(event: AgentEvent): boolean {
+    return (
+      (event.type === 'done' && !this.isSilentStopDoneEvent(event)) ||
+      this.isIdleStatusEvent(event) ||
+      (isTerminalAgentErrorEvent(event) && this.staleTerminalQueuedGeneration !== null)
+    );
+  }
+
+  private isNewTurnProgressEvent(event: AgentEvent): boolean {
+    if (event.turnScope === 'background') return false;
+    return (
+      event.type === 'text' ||
+      event.type === 'thinking' ||
+      event.type === 'image' ||
+      event.type === 'tool_use' ||
+      event.type === 'tool_result' ||
+      event.type === 'tool_result_full'
+    );
+  }
+
+  private resolveSessionTurnGeneration(
+    waitStartGeneration: number,
+    observedGeneration: number,
+    event: AgentEvent,
+  ): number {
+    if (observedGeneration > waitStartGeneration) {
+      this.staleTerminalQueuedGeneration = null;
+      if (this.isNewTurnProgressEvent(event)) {
+        this.pendingPriorGeneration = null;
+      }
+      return observedGeneration;
+    }
+    const prior = this.pendingPriorGeneration;
+    const leftoverDoneOrIdle =
+      (event.type === 'done' && !this.isSilentStopDoneEvent(event)) ||
+      this.isIdleStatusEvent(event);
+    if (prior !== null && leftoverDoneOrIdle && waitStartGeneration !== 0) {
+      if (event.type === 'done') {
+        this.pendingPriorGeneration = null;
+        this.staleTerminalQueuedGeneration = null;
+      } else {
+        this.staleTerminalQueuedGeneration = prior;
+      }
+      return prior;
+    }
+    const leftoverTail = this.isLeftoverTailEvent(event);
+    if (leftoverTail && this.staleTerminalQueuedGeneration !== null) {
+      const stamped = this.staleTerminalQueuedGeneration;
+      if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+        this.staleTerminalQueuedGeneration = null;
+      }
+      return stamped;
+    }
+    if (leftoverTail && waitStartGeneration > 0 && waitStartGeneration < this.turnGeneration) {
+      if (event.type === 'done' || isTerminalAgentErrorEvent(event)) {
+        this.staleTerminalQueuedGeneration = null;
+      } else {
+        this.staleTerminalQueuedGeneration = waitStartGeneration;
+      }
+      return waitStartGeneration;
+    }
+    const inFlightGeneration = this.sendReservation?.generation;
+    const belongsToInFlightSend =
+      this.insideProviderSendSync &&
+      this.inFlightSendOwnsBlockedWait &&
+      typeof inFlightGeneration === 'number' &&
+      inFlightGeneration === this.turnGeneration &&
+      this.turnControlState?.generation === inFlightGeneration;
+    if (belongsToInFlightSend) {
+      this.inFlightSendOwnsBlockedWait = false;
+      this.staleTerminalQueuedGeneration = null;
+      if (
+        this.isNewTurnProgressEvent(event) ||
+        event.type === 'done' ||
+        isTerminalAgentErrorEvent(event)
+      ) {
+        this.pendingPriorGeneration = null;
+      }
+      return inFlightGeneration;
+    }
+    if (waitStartGeneration === 0 && this.turnGeneration > 0) {
+      this.staleTerminalQueuedGeneration = null;
+      return this.turnGeneration;
+    }
+    if (this.isNewTurnProgressEvent(event)) {
+      // New-turn tokens prove this generation owns later product terminals.
+      // Drop a leftover idle-only tail too: if that old done is lost, the
+      // live done must not inherit staleQueued and get fenced.
+      this.pendingPriorGeneration = null;
+      this.staleTerminalQueuedGeneration = null;
+    }
+    return waitStartGeneration;
+  }
+
+  private fanOutEvent(
+    event: AgentEvent,
+    observedGeneration = this.turnGeneration,
+    queuedGeneration = observedGeneration,
+  ): void {
     const isBackgroundEvent = event.turnScope === 'background';
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
-    const isCurrentGeneration = observedGeneration === this.turnGeneration;
-    this.observeTurnControl(event, observedGeneration);
+    if (event.sessionInstanceId === undefined) {
+      event.sessionInstanceId = this.instanceId;
+    }
+    if (event.sessionTurnGeneration === undefined) {
+      event.sessionTurnGeneration = this.resolveSessionTurnGeneration(
+        queuedGeneration,
+        observedGeneration,
+        event,
+      );
+    }
+    const resolvedGeneration = event.sessionTurnGeneration ?? observedGeneration;
+    // Both the source stamp and the dequeued wait must name this turn.
+    // A leftover tail can be stamped N while next() recaptures N+1, or the
+    // reverse when an in-flight start-failure adopts the new generation from
+    // an older wait. Current-turn cleanup requires agreement.
+    const isCurrentGeneration =
+      resolvedGeneration === this.turnGeneration &&
+      observedGeneration === this.turnGeneration;
+    this.observeTurnControl(event, resolvedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
     if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
@@ -1811,32 +1974,38 @@ export class Session {
     }
     const listenerEvent = redactEventForListeners(event);
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
-      this.clearTurnControl(observedGeneration);
+      this.clearTurnControl(resolvedGeneration);
     }
-    if (isTerminal && !isBackgroundEvent) {
+    const isLeftoverProductTerminal =
+      !isBackgroundEvent &&
+      resolvedGeneration < this.turnGeneration &&
+      (isTerminal || this.isIdleStatusEvent(event));
+    if (isTerminal && !isBackgroundEvent && !isLeftoverProductTerminal) {
       try {
         const pending = this.turnLifecycleObserver?.onTerminal({
-          turnGeneration: observedGeneration,
+          turnGeneration: resolvedGeneration,
           event: listenerEvent,
           isCurrentGeneration,
         });
         if (pending) {
           void Promise.resolve(pending).catch((error) => {
             this.logger.warn('turn lifecycle terminal cleanup failed', {
-              turnGeneration: observedGeneration,
+              turnGeneration: resolvedGeneration,
               error: String(error),
             });
           });
         }
       } catch (error) {
         this.logger.warn('turn lifecycle terminal cleanup failed', {
-          turnGeneration: observedGeneration,
+          turnGeneration: resolvedGeneration,
           error: String(error),
         });
       }
     }
-    for (const listener of this.eventListeners) {
-      try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
+    if (!isLeftoverProductTerminal) {
+      for (const listener of this.eventListeners) {
+        try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
+      }
     }
     // A late child update belongs to the completed parent turn. It remains
     // visible to listeners, but must not clear/adopt the current turn or keep
@@ -2118,7 +2287,13 @@ export class Session {
         const awaitingCanAdoptNextGeneration =
           awaitingGeneration === 0 ||
           this.terminalEventObservedGeneration === awaitingGeneration;
-        const result = await iterator.next();
+        this.eventLoopAwaiting = true;
+        let result: IteratorResult<AgentEvent>;
+        try {
+          result = await iterator.next();
+        } finally {
+          this.eventLoopAwaiting = false;
+        }
         if (result.done) break;
         const event = result.value;
         this.releaseSendReservationIfObserved();
@@ -2137,7 +2312,7 @@ export class Session {
         if (this.terminationStarted) continue;
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
         // 见那里的注释）。关闭门一旦占住，旧 handle 的迟到事件不得再改写业务状态。
-        this.fanOutEvent(event, observedGeneration);
+        this.fanOutEvent(event, observedGeneration, awaitingGeneration);
       }
     } catch (e) {
       this.logger.error('event loop crashed', { error: String(e) });

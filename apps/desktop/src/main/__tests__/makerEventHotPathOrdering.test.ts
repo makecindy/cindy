@@ -61,6 +61,32 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
+  it('rejects a fenced leftover terminal before register-side turn effects', () => {
+    expect(source).toContain('delete rendererEvent.sessionTurnGeneration');
+    expect(source).toContain('delete rendererEvent.sessionInstanceId');
+    const wireSessionSource = extractWireSessionSource();
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'ghostSessionTap.handleEvent(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'consumeClaudeOpusPlanMismatch(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'finalizeTurnChangeSet(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'isFencedStaleSessionTerminal(session.id, event)',
+      'shouldMarkTurnStatusIdleAfterBroadcast = true',
+    );
+  });
+
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
     const wireSessionSource = extractWireSessionSource();
 
@@ -147,7 +173,7 @@ describe('maker:event hot path ordering', () => {
     const observerHelperStart = source.indexOf('function notifyGoalIdleAfterTurnSettled(');
     const observerHelperEnd = source.indexOf('\n}\n', observerHelperStart) + 2;
     const observerHelperSource = source.slice(observerHelperStart, observerHelperEnd);
-    const reconcileStart = source.indexOf('const reconcileSessionTurnIdle =');
+    const reconcileStart = source.indexOf('const sealLostTerminalPersistState =');
     const reconcileEnd = source.indexOf('\n\n  const readDirectAbortTurnId =', reconcileStart);
     const reconcileSource = source.slice(reconcileStart, reconcileEnd);
     const directAbortStart = source.indexOf('ipcMain.handle(MAKER_INVOKE.ABORT_SESSION');
@@ -170,20 +196,27 @@ describe('maker:event hot path ordering', () => {
 
     expect(reconcileStart).toBeGreaterThanOrEqual(0);
     expect(reconcileEnd).toBeGreaterThan(reconcileStart);
-    expectOrder(
-      reconcileSource,
+    const liveIdleStart = reconcileSource.indexOf(
       'sessionTurnActivityTracker.setSessionInTurn(sessionId, false);',
-      'notifyGoalIdleAfterTurnSettled(sessionId);',
     );
+    expect(liveIdleStart).toBeGreaterThanOrEqual(0);
+    expect(
+      reconcileSource.indexOf('notifyGoalIdleAfterTurnSettled(sessionId);', liveIdleStart),
+    ).toBeGreaterThan(liveIdleStart);
     expectOrder(
       reconcileSource,
-      'markTurnEndedAfterPersistDrain(sessionId);',
-      'clearCodexPlanRowsForSession(sessionId);',
+      'flushAssistantBlock(sessionId, null);',
+      'consumeLastAssistantPersistId(sessionId);',
     );
     expectOrder(
       reconcileSource,
       'clearCodexPlanRowsForSession(sessionId);',
       'resetTurnPersistState(sessionId);',
+    );
+    expectOrder(
+      reconcileSource,
+      'sealLostTerminalPersistState(sessionId);',
+      'sessionTurnActivityTracker.deleteSession(sessionId);',
     );
 
     // ABORT_SESSION reconciles from finally, so vendor abort rejection still reaches the
@@ -202,7 +235,12 @@ describe('maker:event hot path ordering', () => {
       "return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');",
     );
     expect(coordinatorSource).toContain('isLiveTurnRunning: (sessionId) =>');
-    expect(coordinatorSource).toContain('if (!sess) return undefined;');
+    expect(coordinatorSource).toContain('isLiveSessionPresent: (sessionId) =>');
+    expect(source).toContain('lookupStableSessionForTurnBoundary');
+    expect(source).toContain("status: 'unavailable'");
+    expect(coordinatorSource).toContain("if (lookup.status === 'unavailable') return undefined;");
+    expect(coordinatorSource).toContain("if (lookup.status === 'missing') return false;");
+    expect(coordinatorSource).toContain("return lookup.status === 'found';");
   });
 
   it('does not latch product-turn bookkeeping on background status events', () => {
@@ -695,18 +733,25 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {
-    const stableLookupStart = source.indexOf('const getStableSessionForTurnBoundary =');
-    const stableLookupEnd = source.indexOf('\n  const reconcileSessionTurnIdle =', stableLookupStart);
+    const stableLookupStart = source.indexOf('const lookupStableSessionForTurnBoundary =');
+    const stableLookupEnd = source.indexOf('\n  const getStableSessionForTurnBoundary =', stableLookupStart);
     const stableLookupSource = source.slice(stableLookupStart, stableLookupEnd);
-    const reconcileStart = stableLookupEnd;
+    const reconcileStart = source.indexOf('const sealLostTerminalPersistState =');
     const reconcileEnd = source.indexOf('\n\n  const inputCoordinator:', reconcileStart);
     const reconcileSource = source.slice(reconcileStart, reconcileEnd);
 
     expect(stableLookupStart).toBeGreaterThanOrEqual(0);
     expect(stableLookupEnd).toBeGreaterThan(stableLookupStart);
     expect(stableLookupSource).toContain('wiredSessionsById.get(sessionId)?.session');
-    expectOrder(stableLookupSource, 'if (wired) return wired;', 'return maker.getSession(sessionId) ?? null;');
-    expect(stableLookupSource).toContain('return null;');
+    expectOrder(
+      stableLookupSource,
+      'if (wired) return { status: \'found\', session: wired };',
+      'return sess ? { status: \'found\', session: sess } : { status: \'missing\' };',
+    );
+    expect(stableLookupSource).toContain("return { status: 'unavailable' };");
+    expect(source).toContain(
+      "return lookup.status === 'found' ? lookup.session : null;",
+    );
 
     expect(reconcileStart).toBeGreaterThanOrEqual(0);
     expect(reconcileEnd).toBeGreaterThan(reconcileStart);
@@ -716,8 +761,8 @@ describe('maker:event hot path ordering', () => {
     expectOrder(reconcileSource, 'flushAssistantBlock(sessionId, null);', 'consumeLastAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastAssistantPersistId(sessionId);', 'consumeLastTopLevelAssistantPersistId(sessionId);');
     expectOrder(reconcileSource, 'consumeLastTopLevelAssistantPersistId(sessionId);', 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)');
-    expectOrder(reconcileSource, 'markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId)', 'markTurnEndedAfterPersistDrain(sessionId);');
-    expectOrder(reconcileSource, 'markTurnEndedAfterPersistDrain(sessionId);', 'resetTurnPersistState(sessionId);');
+    expectOrder(reconcileSource, 'sealLostTerminalPersistState(sessionId);', 'sessionTurnActivityTracker.deleteSession(sessionId);');
+    expectOrder(reconcileSource, 'clearCodexPlanRowsForSession(sessionId);', 'resetTurnPersistState(sessionId);');
   });
 
   it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {

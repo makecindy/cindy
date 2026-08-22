@@ -2202,6 +2202,40 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
   });
 
+  it('missing-session lost-terminal seal does not concatenate the next turn onto leftover stream text', async () => {
+    const deadId = onAssistantTextEvent(
+      SESSION,
+      { text: 'dead-turn-fragment', isFinal: false },
+      null,
+    );
+    expect(deadId).toEqual(expect.any(String));
+
+    // Same persist boundary as reconcileSessionTurnIdle's missing lookup.
+    flushAssistantBlock(SESSION, null);
+    consumeLastAssistantPersistId(SESSION);
+    consumeLastTopLevelAssistantPersistId(SESSION);
+    resetTurnPersistState(SESSION);
+
+    const nextId = onAssistantTextEvent(
+      SESSION,
+      { text: 'next-turn-only', isFinal: false },
+      null,
+    );
+    expect(nextId).not.toBe(deadId);
+    flushAssistantBlock(SESSION, null);
+    await flushWrites();
+
+    const assistantCreates = (createMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .filter((c) => (c[1] as { role?: string }).role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+    expect(assistantCreates[0]?.[1]).toEqual(
+      expect.objectContaining({ clientId: deadId, content: 'dead-turn-fragment' }),
+    );
+    expect(assistantCreates[1]?.[1]).toEqual(
+      expect.objectContaining({ clientId: nextId, content: 'next-turn-only' }),
+    );
+  });
+
   it('clearSessionPersistState 清理追踪(session 关闭防泄漏)', () => {
     onAssistantTextEvent(SESSION, { text: 'gone', isFinal: true }, null);
     clearSessionPersistState(SESSION);
