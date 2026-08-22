@@ -4643,9 +4643,9 @@ export function CCAgentSessionView({
               </InteractionPromptHost>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               <GoalIndicator sessionId={sessionId} />
-              {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
-                 全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
-                 Takeover ? : ChatInput) 的语义一致。
+              {/* 互斥:控制端能终结的 pending interaction 会接管 composer；
+                 Desktop-only 只读确认只能提示等待，必须保留 ChatInput，避免控制端
+                 既处理不了确认又无法继续发送或排队消息。
                  优先级 (高 → 低):
                    1. attached (远程接管中)  → TakeoverMask  (90px)
                    2. worktreePreparing      → WorktreeCreatingOverlay (90px, 视觉同款)
@@ -4659,8 +4659,7 @@ export function CCAgentSessionView({
               pendingPluginSetup ||
               pendingIssueConfirm ||
               pendingRenameSessionsConfirm ||
-              pendingGhostGrantConfirm ||
-              pendingRemoteDesktopConfirmation ? null : sessionBinding.attached && sessionId ? (
+              pendingGhostGrantConfirm ? null : sessionBinding.attached && sessionId ? (
                 <TakeoverMask
                   sessionId={sessionId}
                   channel={sessionBinding.identity?.channel ?? 'feishu'}

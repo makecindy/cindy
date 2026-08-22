@@ -323,6 +323,20 @@ describe('device-link 远程交互往返 — plan_review', () => {
 });
 
 describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
+  it('只读提示展示期间保留 ChatInput，不把控制端锁死', () => {
+    const src = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
+      'utf8',
+    );
+    const branchStart = src.indexOf('/* 互斥:控制端能终结的 pending interaction');
+    const chatInput = src.indexOf('<ChatInput', branchStart);
+    expect(branchStart).toBeGreaterThan(-1);
+    expect(chatInput).toBeGreaterThan(branchStart);
+    expect(src.slice(branchStart, chatInput)).not.toContain(
+      'pendingRemoteDesktopConfirmation',
+    );
+  });
+
   it.each(['issue_confirm', 'rename_sessions_confirm', 'ghost_grant_confirm'] as const)(
     '%s live push 只建立不可操作状态，dismissal 后清除',
     async (kind) => {
