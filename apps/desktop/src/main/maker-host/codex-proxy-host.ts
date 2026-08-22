@@ -37,6 +37,7 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
+  createResponsesCustomToolFunctionAdapter,
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
@@ -1944,6 +1945,26 @@ function createXaiResponsesCompatTransform(): RequestTransform {
   };
 }
 
+function needsExecFunctionAdapter(
+  body: Record<string, unknown>,
+  ctx: RequestTransformCtx,
+): boolean {
+  const requestModel = typeof body.model === 'string' ? body.model : '';
+  const providerContext = providerContextForRequest(ctx.headers, requestModel);
+  const providerId = providerContext.providerId ?? inferProviderIdForModel(requestModel, 'codex');
+  const routing = providerContext.subagentRoute
+    ? getProviderRoutingDescriptor(
+        providerContext.subagentRoute.providerId,
+        'codex',
+        providerContext.subagentRoute.catalogModel,
+      )
+    : providerContext.sessionId
+      ? getSessionRoutingDescriptor(providerContext.sessionId, 'codex', requestModel)
+      : getProviderRoutingDescriptor(providerId, 'codex', requestModel);
+  return (routing?.wireProtocol ?? 'openai-responses') === 'openai-responses'
+    && routing?.supportsResponsesCustomTools === false;
+}
+
 /**
  * The XD Gateway claims this wire model for its codex routing when the active
  * catalog exposes it under `xd.models.codex`. We use the catalog membership
@@ -2607,6 +2628,7 @@ export function createModelRoutingTransform(
 
 function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
+  execAdapter = createResponsesCustomToolFunctionAdapter(['exec']),
 ): RequestTransform[] {
   const transforms: RequestTransform[] = [
     createActiveStripTransform({
@@ -2640,6 +2662,12 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: sanitizeXaiModelInputFromBody,
     }),
+    // Providers that explicitly lack Responses custom tools still accept ordinary
+    // functions. Adapt before provider sanitizers, then restore custom_tool_call
+    // events on the matching response stream.
+    (body, ctx) => isPlainObject(body) && needsExecFunctionAdapter(body, ctx)
+      ? execAdapter.adaptRequest(body, ctx.reqId)
+      : null,
     createStrictGatewayHistoryCompatTransform(),
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
@@ -2757,10 +2785,15 @@ export function withCodexUpstreamRecording(
 function createCodexProxyHandle(
   frozenAuthInjection?: CodexProxyAuthInjection,
 ): Promise<ProxyHandle> {
+  const execAdapter = createResponsesCustomToolFunctionAdapter(['exec']);
   return createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
-    transformRequest: createTransformRequestChain(frozenAuthInjection),
+    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter),
+    transformResponse: (ctx) => execAdapter.createResponseTransform(ctx.reqId, {
+      contentType: ctx.responseHeaders['content-type'] ?? '',
+      contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',
+    }),
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(

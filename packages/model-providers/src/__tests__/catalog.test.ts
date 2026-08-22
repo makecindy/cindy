@@ -181,6 +181,12 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     }
   });
 
+  it('declares native Responses custom-tool support on each built-in Codex Responses route', () => {
+    expect(provider('openai').routing.codex?.supportsResponsesCustomTools).toBe(true);
+    expect(provider('xd').routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(provider('xai').routing.codex?.supportsResponsesCustomTools).toBe(false);
+  });
+
   it('declares access separately from model names', () => {
     expect(provider('anthropic').access).toEqual({ kind: 'subscription', product: 'Claude.ai' });
     expect(provider('openai').access).toEqual({ kind: 'subscription', product: 'ChatGPT' });

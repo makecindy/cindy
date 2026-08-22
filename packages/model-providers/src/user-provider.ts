@@ -215,6 +215,10 @@ function toRouting(
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
+    ...(agent === 'codex'
+      && (wireProtocol ?? defaultWireProtocol(agent)) === 'openai-responses'
+      ? { supportsResponsesCustomTools: false }
+      : {}),
     ...(strategy === "none" &&
     (!isLoopbackProviderUrl(baseUrl) ||
       (modelsUrl !== undefined && !isLoopbackProviderUrl(modelsUrl)))

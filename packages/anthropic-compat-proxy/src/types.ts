@@ -4,13 +4,14 @@
  * 设计要点:
  *   - 请求 transform 是数组,按顺序串联,任一返回 null 表示"我不动这条",继续下一个
  *     或者最终走字节透传(整条 JSON 全程不解析,延迟 0)
- *   - 响应不开 transform —— 流式 SSE 一旦 parse/改写就丧失低延迟,代价不值;
- *     只提供可选 observer 做只读 tee,默认关闭
+ *   - 响应默认字节透传；协议兼容场景可显式注入 request-scoped Transform，
+ *     observer 仍只做只读 tee
  *   - logger 全可选,host 不传就静默(包本身永远不 console.log)
  */
 
 import type { Buffer } from "node:buffer";
 import type { ServerResponse } from "node:http";
+import type { Transform } from "node:stream";
 
 import type { OutboundProxyResolver } from "./outbound-proxy.js";
 
@@ -151,6 +152,9 @@ export type ResponseObserver = (
   ctx: ResponseObserverCtx,
 ) => ResponseObserverSink | null | undefined | void;
 
+/** 请求级响应体改写；null 保持零拷贝，Transform 仍由代理统一收口生命周期与 headers。 */
+export type ResponseTransform = (ctx: ResponseObserverCtx) => Transform | null | undefined;
+
 /**
  * 一条 400 透明重试规则。
  *
@@ -234,6 +238,8 @@ export interface ProxyOptions {
    * 不能改写响应或阻塞流式 pipe。
    */
   responseObserver?: ResponseObserver;
+  /** 可选响应体 transform 工厂。默认关闭，响应字节原样透传。 */
+  transformResponse?: ResponseTransform;
   /** 可选 logger,不传则静默 */
   logger?: ProxyLogger;
   /**

@@ -65,8 +65,22 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.routing.codex).toEqual({
       upstream: "https://openrouter.ai/api/v1",
       authStrategy: "api-key-header",
+      supportsResponsesCustomTools: false,
     });
     expect(p.routing.codex?.headerOverride).toBeUndefined();
+  });
+
+  it("marks only a custom Codex Responses runtime as lacking native custom tools", () => {
+    const responses = buildUserProvider(codexOnly);
+    const chat = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: { ...codexOnly.runtimes.codex!, wireProtocol: "openai-chat" },
+      },
+    });
+
+    expect(responses.routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(chat.routing.codex?.supportsResponsesCustomTools).toBeUndefined();
   });
 
   it("preserves an explicit Chat Completions protocol for Codex routing", () => {

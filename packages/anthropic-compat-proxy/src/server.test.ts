@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { EventEmitter } from 'node:events';
+import { Transform } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -140,6 +141,38 @@ describe('anthropic-compat-proxy loopback port guard', () => {
 
     const result = await post(proxy.url, { model: 'test-model' });
     expect(result).toEqual({ status: 200, text: JSON.stringify({ ok: true }) });
+  });
+
+  it('pipes successful response bodies through a request-scoped transform', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      const payload = '{"source":"upstream"}';
+      res.writeHead(200, {
+        'content-type': 'application/json', 'content-length': String(payload.length),
+      }).end(payload);
+    });
+    upstreamClose = upstream.close;
+    let requestBody = '';
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [(body) => ({ ...(body as object), routed: true })],
+      transformResponse: (ctx) => {
+        requestBody = ctx.requestBody.toString('utf8');
+        return new Transform({
+          transform(chunk, _encoding, callback) {
+            callback(null, String(chunk).replace('upstream', 'adapted-provider'));
+          },
+        });
+      },
+    });
+
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: '{"model":"test-model"}',
+    });
+    expect(await response.json()).toEqual({ source: 'adapted-provider' });
+    expect(response.headers.get('content-length')).toBeNull();
+    expect(JSON.parse(requestBody)).toEqual({ model: 'test-model', routed: true });
   });
 
   it('jumps out of a Windows excluded-port range after EACCES and cleans listeners', async () => {
