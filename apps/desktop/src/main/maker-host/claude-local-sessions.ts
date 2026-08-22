@@ -68,7 +68,8 @@ export interface ClaudeCodeSessionScanSummary {
 interface ClaudeScanSummaryCacheEntry {
   mtimeMs: number;
   size: number;
-  summary: ClaudeCodeSessionScanSummary | null;
+  /** 缓存完整结果:拒绝原因也一并缓存,避免未变化文件重扫时分类漂移成 noEvents。 */
+  result: ClaudeCodeSessionScanSummaryResult;
 }
 
 /** Summary of one top-level Claude Code JSONL file as an XD session row. */
@@ -117,6 +118,19 @@ export interface ClaudeCodeExternalScanResult {
   roots: string[];
   candidates: ClaudeCodeExternalSessionCandidate[];
   rejectedCount: number;
+  /** 拒绝原因分类(合计等于 rejectedCount;供导入页区分展示, 解决 #1791 可发现性问题)。 */
+  rejected?: {
+    /** 文件不存在 / 不可读。 */
+    unreadable: number;
+    /** 内部 review 会话(review-session-channel / local-review)。 */
+    internal: number;
+    /** 无顶层 user/assistant 事件。 */
+    noEvents: number;
+    /** 扫描窗口限制(头部未读到有效标题)。 */
+    windowLimit: number;
+    /** SDK ID 格式不合法。 */
+    invalidId: number;
+  };
 }
 
 export interface ClaudeCodeExternalScanOptions {
@@ -131,16 +145,19 @@ export async function scanExternalClaudeCodeSessions(
   const roots = await discoverClaudeProjectsRoots();
   const candidates: ClaudeCodeExternalSessionCandidate[] = [];
   let rejectedCount = 0;
+  const rejected = { unreadable: 0, internal: 0, noEvents: 0, windowLimit: 0, invalidId: 0 };
   for (const root of roots) {
     let scannedForRoot = 0;
     const files = await collectClaudeSessionFiles(root);
     for (const file of files) {
       if (scannedForRoot >= maxSessionsPerRoot) break;
-      const summary = await readClaudeCodeSessionScanSummary(file);
-      if (!summary) {
+      const result = await readClaudeCodeSessionScanSummaryResult(file);
+      if (result.kind === 'rejected') {
         rejectedCount += 1;
+        rejected[result.reason] += 1;
         continue;
       }
+      const summary = result.summary;
       scannedForRoot += 1;
       candidates.push({
         source: 'claude',
@@ -153,7 +170,7 @@ export async function scanExternalClaudeCodeSessions(
       });
     }
   }
-  return { roots, candidates, rejectedCount };
+  return { roots, candidates, rejectedCount, rejected };
 }
 
 /** Import the selected external Claude Code sessions into xdt-maker's session table. */
@@ -372,21 +389,51 @@ async function findClaudeSessionFileById(sdkSessionId: string): Promise<string |
  * - 头部窗口内没有任何顶层 user/assistant 事件的文件按 rejected 处理。
  * 结果按 (mtimeMs, size) 缓存,文件未变化时零 IO。
  */
-export async function readClaudeCodeSessionScanSummary(file: string): Promise<ClaudeCodeSessionScanSummary | null> {
+export type ClaudeScanSummaryRejection =
+  | 'unreadable'
+  | 'internal'
+  | 'noEvents'
+  | 'windowLimit'
+  | 'invalidId';
+
+/** 带拒绝原因的扫描摘要:success 或带分类的拒绝。 */
+export type ClaudeCodeSessionScanSummaryResult =
+  | { kind: 'ok'; summary: ClaudeCodeSessionScanSummary }
+  | { kind: 'rejected'; reason: ClaudeScanSummaryRejection };
+
+export async function readClaudeCodeSessionScanSummaryResult(
+  file: string,
+): Promise<ClaudeCodeSessionScanSummaryResult> {
   const stat = await fsp.stat(file).catch(() => null);
-  if (!stat) return null;
+  if (!stat) return { kind: 'rejected', reason: 'unreadable' };
   const cached = claudeScanSummaryCache.get(file);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return cached.summary;
+    return cached.result;
   }
 
-  const summary = await readScanSummaryFromHead(file, stat.mtimeMs);
+  const result = await readScanSummaryFromHead(file, stat.mtimeMs);
+  const cacheEntry = {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    result,
+  };
   if (claudeScanSummaryCache.size >= SCAN_SUMMARY_CACHE_MAX_ENTRIES) claudeScanSummaryCache.clear();
-  claudeScanSummaryCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, summary });
-  return summary;
+  claudeScanSummaryCache.set(file, cacheEntry);
+  return result;
 }
 
-async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<ClaudeCodeSessionScanSummary | null> {
+/** 兼容旧调用方的薄包装:只返回摘要或 null(拒绝原因见 Result 版本)。 */
+export async function readClaudeCodeSessionScanSummary(
+  file: string,
+): Promise<ClaudeCodeSessionScanSummary | null> {
+  const result = await readClaudeCodeSessionScanSummaryResult(file);
+  return result.kind === 'ok' ? result.summary : null;
+}
+
+async function readScanSummaryFromHead(
+  file: string,
+  mtimeMs: number,
+): Promise<ClaudeCodeSessionScanSummaryResult> {
   // end 截断可能把最后一行读成半截 JSON,parseJsonObject 解析失败会自然跳过。
   const input = createReadStream(file, { encoding: 'utf-8', end: SCAN_SUMMARY_MAX_BYTES - 1 });
   const rl = readline.createInterface({ input, crlfDelay: Infinity });
@@ -397,6 +444,7 @@ async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<C
   let sawTopLevelEvent = false;
   let removedIdeContextWithoutTitle = false;
   let hitLineLimitBeforeTitle = false;
+  let readFailed = false;
   let lineCount = 0;
 
   try {
@@ -424,7 +472,7 @@ async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<C
       if (type === 'user' && !title && isRecord(obj.message)) {
         const content = obj.message.content;
         const text = extractUserText(content).trim();
-        if (text && isInternalClaudeReviewChannelText(text)) return null;
+        if (text && isInternalClaudeReviewChannelText(text)) return { kind: 'rejected', reason: 'internal' };
         if (text) title = makeTitle(text);
         else if (hasCompleteIdeOpenedFileBlock(content)) removedIdeContextWithoutTitle = true;
       }
@@ -432,18 +480,26 @@ async function readScanSummaryFromHead(file: string, mtimeMs: number): Promise<C
       if (title) break;
     }
   } catch {
-    /* 读取中途出错(文件被并发轮转等):按已读到的内容收尾 */
+    // 读取中途出错(文件被并发轮转 / IO 失败等):未读到任何顶层事件时按「不可读」
+    // 分类,而非误判为 noEvents —— noEvents 语义是「文件可读但没有有效内容」。
+    readFailed = true;
   } finally {
     rl.close();
     input.destroy();
   }
 
-  if (!sawTopLevelEvent || hitLineLimitBeforeTitle || !isLikelySessionId(sdkSessionId)) return null;
+  if (readFailed && !sawTopLevelEvent) return { kind: 'rejected', reason: 'unreadable' };
+  if (!sawTopLevelEvent) return { kind: 'rejected', reason: 'noEvents' };
+  if (hitLineLimitBeforeTitle) return { kind: 'rejected', reason: 'windowLimit' };
+  if (!isLikelySessionId(sdkSessionId)) return { kind: 'rejected', reason: 'invalidId' };
   return {
-    sdkSessionId,
-    title: title || 'Claude Code Session',
-    cwd: cwd || os.homedir(),
-    updatedAt: Math.floor(mtimeMs),
+    kind: 'ok',
+    summary: {
+      sdkSessionId,
+      title: title || 'Claude Code Session',
+      cwd: cwd || os.homedir(),
+      updatedAt: Math.floor(mtimeMs),
+    },
   };
 }
 

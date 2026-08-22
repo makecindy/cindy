@@ -1165,8 +1165,21 @@
         "projectsHint": "Sessions that will appear under project groups",
         "dialogue": "Chat",
         "dialogueHint": "Codex projectless sessions",
+        "existing": "Already in app",
+        "existingHint": "Session with same SDK ID already exists; won't be re-imported",
+        "managedDialogue": "Internal chat",
+        "managedDialogueHint": "Orphan/internal chats under Cindy-managed dirs — not shown or imported",
         "filtered": "Skipped",
-        "filteredHint": "Internal or already in app"
+        "filteredHint": "Internal agent sessions, invalid files, or beyond scan window — not shown or imported",
+        "reasonListOpen": " (",
+        "reasonListSep": ", ",
+        "reasonListClose": ")",
+        "reasonListSource": "Claude: ",
+        "reasonInternal": "Internal",
+        "reasonNoEvents": "No events",
+        "reasonWindowLimit": "Scan window",
+        "reasonInvalidId": "Invalid ID",
+        "reasonUnreadable": "Unreadable"
       },
       "filters": {
         "source": "Source",

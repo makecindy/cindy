@@ -1165,8 +1165,21 @@
         "projectsHint": "Sessions under current sidebar projects",
         "dialogue": "New folder sessions",
         "dialogueHint": "Sessions that will create project groups",
+        "existing": "アプリ内に存在",
+        "existingHint": "同じ SDK ID のセッションが既に存在。再インポートされません",
+        "managedDialogue": "内部チャット",
+        "managedDialogueHint": "Cindy 管理ディレクトリ下の孤立/内部チャット — 表示もインポートもされません",
         "filtered": "スキップ済み",
-        "filteredHint": "内部セッション、または既にアプリ内に存在"
+        "filteredHint": "内部 Agent セッション、無効なファイル、またはスキャンウィンドウ外 — 表示もインポートもされません",
+        "reasonListOpen": "（",
+        "reasonListSep": "・",
+        "reasonListClose": "）",
+        "reasonListSource": "Claude：",
+        "reasonInternal": "Agent セッション",
+        "reasonNoEvents": "有効な内容なし",
+        "reasonWindowLimit": "スキャンウィンドウ外",
+        "reasonInvalidId": "ID 形式が無効",
+        "reasonUnreadable": "ファイルを読み取り不可"
       },
       "filters": {
         "source": "ソース",

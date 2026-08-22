@@ -1165,8 +1165,21 @@
         "projectsHint": "导入后进入项目分组的任务",
         "dialogue": "对话",
         "dialogueHint": "Codex 标记为不属于项目的任务",
+        "existing": "已在应用内",
+        "existingHint": "同 SDK 任务已在应用中，不会重复导入",
+        "managedDialogue": "内部对话",
+        "managedDialogueHint": "Cindy 管理目录下的孤儿/内部对话，不展示也不导入",
         "filtered": "已跳过",
-        "filteredHint": "内部 Agent 会话或已在应用内"
+        "filteredHint": "内部 Agent 会话、格式无效或超出扫描窗口，不会展示也不会导入",
+        "reasonListOpen": "（",
+        "reasonListSep": " · ",
+        "reasonListClose": "）",
+        "reasonListSource": "Claude：",
+        "reasonInternal": "内部 Agent 会话",
+        "reasonNoEvents": "无有效内容",
+        "reasonWindowLimit": "超出扫描窗口",
+        "reasonInvalidId": "ID 格式无效",
+        "reasonUnreadable": "文件不可读"
       },
       "filters": {
         "source": "来源",

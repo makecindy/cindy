@@ -36,6 +36,14 @@ interface ScanResult {
     codex: number;
     claude: number;
     existing: number;
+    managedDialogue?: number;
+    claudeReasons?: {
+      unreadable: number;
+      internal: number;
+      noEvents: number;
+      windowLimit: number;
+      invalidId: number;
+    };
   };
   currentProjectDirs: string[];
 }
@@ -419,12 +427,39 @@ function buildImportListItems(candidates: ImportCandidate[]): ImportListItem[] {
   return listItems.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 }
 
+/** 构造「已跳过」hint:基础文案 + Claude 拒绝原因明细(非零项)。
+ * 明细只覆盖 Claude 侧(有分类);codex 侧只有 rejectedCount 无分类,
+ * 故用「Claude:」前缀标明范围,避免与总数(codex+claude)混淆。
+ * 括号/分隔符走 i18n,不硬编码。 */
+function buildFilteredHint(
+  rejected: ScanResult['rejected'],
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  const base = t('settings.sessionImport.summary.filteredHint');
+  const reasons = rejected.claudeReasons;
+  if (!reasons) return base;
+  const parts: string[] = [];
+  if (reasons.internal > 0) parts.push(`${t('settings.sessionImport.summary.reasonInternal')} ${reasons.internal}`);
+  if (reasons.noEvents > 0) parts.push(`${t('settings.sessionImport.summary.reasonNoEvents')} ${reasons.noEvents}`);
+  if (reasons.windowLimit > 0) parts.push(`${t('settings.sessionImport.summary.reasonWindowLimit')} ${reasons.windowLimit}`);
+  if (reasons.invalidId > 0) parts.push(`${t('settings.sessionImport.summary.reasonInvalidId')} ${reasons.invalidId}`);
+  if (reasons.unreadable > 0) parts.push(`${t('settings.sessionImport.summary.reasonUnreadable')} ${reasons.unreadable}`);
+  if (parts.length === 0) return base;
+  // 括号与分隔符本地化:中英日韩的样式不同,不能硬编码全角括号。
+  return (
+    `${base}${t('settings.sessionImport.summary.reasonListOpen')}`
+    + t('settings.sessionImport.summary.reasonListSource')
+    + parts.join(t('settings.sessionImport.summary.reasonListSep'))
+    + t('settings.sessionImport.summary.reasonListClose')
+  );
+}
+
 function ScanSummary({ scan }: { scan: ScanResult }) {
   const { t } = useTranslation();
   const projectCount = scan.candidates.filter((item) => item.sidebarBucket === 'project').length;
   const dialogueCount = scan.candidates.length - projectCount;
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
       <SummaryCell
         label={t('settings.sessionImport.summary.total')}
         value={scan.candidates.length}
@@ -441,9 +476,19 @@ function ScanSummary({ scan }: { scan: ScanResult }) {
         hint={t('settings.sessionImport.summary.dialogueHint')}
       />
       <SummaryCell
+        label={t('settings.sessionImport.summary.existing')}
+        value={scan.rejected.existing}
+        hint={t('settings.sessionImport.summary.existingHint')}
+      />
+      <SummaryCell
+        label={t('settings.sessionImport.summary.managedDialogue')}
+        value={scan.rejected.managedDialogue ?? 0}
+        hint={t('settings.sessionImport.summary.managedDialogueHint')}
+      />
+      <SummaryCell
         label={t('settings.sessionImport.summary.filtered')}
-        value={scan.rejected.codex + scan.rejected.claude + scan.rejected.existing}
-        hint={t('settings.sessionImport.summary.filteredHint')}
+        value={scan.rejected.codex + scan.rejected.claude}
+        hint={buildFilteredHint(scan.rejected, t)}
       />
     </div>
   );
