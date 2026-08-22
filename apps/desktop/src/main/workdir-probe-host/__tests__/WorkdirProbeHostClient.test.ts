@@ -261,3 +261,95 @@ describe('WorkdirProbeHostClient validate/availability(IM 渠道探测 job)', ()
     client.dispose();
   });
 });
+
+describe('WorkdirProbeHostClient single-flight 按 job 类型隔离', () => {
+  it('同路径并发 probe + availability: 各自获得正确形态的结果, 互不复用', async () => {
+    const children: FakeChild[] = [];
+    const client = new WorkdirProbeHostClient({
+      fork: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      log: { warn: vi.fn() },
+    });
+
+    const stat = client.probe('/share/a', '/share/a', 1_000);
+    const avail = client.availability('/share/a', '/share/a', 1_000);
+
+    expect(children).toHaveLength(2);
+    expect(children[0].posted[0].kind).toBe('probe');
+    expect(children[1].posted[0].kind).toBe('availability');
+    children[0].emit('message', {
+      kind: 'result',
+      id: children[0].posted[0].id,
+      result: { ok: true, isDirectory: true },
+    });
+    children[1].emit('message', {
+      kind: 'result',
+      id: children[1].posted[0].id,
+      result: { ok: true, usable: false },
+    });
+    await expect(stat).resolves.toEqual({ ok: true, isDirectory: true });
+    await expect(avail).resolves.toEqual({ ok: true, usable: false });
+    client.dispose();
+  });
+
+  it('同路径并发 validate + availability: 独立执行, 不跨类型复用', async () => {
+    const children: FakeChild[] = [];
+    const client = new WorkdirProbeHostClient({
+      fork: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      log: { warn: vi.fn() },
+    });
+
+    const validate = client.validate('/share/a', '/share/a', 1_000);
+    const avail = client.availability('/share/a', '/share/a', 1_000);
+
+    expect(children).toHaveLength(2);
+    expect(children[0].posted[0].kind).toBe('validate');
+    expect(children[1].posted[0].kind).toBe('availability');
+    children[0].emit('message', {
+      kind: 'result',
+      id: children[0].posted[0].id,
+      result: { ok: true, realPath: '/resolved' },
+    });
+    children[1].emit('message', {
+      kind: 'result',
+      id: children[1].posted[0].id,
+      result: { ok: true, usable: true },
+    });
+    await expect(validate).resolves.toEqual({ ok: true, realPath: '/resolved' });
+    await expect(avail).resolves.toEqual({ ok: true, usable: true });
+    client.dispose();
+  });
+
+  it('同类型同路径仍然复用(不放大探测次数)', async () => {
+    const children: FakeChild[] = [];
+    const client = new WorkdirProbeHostClient({
+      fork: () => {
+        const child = new FakeChild();
+        children.push(child);
+        return child;
+      },
+      log: { warn: vi.fn() },
+    });
+
+    const first = client.validate('/share/a', '/share/a', 1_000);
+    const second = client.validate('/share/a', '/share/a', 1_000);
+    expect(children).toHaveLength(1);
+    children[0].emit('message', {
+      kind: 'result',
+      id: children[0].posted[0].id,
+      result: { ok: true, realPath: '/resolved' },
+    });
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { ok: true, realPath: '/resolved' },
+      { ok: true, realPath: '/resolved' },
+    ]);
+    client.dispose();
+  });
+});

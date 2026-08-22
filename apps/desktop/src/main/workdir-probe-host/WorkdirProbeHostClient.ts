@@ -115,7 +115,11 @@ export class WorkdirProbeHostClient {
         new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe host is disposed'),
       );
     }
-    const existing = this.inFlightByPath.get(key);
+    // single-flight 按「job 类型 + 路径」: 三种 job 的结果形态不同
+    // (isDirectory/realPath/usable), 同路径跨类型复用会把成功结果交给错误的
+    // 收窄函数, 变成 WORKDIR_PROBE_UNAVAILABLE 误拒 — 只合并同类型同路径。
+    const flightKey = `${kind}\0${key}`;
+    const existing = this.inFlightByPath.get(flightKey);
     if (existing) return existing;
     if (this.queue.length >= this.maxQueued) {
       return Promise.reject(
@@ -136,11 +140,11 @@ export class WorkdirProbeHostClient {
       };
       this.schedule(entry);
     }).finally(() => {
-      if (this.inFlightByPath.get(key) === probe) {
-        this.inFlightByPath.delete(key);
+      if (this.inFlightByPath.get(flightKey) === probe) {
+        this.inFlightByPath.delete(flightKey);
       }
     });
-    this.inFlightByPath.set(key, probe);
+    this.inFlightByPath.set(flightKey, probe);
     return probe;
   }
 
