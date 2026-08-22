@@ -1105,6 +1105,19 @@ describe('setContext / routeCommand', () => {
     expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
   });
 
+  it('releases a visible-window pin when allowOpen host never resolves', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
   it('opens a hidden window after a missed allowOpen lookup is adopted', async () => {
     const focused = { ...ctx, sessionId: 's2' };
     const resolved = {
