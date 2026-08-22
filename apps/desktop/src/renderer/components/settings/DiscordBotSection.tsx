@@ -15,6 +15,7 @@ const statusKey: Record<DiscordBotTransportStatus['kind'], string> = {
   idle: 'settings.discordBot.status.needsConfig',
   connecting: 'settings.discordBot.status.connecting',
   connected: 'settings.discordBot.status.connected',
+  standby: 'settings.discordBot.status.standby',
   conflict: 'settings.discordBot.status.conflict',
   error: 'settings.discordBot.status.error',
 };
@@ -24,6 +25,7 @@ function statusColor(s: DiscordBotTransportStatus): string {
     case 'idle':
       return 'var(--settings-badge-needs-config)';
     case 'connecting':
+    case 'standby':
     case 'conflict':
       return 'var(--settings-badge-saved)';
     case 'connected':
@@ -144,8 +146,9 @@ export function DiscordBotSection({
       <ImDefaultSettingsSection channel="discord" embedded onSummaryChange={setRouteSummary} />
       <div className="h-px w-full bg-[var(--border-default)]" />
       {/* 与 FeishuBotSection 同构:已连接 → 状态卡(单个解绑);否则表单(单个连接)。 */}
-      {status.kind === 'connected' ? (
+      {status.kind === 'connected' || status.kind === 'standby' ? (
         <ConnectedCard
+          standby={status.kind === 'standby'}
           botTag={status.appId}
           ownerUserId={ownerUserId}
           isDisconnecting={isDisconnecting}
@@ -329,6 +332,7 @@ export function DiscordBotSection({
 
 /** 已连接状态卡 —— 结构对齐 FeishuBotSection 的 ConnectedCard(单个解绑按钮)。 */
 function ConnectedCard(props: {
+  standby: boolean;
   botTag: string;
   ownerUserId: string;
   isDisconnecting: boolean;
@@ -344,15 +348,30 @@ function ConnectedCard(props: {
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] text-[var(--settings-badge-connected)]">
+        <div
+          className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)]"
+          style={{
+            color: props.standby
+              ? 'var(--settings-badge-saved)'
+              : 'var(--settings-badge-connected)',
+          }}
+        >
           <Check size={16} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-13 font-medium text-[var(--settings-section-title)]">
-            {t('settings.discordBot.connected.heading')}
+            {t(
+              props.standby
+                ? 'settings.discordBot.connected.headingStandby'
+                : 'settings.discordBot.connected.heading',
+            )}
           </div>
           <div className="mt-1 text-12 leading-[1.6] text-[var(--settings-section-desc)]">
-            {t('settings.discordBot.connected.note')}
+            {t(
+              props.standby
+                ? 'settings.discordBot.connected.noteStandby'
+                : 'settings.discordBot.connected.note',
+            )}
           </div>
         </div>
       </div>

@@ -1996,6 +1996,34 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
   });
 
+  it('reports the terminal promise when an internal turn is accepted', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnAccepted = vi.fn();
+
+    await getRunner().runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-tracked',
+      text: 'tracked task',
+      attachments: [],
+      onTurnAccepted,
+    });
+
+    expect(onTurnAccepted).toHaveBeenCalledOnce();
+    const terminal = onTurnAccepted.mock.calls[0]?.[0] as Promise<unknown> | undefined;
+    let settled = false;
+    void terminal?.then(() => {
+      settled = true;
+    });
+    await flushMicrotasks();
+    expect(settled).toBe(false);
+
+    h.emit({ type: 'text', data: { text: 'tracked answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await terminal;
+    expect(settled).toBe(true);
+  });
+
   it('reports the attached Desktop route only after provider startup is accepted', async () => {
     const h = setupAttachedSession(async () => ({ accepted: true }));
     const onRouteResolved = vi.fn();
@@ -2743,15 +2771,23 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       onRouteResolved: firstRouteResolved,
     });
     const secondRouteResolved = vi.fn();
-    await runDefaultTurn(vi.fn(), {
+    let queuedTerminal: Promise<unknown> | undefined;
+    await getRunner().runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
       userMessageId: 'msg-second',
       text: 'second user message',
+      attachments: [],
       onRouteResolved: secondRouteResolved,
+      onTurnAccepted: (terminal) => {
+        queuedTerminal = terminal;
+      },
     });
     await flushMicrotasks();
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(firstRouteResolved).toHaveBeenCalledTimes(1);
     expect(secondRouteResolved).not.toHaveBeenCalled();
+    expect(queuedTerminal).toBeInstanceOf(Promise);
 
     const result = await getRunner().stopActiveTurn({
       botContextId: 'cli_test_bot',
@@ -2760,6 +2796,11 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     expect(result).toEqual({ stopped: true, droppedQueued: 1 });
     expect(h.abort).toHaveBeenCalledTimes(1);
+    if (!queuedTerminal) throw new Error('expected queued terminal');
+    await expect(queuedTerminal).resolves.toMatchObject({
+      kind: 'aborted',
+      errorCode: 'pending_send_dropped',
+    });
     // 被丢弃的排队消息的 ack 表情要撤掉(否则永远挂在用户消息上)
     await waitForAssertion(() => {
       expect(mocks.feishuIm.removeMessageReaction).toHaveBeenCalledWith(

@@ -2102,6 +2102,7 @@
         "needsConfig": "Needs configuration",
         "connecting": "Connecting…",
         "connected": "Connected",
+        "standby": "Receiving on another linked computer",
         "conflict": "In use on another device",
         "error": "Connection failed"
       },
@@ -2114,6 +2115,8 @@
       "connected": {
         "heading": "Discord bot connected",
         "note": "Messages you DM to your bot on Discord are routed to {{appName}} on this machine.",
+        "headingStandby": "Discord bot bound; this computer is on standby",
+        "noteStandby": "Another linked computer under the same Cindy account is receiving messages; this computer takes over automatically when it goes offline.",
         "botLabel": "Bot account",
         "ownerLabel": "My user ID"
       },

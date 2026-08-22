@@ -2101,6 +2101,7 @@
         "needsConfig": "設定が必要",
         "connecting": "接続中…",
         "connected": "接続済み",
+        "standby": "別の連携済みパソコンで受信中",
         "conflict": "別のデバイスで使用中",
         "error": "接続失敗"
       },
@@ -2113,6 +2114,8 @@
       "connected": {
         "heading": "Discord Bot 接続済み",
         "note": "Discord で Bot に DM したメッセージは、このマシンの {{appName}} にルーティングされます。",
+        "headingStandby": "Discord Bot は連携済み、このパソコンは待機中",
+        "noteStandby": "同じ Cindy アカウントの別の連携済みパソコンが受信中で、そのパソコンがオフラインになると、このパソコンが自動的に引き継ぎます。",
         "botLabel": "Bot アカウント",
         "ownerLabel": "自分のユーザー ID"
       },

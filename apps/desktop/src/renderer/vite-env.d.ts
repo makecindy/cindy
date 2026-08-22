@@ -462,6 +462,7 @@ type DiscordBotTransportStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
+  | { kind: 'standby'; appId: string }
   | { kind: 'conflict'; appId: string }
   | { kind: 'error'; reason: string };
 
@@ -484,7 +485,12 @@ type TelegramBotTransportStatus =
 /** 稳定错误分类;renderer 据此取 i18n 文案,不直接展示 main 层 reason。 */
 type TelegramBotErrorCode = 'invalid-token' | 'provider-api' | 'network' | 'secret-unavailable';
 
-type DingTalkBotTransportStatus = DiscordBotTransportStatus;
+type DingTalkBotTransportStatus =
+  | { kind: 'idle' }
+  | { kind: 'connecting' }
+  | { kind: 'connected'; appId: string }
+  | { kind: 'conflict'; appId: string }
+  | { kind: 'error'; reason: string };
 type WecomBotTransportStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }

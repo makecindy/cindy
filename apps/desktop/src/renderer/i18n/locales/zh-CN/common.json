@@ -2101,6 +2101,7 @@
         "needsConfig": "需要配置",
         "connecting": "连接中…",
         "connected": "已连接",
+        "standby": "已在其他关联电脑接收",
         "conflict": "已被另一台设备使用",
         "error": "连接失败"
       },
@@ -2113,6 +2114,8 @@
       "connected": {
         "heading": "已连接 Discord Bot",
         "note": "你在 Discord 上私聊 Bot 发送的消息会路由到本机的 {{appName}}。",
+        "headingStandby": "Discord Bot 已绑定，本机待命",
+        "noteStandby": "当前由同一 Cindy 账号下的另一台关联电脑接收消息；那台电脑离线后，本机会自动接管。",
         "botLabel": "Bot 账号",
         "ownerLabel": "我的用户 ID"
       },

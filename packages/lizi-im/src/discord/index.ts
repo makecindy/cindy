@@ -13,6 +13,7 @@ import type {
   StreamingTextHandle,
 } from '../types.js';
 import {
+  connectedStatusForBotTag,
   createDiscordGateway,
   mapDiscordLoginErrorToStatus,
   type DiscordGateway,
@@ -35,6 +36,8 @@ import { startStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
+const PENDING_TOKEN_SECRET_KEY = 'discord-bot-token-pending';
+const PENDING_OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id-pending';
 const RUNTIME_ACTIVE_SECRET_KEY = 'discord-bot-runtime-active';
 const LIFECYCLE_ANNOUNCEMENT_SECRET_KEY = 'discord-bot-lifecycle-announcement';
 const MAX_OUTBOUND_FILE_BYTES = 8 * 1024 * 1024;
@@ -57,8 +60,8 @@ const DEFAULT_OWNER_NOTICES = {
   offlineNotice: '🔔 I was offline for a while, so messages sent during that time may have been missed.',
 } as const;
 
-type MessageHandler = (e: IMMessageEvent) => void;
-type CardActionHandler = (e: IMCardActionEvent) => void;
+type MessageHandler = (e: IMMessageEvent) => void | Promise<void>;
+type CardActionHandler = (e: IMCardActionEvent) => void | Promise<void>;
 type StatusHandler = (s: IMStatus) => void;
 type OwnerNoticePhase = keyof typeof DEFAULT_OWNER_NOTICES;
 type OwnerNoticeGuard = () => boolean;
@@ -66,6 +69,19 @@ type OwnerNoticeGuard = () => boolean;
 interface DiscordFilePayload {
   attachment: string;
   name: string;
+}
+
+interface DiscordOutboundLease {
+  client: unknown;
+  configVersion: number;
+  identity: string;
+}
+
+export interface DiscordSchedulerHooks {
+  /** Return whether this Desktop currently owns the Discord ingress lease. */
+  isTransportAllowed(identity?: string | null): boolean;
+  /** Re-run same-account election after a local credential/binding change. */
+  onConfigurationChanged?: () => void;
 }
 
 export interface DiscordIMOptions {
@@ -85,9 +101,15 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private status: IMStatus = { kind: 'idle' };
   private ownerUserId = '';
   private configVersion = 0;
+  private inboundConfigVersion = 0;
+  // Invalidates an in-flight init without revoking outbound leases that must
+  // finish during an ordered scheduler handoff drain.
+  private initializationGeneration = 0;
   private dmResolverClient: unknown = null;
   private dmResolver: ((userId: string) => Promise<DMChannelLike>) | null = null;
   private readonly dmMessageQueues = new Map<string, Promise<void>>();
+  private readonly buttonInteractionQueues = new Set<Promise<void>>();
+  private readonly acceptedTasks = new Set<Promise<unknown>>();
   private readonly mediaDir: string;
   private suppressNextOnlineNotice = false;
   private pendingOfflineNotice = false;
@@ -96,6 +118,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private lifecycleAnnouncementEnabled = true;
   private lifecycleNoticeVersion = 0;
   private disposing = false;
+  private schedulerHandoffDraining = false;
+  private schedulerHooks: DiscordSchedulerHooks | null = null;
 
   constructor(host: IMHost, private readonly opts: DiscordIMOptions = {}) {
     super('discord', host);
@@ -108,26 +132,38 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       onDmMessage: (m) => {
         void this.handleDmMessage(m as unknown as MessageLike);
       },
-      onButtonInteraction: (i) => {
-        void this.handleButtonInteraction(i as unknown as ButtonInteractionLike);
+      onButtonInteraction: (i, acknowledged) => {
+        void this.handleButtonInteraction(
+          i as unknown as ButtonInteractionLike,
+          acknowledged,
+        );
       },
     });
   }
 
   async init(): Promise<void> {
     this.disposing = false;
+    const initializationGeneration = ++this.initializationGeneration;
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
     this.runtimeOnlineAnnounced = false;
     this.lifecycleNoticeVersion += 1;
     this.lifecycleAnnouncementEnabled = this.readLifecycleAnnouncement();
-    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
-    this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
+    const pendingToken = this.readPendingToken();
+    const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
+    const token = pendingToken || previousToken?.trim() || '';
+    const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
+    this.ownerUserId = this.readConfiguredOwnerUserId(Boolean(pendingToken));
     if (!this.lifecycleAnnouncementEnabled) {
       this.clearRuntimeActiveMarker();
     }
     if (!token) {
       this.setStatus({ kind: 'idle' });
+      return;
+    }
+    const configuredIdentity = this.schedulerIdentityFromToken(token);
+    if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
+      this.setStatus({ kind: 'standby', appId: configuredIdentity });
       return;
     }
 
@@ -137,20 +173,46 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     try {
       await this.gateway.connect(token);
+      if (!this.isCurrentInitialization(initializationGeneration)) return;
+      if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
+        await this.enterSchedulerStandby();
+        return;
+      }
+      if (pendingToken && !this.promotePendingCredentials(pendingToken, this.ownerUserId)) {
+        await this.gateway.destroy();
+        this.discardPendingCredentials(pendingToken);
+        this.ownerUserId = previousOwnerUserId?.trim() ?? '';
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        this.schedulerConfigurationChanged();
+        await this.reconnectPreviousGateway(previousToken);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord gateway connect failed: ${msg}`);
+      if (!this.isCurrentInitialization(initializationGeneration)) return;
+      if (pendingToken) {
+        this.discardPendingCredentials(pendingToken);
+        this.ownerUserId = previousOwnerUserId?.trim() ?? '';
+        this.schedulerConfigurationChanged();
+        await this.reconnectPreviousGateway(previousToken);
+      }
     }
   }
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    this.initializationGeneration += 1;
+    this.inboundConfigVersion += 1;
     const noticeDeadline = Date.now() + RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS;
     await this.waitForRuntimeOnlineNotice(noticeDeadline);
     this.configVersion += 1;
     await this.announceRuntimeOffline(noticeDeadline);
     await this.gateway.destroy();
     this.setStatus({ kind: 'idle' });
+  }
+
+  setSchedulerHooks(hooks: DiscordSchedulerHooks | null): void {
+    this.schedulerHooks = hooks;
   }
 
   registerIpc(): void {
@@ -176,28 +238,56 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
       const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
       const previousRuntimeOwnerUserId = this.ownerUserId;
-
-      const tokenSaved = token ? this.host.secrets.write(TOKEN_SECRET_KEY, token) : true;
-      const ownerUserIdSaved = ownerUserId
-        ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
-        : true;
-      if (!tokenSaved || !ownerUserIdSaved) {
-        this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-        this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
-        this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
-        return configResult();
-      }
-
       const nextOwnerUserId = ownerUserId || this.ownerUserId;
       if (token) {
+        const previousPendingToken = this.host.secrets.read(PENDING_TOKEN_SECRET_KEY);
+        const previousPendingOwnerUserId = this.host.secrets.read(PENDING_OWNER_USER_ID_SECRET_KEY);
+        const tokenSaved = this.host.secrets.write(PENDING_TOKEN_SECRET_KEY, token);
+        const ownerUserIdSaved = nextOwnerUserId
+          ? this.host.secrets.write(PENDING_OWNER_USER_ID_SECRET_KEY, nextOwnerUserId)
+          : true;
+        if (!tokenSaved || !ownerUserIdSaved) {
+          this.restoreSecret(PENDING_TOKEN_SECRET_KEY, previousPendingToken);
+          this.restoreSecret(PENDING_OWNER_USER_ID_SECRET_KEY, previousPendingOwnerUserId);
+          this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+          return configResult();
+        }
+        if (!nextOwnerUserId) this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
+
         this.configVersion += 1;
+        this.initializationGeneration += 1;
+        this.inboundConfigVersion += 1;
         const wasConnectedBeforeReconnect = this.status.kind === 'connected';
         await this.gateway.destroy();
         this.ownerUserId = nextOwnerUserId;
+        const configuredIdentity = this.schedulerIdentityFromToken(token);
+        // Publish the new binding and enter the scheduler's discovery grace
+        // before attempting a Gateway connection. Otherwise two Desktops
+        // moving from empty configuration to the same Bot can both connect
+        // while their old empty advertisements are still the only peer view.
+        this.schedulerConfigurationChanged();
+        if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
+          this.setStatus({ kind: 'standby', appId: configuredIdentity });
+          return configResult();
+        }
         this.suppressNextOnlineNotice = true;
         try {
           await this.gateway.connect(token);
+          if (configuredIdentity && !this.schedulerTransportAllowed(configuredIdentity)) {
+            await this.enterSchedulerStandby();
+            return configResult();
+          }
+          if (!this.promotePendingCredentials(token, nextOwnerUserId)) {
+            const failedStatus: IMStatus = { kind: 'error', reason: SECRET_WRITE_FAILED_REASON };
+            await this.gateway.destroy();
+            this.discardPendingCredentials(token);
+            this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+            this.setStatus(failedStatus);
+            this.schedulerConfigurationChanged();
+            await this.reconnectPreviousGateway(previousToken);
+            return configResult(failedStatus);
+          }
           this.markRuntimeActive();
           const linkedNoticeConfigVersion = this.configVersion;
           await this.sendOwnerNoticeWithTimeout(
@@ -215,14 +305,23 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           this.log.warn(`discord gateway connect failed from set-config: ${msg}`);
           const failedStatus = mapDiscordLoginErrorToStatus(err);
           this.setStatus(failedStatus);
-          this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+          this.discardPendingCredentials(token);
           this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+          this.schedulerConfigurationChanged();
           await this.reconnectPreviousGateway(previousToken);
           return configResult(failedStatus);
         }
       } else if (nextOwnerUserId !== this.ownerUserId) {
+        const ownerSecretKey = this.readPendingToken()
+          ? PENDING_OWNER_USER_ID_SECRET_KEY
+          : OWNER_USER_ID_SECRET_KEY;
+        if (!this.host.secrets.write(ownerSecretKey, nextOwnerUserId)) {
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+          return configResult();
+        }
         this.configVersion += 1;
+        this.initializationGeneration += 1;
+        this.inboundConfigVersion += 1;
         this.ownerUserId = nextOwnerUserId;
       }
       return configResult();
@@ -255,6 +354,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     this.host.ipc.handle('discordBot:disconnect', async () => {
       this.configVersion += 1;
+      this.initializationGeneration += 1;
+      this.inboundConfigVersion += 1;
       const disconnectedNoticeConfigVersion = this.configVersion;
       const disconnectedOwnerUserId = this.ownerUserId;
       this.ownerUserId = '';
@@ -268,13 +369,149 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       );
       this.host.secrets.remove(TOKEN_SECRET_KEY);
       this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
+      this.host.secrets.remove(PENDING_TOKEN_SECRET_KEY);
+      this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
       this.clearRuntimeActiveMarker();
       this.pendingOfflineNotice = false;
       this.runtimeOnlineAnnounced = false;
       await this.gateway.destroy();
       this.setStatus({ kind: 'idle' });
+      this.schedulerConfigurationChanged();
       return { status: this.status };
     });
+  }
+
+  getSchedulerIdentity(): string | null {
+    const token = this.readPendingToken()
+      || this.host.secrets.read(TOKEN_SECRET_KEY)?.trim()
+      || '';
+    return this.schedulerIdentityFromToken(token);
+  }
+
+  isSchedulerTransportActive(): boolean {
+    return this.gateway.client !== null && this.gateway.ingressOpen;
+  }
+
+  /** A discord.js client may remain alive while its Gateway is reconnecting. */
+  isSchedulerTransportConnecting(): boolean {
+    return this.gateway.client !== null && !this.gateway.ingressOpen;
+  }
+
+  /** Stop new Discord ingress immediately; ordered handoff cleanup follows. */
+  async closeSchedulerIngress(): Promise<void> {
+    await this.gateway.closeIngress();
+  }
+
+  async enterSchedulerStandby(options: {
+    clearRuntimeActiveMarker?: boolean;
+    closeIngress?: boolean;
+  } = {}): Promise<void> {
+    // Invalidate pending init side effects before awaiting ingress close or
+    // accepted-task drain. `configVersion` intentionally changes later so
+    // already accepted outbound work can still finish on the old client.
+    this.initializationGeneration += 1;
+    const identity = this.getSchedulerIdentity() ?? 'discord';
+    this.suppressNextOnlineNotice = false;
+    this.runtimeOnlineNotice = null;
+    this.schedulerHandoffDraining = true;
+    try {
+      if (options.closeIngress) {
+        // A same-device Device Link ownership loss is invisible to the peer
+        // snapshot because both processes share one deviceId. Close the old
+        // Gateway ingress before the new owner can connect, while retaining
+        // the REST client for already accepted work below.
+        await this.gateway.closeIngress();
+      }
+      // A same-device ownership handoff closes the websocket before this
+      // drain. A normal remote handoff keeps the only live Gateway receiving,
+      // so DMs and buttons arriving while the next owner waits for our clean
+      // runtime are accepted into this same drain queue.
+      await this.drainSchedulerHandoffWork();
+      // Presence can change while an accepted Agent turn is draining. If the
+      // remote winner disappeared and this Desktop owns ingress again, the
+      // original handoff decision is stale: keep the existing Gateway instead
+      // of manufacturing a clean logout/relogin gap.
+      if (
+        !options.closeIngress
+        && this.schedulerHooks
+        && this.schedulerTransportAllowed(identity)
+        && this.gateway.ingressForcedClosed !== true
+      ) {
+        // Keep the provider's real connection status. In particular, an
+        // existing discord.js client can still be reconnecting; only a real
+        // ShardReady/ShardResume event may promote it back to connected.
+        if (this.gateway.ingressOpen) {
+          // ShardReady/ShardResume may have arrived while this Desktop was
+          // still denied and therefore been projected to standby. Once the
+          // stale handoff is cancelled, republish the Gateway's real state so
+          // the scheduler restores its connected identity and reconnect
+          // supervision instead of retaining a synthetic standby forever.
+          this.setStatus(connectedStatusForBotTag(this.gateway.botTag));
+        }
+        return;
+      }
+      this.configVersion += 1;
+      await this.gateway.destroy();
+      if (options.clearRuntimeActiveMarker && !this.pendingOfflineNotice) {
+        this.clearRuntimeActiveMarker();
+      }
+      this.setStatus({ kind: 'standby', appId: identity });
+    } finally {
+      this.schedulerHandoffDraining = false;
+    }
+  }
+
+  trackAcceptedTask(task: Promise<unknown>): void {
+    const tracked = Promise.resolve(task);
+    this.acceptedTasks.add(tracked);
+    void tracked.then(
+      () => this.acceptedTasks.delete(tracked),
+      () => this.acceptedTasks.delete(tracked),
+    );
+  }
+
+  /** Preserve a cross-device unclean runtime fact until the next active lease can compensate it. */
+  markSchedulerOfflineGap(): void {
+    if (!this.readLifecycleAnnouncement()) return;
+    this.pendingOfflineNotice = true;
+    this.markRuntimeActive();
+  }
+
+  hasPendingSchedulerOfflineNotice(): boolean {
+    return this.pendingOfflineNotice;
+  }
+
+  private schedulerIdentityFromToken(token: string): string | null {
+    const encodedId = token.split('.', 1)[0] ?? '';
+    if (!encodedId) return null;
+    try {
+      const decoded = Buffer.from(encodedId, 'base64url').toString('utf8');
+      return /^[1-9][0-9]{16,19}$/.test(decoded) ? decoded : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private schedulerTransportAllowed(identity = this.getSchedulerIdentity()): boolean {
+    // An undecodable token must still reach the provider so it can report a
+    // normal authentication error. Scheduler arbitration only applies after
+    // the non-secret Discord application id is known.
+    return identity ? (this.schedulerHooks?.isTransportAllowed(identity) ?? true) : true;
+  }
+
+  private schedulerOutboundAllowed(identity: string): boolean {
+    return (
+      this.schedulerHandoffDraining
+      && identity === this.getSchedulerIdentity()
+    ) || this.schedulerTransportAllowed(identity);
+  }
+
+  private schedulerConfigurationChanged(): void {
+    try {
+      this.schedulerHooks?.onConfigurationChanged?.();
+    } catch (error) {
+      this.log.warn(`discord scheduler configuration notification failed: ${String(error)}`);
+    }
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -296,22 +533,21 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     userId: string,
     text: string,
   ): Promise<{ messageId: string }> {
-    return this.requireDmChannel(userId).then(async (channel) => {
-      const result = await sendChunked(channel, text);
-      return { messageId: result.firstMessageId };
-    });
+    return this.sendTextWithLease(userId, text);
   }
 
   async sendMarkdownText(
     userId: string,
     markdown: string,
   ): Promise<{ messageId: string }> {
+    const lease = this.captureOutboundLease();
     const channel = await this.requireDmChannel(userId);
+    this.assertOutboundLease(lease);
     const { text, imageUrls } = markdownToDiscord(markdown);
     const files = this.resolveImageFiles(imageUrls);
 
     if (files.length === 0) {
-      const result = await sendChunked(channel, text);
+      const result = await sendChunked(channel, text, () => this.assertOutboundLease(lease));
       return { messageId: result.firstMessageId };
     }
 
@@ -319,7 +555,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const fileBatches = batchDiscordUploadFiles(files);
     const firstBatch = fileBatches[0];
     if (!firstBatch) {
-      const result = await sendChunked(channel, text);
+      const result = await sendChunked(channel, text, () => this.assertOutboundLease(lease));
       return { messageId: result.firstMessageId };
     }
     const remainingBatches = fileBatches.slice(1);
@@ -330,14 +566,20 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (firstChunk.length > 0) {
       firstPayload.content = firstChunk;
     }
+    this.assertOutboundLease(lease);
     const firstSent = await channel.send(firstPayload);
+    this.assertOutboundLease(lease);
     const firstMessageId = encodeMessageId(channel.id, firstSent.id);
 
     for (const chunk of chunks.slice(1)) {
+      this.assertOutboundLease(lease);
       await channel.send(chunk);
+      this.assertOutboundLease(lease);
     }
     for (const batch of remainingBatches) {
+      this.assertOutboundLease(lease);
       await channel.send({ files: batch });
+      this.assertOutboundLease(lease);
     }
     return { messageId: firstMessageId };
   }
@@ -346,27 +588,36 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     userId: string,
     spec: InteractiveCardSpec,
   ): Promise<{ messageId: string }> {
+    const lease = this.captureOutboundLease();
     const channel = await this.requireDmChannel(userId);
+    this.assertOutboundLease(lease);
     const sent = await channel.send(buildCardMessage(spec));
+    this.assertOutboundLease(lease);
     const messageId = encodeMessageId(channel.id, sent.id);
     this.cardSpecs.set(messageId, cloneCardSpec(spec));
     return { messageId };
   }
 
   async updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
+    const lease = this.captureOutboundLease();
     const message = await this.fetchMessage(messageId);
+    this.assertOutboundLease(lease);
     await message.edit({ content: '', ...buildCardMessage(spec) });
+    this.assertOutboundLease(lease);
     this.cardSpecs.set(messageId, cloneCardSpec(spec));
   }
 
   async patchMarkdownCard(messageId: string, markdown: string): Promise<void> {
+    const lease = this.captureOutboundLease();
     const message = await this.fetchMessage(messageId);
+    this.assertOutboundLease(lease);
     const { text } = markdownToDiscord(markdown);
     await message.edit({
       content: text.slice(0, 2000),
       embeds: [],
       components: [],
     });
+    this.assertOutboundLease(lease);
     this.cardSpecs.delete(messageId);
   }
 
@@ -374,21 +625,29 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     userId: string,
     initial?: string,
   ): Promise<StreamingTextHandle> {
+    const lease = this.captureOutboundLease();
     const channel = await this.requireDmChannel(userId);
+    this.assertOutboundLease(lease);
     return startStreaming(
       {
         send: async (text) => {
+          this.assertOutboundLease(lease);
           const sent = await channel.send(text);
+          this.assertOutboundLease(lease);
           return encodeMessageId(channel.id, sent.id);
         },
         edit: async (messageId, text) => {
+          this.assertOutboundLease(lease);
           const message = await this.fetchMessage(messageId);
+          this.assertOutboundLease(lease);
           await message.edit(text);
+          this.assertOutboundLease(lease);
         },
         markdownToDiscord,
         chunk: chunkDiscordText,
         resolveImageUrl: this.opts.resolveImageUrl,
-        uploadImages: (messageId, absPaths) => this.uploadImages(messageId, absPaths),
+        uploadImages: (messageId, absPaths) =>
+          this.uploadImages(messageId, absPaths, () => this.assertOutboundLease(lease)),
       },
       initial,
     );
@@ -409,10 +668,13 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (stat.size > MAX_OUTBOUND_FILE_BYTES) return { ok: false, reason: 'TOO_LARGE' };
 
     try {
+      const lease = this.captureOutboundLease();
       const channel = await this.requireDmChannel(userId);
+      this.assertOutboundLease(lease);
       const sent = await channel.send({
         files: [{ attachment: absPath, name: displayName ?? path.basename(absPath) }],
       });
+      this.assertOutboundLease(lease);
       return { ok: true, messageId: encodeMessageId(channel.id, sent.id) };
     } catch (err) {
       return { ok: false, reason: isPayloadTooLarge(err) ? 'TOO_LARGE' : 'UPLOAD_FAIL' };
@@ -421,10 +683,14 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async reactToMessage(messageId: string, emoji: string): Promise<string | null> {
     try {
+      const lease = this.captureOutboundLease();
       const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
       const channel = await this.fetchChannel(channelId);
+      this.assertOutboundLease(lease);
       const message = await channel.messages.fetch(nativeMessageId);
+      this.assertOutboundLease(lease);
       await message.react(emoji);
+      this.assertOutboundLease(lease);
       return emoji;
     } catch {
       return null;
@@ -433,10 +699,14 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async removeMessageReaction(messageId: string, reactionToken: string): Promise<void> {
     try {
+      const lease = this.captureOutboundLease();
       const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
       const channel = await this.fetchChannel(channelId);
+      this.assertOutboundLease(lease);
       const message = await channel.messages.fetch(nativeMessageId);
+      this.assertOutboundLease(lease);
       await message.reactions.resolve(reactionToken)?.users.remove(this.gateway.client?.user?.id);
+      this.assertOutboundLease(lease);
     } catch {
       /* cleanup is best-effort */
     }
@@ -452,6 +722,47 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       return;
     }
     this.host.secrets.write(key, previousValue);
+  }
+
+  private readPendingToken(): string {
+    return this.host.secrets.read(PENDING_TOKEN_SECRET_KEY)?.trim() ?? '';
+  }
+
+  private readConfiguredOwnerUserId(hasPendingToken = Boolean(this.readPendingToken())): string {
+    const ownerKey = hasPendingToken
+      ? PENDING_OWNER_USER_ID_SECRET_KEY
+      : OWNER_USER_ID_SECRET_KEY;
+    return this.host.secrets.read(ownerKey)?.trim()
+      || this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim()
+      || '';
+  }
+
+  private promotePendingCredentials(expectedToken: string, ownerUserId: string): boolean {
+    if (this.readPendingToken() !== expectedToken) return false;
+    const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
+    const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
+    const tokenSaved = this.host.secrets.write(TOKEN_SECRET_KEY, expectedToken);
+    const ownerUserIdSaved = ownerUserId
+      ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
+      : true;
+    if (!tokenSaved || !ownerUserIdSaved) {
+      this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
+      this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+      return false;
+    }
+    if (!ownerUserId) this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
+    this.discardPendingCredentials(expectedToken);
+    return true;
+  }
+
+  private discardPendingCredentials(expectedToken?: string): void {
+    if (expectedToken && this.readPendingToken() !== expectedToken) return;
+    this.host.secrets.remove(PENDING_TOKEN_SECRET_KEY);
+    this.host.secrets.remove(PENDING_OWNER_USER_ID_SECRET_KEY);
+  }
+
+  private isCurrentInitialization(generation: number): boolean {
+    return !this.disposing && this.initializationGeneration === generation;
   }
 
   private readLifecycleAnnouncement(): boolean {
@@ -508,10 +819,18 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   private async reconnectPreviousGateway(previousToken: string | null): Promise<void> {
     const token = previousToken?.trim() ?? '';
-    if (!token) return;
+    const identity = this.schedulerIdentityFromToken(token);
+    if (this.disposing || !token || (identity && !this.schedulerTransportAllowed(identity))) return;
 
     try {
       await this.gateway.connect(token);
+      if (this.disposing) {
+        await this.gateway.destroy();
+        return;
+      }
+      if (identity && !this.schedulerTransportAllowed(identity)) {
+        await this.enterSchedulerStandby();
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord gateway reconnect to previous config failed: ${msg}`);
@@ -519,6 +838,25 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private setStatus(s: IMStatus): void {
+    const schedulerIdentity = this.getSchedulerIdentity();
+    if (s.kind === 'connected' && schedulerIdentity && !this.schedulerTransportAllowed(schedulerIdentity)) {
+      const standby: IMStatus = { kind: 'standby', appId: schedulerIdentity };
+      this.status = standby;
+      this.host.ipc.broadcast('discordBot:status-change', { status: standby });
+      for (const h of this.statusHandlers) {
+        try {
+          h(standby);
+        } catch {
+          /* swallow */
+        }
+      }
+      if (!this.schedulerHandoffDraining) {
+        void this.gateway.destroy().catch((error) => {
+          this.log.warn(`discord scheduler standby destroy failed: ${String(error)}`);
+        });
+      }
+      return;
+    }
     const previous = this.status;
     this.status = s;
     this.host.ipc.broadcast('discordBot:status-change', { status: s });
@@ -820,16 +1158,17 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private async handleDmMessage(m: MessageLike): Promise<void> {
-    if (this.disposing) return;
+    if (this.disposing || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining))
+      return;
     const acceptedOwnerUserId = this.ownerUserId;
     if (m.author.id !== acceptedOwnerUserId) return;
 
     const acceptedContext = {
       appId: this.gateway.appId,
-      configVersion: this.configVersion,
+      inboundConfigVersion: this.inboundConfigVersion,
       ownerUserId: acceptedOwnerUserId,
     };
-    const queueKey = `${acceptedContext.configVersion}:${dmMessageQueueKey(m)}`;
+    const queueKey = `${acceptedContext.inboundConfigVersion}:${dmMessageQueueKey(m)}`;
     const previous = this.dmMessageQueues.get(queueKey) ?? Promise.resolve();
     const current = previous
       .catch(() => undefined)
@@ -846,7 +1185,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   private async normalizeAndEmitDmMessage(
     m: MessageLike,
-    acceptedContext: { appId: string; configVersion: number; ownerUserId: string },
+    acceptedContext: { appId: string; inboundConfigVersion: number; ownerUserId: string },
   ): Promise<void> {
     try {
       const event = await normalizeDmMessage(m, {
@@ -857,44 +1196,92 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       });
       if (
         this.disposing ||
-        this.configVersion !== acceptedContext.configVersion ||
-        this.ownerUserId !== acceptedContext.ownerUserId ||
-        this.gateway.appId !== acceptedContext.appId
+        this.inboundConfigVersion !== acceptedContext.inboundConfigVersion ||
+        this.ownerUserId !== acceptedContext.ownerUserId
       ) {
         return;
       }
+      const handlers: Promise<void>[] = [];
       for (const h of this.messageHandlers) {
         try {
-          h(event);
+          handlers.push(Promise.resolve(h(event)));
         } catch {
           /* swallow */
         }
       }
+      await Promise.allSettled(handlers);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord inbound message failed: ${msg}`);
     }
   }
 
-  private async handleButtonInteraction(i: ButtonInteractionLike): Promise<void> {
-    if (this.disposing) return;
+  private handleButtonInteraction(
+    i: ButtonInteractionLike,
+    acknowledged: Promise<void> = Promise.resolve(),
+  ): Promise<void> {
+    if (this.disposing || (!this.schedulerTransportAllowed() && !this.schedulerHandoffDraining)) {
+      return Promise.resolve();
+    }
+    const acceptedContext = {
+      inboundConfigVersion: this.inboundConfigVersion,
+      ownerUserId: this.ownerUserId,
+    };
+    const current = this.processAcceptedButtonInteraction(i, acknowledged, acceptedContext);
+    this.buttonInteractionQueues.add(current);
+    void current.then(
+      () => this.buttonInteractionQueues.delete(current),
+      () => this.buttonInteractionQueues.delete(current),
+    );
+    return current;
+  }
+
+  private async processAcceptedButtonInteraction(
+    i: ButtonInteractionLike,
+    acknowledged: Promise<void>,
+    acceptedContext: { inboundConfigVersion: number; ownerUserId: string },
+  ): Promise<void> {
+    await acknowledged.catch(() => undefined);
+    if (
+      this.disposing ||
+      this.inboundConfigVersion !== acceptedContext.inboundConfigVersion ||
+      this.ownerUserId !== acceptedContext.ownerUserId
+    ) {
+      return;
+    }
     const event = parseInteraction(i);
     if (!event) {
       await this.notifyExpiredInteraction(i);
       return;
     }
-    if (event.senderId !== this.ownerUserId) return;
+    if (event.senderId !== acceptedContext.ownerUserId) return;
     if (event.buttonId === DISCORD_CARD_PAGE_BUTTON_ID) {
       await this.handleCardPageInteraction(event, i);
       return;
     }
 
+    const handlers: Promise<void>[] = [];
     for (const h of this.cardActionHandlers) {
       try {
-        h(event);
+        handlers.push(Promise.resolve(h(event)));
       } catch {
         /* swallow */
       }
+    }
+    await Promise.allSettled(handlers);
+  }
+
+  private async drainSchedulerHandoffWork(): Promise<void> {
+    while (
+      this.dmMessageQueues.size > 0
+      || this.buttonInteractionQueues.size > 0
+      || this.acceptedTasks.size > 0
+    ) {
+      await Promise.allSettled([
+        ...this.dmMessageQueues.values(),
+        ...this.buttonInteractionQueues,
+        ...this.acceptedTasks,
+      ]);
     }
   }
 
@@ -910,8 +1297,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     }
 
     try {
+      const lease = this.captureOutboundLease();
       const message = await this.fetchMessage(event.messageId);
+      this.assertOutboundLease(lease);
       await message.edit({ content: '', ...buildCardMessage(spec, { page }) });
+      this.assertOutboundLease(lease);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log.warn(`discord card pagination failed: ${msg}`);
@@ -926,6 +1316,38 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.dmResolver = createDmResolver(client);
     }
     return this.dmResolver(userId);
+  }
+
+  private captureOutboundLease(): DiscordOutboundLease {
+    const client = this.gateway.client;
+    const identity = this.getSchedulerIdentity();
+    if (!client || !identity) throw new Error('discord gateway is not connected');
+    const lease = { client, configVersion: this.configVersion, identity };
+    this.assertOutboundLease(lease);
+    return lease;
+  }
+
+  private assertOutboundLease(lease: DiscordOutboundLease): void {
+    if (
+      this.disposing
+      || this.configVersion !== lease.configVersion
+      || this.gateway.client !== lease.client
+      || this.getSchedulerIdentity() !== lease.identity
+      || !this.schedulerOutboundAllowed(lease.identity)
+    ) {
+      throw new Error('DISCORD_SCHEDULER_STANDBY');
+    }
+  }
+
+  private async sendTextWithLease(
+    userId: string,
+    text: string,
+  ): Promise<{ messageId: string }> {
+    const lease = this.captureOutboundLease();
+    const channel = await this.requireDmChannel(userId);
+    this.assertOutboundLease(lease);
+    const result = await sendChunked(channel, text, () => this.assertOutboundLease(lease));
+    return { messageId: result.firstMessageId };
   }
 
   private async fetchChannel(channelId: string): Promise<{
@@ -965,12 +1387,18 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return channel.messages.fetch(nativeMessageId);
   }
 
-  private async uploadImages(messageId: string, absPaths: string[]): Promise<void> {
+  private async uploadImages(
+    messageId: string,
+    absPaths: string[],
+    assertCurrent: () => void = () => {},
+  ): Promise<void> {
     const { channelId } = decodeMessageId(messageId);
+    assertCurrent();
     const client = this.gateway.client as unknown as {
       channels?: { fetch(channelId: string): Promise<unknown> };
     } | null;
     const channel = await client?.channels?.fetch(channelId);
+    assertCurrent();
     const send = isRecord(channel) ? channel.send : null;
     if (typeof send !== 'function') return;
     const files = absPaths.map((absPath) => ({
@@ -978,7 +1406,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       name: path.basename(absPath),
     }));
     for (const batch of batchDiscordUploadFiles(files)) {
+      assertCurrent();
       await send.call(channel, { files: batch });
+      assertCurrent();
     }
   }
 
@@ -987,9 +1417,17 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       followUp?: (payload: { content: string; ephemeral?: boolean }) => Promise<unknown>;
     };
     const notice = this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE;
+    let lease: DiscordOutboundLease;
+    try {
+      lease = this.captureOutboundLease();
+    } catch {
+      return;
+    }
     if (typeof interaction.followUp === 'function') {
       try {
+        this.assertOutboundLease(lease);
         await interaction.followUp({ content: notice, ephemeral: true });
+        this.assertOutboundLease(lease);
         return;
       } catch {
         /* fall back to DM below */
@@ -998,7 +1436,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     try {
       const channel = await this.requireDmChannel(i.user.id);
-      await channel.send(notice);
+      this.assertOutboundLease(lease);
+      await sendChunked(channel, notice, () => this.assertOutboundLease(lease));
     } catch {
       /* best-effort */
     }

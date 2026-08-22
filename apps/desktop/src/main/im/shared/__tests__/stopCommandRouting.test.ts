@@ -92,6 +92,7 @@ describe('messageHandler !stop routing', () => {
   let handleSlashCommand: ReturnType<typeof vi.fn>;
   let sendMarkdownText: ReturnType<typeof vi.fn>;
   let sendText: ReturnType<typeof vi.fn>;
+  let trackAcceptedTask: ReturnType<typeof vi.fn>;
   let consumePendingOpenerCard: ReturnType<typeof vi.fn>;
   let consumePendingOpenerAsCard: ReturnType<typeof vi.fn>;
   let deliver: (event: IMMessageEvent) => void;
@@ -102,6 +103,7 @@ describe('messageHandler !stop routing', () => {
     handleSlashCommand = vi.fn(async () => true);
     sendMarkdownText = vi.fn(async () => undefined);
     sendText = vi.fn(async () => undefined);
+    trackAcceptedTask = vi.fn();
     // 群主流 @ 开话题的开场白卡收口能力(仅 feishu 实现; 这里模拟富卡渠道)。
     consumePendingOpenerCard = vi.fn(async () => false);
     consumePendingOpenerAsCard = vi.fn(async () => false);
@@ -113,6 +115,7 @@ describe('messageHandler !stop routing', () => {
       },
       sendMarkdownText,
       sendText,
+      trackAcceptedTask,
       consumePendingOpenerCard,
       consumePendingOpenerAsCard,
     } as unknown as ChannelIM;
@@ -217,6 +220,25 @@ describe('messageHandler !stop routing', () => {
     background.resolve();
     await draining;
     expect(drained).toBe(true);
+  });
+
+  it('forwards an accepted turn terminal to a transport handoff tracker', async () => {
+    const terminal = deferred();
+    runAgentTurn.mockImplementationOnce(
+      async (args: Parameters<ImTurnRunner['runAgentTurn']>[0]) => {
+        args.onTurnAccepted?.(terminal.promise.then(() => ({
+          kind: 'done' as const,
+          text: 'done',
+          completedAt: Date.now(),
+        })));
+      },
+    );
+
+    deliver(makeEvent({ messageId: 'tracked-turn', text: 'run this' }));
+    await vi.waitFor(() => expect(trackAcceptedTask).toHaveBeenCalledOnce());
+
+    expect(trackAcceptedTask.mock.calls[0]?.[0]).toBeInstanceOf(Promise);
+    terminal.resolve();
   });
 
   it('routes !stop to stopActiveTurn with the thread scopeKey and replies stopDone', async () => {

@@ -2101,6 +2101,7 @@
         "needsConfig": "구성 필요",
         "connecting": "연결 중…",
         "connected": "연결됨",
+        "standby": "다른 연결된 컴퓨터에서 수신 중",
         "conflict": "다른 기기에서 사용 중",
         "error": "연결 실패"
       },
@@ -2113,6 +2114,8 @@
       "connected": {
         "heading": "Discord 봇 연결됨",
         "note": "Discord에서 봇에게 보낸 DM은 이 기기의 {{appName}}로 전달됩니다.",
+        "headingStandby": "Discord 봇 연동됨 · 이 컴퓨터는 대기 중",
+        "noteStandby": "같은 Cindy 계정의 다른 연결된 컴퓨터가 메시지를 받고 있으며, 해당 컴퓨터가 오프라인이 되면 이 컴퓨터가 자동으로 이어받습니다.",
         "botLabel": "봇 계정",
         "ownerLabel": "내 사용자 ID"
       },
