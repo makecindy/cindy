@@ -371,16 +371,17 @@ describe('MessageStream focus cancellation wiring', () => {
   it('cancels chip jumps on scrollbar mousedown as well as wheel and touch', () => {
     const takeover = sourceBetween(
       'const onWheel = (event: WheelEvent) => {',
-      '}, [\n    clearChipJumpSuppression,\n    pinAutoFollowForUserDownIntent,\n    triggerUserIntentFill,\n    unpinAutoFollowForUserUpIntent,\n  ]);',
+      '}, [\n    clearChipJumpSuppression,\n    endScrollbarDrag,\n    pinAutoFollowForUserDownIntent,\n    triggerUserIntentFill,\n    unpinAutoFollowForUserUpIntent,\n  ]);',
     );
     expect(takeover).toContain('clearChipJumpSuppression();');
     expect(takeover).toContain("root.addEventListener('mousedown', onMouseDown)");
     expect(takeover).toContain("window.addEventListener('mousemove', onMouseMove)");
     expect(takeover).toContain('isVerticalScrollbarPress({');
     expect(takeover).toContain('shouldUnpinOnScrollbarDrag({');
-    expect(takeover).toContain(
-      'if (wasDragging && isNearBottomRef.current) pinToBottomRef.current()',
-    );
+    expect(takeover).toContain('endScrollbarDrag()');
+    expect(takeover).toContain("window.addEventListener('pointercancel', onPointerCancel)");
+    expect(takeover).toContain("window.addEventListener('blur', onWindowBlur)");
+    expect(takeover).toContain("document.addEventListener('visibilitychange', onVisibilityChange)");
     expect(takeover).toContain('shouldRepinOnWheel({');
     expect(takeover).toContain('pinAutoFollowForUserDownIntent()');
   });

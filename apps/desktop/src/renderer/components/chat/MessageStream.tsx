@@ -4215,6 +4215,13 @@ export function MessageStream({
   // 按下期间停掉流式 pin,避免 programmatic 窗口把拖拽 scroll 吞掉后再钉回。
   const scrollbarDragStartTopRef = useRef<number | null>(null);
   const pinToBottomRef = useRef<() => void>(() => {});
+  // 拖拽态必须有界结束:mouseup / blur / pointercancel / 页签隐藏都走这里。
+  // Alt-Tab 后在别处松手收不到 mouseup,不清理则 pinToBottom 会永久提前返回。
+  const endScrollbarDrag = useCallback(() => {
+    if (scrollbarDragStartTopRef.current == null) return;
+    scrollbarDragStartTopRef.current = null;
+    if (isNearBottomRef.current) pinToBottomRef.current();
+  }, []);
 
   // ── jump-to-bottom chip ──
   // 用户向下滚动且未到底时显示扁平的"跳到底部" chip,2s 内无滚动自动隐藏。
@@ -4524,11 +4531,16 @@ export function MessageStream({
       }
     };
     const onMouseUp = () => {
-      const wasDragging = scrollbarDragStartTopRef.current != null;
-      scrollbarDragStartTopRef.current = null;
-      // 按住期间 pin 被抑制。若松手前最后一批 token 已经 settle,没有新的
-      // ResizeObserver,视口会停在旧底部。仍在跟随时补一次钉底。
-      if (wasDragging && isNearBottomRef.current) pinToBottomRef.current();
+      endScrollbarDrag();
+    };
+    const onPointerCancel = () => {
+      endScrollbarDrag();
+    };
+    const onWindowBlur = () => {
+      endScrollbarDrag();
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) endScrollbarDrag();
     };
     root.addEventListener('wheel', onWheel, { passive: true });
     root.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -4538,6 +4550,9 @@ export function MessageStream({
     root.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    window.addEventListener('blur', onWindowBlur);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       root.removeEventListener('wheel', onWheel);
       root.removeEventListener('touchstart', onTouchStart);
@@ -4547,9 +4562,13 @@ export function MessageStream({
       root.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      window.removeEventListener('blur', onWindowBlur);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [
     clearChipJumpSuppression,
+    endScrollbarDrag,
     pinAutoFollowForUserDownIntent,
     triggerUserIntentFill,
     unpinAutoFollowForUserUpIntent,
