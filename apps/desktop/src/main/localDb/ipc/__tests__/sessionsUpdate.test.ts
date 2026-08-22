@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
     closeSession: (id: string) => Promise<void>;
   } | null => null),
   setPinnedSectionCardMode: vi.fn(),
+  upsertRecentWorkdir: vi.fn(async () => undefined),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
@@ -77,7 +78,7 @@ vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
 vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
-vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
+vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
@@ -546,6 +547,29 @@ describe('local-db:sessions:update handler wiring', () => {
       patch: { status: 'deleted' },
     });
     // 不再出现携带请求值的回滚广播
+    const statusPatches = h.tapWindowBroadcast.mock.calls
+      .filter(([channel]) => channel === 'local-db:sessions:patched')
+      .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
+    expect(statusPatches).toEqual(['deleted']);
+  });
+
+  // 竞态收敛(review on #3225 第二轮):读行与广播之间还有 await(摘要清理 /
+  // recent-workdir / 转录迁移),期间另一窗口可删除并先广播 deleted;本 handler
+  // 恢复后若用旧快照广播 archived,该广播是最后一条,镜像不会自愈——已删任务
+  // 持久复活。upsertRecentWorkdir 是已 mock 的依赖:在其 await 期间模拟删除落库,
+  // 断言广播前重读了状态。
+  it('re-reads status before broadcasting when an await intervenes after the row read', async () => {
+    h.upsertRecentWorkdir.mockImplementationOnce(async () => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('cc-local');
+    });
+
+    await invokeUpdate('cc-local', { status: 'archived', workspaceKind: 'project' });
+    await vi.dynamicImportSettled();
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'cc-local',
+      patch: expect.objectContaining({ status: 'deleted' }),
+    });
     const statusPatches = h.tapWindowBroadcast.mock.calls
       .filter(([channel]) => channel === 'local-db:sessions:patched')
       .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
