@@ -90,6 +90,8 @@ const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
 const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 1;
 const MAX_DEFERRED_SESSIONS = 8;
 const MAX_KNOWN_CONTEXTS = 32;
+const MAX_ADOPT_RESOLVE_RETRIES = 5;
+const ADOPT_RESOLVE_RETRY_MS = 400;
 /**
  * 单会话 deferred 队列上限。正常路径远达不到(passive 命令种类有限且有合并
  * 规则);达到时丢最旧一条并记 warn —— 不能静默,登记类命令被丢意味着这次
@@ -144,6 +146,8 @@ export class RsbWindowController {
    * 用户切到被 pin 的 session、离开聊天视图或关掉子窗口时解除。
    */
   private pinnedSessionId: string | null = null;
+  private adoptRetryTimer: NodeJS.Timeout | null = null;
+  private adoptRetryAttempts = 0;
   /** 主窗曾上报、或权威来源解析过的完整宿主上下文，按 session 复用。 */
   private knownContexts = new Map<string, RsbWindowContext>();
   /** 冷启动分离窗尚未 presentation-ready 时暂存主窗交来的内存态 tab。 */
@@ -833,6 +837,7 @@ export class RsbWindowController {
 
   private adoptHostSession(sessionId: string): void | Promise<void> {
     if (!sessionId) return;
+    if (this.pinnedSessionId !== sessionId) this.resetAdoptRetry();
     this.pinnedSessionId = sessionId;
     if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
     const cached = this.knownContexts.get(sessionId);
@@ -850,13 +855,37 @@ export class RsbWindowController {
     this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null);
   }
 
-  private finishAdoptHostSession(_sessionId: string, resolved: RsbWindowContext | null): void {
+  private finishAdoptHostSession(sessionId: string, resolved: RsbWindowContext | null): void {
     if (!resolved) {
-      this.flushDeferredCommandsToDetachedHost();
+      this.scheduleAdoptRetry(sessionId);
       return;
     }
+    this.resetAdoptRetry();
     this.rememberContext(resolved);
     this.applyAdoptedContext(resolved);
+  }
+
+  private scheduleAdoptRetry(sessionId: string): void {
+    if (this.disposed || this.pinnedSessionId !== sessionId) return;
+    if (this.adoptRetryAttempts >= MAX_ADOPT_RESOLVE_RETRIES) return;
+    this.clearAdoptRetryTimer();
+    this.adoptRetryAttempts += 1;
+    this.adoptRetryTimer = setTimeout(() => {
+      this.adoptRetryTimer = null;
+      if (this.disposed || this.pinnedSessionId !== sessionId) return;
+      void this.adoptHostSession(sessionId);
+    }, ADOPT_RESOLVE_RETRY_MS);
+  }
+
+  private clearAdoptRetryTimer(): void {
+    if (!this.adoptRetryTimer) return;
+    clearTimeout(this.adoptRetryTimer);
+    this.adoptRetryTimer = null;
+  }
+
+  private resetAdoptRetry(): void {
+    this.clearAdoptRetryTimer();
+    this.adoptRetryAttempts = 0;
   }
 
   private rememberContext(ctx: RsbWindowContext): void {
@@ -877,6 +906,7 @@ export class RsbWindowController {
   }
 
   private clearPinnedSession(): void {
+    this.resetAdoptRetry();
     this.pinnedSessionId = null;
   }
 

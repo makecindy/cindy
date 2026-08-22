@@ -11,17 +11,28 @@ describe('resolveHostContext mappers', () => {
       contextFromLocalSessionRow({
         id: 'local-1',
         workingDir: '/repo',
-        remoteHostId: 'ssh-1',
+        remoteHostId: null,
         agentKind: 'pi',
       }),
     ).toEqual({
       sessionId: 'local-1',
       workdir: '/repo',
-      remoteHostId: 'ssh-1',
+      remoteHostId: null,
       deviceLinkDeviceId: null,
       available: true,
       subagentsAvailable: true,
     });
+  });
+
+  it('does not enable Subagents for an SSH-hosted Pi session', () => {
+    expect(
+      contextFromLocalSessionRow({
+        id: 'ssh-1',
+        workingDir: '/remote/repo',
+        remoteHostId: 'host-1',
+        agentKind: 'pi',
+      }).subagentsAvailable,
+    ).toBe(false);
   });
 
   it('fills device-link context from the main mirror list', () => {

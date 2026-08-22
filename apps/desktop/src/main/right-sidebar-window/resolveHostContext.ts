@@ -25,7 +25,7 @@ export function contextFromLocalSessionRow(row: {
     remoteHostId: row.remoteHostId ?? null,
     deviceLinkDeviceId: null,
     available: true,
-    subagentsAvailable: row.agentKind === 'pi',
+    subagentsAvailable: row.agentKind === 'pi' && !row.remoteHostId,
   };
 }
 
