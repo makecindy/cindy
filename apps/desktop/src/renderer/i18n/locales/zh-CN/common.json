@@ -7792,6 +7792,10 @@
       "waitForReply": "等待你在文档区回复…",
       "modelSwitchedFastModeOff": "已切换模型，Fast Mode 已关闭"
     },
+    "remoteDesktopConfirmation": {
+      "title": "需要在被控电脑上确认",
+      "description": "请在被控电脑上打开 Cindy，查看并处理这项确认。"
+    },
     "handoff": {
       "card": {
         "lastActive": {

@@ -7792,6 +7792,10 @@
       "waitForReply": "ドキュメント領域での返信を待っています…",
       "modelSwitchedFastModeOff": "モデルを切り替えました。Fast Mode は無効になりました"
     },
+    "remoteDesktopConfirmation": {
+      "title": "制御対象のコンピューターで確認が必要です",
+      "description": "制御対象のコンピューターで Cindy を開き、内容を確認して応答してください。"
+    },
     "handoff": {
       "card": {
         "lastActive": {

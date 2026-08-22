@@ -66,6 +66,7 @@ import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { IssueConfirmCard } from './IssueConfirmCard';
 import { RenameSessionsConfirmCard } from './RenameSessionsConfirmCard';
 import { GhostGrantConfirmCard } from './GhostGrantConfirmCard';
+import { RemoteDesktopConfirmationNotice } from './RemoteDesktopConfirmationNotice';
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { PlanViewerCard } from '@/components/new-chat/PlanViewerCard';
@@ -1531,6 +1532,7 @@ export function CCAgentSessionView({
     pendingRenameSessionsConfirm,
     respondToRenameSessionsConfirm,
     pendingGhostGrantConfirm,
+    pendingRemoteDesktopConfirmation,
     respondToGhostGrantConfirm,
     lastExpandedPlanViewerState,
     updatePlanContent,
@@ -3975,7 +3977,8 @@ export function CCAgentSessionView({
       pendingPluginSetup ||
       pendingIssueConfirm ||
       pendingRenameSessionsConfirm ||
-      pendingGhostGrantConfirm,
+      pendingGhostGrantConfirm ||
+      pendingRemoteDesktopConfirmation,
     );
   useEffect(() => {
     if (shareSelectionActive && shareSelectionBlocked) shareSelectionStore.exit();
@@ -4330,7 +4333,8 @@ export function CCAgentSessionView({
                       pendingPluginSetup ||
                       pendingIssueConfirm ||
                       pendingRenameSessionsConfirm ||
-                      pendingGhostGrantConfirm
+                      pendingGhostGrantConfirm ||
+                      pendingRemoteDesktopConfirmation
                     )
                   }
                   className="mb-0"
@@ -4519,7 +4523,8 @@ export function CCAgentSessionView({
                     pendingPluginSetup ||
                     pendingIssueConfirm ||
                     pendingRenameSessionsConfirm ||
-                    pendingGhostGrantConfirm
+                    pendingGhostGrantConfirm ||
+                    pendingRemoteDesktopConfirmation
                   )
                 }
                 placeholder={
@@ -4586,6 +4591,10 @@ export function CCAgentSessionView({
                     pending={pendingGhostGrantConfirm}
                     onRespond={respondToGhostGrantConfirm}
                   />
+                ) : pendingRemoteDesktopConfirmation ? (
+                  <RemoteDesktopConfirmationNotice
+                    key={pendingRemoteDesktopConfirmation.requestId}
+                  />
                 ) : null}
               </InteractionPromptHost>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
@@ -4606,7 +4615,8 @@ export function CCAgentSessionView({
               pendingPluginSetup ||
               pendingIssueConfirm ||
               pendingRenameSessionsConfirm ||
-              pendingGhostGrantConfirm ? null : sessionBinding.attached && sessionId ? (
+              pendingGhostGrantConfirm ||
+              pendingRemoteDesktopConfirmation ? null : sessionBinding.attached && sessionId ? (
                 <TakeoverMask
                   sessionId={sessionId}
                   channel={sessionBinding.identity?.channel ?? 'feishu'}
