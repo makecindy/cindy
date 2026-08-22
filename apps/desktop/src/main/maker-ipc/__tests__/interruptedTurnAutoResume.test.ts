@@ -80,6 +80,20 @@ describe('isInterruptedTurnError', () => {
     expect(isInterruptedTurnError({ reason: 'empty-response' })).toBe(true);
   });
 
+  it('accepts the classified malformed-tool-markup reason (#2518)', () => {
+    // translator 只在「零结构化 tool_use、正文命中泄漏工具调用标记对」的严格
+    // 形态下盖这个 key —— 模型把写坏的工具调用块当纯文本输出,工具没执行;
+    // 泄漏正文已落库,恢复走「已有进展 → 续跑提示」分支,模型基于上下文重发
+    // 调用即可救回。止损与其他放行 reason 共用同一套上限与退避。
+    expect(
+      isInterruptedTurnError({
+        reason: 'malformed-tool-markup',
+        message: '模型输出了格式错误的工具调用块。',
+      }),
+    ).toBe(true);
+    expect(isInterruptedTurnError({ reason: 'malformed-tool-markup' })).toBe(true);
+  });
+
   it('rejects errors that carry a stable reason (已分类,另有处置路径)', () => {
     for (const reason of ['turn-failed', 'silent-stop-exhausted']) {
       expect(

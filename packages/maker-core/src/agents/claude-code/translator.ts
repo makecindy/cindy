@@ -28,6 +28,10 @@ import {
 } from '@cindy/maker-shared/internal-citation';
 import type { createAsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
+import {
+  detectLeakedToolCallMarkup,
+  type LeakedToolMarkupHit,
+} from '../shared/leaked-tool-markup.js';
 import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
 import {
   CONTEXT_OVERFLOW_REASON,
@@ -2002,6 +2006,62 @@ function handleResult(
     resetClaudeGenerationTiming(ctx.rt.generation);
     ctx.onTurnEnd?.();
     return;
+  }
+  // 泄漏工具调用标记(#2518 类 B,临时兜底,按维护者 2026-08-13 review 收窄):
+  // 模型把写坏的工具调用块(缺失前导 < 的 invoke 开标签)当**普通正文**输出,
+  // SDK 解析器从未进入工具调用状态 —— 不能按成功收口:工具没执行,用户无从
+  // 分辨「做完了」和「压根没跑」。**仅在没有任何结构化 tool_use 的回合触发**
+  // (已观测协议特征;有 tool_use 的回合一律不判),命中推一条带稳定 reason
+  // 的 terminal error(main 的有界自动续跑按 reason 放行,不执行泄漏文本、不
+  // 重发原请求),然后**继续**走下方 status Done + done —— 本轮有真实用量,
+  // 砍 done 会丢整轮账(与 is_error 失败序列同构;empty-response 只发 error
+  // 是因为零用量无账可丢)。移除条件见 shared/leaked-tool-markup.ts 文件头。
+  // 正文取「用户实际看到的全文」= emitted + fallbackTail —— 泄漏标记可能只
+  // 存在于 result.result 兜出的未流式尾段;mismatch 分支由下方补扫兜底。
+  const leakedMarkupGuard =
+    !msg.is_error &&
+    !ctx.turn.interruptRequested &&
+    !ctx.turn.sawCompactBoundary &&
+    ctx.turn.toolUses === 0;
+  let leakedMarkupBody = emitted + fallbackTail;
+  let leakedToolMarkup = leakedMarkupGuard ? detectLeakedToolCallMarkup(leakedMarkupBody) : null;
+  // mismatch 分支补扫(Greptile review):full 与 emitted 前缀对不上时 fallbackTail
+  // 为空、full 未展示,但泄漏若只在 full 里,「工具没执行却按成功收口」的实质
+  // 伤害不变 —— 检测依据是本轮模型输出,不限于已展示部分。complete/tail 分支的
+  // full 已被 emitted + fallbackTail 全量覆盖,不会走到这里。
+  if (
+    leakedMarkupGuard &&
+    !leakedToolMarkup &&
+    full.length > 0 &&
+    fallbackTail.length === 0 &&
+    full !== emitted
+  ) {
+    leakedToolMarkup = detectLeakedToolCallMarkup(full);
+    if (leakedToolMarkup) leakedMarkupBody = full;
+  }
+  if (leakedToolMarkup) {
+    // 匿名命中统计(评估移除时机用):只记类别与长度,不记正文 —— 泄漏内容
+    // 可能含命令参数等敏感信息。
+    ctx.log.warn('SDK ◀ turn leaked malformed tool-call markup as plain text', {
+      category: leakedToolMarkup.category,
+      textLength: leakedMarkupBody.length,
+      toolUses: ctx.turn.toolUses,
+      apiCalls: ctx.turn.apiCalls,
+      model: currentModel,
+    });
+    queue.push({
+      type: 'error',
+      data: {
+        // 不承诺自动重试:是否自动续跑由下游 guard(开关/额度/补发结果)决定,
+        // 这里看不到结论 —— 只陈述事实与始终存在的人工重试入口(第三十轮
+        // Codex review)。
+        message:
+          '模型输出了格式错误的工具调用块,未能解析为结构化调用,本轮工具未执行,可重新发送重试。',
+        isTerminal: true,
+        reason: 'malformed-tool-markup',
+      },
+      source: 'claude-code',
+    });
   }
   // is_error result 才是 API-error envelope 的权威终态。此前 envelope 会立即推
   // terminal error,即使 SDK 随后自动重试成功也会让下游提前收口；现在成功 result
