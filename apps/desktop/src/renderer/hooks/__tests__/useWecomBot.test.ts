@@ -524,4 +524,99 @@ describe('useWecomBot', () => {
     expect(result.current.channelSettings).toEqual(defaults);
     expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(3);
   });
+
+  it('flushes a boundary-ready deferred by an in-flight reset after the update fails', async () => {
+    // P2(与个人微信 choose 同构的反向矩阵): reset 在途时切 Cindy 账号 —
+    // auth 触发的读取因新账号边界未激活而失败, ready 在更新在途中到达(只能
+    // 挂起), 旧账号的 reset 随后被 Main generation 守卫拒绝。ready 不得丢:
+    // reset 收尾后必须为当前 owner 补拉, 设置不得停在 null; 迟到的旧语境
+    // 挂载读取也不得覆盖。
+    const harness = installWecomApi();
+    let resolveMountRead!: (state: WecomChannelSettingsState) => void;
+    harness.api.getChannelSettings
+      .mockReturnValueOnce( // owner 首次确立的挂载读取(慢探测, 旧语境晚归)
+        new Promise<WecomChannelSettingsState>((resolve) => {
+          resolveMountRead = resolve;
+        }),
+      )
+      .mockRejectedValueOnce( // auth 切换触发的读取撞上未激活边界
+        new Error('[IM_NOT_READY] IM account is not active'),
+      )
+      .mockResolvedValueOnce(settingsFor('B')); // 收尾补拉(边界已激活)
+    const { result } = renderHook(() => useWecomBot());
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(1));
+
+    let rejectReset!: (reason?: unknown) => void;
+    harness.api.resetWorkingDirectory.mockReturnValueOnce(
+      new Promise<WecomChannelSettingsState>((_resolve, reject) => {
+        rejectReset = reject;
+      }),
+    );
+    let resetDone: Promise<void> | null = null;
+    act(() => {
+      resetDone = result.current.resetWorkingDirectory();
+    });
+    // reset 在途时切 Cindy 账号: 失效 + auth 触发的读取失败(call 2)。
+    act(() => {
+      harness.pushAuth(authState('owner-b'));
+    });
+    expect(result.current.channelSettings).toBeNull();
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2));
+    // ready 在更新在途时到达 — 只记 pending, 不立刻拉。
+    act(() => harness.pushBoundaryReady());
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2);
+
+    // 旧账号的 reset 被 Main generation 守卫拒绝 → 收尾补拉(call 3)。
+    await act(async () => {
+      rejectReset(new Error('[WECOM_WORKING_DIR_UPDATE_FAILED] account changed while reset'));
+      await resetDone;
+    });
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('B')));
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(3);
+
+    // 挂载读取(旧语境)此刻才返回 — 不得覆盖。
+    await act(async () => {
+      resolveMountRead(settingsFor('A'));
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings).toEqual(settingsFor('B'));
+  });
+
+  it('does not double-fetch when the owner-flip recovery supersedes a deferred ready', async () => {
+    // 协调: pending ready 与 owner 翻转收敛同时出现 — refetchAfterOwnerFlip
+    // 已在 Main 返回后发起收敛读取, 收尾不得再为同一目标补拉第二次。
+    const harness = installWecomApi();
+    harness.api.getChannelSettings
+      .mockResolvedValueOnce(settingsFor('old')) // 挂载确立 owner('')
+      .mockResolvedValueOnce(settingsFor('old')) // 翻转触发的提交前读取
+      .mockResolvedValueOnce(settingsFor('X')); // 收敛读取(Main 已提交)
+    const { result } = renderHook(() => useWecomBot());
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('old')));
+
+    let resolvePick!: (result: { canceled: boolean; state: WecomChannelSettingsState }) => void;
+    harness.api.chooseWorkingDirectory.mockReturnValueOnce(
+      new Promise<{ canceled: boolean; state: WecomChannelSettingsState }>((resolve) => {
+        resolvePick = resolve;
+      }),
+    );
+    let chooseDone: Promise<void> | null = null;
+    act(() => {
+      chooseDone = result.current.chooseWorkingDirectory();
+    });
+    act(() => {
+      harness.push({ status: { kind: 'connected', appId: 'app' }, botId: 'bot', ownerUserId: 'X' });
+    });
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2));
+    // 更新在途时 ready 到达 — 记 pending。
+    act(() => harness.pushBoundaryReady());
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2);
+
+    // Main 成功返回但 owner 已翻转 → 收敛读取覆盖 pending, 收尾不再补拉。
+    await act(async () => {
+      resolvePick({ canceled: false, state: settingsFor('X') });
+      await chooseDone;
+    });
+    await waitFor(() => expect(result.current.channelSettings).toEqual(settingsFor('X')));
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(3);
+  });
 });

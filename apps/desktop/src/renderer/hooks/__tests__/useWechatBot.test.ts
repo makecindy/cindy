@@ -484,6 +484,71 @@ describe('useWechatBot', () => {
     expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(3);
   });
 
+  it('flushes a boundary-ready deferred by an in-flight pick after the update fails', async () => {
+    // P2: 选择器在途时切号 — auth 触发的读取因新账号边界未激活而失败, ready
+    // 又在更新在途中到达(只能挂起), 旧账号的 choose 随后被 Main generation
+    // 守卫拒绝。ready 不得丢: choose 收尾后必须为当前 owner 补拉, 设置不得
+    // 停在 null; 迟到的旧账号挂载读取也不得覆盖。
+    const harness = installWechatApi();
+    let resolveMountRead!: (state: WechatChannelSettingsState) => void;
+    harness.api.getChannelSettings
+      .mockReturnValueOnce( // 挂载读取挂起(慢探测), 携带旧账号语境, 晚归
+        new Promise<WechatChannelSettingsState>((resolve) => {
+          resolveMountRead = resolve;
+        }),
+      )
+      .mockRejectedValueOnce( // auth 切换触发的读取撞上未激活边界
+        new Error('[WECHAT_WORKING_DIR_UPDATE_FAILED] no active account'),
+      )
+      .mockResolvedValueOnce({ // 收尾补拉(边界已激活, 新账号已落盘状态)
+        version: 1,
+        workingDir: 'D:/owner-b/project',
+        workingDirAvailable: true,
+      });
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(1));
+
+    let rejectChoose!: (reason?: unknown) => void;
+    harness.api.chooseWorkingDirectory.mockReturnValueOnce(
+      new Promise<{
+        canceled: boolean;
+        state: { version: 1; workingDir: string; workingDirAvailable: boolean };
+      }>((_resolve, reject) => {
+        rejectChoose = reject;
+      }),
+    );
+    let chooseDone: Promise<void> | null = null;
+    act(() => {
+      chooseDone = result.current.chooseWorkingDirectory();
+    });
+    // 弹窗期间切号: 立即失效 + auth 触发的读取失败(call 2)。
+    act(() => {
+      harness.pushAuth(authState('owner-b'));
+    });
+    expect(result.current.channelSettings).toBeNull();
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2));
+    // ready 在更新在途时到达 — 只记 pending, 不立刻拉。
+    act(() => harness.pushBoundaryReady());
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2);
+
+    // 旧账号的 choose 被 Main generation 守卫拒绝 → 收尾补拉(call 3)。
+    await act(async () => {
+      rejectChoose(new Error('[WECHAT_WORKING_DIR_UPDATE_FAILED] account changed while pick'));
+      await chooseDone;
+    });
+    await waitFor(() =>
+      expect(result.current.channelSettings?.workingDir).toBe('D:/owner-b/project'),
+    );
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(3);
+
+    // 挂载读取(旧账号代次)此刻才返回 — 不得覆盖。
+    await act(async () => {
+      resolveMountRead({ version: 1, workingDir: 'D:/owner-a/project', workingDirAvailable: true });
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings?.workingDir).toBe('D:/owner-b/project');
+  });
+
   it('skips the focus refresh while a working-dir update is in flight', async () => {
     const harness = installWechatApi();
     const { result } = renderHook(() => useWechatBot());

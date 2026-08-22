@@ -50,6 +50,12 @@ export function useWechatBot(): UseWechatBotReturn {
   const cindyOwnerRef = useRef<string | null>(null);
   /** isUpdatingWorkingDir 的 ref 镜像: refreshChannelSettings 的在途守卫用。 */
   const isUpdatingWorkingDirRef = useRef(false);
+  /**
+   * 更新在途期间到达的 boundary-ready: 此刻拉取会被在途守卫跳过、读到提交前
+   * 旧配置, 只能记下来, 由 choose/reset 收尾(finishWorkingDirUpdate)补拉 —
+   * ready 一轮登录只广播一次, 跳过即永久丢失(切号后设置停在 null)。
+   */
+  const pendingBoundaryReadyRef = useRef(false);
 
   /** 拉取当前账号的渠道设置;owner 代次或更新序号已推进的迟到响应不写回。 */
   const fetchChannelSettings = useCallback(async (): Promise<void> => {
@@ -73,7 +79,23 @@ export function useWechatBot(): UseWechatBotReturn {
    * Main 返回之后发起, 必然读到已提交状态。
    */
   const refetchAfterOwnerFlip = useCallback((): void => {
+    // 这里的收敛读取已覆盖「ready 待补拉」的意图 — 清掉 pending, 防止收尾
+    // 时对同一目标重复拉取。
+    pendingBoundaryReadyRef.current = false;
     updateSeqRef.current += 1;
+    void fetchChannelSettings();
+  }, [fetchChannelSettings]);
+
+  /**
+   * choose/reset 的统一收尾: 先解除更新在途守卫, 再补拉更新期间到达的
+   * boundary-ready(若有)。补拉发生在 choose/reset 完全结束之后, ready 又已
+   * 表示新账号边界激活 — 此时读到的是当前 owner 的已落盘状态; 迟到守卫照常,
+   * ownerEpoch 再推进则丢弃, 由推进方自己的重拉兜底。
+   */
+  const finishWorkingDirUpdate = useCallback((): void => {
+    isUpdatingWorkingDirRef.current = false;
+    if (!pendingBoundaryReadyRef.current) return;
+    pendingBoundaryReadyRef.current = false;
     void fetchChannelSettings();
   }, [fetchChannelSettings]);
 
@@ -138,9 +160,13 @@ export function useWechatBot(): UseWechatBotReturn {
       // 冷启动/换号窗口: 挂载首拉撞上 IM 账号边界未激活会被 Main fail-closed
       // 拒绝([IM_NOT_READY]), 设置停在 null; Main 在边界激活时广播 ready,
       // 到达即重拉, 不必等 focus/设置卡展开。迟到守卫不变 — ownerEpoch/
-      // updateSeq 已推进的响应照旧丢弃, 更新在途时 refreshChannelSettings
-      // 自会跳过(其结果由 choose/reset 落地的新状态取代)。
+      // updateSeq 已推进的响应照旧丢弃。更新在途时不能拉也不能丢: 记入
+      // pending, 由 choose/reset 收尾(finishWorkingDirUpdate)补拉。
       window.electronAPI.onImAccountBoundaryReady(() => {
+        if (isUpdatingWorkingDirRef.current) {
+          pendingBoundaryReadyRef.current = true;
+          return;
+        }
         void refreshChannelSettings();
       }),
     [refreshChannelSettings],
@@ -207,10 +233,10 @@ export function useWechatBot(): UseWechatBotReturn {
       log.error('failed to choose personal WeChat working directory');
       toast.error(t('settings.wechatBot.toasts.workingDirFailed'));
     } finally {
-      isUpdatingWorkingDirRef.current = false;
+      finishWorkingDirUpdate();
       setIsUpdatingWorkingDir(false);
     }
-  }, [isUpdatingWorkingDir, refetchAfterOwnerFlip, t]);
+  }, [finishWorkingDirUpdate, isUpdatingWorkingDir, refetchAfterOwnerFlip, t]);
 
   const resetWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
@@ -231,10 +257,10 @@ export function useWechatBot(): UseWechatBotReturn {
       log.error('failed to reset personal WeChat working directory');
       toast.error(t('settings.wechatBot.toasts.workingDirFailed'));
     } finally {
-      isUpdatingWorkingDirRef.current = false;
+      finishWorkingDirUpdate();
       setIsUpdatingWorkingDir(false);
     }
-  }, [isUpdatingWorkingDir, refetchAfterOwnerFlip, t]);
+  }, [finishWorkingDirUpdate, isUpdatingWorkingDir, refetchAfterOwnerFlip, t]);
 
   return {
     state,
