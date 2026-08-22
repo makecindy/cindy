@@ -50,7 +50,7 @@ describe('normalizeDmMessage', () => {
       fs.writeFileSync(dest, 'image');
     });
 
-    const event = await normalizeDmMessage(
+    const event = (await normalizeDmMessage(
       message({
         attachments: [
           {
@@ -63,7 +63,7 @@ describe('normalizeDmMessage', () => {
         ],
       }),
       { contextId: 'app-1', mediaDir, download },
-    );
+    ))!;
 
     expect(download).toHaveBeenCalledWith(
       'https://cdn.example/photo.png',
@@ -95,7 +95,7 @@ describe('normalizeDmMessage', () => {
       resolveMediaUrl: vi.fn(() => null),
     };
 
-    const event = await normalizeDmMessage(
+    const event = (await normalizeDmMessage(
       message({
         attachments: [
           { id: 'att-1', name: 'photo.png', url: 'https://cdn.example/photo.png', size: 1024, contentType: 'image/png' },
@@ -103,7 +103,7 @@ describe('normalizeDmMessage', () => {
         ],
       }),
       { contextId: 'app-1', mediaDir, download, media },
-    );
+    ))!;
 
     expect(cacheImage).toHaveBeenCalledTimes(1);
     expect(cacheImage.mock.calls[0][0]).toMatchObject({
@@ -139,14 +139,14 @@ describe('normalizeDmMessage', () => {
       resolveMediaUrl: vi.fn(() => null),
     };
 
-    const event = await normalizeDmMessage(
+    const event = (await normalizeDmMessage(
       message({
         attachments: [
           { id: 'att-1', name: 'photo.png', url: 'https://cdn.example/photo.png', size: 1024, contentType: 'image/png' },
         ],
       }),
       { contextId: 'app-1', mediaDir, download, media },
-    );
+    ))!;
 
     expect(event.attachments[0]).toMatchObject({
       kind: 'image',
@@ -159,7 +159,7 @@ describe('normalizeDmMessage', () => {
   it('marks attachments over 50MiB unsupported without downloading', async () => {
     const download = vi.fn();
 
-    const event = await normalizeDmMessage(
+    const event = (await normalizeDmMessage(
       message({
         attachments: [
           {
@@ -172,7 +172,7 @@ describe('normalizeDmMessage', () => {
         ],
       }),
       { contextId: 'app-1', mediaDir: tempDir(), download },
-    );
+    ))!;
 
     expect(download).not.toHaveBeenCalled();
     expect(event.attachments).toEqual([]);
@@ -180,10 +180,10 @@ describe('normalizeDmMessage', () => {
   });
 
   it('marks stickers unsupported', async () => {
-    const event = await normalizeDmMessage(
+    const event = (await normalizeDmMessage(
       message({ stickers: [{ id: 'sticker-1', name: 'wave' }] }),
       { contextId: 'app-1', mediaDir: tempDir(), download: vi.fn() },
-    );
+    ))!;
 
     expect(event.unsupported).toEqual([{ type: 'sticker', label: 'wave' }]);
   });
@@ -230,6 +230,7 @@ describe('normalizeDmMessage', () => {
       ),
     ]);
 
+    if (!first || !second) throw new Error("expected both messages");
     expect(destinations).toEqual([
       path.join(mediaDir, 'msg-a-image.png'),
       path.join(mediaDir, 'msg-b-image.png'),
@@ -246,7 +247,7 @@ describe('normalizeDmMessage', () => {
       fs.writeFileSync(dest, 'image');
     });
 
-    const event = await normalizeDmMessage(
+    const event = (await normalizeDmMessage(
       message({
         id: 'msg-a',
         attachments: [
@@ -267,7 +268,7 @@ describe('normalizeDmMessage', () => {
         ],
       }),
       { contextId: 'app-1', mediaDir, download },
-    );
+    ))!;
 
     expect(event.attachments.map((a) => a.absPath)).toEqual([
       path.join(mediaDir, 'msg-a-att-1-image.png'),
