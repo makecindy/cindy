@@ -31,7 +31,7 @@ export interface IOSSimulatorProjectBuildResult extends IOSSimulatorProjectDescr
 /** Build failure that retains bounded diagnostics without exposing raw process state. */
 export class IOSSimulatorProjectBuildError extends IOSSimulatorInstanceError {
   constructor(
-    code: "APP_BUILD_FAILED" | "APP_ARTIFACT_INVALID",
+    code: "APP_BUILD_FAILED" | "APP_ARTIFACT_INVALID" | "APP_ARCH_MISMATCH",
     message: string,
     readonly buildLogTail: string,
     readonly resultBundlePath: string | null,
@@ -96,6 +96,27 @@ function tail(value: string, maxBytes = 32 * 1024): string {
     : bytes.subarray(-maxBytes).toString("utf8");
 }
 
+const PACKAGE_RESOLVED_ON_LINE = /\bPackage\.resolved\b/i;
+const PACKAGE_RESOLVED_UNUSABLE_ON_LINE =
+  /\b(missing|does not exist|couldn't be opened|could not be opened|unable to read|no such file|unable to load the resolved file)\b/i;
+
+/**
+ * Retry the resolved-file pin only when one diagnostic line names
+ * Package.resolved and says that file is missing or unusable. Two
+ * independent whole-log matches would retry a compile/link failure that
+ * mentions the lockfile on one line and a missing header on another.
+ */
+function isMissingPackageResolvedDiagnostic(
+  result: IOSSimulatorCommandResult,
+): boolean {
+  const output = `${result.stdout}\n${result.stderr}`;
+  return output.split(/\r?\n/).some(
+    (line) =>
+      PACKAGE_RESOLVED_ON_LINE.test(line) &&
+      PACKAGE_RESOLVED_UNUSABLE_ON_LINE.test(line),
+  );
+}
+
 function commandLogTail(
   results: readonly IOSSimulatorCommandResult[],
   maxBytes = 32 * 1024,
@@ -132,6 +153,65 @@ function summarize(values: readonly string[], limit = 8): string {
     .map((value) => JSON.stringify(value.slice(0, 256)));
   const remaining = values.length - bounded.length;
   return `${bounded.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}`;
+}
+
+function entryBuildSettings(entry: unknown): Record<string, unknown> | null {
+  if (typeof entry !== "object" || entry === null) return null;
+  const buildSettings = (entry as { buildSettings?: unknown }).buildSettings;
+  return typeof buildSettings === "object" && buildSettings !== null
+    ? (buildSettings as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Pick the build settings of the target that produces the installable `.app`.
+ * `-showBuildSettings -json` emits one entry per target; a scheme with app +
+ * extension/helper targets would otherwise pre-flight against the wrong
+ * target's ARCHS. Returns null when no `.app` target is identifiable.
+ */
+function appTargetBuildSettings(parsed: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  for (const entry of parsed) {
+    const settings = entryBuildSettings(entry);
+    if (settings) {
+      const wrapper = settings.WRAPPER_NAME;
+      if (typeof wrapper === "string" && wrapper.endsWith(".app")) return settings;
+    }
+  }
+  // No `.app` target could be identified (missing/unevaluated WRAPPER_NAME).
+  // Do NOT fall back to the first entry — it may be a framework/extension/test
+  // bundle whose ARCHS differs from the app. Skip the preflight instead.
+  return null;
+}
+
+/**
+ * Derive the effective arch set from the installable `.app` target's own
+ * `ARCHS − EXCLUDED_ARCHS`. Dependency targets (frameworks, extensions, Pods)
+ * are deliberately not modeled: `-showBuildSettings` exposes no reliable
+ * dependency graph, and a dependency that excludes an arch fails the build
+ * itself with a linker error — a heuristic here would only add false positives
+ * (test bundles, independent frameworks). Returns `null` when the output cannot
+ * be trusted.
+ */
+function effectiveArchitectures(showBuildSettingsJson: string): string[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(showBuildSettingsJson);
+  } catch {
+    return null;
+  }
+  const settings = appTargetBuildSettings(parsed);
+  if (!settings) return null;
+  const archs = String(settings.ARCHS ?? "")
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const excluded = String(settings.EXCLUDED_ARCHS ?? "")
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (archs.length === 0) return null;
+  return archs.filter((arch) => !excluded.includes(arch));
 }
 
 async function throwIfBuildCancelled(
@@ -287,6 +367,10 @@ export class IOSSimulatorProjectBuilder {
     containerPath?: string;
     scheme?: string;
     signal?: AbortSignal;
+    /** Target simulator architecture; when set, the build is pre-flighted so an unmatchable artifact fails before compiling. */
+    expectedArch?: "arm64" | "x86_64";
+    /** Shared SPM checkout root; reuses cloned packages across sessions instead of re-cloning per build. */
+    clonedSourcePackagesDirPath?: string;
   }): Promise<IOSSimulatorProjectBuildResult> {
     await throwIfBuildCancelled(input.signal);
     const project = await this.inspect(input.worktreeRoot, input.containerPath);
@@ -414,14 +498,50 @@ export class IOSSimulatorProjectBuilder {
       "generic/platform=iOS Simulator",
       "-derivedDataPath",
       input.derivedDataPath,
+      ...(input.clonedSourcePackagesDirPath
+        ? ["-clonedSourcePackagesDirPath", input.clonedSourcePackagesDirPath]
+        : []),
     ];
+    if (input.expectedArch) {
+      const archSettings = await this.#runner.run(
+        "xcodebuild",
+        [...commonArgs, "-showBuildSettings", "-json"],
+        {
+          cwd: project.projectRoot,
+          timeoutMs: 60_000,
+          maxBufferBytes: 4 * 1024 * 1024,
+          signal: input.signal,
+          env: this.#childEnvironment,
+        },
+      );
+      await throwIfBuildCancelled(input.signal);
+      const effective =
+        archSettings.exitCode === 0 && !archSettings.outputTruncated
+          ? effectiveArchitectures(archSettings.stdout)
+          : null;
+      if (effective && !effective.includes(input.expectedArch)) {
+        throw new IOSSimulatorProjectBuildError(
+          "APP_ARCH_MISMATCH",
+          `The app target would produce architectures [${effective.join(", ")}], but the target simulator needs ${input.expectedArch}. Check the app target's ARCHS and EXCLUDED_ARCHS.`,
+          commandLogTail([archSettings]),
+          null,
+          Boolean(archSettings.outputTruncated),
+        );
+      }
+    }
     const resultBundlePath = path.join(
       input.derivedDataPath,
       `CindyBuild-${randomUUID()}.xcresult`,
     );
-    const build = await this.#runner.run(
+    let build = await this.#runner.run(
       "xcodebuild",
-      [...commonArgs, "-resultBundlePath", resultBundlePath, "build"],
+      [
+        ...commonArgs,
+        "-onlyUsePackageVersionsFromResolvedFile",
+        "-resultBundlePath",
+        resultBundlePath,
+        "build",
+      ],
       {
         cwd: project.projectRoot,
         timeoutMs: this.#buildTimeoutMs,
@@ -431,6 +551,28 @@ export class IOSSimulatorProjectBuilder {
       },
     );
     await throwIfBuildCancelled(input.signal, resultBundlePath);
+    if (build.exitCode !== 0 && isMissingPackageResolvedDiagnostic(build)) {
+      // Only retry when Xcode says the resolved file is missing or unusable.
+      // A generic compile/link failure that happens to mention Package.resolved
+      // must not pay for a second full build. The failed build may have written
+      // its .xcresult; -resultBundlePath requires a non-existent path, so
+      // remove it before retrying.
+      await rm(resultBundlePath, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+      build = await this.#runner.run(
+        "xcodebuild",
+        [...commonArgs, "-resultBundlePath", resultBundlePath, "build"],
+        {
+          cwd: project.projectRoot,
+          timeoutMs: this.#buildTimeoutMs,
+          maxBufferBytes: 1024 * 1024,
+          signal: input.signal,
+          env: this.#childEnvironment,
+        },
+      );
+      await throwIfBuildCancelled(input.signal, resultBundlePath);
+    }
     const availableResultBundlePath = (await exists(resultBundlePath))
       ? resultBundlePath
       : null;
