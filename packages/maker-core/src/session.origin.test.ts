@@ -608,6 +608,36 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('does not treat a background tool result as new-turn progress', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({
+      type: 'tool_result_full',
+      data: { toolUseId: 'collab-1', result: 'old collab' },
+      source: 'codex',
+      turnScope: 'background',
+    });
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+
+    const leftoverDone = seen.find((event) => event.type === 'done');
+    expect(leftoverDone?.sessionTurnGeneration).toBe(1);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('treats a standalone image as new-turn progress before leftover done', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,

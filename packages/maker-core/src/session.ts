@@ -1798,6 +1798,7 @@ export class Session {
   }
 
   private isNewTurnProgressEvent(event: AgentEvent): boolean {
+    if (event.turnScope === 'background') return false;
     return (
       event.type === 'text' ||
       event.type === 'thinking' ||
