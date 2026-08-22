@@ -1,9 +1,16 @@
 /**
- * 交付物的纯展示规则:四型 + 兜底 → 图标 / 文案 key / 元信息串。
+ * 交付物的纯展示规则:五型 + 兜底 → 图标 / 文案 key / 元信息串。
  * 与渲染分离,便于直接单测(不需要挂 React 树)。
  */
 
-import { FileSpreadsheet, FileText, Image as ImageIcon, Paperclip, Presentation } from 'lucide-react';
+import {
+  FileSpreadsheet,
+  FileText,
+  Film,
+  Image as ImageIcon,
+  Paperclip,
+  Presentation,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import {
@@ -12,7 +19,7 @@ import {
   type BotArtifactItem,
 } from '../../../shared/botArtifact';
 
-/** 仓库面板的过滤 chip 顺序:全部 + 四型 + 其它。 */
+/** 仓库面板的过滤 chip 顺序:全部 + 五型 + 其它。 */
 export const BOT_ARTIFACT_FILTERS: readonly (BotArtifactCategory | 'all')[] = [
   'all',
   ...BOT_ARTIFACT_CATEGORIES,
@@ -23,6 +30,7 @@ const ICONS: Record<BotArtifactCategory, LucideIcon> = {
   sheet: FileSpreadsheet,
   image: ImageIcon,
   deck: Presentation,
+  video: Film,
   other: Paperclip,
 };
 
@@ -192,6 +200,7 @@ export function countBotArtifactsByCategory(
     sheet: 0,
     image: 0,
     deck: 0,
+    video: 0,
     other: 0,
   };
   for (const item of items) counts[item.category] += 1;

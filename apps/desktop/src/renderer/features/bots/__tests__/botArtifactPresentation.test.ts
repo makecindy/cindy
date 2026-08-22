@@ -22,12 +22,21 @@ const SAMPLE = [
   item('/w/c.csv'),
   item('/w/d.png'),
   item('/w/e.pptx'),
+  item('/w/g.mp4'),
   item('/w/f.zip'),
 ];
 
 describe('filter chips', () => {
-  it('offers 全部 + 四型 + 其它, in that order', () => {
-    expect([...BOT_ARTIFACT_FILTERS]).toEqual(['all', 'doc', 'sheet', 'image', 'deck', 'other']);
+  it('offers 全部 + 五型 + 其它, in that order', () => {
+    expect([...BOT_ARTIFACT_FILTERS]).toEqual([
+      'all',
+      'doc',
+      'sheet',
+      'image',
+      'deck',
+      'video',
+      'other',
+    ]);
   });
 
   it('maps every chip to its own i18n key', () => {
@@ -37,11 +46,12 @@ describe('filter chips', () => {
   });
 
   it('filters by category and keeps 全部 as a pass-through', () => {
-    expect(filterBotArtifacts(SAMPLE, 'all')).toHaveLength(6);
+    expect(filterBotArtifacts(SAMPLE, 'all')).toHaveLength(7);
     expect(filterBotArtifacts(SAMPLE, 'doc').map((row) => row.name)).toEqual(['a.md', 'b.pdf']);
     expect(filterBotArtifacts(SAMPLE, 'sheet').map((row) => row.name)).toEqual(['c.csv']);
     expect(filterBotArtifacts(SAMPLE, 'image').map((row) => row.name)).toEqual(['d.png']);
     expect(filterBotArtifacts(SAMPLE, 'deck').map((row) => row.name)).toEqual(['e.pptx']);
+    expect(filterBotArtifacts(SAMPLE, 'video').map((row) => row.name)).toEqual(['g.mp4']);
     expect(filterBotArtifacts(SAMPLE, 'other').map((row) => row.name)).toEqual(['f.zip']);
   });
 
@@ -51,6 +61,7 @@ describe('filter chips', () => {
       sheet: 1,
       image: 1,
       deck: 1,
+      video: 1,
       other: 1,
     });
     expect(countBotArtifactsByCategory([])).toEqual({
@@ -58,6 +69,7 @@ describe('filter chips', () => {
       sheet: 0,
       image: 0,
       deck: 0,
+      video: 0,
       other: 0,
     });
   });

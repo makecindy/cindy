@@ -66,7 +66,16 @@ describe('classifyBotArtifact', () => {
 
   it('trusts the protocol scheme over a missing extension', () => {
     expect(classifyBotArtifact('xdt-image://session/frame')).toBe('image');
-    expect(classifyBotArtifact('xdt-video://session/clip')).toBe('other');
+    // 视频有自己的一型了(此前和压缩包、音频一起挤在「其它」里,拿的是回形针图标)。
+    expect(classifyBotArtifact('xdt-video://session/clip')).toBe('video');
+    // 音频仍走「其它」:它没有独立的作品卡形态,硬给一型就是空头支票。
+    expect(classifyBotArtifact('xdt-audio://session/track')).toBe('other');
+  });
+
+  it('classifies video by extension too, not only by scheme', () => {
+    for (const name of ['/w/a.mp4', '/w/a.mov', '/w/a.webm', '/w/a.mkv']) {
+      expect(classifyBotArtifact(name)).toBe('video');
+    }
   });
 });
 

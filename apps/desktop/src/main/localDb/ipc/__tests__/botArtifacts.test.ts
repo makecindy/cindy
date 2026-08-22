@@ -211,6 +211,52 @@ describe('bot artifact projection', () => {
     expect(result.items[2]!.sizeBytes).toBe(1);
   });
 
+  /*
+    这一条盯的是一个具体故障:**伙伴做出来的图在对话里好好地显示着,作品集里
+    一张都没有。** 图和视频不是文件写入 —— 它们从工具结果的 xdt_image_urls /
+    xdt_video_urls 里回来,而投影原来只认「文件工具的新建」和「消息附件」两条。
+  */
+  it('picks up images and videos that came back in tool results', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    addMessage(
+      'session-a',
+      'm1',
+      'tool_result',
+      {
+        xdt_image_urls: ['cindy-media://blobs/cover.png'],
+        xdt_video_urls: ['cindy-media://blobs/clip'],
+      },
+      5_000,
+    );
+
+    const result = await listBotArtifacts({ botId: 'bot-a' });
+    expect(result.items.map((item) => item.source)).toEqual(['media', 'media']);
+    /*
+      两条地址都是 `cindy-media://<指纹>`,长得一模一样、都没有扩展名 ——
+      分得开它们的**只有**「它出现在结果的哪个字段里」。靠地址猜的话两条都会
+      落进 other。
+    */
+    expect(result.items.map((item) => item.category).sort()).toEqual(['image', 'video']);
+    // 协议引用不暴露磁盘路径,也不参与存在性 stat(媒体仓绝对路径不出主进程)。
+    for (const item of result.items) {
+      expect(item.path).toBeNull();
+      expect(item.ref?.startsWith('cindy-media://')).toBe(true);
+    }
+  });
+
+  it('leaves out media the tool asked not to render', async () => {
+    addBot('bot-a', 'session-a', tmpRoot);
+    addMessage(
+      'session-a',
+      'm1',
+      'tool_result',
+      { _xdt_render_image: false, xdt_image_urls: ['cindy-media://blobs/hidden.png'] },
+      5_000,
+    );
+    // 不上屏的东西不该出现在「TA 做出来的东西」里。
+    expect((await listBotArtifacts({ botId: 'bot-a' })).items).toEqual([]);
+  });
+
   it('keeps each teammate to its own artifacts', async () => {
     addBot('bot-a', 'session-a', tmpRoot);
     addBot('bot-b', 'session-b', tmpRoot);

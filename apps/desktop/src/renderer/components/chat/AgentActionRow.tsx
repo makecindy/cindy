@@ -58,6 +58,12 @@ import { statsForToolCall } from '@/lib/agent-actions/diffStats';
 import { extractDisplayParam } from '@/lib/agent-actions/actionPresentation';
 import { SUPPORTED_IMAGE_EXTS, extractExt } from '@/lib/fileTypes';
 import { toLocalFileUrl, resolveToolFilePath } from '@/lib/localPathResolver';
+import {
+  isToolAudioUrl,
+  isToolImageUrl,
+  isToolVideoUrl,
+  toolResultMayHaveMedia,
+} from '../../../shared/toolResultMedia';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
 import { isGhostCallToolName } from '../../../shared/ghost';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
@@ -240,27 +246,11 @@ function parseAudioTracks(raw: unknown): ToolAudioTrack[] {
   return out;
 }
 
-/**
- * 图卡接受的取件协议:历史 xdt-image://(只读)+ 媒体总仓
- * cindy-media://(媒体总仓,内容寻址;意识 gen_image 等新链路的产物)。
- * cindy-media 是图还是视频由落盘后缀定,放进 xdt_image_urls 字段即当图渲染。
- */
-function isToolImageUrl(url: string): boolean {
-  return url.startsWith('xdt-image://') || url.startsWith('cindy-media://');
-}
-
-/** 视频卡接受的取件协议(与图卡同款双世界;cindy-media 后缀即视频的才会被塞进 xdt_video_urls)。 */
-function isToolVideoUrl(url: string): boolean {
-  return url.startsWith('xdt-video://') || url.startsWith('cindy-media://');
-}
-
-/**
- * 音频卡接受的取件协议:历史 xdt-audio://(退役 lizi_mivo MCP 的历史消息,
- * 只读)+ 媒体总仓 cindy-media://(意识 xd-mivo 等当前链路的产物)。
- */
-function isToolAudioUrl(url: string): boolean {
-  return url.startsWith('xdt-audio://') || url.startsWith('cindy-media://');
-}
+/*
+  取件协议判定(图 / 视频 / 音频)已经搬到 shared/toolResultMedia.ts —— 主进程侧的
+  作品集投影要用同一份判定,而它 import 不了 renderer。这里只是消费,不再自己写一份:
+  两份判定一旦漂移,就会出现「对话里显示成图、作品集里归成视频」这种自相矛盾。
+*/
 
 /**
  * 从 ghost_call 的 tool_result JSON 里提取卡片配对令牌(卡槽③):顶层
@@ -303,13 +293,7 @@ export function extractAnchorCardId(toolResult: string): string | null {
 export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
   if (!toolResult || typeof toolResult !== 'string') return [];
   // 快速否定:不含任何 xdt_*_url 字面量直接 short-circuit。
-  if (
-    !toolResult.includes('xdt_image_url') &&
-    !toolResult.includes('xdt_video_url') &&
-    !toolResult.includes('xdt_audio_url')
-  ) {
-    return [];
-  }
+  if (!toolResultMayHaveMedia(toolResult)) return [];
   try {
     const parsed = JSON.parse(toolResult) as {
       xdt_image_url?: unknown;

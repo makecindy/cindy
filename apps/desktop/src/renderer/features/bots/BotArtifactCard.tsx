@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Play } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useChatSessionFile } from '@/components/chat/ChatSessionFileContext';
@@ -60,10 +61,15 @@ export function useArtifactTimeText(): (createdAt: number) => string {
   };
 }
 
-/** 图片缩略图地址;非图片或拿不到地址返回 null。 */
+/**
+ * 图片 / 视频的预览地址;其它类型或拿不到地址返回 null。
+ *
+ * 视频给的是同一条地址,由调用方用 `<video>` 取首帧 —— 一柜子视频如果只显示
+ * 通用图标,和一柜子没有封面的文件没有区别,而封面本来就在文件里。
+ */
 export function useArtifactThumbnail(item: BotArtifactItem): string | null {
   const fileCtx = useChatSessionFile();
-  if (item.category !== 'image') return null;
+  if (item.category !== 'image' && item.category !== 'video') return null;
   const base = item.ref ?? (item.path ? toLocalFileUrl(item.path) : null);
   if (!base) return null;
   return rewriteToRemoteMediaOrigin(
@@ -189,14 +195,48 @@ export function BotArtifactCard({ item, onOpen, onReveal, deliveredBy, className
           type="button"
           onClick={() => onOpen(item)}
           aria-label={t('bots.artifacts.open')}
-          className="block w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="relative block w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         >
-          <img
-            src={thumbnail}
-            alt={item.name}
-            onError={() => setThumbnailFailed(true)}
-            className="max-h-[220px] w-full border-b border-[var(--border-default)] bg-[var(--surface-hover)] object-contain"
-          />
+          {item.category === 'video' ? (
+            <>
+              {/*
+                真首帧,不画假封面。`#t=0.1` 让浏览器把解码位置停在第 0.1 秒并渲染
+                那一帧 —— 停在 0 秒有些编码取不到画面,出来是全黑。`preload=metadata`
+                只取够画一帧的数据,不拉整段;不给 controls,这里是封面不是播放器,
+                点击仍然走下面那个「打开」。取不到帧就 onError 退回图标(showThumbnail
+                会转 false),和表格预览同一个原则:要么真的,要么不出。
+              */}
+              <video
+                src={`${thumbnail}#t=0.1`}
+                muted
+                playsInline
+                preload="metadata"
+                aria-hidden="true"
+                onError={() => setThumbnailFailed(true)}
+                className="max-h-[220px] w-full border-b border-[var(--border-default)] bg-[var(--surface-hover)] object-contain"
+              />
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 flex items-center justify-center"
+              >
+                {/*
+                  实心徽标,不是半透明蒙层。首帧什么颜色都可能,半透明的话对比度
+                  完全不可控;而「在蒙层上的文字色」本仓没有这个 token,不为一个
+                  播放标记去造一个。实心 chip 用的是到处都在用的那套面色。
+                */}
+                <span className="flex size-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)]">
+                  <Play size={15} className="ml-0.5 text-[var(--text-primary)]" fill="currentColor" />
+                </span>
+              </span>
+            </>
+          ) : (
+            <img
+              src={thumbnail}
+              alt={item.name}
+              onError={() => setThumbnailFailed(true)}
+              className="max-h-[220px] w-full border-b border-[var(--border-default)] bg-[var(--surface-hover)] object-contain"
+            />
+          )}
         </button>
       ) : null}
       {showSheetPreview ? (

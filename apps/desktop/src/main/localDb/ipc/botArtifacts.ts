@@ -14,6 +14,10 @@
  *        c. checkpoint(turn change set)记录的**新建**文件 —— 脚本产物常常既没有
  *           文件工具记录、命令文本也认不出,这是它唯一的结构化证据。
  *   3. 同批 Session 消息里的文件附件(`content.files[]`)。
+ *   4. 同批 Session 的 `tool_result` 里回来的**媒体**(`xdt_image_urls` /
+ *      `xdt_video_urls` / `xdt_audio_urls`,判定见 shared/toolResultMedia.ts)。
+ *      伙伴做出来的图和视频不是文件写入,它们从工具结果里回来 —— 少了这条来源,
+ *      就会出现「对话里图好好地显示着,作品集里一张都没有」。
  *
  * 存在性门槛:有本机绝对路径的交付物在返回前 `stat` 一次,不存在 / 非普通文件的
  * 直接摘掉(DESIGN.md §14.5 「本机会话走真实存在性检查」)。协议引用类(cindy-media://
@@ -43,6 +47,7 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { parseBotOutputArtifacts } from '../../../shared/botOutputArtifact.js';
 import { extractCommandOutputPathCandidates } from '../../../shared/commandOutputPaths.js';
+import { extractToolResultMediaUrls } from '../../../shared/toolResultMedia.js';
 import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet.js';
 import {
   BOT_ARTIFACT_LIMIT,
@@ -184,8 +189,11 @@ function resolveArtifactPath(rawPath: string, workingDir: string | null): string
  */
 const SOURCE_RANK: Record<BotArtifactItem['source'], number> = {
   generated: 0,
-  attachment: 1,
-  delegation: 2,
+  // 媒体排在附件之前:同一张图既可能作为工具结果回来、又被当附件带一遍,
+  // 而媒体那条来源带着**准确的类型**(图还是视频由字段决定),附件只有一个地址。
+  media: 1,
+  attachment: 2,
+  delegation: 3,
 };
 
 export function mergeBotArtifacts(items: BotArtifactItem[]): BotArtifactItem[] {
@@ -423,6 +431,31 @@ export async function listBotArtifacts(
             }),
             at: row.createdAt,
           });
+        }
+        continue;
+      }
+      if (row.role === 'tool_result') {
+        /*
+          伙伴做出来的图片 / 视频。它们是**协议地址**不是磁盘路径,所以 isRef:true
+          —— 后面那道存在性 stat 会跳过它们(媒体仓绝对路径不出主进程,存在性由
+          协议 handler 自己兜底,见本文件头)。
+
+          类型不靠猜地址:`cindy-media://<指纹>` 图和视频长得一模一样,区分它们的
+          是这条 URL 出现在结果的哪个字段里,那个信息在 extractToolResultMediaUrls
+          里已经定好了,这里原样带过去。
+        */
+        for (const media of extractToolResultMediaUrls(content)) {
+          addStructural(
+            makeBotArtifact({
+              source: 'media',
+              target: media.url,
+              isRef: true,
+              categoryHint: media.kind === 'audio' ? 'other' : media.kind,
+              createdAt: row.createdAt,
+              sessionId: row.sessionId,
+              delegationId: null,
+            }),
+          );
         }
         continue;
       }

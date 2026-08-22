@@ -16,19 +16,20 @@
  * 文档 / 表格 / 图片 / 演示,其余一律 `other` 走通用文件卡。
  */
 
-/** 定稿原型的四型交付物 + 兜底。 */
-export type BotArtifactCategory = 'doc' | 'sheet' | 'image' | 'deck' | 'other';
+/** 五型交付物 + 兜底。 */
+export type BotArtifactCategory = 'doc' | 'sheet' | 'image' | 'deck' | 'video' | 'other';
 
 export const BOT_ARTIFACT_CATEGORIES: readonly BotArtifactCategory[] = [
   'doc',
   'sheet',
   'image',
   'deck',
+  'video',
   'other',
 ];
 
 /** 交付物来源。决定归属判定与降级口径,不进 UI 文案。 */
-export type BotArtifactSource = 'delegation' | 'generated' | 'attachment';
+export type BotArtifactSource = 'delegation' | 'generated' | 'attachment' | 'media';
 
 export interface BotArtifactItem {
   /** 稳定标识:同一件东西在多次投影里必须得到同一个 id(用于去重 + 高亮定位)。 */
@@ -75,6 +76,7 @@ const DOC_EXTS = new Set([
 const SHEET_EXTS = new Set(['csv', 'tsv', 'xls', 'xlsx', 'xlsm', 'ods', 'numbers']);
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic', 'avif']);
 const DECK_EXTS = new Set(['ppt', 'pptx', 'odp', 'key']);
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv', 'mpeg', 'mpg']);
 
 /**
  * 取展示名:路径 / 协议地址的最后一段,去掉 query 与 hash。
@@ -112,13 +114,15 @@ export function botArtifactExtension(refOrPath: string): string {
 export function classifyBotArtifact(refOrPath: string): BotArtifactCategory {
   const raw = refOrPath.trim();
   if (raw.startsWith('xdt-image://')) return 'image';
-  if (raw.startsWith('xdt-video://') || raw.startsWith('xdt-audio://')) return 'other';
+  if (raw.startsWith('xdt-video://')) return 'video';
+  if (raw.startsWith('xdt-audio://')) return 'other';
   const ext = botArtifactExtension(raw);
   if (!ext) return 'other';
   if (DOC_EXTS.has(ext)) return 'doc';
   if (SHEET_EXTS.has(ext)) return 'sheet';
   if (IMAGE_EXTS.has(ext)) return 'image';
   if (DECK_EXTS.has(ext)) return 'deck';
+  if (VIDEO_EXTS.has(ext)) return 'video';
   return 'other';
 }
 
@@ -133,6 +137,15 @@ export interface MakeBotArtifactInput {
   createdAt: number;
   sessionId?: string | null | undefined;
   delegationId?: string | null | undefined;
+  /**
+   * 调用方已经确切知道这是什么时,直接给类型,不让 `classifyBotArtifact` 去猜。
+   *
+   * 唯一的用处是媒体总仓地址:`cindy-media://<内容指纹>` 里没有任何线索能区分
+   * 图片和视频 —— 区分它们的是**工具结果把它放进了哪个字段**
+   * (`xdt_image_urls` 还是 `xdt_video_urls`,见 shared/toolResultMedia.ts)。
+   * 那个信息只有取件的人有,靠猜地址永远猜不出来。
+   */
+  categoryHint?: BotArtifactCategory | undefined;
 }
 
 /** 唯一的 BotArtifactItem 构造口:main 投影与 renderer 就地构造共用,分类口径不漂。 */
@@ -143,7 +156,7 @@ export function makeBotArtifact(input: MakeBotArtifactInput): BotArtifactItem {
   const item: BotArtifactItem = {
     id: '',
     source: input.source,
-    category: classifyBotArtifact(input.target),
+    category: input.categoryHint ?? classifyBotArtifact(input.target),
     name,
     ext: botArtifactExtension(input.target),
     path: input.isRef ? null : input.target,
