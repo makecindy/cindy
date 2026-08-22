@@ -6927,6 +6927,7 @@
       },
       "stop": "このタスクを停止",
       "openInPanel": "バックグラウンドタスクパネルで開く",
+      "viewSubagentDetails": "サブエージェントの詳細を表示",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
       "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",

@@ -6927,6 +6927,7 @@
       },
       "stop": "停止该任务",
       "openInPanel": "在后台任务面板中打开",
+      "viewSubagentDetails": "查看 Subagent 详情",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} Agent",
       "workflowProgressCount": "{{done}}/{{total}} Agent",
       "tokens": "{{count}} tokens",

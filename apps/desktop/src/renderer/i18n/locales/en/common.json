@@ -6929,6 +6929,7 @@
       },
       "stop": "Stop this task",
       "openInPanel": "Open in the background tasks panel",
+      "viewSubagentDetails": "View Subagent details",
       "workflowProgressLine": "{{phase}} · {{done}}/{{total}} agents",
       "workflowProgressCount": "{{done}}/{{total}} agents",
       "tokens": "{{count}} tokens",

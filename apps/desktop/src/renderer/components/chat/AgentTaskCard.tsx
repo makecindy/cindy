@@ -35,6 +35,7 @@ import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
 import {
+  isSubagentSpawnToolName,
   PI_SUBAGENT_TOOL_NAME,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
@@ -354,6 +355,35 @@ export function AgentTaskCard({
     });
   }, [provider, sessionId, subagentFocusId]);
 
+  // 普通子代理(非 workflow / bash)卡:就地只展开摘要,完整进度(activity、用量、
+  // 返回结果与未来的完整过程)在右栏「子代理」面板。提供显式入口,不恢复曾被有意
+  // 撤回的"首次创建自动弹出右栏"。focusId 优先取 update.taskId(实时态),history
+  // reload 后 update 缺失时回退 toolCall.toolUseId(已作为 sidebar alias 持久化,
+  // Pi durable 路径也用它兜底,见 #3154 codex P1)。provider 与卡片同源。内嵌宿主
+  // (worker 面板/窄 rail)右栏不可达时不显示假入口。只在真正的 subagent 启动卡
+  // (Task/Agent/subagent/collab:spawn[Agent])显示——collab:wait/sendInput/
+  // resumeAgent/closeAgent 等控制调用虽被 isAgentTaskToolName 渲染成任务卡,但
+  // 不是子代理启动,拿它们的 toolUseId 去聚焦右栏会定位不到 run(#3154 codex P2)。
+  const toolName = toolCall?.toolName ?? '';
+  const isSubagentCard =
+    !isWorkflow
+    && !isBash
+    && isSubagentSpawnToolName(toolName);
+  const subagentPanelFocusId = update?.taskId ?? toolCall?.toolUseId;
+  const canOpenSubagentPanel =
+    Boolean(sessionId)
+    && Boolean(subagentPanelFocusId)
+    && panelReachable
+    && isSubagentCard;
+  const openSubagentPanel = useCallback(() => {
+    if (!sessionId || !subagentPanelFocusId) return;
+    void openSubagentsTab(sessionId, {
+      focusRunId: subagentPanelFocusId,
+      focusProvider: provider,
+      userInitiated: true,
+    });
+  }, [provider, sessionId, subagentPanelFocusId]);
+
   // workflow 摘要行:当前运行中 agent 的 phaseTitle + 已收口/总数。收口判定走
   // workflowAgentVisualState 归一(与方块条 / 面板同一词表源,done 与 failed 都算收口)。
   const workflowSummary = useMemo(() => {
@@ -579,6 +609,16 @@ export function AgentTaskCard({
                 <p className="text-12 leading-4 text-[var(--text-tertiary)]">
                   {t('chat.agentTask.outputFile', { path: update.outputFile })}
                 </p>
+              )}
+              {canOpenSubagentPanel && (
+                <button
+                  type="button"
+                  onClick={openSubagentPanel}
+                  className="mt-1 inline-flex items-center gap-1 text-12 leading-4 text-[var(--text-link)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                >
+                  <PanelRight size={12} aria-hidden="true" />
+                  {t('chat.agentTask.viewSubagentDetails')}
+                </button>
               )}
             </div>
           </Collapse>

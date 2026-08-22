@@ -189,6 +189,166 @@ describe('implicit local bridge resume routing', () => {
       routing: { wireProtocol: 'anthropic-messages' },
     });
   });
+
+  it('does not guess when two connected user providers expose the same bare model id (#3210 P1)', async () => {
+    // 两个已连接的用户自定义 Anthropic 兼容来源都暴露裸 id glm-5.3。会话启动/切模竞态下
+    // getSessionProvider 暂时为 null,此时绝不能把首包猜发给其中一个来源(数据外发+错计费),
+    // 应回落默认路由,等 provider 绑定落定后重试恢复。
+    setCustomProviders([
+      buildUserProvider({
+        id: 'zhipu-a',
+        name: 'Zhipu A',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://open.bigmodel.example/a/api/anthropic',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'glm-5.3', name: 'GLM-5.3' }],
+          },
+        },
+      }),
+      buildUserProvider({
+        id: 'zhipu-b',
+        name: 'Zhipu B',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://open.bigmodel.example/b/api/anthropic',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'glm-5.3', name: 'GLM-5.3' }],
+          },
+        },
+      }),
+    ]);
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { 'zhipu-a': true, 'zhipu-b': true }, {}),
+    );
+
+    await expect(
+      resolveImplicitLocalBridgeRoute('glm-5.3', 'claude-code'),
+    ).resolves.toBeNull();
+  });
+
+  it('resolves the sole connected user bridge source for a bare model id', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'zhipu-solo',
+        name: 'Zhipu Solo',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://open.bigmodel.example/api/anthropic',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'glm-5.3', name: 'GLM-5.3' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'glm-user-key');
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { 'zhipu-solo': true }, {}),
+    );
+
+    await expect(
+      resolveImplicitLocalBridgeRoute('glm-5.3', 'claude-code'),
+    ).resolves.toMatchObject({
+      providerId: 'zhipu-solo',
+      providerSource: 'user',
+      apiKey: 'glm-user-key',
+    });
+  });
+
+  it('does not treat an unrelated connected user provider as a bridge candidate for a model it does not list (#3210 P1 follow-up)', async () => {
+    // 场景:用户已断连原来源,但一个**不提供该 model** 的 BYOM 仍 connected
+    // (典型:运维临时挂着的空 BYOM)。歧义检查只看到「唯一候选」,如果该候选
+    // 其实不提供 model,providerRoutingForModel 会回落 provider 级 routing,导致
+    // 首包被转发到无关上游 + 凭证泄漏。必须先按 model 存在性过滤。
+    setCustomProviders([
+      buildUserProvider({
+        id: 'byom-unrelated',
+        name: 'Unrelated BYOM',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://unrelated.example/api/anthropic',
+            wireProtocol: 'anthropic-messages',
+            // 提供的是别的 model,不是 glm-5.3
+            models: [{ id: 'unrelated-model', name: 'Unrelated' }],
+          },
+        },
+      }),
+    ]);
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { 'byom-unrelated': true }, {}),
+    );
+
+    await expect(
+      resolveImplicitLocalBridgeRoute('glm-5.3', 'claude-code'),
+    ).resolves.toBeNull();
+  });
+
+  it('does not select a suspended user provider even when it is the sole connected bridge (#3210 P1 follow-up)', async () => {
+    // 用户在设置页停用某供应商后凭证仍保留(connected=true),但 suspended=true
+    // 表示该来源不可用于新路由。隐式首包绝不能选它,否则违背用户显式停用动作。
+    setCustomProviders([
+      buildUserProvider({
+        id: 'suspended-bridge',
+        name: 'Suspended Bridge',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://suspended.example/api/anthropic',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'glm-5.3', name: 'GLM-5.3' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'suspended-key');
+    const views = buildRegistry(getActiveCatalog(), { 'suspended-bridge': true }, {})
+      // buildRegistry 用 spread 构造视图,suspended 只在 provider 被整体停用
+      // (access.disabledProviders)时设置。测试里用 JSON round-trip 绕开只读,
+      // 手工打上 suspended=true 模拟"已连接但停用"状态。
+      .map((v) => (v.id === 'suspended-bridge' ? { ...v, suspended: true } : v));
+    setProviderViewsReader(async () => views);
+
+    await expect(
+      resolveImplicitLocalBridgeRoute('glm-5.3', 'claude-code'),
+    ).resolves.toBeNull();
+  });
+
+  it('does not select a provider whose matching model entry is individually disabled (#3210 P1 follow-up)', async () => {
+    // 用户在某供应商下只停用了单个 model(供应商本身仍 connected),ProviderView
+    // 会把该 model 条目标 disabled=true。隐式路由必须排除,否则首包仍打到被
+    // 用户显式停用的模型上游。
+    setCustomProviders([
+      buildUserProvider({
+        id: 'partial-disable',
+        name: 'Partial Disable',
+        runtimes: {
+          'claude-code': {
+            baseUrl: 'https://partial.example/api/anthropic',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'glm-5.3', name: 'GLM-5.3' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'partial-key');
+    const views = buildRegistry(getActiveCatalog(), { 'partial-disable': true }, {})
+      .map((v) => {
+        if (v.id !== 'partial-disable') return v;
+        return {
+          ...v,
+          models: {
+            ...v.models,
+            'claude-code': (v.models['claude-code'] ?? []).map((m) =>
+              m.id === 'glm-5.3' ? { ...m, disabled: true } : m,
+            ),
+          },
+        };
+      });
+    setProviderViewsReader(async () => views);
+
+    await expect(
+      resolveImplicitLocalBridgeRoute('glm-5.3', 'claude-code'),
+    ).resolves.toBeNull();
+  });
 });
 
 describe('local mode Cindy gateway gate', () => {

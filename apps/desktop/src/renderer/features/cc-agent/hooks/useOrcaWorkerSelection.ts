@@ -260,16 +260,48 @@ export function useOrcaWorkerSelection({
       if (acknowledgingDoneWorkerIdsRef.current.has(workerId)) return false;
       acknowledgingDoneWorkerIdsRef.current.add(workerId);
       try {
-        await orcaWorkflowsFor(leadSessionId).idleWorker(leadSessionId, workerId, 'done');
-        clearWorkerAttention(workerId);
-        return true;
-      } catch (err) {
-        const errorCode = extractIpcError(err)?.code;
-        if (errorCode === 'WORKER_STATE_CHANGED' || errorCode === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
-          log.debug('done acknowledgement skipped after worker state changed', { workerId });
-          return false;
+        // 终态事件抵达时底层 agent 的 turn 可能尚未 settle,idleWorker 会撞
+        // WORKER_STATE_CHANGED/has an active turn。只对"turn 还在收尾/send 锁未释放"
+        // 这两种可恢复情形做有界重试(250ms × 8 ≈ 2s,覆盖 translator 清
+        // turnInFlight 的窗口);其它(有排队输入、已不是 done、device-link 拒绝)
+        // 立即放弃,attention 保持 done 等下一次用户查看时 effect 重入。
+        const MAX_ATTEMPTS = 8;
+        const RETRY_DELAY_MS = 250;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+          try {
+            await orcaWorkflowsFor(leadSessionId).idleWorker(leadSessionId, workerId, 'done');
+            clearWorkerAttention(workerId);
+            return true;
+          } catch (err) {
+            const ipcErr = extractIpcError(err);
+            if (ipcErr?.code !== 'WORKER_STATE_CHANGED') {
+              if (ipcErr?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') {
+                log.debug('done acknowledgement skipped after worker state changed', { workerId });
+                return false;
+              }
+              throw err;
+            }
+            const transient =
+              ipcErr.message.includes('has an active turn')
+              || ipcErr.message.includes('has a send in progress');
+            if (!transient) {
+              log.debug('done acknowledgement abandoned after non-transient state change', {
+                workerId,
+                message: ipcErr.message,
+              });
+              return false;
+            }
+            if (attempt + 1 >= MAX_ATTEMPTS) {
+              log.debug('done acknowledgement exhausted retries; leaving for next view', {
+                workerId,
+                attempts: attempt + 1,
+              });
+              return false;
+            }
+            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+          }
         }
-        throw err;
+        return false;
       } finally {
         acknowledgingDoneWorkerIdsRef.current.delete(workerId);
       }

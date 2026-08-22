@@ -458,6 +458,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       };
     }
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'active-orca-rehydrate');
+    // #2882: close 当前 runtime 前必须先用 DB(真源)对账 createOpts,尤其是回填
+    // resumeSessionId(sessions.sdkSessionId)。否则中途开启 Orca 触发 rehydrate 时,
+    // Pi/Codex 等依赖 resume 续接原生会话的 agent 会丢掉旧 JSONL/thread,从空会话开始。
+    // 与 lazy-create 路径(下方 reconcileCreateOptsWithDb)保持同一条 resume 口径;
+    // 对账必须在 close 前,避免恢复失败后已不可逆地丢失当前 handle。
+    await deps.reconcileCreateOptsWithDb?.(sessionId, createOpts);
     try {
       const session = await deps.withRehydrateCloseSuppressed(sessionId, async () => {
         await deps.closeSession(sessionId);

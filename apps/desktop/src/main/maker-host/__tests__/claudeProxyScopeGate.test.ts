@@ -249,12 +249,16 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     expect(parsedBody.model.startsWith('xai/')).toBe(false);
   });
 
-  it('网关风格 x-ai/grok-4.6 仍走默认路由(不是 SuperGrok 独占户口)', () => {
+  it('网关风格 x-ai/grok-4.6 仍走默认路由(不是 SuperGrok 独占户口)', async () => {
     clearSessionProvider('sess-grok');
     const transform = createModelRoutingTransform();
-    const decision = transform(
-      { model: 'x-ai/grok-4.6' },
-      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    // ①.5 隐式来源解析为异步;x-ai/grok-4.6 非 bridge wire,短路回落 ② 段,
+    // 决策内容与同步时代逐字段一致(默认路由 + 网关换 key)。
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'x-ai/grok-4.6' },
+        ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+      ),
     );
     expect(decision).toEqual({
       headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
