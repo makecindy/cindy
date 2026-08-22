@@ -1494,13 +1494,23 @@ export function registerSessionIpc(
       row.summary = null;
     }
     const updated = sessionToCamel(row);
+    // status 广播必须用**持久化后的 updated.status**,不能带请求值 p.status:写入
+    // (withStatusWriteLock)与这里的查询不在同一串行区间,两个窗口对同一任务并发
+    // 操作时,本请求写入后、查询前可能被另一窗口推进到更晚的终态(如归档写入后
+    // 被删除)。广播请求值会把镜像回滚成旧 UI 状态(已删除任务在副窗/控制端复活);
+    // 广播持久化真值则天然收敛——即使请求 archived 而行已 deleted,广播 deleted
+    // 与另一窗口的广播幂等重合。置顶合并沿用 updated 值同理。
     const broadcastPatch =
-      p.pinnedAt === undefined
+      p.pinnedAt === undefined && p.status === undefined
         ? p
         : {
             ...p,
-            pinnedAt: updated.pinnedAt,
-            ...(updated.pinnedAt === null ? { summary: null } : { status: updated.status }),
+            ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
+            ...(p.status !== undefined ? { status: updated.status } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
+              ? { status: updated.status }
+              : {}),
           };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));

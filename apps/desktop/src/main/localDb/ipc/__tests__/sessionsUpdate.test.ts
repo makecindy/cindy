@@ -527,6 +527,31 @@ describe('local-db:sessions:update handler wiring', () => {
     });
   });
 
+  // 竞态收敛(review on #3225):写入与查询不在同一串行区间,归档写入后、查询前
+  // 另一窗口可能已把行推进到 deleted。广播必须携带持久化后的 updated.status,
+  // 否则副窗/控制端镜像会被请求值回滚成旧 UI 状态(已删除任务复活)。
+  // routeLock 是测试注入的实现:在锁内写库完成后、handler 继续查询前,模拟
+  // 另一窗口的删除落库。
+  it('broadcasts the persisted status when a concurrent window deletes between write and read', async () => {
+    h.routeLock.mockImplementation(async (_sessionId, task) => {
+      await task();
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    });
+
+    await invokeUpdate('codex-local', { status: 'archived' });
+    await vi.dynamicImportSettled();
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'deleted' },
+    });
+    // 不再出现携带请求值的回滚广播
+    const statusPatches = h.tapWindowBroadcast.mock.calls
+      .filter(([channel]) => channel === 'local-db:sessions:patched')
+      .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
+    expect(statusPatches).toEqual(['deleted']);
+  });
+
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
     const pinnedAt = '2026-08-03T04:08:26.000Z';
     await invokeUpdate('codex-local', { pinnedAt });
