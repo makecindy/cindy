@@ -942,6 +942,7 @@ import {
   hasEnabledUserMessageHookGhost,
   screenGhostUserMessage,
   setGhostAgentTurnRunner,
+  setGhostSessionRevealer,
   setGhostErrandRunner,
   setGhostWorkspaceSessionService,
   notifyGhostSessionEvent,
@@ -9382,6 +9383,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       disposition: 'forked',
     };
   });
+  setGhostSessionRevealer((sessionId) => openMainWindowSession(sessionId));
 
   // Ghost 的派活取件(agent 槽 errand 加档):守门在 cindy-brain/errandSlot,
   // 这里注入真实执行链——专属会话确保/统一投递/turn 收口。投递仍走

@@ -59,6 +59,7 @@ function makeSlot(options: {
   ghosts?: InstalledGhost[];
   runner?: GhostAgentTurnRunner | null;
   now?: () => number;
+  onRevealSession?: (sessionId: string) => void;
 } = {}) {
   const ghosts = options.ghosts ?? [fakeGhost('alpha')];
   let tokenIndex = 0;
@@ -67,6 +68,7 @@ function makeSlot(options: {
     runner: options.runner,
     now: options.now ?? (() => 20_000),
     createToken: () => `token-${++tokenIndex}`,
+    ...(options.onRevealSession ? { onRevealSession: options.onRevealSession } : {}),
   };
   return new GhostAgentSlot(deps);
 }
@@ -274,5 +276,88 @@ describe('agentSlot · 后台权限', () => {
     now += 10_000;
     expect((await slot.handleRequest('alpha', request('session-1'))).ok).toBe(true);
     expect(runner).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('agentSlot · 可见任务自动切过去', () => {
+  it('user-action continue 切到原会话', async () => {
+    const reveal = vi.fn();
+    const slot = makeSlot({ runner: acceptedRunner(), onRevealSession: reveal });
+    const token = slot.issueUserActionToken('alpha', 'session-source')!;
+    await slot.handleRequest('alpha', userRequest(token));
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal).toHaveBeenCalledWith('session-source');
+  });
+
+  it('user-action new / fork 切到新任务', async () => {
+    const reveal = vi.fn();
+    const slot = makeSlot({ runner: acceptedRunner(), onRevealSession: reveal });
+    for (const mode of ['new', 'fork'] as const) {
+      const token = slot.issueUserActionToken('alpha', 'session-source')!;
+      await slot.handleRequest(
+        'alpha',
+        userRequest(token, { mode, title: mode === 'new' ? '新任务' : undefined }),
+      );
+    }
+    expect(reveal.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+      'target-new',
+      'target-fork',
+    ]);
+  });
+
+  it('后台 continue 不切任务', async () => {
+    const reveal = vi.fn();
+    const slot = makeSlot({
+      ghosts: [fakeGhost('alpha', { background: true })],
+      runner: acceptedRunner(),
+      onRevealSession: reveal,
+    });
+    slot.issueUserActionToken('alpha', 'session-1');
+    await slot.handleRequest('alpha', {
+      ...userRequest('unused'),
+      trigger: 'background',
+      sessionId: 'session-1',
+    });
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('后台 new 仍切到新建任务', async () => {
+    const reveal = vi.fn();
+    const slot = makeSlot({
+      ghosts: [fakeGhost('alpha', { background: true })],
+      runner: acceptedRunner(),
+      onRevealSession: reveal,
+    });
+    slot.issueUserActionToken('alpha', 'session-1');
+    await slot.handleRequest('alpha', {
+      ...userRequest('unused'),
+      trigger: 'background',
+      mode: 'new',
+      title: '插件新任务',
+      sessionId: 'session-1',
+    });
+    expect(reveal).toHaveBeenCalledWith('target-new');
+  });
+
+  it('runner 失败不切', async () => {
+    const reveal = vi.fn();
+    const runner = vi.fn<GhostAgentTurnRunner>(async () => ({
+      ok: false as const,
+      errorCode: 'NOT_FOUND',
+      message: 'gone',
+    }));
+    const slot = makeSlot({ runner, onRevealSession: reveal });
+    const token = slot.issueUserActionToken('alpha', 'session-source')!;
+    await slot.handleRequest('alpha', userRequest(token));
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('setRevealSession 可以后接线', async () => {
+    const reveal = vi.fn();
+    const slot = makeSlot({ runner: acceptedRunner() });
+    slot.setRevealSession(reveal);
+    const token = slot.issueUserActionToken('alpha', 'session-source')!;
+    await slot.handleRequest('alpha', userRequest(token));
+    expect(reveal).toHaveBeenCalledWith('session-source');
   });
 });
