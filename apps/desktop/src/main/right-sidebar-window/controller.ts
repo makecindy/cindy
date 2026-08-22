@@ -220,6 +220,13 @@ export class RsbWindowController {
     if (this.disposed) return;
     const userInitiated = opts.userInitiated !== false;
     const revealSessionId = typeof opts.sessionId === 'string' ? opts.sessionId.trim() : '';
+    if (userInitiated) {
+      const currentHost = this.lastContext?.available ? this.lastContext.sessionId : '';
+      const targetHost = revealSessionId || currentHost;
+      if (this.pinnedSessionId && targetHost && this.pinnedSessionId !== targetHost) {
+        this.replacePinnedSession(null);
+      }
+    }
     if (
       revealSessionId &&
       (userInitiated === false || this.lastContext?.sessionId !== revealSessionId)
@@ -429,7 +436,12 @@ export class RsbWindowController {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, ctx);
     }
     this.flushDeferredCommandsToDetachedHost();
-    if (ctx.available && ctx.sessionId) this.settleHostWaiters(ctx.sessionId, true);
+    if (ctx.available && ctx.sessionId) {
+      this.settleHostWaiters(ctx.sessionId, true);
+      if (!this.deps.settings.read().detached) {
+        this.flushDeferredCommandsToAttachedHost(ctx.sessionId);
+      }
+    }
   }
 
   getContext(): RsbWindowContext | null {
@@ -463,7 +475,11 @@ export class RsbWindowController {
     if (adopted) await adopted;
     if (!this.canDispatchCommand(command)) {
       this.enqueueDeferredCommand(command);
-      if (allowOpen && (!this.isOpen() || !this.presentationReady)) {
+      if (
+        allowOpen &&
+        this.lastContext?.available &&
+        (!this.isOpen() || !this.presentationReady)
+      ) {
         this.open({
           userInitiated,
           ...(hostSessionId ? { sessionId: hostSessionId } : {}),
@@ -902,13 +918,7 @@ export class RsbWindowController {
       if (this.pinnedSessionId === sessionId) this.clearPinnedSession();
       return;
     }
-    if (this.pinnedSessionId && this.pinnedSessionId !== sessionId) {
-      this.settleHostWaiters(this.pinnedSessionId, false);
-      this.resetAdoptRetry();
-    } else if (this.pinnedSessionId !== sessionId) {
-      this.resetAdoptRetry();
-    }
-    this.pinnedSessionId = sessionId;
+    if (this.pinnedSessionId !== sessionId) this.replacePinnedSession(sessionId);
     const cached = this.knownContexts.get(sessionId);
     if (cached) {
       this.applyAdoptedContext(cached);
@@ -1075,6 +1085,30 @@ export class RsbWindowController {
     this.pinnedSessionId = null;
   }
 
+  private replacePinnedSession(next: string | null): void {
+    const previous = this.pinnedSessionId;
+    if (previous && previous !== next) {
+      this.settleHostWaiters(previous, false);
+      this.rejectReadyWaiters(previous);
+    }
+    this.resetAdoptRetry();
+    this.pinnedSessionId = next;
+  }
+
+  private rejectReadyWaiters(sessionId?: string): void {
+    if (this.readyWaiters.length === 0) return;
+    const remaining: typeof this.readyWaiters = [];
+    for (const waiter of this.readyWaiters) {
+      if (sessionId && waiter.sessionId !== sessionId) {
+        remaining.push(waiter);
+        continue;
+      }
+      clearTimeout(waiter.timeout);
+      waiter.reject(new Error('right-sidebar host context wait cancelled'));
+    }
+    this.readyWaiters = remaining;
+  }
+
   private canDispatchCommand(cmd: RsbWindowCommand): boolean {
     return Boolean(
       this.lastContext?.available &&
@@ -1183,17 +1217,15 @@ export class RsbWindowController {
     );
   }
 
-  private flushDeferredCommandsToAttachedHost(): void {
+  private flushDeferredCommandsToAttachedHost(sessionId?: string | null): void {
     if (this.deps.settings.read().detached) return;
     const main = this.deps.getMainWindow();
     if (!main || main.isDestroyed()) return;
-    for (const sessionId of [...this.deferredCommands.keys()]) {
-      this.flushDeferredCommands(
-        () => !main.isDestroyed(),
-        (command) => this.deps.sendToWindow(main, this.deps.commandChannel, command),
-        sessionId,
-      );
-    }
+    this.flushDeferredCommands(
+      () => !main.isDestroyed(),
+      (command) => this.deps.sendToWindow(main, this.deps.commandChannel, command),
+      sessionId,
+    );
   }
 
   private broadcast(opts: { userClose?: boolean } = {}): void {
@@ -1212,11 +1244,7 @@ export class RsbWindowController {
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = true;
     this.clearOpenTimeout();
-    const waiters = this.readyWaiters.splice(0);
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timeout);
-      waiter.reject(new Error('right-sidebar host context wait cancelled'));
-    }
+    this.rejectReadyWaiters();
     if (advertisedPending) this.broadcast({ userClose: false });
   }
 }

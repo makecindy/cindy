@@ -1315,7 +1315,7 @@ describe('setContext / routeCommand', () => {
     expect(h.controller.getContext()).toEqual(resolvedA);
   });
 
-  it('flushes every deferred session when merging back to attached', async () => {
+  it('flushes only the current host on attach, then the focused session later', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
     const closeA = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
@@ -1329,9 +1329,65 @@ describe('setContext / routeCommand', () => {
     ).resolves.toBe('queued');
     h.controller.setDetached(false);
     expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
-      closeA,
       closeB,
     ]);
+    h.sends.length = 0;
+    h.controller.setContext(ctx);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeA,
+    ]);
+  });
+
+  it('lets a user raise of the current host cancel a foreign pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.open({ userInitiated: true });
+    finishA(resolvedA);
+    await Promise.resolve();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('cancels an earlier ready waiter when a later pin takes the host', async () => {
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return { ...ctx, sessionId: 's1' };
+        if (sessionId === 's3') return { ...ctx, sessionId: 's3' };
+        return null;
+      },
+    });
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const pendingB = h.controller.ensureOpenForAutomation({ sessionId: 's3' });
+    markReady(h.controller, h.windows[0]);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    await expect(pendingB).resolves.toBeUndefined();
+    expect(h.controller.getContext()?.sessionId).toBe('s3');
+  });
+
+  it('does not reopen a left session after adopt returns', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    finishA(resolvedA);
+    await expect(pending).resolves.toBe('queued');
+    expect(h.controller.getContext()).toBeNull();
   });
 
   it('does not advertise a cancelled pending reveal as a user close', async () => {
