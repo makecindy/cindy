@@ -22,6 +22,9 @@ vi.mock('../../scheduler-host/proc-util', () => ({ killProcessTree: mocks.killPr
 vi.mock('../../device-link/crossProcessLock', () => ({
   withCrossProcessLock: mocks.withCrossProcessLock,
 }));
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 
 import {
   gitExec,

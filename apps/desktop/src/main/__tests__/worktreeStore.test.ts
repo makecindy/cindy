@@ -2,17 +2,29 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import type { WorktreeMeta } from '../worktree/types';
 
-const backingStore: Record<string, unknown> = { worktrees: {} as Record<string, WorktreeMeta> };
+// 按 store 文件名隔离的后备数据: worktrees.json 与 worktree-safe-directory-cleanup.json
+// 是两个物理文件, 单测同样按 name 隔离, 验证队列写入不会碰 worktrees 键。
+const storesByName = new Map<string, Record<string, unknown>>();
 const setWorktreePathInDbMock = vi.fn();
 
 vi.mock('electron-store', () => ({
   default: class MockStore {
+    constructor(opts: { name?: string } = {}) {
+      this.name = opts.name ?? 'default';
+      if (!storesByName.has(this.name)) storesByName.set(this.name, {});
+    }
+
+    name: string;
+
     get(key: string, fallback: unknown) {
-      return backingStore[key] ?? fallback;
+      const backing = storesByName.get(this.name) ?? {};
+      return backing[key] ?? fallback;
     }
 
     set(key: string, value: unknown) {
-      backingStore[key] = value;
+      const backing = storesByName.get(this.name) ?? {};
+      backing[key] = value;
+      storesByName.set(this.name, backing);
     }
   },
 }));
@@ -32,8 +44,7 @@ vi.mock('../device-link/crossProcessLock', () => ({
 
 describe('worktreeStore', () => {
   beforeEach(async () => {
-    backingStore.worktrees = {};
-    delete backingStore.pendingSafeDirectoryCleanups;
+    storesByName.clear();
     setWorktreePathInDbMock.mockReset();
     vi.resetModules();
   });
@@ -71,5 +82,28 @@ describe('worktreeStore', () => {
 
     await store.removePendingSafeDirectoryCleanups(['/b']);
     expect(store.getPendingSafeDirectoryCleanups()).toEqual([]);
+  });
+
+  it('queue writes live in a separate store file from worktrees', async () => {
+    const store = await import('../worktree/worktreeStore');
+    const meta: WorktreeMeta = {
+      sessionId: 'session-1',
+      name: 'auto-test',
+      path: '/repo/.xdt-worktrees/auto-test',
+      baseRepo: '/repo',
+      branch: 'xdt/auto-test',
+      sourceBranch: 'main',
+      createdAt: '2026-05-26T00:00:00.000Z',
+      ephemeral: false,
+    };
+
+    await store.set(meta.sessionId, meta);
+    await store.addPendingSafeDirectoryCleanups(['/deferred']);
+
+    // 两类写入落在不同 store 文件: worktrees.json 只含 worktrees 键,
+    // 队列文件只含 pending 键 —— 互相整体重写也不会抹掉对方的数据。
+    expect(Object.keys(storesByName.get('worktrees') ?? {})).toEqual(['worktrees']);
+    expect(storesByName.get('worktrees')?.worktrees).toEqual({ [meta.sessionId]: meta });
+    expect(storesByName.get('worktree-safe-directory-cleanup')).toEqual({ pending: ['/deferred'] });
   });
 });

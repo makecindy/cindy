@@ -261,15 +261,27 @@ async function computeInUseSafeDirectorySpellings(): Promise<Set<string>> {
  * 移除; 仍失败的留待下次启动。fire-and-forget, 不阻塞启动。
  *
  * 清理前先剔除仍被活跃 worktree 占用的路径(同名复用场景): 这些待办已作废——条目
- * 归新一代 worktree 所有, 由它自己的删除流程负责, 这里只出队不清理。
+ * 归新一代 worktree 所有, 由它自己的删除流程负责, 这里只出队不清理。占用判定必须
+ * 在**持锁临界区内**重估: 快照算在锁外时, 两个 Cindy 实例重叠的场景下, 新 worktree
+ * 可以在快照之后、拿到锁之前认领待办路径, 锁内照删就复现误删新条目的问题。
  */
 export async function reconcilePendingSafeDirectoryCleanups(): Promise<void> {
   const pending = store.getPendingSafeDirectoryCleanups();
   if (pending.length === 0) return;
 
-  const inUse = await computeInUseSafeDirectorySpellings();
-  const targets = pending.filter((p) => !inUse.has(p));
-  const reclaimed = pending.filter((p) => inUse.has(p));
+  const { cleaned, reclaimed } = await withCrossProcessLock(
+    globalSafeDirectoryLockPath(),
+    { label: 'git-safe-directory', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) return { cleaned: [] as string[], reclaimed: [] as string[] };
+      // 持锁后重估占用: 确保不被快照与持锁之间认领路径的新 worktree 抢先。
+      const inUse = await computeInUseSafeDirectorySpellings();
+      const targets = pending.filter((p) => !inUse.has(p));
+      const reclaimedNow = pending.filter((p) => inUse.has(p));
+      const cleanedNow = await unsetSafeDirectoryEntriesLocked(targets);
+      return { cleaned: cleanedNow, reclaimed: reclaimedNow };
+    },
+  );
 
   // 复用路径的旧待办作废: 只出队, 不动 git config(条目归新 worktree)。
   if (reclaimed.length > 0) {
@@ -286,16 +298,6 @@ export async function reconcilePendingSafeDirectoryCleanups(): Promise<void> {
       );
     }
   }
-  if (targets.length === 0) return;
-
-  const cleaned = await withCrossProcessLock(
-    globalSafeDirectoryLockPath(),
-    { label: 'git-safe-directory', waitMs: 1_000 },
-    async (status) => {
-      if (!status.held) return [];
-      return unsetSafeDirectoryEntriesLocked(targets);
-    },
-  );
 
   if (cleaned.length > 0) {
     try {

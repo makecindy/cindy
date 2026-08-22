@@ -18,6 +18,9 @@ import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
+import { createLogger } from '../logger';
+
+const log = createLogger('gitExec');
 
 export interface GitExecResult {
   stdout: string;
@@ -558,8 +561,14 @@ export async function gitExec(
           await ensureGlobalSafeDirectory(dubiousPath);
           // 配完 safe.directory 后重试原命令
           return await execFileOnce(args, cwd, opts);
-        } catch {
-          // 重试或配置失败都直接抛原始错误(让 classifier 报 dubious-ownership)
+        } catch (cause) {
+          // 对外错误契约不变: 调用方/classifier 仍拿到原始 dubious-ownership 错误。
+          // 但 ensureGlobalSafeDirectory 的真实失败(--get-all 权限/锁冲突/配置损坏,
+          // 或拿不到跨进程锁)不能被静默吞掉 —— 先落日志保住诊断信息, 再抛原始错误。
+          log.warn(
+            `gitExec auto safe.directory add failed for ${dubiousPath}:`,
+            cause instanceof Error ? cause.message : String(cause),
+          );
           throw err;
         }
       }
