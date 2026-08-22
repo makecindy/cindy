@@ -12,12 +12,21 @@ const makerExperimentalSource = readFileSync(
 
 describe('Desktop disabled cursor visual contract', () => {
   it('uses the ordinary arrow instead of a theme-provided SVG cursor', () => {
+    const disabledCursorRule = globalsSource.match(
+      /\.cursor-not-allowed,[^{}]*\{[^{}]*\}/,
+    )?.[0];
+
     expect(colorsSource).not.toContain('createNotAllowedCursor');
     expect(colorsSource).not.toContain("registerColor('cursor-not-allowed'");
-    expect(globalsSource).toContain('.cursor-not-allowed');
+    expect(disabledCursorRule).toBeDefined();
+    expect(disabledCursorRule).toContain('.cursor-not-allowed');
+    expect(disabledCursorRule).toContain('.disabled\\:cursor-not-allowed:disabled');
+    expect(disabledCursorRule).toContain(
+      '.data-\\[disabled\\]\\:cursor-not-allowed[data-disabled]',
+    );
+    expect(disabledCursorRule).toContain('cursor: default;');
+    expect(disabledCursorRule).not.toContain('var(--cursor-not-allowed');
     expect(globalsSource).not.toContain("html[data-platform='win32'] .cursor-not-allowed");
-    expect(globalsSource).toContain('cursor: default;');
-    expect(globalsSource).not.toContain('var(--cursor-not-allowed');
     expect(makerExperimentalSource).not.toContain('var(--cursor-not-allowed');
     expect(makerExperimentalSource).not.toContain("window.electronAPI.platform === 'win32'");
     expect(makerExperimentalSource).toContain("cursor: m.session ? 'default' : 'pointer'");
