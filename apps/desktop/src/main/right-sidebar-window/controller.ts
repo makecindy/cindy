@@ -409,8 +409,9 @@ export class RsbWindowController {
         this.pokeAdoptRetry(this.pinnedSessionId);
         return;
       } else {
-        // 离开聊天 / 空上下文不能拆 pin，否则进行中的异步 adopt 和 waiter 会丢结果。
-        return;
+        const pinned = this.pinnedSessionId;
+        this.clearPinnedSession();
+        if (pinned) this.settleHostWaiters(pinned, false);
       }
     }
     this.lastContext = ctx;
@@ -464,13 +465,21 @@ export class RsbWindowController {
     }
 
     if (allowOpen && (!this.isOpen() || !this.presentationReady)) {
+      const holdPin =
+        Boolean(hostSessionId) &&
+        this.lastContext?.available &&
+        this.lastContext.sessionId === hostSessionId &&
+        this.pinnedSessionId !== hostSessionId;
+      if (holdPin) this.pinnedSessionId = hostSessionId;
       try {
         await this.ensureOpenForAutomation({ userInitiated });
       } catch (err) {
+        if (holdPin && this.pinnedSessionId === hostSessionId) this.clearPinnedSession();
         if (!this.deps.settings.read().detached) return 'attached';
         if (!this.canDispatchCommand(command)) return 'stale-context';
         throw err;
       }
+      if (holdPin && this.pinnedSessionId === hostSessionId) this.clearPinnedSession();
     }
 
     if (!this.deps.settings.read().detached) return 'attached';
@@ -880,9 +889,13 @@ export class RsbWindowController {
 
   private adoptHostSession(sessionId: string): void | Promise<void> {
     if (!sessionId) return;
+    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+      // 已经在目标宿主上。再钉一次会挡住之后的 setContext。
+      if (this.pinnedSessionId === sessionId) this.clearPinnedSession();
+      return;
+    }
     if (this.pinnedSessionId !== sessionId) this.resetAdoptRetry();
     this.pinnedSessionId = sessionId;
-    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
     const cached = this.knownContexts.get(sessionId);
     if (cached) {
       this.applyAdoptedContext(cached);
@@ -984,6 +997,9 @@ export class RsbWindowController {
     if (adopted) {
       return adopted.then(() => {
         if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
+        if (this.pinnedSessionId !== sessionId) {
+          return Promise.reject(new Error('right-sidebar host context wait cancelled'));
+        }
         return this.queueHostWaiter(sessionId);
       });
     }

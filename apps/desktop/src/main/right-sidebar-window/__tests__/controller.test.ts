@@ -843,7 +843,7 @@ describe('ensureOpenForAutomation', () => {
     });
   });
 
-  it('keeps an in-flight adopt after Main reports unavailable', async () => {
+  it('cancels an in-flight adopt after Main leaves chat', async () => {
     const resolved = {
       ...ctx,
       sessionId: 's1',
@@ -863,8 +863,14 @@ describe('ensureOpenForAutomation', () => {
     const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
     h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
     finishLookup(resolved);
-    await expect(pending).resolves.toBeUndefined();
-    expect(h.controller.getContext()).toEqual(resolved);
+    await expect(pending).rejects.toThrow(/cancelled/);
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({
+      sessionId: null,
+      workdir: null,
+      remoteHostId: null,
+      available: false,
+    });
   });
 
   it('fails closed when the target session context never arrives', async () => {
@@ -1269,10 +1275,11 @@ describe('setContext / routeCommand', () => {
   it('pinned host session ignores later focus switches until the user arrives', () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
     h.controller.open({ userInitiated: false, sessionId: 's1' });
     const win = h.windows[0];
     markReady(h.controller, win);
-    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
     expect(h.controller.getContext()).toEqual(ctx);
 
     h.controller.setContext({
@@ -1285,6 +1292,16 @@ describe('setContext / routeCommand', () => {
       sessionId: 's1',
       workdir: '/adopted',
     });
+  });
+
+  it('does not pin an already-active host, so a later focus switch is applied', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('routed');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
   });
 
   it('allowOpen=false + window hidden: stays queued through prewarm and flushes on open', async () => {
