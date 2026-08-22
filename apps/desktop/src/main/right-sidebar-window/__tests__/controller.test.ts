@@ -1328,6 +1328,32 @@ describe('setContext / routeCommand', () => {
     expect(h.controller.getContext()).toEqual(resolvedA);
   });
 
+  it('does not let a replaced async route steal the host', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    const resolvedB = { ...ctx, sessionId: 's3', workdir: '/from-b' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return lookupA;
+        if (sessionId === 's3') return resolvedB;
+        return null;
+      },
+    });
+    const pendingA = h.controller.routeCommand(terminalRequest('s1'));
+    const pendingB = h.controller.routeCommand(terminalRequest('s3'));
+    markReady(h.controller, h.windows[0]);
+    await expect(pendingB).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual(resolvedB);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      { type: 'open-terminal', sessionId: 's3' },
+    ]);
+  });
+
   it('flushes only the current host on attach, then the focused session later', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);

@@ -473,6 +473,10 @@ export class RsbWindowController {
     }
     const adopted = this.adoptHostSession(hostSessionId);
     if (adopted) await adopted;
+    if (!this.stillOwnsHost(hostSessionId)) {
+      this.enqueueDeferredCommand(command);
+      return 'queued';
+    }
     if (!this.canDispatchCommand(command)) {
       this.enqueueDeferredCommand(command);
       if (allowOpen && this.lastContext?.available) {
@@ -1109,6 +1113,14 @@ export class RsbWindowController {
       waiter.reject(new Error('right-sidebar host context wait cancelled'));
     }
     this.readyWaiters = remaining;
+  }
+
+  private stillOwnsHost(sessionId: string): boolean {
+    if (!sessionId) return false;
+    return (
+      this.pinnedSessionId === sessionId ||
+      Boolean(this.lastContext?.available && this.lastContext.sessionId === sessionId)
+    );
   }
 
   private canDispatchCommand(cmd: RsbWindowCommand): boolean {
