@@ -130,6 +130,34 @@ describe('useOrcaWorkerSelection', () => {
     expect(mocks.refresh).toHaveBeenCalled();
   });
 
+  it('retries done acknowledgement when the worker turn is still settling (active turn)', async () => {
+    // #3153: 终态事件抵达时底层 turn 可能尚未 settle,idleWorker 第一次撞
+    // WORKER_STATE_CHANGED/has an active turn。renderer 应有界重试,直到 turn
+    // settle 后 ack 成功,而不是让 worker 长期停在 done。
+    mocks.workers = [
+      makeWorker('worker-a', 'session-a', true),
+      makeWorker('worker-b', 'session-b', false, 'done'),
+    ];
+    mocks.idleWorker
+      .mockRejectedValueOnce(
+        new Error('[WORKER_STATE_CHANGED] worker worker-b has an active turn'),
+      )
+      .mockResolvedValueOnce({ ok: true as const, workerId: 'worker-b' });
+    markWorkerAttention('worker-b');
+    const { result } = renderHook(
+      () => useOrcaWorkerSelection({ leadSessionId: 'lead-1' }),
+      { wrapper },
+    );
+
+    act(() => result.current.handleSwitchFocus('worker-b'));
+
+    await waitFor(() => {
+      expect(mocks.idleWorker).toHaveBeenCalledTimes(2);
+    });
+    expect(hasWorkerAttention('worker-b')).toBe(false);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
   it('silently keeps done attention and refreshes when acknowledgement loses a state race', async () => {
     mocks.workers = [
       makeWorker('worker-a', 'session-a', true),

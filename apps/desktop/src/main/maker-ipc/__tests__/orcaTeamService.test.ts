@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import {
@@ -1732,6 +1732,7 @@ describe('OrcaTeamService worker queued message control', () => {
       }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'QUEUED_MESSAGE_NOT_FOUND' });
   });
+
 
   it('threads queuedMessageId through queued dispatch results', async () => {
     const { service } = createDeps({
