@@ -1121,6 +1121,19 @@
       "note": "Agent / 引擎的**运行时**会话（SDK Query 的生命周期），不是 session 条目说的那个产品条目。中文必须叫「Agent 会话」而不是「任务」——两者的区别是用户会不会因此做一个多余的动作：记忆、MCP、内置工具、LSP、权限开关这类设置都在「下一个 Agent 会话」生效，而同一条任务里 /clear、rewind、重启都会开新的 Agent 会话，说「新建任务才生效」会让用户白开一条任务、还割裂上下文。forbidden 规则只覆盖英文源字面写了 agent session 的 key（精确、无误报）；英文只写 session 的那批（`The Codex session state` / `Session is inactive` / `in-flight sessions`）**机器判不出来**——英语本身不区分这两个意思，同一句里两个所指并存也是合法的（`The historical agent session ... so a new session can't be started`：前半指运行时、后半指条目，已登记 exempt）。所以这批只能靠人读英文源判断，判据与全部踩坑记录见 docs/product-rules/task-and-conversation-naming.md §6.0.2。session 条目的 exempt 里另有三类同样叫 session 的东西：登录/绑定校验会话、SSH 远程与传输会话、操作系统桌面会话，以及 mobile 的语音连接会话——它们各自稳定、极少改动，故未单独立条目。"
     },
     {
+      "id": "search-mode",
+      "status": "proposed",
+      "en": "Search mode",
+      "translations": {
+        "zh-CN": "搜索模式",
+        "zh-TW": "搜尋模式",
+        "ja": "検索モード",
+        "ko": "검색 모드"
+      },
+      "checkCase": false,
+      "note": "桌面 Composer 会话级开关：开了以后挡住帮手、插件、skill、浏览器，只用模型自己的公开网页搜索和开页。与 Plan mode 同级入口。五语已在 desktop:searchMode.* 落地，先登记为 proposed，避免后续界面另造「检索模式 / 网页模式 / Web search mode」等冲突叫法。"
+    },
+    {
       "id": "shortcut-listener-permission",
       "status": "proposed",
       "en": "shortcut listener permission",

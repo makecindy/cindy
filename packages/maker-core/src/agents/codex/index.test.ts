@@ -819,6 +819,143 @@ describe('CodexAgent permissions', () => {
     await handle.close();
   });
 
+  it('hides Skills, plugins, and MCP servers in search mode but keeps web search', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.SkillsList) {
+          return {
+            data: [{
+              cwd: '/repo',
+              skills: [{
+                name: 'web-access',
+                description: 'must not load',
+                path: '/home/test/.codex/plugins/cache/personal/browser-plugin/1.0.0/skills/web/SKILL.md',
+                scope: 'user',
+                enabled: true,
+              }],
+              errors: [],
+            }],
+          };
+        }
+        if (method === Method.ConfigRead) {
+          return {
+            config: {
+              mcp_servers: { cindy_browser: { command: '/usr/bin/cindy-browser', enabled: true } },
+              plugins: {
+                'browser-plugin@personal': {
+                  mcp_servers: {
+                    plugin_browser: { url: 'https://example.invalid/mcp', enabled: true },
+                  },
+                },
+              },
+            },
+          };
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    const handle = await agent.startSession({
+      sessionId: 'session-search',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      searchMode: true,
+    });
+
+    const threadStart = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as Record<string, unknown>;
+    const config = threadStart.config as Record<string, unknown>;
+    expect(config['skills.config']).toEqual([
+      {
+        path: '/home/test/.codex/plugins/cache/personal/browser-plugin/1.0.0/skills/web/SKILL.md',
+        enabled: false,
+      },
+    ]);
+    expect(config['mcp_servers.cindy_browser.enabled']).toBe(false);
+    expect(config['plugins."browser-plugin@personal".enabled']).toBe(false);
+    expect(config['plugins."browser-plugin@personal".mcp_servers.plugin_browser.enabled']).toBe(false);
+    expect(config).not.toHaveProperty('web_search');
+    await handle.close();
+  });
+
+  it('fails closed when search-mode Skill discovery reports an unscoped error', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.SkillsList) {
+          return {
+            data: [{
+              cwd: '/repo',
+              skills: [],
+              errors: [{ message: 'catalog unavailable' }],
+            }],
+          };
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    await expect(agent.startSession({
+      sessionId: 'session-search-unscoped-skill-error',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      searchMode: true,
+    })).rejects.toThrow(
+      'Cannot start Codex search mode because Cindy could not hide Skills, plugins, and MCP servers: catalog unavailable',
+    );
+  });
+
+  it('does not register host dynamic tools in search mode', async () => {
+    const listTools = vi.fn(() => [
+      {
+        type: 'function' as const,
+        name: 'cindy_ios_simulator__list_tools',
+        description: 'Discover embedded simulator tools.',
+        inputSchema: { type: 'object' },
+        deferLoading: false,
+      },
+      {
+        type: 'function' as const,
+        name: 'cindy_ios_simulator__call_tool',
+        description: 'Call an embedded simulator tool.',
+        inputSchema: { type: 'object' },
+        deferLoading: false,
+      },
+    ]);
+    const agent = new CodexAgent(createDeps({}, {
+      codexHostDynamicToolProvider: {
+        listTools,
+        callTool: vi.fn(async () => ({
+          contentItems: [{ type: 'inputText' as const, text: '{"ok":true}' }],
+          success: true,
+        })),
+      },
+    }));
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-search-no-simulator',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      searchMode: true,
+    });
+
+    expect(listTools).not.toHaveBeenCalled();
+    const threadStart = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { dynamicTools?: Array<{ name?: string }> };
+    const names = (threadStart.dynamicTools ?? []).map((tool) => tool.name);
+    expect(names).not.toContain('cindy_ios_simulator__list_tools');
+    expect(names).not.toContain('cindy_ios_simulator__call_tool');
+    await handle.close();
+  });
+
   it('fails closed when Review sees an unknown runtime-only MCP server', async () => {
     const reviewDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-runtime-mcp-'));
     tempRoots.push(reviewDir);

@@ -10165,6 +10165,14 @@
     },
     "exit": "Exit plan mode"
   },
+  "searchMode": {
+    "menuItem": "Search mode",
+    "indicator": {
+      "title": "Search mode",
+      "hint": "Exclude environment noise; use the model's own web search only"
+    },
+    "exit": "Exit search mode"
+  },
   "globalDrop": {
     "cindyHint": "Drop to install plugin",
     "cshareHint": "Drop to import shared session"

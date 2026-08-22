@@ -1029,6 +1029,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
     const reviewMode = opts.reviewMode === true;
+    const searchMode = !reviewMode && opts.searchMode === true;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Claude Code sessions only');
     }
@@ -2102,6 +2103,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         : undefined;
     };
 
+    const hiddenSkillNames = searchMode
+      ? (await scanClaudeSlashCommands(opts.workingDir))
+          .filter((cmd) => cmd.source === 'skill')
+          .map((cmd) => cmd.name)
+      : [];
+
     // SDK settings 对象 (优先级最高, 覆盖 user/project/local 文件层) — 本地分支
     // 和远端分支必须**保持一致** , 否则同 session setting 跨本地 / 远端表现不同
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
@@ -2122,6 +2129,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // agent 层不重复硬判(规则 9:确定性逻辑就近,但 fast 的最终门槛是二进制 + 配置门控)。
         fastMode: mutableFastMode,
         capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
+        ...(searchMode && hiddenSkillNames.length > 0 ? { hiddenSkillNames } : {}),
       });
       if (!reviewMode) return settings;
       return {

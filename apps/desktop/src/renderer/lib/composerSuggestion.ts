@@ -22,6 +22,7 @@ export type ComposerSuggestionActionId =
   | 'attach-files'
   | 'new-goal'
   | 'plan-mode'
+  | 'search-mode'
   | 'collaboration'
   | 'add-extra-dir';
 

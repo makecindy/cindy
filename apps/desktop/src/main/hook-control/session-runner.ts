@@ -81,6 +81,7 @@ import { createMessage } from '../localDb/ipc/messages.js';
 import {
   getSessionRowSnapshot,
   getSessionRowSnapshotStrict,
+  getSessionSearchModeEnabled,
   setSessionProviderIdInDb,
   setSessionSourceInDb,
   setWorktreePathInDb,
@@ -511,13 +512,15 @@ export function createMakerHookSessionRunner(deps: {
       // 复用/接管路径的持久化来源(sessions.provider_id, 用户在聊天里切过的
       // 来源以它为权威); 新建路径恒 null, 由下方草稿默认解析
       let rowProviderId: string | null = null;
+      let searchMode = false;
       if (!req.isNew) {
         // 复用/接管: session 自己的 meta 是权威(workDir/model/agentKind/
         // permissionMode), sdkSessionId 用于冷 resume; effort 不覆盖、权限档
         // 不覆盖(进行中的会话不受偏好影响; meta 没记录时按历史默认 bypass)
-        const [meta, row] = await Promise.all([
+        const [meta, row, persistedSearchMode] = await Promise.all([
           maker.getSessionMeta(req.sessionId).catch(() => null),
           getSessionRowSnapshot(req.sessionId),
+          getSessionSearchModeEnabled(req.sessionId),
         ]);
         if (meta) {
           workingDir = meta.workDir;
@@ -528,6 +531,7 @@ export function createMakerHookSessionRunner(deps: {
         effort = undefined;
         permissionMode = meta?.permissionMode ?? 'bypassPermissions';
         rowProviderId = row?.providerId ?? null;
+        searchMode = persistedSearchMode;
       }
 
       const fail = (msg: string): HookRunOutcome => ({
@@ -607,6 +611,7 @@ export function createMakerHookSessionRunner(deps: {
         ...(providerId !== null ? { providerId } : {}),
         ...(effort !== undefined ? { effort } : {}),
         permissionMode,
+        ...(searchMode ? { searchMode: true } : {}),
         // chat 伪目录新会话: 标记 dialogue, 落侧边栏「对话」分组而非按
         // dialogues/<日期>/<id> 目录名聚成项目节点
         ...(req.isNew && req.workspaceKind !== undefined

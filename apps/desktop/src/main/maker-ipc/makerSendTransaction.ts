@@ -25,6 +25,7 @@ import {
   buildMobileClientPromptNote,
   shouldPrependMobileClientPromptNote,
 } from './mobileClientPromptNote.js';
+import { SEARCH_MODE_PROMPT, shouldApplySearchMode } from '../../shared/searchMode.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -129,6 +130,7 @@ export interface MakerSendTransactionDeps {
    * 快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
    */
   readSessionWorkingDirFromDb(sessionId: string): Promise<string | null>;
+  isSearchModeEnabled?(sessionId: string): Promise<boolean>;
   isOrcaMcpHydrated(sessionId: string): boolean;
   buildCreateOptsWithStderr(opts: CreateOpts): CreateOpts;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
@@ -840,9 +842,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
           ? buildMobileClientPromptNote()
           : null;
-      const outgoing = mobileClientNote
+      const withMobile = mobileClientNote
         ? prependNoteToWireUserMessage(withPlanReconcile as HandoffWireMessage, mobileClientNote)
         : withPlanReconcile;
+      const searchModeOn =
+        isOrdinaryUserTurn &&
+        shouldApplySearchMode(await deps.isSearchModeEnabled?.(sessionId).catch(() => true));
+      const outgoing = searchModeOn
+        ? prependNoteToWireUserMessage(withMobile as HandoffWireMessage, SEARCH_MODE_PROMPT)
+        : withMobile;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       let persistUserMessage = readPersistUserMessageOption(so);
       const topLevelClearBoundary = normalizeExpectedClearBoundary(so.expectedClearBoundaryMs);

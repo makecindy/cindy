@@ -113,6 +113,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'initialPermissionMode={chatInitialPermissionMode}',
       'initialProviderId={chatInitialProviderId}',
       'planModeEnabled={effectivePlanMode}',
+      'searchModeEnabled={effectiveSearchMode}',
       'fastMode={effectiveFastMode}',
       'onWorkingDirChange={handleWorkingDirChange}',
       'onModelDidChange={handleModelDidChange}',

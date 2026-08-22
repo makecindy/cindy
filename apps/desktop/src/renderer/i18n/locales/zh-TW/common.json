@@ -10151,6 +10151,14 @@
     },
     "exit": "退出計劃模式"
   },
+  "searchMode": {
+    "menuItem": "搜尋模式",
+    "indicator": {
+      "title": "搜尋模式",
+      "hint": "排除環境干擾，只用模型自己的網頁搜尋"
+    },
+    "exit": "退出搜尋模式"
+  },
   "globalDrop": {
     "cindyHint": "鬆開安裝插件",
     "cshareHint": "鬆開匯入分享的任務"

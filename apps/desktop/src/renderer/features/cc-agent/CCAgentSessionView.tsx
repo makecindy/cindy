@@ -1538,6 +1538,8 @@ export function CCAgentSessionView({
     resetFastMode,
     planModeEnabled,
     setPlanMode,
+    searchModeEnabled,
+    setSearchMode,
     // F-QUEUE-DEFER
     pendingQueue,
     steeringQueueClientIds,
@@ -4640,6 +4642,8 @@ export function CCAgentSessionView({
                   initialPermissionMode={session?.permissionMode}
                   planModeEnabled={planModeEnabled}
                   onPlanModeChange={setPlanMode}
+                  searchModeEnabled={searchModeEnabled}
+                  onSearchModeChange={setSearchMode}
                   fastMode={fastMode}
                   onFastModeChange={setFastMode}
                   onWorkingDirChange={handleWorkingDirChange}

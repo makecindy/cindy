@@ -133,6 +133,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: vi.fn(async () => null),
   getSessionRowSnapshotStrict: vi.fn(async () => null),
+  getSessionSearchModeEnabled: vi.fn(async () => false),
   setSessionProviderIdInDb: h.setSessionProviderIdInDb,
   setSessionSourceInDb: h.setSessionSourceInDb,
   setWorktreePathInDb: vi.fn(async () => undefined),
@@ -2887,6 +2888,39 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     expect(h.setSessionProviderIdInDb).not.toHaveBeenCalled();
     // 复用路径不读供应商目录
     expect(h.listProviders).not.toHaveBeenCalled();
+  });
+
+  it('复用/接管: sessions.search_mode_enabled 权威 -> 传 createSession', async () => {
+    const { getSessionRowSnapshot, getSessionSearchModeEnabled } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshot).mockResolvedValueOnce({
+      status: 'active',
+      title: null,
+      userSendAt: 1,
+      workingDir: 'D:/repo',
+      workspaceKind: 'project',
+      providerId: 'xd',
+    });
+    vi.mocked(getSessionSearchModeEnabled).mockResolvedValueOnce(true);
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({ sessionId: 'sess-old', isNew: false }));
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true, providerId: 'xd' }),
+    );
+  });
+
+  it('复用/接管: 快照读失败时仍 fail-closed 传 searchMode', async () => {
+    const { getSessionRowSnapshot, getSessionSearchModeEnabled } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshot).mockResolvedValueOnce(null);
+    vi.mocked(getSessionSearchModeEnabled).mockResolvedValueOnce(true);
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(baseReq({ sessionId: 'sess-old', isNew: false }));
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true }),
+    );
   });
 });
 

@@ -56,6 +56,7 @@ interface UseCCSessionsReturn {
     fastMode?: boolean;
     /** 计划模式一级开关(与 permissionMode 正交); 草稿开着时随建会话落库。 */
     planModeEnabled?: boolean;
+    searchModeEnabled?: boolean;
     agentKind?: AgentKind;
     extraDirs?: string[];
     remoteHostId?: string;
@@ -150,6 +151,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       permissionMode?: string;
       fastMode?: boolean;
       planModeEnabled?: boolean;
+      searchModeEnabled?: boolean;
       agentKind?: AgentKind;
       /** 附加只读引用目录列表 (绝对路径); 透传到 sessionService.create → mapper 写库。 */
       extraDirs?: string[];

@@ -291,6 +291,8 @@ interface UseCCAgentChatReturn {
   planModeEnabled: boolean;
   /** 切换计划模式(server-first: 落库 → store → maker runtime)。 */
   setPlanMode: (enabled: boolean) => Promise<void>;
+  searchModeEnabled: boolean;
+  setSearchMode: (enabled: boolean) => Promise<void>;
   /** Hidden-pane-safe heavy snapshot shared by MessageStream descendants. */
   chatDisplaySnapshot: ChatDisplaySnapshot;
 }
@@ -740,6 +742,14 @@ export function useCCAgentChat(
     [sessionId],
   );
 
+  const setSearchMode = useCallback(
+    async (enabled: boolean) => {
+      if (!sessionId) return;
+      await makerChatStore.setSearchMode(sessionId, enabled);
+    },
+    [sessionId],
+  );
+
   const pendingQueueLength = lightState.pendingQueue.length;
   // Codex 插话会先 interrupt 当前 turn，再等待 follow-up turn 真正启动。
   // 这个窗口里 SDK 可能已经上报 done / isRunning=false；只看运行态会把 Stop
@@ -897,6 +907,8 @@ export function useCCAgentChat(
     resetFastMode,
     planModeEnabled: lightState.planModeEnabled,
     setPlanMode,
+    searchModeEnabled: lightState.searchModeEnabled,
+    setSearchMode,
     chatDisplaySnapshot,
   };
 }

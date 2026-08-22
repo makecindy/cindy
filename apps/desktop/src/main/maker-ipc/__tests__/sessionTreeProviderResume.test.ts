@@ -67,6 +67,16 @@ describe('Pi session-tree lazy resume provider route', () => {
     expect(bootstrapIdx).toBeGreaterThan(statusGuardIdx);
   });
 
+  it('preserves searchMode from the persisted session row', () => {
+    const lazyResume = sourceBetween(
+      'async function getOrResumeSessionTreeSession',
+      'ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE',
+    );
+
+    expect(lazyResume).toContain('searchModeEnabled: sessions.searchModeEnabled,');
+    expect(lazyResume).toContain('searchMode: row.searchModeEnabled === true,');
+  });
+
   it('keeps the same three-state route contract across every persisted-session bootstrap', () => {
     const preHydrate = sourceBetween(
       'async function hydrateProviderIdBeforeSessionStart',

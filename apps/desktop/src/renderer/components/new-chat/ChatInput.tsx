@@ -154,6 +154,7 @@ import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapability
 import { focusComposerEndNextFrame, hostCapabilityForGhost, placeGhostAtComposerStart, placeHostCapabilityAtComposerStart } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
+import { SearchModeIndicator } from './SearchModeIndicator';
 import {
   addPlanModeComposerCommand,
   consumePlanModeComposerCommand,
@@ -500,6 +501,8 @@ interface ChatInputProps {
    * 草稿 patchVendorPrefs)。未提供 = 不显示计划模式入口。
    */
   onPlanModeChange?: (enabled: boolean) => void | Promise<void>;
+  searchModeEnabled?: boolean;
+  onSearchModeChange?: (enabled: boolean) => void | Promise<void>;
   /** Current Fast Mode state from the session store. */
   fastMode?: boolean;
   /** Called when the Fast Mode toggle changes. Captured device ID pins remote routing. */
@@ -1026,6 +1029,8 @@ export function ChatInput({
   initialPermissionMode,
   planModeEnabled = false,
   onPlanModeChange,
+  searchModeEnabled = false,
+  onSearchModeChange,
   fastMode = false,
   onFastModeChange,
   onWorkingDirChange,
@@ -1774,6 +1779,10 @@ export function ChatInput({
   const planModeEntry =
     !settingsLocked && planModeSupported && onPlanModeChange
       ? { enabled: planModeEnabled, onToggle: (next: boolean) => void onPlanModeChange(next) }
+      : undefined;
+  const searchModeEntry =
+    !settingsLocked && onSearchModeChange
+      ? { enabled: searchModeEnabled, onToggle: (next: boolean) => void onSearchModeChange(next) }
       : undefined;
   // 当前 activeModel 归属的 agent runtime —— 用于 send 预检里按 (model, agent) 查
   // 「有没有已连接来源」。vendorKey 锁定时直接信任;否则按 capabilities 反推
@@ -4289,6 +4298,15 @@ export function ChatInput({
         run: () => planModeEntry.onToggle(!planModeEntry.enabled),
       });
     }
+    if (searchModeEntry) {
+      actions.push({
+        id: 'search-mode',
+        label: t('searchMode.menuItem'),
+        checked: searchModeEntry.enabled,
+        disabled: composerMutationLocked,
+        run: () => searchModeEntry.onToggle(!searchModeEntry.enabled),
+      });
+    }
     if (collaboration) {
       const policyDisabled = collaboration.disabled === true;
       const retryable = policyDisabled && !!collaboration.onDisabledActivate;
@@ -4351,6 +4369,7 @@ export function ChatInput({
     onExtraDirsChange,
     onNewGoal,
     planModeEntry,
+    searchModeEntry,
     runNewGoalAction,
     t,
     workingDir,
@@ -7585,6 +7604,14 @@ export function ChatInput({
         <div className="-mb-2 w-full">
           <PlanModeIndicator
             onExit={() => void onPlanModeChange?.(false)}
+            disabled={composerMutationLocked}
+          />
+        </div>
+      )}
+      {searchModeEntry && searchModeEnabled && (
+        <div className="-mb-2 w-full">
+          <SearchModeIndicator
+            onExit={() => void onSearchModeChange?.(false)}
             disabled={composerMutationLocked}
           />
         </div>

@@ -86,6 +86,11 @@ export const sessions = sqliteTable(
      * 历史 permission_mode='plan' 的行由对应 migration 转换为此列=true + 'ask'。
      */
     planModeEnabled: integer('plan_mode_enabled', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * 搜索模式一级开关(与 permissionMode / planMode 正交):开启时真挡帮手 / 插件 / 浏览器,
+     * 启动时不把 skill 列表喂给模型。默认关闭,不影响写代码。
+     */
+    searchModeEnabled: integer('search_mode_enabled', { mode: 'boolean' }).notNull().default(false),
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
     /**

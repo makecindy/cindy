@@ -10151,6 +10151,14 @@
     },
     "exit": "退出计划模式"
   },
+  "searchMode": {
+    "menuItem": "搜索模式",
+    "indicator": {
+      "title": "搜索模式",
+      "hint": "排除环境干扰，只用模型自己的网页搜索"
+    },
+    "exit": "退出搜索模式"
+  },
   "globalDrop": {
     "cindyHint": "松开安装插件",
     "cshareHint": "松开导入分享的任务"

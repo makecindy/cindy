@@ -354,6 +354,7 @@ const REMOTE_PERSIST_FIELDS = new Set([
   'permissionMode',
   'fastMode',
   'planModeEnabled',
+  'searchModeEnabled',
   'extraDirs',
 ]);
 
@@ -610,6 +611,7 @@ export interface SessionRowSnapshot {
   agentKind?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
+  searchModeEnabled?: boolean | null;
 }
 
 async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
@@ -628,6 +630,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       remoteHostId: sessions.remoteHostId,
       orcaRole: sessions.orcaRole,
       agentKind: sessions.agentKind,
+      searchModeEnabled: sessions.searchModeEnabled,
     })
     .from(sessions)
     .where(eq(sessions.id, id))
@@ -655,6 +658,35 @@ export async function getSessionRowSnapshot(id: string): Promise<SessionRowSnaps
       err: err instanceof Error ? err.message : String(err),
     });
     return null;
+  }
+}
+
+/**
+ * Heartbeat restore must not treat a temporary DB read failure as
+ * "session missing / archived". Swallowing that error would let a
+ * persistent schedule rebind onto a fresh unisolated session.
+ */
+export async function getSessionRowSnapshotForHeartbeat(
+  id: string,
+): Promise<SessionRowSnapshot | null> {
+  return selectSessionRowSnapshot(id);
+}
+
+export async function getSessionSearchModeEnabled(id: string): Promise<boolean> {
+  try {
+    const db = getDbClient().drizzle;
+    const [row] = await db
+      .select({ searchModeEnabled: sessions.searchModeEnabled })
+      .from(sessions)
+      .where(eq(sessions.id, id))
+      .limit(1);
+    return row?.searchModeEnabled === true;
+  } catch (err) {
+    log.warn('getSessionSearchModeEnabled failed; treating search mode as on', {
+      sessionId: id,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return true;
   }
 }
 
@@ -1369,6 +1401,7 @@ export function registerSessionIpc(
       'permissionMode',
       'fastMode',
       'planModeEnabled',
+      'searchModeEnabled',
       'orcaRole',
       'extraDirs',
     ]);
@@ -1410,6 +1443,7 @@ export function registerSessionIpc(
       'permissionMode',
       'fastMode',
       'planModeEnabled',
+      'searchModeEnabled',
       'providerId',
       'orcaRole',
       'extraDirs',

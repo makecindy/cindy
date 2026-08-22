@@ -62,11 +62,22 @@ export interface ClaudeFlagSettingsInput {
    * This highest-priority list replaces any stale user availableModels list.
    */
   availableModels?: readonly string[];
+  /**
+   * Search mode hides every discovered skill from the model listing.
+   * Keys are Claude skill names (`off` = hidden from listing and `/name`).
+   */
+  hiddenSkillNames?: readonly string[];
 }
 
 /** 装配 startSession 注入的 flag settings 对象。纯函数 —— 每次调用读最新输入值。 */
 export function buildClaudeFlagSettings(input: ClaudeFlagSettingsInput): Settings {
-  const skillOverrides = buildClaudeSkillOverrides(input.capabilityRouting);
+  const skillOverrides: NonNullable<Settings['skillOverrides']> = {
+    ...buildClaudeSkillOverrides(input.capabilityRouting),
+  };
+  for (const name of input.hiddenSkillNames ?? []) {
+    const trimmed = name.trim();
+    if (trimmed) skillOverrides[trimmed] = 'off';
+  }
   return {
     showThinkingSummaries: input.showThinkingSummaries,
     // 屏蔽用户级 apiKeyHelper,防止它劫持 oauth-spawn 的订阅鉴权(见文件头注释)。

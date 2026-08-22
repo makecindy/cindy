@@ -202,6 +202,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     contextWindow: row.contextWindow,
     fastMode: !!row.fastMode,
     planModeEnabled: !!row.planModeEnabled,
+    searchModeEnabled: !!row.searchModeEnabled,
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
     userSendAt: msToIso(row.userSendAt),
@@ -291,6 +292,7 @@ export function sessionCreateToRow(
         permissionMode?: string;
         fastMode?: boolean;
         planModeEnabled?: boolean;
+        searchModeEnabled?: boolean;
         agentKind?: AgentKind;
         orcaRole?: OrcaRole | null;
         parentSessionId?: string | null;
@@ -326,6 +328,7 @@ export function sessionCreateToRow(
     fastMode: !!body?.fastMode,
     // 计划模式默认 OFF；草稿里开了计划模式的会话显式传 true。
     planModeEnabled: !!body?.planModeEnabled,
+    searchModeEnabled: !!body?.searchModeEnabled,
     clearedAt: null,
     pinnedAt: null,
     userSendAt: null,
@@ -364,6 +367,7 @@ export function sessionPatchToRow(
     providerId?: string | null;
     fastMode?: boolean;
     planModeEnabled?: boolean;
+    searchModeEnabled?: boolean;
     sdkSessionId?: string | null;
     totalTokenUsage?: number;
     totalCostUsd?: number;
@@ -389,6 +393,7 @@ export function sessionPatchToRow(
   if (patch.providerId !== undefined) out.providerId = patch.providerId;
   if (patch.fastMode !== undefined) out.fastMode = !!patch.fastMode;
   if (patch.planModeEnabled !== undefined) out.planModeEnabled = !!patch.planModeEnabled;
+  if (patch.searchModeEnabled !== undefined) out.searchModeEnabled = !!patch.searchModeEnabled;
   if (patch.sdkSessionId !== undefined) out.sdkSessionId = patch.sdkSessionId;
   if (patch.totalTokenUsage !== undefined) out.totalTokenUsage = patch.totalTokenUsage;
   if (patch.totalCostUsd !== undefined) out.totalCostUsd = patch.totalCostUsd;

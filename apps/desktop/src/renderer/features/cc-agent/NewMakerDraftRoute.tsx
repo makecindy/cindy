@@ -1936,6 +1936,7 @@ export function NewMakerDraftRoute() {
   // 计划模式草稿态:仅本地草稿支持(device-link 远程草稿 v1 不透传,入口也不显示;
   // 创建后进会话仍可经运行时隧道切换)。
   const effectivePlanMode = isDeviceLinkDraft ? false : chatPrefs.planMode === true;
+  const effectiveSearchMode = isDeviceLinkDraft ? false : chatPrefs.searchMode === true;
 
   // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
   // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
@@ -2404,6 +2405,7 @@ export function NewMakerDraftRoute() {
           effort: sshEffort,
           fastMode: sshFastMode,
           planModeEnabled: effectivePlanMode,
+          searchModeEnabled: effectiveSearchMode,
           remoteHostId: target.hostId,
           providerId: sshProviderId,
           extraDirs: [],
@@ -2418,6 +2420,7 @@ export function NewMakerDraftRoute() {
           agentKind: dbToMakerAgentKind(draftVendor),
           fastMode: sshFastMode,
           planModeEnabled: effectivePlanMode,
+          searchModeEnabled: effectiveSearchMode,
         });
         // 把草稿页已输入的文本/附件移交到新会话,避免 navigate 后丢失。
         // rehomeDraftAttachments 把 base64 和 xdt-image://__new_maker_draft__/ 迁移到
@@ -2640,6 +2643,13 @@ export function NewMakerDraftRoute() {
     (enabled: boolean) => {
       if (isDeviceLinkDraft) return;
       patchActivePrefs({ planMode: enabled });
+    },
+    [isDeviceLinkDraft, patchActivePrefs],
+  );
+  const handleSearchModeChange = useCallback(
+    (enabled: boolean) => {
+      if (isDeviceLinkDraft) return;
+      patchActivePrefs({ searchMode: enabled });
     },
     [isDeviceLinkDraft, patchActivePrefs],
   );
@@ -3291,7 +3301,8 @@ export function NewMakerDraftRoute() {
         );
         return false;
       }
-      const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+      const shouldEnableCollab =
+        effectiveCollab.enabled && collabPolicyEligible && policyEnabled && !effectiveSearchMode;
       // device-link 切设备后,capabilities/providers hook 可能还没 re-render 到新设备快照;
       // 此时 effectiveFastMode / supportsFastMode / sendProviderId 仍基于旧设备。
       // remoteDraftState 必须一起看:换设备时我们会把它打回 loading(防上一台的默认值串台),
@@ -3779,6 +3790,7 @@ export function NewMakerDraftRoute() {
               permissionMode,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
+              searchModeEnabled: effectiveSearchMode,
               workingDir: baseRepo,
               workspaceKind: 'project',
               extraDirs: effectiveExtraDirs,
@@ -3811,6 +3823,7 @@ export function NewMakerDraftRoute() {
               agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
+              searchModeEnabled: effectiveSearchMode,
             });
             worktreeCreationStore.set(newSession.id, {
               status: 'creating',
@@ -4021,6 +4034,7 @@ export function NewMakerDraftRoute() {
             permissionMode,
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
+            searchModeEnabled: effectiveSearchMode,
             workingDir: workingDir ?? undefined,
             // 没选项目目录 = 创建 standalone dialogue;main 端会按 workspaceKind='dialogue'
             // 自动分配 <userData>/dialogues/<date>/<sid>/ 作为运行目录,不进入项目段。
@@ -4047,6 +4061,7 @@ export function NewMakerDraftRoute() {
             agentKind: capabilityAgentKind,
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
+            searchModeEnabled: effectiveSearchMode,
           });
 
           // "创建即发送"路径:乐观回写 userSendAt 跳过 projectGrouping 的草稿兜底
@@ -4294,7 +4309,8 @@ export function NewMakerDraftRoute() {
             throw new Error(t('newChat.collaboration.disabledHint'));
           }
         }
-        const shouldEnableCollab = effectiveCollab.enabled && collabPolicyEligible && policyEnabled;
+        const shouldEnableCollab =
+          effectiveCollab.enabled && collabPolicyEligible && policyEnabled && !effectiveSearchMode;
         // 同 handleSend:remoteDraftState 未就绪时不得放行,否则提交 capability 兜底值而非该设备的
         // 草稿值(缓存已热时另两个 loading 会立刻为 false,拦不住)。
         if (isDeviceLinkDraft && remoteModelListStatus === 'error') {
@@ -5071,6 +5087,8 @@ export function NewMakerDraftRoute() {
                     initialProviderId={chatInitialProviderId}
                     planModeEnabled={effectivePlanMode}
                     onPlanModeChange={isDeviceLinkDraft ? undefined : handlePlanModeChange}
+                    searchModeEnabled={effectiveSearchMode}
+                    onSearchModeChange={isDeviceLinkDraft ? undefined : handleSearchModeChange}
                     fastMode={effectiveFastMode}
                     onFastModeChange={handleFastModeChange}
                     onWorkingDirChange={handleWorkingDirChange}

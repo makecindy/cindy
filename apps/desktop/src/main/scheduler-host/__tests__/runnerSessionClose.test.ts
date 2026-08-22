@@ -25,6 +25,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  getSessionSearchModeEnabled: vi.fn(async () => false),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: vi.fn(),
@@ -37,7 +38,8 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
-  getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionRowSnapshotForHeartbeat: mocks.getSessionRowSnapshot,
+  getSessionSearchModeEnabled: mocks.getSessionSearchModeEnabled,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -251,6 +253,28 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
     expect(h.headlessDuringSend).toEqual([false]);
     expect(h.headlessAfterAccepted).toEqual([true]);
     expect(isHeadlessGhostSetupTurn('scheduler-session')).toBe(false);
+  });
+
+  it('heartbeat 冷恢复把 sessions.search_mode_enabled 传进 createSession', async () => {
+    const h = createSessionHarness();
+    const { runner, maker } = createRunnerHarness(h.session);
+    (maker.getSessionMeta as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sdkSessionId: 'sdk-1',
+      workDir: '/hb/dir',
+      model: 'gpt-5.5',
+    });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    mocks.getSessionSearchModeEnabled.mockResolvedValue(true);
+
+    await fireToCompletion(
+      runner,
+      baseSchedule({ targetSessionId: 'scheduler-session', workspaceKind: 'project' }),
+      h,
+    );
+
+    expect(maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true }),
+    );
   });
 
   it('persistentSession(持续会话)不关闭 —— 跨 fire 复用同一 session', async () => {

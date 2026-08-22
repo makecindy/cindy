@@ -65,6 +65,10 @@ vi.mock('../../usageBroadcaster.js', () => ({
   recordXaiRateLimitSnapshot: mockState.recordXaiRateLimitSnapshot,
 }));
 
+vi.mock('../../localDb/ipc/sessions.js', () => ({
+  getSessionSearchModeEnabled: vi.fn(async () => false),
+}));
+
 // SUT 链(codex-gateway-config → runtime-configs)运行期读端点清单;单测里没有
 // initClientEndpoints,mock 成 fixture 直读(与 XD_GATEWAY_BASE_URL 断言值同源)。
 vi.mock('../../clientEndpointsService.js', async () => {
@@ -1778,6 +1782,92 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       },
     });
     expect(mockState.capturedRegistry?.get('thread-collab-orphan')).toBeUndefined();
+  });
+
+  it('blocks collab_spawn when search mode is on', async () => {
+    const { getSessionSearchModeEnabled } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionSearchModeEnabled).mockResolvedValueOnce(true);
+    const host = await freshCodexProxyHost();
+    host.registerComposed('session-search', 'thread-search-parent', 'PRODUCT_PROMPT');
+
+    try {
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-search-child',
+          'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-search-parent',
+        },
+      };
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'gpt-5.4', input: [] },
+        ctx,
+      ));
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      if (!decision?.localHandler) throw new Error('missing search-mode collab handler');
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision.localHandler({
+        rawBody: Buffer.alloc(0),
+        parsedBody: { model: 'gpt-5.4', input: [] },
+        ctx,
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(403, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      expect(JSON.parse(String(end.mock.calls[0]?.[0]))).toMatchObject({
+        error: { code: 'cindy_search_mode_collab_blocked' },
+      });
+    } finally {
+      host.unregister('session-search');
+    }
+  });
+
+  it('blocks collab_spawn when search mode lookup fails', async () => {
+    const { getSessionSearchModeEnabled } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionSearchModeEnabled).mockRejectedValueOnce(new Error('db unavailable'));
+    const host = await freshCodexProxyHost();
+    host.registerComposed('session-search-fail', 'thread-search-fail-parent', 'PRODUCT_PROMPT');
+
+    try {
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-search-fail-child',
+          'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-search-fail-parent',
+        },
+      };
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'gpt-5.4', input: [] },
+        ctx,
+      ));
+      expect(decision).toEqual({ localHandler: expect.any(Function) });
+      if (!decision?.localHandler) throw new Error('missing search-mode collab handler');
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision.localHandler({
+        rawBody: Buffer.alloc(0),
+        parsedBody: { model: 'gpt-5.4', input: [] },
+        ctx,
+        res: { writeHead, end } as never,
+      });
+      expect(writeHead).toHaveBeenCalledWith(403, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      expect(JSON.parse(String(end.mock.calls[0]?.[0]))).toMatchObject({
+        error: { code: 'cindy_search_mode_collab_blocked' },
+      });
+    } finally {
+      host.unregister('session-search-fail');
+    }
   });
 
   it('does not use a matching x-client-request-id as a collab_spawn child identity', async () => {

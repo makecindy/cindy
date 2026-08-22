@@ -2,6 +2,23 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Session, SessionMeta } from '@cindy/maker-core';
 
+vi.mock('../../localDb/ipc/sessions.js', () => ({
+  getSessionRowSnapshot: vi.fn(async () => null),
+  getSessionSearchModeEnabled: vi.fn(async () => false),
+}));
+vi.mock('../../maker-ipc/orcaMcpHydrationCache.js', () => ({
+  markOrcaMcpHydratedIfNeeded: vi.fn(),
+}));
+vi.mock('../../maker-ipc/orcaSessionStartOptions.js', () => ({
+  preparePersistedOrcaSessionStart: vi.fn(async () => true),
+}));
+vi.mock('../../maker-ipc/register.js', () => ({
+  wireSessionToIpc: vi.fn(),
+}));
+vi.mock('../../maker-host/session-provider-store.js', () => ({
+  hydrateSessionProvider: vi.fn(),
+}));
+
 import { restoreSessionForGoal, type RestoreGoalSessionDeps } from '../sessionRestore';
 
 const META: SessionMeta = {
@@ -106,9 +123,38 @@ describe('Goal dormant session restore', () => {
     await restoreSessionForGoal('session-1', deps);
 
     expect(deps.maker.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ agentKind: 'pi', providerId: null }),
+      expect.objectContaining({ agentKind: 'pi', providerId: null, searchMode: false }),
     );
     expect(deps.hydrateProvider).toHaveBeenCalledWith('session-1', null);
+  });
+
+  it('passes persisted searchMode when restoring a dormant session', async () => {
+    const deps = baseDeps({
+      getSessionRow: vi.fn().mockResolvedValue({
+        providerId: 'provider-1',
+      }),
+      getSearchModeEnabled: vi.fn().mockResolvedValue(true),
+    });
+
+    await restoreSessionForGoal('session-1', deps);
+
+    expect(deps.maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true }),
+    );
+  });
+
+  it('fails closed to searchMode when the session row snapshot is missing', async () => {
+    const deps = baseDeps({
+      getSessionRow: vi.fn().mockResolvedValue(null),
+      getSearchModeEnabled: vi.fn().mockResolvedValue(true),
+    });
+
+    await restoreSessionForGoal('session-1', deps);
+
+    expect(deps.getSearchModeEnabled).toHaveBeenCalledWith('session-1');
+    expect(deps.maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true }),
+    );
   });
 
   it('marks Orca hydration only after successful session creation', async () => {

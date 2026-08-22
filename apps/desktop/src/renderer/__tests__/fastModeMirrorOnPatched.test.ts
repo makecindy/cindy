@@ -68,4 +68,22 @@ describe('makerChatStore.mirrorSessionFields', () => {
     expect(makerChatStore.getSnapshot(s).agentKind).toBe('claude-code');
     expect(makerChatStore.getSnapshot(s).agentSwitchIntent).toBeNull();
   });
+
+  it('patched{searchModeEnabled:true} 镜像进快照并推进 searchModeRev', () => {
+    const s = sid();
+    const before = makerChatStore.getSnapshot(s).searchModeRev;
+    makerChatStore.mirrorSessionFields(s, { searchModeEnabled: true });
+    expect(makerChatStore.getSnapshot(s).searchModeEnabled).toBe(true);
+    expect(makerChatStore.getSnapshot(s).searchModeRev).toBe(before + 1);
+    makerChatStore.mirrorSessionFields(s, { searchModeEnabled: false });
+    expect(makerChatStore.getSnapshot(s).searchModeEnabled).toBe(false);
+  });
+
+  it('searchModeEnabled 同值镜像不推进 searchModeRev', () => {
+    const s = sid();
+    makerChatStore.mirrorSessionFields(s, { searchModeEnabled: true });
+    const snap = makerChatStore.getSnapshot(s);
+    makerChatStore.mirrorSessionFields(s, { searchModeEnabled: true });
+    expect(makerChatStore.getSnapshot(s)).toBe(snap);
+  });
 });

@@ -52,6 +52,7 @@ export interface ImSessionRow {
   /** Latest persisted permission mode. */
   permissionMode: PermissionMode;
   fastMode: boolean;
+  searchModeEnabled?: boolean;
   sdkSessionId: string | null;
   /**
    * 该会话显式选定的供应商 id(路由用,null = 跟随默认路由)。/model 卡片选行时一并持久化,
@@ -225,6 +226,7 @@ export function createImSessionRepo(
         effort: row.effort,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
+        searchModeEnabled: row.searchModeEnabled === true,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
         workspaceKind: readWorkspaceKind(row.workingDir, row.workspaceKind ?? null, botContextId),
@@ -303,6 +305,7 @@ export function createImSessionRepo(
         effort: row.effort,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
+        searchModeEnabled: row.searchModeEnabled === true,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
         // update 前读到的旧值不能直接回 —— 与 correctedWorkspaceKind 用同一判据现算,
@@ -324,6 +327,7 @@ export function createImSessionRepo(
         effort: row.effort,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
+        searchModeEnabled: row.searchModeEnabled === true,
         sdkSessionId: row.sdkSessionId,
         providerId: row.providerId ?? null,
         workspaceKind: row.workspaceKind ?? null,
@@ -423,6 +427,7 @@ export function createImSessionRepo(
             effort: persistedRow.effort,
             permissionMode: persistedRow.permissionMode,
             fastMode: persistedRow.fastMode,
+            searchModeEnabled: persistedRow.searchModeEnabled === true,
             sdkSessionId: persistedRow.sdkSessionId,
             providerId: persistedRow.providerId ?? null,
           }
@@ -471,6 +476,7 @@ function rowFromDefaults(
     effort: defaults.effort,
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
+    searchModeEnabled: false,
     sdkSessionId: null,
     providerId: defaults.providerId,
   };

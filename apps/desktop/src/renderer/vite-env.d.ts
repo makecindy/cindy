@@ -4210,6 +4210,7 @@ interface ElectronAPI {
         permissionMode?: string;
         fastMode?: boolean;
         planModeEnabled?: boolean;
+        searchModeEnabled?: boolean;
         agentKind?: 'cc' | 'codex' | 'pi';
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
@@ -4238,6 +4239,7 @@ interface ElectronAPI {
           permissionMode?: string;
           fastMode?: boolean;
           planModeEnabled?: boolean;
+          searchModeEnabled?: boolean;
           sdkSessionId?: string | null;
           totalTokenUsage?: number;
           totalCostUsd?: number;

@@ -275,6 +275,13 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     );
   });
 
+  it('does not start collaboration workers when search mode is on', () => {
+    expect(source.match(/&& !effectiveSearchMode/g)).toHaveLength(2);
+    expect(source).toContain(
+      'effectiveCollab.enabled && collabPolicyEligible && policyEnabled && !effectiveSearchMode',
+    );
+  });
+
   it('carries a successful policy refresh into all collaboration creation branches', () => {
     expect(source.match(/const shouldEnableCollab =/g)).toHaveLength(2);
     // 3 = Send 普通 + Send worktree + 本机/SSH 新建目标;device-link 两条改为在 pending

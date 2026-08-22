@@ -2890,6 +2890,7 @@ export class CodexAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/codex` : 'codex');
     const reviewMode = opts.reviewMode === true;
+    const searchMode = !reviewMode && opts.searchMode === true;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
     }
@@ -3743,7 +3744,12 @@ export class CodexAgent extends BaseAgent {
     };
     const hostDynamicToolProvider = this.deps.codexHostDynamicToolProvider;
     let hostDynamicTools: DynamicToolSpec[] = [];
-    if (!opts.remoteHostId && supportsCodexDynamicTools(opts) && hostDynamicToolProvider) {
+    if (
+      !opts.remoteHostId &&
+      !searchMode &&
+      supportsCodexDynamicTools(opts) &&
+      hostDynamicToolProvider
+    ) {
       try {
         hostDynamicTools = [...hostDynamicToolProvider.listTools(hostDynamicToolContext)];
       } catch (error) {
@@ -4036,6 +4042,81 @@ export class CodexAgent extends BaseAgent {
         releaseHostBindingLeaseIfNeeded();
         throw new Error(
           `Cannot start Codex Review safely because Cindy could not disable local Skills, plugins, and MCP servers: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    if (searchMode && capabilityRoutingProtocolSupported) {
+      try {
+        assertCurrentHost('search-mode isolation');
+        const { skills, errors } = await this.listSkillsForHost(
+          host,
+          opts.workingDir,
+          false,
+          CRITICAL_THREAD_RPC_TIMEOUT_MS,
+        );
+        assertCurrentHost('search-mode isolation');
+        const unscopedSkillError = errors.find((error) => !error.path);
+        if (unscopedSkillError) throw new Error(unscopedSkillError.message);
+        const configResponse = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead,
+          { includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        const effectiveConfig = asRecord(configResponse.config);
+        const configuredMcp = asRecord(effectiveConfig.mcp_servers);
+        const configuredPlugins = asRecord(effectiveConfig.plugins);
+        const skillPaths = new Set([
+          ...skills.map((skill) => skill.path),
+          ...errors.flatMap((error) => (error.path ? [error.path] : [])),
+        ]);
+        const existingSkillConfig = Array.isArray(capabilityRoutingConfig['skills.config'])
+          ? (capabilityRoutingConfig['skills.config'] as Array<{ path?: string }>)
+          : [];
+        const disabledSkills = new Map<string, { path: string; enabled: false }>();
+        for (const entry of existingSkillConfig) {
+          if (typeof entry?.path === 'string' && entry.path) {
+            disabledSkills.set(entry.path, { path: entry.path, enabled: false });
+          }
+        }
+        for (const skillPath of skillPaths) {
+          disabledSkills.set(skillPath, { path: skillPath, enabled: false });
+        }
+        const pluginIds = new Set(Object.keys(configuredPlugins));
+        for (const skillPath of skillPaths) {
+          const pluginId = pluginIdFromCodexSkillPath(skillPath);
+          if (pluginId) pluginIds.add(pluginId);
+        }
+        const searchCapabilityConfig: Record<string, unknown> = {};
+        if (disabledSkills.size > 0) {
+          searchCapabilityConfig['skills.config'] = [...disabledSkills.values()]
+            .sort((a, b) => a.path.localeCompare(b.path));
+        }
+        for (const [serverName, serverConfig] of Object.entries(configuredMcp)) {
+          if (!hasCodexMcpTransport(serverConfig)) continue;
+          searchCapabilityConfig[
+            `mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
+          ] = false;
+        }
+        for (const pluginId of pluginIds) {
+          searchCapabilityConfig[
+            `plugins.${quoteReviewConfigSegment(pluginId)}.enabled`
+          ] = false;
+          const pluginMcp = asRecord(asRecord(configuredPlugins[pluginId]).mcp_servers);
+          for (const [serverName, serverConfig] of Object.entries(pluginMcp)) {
+            if (!hasCodexMcpTransport(serverConfig)) continue;
+            searchCapabilityConfig[
+              `plugins.${quoteReviewConfigSegment(pluginId)}.mcp_servers.${renderReviewConfigSegment(serverName)}.enabled`
+            ] = false;
+          }
+        }
+        capabilityRoutingConfig = {
+          ...capabilityRoutingConfig,
+          ...searchCapabilityConfig,
+        };
+      } catch (error) {
+        releaseHostBindingLeaseIfNeeded();
+        throw new Error(
+          `Cannot start Codex search mode because Cindy could not hide Skills, plugins, and MCP servers: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }

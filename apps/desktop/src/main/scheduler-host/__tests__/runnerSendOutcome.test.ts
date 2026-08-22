@@ -29,7 +29,8 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
-  getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionRowSnapshotForHeartbeat: mocks.getSessionRowSnapshot,
+  getSessionSearchModeEnabled: vi.fn(async () => false),
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -423,6 +424,25 @@ describe('MakerScheduleRunner send outcome policy', () => {
 
     expect(order).toEqual(['release', 'notify']);
     expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a heartbeat snapshot read failure as an archived session', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker } = createRunnerHarness(h.session);
+    mocks.getSessionRowSnapshot.mockRejectedValue(new Error('database unavailable'));
+
+    await expect(
+      runner.fire(
+        baseSchedule({
+          targetSessionId: 'scheduler-session',
+          persistentSession: true,
+        }),
+        createFireContext(),
+      ),
+    ).rejects.toThrow(/database unavailable/);
+
+    expect(maker.createSession).not.toHaveBeenCalled();
     expect(h.send).not.toHaveBeenCalled();
   });
 

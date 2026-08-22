@@ -1,6 +1,6 @@
 import type { Session, SessionMeta } from '@cindy/maker-core';
 
-import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
+import { getSessionRowSnapshot, getSessionSearchModeEnabled } from '../localDb/ipc/sessions.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
 import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
@@ -16,6 +16,7 @@ interface GoalSessionRestoreMaker {
 
 interface GoalSessionRow {
   providerId: string | null;
+  searchModeEnabled?: boolean | null;
 }
 
 /** Injectable seams keep the dormant-session restore ordering deterministic in tests. */
@@ -23,6 +24,7 @@ export interface RestoreGoalSessionDeps {
   maker: GoalSessionRestoreMaker;
   warn(message: string, meta: Record<string, unknown>): void;
   getSessionRow?: (sessionId: string) => Promise<GoalSessionRow | null>;
+  getSearchModeEnabled?: (sessionId: string) => Promise<boolean>;
   hydrateProvider?: (sessionId: string, providerId: string | null) => void;
   prepareOrcaStart?: (sessionId: string, opts: MakerSessionCreateOpts) => Promise<boolean>;
   markOrcaHydrated?: (sessionId: string, opts: MakerSessionCreateOpts) => void;
@@ -52,6 +54,7 @@ export async function restoreSessionForGoal(
 
   try {
     const row = await (deps.getSessionRow ?? getSessionRowSnapshot)(sessionId);
+    const searchMode = await (deps.getSearchModeEnabled ?? getSessionSearchModeEnabled)(sessionId);
     const opts: MakerSessionCreateOpts = {
       id: sessionId,
       agentKind: meta.agentKind,
@@ -65,6 +68,7 @@ export async function restoreSessionForGoal(
       // A persisted null explicitly selects the Cindy default route for Pi;
       // only a missing row has no route value to pass through.
       providerId: row?.providerId,
+      searchMode,
     };
 
     await (deps.prepareOrcaStart ?? preparePersistedOrcaSessionStart)(sessionId, opts);

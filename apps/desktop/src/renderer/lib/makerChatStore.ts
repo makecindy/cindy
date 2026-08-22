@@ -2537,12 +2537,19 @@ export interface SessionChatState {
    * mirrorSessionFields 回流为 false。
    */
   planModeEnabled: boolean;
+  searchModeEnabled: boolean;
   /**
    * planModeEnabled 的本地写入单调计数(setPlanMode / 一次性消耗 / 镜像 / seed)。
    * ensureInitialMessages 的行水合是并行异步读:fetch 期间发生过本地写入时,
    * 读回的行值已陈旧,按此计数丢弃,防止刚被消耗的勾选被复燃(bot review P2)。
    */
   planModeRev: number;
+  /**
+   * searchModeEnabled 的本地写入单调计数(setSearchMode / seed)。
+   * 与 planModeRev 同口径:fetch 期间本地切换过搜索模式时,丢弃陈旧行值,
+   * 避免芯片和菜单被水合盖回旧状态(bot review P2)。
+   */
+  searchModeRev: number;
   /**
    * 最近一次 running→stopped 是否来自 skipTurnReset side-task(mivo 图片按钮等
    * 不走 LLM 的后台任务)。side-task 刻意保留 state.error(上一轮真实失败的
@@ -2671,6 +2678,7 @@ export type SessionChatLightState = Pick<
   | 'queueExpanded'
   | 'fastMode'
   | 'planModeEnabled'
+  | 'searchModeEnabled'
   | 'agentSwitchIntent'
   | 'pendingTaskWake'
   | 'pendingTaskWakeStarted'
@@ -2738,7 +2746,9 @@ function createInitialState(): SessionChatState {
     queueExpanded: false,
     fastMode: false,
     planModeEnabled: false,
+    searchModeEnabled: false,
     planModeRev: 0,
+    searchModeRev: 0,
     lastStopWasSideTask: false,
     pendingTaskWake: 0,
     pendingTaskWakeDuringTurn: 0,
@@ -2811,7 +2821,9 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   queueExpanded: false,
   fastMode: false,
   planModeEnabled: false,
+  searchModeEnabled: false,
   planModeRev: 0,
+  searchModeRev: 0,
   lastStopWasSideTask: false,
   pendingTaskWake: 0,
   pendingTaskWakeDuringTurn: 0,
@@ -8317,6 +8329,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     queueExpanded: state.queueExpanded,
     fastMode: state.fastMode,
     planModeEnabled: state.planModeEnabled,
+    searchModeEnabled: state.searchModeEnabled,
     pendingTaskWake: state.pendingTaskWake,
     pendingTaskWakeStarted: state.pendingTaskWakeStarted,
     turnStoppedByUser: state.turnStoppedByUser,
@@ -8361,6 +8374,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.queueExpanded === b.queueExpanded &&
     a.fastMode === b.fastMode &&
     a.planModeEnabled === b.planModeEnabled &&
+    a.searchModeEnabled === b.searchModeEnabled &&
     a.pendingTaskWake === b.pendingTaskWake &&
     a.pendingTaskWakeStarted === b.pendingTaskWakeStarted &&
     a.turnStoppedByUser === b.turnStoppedByUser
@@ -9777,8 +9791,9 @@ function ensureInitialMessages(sessionId: string): void {
   _historyFetchToken.set(sessionId, historyFetchToken);
   const isCurrentHistoryLoad = () =>
     isCurrentHistoryFetch(sessionId, historyFetchToken, historyOriginAtStart, historyEpochAtStart);
-  // 行水合并行异步读的陈旧性守卫: fetch 启动时定格 rev, 应用时比对(见 planModeRev)。
+  // 行水合并行异步读的陈旧性守卫: fetch 启动时定格 rev, 应用时比对(见 planModeRev / searchModeRev)。
   const planModeRevAtFetchStart = state.planModeRev;
+  const searchModeRevAtFetchStart = state.searchModeRev;
 
   // Mark in-flight to prevent concurrent callers from double-fetching.
   // historyLoaded stays false until data actually arrives.
@@ -9839,6 +9854,13 @@ function ensureInitialMessages(sessionId: string): void {
           s.planModeEnabled !== session.planModeEnabled
         ) {
           updates.planModeEnabled = session.planModeEnabled;
+        }
+        if (
+          session.searchModeEnabled !== undefined &&
+          s.searchModeRev === searchModeRevAtFetchStart &&
+          s.searchModeEnabled !== session.searchModeEnabled
+        ) {
+          updates.searchModeEnabled = session.searchModeEnabled;
         }
         // 重启 / session 切换时从 DB 恢复 cost + context 进圆环。
         // tokenUsage 不恢复 —— 它是 per-turn 内存值, 新 session 打开就该归 0,
@@ -11624,6 +11646,7 @@ export function buildCreateOptsForCurrentSession(
     permissionMode,
     fastMode: current.fastMode,
     planMode: current.planModeEnabled,
+    searchMode: current.searchModeEnabled,
     displayReasoning: 'summarized',
     userPrompt: getUserPrompt(),
     // device-link routes to the target desktop, so omit the controller setting.
@@ -14156,6 +14179,27 @@ async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
   await runtimePush;
 }
 
+async function setSearchMode(sessionId: string, enabled: boolean): Promise<void> {
+  if (!sessionId) return;
+  const previous = getOrCreateState(sessionId).searchModeEnabled;
+  setState(sessionId, (s) =>
+    s.searchModeEnabled === enabled
+      ? s
+      : { ...s, searchModeEnabled: enabled, searchModeRev: s.searchModeRev + 1 },
+  );
+  try {
+    await sessionService.update(sessionId, { searchModeEnabled: enabled });
+  } catch (err) {
+    setState(sessionId, (s) =>
+      s.searchModeEnabled === enabled
+        ? { ...s, searchModeEnabled: previous, searchModeRev: s.searchModeRev + 1 }
+        : s,
+    );
+    log.warn('setSearchMode persist failed:', err);
+    throw err;
+  }
+}
+
 /**
  * Reset Fast Mode to OFF.
  * Server-first: persist false to DB, then update store + push to SDK via IPC.
@@ -14566,6 +14610,7 @@ function setSessionRuntime(
     agentKind?: 'claude-code' | 'codex' | 'pi';
     fastMode?: boolean;
     planModeEnabled?: boolean;
+    searchModeEnabled?: boolean;
   },
 ): void {
   if (!sessionId) return;
@@ -14573,10 +14618,12 @@ function setSessionRuntime(
     const nextAgentKind = opts.agentKind ?? s.agentKind;
     const nextFastMode = opts.fastMode ?? s.fastMode;
     const nextPlanMode = opts.planModeEnabled ?? s.planModeEnabled;
+    const nextSearchMode = opts.searchModeEnabled ?? s.searchModeEnabled;
     if (
       s.agentKind === nextAgentKind &&
       s.fastMode === nextFastMode &&
-      s.planModeEnabled === nextPlanMode
+      s.planModeEnabled === nextPlanMode &&
+      s.searchModeEnabled === nextSearchMode
     )
       return s;
     return {
@@ -14584,7 +14631,9 @@ function setSessionRuntime(
       agentKind: nextAgentKind,
       fastMode: nextFastMode,
       planModeEnabled: nextPlanMode,
+      searchModeEnabled: nextSearchMode,
       ...(s.planModeEnabled !== nextPlanMode ? { planModeRev: s.planModeRev + 1 } : {}),
+      ...(s.searchModeEnabled !== nextSearchMode ? { searchModeRev: s.searchModeRev + 1 } : {}),
     };
   });
 }
@@ -14625,6 +14674,7 @@ function mirrorSessionFields(
     | {
         fastMode?: unknown;
         planModeEnabled?: unknown;
+        searchModeEnabled?: unknown;
         agentKind?: unknown;
         agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
@@ -14671,6 +14721,14 @@ function mirrorSessionFields(
       s.planModeEnabled === next
         ? s
         : { ...s, planModeEnabled: next, planModeRev: s.planModeRev + 1 },
+    );
+  }
+  if (typeof patch.searchModeEnabled === 'boolean') {
+    const next = patch.searchModeEnabled;
+    setState(sessionId, (s) =>
+      s.searchModeEnabled === next
+        ? s
+        : { ...s, searchModeEnabled: next, searchModeRev: s.searchModeRev + 1 },
     );
   }
 }
@@ -14806,6 +14864,7 @@ export const makerChatStore = {
   setFastMode,
   resetFastMode,
   setPlanMode,
+  setSearchMode,
   setPlanViewerState,
   /** F-AUQ-MIN-2/4: minimize/restore the AskUserQuestion prompt UI. */
   setAskUserViewerState,

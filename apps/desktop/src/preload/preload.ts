@@ -5626,6 +5626,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       permissionMode?: string;
       /** 计划模式一级开关(与 permissionMode 正交)。 */
       planMode?: boolean;
+      /** 搜索模式：startSession 时不把 skill 列表喂给模型。 */
+      searchMode?: boolean;
       systemPrompt?: string;
       /**
        * 用户级 system prompt 末段, agent.startSession 时拼到 systemPrompt /
@@ -5733,6 +5735,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         permissionMode?: string;
         /** 计划模式一级开关(与 permissionMode 正交)。 */
         planMode?: boolean;
+        /** 搜索模式：startSession 时不把 skill 列表喂给模型。 */
+        searchMode?: boolean;
         /** 用户级 system prompt 末段; 仅 lazy-create 那一次生效, 已 spawn 的 session 忽略。 */
         userPrompt?: string;
         /** Maker Memory 启用 flag; 仅 lazy-create 时生效, 已 spawn 的 session 忽略。 */
@@ -5778,6 +5782,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         permissionMode?: string;
         /** 计划模式一级开关(与 permissionMode 正交)。 */
         planMode?: boolean;
+        /** 搜索模式：startSession 时不把 skill 列表喂给模型。 */
+        searchMode?: boolean;
         userPrompt?: string;
         makerMemoryEnabled?: boolean;
         extraDirs?: string[];

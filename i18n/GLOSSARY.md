@@ -315,6 +315,10 @@ Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改�
 
 日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。
 
+### Search mode
+
+桌面 Composer 会话级开关：开了以后挡住帮手、插件、skill、浏览器，只用模型自己的公开网页搜索和开页。与 Plan mode 同级入口。五语已在 desktop:searchMode.* 落地，先登记为 proposed，避免后续界面另造「检索模式 / 网页模式 / Web search mode」等冲突叫法。
+
 ### shortcut listener permission
 
 macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Cindy 内的对外称法。产品侧只按用途讲: 这个权限只服务语音输入快捷键的监听, 不讲系统实现, 所以 zh-CN 沿用设置页权限项已有的「监听权限」(settings.voiceInput.permissions.inputMonitoring.label), 不引入「输入监控」这个直译——后者听起来像 Cindy 在监控用户的全部输入, 与实际能力(只识别快捷键按键组合)不符, 反而制造隐私误解。禁用项都挂 whenEn 条件: 要引用 macOS 系统设置面板名本身时那是 OS 的 UI 名称, 不受本条约束。四语的比喻不统一(en listener / ja 監視 / ko 감지)是现状登记而非裁决——各语言内部一致但跨语言不同, 保持 proposed 等产品拍板, 先把清单摆出来防止继续在 listener / monitoring / detection 之间漂移。

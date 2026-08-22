@@ -100,6 +100,8 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
+import { createSearchModeHooks } from './claude-hooks/search-mode-hook.js';
+import { getSessionSearchModeEnabled } from '../localDb/ipc/sessions.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
@@ -1006,6 +1008,18 @@ export function getMaker(): Maker {
           ],
         },
         createBashConcurrencyHooks(commandConcurrencyGate, desktopMakerLogger),
+        createSearchModeHooks(
+          {
+            resolveCindySessionId: (sdkSessionId) => {
+              const maker = _maker;
+              if (!maker) return null;
+              const session = maker.listActiveSessions().find((item) => item.sdkSessionId === sdkSessionId);
+              return session?.id ?? null;
+            },
+            isSearchModeEnabled: (sessionId) => getSessionSearchModeEnabled(sessionId),
+          },
+          desktopMakerLogger,
+        ),
       ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
