@@ -3744,7 +3744,12 @@ export class CodexAgent extends BaseAgent {
     };
     const hostDynamicToolProvider = this.deps.codexHostDynamicToolProvider;
     let hostDynamicTools: DynamicToolSpec[] = [];
-    if (!opts.remoteHostId && supportsCodexDynamicTools(opts) && hostDynamicToolProvider) {
+    if (
+      !opts.remoteHostId &&
+      !searchMode &&
+      supportsCodexDynamicTools(opts) &&
+      hostDynamicToolProvider
+    ) {
       try {
         hostDynamicTools = [...hostDynamicToolProvider.listTools(hostDynamicToolContext)];
       } catch (error) {

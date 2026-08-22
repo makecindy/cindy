@@ -882,6 +882,51 @@ describe('CodexAgent permissions', () => {
     await handle.close();
   });
 
+  it('does not register host dynamic tools in search mode', async () => {
+    const listTools = vi.fn(() => [
+      {
+        type: 'function' as const,
+        name: 'cindy_ios_simulator__list_tools',
+        description: 'Discover embedded simulator tools.',
+        inputSchema: { type: 'object' },
+        deferLoading: false,
+      },
+      {
+        type: 'function' as const,
+        name: 'cindy_ios_simulator__call_tool',
+        description: 'Call an embedded simulator tool.',
+        inputSchema: { type: 'object' },
+        deferLoading: false,
+      },
+    ]);
+    const agent = new CodexAgent(createDeps({}, {
+      codexHostDynamicToolProvider: {
+        listTools,
+        callTool: vi.fn(async () => ({
+          contentItems: [{ type: 'inputText' as const, text: '{"ok":true}' }],
+          success: true,
+        })),
+      },
+    }));
+    const host = installFakeHost(agent, undefined, { userAgent: 'mock-codex/0.145.0' });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-search-no-simulator',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      searchMode: true,
+    });
+
+    expect(listTools).not.toHaveBeenCalled();
+    const threadStart = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { dynamicTools?: Array<{ name?: string }> };
+    const names = (threadStart.dynamicTools ?? []).map((tool) => tool.name);
+    expect(names).not.toContain('cindy_ios_simulator__list_tools');
+    expect(names).not.toContain('cindy_ios_simulator__call_tool');
+    await handle.close();
+  });
+
   it('fails closed when Review sees an unknown runtime-only MCP server', async () => {
     const reviewDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-review-runtime-mcp-'));
     tempRoots.push(reviewDir);

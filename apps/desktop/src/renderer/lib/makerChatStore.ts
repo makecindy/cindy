@@ -14564,6 +14564,7 @@ function mirrorSessionFields(
     | {
         fastMode?: unknown;
         planModeEnabled?: unknown;
+        searchModeEnabled?: unknown;
         agentKind?: unknown;
         agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
@@ -14610,6 +14611,14 @@ function mirrorSessionFields(
       s.planModeEnabled === next
         ? s
         : { ...s, planModeEnabled: next, planModeRev: s.planModeRev + 1 },
+    );
+  }
+  if (typeof patch.searchModeEnabled === 'boolean') {
+    const next = patch.searchModeEnabled;
+    setState(sessionId, (s) =>
+      s.searchModeEnabled === next
+        ? s
+        : { ...s, searchModeEnabled: next, searchModeRev: s.searchModeRev + 1 },
     );
   }
 }
