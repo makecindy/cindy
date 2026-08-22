@@ -18,6 +18,7 @@ import {
   prepareInputPath,
   prepareOutputPath,
   resolveSessionRoot,
+  writeOutputFile,
 } from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
 import {
@@ -265,7 +266,7 @@ export function registerMakePptxTool(
         }
 
         const buffer = (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
-        await fs.writeFile(abs, buffer);
+        await writeOutputFile(abs, buffer, overwrite);
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'pptx',

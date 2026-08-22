@@ -5,13 +5,17 @@
  * 应该是能直接看的表,而不是一片等宽未冻结的裸数据。
  */
 
-import { promises as fs } from 'node:fs';
-
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
-import { describeOutput, DocsPathError, prepareOutputPath, resolveSessionRoot } from './_paths.js';
+import {
+  describeOutput,
+  DocsPathError,
+  prepareOutputPath,
+  resolveSessionRoot,
+  writeOutputFile,
+} from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
 import {
   DEFAULT_DOCS_THEME,
@@ -366,7 +370,7 @@ export function registerMakeXlsxTool(
         }
 
         const arrayBuffer = await workbook.xlsx.writeBuffer();
-        await fs.writeFile(abs, Buffer.from(arrayBuffer as ArrayBuffer));
+        await writeOutputFile(abs, Buffer.from(arrayBuffer as ArrayBuffer), overwrite);
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'xlsx',

@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
 import { isSupportedPptxImage, PPTX_THEMES } from '../cindy-docs/make_pptx.js';
+import { writeOutputFile } from '../cindy-docs/_paths.js';
 import type {
   DocsMcpDeps,
   DocsMcpSessionCtx,
@@ -506,6 +507,44 @@ describe('read_sheet', () => {
     expect(result.truncationNote).toContain('50');
   });
 
+  it('按 worksheet.rowCount 保留物理行号,稀疏尾行会正确标记截断', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Sparse');
+    sheet.getCell('A1000').value = 'tail';
+    await fs.writeFile(
+      path.join(workdir, 'sparse.xlsx'),
+      Buffer.from((await workbook.xlsx.writeBuffer()) as ArrayBuffer),
+    );
+    const client = await connect();
+    const first = await callTool(client, 'read_sheet', { path: 'sparse.xlsx', maxRows: 200 });
+    expect(first.totalRows).toBe(1000);
+    expect(first.returnedRows).toBe(200);
+    expect(first.truncated).toBe(true);
+
+    const full = await callTool(client, 'read_sheet', { path: 'sparse.xlsx', maxRows: 1000 });
+    expect(full.totalRows).toBe(1000);
+    expect(full.truncated).toBe(false);
+    expect((full.rows as unknown[][])[999]![0]).toBe('tail');
+  });
+
+  it('xlsx 输入先过文件大小与 ZIP 解压比上限,不把异常压缩包交给 ExcelJS', async () => {
+    const client = await connect();
+    await fs.writeFile(path.join(workdir, 'huge.xlsx'), Buffer.alloc(32 * 1024 * 1024 + 1, 0));
+    expect((await callTool(client, 'read_sheet', { path: 'huge.xlsx' })).errorCode).toBe(
+      'FILE_TOO_LARGE',
+    );
+
+    const zip = new JSZip();
+    zip.file('xl/worksheets/sheet1.xml', '<sheetData>' + 'x'.repeat(2 * 1024 * 1024) + '</sheetData>');
+    await fs.writeFile(
+      path.join(workdir, 'bomb.xlsx'),
+      await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 9 } }),
+    );
+    const bomb = await callTool(client, 'read_sheet', { path: 'bomb.xlsx' });
+    expect(bomb.errorCode).toBe('FILE_TOO_LARGE');
+    expect((bomb.data as Record<string, string>).hint).toContain('压缩');
+  });
+
   it('.xls 与未知扩展名给出可执行的降级指引', async () => {
     const client = await connect();
     await fs.writeFile(path.join(workdir, 'old.xls'), 'x', 'utf-8');
@@ -569,6 +608,18 @@ describe('路径边界与覆盖语义', () => {
     });
     expect(forced.ok).toBe(true);
     expect(await unzip(forced.path as string, 'word/document.xml')).toContain('第二版');
+  });
+
+  it('并发写同一路径时默认模式由最终 wx 落盘闸门保证只成功一次', async () => {
+    const target = path.join(workdir, 'race.bin');
+    const results = await Promise.allSettled([
+      writeOutputFile(target, Buffer.from('one'), false),
+      writeOutputFile(target, Buffer.from('two'), false),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected?.status === 'rejected' && rejected.reason?.code).toBe('FILE_EXISTS');
+    expect(['one', 'two']).toContain(await fs.readFile(target, 'utf8'));
   });
 
   it('无 workingDir 时 fail closed', async () => {

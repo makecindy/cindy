@@ -23,8 +23,28 @@ interface FakeWindowOptions {
   [k: string]: unknown;
 }
 
+class FakeSession {
+  permissionRequestHandler: ((...args: any[]) => void) | undefined;
+  permissionCheckHandler: ((...args: any[]) => boolean) | undefined;
+  beforeRequestHandler: ((details: { url: string }, callback: (response: { cancel: boolean }) => void) => void) | undefined;
+  webRequest = {
+    onBeforeRequest: vi.fn((handler: (details: { url: string }, callback: (response: { cancel: boolean }) => void) => void) => {
+      this.beforeRequestHandler = handler;
+    }),
+  };
+
+  setPermissionRequestHandler(handler: (...args: any[]) => void): void {
+    this.permissionRequestHandler = handler;
+  }
+
+  setPermissionCheckHandler(handler: (...args: any[]) => boolean): void {
+    this.permissionCheckHandler = handler;
+  }
+}
+
 class FakeWebContents extends EventEmitter {
   windowOpenHandler: ((details: unknown) => unknown) | undefined;
+  readonly session = new FakeSession();
 
   printToPDF = vi.fn(async (_opts: unknown) => {
     FakeBrowserWindow.calls.push('printToPDF');
@@ -144,7 +164,32 @@ describe('渲染窗的安全配置', () => {
     });
     expect(prefs.preload).toBeUndefined();
     expect(prefs.enableBlinkFeatures).toBeUndefined();
+    expect(prefs.partition).toMatch(/^temp:cindy-docs-/);
+    expect(win.webContents.session.webRequest.onBeforeRequest).toHaveBeenCalledTimes(1);
+    expect(win.webContents.session.permissionRequestHandler).toBeDefined();
+    expect(win.webContents.session.permissionCheckHandler).toBeDefined();
+    const permissionCallback = vi.fn();
+    win.webContents.session.permissionRequestHandler!({}, 'geolocation', permissionCallback);
+    expect(permissionCallback).toHaveBeenCalledWith(false);
+    expect(win.webContents.session.permissionCheckHandler!()).toBe(false);
     expect(win.shown).toBe(false);
+  });
+
+  it('请求级 URL 策略只放行本地同目录资源与内联 URL,阻断网络和越界 file URL', async () => {
+    const localAsset = path.join(tempRoot, 'asset.txt');
+    await fs.writeFile(localAsset, 'asset', 'utf8');
+    await renderHtmlToPdf({ ...BASE_INPUT, htmlPath: path.join(tempRoot, 'src.html') }).catch(() => undefined);
+    const win = FakeBrowserWindow.instances[0]!;
+    const handler = win.webContents.session.beforeRequestHandler!;
+    const decide = async (url: string): Promise<boolean> => {
+      const response = await new Promise<{ cancel: boolean }>((resolve) => handler({ url }, resolve));
+      return !response.cancel;
+    };
+    expect(await decide(`file://${localAsset}`)).toBe(true);
+    expect(await decide('data:text/plain,ok')).toBe(true);
+    expect(await decide('https://example.com/font.woff2')).toBe(false);
+    expect(await decide('http://127.0.0.1:8080/secret')).toBe(false);
+    expect(await decide('file:///etc/passwd')).toBe(false);
   });
 
   it('弹窗与 Renderer 发起的导航一律 deny', async () => {

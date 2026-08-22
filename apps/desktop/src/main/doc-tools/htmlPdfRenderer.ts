@@ -34,8 +34,10 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { BrowserWindow, app } from 'electron';
 
@@ -81,19 +83,23 @@ function tempRoot(): string {
 
 interface PreparedSource {
   fileUrlPath: string;
+  /** 允许 file:// 子资源读取的目录,防止 HTML 借 file URL 读取任意本地文件。 */
+  allowedFileRoot: string;
   /** 需要清理的临时目录(仅内联 HTML 走这条路)。 */
   cleanupDir?: string;
 }
 
 async function prepareSource(input: DocsPdfRenderInput): Promise<PreparedSource> {
-  if (input.htmlPath) return { fileUrlPath: input.htmlPath };
+  if (input.htmlPath) {
+    return { fileUrlPath: input.htmlPath, allowedFileRoot: path.dirname(input.htmlPath) };
+  }
   const dir = await fs.mkdtemp(path.join(tempRoot(), 'cindy-docs-html-'));
   const file = path.join(dir, 'source.html');
   await fs.writeFile(file, input.html ?? '', 'utf-8');
-  return { fileUrlPath: file, cleanupDir: dir };
+  return { fileUrlPath: file, allowedFileRoot: dir, cleanupDir: dir };
 }
 
-function createRenderWindow(): BrowserWindow {
+function createRenderWindow(partition: string): BrowserWindow {
   return new BrowserWindow({
     show: false,
     width: RENDER_VIEWPORT.width,
@@ -102,6 +108,9 @@ function createRenderWindow(): BrowserWindow {
     skipTaskbar: true,
     paintWhenInitiallyHidden: true,
     webPreferences: {
+      // 每次渲染独占一个非持久 partition,不与主窗口/OAuth 页面共享 Cookie、缓存、
+      // localStorage 或既有权限状态。temp: partition 在窗口销毁后不落盘。
+      partition,
       // ── electron-security §3:全部安全字段显式写死 ──
       sandbox: true,
       contextIsolation: true,
@@ -119,6 +128,50 @@ function createRenderWindow(): BrowserWindow {
       // 有意不设 enableBlinkFeatures。
       backgroundThrottling: false,
     },
+  });
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel.length === 0 || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * PDF 排版窗只允许读取当前 HTML 目录里的本地资源、data/blob URL 与 about:blank。
+ * 外部网络请求一律取消:即便不读取响应,图片/字体/iframe 也能借用户网络身份探测
+ * localhost/内网或触发第三方跟踪副作用。需要远程资源时由模型先转成 data URI。
+ */
+async function isAllowedResourceUrl(requestUrl: string, allowedFileRoot: string): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(requestUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol === 'data:' || parsed.protocol === 'blob:' || parsed.protocol === 'about:') {
+    return true;
+  }
+  if (parsed.protocol !== 'file:') return false;
+  try {
+    const filePath = fileURLToPath(parsed);
+    const [rootReal, fileReal] = await Promise.all([
+      fs.realpath(allowedFileRoot),
+      fs.realpath(filePath),
+    ]);
+    return isPathInside(rootReal, fileReal);
+  } catch {
+    return false;
+  }
+}
+
+function lockRequests(win: BrowserWindow, allowedFileRoot: string): void {
+  const session = win.webContents.session;
+  session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  session.setPermissionCheckHandler(() => false);
+  session.webRequest.onBeforeRequest((details, callback) => {
+    void isAllowedResourceUrl(details.url, allowedFileRoot)
+      .then((allowed) => callback({ cancel: !allowed }))
+      .catch(() => callback({ cancel: true }));
   });
 }
 
@@ -181,9 +234,10 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
   let timer: NodeJS.Timeout | undefined;
 
   try {
-    win = createRenderWindow();
+    win = createRenderWindow(`temp:cindy-docs-${randomUUID()}`);
     const target = win;
     lockNavigation(target);
+    lockRequests(target, source.allowedFileRoot);
 
     const work = (async (): Promise<RenderAttemptResult> => {
       // 加载失败与 Renderer 崩溃都要把这次渲染判死,否则 printToPDF 会在一个空白

@@ -28,7 +28,8 @@ export class DocsPathError extends Error {
       | 'FILE_EXISTS'
       | 'NOT_A_FILE'
       | 'SHEET_NOT_FOUND'
-      | 'FILE_TOO_LARGE',
+      | 'FILE_TOO_LARGE'
+      | 'READ_TIMEOUT',
     message: string,
     readonly hint: string,
   ) {
@@ -108,6 +109,45 @@ export async function prepareOutputPath(
   // 先手工 mkdir 一次)。recursive 对已存在目录是 no-op。
   await fs.mkdir(path.dirname(abs), { recursive: true });
   return abs;
+}
+
+/**
+ * 在最终落盘处再次执行防覆盖判定，避免 prepareOutputPath 的 stat/write 竞态：
+ * - 默认模式用 wx，目标在两次调用之间出现时也只会失败，不会截断它；
+ * - 覆盖模式先写同目录临时文件，再用 rename 原子替换，读者不会看到半个产物。
+ */
+export async function writeOutputFile(
+  abs: string,
+  data: Uint8Array | string,
+  overwrite: boolean,
+): Promise<void> {
+  if (!overwrite) {
+    try {
+      await fs.writeFile(abs, data, { flag: 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+        throw new DocsPathError(
+          'FILE_EXISTS',
+          `目标文件已存在: ${abs}`,
+          '同名文件已存在。确认要覆盖就再调一次并传 overwrite: true,否则换一个文件名(建议加日期或版本后缀)。',
+        );
+      }
+      throw err;
+    }
+    return;
+  }
+
+  const dir = path.dirname(abs);
+  const stagingDir = await fs.mkdtemp(path.join(dir, '.cindy-docs-staging-'));
+  const stagingPath = path.join(stagingDir, path.basename(abs));
+  try {
+    await fs.writeFile(stagingPath, data, { flag: 'wx' });
+    await fs.rename(stagingPath, abs);
+  } finally {
+    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {
+      /* 临时 staging 清理尽力而为 */
+    });
+  }
 }
 
 /** 校验一个读取路径:边界钳制 + 必须是普通文件。 */

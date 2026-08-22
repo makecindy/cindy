@@ -9,9 +9,11 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { Worker } from 'node:worker_threads';
 
-import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
@@ -24,6 +26,11 @@ const DEFAULT_MAX_ROWS = 200;
 const HARD_MAX_ROWS = 5000;
 /** 文本表格的读入上限(字节)。超过就拒读,避免把几百 MB 日志当 csv 塞进内存。 */
 const MAX_TEXT_BYTES = 32 * 1024 * 1024;
+/** xlsx 在 ExcelJS 中会展开 ZIP,压缩包与展开后都设硬上限。 */
+const MAX_XLSX_BYTES = 32 * 1024 * 1024;
+const MAX_XLSX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024;
+const MAX_XLSX_COMPRESSION_RATIO = 100;
+const XLSX_READ_TIMEOUT_MS = 15_000;
 
 const DESCRIPTION = [
   '读取工作目录内的表格文件(.xlsx / .csv / .tsv),返回结构化的二维数据。',
@@ -37,36 +44,13 @@ const DESCRIPTION = [
   '',
   '【返回】rows 是二维数组(每格为字符串、数字、布尔或 null);',
   'xlsx 的公式格返回其缓存的计算结果,日期返回 ISO 字符串。',
+  'xlsx 会先检查文件大小与 ZIP 解压比,再在受限 worker 中解析(15 秒超时);超限会返回 FILE_TOO_LARGE/READ_TIMEOUT。',
   '',
   '【读不到时】文件不在工作目录内会返回 PATH_NOT_ALLOWED,不存在返回 NOT_A_FILE。',
   '.xls(老二进制格式)不支持,先让用户另存为 .xlsx。',
 ].join('\n');
 
 type SheetCell = string | number | boolean | null;
-
-/** 把 exceljs 的富值(公式/富文本/超链接/日期/错误)压成一个朴素标量。 */
-function normalizeCell(value: unknown): SheetCell {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    // 公式格:优先用缓存结果,没有结果就回落公式文本,让模型知道这是算出来的。
-    if ('result' in obj) return normalizeCell(obj.result);
-    if ('formula' in obj) return `=${String(obj.formula)}`;
-    if ('text' in obj && typeof obj.text === 'string') return obj.text;
-    if ('hyperlink' in obj && typeof obj.hyperlink === 'string') return obj.hyperlink;
-    if ('richText' in obj && Array.isArray(obj.richText)) {
-      return (obj.richText as Array<{ text?: string }>)
-        .map((part) => part.text ?? '')
-        .join('');
-    }
-    if ('error' in obj) return String(obj.error);
-  }
-  return String(value);
-}
 
 interface SheetRead {
   rows: SheetCell[][];
@@ -75,55 +59,162 @@ interface SheetRead {
   sheetNames?: string[];
 }
 
+interface ZipEntryData {
+  _data?: { compressedSize?: number; uncompressedSize?: number };
+}
+
+async function assertSafeXlsxArchive(absPath: string): Promise<void> {
+  const stat = await fs.stat(absPath);
+  if (stat.size > MAX_XLSX_BYTES) {
+    throw new DocsPathError(
+      'FILE_TOO_LARGE',
+      `工作簿过大: ${stat.size} 字节`,
+      `这个 .xlsx 文件有 ${(stat.size / 1024 / 1024).toFixed(1)} MB,超出单次读取上限(32 MB)。请先拆分工作簿,或改用命令行工具处理。`,
+    );
+  }
+
+  const archive = await fs.readFile(absPath);
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(archive, { createFolders: false });
+  } catch {
+    // 让 ExcelJS 给出原本的格式错误信息,这里仅负责资源边界。
+    return;
+  }
+  let compressed = 0;
+  let uncompressed = 0;
+  for (const entry of Object.values(zip.files) as ZipEntryData[]) {
+    const data = entry._data;
+    if (!data) continue;
+    compressed += data.compressedSize ?? 0;
+    uncompressed += data.uncompressedSize ?? 0;
+    if (uncompressed > MAX_XLSX_UNCOMPRESSED_BYTES) {
+      throw new DocsPathError(
+        'FILE_TOO_LARGE',
+        `工作簿解压后过大: ${uncompressed} 字节`,
+        '这个工作簿的解压体积超过 128 MB,为保护 Cindy 主进程已拒绝读取。请先拆分或重新保存文件。',
+      );
+    }
+  }
+  const ratio = compressed > 0 ? uncompressed / compressed : Number.POSITIVE_INFINITY;
+  if (ratio > MAX_XLSX_COMPRESSION_RATIO) {
+    throw new DocsPathError(
+      'FILE_TOO_LARGE',
+      `工作簿压缩比异常: ${ratio.toFixed(1)}:1`,
+      '这个工作簿疑似是异常压缩包,为保护 Cindy 主进程已拒绝读取。请用 Excel/WPS 重新另存为 .xlsx 后再试。',
+    );
+  }
+}
+
+const XLSX_WORKER_SOURCE = String.raw`
+const { parentPort, workerData } = require('node:worker_threads');
+const ExcelJS = require(workerData.exceljsPath);
+
+function normalizeCell(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object') {
+    if ('result' in value) return normalizeCell(value.result);
+    if ('formula' in value) return '=' + String(value.formula);
+    if ('text' in value && typeof value.text === 'string') return value.text;
+    if ('hyperlink' in value && typeof value.hyperlink === 'string') return value.hyperlink;
+    if ('richText' in value && Array.isArray(value.richText)) return value.richText.map((part) => part.text || '').join('');
+    if ('error' in value) return String(value.error);
+  }
+  return String(value);
+}
+
+(async () => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(workerData.absPath);
+  const sheetNames = workbook.worksheets.map((ws) => ws.name);
+  if (sheetNames.length === 0) return parentPort.postMessage({ rows: [], totalRows: 0, sheetNames });
+  let worksheet = workbook.worksheets[0];
+  if (typeof workerData.sheetSelector === 'number') worksheet = workbook.worksheets[workerData.sheetSelector - 1];
+  else if (typeof workerData.sheetSelector === 'string' && workerData.sheetSelector.length > 0) {
+    worksheet = workbook.worksheets.find((ws) => ws.name === workerData.sheetSelector);
+  }
+  if (!worksheet) {
+    const error = new Error('SHEET_NOT_FOUND');
+    error.code = 'SHEET_NOT_FOUND';
+    error.available = sheetNames;
+    throw error;
+  }
+  const totalRows = Math.max(worksheet.rowCount || 0, worksheet.actualRowCount || 0);
+  const columnCount = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
+  const rows = [];
+  const lastRow = Math.min(totalRows, workerData.maxRows);
+  for (let r = 1; r <= lastRow; r += 1) {
+    const row = worksheet.getRow(r);
+    const cells = [];
+    for (let c = 1; c <= columnCount; c += 1) cells.push(normalizeCell(row.getCell(c).value));
+    rows.push(cells);
+  }
+  parentPort.postMessage({ rows, totalRows, sheetName: worksheet.name, sheetNames });
+})().catch((error) => parentPort.postMessage({ error: {
+  code: error.code,
+  message: String(error.message || error),
+  available: error.available,
+} }));
+`;
+
+function readXlsxInWorker(
+  absPath: string,
+  sheetSelector: string | number | undefined,
+  maxRows: number,
+): Promise<SheetRead> {
+  return new Promise((resolve, reject) => {
+const worker = new Worker(XLSX_WORKER_SOURCE, {
+      eval: true,
+      workerData: { absPath, sheetSelector, maxRows, exceljsPath: createRequire(import.meta.url).resolve('exceljs') },
+      resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 },
+    });
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn();
+      void worker.terminate();
+    };
+    timer = setTimeout(() => {
+      finish(() => reject(new DocsPathError(
+        'READ_TIMEOUT',
+        `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
+        '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
+      )));
+    }, XLSX_READ_TIMEOUT_MS);
+    worker.once('message', (message: { error?: { code?: string; message?: string; available?: string[] } } & SheetRead) => {
+      if (message.error) {
+        if (message.error.code === 'SHEET_NOT_FOUND') {
+          finish(() => reject(new DocsPathError(
+            'SHEET_NOT_FOUND',
+            `找不到工作表: ${String(sheetSelector)}`,
+            `这个文件里的工作表是:${message.error?.available?.join(' / ') || '未知'}。请换一个名称或序号。`,
+          )));
+        } else {
+          finish(() => reject(Object.assign(new Error(message.error?.message || '读取工作簿失败'), { code: message.error?.code })));
+        }
+        return;
+      }
+      finish(() => resolve(message));
+    });
+    worker.once('error', (error) => finish(() => reject(error)));
+    worker.once('exit', (code) => {
+      if (code !== 0) finish(() => reject(new Error(`工作簿解析进程退出(${code})`)));
+    });
+  });
+}
+
 async function readXlsx(
   absPath: string,
   sheetSelector: string | number | undefined,
   maxRows: number,
 ): Promise<SheetRead> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(absPath);
-  const sheetNames = workbook.worksheets.map((ws) => ws.name);
-  if (sheetNames.length === 0) {
-    return { rows: [], totalRows: 0, sheetNames };
-  }
-
-  let worksheet = workbook.worksheets[0]!;
-  if (typeof sheetSelector === 'number') {
-    const found = workbook.worksheets[sheetSelector - 1];
-    if (!found) {
-      throw new DocsPathError(
-        'SHEET_NOT_FOUND',
-        `工作表序号越界: ${sheetSelector}`,
-        `这个文件只有 ${sheetNames.length} 张工作表(${sheetNames.join(' / ')})。请换一个序号或直接传工作表名。`,
-      );
-    }
-    worksheet = found;
-  } else if (typeof sheetSelector === 'string' && sheetSelector.length > 0) {
-    const found = workbook.worksheets.find((ws) => ws.name === sheetSelector);
-    if (!found) {
-      throw new DocsPathError(
-        'SHEET_NOT_FOUND',
-        `找不到工作表: ${sheetSelector}`,
-        `这个文件里没有叫 "${sheetSelector}" 的工作表。可选的是:${sheetNames.join(' / ')}。`,
-      );
-    }
-    worksheet = found;
-  }
-
-  const totalRows = worksheet.actualRowCount ?? worksheet.rowCount ?? 0;
-  const columnCount = worksheet.actualColumnCount ?? worksheet.columnCount ?? 0;
-  const rows: SheetCell[][] = [];
-  // eachRow 会跳过完全空的行,而我们要保持行号语义,所以按 1..rowCount 顺序取。
-  const lastRow = Math.min(worksheet.rowCount ?? 0, Math.max(totalRows, 0) + maxRows);
-  for (let r = 1; r <= lastRow && rows.length < maxRows; r += 1) {
-    const row = worksheet.getRow(r);
-    const cells: SheetCell[] = [];
-    for (let c = 1; c <= columnCount; c += 1) {
-      cells.push(normalizeCell(row.getCell(c).value));
-    }
-    rows.push(cells);
-  }
-  return { rows, totalRows: Math.max(totalRows, rows.length), sheetName: worksheet.name, sheetNames };
+  await assertSafeXlsxArchive(absPath);
+  return readXlsxInWorker(absPath, sheetSelector, maxRows);
 }
 
 async function readTextTable(

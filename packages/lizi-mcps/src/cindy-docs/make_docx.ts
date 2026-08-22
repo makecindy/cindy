@@ -5,12 +5,16 @@
  * 是真 Word 文档,标题进导航窗格、表格能选中、列表能续编号,用户可以接着改。
  */
 
-import { promises as fs } from 'node:fs';
-
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
-import { describeOutput, DocsPathError, prepareOutputPath, resolveSessionRoot } from './_paths.js';
+import {
+  describeOutput,
+  DocsPathError,
+  prepareOutputPath,
+  resolveSessionRoot,
+  writeOutputFile,
+} from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
 import { markdownToDocxBuffer } from './markdownToDocx.js';
 import type { DocsMcpSessionCtx } from './types.js';
@@ -79,7 +83,7 @@ export function registerMakeDocxTool(
           ...(trimmedTitle.length > 0 ? { title: trimmedTitle } : {}),
           ...(subtitle ? { subtitle } : {}),
         });
-        await fs.writeFile(abs, buffer);
+        await writeOutputFile(abs, buffer, overwrite);
         return okPayload({
           ...(await describeOutput(root, abs)),
           format: 'docx',

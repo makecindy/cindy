@@ -14,7 +14,14 @@ import { promises as fs } from 'node:fs';
 import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
-import { describeOutput, DocsPathError, prepareInputPath, prepareOutputPath, resolveSessionRoot } from './_paths.js';
+import {
+  describeOutput,
+  DocsPathError,
+  prepareInputPath,
+  prepareOutputPath,
+  resolveSessionRoot,
+  writeOutputFile,
+} from './_paths.js';
 import { errorPayload, okPayload } from './_payload.js';
 import {
   applyReportTemplate,
@@ -44,7 +51,8 @@ const DESCRIPTION = [
   '如果产物要给人二次编辑,请改用 make_docx —— PDF 不好改。',
   '',
   '【输入】htmlPath(工作目录内的 .html 文件)与 html(内联源码)二选一,必须给且只给一个。',
-  'HTML 里可以引用网络资源(图片、字体);相对路径资源只有在用 htmlPath 时才解析得到。',
+  '为防止不可信 HTML 借用户网络身份探测内网或触发跟踪,渲染窗会阻断外部网络请求。',
+  '图片/字体请内联成 data URI;相对路径资源只有在用 htmlPath 时才解析得到。',
   '',
   '【模板】template 默认 auto:没有 <style> / 外链 CSS 的裸 HTML 会自动套内置报告模板',
   '(系统字体、标题层级、表格斑马纹、打印页边距)。已经自己写了样式的原样透传。',
@@ -180,7 +188,7 @@ export function registerRenderPdfTool(
             {},
           );
         }
-        await fs.writeFile(abs, buffer);
+        await writeOutputFile(abs, buffer, overwrite);
 
         const described = await describeOutput(root, abs);
         const warnings: string[] = [];
