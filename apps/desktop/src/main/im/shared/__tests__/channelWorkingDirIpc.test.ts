@@ -188,6 +188,68 @@ describe.each(CHANNELS)('channelWorkingDirIpc handlers ($label)', ({ code, label
     await expect(failing.resetWorkingDir()).rejects.toThrow(`[${code}]`);
   });
 
+  it('returns settings normally when the generation stays stable across a slow read', async () => {
+    let resolveRead!: (state: typeof PICKED_STATE) => void;
+    const deps = makeDeps({
+      readSettings: vi.fn(
+        () => new Promise<typeof PICKED_STATE>((resolve) => { resolveRead = resolve; }),
+      ),
+    });
+    const handlers = makeHandlers(deps);
+
+    const pending = handlers.getChannelSettings();
+    resolveRead(PICKED_STATE);
+    await expect(pending).resolves.toBe(PICKED_STATE);
+  });
+
+  it('drops a slow settings read that crosses an account switch', async () => {
+    // A 账号的目录在慢速网络盘上: 读取挂起期间切到 B — A 的绝对路径不得
+    // 返回给当前 Renderer(Main 侧守卫, renderer 无法可靠拦截)。
+    const OLD_ACCOUNT_STATE = {
+      version: 1,
+      workingDir: 'D:/owner-a/project',
+      workingDirAvailable: true,
+    } as const;
+    let resolveRead!: (state: typeof PICKED_STATE) => void;
+    let generation = 7;
+    const deps = makeDeps({
+      readSettings: vi.fn(
+        () => new Promise<typeof PICKED_STATE>((resolve) => { resolveRead = resolve; }),
+      ),
+      captureGeneration: vi.fn(() => generation),
+    });
+    const handlers = makeHandlers(deps);
+
+    const pending = handlers.getChannelSettings();
+    generation = 8;
+    resolveRead(OLD_ACCOUNT_STATE as unknown as typeof PICKED_STATE);
+    await expect(pending).rejects.toMatchObject({ code });
+    expect(deps.warn).toHaveBeenCalledWith(
+      `${label} working directory settings read crossed an account switch; dropped`,
+    );
+  });
+
+  it('drops the post-cancel settings read when it crosses an account switch', async () => {
+    let resolveRead!: (state: typeof PICKED_STATE) => void;
+    let generation = 7;
+    const deps = makeDeps({
+      showDirectoryPicker: vi.fn(async () => ({ canceled: true, filePaths: [] })),
+      readSettings: vi.fn(
+        () => new Promise<typeof PICKED_STATE>((resolve) => { resolveRead = resolve; }),
+      ),
+      captureGeneration: vi.fn(() => generation),
+    });
+    const handlers = makeHandlers(deps);
+
+    const pending = handlers.chooseWorkingDirectory({});
+    // 等 handler 走过取消分支、真正发起 readSettings 后再切号。
+    await Promise.resolve();
+    await Promise.resolve();
+    generation = 8;
+    resolveRead(PICKED_STATE);
+    await expect(pending).rejects.toMatchObject({ code });
+  });
+
   it('never logs the picked absolute path or raw error messages', async () => {
     // 脱敏纪律: 原生 fs 错误的 message 含完整用户目录, warn 上下文只允许
     // errorCode 一个字段。

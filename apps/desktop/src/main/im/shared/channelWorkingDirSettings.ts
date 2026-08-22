@@ -53,12 +53,17 @@ export interface ChannelWorkingDirStore {
   read(rootPath?: string): Promise<ChannelWorkingDirSettingsState>;
   /** 校验并写入用户所选目录(一步到位版): 异步 normalize + 异步落盘。 */
   writeWorkingDir(selectedPath: string, rootPath?: string): Promise<ChannelWorkingDirSettingsState>;
-  /** 只校验/规整用户所选目录(异步探测用户盘), 不落盘;返回存储形态路径。 */
+  /**
+   * 严格校验并规整用户**新选择**的目录(不落盘): realpath → stat → 'wx' 写
+   * 探针 → 清理在同一 deadline 内完成, 任一步失败/超时抛带 .code 的错误,
+   * 调用方不得进入 commit。返回存储形态路径。
+   */
   normalizeSelectedDirectory(selectedPath: string): Promise<string>;
   /**
-   * 落盘已规整的目录: 只碰本地 userData 配置文件。供 IPC 在「用户盘探测完成」
-   * 与「提交」之间二次校验 IM account generation 后调用, 缩短代次校验到写入的
-   * 敏感窗口(探测网络盘可能秒级)。
+   * 落盘已通过严格校验的目录: 只原子写 owner-scoped 本地配置(userData),
+   * 直接返回 workingDirAvailable:true — 边界内不访问用户目录。供 IPC 在
+   * 「用户盘校验完成」与「提交」之间二次校验 IM account generation 后调用,
+   * 校验到写入之间只剩本机盘 IO。
    */
   commitWorkingDir(normalizedDir: string, rootPath?: string): Promise<ChannelWorkingDirSettingsState>;
   /** 「恢复默认」= 删配置文件(本地 userData)。 */
@@ -94,6 +99,7 @@ export function createChannelWorkingDirStore(options: {
   const invalidErrorCode = `${options.errorCodePrefix}_WORKING_DIR_INVALID`;
   const notDirectoryErrorCode = `${options.errorCodePrefix}_WORKING_DIR_NOT_DIRECTORY`;
   const probeTimeoutErrorCode = `${options.errorCodePrefix}_WORKING_DIR_PROBE_TIMEOUT`;
+  const notWritableErrorCode = `${options.errorCodePrefix}_WORKING_DIR_NOT_WRITABLE`;
   const userDirTimeoutMs = options.userDirTimeoutMs ?? USER_DIR_IO_TIMEOUT_MS;
   const defaults: ChannelWorkingDirSettings = { version: SETTINGS_VERSION, workingDir: null };
 
@@ -140,20 +146,26 @@ export function createChannelWorkingDirStore(options: {
 
   async function normalizeSelectedDirectory(selectedPath: string): Promise<string> {
     // 校验错误自带 .code(= 渠道错误码): IPC 层日志只记错误码即可区分
-    // WECOM_WORKING_DIR_INVALID / NOT_DIRECTORY / EACCES..., 不需要
-    // error.message —— 原生 fs 错误的 message 含完整用户目录, 不能进日志。
+    // WECOM_WORKING_DIR_INVALID / NOT_DIRECTORY / NOT_WRITABLE / EACCES...,
+    // 不需要 error.message —— 原生 fs 错误的 message 含完整用户目录, 不能进日志。
     if (typeof selectedPath !== 'string' || !path.isAbsolute(selectedPath)) {
       throw Object.assign(new Error(invalidErrorCode), { code: invalidErrorCode });
     }
-    // 用户所选目录可能是网络盘/可移动盘 — realpath/stat 全异步且套 deadline:
-    // 挂起不冻结 Main, 超时则不提交配置, 抛结构化超时错误(快速失败的本地
-    // 校验错误照常穿透)。fs.promises 没有 realpath.native(那只有同步版),
-    // 用标准 fsp.realpath — 同样解析符号链接, Node 22 实测与
-    // realpathSync.native 结果一致。
+    // 新选择目录采用「严格校验」: realpath → stat → 'wx' 写探针 → 清理在
+    // 同一个 deadline 内完成, 任一步失败/超时都不进入 commit, 原配置保持
+    // 不变(与「已保存目录宽大保留」相对 — 后者由 read() 降级为不可用)。
+    // 用户所选目录可能是网络盘/可移动盘 — 全异步且套 deadline: 挂起不冻结
+    // Main, 超时抛结构化超时错误; 快速失败的本地校验错误照常穿透。
+    // fs.promises 没有 realpath.native(那只有同步版), 用标准 fsp.realpath —
+    // 同样解析符号链接, Node 22 实测与 realpathSync.native 结果一致。
     const checked = await withUserDirDeadline(async () => {
       const realPath = await realpath(selectedPath);
       if (!(await stat(realPath)).isDirectory()) {
         throw Object.assign(new Error(notDirectoryErrorCode), { code: notDirectoryErrorCode });
+      }
+      if (!(await probeUsability(realPath))) {
+        // 目录存在但探针写不进(权限/只读/独占碰撞) — 绝不提交。
+        throw Object.assign(new Error(notWritableErrorCode), { code: notWritableErrorCode });
       }
       return realPath;
     }, userDirTimeoutMs);
@@ -171,8 +183,11 @@ export function createChannelWorkingDirStore(options: {
     normalizedDir: string,
     rootPath?: string,
   ): Promise<ChannelWorkingDirSettingsState> {
+    // 只原子写入 owner-scoped 本地配置, 直接返回 available:true — 严格校验
+    // ('wx' 写探针)已在 normalizeSelectedDirectory 完成, commit 边界内不再
+    // 访问用户目录(超时/不可写时配置早已不被触碰)。
     await writeSettings({ ...defaults, workingDir: normalizedDir }, rootPath);
-    return read(rootPath);
+    return { ...defaults, workingDir: normalizedDir, workingDirAvailable: true };
   }
 
   async function resetWorkingDir(rootPath?: string): Promise<ChannelWorkingDirSettingsState> {

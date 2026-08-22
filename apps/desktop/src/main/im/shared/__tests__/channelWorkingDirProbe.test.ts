@@ -287,6 +287,55 @@ describe('用户目录探测 deadline(失联网络盘)', () => {
     releaseProbeHang();
   });
 
+  it('新选择目录的写探针超时: 不提交, 旧配置原样保留, 迟到探针自清理', async () => {
+    const selected = path.join(root, 'project');
+    await mkdir(selected);
+    const store = makeStore(120);
+    await store.writeWorkingDir(selected, root);
+    const configPath = path.join(root, 'test-channel.json');
+    const before = await readFile(configPath, 'utf8');
+
+    // realpath/stat 正常, 但 'wx' 写探针挂起(慢速网络盘) — 严格校验在 commit
+    // 之前完成, 超时绝不提交。
+    const fresh = path.join(root, 'fresh');
+    await mkdir(fresh);
+    failState.probeWriteHang = true;
+    const started = Date.now();
+    await expect(store.writeWorkingDir(fresh, root)).rejects.toMatchObject({
+      code: 'TEST_WORKING_DIR_PROBE_TIMEOUT',
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await readFile(configPath, 'utf8')).toBe(before);
+
+    // 迟到的探针写最终成功 — 由本次调用按所有权纪律清理自己那枚。
+    releaseProbeHang();
+    await vi.waitFor(async () => {
+      expect(await probeNames(fresh)).toEqual([]);
+    });
+  });
+
+  it('新选择目录不可写(wx 独占碰撞): 不提交, 碰撞文件原样保留', async () => {
+    const selected = path.join(root, 'project');
+    await mkdir(selected);
+    const store = makeStore(120);
+    await store.writeWorkingDir(selected, root);
+    const configPath = path.join(root, 'test-channel.json');
+    const before = await readFile(configPath, 'utf8');
+
+    const fresh = path.join(root, 'fresh');
+    await mkdir(fresh);
+    failState.probeWriteEexistNext = true;
+    await expect(store.writeWorkingDir(fresh, root)).rejects.toMatchObject({
+      code: 'TEST_WORKING_DIR_NOT_WRITABLE',
+    });
+    expect(await readFile(configPath, 'utf8')).toBe(before);
+
+    // 碰撞路径属于「别人」: 原样保留, 绝不删除。
+    const collided = await probeNames(fresh);
+    expect(collided).toHaveLength(1);
+    expect(await readFile(path.join(fresh, collided[0]!), 'utf8')).toBe('foreign data');
+  });
+
   it('超时后迟到完成的探针只清理自己创建的文件, 不误删用户同前缀文件', async () => {
     const selected = path.join(root, 'project');
     await mkdir(selected);

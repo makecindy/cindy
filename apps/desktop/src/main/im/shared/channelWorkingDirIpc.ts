@@ -53,9 +53,27 @@ export interface ChannelWorkingDirIpcOptions {
 
 export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpcOptions) {
   const { updateFailedCode, channelLabel, deps } = options;
+
+  /**
+   * 读取渠道设置并做 generation 守卫: A 账号的目录在慢速网络盘上时,
+   * readSettings 可能挂到 deadline 才返回 — 期间切到 B 账号后, A 的绝对
+   * 路径不得交给当前 Renderer。读取前捕获、返回前复检, generation 变化
+   * 即丢弃结果并抛渠道 UPDATE_FAILED(renderer 无法可靠拦截跨账号响应,
+   * 守卫必须在 Main 侧)。
+   */
+  async function readSettingsForCurrentGeneration(): Promise<ChannelWorkingDirSettingsState> {
+    const generationAtRead = deps.captureGeneration();
+    const state = await deps.readSettings();
+    if (deps.captureGeneration() !== generationAtRead) {
+      deps.warn(`${channelLabel} working directory settings read crossed an account switch; dropped`);
+      throwIpcError(updateFailedCode, 'account changed while reading settings');
+    }
+    return state;
+  }
+
   return {
     async getChannelSettings(): Promise<ChannelWorkingDirSettingsState> {
-      return deps.readSettings();
+      return readSettingsForCurrentGeneration();
     },
 
     async chooseWorkingDirectory(
@@ -78,7 +96,7 @@ export function createChannelWorkingDirIpcHandlers(options: ChannelWorkingDirIpc
 
       const picked = result.canceled || !result.filePaths[0] ? undefined : result.filePaths[0];
       if (picked === undefined) {
-        return { canceled: true, state: await deps.readSettings() };
+        return { canceled: true, state: await readSettingsForCurrentGeneration() };
       }
       if (deps.captureGeneration() !== generationAtOpen) {
         // ① 弹窗期间登出/换号: 选中的路径属于上一个账号的语境, 不落盘。
