@@ -367,17 +367,59 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
   });
 
-  it('重连快照可重建只读状态，后续权威空快照将其收口', async () => {
+  it('并发确认按到达顺序排队，关闭任一项都不会丢失其余确认', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, { kind: 'issue_confirm', requestId: 'opaque-a' });
+    host.hostInteraction(s, { kind: 'ghost_grant_confirm', requestId: 'opaque-b' });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'issue_confirm',
+      requestId: 'opaque-a',
+    });
+
+    host.hostDismiss(s, 'opaque-b', 'resolved');
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation?.requestId).toBe(
+      'opaque-a',
+    );
+
+    host.hostInteraction(s, { kind: 'ghost_grant_confirm', requestId: 'opaque-b' });
+    await flush();
+    host.hostDismiss(s, 'opaque-a', 'resolved');
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'ghost_grant_confirm',
+      requestId: 'opaque-b',
+    });
+  });
+
+  it('重连快照可重建多个只读状态，后续权威快照将其逐项收口', async () => {
     const s = openRemoteSession();
     host.seedPending(s, {
       kind: 'issue_confirm',
-      requestId: 'opaque-snapshot',
+      requestId: 'opaque-snapshot-a',
+    });
+    host.seedPending(s, {
+      kind: 'rename_sessions_confirm',
+      requestId: 'opaque-snapshot-b',
     });
 
     await makerChatStore.reconcilePendingInteractions(s);
     expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
       kind: 'issue_confirm',
-      requestId: 'opaque-snapshot',
+      requestId: 'opaque-snapshot-a',
+    });
+
+    host.clearPending(s);
+    host.seedPending(s, {
+      kind: 'rename_sessions_confirm',
+      requestId: 'opaque-snapshot-b',
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'rename_sessions_confirm',
+      requestId: 'opaque-snapshot-b',
     });
 
     host.clearPending(s);

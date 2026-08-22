@@ -2475,6 +2475,8 @@ export interface SessionChatState {
   pendingGhostGrantConfirm: PendingGhostGrantConfirm | null;
   /** Device Link 控制端上的 Desktop-only 只读确认提示; null when none. */
   pendingRemoteDesktopConfirmation: PendingRemoteDesktopConfirmation | null;
+  /** 同一会话内其余 Desktop-only 只读确认，按首次收到顺序等待展示。 */
+  pendingRemoteDesktopConfirmationQueue: PendingRemoteDesktopConfirmation[];
   /** FP-3: Plan Viewer Card display state (only meaningful when pendingPlanReview != null). */
   planViewerState: PlanViewerState;
   /** FP-3: Last non-minimized state — used to restore from minimized via the "+" button. */
@@ -2739,6 +2741,7 @@ function createInitialState(): SessionChatState {
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
     pendingRemoteDesktopConfirmation: null,
+    pendingRemoteDesktopConfirmationQueue: [],
     planViewerState: 'expanded',
     lastExpandedPlanViewerState: 'expanded',
     oldestMessageId: null,
@@ -2816,6 +2819,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   pendingRenameSessionsConfirm: null,
   pendingGhostGrantConfirm: null,
   pendingRemoteDesktopConfirmation: null,
+  pendingRemoteDesktopConfirmationQueue: [],
   planViewerState: 'expanded',
   lastExpandedPlanViewerState: 'expanded',
   pendingQueue: [],
@@ -3416,7 +3420,8 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     s.pendingIssueConfirm ||
     s.pendingRenameSessionsConfirm ||
     s.pendingGhostGrantConfirm ||
-    s.pendingRemoteDesktopConfirmation
+    s.pendingRemoteDesktopConfirmation ||
+    s.pendingRemoteDesktopConfirmationQueue.length > 0
   );
 }
 
@@ -5306,6 +5311,7 @@ export function handleStreamEvent(
         pendingRenameSessionsConfirm: null,
         pendingGhostGrantConfirm: null,
         pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
         // agent-meta: turn 结束清空，下一 turn 重新累积。
         lastAgentMeta: null,
         queueAbortPending: false,
@@ -5514,6 +5520,7 @@ export function handleStreamEvent(
         pendingRenameSessionsConfirm: null,
         pendingGhostGrantConfirm: null,
         pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
         // agent-meta: turn 异常结束也清空。
         lastAgentMeta: null,
         // 出错也是 turn 终结：清掉 isRunning，否则 RunningStatusBar 会一直停在
@@ -5602,7 +5609,25 @@ export function handleStreamEvent(
         return { ...state, pendingGhostGrantConfirm: null };
       }
       if (state.pendingRemoteDesktopConfirmation?.requestId === data.requestId) {
-        return { ...state, pendingRemoteDesktopConfirmation: null };
+        const [next = null, ...remaining] = state.pendingRemoteDesktopConfirmationQueue;
+        return {
+          ...state,
+          pendingRemoteDesktopConfirmation: next,
+          pendingRemoteDesktopConfirmationQueue: remaining,
+        };
+      }
+      if (
+        state.pendingRemoteDesktopConfirmationQueue.some(
+          (confirmation) => confirmation.requestId === data.requestId,
+        )
+      ) {
+        return {
+          ...state,
+          pendingRemoteDesktopConfirmationQueue:
+            state.pendingRemoteDesktopConfirmationQueue.filter(
+              (confirmation) => confirmation.requestId !== data.requestId,
+            ),
+        };
       }
       if (state.pendingAskUser?.requestId === data.requestId) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
@@ -5895,6 +5920,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.pendingRenameSessionsConfirm &&
     !state.pendingGhostGrantConfirm &&
     !state.pendingRemoteDesktopConfirmation &&
+    state.pendingRemoteDesktopConfirmationQueue.length === 0 &&
     !state.messages.some((m) => m.isStreaming) &&
     !state.queueAbortPending &&
     state.steeringQueueClientIds.length === 0 &&
@@ -5949,6 +5975,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingRenameSessionsConfirm: null,
     pendingGhostGrantConfirm: null,
     pendingRemoteDesktopConfirmation: null,
+    pendingRemoteDesktopConfirmationQueue: [],
     queueAbortPending: false,
     steeringQueueClientIds: [],
     continuationTurnClientId: null,
@@ -7168,16 +7195,40 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         kind === 'rename_sessions_confirm' ||
         kind === 'ghost_grant_confirm')
     ) {
-      setState(sessionId, (s) => ({
-        ...s,
-        pendingIssueConfirm: null,
-        pendingRenameSessionsConfirm: null,
-        pendingGhostGrantConfirm: null,
-        pendingRemoteDesktopConfirmation: {
+      setState(sessionId, (s) => {
+        const confirmation: PendingRemoteDesktopConfirmation = {
           kind,
           requestId: request.requestId,
-        },
-      }));
+        };
+        const current = s.pendingRemoteDesktopConfirmation;
+        if (!current) {
+          return {
+            ...s,
+            pendingIssueConfirm: null,
+            pendingRenameSessionsConfirm: null,
+            pendingGhostGrantConfirm: null,
+            pendingRemoteDesktopConfirmation: confirmation,
+          };
+        }
+        if (current.requestId === confirmation.requestId) {
+          return { ...s, pendingRemoteDesktopConfirmation: confirmation };
+        }
+        const queuedIndex = s.pendingRemoteDesktopConfirmationQueue.findIndex(
+          (queued) => queued.requestId === confirmation.requestId,
+        );
+        if (queuedIndex >= 0) {
+          const nextQueue = s.pendingRemoteDesktopConfirmationQueue.slice();
+          nextQueue[queuedIndex] = confirmation;
+          return { ...s, pendingRemoteDesktopConfirmationQueue: nextQueue };
+        }
+        return {
+          ...s,
+          pendingRemoteDesktopConfirmationQueue: [
+            ...s.pendingRemoteDesktopConfirmationQueue,
+            confirmation,
+          ],
+        };
+      });
       return;
     }
 
@@ -7301,6 +7352,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           suggestedPublicName,
         },
         pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -7317,6 +7369,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         ...s,
         pendingRenameSessionsConfirm: { requestId: request.requestId, changes },
         pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -7329,6 +7382,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         ...s,
         pendingGhostGrantConfirm: parsed,
         pendingRemoteDesktopConfirmation: null,
+        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -8895,12 +8949,30 @@ function reconcilePendingInteractions(
               ? state.pendingRemoteDesktopConfirmation
               : null
             : state.pendingRemoteDesktopConfirmation;
+        const nextRemoteDesktopConfirmationQueue =
+          stickyDeviceAtStart || interactionOriginAtStart
+            ? state.pendingRemoteDesktopConfirmationQueue.filter((confirmation) =>
+                authoritativeRemoteDesktopConfirmationIds.has(confirmation.requestId),
+              )
+            : state.pendingRemoteDesktopConfirmationQueue;
+        const [promotedRemoteDesktopConfirmation = null, ...remainingRemoteConfirmations] =
+          nextRemoteDesktopConfirmation
+            ? [nextRemoteDesktopConfirmation, ...nextRemoteDesktopConfirmationQueue]
+            : nextRemoteDesktopConfirmationQueue;
+        const remoteQueueChanged =
+          remainingRemoteConfirmations.length !==
+            state.pendingRemoteDesktopConfirmationQueue.length ||
+          remainingRemoteConfirmations.some(
+            (confirmation, index) =>
+              confirmation !== state.pendingRemoteDesktopConfirmationQueue[index],
+          );
 
         if (
           !currentChanged &&
           !queueChanged &&
           nextCommand === state.pluginSetupCommandInFlight &&
-          nextRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation
+          promotedRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation &&
+          !remoteQueueChanged
         ) {
           return state;
         }
@@ -8910,7 +8982,8 @@ function reconcilePendingInteractions(
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
           pluginSetupCommandInFlight: nextCommand,
-          pendingRemoteDesktopConfirmation: nextRemoteDesktopConfirmation,
+          pendingRemoteDesktopConfirmation: promotedRemoteDesktopConfirmation,
+          pendingRemoteDesktopConfirmationQueue: remainingRemoteConfirmations,
         };
       });
       for (const item of list) {
@@ -13488,6 +13561,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       pendingPlanReview: null,
       pendingIssueConfirm: null,
       pendingRemoteDesktopConfirmation: null,
+      pendingRemoteDesktopConfirmationQueue: [],
       pendingQueue: s.pendingQueue.filter((item) =>
         postClearOptimisticClientIds.has(item.clientId),
       ),
