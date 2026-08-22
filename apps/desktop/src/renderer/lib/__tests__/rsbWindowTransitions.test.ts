@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { didUserCloseDetachedSidebarWindow } from '../rsbWindowTransitions';
+import {
+  didUserCloseDetachedSidebarWindow,
+  sessionIdForDetachedSidebarClose,
+} from '../rsbWindowTransitions';
 
 describe('didUserCloseDetachedSidebarWindow', () => {
   it('recognizes every close path by the detached open-to-closed transition', () => {
@@ -31,6 +34,12 @@ describe('didUserCloseDetachedSidebarWindow', () => {
         { loaded: true, detached: true, open: true },
       ),
     ).toBe(false);
+  });
+
+  it('attributes a detached close to the pinned host, not the focused session', () => {
+    expect(sessionIdForDetachedSidebarClose('session-a', 'session-b')).toBe('session-a');
+    expect(sessionIdForDetachedSidebarClose(null, 'session-b')).toBe('session-b');
+    expect(sessionIdForDetachedSidebarClose(null, null)).toBeNull();
   });
 
   it('does not let a secondary window persist the primary detached close transition', () => {

@@ -51,7 +51,10 @@ import {
   getRsbWindowUiState,
   useRightSidebarWindowState,
 } from '@/lib/rightSidebarWindowState';
-import { didUserCloseDetachedSidebarWindow } from '@/lib/rsbWindowTransitions';
+import {
+  didUserCloseDetachedSidebarWindow,
+  sessionIdForDetachedSidebarClose,
+} from '@/lib/rsbWindowTransitions';
 import { routeSidebarCommand } from '@/features/right-sidebar/lib/detachedSidebarRouting';
 import { openTerminalFromShortcut } from '@/features/right-sidebar/lib/openTerminalShortcut';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
@@ -281,6 +284,7 @@ export function MainLayout() {
   >(undefined);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
+  const detachedHostSessionIdRef = useRef<string | null>(null);
   const isRightSidebarCollapsedRef = useRef(isRightSidebarCollapsed);
   isRightSidebarCollapsedRef.current = isRightSidebarCollapsed;
   const rsbDetachedRef = useRef(rsbDetached);
@@ -822,6 +826,7 @@ export function MainLayout() {
       if (detachedNow) {
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open') {
+          detachedHostSessionIdRef.current = targetSessionId;
           // userInitiated 透传:插件 preview / agent 自动化(false)只把内容送进
           // 子窗口,不 show+focus 抢用户前台;用户手势(缺省 true)行为不变。
           // sessionId 让 controller 把子窗口钉在发起方 session 上。
@@ -858,16 +863,18 @@ export function MainLayout() {
   }, []);
 
   // detached 子窗口的所有真实关窗入口最终都会广播 open:true→false。只要偏好仍是
-  // detached，就把当前 session 记为用户显式收起；合并回主窗会先变 detached=false，
-  // 不命中本分支，继续由 attach 路径写“开”。
+  // detached，就把**实际宿主 session**记为用户显式收起；合并回主窗会先变
+  // detached=false，不命中本分支，继续由 attach 路径写“开”。
   const prevRsbWindowStateRef = useRef(rsbWindow);
   useEffect(() => {
     const prev = prevRsbWindowStateRef.current;
     prevRsbWindowStateRef.current = rsbWindow;
-    const sessionId = rightSidebarSessionIdRef.current;
-    if (sessionId && didUserCloseDetachedSidebarWindow(prev, rsbWindow, !isSecondaryWindow())) {
-      writeCollapsedFor(sessionId, true);
-    }
+    if (!didUserCloseDetachedSidebarWindow(prev, rsbWindow, !isSecondaryWindow())) return;
+    const sessionId = sessionIdForDetachedSidebarClose(
+      detachedHostSessionIdRef.current,
+      rightSidebarSessionIdRef.current,
+    );
+    if (sessionId) writeCollapsedFor(sessionId, true);
   }, [rsbWindow]);
 
   // RSB Maximize(Phase 6):侧栏接管整个内容区。
