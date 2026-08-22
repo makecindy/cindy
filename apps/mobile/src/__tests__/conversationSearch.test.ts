@@ -216,6 +216,27 @@ describe('searchCachedDeviceSessions', () => {
     );
     expect(page.results.map((item) => item.session.id)).toEqual(['hit']);
   });
+
+  it('matches visible title or cached preview, not list metadata', () => {
+    const page = searchCachedDeviceSessions(
+      studio,
+      { query: 'codex' },
+      [
+        session({ id: 'agent-only', title: 'Unrelated planning', agentKind: 'codex' }),
+        session({ id: 'path-only', title: 'Unrelated planning', workingDir: '/Users/dash/codex' }),
+        session({ id: 'title-hit', title: 'Try Codex later' }),
+        session({
+          id: 'preview-hit',
+          title: 'Unrelated planning',
+          preview: 'switch the task to Codex',
+        }),
+      ],
+    );
+    expect(page.results.map((item) => [item.session.id, item.matchKind])).toEqual([
+      ['title-hit', 'title'],
+      ['preview-hit', 'content'],
+    ]);
+  });
 });
 
 describe('helpers', () => {

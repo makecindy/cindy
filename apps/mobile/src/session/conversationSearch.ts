@@ -1,6 +1,6 @@
 /**
  * 手机任务搜索集成层:按设备 fan-out `local-db:conversations:search`,
- * 老端 / 离线回落到已缓存会话的 matchesSearchQuery。
+ * 老端 / 离线回落到已缓存会话的标题与消息预览，不搜列表元数据。
  *
  * 纯函数 + 注入依赖,不直接碰 React / store。
  */
@@ -20,7 +20,8 @@ import {
 } from '@cindy/maker-shared/conversation-search';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import {
-  matchesSearchQuery,
+  remoteSessionDisplayTitle,
+  sessionRowMessagePreview,
   toRemoteSessionListItem,
   type RemoteSessionListItem,
 } from '@cindy/maker-shared/session-list';
@@ -181,10 +182,11 @@ export function searchCachedDeviceSessions(
   sessions.forEach((session, index) => {
     if (session.orcaRole === 'worker') return;
     if (!sessionBelongsToDevice(session, origin.deviceId)) return;
-    if (!matchesSearchQuery(session, query, { unnamedLabel: request.unnamedLabel })) return;
+    const match = cachedConversationSearchMatch(session, query, request.unnamedLabel);
+    if (!match) return;
     hits.push({
       session: sessionToSearchSummary(session, origin),
-      matchKind: 'title',
+      matchKind: match.matchKind,
       titleMatchIndices: [],
       titleScore: null,
       contentHit: null,
@@ -203,6 +205,18 @@ export function searchCachedDeviceSessions(
     },
     request,
   );
+}
+
+function cachedConversationSearchMatch(
+  session: RemoteSession,
+  query: string,
+  unnamedLabel?: string,
+): { matchKind: 'title' | 'content' | 'both' } | null {
+  const titleHit = remoteSessionDisplayTitle(session, unnamedLabel).toLowerCase().includes(query);
+  const contentHit = (sessionRowMessagePreview(session) ?? '').toLowerCase().includes(query);
+  if (!titleHit && !contentHit) return null;
+  if (titleHit && contentHit) return { matchKind: 'both' };
+  return { matchKind: titleHit ? 'title' : 'content' };
 }
 
 function sessionToSearchSummary(
