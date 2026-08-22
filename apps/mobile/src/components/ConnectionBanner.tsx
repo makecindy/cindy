@@ -109,16 +109,12 @@ export function ConnectionBanner({
       : friendlyError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const compact = density === 'compact';
   const title = activeIssue
-    ? activeIssue.kind === 'unstable'
-      ? t('deviceLink.unstableTitle')
-      : connectionIssueTitle(activeIssue.kind)
+    ? connectionIssueTitle(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveTitle')
       : friendlyError ? t('deviceLink.syncFailed') : relayStatusLabel(status);
   const copy = activeIssue
-    ? activeIssue.kind === 'unstable'
-      ? t('deviceLink.unstableHint')
-      : connectionIssueHint(activeIssue.kind)
+    ? connectionIssueHint(activeIssue.kind)
     : showUnresponsive
       ? t('deviceLink.deviceUnresponsiveHint')
       : friendlyError ?? relayStatusHint(status, lastSyncedAt);

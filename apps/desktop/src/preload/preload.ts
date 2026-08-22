@@ -3948,13 +3948,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       remoteControlEnabled: boolean;
       keepAwake: boolean;
       linkStatus: 'stopped' | 'connecting' | 'online';
+      standby: boolean;
       connectionIssue: {
         kind: 'auth-failed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
         closeCode?: number;
         detail?: string;
         at: number;
       } | null;
-      standby: boolean;
       controlledBy: Array<{ deviceId: string; name: string }>;
       revokedControllers: string[];
       disabledControlDeviceIds: string[];
