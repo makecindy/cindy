@@ -147,6 +147,7 @@ export class RsbWindowController {
    * 用户切到被 pin 的 session、离开聊天视图或关掉子窗口时解除。
    */
   private pinnedSessionId: string | null = null;
+  private lastHostSessionId: string | null = null;
   private adoptRetryTimer: NodeJS.Timeout | null = null;
   private adoptRetryAttempts = 0;
   /** 主窗曾上报、或权威来源解析过的完整宿主上下文，按 session 复用。 */
@@ -175,7 +176,12 @@ export class RsbWindowController {
   getState(): RsbWindowState {
     const s = this.deps.settings.read();
     // pendingOpen:窗口已创建但等待 presentation-ready,外部视为 open。
-    return { detached: s.detached, lastOpen: s.lastOpen, open: this.isOpen() || this.pendingOpen };
+    return {
+      detached: s.detached,
+      lastOpen: s.lastOpen,
+      open: this.isOpen() || this.pendingOpen,
+      ...(this.lastHostSessionId ? { hostSessionId: this.lastHostSessionId } : {}),
+    };
   }
 
   /** 后台预热：主窗口首帧后创建隐藏窗口并挂载 renderer。不改变用户焦点。 */
@@ -397,6 +403,7 @@ export class RsbWindowController {
       }
     }
     this.lastContext = ctx;
+    this.rememberLastHostSession(ctx, { onlyIfShowing: true });
     if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, ctx);
     }
@@ -919,10 +926,22 @@ export class RsbWindowController {
 
   private applyAdoptedContext(next: RsbWindowContext): void {
     this.lastContext = next;
+    this.rememberLastHostSession(next);
     if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, next);
     }
     this.flushDeferredCommandsToDetachedHost();
+  }
+
+  private rememberLastHostSession(
+    ctx: RsbWindowContext,
+    opts: { onlyIfShowing?: boolean } = {},
+  ): void {
+    if (opts.onlyIfShowing && !this.visible && !this.pendingOpen) return;
+    if (!ctx.available || !ctx.sessionId) return;
+    if (this.lastHostSessionId === ctx.sessionId) return;
+    this.lastHostSessionId = ctx.sessionId;
+    this.broadcast();
   }
 
   private clearPinnedSession(): void {

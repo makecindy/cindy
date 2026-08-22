@@ -499,6 +499,7 @@ describe('right-sidebar-window IPC', () => {
 
     expect(() => open(mainEvent, { userInitiated: 1 })).toThrow(/options.userInitiated/);
     expect(() => open(mainEvent, { sessionId: '' })).toThrow(/options.sessionId/);
+    expect(() => open(mainEvent, { sessionId: 'x'.repeat(129) })).toThrow(/1–128/);
 
     (controller.open as ReturnType<typeof vi.fn>).mockClear();
     open({ sender: { id: 99 } }, { userInitiated: false, sessionId: 'other-session' });

@@ -264,8 +264,11 @@ function parseOpenOptions(raw: unknown): { userInitiated: boolean; sessionId?: s
   if (r.userInitiated !== undefined && typeof r.userInitiated !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'options.userInitiated must be boolean');
   }
-  if (r.sessionId !== undefined && (typeof r.sessionId !== 'string' || r.sessionId.length === 0)) {
-    throwIpcError('INVALID_PARAMS', 'options.sessionId must be a non-empty string');
+  if (
+    r.sessionId !== undefined &&
+    (typeof r.sessionId !== 'string' || r.sessionId.length === 0 || r.sessionId.length > 128)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'options.sessionId must be a 1–128 character string');
   }
   return {
     userInitiated: r.userInitiated !== false,

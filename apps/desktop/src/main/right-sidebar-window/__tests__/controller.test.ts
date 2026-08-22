@@ -935,10 +935,13 @@ describe('setContext / routeCommand', () => {
     markReady(h.controller, win);
     await expect(pending).resolves.toBe('routed');
     expect(h.controller.getContext()).toEqual(remote);
+    expect(h.controller.getState().hostSessionId).toBe('s1');
     expect(h.sends.at(-1)).toEqual({
       channel: 'cmd-channel',
       payload: { type: 'open-terminal', sessionId: 's1' },
     });
+    h.controller.close();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
   });
 
   it('does not forge a local host when resolve misses', async () => {

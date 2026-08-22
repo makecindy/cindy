@@ -17,6 +17,7 @@ export interface RsbWindowUiState {
   loaded: boolean;
   detached: boolean;
   open: boolean;
+  hostSessionId?: string | null;
 }
 
 function initialState(): RsbWindowUiState {
@@ -36,8 +37,14 @@ let bootstrapPromise: Promise<{
 } | null> | null = null;
 
 function setState(next: RsbWindowUiState): void {
-  if (state.loaded === next.loaded && state.detached === next.detached && state.open === next.open)
+  if (
+    state.loaded === next.loaded &&
+    state.detached === next.detached &&
+    state.open === next.open &&
+    state.hostSessionId === next.hostSessionId
+  ) {
     return;
+  }
   state = next;
   subscribers.forEach((cb) => cb());
 }
@@ -47,7 +54,12 @@ function ensureWired(): void {
   if (wired || isSecondaryWindow()) return;
   wired = true;
   window.electronAPI?.rightSidebarWindow?.onStateChanged((s) => {
-    setState({ loaded: true, detached: s.detached, open: s.open });
+    setState({
+      loaded: true,
+      detached: s.detached,
+      open: s.open,
+      ...(s.hostSessionId ? { hostSessionId: s.hostSessionId } : {}),
+    });
   });
 }
 
@@ -82,7 +94,12 @@ export async function bootstrapRsbWindowState(): Promise<{
     bootstrapPromise = (async () => {
       try {
         const s = await window.electronAPI.rightSidebarWindow.getState();
-        setState({ loaded: true, detached: s.detached, open: s.open });
+        setState({
+          loaded: true,
+          detached: s.detached,
+          open: s.open,
+          ...(s.hostSessionId ? { hostSessionId: s.hostSessionId } : {}),
+        });
         return s;
       } catch {
         // IPC 异常时明确落到 attached fallback，避免整个会话期永久卡在 unknown。

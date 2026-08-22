@@ -880,11 +880,24 @@ export function MainLayout() {
     const prev = prevRsbWindowStateRef.current;
     prevRsbWindowStateRef.current = rsbWindow;
     if (!didUserCloseDetachedSidebarWindow(prev, rsbWindow, !isSecondaryWindow())) return;
-    const sessionId = sessionIdForDetachedSidebarClose(
-      detachedHostSessionIdRef.current,
-      rightSidebarSessionIdRef.current,
-    );
-    if (sessionId) writeCollapsedFor(sessionId, true);
+    const focusedSessionId = rightSidebarSessionIdRef.current;
+    const fallbackHostSessionId = detachedHostSessionIdRef.current;
+    void window.electronAPI.rightSidebarWindow
+      .getState()
+      .then((s) => {
+        const sessionId = sessionIdForDetachedSidebarClose(
+          s.hostSessionId ?? fallbackHostSessionId,
+          focusedSessionId,
+        );
+        if (sessionId) writeCollapsedFor(sessionId, true);
+      })
+      .catch(() => {
+        const sessionId = sessionIdForDetachedSidebarClose(
+          fallbackHostSessionId,
+          focusedSessionId,
+        );
+        if (sessionId) writeCollapsedFor(sessionId, true);
+      });
   }, [rsbWindow]);
 
   // RSB Maximize(Phase 6):侧栏接管整个内容区。

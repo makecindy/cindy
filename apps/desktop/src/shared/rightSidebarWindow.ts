@@ -17,6 +17,8 @@ export interface RsbWindowState {
   lastOpen: boolean;
   /** 运行时:子窗口当前是否存在。不持久化。 */
   open: boolean;
+  /** 子窗口最近一次真正展示的宿主 session。关窗后仍保留，供主窗写折叠归属。 */
+  hostSessionId?: string | null;
 }
 
 /**
