@@ -1296,6 +1296,44 @@ describe('OrcaTeamService', () => {
     );
   });
 
+  // terminal 补收口重试若被 active-turn 守卫拒绝,守卫不得把 worker 重新登记——
+  // 否则 fire-once 被打破,且该 terminal 边界之后未必还有下一个 terminal 事件,
+  // worker 会带着悬置登记卡回 done(本机制要修的状态复发)。
+  it('does not re-register a deferred acknowledgement when the terminal retry itself hits the active-turn guard', async () => {
+    const { deps, getWorker, service, setWorker } = createDeps({
+      getLiveSession: vi.fn(() => ({ isTurnRunning: () => true })),
+    });
+    setWorker(createWorker({ status: 'done' }));
+
+    await expect(service.idleWorker({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      expectedStatus: 'done',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+
+    // terminal 边界:live session 仍报 running,重试被拒——但不得重新登记。
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+    expect(getWorker().status).toBe('done');
+    expect(deps.markWorkerIdleIfStatus).not.toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledWith(
+      'orca deferred done acknowledgement skipped',
+      expect.objectContaining({ workerId: 'worker-1', errorCode: 'WORKER_STATE_CHANGED' }),
+    );
+
+    // 后续再来的 terminal 事件(无新登记来源)也不得触发重试:fire-once 契约成立。
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: 'finished',
+    });
+    expect(deps.markWorkerIdleIfStatus).not.toHaveBeenCalled();
+    expect(deps.log.info).toHaveBeenCalledTimes(1);
+  });
+
   it('does not close a direct send that wins the atomic idle-close reservation after the CAS', async () => {
     const { calls, deps, getWorker, service, setWorker } = createDeps({
       getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
