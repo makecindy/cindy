@@ -847,10 +847,10 @@ export function MainLayout() {
           return targetCollapsed;
         });
       } else {
-        // 后台路径:写入目标 session 存档。open 再把主窗切到发起方 session,
-        // 否则内嵌右侧栏永远只属于当前焦点,远程/后台 agent 的浏览器看不见。
+        // 后台路径:写入目标 session 存档。用户手势跨任务 open 才切主窗;
+        // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
         writeCollapsedFor(targetSessionId, targetCollapsed);
-        if (visibility === 'open') {
+        if (visibility === 'open' && opts.userInitiated !== false) {
           navigateToSessionRef.current?.(targetSessionId);
         }
       }

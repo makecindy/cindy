@@ -100,7 +100,10 @@ function fakeWindow(id = 1): FakeWindow {
   return win;
 }
 
-function makeHarness(initial: Partial<RsbWindowSettings> = {}) {
+function makeHarness(
+  initial: Partial<RsbWindowSettings> = {},
+  extras: Pick<RsbWindowControllerDeps, 'resolveHostContext'> = {},
+) {
   let settings: RsbWindowSettings = { detached: false, lastOpen: false, ...initial };
   let quitting = false;
   const windows: FakeWindow[] = [];
@@ -143,6 +146,7 @@ function makeHarness(initial: Partial<RsbWindowSettings> = {}) {
     commandChannel: 'cmd-channel',
     tabHandoffChannel: 'handoff-channel',
     isQuitting: () => quitting,
+    resolveHostContext: extras.resolveHostContext,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   const controller = new RsbWindowController(deps);
@@ -914,22 +918,87 @@ describe('setContext / routeCommand', () => {
   });
 
   it('context mismatch adopts the command session and routes', async () => {
-    const h = makeHarness({ detached: true });
+    const remote = {
+      sessionId: 's1',
+      workdir: '/remote/app',
+      remoteHostId: 'ssh-1',
+      deviceLinkDeviceId: 'device-1',
+      subagentsAvailable: true,
+      available: true,
+    };
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? remote : null),
+    });
     h.controller.setContext({ ...ctx, sessionId: 's2' });
     const pending = h.controller.routeCommand(terminalRequest());
     const win = h.windows[0];
     markReady(h.controller, win);
     await expect(pending).resolves.toBe('routed');
-    expect(h.controller.getContext()).toEqual({
-      sessionId: 's1',
-      workdir: null,
-      remoteHostId: null,
-      available: true,
-    });
+    expect(h.controller.getContext()).toEqual(remote);
     expect(h.sends.at(-1)).toEqual({
       channel: 'cmd-channel',
       payload: { type: 'open-terminal', sessionId: 's1' },
     });
+  });
+
+  it('reuses a previously reported host context instead of forging a local one', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/visited',
+      remoteHostId: 'ssh-visited',
+      deviceLinkDeviceId: 'dev-visited',
+      subagentsAvailable: true,
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toMatchObject({
+      sessionId: 's1',
+      workdir: '/visited',
+      remoteHostId: 'ssh-visited',
+      deviceLinkDeviceId: 'dev-visited',
+      subagentsAvailable: true,
+    });
+  });
+
+  it('does not switch a visible host for passive commands from another session', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    const cmd = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await expect(
+      h.controller.routeCommand({ command: cmd, allowOpen: false }),
+    ).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+  });
+
+  it('keeps another session queued when a later reveal adopts a different host', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const first = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://a.example' };
+    await expect(
+      h.controller.routeCommand({ command: first, allowOpen: false }),
+    ).resolves.toBe('queued');
+    const pending = h.controller.routeCommand(terminalRequest('s3'));
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's3' } },
+    ]);
+
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest('s1'))).resolves.toBe('routed');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: first },
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
   });
 
   it('pinned host session ignores later focus switches until the user arrives', () => {

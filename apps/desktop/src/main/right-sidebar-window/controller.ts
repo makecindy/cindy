@@ -59,6 +59,13 @@ export interface RsbWindowControllerDeps {
   /** 向裁决后的 renderer host 推送 context / command；窗口有效性由 controller 保证。 */
   sendToWindow: (win: BrowserWindow, channel: string, payload: unknown) => void;
   /**
+   * 主窗没上报过该 session 时，从权威会话来源补齐 workdir / 远程归属。
+   * 不要在 controller 里把远程会话捏成本机空上下文。
+   */
+  resolveHostContext?: (
+    sessionId: string,
+  ) => RsbWindowContext | null | Promise<RsbWindowContext | null>;
+  /**
    * 缓存窗口每次重新显示前的 Host 同步钩子。调用时窗口仍标记为 hidden，
    * capability 同步必须以该精确 WebContents 为目标；原生 show 前完成。
    */
@@ -82,6 +89,7 @@ const DEFAULT_PREWARM_TIMEOUT_MS = 10_000;
 const DEFAULT_RECOVERY_STABILITY_MS = 30_000;
 const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 1;
 const MAX_DEFERRED_SESSIONS = 8;
+const MAX_KNOWN_CONTEXTS = 32;
 /**
  * 单会话 deferred 队列上限。正常路径远达不到(passive 命令种类有限且有合并
  * 规则);达到时丢最旧一条并记 warn —— 不能静默,登记类命令被丢意味着这次
@@ -136,6 +144,8 @@ export class RsbWindowController {
    * 用户切到被 pin 的 session、离开聊天视图或关掉子窗口时解除。
    */
   private pinnedSessionId: string | null = null;
+  /** 主窗曾上报、或权威来源解析过的完整宿主上下文，按 session 复用。 */
+  private knownContexts = new Map<string, RsbWindowContext>();
   /** 冷启动分离窗尚未 presentation-ready 时暂存主窗交来的内存态 tab。 */
   private pendingDetachedTabHandoff: RsbWindowTabHandoff | null = null;
   /**
@@ -191,7 +201,7 @@ export class RsbWindowController {
       revealSessionId &&
       (userInitiated === false || this.lastContext?.sessionId !== revealSessionId)
     ) {
-      this.adoptHostSession(revealSessionId);
+      void this.adoptHostSession(revealSessionId);
     }
 
     this.automaticRecoveryAttempts = 0;
@@ -338,6 +348,7 @@ export class RsbWindowController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.knownContexts.clear();
     this.destroyWindow();
   }
 
@@ -362,6 +373,7 @@ export class RsbWindowController {
 
   /** 主窗上报渲染上下文:缓存 + 窗口活跃就转发。 */
   setContext(ctx: RsbWindowContext): void {
+    this.rememberContext(ctx);
     if (this.pinnedSessionId) {
       if (ctx.available && ctx.sessionId === this.pinnedSessionId) {
         this.clearPinnedSession();
@@ -401,16 +413,24 @@ export class RsbWindowController {
     const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
     const hostSessionId = commandHostSessionId(command);
-    if (userInitiated === false || this.lastContext?.sessionId !== hostSessionId) {
-      this.adoptHostSession(hostSessionId);
-    }
-    if (!this.canDispatchCommand(command)) return 'stale-context';
-
-    const windowAlive = this.winRef && !this.winRef.isDestroyed();
-    if (!allowOpen && (!windowAlive || !this.presentationReady || !this.visible)) {
+    if (!allowOpen) {
+      const windowReady =
+        this.winRef &&
+        !this.winRef.isDestroyed() &&
+        this.presentationReady &&
+        this.visible;
+      if (windowReady && this.canDispatchCommand(command)) {
+        this.deps.sendToWindow(this.winRef!, this.deps.commandChannel, command);
+        return 'routed';
+      }
       this.enqueueDeferredCommand(command);
       return 'queued';
     }
+    if (userInitiated === false || this.lastContext?.sessionId !== hostSessionId) {
+      const adopted = this.adoptHostSession(hostSessionId);
+      if (adopted) await adopted;
+    }
+    if (!this.canDispatchCommand(command)) return 'stale-context';
 
     if (allowOpen && (!this.isOpen() || !this.presentationReady)) {
       try {
@@ -818,23 +838,48 @@ export class RsbWindowController {
 
   // ── 命令路由辅助 ─────────────────────────────────────────────────
 
-  private adoptHostSession(sessionId: string): void {
+  private adoptHostSession(sessionId: string): void | Promise<void> {
     if (!sessionId) return;
     this.pinnedSessionId = sessionId;
     if (this.lastContext?.available && this.lastContext.sessionId === sessionId) return;
-    const previousSessionId = this.lastContext?.sessionId ?? null;
-    const next: RsbWindowContext = {
-      sessionId,
-      workdir: null,
-      remoteHostId: null,
-      available: true,
-    };
-    this.lastContext = next;
-    if (previousSessionId && previousSessionId !== sessionId) {
-      for (const queuedSessionId of this.deferredCommands.keys()) {
-        if (queuedSessionId !== sessionId) this.deferredCommands.delete(queuedSessionId);
-      }
+    const cached = this.knownContexts.get(sessionId);
+    if (cached) {
+      this.applyAdoptedContext(cached);
+      return;
     }
+    const pending = this.deps.resolveHostContext?.(sessionId);
+    if (pending && typeof (pending as Promise<RsbWindowContext | null>).then === 'function') {
+      return Promise.resolve(pending).then((resolved) => {
+        if (this.pinnedSessionId !== sessionId || this.disposed) return;
+        this.finishAdoptHostSession(sessionId, resolved);
+      });
+    }
+    this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null);
+  }
+
+  private finishAdoptHostSession(sessionId: string, resolved: RsbWindowContext | null): void {
+    if (resolved) this.rememberContext(resolved);
+    this.applyAdoptedContext(
+      resolved ?? {
+        sessionId,
+        workdir: null,
+        remoteHostId: null,
+        available: true,
+      },
+    );
+  }
+
+  private rememberContext(ctx: RsbWindowContext): void {
+    if (!ctx.available || !ctx.sessionId) return;
+    if (this.knownContexts.size >= MAX_KNOWN_CONTEXTS && !this.knownContexts.has(ctx.sessionId)) {
+      const oldest = this.knownContexts.keys().next().value as string | undefined;
+      if (oldest) this.knownContexts.delete(oldest);
+    }
+    this.knownContexts.set(ctx.sessionId, ctx);
+  }
+
+  private applyAdoptedContext(next: RsbWindowContext): void {
+    this.lastContext = next;
     if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, next);
     }
