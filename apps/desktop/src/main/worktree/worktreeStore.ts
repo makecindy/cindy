@@ -26,6 +26,11 @@ const log = createLogger('worktreeStore');
 
 interface WorktreesStoreShape {
   worktrees: Record<string, WorktreeMeta>;
+  /**
+   * 删除 worktree 时因拿不到全局 safe.directory 锁而推迟到下次启动补清的路径。
+   * 只存自动生成的托管路径, 供 reconcilePendingSafeDirectoryCleanups 逐条精确 --unset-all。
+   */
+  pendingSafeDirectoryCleanups: string[];
 }
 
 let storeInstance: Store<WorktreesStoreShape> | null = null;
@@ -38,10 +43,11 @@ function getStore(): Store<WorktreesStoreShape> {
   if (storeInstance) return storeInstance;
   storeInstance = new Store<WorktreesStoreShape>({
     name: 'worktrees',
-    defaults: { worktrees: {} },
+    defaults: { worktrees: {}, pendingSafeDirectoryCleanups: [] },
     // 简单 schema: worktrees 是 object, 其余字段在 TS 层兜底
     schema: {
       worktrees: { type: 'object' },
+      pendingSafeDirectoryCleanups: { type: 'array', items: { type: 'string' } },
     },
     // 文件被外部破坏时 reset 为 defaults, 避免反复抛 SyntaxError
     clearInvalidConfig: true,
@@ -81,6 +87,44 @@ export function getAllPaths(): string[] {
   return getAll().flatMap((m) => (
     m.quarantinePath ? [m.path, m.quarantinePath] : [m.path]
   ));
+}
+
+function readPendingSafeDirectoryCleanups(): string[] {
+  const raw = getStore().get('pendingSafeDirectoryCleanups', []);
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((p): p is string => typeof p === 'string' && p.length > 0);
+}
+
+/**
+ * 读取当前推迟清理的 safe.directory 路径(供启动期 reconcile 补清)。
+ */
+export function getPendingSafeDirectoryCleanups(): string[] {
+  return readPendingSafeDirectoryCleanups();
+}
+
+/**
+ * 追加推迟清理的路径(去重)。删除 worktree 时拿不到锁才走到这里。
+ */
+export function addPendingSafeDirectoryCleanups(paths: readonly string[]): void {
+  const unique = new Set(readPendingSafeDirectoryCleanups());
+  let changed = false;
+  for (const p of paths) {
+    if (p && !unique.has(p)) {
+      unique.add(p);
+      changed = true;
+    }
+  }
+  if (changed) getStore().set('pendingSafeDirectoryCleanups', [...unique]);
+}
+
+/**
+ * 移除已成功清理的路径。
+ */
+export function removePendingSafeDirectoryCleanups(paths: readonly string[]): void {
+  const current = readPendingSafeDirectoryCleanups();
+  const toRemove = new Set(paths);
+  const next = current.filter((p) => !toRemove.has(p));
+  if (next.length !== current.length) getStore().set('pendingSafeDirectoryCleanups', next);
 }
 
 /**

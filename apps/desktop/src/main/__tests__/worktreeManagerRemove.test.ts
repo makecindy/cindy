@@ -23,6 +23,7 @@ const ignoredFilesMock = vi.fn();
 const changedIncludeFilesMock = vi.fn();
 const storeSetMock = vi.fn();
 const storeMap = new Map<string, WorktreeMeta>();
+const pendingSafeDirectoryCleanups: string[] = [];
 const liveSessionRows: Array<{
   id: string;
   status: string | null;
@@ -63,6 +64,18 @@ vi.mock('../worktree/worktreeStore', () => ({
     ),
   set: (...args: unknown[]) => storeSetMock(...args),
   del: vi.fn((sessionId: string) => storeMap.delete(sessionId)),
+  getPendingSafeDirectoryCleanups: () => [...pendingSafeDirectoryCleanups],
+  addPendingSafeDirectoryCleanups: (paths: readonly string[]) => {
+    for (const p of paths) {
+      if (p && !pendingSafeDirectoryCleanups.includes(p)) pendingSafeDirectoryCleanups.push(p);
+    }
+  },
+  removePendingSafeDirectoryCleanups: (paths: readonly string[]) => {
+    const toRemove = new Set(paths);
+    for (let i = pendingSafeDirectoryCleanups.length - 1; i >= 0; i -= 1) {
+      if (toRemove.has(pendingSafeDirectoryCleanups[i])) pendingSafeDirectoryCleanups.splice(i, 1);
+    }
+  },
 }));
 
 vi.mock('../localDb/client/current', () => ({
@@ -100,6 +113,7 @@ describe('removeWorktreeForSession', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     storeMap.clear();
+    pendingSafeDirectoryCleanups.length = 0;
     liveSessionRows.length = 0;
     liveSessionRows.push({
       id: '__unrelated_active_session__',
@@ -1074,6 +1088,46 @@ describe('removeWorktreeForSession', () => {
     }
   });
 
+  it('defers safe.directory cleanup to the store when the global lock is not acquired', async () => {
+    crossProcessLockMock.mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: false, reason: 'busy' }),
+    );
+    const meta = makeMeta('s1');
+    storeMap.set('s1', meta);
+
+    await manager.removeWorktreeForSession('s1');
+
+    // 目录已删、store.del 已执行; 拿不到锁时不得做无锁 --unset-all, 而是落盘待下次启动补清
+    expect(
+      gitExecMock.mock.calls.some(
+        ([args]) => Array.isArray(args) && args.includes('--unset-all'),
+      ),
+    ).toBe(false);
+    expect(pendingSafeDirectoryCleanups).toContain(meta.path);
+  });
+
+  it('reconcilePendingSafeDirectoryCleanups drains pending entries under the lock', async () => {
+    const gonePath = path.join(BASE_REPO, '.xdt-worktrees', 'gone');
+    pendingSafeDirectoryCleanups.push(gonePath);
+    crossProcessLockMock.mockImplementation(
+      (_lockPath: string, _opts: unknown, task: (status: unknown) => Promise<unknown>) =>
+        task({ held: true }),
+    );
+
+    await manager.reconcilePendingSafeDirectoryCleanups();
+
+    expect(gitExecMock).toHaveBeenCalledWith([
+      'config',
+      '--global',
+      '--unset-all',
+      '--fixed-value',
+      'safe.directory',
+      gonePath,
+    ]);
+    expect(pendingSafeDirectoryCleanups).toEqual([]);
+  });
+
   it('does not move a worktree when quarantine state cannot be persisted', async () => {
     const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), 'xdt-wt-quarantine-persist-'));
     try {
@@ -1138,6 +1192,7 @@ describe('removeWorktreeForSession', () => {
     expect(gitOperations).toEqual([
       'symbolic-ref',
       'worktree',
+      'config',
       'rev-parse',
       'rev-list',
       'update-ref',

@@ -2,16 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import type { WorktreeMeta } from '../worktree/types';
 
-const backingStore = { worktrees: {} as Record<string, WorktreeMeta> };
+const backingStore: Record<string, unknown> = { worktrees: {} as Record<string, WorktreeMeta> };
 const setWorktreePathInDbMock = vi.fn();
 
 vi.mock('electron-store', () => ({
   default: class MockStore {
-    get(key: 'worktrees', fallback: Record<string, WorktreeMeta>) {
+    get(key: string, fallback: unknown) {
       return backingStore[key] ?? fallback;
     }
 
-    set(key: 'worktrees', value: Record<string, WorktreeMeta>) {
+    set(key: string, value: unknown) {
       backingStore[key] = value;
     }
   },
@@ -24,6 +24,7 @@ vi.mock('../localDb/ipc/sessions', () => ({
 describe('worktreeStore', () => {
   beforeEach(async () => {
     backingStore.worktrees = {};
+    delete backingStore.pendingSafeDirectoryCleanups;
     setWorktreePathInDbMock.mockReset();
     vi.resetModules();
   });
@@ -46,5 +47,20 @@ describe('worktreeStore', () => {
 
     expect(store.get(meta.sessionId)).toEqual(meta);
     expect(setWorktreePathInDbMock).toHaveBeenCalledWith(meta.sessionId, meta.path);
+  });
+
+  it('adds and removes pending safe.directory cleanup paths (deduped)', async () => {
+    const store = await import('../worktree/worktreeStore');
+
+    expect(store.getPendingSafeDirectoryCleanups()).toEqual([]);
+
+    store.addPendingSafeDirectoryCleanups(['/a', '/a', '/b']);
+    expect(store.getPendingSafeDirectoryCleanups()).toEqual(['/a', '/b']);
+
+    store.removePendingSafeDirectoryCleanups(['/a']);
+    expect(store.getPendingSafeDirectoryCleanups()).toEqual(['/b']);
+
+    store.removePendingSafeDirectoryCleanups(['/b']);
+    expect(store.getPendingSafeDirectoryCleanups()).toEqual([]);
   });
 });

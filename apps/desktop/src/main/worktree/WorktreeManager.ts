@@ -106,6 +106,41 @@ function activeWorktreePath(meta: WorktreeMeta): string {
 }
 
 /**
+ * 在持有全局 safe.directory 跨进程锁的前提下, 按精确值移除一组路径的 safe.directory
+ * 条目(#2627)。返回实际成功清理(exit 0)或本就不存在(exit 5)的路径; 其余失败仅告警、
+ * 不算已清理, 由调用方决定是否落盘推迟到下次启动再试。
+ */
+async function unsetSafeDirectoryEntriesLocked(
+  targets: Iterable<string>,
+): Promise<string[]> {
+  const cleaned: string[] = [];
+  for (const target of targets) {
+    try {
+      await gitExec([
+        'config',
+        '--global',
+        '--unset-all',
+        '--fixed-value',
+        'safe.directory',
+        target,
+      ]);
+      cleaned.push(target);
+    } catch (err) {
+      // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
+      if (err instanceof GitExecError && err.exitCode === 5) {
+        cleaned.push(target);
+        continue;
+      }
+      log.warn(
+        `[worktree] remove safe.directory entry for ${target} failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  return cleaned;
+}
+
+/**
  * 删除/归档成功后, 清理该 worktree 路径残留在全局 git config 里的 safe.directory
  * 条目(#2627)。只按精确值移除, 不触碰用户其它仓库的手动配置; 失败仅日志, 不影响
  * 删除主流程。传入本次删除涉及的所有候选路径:原始 path + 已持久化的 quarantinePath
@@ -116,8 +151,10 @@ function activeWorktreePath(meta: WorktreeMeta): string {
  * 与 gitExec 的 ensureGlobalSafeDirectory(--add)共用同一把跨进程锁:一个实例删
  * worktree、另一个实例同时给某仓库按需加 safe.directory 时,两种写操作必须串行,
  * 否则并发写全局 config 会因 .gitconfig.lock 冲突失败(清理侧吞掉失败留残项 /
- * add 侧失败让原 git 操作继续报 dubious ownership)。拿不到锁时**跳过**清理(留待
- * 下次),绝不做无锁 --unset-all。
+ * add 侧失败让原 git 操作继续报 dubious ownership)。拿不到锁时**不**做无锁
+ * --unset-all, 而是把候选路径落盘到 worktreeStore.pendingSafeDirectoryCleanups,
+ * 由下次启动的 reconcilePendingSafeDirectoryCleanups 补清 —— 因为此刻目录已删、
+ * store.del(sessionId) 已执行, 进程内已无任何持久状态可再重试, 必须靠落盘兜底。
  */
 async function removeWorktreeSafeDirectory(
   ...paths: (string | null | undefined)[]
@@ -126,35 +163,63 @@ async function removeWorktreeSafeDirectory(
     paths.filter((p): p is string => typeof p === 'string' && p.length > 0),
   );
   if (candidates.size === 0) return;
-  await withCrossProcessLock(
+
+  const cleaned = await withCrossProcessLock(
     globalSafeDirectoryLockPath(),
     { label: 'git-safe-directory', waitMs: 1_000 },
     async (status) => {
-      if (!status.held) {
-        log.warn('[worktree] skip safe.directory cleanup: global lock not acquired');
-        return;
-      }
-      for (const target of candidates) {
-        try {
-          await gitExec([
-            'config',
-            '--global',
-            '--unset-all',
-            '--fixed-value',
-            'safe.directory',
-            target,
-          ]);
-        } catch (err) {
-          // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
-          if (err instanceof GitExecError && err.exitCode === 5) continue;
-          log.warn(
-            `[worktree] remove safe.directory entry for ${target} failed:`,
-            err instanceof Error ? err.message : String(err),
-          );
-        }
-      }
+      if (!status.held) return [];
+      return unsetSafeDirectoryEntriesLocked(candidates);
     },
   );
+
+  const pending = [...candidates].filter((p) => !cleaned.includes(p));
+  if (pending.length > 0) {
+    try {
+      store.addPendingSafeDirectoryCleanups(pending);
+    } catch (err) {
+      // 落盘失败只是丢失一次「下次启动补清」的机会, 绝不能反向中断删除主流程
+      log.warn(
+        '[worktree] persist deferred safe.directory cleanup failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+    log.warn(
+      '[worktree] safe.directory cleanup deferred to next startup:',
+      pending.join(', '),
+    );
+  }
+}
+
+/**
+ * 启动期对账: 补清 removeWorktreeSafeDirectory 因拿不到锁(或 --unset-all 失败)而
+ * 落盘的 safe.directory 残留路径。成功(exit 0)或本就不存在(exit 5)的路径从 store
+ * 移除; 仍失败的留待下次启动。fire-and-forget, 不阻塞启动。
+ */
+export async function reconcilePendingSafeDirectoryCleanups(): Promise<void> {
+  const pending = store.getPendingSafeDirectoryCleanups();
+  if (pending.length === 0) return;
+
+  const cleaned = await withCrossProcessLock(
+    globalSafeDirectoryLockPath(),
+    { label: 'git-safe-directory', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) return [];
+      return unsetSafeDirectoryEntriesLocked(pending);
+    },
+  );
+
+  if (cleaned.length > 0) {
+    try {
+      store.removePendingSafeDirectoryCleanups(cleaned);
+    } catch (err) {
+      log.warn(
+        '[worktree] remove cleaned safe.directory paths from store failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 }
 
 async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
