@@ -97,7 +97,8 @@ import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
-import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
+import { getNotificationsEnabled, getSoundNotificationsEnabled } from '@/hooks/useNotificationSettings';
+import { playSessionEventSound } from '@/lib/notificationSound';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import type { Session } from '@/lib/ccAgent.types';
@@ -1124,6 +1125,9 @@ function ExpandedView({
       const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
       const desktopEnabled = getNotificationsEnabled() && !islandActive;
       const feishuEnabled = getFeishuNotificationsEnabled();
+      // 应用级提示音(#3177):与桌面通知同一去重形状——岛已承载该事件时岛会播
+      // 自己的音效,这里不再重响。
+      const soundEnabled = getSoundNotificationsEnabled() && !islandActive;
       // 失焦才推 —— 见上注释。
       if (typeof document !== 'undefined' && document.hasFocus()) return;
       const session = sessionsRef.current.find((s) => s.id === sessionId);
@@ -1131,6 +1135,10 @@ function ExpandedView({
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
+      // 声音只在确认真实外发后播放(过了失焦 gate 与 worker 聚合),且与 toast 的
+      // OS 通知音互斥:声音开了 → toast 静音,由应用提示音统一发声;
+      // 关了 → 保持 Electron 默认(silent:false),交给 OS。
+      if (soundEnabled) playSessionEventSound(kind);
       void window.electronAPI.notificationMarkSessionAttention(sessionId);
       // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。
       // (手机推送用的是**桌面侧**语言 —— 标题在 wire payload 里是字面量,让手机按自己
@@ -1147,6 +1155,7 @@ function ExpandedView({
           desktop: desktopEnabled,
           feishu: feishuEnabled,
           mobile: true,
+          sound: soundEnabled,
         },
       });
     },

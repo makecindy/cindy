@@ -3295,7 +3295,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sessionId: string;
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
-    channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
+    channels?: {
+      desktop?: boolean;
+      feishu?: boolean;
+      mobile?: boolean;
+      /** #3177:true 时 main 将本条 toast 置静音,提示音已由 renderer 本地播放。 */
+      sound?: boolean;
+    };
   }): Promise<void> => ipcRenderer.invoke('notification:show-session-event', payload),
   notificationSetDesktopEnabled: (enabled: boolean): Promise<{ ok: true }> =>
     ipcRenderer.invoke('notification:set-desktop-enabled', enabled),

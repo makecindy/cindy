@@ -523,4 +523,90 @@ describe('notificationService — channels 分发', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toContain('feishu sendMarkdownText failed');
   });
+
+  // ── sound 通道(#3177)────────────────────────────────────────────────────
+  // renderer 播放应用提示音后传 sound:true → 本条 toast 必须静音,避免
+  // OS 通知音与应用提示音双响;未传/关闭时保持 Electron 默认(silent 不设,
+  // OS 通知音照常),老调用方零改动。
+
+  it('channels.sound:true → toast 置 silent(OS 音不与应用提示音叠加)', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'done',
+      channels: { desktop: true, feishu: false, sound: true },
+    });
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Cindy · Hello', silent: true }),
+    );
+  });
+
+  it('channels.sound 未传/false → toast 不带 silent,OS 通知音照常', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'done',
+      channels: { desktop: true, feishu: false, sound: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.not.objectContaining({ silent: true }),
+    );
+
+    notificationCtor.mockClear();
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'done',
+      channels: { desktop: true, feishu: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.not.objectContaining({ silent: true }),
+    );
+  });
+
+  it('sound:true 且 desktop:false → 无 toast 可静音,其余通道照常分发', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'needs-reply',
+      channels: { desktop: false, feishu: true, mobile: true, sound: true },
+    });
+    await flushAsync();
+
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalled();
+    // 角标不受任何通道开关影响
+    expect(markSessionNeedsAttention).toHaveBeenCalledWith('s1');
+  });
+
+  it('payload 运行时校验:sound 非 boolean 直接 reject', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+
+    await expect(
+      invokeHandler({
+        sessionId: 's1',
+        title: 'x',
+        kind: 'done',
+        channels: { desktop: true, sound: 'yes' },
+      }),
+    ).rejects.toThrow('invalid session event payload');
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
 });
