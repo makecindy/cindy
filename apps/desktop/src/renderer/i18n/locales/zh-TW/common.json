@@ -6630,6 +6630,7 @@
     "chatInput": {
       "defaultPlaceholder": "今天我們做點什麼呢~",
       "createAgentPlaceholder": "你好，{{appName}}！",
+      "recommendationShortcut": "Tab",
       "voiceInput": {
         "start": "開始語音輸入",
         "stop": "停止語音輸入",

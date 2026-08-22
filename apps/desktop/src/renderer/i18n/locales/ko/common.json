@@ -6630,6 +6630,7 @@
     "chatInput": {
       "defaultPlaceholder": "오늘은 무엇을 할까요~",
       "createAgentPlaceholder": "안녕하세요, {{appName}}!",
+      "recommendationShortcut": "Tab",
       "voiceInput": {
         "start": "음성 입력 시작",
         "stop": "음성 입력 중지",
