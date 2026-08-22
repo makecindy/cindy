@@ -10,6 +10,7 @@ import {
   validateGhostManifest,
   type GhostInstallApproval,
   type GhostManifest,
+  type GhostTrustInfo,
 } from '../../../shared/ghost.js';
 
 const runtime = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const runtime = vi.hoisted(() => ({
     dir: string;
     enabled: boolean;
     approval?: GhostInstallApproval;
+    trust?: GhostTrustInfo;
   }>,
   install: vi.fn(),
   uninstall: vi.fn(),
