@@ -1147,7 +1147,19 @@ function ExpandedView({
       // 播放成功 → 静音 OS 通知音,单一声源;失败(autoplay 被拒/资源缺失)→
       // 保持 Electron 默认,OS 通知音照常,用户至少还有一条可听的提醒。
       let soundOn = false;
-      if (soundRequested) soundOn = await playSessionEventSound(kind);
+      if (soundRequested) {
+        const focusAbortController = new AbortController();
+        const abortPendingSound = () => focusAbortController.abort();
+        window.addEventListener('focus', abortPendingSound, { once: true });
+        try {
+          soundOn = await playSessionEventSound(kind, focusAbortController.signal);
+        } finally {
+          window.removeEventListener('focus', abortPendingSound);
+        }
+      }
+      // play() 最多会等待 500ms；等待期间用户可能已经切回 Cindy。焦点恢复既取消
+      // 待播音频，也终止桌面/飞书/手机与角标的整条通知分发。
+      if (typeof document !== 'undefined' && document.hasFocus()) return;
       if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;
       void window.electronAPI.notificationMarkSessionAttention(sessionId);
       // 哨兵过投影:toast / 飞书 / 手机推送里都不能出现内部哨兵 "New Maker"。

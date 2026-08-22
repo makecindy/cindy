@@ -52,4 +52,15 @@ describe('playSessionEventSound', () => {
     await expect(result).resolves.toBe(false);
     expect(audioHarness.pause).toHaveBeenCalledOnce();
   });
+
+  it('aborts and pauses a pending playback when the window regains focus', async () => {
+    audioHarness.play.mockReturnValue(new Promise<void>(() => undefined));
+    const controller = new AbortController();
+    const result = playSessionEventSound('done', controller.signal);
+
+    controller.abort();
+
+    await expect(result).resolves.toBe(false);
+    expect(audioHarness.pause).toHaveBeenCalledOnce();
+  });
 });

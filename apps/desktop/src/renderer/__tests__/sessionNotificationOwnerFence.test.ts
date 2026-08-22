@@ -9,21 +9,39 @@ const sidebarSource = readFileSync(
 );
 
 describe('session notification owner fence', () => {
-  it('captures the account boundary before the sound await and drops stale events', () => {
+  it('rechecks focus and account ownership after the sound await before any notification side effect', () => {
     const capture = sidebarSource.indexOf('const dataOwnerAtNotification = getDataOwnerGeneration();');
-    const soundAwait = sidebarSource.indexOf('await playSessionEventSound(kind);', capture);
-    const fence = sidebarSource.indexOf(
-      'if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;',
+    const focusListener = sidebarSource.indexOf(
+      "window.addEventListener('focus', abortPendingSound, { once: true });",
+      capture,
+    );
+    const soundAwait = sidebarSource.indexOf(
+      'await playSessionEventSound(kind, focusAbortController.signal);',
+      focusListener,
+    );
+    const focusFence = sidebarSource.indexOf(
+      "if (typeof document !== 'undefined' && document.hasFocus()) return;",
       soundAwait,
+    );
+    const ownerFence = sidebarSource.indexOf(
+      'if (!isDataOwnerGenerationCurrent(dataOwnerAtNotification)) return;',
+      focusFence,
     );
     const markAttention = sidebarSource.indexOf(
       'window.electronAPI.notificationMarkSessionAttention(sessionId)',
-      fence,
+      ownerFence,
+    );
+    const showNotification = sidebarSource.indexOf(
+      'window.electronAPI.notificationShowSessionEvent({',
+      markAttention,
     );
 
     expect(capture).toBeGreaterThan(-1);
-    expect(soundAwait).toBeGreaterThan(capture);
-    expect(fence).toBeGreaterThan(soundAwait);
-    expect(markAttention).toBeGreaterThan(fence);
+    expect(focusListener).toBeGreaterThan(capture);
+    expect(soundAwait).toBeGreaterThan(focusListener);
+    expect(focusFence).toBeGreaterThan(soundAwait);
+    expect(ownerFence).toBeGreaterThan(focusFence);
+    expect(markAttention).toBeGreaterThan(ownerFence);
+    expect(showNotification).toBeGreaterThan(markAttention);
   });
 });

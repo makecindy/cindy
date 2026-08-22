@@ -38,27 +38,56 @@ export const NOTIFICATION_SOUND_START_TIMEOUT_MS = 500;
  *   - false = 自动播放被策略拒绝 / 资源缺失或解码失败 → 调用方保持 Electron
  *             默认(silent:false),OS 通知音照常,用户至少还有一条可听的提醒。
  */
-export async function playSessionEventSound(kind: SessionNotificationSoundKind): Promise<boolean> {
+export async function playSessionEventSound(
+  kind: SessionNotificationSoundKind,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const audio = new Audio(SOUND_URL_BY_KIND[kind]);
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let abortListener: (() => void) | null = null;
+  let audioStopped = false;
+  const stopAudio = (): void => {
+    if (audioStopped) return;
+    audioStopped = true;
+    audio.pause();
+  };
   try {
+    if (signal?.aborted) return false;
     // play() resolve 表示实际开始出声;资源加载/解码失败与 autoplay 拒绝都会 reject。
-    const started = await Promise.race([
+    const startupResults: Array<Promise<boolean>> = [
       audio.play().then(() => true),
       new Promise<boolean>((resolve) => {
         timeoutId = setTimeout(() => resolve(false), NOTIFICATION_SOUND_START_TIMEOUT_MS);
       }),
-    ]);
+    ];
+    if (signal) {
+      startupResults.push(
+        new Promise<boolean>((resolve) => {
+          abortListener = () => {
+            stopAudio();
+            resolve(false);
+          };
+          signal.addEventListener('abort', abortListener, { once: true });
+        }),
+      );
+    }
+    const started = await Promise.race(startupResults);
     if (!started) {
       // play() 没有取消 API；pause 阻止超时后迟到的 resolve 再补播一声。
-      audio.pause();
-      log.debug('notification sound startup timed out');
+      stopAudio();
+      log.debug(
+        signal?.aborted
+          ? 'notification sound cancelled after window focus'
+          : 'notification sound startup timed out',
+      );
     }
     return started;
   } catch (err) {
+    stopAudio();
     log.debug('notification sound skipped', err);
     return false;
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
+    if (signal && abortListener) signal.removeEventListener('abort', abortListener);
   }
 }
