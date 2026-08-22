@@ -825,6 +825,39 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it('still injects host auto-compact on a full remote session because rollover is local-only', async () => {
+    const { handle, firstQuery, infoCalls } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      autoCompactThresholdPct: 75,
+      remoteHostId: 'remote-1',
+    });
+    void (async () => {
+      try {
+        for await (const _event of handle.events()) {
+          /* drain */
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hi' });
+    firstQuery.stream.emit({
+      type: 'result',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 500_000, output_tokens: 20 },
+    });
+    await vi.waitFor(() => {
+      expect(infoCalls.filter((message) => message === 'auto-compact triggered')).toEqual([
+        'auto-compact triggered',
+      ]);
+    });
+    expect(handle.getUsageSnapshot().needsRollover).toBeUndefined();
+
+    await handle.close();
+  });
+
   it('latches rollover when idle host auto-compact returns an empty summary', async () => {
     const { handle, firstQuery, infoCalls } = await startRewindableSession({
       model: 'claude-sonnet-5',

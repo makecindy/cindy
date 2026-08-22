@@ -213,7 +213,7 @@ describe('Orca lead/worker dispatcher', () => {
     let lockChain: Promise<unknown> = Promise.resolve();
     let lockHeld = false;
     let overlapping = false;
-    const withSendToSessionLock = vi.fn(async (_sessionId: string, task: () => Promise<unknown>) => {
+    const withSendToSessionLock = async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> => {
       const run = lockChain.then(async () => {
         if (lockHeld) overlapping = true;
         lockHeld = true;
@@ -225,7 +225,7 @@ describe('Orca lead/worker dispatcher', () => {
       });
       lockChain = run.then(() => undefined, () => undefined);
       return run;
-    });
+    };
     const prepareUnhealthySession = vi.fn(async () => {
       if (prepareUnhealthySession.mock.calls.length === 1) await firstGate;
       return false;

@@ -2295,6 +2295,7 @@ export class PiAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'pi',
             getThresholdPct: getAutoCompactThresholdPct,
+            compactWhenFull: Boolean(opts.remoteHostId),
           });
     // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
     // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。

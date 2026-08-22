@@ -22,6 +22,11 @@ export interface AutoCompactControllerDeps {
   agentKind: string;
   /** 返回当前自动压缩阈值百分比。undefined 表示关闭 host 侧自动压缩。 */
   getThresholdPct: () => number | undefined;
+  /**
+   * 满窗时是否仍允许 host compact。本机 false：满窗走换窗。
+   * 远端 true：没有本地换窗，满窗仍应 compact。
+   */
+  compactWhenFull?: boolean;
 }
 
 /**
@@ -43,8 +48,8 @@ export function isDeterministicHostCompactFailure(message: string): boolean {
  * 控制器只做判定与 fire-once 状态管理; Claude Code 注入 `/compact`，Pi 调 compact RPC。
  *
  * 同模型三条独立状态：
- *  - compact：设置值 ≤ ratio < 1，且没有 needsRollover
- *  - overflow rebuild：ratio ≥ 1（由 host prepareUnhealthySession 判断）
+ *  - compact：设置值 ≤ ratio，且没有 needsRollover；本机另要求 ratio < 1
+ *  - overflow rebuild：本机 ratio ≥ 1（由 host prepareUnhealthySession 判断）
  *  - needsRollover：host/bridge auto compact 的窄分类失败，下次 send 换窗
  */
 export class AutoCompactController {
@@ -66,7 +71,8 @@ export class AutoCompactController {
   }
 
   /**
-   * turn end 时调用。达到当前阈值、尚未满窗、且未锁存换窗时返回 true。
+   * turn end 时调用。达到当前阈值、未锁存换窗，且（本机）尚未满窗时返回 true。
+   * 远端 compactWhenFull 时，满窗仍返回 true。
    * 每次调用都读取 getter, 因此 host 设置变更对当前会话实时生效。
    */
   shouldCompactNow(): boolean {
@@ -81,7 +87,7 @@ export class AutoCompactController {
       });
       return false;
     }
-    if (this.latest.ratio >= 1) {
+    if (this.latest.ratio >= 1 && this.deps.compactWhenFull !== true) {
       this.deps.logger.debug('auto-compact skipped: context is already full', {
         contextTokens: this.latest.contextTokens,
         contextWindow: this.latest.contextWindow,

@@ -1266,6 +1266,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'claude-code',
             getThresholdPct: getAutoCompactThresholdPct,
+            compactWhenFull: Boolean(opts.remoteHostId),
           });
     // opts.makerMemoryEnabled 优先 (per-session, renderer 透传); fallback 到 runtimeConfig
     // (host 静态配置, 一般 undefined)。manager 没注入视为禁用。

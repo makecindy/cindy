@@ -178,6 +178,7 @@ describe('PiAgent host auto-compact', () => {
     await handle.close();
   });
 
+
   it('does not retry compact after a deterministic host compact failure', async () => {
     knobs.compactResponse = {
       success: false,

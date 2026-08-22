@@ -15,12 +15,14 @@ const noopLogger: Logger = {
 
 function makeController(
   getThresholdPct: () => number | undefined,
+  compactWhenFull?: boolean,
 ): AutoCompactController {
   return new AutoCompactController({
     logger: noopLogger,
     workdir: '/tmp/project',
     agentKind: 'claude-code',
     getThresholdPct,
+    compactWhenFull,
   });
 }
 
@@ -150,6 +152,14 @@ describe('AutoCompactController', () => {
     controller.onUsageUpdate(200, 200);
 
     expect(controller.shouldCompactNow()).toBe(false);
+  });
+
+  it('still compacts a full window when compactWhenFull is set', () => {
+    const controller = makeController(() => 75, true);
+
+    controller.onUsageUpdate(200, 200);
+
+    expect(controller.shouldCompactNow()).toBe(true);
   });
 
   it('does not compact after a deterministic host compact failure is latched', () => {
