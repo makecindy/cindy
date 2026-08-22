@@ -726,6 +726,15 @@ html:lang(ko) {
   top: -1px;
 }
 
+/* Programmatic Tiptap commands can still mutate a non-editable document. Hide
+   the quote action at the same DOM boundary that locks the composer; the
+   command handler separately checks editor.isEditable as the behavior guard. */
+.ProseMirror[contenteditable='false'] [data-composer-quote-remove] {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
+
 /* Keep the caret and surrounding prose a consistent, readable distance from
    every composer pill. This is external spacing, independent of chip padding. */
 .ProseMirror :is(

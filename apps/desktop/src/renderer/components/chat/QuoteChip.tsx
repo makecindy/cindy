@@ -5,9 +5,11 @@
  * 消息气泡复用同一套紧凑尺寸、颜色与截断规则。onRemove 存在时显示删除按钮。
  */
 import { FileText, MessageSquareQuote, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { ChatQuote } from '@/lib/chatQuotes';
 import { quoteSourceDisplayLabel } from '@/lib/chatQuotes';
 import { InlineReferenceChip } from './InlineReferenceChip';
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 interface QuoteChipProps {
@@ -22,8 +24,10 @@ export function QuoteChip({
   selected = false,
   onRemove,
 }: QuoteChipProps) {
+  const { t } = useTranslation();
   const sourceLabel = quoteSourceDisplayLabel(quote);
   const compactText = quote.text.replace(/\s+/g, ' ').trim();
+  const removeLabel = t('chat.quote.remove');
 
   const tooltip = (
     <span className="flex flex-col gap-1">
@@ -43,23 +47,26 @@ export function QuoteChip({
   );
 
   const removeButton = onRemove ? (
-    <button
-      type="button"
-      aria-label={`Remove quote: ${quote.text}`}
-      className={cn(
-        'absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center',
-        'rounded-full bg-[var(--surface-secondary)] text-[var(--text-tertiary)]',
-        'opacity-0 transition-opacity group-hover:opacity-100 group-hover:bg-[var(--surface-hover)] group-hover:text-[var(--text-primary)]',
-        'focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
-      )}
-      onClick={(e) => {
-        e.stopPropagation();
-        onRemove();
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <X className="h-2.5 w-2.5" aria-hidden />
-    </button>
+    <Tip text={removeLabel}>
+      <button
+        type="button"
+        aria-label={removeLabel}
+        data-composer-quote-remove=""
+        className={cn(
+          'absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5 items-center justify-center',
+          'rounded-full bg-[var(--surface-secondary)] text-[var(--text-tertiary)]',
+          'opacity-0 transition-opacity group-hover:opacity-100 group-hover:bg-[var(--surface-hover)] group-hover:text-[var(--text-primary)]',
+          'focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <X className="h-2.5 w-2.5" aria-hidden />
+      </button>
+    </Tip>
   ) : undefined;
 
   return (

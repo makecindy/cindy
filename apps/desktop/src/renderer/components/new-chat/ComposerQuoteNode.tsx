@@ -25,6 +25,7 @@ function ComposerQuoteNodeView({ node, selected, editor, getPos }: NodeViewProps
   const quote = composerQuoteAttrsToChatQuote(node.attrs as ComposerQuoteAttrs);
 
   const handleRemove = () => {
+    if (editor.isDestroyed || !editor.isEditable) return;
     const pos = typeof getPos === 'function' ? getPos() : undefined;
     if (pos === undefined) return;
     // Delete the atom node (nodeSize = 1 for inline atoms).

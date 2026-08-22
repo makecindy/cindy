@@ -3,8 +3,8 @@
  *
  * The shell owns the pill geometry, theme tokens and truncation tooltip.
  * Callers keep semantic behaviour such as navigation, file preview and
- * ProseMirror drag handling. Atomic chips intentionally have no close button;
- * composer nodes remain removable through normal node selection + Delete.
+ * ProseMirror drag handling. Callers may provide an overlay action while the
+ * default remains a static pill removable through normal node selection + Delete.
  *
  * 剪贴板契约(为什么这里是 `<span role="button">` 而不是 `<button>`):
  *   聊天消息被选中复制时,Chromium 会把选区**原样**序列化进 `text/html`。
@@ -41,9 +41,11 @@ export interface InlineReferenceChipProps {
    * `false`:那里 chip 是一个整体被选中 / 删除的原子节点,内部文字不参与 selection。
    */
   textSelectable?: boolean;
-  /** Optional overlay button rendered at the top-right corner of the chip.
-   *  The chip applies `group` and `relative` to its root when this prop is set,
-   *  enabling group-hover reveal on the button. */
+  /**
+   * Optional overlay button rendered at the top-right corner of the chip.
+   * The chip applies `group` and `relative` to its root when this prop is set,
+   * enabling group-hover reveal on the button.
+   */
   removeButton?: ReactNode;
 }
 
@@ -118,10 +120,28 @@ export function InlineReferenceChip({
       data-inline-reference-chip=""
       data-split-pane-route-action={splitPaneRouteAction ? '' : undefined}
     >
-      {contents}
+      {removeButton ? (
+        <Tip
+          text={tooltip}
+          mono={tooltipMono}
+          delay={300}
+          contentClassName={tooltipContentClassName}
+        >
+          <span className="inline-flex min-w-0 flex-1 items-center gap-1.5">
+            {contents}
+          </span>
+        </Tip>
+      ) : (
+        contents
+      )}
       {removeButton}
     </span>
   );
+
+  // Overlay actions need their own Tip. Keeping the quote preview on an inner
+  // content span makes both tooltip triggers siblings instead of nesting two
+  // Radix triggers, while preserving this root's DOM/layout contract.
+  if (removeButton) return trigger;
 
   return (
     <Tip
