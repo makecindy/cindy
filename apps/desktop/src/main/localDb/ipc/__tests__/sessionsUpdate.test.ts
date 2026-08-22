@@ -100,6 +100,14 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
 vi.mock('../../../maker-host/index.js', () => ({
   getMakerIfReady: h.getMakerIfReady,
 }));
+// delete 路径的 removeHookAttachmentDir 会真删 turn change-set;归档路径动态
+// import cindy-brain(重副作用模块)。两者都 mock 掉,本文件只断言广播行为。
+vi.mock('../../../turn-change-set/store.js', () => ({
+  removeTurnChangeSetsForSession: vi.fn(async () => undefined),
+}));
+vi.mock('../../../cindy-brain/index.js', () => ({
+  notifyGhostSessionEvent: vi.fn(),
+}));
 
 import { registerSessionIpc, resumeDeletedPiSubagentCleanup } from '../sessions';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
@@ -484,6 +492,39 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: { status: 'deleted' },
       }),
     );
+  });
+
+  it('broadcasts local unarchive status patches to every window (#3175)', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+
+    await invokeUpdate('codex-local', { status: 'active' });
+    await vi.dynamicImportSettled();
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string };
+    expect(persisted.status).toBe('active');
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'active' },
+    });
+  });
+
+  // setStatus 的归档形是 { status, pinnedAt: null }:广播沿用置顶合并逻辑,
+  // 归档一并清 pin 与摘要(归档列表不该保留 pin 标记)。
+  it('broadcasts local archive status patches with the unpin merge (#3175)', async () => {
+    await invokeUpdate('codex-local', { status: 'archived', pinnedAt: null });
+    await vi.dynamicImportSettled();
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; pinnedAt: number | null };
+    expect(persisted.status).toBe('archived');
+    expect(persisted.pinnedAt).toBeNull();
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'archived', pinnedAt: null, summary: null },
+    });
   });
 
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
