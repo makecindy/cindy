@@ -114,7 +114,11 @@ export function openSessionInNewWindow(
       )
     : nativeTheme.shouldUseDarkColors;
   const bgColor = isDark ? '#1f1f1e' : '#f8f8f6';
-  const winBackdropConfig = resolveVibrancyConfig('cindy', isDark, process.platform);
+  const winBackdropConfig = resolveVibrancyConfig(
+    persistedTheme?.familyId ?? 'cindy',
+    isDark,
+    process.platform,
+  );
 
   const base = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   const requestedSize = base

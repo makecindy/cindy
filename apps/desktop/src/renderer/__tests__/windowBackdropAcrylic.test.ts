@@ -31,6 +31,9 @@ describe('Windows Acrylic resize backing contract', () => {
     expect(bootstrapSource).toContain(
       "persistedTheme?.familyId ?? 'cindy',\n    isDark,\n    process.platform,",
     );
+    expect(secondaryWindowsSource).toContain(
+      "persistedTheme?.familyId ?? 'cindy',\n    isDark,\n    process.platform,",
+    );
   });
 
   it('publishes the actual window material to a root data attribute', () => {
