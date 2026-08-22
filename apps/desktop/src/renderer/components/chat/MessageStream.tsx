@@ -38,8 +38,11 @@ import {
   type AgentTaskTerminalStatus,
 } from '@cindy/maker-shared/agent-task';
 import {
+  findMessageTodoInsertions,
+  getLatestMessageTodoState,
   isAgentPlanToolName,
   isDeliveryProseText,
+  isPlanUserBoundary,
   isSubagentParentToolUseId,
 } from '@cindy/maker-shared/message-render';
 // 子代理卡判据只能有一份:此前桌面自带一份只认 Agent/Task/collab:* 的副本,新增 harness
@@ -222,6 +225,7 @@ import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
 import { PlanReviewBubble } from './PlanReviewBubble';
 import { ToolCallCard, getToolSummary } from './ToolCallCard';
+import { InlinePlanCard, type TodoItem } from './TodoListCard';
 import { SystemCard } from './SystemCard';
 import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
@@ -342,6 +346,8 @@ interface MessageStreamProps {
   onLoadMore?: (automatic?: boolean) => Promise<boolean>;
   isLoadingMore?: boolean;
   hasMoreMessages?: boolean;
+  /** 当前逻辑历史窗口中间仍有缺口；与 hasMoreMessages 一样会让父调用归属不可信。 */
+  historyWindowHasIsland?: boolean;
   /** Dynamic bottom padding (px) to reserve space for the input overlay */
   bottomPadding?: number;
   /** Distance from the chat viewport bottom to the visible composer stack top. */
@@ -376,6 +382,16 @@ interface MessageStreamProps {
    * Split panes keep every MessageStream mounted; only the focused owner may act.
    */
   ownsHardwareScrollActions?: boolean;
+  /**
+   * 当前计划的流内卡是否仍在用户可见区域。父层据此决定 composer 上方的
+   * 兜底胶囊是否需要接力；key 防止新旧计划切换时沿用上一张卡的可见状态。
+   */
+  onInlinePlanVisibilityChange?: (state: InlinePlanVisibility | null) => void;
+}
+
+export interface InlinePlanVisibility {
+  key: string;
+  visible: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +408,15 @@ interface MessageStreamProps {
 // 引用这两个成员(WorkChildItem),让「children 只含这两类」由类型系统保证,
 // 渲染处无需 as 强转;其余成员保持内联。
 type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
+type AgentPlanRenderItem = {
+  type: 'agent_plan';
+  key: string;
+  todos: TodoItem[];
+  /** 同一 session 的计划工具行；历史 prepend 改变首行 key 后仍可恢复旧锚点。 */
+  sourceClientIds: string[];
+  /** 计划调用在流里的位置与时间锚点；原 tool_use 行由本卡取代。 */
+  createdAt?: string;
+};
 type ToolSegmentRenderItem = {
   /** A run of consecutive tool_use messages between text segments,
    *  rendered as a single AgentActionsBlock. v2 — no isStreaming
@@ -468,6 +493,7 @@ interface WorkGroupRenderItem {
 
 export type RenderItem =
   | MessageRenderItem
+  | AgentPlanRenderItem
   | ToolSegmentRenderItem
   | AgentTaskRenderItem
   | ForkOriginRenderItem
@@ -580,6 +606,47 @@ export function shouldBoostDefaultWindow({
 }): boolean {
   if (defaultWindowItems >= RENDER_WINDOW_INITIAL_ITEMS) return false;
   return visibleItemCount < allItemCount;
+}
+
+type VisibilityRect = Pick<DOMRect, 'top' | 'right' | 'bottom' | 'left' | 'width' | 'height'>;
+
+/**
+ * 判定流内计划卡是否至少有一个可见像素。
+ *
+ * scroll 容器底部被 composer overlay 覆盖，单看容器的 DOMRect 会把“实际藏在
+ * 输入框后面”误判为可见，所以把 overlay 高度作为 bottomInset 从可视区扣掉。
+ */
+export function isPlanCardVisibleInViewport(
+  card: VisibilityRect,
+  viewport: VisibilityRect,
+  bottomInset = 0,
+): boolean {
+  if (card.width <= 0 || card.height <= 0 || viewport.width <= 0 || viewport.height <= 0) {
+    return false;
+  }
+  const safeBottomInset = Math.min(Math.max(0, bottomInset), Math.max(0, viewport.height - 1));
+  const visibleBottom = viewport.bottom - safeBottomInset;
+  return (
+    card.bottom > viewport.top &&
+    card.top < visibleBottom &&
+    card.right > viewport.left &&
+    card.left < viewport.right
+  );
+}
+
+export function planSessionBelongsToLatestUserTurn(
+  messages: readonly ChatMessage[],
+  sourceClientIds: readonly string[],
+): boolean {
+  const sourceIds = new Set(sourceClientIds);
+  let latestNormalUserIndex = -1;
+  let latestPlanRowIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (isPlanUserBoundary(message)) latestNormalUserIndex = index;
+    if (sourceIds.has(message.clientId)) latestPlanRowIndex = index;
+  }
+  return latestPlanRowIndex >= 0 && latestNormalUserIndex <= latestPlanRowIndex;
 }
 
 export function resolveDefaultWindowStartIdx({
@@ -899,12 +966,10 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * collapsed; user click → persisted).
  *
  * Agent plan handling:
- *   Plan tool calls (TodoWrite / update_plan / TaskCreate…) are swallowed
- *   entirely — same treatment as F7's AskUserQuestion / ExitPlanMode: the
- *   call and its tool_results produce no render item and do NOT cut the
- *   surrounding tool_segment. 计划的唯一呈现是 composer 上方的常驻面板
- *   (PinnedPlanPanel,Codex IDE 扩展式钉住交互),它直接从 messages 派生
- *   最新 plan session 快照,与本函数无关。
+ *   Pass 1 groups TodoWrite / update_plan / Task* calls into logical plan
+ *   sessions. Pass 2 replaces each session's latest tool row with one
+ *   `agent_plan` item in the chat timeline. The composer capsule observes the
+ *   latest inline card and only takes over after that card leaves the viewport.
  */
 /**
  * 锚点丢失恢复:DB 加载更老历史 prepend 时,若新拉回的末尾是 tool_use 且当前
@@ -917,7 +982,8 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * 扫描 allRenderItems 找哪个 item **现在覆盖**这个 clientId:
  *   - message: msg.clientId 严格匹配
  *   - tool_segment: toolCalls.*.clientId 任一匹配(段合并后老 toolCall 仍在新段内)
- *   - tool_media / ghost_card: 用 key 后缀匹配(它们的 key 派生自 stable message clientId)
+ *   - tool_media / ghost_card:用派生 key 后缀匹配
+ *   - agent_plan:除 key 外还保留 session 内全部计划行的 clientId
  *
  * 找到即返回该 index,visible slice 从这里继续;找不到才退回默认窗口。
  *
@@ -941,6 +1007,14 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
       if (it.toolCalls.some((tc) => tc.clientId === lostCid)) return i;
     } else if (it.type === 'agent_task') {
       if (it.toolCall?.clientId === lostCid) return i;
+    } else if (it.type === 'agent_plan') {
+      if (
+        it.key === lostKey ||
+        it.key.endsWith(`-${lostCid}`) ||
+        it.sourceClientIds.includes(lostCid)
+      ) {
+        return i;
+      }
     } else if (it.type === 'work_group') {
       // work_group 可能嵌套完成态时间线 — 老锚点(`seg-${cid}` /
       // `msg-${cid}` / `work-${cid}`)递归落到任一后代即由外组接住。
@@ -1398,6 +1472,47 @@ export function buildRenderItems(
     }
   }
 
+  // ── Pass 1: group plan events into timeline cards ──
+  // 分组与 composer 兜底胶囊共用 maker-shared 的同一口径。历史窗口不完整时
+  // Task* 计划先不画半张卡，等更早页补齐后再由同一 stable key 插入。
+  const planInsertAt = findMessageTodoInsertions(messages, {
+    taskHistoryMayBeIncomplete: opts?.historyWindowIncomplete === true,
+  });
+  // findMessageTodoInsertions 负责完整历史时间线，不会自行裁掉分页窗口里的半截
+  // Task session。不能只检查整窗「最新」计划：后面若已有可解析的新 session，
+  // 较早的半截 Task 卡仍会漏出来。逐个 Task insertion 用其前缀复核，等 prepend
+  // 补齐标题/早期 TaskCreate 后再由同一 stable key 插回。
+  if (opts?.historyWindowIncomplete === true) {
+    for (const [index, insertion] of planInsertAt) {
+      if (insertion.source !== 'task') continue;
+      const prefix = messages.slice(0, index + 1);
+      const prefixPlanToolUseIds = new Set(
+        prefix
+          .filter((message) => isAgentPlanToolName(message.toolName))
+          .map((message) => message.toolUseId)
+          .filter((toolUseId): toolUseId is string => Boolean(toolUseId)),
+      );
+      // TaskList / TaskGet 的权威内容在后续 tool_result 行里。只切到工具行会把
+      // 已完整的 snapshot 重新判成半截；保留当前前缀中计划调用的匹配结果，但
+      // 不把后续计划事件带进来，避免改变「正在复核哪张 insertion」的语义。
+      const validationMessages = [
+        ...prefix,
+        ...messages.slice(index + 1).filter(
+          (message) =>
+            message.role === 'tool_result' &&
+            typeof message.toolUseId === 'string' &&
+            prefixPlanToolUseIds.has(message.toolUseId),
+        ),
+      ];
+      const stateAtInsertion = getLatestMessageTodoState(validationMessages, {
+        taskHistoryMayBeIncomplete: true,
+      });
+      if (!stateAtInsertion.isResolved || stateAtInsertion.latestInsertionIndex !== index) {
+        planInsertAt.delete(index);
+      }
+    }
+  }
+
   const isOrcaCommunicationTool = (toolName: string): boolean => {
     const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
     return (
@@ -1631,10 +1746,22 @@ export function buildRenderItems(
         continue;
       }
 
-      // Plan tools (TodoWrite / update_plan / Task*) — swallowed like F7:
-      // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(钉住式常驻面板),
-      // 流内不再插卡;也不切段,周围工具保持聚组,如同调用不存在。
+      // Plan tools (TodoWrite / update_plan / Task*)由流内计划卡取代。只有
+      // session 的最新快照所在行插卡；中间更新只刷新同一 stable-key 卡片。
       if (isAgentPlanToolName(toolName)) {
+        const insertion = planInsertAt.get(i);
+        // 与悬浮胶囊保持一致：单步清单不占计划 UI；没有可画卡片时也不切开
+        // 周围工具段，保留旧的紧凑聚组语义。
+        if (insertion && insertion.todos.length >= 2) {
+          flushSegment();
+          items.push({
+            type: 'agent_plan',
+            key: insertion.key,
+            todos: insertion.todos,
+            sourceClientIds: insertion.sourceClientIds,
+            createdAt: msg.createdAt,
+          });
+        }
         let j = i + 1;
         while (j < messages.length && messages[j].role === 'tool_result') j++;
         i = j;
@@ -2108,6 +2235,7 @@ function renderItemContainsClientId(item: RenderItem, clientId: string): boolean
   if (item.type === 'tool_segment')
     return item.toolCalls.some((toolCall) => toolCall.clientId === clientId);
   if (item.type === 'agent_task') return item.toolCall?.clientId === clientId;
+  if (item.type === 'agent_plan') return item.sourceClientIds.includes(clientId);
   if (item.type === 'work_group') {
     return item.children.some((child) => renderItemContainsClientId(child, clientId));
   }
@@ -2125,6 +2253,10 @@ function renderItemStartMs(item: RenderItem): number | null {
   }
   if (item.type === 'agent_task') {
     const ms = Date.parse(item.toolCall?.createdAt ?? item.update?.createdAt ?? '');
+    return Number.isFinite(ms) ? ms : null;
+  }
+  if (item.type === 'agent_plan') {
+    const ms = Date.parse(item.createdAt ?? '');
     return Number.isFinite(ms) ? ms : null;
   }
   // ghost_card 是那次调用在流里的**唯一**呈现(工具行被卡片取代),所以它必须
@@ -2804,6 +2936,7 @@ export function MessageStream({
   onLoadMore,
   isLoadingMore,
   hasMoreMessages,
+  historyWindowHasIsland = false,
   bottomPadding,
   composerStackTopOffset,
   contentWidth,
@@ -2813,6 +2946,7 @@ export function MessageStream({
   onOpenForkOrigin,
   isLocalUserSend,
   ownsHardwareScrollActions = true,
+  onInlinePlanVisibilityChange,
 }: MessageStreamProps) {
   // 右上角 chip 栈插槽 —— PrevMessageJumpChip 通过 portal 挂到这里,
   // 与 DiffPanelToggle 在同一栈中各占一行。Provider 不存在时返回 null,
@@ -3047,11 +3181,21 @@ export function MessageStream({
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(
     () =>
       buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
-        historyWindowIncomplete: Boolean(hasMoreMessages),
+        historyWindowIncomplete:
+          !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
         turnChangeSets,
         workingDir,
       }),
-    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages, turnChangeSets, workingDir],
+    [
+      messages,
+      taskUpdates,
+      ghostCardSnapshot,
+      historyLoaded,
+      hasMoreMessages,
+      historyWindowHasIsland,
+      turnChangeSets,
+      workingDir,
+    ],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(visibleMessages),
@@ -3072,6 +3216,21 @@ export function MessageStream({
   const allRenderItems = useMemo(
     () => insertForkOriginItem(groupWorkRuns(ungroupedRenderItems, isSessionStreaming), forkOrigin),
     [ungroupedRenderItems, isSessionStreaming, forkOrigin],
+  );
+  const latestInlinePlan = useMemo(() => {
+    for (let index = allRenderItems.length - 1; index >= 0; index -= 1) {
+      const item = allRenderItems[index];
+      if (item.type === 'agent_plan') return item;
+    }
+    return null;
+  }, [allRenderItems]);
+  const latestInlinePlanKey = latestInlinePlan?.key ?? null;
+  const latestInlinePlanBelongsToActiveTurn = useMemo(
+    () =>
+      latestInlinePlan
+        ? planSessionBelongsToLatestUserTurn(messages, latestInlinePlan.sourceClientIds)
+        : false,
+    [latestInlinePlan, messages],
   );
 
   /**
@@ -5343,6 +5502,79 @@ export function MessageStream({
     composerStackTopOffset,
   });
 
+  const latestInlinePlanRendered = Boolean(
+    latestInlinePlanKey && visibleRenderItems.some((item) => item.key === latestInlinePlanKey),
+  );
+  useLayoutEffect(() => {
+    if (!onInlinePlanVisibilityChange) return;
+    if (!latestInlinePlanKey) {
+      onInlinePlanVisibilityChange(null);
+      return;
+    }
+    // shell-first 的首帧故意不挂消息树。此时保持“未知”而不是误报不可见，避免
+    // 品牌 loading 帧里 composer 胶囊抢先闪一下。
+    if (firstMountDeferred) return;
+
+    const root = scrollRef.current;
+    const card = root
+      ? [...root.querySelectorAll<HTMLElement>('[data-inline-plan-key]')].find(
+          (candidate) => candidate.dataset.inlinePlanKey === latestInlinePlanKey,
+        )
+      : undefined;
+    if (!root || !card || !latestInlinePlanRendered) {
+      onInlinePlanVisibilityChange({ key: latestInlinePlanKey, visible: false });
+      return;
+    }
+
+    const bottomInset = Math.min(
+      Math.max(0, resolvedBottomPadding),
+      Math.max(0, root.clientHeight - 1),
+    );
+    const reportMeasuredVisibility = () => {
+      onInlinePlanVisibilityChange({
+        key: latestInlinePlanKey,
+        visible: isPlanCardVisibleInViewport(
+          card.getBoundingClientRect(),
+          root.getBoundingClientRect(),
+          bottomInset,
+        ),
+      });
+    };
+
+    // 首次结果在 paint 前同步给父层，计划刚出现时不会先闪一次悬浮胶囊。
+    reportMeasuredVisibility();
+
+    if (typeof IntersectionObserver !== 'undefined') {
+      const observer = new IntersectionObserver(reportMeasuredVisibility, {
+        root,
+        rootMargin: `0px 0px -${bottomInset}px 0px`,
+        threshold: 0,
+      });
+      observer.observe(card);
+      return () => observer.disconnect();
+    }
+
+    // Electron 正常支持 IntersectionObserver；测试壳或极老 runtime 缺失时用
+    // 轻量 scroll/resize 兜底，不能因为能力缺失让胶囊永久不出现。
+    root.addEventListener('scroll', reportMeasuredVisibility, { passive: true });
+    window.addEventListener('resize', reportMeasuredVisibility);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' ? new ResizeObserver(reportMeasuredVisibility) : null;
+    resizeObserver?.observe(root);
+    resizeObserver?.observe(card);
+    return () => {
+      root.removeEventListener('scroll', reportMeasuredVisibility);
+      window.removeEventListener('resize', reportMeasuredVisibility);
+      resizeObserver?.disconnect();
+    };
+  }, [
+    firstMountDeferred,
+    latestInlinePlanKey,
+    latestInlinePlanRendered,
+    onInlinePlanVisibilityChange,
+    resolvedBottomPadding,
+  ]);
+
   // 「提及 → 兑现」关联(方案 2):从会话历史现算,软提示卡据此升级为召唤卡。
   // 引用缓存:内容不变时复用上一个 Map 引用——UserMessage 顶层订阅该
   // context,流式期间 messages 每批 delta 都换引用,不缓存会让全部历史
@@ -5439,6 +5671,21 @@ export function MessageStream({
                   {visibleRenderItems.map((item) => {
                     if (item.type === 'fork_origin') {
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
+                    }
+
+                    if (item.type === 'agent_plan') {
+                      return (
+                        <div key={item.key} data-inline-plan-key={item.key}>
+                          <InlinePlanCard
+                            todos={item.todos}
+                            animated={
+                              isSessionStreaming &&
+                              latestInlinePlanBelongsToActiveTurn &&
+                              item.key === latestInlinePlanKey
+                            }
+                          />
+                        </div>
+                      );
                     }
 
                     if (item.type === 'turn_changes') {

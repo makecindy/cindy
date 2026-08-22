@@ -376,10 +376,9 @@ describe('AuthContext session cache boundaries', () => {
   });
 
   /**
-   * 本地模式也是一次 dataOwnerId 切换(2026-08-17 review 第五轮 M5)。enterLocalMode /
-   * exitLocalMode 此前只更新了 dataOwnerId 与另外几个 owner 分区 setter,漏掉统一模型选择器
-   * 新增的两根轴 —— 于是本地模式下读写的是**上一个身份**的收藏 / 引擎 override:跨身份可见,
-   * 还会把改动写进别人的账号。
+   * 本地模式也是一次 dataOwnerId 切换。enterLocalMode / exitLocalMode 必须走完整
+   * applyIncomingState,不能自己拼半套 setter —— 漏接任一 owner 分区都会让本地模式
+   * 读写上一个身份的数据:跨身份可见,还会把改动写进别人的账号。
    */
   it('repartitions unified-picker favorites and engine overrides across local mode', async () => {
     resetFavorites();

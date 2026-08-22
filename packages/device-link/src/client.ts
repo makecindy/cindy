@@ -18,6 +18,7 @@ import {
   type LinkClosePayload,
 } from './protocol.js';
 import {
+  DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
@@ -283,6 +284,19 @@ function normalizeRetryPassBudget(value: number | undefined): number {
   return floored >= 1 ? floored : TRANSPORT_RETRY_PASS_BUDGET;
 }
 
+function normalizeTransportRetryInterval(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return TRANSPORT_RETRY_INTERVAL_MS;
+  }
+  return value;
+}
+
+function normalizeTransportRetryAttempts(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return TRANSPORT_MAX_RETRY_ATTEMPTS;
+  const floored = Math.floor(value);
+  return floored >= 1 ? floored : TRANSPORT_MAX_RETRY_ATTEMPTS;
+}
+
 function normalizeCongestionStableResetMs(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return DEFAULT_TIMING.congestionStableResetMs;
@@ -406,13 +420,45 @@ interface PendingReliableMessage {
   enqueuedAt: number;
 }
 
+type ReliableSendPhase = 'down' | 'awaiting-confirm' | 'ready';
+
+interface ReliableResumePlan {
+  duplicateOpen: boolean;
+  resumedLink: boolean;
+  enterRecovery: boolean;
+}
+
+interface PendingLinkConfirmation {
+  requestId: string;
+  /** accept 声明的接收基线减一；低于它说明对端尚未真正安装本代基线。 */
+  minimumAckSeq: number;
+  resume: ReliableResumePlan;
+  /** 入站确认尚未完成时,撤销入站方向应恢复此前仍存续的本地发送状态。 */
+  previousSendPhase: 'down' | 'ready';
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+interface OutboundLinkConfirmationAck {
+  requestId: string;
+  streamId: string;
+  attempts: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 interface PeerTransportState {
   streamId: string;
   remoteStreamId: string | null;
   remoteBaseSeq: number;
   nextSeq: number;
   reliable: boolean;
-  linkReady: boolean;
+  /** 本机可靠 stream 是否已被对端确认可接收；只控制 local → remote 发送。 */
+  sendPhase: ReliableSendPhase;
+  /** 本机是否已提交对端 stream 基线；只控制 remote → local 接收。 */
+  receiveReady: boolean;
+  /** 新版入站 accept 等待对端回显 request id；新 offer 会原子替换旧代。 */
+  pendingLinkConfirmation: PendingLinkConfirmation | null;
+  /** 本机已处理出站 accept 后的有界确认 ACK 重发；只由对应确认 ACK 或代际复位撤销。 */
+  outboundLinkConfirmationAck: OutboundLinkConfirmationAck | null;
   explicitlyClosed: boolean;
   /**
    * 该 peer 当前是否有**活动的入站控制方向**(对方作为控制端被本机 accept
@@ -646,7 +692,7 @@ export class DeviceLinkClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    // 主动重建必须复用被动断线的链路层复位:半开期间 linkReady 仍是 true,
+    // 主动重建必须复用被动断线的链路层复位:半开期间收发方向仍可能残留 ready,
     // 不复位会让 host 侧跳过 openLink、旧 stream 帧在新 socket 上被对端丢弃。
     this.resetLinkStateForReconnect();
     void this.connect(reason);
@@ -735,7 +781,8 @@ export class DeviceLinkClient {
 
   /** 目标设备是否已完成 link-open / link-accept，可安全进入 streaming tier。 */
   isLinkReady(dst: string): boolean {
-    return this.peerTransport.get(dst)?.linkReady === true;
+    const peer = this.peerTransport.get(dst);
+    return !!peer && this.isPeerSendReady(peer) && peer.receiveReady;
   }
 
   /**
@@ -881,7 +928,7 @@ export class DeviceLinkClient {
       'link-accept',
       timeoutMs,
     );
-    // link-accept 在 dispatchEnvelope 中已经原子提交 capability/linkReady 并只重放一次；
+    // link-accept 在 dispatchEnvelope 中已经原子提交收发方向并只重放一次；
     // 这里不要重复 replay，否则每次重开都会立刻把全部 pending 再发第二遍并消耗重试预算。
     return env.payload as LinkAcceptPayload;
   }
@@ -916,7 +963,13 @@ export class DeviceLinkClient {
       // 只撤销入站语义:活动入站标记(后续重试耗尽回退整连接重连,升级前
       // 语义)并通知对端。纯被控场景(无出站活动)下保留的传输层状态无害:
       // dispatch 已清订阅,不会再有新流量灌入。
-      if (peer) peer.linkAcceptedInbound = false;
+      if (peer) {
+        // 撤销入站控制方向必须同步取消该方向的确认超时。否则旧 timer
+        // 会在撤权后继续调用 handleReliableRetryExhausted,误拆共享 relay。
+        // 若此前已有可用的出站控制方向,恢复原 send phase,不把互控链路一起降级。
+        this.cancelPendingLinkConfirmation(dst, peer, true);
+        peer.linkAcceptedInbound = false;
+      }
     } else {
       this.rejectPendingLinkOpen(
         dst,
@@ -924,7 +977,7 @@ export class DeviceLinkClient {
         `control link closed locally (${reason})`,
       );
       if (peer) {
-        peer.linkReady = false;
+        this.markPeerLinkDown(peer);
         peer.explicitlyClosed = true;
         peer.unlinkedLegacyResponseIds.clear();
         // 本地显式关闭同样撤销活动入站标记(与收到永久 link-close 对称):
@@ -976,7 +1029,7 @@ export class DeviceLinkClient {
     // 结果都等 120s 过期丢弃),改为 legacy 裸帧即时直发 —— 控制端按 id 配对
     // 不依赖可靠层。送达失败(对端恰好离线)时对端本来就会超时,不比旧行为差。
     // 超过单帧上限的大 result 只能靠可靠层分片,回落入队等 link 重建。
-    if (peer?.reliable && !peer.linkReady && this.status === 'online') {
+    if (peer?.reliable && !this.isPeerSendReady(peer) && this.status === 'online') {
       try {
         this.sendEnvelope(env);
         peer.unlinkedLegacyResponseIds.delete(requestId);
@@ -1000,6 +1053,10 @@ export class DeviceLinkClient {
       Array.isArray(matchingOffer?.capabilities)
       && matchingOffer.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
     );
+    const peerSupportsLinkConfirm = (
+      peerSupportsReliable
+      && matchingOffer!.capabilities!.includes(DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM)
+    );
     const peer = this.getPeerTransport(dst);
     // 建链即丢弃队头连续的可丢弃前缀（push 不分新旧 + skip 占位）：让 accept
     // 携带的 transportBaseSeq 直接跳过它们，对端从一开始就不等这些 seq，随后的
@@ -1021,6 +1078,9 @@ export class DeviceLinkClient {
           ? {
               capabilities: this.mergeCapabilities(payload?.capabilities, [
                 DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+                ...(peerSupportsLinkConfirm
+                  ? [DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM]
+                  : []),
               ]),
               transportStreamId: peer.streamId,
               transportBaseSeq: this.getTransportBaseSeq(peer),
@@ -1038,10 +1098,15 @@ export class DeviceLinkClient {
       );
     }
     peer.linkAcceptedInbound = true;
-    // 对端已重开链路:若仍有待重发的 transport-timeout 通知,不再需要。
-    this.cancelTimeoutCloseNotify(dst);
     if (peerSupportsReliable) {
-      this.completeReliableLinkResume(dst, peer);
+      const resume = this.planReliableSendResume(peer);
+      this.commitReliableReceiveReady(dst, peer);
+      if (peerSupportsLinkConfirm) {
+        this.beginReliableLinkConfirmation(dst, peer, requestId, resume);
+      } else {
+        // 旧端没有确认能力：保留 v1 的即时 ready / replay 语义，保证独立升级。
+        this.commitReliableSendResume(dst, peer, resume);
+      }
     }
   }
 
@@ -1217,7 +1282,7 @@ export class DeviceLinkClient {
     peer: PeerTransportState,
     pending: PendingReliableMessage,
   ): void {
-    if (!peer.reliable || !peer.linkReady || this.stopped || this.status !== 'online') return;
+    if (!peer.reliable || !this.isPeerSendReady(peer) || this.stopped || this.status !== 'online') return;
     try {
       this.sendReliableFrames(peer, pending);
     } catch (err) {
@@ -1350,14 +1415,14 @@ export class DeviceLinkClient {
    * 连接世代切换时的链路层复位:link 状态、可靠重试计时器、入站 offer、legacy 队列
    * 与跨世代 presence patch。可靠 pending **保留**(等 link 重建后按原 seq 重放)。
    * handleDisconnect(被动断线)与 restartConnection(主动重建)共用 —— 主动重建
-   * 若跳过这段,旧 linkReady=true 会让 host 侧误以为 link 仍在、跳过 openLink,
+   * 若跳过这段,旧收发 ready 会让 host 侧误以为 link 仍在、跳过 openLink,
    * 随后用旧 stream 在新 socket 上发帧被对端当未建链帧丢弃(review P2)。
    */
   private resetLinkStateForReconnect(): void {
     // hello 会从 host 读取完整最新状态；旧连接上尚未发出的覆盖型 patch 不跨世代重放。
     this.clearPendingPresence();
     for (const peer of this.peerTransport.values()) {
-      peer.linkReady = false;
+      this.markPeerLinkDown(peer);
       peer.recoveryNeedsAck = true;
       peer.recoveryFramesSent = 0;
       if (peer.retryTimer) {
@@ -1573,7 +1638,9 @@ export class DeviceLinkClient {
 
     const ack = parseTransportAck(env);
     if (ack) {
-      if (env.src) this.handleTransportAck(env.src, ack.streamId, ack.ackSeq);
+      if (env.src) {
+        this.handleTransportAck(env.src, ack.streamId, ack.ackSeq, ack.linkRequestId);
+      }
       return;
     }
 
@@ -1759,7 +1826,18 @@ export class DeviceLinkClient {
             // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
             // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向
             // 的重试耗尽误拆整条共享 relay(字段注释有完整语义)。
-            this.completeReliableLinkResume(env.src, peer);
+            if (peer.reliable) {
+              const resume = this.planReliableSendResume(peer);
+              this.commitReliableReceiveReady(env.src, peer);
+              this.commitReliableSendResume(env.src, peer, resume);
+              if (
+                Array.isArray(accepted?.capabilities)
+                && accepted.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM)
+                && env.id
+              ) {
+                this.sendReliableLinkConfirmation(env.src, env.id, peer);
+              }
+            }
           }
           this.pending.delete(env.id!);
           p.resolve(env);
@@ -1782,7 +1860,7 @@ export class DeviceLinkClient {
           // 跨过；其它单帧错误改成同 seq skip。
           if (p.reliableDst) {
             if (terminalRouteFailure) {
-              this.getPeerTransport(p.reliableDst).linkReady = false;
+              this.markPeerLinkDown(this.getPeerTransport(p.reliableDst));
               this.abandonReliablePending(
                 p.reliableDst,
                 `relay rejected reliable link (${payload.code})`,
@@ -1796,7 +1874,7 @@ export class DeviceLinkClient {
         }
         if (payload.dst && terminalRouteFailure) {
           const peer = this.getPeerTransport(payload.dst);
-          peer.linkReady = false;
+          this.markPeerLinkDown(peer);
           peer.recoveryNeedsAck = true;
           peer.recoveryFramesSent = 0;
           if (peer.retryTimer) {
@@ -1871,7 +1949,7 @@ export class DeviceLinkClient {
             // requestTimeout 兕底)。帧照常交给 app 层:mobile 据此立即发起 rehydrate,
             // desktop 控制端据此立即重新 openLink(见各自 link-close 处理)。
             const peer = this.getPeerTransport(env.src);
-            peer.linkReady = false;
+            this.markPeerLinkDown(peer);
             if (peer.retryTimer) {
               clearInterval(peer.retryTimer);
               peer.retryTimer = null;
@@ -1887,7 +1965,7 @@ export class DeviceLinkClient {
               : 'control link closed by peer',
           );
           const peer = this.getPeerTransport(env.src);
-          peer.linkReady = false;
+          this.markPeerLinkDown(peer);
           peer.explicitlyClosed = true;
           peer.unlinkedLegacyResponseIds.clear();
           // 收到永久关闭同样撤销已排期的 transport-timeout 重试通知(与本地
@@ -1914,7 +1992,7 @@ export class DeviceLinkClient {
           && isUnlinkedLegacyEnvelope(env)
         ) {
           const peer = this.getPeerTransport(env.src);
-          if (peer.explicitlyClosed && !peer.linkReady) {
+          if (peer.explicitlyClosed && !this.isPeerLinkReady(peer)) {
             this.rememberUnlinkedLegacyResponse(peer, env.id);
           }
         }
@@ -1936,7 +2014,7 @@ export class DeviceLinkClient {
     if (!parsed || !env.src || !isReliableKind(env.kind)) return { handled: false };
 
     const peer = this.getPeerTransport(env.src);
-    if (!peer.reliable || !peer.linkReady) {
+    if (!peer.reliable || !peer.receiveReady) {
       // 可靠业务帧只在双方完成 link-open/link-accept 能力协商后接收。断线后迟到的
       // pub/sub 帧可能被投到同 deviceId 的新进程；提前执行会绕过新基线并重复副作用。
       // 不回 ACK，让仍存活的发送端在链路重新建立后按同 seq 重放。
@@ -2221,7 +2299,7 @@ export class DeviceLinkClient {
     return (
       !!peer
       && peer.reliable
-      && peer.linkReady
+      && peer.receiveReady
       && peer.remoteStreamId === streamId
       && peer.receive.get(streamId) === stream
     );
@@ -2235,7 +2313,7 @@ export class DeviceLinkClient {
     const peer = this.getPeerTransport(env.dst);
     if (
       peer.explicitlyClosed
-      && !peer.linkReady
+      && !this.isPeerSendReady(peer)
       && !isUnlinkedLegacyEnvelope(env)
       && !allowClosedLegacyResponse
     ) {
@@ -2250,7 +2328,7 @@ export class DeviceLinkClient {
     // 若 link-accept/link-open 丢失则永远等不到,满队列把所有新帧顶成 BACKPRESSURE。
     // 队头滞留超过阈值即整队放弃 —— push 由重连 resync 补偿,invoke-result 的
     // 原请求方早已超时;放弃后 baseSeq 前移,对端按新基线跳过这些 seq。
-    if (!peer.linkReady && peer.pending.size > 0) {
+    if (!this.isPeerSendReady(peer) && peer.pending.size > 0) {
       const oldest = peer.pending.values().next().value as PendingReliableMessage | undefined;
       if (
         oldest
@@ -2288,7 +2366,8 @@ export class DeviceLinkClient {
     // pending,不碰共享 ws;其它 peer 占满 send buffer 不得让它 BACKPRESSURE。
     // 真会发送时仍在驱逐/腾位之前预检(旧 P1:先驱逐再拒会清空镜像历史)。
     const additionalFrames = Math.max(1, frames.length);
-    const willSendNow = peer.linkReady && !this.shouldHoldRecoverySend(peer, additionalFrames);
+    const willSendNow = this.isPeerSendReady(peer)
+      && !this.shouldHoldRecoverySend(peer, additionalFrames);
     if (willSendNow) {
       this.assertWebSocketCapacity(this.measureReliableFrames(frames));
     }
@@ -2351,7 +2430,7 @@ export class DeviceLinkClient {
         this.log.debug(`reliable transport initial send interrupted for ${env.dst.slice(0, 8)}`, err);
       }
     }
-    if (peer.linkReady) this.ensureRetryTimer(env.dst);
+    if (this.isPeerSendReady(peer)) this.ensureRetryTimer(env.dst);
     return true;
   }
 
@@ -2445,6 +2524,27 @@ export class DeviceLinkClient {
     }
   }
 
+  private isPeerSendReady(peer: PeerTransportState): boolean {
+    return peer.sendPhase === 'ready';
+  }
+
+  private isPeerLinkReady(peer: PeerTransportState): boolean {
+    return this.isPeerSendReady(peer) && peer.receiveReady;
+  }
+
+  private markPeerLinkDown(peer: PeerTransportState): void {
+    if (peer.pendingLinkConfirmation?.timer) {
+      clearTimeout(peer.pendingLinkConfirmation.timer);
+    }
+    if (peer.outboundLinkConfirmationAck?.timer) {
+      clearTimeout(peer.outboundLinkConfirmationAck.timer);
+    }
+    peer.sendPhase = 'down';
+    peer.receiveReady = false;
+    peer.pendingLinkConfirmation = null;
+    peer.outboundLinkConfirmationAck = null;
+  }
+
   private getPeerTransport(dst: string): PeerTransportState {
     let peer = this.peerTransport.get(dst);
     if (!peer) {
@@ -2454,7 +2554,10 @@ export class DeviceLinkClient {
         remoteBaseSeq: 1,
         nextSeq: 1,
         reliable: false,
-        linkReady: false,
+        sendPhase: 'down',
+        receiveReady: false,
+        pendingLinkConfirmation: null,
+        outboundLinkConfirmationAck: null,
         explicitlyClosed: false,
         linkAcceptedInbound: false,
         outboundExplicitlyClosed: false,
@@ -2586,6 +2689,12 @@ export class DeviceLinkClient {
     if (peer.reliable && !reliable) {
       this.abandonReliablePending(dst, 'peer no longer supports reliable transport');
     }
+    if (!reliable) {
+      this.markPeerLinkDown(peer);
+    } else {
+      // capability 只描述提议/accept；真正接收 ready 由对应握手提交点置位。
+      peer.receiveReady = false;
+    }
     peer.reliable = reliable;
     peer.explicitlyClosed = false;
     peer.remoteStreamId = nextRemoteStreamId;
@@ -2603,6 +2712,7 @@ export class DeviceLinkClient {
     return {
       ...payload,
       capabilities: this.mergeCapabilities(payload.capabilities, [
+        DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
         DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
         DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
       ]),
@@ -2631,17 +2741,101 @@ export class DeviceLinkClient {
     return result;
   }
 
-  private sendTransportAck(dst: string, streamId: string, ackSeq: number): void {
+  private sendTransportAck(
+    dst: string,
+    streamId: string,
+    ackSeq: number,
+    linkRequestId?: string,
+  ): void {
+    const pendingConfirmation = this.peerTransport.get(dst)?.outboundLinkConfirmationAck;
+    const effectiveLinkRequestId = linkRequestId ?? (
+      pendingConfirmation?.streamId === streamId
+        ? pendingConfirmation.requestId
+        : undefined
+    );
     try {
-      this.sendEnvelope(makeTransportAck(dst, streamId, ackSeq));
+      this.sendEnvelope(makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId));
     } catch (err) {
       this.log.debug('reliable transport ACK send failed', err);
     }
   }
 
-  private handleTransportAck(src: string, streamId: string, ackSeq: number): void {
+  private sendReliableLinkConfirmation(
+    dst: string,
+    requestId: string,
+    peer: PeerTransportState,
+  ): void {
+    if (!peer.receiveReady || !peer.remoteStreamId) return;
+    this.getReceiveStream(peer, peer.remoteStreamId, peer.remoteBaseSeq);
+    if (peer.outboundLinkConfirmationAck?.timer) {
+      clearTimeout(peer.outboundLinkConfirmationAck.timer);
+    }
+    peer.outboundLinkConfirmationAck = {
+      requestId,
+      streamId: peer.remoteStreamId,
+      attempts: 0,
+      timer: null,
+    };
+    this.retryReliableLinkConfirmation(dst, peer);
+  }
+
+  private retryReliableLinkConfirmation(dst: string, peer: PeerTransportState): void {
+    const confirmation = peer.outboundLinkConfirmationAck;
+    if (
+      !confirmation
+      || this.stopped
+      || this.status !== 'online'
+      || !peer.receiveReady
+      || peer.remoteStreamId !== confirmation.streamId
+    ) {
+      return;
+    }
+    // link-accept 可能在旧可靠帧仍执行时推进 requestedBaseSeq；此时
+    // applyReceiveStreamBase 会延迟提交，首次确认看到的 lastDeliveredSeq
+    // 不是最终基线。每次重试必须从活动 stream 重新读取，不能复用快照。
+    const stream = this.getReceiveStream(peer, confirmation.streamId, peer.remoteBaseSeq);
+    confirmation.attempts += 1;
+    this.sendTransportAck(
+      dst,
+      confirmation.streamId,
+      stream.lastDeliveredSeq,
+      confirmation.requestId,
+    );
+    if (confirmation.attempts >= normalizeTransportRetryAttempts(this.timing.transportMaxRetryAttempts)) {
+      confirmation.timer = null;
+      return;
+    }
+    confirmation.timer = setTimeout(() => {
+      confirmation.timer = null;
+      if (peer.outboundLinkConfirmationAck !== confirmation) return;
+      this.retryReliableLinkConfirmation(dst, peer);
+    }, normalizeTransportRetryInterval(this.timing.transportRetryIntervalMs));
+  }
+
+  private handleTransportAck(
+    src: string,
+    streamId: string,
+    ackSeq: number,
+    linkRequestId?: string,
+  ): void {
     const peer = this.peerTransport.get(src);
-    if (!peer || !peer.reliable || !peer.linkReady || peer.streamId !== streamId) return;
+    if (!peer || !peer.reliable || peer.streamId !== streamId) return;
+    const confirmation = peer.pendingLinkConfirmation;
+    if (
+      peer.sendPhase === 'awaiting-confirm'
+      && confirmation
+      && linkRequestId === confirmation.requestId
+      && ackSeq >= confirmation.minimumAckSeq
+      && ackSeq <= peer.nextSeq - 1
+    ) {
+      this.log.info(
+        `device-link recovery dst=${src.slice(0, 8)} trigger=link-confirm-ack`
+        + ` stream=${peer.streamId.slice(0, 8)} request=${confirmation.requestId.slice(0, 8)}`
+        + ` ack=${ackSeq} conn=${this.connEpoch}`,
+      );
+      this.commitReliableSendResume(src, peer, confirmation.resume);
+    }
+    if (!this.isPeerSendReady(peer)) return;
     // 迟到/陈旧 ACK 幂等无害（含指向已被驱逐 seq 的 ACK）：驱逐后该 seq 已不在
     // map 里，累计删除循环遇到更高的队头 live seq 直接 break，不会误删、不抛错、
     // 不错误推进状态；高于 nextSeq-1 的未知 ACK 与倒退的 ACK 直接忽略。
@@ -2838,7 +3032,7 @@ export class DeviceLinkClient {
     if (
       !peer
       || !peer.reliable
-      || !peer.linkReady
+      || !this.isPeerSendReady(peer)
       || this.stopped
       || this.status !== 'online'
     ) return;
@@ -2938,33 +3132,111 @@ export class DeviceLinkClient {
     peer.recoveryFramesSent += frames;
   }
 
-  /**
-   * 同连接代、同对端 stream、链路已 ready 的重复 link-open 只重发 accept。
-   * 对端重启会换 transportStreamId，必须当真正恢复。
-   */
-  private completeReliableLinkResume(dst: string, peer: PeerTransportState): void {
-    const wasReady = peer.linkReady;
+  private planReliableSendResume(peer: PeerTransportState): ReliableResumePlan {
+    const wasReady = this.isPeerSendReady(peer);
     const streamChanged = peer.lastReplayRemoteStreamId !== peer.remoteStreamId;
     const duplicateOpen = wasReady && !streamChanged && peer.lastReplayEpoch === this.connEpoch;
-    peer.linkReady = true;
+    const hadPriorResume = peer.lastReplayRemoteStreamId !== null;
+    const resumedLink = !wasReady || streamChanged;
+    return {
+      duplicateOpen,
+      resumedLink,
+      enterRecovery: resumedLink
+        && (hadPriorResume || peer.pending.size > 0 || peer.recoveryNeedsAck),
+    };
+  }
+
+  private commitReliableReceiveReady(dst: string, peer: PeerTransportState): void {
+    peer.receiveReady = true;
     this.staleLinkNotifiedAt.delete(dst);
     this.resumeReceiveStreams(dst, peer);
-    if (duplicateOpen) {
+  }
+
+  private beginReliableLinkConfirmation(
+    dst: string,
+    peer: PeerTransportState,
+    requestId: string,
+    resume: ReliableResumePlan,
+  ): void {
+    const previousConfirmation = peer.pendingLinkConfirmation;
+    if (previousConfirmation?.timer) {
+      clearTimeout(previousConfirmation.timer);
+    }
+    // 连续的 inbound open 可能在上一代仍 awaiting-confirm 时替换确认对象。
+    // 此时 sendPhase 不能代表替换前的健康 outbound 方向,应沿用旧确认保存的
+    // previousSendPhase,否则撤销新一代 inbound 时会把原本 ready 的方向降成 down。
+    const previousSendPhase: 'down' | 'ready' = previousConfirmation?.previousSendPhase
+      ?? (peer.sendPhase === 'ready' ? 'ready' : 'down');
+    peer.sendPhase = 'awaiting-confirm';
+    const confirmation: PendingLinkConfirmation = {
+      requestId,
+      minimumAckSeq: this.getTransportBaseSeq(peer) - 1,
+      resume,
+      previousSendPhase,
+      timer: null,
+    };
+    peer.pendingLinkConfirmation = confirmation;
+    if (peer.retryTimer) {
+      clearInterval(peer.retryTimer);
+      peer.retryTimer = null;
+    }
+    this.log.info(
+      `device-link recovery dst=${dst.slice(0, 8)} trigger=await-link-confirm`
+      + ` pending=${peer.pending.size}/${peer.pendingBytes}`
+      + ` stream=${peer.streamId.slice(0, 8)} request=${requestId.slice(0, 8)}`
+      + ` conn=${this.connEpoch}`,
+    );
+    const attempts = normalizeTransportRetryAttempts(this.timing.transportMaxRetryAttempts);
+    confirmation.timer = setTimeout(() => {
+      confirmation.timer = null;
+      if (
+        peer.pendingLinkConfirmation !== confirmation
+        || peer.sendPhase !== 'awaiting-confirm'
+        || this.stopped
+        || this.status !== 'online'
+      ) {
+        return;
+      }
+      this.log.warn(
+        `device-link link confirmation timeout for ${dst.slice(0, 8)}`
+        + ` request=${requestId.slice(0, 8)}; resetting peer link`,
+      );
+      this.handleReliableRetryExhausted(dst, confirmation.minimumAckSeq);
+    }, normalizeTransportRetryInterval(this.timing.transportRetryIntervalMs) * attempts);
+  }
+
+  /**
+   * 只提交 local → remote 发送方向。新版入站 accept 必须先经过带 request id
+   * 的 ACK 确认；旧端与本机处理到的出站 accept 直接调用本方法。
+   */
+  private commitReliableSendResume(
+    dst: string,
+    peer: PeerTransportState,
+    resume: ReliableResumePlan,
+  ): void {
+    if (peer.pendingLinkConfirmation?.timer) {
+      clearTimeout(peer.pendingLinkConfirmation.timer);
+    }
+    peer.sendPhase = 'ready';
+    peer.pendingLinkConfirmation = null;
+    this.cancelTimeoutCloseNotify(dst);
+    if (resume.duplicateOpen) {
+      // 同连接同 stream 的重复 open 仍可能带着未确认的可靠帧。确认阶段
+      // 会先清掉旧 retryTimer;不能因为这是 duplicate open 就让 pending 永久
+      // 停在队列里。这里不做全量 replay,只恢复原有有界重试计时器。
+      if (peer.pending.size > 0) this.ensureRetryTimer(dst);
       this.logRecoverySend(dst, peer, 'link-replay', true);
       return;
     }
-    const hadPriorResume = peer.lastReplayRemoteStreamId !== null;
     peer.lastReplayEpoch = this.connEpoch;
     peer.lastReplayRemoteStreamId = peer.remoteStreamId;
     // 真正恢复不依赖当时队列是否有积压:abandon / transport-timeout 可能已清空
     // pending。首次建链(还没 resume 过)保持原语义,空队列不进探测。
-    const enterRecovery = (!wasReady || streamChanged)
-      && (hadPriorResume || peer.pending.size > 0 || peer.recoveryNeedsAck);
-    if (enterRecovery) {
+    if (resume.enterRecovery) {
       peer.recoveryNeedsAck = true;
       peer.recoveryFramesSent = 0;
     }
-    this.replayPending(dst, !wasReady || streamChanged);
+    this.replayPending(dst, resume.resumedLink);
   }
 
   private logRecoverySend(
@@ -2984,7 +3256,7 @@ export class DeviceLinkClient {
 
   private replayPending(dst: string, resumedLink = false): void {
     const peer = this.peerTransport.get(dst);
-    if (!peer || !peer.reliable || !peer.linkReady || peer.pending.size === 0) return;
+    if (!peer || !peer.reliable || !this.isPeerSendReady(peer) || peer.pending.size === 0) return;
     // 重放前先丢弃队头连续的可丢弃前缀（push 不分新旧 + skip 占位）：重放一旦把
     // 它们写进 WebSocket FIFO 就无法撤回，之后的 invoke-result 驱逐救不回已发出
     // 的帧，接收端仍会按 seq 顺序先消化整段重放洪峰。丢弃后重放的第一帧就是最
@@ -3010,7 +3282,7 @@ export class DeviceLinkClient {
    *   该 peer 的 link,不炸整条 relay 连接。v0.1.26 线上:一台休眠 iPhone 的 ACK
    *   耗尽单日把整条 relay 连接强拆 38 次,其它 peer(另一台手机 / 飞书 hook)全部
    *   陪葬,重连风暴又放大成订阅风暴。重置语义:
-   *   - linkReady=false + 停重试计时器;**不清 pending**——live invoke-result 等
+   *   - 收发方向复位 + 停重试计时器;**不清 pending**——live invoke-result 等
    *     下次 link-accept 后按原 seq 重放(陈旧 push 前缀由重放前清扫丢弃),
    *     不丢在途回包,也不碰 dispatch 层的去重缓存与订阅状态;
    *   - best-effort 发 link-close(transport-timeout):存活但卡流的对端在
@@ -3034,7 +3306,7 @@ export class DeviceLinkClient {
     this.log.warn(
       `reliable transport ACK timeout for ${dst.slice(0, 8)} seq=${seq}; resetting peer link (relay connection kept alive)`,
     );
-    peer.linkReady = false;
+    this.markPeerLinkDown(peer);
     if (peer.retryTimer) {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
@@ -3049,7 +3321,7 @@ export class DeviceLinkClient {
    * 背压/异常失败就放弃,存活但卡流的对端永远收不到重建信号,保留的 pending
    * 会无限停滞。故失败时按 transportRetryIntervalMs 退避重发,上限
    * transportMaxRetryAttempts 次;重试回调中任一成立即停:对端已重开
-   * (linkReady 回 true,由 sendLinkAccept 取消)、relay 已断开(断线重连路径接管
+   * (发送方向确认 ready,由确认 ACK 取消)、relay 已断开(断线重连路径接管
    * 恢复,presence 闪断会触发对端 rehydrate)、client 已 stop。耗尽后放弃本地
    * 重试:对端若存活,其后续请求超时/自身重试耗尽会走它自己的恢复路径;若
    * 休眠,唤醒重连即重开。两条兜底都不拆共享 relay 连接、不丢保留的 pending。
@@ -3087,7 +3359,7 @@ export class DeviceLinkClient {
       const peer = this.peerTransport.get(dst);
       if (
         !peer
-        || peer.linkReady // 对端已重开,通知不再需要
+        || this.isPeerSendReady(peer) // 对端已确认重开,通知不再需要
         || peer.explicitlyClosed // 已进入永久关闭态
         || !peer.linkAcceptedInbound // 活动入站方向已被撤销
         || !peer.supportsTransportTimeoutClose // 能力已失效(对端降级重声明)
@@ -3104,6 +3376,23 @@ export class DeviceLinkClient {
     if (timer) {
       clearTimeout(timer);
       this.timeoutCloseNotifyTimers.delete(dst);
+    }
+  }
+
+  private cancelPendingLinkConfirmation(
+    dst: string,
+    peer: PeerTransportState,
+    restorePreviousSendPhase: boolean,
+  ): void {
+    const confirmation = peer.pendingLinkConfirmation;
+    if (!confirmation) return;
+    if (confirmation.timer) clearTimeout(confirmation.timer);
+    peer.pendingLinkConfirmation = null;
+    if (restorePreviousSendPhase && peer.sendPhase === 'awaiting-confirm') {
+      peer.sendPhase = confirmation.previousSendPhase;
+      if (peer.sendPhase === 'ready' && peer.pending.size > 0) {
+        this.ensureRetryTimer(dst);
+      }
     }
   }
 
@@ -3153,6 +3442,10 @@ export class DeviceLinkClient {
   private clearPeerTransport(): void {
     for (const peer of this.peerTransport.values()) {
       if (peer.retryTimer) clearInterval(peer.retryTimer);
+      if (peer.pendingLinkConfirmation?.timer) clearTimeout(peer.pendingLinkConfirmation.timer);
+      if (peer.outboundLinkConfirmationAck?.timer) {
+        clearTimeout(peer.outboundLinkConfirmationAck.timer);
+      }
     }
     this.peerTransport.clear();
     for (const timer of this.timeoutCloseNotifyTimers.values()) clearTimeout(timer);

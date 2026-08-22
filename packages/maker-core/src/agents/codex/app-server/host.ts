@@ -26,6 +26,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
+import type { CodexSubagentRoutingProfile } from '../../base-agent.js';
 import { AppServerClient } from './client.js';
 import type { Transport } from './transport.js';
 import {
@@ -283,6 +284,8 @@ export interface AppServerHostOptions {
   };
   /** Whether the OpenAI identity provider may use Responses WebSocket on this host. */
   codexOpenAiWebSocketsEnabled?: boolean;
+  /** Host-level Subagent route profile used to prevent incompatible local host reuse. */
+  codexSubagentRoutingProfile?: CodexSubagentRoutingProfile;
 }
 
 interface BufferedNotification {
@@ -453,6 +456,10 @@ export class AppServerHost {
 
   getOpenAiWebSocketsEnabled(): boolean {
     return this.opts.codexOpenAiWebSocketsEnabled !== false;
+  }
+
+  getSubagentRoutingProfile(): CodexSubagentRoutingProfile {
+    return this.opts.codexSubagentRoutingProfile ?? 'default';
   }
 
   getConnectionId(): string {

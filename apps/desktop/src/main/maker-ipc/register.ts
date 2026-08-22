@@ -268,8 +268,11 @@ import {
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
 } from '../localDb/ipc/sessions.js';
-// sidebar-card-mode: turn-done 后触发任务现状摘要生成
-import { maybeGenerateSessionTaskSummary } from '../sessionTaskSummary.js';
+// sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
+import {
+  maybeGenerateSessionTaskSummary,
+  refreshSessionListPreview,
+} from '../sessionTaskSummary.js';
 import {
   addOrUpdateWorker,
   archiveSingleWorkerSession,
@@ -556,6 +559,10 @@ import {
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import {
+  clearPromptPredictionSessionStopped,
+  notePromptPredictionSessionStopped,
+} from './promptPredictionStopLedger.js';
 import {
   estimateReferenceTokens,
   MAX_REFERENCE_MESSAGES,
@@ -3891,6 +3898,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             // 「疑似中断」纯读判定(设计总述见 localDb/sessionActiveTurn.ts 文件头)。
             // SSH remote 会话同样记录:session 行在本地 DB、事件流走本进程,只是
             // agent 跑在远端;device-link 被控会话不进本进程 maker-core,天然不经过。
+            clearPromptPredictionSessionStopped(session.id);
             markSessionTurnStarted(session.id);
           }
           if (
@@ -4446,6 +4454,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (event.type === 'done' && !isContinuationBoundary) {
           void (async () => {
             await drainPersistQueue();
+            // 列表预览与置顶卡片摘要解耦:无论置顶区是不是卡片、这条有没有置顶,
+            // 都要把最近一条可见消息立刻写回 session.preview。摘要生成失败也不能
+            // 让侧栏停在进入本轮前的旧句子。
+            await refreshSessionListPreview(session.id);
             // force:turn-done 是权威刷新点(本轮 assistant 已落库),必须以最新内容覆盖
             // 任何 pin 触发 / 上一轮残留的摘要——绕过 in-flight 早返与 20s 节流
             // (codex review:pin during running turn 会让卡片停在部分/旧摘要)。
@@ -13154,6 +13166,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
     const sid = requireSessionId(sessionId);
     await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+    // Main 是本机窗口与 Device Link 控制端的 Stop 汇合点；先记账再触发 abort，
+    // 任何 renderer 后续请求推荐都会从同一 ledger fail-closed。
+    notePromptPredictionSessionStopped(sid);
     // 这三类续跑撤销都是同步操作，必须早于 goal/DB await；
     // 否则退避 timer 能在用户已点 Stop 后抢先发出下一轮。
     resetAutomaticRecoveryForExplicitStop(sid);

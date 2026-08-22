@@ -1,8 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { promises as fs } from 'node:fs';
+import {
+  mkdtempSync,
+  promises as fs,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+
+// Windows 未开启 Developer Mode / 无 Create Symbolic Link 权限时，文件 symlink
+// 会返回 EPERM；目录 junction 不受此限制，但本文件的竞态用例必须替换单个文件。
+// 探测真实 OS 能力，避免把权限差异误报成产品回归。
+function canCreateFileSymlink(): boolean {
+  const probeRoot = mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-package-file-link-probe-'));
+  const link = path.join(probeRoot, 'link');
+  try {
+    symlinkSync(path.join(probeRoot, 'target'), link, 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probeRoot, { recursive: true, force: true });
+  }
+}
+
+const canLinkFile = canCreateFileSymlink();
 
 const runtime = vi.hoisted(() => ({
   userData: '',
@@ -1113,7 +1136,7 @@ describe('Pi package executable-code boundary', () => {
     await expect(fs.readdir(snapshotRoot)).resolves.toEqual([]);
   });
 
-  it('rejects a direct file snapshot whose package root is replaced by a symlink', async () => {
+  it.skipIf(!canLinkFile)('rejects a direct file snapshot whose package root is replaced by a symlink', async () => {
     const packageFile = path.join(runtime.userData, 'snapshot-direct-extension.ts');
     const outsideFile = path.join(runtime.userData, 'snapshot-host-private.ts');
     await fs.writeFile(packageFile, 'export default function approved() {}\n');

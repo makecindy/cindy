@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type AnimationEvent as ReactAnimationEvent, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type AnimationEvent as ReactAnimationEvent, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -33,6 +33,8 @@ import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
 import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
 import {
+  commitWordFadeCandidate,
+  createWordFadeCandidate,
   getOrCreateWordFadeState,
   markSettledFromAnimationEnd,
   releaseWordFadeState,
@@ -429,7 +431,9 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
     };
   }, []);
 
-  return throttled;
+  // useEffect 在 paint 后才执行。流式结束时本次 render 直接返回最新原文，
+  // effect 只负责同步内部 state，供未来可能的新流式周期使用。
+  return enabled ? throttled : value;
 }
 
 /**
@@ -1638,10 +1642,10 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // so the throttle is fully bypassed — same behavior as before.
   const throttledContent = useStreamingThrottle(content, isStreaming);
   // 流式逐词淡入(rehypeStreamWordFade,§14.4 第五个 sanctioned motion class):
-  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。state 按渲染器
-  // 实例持有(useMemo 键 isStreaming):流式期间跨 parse tick 记住每个词的 delay
-  // 保证不重播;根节点监听冒泡的 animationend 把播完的词落袋(settled),下一次
-  // parse 直接还原纯文本 —— 结构性 remount 也无从重播(双保险,详见插件头注释)。
+  // 仅 isStreaming + 非 reduced-motion 时把插件挂到 rehype 链尾。committed state
+  // 按消息身份跨 parse / remount 保留;本次 render 只写 candidate,layout effect
+  // 确认 DOM 已提交后才落状态,避免被放弃的并发 render 提前推进 key / 时间线。
+  // 根节点监听 animationend 把播完的段落袋(settled),下一次 parse 还原纯文本。
   // isStreaming 翻 false 时整段回落到模块级常量 REHYPE_PLUGINS —— 终版渲染无
   // 任何 span 包装,插件、state 与监听一起被回收,静态路径零开销。
   // 用户开关(Settings → 个性化 → 流式动效,默认开)与 reduced-motion 取 AND:
@@ -1649,23 +1653,13 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   const reducedMotion = useReducedMotion();
   const streamFadeEnabled = useStreamFadeEnabled();
   const streamFade = isStreaming && !reducedMotion && streamFadeEnabled;
-  const wordFade = useMemo(() => {
+  const wordFadeState = useMemo(() => {
     if (!streamFade) return null;
-    const state = getOrCreateWordFadeState(streamFadeKey);
-    return {
-      state,
-      plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, state]] as PluggableList,
-    };
+    return getOrCreateWordFadeState(streamFadeKey);
   }, [streamFade, streamFadeKey]);
   useEffect(() => {
     if (!isStreaming) releaseWordFadeState(streamFadeKey);
   }, [isStreaming, streamFadeKey]);
-  const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
-  const handleWordFadeAnimationEnd = useMemo(() => {
-    if (!wordFade) return undefined;
-    return (event: ReactAnimationEvent<HTMLDivElement>) =>
-      markSettledFromAnimationEnd(wordFade.state, event.nativeEvent);
-  }, [wordFade]);
   // LaTeX 定界符归一化(`\(...\)` / `\[...\]` → `$...$` / `$$...$$`)。
   // emitSourceLines(TextLightbox 行锚点 doc 模式,依赖 data-source-line 与
   // 源文件行号一致)时走保行数模式:单行 inline 照常转换(同行替换不改行
@@ -1683,6 +1677,26 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
     [repairedContent, emitSourceLines],
   );
+  const wordFade = useMemo(() => {
+    if (!wordFadeState) return null;
+    const candidate = createWordFadeCandidate(wordFadeState);
+    return {
+      candidate,
+      plugins: [...REHYPE_PLUGINS, [rehypeStreamWordFade, candidate]] as PluggableList,
+    };
+    // animationend 不触发 React state;即使正文没变,其它 render 也要克隆最新 settled。
+  }, [wordFadeState, renderedContent, wordFadeState?.settled.size]);
+  useLayoutEffect(() => {
+    if (wordFadeState && wordFade) {
+      commitWordFadeCandidate(wordFadeState, wordFade.candidate);
+    }
+  }, [wordFadeState, wordFade]);
+  const rehypePlugins = wordFade?.plugins ?? REHYPE_PLUGINS;
+  const handleWordFadeAnimationEnd = useMemo(() => {
+    if (!wordFadeState) return undefined;
+    return (event: ReactAnimationEvent<HTMLDivElement>) =>
+      markSettledFromAnimationEnd(wordFadeState, event.nativeEvent);
+  }, [wordFadeState]);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // 远程入方向:远程会话里 markdown 的图片/音频 URL 指向远端机器,按来源改写到
   // cindy-remote-media://(device 经 OSS 中转、ssh 经 file-service 落盘缓存)。本地

@@ -42,6 +42,7 @@ import {
   UPSTREAM_STREAM_INTERRUPTED_REASON,
   isStreamInterruptedErrorMessage,
 } from '../shared/stream-interrupt-error.js';
+import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
 import { parsePiSubagentProgress, type PiSubagentUsage } from './subagent-progress.js';
 
@@ -143,6 +144,10 @@ export interface PiTranslateContext {
   subagentToolCalls: Map<string, AgentTaskUpdateEventData>;
   /** Host 百分比闸发起的 compact RPC 在途；Pi 仍会报 reason=manual。 */
   hostAutoCompactInFlight: boolean;
+  /** Optional rewrite for ctx_doctor tool result text (Cindy-managed package paths). */
+  rewriteToolResultText?: (text: string) => string;
+  /** toolCallId → toolName for the in-flight Pi tool, so end events can gate rewrites. */
+  toolNamesByCallId: Map<string, string>;
   /**
    * compaction_start 锁存的 turnScope。end/boundary 必须复用，不能按结束时的
    * isStreaming 重判——idle compact 期间用户开了新 turn 时，重判会把后台边界
@@ -176,6 +181,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     generationHeartbeatReliable: true,
     delegatedUsage: new Map(),
     subagentToolCalls: new Map(),
+    toolNamesByCallId: new Map(),
     pendingAssistantError: null,
     hostAutoCompactInFlight: false,
     compactTurnScope: null,
@@ -199,6 +205,7 @@ export function disposePiTranslateContext(ctx: PiTranslateContext): void {
   ctx.pendingAssistantError = null;
   ctx.compactTurnScope = null;
   ctx.subagentToolCalls.clear();
+  ctx.toolNamesByCallId.clear();
 }
 
 function samplePiGenerationHeartbeat(ctx: PiTranslateContext, now = Date.now()): void {
@@ -447,6 +454,7 @@ export function translatePiEvent(
       // 也避免长会话里 taskId 条目无界堆积。
       ctx.delegatedUsage.clear();
       ctx.subagentToolCalls.clear();
+      ctx.toolNamesByCallId.clear();
       ctx.streamStopTokenByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -528,6 +536,7 @@ export function translatePiEvent(
       const toolUseId = String(event.toolCallId ?? '');
       const toolName = String(event.toolName ?? 'tool');
       const toolArgs = (event.args as Record<string, unknown>) ?? {};
+      if (toolUseId) ctx.toolNamesByCallId.set(toolUseId, toolName);
       queue.push({
         type: 'tool_use',
         data: {
@@ -586,7 +595,16 @@ export function translatePiEvent(
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');
       const isError = event.isError === true;
-      const fullText = toolResultFullText(event.result);
+      const rawText = toolResultFullText(event.result);
+      const toolName = String(
+        event.toolName
+          ?? (toolUseId ? ctx.toolNamesByCallId.get(toolUseId) : undefined)
+          ?? '',
+      );
+      if (toolUseId) ctx.toolNamesByCallId.delete(toolUseId);
+      const fullText = isContextModeDoctorToolName(toolName) && ctx.rewriteToolResultText
+        ? ctx.rewriteToolResultText(rawText)
+        : rawText;
       queue.push({
         type: 'tool_result_full',
         data: { toolUseId, fullText, isError },

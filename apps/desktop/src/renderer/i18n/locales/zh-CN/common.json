@@ -2502,6 +2502,7 @@
       "unspecified": "跟随默认设置",
       "hint": "Claude Code 的设置从新任务开始生效；Codex 的设置会在空闲后自动应用。",
       "codexV2ModelHint": "Claude Code 使用所选模型作为默认值。Codex 的所有本机 Subagent 都固定使用所选模型和推理强度。",
+      "codexOauthCompatibilityHint": "固定 Subagent 路由与 ChatGPT OAuth 不能安全共用。主任务使用 ChatGPT OAuth，或非 OAuth 主任务指定 ChatGPT OAuth Subagent 时，Cindy 会忽略这里的模型、来源和推理强度，改用主任务的 Codex 默认 Subagent。",
       "saveFailed": "保存 Subagent 设置失败",
       "guardrails": {
         "title": "Codex Subagent 护栏",
@@ -3183,12 +3184,14 @@
           "copyLink": "复制链接",
           "copied": "链接已复制",
           "state": {
-            "denied": "在 Slack 授权页取消了授权",
+            "denied": "Slack 授权已取消，账号尚未绑定",
             "expired": "授权超时，请重新连接",
             "failed": "绑定失败",
             "revoked": "绑定已解除"
           },
-          "retryHint": "重新打开开关即可再次连接并绑定。"
+          "reauthorize": "重新授权 Slack",
+          "reauthorizing": "正在重新授权 Slack…",
+          "retryHint": "重新授权 Slack 即可再次连接并绑定。"
         },
         "toast": {
           "saveFailed": "保存失败",
@@ -3198,6 +3201,8 @@
         "loginRequired": "需要先登录 {{appName}} 账号，连接会在登录后自动恢复。",
         "standbyHint": "本机另一 Cindy 实例正在使用 Slack 连接。关闭它后，重新打开此开关即可接管。",
         "authorizing": "授权中…",
+        "transportStatus": "传输连接：{{status}}",
+        "accountStatus": "Slack 账号：{{status}}",
         "statusBound": "已绑定 @{{name}}",
         "statusBoundTeam": "已绑定 {{team}} @{{name}}",
         "statusUnbound": "未绑定",
@@ -6556,6 +6561,7 @@
     },
     "chatInput": {
       "defaultPlaceholder": "今天我们做点什么呢~",
+      "createAgentPlaceholder": "你好，{{appName}}！",
       "voiceInput": {
         "start": "开始语音输入",
         "stop": "停止语音输入",

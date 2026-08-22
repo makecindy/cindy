@@ -1145,6 +1145,11 @@ export class Session {
     return this.handle.codexProxyActive;
   }
 
+  /** Codex-only: app-server 确认的 thread 级 model provider 身份。 */
+  get codexThreadModelProviderId(): string | undefined {
+    return this.handle.codexThreadModelProviderId;
+  }
+
   /** Snapshot used by temporary host overrides to avoid undoing a newer user change. */
   get permissionModeState(): PermissionModeState {
     return { ...this.permissionModeStateValue };
