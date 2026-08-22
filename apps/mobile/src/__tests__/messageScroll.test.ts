@@ -18,6 +18,7 @@ import {
   isNearMessageListTop,
   isMobileMvcpSettling,
   mobileFollowVerifyStartDelayMs,
+  mobileMessageListKeysSignature,
   mobileMvcpSettleDeadline,
   MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS,
   MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS,
@@ -746,6 +747,15 @@ describe('mobile mVCP settle quiet window', () => {
     const firstDeadline = mobileMvcpSettleDeadline(0, 1_000);
     const extendedDeadline = mobileMvcpSettleDeadline(firstDeadline, 1_080);
     expect(extendedDeadline).toBe(1_080 + MOBILE_MVCP_SETTLE_QUIET_MS);
+  });
+
+  it('treats reused keys as the same list identity even when the items array is new', () => {
+    expect(mobileMessageListKeysSignature(['u1', 'a1'])).toBe(
+      mobileMessageListKeysSignature(['u1', 'a1']),
+    );
+    expect(mobileMessageListKeysSignature(['u1', 'a1'])).not.toBe(
+      mobileMessageListKeysSignature(['u1', 'a1', 'a2']),
+    );
   });
 });
 

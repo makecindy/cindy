@@ -60,6 +60,9 @@ describe('mobile message list container', () => {
     // 两套 verifier 都不能再只依赖 readingOlderRef 判断是否等待。
     expect(source).toContain('mvcpSettleAtRef.current = mobileMvcpSettleDeadline(');
     expect(source).toContain('markMobileMvcpSettle();');
+    expect(source).toContain('mobileMessageListKeysSignature(itemKeys)');
+    expect(source).toContain('[itemKeysSignature, markMobileMvcpSettle]');
+    expect(source).not.toContain('[itemKeys, markMobileMvcpSettle]');
     expect(source.match(/isMobileMvcpSettling\(Date\.now\(\), mvcpSettleAtRef\.current\)/g))
       .toHaveLength(2);
   });

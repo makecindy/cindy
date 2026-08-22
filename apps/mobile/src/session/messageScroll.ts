@@ -309,6 +309,14 @@ export function isMobileMvcpSettling(now: number, settleAt: number): boolean {
   return now < settleAt;
 }
 
+/**
+ * 只在行身份变化时续 mVCP 安静窗。流式更新会反复换 `items` 数组引用、但 key 不变；
+ * 若按数组引用续窗，verifier 会在整轮生成期间一直 wait，直到 2.5s 预算耗尽。
+ */
+export function mobileMessageListKeysSignature(keys: readonly string[]): string {
+  return keys.join('\0');
+}
+
 export interface MobileFollowVerifyStartDelayInput {
   animatedScrollInFlight: boolean;
   now: number;
