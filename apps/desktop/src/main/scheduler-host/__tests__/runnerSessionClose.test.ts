@@ -25,6 +25,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  getSessionSearchModeEnabled: vi.fn(async () => false),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionSearchModeEnabled: mocks.getSessionSearchModeEnabled,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -261,10 +263,8 @@ describe('MakerScheduleRunner ephemeral 会话收尾(run 终态后 closeSession)
       workDir: '/hb/dir',
       model: 'gpt-5.5',
     });
-    mocks.getSessionRowSnapshot.mockResolvedValue({
-      status: 'active',
-      searchModeEnabled: true,
-    });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    mocks.getSessionSearchModeEnabled.mockResolvedValue(true);
 
     await fireToCompletion(
       runner,

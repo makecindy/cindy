@@ -81,6 +81,7 @@ import { createMessage } from '../localDb/ipc/messages.js';
 import {
   getSessionRowSnapshot,
   getSessionRowSnapshotStrict,
+  getSessionSearchModeEnabled,
   setSessionProviderIdInDb,
   setSessionSourceInDb,
   setWorktreePathInDb,
@@ -516,9 +517,10 @@ export function createMakerHookSessionRunner(deps: {
         // 复用/接管: session 自己的 meta 是权威(workDir/model/agentKind/
         // permissionMode), sdkSessionId 用于冷 resume; effort 不覆盖、权限档
         // 不覆盖(进行中的会话不受偏好影响; meta 没记录时按历史默认 bypass)
-        const [meta, row] = await Promise.all([
+        const [meta, row, persistedSearchMode] = await Promise.all([
           maker.getSessionMeta(req.sessionId).catch(() => null),
           getSessionRowSnapshot(req.sessionId),
+          getSessionSearchModeEnabled(req.sessionId),
         ]);
         if (meta) {
           workingDir = meta.workDir;
@@ -529,7 +531,7 @@ export function createMakerHookSessionRunner(deps: {
         effort = undefined;
         permissionMode = meta?.permissionMode ?? 'bypassPermissions';
         rowProviderId = row?.providerId ?? null;
-        searchMode = row?.searchModeEnabled === true;
+        searchMode = persistedSearchMode;
       }
 
       const fail = (msg: string): HookRunOutcome => ({

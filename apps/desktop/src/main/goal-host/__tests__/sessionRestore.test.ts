@@ -4,6 +4,7 @@ import type { Session, SessionMeta } from '@cindy/maker-core';
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: vi.fn(async () => null),
+  getSessionSearchModeEnabled: vi.fn(async () => false),
 }));
 vi.mock('../../maker-ipc/orcaMcpHydrationCache.js', () => ({
   markOrcaMcpHydratedIfNeeded: vi.fn(),
@@ -131,12 +132,26 @@ describe('Goal dormant session restore', () => {
     const deps = baseDeps({
       getSessionRow: vi.fn().mockResolvedValue({
         providerId: 'provider-1',
-        searchModeEnabled: true,
       }),
+      getSearchModeEnabled: vi.fn().mockResolvedValue(true),
     });
 
     await restoreSessionForGoal('session-1', deps);
 
+    expect(deps.maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ searchMode: true }),
+    );
+  });
+
+  it('fails closed to searchMode when the session row snapshot is missing', async () => {
+    const deps = baseDeps({
+      getSessionRow: vi.fn().mockResolvedValue(null),
+      getSearchModeEnabled: vi.fn().mockResolvedValue(true),
+    });
+
+    await restoreSessionForGoal('session-1', deps);
+
+    expect(deps.getSearchModeEnabled).toHaveBeenCalledWith('session-1');
     expect(deps.maker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ searchMode: true }),
     );

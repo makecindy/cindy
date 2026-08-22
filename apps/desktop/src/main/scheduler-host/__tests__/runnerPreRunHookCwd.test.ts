@@ -32,6 +32,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  getSessionSearchModeEnabled: vi.fn(async () => false),
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../localDb/dialogueWorkspace', () => ({

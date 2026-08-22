@@ -56,7 +56,11 @@ import type {
 } from '@cindy/maker-scheduler';
 
 import { createMessage } from '../localDb/ipc/messages.js';
-import { getSessionRowSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
+import {
+  getSessionRowSnapshot,
+  getSessionSearchModeEnabled,
+  touchUserSendInDb,
+} from '../localDb/ipc/sessions.js';
 import {
   getSessionProvider,
   setSessionProvider,
@@ -635,10 +639,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
       holder.releaseAgentSwitchLock =
         (await this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal)) ?? undefined;
       throwIfFireAborted(ctx.signal, 'credential switch setup');
-      const [meta, row] = await Promise.all([
+      const [meta, row, persistedSearchMode] = await Promise.all([
         this.deps.maker.getSessionMeta(sessionId).catch(() => null),
         getSessionRowSnapshot(sessionId),
+        getSessionSearchModeEnabled(sessionId),
       ]);
+      heartbeatSearchMode = persistedSearchMode;
       const archived = !row || row.status === 'archived' || row.status === 'deleted';
       if (archived) {
         holder.releaseAgentSwitchLock?.();
@@ -657,6 +663,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           isHeartbeat = false;
           sessionId = randomUUID();
+          heartbeatSearchMode = false;
           // resumeSessionId / heartbeatWorkingDir / heartbeatModel 仍是 undefined,
           // 下方 workingDir 解析自然走 schedule.workingDir + schedule.useWorktree 分支
         } else {
@@ -718,7 +725,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
         heartbeatAgentKind = meta?.agentKind;
         heartbeatFastMode = meta?.fastMode;
         heartbeatProviderId = row?.providerId ?? null;
-        heartbeatSearchMode = row?.searchModeEnabled === true;
       }
     }
 
