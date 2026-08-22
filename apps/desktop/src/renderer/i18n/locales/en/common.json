@@ -5148,7 +5148,7 @@
   },
   "usageHistory": {
     "description": "Token usage produced inside Cindy on this device. Records start accumulating when the feature ships; earlier history is not backfilled.",
-    "empty": "No usage recorded yet. This fills in once you run a conversation.",
+    "empty": "No usage recorded yet. This fills in once you start a chat.",
     "cacheHitTooltip": "Cache read / (input + cache read + cache write) — the same formula as the message card.",
     "summary": {
       "title": "Overview"
