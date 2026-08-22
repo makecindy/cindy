@@ -393,6 +393,36 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('keeps a leftover terminal on queued generation after handle.send yields', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+
+    const late = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
+    expect(late?.sessionTurnGeneration).toBe(1);
+    expect(late?.sessionInstanceId).toBe(session.instanceId);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('排队中的旧 Codex terminal error 不能冒领随后 dispatch 的 attempt token', async () => {
     const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
       dispatchEvent: {

@@ -6279,6 +6279,33 @@ describe('AgentInputCoordinator steer transaction', () => {
     }
   });
 
+  it('does not reclaim leftover activeTurn when idle reconcile fails', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'drain-reconcile-fail-keeps-boundary';
+
+      h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+      h.setLiveRunning(false);
+      h.setLiveSessionPresent(true);
+      h.setRunning(true);
+      h.reconcileTurnIdle.mockImplementation(() => false);
+      h.coordinator.enqueue(sid, makeItem('q-2', 'queued-after-idle'));
+      await flush();
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ignores a late terminal from a reclaimed leftover turn after the next turn starts', async () => {
     vi.useFakeTimers();
     try {

@@ -3524,7 +3524,7 @@ export class AgentInputCoordinator {
 
     if (trackerBusy || reclaimLeftover) {
       const reconciled = this.deps.reconcileTurnIdle?.(sessionId) === true;
-      if (!reconciled && !reclaimLeftover) return false;
+      if (!reconciled) return false;
     }
     if (reclaimLeftover) {
       const vendorGeneration = this.deps.getTurnGeneration?.(sessionId);

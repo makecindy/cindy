@@ -428,6 +428,8 @@ export class Session {
   private eventLoopAwaiting = false;
   /** The blocked next() that was pending when the current send entered handle.send. */
   private inFlightSendOwnsBlockedWait = false;
+  /** True only for the synchronous body of handle.send plus its first microtask. */
+  private insideProviderSendSync = false;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
    * AgentEvent.turnOrigin 上,turn 终止(isTerminalTurnEvent)后清空 — 共享
@@ -656,10 +658,21 @@ export class Session {
       try {
         this.beginTurnControl(reservedTurnGeneration);
         onDispatching?.();
-        await this.handle.send(msg, {
-          ...handleOpts,
-          signal: reservation.abortController.signal,
-        });
+        this.insideProviderSendSync = true;
+        let sendPromise: Promise<void>;
+        try {
+          sendPromise = this.handle.send(msg, {
+            ...handleOpts,
+            signal: reservation.abortController.signal,
+          });
+        } catch (error) {
+          this.insideProviderSendSync = false;
+          throw error;
+        }
+        setTimeout(() => {
+          this.insideProviderSendSync = false;
+        }, 0);
+        await sendPromise;
       } catch (e) {
         if (e instanceof TurnDispatchRejectedError) {
           // The provider returned a trustworthy rejection before accepting any
@@ -1759,6 +1772,7 @@ export class Session {
   private resolveSessionTurnGeneration(queuedGeneration: number): number {
     const inFlightGeneration = this.sendReservation?.generation;
     const belongsToInFlightSend =
+      this.insideProviderSendSync &&
       this.inFlightSendOwnsBlockedWait &&
       typeof inFlightGeneration === 'number' &&
       inFlightGeneration === this.turnGeneration &&
