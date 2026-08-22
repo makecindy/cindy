@@ -70,8 +70,12 @@ function parseContext(raw: unknown): RsbWindowContext {
 
 function parseCommand(raw: unknown): RsbWindowCommand {
   const r = requireObject(raw, 'command');
-  if (typeof r.sessionId !== 'string' || r.sessionId.length === 0) {
-    throwIpcError('INVALID_PARAMS', 'command.sessionId required');
+  if (
+    typeof r.sessionId !== 'string' ||
+    r.sessionId.length === 0 ||
+    r.sessionId.length > 128
+  ) {
+    throwIpcError('INVALID_PARAMS', 'command.sessionId must be a 1–128 character string');
   }
   if (r.type === 'open-terminal') {
     return { type: 'open-terminal', sessionId: r.sessionId };

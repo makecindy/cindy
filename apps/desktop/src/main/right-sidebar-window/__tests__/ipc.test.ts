@@ -392,7 +392,13 @@ describe('right-sidebar-window IPC', () => {
         { sender: { id: 2 } },
         { command: { type: 'open-terminal', sessionId: '' }, allowOpen: true },
       ),
-    ).rejects.toThrow(/command.sessionId required/);
+    ).rejects.toThrow(/command.sessionId must be a 1–128 character string/);
+    await expect(
+      handler(
+        { sender: { id: 2 } },
+        { command: { type: 'open-terminal', sessionId: 'x'.repeat(129) }, allowOpen: true },
+      ),
+    ).rejects.toThrow(/1–128/);
   });
 
   it('forwards userInitiated when present and omits it when absent', async () => {
