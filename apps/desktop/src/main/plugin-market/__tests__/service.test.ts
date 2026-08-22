@@ -10,6 +10,7 @@ import {
   validateGhostManifest,
   type GhostInstallApproval,
   type GhostManifest,
+  type GhostTrustInfo,
 } from '../../../shared/ghost.js';
 
 const runtime = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const runtime = vi.hoisted(() => ({
     dir: string;
     enabled: boolean;
     approval?: GhostInstallApproval;
+    trust?: GhostTrustInfo;
   }>,
   install: vi.fn(),
   uninstall: vi.fn(),
@@ -72,6 +74,12 @@ vi.mock('../../cindy-brain/index.js', () => ({
         approval: ghost.approval ?? {
           state: 'approved',
           revision: '00000000-0000-4000-8000-000000000001',
+        },
+        trust: ghost.trust ?? {
+          level: 'unverified',
+          publisherSigned: false,
+          publisherVerified: false,
+          reviewed: false,
         },
       })),
     approvedInstallEvidence: runtime.approvedInstallEvidence,
@@ -1170,13 +1178,33 @@ describe('PluginMarketService migration and defaultInstall', () => {
     );
   });
 
-  it('旧 source:market + manifestDigest 安装会回填 cindy-github 官方 trust', async () => {
+  it('Host receipt 未可信时,目录中的完整 trust 镜像也不能阻止官方回填', async () => {
     const item = summary({ ghostId: 'cindy-github' });
     const rawManifest = manifest('cindy-github');
     const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-github-'));
     roots.push(installDir);
     fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(rawManifest));
-    runtime.ghosts = [{ manifest: rawManifest, dir: installDir, enabled: true }];
+    fs.writeFileSync(
+      path.join(installDir, '.cindy-trust.json'),
+      JSON.stringify({
+        level: 'cindy-official',
+        publisherSigned: true,
+        publisherVerified: true,
+        reviewed: true,
+        publisherName: 'Cindy Plugin Market',
+      }),
+    );
+    runtime.ghosts = [{
+      manifest: rawManifest,
+      dir: installDir,
+      enabled: true,
+      trust: {
+        level: 'unverified',
+        publisherSigned: false,
+        publisherVerified: false,
+        reviewed: false,
+      },
+    }];
     const h = harness([item]);
     const digest = ghostManifestDigest(rawManifest);
     h.ledger.upsertInstallation({
@@ -1230,7 +1258,18 @@ describe('PluginMarketService migration and defaultInstall', () => {
         publisherName: 'Cindy Plugin Market',
       }),
     );
-    runtime.ghosts = [{ manifest: rawManifest, dir: installDir, enabled: true }];
+    runtime.ghosts = [{
+      manifest: rawManifest,
+      dir: installDir,
+      enabled: true,
+      trust: {
+        level: 'cindy-official',
+        publisherSigned: true,
+        publisherVerified: true,
+        reviewed: true,
+        publisherName: 'Cindy Plugin Market',
+      },
+    }];
     const h = harness([item]);
     h.ledger.upsertInstallation({
       pluginId: item.id,
@@ -1250,6 +1289,57 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     expect(h.api.download).not.toHaveBeenCalled();
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('Host receipt 已可信但目录镜像缺失时仍回填旧版兼容 trust', async () => {
+    const item = summary({ ghostId: 'cindy-github' });
+    const rawManifest = manifest('cindy-github');
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-github-mirror-missing-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(rawManifest));
+    runtime.ghosts = [{
+      manifest: rawManifest,
+      dir: installDir,
+      enabled: true,
+      trust: {
+        level: 'cindy-official',
+        publisherSigned: true,
+        publisherVerified: true,
+        reviewed: true,
+        publisherName: 'Cindy Plugin Market',
+      },
+    }];
+    const h = harness([item]);
+    h.ledger.upsertInstallation({
+      pluginId: item.id,
+      ghostId: item.ghostId,
+      releaseId: item.currentRelease.id,
+      version: item.currentRelease.version,
+      sha256: item.currentRelease.sha256,
+      scope: item.scope,
+      organizationId: item.organizationId,
+      source: 'market',
+      installed: true,
+      updatedAt: '2026-08-07T00:00:00.000Z',
+      manifestDigest: ghostManifestDigest(rawManifest),
+    });
+    runtime.install.mockResolvedValue({
+      manifest: rawManifest,
+      dir: installDir,
+      enabled: true,
+      trust: { level: 'cindy-official' },
+    });
+
+    await h.service.snapshot();
+
+    expect(h.api.download).toHaveBeenCalledWith(item.id, item.currentRelease.id);
+    expect(runtime.install).toHaveBeenCalledWith(
+      expect.stringMatching(/cindy-plugin-trust-backfill-.*\.cindy$/),
+      expect.objectContaining({
+        ghostId: 'cindy-github',
+        officialCindyGithub: true,
+      }),
+    );
   });
 
   it('legacy-adopted 记录不能成为开发版冒充 cindy-github 的官方 trust 来源', async () => {
