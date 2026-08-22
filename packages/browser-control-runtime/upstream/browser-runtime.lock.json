@@ -29,10 +29,26 @@
     {
       "file": "extension/src/browser/config.ts",
       "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "resolve exact-origin allowlist per request URL in the navigation guard (allowedOrigins only promotes the matching origin's hostname; redirects/subframes re-evaluate with their own URL)"
+    },
+    {
+      "file": "extension/src/browser/navigation-guard.ts",
+      "desc": "apply resolveSsrFPolicyForUrl before the private-network gates in assertBrowserNavigationAllowed"
+    },
+    {
+      "file": "extension/src/infra/net/ssrf.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl through the browser-local SSRF policy shell (used by the local HTML preview origin allowlist)"
+    },
+    {
+      "file": "extension/src/sdk-security-runtime.ts",
+      "desc": "re-export resolveSsrFPolicyForUrl from the shim so the navigation guard can promote exact-origin allowlist entries"
     }
   ],
   "fileCount": 335,
-  "contentHash": "ec71c1f65b7239df32b0e861d8ac55a1dc55747487dae4fcf1ea4d16002c02ec",
+  "contentHash": "be2803aee31f3ead0c3366095a537c49f2e41cea3c70439720c6e2b154fd47b3",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

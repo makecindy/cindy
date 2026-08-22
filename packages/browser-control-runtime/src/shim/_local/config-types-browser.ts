@@ -48,6 +48,12 @@ export type BrowserSsrFPolicyConfig = {
    */
   allowedHostnames?: string[];
   /**
+   * Exact HTTP origins that may promote only the current request hostname into
+   * `allowedHostnames`. Evaluated per URL inside the redirect loop. Used by the
+   * sandboxed local HTML preview to scope trust to one exact loopback origin.
+   */
+  allowedOrigins?: string[];
+  /**
    * Hostname allowlist patterns for browser navigation.
    * Supports exact hosts and "*.example.com" wildcard subdomains.
    */
