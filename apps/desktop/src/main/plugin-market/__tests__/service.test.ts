@@ -101,6 +101,7 @@ import {
   ghostManifestDigest,
   type PluginMarketInstallationRecord,
 } from '../ledger';
+import type { PluginInstallReceiptOutbox } from '../installReceiptOutbox';
 import { PluginMarketService } from '../service';
 import type { PluginMarketApi } from '../api';
 
@@ -270,11 +271,30 @@ function harness(items: VisiblePluginSummary[], removals: PluginRemovalNotice[] 
       sha256: 'a'.repeat(64),
       sizeBytes: 42,
     })),
+    recordInstallReceipt: vi.fn(async () => ({
+      accepted: true as const,
+      duplicate: false,
+      eventId: 'unused-by-service-harness',
+    })),
+  };
+  const receiptOutbox = {
+    enqueue: vi.fn(() => ({
+      eventId: '123e4567-e89b-42d3-a456-426614174000',
+      pluginId: PLUGIN_ID,
+      releaseId: 'release-1',
+    })),
+    flush: vi.fn(async () => undefined),
   };
   return {
     api,
     ledger,
-    service: new PluginMarketService(api as unknown as PluginMarketApi, ledger),
+    receiptOutbox,
+    service: new PluginMarketService(
+      api as unknown as PluginMarketApi,
+      ledger,
+      undefined,
+      () => receiptOutbox as unknown as PluginInstallReceiptOutbox,
+    ),
   };
 }
 
@@ -896,6 +916,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       releaseId: 'release-1',
       manifestDigest: ghostManifestDigest(manifest()),
     });
+    expect(h.receiptOutbox.enqueue).toHaveBeenCalledWith(item.id, item.currentRelease.id);
   });
 
   it('installs a default package whose permission cap contains normalized setup requirements', async () => {
@@ -2412,6 +2433,175 @@ describe('PluginMarketService migration and defaultInstall', () => {
       pluginId: item.id,
       installed: true,
     });
+    expect(h.receiptOutbox.enqueue).toHaveBeenCalledWith(item.id, item.currentRelease.id);
+  });
+
+  it('returns a successful install after the ledger write without waiting for a hanging receipt', async () => {
+    const item = summary();
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-receipt-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: installDir,
+      enabled: true,
+    });
+    const h = harness([item]);
+    h.receiptOutbox.enqueue.mockImplementation(() => {
+      expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+        installed: true,
+        releaseId: item.currentRelease.id,
+      });
+      return {
+        eventId: '123e4567-e89b-42d3-a456-426614174000',
+        pluginId: item.id,
+        releaseId: item.currentRelease.id,
+      };
+    });
+    h.receiptOutbox.flush.mockImplementation(() => new Promise<undefined>(() => undefined));
+
+    await expect(h.service.install(item.id, reviewedInstallOptions(item))).resolves.toMatchObject({
+      ghost: { manifest: { id: item.ghostId } },
+    });
+    expect(h.receiptOutbox.enqueue).toHaveBeenCalledOnce();
+    expect(h.receiptOutbox.flush).toHaveBeenCalledOnce();
+  });
+
+  it('queues one receipt after replacing a local source with a public market plugin', async () => {
+    const item = summary();
+    const previousDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-local-plugin-'));
+    roots.push(previousDir);
+    const previousManifest = manifest(item.ghostId);
+    fs.writeFileSync(path.join(previousDir, 'ghost.json'), JSON.stringify(previousManifest));
+    runtime.ghosts = [{ manifest: previousManifest, dir: previousDir, enabled: true }];
+    runtime.install.mockResolvedValue({
+      manifest: manifest(item.ghostId),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(
+      recordForTest(item, {
+        pluginId: 'local-plugin',
+        source: 'local-market',
+        sourceKey: 'local:/plugins',
+        manifestDigest: ghostManifestDigest(previousManifest),
+      }),
+    );
+    h.receiptOutbox.enqueue.mockImplementation(() => {
+      expect(h.ledger.installationForGhost(item.ghostId)).toMatchObject({
+        pluginId: item.id,
+        source: 'market',
+        installed: true,
+      });
+      return {
+        eventId: '123e4567-e89b-42d3-a456-426614174000',
+        pluginId: item.id,
+        releaseId: item.currentRelease.id,
+      };
+    });
+
+    await expect(
+      h.service.install(item.id, {
+        ...reviewedInstallOptions(item, true),
+        expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
+      }),
+    ).resolves.toMatchObject({ ghost: { manifest: { id: item.ghostId } } });
+
+    expect(h.receiptOutbox.enqueue).toHaveBeenCalledOnce();
+    expect(h.receiptOutbox.enqueue).toHaveBeenCalledWith(item.id, item.currentRelease.id);
+    expect(h.receiptOutbox.flush).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['download', new Error('download failed')],
+    ['verification', new Error('sha256 mismatch')],
+  ])('does not queue a receipt when %s fails', async (_stage, error) => {
+    const item = summary();
+    const h = harness([item]);
+    const downloadMock = vi.mocked(
+      (await import('../download.js')).downloadVerifiedPlugin,
+    );
+    downloadMock.mockRejectedValueOnce(error);
+
+    await expect(h.service.install(item.id, reviewedInstallOptions(item))).rejects.toThrow(
+      error.message,
+    );
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.receiptOutbox.enqueue).not.toHaveBeenCalled();
+  });
+
+  it.each(['validation', 'extraction', 'disk commit'])(
+    'does not queue a receipt when package %s fails',
+    async (stage) => {
+      const item = summary();
+      const h = harness([item]);
+      runtime.install.mockRejectedValueOnce(new Error(`${stage} failed`));
+
+      await expect(h.service.install(item.id, reviewedInstallOptions(item))).rejects.toThrow(
+        `${stage} failed`,
+      );
+      expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
+      expect(h.receiptOutbox.enqueue).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not queue a receipt when the local installation ledger update fails', async () => {
+    const item = summary();
+    const h = harness([item]);
+    runtime.install.mockResolvedValue({
+      manifest: manifest(),
+      dir: '/userData/cindy-brain/cindy-test',
+      enabled: true,
+    });
+    vi.spyOn(h.ledger, 'upsertInstallation').mockImplementationOnce(() => {
+      throw new Error('ledger write failed');
+    });
+
+    await expect(h.service.install(item.id, reviewedInstallOptions(item))).rejects.toThrow(
+      'ledger write failed',
+    );
+    expect(h.receiptOutbox.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not queue receipts for organization installs or Plugin upgrades', async () => {
+    const organization = summary({ scope: 'organization', organizationId: 'org-1' });
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-no-receipt-'));
+    roots.push(installDir);
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(manifest()));
+    runtime.install.mockResolvedValue({ manifest: manifest(), dir: installDir, enabled: true });
+    const organizationHarness = harness([organization]);
+
+    await organizationHarness.service.install(
+      organization.id,
+      reviewedInstallOptions(organization),
+    );
+    expect(organizationHarness.receiptOutbox.enqueue).not.toHaveBeenCalled();
+
+    const upgraded = summary({
+      scope: 'organization',
+      organizationId: 'org-1',
+      defaultInstall: true,
+      currentRelease: { ...summary().currentRelease, id: 'release-2', version: '2.0.0' },
+    });
+    const oldManifest = manifest(upgraded.ghostId, '1.0.0');
+    fs.writeFileSync(path.join(installDir, 'ghost.json'), JSON.stringify(oldManifest));
+    runtime.ghosts = [{ manifest: oldManifest, dir: installDir, enabled: true }];
+    const upgradeHarness = harness([upgraded]);
+    upgradeHarness.ledger.upsertInstallation({
+      ...recordForTest(upgraded),
+      releaseId: 'release-1',
+      version: '1.0.0',
+      manifestDigest: ghostManifestDigest(oldManifest),
+    });
+    runtime.install.mockResolvedValue({
+      manifest: manifest(upgraded.ghostId, '2.0.0'),
+      dir: installDir,
+      enabled: true,
+    });
+
+    await upgradeHarness.service.snapshot();
+    expect(upgradeHarness.receiptOutbox.enqueue).not.toHaveBeenCalled();
   });
 
   it('服务端安装持 ghostId 锁,覆盖落位到溯源写入整段', async () => {

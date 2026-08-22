@@ -204,6 +204,27 @@ describe('serverApiFetch', () => {
     expect(mocks.invalidateSession).toHaveBeenCalledWith('resource-unauthorized-after-refresh');
   });
 
+  it.each(['TOKEN_EXPIRED', 'ACCOUNT_UNAVAILABLE'])(
+    'suppressAuthSideEffects 遇到 %s 时不 refresh 也不退登',
+    async (code) => {
+      mocks.getAccessToken.mockReturnValue('token-a');
+      mocks.netFetch.mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { code } }),
+      });
+
+      await expect(
+        serverApiFetch('/api/resource', {
+          baseUrl: 'https://resource.example.com',
+          suppressAuthSideEffects: true,
+        }),
+      ).rejects.toMatchObject({ code, statusCode: 401 });
+      expect(mocks.refresh).not.toHaveBeenCalled();
+      expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { name: '403', response: { ok: false, status: 403, json: async () => ({}) } },
     { name: 'network failure', response: new Error('offline') },

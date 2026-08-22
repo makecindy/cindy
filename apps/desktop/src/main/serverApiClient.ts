@@ -46,6 +46,11 @@ export interface ApiFetchOptions {
   /** 跳过 401 自动 refresh（避免无限循环；refresh 自身调用时禁用）。 */
   skipAutoRefresh?: boolean;
   /**
+   * 后台尽力而为请求使用：401 不 refresh，也不触发会话失效，保证请求失败
+   * 不会修改当前登录态。
+   */
+  suppressAuthSideEffects?: boolean;
+  /**
    * 目标服务 base URL(必传;来自 clientEndpoints 的对应字段或注入方)。
    * 区域相关服务必须传 resolver：401 refresh 可能切换登录区域，重试前要重新
    * 读取端点，不能把新区域 token 发到首次请求的旧区域。
@@ -136,6 +141,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
   if (
     result.status === 401 &&
     !opts.skipAutoRefresh &&
+    !opts.suppressAuthSideEffects &&
     firstCode !== 'ACCOUNT_UNAVAILABLE' &&
     isRefreshableUnauthorizedCode(firstCode)
   ) {
@@ -151,6 +157,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
     const errMsg = readErrorMessage(result.data) ?? `请求失败 (${result.status})`;
     if (
       result.status === 401 &&
+      !opts.suppressAuthSideEffects &&
       (errCode === 'ACCOUNT_UNAVAILABLE' ||
         (refreshedAndRetried && isRefreshableUnauthorizedCode(errCode)))
     ) {
