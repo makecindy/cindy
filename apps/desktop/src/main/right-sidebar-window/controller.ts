@@ -412,10 +412,12 @@ export class RsbWindowController {
     }
     this.lastContext = ctx;
     this.rememberLastHostSession(ctx, { onlyIfShowing: true });
+    this.revealPendingOpenIfHostReady();
     if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, ctx);
     }
     this.flushDeferredCommandsToDetachedHost();
+    if (ctx.available && ctx.sessionId) this.settleHostWaiters(ctx.sessionId, true);
   }
 
   getContext(): RsbWindowContext | null {
@@ -449,6 +451,12 @@ export class RsbWindowController {
     if (adopted) await adopted;
     if (!this.canDispatchCommand(command)) {
       this.enqueueDeferredCommand(command);
+      if (allowOpen && (!this.isOpen() || !this.presentationReady)) {
+        this.open({
+          userInitiated,
+          ...(hostSessionId ? { sessionId: hostSessionId } : {}),
+        });
+      }
       return 'queued';
     }
 
@@ -587,6 +595,12 @@ export class RsbWindowController {
   }
 
   private showWindow(win: BrowserWindow, shouldFocus: boolean): void {
+    if (this.pinnedSessionId && this.lastContext?.sessionId !== this.pinnedSessionId) {
+      this.pendingOpen = true;
+      this.pendingOpenShouldFocus = shouldFocus;
+      this.broadcast();
+      return;
+    }
     this.clearOpenTimeout();
     this.clearPrewarmTimeout();
     this.pendingOpen = false;
@@ -938,11 +952,25 @@ export class RsbWindowController {
   private applyAdoptedContext(next: RsbWindowContext): void {
     this.lastContext = next;
     this.rememberLastHostSession(next);
+    this.revealPendingOpenIfHostReady();
     if (this.visible && this.winRef && !this.winRef.isDestroyed()) {
       this.deps.sendToWindow(this.winRef, this.deps.contextChannel, next);
     }
     this.flushDeferredCommandsToDetachedHost();
     this.settleHostWaiters(next.sessionId, true);
+  }
+
+  private revealPendingOpenIfHostReady(): void {
+    if (
+      !this.pendingOpen ||
+      !this.winRef ||
+      this.winRef.isDestroyed() ||
+      !this.presentationReady
+    ) {
+      return;
+    }
+    if (this.pinnedSessionId && this.lastContext?.sessionId !== this.pinnedSessionId) return;
+    this.showWindow(this.winRef, this.pendingOpenShouldFocus);
   }
 
   private waitForHostSession(sessionId: string): Promise<void> {
@@ -968,9 +996,21 @@ export class RsbWindowController {
         const idx = this.hostWaiters.findIndex((w) => w.timeout === timeout);
         if (idx >= 0) this.hostWaiters.splice(idx, 1);
         reject(new Error(`right-sidebar host context not ready for ${sessionId}`));
+        this.releaseUnresolvedHostPin(sessionId);
       }, READY_TIMEOUT_MS);
       this.hostWaiters.push({ sessionId, resolve, reject, timeout });
     });
+  }
+
+  private releaseUnresolvedHostPin(sessionId: string): void {
+    if (this.pinnedSessionId !== sessionId) return;
+    if (this.hostWaiters.some((waiter) => waiter.sessionId === sessionId)) return;
+    this.clearPinnedSession();
+    if (this.pendingOpen && !this.visible) {
+      this.pendingOpen = false;
+      this.pendingOpenShouldFocus = true;
+      this.broadcast();
+    }
   }
 
   private settleHostWaiters(sessionId: string | null, ok: boolean): void {
