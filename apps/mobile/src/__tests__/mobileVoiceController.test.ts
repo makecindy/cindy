@@ -1,5 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 
+// 捕获 DictationRefiner 构造入参(含 contextProvider),用于验证「锚点作废后润色
+// 语境切到文末」这一回归。仅替换 DictationRefiner,其余(ASR/controller)用真实实现。
+const dictationRefinerOptions = vi.hoisted(() => [] as Array<{ contextProvider?: () => Record<string, unknown> }>);
+
+vi.mock('@cindy/voice-input-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/voice-input-core')>();
+  const RealDictationRefiner = actual.DictationRefiner;
+  return {
+    ...actual,
+    DictationRefiner: class extends RealDictationRefiner {
+      constructor(options: { contextProvider?: () => Record<string, unknown> }) {
+        super(options as never);
+        dictationRefinerOptions.push(options);
+      }
+    },
+  };
+});
+
 vi.mock('@/auth/secureStorage', () => ({
   getSecureItem: vi.fn(async () => null),
   setSecureItem: vi.fn(async () => undefined),
@@ -1032,5 +1050,156 @@ describe('mobileVoiceController', () => {
     // Only the pre-stop chunk reached ASR; the post-stop chunk was discarded.
     expect(asr.appended).toEqual([pre]);
     expect(asr.flushCalls).toBe(1);
+  });
+
+  it('inserts the transcript at the recording-start caret when the draft is unchanged', async () => {
+    const drafts: string[] = [];
+    let currentDraft = '世界';
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft: currentDraft,
+      readCurrentDraft: () => currentDraft,
+      readCaret: () => ({ start: 0, end: 0 }),
+      asr,
+      refiner: null,
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (draft) => {
+        currentDraft = draft;
+        drafts.push(draft);
+      },
+    });
+
+    await session.start();
+    asr.emit({ type: 'partial', text: '你好', at: Date.now() });
+
+    expect(session.currentDraft()).toBe('你好世界');
+    expect(drafts).toEqual(['你好世界']);
+    expect(session.currentInsertionEnd()).toBe(2);
+
+    await session.cancel();
+  });
+
+  it('invalidates the caret anchor when the draft changes before the first ASR result', async () => {
+    const drafts: string[] = [];
+    let currentDraft = '世界';
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft: currentDraft,
+      readCurrentDraft: () => currentDraft,
+      readCaret: () => ({ start: 0, end: 0 }),
+      asr,
+      refiner: null,
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (draft) => {
+        currentDraft = draft;
+        drafts.push(draft);
+      },
+    });
+
+    await session.start();
+    // 用户开麦后、首个 ASR 结果返回前编辑了草稿——锚点已过期，必须作废。
+    currentDraft = '已编辑的世界';
+    asr.emit({ type: 'partial', text: '你好', at: Date.now() });
+
+    expect(session.currentDraft()).toBe('已编辑的世界\n你好');
+    expect(drafts).toEqual(['已编辑的世界\n你好']);
+
+    await session.cancel();
+  });
+
+  it('keeps the salvaged insertion endpoint available after a transport failure', async () => {
+    const errors: string[] = [];
+    let currentDraft = '前缀';
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft: currentDraft,
+      readCurrentDraft: () => currentDraft,
+      asr,
+      refiner: null,
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (draft) => {
+        currentDraft = draft;
+      },
+      onError: (message) => errors.push(message),
+    });
+
+    await session.start();
+    asr.emit({ type: 'partial', text: '保留', at: Date.now() });
+    asr.emit({ type: 'disconnected', at: Date.now() });
+
+    // fail() salvages the transcript before notifying the UI. The UI can use
+    // this endpoint to put the native TextInput caret after the retained text.
+    expect(currentDraft).toBe('前缀\n保留');
+    expect(session.currentInsertionEnd()).toBe(5);
+    expect(errors).toHaveLength(1);
+
+    await session.cancel();
+  });
+
+  it('switches the refiner selection context to end-append once the caret anchor goes stale', async () => {
+    dictationRefinerOptions.length = 0;
+    let currentDraft = '世界';
+    const asr = new FakeAsrProvider();
+    // 不传 refiner:null,走真实 createMobileRefiner 以捕获 contextProvider。
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft: currentDraft,
+      readCurrentDraft: () => currentDraft,
+      readCaret: () => ({ start: 0, end: 0 }),
+      asr,
+      refinerTargetProvider: async () => ({ url: 'https://refine.test/v1', authorization: 'Bearer test' }),
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (draft) => {
+        currentDraft = draft;
+      },
+    });
+
+    await session.start();
+    // 开麦后、首个 ASR 前编辑草稿 → 锚点作废,落点回退到文末追加。
+    currentDraft = '已编辑的世界';
+    asr.emit({ type: 'partial', text: '你好', at: Date.now() });
+
+    expect(dictationRefinerOptions.length).toBe(1);
+    const context = dictationRefinerOptions[0].contextProvider?.();
+    expect(context?.selectionBefore).toBe('已编辑的世界');
+    expect(context?.selectedText).toBeUndefined();
+    expect(context?.selectionAfter).toBeUndefined();
+
+    await session.cancel();
+  });
+
+  it('reconciles stale anchor before stop() so refiner gets end-append context', async () => {
+    dictationRefinerOptions.length = 0;
+    let currentDraft = '世界';
+    const asr = new FakeAsrProvider();
+    const session = createMobileVoiceControllerSession({
+      credential: credential(),
+      initialDraft: currentDraft,
+      readCurrentDraft: () => currentDraft,
+      readCaret: () => ({ start: 0, end: 0 }),
+      asr,
+      refinerTargetProvider: async () => ({ url: 'https://refine.test/v1', authorization: 'Bearer test' }),
+      startAudio: async () => async () => undefined,
+      onDraftChanged: (draft) => {
+        currentDraft = draft;
+      },
+    });
+
+    await session.start();
+    // Edit draft before any ASR result → anchor becomes stale.
+    currentDraft = '已编辑的世界';
+    // Immediately stop without any ASR result — publishText() was never called.
+    const result = await session.stop();
+
+    // The refiner should have received end-append context (stale anchor
+    // reconciled in stop()), not the old caret context.
+    expect(dictationRefinerOptions.length).toBe(1);
+    const context = dictationRefinerOptions[0].contextProvider?.();
+    expect(context?.selectionBefore).toBe('已编辑的世界');
+    expect(context?.selectedText).toBeUndefined();
+    expect(context?.selectionAfter).toBeUndefined();
   });
 });

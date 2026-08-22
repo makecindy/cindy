@@ -1696,6 +1696,7 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('const voicePermissionRequestInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(newSource).toContain('const voiceStartupSeqRef = useRef(0);');
+    expect(newSource).toContain('const voiceRecordingGenerationRef = useRef(0);');
     expect(newSource).toContain('|| voiceStopInFlightRef.current');
     expect(newSource).toContain('resolveMobileVoiceRecordingPermission({');
     expect(newSource).toContain('voiceStartupInFlightRef.current = true;');
@@ -1711,6 +1712,8 @@ describe('new session composer surface', () => {
       + "      startupSeq = voiceStartupSeqRef.current + 1;",
     );
     expect(newSource).toContain('const cancelVoiceForDeviceSwitch = useCallback(() => {');
+    expect(newSource).toContain('const cancelGeneration = voiceRecordingGenerationRef.current + 1;');
+    expect(newSource).toContain('if (voiceRecordingGenerationRef.current !== cancelGeneration) return;');
     expect(selectDeviceSource).toContain('voicePermissionRequestInFlightRef.current');
     expect(selectDeviceSource).toContain('|| voiceStopInFlightRef.current');
     expect(selectDeviceSource).toContain('|| voiceIsProcessing');

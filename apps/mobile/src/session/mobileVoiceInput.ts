@@ -71,6 +71,15 @@ export interface MobileVoiceDraftInsertion {
   text: string;
 }
 
+/**
+ * 录音开始时输入框的光标/选区(plain-text 偏移)。start === end 表示插入点,
+ * start < end 表示要替换的选区。
+ */
+export interface MobileVoiceCaretAnchor {
+  start: number;
+  end: number;
+}
+
 interface VoicePresignResult {
   putUrl: string;
   key: string;
@@ -99,9 +108,22 @@ export function appendVoiceTranscriptDraft(current: string, transcript: string):
 export function appendVoiceTranscriptDraftWithRange(
   current: string,
   transcript: string,
+  caret?: MobileVoiceCaretAnchor | null,
 ): { draft: string; insertion: MobileVoiceDraftInsertion | null } {
   const text = transcript.trim();
   if (!text) return { draft: current, insertion: null };
+
+  // 显式给了光标/选区:就地插入(替换选区),不擅自追加、不擅自加换行。
+  // 偏移越界时收敛到 [0, current.length],保证 slice 永不抛错。
+  if (caret) {
+    const start = Math.max(0, Math.min(current.length, caret.start));
+    const end = Math.max(start, Math.min(current.length, caret.end));
+    return {
+      draft: `${current.slice(0, start)}${text}${current.slice(end)}`,
+      insertion: { start, end: start + text.length, text },
+    };
+  }
+
   const base = current.trimEnd();
   if (!base) {
     return {
@@ -284,6 +306,20 @@ export function buildMobileVoiceRefinementContext(
     ...options.refinementContext,
     uiLanguage,
     sourceLanguage,
+  };
+}
+
+/**
+ * 锚点作废后的润色选区上下文:录音开始后、首个 ASR 结果返回前草稿被编辑时,
+ * 实际落点已回退到文末追加,润色语境也必须同步切到文末——selectionBefore 取
+ * 当前草稿尾部,selectedText/selectionAfter 清空,否则 refiner 会依据录音起始
+ * 的旧光标附近文本错误改写听写结果。
+ */
+export function buildStaleAnchorRefinementContext(draft: string): DictationRefinementContext {
+  return {
+    selectionBefore: draft.slice(-1200),
+    selectedText: undefined,
+    selectionAfter: undefined,
   };
 }
 

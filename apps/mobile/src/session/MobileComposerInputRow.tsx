@@ -129,6 +129,7 @@ export interface MobileComposerInputRowProps {
   onChangeText: (value: string) => void;
   onContentSizeChange?: TextInputProps['onContentSizeChange'];
   onFocus?: TextInputProps['onFocus'];
+  onSelectionChange?: TextInputProps['onSelectionChange'];
   /**
    * 粘贴图片回调(expo-paste-input):长按输入框 Paste 剪贴板图片时收到
    * file:// 临时文件 uri 列表,原生侧已阻止图片以默认方式插入文本;
@@ -202,6 +203,7 @@ export function MobileComposerInputRow({
   onChangeText,
   onContentSizeChange,
   onFocus,
+  onSelectionChange,
   onPasteImages,
   onPasteImagesLoading,
   onPasteImagesLoadFailed,
@@ -259,6 +261,7 @@ export function MobileComposerInputRow({
       onChangeText={onChangeText}
       onContentSizeChange={onContentSizeChange}
       onFocus={onFocus}
+      onSelectionChange={onSelectionChange}
       onPressIn={onPressIn}
       placeholder={placeholder}
       placeholderTextColor={placeholderTextColor}

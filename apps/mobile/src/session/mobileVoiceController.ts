@@ -21,10 +21,12 @@ import { CINDY_MANAGED_REFINER_PROVIDER } from '@/session/mobileCindyVoiceSessio
 import {
   appendVoiceTranscriptDraftWithRange,
   buildMobileVoiceRefinementContext,
+  buildStaleAnchorRefinementContext,
   makeMobileRefinerPromptCacheKey,
   MobileLiteLlmTextModelClient,
   mobileVoiceErrorCodeMessage,
   mobileVoiceTranscriptKeptError,
+  type MobileVoiceCaretAnchor,
   type MobileVoiceDraftInsertion,
 } from '@/session/mobileVoiceInput';
 import { startMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
@@ -50,6 +52,8 @@ export type MobileVoiceControllerSession = {
   stop(): Promise<string>;
   cancel(): Promise<void>;
   currentDraft(): string;
+  /** 本次录音最后一次落点的文本区间末尾（plain-text 偏移）；插入已失效时为 null。 */
+  currentInsertionEnd(): number | null;
 };
 
 type MobileVoiceControllerOptions = {
@@ -75,6 +79,10 @@ type MobileVoiceControllerOptions = {
   }) => Promise<void>;
   startAudio?: StartRealtimeAudio;
   readCurrentDraft?: () => string;
+  /** 录音开始时输入框的光标/选区(plain-text 偏移)。为空则沿用旧的末尾追加行为。 */
+  readCaret?: () => MobileVoiceCaretAnchor | null;
+  /** 光标捕获时的草稿快照(由 onSelectionChange 同时存)。用于检测「光标位置对应旧草稿」竞态。 */
+  readCaretDraft?: () => string | null;
   onDraftChanged: (draft: string) => void;
   onStateChanged?: (state: VoiceInputState) => void;
   onError?: (message: string) => void;
@@ -115,11 +123,15 @@ export function createMobileVoiceControllerSession(
   const asr = new BufferedAsrProvider(options.asr ?? createMobileAsrProvider(options.credential, {
     connectionProvider: options.connectionProvider,
   }));
+  // 锚点作废(录音开始后、首个 ASR 结果返回前草稿被编辑)时,实际落点回退到文末
+  // 追加;这里把同样的回退同步给 refiner:润色语境切到文末,避免拿旧光标语境改写。
+  let refinementSelectionOverride: DictationRefinementContext | null = null;
   const refiner = options.refiner === undefined
     ? createMobileRefiner(options.credential, {
       refinementContext: options.refinementContext,
       localVoiceInputHistory: options.localVoiceInputHistory,
       refinerTargetProvider: options.refinerTargetProvider,
+      readDynamicSelectionContext: () => refinementSelectionOverride,
     })
     : options.refiner ?? undefined;
   // 托管 prompt cache 预热:发一个与真实润色共享 prompt 前缀(dictationText 为空)
@@ -199,6 +211,9 @@ export function createMobileVoiceControllerSession(
   let voiceInsertion: MobileVoiceDraftInsertion | null = null;
   let voiceInsertionSegmentIds: string[] = [];
   let voiceInsertionTouched = false;
+  let caretAnchor: MobileVoiceCaretAnchor | null = null;
+  // 锚定光标时同步快照的草稿文本；首次落点前草稿若已变化，锚点即失效。
+  let caretAnchorDraft: string | null = null;
   let historyEntryId: string | null = null;
   let historyEntryPromise: Promise<string | null | void> | null = null;
   let pendingHistoryUpdateText: string | null = null;
@@ -288,6 +303,22 @@ export function createMobileVoiceControllerSession(
     pendingDraftToPublish = draft;
   };
 
+  // Synchronously detect whether the caret anchor is still valid (draft hasn't
+  // changed since capture). When stale, invalidates the refinement context so
+  // the refiner uses the current draft's end-of-text context instead of the
+  // old caret context. Called from both publishText() and stop().
+  const reconcileStaleAnchor = (currentDraft: string): void => {
+    // A draft difference is expected once this controller has published its
+    // own ASR insertion. Preserve the original selection context while that
+    // insertion is still intact; only edits inside the insertion invalidate it.
+    if (voiceInsertion && isInsertionIntact(currentDraft, voiceInsertion)) return;
+    if (caretAnchor !== null && caretAnchorDraft !== currentDraft) {
+      refinementSelectionOverride = buildStaleAnchorRefinementContext(currentDraft);
+      caretAnchor = null;
+      caretAnchorDraft = null;
+    }
+  };
+
   const publishText = (
     text: string,
     segmentIds: string[],
@@ -316,7 +347,13 @@ export function createMobileVoiceControllerSession(
       return buildEditableRange(voiceInsertion, segmentIds, voiceInsertionTouched);
     }
 
-    const result = appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
+    // 录音开始后、首个 ASR 结果返回前用户可能继续编辑草稿：一旦草稿与锚定时
+    // 快照不一致，偏移就不再有意义，作废锚点回退到安全的末尾追加。
+    const anchorIsFresh = caretAnchor !== null && caretAnchorDraft === currentDraft;
+    if (caretAnchor !== null && !anchorIsFresh) {
+      reconcileStaleAnchor(currentDraft);
+    }
+    const result = appendVoiceTranscriptDraftWithRange(currentDraft, normalized, anchorIsFresh ? caretAnchor : null);
     if (!result.insertion) return undefined;
     voiceInsertion = result.insertion;
     voiceInsertionSegmentIds = segmentIds;
@@ -414,6 +451,17 @@ export function createMobileVoiceControllerSession(
       asrStartError = null;
       audioFailureError = null;
       controllerError = null;
+      // 录音开始的瞬间锚定输入框光标/选区;后续增量识别都锁在这个区间上,
+      // 听写中途用户移动光标也不应让落点漂移。同时快照光标捕获时的草稿，
+      // 用于检测「光标位置对应旧草稿」竞态（程序化更新草稿后、onSelectionChange
+      // 刷新前用户按麦克风，旧偏移会配对新草稿）。
+      caretAnchor = options.readCaret?.() ?? null;
+      // 优先用 readCaretDraft（onSelectionChange 同时存的草稿快照），
+      // 回退到 readCurrentDraft——后者在竞态场景下会返回新草稿，导致光标
+      // 被误判为新鲜。
+      const draftAtCaretCapture = options.readCaretDraft?.();
+      caretAnchorDraft = caretAnchor ? (draftAtCaretCapture ?? readCurrentDraft()) : null;
+      refinementSelectionOverride = null;
       // Connect the ASR socket and open the mic CONCURRENTLY instead of serially.
       // The shared controller sets 'listening' synchronously, so the mic goes live
       // immediately instead of waiting for the ~2.4s WebSocket connect + session
@@ -525,6 +573,12 @@ export function createMobileVoiceControllerSession(
         );
       }
       notifyReadyForEndCue();
+      // P1 fix: reconcile anchor before optimistic refinement. If the user
+      // edited the draft before the first ASR result and then called stop(),
+      // publishText() was never called, so the stale-anchor fallback never ran.
+      // Without this, the refiner would receive the old caret context instead
+      // of the current draft's end-of-text fallback context.
+      reconcileStaleAnchor(readCurrentDraft());
       await controller.stop();
       if (state === 'error' || controllerError) {
         runPhase = 'failed';
@@ -551,6 +605,10 @@ export function createMobileVoiceControllerSession(
     },
     currentDraft() {
       return readCurrentDraft();
+    },
+    currentInsertionEnd() {
+      if (!voiceInsertion || !isInsertionIntact(readCurrentDraft(), voiceInsertion)) return null;
+      return voiceInsertion.end;
     },
   };
 
@@ -671,6 +729,8 @@ function createMobileRefiner(
       url: string;
       authorization: string;
     }>;
+    /** 锚点作废后动态注入的润色选区上下文(优先级高于静态 refinementContext)。 */
+    readDynamicSelectionContext?: () => DictationRefinementContext | null;
   },
 ): DictationRefiner | undefined {
   if (credential.settings?.refinementEnabled === false) return undefined;
@@ -687,13 +747,17 @@ function createMobileRefiner(
     }),
     model: CINDY_MANAGED_REFINER_PROVIDER,
     promptCacheScope: mobileRefinerPromptCacheScope(credential),
-    contextProvider: () => buildMobileVoiceRefinementContext(credential, {
-      refinementContext: options.refinementContext,
-      localVoiceInputHistory: options.localVoiceInputHistory,
-      // 词典来自被控桌面的只读快照缓存(拉取在开麦时异步触发)。桌面离线或还没
-      // 拉到时是空数组 —— 润色照常进行,只是少了术语提示。
-      dictionaryEntries: readCachedMobileVoiceDictionary(credential.hostDeviceId),
-    }),
+    contextProvider: () => {
+      const context = buildMobileVoiceRefinementContext(credential, {
+        refinementContext: options.refinementContext,
+        localVoiceInputHistory: options.localVoiceInputHistory,
+        // 词典来自被控桌面的只读快照缓存(拉取在开麦时异步触发)。桌面离线或还没
+        // 拉到时是空数组 —— 润色照常进行,只是少了术语提示。
+        dictionaryEntries: readCachedMobileVoiceDictionary(credential.hostDeviceId),
+      });
+      const dynamicSelection = options.readDynamicSelectionContext?.();
+      return dynamicSelection ? { ...context, ...dynamicSelection } : context;
+    },
   });
 }
 
