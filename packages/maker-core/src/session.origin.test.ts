@@ -445,6 +445,32 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('does not stamp a zero-output done as leftover after a completed prior turn', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    await emit({ type: 'done', data: {}, source: 'codex' });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({ type: 'done', data: {}, source: 'codex' });
+
+    const dones = seen.filter((event) => event.type === 'done');
+    expect(dones[0]?.sessionTurnGeneration).toBe(1);
+    expect(dones[1]?.sessionTurnGeneration).toBe(2);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('stamps a silent-stop done as the new generation even without progress tokens', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,

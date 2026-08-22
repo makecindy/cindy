@@ -580,8 +580,13 @@ export class Session {
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     const previousTurnGeneration = this.turnGeneration;
     this.turnGeneration += 1;
-    if (previousTurnGeneration > 0) {
+    if (
+      previousTurnGeneration > 0 &&
+      this.terminalEventObservedGeneration !== previousTurnGeneration
+    ) {
       this.pendingPriorGeneration = previousTurnGeneration;
+    } else {
+      this.pendingPriorGeneration = null;
     }
     const reservedTurnGeneration = this.turnGeneration;
     const reservation = createSendReservation(reservedTurnGeneration);
