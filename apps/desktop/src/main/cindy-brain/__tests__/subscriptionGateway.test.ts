@@ -949,7 +949,7 @@ describe('will-assistant-message 出口钩子拦截(screenAssistantMessage)', ()
 });
 
 describe('isGhostEligibleSessionRow(订阅投递资格行级判定)', () => {
-  it('desktop / shared 主会话放行;IM / 自动化 / orca 排除', () => {
+  it('desktop / shared 与 Orca Lead 放行;IM / 自动化 / 其它 Orca 角色排除', () => {
     // 用户主会话:亲手建的 + 分享导入的(2026-07-13 实撞:shared 曾被误排除)。
     expect(isGhostEligibleSessionRow({ source: 'desktop', orcaRole: null })).toBe(true);
     expect(isGhostEligibleSessionRow({ source: 'shared', orcaRole: null })).toBe(true);
@@ -959,9 +959,10 @@ describe('isGhostEligibleSessionRow(订阅投递资格行级判定)', () => {
     for (const source of ['feishu', 'slack', 'discord', 'scheduler', 'learn']) {
       expect(isGhostEligibleSessionRow({ source, orcaRole: null }), source).toBe(false);
     }
-    // Orca 协同(lead/worker)排除。
-    expect(isGhostEligibleSessionRow({ source: 'desktop', orcaRole: 'lead' })).toBe(false);
+    // 只明确放行 Orca Lead；其它当前或未来角色都按内部执行噪音 fail-closed。
+    expect(isGhostEligibleSessionRow({ source: 'desktop', orcaRole: 'lead' })).toBe(true);
     expect(isGhostEligibleSessionRow({ source: 'shared', orcaRole: 'worker' })).toBe(false);
+    expect(isGhostEligibleSessionRow({ source: 'plugin', orcaRole: 'reviewer' })).toBe(false);
   });
 });
 

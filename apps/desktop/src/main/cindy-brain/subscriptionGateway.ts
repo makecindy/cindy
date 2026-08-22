@@ -643,9 +643,9 @@ export class GhostSubscriptionGateway {
 
 /**
  * 订阅事件投递资格的行级判定(纯谓词,抽出便于单测;DB 查询在调用方):
- * 只投**用户主会话**——亲手建的(desktop)与分享导入后自己在用的(shared);
- * IM 机器人渠道(feishu/slack/discord)、本机自动化(scheduler/learn)与 Orca
- * 协同会话(orcaRole 非空)一律排除,它们的动态对意识是噪音。
+ * 只投**用户主会话**——亲手建的(desktop)与分享导入后自己在用的(shared),
+ * 包括仍由用户直接交互的 Orca Lead;IM 机器人渠道(feishu/slack/discord)、
+ * 本机自动化(scheduler/learn)与其它 Orca 角色排除,它们的动态对意识是噪音。
  * (2026-07-13 实撞:shared 会话被旧的 desktop-only 判定静默排除,用户切到
  * 分享导入的会话时 did-session-switched 不发,还连带切回时重复发上一会话。)
  */
@@ -653,10 +653,10 @@ export function isGhostEligibleSessionRow(row: {
   source: string | null | undefined;
   orcaRole: string | null | undefined;
 }): boolean {
-  // orcaRole 宽松判空:worker-thread 代理序列化可能把 NULL 列变 undefined。
   // plugin 来源:workspace 槽创建的项目会话,用户打开后正常交互,应享有完整的
   // ghost 事件(turn/hook/session-switched 等),与 desktop/shared 同等待遇。
-  return (row.source === 'desktop' || row.source === 'shared' || row.source === 'plugin') && row.orcaRole == null;
+  return (row.source === 'desktop' || row.source === 'shared' || row.source === 'plugin')
+    && (row.orcaRole == null || row.orcaRole === 'lead');
 }
 
 /** did-session-switched 可投递 Orca Lead，但绝不暴露 Worker。 */
