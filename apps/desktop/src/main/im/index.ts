@@ -84,6 +84,7 @@ import {
   captureImAccountGeneration,
   deactivateImAccountBoundary,
   isImAccountGenerationCurrent,
+  onImAccountBoundaryActivated,
   waitForImAccountGenerationIdle,
 } from './accountBoundary';
 import { configureImAccountScope } from './accountScopeBridge';
@@ -249,6 +250,14 @@ export function startImOrchestrators(): void {
   // Keep the synchronous ingress gate closed until startImConnection reaches
   // the authenticated account's initialized DB boundary.
   deactivateImAccountBoundary();
+  // 边界每次从关闭走到激活(登录/换号后 startImConnection 完成初始化)时广播
+  // 一次: 该窗口里 renderer 的渠道设置首拉(个人微信/企微)会因 generation=null
+  // 被 fail-closed 拒绝, 收到推送即重拉。无 payload — 只表达「可以重试了」,
+  // 数据仍由 renderer 主动拉取, 迟到守卫(Main generation + renderer
+  // ownerEpoch/updateSeq)不因此变化。
+  onImAccountBoundaryActivated(() =>
+    broadcastToAllWindows('im:account-boundary-ready', null),
+  );
 
   ipcMain.on('desktop:cc-prefs-changed', (_e: IpcMainEvent, prefs: unknown) => {
     if (prefs && typeof prefs === 'object') {

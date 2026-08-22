@@ -535,6 +535,9 @@ const fanOutDingTalkBotOwnerChange = createIpcFanOut('dingtalkBot:owner-change')
 const fanOutWecomBotStatusChange = createIpcFanOut('wecomBot:status-changed');
 // Personal WeChat: main owns auth/polling and broadcasts a credential-free state snapshot.
 const fanOutWechatBotStateChange = createIpcFanOut('wechatBot:state-changed');
+// IM 账号边界激活通知(main 广播, 无 payload): 冷启动/换号窗口里个人微信/企微
+// 渠道设置首拉会因 [IM_NOT_READY] 失败, renderer 收到该推送后重拉。
+const fanOutImAccountBoundaryReady = createIpcFanOut('im:account-boundary-ready');
 const fanOutVoiceInputEvent = createIpcFanOut('voice-input:event');
 const fanOutVoiceInputGlobalShortcutTrigger = createIpcFanOut(
   'voice-input:global-shortcut-trigger',
@@ -1834,6 +1837,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }): Promise<{ ok: true }> => ipcRenderer.invoke('profile:update', params),
   onAuthStateChange: fanOutAuthStateChange,
   onAuthSessionExpired: fanOutAuthSessionExpired,
+  /** IM 账号边界激活推送(无 payload)— 渠道设置首拉失败后的重拉信号。 */
+  onImAccountBoundaryReady: fanOutImAccountBoundaryReady,
 
   // ── 使用统计(TapDB)同意闸 ──
   // 真相在 main(<userData>/analytics-settings.json);renderer 只读结论、只提交

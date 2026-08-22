@@ -45,6 +45,7 @@ function authState(dataOwnerId: string, ownerGeneration = 1): AuthStateChangePay
 function installWechatApi(initial: WechatBotState = disconnectedState()) {
   const listeners = new Set<(state: WechatBotState) => void>();
   const authListeners = new Set<(auth: AuthStateChangePayload) => void>();
+  const boundaryReadyListeners = new Set<() => void>();
   const channelState: WechatChannelSettingsState = {
     version: 1,
     workingDir: null,
@@ -71,6 +72,7 @@ function installWechatApi(initial: WechatBotState = disconnectedState()) {
       electronAPI: {
         wechatBot: typeof api;
         onAuthStateChange: (cb: (auth: AuthStateChangePayload) => void) => () => void;
+        onImAccountBoundaryReady: (cb: () => void) => () => void;
       };
     }
   ).electronAPI = {
@@ -78,6 +80,10 @@ function installWechatApi(initial: WechatBotState = disconnectedState()) {
     onAuthStateChange: vi.fn((callback: (auth: AuthStateChangePayload) => void) => {
       authListeners.add(callback);
       return () => authListeners.delete(callback);
+    }),
+    onImAccountBoundaryReady: vi.fn((callback: () => void) => {
+      boundaryReadyListeners.add(callback);
+      return () => boundaryReadyListeners.delete(callback);
     }),
   };
   return {
@@ -87,6 +93,9 @@ function installWechatApi(initial: WechatBotState = disconnectedState()) {
     },
     pushAuth(auth: AuthStateChangePayload) {
       for (const listener of authListeners) listener(auth);
+    },
+    pushBoundaryReady() {
+      for (const listener of boundaryReadyListeners) listener();
     },
   };
 }
@@ -292,6 +301,187 @@ describe('useWechatBot', () => {
       await Promise.resolve();
     });
     expect(result.current.channelSettings?.workingDir).toBe('D:/owner-b/project');
+  });
+
+  it('re-pulls channel settings after the IM account boundary becomes ready', async () => {
+    // 冷启动/换号窗口: 挂载首拉撞上 IM 账号边界未激活, 被 Main fail-closed
+    // 拒绝 — 设置停在 null; Main 激活边界后广播 ready, 到达即重拉成功,
+    // 不必等 focus/设置卡展开。
+    const harness = installWechatApi();
+    harness.api.getChannelSettings
+      .mockRejectedValueOnce(
+        new Error('[WECHAT_WORKING_DIR_UPDATE_FAILED] no active account'),
+      )
+      .mockResolvedValueOnce({
+        version: 1,
+        workingDir: 'D:/owner-a/project',
+        workingDirAvailable: true,
+      });
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(1));
+    expect(result.current.channelSettings).toBeNull();
+
+    act(() => harness.pushBoundaryReady());
+    await waitFor(() =>
+      expect(result.current.channelSettings?.workingDir).toBe('D:/owner-a/project'),
+    );
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops the ready-triggered read that crosses a Cindy account switch', async () => {
+    // ready 重拉在途期间换号: 该响应按旧 owner 代次丢弃, 不覆盖新账号状态。
+    const harness = installWechatApi();
+    harness.api.getChannelSettings.mockRejectedValueOnce(
+      new Error('[WECHAT_WORKING_DIR_UPDATE_FAILED] no active account'),
+    );
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(1));
+
+    // ready 到达 → 重拉挂起(慢速网络盘探测, 可能仍服务于旧 owner 语境)。
+    let resolveReadyRead!: (state: WechatChannelSettingsState) => void;
+    harness.api.getChannelSettings.mockReturnValueOnce(
+      new Promise<WechatChannelSettingsState>((resolve) => {
+        resolveReadyRead = resolve;
+      }),
+    );
+    act(() => harness.pushBoundaryReady());
+    await waitFor(() => expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(2));
+
+    // 换号: 立即失效 + 新 owner 的拉取先返回。
+    harness.api.getChannelSettings.mockResolvedValueOnce({
+      version: 1,
+      workingDir: 'D:/owner-b/project',
+      workingDirAvailable: true,
+    });
+    act(() => {
+      harness.pushAuth(authState('owner-b'));
+    });
+    expect(result.current.channelSettings).toBeNull();
+    await waitFor(() =>
+      expect(result.current.channelSettings?.workingDir).toBe('D:/owner-b/project'),
+    );
+
+    // ready 重拉(旧 owner 代次)此刻才返回 — 不得落地。
+    await act(async () => {
+      resolveReadyRead({ version: 1, workingDir: 'D:/owner-a/project', workingDirAvailable: true });
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings?.workingDir).toBe('D:/owner-b/project');
+  });
+
+  it('recovers the committed pick when the Cindy owner epoch advances during the picker', async () => {
+    // 与企微 TOFU 翻转同构的竞态: 弹窗期间 owner 代次推进, Main 已提交但结果
+    // 按旧代次被丢弃; 代次推进触发的提交前读取先落地旧配置 — 最终必须由
+    // 丢弃后的收敛读取把已落盘状态读回来(修复前停在旧配置)。
+    const harness = installWechatApi();
+    const oldState: WechatChannelSettingsState = {
+      version: 1,
+      workingDir: 'D:/old',
+      workingDirAvailable: true,
+    };
+    const committed: WechatChannelSettingsState = {
+      version: 1,
+      workingDir: 'D:/newly-picked',
+      workingDirAvailable: true,
+    };
+    harness.api.getChannelSettings
+      .mockResolvedValueOnce(oldState) // 挂载读取
+      .mockResolvedValueOnce(oldState) // 代次推进触发的读取(提交前, 先落地)
+      .mockResolvedValueOnce(committed); // 丢弃结果后的收敛读取(Main 已提交)
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(result.current.channelSettings?.workingDir).toBe('D:/old'));
+
+    let resolvePick!: (result: {
+      canceled: boolean;
+      state: { version: 1; workingDir: string; workingDirAvailable: boolean };
+    }) => void;
+    harness.api.chooseWorkingDirectory.mockReturnValueOnce(
+      new Promise<{
+        canceled: boolean;
+        state: { version: 1; workingDir: string; workingDirAvailable: boolean };
+      }>((resolve) => {
+        resolvePick = resolve;
+      }),
+    );
+    let chooseDone: Promise<void> | null = null;
+    act(() => {
+      chooseDone = result.current.chooseWorkingDirectory();
+    });
+    act(() => {
+      harness.pushAuth(authState('owner-b'));
+    });
+    expect(result.current.channelSettings).toBeNull();
+    // 代次推进触发的提交前读取先返回并落地 — 修复前它会一直定住 UI。
+    await waitFor(() => expect(result.current.channelSettings?.workingDir).toBe('D:/old'));
+
+    // Main 已提交并返回; 结果按旧代次丢弃 → 收敛读取落地已提交状态。
+    await act(async () => {
+      resolvePick({
+        canceled: false,
+        state: { version: 1, workingDir: 'D:/newly-picked', workingDirAvailable: true },
+      });
+      await chooseDone;
+    });
+    await waitFor(() => expect(result.current.channelSettings?.workingDir).toBe('D:/newly-picked'));
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(3);
+  });
+
+  it('invalidates the pre-reset read and converges when the Cindy owner epoch advances during the reset', async () => {
+    // reset 版竞态另一半: 代次推进触发的提交前读取晚于丢弃返回 — 必须已被
+    // updateSeq 作废, 最终状态收敛到 Main 删除配置后的默认值。
+    const harness = installWechatApi();
+    const oldState: WechatChannelSettingsState = {
+      version: 1,
+      workingDir: 'D:/old',
+      workingDirAvailable: true,
+    };
+    const defaults: WechatChannelSettingsState = {
+      version: 1,
+      workingDir: null,
+      workingDirAvailable: true,
+    };
+    let resolveFlipRead!: (state: WechatChannelSettingsState) => void;
+    harness.api.getChannelSettings
+      .mockResolvedValueOnce(oldState) // 挂载读取
+      .mockReturnValueOnce( // 代次推进触发的读取(提交前, 挂起晚归)
+        new Promise<WechatChannelSettingsState>((resolve) => {
+          resolveFlipRead = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(defaults); // 丢弃结果后的收敛读取(配置已删除)
+    const { result } = renderHook(() => useWechatBot());
+    await waitFor(() => expect(result.current.channelSettings?.workingDir).toBe('D:/old'));
+
+    let resolveReset!: (state: WechatChannelSettingsState) => void;
+    harness.api.resetWorkingDirectory.mockReturnValueOnce(
+      new Promise<WechatChannelSettingsState>((resolve) => {
+        resolveReset = resolve;
+      }),
+    );
+    let resetDone: Promise<void> | null = null;
+    act(() => {
+      resetDone = result.current.resetWorkingDirectory();
+    });
+    // reset 在途时 owner 代次推进(读取挂起中)。
+    act(() => {
+      harness.pushAuth(authState('owner-b'));
+    });
+    expect(result.current.channelSettings).toBeNull();
+
+    // Main 已删除配置并返回; 结果按旧代次丢弃 → 收敛读取落地「已恢复默认」。
+    await act(async () => {
+      resolveReset(defaults);
+      await resetDone;
+    });
+    await waitFor(() => expect(result.current.channelSettings?.workingDir).toBeNull());
+
+    // 代次推进触发的提交前读取此刻才返回 — 已被作废, 不得落地。
+    await act(async () => {
+      resolveFlipRead(oldState);
+      await Promise.resolve();
+    });
+    expect(result.current.channelSettings?.workingDir).toBeNull();
+    expect(harness.api.getChannelSettings).toHaveBeenCalledTimes(3);
   });
 
   it('skips the focus refresh while a working-dir update is in flight', async () => {

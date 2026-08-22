@@ -73,6 +73,19 @@ export function useWecomBot() {
   }, []);
 
   /**
+   * choose/reset 结果因 owner 翻转被丢弃后的收敛。Main 侧已把新状态落盘并
+   * 返回 — TOFU 首绑定(''→sender)只是渠道维度换 owner, 不动 IM 账号代次,
+   * Main 照常提交; 但 owner 翻转触发的渠道设置读取出发于提交之前, 迟到落地
+   * 会带着提交前的旧配置, 把已落盘的新状态盖掉或停在旧值上。先推进
+   * updateSeq 作废这些在途旧读取, 再为当前 owner 重拉一次 — 重拉在 Main
+   * 返回之后发起, 必然读到已提交状态。
+   */
+  const refetchAfterOwnerFlip = useCallback((): void => {
+    updateSeqRef.current += 1;
+    void fetchChannelSettings();
+  }, [fetchChannelSettings]);
+
+  /**
    * 统一的状态落地。ownerUserId 变化(含首次确定)= 数据主人换了: 立即失效
    * 旧 owner 的渠道设置(绝对路径不得跨账号展示), 作废在途响应, 并重拉新
    * owner 的设置。在途请求无法保证服务于哪个 owner — 宁可多拉一次本地小数据。
@@ -240,7 +253,12 @@ export function useWecomBot() {
       // 原生弹窗 + Main 侧异步探测期间可能切号: 仅 owner 变化才丢弃。
       // 同 owner 内 focus 触发的并发刷新不构成丢弃理由 — 这里返回的是刚
       // 落盘的最新状态, 丢弃它会让新目录显示不出来(实测回归)。
-      if (ownerEpochRef.current !== ownerEpoch) return;
+      if (ownerEpochRef.current !== ownerEpoch) {
+        // owner 翻转丢弃结果, 但 Main 已提交 — 收敛到已落盘状态, 不停在
+        // 翻转触发的提交前旧读取上。
+        refetchAfterOwnerFlip();
+        return;
+      }
       updateSeqRef.current += 1;
       setChannelSettings(result.state);
       if (!result.canceled) toast.success(t('settings.wecomBot.workingDirSaved'));
@@ -254,7 +272,7 @@ export function useWecomBot() {
       isUpdatingWorkingDirRef.current = false;
       setIsUpdatingWorkingDir(false);
     }
-  }, [isUpdatingWorkingDir, t]);
+  }, [isUpdatingWorkingDir, refetchAfterOwnerFlip, t]);
 
   const resetWorkingDirectory = useCallback(async (): Promise<void> => {
     if (isUpdatingWorkingDir) return;
@@ -263,7 +281,11 @@ export function useWecomBot() {
     const ownerEpoch = ownerEpochRef.current;
     try {
       const next = await window.electronAPI.wecomBot.resetWorkingDirectory();
-      if (ownerEpochRef.current !== ownerEpoch) return;
+      if (ownerEpochRef.current !== ownerEpoch) {
+        // owner 翻转丢弃结果, 但 Main 已删除配置 — 收敛到已落盘状态。
+        refetchAfterOwnerFlip();
+        return;
+      }
       updateSeqRef.current += 1;
       setChannelSettings(next);
       toast.success(t('settings.wecomBot.workingDirReset'));
@@ -277,7 +299,7 @@ export function useWecomBot() {
       isUpdatingWorkingDirRef.current = false;
       setIsUpdatingWorkingDir(false);
     }
-  }, [isUpdatingWorkingDir, t]);
+  }, [isUpdatingWorkingDir, refetchAfterOwnerFlip, t]);
 
   /** 拉取最新渠道设置 — 设置卡展开时刷新, 让「目录不可用」警告及时出现。 */
   const refreshChannelSettings = useCallback(async (): Promise<void> => {
@@ -286,6 +308,19 @@ export function useWecomBot() {
     if (isUpdatingWorkingDirRef.current) return;
     await fetchChannelSettings();
   }, [fetchChannelSettings]);
+
+  useEffect(
+    () =>
+      // 冷启动/换号窗口: 首次拉取撞上 IM 账号边界未激活会被 Main fail-closed
+      // 拒绝([IM_NOT_READY]), 设置停在 null; Main 在边界激活时广播 ready,
+      // 到达即重拉, 不必等设置卡展开。迟到守卫不变 — ownerEpoch/updateSeq
+      // 已推进的响应照旧丢弃, 更新在途时 refreshChannelSettings 自会跳过
+      // (其结果由 choose/reset 落地的新状态取代)。
+      window.electronAPI.onImAccountBoundaryReady(() => {
+        void refreshChannelSettings();
+      }),
+    [refreshChannelSettings],
+  );
 
   return {
     botId,

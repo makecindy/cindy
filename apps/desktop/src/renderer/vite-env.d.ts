@@ -2039,6 +2039,11 @@ interface ElectronAPI {
   authConsumeAccountDeletionRestoredNotice: () => Promise<boolean>;
   onAuthStateChange: (callback: (state: AuthStateChangePayload) => void) => () => void;
   onAuthSessionExpired: (callback: (state: AuthSessionExpiredPayload) => void) => () => void;
+  /**
+   * IM 账号边界激活推送(main 广播, 无 payload)。冷启动/换号窗口里个人微信/企微
+   * 渠道设置首拉会因 [IM_NOT_READY] 失败 — 收到该推送即重拉。
+   */
+  onImAccountBoundaryReady: (callback: () => void) => () => void;
 
   // ── 使用统计(TapDB)同意闸 ──
   getAnalyticsSettings: () => Promise<AnalyticsSettingsPayload>;
