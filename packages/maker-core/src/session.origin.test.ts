@@ -528,7 +528,7 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
-  it('keeps leftover idle+done on the prior generation after new-turn tokens', async () => {
+  it('does not let a leftover idle-only tail claim the new turn done after tokens', async () => {
     const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
       holdDispatch: true,
       holdOnSend: 2,
@@ -544,10 +544,10 @@ describe('Session per-turn origin 打标', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
     await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
-    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'done', data: { reason: 'new-turn' }, source: 'codex' });
 
-    const leftoverDone = seen.find((event) => event.type === 'done');
-    expect(leftoverDone?.sessionTurnGeneration).toBe(1);
+    const done = seen.find((event) => event.type === 'done');
+    expect(done?.sessionTurnGeneration).toBe(2);
     releaseDispatch();
     await second;
     await session.close();

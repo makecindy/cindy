@@ -1809,6 +1809,9 @@ export class Session {
   ): number {
     if (observedGeneration > waitStartGeneration) {
       this.staleTerminalQueuedGeneration = null;
+      if (this.isNewTurnProgressEvent(event)) {
+        this.pendingPriorGeneration = null;
+      }
       return observedGeneration;
     }
     const prior = this.pendingPriorGeneration;
@@ -1850,6 +1853,9 @@ export class Session {
     if (belongsToInFlightSend) {
       this.inFlightSendOwnsBlockedWait = false;
       this.staleTerminalQueuedGeneration = null;
+      if (this.isNewTurnProgressEvent(event)) {
+        this.pendingPriorGeneration = null;
+      }
       return inFlightGeneration;
     }
     if (prior !== null && isTerminalAgentErrorEvent(event) && waitStartGeneration !== 0) {
@@ -1863,9 +1869,10 @@ export class Session {
     }
     if (this.isNewTurnProgressEvent(event)) {
       // New-turn tokens prove this generation owns later product terminals.
-      // Keep a leftover idle/error tail on its queued generation so a late
-      // done after first tokens still matches the register fence.
+      // Drop a leftover idle-only tail too: if that old done is lost, the
+      // live done must not inherit staleQueued and get fenced.
       this.pendingPriorGeneration = null;
+      this.staleTerminalQueuedGeneration = null;
     }
     return waitStartGeneration;
   }
