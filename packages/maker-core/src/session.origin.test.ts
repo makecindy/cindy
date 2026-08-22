@@ -474,6 +474,61 @@ describe('Session per-turn origin 打标', () => {
     await session.close();
   });
 
+  it('does not let a leftover terminal clear the live turn origin', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second', { origin: SCHED_ORIGIN });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: true }, source: 'codex' });
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    const leftoverDone = seen.find((event) => event.type === 'done');
+    const secondText = seen.find((event) =>
+      event.type === 'text' && (event.data as { text?: string }).text === 'second progress');
+    expect(leftoverDone?.sessionTurnGeneration).toBe(1);
+    expect(leftoverDone?.turnOrigin).toBeUndefined();
+    expect(secondText?.sessionTurnGeneration).toBe(2);
+    expect(secondText?.turnOrigin).toEqual(SCHED_ORIGIN);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('keeps leftover idle+done on the prior generation after new-turn tokens', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await emit({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+    await emit({ type: 'done', data: { reason: 'old-tail' }, source: 'codex' });
+
+    const leftoverDone = seen.find((event) => event.type === 'done');
+    expect(leftoverDone?.sessionTurnGeneration).toBe(1);
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
   it('排队中的旧 Codex terminal error 不能冒领随后 dispatch 的 attempt token', async () => {
     const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
       dispatchEvent: {

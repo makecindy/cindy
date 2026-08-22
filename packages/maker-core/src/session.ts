@@ -1854,8 +1854,10 @@ export class Session {
       return this.turnGeneration;
     }
     if (this.isNewTurnProgressEvent(event)) {
+      // New-turn tokens prove this generation owns later product terminals.
+      // Keep a leftover idle/error tail on its queued generation so a late
+      // done after first tokens still matches the register fence.
       this.pendingPriorGeneration = null;
-      this.staleTerminalQueuedGeneration = null;
     }
     return waitStartGeneration;
   }
@@ -1868,7 +1870,6 @@ export class Session {
     const isBackgroundEvent = event.turnScope === 'background';
     if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
-    const isCurrentGeneration = observedGeneration === this.turnGeneration;
     if (event.sessionInstanceId === undefined) {
       event.sessionInstanceId = this.instanceId;
     }
@@ -1879,7 +1880,15 @@ export class Session {
         event,
       );
     }
-    this.observeTurnControl(event, observedGeneration);
+    const resolvedGeneration = event.sessionTurnGeneration ?? observedGeneration;
+    // Both the source stamp and the dequeued wait must name this turn.
+    // A leftover tail can be stamped N while next() recaptures N+1, or the
+    // reverse when an in-flight start-failure adopts the new generation from
+    // an older wait. Current-turn cleanup requires agreement.
+    const isCurrentGeneration =
+      resolvedGeneration === this.turnGeneration &&
+      observedGeneration === this.turnGeneration;
+    this.observeTurnControl(event, resolvedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
     if (!isBackgroundEvent && isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
@@ -1934,26 +1943,26 @@ export class Session {
     }
     const listenerEvent = redactEventForListeners(event);
     if (isCurrentGeneration && isTerminal && !isBackgroundEvent) {
-      this.clearTurnControl(observedGeneration);
+      this.clearTurnControl(resolvedGeneration);
     }
     if (isTerminal && !isBackgroundEvent) {
       try {
         const pending = this.turnLifecycleObserver?.onTerminal({
-          turnGeneration: observedGeneration,
+          turnGeneration: resolvedGeneration,
           event: listenerEvent,
           isCurrentGeneration,
         });
         if (pending) {
           void Promise.resolve(pending).catch((error) => {
             this.logger.warn('turn lifecycle terminal cleanup failed', {
-              turnGeneration: observedGeneration,
+              turnGeneration: resolvedGeneration,
               error: String(error),
             });
           });
         }
       } catch (error) {
         this.logger.warn('turn lifecycle terminal cleanup failed', {
-          turnGeneration: observedGeneration,
+          turnGeneration: resolvedGeneration,
           error: String(error),
         });
       }
