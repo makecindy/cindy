@@ -278,8 +278,9 @@ describe('Session turn stall watchdog', () => {
       await vi.advanceTimersByTimeAsync(0);
 
       const done = seen.find((ev) => ev.type === 'done');
-      // next() started at construction (generation 0) and stayed pending across both sends.
-      expect(done?.sessionTurnGeneration).toBe(0);
+      // The constructor wait starts at generation 0; the send that is current
+      // when that wait finally dequeues owns the event.
+      expect(done?.sessionTurnGeneration).toBe(2);
       expect(done?.sessionInstanceId).toBe(session.instanceId);
     } finally {
       vi.useRealTimers();

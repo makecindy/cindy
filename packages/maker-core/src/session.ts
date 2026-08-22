@@ -424,6 +424,10 @@ export class Session {
   private terminalErrorDrainGeneration: number | null = null;
   private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private sendReservation: SendReservation | null = null;
+  /** True while runEventLoop is blocked in iterator.next(). */
+  private eventLoopAwaiting = false;
+  /** The blocked next() that was pending when the current send entered handle.send. */
+  private inFlightSendOwnsBlockedWait = false;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
    * AgentEvent.turnOrigin 上,turn 终止(isTerminalTurnEvent)后清空 — 共享
@@ -1603,6 +1607,7 @@ export class Session {
       gracefulStopState: 'none',
       gracefulStopPromise: null,
     };
+    this.inFlightSendOwnsBlockedWait = this.eventLoopAwaiting;
   }
 
   private clearTurnControl(generation: number): void {
@@ -1751,6 +1756,24 @@ export class Session {
    * 并像用户插话一样暂停 goal,scheduler 的 IM 转播则直接忽略,卡片永不 finalize
    * (review #944 第二轮)。
    */
+  private resolveSessionTurnGeneration(queuedGeneration: number): number {
+    const inFlightGeneration = this.sendReservation?.generation;
+    const belongsToInFlightSend =
+      this.inFlightSendOwnsBlockedWait &&
+      typeof inFlightGeneration === 'number' &&
+      inFlightGeneration === this.turnGeneration &&
+      this.turnControlState?.generation === inFlightGeneration;
+    if (belongsToInFlightSend) {
+      this.inFlightSendOwnsBlockedWait = false;
+      return inFlightGeneration;
+    }
+    // The constructor wait starts at generation 0. The first send owns that wait.
+    if (queuedGeneration === 0 && this.turnGeneration > 0) {
+      return this.turnGeneration;
+    }
+    return queuedGeneration;
+  }
+
   private fanOutEvent(
     event: AgentEvent,
     observedGeneration = this.turnGeneration,
@@ -1764,10 +1787,9 @@ export class Session {
       event.sessionInstanceId = this.instanceId;
     }
     if (event.sessionTurnGeneration === undefined) {
-      // Stamp the generation that owned this next() wait, not an adopted later
-      // generation. A leftover terminal dequeued after the next send must keep
-      // the older value so host can fence it.
-      event.sessionTurnGeneration = queuedGeneration;
+      event.sessionTurnGeneration = this.resolveSessionTurnGeneration(
+        queuedGeneration,
+      );
     }
     this.observeTurnControl(event, observedGeneration);
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
@@ -2131,7 +2153,13 @@ export class Session {
         const awaitingCanAdoptNextGeneration =
           awaitingGeneration === 0 ||
           this.terminalEventObservedGeneration === awaitingGeneration;
-        const result = await iterator.next();
+        this.eventLoopAwaiting = true;
+        let result: IteratorResult<AgentEvent>;
+        try {
+          result = await iterator.next();
+        } finally {
+          this.eventLoopAwaiting = false;
+        }
         if (result.done) break;
         const event = result.value;
         this.releaseSendReservationIfObserved();

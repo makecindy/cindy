@@ -355,9 +355,41 @@ describe('Session per-turn origin 打标', () => {
       type: 'error',
       turnOrigin: SCHED_ORIGIN,
       turnAttemptToken: 9,
+      sessionTurnGeneration: 1,
+      sessionInstanceId: session.instanceId,
     }));
     releaseDispatch();
     await send;
+    await session.close();
+  });
+
+  it('prior-turn next() still stamps an in-flight Codex start-failure as the new generation', async () => {
+    const { handle, emit, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    const second = session.send('second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const startFail = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'second failed');
+    expect(startFail?.sessionTurnGeneration).toBe(2);
+    expect(startFail?.sessionInstanceId).toBe(session.instanceId);
+    releaseDispatch();
+    await second;
     await session.close();
   });
 
@@ -394,6 +426,7 @@ describe('Session per-turn origin 打标', () => {
       event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
     expect(late?.turnAttemptToken).toBeUndefined();
     expect(late?.turnOrigin).toBeUndefined();
+    expect(late?.sessionInstanceId).toBe(session.instanceId);
     releaseDispatch();
     await second;
     await session.close();

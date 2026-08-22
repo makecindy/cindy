@@ -6309,6 +6309,12 @@ describe('AgentInputCoordinator steer transaction', () => {
           sessionInstanceId: 'harness-session',
         }),
       ).toBe(true);
+      expect(
+        h.coordinator.isFencedStaleTerminal(sid, {
+          sessionTurnGeneration: 5,
+          sessionInstanceId: 'harness-session',
+        }),
+      ).toBe(false);
       h.coordinator.onTurnEvent(sid, 'error', 'old turn died late', undefined, {
         sessionTurnGeneration: 0,
         sessionInstanceId: 'harness-session',
