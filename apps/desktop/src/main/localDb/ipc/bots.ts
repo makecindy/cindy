@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import type { OpenDialogOptions } from 'electron';
 import { and, desc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
 
@@ -40,6 +40,41 @@ import { readGitSafetySettings } from '../../maker-host/git-safety-settings-stor
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace.js';
 import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
 import { botProfileContentChanged, mergeBotProfileCapabilities } from './botProfileVersioning.js';
+import { writeBotProfileFolder } from '../../maker-ipc/botProfileFolder.js';
+import { createLogger } from '../../logger.js';
+
+const log = createLogger('bots');
+
+/**
+ * 把这份档案摊到伙伴自己的家(`<userData>/bots/<botId>/`)。
+ *
+ * 分工见 botProfileFolder.ts 的开头:**文件是当前值与编辑面**(用户拿编辑器改、
+ * 伙伴自己用文件工具改都落这里),**`bot_profile_versions` 行是运行时的冻结快照**
+ * (任务启动认版本号,整轮不变)。所以改完文件不会让进行中的对话当场变身,而是
+ * 下一轮生效 —— 契约 9.3 节要的第三种状态。
+ *
+ * `userContextSource` 存在 capabilities 里,但它在磁盘上有自己的位置
+ * (`memories/USER.md`,与 Hermes 同路径),所以这里拆出来单独写。
+ *
+ * 写文件失败**不让保存整个失败**:数据库那份才是运行时读的东西,文件只影响
+ * 「能不能用编辑器改」。吞掉异常但记一笔,不静默。
+ */
+async function syncBotProfileFolder(
+  botId: string,
+  identitySource: string,
+  config: Record<string, unknown>,
+): Promise<void> {
+  const { userContextSource, ...rest } = config;
+  try {
+    await writeBotProfileFolder(app.getPath('userData'), botId, {
+      identitySource,
+      userContextSource: typeof userContextSource === 'string' ? userContextSource : '',
+      config: rest,
+    });
+  } catch (cause) {
+    log.warn('write bot profile folder failed', { botId, error: String(cause) });
+  }
+}
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
 import { normalizeBotSessionControlMode } from '../../../shared/botSessionControl.js';
 import { normalizeBotAutomation } from '../../../shared/botAutomationCapability.js';
@@ -981,6 +1016,12 @@ export function registerBotIpc(): void {
       eventSubscription,
       now,
     });
+    await syncBotProfileFolder(id, identitySource, {
+      ...capabilities,
+      skills,
+      userContextSource,
+      ...(gender ? { gender } : {}),
+    });
     return readProfile(db, id);
   });
 
@@ -1105,6 +1146,7 @@ export function registerBotIpc(): void {
       expectedCurrentVersion: current.currentVersion,
       now,
     });
+    await syncBotProfileFolder(id, nextIdentitySource, nextConfig);
     return readProfile(db, id);
   });
 

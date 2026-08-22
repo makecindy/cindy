@@ -84,9 +84,19 @@ function botDirName(botId: string): string {
   return safe;
 }
 
-/** 一个伙伴的技能根目录(= Claude Code 本地 plugin 根)。 */
+/**
+ * 一个伙伴的技能根目录(= Claude Code 本地 plugin 根)。
+ *
+ * 这里就是**伙伴的家**(`botProfileFolder.ts`)。技能原来单独住在
+ * `<userData>/bot-skills/<botId>/`,与灵魂、用户画像、能力位分居两处;现在一个
+ * 伙伴一个家,技能是家里的 `skills/`。搬家由 `migrateBotProfileFolder` 完成,
+ * 内容与 slug 都不变,挂载路径每次会话现算、没有任何地方持久化过旧路径。
+ *
+ * 目录布局刻意仍长成 CC 本地 plugin 的样子(`.claude-plugin/` + `skills/`),
+ * 与 SOUL.md 等文件互不干扰 —— CC 只认那两个名字。
+ */
 export function botSkillRootDir(userDataDir: string, botId: string): string {
-  return path.join(userDataDir, 'bot-skills', botDirName(botId));
+  return path.join(userDataDir, 'bots', botDirName(botId));
 }
 
 /** 技能真正躺的地方。CC plugin 规范要求这一层就叫 `skills`。 */

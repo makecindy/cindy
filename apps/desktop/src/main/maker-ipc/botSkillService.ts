@@ -10,6 +10,7 @@
 import { app } from 'electron';
 import { and, eq } from 'drizzle-orm';
 
+import { migrateBotSkillsIntoProfileFolder } from './botProfileFolder.js';
 import {
   BotSkillStoreError,
   botSkillRootDir,
@@ -56,6 +57,22 @@ export interface BotSkillServiceDeps {
 
 function userDataDirOf(deps: BotSkillServiceDeps): string {
   return deps.userDataDir ?? app.getPath('userData');
+}
+
+/**
+ * userData 根,外加「这个伙伴的技能已经搬进它自己的家」这条保证。
+ *
+ * 技能原来单独住在 `<userData>/bot-skills/<botId>/`,现在归到伙伴的家
+ * (`<userData>/bots/<botId>/`)。搬家挂在每个读写入口前而不是只挂在启动时:
+ * 任何一条路径进来都不该读到旧家 —— 漏一条就是「技能凭空消失」。
+ *
+ * 幂等且便宜:搬完之后每次只是一次失败的 `access`。搬家失败不阻断本次操作
+ * (最坏是这次读到空技能表),但绝不会丢:旧目录只在 rename 成功后才删。
+ */
+async function skillHomeOf(deps: BotSkillServiceDeps, botId: string): Promise<string> {
+  const dir = userDataDirOf(deps);
+  await migrateBotSkillsIntoProfileFolder(dir, botId).catch(() => {});
+  return dir;
 }
 
 async function defaultResolveBotId(callerSessionId: string): Promise<
@@ -115,7 +132,7 @@ export async function saveBotSkillForSession(
   const owner = await (deps.resolveBotId ?? defaultResolveBotId)(params.callerSessionId);
   if (!owner.ok) return owner;
   try {
-    const { record, created } = await saveBotSkill(userDataDirOf(deps), owner.botId, {
+    const { record, created } = await saveBotSkill(await skillHomeOf(deps, owner.botId), owner.botId, {
       name: params.name,
       description: params.description,
       body: params.body,
@@ -145,7 +162,7 @@ export async function listBotSkillsForSession(
   const owner = await (deps.resolveBotId ?? defaultResolveBotId)(params.callerSessionId);
   if (!owner.ok) return owner;
   try {
-    const skills = await listBotSkills(userDataDirOf(deps), owner.botId);
+    const skills = await listBotSkills(await skillHomeOf(deps, owner.botId), owner.botId);
     return { ok: true, skills: skills.map(toWire) };
   } catch (cause) {
     return storeError(cause);
@@ -157,7 +174,7 @@ export async function listBotSkillsForBot(
   botId: string,
   deps: BotSkillServiceDeps = {},
 ): Promise<BotSkillWireSummary[]> {
-  return (await listBotSkills(userDataDirOf(deps), botId)).map(toWire);
+  return (await listBotSkills(await skillHomeOf(deps, botId), botId)).map(toWire);
 }
 
 /** 设置页展开某条技能时读正文。 */
@@ -166,7 +183,7 @@ export async function readBotSkillForBot(
   slug: string,
   deps: BotSkillServiceDeps = {},
 ): Promise<BotSkillDetail | null> {
-  const record = await readBotSkill(userDataDirOf(deps), botId, slug);
+  const record = await readBotSkill(await skillHomeOf(deps, botId), botId, slug);
   return record
     ? {
         slug: record.slug,
@@ -184,7 +201,7 @@ export async function deleteBotSkillForBot(
   slug: string,
   deps: BotSkillServiceDeps = {},
 ): Promise<boolean> {
-  return deleteBotSkill(userDataDirOf(deps), botId, slug);
+  return deleteBotSkill(await skillHomeOf(deps, botId), botId, slug);
 }
 
 /**
@@ -200,7 +217,7 @@ export async function collectBotOwnSkillMounts(
   pluginRoot: string;
   skills: { name: string; description: string; path: string }[];
 }> {
-  const userDataDir = userDataDirOf(deps);
+  const userDataDir = await skillHomeOf(deps, botId);
   const skills = await listBotSkills(userDataDir, botId);
   return {
     pluginRoot: botSkillRootDir(userDataDir, botId),

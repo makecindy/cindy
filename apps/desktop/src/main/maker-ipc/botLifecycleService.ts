@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { and, eq } from 'drizzle-orm';
 import type { Maker } from '@cindy/maker-core';
 
@@ -18,6 +18,7 @@ import {
   botSessionLinks,
   sessions,
 } from '../localDb/schema.js';
+import { removeBotProfileFolder } from './botProfileFolder.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
@@ -511,6 +512,23 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       sessionIds,
       request.keepTaskHistory === true,
     );
+
+    /*
+      伙伴的家一起走 —— `<userData>/bots/<botId>/` 里躺着 SOUL.md、用户画像、
+      技能正文,全是用户内容。数据库行删了却把它留在盘上,就是一份没人管得着、
+      也没人看得见的残留。
+
+      删失败不改变「已删除」这个结论(数据库那边已经是终态了),但要记一笔:
+      沉默地留下用户内容是隐私问题,不是小事。
+    */
+    try {
+      await removeBotProfileFolder(app.getPath('userData'), request.botId);
+    } catch (cause) {
+      log.warn('remove bot profile folder failed', {
+        botId: request.botId,
+        error: String(cause),
+      });
+    }
 
     const result = lifecycleResult(request.botId, 'delete', 'deleted', {
       sessions: sessionIds.length,

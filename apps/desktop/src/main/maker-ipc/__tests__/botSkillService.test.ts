@@ -104,9 +104,10 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     const mounts = await collectBotOwnSkillMounts('bot-1', { userDataDir });
     expect(mounts.skills).toHaveLength(1);
     expect(mounts.skills[0].path).toBe(
-      path.join(userDataDir, 'bot-skills', 'bot-1', 'skills', 'weekly-report'),
+      path.join(userDataDir, 'bots', 'bot-1', 'skills', 'weekly-report'),
     );
-    expect(mounts.pluginRoot).toBe(path.join(userDataDir, 'bot-skills', 'bot-1'));
+    // 技能住在伙伴自己的家里,与 SOUL.md、config.json 同一个目录。
+    expect(mounts.pluginRoot).toBe(path.join(userDataDir, 'bots', 'bot-1'));
     // plugin 根必须真的带清单,否则 Claude Code 不会把它当 local plugin 挂上。
     await expect(
       fs.stat(path.join(mounts.pluginRoot, '.claude-plugin', 'plugin.json')),

@@ -190,8 +190,8 @@ describe('隔离 — 一个伙伴的技能不进另一个伙伴的目录', () =>
     expect(botSkillRootDir(userDataDir, 'bot-1')).not.toBe(botSkillRootDir(userDataDir, 'bot-2'));
   });
 
-  it('sanitises a botId that would otherwise walk out of bot-skills/', async () => {
+  it('sanitises a botId that would otherwise walk out of the bot home', async () => {
     const root = botSkillRootDir(userDataDir, '../escape');
-    expect(path.relative(path.join(userDataDir, 'bot-skills'), root)).toBe('-escape');
+    expect(path.relative(path.join(userDataDir, 'bots'), root)).toBe('-escape');
   });
 });
