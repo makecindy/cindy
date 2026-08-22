@@ -71,13 +71,15 @@ export interface WorkLouderCodexLightingSink {
   ): void;
   setDeviceEnabled?(enabled: boolean): void;
   setPresenceHandler?(
-    handler: ((
-      present: boolean,
-      identity?: {
-        deviceType: 'codex-micro' | 'creator-micro-2';
-        isUsbConnection: boolean;
-      },
-    ) => void) | null,
+    handler:
+      | ((
+          present: boolean,
+          identity?: {
+            deviceType: 'codex-micro' | 'creator-micro-2';
+            isUsbConnection: boolean;
+          },
+        ) => void)
+      | null,
   ): void;
   dispose(): Promise<void>;
 }
@@ -603,7 +605,15 @@ export class WorkLouderCodexLightingController {
       const resolved = WORKLOUDER_CODEX_KEYCAP_ACTIONS[action.keycapId];
       if (resolved) this.executeAction(resolved, focusTask);
     } else {
-      this.dispatchRendererAction(action);
+      this.dispatchRendererAction(
+        action.type === 'command' &&
+          (action.commandId === 'approval.approve' || action.commandId === 'approval.decline')
+          ? {
+              ...action,
+              issuedAtMs: performance.timeOrigin + performance.now(),
+            }
+          : action,
+      );
     }
   }
 
@@ -672,7 +682,10 @@ export class WorkLouderCodexLightingController {
   }
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
-    const baseFrame = createWorkLouderCodexLightingFrame(this.lightingActivity(), this.slotSessionIds);
+    const baseFrame = createWorkLouderCodexLightingFrame(
+      this.lightingActivity(),
+      this.slotSessionIds,
+    );
     const baseFrameKey = JSON.stringify(baseFrame);
     const baseFrameChanged = baseFrameKey !== this.lastBaseFrameKey;
     this.lastBaseFrameKey = baseFrameKey;

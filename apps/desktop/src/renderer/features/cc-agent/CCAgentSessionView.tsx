@@ -195,6 +195,11 @@ import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
 import {
+  bindInputDeviceApprovalActionToTarget,
+  createVisibleInputDeviceApprovalTarget,
+  type InputDeviceApprovalTarget,
+} from '@/lib/inputDeviceActions';
+import {
   copyCurrentTaskMarkdown,
   forkCurrentTaskFromKeyboard,
 } from '@/lib/workLouderCodexTaskActions';
@@ -1554,6 +1559,17 @@ export function CCAgentSessionView({
     updateQueueItem,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  const hardwareApprovalTargetRef = useRef<InputDeviceApprovalTarget | null>(null);
+  useLayoutEffect(() => {
+    // Establish the identity/time fence only after this card has committed.
+    // An action produced while A was still visible but delivered after B's
+    // commit must therefore compare older than B and become a no-op.
+    hardwareApprovalTargetRef.current = createVisibleInputDeviceApprovalTarget(
+      pendingPermission?.requestId ?? null,
+      pendingPlanReview?.requestId ?? null,
+      performance.timeOrigin + performance.now(),
+    );
+  }, [pendingPermission?.requestId, pendingPlanReview?.requestId]);
   useEffect(() => {
     if (!sessionId || !isOrcaLeadSessionView || !historyLoaded) return;
     const recoveredAssignment = getRecoverableDeferredUiAssignment({
@@ -1575,30 +1591,29 @@ export function CCAgentSessionView({
     return subscribeWorkLouderCodexAction((action) => {
       if (action.type !== 'command') return false;
       if (!sessionId || !ownsHardwareTaskActions) return false;
-      if (action.commandId === 'approval.approve') {
-        if (pendingPermission) {
-          respondToPermission({ behavior: 'allow' });
+      if (action.commandId === 'approval.approve' || action.commandId === 'approval.decline') {
+        const hardwareApprovalTarget = hardwareApprovalTargetRef.current;
+        const target = bindInputDeviceApprovalActionToTarget(action, hardwareApprovalTarget);
+        if (!target) return hardwareApprovalTarget !== null;
+        if (target.kind === 'permission') {
+          respondToPermission(
+            target.requestId,
+            action.commandId === 'approval.approve'
+              ? { behavior: 'allow' }
+              : {
+                  behavior: 'deny',
+                  message: 'User denied',
+                  decisionClassification: 'user_reject',
+                },
+          );
           return true;
         }
-        if (pendingPlanReview) {
-          respondToPlanReview(pendingPlanReview.requestId, true);
+        if (action.commandId === 'approval.approve') {
+          respondToPlanReview(target.requestId, true);
           return true;
         }
-        return false;
-      }
-      if (action.commandId === 'approval.decline') {
-        if (pendingPermission) {
-          respondToPermission({
-            behavior: 'deny',
-            message: 'User denied',
-            decisionClassification: 'user_reject',
-          });
-          return true;
-        }
-        if (pendingPlanReview) {
-          cancelPlanReview(pendingPlanReview.requestId);
-          return true;
-        }
+        cancelPlanReview(target.requestId);
+        return true;
       }
       if (action.commandId === 'forkTask') {
         if (!canNavigateSession) return false;
@@ -1628,8 +1643,6 @@ export function CCAgentSessionView({
     cancelPlanReview,
     ownsHardwareTaskActions,
     navigate,
-    pendingPermission,
-    pendingPlanReview,
     respondToPermission,
     respondToPlanReview,
     sessionId,
@@ -4547,6 +4560,7 @@ export function CCAgentSessionView({
                   </>
                 ) : pendingPermission ? (
                   <PermissionPrompt
+                    key={pendingPermission.requestId}
                     permission={pendingPermission}
                     onRespond={respondToPermission}
                   />
@@ -5171,7 +5185,15 @@ function RunningStatusBar({
     }
     shimmerPlayingRef.current = true;
     setShimmerCycle((n) => n + 1);
-  }, [visible, suppressContent, reducedMotion, status, tokenUsage, outputTokens, generationDurationMs]);
+  }, [
+    visible,
+    suppressContent,
+    reducedMotion,
+    status,
+    tokenUsage,
+    outputTokens,
+    generationDurationMs,
+  ]);
 
   // Animate the token counter so live mid-turn updates feel like a smoothly-
   // incrementing number. Rate does not use this: locally ticking the

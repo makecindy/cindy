@@ -70,6 +70,7 @@ type ResolveCall = { requestId: string; decision: Record<string, unknown> };
 function makeFakeHost(deviceId: string) {
   let pushCb: ((p: RemotePush) => void) | null = null;
   const resolved: ResolveCall[] = [];
+  const deferredResolves = new Map<string, { promise: Promise<void>; settle: () => void }>();
   // 被控端「当前挂起交互」快照(maker:get-pending-interactions 返回它)。
   const pending = new Map<
     string,
@@ -78,12 +79,15 @@ function makeFakeHost(deviceId: string) {
 
   const invoke = vi.fn(async (_d: string, channel: string, args: unknown[]) => {
     switch (channel) {
-      case 'maker:resolve-interaction':
+      case 'maker:resolve-interaction': {
+        const requestId = args[0] as string;
         resolved.push({
-          requestId: args[0] as string,
+          requestId,
           decision: args[1] as Record<string, unknown>,
         });
+        await deferredResolves.get(requestId)?.promise;
         return null;
+      }
       case 'maker:get-pending-interactions':
         return pending.get(args[0] as string) ?? [];
       case 'local-db:messages:list':
@@ -99,6 +103,19 @@ function makeFakeHost(deviceId: string) {
     deviceId,
     invoke,
     resolved,
+    /** Keep one resolve RPC pending until the returned callback is invoked. */
+    deferResolve(requestId: string): () => void {
+      let settle = () => {};
+      const promise = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      deferredResolves.set(requestId, { promise, settle });
+      return () => {
+        const deferred = deferredResolves.get(requestId);
+        deferredResolves.delete(requestId);
+        deferred?.settle();
+      };
+    },
     /** 被控端「已挂起」一条交互(不发 live push)—— 模拟控制端窗口在交互之后才打开的场景。 */
     seedPending(sessionId: string, request: Record<string, unknown>, persistId?: string): void {
       const arr = pending.get(sessionId) ?? [];
@@ -248,7 +265,7 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(pending?.requestId).toBe('perm-1');
     expect(pending?.toolName).toBe('Bash');
 
-    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    makerChatStore.respondToPermission(s, 'perm-1', { behavior: 'allow' });
     await flush();
 
     // 经隧道回被控端(不走本机 IPC)。
@@ -256,6 +273,146 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(host.resolved[0].requestId).toBe('perm-1');
     expect(host.resolved[0].decision).toMatchObject({ kind: 'permission', behavior: 'allow' });
     expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
+  it('同一会话并行 permission 按 FIFO 展示和回传,不会丢掉先到的请求', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'parallel-first',
+      toolName: 'Read',
+      input: { file_path: '/outside/first.md' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'parallel-second',
+      toolName: 'Read',
+      input: { file_path: '/outside/second.md' },
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('parallel-first');
+
+    makerChatStore.respondToPermission(s, 'parallel-first', { behavior: 'allow' });
+    await flush();
+    expect(host.resolved[0]?.requestId).toBe('parallel-first');
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('parallel-second');
+
+    // B carries its own request identity, so an independent response is not
+    // silently dropped by A's same-request dedupe window.
+    makerChatStore.respondToPermission(s, 'parallel-second', { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'parallel-first',
+      'parallel-second',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
+  it('duplicate permission response cannot authorize the promoted queue head', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'duplicate-first',
+      toolName: 'Read',
+      input: { file_path: '/first.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'duplicate-second',
+      toolName: 'Read',
+      input: { file_path: '/second.txt' },
+    });
+    await flush();
+
+    // Two synchronous approval commands model a double-click / key repeat.
+    makerChatStore.respondToPermission(s, 'duplicate-first', { behavior: 'allow' });
+    makerChatStore.respondToPermission(s, 'duplicate-first', {
+      behavior: 'deny',
+      message: 'duplicate',
+    });
+    await flush();
+
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['duplicate-first']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('duplicate-second');
+  });
+
+  it('双击第二击在 IPC 已 settle 后到达也不能误批推广后的新卡', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'async-double-first',
+      toolName: 'Read',
+      input: { file_path: '/first.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'async-double-second',
+      toolName: 'Read',
+      input: { file_path: '/second.txt' },
+    });
+    await flush();
+
+    // The delayed second event still belongs to A even though B is now visible.
+    makerChatStore.respondToPermission(s, 'async-double-first', { behavior: 'allow' });
+    await flush();
+    makerChatStore.respondToPermission(s, 'async-double-first', {
+      behavior: 'deny',
+      message: 'double-click',
+    });
+    await flush();
+
+    // 第二次输入被防重窗口挡下,只能批掉第一张卡,第二张卡仍挂起。
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['async-double-first']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('async-double-second');
+
+    // A distinct response for B works immediately; there is no 300ms dead zone.
+    makerChatStore.respondToPermission(s, 'async-double-second', { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'async-double-first',
+      'async-double-second',
+    ]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
+  });
+
+  it('dismissal releases only A: delayed A input is ignored and B responds immediately', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'dismiss-guard-a',
+      toolName: 'Read',
+      input: { file_path: '/a.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'dismiss-guard-b',
+      toolName: 'Read',
+      input: { file_path: '/b.txt' },
+    });
+    await flush();
+
+    makerChatStore.respondToPermission(s, 'dismiss-guard-a', { behavior: 'allow' });
+    await flush();
+    host.hostDismiss(s, 'dismiss-guard-a', 'resolved', { behavior: 'allow' });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('dismiss-guard-b');
+
+    // A's delayed input keeps A's identity and cannot act on B.
+    makerChatStore.respondToPermission(s, 'dismiss-guard-a', { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['dismiss-guard-a']);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('dismiss-guard-b');
+
+    // B is independent and can be answered immediately.
+    makerChatStore.respondToPermission(s, 'dismiss-guard-b', { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'dismiss-guard-a',
+      'dismiss-guard-b',
+    ]);
     expect(makerChatStore.getSnapshot(s).pendingPermission).toBeNull();
   });
 
@@ -268,12 +425,120 @@ describe('device-link 远程交互往返 — permission', () => {
       input: {},
     });
     await flush();
-    makerChatStore.respondToPermission(s, { behavior: 'deny', message: '不允许' });
+    makerChatStore.respondToPermission(s, 'perm-2', { behavior: 'deny', message: '不允许' });
     await flush();
     expect(host.resolved[0]).toMatchObject({
       requestId: 'perm-2',
       decision: { kind: 'permission', behavior: 'deny', reason: '不允许' },
     });
+  });
+
+  it('authoritative permission snapshot replaces a stale displayed request after reconnect', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'stale-permission',
+      toolName: 'Read',
+      input: { file_path: '/stale.txt' },
+    });
+    await flush();
+
+    // The renderer missed the dismissal for A. The host snapshot is now the
+    // source of truth and contains only B, which must become the visible head.
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'fresh-permission',
+      toolName: 'Read',
+      input: { file_path: '/fresh.txt' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('fresh-permission');
+    expect(makerChatStore.getSnapshot(s).pendingPermissionQueue).toEqual([]);
+  });
+
+  it('reconnect snapshot drops A guard: stale A is ignored while B works with A RPC pending', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'reconnect-a',
+      toolName: 'Read',
+      input: { file_path: '/a.txt' },
+    });
+    await flush();
+
+    const settleA = host.deferResolve('reconnect-a');
+    makerChatStore.respondToPermission(s, 'reconnect-a', { behavior: 'allow' });
+    await flush();
+
+    // A was handled by the host while this controller was disconnected. Its
+    // authoritative reconnect snapshot contains only B; A's invoke is still pending.
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'reconnect-b',
+      toolName: 'Write',
+      input: { file_path: '/b.txt' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('reconnect-b');
+
+    makerChatStore.respondToPermission(s, 'reconnect-a', {
+      behavior: 'deny',
+      message: 'late A input',
+    });
+    makerChatStore.respondToPermission(s, 'reconnect-b', { behavior: 'allow' });
+    await flush();
+
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['reconnect-a', 'reconnect-b']);
+    settleA();
+    await flush();
+  });
+
+  it('A/B/C delayed settles cannot release a newer request guard', async () => {
+    const s = openRemoteSession();
+    for (const requestId of ['ordered-a', 'ordered-b', 'ordered-c']) {
+      host.hostInteraction(s, {
+        kind: 'permission',
+        requestId,
+        toolName: 'Read',
+        input: { file_path: `/${requestId}.txt` },
+      });
+    }
+    await flush();
+
+    const settleA = host.deferResolve('ordered-a');
+    const settleB = host.deferResolve('ordered-b');
+    const settleC = host.deferResolve('ordered-c');
+    makerChatStore.respondToPermission(s, 'ordered-a', { behavior: 'allow' });
+    makerChatStore.respondToPermission(s, 'ordered-b', { behavior: 'allow' });
+    makerChatStore.respondToPermission(s, 'ordered-c', { behavior: 'allow' });
+    await flush();
+
+    // The host still reports C while its RPC is pending. Replaying that snapshot
+    // restores the card, but C's own guard must continue to reject duplicates.
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'ordered-c',
+      toolName: 'Read',
+      input: { file_path: '/ordered-c.txt' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+    settleA();
+    await flush();
+    makerChatStore.respondToPermission(s, 'ordered-c', {
+      behavior: 'deny',
+      message: 'duplicate C',
+    });
+    await flush();
+
+    expect(host.resolved.map((item) => item.requestId)).toEqual([
+      'ordered-a',
+      'ordered-b',
+      'ordered-c',
+    ]);
+    settleB();
+    settleC();
+    await flush();
   });
 });
 
@@ -605,7 +870,7 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
     expect(makerChatStore.getSnapshot(s1).pendingPermission?.requestId).toBe('p-s1');
     expect(makerChatStore.getSnapshot(s2).pendingPermission?.requestId).toBe('p-s2');
 
-    makerChatStore.respondToPermission(s2, { behavior: 'allow' });
+    makerChatStore.respondToPermission(s2, 'p-s2', { behavior: 'allow' });
     await flush();
     expect(host.resolved).toHaveLength(1);
     expect(host.resolved[0].requestId).toBe('p-s2');
@@ -624,7 +889,7 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
     await flush();
     expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('local-perm');
 
-    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    makerChatStore.respondToPermission(s, 'local-perm', { behavior: 'allow' });
     await flush();
     expect(local.localResolveInteraction).toHaveBeenCalledWith(
       'local-perm',
