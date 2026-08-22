@@ -6,6 +6,7 @@ import {
   useState,
   type CSSProperties,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -49,8 +50,10 @@ import {
   LoginSkipEntry,
   LoginSocialButton,
   LoginSocialRow,
+  LoginSsoOrgHistoryList,
   LoginTextLink,
   LoginTitleBlock,
+  ssoOrgHistoryOptionId,
 } from './LoginControls';
 import { useResendCountdown } from './useResendCountdown';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
@@ -67,6 +70,7 @@ import {
 } from './loginDesignTokens';
 import { PANEL_FIXED_SCALE } from './loginScale';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from './consentGate';
+import { getSsoOrgHistory } from '@/state/ssoOrgHistory';
 
 /**
  * 标题旁区域徽标的 i18n key(2026-07-27 拍板)。
@@ -342,7 +346,10 @@ export function LoginPage() {
   // (规则 9:能代码化的格式校验不甩给 server 往返);与 server errorCode 互斥展示
   // (本地错误优先),输入变更即清除。null = 无本地格式错误。
   const [identifierFormatError, setIdentifierFormatError] = useState<VerificationKind | null>(null);
-  const [ssoOrg, setSsoOrg] = useState('');
+  const [ssoOrgHistory, setSsoOrgHistory] = useState(() => getSsoOrgHistory());
+  const [ssoOrg, setSsoOrg] = useState(() => ssoOrgHistory[0] ?? '');
+  const [ssoOrgHistoryOpen, setSsoOrgHistoryOpen] = useState(false);
+  const [ssoOrgHistoryActiveIndex, setSsoOrgHistoryActiveIndex] = useState(-1);
   const [verificationCode, setVerificationCode] = useState('');
   const [ssoVerificationCode, setSsoVerificationCode] = useState('');
   const [bindingContact, setBindingContact] = useState('');
@@ -602,9 +609,51 @@ export function LoginPage() {
     if (localModePendingRef.current) return;
     const value = ssoOrg.trim();
     if (!value) return;
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
     // 组织区域先静默发现；仅当结果与安装包区域不一致时，main 状态机进入
     // realm-confirmation，由下方弹窗在继续 SSO 前向用户确认。
-    void dispatch({ type: 'discover-sso-org', org: value });
+    void dispatch({ type: 'discover-sso-org', org: value }).finally(() => {
+      setSsoOrgHistory(getSsoOrgHistory());
+    });
+  };
+
+  const openSsoOrgHistory = () => {
+    if (ssoOrgHistory.length <= 1) return;
+    setSsoOrgHistoryOpen(true);
+    setSsoOrgHistoryActiveIndex(-1);
+  };
+
+  const selectSsoOrgHistory = (entry: string) => {
+    setSsoOrg(entry);
+    setSsoOrgHistoryOpen(false);
+    setSsoOrgHistoryActiveIndex(-1);
+    clearError();
+  };
+
+  const handleSsoOrgHistoryKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (ssoOrgHistory.length <= 1) return;
+    if (event.key === 'Escape') {
+      setSsoOrgHistoryOpen(false);
+      setSsoOrgHistoryActiveIndex(-1);
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setSsoOrgHistoryOpen(true);
+      setSsoOrgHistoryActiveIndex((current) => {
+        if (event.key === 'ArrowDown') {
+          return current < ssoOrgHistory.length - 1 ? current + 1 : 0;
+        }
+        return current > 0 ? current - 1 : ssoOrgHistory.length - 1;
+      });
+      return;
+    }
+    if (event.key === 'Enter' && ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0) {
+      event.preventDefault();
+      const selected = ssoOrgHistory[ssoOrgHistoryActiveIndex];
+      if (selected) selectSsoOrgHistory(selected);
+    }
   };
 
   /* ── identifier 主视图(680×620 组:面板 680×500 + 第三方圆钮行) ── */
@@ -715,6 +764,11 @@ export function LoginPage() {
               // 期间要自己挡:那道 guard 在 requireConsent 里,这条路径绕过了它。
               if (isLoading || localModePendingRef.current) return;
               clearError();
+              const nextHistory = getSsoOrgHistory();
+              setSsoOrgHistory(nextHistory);
+              if (!ssoOrg.trim()) setSsoOrg(nextHistory[0] ?? '');
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
               setSsoOrgMode(true);
             }}
           >
@@ -736,54 +790,86 @@ export function LoginPage() {
 
   /* ── 企业 SSO 入口子视图(sso-org empty/filled;面板 680×500,无跳过入口) ── */
   const renderSsoOrg = () => (
-    <LoginPanel testId="login-panel-sso-org">
-      <form onSubmit={submitSsoOrg} noValidate>
-        <LoginBackButton
-          disabled={isLoading}
-          label={t('login.back')}
-          onClick={() => {
-            clearError();
-            setSsoOrgMode(false);
-          }}
-        />
-        <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
-        <LoginInput
-          autoFocus
-          disabled={isLoading}
-          maxLength={253}
-          autoComplete="off"
+    <>
+      <LoginPanel testId="login-panel-sso-org">
+        <form onSubmit={submitSsoOrg} noValidate>
+          <LoginBackButton
+            disabled={isLoading}
+            label={t('login.back')}
+            onClick={() => {
+              clearError();
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+              setSsoOrgMode(false);
+            }}
+          />
+          <LoginTitleBlock title={t('login.ssoOrgTitle')} subtitle={t('login.ssoOrgSubtitle')} />
+          <LoginInput
+            autoFocus={ssoOrgHistory.length <= 1}
+            disabled={isLoading}
+            maxLength={253}
+            autoComplete="off"
+            value={ssoOrg}
+            onChange={(value) => {
+              setSsoOrg(value);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onFocus={openSsoOrgHistory}
+            onClick={openSsoOrgHistory}
+            onBlur={() => {
+              setSsoOrgHistoryOpen(false);
+              setSsoOrgHistoryActiveIndex(-1);
+            }}
+            onKeyDown={handleSsoOrgHistoryKeyDown}
+            role="combobox"
+            ariaControls="login-sso-org-history-list"
+            ariaExpanded={ssoOrgHistoryOpen}
+            ariaActiveDescendant={
+              ssoOrgHistoryOpen && ssoOrgHistoryActiveIndex >= 0
+                ? ssoOrgHistoryOptionId(ssoOrgHistoryActiveIndex)
+                : undefined
+            }
+            placeholder={t('login.ssoOrgPlaceholder')}
+            error={!!errorCode}
+            testId="login-sso-org-input"
+          />
+          {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
+          <span
+            className="absolute line-clamp-2 text-center"
+            style={{
+              left: SSO_ORG_HINT.x,
+              top: SSO_ORG_HINT.y,
+              width: SSO_ORG_HINT.width,
+              height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
+              lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
+              fontSize: SSO_ORG_HINT.fontSize,
+              color: LOGIN_COLORS.secondaryText,
+            }}
+          >
+            {t('login.ssoOrgHint')}
+          </span>
+          <LoginPrimaryButton
+            type="submit"
+            disabled={!ssoOrg.trim()}
+            loading={isLoading}
+            testId="login-sso-org-continue"
+          >
+            {isLoading ? t('login.working') : t('login.continue')}
+          </LoginPrimaryButton>
+          {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
+        </form>
+      </LoginPanel>
+      {ssoOrgHistoryOpen && ssoOrgHistory.length > 1 && (
+        <LoginSsoOrgHistoryList
+          entries={ssoOrgHistory}
           value={ssoOrg}
-          onChange={setSsoOrg}
-          placeholder={t('login.ssoOrgPlaceholder')}
-          error={!!errorCode}
-          testId="login-sso-org-input"
+          activeIndex={ssoOrgHistoryActiveIndex}
+          onActiveIndexChange={setSsoOrgHistoryActiveIndex}
+          onSelect={selectSsoOrgHistory}
+          listId="login-sso-org-history-list"
         />
-        {/* 帮助行(无下划线、次级色;顶对齐 ≤2 行,DESIGN.md §16.2 折行分级 2) */}
-        <span
-          className="absolute line-clamp-2 text-center"
-          style={{
-            left: SSO_ORG_HINT.x,
-            top: SSO_ORG_HINT.y,
-            width: SSO_ORG_HINT.width,
-            height: SSO_ORG_HINT.lineHeight * SSO_ORG_HINT.maxLines,
-            lineHeight: `${SSO_ORG_HINT.lineHeight}px`,
-            fontSize: SSO_ORG_HINT.fontSize,
-            color: LOGIN_COLORS.secondaryText,
-          }}
-        >
-          {t('login.ssoOrgHint')}
-        </span>
-        <LoginPrimaryButton
-          type="submit"
-          disabled={!ssoOrg.trim()}
-          loading={isLoading}
-          testId="login-sso-org-continue"
-        >
-          {isLoading ? t('login.working') : t('login.continue')}
-        </LoginPrimaryButton>
-        {errorMessage && <LoginErrorText>{errorMessage}</LoginErrorText>}
-      </form>
-    </LoginPanel>
+      )}
+    </>
   );
 
   /* ── method-choice(含 sso-org-list 来源变体) ── */

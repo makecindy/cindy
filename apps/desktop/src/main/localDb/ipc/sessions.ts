@@ -1489,14 +1489,6 @@ export function registerSessionIpc(
       row.summary = null;
     }
     const updated = sessionToCamel(row);
-    const broadcastPatch =
-      p.pinnedAt === undefined
-        ? p
-        : {
-            ...p,
-            pinnedAt: updated.pinnedAt,
-            ...(updated.pinnedAt === null ? { summary: null } : { status: updated.status }),
-          };
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
@@ -1511,6 +1503,37 @@ export function registerSessionIpc(
     ) {
       await upsertRecentWorkdir(row.workingDir, Date.now());
     }
+    // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
+    // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
+    // 之后、广播之前还有 await(摘要清理 / recent-workdir / 转录迁移),两个窗口
+    // 对同一任务并发操作时,本请求可能在此期间被另一窗口推进到更晚的终态(如
+    // 归档写入后被删除)。用过期值广播会把镜像回滚成旧 UI 状态(已删除任务在
+    // 副窗/控制端复活),且若本广播是最后一条,镜像不会自愈。
+    //
+    // 因此含 status 的 patch 在广播前(所有 await 之后)**重读一次**:重读与广播
+    // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
+    // 晚于本广播到达,镜像最终也收敛到 deleted。
+    let broadcastStatus = updated.status;
+    if (p.status !== undefined) {
+      const [currentRow] = await db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      if (currentRow) broadcastStatus = currentRow.status;
+    }
+    const broadcastPatch =
+      p.pinnedAt === undefined && p.status === undefined
+        ? p
+        : {
+            ...p,
+            ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
+            ...(p.status !== undefined ? { status: broadcastStatus } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
+              ? { status: broadcastStatus }
+              : {}),
+          };
     if (
       projectTargetChanged ||
       settingsChanged ||

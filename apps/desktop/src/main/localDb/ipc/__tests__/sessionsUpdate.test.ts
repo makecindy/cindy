@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
     closeSession: (id: string) => Promise<void>;
   } | null => null),
   setPinnedSectionCardMode: vi.fn(),
+  upsertRecentWorkdir: vi.fn(async () => undefined),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
@@ -77,7 +78,7 @@ vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
 vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
-vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
+vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: h.tapWindowBroadcast,
@@ -99,6 +100,14 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
 // the whole Host.
 vi.mock('../../../maker-host/index.js', () => ({
   getMakerIfReady: h.getMakerIfReady,
+}));
+// delete 路径的 removeHookAttachmentDir 会真删 turn change-set;归档路径动态
+// import cindy-brain(重副作用模块)。两者都 mock 掉,本文件只断言广播行为。
+vi.mock('../../../turn-change-set/store.js', () => ({
+  removeTurnChangeSetsForSession: vi.fn(async () => undefined),
+}));
+vi.mock('../../../cindy-brain/index.js', () => ({
+  notifyGhostSessionEvent: vi.fn(),
 }));
 
 import { registerSessionIpc, resumeDeletedPiSubagentCleanup } from '../sessions';
@@ -505,6 +514,87 @@ describe('local-db:sessions:update handler wiring', () => {
         patch: { status: 'deleted' },
       }),
     );
+  });
+
+  it('broadcasts local unarchive status patches to every window (#3175)', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+
+    await invokeUpdate('codex-local', { status: 'active' });
+    await vi.dynamicImportSettled();
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string };
+    expect(persisted.status).toBe('active');
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'active' },
+    });
+  });
+
+  // setStatus 的归档形是 { status, pinnedAt: null }:广播沿用置顶合并逻辑,
+  // 归档一并清 pin 与摘要(归档列表不该保留 pin 标记)。
+  it('broadcasts local archive status patches with the unpin merge (#3175)', async () => {
+    await invokeUpdate('codex-local', { status: 'archived', pinnedAt: null });
+    await vi.dynamicImportSettled();
+
+    const persisted = h
+      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; pinnedAt: number | null };
+    expect(persisted.status).toBe('archived');
+    expect(persisted.pinnedAt).toBeNull();
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'archived', pinnedAt: null, summary: null },
+    });
+  });
+
+  // 竞态收敛(review on #3225):写入与查询不在同一串行区间,归档写入后、查询前
+  // 另一窗口可能已把行推进到 deleted。广播必须携带持久化后的 updated.status,
+  // 否则副窗/控制端镜像会被请求值回滚成旧 UI 状态(已删除任务复活)。
+  // routeLock 是测试注入的实现:在锁内写库完成后、handler 继续查询前,模拟
+  // 另一窗口的删除落库。
+  it('broadcasts the persisted status when a concurrent window deletes between write and read', async () => {
+    h.routeLock.mockImplementation(async (_sessionId, task) => {
+      await task();
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('codex-local');
+    });
+
+    await invokeUpdate('codex-local', { status: 'archived' });
+    await vi.dynamicImportSettled();
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local',
+      patch: { status: 'deleted' },
+    });
+    // 不再出现携带请求值的回滚广播
+    const statusPatches = h.tapWindowBroadcast.mock.calls
+      .filter(([channel]) => channel === 'local-db:sessions:patched')
+      .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
+    expect(statusPatches).toEqual(['deleted']);
+  });
+
+  // 竞态收敛(review on #3225 第二轮):读行与广播之间还有 await(摘要清理 /
+  // recent-workdir / 转录迁移),期间另一窗口可删除并先广播 deleted;本 handler
+  // 恢复后若用旧快照广播 archived,该广播是最后一条,镜像不会自愈——已删任务
+  // 持久复活。upsertRecentWorkdir 是已 mock 的依赖:在其 await 期间模拟删除落库,
+  // 断言广播前重读了状态。
+  it('re-reads status before broadcasting when an await intervenes after the row read', async () => {
+    h.upsertRecentWorkdir.mockImplementationOnce(async () => {
+      h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('cc-local');
+    });
+
+    await invokeUpdate('cc-local', { status: 'archived', workspaceKind: 'project' });
+    await vi.dynamicImportSettled();
+
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'cc-local',
+      patch: expect.objectContaining({ status: 'deleted' }),
+    });
+    const statusPatches = h.tapWindowBroadcast.mock.calls
+      .filter(([channel]) => channel === 'local-db:sessions:patched')
+      .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
+    expect(statusPatches).toEqual(['deleted']);
   });
 
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
