@@ -1989,10 +1989,12 @@ body.resizing-pane [data-ghost-webview] {
     color: var(--sidebar-item-active-foreground);
   }
 
-  html[data-platform='win32'] .cursor-not-allowed,
-  html[data-platform='win32'] .disabled\:cursor-not-allowed:disabled,
-  html[data-platform='win32'] .data-\[disabled\]\:cursor-not-allowed[data-disabled] {
-    cursor: var(--cursor-not-allowed, not-allowed);
+  /* Disabled controls keep the ordinary desktop arrow. Their visual disabled
+     state already comes from opacity/color, so a separate cursor adds noise. */
+  .cursor-not-allowed,
+  .disabled\:cursor-not-allowed:disabled,
+  .data-\[disabled\]\:cursor-not-allowed[data-disabled] {
+    cursor: default;
   }
 }
 
