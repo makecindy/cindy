@@ -45,7 +45,17 @@ export type InputDeviceAction =
   | { type: 'external-url'; url: string };
 
 export type InputDeviceRendererAction =
-  | Exclude<InputDeviceAction, { type: 'task' }>
+  | Exclude<InputDeviceAction, { type: 'task' } | { type: 'command' }>
+  | {
+      type: 'command';
+      commandId: InputDeviceCommandId;
+      /**
+       * Cross-process monotonic wall-clock time captured when the hardware
+       * command was issued. Approval consumers use it to reject an action that
+       * was produced for an interaction replaced before the IPC arrived.
+       */
+      issuedAtMs?: number;
+    }
   | { type: 'voice'; phase: 'press' | 'release' }
   | {
       type: 'scroll';
@@ -86,7 +96,9 @@ export interface InputDevicePublishedTask {
 }
 
 export function isInputDeviceCommandId(value: unknown): value is InputDeviceCommandId {
-  return typeof value === 'string' && (INPUT_DEVICE_COMMAND_IDS as readonly string[]).includes(value);
+  return (
+    typeof value === 'string' && (INPUT_DEVICE_COMMAND_IDS as readonly string[]).includes(value)
+  );
 }
 
 export function inputDeviceHasCapability(

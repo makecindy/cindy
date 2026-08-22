@@ -12,6 +12,39 @@ function settings(patch: Partial<WorkLouderCodexSettings>): WorkLouderCodexSetti
 }
 
 describe('WorkLouderCodexLightingController', () => {
+  it('timestamps approval commands when the hardware issues them', async () => {
+    const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
+      current: null,
+    };
+    const dispatch = vi.fn();
+    const sink = {
+      update: vi.fn(),
+      setAgentKeyPressHandler: vi.fn(),
+      setDeviceActivityHandler: vi.fn(),
+      setConnectionStatusHandler: vi.fn(),
+      setHidInputHandler: vi.fn((handler: typeof hidRef.current) => {
+        hidRef.current = handler;
+      }),
+      dispose: vi.fn(async () => undefined),
+    };
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => [],
+      dispatch,
+    );
+    controller.start();
+    await controller.resumeTaskSlots();
+
+    hidRef.current?.({ key: 'ACT07', act: 1 });
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'command',
+      commandId: 'approval.approve',
+      issuedAtMs: expect.any(Number),
+    });
+  });
+
   it('deduplicates activity updates that produce the same lighting frame', () => {
     const sink = {
       update: vi.fn(),
@@ -77,15 +110,7 @@ describe('WorkLouderCodexLightingController', () => {
       setConnectionStatusHandler: vi.fn(),
       dispose: vi.fn(async () => undefined),
     };
-    const catalog = [
-      'idle-1',
-      'idle-2',
-      'idle-3',
-      'idle-4',
-      'idle-5',
-      'idle-6',
-      'lead-outside',
-    ];
+    const catalog = ['idle-1', 'idle-2', 'idle-3', 'idle-4', 'idle-5', 'idle-6', 'lead-outside'];
     const loadWorkerSessions = vi.fn(async (leadIds: readonly string[]) => {
       expect(leadIds).toContain('lead-outside');
       return { 'lead-outside': ['worker-1'] };
@@ -780,10 +805,12 @@ describe('WorkLouderCodexLightingController', () => {
 
   it('keeps the instance disabled while still recording keyboard presence', () => {
     const presenceRef: {
-      current: ((
-        present: boolean,
-        identity?: { deviceType: 'codex-micro' | 'creator-micro-2'; isUsbConnection: boolean },
-      ) => void) | null;
+      current:
+        | ((
+            present: boolean,
+            identity?: { deviceType: 'codex-micro' | 'creator-micro-2'; isUsbConnection: boolean },
+          ) => void)
+        | null;
     } = { current: null };
     const statusRef: { current: ((status: 'connecting' | 'disabled') => void) | null } = {
       current: null,
@@ -834,9 +861,10 @@ describe('WorkLouderCodexLightingController', () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -910,9 +938,10 @@ describe('WorkLouderCodexLightingController', () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -947,9 +976,10 @@ describe('WorkLouderCodexLightingController', () => {
     const hidRef: { current: ((event: { key: string; act: number }) => void) | null } = {
       current: null,
     };
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -978,9 +1008,10 @@ describe('WorkLouderCodexLightingController', () => {
   });
 
   it('does not fire a held stick action after the account resumes', async () => {
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -993,7 +1024,12 @@ describe('WorkLouderCodexLightingController', () => {
       }),
       dispose: vi.fn(async () => undefined),
     };
-    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => [],
+      dispatch,
+    );
     controller.start();
     await controller.resumeTaskSlots();
     joystickRef.current?.({ angle: 0.5, distance: 1 });
@@ -1015,9 +1051,10 @@ describe('WorkLouderCodexLightingController', () => {
   });
 
   it('clears a held stick during suspend so the next push after resume works', async () => {
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1030,7 +1067,12 @@ describe('WorkLouderCodexLightingController', () => {
       }),
       dispose: vi.fn(async () => undefined),
     };
-    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => [],
+      dispatch,
+    );
     controller.start();
     await controller.resumeTaskSlots();
     joystickRef.current?.({ angle: 0.5, distance: 1 });
@@ -1045,9 +1087,10 @@ describe('WorkLouderCodexLightingController', () => {
   });
 
   it('keeps the first push after resume when the stick was already centred', async () => {
-    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } = {
-      current: null,
-    };
+    const joystickRef: { current: ((event: { angle: number; distance: number }) => void) | null } =
+      {
+        current: null,
+      };
     const dispatch = vi.fn();
     const sink = {
       update: vi.fn(),
@@ -1060,7 +1103,12 @@ describe('WorkLouderCodexLightingController', () => {
       }),
       dispose: vi.fn(async () => undefined),
     };
-    const controller = new WorkLouderCodexLightingController(sink, vi.fn(), async () => [], dispatch);
+    const controller = new WorkLouderCodexLightingController(
+      sink,
+      vi.fn(),
+      async () => [],
+      dispatch,
+    );
     controller.start();
     await controller.resumeTaskSlots();
     controller.suspendTaskSlots();

@@ -82,22 +82,27 @@ describe('ChatInput session switch focus contract', () => {
       'const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);',
     );
     expect(sessionViewSource).toContain('focusOnStorageKeyChange={ownsRoute}');
-    expect(sessionViewSource).toContain(
-      'ownsHardwareComposerActions={ownsHardwareTaskActions}',
-    );
+    expect(sessionViewSource).toContain('ownsHardwareComposerActions={ownsHardwareTaskActions}');
     expect(chatInputSource).toContain('workLouderVoiceGestureRef.current?.cancelHeldPress();');
-    expect(sessionViewSource).toContain(
-      'ownsHardwareScrollActions={ownsHardwareTaskActions}',
-    );
+    expect(sessionViewSource).toContain('ownsHardwareScrollActions={ownsHardwareTaskActions}');
     expect(sessionViewSource).toContain("navigationMode !== 'split-pane'");
     expect(sessionViewSource).toContain("action.commandId === 'toggleTaskPin'");
     expect(sessionViewSource).toContain("action.commandId === 'archiveTask'");
+    expect(sessionViewSource).toContain(
+      'hardwareApprovalTargetRef.current = createVisibleInputDeviceApprovalTarget(',
+    );
+    expect(sessionViewSource).toContain('pendingPermission?.requestId ?? null,');
+    expect(sessionViewSource).toContain('pendingPlanReview?.requestId ?? null,');
     expect(sessionViewSource).toContain('void togglePin();');
     expect(sessionViewSource).toContain('void archive();');
     expect(messageStreamSource).toContain('ownsHardwareScrollActions?: boolean;');
     expect(messageStreamSource).toContain('if (!ownsHardwareScrollActions) return false;');
-    expect(mainLayoutSource).toContain("const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');");
-    expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'toggle-review-tab', sessionId })");
+    expect(mainLayoutSource).toContain(
+      "const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');",
+    );
+    expect(mainLayoutSource).toContain(
+      "routeSidebarCommand({ type: 'toggle-review-tab', sessionId })",
+    );
     expect(mainLayoutSource).toContain('if (reviewIsActive && reviewTab) {');
     expect(mainLayoutSource).toContain('await closeTab(sessionId, reviewTab.id);');
     expect(mainLayoutSource).toContain(
@@ -184,11 +189,13 @@ describe('ChatInput session switch focus contract', () => {
       ),
     ).toHaveLength(1);
     expect(capabilitySelectionBlock).toContain("selectedItem.type === 'plugin-command'");
-expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
+    expect(capabilitySelectionBlock).toContain('!ghost?.enabled');
     expect(capabilitySelectionBlock).toContain(
       'placeGhostAtComposerStart(editor, ghost, installedGhostsRef.current);',
     );
-    expect(capabilitySelectionBlock).toContain('placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);');
+    expect(capabilitySelectionBlock).toContain(
+      'placeHostCapabilityAtComposerStart(editor, ghost, installedGhostsRef.current);',
+    );
     expect(capabilitySelectionBlock).toContain('closeAtPanel();');
     expect(capabilitySelectionBlock).not.toContain('focusIOSSimulatorPanel');
     expect(chatInputSource).toContain('focusComposerEndNextFrame(editor);');
