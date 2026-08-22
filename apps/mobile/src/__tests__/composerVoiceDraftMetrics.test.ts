@@ -139,8 +139,8 @@ describe('composer voice draft text metrics', () => {
     expect(row).toContain('Math.max(inputFrameHeight, inputFrameMinHeight)');
     expect(row).toContain('resolvedInputFrameHeight != null && { height: resolvedInputFrameHeight }');
     for (const rel of COMPOSER_PAGES) {
-      expect(read(rel), `${rel} 听写期间必须把输入区撑到触控目标`)
-        .toContain('inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}');
+      expect(read(rel), `${rel} 启动 pending 和听写期间都必须把输入区撑到触控目标`)
+        .toContain('inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}');
     }
   });
 

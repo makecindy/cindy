@@ -1,3 +1,5 @@
+import type { MobileVoiceState } from '@/session/mobileVoiceInput';
+
 export type MobileVoiceRecordingPermission = {
   granted: boolean;
 };
@@ -135,4 +137,27 @@ export function shouldCancelMobileVoiceForBackground(
   state: MobileVoiceBackgroundState,
 ): boolean {
   return state.startupInFlight || state.recordingActive || state.hasController;
+}
+
+/**
+ * Resolves the optimistic voice-pill startup state without racing the first
+ * native PCM chunk. Native `start()` / `AudioStream.start()` may settle while
+ * the controller is still waiting to surface `listening` from its first chunk.
+ */
+export function shouldClearMobileVoiceStartPending(input: {
+  voiceState: MobileVoiceState;
+  startupSettled: boolean;
+  recordingActive: boolean;
+  hasController: boolean;
+}): boolean {
+  if (
+    input.voiceState === 'listening'
+    || input.voiceState === 'submitting'
+    || input.voiceState === 'refining'
+  ) return true;
+  if (!input.startupSettled) return false;
+  // A completed state may belong to the previous run. Keep the optimistic pill
+  // while this run still owns a controller; cleanup paths clear it once the
+  // startup is cancelled or fails and the controller is released.
+  return !input.recordingActive || !input.hasController;
 }

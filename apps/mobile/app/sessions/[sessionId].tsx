@@ -404,6 +404,7 @@ import {
 } from '@/session/mobileVoicePrewarm';
 import {
   resolveMobileVoiceRecordingPermission,
+  shouldClearMobileVoiceStartPending,
   shouldCancelMobileVoiceForBackground,
   waitForMobileVoiceAppActive,
 } from '@/session/mobileVoiceStartup';
@@ -421,10 +422,7 @@ import {
   recordMobileVoiceInputHistoryForHost,
   updateMobileVoiceInputHistoryEntryForHost,
 } from '@/session/mobileVoiceHistoryStore';
-import {
-  hydrateMobileVoiceDictionary,
-  refreshMobileVoiceDictionary,
-} from '@/session/mobileVoiceDictionaryCache';
+import { refreshMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
 import {
   playMobileVoiceInputEndCue,
 } from '@/session/mobileVoiceCue';
@@ -2440,8 +2438,26 @@ export default function SessionScreen() {
   // pending 的世代号:本组件会随 sessionId 复用,上一个会话的启动收尾不能把
   // 当前会话刚展开的乐观胶囊收掉——finally 只在世代未前进时清 pending。
   const voiceStartPendingSeqRef = useRef(0);
+  // The permission request starts before voiceStartupInFlightRef is set. Keep
+  // optimistic pending alive across that synchronous-to-async handoff.
+  const voiceStartRequestedRef = useRef(false);
   // pressIn 已起录的标记:同一次手势的松手(onPress)不能再被当作「再点一下停止」。
   const voiceStartedOnPressInRef = useRef(false);
+  const clearVoiceStartPending = useCallback(() => {
+    voiceStartPendingSeqRef.current += 1;
+    setVoiceStartPending(false);
+  }, []);
+  useEffect(() => {
+    if (!voiceStartPending) return;
+    if (shouldClearMobileVoiceStartPending({
+      voiceState,
+      startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current,
+      recordingActive: voiceRecordingActiveRef.current,
+      hasController: Boolean(voiceControllerSessionRef.current),
+    })) {
+      setVoiceStartPending(false);
+    }
+  }, [voiceStartPending, voiceState]);
   // 发送槽双语义(对齐桌面 ChatInput 的主槽判定,voice busy = listening|submitting|refining):
   // 任务执行中且发送不可用、又没有语音在进行时,停止任务顶替发送位;语音一旦开始,
   // 发送键回到发送位(录音期=「结束并发送」,润色期=禁用态占位),停止任务退到
@@ -2481,6 +2497,10 @@ export default function SessionScreen() {
     expanded: voiceIsListening || voiceStartPending,
     counting: voiceIsListening,
   });
+  // Keep Composer geometry stable while startup waits for the first PCM chunk.
+  // Pending reserves the listening slot without enabling the stop gesture or
+  // showing live listening content before capture is real.
+  const voiceIsActiveLayout = voiceIsListening || voiceStartPending;
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
   // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
@@ -2867,7 +2887,7 @@ export default function SessionScreen() {
       {renderComposerSendSlot()}
     </>
   );
-  const renderComposerInputOverlay = () => voiceIsListening ? (
+  const renderComposerInputOverlay = () => voiceIsActiveLayout ? (
     // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
     // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
     // 的 view,它根本收不到触摸——把停听写挂在 WebView 的 focus / touch 上都不成立
@@ -2880,6 +2900,7 @@ export default function SessionScreen() {
       // handler 幂等:finishVoiceRecording 有 voiceStopInFlight 门,重复调用是 no-op。
       onPress={handleComposerInputPressIn}
       onPressIn={handleComposerInputPressIn}
+      pointerEvents={voiceIsListening ? 'auto' : 'none'}
       style={styles.voiceDraftOverlay}
       testID="session.voiceDraftOverlay"
     >
@@ -2904,7 +2925,7 @@ export default function SessionScreen() {
         showsVerticalScrollIndicator={false}
         style={styles.voiceDraftScroll}
       >
-        {voiceDraftShowsListeningPrompt ? (
+        {voiceIsListening ? (voiceDraftShowsListeningPrompt ? (
           <View style={styles.voiceDraftListeningPrompt}>
             <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             <Text style={styles.voiceDraftListeningText}>{composerLayout.input.placeholder}</Text>
@@ -2930,7 +2951,7 @@ export default function SessionScreen() {
               <VoiceMicWaveCaret color={colors.textPrimary} testID="session.voiceMicCaret" />
             </View>
           </View>
-        )}
+        )) : null}
       </ScrollView>
     </Pressable>
   ) : null;
@@ -5101,11 +5122,16 @@ export default function SessionScreen() {
       // 词典快照拉取不进 await:它只影响润色提示的丰富度,拉不到(桌面离线、老版本
       // 被控端)就用上次缓存,绝不为它推迟开麦。本次拉到的内容供下一次润色使用。
       void refreshMobileVoiceDictionary(deviceId, () => maker.getVoiceDictionary());
-      const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([
-        takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),
-        getMobileVoiceInputHistoryForHost(deviceId),
-        hydrateMobileVoiceDictionary(deviceId),
-      ]);
+      // Claiming a prewarm must not await its in-flight WebSocket handshake:
+      // BufferedAsrProvider already lets capture start concurrently and replays
+      // the early PCM once the connection settles.
+      const prewarmedVoice = takePrewarmedMobileVoiceAsr(deviceId);
+      // History and dictionary enrich refinement only. Load both behind the mic
+      // start; the retained array is read when refinement actually runs.
+      const localVoiceInputHistory: string[] = [];
+      void getMobileVoiceInputHistoryForHost(deviceId)
+        .then((history) => localVoiceInputHistory.push(...history))
+        .catch(() => undefined);
       claimedPrewarm = prewarmedVoice;
       const credential = prewarmedVoice?.credential
         ?? createMobileCindyVoiceCredential(deviceId);
@@ -5154,6 +5180,20 @@ export default function SessionScreen() {
           onDraftChanged: setComposerDraft,
           onStateChanged: setVoiceState,
           onError: (message) => {
+            const failedController = getCreatedController();
+            if (!failedController || voiceControllerSessionRef.current !== failedController) return;
+            voiceStartupSeqRef.current += 1;
+            voiceControllerSessionRef.current = null;
+            voiceStartupInFlightRef.current = false;
+            voiceStopInFlightRef.current = false;
+            voiceRecordingActiveRef.current = false;
+            clearVoiceStartPending();
+            voiceLongPressActiveRef.current = false;
+            voiceSuppressNextPressRef.current = false;
+            voiceStopAfterStartRef.current = false;
+            setVoiceReleaseToSendActive(false);
+            setComposerVoiceHoldArmed(false);
+            void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
             setVoiceState('error');
             setVoiceError(message);
           },
@@ -5247,7 +5287,7 @@ export default function SessionScreen() {
       setVoiceError(formatRemoteError(err));
       await setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
     }
-  }, [deviceId, draft, openLink, renderItems, t, voiceIsProcessing, voiceState]);
+  }, [clearVoiceStartPending, deviceId, draft, openLink, renderItems, t, voiceIsProcessing, voiceState]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
@@ -5268,6 +5308,7 @@ export default function SessionScreen() {
     voiceStartupInFlightRef.current = false;
     voiceStopInFlightRef.current = false;
     voiceRecordingActiveRef.current = false;
+    clearVoiceStartPending();
     voiceLongPressActiveRef.current = false;
     voiceSuppressNextPressRef.current = false;
     voiceStopAfterStartRef.current = false;
@@ -5278,7 +5319,7 @@ export default function SessionScreen() {
     discardPendingPrewarm();
     if (controller) void controller.cancel().catch(() => undefined);
     void setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-  }, [setVoiceState]);
+  }, [clearVoiceStartPending, setVoiceState]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -5301,10 +5342,12 @@ export default function SessionScreen() {
     voicePermissionRequestAbortRef.current?.abort();
     voicePermissionRequestAbortRef.current = null;
     voicePermissionRequestInFlightRef.current = false;
+    clearVoiceStartPending();
     cancelVoiceForAppBackground();
-  }, [cancelVoiceForAppBackground]);
+  }, [cancelVoiceForAppBackground, clearVoiceStartPending]);
 
   useEffect(() => {
+    setVoiceStartPending(false);
     return () => {
       const controller = voiceControllerSessionRef.current;
       voiceControllerSessionRef.current = null;
@@ -5314,6 +5357,7 @@ export default function SessionScreen() {
       voicePermissionRequestAbortRef.current?.abort();
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
+      voiceStartPendingSeqRef.current += 1;
       voiceStartupSeqRef.current += 1;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
@@ -5426,13 +5470,22 @@ export default function SessionScreen() {
     // 否则松手的 onPress 会被吞掉,用户失去 toggle 能力。
     if (voiceStartupInFlightRef.current || voiceStopInFlightRef.current) return;
     voiceStartedOnPressInRef.current = true;
+    voiceStartRequestedRef.current = true;
     const pendingSeq = ++voiceStartPendingSeqRef.current;
     setVoiceStartPending(true);
     void startVoiceRecording()
       .catch(() => undefined)
       .finally(() => {
-        // 只收自己世代的 pending:切会话后旧启动的收尾不能塌掉新录音的胶囊。
-        if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);
+        // 启动 Promise 可能早于首个 PCM 完成;这时仍保持 pending,由
+        // listening 状态 effect 在真实采集开始后收口。
+        if (voiceStartPendingSeqRef.current !== pendingSeq) return;
+        if (shouldClearMobileVoiceStartPending({
+          voiceState: voiceStateTransitionRef.current,
+          startupSettled: true,
+          recordingActive: voiceRecordingActiveRef.current,
+          hasController: Boolean(voiceControllerSessionRef.current),
+        })) setVoiceStartPending(false);
+        voiceStartRequestedRef.current = false;
       });
   }, [deviceId, startVoiceRecording, voiceIsProcessing, voiceState]);
 
@@ -9603,7 +9656,7 @@ export default function SessionScreen() {
                     accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
                     autoFocus={visualFocusComposer}
                     cardActive={composerCardActive}
-                    caretHidden={voiceIsListening}
+                    caretHidden={voiceIsActiveLayout}
                     compact={compactComposer && !composerCardActive}
                     editable={!composerLayout.input.disabled}
                     floatingVoiceButton={voiceUiAvailable ? renderComposerVoiceButton : undefined}
@@ -9611,7 +9664,7 @@ export default function SessionScreen() {
                     inputFrameHeight={composerResize.frameHeight}
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
                     // hitSlop 越不过父边界(见常量注释)。
-                    inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                    inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                     inputElement={(
                       <ComposerRichInput
                         ref={composerInputRef}
@@ -9620,7 +9673,7 @@ export default function SessionScreen() {
                         document={composerDocument}
                         editable={!composerLayout.input.disabled}
                         height={composerInputVisibleHeight}
-                        hidden={voiceIsListening}
+                        hidden={voiceIsActiveLayout}
                         maxHeight={composerResize.inputMaxHeight}
                         opticalPadding={composerCardActive}
                         onBlur={() => {
@@ -9633,7 +9686,7 @@ export default function SessionScreen() {
                         onPasteImages={(uris) => void addPastedImageAttachments(uris)}
                         onPasteImagesLoading={beginPastePlaceholders}
                         onPasteImagesLoadFailed={failPastePlaceholders}
-                        placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
+                        placeholder={voiceIsActiveLayout ? '' : composerLayout.input.placeholder}
                         resolveSessionLinkLabel={resolvePastedSessionLinkLabel}
                         testID="session.composerRichInput"
                         theme={{
@@ -9648,7 +9701,7 @@ export default function SessionScreen() {
                       />
                     )}
                     inputOverlay={renderComposerInputOverlay()}
-                    inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
+                    inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}
                     inputTestID="session.composerInput"
                     leading={renderComposerCompactLeading()}
                     maxHeight={composerResize.inputMaxHeight}
@@ -9668,7 +9721,7 @@ export default function SessionScreen() {
                     onPasteImagesLoading={beginPastePlaceholders}
                     onPasteImagesLoadFailed={failPastePlaceholders}
                     onPressIn={handleComposerInputPressIn}
-                    placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
+                    placeholder={voiceIsActiveLayout ? '' : composerLayout.input.placeholder}
                     placeholderTextColor={colors.textTertiary}
                     resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
                     scrollEnabled={composerInputScrollEnabled}

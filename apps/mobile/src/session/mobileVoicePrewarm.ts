@@ -18,7 +18,7 @@ export type PrewarmedMobileVoiceAsr = {
 type PendingPrewarm = {
   deviceId: string;
   createdAt: number;
-  promise: Promise<PrewarmedMobileVoiceAsr | null>;
+  value: PrewarmedMobileVoiceAsr | null;
   expireTimer: ReturnType<typeof setTimeout>;
 };
 
@@ -63,11 +63,11 @@ export function prewarmMobileVoiceStart(
     return;
   }
   discardPendingPrewarm();
-  const promise = buildPrewarm(deviceId, options);
+  const value = buildPrewarm(deviceId, options);
   const entry: PendingPrewarm = {
     deviceId,
     createdAt: Date.now(),
-    promise,
+    value,
     expireTimer: setTimeout(() => {
       if (pendingPrewarm === entry) discardPendingPrewarm();
     }, PREWARM_MAX_AGE_MS),
@@ -83,14 +83,14 @@ export function prewarmMobileVoiceStart(
  */
 export function takePrewarmedMobileVoiceAsr(
   deviceId: string,
-): Promise<PrewarmedMobileVoiceAsr | null> | null {
+): PrewarmedMobileVoiceAsr | null {
   const entry = pendingPrewarm;
   if (!entry || entry.deviceId !== deviceId || Date.now() - entry.createdAt >= PREWARM_MAX_AGE_MS) {
     return null;
   }
   pendingPrewarm = null;
   clearTimeout(entry.expireTimer);
-  return entry.promise;
+  return entry.value;
 }
 
 /** Discards (and closes) any unclaimed prewarmed connection, e.g. on unmount. */
@@ -99,19 +99,17 @@ export function discardPendingPrewarm(): void {
   if (!entry) return;
   pendingPrewarm = null;
   clearTimeout(entry.expireTimer);
-  void entry.promise
-    .then((prewarmed) => prewarmed?.asr.stop())
-    .catch(() => undefined);
+  void entry.value?.asr.stop().catch(() => undefined);
 }
 
-async function buildPrewarm(
+function buildPrewarm(
   deviceId: string,
   auth?: {
     getAccessToken: () => Promise<string | null>;
     refreshAccessToken: () => Promise<string | null>;
     apiFetch: <T>(path: string, options: Omit<ApiFetchOptions, 'token'>) => Promise<T>;
   },
-): Promise<PrewarmedMobileVoiceAsr | null> {
+): PrewarmedMobileVoiceAsr | null {
   // 手机语音只保留 Cindy 官方托管路径:没有登录态(auth)就没有可预热的连接。
   if (!auth) return null;
   try {

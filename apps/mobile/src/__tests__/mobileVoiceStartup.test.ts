@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   resolveMobileVoiceRecordingPermission,
+  shouldClearMobileVoiceStartPending,
   shouldCancelMobileVoiceForBackground,
   waitForMobileVoiceAppActive,
 } from '@/session/mobileVoiceStartup';
@@ -27,6 +28,58 @@ function stableAppStateLifecycle(): {
 }
 
 describe('mobileVoiceStartup', () => {
+  it('keeps the optimistic pill while startup settles before the first PCM chunk', () => {
+    expect(shouldClearMobileVoiceStartPending({
+      voiceState: 'idle',
+      startupSettled: true,
+      recordingActive: true,
+      hasController: true,
+    })).toBe(false);
+  });
+
+  it('clears a settled startup after cancellation releases the controller', () => {
+    expect(shouldClearMobileVoiceStartPending({
+      voiceState: 'idle',
+      startupSettled: true,
+      recordingActive: false,
+      hasController: false,
+    })).toBe(true);
+  });
+
+  it.each(['listening', 'submitting', 'refining'] as const)(
+    'clears the optimistic pill once voice state is %s',
+    (voiceState) => {
+      expect(shouldClearMobileVoiceStartPending({
+        voiceState,
+        startupSettled: false,
+        recordingActive: true,
+        hasController: true,
+      })).toBe(true);
+    },
+  );
+
+  it.each(['error', 'done'] as const)('keeps a stale terminal voice state %s while the new controller is active', (voiceState) => {
+    expect(shouldClearMobileVoiceStartPending({
+      voiceState,
+      startupSettled: true,
+      recordingActive: true,
+      hasController: true,
+    })).toBe(false);
+  });
+
+  it.each([
+    { voiceState: 'idle', reason: 'no active recording' },
+    { voiceState: 'error', reason: 'startup failure' },
+    { voiceState: 'done', reason: 'cancelled previous run' },
+  ] as const)('clears the optimistic pill after %s', ({ voiceState }) => {
+    expect(shouldClearMobileVoiceStartPending({
+      voiceState,
+      startupSettled: true,
+      recordingActive: false,
+      hasController: false,
+    })).toBe(true);
+  });
+
   it('uses an existing microphone grant without opening the system prompt', async () => {
     const requestPermission = vi.fn(async () => ({ granted: true }));
 

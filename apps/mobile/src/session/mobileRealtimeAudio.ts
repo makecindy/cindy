@@ -92,8 +92,8 @@ type ExpoAudioPcm16ResampleState = {
 };
 
 const DEFAULT_NATIVE_AUDIO_BUFFER_SIZE = 4096;
-const EXPO_AUDIO_STREAM_STALL_TIMEOUT_MS = 5_000;
-const EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS = 1_000;
+const REALTIME_AUDIO_STALL_TIMEOUT_MS = 5_000;
+const REALTIME_AUDIO_WATCHDOG_INTERVAL_MS = 1_000;
 
 let nativeBinding: RealtimeAudioNativeBinding | null | undefined;
 let expoAudioNativeModule: ExpoAudioNativeModule | null | undefined;
@@ -127,10 +127,18 @@ export async function startMobileRealtimeAudio(
     return startE2eMockRealtimeAudio(options);
   }
   const binding = getNativeBinding();
+  const expoAudioModule = getExpoAudioNativeModule();
+  // Current Apple builds contain both bindings. Prefer Expo AudioStream there:
+  // it creates a fresh AVAudioEngine for each run and uses the input-only
+  // `.record` session category, which keeps PCM flowing while iOS system screen
+  // recording is active. The retained custom play-and-record engine can start
+  // successfully in that state without ever delivering a tap buffer.
+  if (binding && expoAudioModule) {
+    return startExpoAudioRealtimeAudio(expoAudioModule, options);
+  }
   if (binding) {
     return startCustomNativeRealtimeAudio(binding, options);
   }
-  const expoAudioModule = getExpoAudioNativeModule();
   if (expoAudioModule) {
     return startExpoAudioRealtimeAudio(expoAudioModule, options);
   }
@@ -146,8 +154,16 @@ async function startCustomNativeRealtimeAudio(
     bufferSize?: number;
   },
 ): Promise<() => Promise<void>> {
+  let stopped = false;
+  let failureReported = false;
+  let hasReceivedChunk = false;
+  let lastChunkAt = Date.now();
+  let watchdog: ReturnType<typeof setInterval> | null = null;
   const subscriptions: EventSubscription[] = [
     binding.module.addListener('onAudioChunk', (event) => {
+      if (stopped) return;
+      hasReceivedChunk = true;
+      lastChunkAt = Date.now();
       options.onChunk({
         pcm16: decodeBase64ToArrayBuffer(event.base64Pcm16),
         trace: {
@@ -160,9 +176,27 @@ async function startCustomNativeRealtimeAudio(
       });
     }),
     binding.module.addListener('onAudioError', (event) => {
-      options.onError?.(new Error(event.message));
+      reportFailure(new Error(event.message));
     }),
   ];
+
+  const stopCapture = async (): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    if (watchdog) {
+      clearInterval(watchdog);
+      watchdog = null;
+    }
+    subscriptions.forEach((subscription) => subscription.remove());
+    await binding.module.stop();
+  };
+
+  function reportFailure(error: Error): void {
+    if (stopped || failureReported) return;
+    failureReported = true;
+    void stopCapture().catch(() => undefined);
+    options.onError?.(error);
+  }
 
   try {
     await binding.module.start({
@@ -174,20 +208,25 @@ async function startCustomNativeRealtimeAudio(
     throw error;
   }
 
-  let stopped = false;
-  return async () => {
-    if (stopped) return;
-    stopped = true;
-    subscriptions.forEach((subscription) => subscription.remove());
-    await binding.module.stop();
-  };
+  if (!stopped) {
+    if (!hasReceivedChunk) lastChunkAt = Date.now();
+    watchdog = setInterval(() => {
+      if (Date.now() - lastChunkAt > REALTIME_AUDIO_STALL_TIMEOUT_MS) {
+        reportFailure(new Error(i18n.t('composer.voice.incomplete')));
+      }
+    }, REALTIME_AUDIO_WATCHDOG_INTERVAL_MS);
+  }
+
+  return stopCapture;
 }
 
 /**
  * Mobile already ships expo-audio for permission and audio-mode management.
  * SDK 56 also exposes the native SharedObject behind its public useAudioStream
  * hook. The voice controller is intentionally imperative, so construct that
- * same stream class directly rather than carrying a second AudioRecord stack.
+ * same stream class directly. Android uses it as its only PCM implementation;
+ * Apple builds prefer it over the legacy custom engine so system screen
+ * recording and voice input can remain active together.
  */
 async function startExpoAudioRealtimeAudio(
   module: ExpoAudioNativeModule,
@@ -282,10 +321,10 @@ async function startExpoAudioRealtimeAudio(
     streamStarted = true;
     lastChunkAt = Date.now();
     watchdog = setInterval(() => {
-      if (Date.now() - lastChunkAt > EXPO_AUDIO_STREAM_STALL_TIMEOUT_MS) {
+      if (Date.now() - lastChunkAt > REALTIME_AUDIO_STALL_TIMEOUT_MS) {
         reportFailure();
       }
-    }, EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS);
+    }, REALTIME_AUDIO_WATCHDOG_INTERVAL_MS);
   } catch (error) {
     stopStream();
     throw error;
@@ -305,6 +344,10 @@ async function startExpoAudioRealtimeAudio(
  */
 export function prewarmMobileRealtimeAudio(): void {
   if (isE2eMockRealtimeAudioEnabled()) return;
+  // AudioStream owns a fresh input-only engine and has no separate prepare
+  // phase. Prewarming the legacy play-and-record session before AudioStream
+  // starts would only force a second category/route reconfiguration.
+  if (getExpoAudioNativeModule()) return;
   const binding = getNativeBinding();
   if (!binding) return;
   void binding.module.prewarm().catch(() => undefined);

@@ -1592,10 +1592,10 @@ describe('new session composer surface', () => {
     expect(newComposerSource).toContain('selectionColor={colors.inputCaret}');
     expect(newComposerSource).toContain('inputRef={firstMessageInputRef}');
     expect(newComposerSource).toContain('inputOverlay={renderComposerInputOverlay()}');
-    expect(newComposerSource).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
+    expect(newComposerSource).toContain('inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}');
     expect(newComposerSource).toContain('onChangeText={setFirstMessageDraft}');
     expect(newComposerSource).toContain('onContentSizeChange={handleFirstMessageInputContentSizeChange}');
-    expect(newComposerSource).toContain("placeholder={voiceIsListening ? '' : composerPlaceholder}");
+    expect(newComposerSource).toContain("placeholder={voiceIsActiveLayout ? '' : composerPlaceholder}");
     expect(newComposerSource).toContain('scrollEnabled={composerInputScrollEnabled}');
     expect(newComposerSource).toContain('trailing={composerCardActive || !composerShowCreateButton ? null : renderCreateButton()}');
     expect(newComposerSource).toContain('leading={renderComposerCompactLeading()}');
@@ -1676,6 +1676,23 @@ describe('new session composer surface', () => {
     // 语音生命周期内创建按钮常驻(2026-07-25 对齐桌面):录音中点创建=结束录音并
     // 用转写创建;否则首段转写落地瞬间按钮冒出来会把语音胶囊整格推左。
     expect(newSource).toContain("|| voiceStartPending\n    || voiceState === 'listening'\n    || voiceState === 'submitting'\n    || voiceState === 'refining';");
+    expect(newSource).toContain('shouldClearMobileVoiceStartPending');
+    expect(newSource).toContain('startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current');
+    expect(newSource).toContain('voiceStartRequestedRef.current = true;');
+    expect(newSource).toContain('startupSettled: true');
+    expect(newSource).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // controller/ref teardown 不一定改变 voiceState;显式清 pending,避免同值 idle
+    // 被 React 跳过后胶囊常驻。
+    expect(newSource).toContain('const clearVoiceStartPending = useCallback(() => {');
+    expect(newSource).toContain('voiceRecordingActiveRef.current = false;\n    clearVoiceStartPending();\n    setComposerVoiceHoldArmed(false);');
+    // Controller 异步报错可能发生在 start() 已 resolve 之后；页面必须立即释放
+    // 本轮 owner refs/pending，且旧 controller 的迟到错误不得覆盖当前录音状态。
+    expect(newSource).toContain('const failedController = createdController;');
+    expect(newSource).toContain(
+      'if (!failedController || voiceControllerSessionRef.current !== failedController) return;\n'
+      + '          voiceStartupSeqRef.current += 1;',
+    );
+    expect(newSource).toContain('voiceStartupInFlightRef.current = false;\n          voiceStopInFlightRef.current = false;\n          voiceRecordingActiveRef.current = false;\n          clearVoiceStartPending();');
     // listening 时只豁免「缺正文/附件」校验(路径/模型等其它校验不放行,
     // 否则按钮可点但必失败):点创建 = 停录并用最终转写创建(review 二轮收窄)。
     // 判定必须是结构化的 isNewSessionDraftMissingPayloadOnly,禁止比对本地化
@@ -1743,7 +1760,11 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('testID="newSession.voiceStatus"');
     expect(newSource).toContain('testID="newSession.voiceSettingsButton"');
     expect(newSource).toContain('testID="newSession.voiceMicCaret"');
-    expect(newSource).toContain('const renderComposerInputOverlay = () => voiceIsListening ? (');
+    expect(newSource).toContain('const voiceIsActiveLayout = voiceIsListening || voiceStartPending;');
+    expect(newSource).toContain('const renderComposerInputOverlay = () => voiceIsActiveLayout ? (');
+    expect(newSource).toContain('{voiceIsListening ? (voiceDraftShowsListeningPrompt ? (');
+    expect(newSource).toContain('caretHidden={voiceIsActiveLayout}');
+    expect(newSource).toContain('inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}');
     expect(newSource).toContain("import { buildSessionComposerLayout } from '@/session/sessionComposerLayout';");
     expect(newSource).toContain('const composerListeningPlaceholder = buildSessionComposerLayout({');
     expect(newSource).toContain('<Text style={styles.voiceDraftListeningText}>{composerListeningPlaceholder}</Text>');
@@ -1785,8 +1806,9 @@ describe('new session composer surface', () => {
     expect(newSource).toContain('getAccessToken: () => auth.getAccessToken(),');
     expect(newSource).toContain('refreshAccessToken: () => auth.refreshAccessToken(),');
     expect(newSource).toContain('apiFetch: auth.apiFetch,');
-    expect(newSource).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(newSource).toContain('takePrewarmedMobileVoiceAsr(selectedDeviceId) ?? Promise.resolve(null),');
+    expect(newSource).toContain('const prewarmedVoice = takePrewarmedMobileVoiceAsr(selectedDeviceId);');
+    expect(newSource).toContain('void getMobileVoiceInputHistoryForHost(selectedDeviceId)');
+    expect(newSource).not.toContain('await Promise.all([\n        takePrewarmedMobileVoiceAsr(selectedDeviceId)');
     expect(newSource).not.toContain('MobileVoiceServiceMode');
     expect(newSource).not.toContain('LiteLlm');
     expect(newSource).toContain('?? createMobileCindyVoiceCredential(selectedDeviceId);');

@@ -96,10 +96,11 @@ describe('mobileVoicePrewarm', () => {
 
     prewarmMobileVoiceStart('device-1', AUTH);
     expect(prewarmMobileRealtimeAudio).toHaveBeenCalledTimes(1);
-    await settle();
     expect(provider.startCalls).toBe(1);
 
-    const claimed = await takePrewarmedMobileVoiceAsr('device-1');
+    // Claiming returns the provider immediately while its speculative connect
+    // is still pending, so the caller can open the mic in parallel.
+    const claimed = takePrewarmedMobileVoiceAsr('device-1');
     expect(claimed?.credential).toBe(CREDENTIAL);
     expect(__testing.hasPending()).toBe(false);
 

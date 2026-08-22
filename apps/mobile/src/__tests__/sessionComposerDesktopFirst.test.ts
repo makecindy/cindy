@@ -394,12 +394,16 @@ describe('mobile session composer desktop-first surface', () => {
     // (停止听写并有意打字)时由 WebKit 按触点放置。
     expect(source).not.toContain('setSelectionToEnd');
     expect(source).toContain('voiceDraftScrollRef.current?.scrollToEnd({ animated: false });');
-    expect(source).toContain('caretHidden={voiceIsListening}');
+    expect(source).toContain('const voiceIsActiveLayout = voiceIsListening || voiceStartPending;');
+    expect(source).toContain('caretHidden={voiceIsActiveLayout}');
     expect(source).toContain('const handleComposerInputPressIn = useCallback(() => {');
     expect(source).toContain('onPressIn={handleComposerInputPressIn}');
-    expect(source).toContain("placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}");
+    expect(source).toContain("placeholder={voiceIsActiveLayout ? '' : composerLayout.input.placeholder}");
     expect(source).toContain('placeholderTextColor={colors.textTertiary}');
-    expect(source).toContain('inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}');
+    expect(source).toContain('inputStyle={voiceIsActiveLayout ? styles.inputVoiceHidden : undefined}');
+    expect(source).toContain('inputFrameMinHeight={voiceIsActiveLayout ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}');
+    expect(source).toContain('hidden={voiceIsActiveLayout}');
+    expect(source).toContain("pointerEvents={voiceIsListening ? 'auto' : 'none'}");
     expect(source).toContain('styles.voiceDraftOverlay');
     expect(voiceDraftOverlayStyle).toContain('...StyleSheet.absoluteFill');
     expect(voiceDraftOverlayStyle).toContain("overflow: 'hidden'");
@@ -587,8 +591,9 @@ describe('mobile session composer desktop-first surface', () => {
     // fresh (credential already resolved, WebSocket already connecting) and
     // falls back to building the managed credential itself otherwise. 手机语音
     // 只保留 Cindy 官方托管路径:BYOK/穿透已删除。
-    expect(source).toContain('const [prewarmedVoice, localVoiceInputHistory] = await Promise.all([');
-    expect(source).toContain('takePrewarmedMobileVoiceAsr(deviceId) ?? Promise.resolve(null),');
+    expect(source).toContain('const prewarmedVoice = takePrewarmedMobileVoiceAsr(deviceId);');
+    expect(source).toContain('void getMobileVoiceInputHistoryForHost(deviceId)');
+    expect(source).not.toContain('await Promise.all([\n        takePrewarmedMobileVoiceAsr(deviceId)');
     expect(source).not.toContain('MobileVoiceServiceMode');
     expect(source).not.toContain('LiteLlm');
     expect(source).toContain('?? createMobileCindyVoiceCredential(deviceId);');
@@ -601,7 +606,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),');
     expect(source).toContain('voiceContext.createRefinerTarget(providerId, options),');
     expect(source).toContain('voiceContext.warmRefiner(input),');
-    expect(source).toContain('getMobileVoiceInputHistoryForHost(deviceId),');
+    expect(source).toContain('void getMobileVoiceInputHistoryForHost(deviceId)');
     // Device link is opened non-blocking (not awaited): dictation goes through the
     // cloud ASR proxy and does not need the link, so it must not gate mic start.
     expect(source).toContain('void openLink(deviceId).catch(() => undefined);');
@@ -714,8 +719,26 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('expanded: voiceIsListening || voiceStartPending,');
     expect(source).toContain('counting: voiceIsListening,');
     expect(source).toContain('const voiceStartedOnPressInRef = useRef(false);');
-    // pending 世代守卫:切会话后旧启动收尾不得塌掉新录音的乐观胶囊(review P1)。
-    expect(source).toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // pending 世代守卫:启动 Promise 早于首个 PCM 时不得收掉乐观胶囊,
+    // 进入真实 listening 或终态后才收口。
+    expect(source).toContain('shouldClearMobileVoiceStartPending');
+    expect(source).toContain('startupSettled: !voiceStartupInFlightRef.current && !voiceStartRequestedRef.current');
+    expect(source).toContain('voiceStartRequestedRef.current = true;');
+    expect(source).toContain('startupSettled: true');
+    expect(source).not.toContain('if (voiceStartPendingSeqRef.current === pendingSeq) setVoiceStartPending(false);');
+    // cleanup 只改 ref 时不会触发 effect;后台、手势取消和会话切换必须显式清 pending。
+    expect(source).toContain('const clearVoiceStartPending = useCallback(() => {');
+    expect(source).toContain('voiceRecordingActiveRef.current = false;\n    clearVoiceStartPending();\n    voiceLongPressActiveRef.current = false;');
+    // Controller 异步报错必须释放仍由本轮持有的 refs/pending，同时让 owner
+    // 不匹配的迟到错误整体退出，避免覆盖下一轮录音的状态。
+    expect(voiceSource).toContain('const failedController = getCreatedController();');
+    expect(voiceSource).toContain(
+      'if (!failedController || voiceControllerSessionRef.current !== failedController) return;\n'
+      + '            voiceStartupSeqRef.current += 1;',
+    );
+    expect(voiceSource).toContain('voiceStartupInFlightRef.current = false;\n            voiceStopInFlightRef.current = false;\n            voiceRecordingActiveRef.current = false;\n            clearVoiceStartPending();');
+    expect(source).toContain('voicePermissionRequestInFlightRef.current = false;\n    clearVoiceStartPending();\n    cancelVoiceForAppBackground();');
+    expect(source).toContain('useEffect(() => {\n    setVoiceStartPending(false);\n    return () => {');
     // 手势被系统/滚动打断时撤销按下即录(review P1)。
     expect(source).toContain('cancelVoiceForAppBackground();');
     expect(source).toContain('testID="session.voiceRecordingPill"');
