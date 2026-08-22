@@ -39,6 +39,7 @@ import {
   withGhostSkillProjectionOwnerCommit,
   withGhostSkillProjectionReadOnlyOwner,
   withGhostSkillProjectionReconcile,
+  withSharedGlobalSkillProjectionAccess,
 } from '../authBoundaryQuarantine.js';
 
 function readPersistedState(): unknown {
@@ -358,6 +359,25 @@ describe('Ghost skill projection boundary state', () => {
       }),
     ).rejects.toThrow('cannot publish');
     expect(fs.readFileSync(__testing.filePath(), 'utf8')).toBe(before);
+  });
+
+  it('routes shared projection access to observation for a passive process', async () => {
+    await withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: null,
+      nextOwnerId: 'owner-a',
+      prepareTransition: async () => {},
+      commit: () => undefined,
+    });
+    process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
+    const mutate = vi.fn(async () => 'mutated');
+    const observe = vi.fn(async () => 'observed');
+
+    await expect(
+      withSharedGlobalSkillProjectionAccess('owner-a', { mutate, observe }),
+    ).resolves.toBe('observed');
+
+    expect(mutate).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledOnce();
   });
 
   it('serializes owner commit and reconcile inside one process', async () => {

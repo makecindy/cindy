@@ -51,8 +51,14 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
+import {
+  activeOwnerScopeKey,
+  getActiveAppSession,
+  isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
+} from '../appSessionState.js';
+import { getGhostManager, getIOSSimulatorPluginAccessDecision } from '../cindy-brain/index.js';
+import { assertGhostSkillProjectionBoundaryStableForOwner } from '../authBoundaryQuarantine.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -262,6 +268,11 @@ import {
   prepareCodexBrowserCompanion,
   resolveCodexBrowserCompanionSpawnConfig,
 } from './codex-browser-companion.js';
+import { codexDisabledSkillPathsForOwner } from './codex-global-skills.js';
+import {
+  scheduleCodexGlobalSkillsRefresh,
+  setCodexGlobalSkillsRefreshHandler,
+} from './codex-global-skills-refresh.js';
 export { withRehydrateCloseSuppressed };
 
 type RemoteCcQuery = Awaited<
@@ -1270,6 +1281,29 @@ export function getMaker(): Maker {
           remoteHostId,
         });
       },
+      resolveCodexDisabledSkillPaths: ({ skills }) => {
+        // list/verify 跨 await，必须把同一 owner 的 ID/scope/root 一起固定下来。
+        const ownerId = getActiveAppSession().dataOwnerId;
+        const ownerScopeKey = activeOwnerScopeKey();
+        const ownerRoot = ownerScopedUserDataPath();
+        const assertOwnerStable = () => {
+          if (activeOwnerScopeKey() !== ownerScopeKey) {
+            throw new Error('Codex skill filtering owner changed during approved snapshot read');
+          }
+          assertGhostSkillProjectionBoundaryStableForOwner(ownerId);
+        };
+        assertOwnerStable();
+        const ghostManager = getGhostManager();
+        return codexDisabledSkillPathsForOwner(skills, {
+          ownerRoot,
+          approvedGhostSkills: {
+            ghosts: ghostManager.list(),
+            validateApprovedSkillSnapshot: (ghost) =>
+              ghostManager.verifyApprovedSkillSnapshot(ghost),
+          },
+          assertOwnerStable,
+        });
+      },
       makerMemory: makerMemoryManager,
       codexHostDynamicToolProvider: createIOSSimulatorCodexDynamicToolProvider({
         deps: getIOSSimulatorMcpDeps({ resolveAccess: resolveIOSSimulatorAccess }),
@@ -1804,7 +1838,17 @@ export function getMaker(): Maker {
     // DesktopCodexAuthAdapter 构造函数里(import 即写盘),会让所有传递性 import 到
     // auth-adapters 的测试在真实文件系统留痕(2026-07-03 曾把含真实凭证硬链的
     // codex-home 生成进仓库),现改为装配 maker 时显式预热,import 保持零副作用。
+    desktopCodexAuthAdapter.setApprovedGhostSkillSourceProvider(() => {
+      const ghostManager = getGhostManager();
+      return {
+        ghosts: ghostManager.list(),
+        validateApprovedSkillSnapshot: (ghost) => ghostManager.verifyApprovedSkillSnapshot(ghost),
+      };
+    });
     desktopCodexAuthAdapter.warmUp();
+    setCodexGlobalSkillsRefreshHandler(async () => {
+      await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
+    });
 
     // pi(实验性,个人分支):二进制在位才注册;缺失时 agents map 不含 pi,
     // 既有环境零影响。模型清单走目录 pi 投影(xd 网关模型经 active-catalog 按
@@ -2093,14 +2137,33 @@ export function getMaker(): Maker {
           }
         },
         onBeforeStart: async ({ agentKind, workingDir, remoteHostId }) => {
-          // 延迟记忆重启 pending 时,本地 Codex 新会话加入 shared host 前先尝试
-          // 兑现(其它会话全空闲才会真的重启;仍 busy 则放行,残余窗口见
-          // deferredCodexRestart.ts 模块注释)。
+          // 本地 Codex 会话启动前的统一准备层：所有 maker.createSession 入口
+          // (IPC / scheduler / IM / Orca 等)都会经过 lifecycleHooks.onBeforeStart,
+          // 不能只依赖 maker-ipc 的 bootstrapSession。
+          let globalSkillsReloadEpoch: number | null = null;
           if (agentKind === 'codex' && !remoteHostId) {
+            await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
+            // skills/list 按 cwd 缓存：在异步重载前捕获当前投影代次。请求期间若投影
+            // 再次变化，完成后只推进到捕获值，下一次使用仍会刷新新代次。
+            globalSkillsReloadEpoch =
+              desktopCodexAuthAdapter.codexSkillsListReloadEpoch(workingDir);
+            // 延迟记忆重启 pending 时,本地 Codex 新会话加入 shared host 前先尝试
+            // 兑现(其它会话全空闲才会真的重启;仍 busy 则放行,残余窗口见
+            // deferredCodexRestart.ts 模块注释)。
             await _beforeLocalCodexSessionStartHook?.();
           }
           // SSH remote 的 workingDir 属于远端文件系统，本机不能为它创建兼容链接。
-          if (remoteHostId || !workingDir) return;
+          if (remoteHostId || !workingDir) {
+            // 无项目 cwd 时 listAgentSkills 会回落 HOME；投影刚重建仍需 forceReload。
+            if (agentKind === 'codex' && !remoteHostId && globalSkillsReloadEpoch !== null) {
+              await codexAgent.listAgentSkills({ forceReload: true });
+              desktopCodexAuthAdapter.markCodexSkillsListCacheReloaded(
+                workingDir,
+                globalSkillsReloadEpoch,
+              );
+            }
+            return;
+          }
           const result = await prepareSharedProjectSkillLinks({ workingDir });
           for (const warning of result.warnings) {
             desktopMakerLogger.warn('shared project skill link warning', {
@@ -2108,10 +2171,16 @@ export function getMaker(): Maker {
               warning,
             });
           }
-          // Codex app-server 会按 cwd 缓存 skills/list；本轮新建链接后必须在
-          // startSession 前失效缓存，确保首个 session 就能使用刚共享的 Skill。
-          if (agentKind === 'codex' && result.changed) {
+          // Codex app-server 会按 cwd 缓存 skills/list；本轮新建链接或全局投影
+          // 重建后必须在 startSession 前失效缓存，确保首个 session 就能用到新 Skill。
+          if (agentKind === 'codex' && (result.changed || globalSkillsReloadEpoch !== null)) {
             await codexAgent.listAgentSkills({ workingDir, forceReload: true });
+            if (globalSkillsReloadEpoch !== null) {
+              desktopCodexAuthAdapter.markCodexSkillsListCacheReloaded(
+                workingDir,
+                globalSkillsReloadEpoch,
+              );
+            }
           }
         },
         onStartSucceeded: (sessionId, opts) => {

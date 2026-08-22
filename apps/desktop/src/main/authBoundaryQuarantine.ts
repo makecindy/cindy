@@ -456,6 +456,27 @@ export async function withSharedGlobalSkillProjectionMutation<T>(
   });
 }
 
+/**
+ * Primary 实例在 owner 锁内更新共享投影；共库 passive 实例只在同一锁内观察已发布状态。
+ * 模式选择留在授权边界内，避免调用方先读环境变量再与实际加锁动作产生竞态或分歧。
+ */
+export async function withSharedGlobalSkillProjectionAccess<T>(
+  ownerId: string | null,
+  access: {
+    mutate: () => Promise<T>;
+    observe: () => Promise<T>;
+  },
+): Promise<T> {
+  if (isPassiveSharedUserDataInstance()) {
+    const normalizedOwnerId = normalizeOwnerArgument(ownerId);
+    if (normalizedOwnerId === null) {
+      throw new Error('Read-only Ghost projection join requires a committed owner');
+    }
+    return withGhostSkillProjectionReadOnlyOwner(normalizedOwnerId, access.observe);
+  }
+  return withSharedGlobalSkillProjectionMutation(ownerId, access.mutate);
+}
+
 /** Join an already-published owner without allowing this process to mutate it. */
 export async function withGhostSkillProjectionReadOnlyOwner<T>(
   ownerId: string,

@@ -20,6 +20,7 @@ describe('review plugin', () => {
 
   afterAll(() => {
     registry._resetTabKindRegistry();
+    expansionPreference.resetReviewDiffExpansionPreferencesForTests();
   });
 
   it('registers under kind="review"', () => {

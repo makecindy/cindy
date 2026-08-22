@@ -296,8 +296,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
             }],
           };
         } else if (body.method === 'tools/call') {
-          // 超过 50ms startup budget 后才回工具结果，证明探测完成后切回长 request budget。
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          // 超过 1s startup budget 后才回工具结果，证明探测完成后切回长 request budget。
+          await new Promise((resolve) => setTimeout(resolve, 1_250));
           const text = body.params?.arguments?.text;
           echoCalls.push({ text });
           result = { content: [{ type: 'text', text: `ECHO[${String(text)}]` }] };
@@ -423,8 +423,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                     authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0',
                     'x-api-key': 'CINDY_PI_REMOTE_MCP_SECRET_1',
                   },
-                  startupTimeoutMs: 50,
-                  requestTimeoutMs: 1_000,
+                  startupTimeoutMs: 1_000,
+                  requestTimeoutMs: 3_000,
                 },
               }],
             },

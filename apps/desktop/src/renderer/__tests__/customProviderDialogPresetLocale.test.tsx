@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -133,8 +133,8 @@ async function findReadyPresetTrigger() {
   const trigger = await screen.findByRole('button', {
     name: 'settings.providers.custom.presets.label',
   });
-  // The dialog moves focus in rAF after mounting. Opening the Radix Popover before
-  // that focus settles can immediately dismiss it and leave tests using a stale node.
+  // 对话框挂载后会在 rAF 中移动焦点。在焦点稳定前打开 Radix Popover，
+  // 菜单可能立即关闭，并让测试继续使用已经失效的节点。
   await waitFor(() => {
     expect(document.activeElement).toBe(
       screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'),
@@ -143,8 +143,9 @@ async function findReadyPresetTrigger() {
   return trigger;
 }
 
-// jsdom exposes keyCode as read-only. Testing Library's keyDown helper can recreate
-// the event and lose 229 on Windows, so dispatch the exact native event we configure.
+// jsdom 的 KeyboardEvent.keyCode 只读且恒为 0。fireEvent 会再造一发事件，
+// Windows CI 上 229 赋完又丢，IME Escape 被当成普通关闭键。
+// 必须对同一条原生事件 dispatch，监听器读到的才是我们钉上的 keyCode。
 function dispatchEscape(
   target: Document | Element,
   init: { isComposing?: boolean; keyCode?: number } = {},
@@ -166,6 +167,22 @@ function dispatchEscape(
     }
   }
   target.dispatchEvent(event);
+}
+
+function overlayOf(dialog: HTMLElement): HTMLElement {
+  const overlay = dialog.parentElement;
+  if (!overlay) throw new Error('dialog overlay is missing');
+  return overlay;
+}
+
+function pointerDownOn(element: Element) {
+  element.dispatchEvent(
+    new PointerEvent('pointerdown', {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
 }
 
 beforeEach(() => {
@@ -191,6 +208,20 @@ afterEach(() => {
 });
 
 describe('CustomProviderDialog preset locale ownership', () => {
+  it('keeps keyCode 229 on the native Escape event jsdom delivers', () => {
+    let seen = 0;
+    const onKeyDown = (event: KeyboardEvent) => {
+      seen = event.keyCode;
+    };
+    document.addEventListener('keydown', onKeyDown);
+    try {
+      dispatchEscape(document, { keyCode: 229 });
+    } finally {
+      document.removeEventListener('keydown', onKeyDown);
+    }
+    expect(seen).toBe(229);
+  });
+
   it.each([
     ['zh-TW', '繁體供應商'],
     ['en', 'English Provider'],
@@ -258,7 +289,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
 
   it('dismisses only the topmost preset menu on a scrim gesture', async () => {
     i18nState.language = 'zh-TW';
-    const { container, onClose } = renderDialog();
+    const { onClose } = renderDialog();
 
     const trigger = await findReadyPresetTrigger();
     fireEvent.click(trigger);
@@ -275,15 +306,42 @@ describe('CustomProviderDialog preset locale ownership', () => {
       requestAnimationFrame(() => resolve());
     });
 
-    const scrim = container.firstElementChild as Element;
-    fireEvent.pointerDown(scrim);
-    await waitFor(() => {
-      expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
-    });
-    expect(onClose).not.toHaveBeenCalled();
+    const scrim = overlayOf(
+      screen.getByRole('dialog', { name: 'settings.providers.custom.dialog.createTitle' }),
+    );
+    const staleLayerListener = vi.fn();
+    document.addEventListener('pointerdown', staleLayerListener, true);
+    try {
+      act(() => pointerDownOn(scrim));
+      await waitFor(() => {
+        expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
+      });
+      expect(staleLayerListener).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.pointerDown(scrim);
-    expect(onClose).toHaveBeenCalledTimes(1);
+      act(() => pointerDownOn(scrim));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(staleLayerListener).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener('pointerdown', staleLayerListener, true);
+    }
+  });
+
+  it('claims the preset layer before a batched scrim gesture can dismiss the form', async () => {
+    i18nState.language = 'zh-TW';
+    const { onClose } = renderDialog();
+
+    const trigger = await findReadyPresetTrigger();
+    const scrim = overlayOf(
+      screen.getByRole('dialog', { name: 'settings.providers.custom.dialog.createTitle' }),
+    );
+
+    act(() => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+      pointerDownOn(scrim);
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('does not consume runtime tab or input pointerdowns while a child layer is open', async () => {

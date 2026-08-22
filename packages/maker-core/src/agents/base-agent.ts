@@ -699,6 +699,16 @@ export interface AgentDeps {
   }) => CapabilityRoutingPolicy | undefined | Promise<CapabilityRoutingPolicy | undefined>;
 
   /**
+   * Codex-only：宿主根据 app-server 实际发现的 Skill 路径，返回当前本地身份不可见的路径。
+   * CodexAgent 会同时从命令面板隐藏，并在 thread 配置中显式禁用这些 Skill。
+   * 远程 Codex 不调用此钩子，因为远端有独立的用户目录与身份边界。
+   */
+  resolveCodexDisabledSkillPaths?: (ctx: {
+    workingDir: string;
+    skills: ReadonlyArray<{ path: string; enabled: boolean }>;
+  }) => readonly string[] | Promise<readonly string[]>;
+
+  /**
    * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。
    *
    * 用于把上游上报的窗口收敛到真实上限：app-server 对网关路由的模型常报**基础模型**的窗口

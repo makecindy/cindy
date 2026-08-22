@@ -1079,6 +1079,203 @@ describe('CodexAgent capability routing', () => {
     ],
   } as const;
 
+  it('hides host-disabled global Skills from both the palette and a new thread', async () => {
+    const foreignSkillPath =
+      '/profiles/a/owners/owner-a/cindy-brain/ghost-a/skills/profile-a/SKILL.md';
+    const foreignSameNameSkillPath =
+      '/profiles/a/owners/owner-a/cindy-brain/ghost-shared/skills/shared-profile/SKILL.md';
+    const currentSkillPath =
+      '/profiles/b/owners/owner-b/cindy-brain/ghost-b/skills/profile-b/SKILL.md';
+    const globalSkillPath = '/home/user/.agents/skills/humanizer-zh/SKILL.md';
+    const skills = [
+      {
+        name: 'issue2246-profile-a',
+        description: 'Profile A only',
+        path: foreignSkillPath,
+        scope: 'user' as const,
+        enabled: true,
+      },
+      {
+        name: 'shared-profile',
+        description: 'Profile A copy of a shared Skill name',
+        path: foreignSameNameSkillPath,
+        scope: 'user' as const,
+        enabled: true,
+      },
+      {
+        name: 'shared-profile',
+        description: 'Profile B copy of a shared Skill name',
+        path: currentSkillPath,
+        scope: 'user' as const,
+        enabled: true,
+      },
+      {
+        name: 'humanizer-zh',
+        description: 'Shared user Skill',
+        path: globalSkillPath,
+        scope: 'user' as const,
+        enabled: true,
+      },
+    ];
+    const resolveCodexDisabledSkillPaths = vi.fn(async () => [
+      foreignSkillPath,
+      foreignSameNameSkillPath,
+    ]);
+    const agent = new CodexAgent(createDeps({}, { resolveCodexDisabledSkillPaths }));
+    const host = installFakeHost(
+      agent,
+      (method, params) => {
+        if (method !== Method.SkillsList) return undefined;
+        const { cwds = ['/repo'] } = params as { cwds?: string[] };
+        return { data: cwds.map((cwd) => ({ cwd, skills, errors: [] })) };
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    const palette = await agent.listAgentSkills({ workingDir: '/repo' });
+    expect(palette.skills.map((skill) => skill.name)).toEqual([
+      'humanizer-zh',
+      'shared-profile',
+    ]);
+
+    const handle = await agent.startSession({
+      sessionId: 'session-owner-filtered-skills',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const startParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(startParams.config).toMatchObject({
+      'skills.config': [
+        { path: foreignSkillPath, enabled: false },
+        { path: foreignSameNameSkillPath, enabled: false },
+      ],
+    });
+    expect(resolveCodexDisabledSkillPaths).toHaveBeenCalledWith({
+      workingDir: '/repo',
+      skills,
+    });
+
+    await handle.send({
+      type: 'user',
+      content: '/shared-profile use the current Profile copy',
+    });
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as { input?: unknown };
+    expect(turnStart.input).toEqual([
+      { type: 'skill', name: 'shared-profile', path: currentSkillPath },
+      { type: 'text', text: 'use the current Profile copy' },
+    ]);
+
+    await handle.close();
+  });
+
+  it('revalidates host-disabled Skill paths before dispatching a leading Slash', async () => {
+    const foreignSkillPath =
+      '/profiles/a/owners/owner-a/cindy-brain/ghost-late/skills/late-profile/SKILL.md';
+    let skills: Array<{
+      name: string;
+      description: string;
+      path: string;
+      scope: 'user';
+      enabled: boolean;
+    }> = [];
+    const resolveCodexDisabledSkillPaths = vi.fn(async ({ skills: discoveredSkills }) =>
+      discoveredSkills
+        .map((skill) => skill.path)
+        .filter((skillPath) => skillPath === foreignSkillPath),
+    );
+    const agent = new CodexAgent(createDeps({}, { resolveCodexDisabledSkillPaths }));
+    const host = installFakeHost(
+      agent,
+      (method, params) => {
+        if (method !== Method.SkillsList) return undefined;
+        const { cwds = ['/repo'] } = params as { cwds?: string[] };
+        return { data: cwds.map((cwd) => ({ cwd, skills, errors: [] })) };
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    const handle = await agent.startSession({
+      sessionId: 'session-owner-filtered-late-skill',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    skills = [
+      {
+        name: 'late-profile',
+        description: 'Profile A Skill discovered after the session started',
+        path: foreignSkillPath,
+        scope: 'user',
+        enabled: true,
+      },
+    ];
+
+    expect((await agent.listAgentSkills({ workingDir: '/repo', forceReload: true })).skills).toEqual(
+      [],
+    );
+    await handle.send({
+      type: 'user',
+      content: '/late-profile should stay literal',
+    });
+
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as { input?: unknown };
+    expect(turnStart.input).toEqual([
+      { type: 'text', text: '/late-profile should stay literal' },
+    ]);
+    expect(resolveCodexDisabledSkillPaths).toHaveBeenLastCalledWith({
+      workingDir: '/repo',
+      skills,
+    });
+
+    await handle.close();
+  });
+
+  it('fails closed for host-disabled Skill paths reported only as catalog errors', async () => {
+    const brokenForeignSkillPath =
+      '/profiles/a/owners/owner-a/cindy-brain/ghost-a/agent-skills/profile-a/SKILL.md';
+    const reportedSkills = [{ path: brokenForeignSkillPath, enabled: true }];
+    const resolveCodexDisabledSkillPaths = vi.fn(async () => [brokenForeignSkillPath]);
+    const agent = new CodexAgent(createDeps({}, { resolveCodexDisabledSkillPaths }));
+    const host = installFakeHost(
+      agent,
+      (method, params) => {
+        if (method !== Method.SkillsList) return undefined;
+        const { cwds = ['/repo'] } = params as { cwds?: string[] };
+        return {
+          data: cwds.map((cwd) => ({
+            cwd,
+            skills: [],
+            errors: [{ path: brokenForeignSkillPath, message: 'invalid metadata' }],
+          })),
+        };
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+
+    const handle = await agent.startSession({
+      sessionId: 'session-owner-filtered-broken-skill',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const startParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(startParams.config).toMatchObject({
+      'skills.config': [{ path: brokenForeignSkillPath, enabled: false }],
+    });
+    expect(resolveCodexDisabledSkillPaths).toHaveBeenCalledWith({
+      workingDir: '/repo',
+      skills: reportedSkills,
+    });
+
+    await handle.close();
+  });
+
   it('resolves workspace routing once from the frozen session context', async () => {
     const resolveCapabilityRouting = vi.fn(() => ({
       overrides: [
@@ -1374,6 +1571,17 @@ describe('CodexAgent capability routing', () => {
       'plugins."computer-use@openai-bundled".enabled',
     );
 
+    await handle.send({
+      type: 'user',
+      content: '/computer-use:computer-use control the desktop',
+    });
+    const turnStart = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as { input?: unknown };
+    expect(turnStart.input).toEqual([
+      { type: 'text', text: '/computer-use:computer-use control the desktop' },
+    ]);
+
     await handle.close();
   });
 
@@ -1431,7 +1639,11 @@ describe('CodexAgent capability routing', () => {
   });
 
   it('keeps remote Computer Use available without a local host replacement', async () => {
-    const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
+    const resolveCodexDisabledSkillPaths = vi.fn(async () => ['C:\\local-only\\SKILL.md']);
+    const agent = new CodexAgent(createDeps({}, {
+      capabilityRouting,
+      resolveCodexDisabledSkillPaths,
+    }));
     const host = installFakeHost(agent, (method, params) => {
       if (method !== Method.SkillsList) return undefined;
       const { cwds = ['/repo'] } = params as { cwds?: string[] };
@@ -1474,6 +1686,7 @@ describe('CodexAgent capability routing', () => {
     expect(params.config).not.toHaveProperty(
       'plugins."computer-use@openai-bundled".enabled',
     );
+    expect(resolveCodexDisabledSkillPaths).not.toHaveBeenCalled();
 
     await handle.close();
   });

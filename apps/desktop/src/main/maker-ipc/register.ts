@@ -6501,8 +6501,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (kind === 'codex' && linksChanged) {
           skillParams.forceReload = true;
         }
+        let globalSkillsReloadEpoch: number | null = null;
         if (kind === 'codex') {
           await desktopCodexAuthAdapter.ensureGlobalCodexAssets();
+          globalSkillsReloadEpoch = desktopCodexAuthAdapter.codexSkillsListReloadEpoch(
+            skillParams.workingDir,
+          );
+          if (globalSkillsReloadEpoch !== null) skillParams.forceReload = true;
         } else {
           // Pi scans ~/.agents/skills directly. Refresh the managed projection here so a
           // Codex-only skill added after Cindy startup is visible without using another agent
@@ -6510,6 +6515,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
         }
         const result = await maker.listAgentSkills(kind, skillParams);
+        if (kind === 'codex' && globalSkillsReloadEpoch !== null) {
+          desktopCodexAuthAdapter.markCodexSkillsListCacheReloaded(
+            skillParams.workingDir,
+            globalSkillsReloadEpoch,
+          );
+        }
         return { success: true, ...result };
       } catch (err) {
         return toAgentSkillListFailure(err, {

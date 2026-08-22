@@ -540,7 +540,7 @@ export function CustomProviderDialog({
   const runtimeFillTriggerRef = useRef<HTMLButtonElement>(null);
   const modelPickerTriggerRef = useRef<HTMLButtonElement>(null);
   const modelFetchInFlightRef = useRef(false);
-  const scrimRef = useRef<HTMLDivElement>(null);
+  const dialogScrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
   // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
@@ -575,6 +575,26 @@ export function CustomProviderDialog({
   }, []);
 
   useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        event.button !== 0 ||
+        event.target !== dialogScrimRef.current ||
+        savingRef.current ||
+        runtimeFillRef.current
+      ) {
+        return;
+      }
+      // window capture 先于 Radix Popover 的 document capture：由当前层级 owner
+      // 一次性结算该手势，避免菜单先关闭后同一 pointerdown 又误关底层表单。
+      event.preventDefault();
+      event.stopPropagation();
+      dismissTopmostLayer();
+    };
+    window.addEventListener('pointerdown', onPointerDown, { capture: true });
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, [dismissTopmostLayer]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       // IME 候选窗的 Escape 是组合输入控制，不是弹层关闭意图。
@@ -590,24 +610,6 @@ export function CustomProviderDialog({
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [dismissTopmostLayer]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      if (event.target !== scrimRef.current) return;
-      if (!childLayerRef.current && !runtimeFillRef.current) return;
-
-      // This must run before Radix's document-capture outside-dismiss. The
-      // scrim gesture belongs to the dialog's current child layer; consuming
-      // it here prevents Radix from committing a closed popover before the
-      // form can settle that layer exactly once.
-      event.preventDefault();
-      event.stopPropagation();
-      dismissTopmostLayer();
-    };
-    window.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
   }, [dismissTopmostLayer]);
 
   useEffect(() => {
@@ -1729,7 +1731,7 @@ export function CustomProviderDialog({
 
   return (
     <div
-      ref={scrimRef}
+      ref={dialogScrimRef}
       data-custom-provider-dialog-scrim="true"
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
       onPointerDown={(event) => {
@@ -1811,12 +1813,19 @@ export function CustomProviderDialog({
                 locale={i18n.language}
                 open={presetMenuOpen}
                 onOpenChange={(open) => {
-                  setChildLayer((current) => {
-                    if (open) {
-                      return current?.kind === 'model-picker' ? current : { kind: 'preset-menu' };
-                    }
-                    return current?.kind === 'preset-menu' ? null : current;
-                  });
+                  // Radix 可以在 React 尚未提交本次状态更新时收到下一个原生手势。
+                  // 先同步认领 layer owner，确保 window-capture 不会把刚打开的菜单
+                  // 误判成「没有子层」并关闭底层表单；state 仍负责实际呈现。
+                  const current = childLayerRef.current;
+                  const next: DialogChildLayer = open
+                    ? current?.kind === 'model-picker'
+                      ? current
+                      : { kind: 'preset-menu' }
+                    : current?.kind === 'preset-menu'
+                      ? null
+                      : current;
+                  childLayerRef.current = next;
+                  setChildLayer(next);
                 }}
               />
             </div>

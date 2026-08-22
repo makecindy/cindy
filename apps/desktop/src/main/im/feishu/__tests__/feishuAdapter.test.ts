@@ -72,9 +72,9 @@ const fetchChatHistoryPage = vi.fn<
 >(async () => ({ messages: [], nextPageToken: null }));
 const downloadMessageAttachments = vi.fn(async () => ({ attachments: [], unsupported: [] }));
 const getOwnerOpenId = vi.fn(() => 'ou_owner');
-const sendMarkdownText = vi.fn<(_userId: string, _text: string) => Promise<{ messageId: string }>>(
-  async () => ({ messageId: 'om_notice' }),
-);
+const sendMarkdownText = vi.fn<FeishuIM['sendMarkdownText']>(async () => ({
+  messageId: 'om_notice',
+}));
 const getChatName = vi.fn<(chatId: string) => Promise<string | null>>(async () => null);
 const getStatus = vi.fn<() => IMStatus>(() => ({ kind: 'connected', appId: 'cli_abc' }));
 const fakeIm = {

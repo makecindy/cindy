@@ -31,7 +31,11 @@ import type {
 } from '@cindy/maker-core';
 import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
-import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
+import {
+  prepareCodexGlobalSkillsLinks,
+  readCodexAgentsProjectionIdentity,
+  type CodexApprovedGhostSkillSource,
+} from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
@@ -82,10 +86,12 @@ import {
   activeOwnerScopeKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
+  ownerScopedUserDataPath,
   type ActiveAppSession,
 } from '../appSessionState.js';
 import {
   assertGhostSkillProjectionBoundaryStableForOwner,
+  withSharedGlobalSkillProjectionAccess,
   withSharedGlobalSkillProjectionMutation,
 } from '../authBoundaryQuarantine.js';
 import {
@@ -696,6 +702,29 @@ type CodexDisconnectIntent = {
   acceptingIntent: boolean;
 };
 
+interface CodexAssetPrepOwnerCapture {
+  ownerId: string | null;
+  ownerRoot: string;
+  ownerScopeKey: string;
+}
+
+function captureCodexAssetPrepOwner(): CodexAssetPrepOwnerCapture {
+  // 三次读取之间没有 await；同一 JS turn 内把 ID、scope 与 root 固定成一个入队快照。
+  const ownerId = getActiveAppSession().dataOwnerId;
+  return {
+    ownerId,
+    ownerRoot: ownerScopedUserDataPath(),
+    ownerScopeKey: activeOwnerScopeKey(),
+  };
+}
+
+function assertCodexAssetPrepOwnerStable(capture: CodexAssetPrepOwnerCapture): void {
+  if (activeOwnerScopeKey() !== capture.ownerScopeKey) {
+    throw new Error('Codex asset preparation owner changed before projection publish');
+  }
+  assertGhostSkillProjectionBoundaryStableForOwner(capture.ownerId);
+}
+
 const MAX_COALESCED_LOGIN_PROGRESS_CHARS = 64 * 1024;
 
 export class DesktopCodexAuthAdapter implements AuthAdapter {
@@ -759,12 +788,29 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
 
   /**
-   * 进行中的 ensureGlobalCodexAssets 调用 —— 同一时刻并发进入直接复用同一 Promise,
-   * 避免重复 stat / copy。每次 codex session start 都会过一遍 getAuthEnv → ensure,
-   * 没有缓存时连续启动会触发并发竞态 (功能正确但浪费 io)。结束后置 null 不做长期缓存,
-   * 因为源文件 (~/.codex/AGENTS.md) 随时可能被用户改, 仍需要后续调用触发新一轮检查。
+   * 进行中的 ensureGlobalCodexAssets 调用。同一 owner 的后续刷新在准备已开始时合并为一次
+   * 尾随重跑；owner 切换时将新准备串在旧准备之后，避免两个 Profile 并发改写同一个
+   * CODEX_HOME 投影。结束后不长期缓存，因为源文件 (~/.codex/AGENTS.md) 随时可能被用户修改。
    */
-  private pendingAssetsPrep: Promise<void> | null = null;
+  private pendingAssetsPrep: {
+    owner: CodexAssetPrepOwnerCapture;
+    promise: Promise<{ skillsProjectionEpoch: number }>;
+    runStarted: boolean;
+    rerunRequested: boolean;
+  } | null = null;
+  /** 由 maker-host 装配 GhostManager 的批准态唯一入口；未装配时 Ghost 投影 fail-closed。 */
+  private approvedGhostSkillSourceProvider?: () => CodexApprovedGhostSkillSource;
+
+  /**
+   * owner 投影重建代次。app-server 的 `skills/list` 按 cwd 缓存，因此不能用单个全局
+   * boolean：cwd A forceReload 后若清掉全局 dirty，cwd B 会继续命中旧缓存。
+   * Ghost 变更可能先异步重建投影，随后会话启动时 prepare 已是 changed:false；
+   * 代次 sticky 保证每个 cwd 在首次使用新投影时仍会 forceReload。
+   */
+  private skillsProjectionEpoch = 0;
+  /** 上次由本进程确认的投影发布身份，用于感知其他进程完成的切换或同签名修复。 */
+  private observedAgentsProjectionIdentity: string | null | undefined;
+  private skillsListReloadedEpochByCwd = new Map<string, number>();
 
   /**
    * 进行中的 reconcileWithSystemCodex 调用 —— 多个调用点 (构造 / getState / getAuthEnv /
@@ -1083,31 +1129,137 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
   }
 
-  async ensureGlobalCodexAssets(): Promise<void> {
-    if (this.pendingAssetsPrep) return this.pendingAssetsPrep;
-    this.pendingAssetsPrep = this.runEnsureGlobalCodexAssets().finally(() => {
-      this.pendingAssetsPrep = null;
+  async ensureGlobalCodexAssets(): Promise<{ skillsProjectionEpoch: number }> {
+    const owner = captureCodexAssetPrepOwner();
+    const current = this.pendingAssetsPrep;
+    if (current?.owner.ownerScopeKey === owner.ownerScopeKey) {
+      // 已开始的准备可能已经读取过批准快照；把后续刷新收敛成一次尾随重跑。
+      // 若任务仍在等待前一个 owner，则首次执行尚未取快照，无需额外再跑一轮。
+      if (current.runStarted) current.rerunRequested = true;
+      return current.promise;
+    }
+
+    const pending: {
+      owner: CodexAssetPrepOwnerCapture;
+      promise: Promise<{ skillsProjectionEpoch: number }>;
+      runStarted: boolean;
+      rerunRequested: boolean;
+    } = {
+      owner,
+      promise: Promise.resolve({ skillsProjectionEpoch: this.skillsProjectionEpoch }),
+      runStarted: false,
+      rerunRequested: false,
+    };
+    const start = async (): Promise<{ skillsProjectionEpoch: number }> => {
+      if (current) await current.promise.catch(() => undefined);
+
+      let outcome:
+        | { ok: true; value: { skillsProjectionEpoch: number } }
+        | { ok: false; error: unknown };
+      do {
+        pending.rerunRequested = false;
+        pending.runStarted = true;
+        try {
+          outcome = { ok: true, value: await this.runEnsureGlobalCodexAssets(owner) };
+        } catch (error) {
+          outcome = { ok: false, error };
+        }
+      } while (pending.rerunRequested && this.pendingAssetsPrep === pending);
+
+      if (outcome.ok) return outcome.value;
+      throw outcome.error;
+    };
+    pending.promise = start().finally(() => {
+      if (this.pendingAssetsPrep === pending) this.pendingAssetsPrep = null;
     });
-    return this.pendingAssetsPrep;
+    this.pendingAssetsPrep = pending;
+    return pending.promise;
   }
 
-  private async runEnsureGlobalCodexAssets(): Promise<void> {
+  /**
+   * 与 CodexAgent.listAgentSkills 一致：无项目 cwd 时 app-server 回落 HOME。
+   * 用作 skills/list 缓存脏状态的跟踪键。
+   */
+  codexSkillsListCacheKey(workingDir?: string | null): string {
+    const trimmed = typeof workingDir === 'string' ? workingDir.trim() : '';
+    return trimmed || os.homedir();
+  }
+
+  /**
+   * 返回该 cwd（或 HOME 回落）下一次 forceReload 应覆盖的投影代次。
+   * 调用方必须在发起异步请求前捕获该值，避免请求期间的新投影被旧扫描误标为已刷新。
+   */
+  codexSkillsListReloadEpoch(workingDir?: string | null): number | null {
+    const cacheKey = this.codexSkillsListCacheKey(workingDir);
+    return (this.skillsListReloadedEpochByCwd.get(cacheKey) ?? 0) < this.skillsProjectionEpoch
+      ? this.skillsProjectionEpoch
+      : null;
+  }
+
+  /** 指定 cwd 的 skills/list forceReload 成功时，只推进到请求开始前捕获的投影代次。 */
+  markCodexSkillsListCacheReloaded(
+    workingDir: string | null | undefined,
+    reloadedEpoch: number,
+  ): void {
+    const cacheKey = this.codexSkillsListCacheKey(workingDir);
+    const previousEpoch = this.skillsListReloadedEpochByCwd.get(cacheKey) ?? 0;
+    this.skillsListReloadedEpochByCwd.set(cacheKey, Math.max(previousEpoch, reloadedEpoch));
+  }
+
+  private async runEnsureGlobalCodexAssets(
+    owner: CodexAssetPrepOwnerCapture,
+  ): Promise<{ skillsProjectionEpoch: number }> {
     // Load-bearing order: Codex skill linking scans ~/.agents/skills, so shared
     // links must populate that directory before prepareCodexGlobalSkillsLinks runs.
-    const ownerId = getActiveAppSession().dataOwnerId;
-    const sharedOutcome = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
-      prepareSharedGlobalSkillLinks({
-        assertOwnerStable: () =>
-          assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-      }),
-    ).then(
+    const assertOwnerStable = () => assertCodexAssetPrepOwnerStable(owner);
+    assertOwnerStable();
+    const sharedOutcome = await withSharedGlobalSkillProjectionAccess(owner.ownerId, {
+      mutate: async () => {
+        const result = await prepareSharedGlobalSkillLinks({
+          assertOwnerStable,
+        });
+        return { warnings: result.warnings };
+      },
+      // 共库 passive 只消费 primary 已发布的共享根，不得自行对账或落盘。
+      observe: async () => ({ warnings: [] }),
+    }).then(
       (r) => ({ ok: true as const, label: 'shared-skills' as const, warnings: r.warnings }),
       (err: Error) => ({ ok: false as const, label: 'shared-skills' as const, err }),
     );
+    // shared 对账可能因 owner 切换而失败；不能把这类失败折成 warning 后继续发布旧 root。
+    assertOwnerStable();
+    const approvedGhostSkills = this.approvedGhostSkillSourceProvider?.();
+    assertOwnerStable();
 
+    // Codex Skill 准备会发布 xdt-agents 并删除旧的内容寻址投影；两步必须共用
+    // 跨进程锁，避免共享 userData 的 dev / packaged 实例互删对方刚发布的目录。
     const [skillsOutcome, rulesOutcome, pluginsOutcome] = await Promise.all([
-      prepareCodexGlobalSkillsLinks(this.codexHome).then(
-        (r) => ({ ok: true as const, label: 'skills' as const, warnings: r.warnings }),
+      withSharedGlobalSkillProjectionAccess(owner.ownerId, {
+        mutate: async () => {
+          const result = await prepareCodexGlobalSkillsLinks(this.codexHome, {
+            ownerRoot: owner.ownerRoot,
+            ...(approvedGhostSkills ? { approvedGhostSkills } : {}),
+            assertOwnerStable,
+          });
+          return {
+            warnings: result.warnings,
+            changed: result.changed,
+            agentsProjectionIdentity: result.agentsProjectionIdentity,
+          };
+        },
+        observe: async () => ({
+          warnings: [],
+          changed: false,
+          agentsProjectionIdentity: await readCodexAgentsProjectionIdentity(this.codexHome),
+        }),
+      }).then(
+        (r) => ({
+          ok: true as const,
+          label: 'skills' as const,
+          warnings: r.warnings,
+          changed: r.changed,
+          agentsProjectionIdentity: r.agentsProjectionIdentity,
+        }),
         (err: Error) => ({ ok: false as const, label: 'skills' as const, err }),
       ),
       prepareCodexGlobalRulesCopy(this.codexHome).then(
@@ -1126,6 +1278,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         (err: Error) => ({ ok: false as const, label: 'plugins' as const, err }),
       ),
     ]);
+    assertOwnerStable();
 
     for (const outcome of [sharedOutcome, skillsOutcome, rulesOutcome, pluginsOutcome]) {
       if (!outcome.ok) {
@@ -1156,6 +1309,24 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         `Cannot start Codex safely because Cindy could not isolate a downstream plugin capability: ${pluginsOutcome.routingFailures.join('; ')}`,
       );
     }
+    if (skillsOutcome.ok) {
+      const previousIdentity = this.observedAgentsProjectionIdentity;
+      const nextIdentity = skillsOutcome.agentsProjectionIdentity;
+      if (nextIdentity !== undefined) {
+        this.observedAgentsProjectionIdentity = nextIdentity;
+      }
+      // 首次观察没有旧 app-server 缓存，无需额外推进代次。此后即使本轮没有写盘，
+      // 只要观察到另一进程发布了新投影，也必须让每个 cwd 在首次使用时 forceReload。
+      if (
+        skillsOutcome.changed ||
+        (previousIdentity !== undefined &&
+          nextIdentity !== undefined &&
+          previousIdentity !== nextIdentity)
+      ) {
+        this.skillsProjectionEpoch += 1;
+      }
+    }
+    return { skillsProjectionEpoch: this.skillsProjectionEpoch };
   }
 
   /** maker-host 在构造完 codexAgent 后调一次, 注入 dispose 回调。 */
@@ -1184,6 +1355,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   setOnOAuthBindingClaimed(cb: () => void | Promise<void>): void {
     this.onOAuthBindingClaimed = cb;
+  }
+
+  /** 注入 GhostManager 的 receipt-backed 技能来源，避免 auth adapter 反向依赖插件模块。 */
+  setApprovedGhostSkillSourceProvider(
+    provider: (() => CodexApprovedGhostSkillSource) | undefined,
+  ): void {
+    this.approvedGhostSkillSourceProvider = provider;
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
