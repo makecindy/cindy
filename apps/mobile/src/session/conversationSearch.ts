@@ -256,8 +256,13 @@ export function conversationSearchSessionCacheKey(
   return `${session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? 'local'}:${session.id}`;
 }
 
+/**
+ * 索引搜索行只负责打开任务。重命名 / 置顶 / 归档 / 多选写回留在普通列表:
+ * 搜索结果是一次请求的投影,订阅 store 再同步筛选只会把写操作家族继续放大。
+ * 带 searchLocallyCached 字段 = 搜索命中(无论是否命中本地镜像)。
+ */
 export function conversationSearchAllowsLocalWrites(item: object): boolean {
-  return !('searchLocallyCached' in item) || item.searchLocallyCached !== false;
+  return !('searchLocallyCached' in item);
 }
 
 export function cachedSessionForSearchResult(

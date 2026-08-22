@@ -401,6 +401,7 @@ describe('helpers', () => {
     const item = toSearchListItem(hit, Date.parse('2026-08-19T00:00:00.000Z'), '未命名任务', cachedSessionForSearchResult(hit, cachedByKey));
     expect(item.searchLocallyCached).toBe(true);
     expect((item.session as RemoteSession).deviceLinkDeviceId).toBe('dev-a');
-    expect(conversationSearchAllowsLocalWrites(item)).toBe(true);
+    expect(conversationSearchAllowsLocalWrites(item)).toBe(false);
+    expect(conversationSearchAllowsLocalWrites({ session: { id: 'plain' } })).toBe(true);
   });
 });
