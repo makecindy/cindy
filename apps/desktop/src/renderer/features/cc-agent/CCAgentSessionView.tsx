@@ -181,10 +181,10 @@ import {
 } from '@/features/bots/BotSessionContentHeader';
 import { botComposerPlaceholderKey } from '@/features/bots/botChatPresentation';
 import {
-  mergeBotComposerRuntime,
+  createBotRuntimeMirror,
   type BotComposerRuntimeSnapshot,
 } from '@/features/bots/botComposerRuntime';
-import { getBotProfiles, updateBotProfile } from '@/features/bots/botStore';
+import { getBotProfiles, subscribeBotProfiles, updateBotProfile } from '@/features/bots/botStore';
 import { isCurrentSubagentRunsChange } from '@/features/right-sidebar/plugins/subagents/subagentChangeFence';
 import { startSubagentTabDiscovery } from './subagentTabDiscovery';
 import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
@@ -2609,6 +2609,25 @@ export function CCAgentSessionView({
   }, []);
 
   /*
+    回写队列。store 还没 hydrate 完时它把这次改动存住,等伙伴出现再补写 ——
+    判定与合并规则见 botComposerRuntime.ts 的 createBotRuntimeMirror。
+  */
+  const botRuntimeMirror = useMemo(
+    () =>
+      createBotRuntimeMirror({
+        getCapabilities: (botId) =>
+          getBotProfiles().find((item) => item.id === botId)?.capabilities ?? null,
+        write: (botId, capabilities) => {
+          void updateBotProfile(botId, { capabilities }).catch(() => {});
+        },
+        subscribe: subscribeBotProfiles,
+      }),
+    [],
+  );
+  // 会话视图卸载时把等待中的订阅摘掉,别让它跨会话活着。
+  useEffect(() => () => botRuntimeMirror.dispose(), [botRuntimeMirror]);
+
+  /*
     伙伴对话的运行时选择要写回伙伴 Profile。
 
     输入框的模型 / 权限控件本来只改**这条会话行**,而伙伴的主任务在 Renew 时按
@@ -2621,14 +2640,9 @@ export function CCAgentSessionView({
     (snapshot: BotComposerRuntimeSnapshot) => {
       const botId = botChatIdentityRef.current?.id;
       if (!botId) return;
-      const profile = getBotProfiles().find((item) => item.id === botId);
-      if (!profile) return;
-      const nextCapabilities = mergeBotComposerRuntime(profile.capabilities, snapshot);
-      if (!nextCapabilities) return;
-      // 失败只影响「下次 Renew 会回跳」,不该打断正在进行的对话。
-      void updateBotProfile(botId, { capabilities: nextCapabilities }).catch(() => {});
+      botRuntimeMirror.mirror(botId, snapshot);
     },
-    [],
+    [botRuntimeMirror],
   );
 
   // F3: Model switch linkage — 切到不支持 Fast Mode 的模型时自动关闭。

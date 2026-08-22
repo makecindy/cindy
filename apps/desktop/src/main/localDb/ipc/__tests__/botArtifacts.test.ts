@@ -212,6 +212,61 @@ describe('bot artifact projection', () => {
   });
 
   /*
+    协议引用的存在性。早前这一类一律放行,于是**字节已经被回收的作品仍然留在
+    网格里**,点开必然失败(只能靠打开失败的 toast 兜底)。现在它们也过同一道闸:
+    在主进程内解成绝对路径 → stat,路径不写回条目。
+  */
+  describe('协议引用的存在性', () => {
+    const resolveRefPath = (ref: string) =>
+      ref.startsWith('cindy-media://') ? path.join(tmpRoot, ref.slice('cindy-media://'.length)) : null;
+
+    function addDelegationArtifact(ref: string, kind: string) {
+      sqlite!
+        .prepare(
+          `INSERT INTO bot_delegations
+           (id, requesting_bot_id, target_bot_id, objective, target_profile_version,
+            status, output_artifacts_json, created_at, completed_at, updated_at)
+           VALUES (?, 'bot-a', 'bot-a', 'do it', 1, 'completed', ?, 1, 3000, 3000)`,
+        )
+        .run(`del-${ref}`, JSON.stringify([{ ref, kind }]));
+    }
+
+    it('字节已被回收的引用不再出现在仓库里', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      addDelegationArtifact('cindy-media://gone.png', 'image');
+
+      // 不给解析器 = 与加闸之前逐字同行为:放行。
+      expect((await listBotArtifacts({ botId: 'bot-a' })).items).toHaveLength(1);
+      // 给了解析器,而磁盘上没有这个字节 → 摘掉。
+      const filtered = await listBotArtifacts({ botId: 'bot-a' }, { resolveRefPath });
+      expect(filtered.items).toEqual([]);
+    });
+
+    it('字节还在的引用照常出现,且不把解出来的路径写回条目', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      fs.writeFileSync(path.join(tmpRoot, 'kept.png'), 'xy');
+      addDelegationArtifact('cindy-media://kept.png', 'image');
+
+      const result = await listBotArtifacts({ botId: 'bot-a' }, { resolveRefPath });
+      expect(result.items).toHaveLength(1);
+      // renderer 那边仍然只看得到协议地址 —— 解出来的绝对路径只用于这一次判定。
+      expect(result.items[0]!.path).toBeNull();
+      expect(result.items[0]!.ref).toBe('cindy-media://kept.png');
+      // 顺带补齐了体积。
+      expect(result.items[0]!.sizeBytes).toBe(2);
+    });
+
+    it('解析器认不出的协议一律放行,不因为判不了就删掉用户的作品', async () => {
+      addBot('bot-a', 'session-a', tmpRoot);
+      addDelegationArtifact('xdt-image://legacy-domain-asset', 'image');
+
+      const result = await listBotArtifacts({ botId: 'bot-a' }, { resolveRefPath });
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]!.ref).toBe('xdt-image://legacy-domain-asset');
+    });
+  });
+
+  /*
     这一条盯的是一个具体故障:**伙伴做出来的图在对话里好好地显示着,作品集里
     一张都没有。** 图和视频不是文件写入 —— 它们从工具结果的 xdt_image_urls /
     xdt_video_urls 里回来,而投影原来只认「文件工具的新建」和「消息附件」两条。

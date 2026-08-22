@@ -3458,6 +3458,15 @@
     },
     "imBot": {
       "beta": "Beta",
+      "unreachableTarget": {
+        "names": {
+          "cindyGroup": "官方机器人",
+          "discord": "Discord 机器人",
+          "telegram": "Telegram 机器人"
+        },
+        "cnPersonal": "你要找的{{name}}，中国大陆版的个人账号暂时不提供；换成企业账号就能用。",
+        "localMode": "你要找的{{name}}需要先登录 Cindy 账号。"
+      },
       "groups": {
         "cindy": "官方",
         "personal": "个人"

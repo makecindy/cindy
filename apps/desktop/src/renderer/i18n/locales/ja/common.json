@@ -3458,6 +3458,15 @@
     },
     "imBot": {
       "beta": "Beta",
+      "unreachableTarget": {
+        "names": {
+          "cindyGroup": "公式ボット",
+          "discord": "Discord ボット",
+          "telegram": "Telegram ボット"
+        },
+        "cnPersonal": "お探しの{{name}}は、中国本土版の個人アカウントでは提供されていません。組織アカウントなら利用できます。",
+        "localMode": "お探しの{{name}}を使うには、Cindy アカウントにサインインしてください。"
+      },
       "groups": {
         "cindy": "公式",
         "personal": "個人"

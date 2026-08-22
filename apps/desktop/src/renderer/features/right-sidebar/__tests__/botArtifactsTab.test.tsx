@@ -151,11 +151,21 @@ describe('BotArtifactsBody', () => {
     expect(window.electronAPI.localDb.bots.artifacts).not.toHaveBeenCalled();
   });
 
-  it('fails closed while device ownership is still unresolved', async () => {
+  /*
+    归属未解析时仍然 fail closed(不去读本机数据),但**不再说那句错话**。
+
+    `undefined` 是「还没解析出来」,不是「在远端」。早前两者共用一条判定,于是
+    冷启动瞬间会闪一句「远程任务暂不支持作品集」;分离出去的侧栏窗口若一直收不到
+    context 推送,还会长期停在那句话上 —— 说了一个它并不知道的结论。
+  */
+  it('归属还没解析出来时不读数据,但也不说「远程不支持」', async () => {
     render(
       <BotArtifactsBody state={{ filter: 'all' }} ctx={ctx({ deviceLinkDeviceId: undefined })} />,
     );
-    expect(screen.getByText('bots.artifacts.remoteUnavailable')).toBeTruthy();
+    // fail closed 照旧:没解析出归属就不碰本机数据。
+    expect(window.electronAPI.localDb.bots.artifacts).not.toHaveBeenCalled();
+    // 但显示的是加载态,不是那句关于远端的结论。
+    expect(screen.queryByText('bots.artifacts.remoteUnavailable')).toBeNull();
   });
 
   it('reports truncation so 200 件上限不被当成全部', async () => {

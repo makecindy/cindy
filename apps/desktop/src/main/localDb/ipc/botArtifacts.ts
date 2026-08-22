@@ -19,9 +19,15 @@
  *      伙伴做出来的图和视频不是文件写入,它们从工具结果里回来 —— 少了这条来源,
  *      就会出现「对话里图好好地显示着,作品集里一张都没有」。
  *
- * 存在性门槛:有本机绝对路径的交付物在返回前 `stat` 一次,不存在 / 非普通文件的
- * 直接摘掉(DESIGN.md §14.5 「本机会话走真实存在性检查」)。协议引用类(cindy-media://
- * / xdt-*://)不 stat —— 媒体仓绝对路径不出主进程,存在性由协议 handler 自己兜底。
+ * 存在性门槛:交付物在返回前 `stat` 一次,不存在 / 非普通文件的直接摘掉
+ * (DESIGN.md §14.5 「本机会话走真实存在性检查」)。有本机绝对路径的直接 stat;
+ * 协议引用类先在**主进程内**解引用成绝对路径再 stat —— 路径只用于这一次判定,
+ * 不写回条目、不出主进程,renderer 拿到的仍然只是协议地址。
+ *
+ * 早前这里对协议引用一律放行,理由写的是「媒体仓绝对路径不出主进程」。那个理由
+ * 不成立(判定发生在主进程内,路径本来就没出去),实际后果是已回收的 blob 仍留在
+ * 网格里、点开必然失败。解不出路径的协议(不认识的 scheme、形状非法的地址)仍然
+ * 放行:这里是展示用户的作品,**误删比误留严重**。
  *
  * 已知降级(如实登记,不隐藏):
  *   - SSH 远端 workingDir 的伙伴会话:`stat` 打在本机,一律失败 → 该会话的
@@ -219,21 +225,28 @@ export function mergeBotArtifacts(items: BotArtifactItem[]): BotArtifactItem[] {
 }
 
 /**
- * 存在性过滤 + 用 stat 补齐体积。协议引用直接放行。
+ * 存在性过滤 + 用 stat 补齐体积。
+ *
+ * 本机绝对路径直接 stat;协议引用先经 `resolveRefPath` 解成绝对路径再 stat。
+ * **解出来的路径只用于这一次判定**——不写回条目,renderer 那边仍然只看得到协议
+ * 地址。解不出来(没给解析器 / 不认识的 scheme / 地址形状非法)的一律放行。
  *
  * `notBefore` 是命令候选专用的时间下界(id → 最早那条命令的执行时间 − 余量):
  * 命令文本里出现路径 ≠ 命令创建了它,所以还要求文件的创建时间不早于命令。对话卡
  * 有 turn 上界可用,仓库是全生命周期聚合、没有上界,这一点如实登记为更宽。
+ * 命令候选恒为本机路径,协议引用不会落进这张表。
  */
 async function keepExistingFiles(
   items: BotArtifactItem[],
   notBefore?: ReadonlyMap<string, number>,
+  resolveRefPath?: (ref: string) => string | null,
 ): Promise<BotArtifactItem[]> {
   const checked = await Promise.all(
     items.map(async (item) => {
-      if (!item.path) return item;
+      const probePath = item.path ?? (item.ref ? (resolveRefPath?.(item.ref) ?? null) : null);
+      if (!probePath) return item;
       try {
-        const stat = await fs.stat(item.path);
+        const stat = await fs.stat(probePath);
         if (!stat.isFile()) return null;
         const floor = notBefore?.get(item.id);
         if (typeof floor === 'number') {
@@ -264,6 +277,13 @@ export interface ListBotArtifactsInput {
  */
 export interface BotArtifactSources {
   listTurnChangeSets?: (sessionId: string) => Promise<TurnChangeSetSummary[]>;
+  /**
+   * 协议引用 → 本机绝对路径,**仅供存在性判定**。
+   *
+   * 返回 null = 这个协议判断不了(不认识的 scheme、地址形状非法)→ 条目放行。
+   * 省略这一项 = 所有协议引用都放行,与本模块加这道闸之前的行为一致。
+   */
+  resolveRefPath?: (ref: string) => string | null;
 }
 
 /**
@@ -523,7 +543,7 @@ export async function listBotArtifacts(
   // stat 是这条链上唯一的磁盘开销,不能跟着历史长度线性增长。列表已按时间倒序,
   // 只核验够填满一屏上限的那批候选(留出被存在性过滤掉的余量)。
   const candidates = merged.slice(0, limit * STAT_CANDIDATE_FACTOR);
-  const existing = await keepExistingFiles(candidates, commandOnlyNotBefore);
+  const existing = await keepExistingFiles(candidates, commandOnlyNotBefore, sources?.resolveRefPath);
   return {
     botId,
     items: existing.slice(0, limit),
@@ -540,6 +560,9 @@ export function registerBotArtifactIpc(): void {
     const body = raw && typeof raw === 'object' && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)
       : {};
+    // 同样延迟 import(blobStore 在函数里取 `app.getPath`)。取不到就整块不给
+    // 解析器 —— 协议引用回到「一律放行」,不因为解析器缺席而误删用户的作品。
+    const blobStore = await import('../../cindy-media/blobStore.js').catch(() => null);
     return listBotArtifacts(
       {
         ...(typeof body.botId === 'string' ? { botId: body.botId.slice(0, 128) } : {}),
@@ -553,6 +576,20 @@ export function registerBotArtifactIpc(): void {
           const store = await import('../../turn-change-set/store.js');
           return store.listTurnChangeSets(sessionId);
         },
+        ...(blobStore
+          ? {
+              resolveRefPath: (ref: string) => {
+                // 只有媒体总仓能从地址反解出本机位置。`xdt-*://` 是各媒体域的历史
+                // 地址,没有统一的本机映射 —— 返回 null(放行)而不是猜。
+                if (!ref.startsWith('cindy-media://')) return null;
+                try {
+                  return blobStore.resolveSafe(ref).absPath;
+                } catch {
+                  return null;
+                }
+              },
+            }
+          : {}),
       },
     );
   });

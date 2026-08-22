@@ -11,6 +11,9 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { BotArtifactCard } from '@/features/bots/BotArtifactCard';
+import { useBotArtifactOpen } from '@/features/bots/useBotArtifactOpen';
+import { makeBotArtifact } from '../../../../../shared/botArtifact';
 import type { BotDelegationStatus, BotDelegationView } from '../../../../../shared/botDelegation';
 import type { TabKindHostContext } from '../../types';
 import type { BotDelegationsState } from './index';
@@ -49,6 +52,7 @@ export function BotDelegationsBody({ state, ctx, active = true, shellVisible = t
   const [error, setError] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [retryingDeliveryId, setRetryingDeliveryId] = useState<string | null>(null);
+  const { openArtifact, artifactLightboxes } = useBotArtifactOpen();
   const selected = useMemo(
     () => rows.find((row) => row.id === state.selectedDelegationId) ?? null,
     [rows, state.selectedDelegationId],
@@ -189,14 +193,32 @@ export function BotDelegationsBody({ state, ctx, active = true, shellVisible = t
                 <Paperclip size={12} />
                 {t('bots.automations.outputArtifacts', { count: selected.outputArtifacts.length })}
               </h3>
-              <ul className="flex flex-col gap-1.5">
-                {selected.outputArtifacts.map((artifact) => (
-                  <li key={`${artifact.kind}:${artifact.ref}`} className="break-all rounded-lg bg-[var(--surface-subtle)] px-3 py-2 text-11 text-[var(--text-secondary)]">
-                    <span className="mr-2 text-[var(--text-tertiary)]">{artifact.kind}</span>
-                    {artifact.ref}
-                  </li>
-                ))}
-              </ul>
+              {/*
+                与协作卡、作品仓库同一张卡。这里原来是一行 `<li>` 死文本,把
+                `cindy-media://blobs/<指纹>.png` 这种地址原样摆给用户看,还点不开 ——
+                同一份产物在对话里是能打开的卡片,在这里却成了乱码。
+              */}
+              <div className="flex flex-col gap-1.5">
+                {selected.outputArtifacts
+                  .map((artifact) =>
+                    makeBotArtifact({
+                      source: 'delegation',
+                      target: artifact.ref,
+                      isRef: true,
+                      createdAt: selected.completedAt ?? selected.updatedAt,
+                      sessionId: selected.childSessionId,
+                      delegationId: selected.id,
+                    }),
+                  )
+                  .map((item) => (
+                    <BotArtifactCard
+                      key={item.id}
+                      item={item}
+                      onOpen={(target) => void openArtifact(target)}
+                    />
+                  ))}
+                {artifactLightboxes}
+              </div>
             </div>
           ) : null}
           {selected.completionDelivery ? (

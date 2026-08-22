@@ -18,7 +18,7 @@
  * 隐藏 Discord / Telegram 机器人，保留中国大陆可用的个人连接。
  */
 
-import { Lightbulb } from 'lucide-react';
+import { Info, Lightbulb } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -36,6 +36,7 @@ import {
   showDiscordBot,
   showLarkBot,
   showTelegramBot,
+  unreachableImBotTarget,
   type ImBotIdentity,
 } from './imBotVisibility';
 // 渠道 ↔ 深链参数的映射正本在伙伴侧(能力墙是它唯一的来源),这里只消费类型。
@@ -145,6 +146,16 @@ export function ImBotSection({
   const discordVisible = showDiscordBot(identity);
   const larkVisible = showLarkBot(identity);
   const telegramVisible = showTelegramBot(identity);
+  /*
+    深链把用户送到这一页,但指名的东西在当前身份下根本没渲染 —— 能力墙的「连接
+    账号」按钮只按渠道给路由,不判可见性(判了就是第二份判据、必然漂移)。可见性
+    的权威在这一页,所以由这一页说明「你要找的东西为什么不在」,而不是让用户对着
+    一页找不到的卡发呆。
+  */
+  const unreachable = unreachableImBotTarget(identity, {
+    group: targetGroup,
+    channel: targetChannel,
+  });
   const cindySectionRef = useRef<HTMLElement | null>(null);
   const personalSectionRef = useRef<HTMLElement | null>(null);
   const effectiveTargetGroup = targetGroup
@@ -177,6 +188,29 @@ export function ImBotSection({
           {t('settings.imBot.beta')}
         </span>
       </div>
+
+      {unreachable ? (
+        <div
+          data-testid="im-bot-unreachable-target"
+          className="mt-3 flex items-start gap-2 rounded-xl bg-[var(--surface-chip)] px-3.5 py-2.5"
+        >
+          <Info size={14} className="mt-[2px] shrink-0 text-[var(--text-tertiary)]" />
+          <p className="text-12 leading-[1.6] text-[var(--text-secondary)]">
+            {t(
+              unreachable.reason === 'local-mode'
+                ? 'settings.imBot.unreachableTarget.localMode'
+                : 'settings.imBot.unreachableTarget.cnPersonal',
+              {
+                name: t(
+                  `settings.imBot.unreachableTarget.names.${
+                    unreachable.name === 'cindy-group' ? 'cindyGroup' : unreachable.name
+                  }`,
+                ),
+              },
+            )}
+          </p>
+        </div>
+      ) : null}
 
       <div key={`${mode}:${dataOwnerId ?? 'none'}`} className="mt-4 flex flex-col gap-8">
         {cindyGroupAvailable && (

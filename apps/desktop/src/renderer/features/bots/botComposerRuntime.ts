@@ -87,3 +87,74 @@ export function mergeBotComposerRuntime(
     patch.permissions === capabilities.permissions;
   return unchanged ? null : { ...capabilities, ...patch };
 }
+
+/**
+ * 回写的等待队列 —— 解决「冷启动后第一次改模型静默丢失」。
+ *
+ * `updateBotProfile` 需要拿当前 `capabilities` 当基底,而基底来自 renderer 的 bot
+ * store。应用刚起来时 store 还没 hydrate 完,那个窗口里用户动了模型或权限,原来的
+ * 代码直接 `return` —— 改动丢了,下次 Renew 又跳回旧值,全程没有任何反馈。
+ *
+ * 现在把这次改动存住,订阅 store,等这个伙伴出现了再补写:
+ *
+ *   - 同一伙伴的多次改动**浅合并**,后一次覆盖同名字段(先改模型再改权限 = 两项都留);
+ *   - 换了伙伴则整份替换,绝不把 A 的选择写到 B 身上;
+ *   - 写成功、或发现无需写(等值)之后立刻退订,不留常驻监听;
+ *   - `dispose()` 供组件卸载时收尾。
+ *
+ * 同样放在这个叶子模块里,理由与上面那句一致:调用点在 5k 行的 CCAgentSessionView
+ * 里,挂不起来单测。
+ */
+export interface BotRuntimeMirrorDeps {
+  /** 取这个伙伴当前的能力位;store 还没这条记录时返回 null。 */
+  getCapabilities: (botId: string) => BotCapabilities | null;
+  /** 真正落库。失败只影响「下次 Renew 会回跳」,不该打断正在进行的对话。 */
+  write: (botId: string, capabilities: BotCapabilities) => void;
+  /** store 变化订阅,返回退订函数。 */
+  subscribe: (listener: () => void) => () => void;
+}
+
+export interface BotRuntimeMirror {
+  mirror: (botId: string, snapshot: BotComposerRuntimeSnapshot) => void;
+  dispose: () => void;
+}
+
+export function createBotRuntimeMirror(deps: BotRuntimeMirrorDeps): BotRuntimeMirror {
+  let pending: { botId: string; snapshot: BotComposerRuntimeSnapshot } | null = null;
+  let unsubscribe: (() => void) | null = null;
+
+  const settle = (): void => {
+    pending = null;
+    unsubscribe?.();
+    unsubscribe = null;
+  };
+
+  /** 返回 false = 基底还拿不到,这次写不了。等值不写也算处理完毕(返回 true)。 */
+  const flush = (botId: string, snapshot: BotComposerRuntimeSnapshot): boolean => {
+    const capabilities = deps.getCapabilities(botId);
+    if (!capabilities) return false;
+    const next = mergeBotComposerRuntime(capabilities, snapshot);
+    // 等值时 merge 返回 null,不写,也就不会白顶版本号。
+    if (next) deps.write(botId, next);
+    return true;
+  };
+
+  return {
+    mirror(botId, snapshot) {
+      const merged =
+        pending && pending.botId === botId ? { ...pending.snapshot, ...snapshot } : snapshot;
+      if (flush(botId, merged)) {
+        settle();
+        return;
+      }
+      pending = { botId, snapshot: merged };
+      if (unsubscribe) return;
+      unsubscribe = deps.subscribe(() => {
+        const still = pending;
+        if (!still) return;
+        if (flush(still.botId, still.snapshot)) settle();
+      });
+    },
+    dispose: settle,
+  };
+}

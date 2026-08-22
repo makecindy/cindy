@@ -3459,6 +3459,15 @@
     },
     "imBot": {
       "beta": "Beta",
+      "unreachableTarget": {
+        "names": {
+          "cindyGroup": "the official bots",
+          "discord": "the Discord bot",
+          "telegram": "the Telegram bot"
+        },
+        "cnPersonal": "{{name}} isn't offered on personal accounts in the Chinese mainland edition. An organization account has it.",
+        "localMode": "Sign in to your Cindy account to use {{name}}."
+      },
       "groups": {
         "cindy": "Official",
         "personal": "Personal"

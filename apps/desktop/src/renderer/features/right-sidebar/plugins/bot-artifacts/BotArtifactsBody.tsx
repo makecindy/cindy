@@ -106,9 +106,26 @@ function ArtifactGridCard({
 export function BotArtifactsBody({ state, ctx, active = true, shellVisible = true }: Props) {
   const { t } = useTranslation();
   const visible = active && shellVisible;
-  // 归属未解析(undefined)时按远程 fail closed —— 本机-only 能力不得在冷启动
-  // 竞态里把远端会话当本机处理。
-  const remoteUnavailable = ctx.deviceLinkDeviceId !== null || Boolean(ctx.remoteHostId);
+  /*
+    归属是三态,不是两态。`deviceLinkDeviceId` 的 `undefined` 是「还没解析出来」,
+    与 `null`(确定在本机)、字符串(确定在某台远端设备)都不同。
+
+    早前把 undefined 并进「远程」,读取上是对的(本机-only 能力不该在冷启动竞态里
+    把远端会话当本机处理),但**说法**是错的:冷启动瞬间会闪一句「远程任务暂不
+    支持作品集」,分离出去的侧栏窗口若一直收不到 context 推送,还会长期停在那句
+    错话上。
+
+    所以拆成两件事:读取照旧 fail-closed(非「确定本机」一律不读),显示改成
+    —— 说不出结论的时候转圈,不要说一句错的结论。
+  */
+  const ownership: 'pending' | 'remote' | 'local' = ctx.remoteHostId
+    ? 'remote'
+    : typeof ctx.deviceLinkDeviceId === 'string' && ctx.deviceLinkDeviceId
+      ? 'remote'
+      : ctx.deviceLinkDeviceId === null
+        ? 'local'
+        : 'pending';
+  const blockLoad = ownership !== 'local';
   const [items, setItems] = useState<BotArtifactItem[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -135,7 +152,7 @@ export function BotArtifactsBody({ state, ctx, active = true, shellVisible = tru
   }, [ctx.sessionId]);
 
   useEffect(() => {
-    if (!visible || remoteUnavailable) return;
+    if (!visible || blockLoad) return;
     void load();
     const offs: Array<() => void> = [];
     const onDelegation = window.electronAPI.maker?.onBotDelegationChanged;
@@ -160,7 +177,7 @@ export function BotArtifactsBody({ state, ctx, active = true, shellVisible = tru
     return () => {
       for (const off of offs) off();
     };
-  }, [ctx.sessionId, load, remoteUnavailable, visible]);
+  }, [ctx.sessionId, load, blockLoad, visible]);
 
   const counts = useMemo(() => countBotArtifactsByCategory(items), [items]);
   const shown = useMemo(() => filterBotArtifacts(items, filter), [items, filter]);
@@ -197,7 +214,9 @@ export function BotArtifactsBody({ state, ctx, active = true, shellVisible = tru
     </div>
   );
 
-  if (remoteUnavailable) {
+  // 只有「确定在远端」才说那句话。归属还没解析出来时落到下面的加载态 ——
+  // blockLoad 挡住了取数,loading 保持初值 true,自然就是转圈。
+  if (ownership === 'remote') {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         {header}
