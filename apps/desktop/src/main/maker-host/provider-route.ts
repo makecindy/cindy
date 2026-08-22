@@ -21,6 +21,7 @@
 
 import {
   actualSourceIdForModel,
+  chatEligibleSourcesForModel,
   isExclusiveXaiModelId,
   resolvePiModelRoute,
   runtimeCustomProviderId,
@@ -791,10 +792,20 @@ function providersForModel(modelId: string, agent: AgentKind) {
 
 async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
   const providers = await providerViewsReader();
+  const eligible = chatEligibleSourcesForModel(providers, modelId, agent, {
+    includeDisabled: true,
+  });
+  // Claude Code can emit its first request before the selected Provider is
+  // bound to the session. If more than one connected source exposes the same
+  // bare model id, choosing the native default/first source would risk sending
+  // that prompt to a Provider the user did not select. Fail closed until the
+  // session binding arrives; Codex retains its established native-default
+  // semantics because its implicit bridge is also used for explicit prefixes.
+  if (agent === 'claude-code' && eligible.length !== 1) return null;
   // This runs while dispatching an already-created implicit-source session. Admission for new
   // sessions/model switches happened earlier; keep its retired/disabled source usable for resume.
   const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
-  return providers.find((provider) => provider.id === defaultId) ?? null;
+  return eligible.find((provider) => provider.id === defaultId) ?? null;
 }
 
 /**

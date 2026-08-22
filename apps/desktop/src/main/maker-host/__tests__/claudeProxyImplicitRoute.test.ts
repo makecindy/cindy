@@ -138,6 +138,42 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     });
   });
 
+  it('同一裸 model 有多个已连接来源时不猜测,等待 session provider 绑定', async () => {
+    const provider = (id: string, baseUrl: string) => buildUserProvider({
+      id,
+      name: id,
+      runtimes: {
+        'claude-code': {
+          baseUrl,
+          wireProtocol: 'anthropic-messages',
+          models: [{ id: 'shared-model', name: 'Shared Model' }],
+        },
+      },
+    });
+    setCustomProviders([
+      provider('provider-a', 'https://a.example/v1'),
+      provider('provider-b', 'https://b.example/v1'),
+    ]);
+    setCustomProviderKeyReader((id) => `${id}-key`);
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), {
+      'provider-a': true,
+      'provider-b': true,
+    }));
+    setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-race' ? 'sess-race' : null));
+
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'shared-model' },
+        ctxWith({ 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' }),
+      ),
+    );
+
+    // The safe fallback is the pre-existing gateway path; neither custom
+    // Provider may receive the prompt until the session's explicit choice is known.
+    expect(decision).toBeNull();
+    expect(readClaudeSessionRoute('sess-race')).toBe('gateway');
+  });
+
   it('网关命名空间 id(z-ai/glm-5.3)不受 ①.5 影响,保持默认 passthrough', async () => {
     const decision = await Promise.resolve(
       transform({ model: 'z-ai/glm-5.3' }, ctxWith({ 'x-api-key': 'sk-gw' })),
