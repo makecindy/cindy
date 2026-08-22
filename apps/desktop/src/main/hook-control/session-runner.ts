@@ -54,6 +54,7 @@ import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
   beginTurnChangeSetAtDispatch,
+  prepareUnhealthySessionForSend,
   wireSessionToIpc,
   isSessionInTurn,
   noteSilentStopUserSend,
@@ -636,6 +637,7 @@ export function createMakerHookSessionRunner(deps: {
         resumeSessionId,
       };
       try {
+        await prepareUnhealthySessionForSend(req.sessionId);
         session = await maker.createSession(createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
@@ -1003,6 +1005,7 @@ export function createMakerHookSessionRunner(deps: {
                   content: req.replacementPrompt,
                   createdAt: previousMessages[0].createdAt - 1,
                   agentMeta: null,
+                  toolUseId: null,
                 },
                 ...previousMessages,
               ];
@@ -1022,6 +1025,7 @@ export function createMakerHookSessionRunner(deps: {
                   content: req.replacementPrompt,
                   createdAt: startedAt,
                   agentMeta: null,
+                  toolUseId: null,
                 },
               ];
             } else {

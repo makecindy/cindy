@@ -1314,6 +1314,50 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('context.rebuild appends markers instead of deleting earlier rebuild boundaries', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['native-a', 's1']);
+      await client.tx('context.rebuild', {
+        sessionId: 's1',
+        markerId: 'rebuild-1',
+        markerClientId: 'rebuild-1',
+        markerContent: '{"reason":"context-overflow","sourceAgentKind":"cc"}',
+        markerCreatedAt: 1000,
+        updatedAt: 1000,
+      });
+      await client.exec('UPDATE sessions SET sdk_session_id = ? WHERE id = ?', ['native-b', 's1']);
+      await client.tx('context.rebuild', {
+        sessionId: 's1',
+        markerId: 'rebuild-2',
+        markerClientId: 'rebuild-2',
+        markerContent: '{"reason":"context-overflow","sourceAgentKind":"codex"}',
+        markerCreatedAt: 2000,
+        updatedAt: 2000,
+      });
+      await expect(
+        client.query<{ id: string; content: string; rewind_at: number | null }>(
+          'SELECT id, content, rewind_at FROM messages WHERE session_id = ? AND role = ? ORDER BY created_at',
+          ['s1', 'context_rebuild'],
+        ),
+      ).resolves.toEqual([
+        {
+          id: 'rebuild-1',
+          content: '{"reason":"context-overflow","sourceAgentKind":"cc"}',
+          rewind_at: 1000,
+        },
+        {
+          id: 'rebuild-2',
+          content: '{"reason":"context-overflow","sourceAgentKind":"codex"}',
+          rewind_at: 2000,
+        },
+      ]);
+      await expect(
+        client.queryOne('SELECT sdk_session_id, updated_at FROM sessions WHERE id = ?', ['s1']),
+      ).resolves.toEqual({ sdk_session_id: null, updated_at: 2000 });
+    });
+  });
+
   it('session.agentSwitchFallback missing boundary rolls back sdk id clear', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');

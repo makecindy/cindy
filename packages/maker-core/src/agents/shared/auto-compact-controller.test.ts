@@ -13,12 +13,16 @@ const noopLogger: Logger = {
   child: () => noopLogger,
 };
 
-function makeController(getThresholdPct: () => number | undefined): AutoCompactController {
+function makeController(
+  getThresholdPct: () => number | undefined,
+  shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean,
+): AutoCompactController {
   return new AutoCompactController({
     logger: noopLogger,
     workdir: '/tmp/project',
     agentKind: 'claude-code',
     getThresholdPct,
+    shouldHandoffAfterContextAssessment,
   });
 }
 
@@ -132,5 +136,13 @@ describe('AutoCompactController', () => {
 
     threshold = 75;
     expect(controller.shouldCompactNow()).toBe(true);
+  });
+
+  it('skips auto-compact when the host assessment requires rollover', () => {
+    const controller = makeController(() => 75, (tokens, window) => tokens >= window * 0.75);
+
+    controller.onUsageUpdate(150, 200);
+
+    expect(controller.shouldCompactNow()).toBe(false);
   });
 });

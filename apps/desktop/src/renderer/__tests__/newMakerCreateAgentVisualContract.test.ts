@@ -134,7 +134,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'rememberedEffortByModel={isDeviceLinkDraft ? undefined : draft.effortByModel}',
       'onRememberedEffortChange={',
       'isDeviceLinkDraft ? undefined : handleRememberedEffortChange',
-      'placeholder="Hi Cindy!"',
+      "placeholder={t('newChat.chatInput.createAgentPlaceholder')}",
       // 统一模型选择器(M5):新会话的选中直通 + 收藏锚点选中态。撤掉 AgentSelect 后,
       // 「换引擎」这件事只剩这一条路径 —— 掉了它草稿就再也换不了引擎。
       'onUnifiedDraftSelect={handleUnifiedDraftSelect}',

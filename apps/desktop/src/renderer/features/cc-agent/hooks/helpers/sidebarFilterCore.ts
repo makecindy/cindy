@@ -11,6 +11,7 @@ import {
   type SidebarPinnedOrderMutation,
   type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
+import { reconcileManualProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
 const log = createLogger('SidebarFilterCore');
@@ -642,25 +643,12 @@ export function normalizeManualProjectOrder(
   prev: readonly string[],
   activeWorkingDirs: readonly string[],
 ): string[] {
-  const activeKeys = normalizeProjectKeyList(activeWorkingDirs);
-  const activeSet = new Set(activeKeys);
-  const seen = new Set<string>();
-  const next: string[] = [];
-
+  const prevKeys: string[] = [];
   for (const wd of prev) {
     const key = normalizeProjectKey(wd);
-    if (!key || !activeSet.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    next.push(key);
+    if (key) prevKeys.push(key);
   }
-
-  for (const key of activeKeys) {
-    if (seen.has(key)) continue;
-    seen.add(key);
-    next.push(key);
-  }
-
-  return next;
+  return reconcileManualProjectOrder(prevKeys, normalizeProjectKeyList(activeWorkingDirs));
 }
 
 export function moveManualProjectOrder(

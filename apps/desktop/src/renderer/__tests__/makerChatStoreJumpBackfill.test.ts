@@ -1350,7 +1350,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     expect(restoreSessionAutomaticHistoryLoadAttempts(SID, 5)).toBe(5);
   });
 
-  it('Y2. 超长裁剪丢掉当前计划边界时,允许重入重新首拉补回计划', async () => {
+  it('Y2. 超长裁剪丢掉当前计划边界时,仍保留 historyLoaded,不把打开路径打回全量首拉', async () => {
     const oldPlan = planToolMessage({
       id: 'trimmed-plan',
       clientId: 'trimmed-plan',
@@ -1380,7 +1380,100 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     const snapshot = makerChatStore.getSnapshot(SID);
     expect(snapshot.messages).toHaveLength(200);
     expect(snapshot.messages.some((message) => message.clientId === 'trimmed-plan')).toBe(false);
-    expect(snapshot.historyLoaded).toBe(false);
+    expect(snapshot.historyLoaded).toBe(true);
+  });
+
+  it('Y3. 裁剪后窗口仍含孤岛时,空闲补页从最新连续尾段下沿填缺口,不从孤岛往更老处翻', async () => {
+    // 最新连续尾段只有 50 行,around 孤岛 260 行 → 裁剪保留 200 行后仍夹着孤岛。
+    // 未解析计划落在孤岛与尾段之间的缺口:若 trim 把 oldestMessageId 清成 null,
+    // loadOlderMessages 会拿 messages[0](孤岛)走 beforeTs,向更老处分页,永远填不上缺口。
+    const island = Array.from({ length: 260 }, (_, i) =>
+      serverMessage({
+        id: `island-${String(i).padStart(3, '0')}`,
+        clientId: `island-${String(i).padStart(3, '0')}`,
+        createdAt: new Date(Date.UTC(2026, 6, 1, 0, 0, 0) + i * 1000).toISOString(),
+      }),
+    );
+    const newestTail = Array.from({ length: 50 }, (_, i) =>
+      serverMessage({
+        id: `tail-${String(i).padStart(2, '0')}`,
+        clientId: `tail-${String(i).padStart(2, '0')}`,
+        createdAt: new Date(Date.UTC(2026, 6, 25, 12, 0, 0) - i * 60_000).toISOString(),
+      }),
+    );
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce(island);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce(newestTail);
+
+    await makerChatStore.loadAroundMessageClientId(SID, 'island-000', { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).messages.length).toBeGreaterThan(300);
+    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    const contiguousCursor = makerChatStore.getSnapshot(SID).oldestMessageId;
+    expect(contiguousCursor).toBe('tail-49');
+    markSessionAutomaticHistoryLoadCompleted(SID);
+
+    const leave = makerChatStore.enterView(SID);
+    leave();
+
+    const trimmed = makerChatStore.getSnapshot(SID);
+    expect(trimmed.messages).toHaveLength(200);
+    expect(trimmed.historyWindowHasIsland).toBe(true);
+    expect(trimmed.historyLoaded).toBe(true);
+    expect(trimmed.messages[0]?.clientId.startsWith('island-')).toBe(true);
+    expect(trimmed.messages.some((message) => message.clientId === 'tail-49')).toBe(true);
+    // 关键:游标留在最新连续尾段下沿,而不是清成 null / 孤岛 id。
+    expect(trimmed.oldestMessageId).toBe(contiguousCursor);
+
+    vi.mocked(listMessagesFor).mockClear();
+    vi.mocked(listMessagesFor).mockResolvedValueOnce([
+      planToolMessage({
+        id: 'gap-plan',
+        clientId: 'gap-plan',
+        createdAt: '2026-07-10T12:00:00.000Z',
+      }),
+    ]);
+    await makerChatStore.loadOlderMessages(SID, false, 1);
+
+    expect(listMessagesFor).toHaveBeenCalledWith(SID, { limit: 50, before: 'tail-49' });
+    expect(listMessagesFor).not.toHaveBeenCalledWith(
+      SID,
+      expect.objectContaining({ beforeTs: expect.any(Number) }),
+    );
+    expect(makerChatStore.getSnapshot(SID).messages.some((message) => message.clientId === 'gap-plan')).toBe(
+      true,
+    );
+  });
+
+  it('Y4. 孤岛与尾段间隔不足 HISTORY_GAP_SPLIT_MS 时,裁剪仍保留结构化游标', async () => {
+    const island = Array.from({ length: 260 }, (_, i) =>
+      serverMessage({
+        id: `near-island-${String(i).padStart(3, '0')}`,
+        clientId: `near-island-${String(i).padStart(3, '0')}`,
+        createdAt: new Date(Date.UTC(2026, 6, 25, 11, 40, 0) + i * 1000).toISOString(),
+      }),
+    );
+    const newestTail = Array.from({ length: 50 }, (_, i) =>
+      serverMessage({
+        id: `near-tail-${String(i).padStart(2, '0')}`,
+        clientId: `near-tail-${String(i).padStart(2, '0')}`,
+        createdAt: new Date(Date.UTC(2026, 6, 25, 12, 0, 0) - i * 5_000).toISOString(),
+      }),
+    );
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce(island);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce(newestTail);
+
+    await makerChatStore.loadAroundMessageClientId(SID, 'near-island-000', { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    const contiguousCursor = makerChatStore.getSnapshot(SID).oldestMessageId;
+    expect(contiguousCursor).toBe('near-tail-49');
+    markSessionAutomaticHistoryLoadCompleted(SID);
+
+    const leave = makerChatStore.enterView(SID);
+    leave();
+
+    const trimmed = makerChatStore.getSnapshot(SID);
+    expect(trimmed.messages).toHaveLength(200);
+    expect(trimmed.oldestMessageId).toBe(contiguousCursor);
+    expect(trimmed.messages[0]?.clientId.startsWith('near-island-')).toBe(true);
   });
 
   it('X. /clear 清空窗口时一并清掉孤岛标记,不把会话永久钉在"不连续"', async () => {

@@ -1679,7 +1679,14 @@
         "stepConnect": "連線",
         "stepModels": "選擇模型",
         "searchPlaceholder": "搜尋供應商…",
-        "groupSubscription": "訂閱授權 · 推薦",
+        "groupRecommend": "推薦",
+        "groupDetectedLocal": "偵測到本機服務",
+        "groupSubscription": "訂閱授權",
+        "recommendReason": {
+          "has-local-models": "本機已有模型",
+          "machine-capable": "這台電腦適合跑本機模型",
+          "subscription": "訂閱授權"
+        },
         "groupApiKey": "API 與自託管 Proxy · 預設隨目錄更新",
         "groupCustom": "自定義",
         "metaOAuth": "訂閱授權",
@@ -1728,7 +1735,135 @@
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 連線",
           "note": "此來源提供影像生成模型，不參與對話。API key 僅儲存在本機（系統鑰匙串加密），不會上傳。"
-        }
+        },
+        "groupLocal": "本機模型",
+        "metaLocalRecommended": "推薦 · 在 Cindy 內下載",
+        "metaLocalConnect": "連接已執行的本機服務",
+        "moreLocal": "更多本機服務"
+      },
+      "local": {
+        "title": "Ollama",
+        "subtitle": "本機模型",
+        "beta": "Beta",
+        "recommended": "推薦",
+        "recommendedForThisDevice": "為這台電腦推薦",
+        "hostProfileApple": "Apple 晶片 · 約 {{memory}} GB 統一記憶體",
+        "hostProfileGeneric": "約 {{memory}} GB 記憶體",
+        "hostProfileUnknown": "還不能確定這台電腦的記憶體",
+        "bestForYou": "最適合你",
+        "alsoCoding": "也適合程式設計",
+        "packaging": {
+          "mxfp8": "MXFP8",
+          "mlx": "MLX",
+          "q4": "Q4"
+        },
+        "recommendReason": {
+          "apple-mxfp8": "這台 Mac 記憶體充裕，用官方 MXFP8 封裝。",
+          "apple-mlx": "這台 Mac 適合官方 MLX 封裝。",
+          "generic-27b": "這台電腦適合官方 Q4 封裝。",
+          "compact": "依這台電腦的記憶體，先從更輕量的模型開始。",
+          "unknown": "先選一個更好跑起來的模型。"
+        },
+        "searchPlaceholder": "搜尋模型",
+        "noSearchResults": "沒有符合的模型",
+        "alreadyInstalled": "已在本機",
+        "searchResults": "搜尋結果",
+        "moreModels": "更多常用模型",
+        "memoryWarning": "這台電腦記憶體不足（需要 {{need}} GB，目前約 {{have}} GB）",
+        "manualDownload": "手動下載",
+        "manualDownloadPlaceholder": "Ollama 庫名或 Hugging Face 連結",
+        "invalidLibraryName": "請輸入 Ollama 庫名，或貼上 huggingface.co 上的模型頁連結",
+        "advancedExactName": "進階：精確庫名",
+        "models": {
+          "qwen38-27b": { "blurb": "目前最強可本機跑的稠密模型，適合程式設計與長任務。" },
+          "gpt-oss-20b": { "blurb": "OpenAI 開源 20B，16GB 級機器上的對話與推理首選。" },
+          "gemma4-e2b": { "blurb": "Gemma 4 最小杯，輕量機器也能跑，帶視覺。" },
+          "gemma4-e4b": { "blurb": "Google Gemma 4 小杯，輕量日常，帶視覺。" },
+          "gemma4-12b": { "blurb": "Gemma 4 中杯，日常對話與多模態更穩。" },
+          "gemma4-31b": { "blurb": "Gemma 4 大杯，對話與多模態更強，也更吃記憶體。" },
+          "gemma4-26b": { "blurb": "Gemma 4 的 MoE 中大杯，啟動參數更少，適合中高配。" },
+          "ornith15-35b": { "blurb": "Ornith 1.5 中杯 MoE，本機程式設計與 Agent 備選。" },
+          "glm-47-flash": { "blurb": "智譜新一代程式設計模型，30B MoE，適合寫程式和 Agent。" }
+        },
+        "onboardingTitle": "先安裝 Ollama 執行環境",
+        "onboardingBody": "安裝 Ollama 後，即可在 Cindy 中下載和使用本機模型，無需開啟 Ollama App。Ollama 是免費開源的第三方執行環境。",
+        "installInCindy": "在 Cindy 裡安裝",
+        "installConsent": "Cindy 會下載官方 Ollama 執行時（約 {{size}}）到本機 Cindy 資料目錄並啟動，不會寫入系統應用目錄。Ollama 是免費開源的第三方軟體。",
+        "installCancel": "取消安裝",
+        "installFailed": "Ollama 安裝失敗",
+        "installPhase": {
+          "resolving": "正在查找官方版本…",
+          "downloading": "正在下載…",
+          "verifying": "正在校驗…",
+          "extracting": "正在安裝…",
+          "starting": "正在啟動…",
+          "success": "已安裝",
+          "error": "安裝失敗",
+          "cancelled": "已取消"
+        },
+        "openWebsite": "前往 Ollama 官網",
+        "recheck": "已安裝，重新偵測",
+        "start": "啟動本機模型服務",
+        "conflict": "11434 連接埠已被其他程式佔用",
+        "notReady": "本機模型服務尚未就緒",
+        "connectFailed": "無法連線本機模型服務",
+        "pullFailed": "模型下載失敗",
+        "pullError": {
+          "not-gguf": "這是 MLX 倉庫，Ollama 只能下載 GGUF。請改用帶 GGUF 的模型頁。",
+          "not-found": "找不到這個模型，請檢查庫名或連結。",
+          "unauthorized": "這個模型需要登入 Hugging Face 才能下載。",
+          "refused": "本機模型服務連不上，請確認 Ollama 已啟動。",
+          "generic": "模型下載失敗"
+        },
+        "added": "已加入 Cindy",
+        "status": {
+          "absent": "尚未安裝 Ollama",
+          "stopped": "已安裝 · 未執行",
+          "starting": "正在啟動…",
+          "ready": "執行中",
+          "incompatible": "目前 Ollama 版本不受支援",
+          "port-conflict": "連接埠衝突",
+          "pulling": "正在下載…",
+          "error": "無法存取本機模型服務"
+        },
+        "installed": "本機已下載",
+        "emptyInstalled": "尚未安裝本機模型",
+        "addToCindy": "加入選擇器",
+        "removeFromCindy": "移出選擇器",
+        "downloadAdd": "下載並新增",
+        "retryDownload": "重試",
+        "libraryName": "精確的 Ollama 庫名",
+        "pullingTitle": "正在下載 {{name}}",
+        "pullIndeterminate": "準備中",
+        "pullBytes": "{{done}} / {{total}}",
+        "pullSpeed": " · {{speed}}",
+        "pullPhase": {
+          "starting": "準備下載…",
+          "manifest": "正在取得清單…",
+          "downloading": "正在下載模型檔案",
+          "verifying": "正在校驗…",
+          "writing": "正在寫入…",
+          "success": "下載完成",
+          "error": "下載失敗",
+          "paused": "已暫停",
+          "cancelled": "已取消"
+        },
+        "pauseDownload": "暫停",
+        "resumeDownload": "繼續下載",
+        "cancelDownload": "刪除未完成下載",
+        "notRecommended": "這台電腦未達到 Qwen3.8 27B 所需的 32 GB 記憶體門檻。你仍可輸入精確庫名自行下載。",
+        "sizeHint": "約 {{size}} · 需要 {{memory}} GB 統一記憶體",
+        "sizeHintApple": "約 {{size}} · 需要 {{memory}} GB 統一記憶體",
+        "sizeHintGeneric": "約 {{size}} · 需要 {{memory}} GB 記憶體",
+        "deleteFromCindy": "從 Cindy 移除",
+        "deleteConfirmTitle": "從 Cindy 移除 Ollama？",
+        "deleteConfirmBody": "只會移除 Cindy 中的連線。Ollama 裡已下載的模型仍在磁碟上，服務也不會停止。",
+        "deleteModel": "刪除此模型",
+        "deleteModelConfirmTitle": "刪除 {{name}}？",
+        "deleteModelConfirmBody": "會從這台電腦刪除已下載的模型檔案，Cindy 裡也會一併移除。需要時可以重新下載。",
+        "deleteModelConfirm": "刪除",
+        "deleteModelDone": "已刪除 {{name}}",
+        "deleteModelFailed": "刪除失敗，請確認 Ollama 正在執行後重試"
       },
       "xdSignin": {
         "badge": "推薦",
@@ -2367,6 +2502,7 @@
       "unspecified": "跟隨預設設定",
       "hint": "Claude Code 的設定從新任務開始生效；Codex 的設定會在閒置後自動套用。",
       "codexV2ModelHint": "Claude Code 使用所選模型作為預設值。Codex 的所有本機 Subagent 都固定使用所選模型和推理強度。",
+      "codexOauthCompatibilityHint": "固定 Subagent 路由與 ChatGPT OAuth 無法安全共用。主任務使用 ChatGPT OAuth，或非 OAuth 主任務指定 ChatGPT OAuth Subagent 時，Cindy 會忽略這裡的模型、來源和推理強度，改用主任務的 Codex 預設 Subagent。",
       "saveFailed": "儲存 Subagent 設定失敗",
       "guardrails": {
         "title": "Codex Subagent 護欄",
@@ -2579,7 +2715,7 @@
       "installSectionDescription": "貼上 pi.dev 頁面提供的安裝來源，或輸入 npm 套件名稱、Git 位址、本機絕對路徑。",
       "installedSectionTitle": "已安裝",
       "sourcePlaceholder": "npm 套件名稱、Git 位址或本機絕對路徑",
-      "inspectionHint": "安裝後 Cindy 會檢查資源與相容性。可執行的擴充程式碼預設保持停用，確認來源可信後再啟用。",
+      "inspectionHint": "安裝時只提示一次風險。確認後會安裝擴充功能並檢查資源；檢查成功時，可執行資源會自動啟用。",
       "install": "安裝",
       "update": "更新",
       "remove": "解除安裝",
@@ -2600,11 +2736,11 @@
       "loadFailed": "暫時無法讀取 Pi 擴充功能，請檢查連線後重試。",
       "retry": "重試",
       "operationInProgress": "正在處理 {{name}}…",
-      "confirmTitle": "安裝第三方 Pi 擴充功能？",
-      "confirmDescription": "{{source}} 可能包含第三方程式碼。安裝與更新不會執行 npm 生命週期腳本；若發現可執行的擴充程式碼，會先保持停用，等你看完檢查結果後再明確啟用。",
+      "confirmTitle": "安裝這個 Pi 擴充功能？",
+      "confirmDescription": "{{source}} 是第三方程式碼，會與 Cindy 的 Pi 在同一行程中執行，可能讀取 Pi 能存取的檔案和憑證。安裝不會執行 npm 生命週期指令碼。確認後將安裝擴充功能。檢查成功後，可執行資源會自動啟用，即使 Cindy 同時提示相容性限制。",
       "confirmInstall": "了解風險並安裝",
-      "updateConfirmTitle": "更新第三方 Pi 擴充功能？",
-      "updateConfirmDescription": "{{source}} 會下載第三方新版本並取代已安裝程式碼。更新不會執行 npm 生命週期指令碼；可執行擴充功能程式碼必須重新確認後才能執行。",
+      "updateConfirmTitle": "更新這個 Pi 擴充功能？",
+      "updateConfirmDescription": "{{source}} 會下載第三方新版本並取代已安裝程式碼。更新不會執行 npm 生命週期指令碼。擴充程式碼與 Pi 在同一行程中執行，可能讀取檔案和憑證。確認後將更新擴充功能。你主動關閉的擴充功能會保持關閉；其他擴充功能會在檢查成功後啟用。",
       "confirmUpdate": "了解風險並更新",
       "uninstallTitle": "解除安裝 Pi 擴充功能？",
       "uninstallDescription": "將從這台裝置移除 {{name}}。目前已開啟的 Pi 任務仍會保留舊擴充功能，關閉後才會徹底卸載。",
@@ -2669,7 +2805,8 @@
         "lifecycle-scripts-disabled": "這個擴充功能宣告了安裝指令碼，但 Cindy 為了安全並未執行。依賴安裝指令碼產生檔案的功能可能無法使用。"
       },
       "success": {
-        "install": "Pi 擴充功能已安裝。目前任務不會改變；新建或重新啟動 Pi 任務後生效。",
+        "install": "Pi 擴充功能已安裝，請在下方查看啟用狀態。目前任務不會改變。",
+        "installEnabled": "Pi 擴充功能已安裝並啟用。目前任務不會改變；新建或重新啟動 Pi 任務後生效。",
         "remove": "Pi 擴充功能已移除。目前任務仍保留舊擴充功能，關閉後才會徹底卸載。",
         "update": "Pi 擴充功能已更新。目前任務仍使用舊版本；新建或重新啟動後生效。",
         "set-enabled": "Pi 擴充功能啟用狀態已儲存。目前任務不會改變；新建或重新啟動後生效。"
@@ -3051,12 +3188,14 @@
           "copyLink": "複製連結",
           "copied": "連結已複製",
           "state": {
-            "denied": "在 Slack 授權頁取消了授權",
+            "denied": "Slack 授權已取消，帳號尚未繫結",
             "expired": "授權超時，請重新連線",
             "failed": "繫結失敗",
             "revoked": "繫結已解除"
           },
-          "retryHint": "重新開啟開關即可再次連線並繫結。"
+          "reauthorize": "重新授權 Slack",
+          "reauthorizing": "正在重新授權 Slack…",
+          "retryHint": "重新授權 Slack 即可再次連線並繫結。"
         },
         "toast": {
           "saveFailed": "儲存失敗",
@@ -3066,6 +3205,8 @@
         "loginRequired": "需要先登入 {{appName}} 帳號，連線會在登入後自動恢復。",
         "standbyHint": "本機另一 Cindy 例項正在使用 Slack 連線。關閉它後，重新開啟此開關即可接管。",
         "authorizing": "授權中…",
+        "transportStatus": "傳輸連線：{{status}}",
+        "accountStatus": "Slack 帳號：{{status}}",
         "statusBound": "已繫結 @{{name}}",
         "statusBoundTeam": "已繫結 {{team}} @{{name}}",
         "statusUnbound": "未繫結",
@@ -4638,6 +4779,7 @@
     "expandControlledNotice": "展開被控提示：{{label}}",
     "versionMismatch": "對方版本不一致，部分功能可能受限"
   },
+
   "accountDeletion": {
     "entryButton": "刪除帳號",
     "entryAria": "刪除目前帳號",
@@ -4976,7 +5118,7 @@
     "tokenBreakdown": "（輸入 {{input}} · 輸出 {{output}}）",
     "cacheLabel": "快取",
     "timeLabel": "耗時",
-    "timeAndRateValue": "{{duration}} 速度：{{rate}} token/秒",
+    "timeAndRateValue": "{{duration}} 速度：{{rate}} tokens/秒",
     "modelLabel": "模型",
     "staleData": "資料更新於 {{minutes}} 分鐘前",
     "paceTrendFast": "按目前平均速度偏快（粗略趨勢）",
@@ -4987,12 +5129,12 @@
   "usageDetails": {
     "durationSeconds": "{{value}}秒",
     "durationMinutesSeconds": "{{minutes}}分 {{seconds}}秒",
-    "performanceLine": "速度 {{rate}} token/秒 · 耗時 {{duration}}",
-    "performanceRateLine": "速度 {{rate}} token/秒",
+    "performanceLine": "速度 {{rate}} tokens/秒 · 耗時 {{duration}}",
+    "performanceRateLine": "速度 {{rate}} tokens/秒",
     "timeLine": "耗時 {{duration}}",
     "costLine": "本輪消耗：{{cost}}",
     "valueLine": "本輪 token 價值：{{cost}}",
-    "tokenLine": "Token：共 {{total}} · 輸入 {{input}} · 輸出 {{output}}",
+    "tokenLine": "Tokens：共 {{total}} · 輸入 {{input}} · 輸出 {{output}}",
     "cacheLine": "快取拆分：讀取 {{read}} · 寫入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取拆分：讀取 {{read}} · 寫入 {{create}}",
     "modelLine": "模型：{{model}}",
@@ -5040,7 +5182,7 @@
     "close": "關閉",
     "menuItems": {
       "settings": "設定",
-      "resourceUsage": "資源用量",
+      "resourceUsage": "資源監視器",
       "help": "幫助",
       "issues": "問題反饋",
       "checkForUpdates": "檢查更新"
@@ -5135,7 +5277,7 @@
         "review": "審查",
         "subagents": "Subagent",
         "backgroundTasks": "後臺任務",
-        "resourceUsage": "資源用量",
+        "resourceUsage": "資源監視器",
         "collaboration": "協同",
         "unknown": "未知標籤頁",
         "ghostPanel": "插件面板"
@@ -5155,7 +5297,7 @@
       "empty": {
         "eyebrow": "右側欄",
         "title": "開始一個面板",
-        "desc": "在右側開啟檔案、審查、資源用量、內建瀏覽器或終端，與左側對話並行工作。",
+        "desc": "在右側開啟檔案、審查、資源監視器、內建瀏覽器或終端，與左側對話並行工作。",
         "openFile": "開啟檔案",
         "fileSub": "Files",
         "openReview": "開啟審查",
@@ -5164,7 +5306,7 @@
         "subagentsSub": "可持續回看的子任務",
         "openBackgroundTasks": "開啟後臺任務",
         "backgroundTasksSub": "Background tasks",
-        "openResourceUsage": "開啟資源用量",
+        "openResourceUsage": "開啟資源監視器",
         "openBrowser": "開啟瀏覽器",
         "browserSub": "Browser",
         "openTerminal": "開啟終端",
@@ -5740,26 +5882,85 @@
       "context": "父任務上下文",
       "contextValues": {
         "unknown": "Harness 未回報",
+        "none": "全新隔離上下文",
         "snapshot": "父任務快照",
         "live": "即時父任務"
       },
       "assignment": "任務內容",
+      "overview": "總覽",
+      "children": "Subagent",
+      "queued": "排隊中",
+      "queuedDetail": "該 Subagent 正在排隊，依賴完成且有空閒並行位置後會自動開始。",
+      "awaitingApproval": "等待核准",
+      "awaitingApprovalDetail": "該 Subagent 正在等待你在父任務中處理權限要求。",
+      "childError": "錯誤：{{error}}",
+      "sendDirection": "傳送指令",
+      "composerPlaceholders": {
+        "runningWithSteer": "排隊跟進；{{steerShortcut}} 插話糾正…",
+        "follow_up": "排隊跟進，已完成的結果不會被覆蓋…",
+        "resume": "繼續這個 Subagent…"
+      },
+      "sendShortcutHint": "{{shortcut}} 傳送 · Shift+Enter 換行",
+      "childEndedControlHint": "該 Subagent 已結束。請選擇「總覽」或仍在執行的 Subagent 再傳送指令。",
+      "controlFailed": "指令未能送達。請確認 Subagent 仍可用後再試一次。",
+      "controlActions": {
+        "steer": "目前工具結束後修正",
+        "follow_up": "排入跟進",
+        "resume": "繼續 Subagent"
+      },
       "returnedResult": "回傳結果",
+      "copyResult": "複製",
+      "copiedResult": "已複製",
       "resultTruncated": "回傳結果過長，目前僅顯示部分內容。",
       "latestUpdate": "最近更新",
+      "technicalDetails": "技術詳情",
+      "waitingForReply": "Subagent 正在處理…",
+      "noReply": "Subagent 未傳回回覆，請展開技術詳情查看失敗原因。",
+      "failedNoReply": "Subagent 執行失敗，但沒有傳回可讀詳情。",
+      "stoppedNoReply": "Subagent 已停止，尚未傳回結果。",
+      "completedNoReply": "Subagent 已完成，但沒有傳回結果。",
+      "errors": {
+        "providerNotConnected": "目前尚未連接此供應商。請先連接帳號或設定憑證後再試。",
+        "credentialInvalid": "供應商憑證已失效或遭拒。請重新連接後再試。",
+        "modelInvalid": "所選模型無法使用或名稱無效。請改用目前任務可用的模型。",
+        "rateLimited": "供應商目前限制請求頻率。請稍後再試。",
+        "serviceUnavailable": "供應商服務暫時無法使用。請稍後再試。",
+        "requestInvalid": "供應商拒絕了這次請求。請檢查模型與任務設定後再試。",
+        "unknown": "Subagent 執行失敗，可展開下方原始詳情查看原因。",
+        "rawDetails": "查看原始詳情"
+      },
       "activity": "活動記錄",
       "noActivity": "Harness 暫未提供活動詳情。",
-      "transcript": "完整記錄",
-      "noTranscript": "Harness 暫未提供完整記錄。",
+      "systemLog": "執行日誌",
+      "noSystemLog": "暫無執行日誌。",
+      "loadMoreTranscript": "載入更多記錄",
       "transcriptUnavailable": "該 Harness 尚未向 Cindy 提供完整的子任務記錄；已回傳的結果和生命週期活動仍會保留。",
-      "transcriptRoles": {
-        "parent": "父任務",
-        "subagent": "Subagent",
-        "tool": "工具",
-        "system": "系統"
+      "tool": {
+        "fallbackName": "工具",
+        "running": "執行中…",
+        "failed": "失敗",
+        "input": "輸入",
+        "result": "輸出",
+        "noDetails": "沒有記錄輸入或輸出。"
+      },
+      "controlBadges": {
+        "steer": "插話修正",
+        "follow_up": "跟進",
+        "resume": "繼續",
+        "stop": "停止"
       },
       "lastTool": "最近工具：{{tool}}",
       "tokens": "{{value}} tokens",
+      "toolUses_one": "{{count}} 次工具呼叫",
+      "toolUses_other": "{{count}} 次工具呼叫",
+      "systemEvents": {
+        "stop-requested": "父任務要求停止。",
+        "control-requested": "父任務送出了一則控制要求。",
+        "transcript-truncated": "已達到記錄的儲存上限。",
+        "turn-ended": "Subagent 本輪已結束。",
+        "command-refused": "PI 拒絕了一則子任務命令。",
+        "generation-unreadable": "這段對話中較早的部分無法讀取。"
+      },
       "activityKinds": {
         "started": "已啟動",
         "progress": "進度",
@@ -5818,9 +6019,9 @@
       "processCount_one": "處理程序樹：{{count}} 個處理程序",
       "processCount_other": "處理程序樹：{{count}} 個處理程序",
       "agentsEmpty": "當前沒有執行中的 Agent 處理程序，啟動任務後會在這裡展示佔用",
-      "tableLabel": "按處理程序展示的資源用量",
+      "tableLabel": "資源監視器",
       "sortBy": "按{{column}}排序",
-      "loading": "正在讀取資源用量…",
+      "loading": "正在讀取處理程序…",
       "remoteUnavailableTitle": "遠端任務暫不可用",
       "remoteUnavailableDescription": "此面板僅讀取本機處理程序，僅適用於在此裝置上執行的本機任務。",
       "selectHint": "選擇一個處理程序",
@@ -6142,6 +6343,7 @@
       "retryRemoteModels": "重新讀取模型",
       "remoteEmpty": "這臺裝置沒有可用模型",
       "effortLabel": "推理強度",
+      "thinking": "思考",
       "edit": "編輯",
       "options": "選項",
       "priceTip": "輸入 {{input}} · 輸出 {{output}} / 百萬 token",
@@ -6423,6 +6625,7 @@
     },
     "chatInput": {
       "defaultPlaceholder": "今天我們做點什麼呢~",
+      "createAgentPlaceholder": "你好，{{appName}}！",
       "voiceInput": {
         "start": "開始語音輸入",
         "stop": "停止語音輸入",
@@ -6468,11 +6671,12 @@
       "effortRuntimeDirty": "推理強度還在更新，稍等一下再傳送",
       "credentialSwitchApplied": "模型來源切換已生效。",
       "modelSwitchContextGuard": {
-        "title": "目標模型的上下文視窗較小",
-        "warnToast": "當前任務已使用 {{used}} 上下文，切換後約佔目標模型視窗（{{total}}）的 {{pct}}%",
-        "overflowDescription": "當前任務已使用 {{used}} 上下文，超出目標模型視窗（{{total}}，約 {{pct}}%）。切換後回覆和壓縮都可能失敗，建議先點選上下文圓環壓縮對話，或新建任務使用該模型。仍要切換嗎？",
-        "confirmSwitch": "仍然切換模型",
-        "cancelSwitch": "取消切換"
+        "title": "這個模型裝不下目前的對話",
+        "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
+        "overflowDescription": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。換過去後，Cindy 會先整理一份摘要再繼續；對話記錄還在，只是不會整段原樣帶給新模型。",
+        "overflowDescriptionRemote": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。遠端任務不會自動換窗，下一次傳送仍可能失敗。可以仍然切換，或留在目前模型。",
+        "confirmSwitch": "切換並繼續",
+        "cancelSwitch": "先不換"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切換，但新引擎啟動失敗；傳送訊息時會自動重試",
@@ -6699,6 +6903,8 @@
       "subagentStarted": "Subagent {{name}} 已啟動",
       "showDetails": "展開 Subagent 詳情",
       "hideDetails": "收起 Subagent 詳情",
+      "showFullResult": "展開完整結果",
+      "hideFullResult": "收起結果",
       "provider": {
         "claude": "Claude Code",
         "codex": "Codex",
@@ -6776,6 +6982,10 @@
       "turnTokens": "{{tokens}} tokens",
       "userTurnCostDetailsTitle": "本輪明細"
     },
+    "runningStatus": {
+      "tokenRate": "{{rate}} tok/s",
+      "tokenCount": "{{tokens}} tok"
+    },
     "shareImage": {
       "entry": "分享為圖片",
       "title": "分享對話",
@@ -6840,13 +7050,16 @@
       "rateLimitRetrying": "請求受到限流，正在自動重試（{{attempt}}/{{maxAttempts}}）…",
       "overloadBusy": "模型服務繁忙，上游暫時沒有可用容量。可點選「重試」，或換一個模型。",
       "overloadBusyNoRetry": "模型服務繁忙，上游暫時沒有可用容量。可稍後重試，或換一個模型。",
+      "streamInterrupted": "模型輸出中途中斷了。通常是上游暫時故障，可點選「重試」。",
+      "streamInterruptedNoRetry": "模型輸出中途中斷了。通常是上游暫時故障，請稍後重試。",
       "networkShowRaw": "檢視原始錯誤",
       "networkHideRaw": "收起原始錯誤",
       "silentStopContinue": "繼續",
       "silentStopContinueTitle": "繼續當前任務",
       "piTransportClosed": "遠端 Pi 連線已中斷（SSH 通道關閉）。遠端任務仍在執行，重新連線後可以繼續。",
       "piManagerUnavailable": "遠端 Pi 管理器未就緒，請稍後重試；若持續失敗請到「設定 → 遠端機器」重新安裝 Pi。",
-      "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。"
+      "piBundledNodeMissing": "遠端缺少執行環境（Node.js）。請到「設定 → 遠端機器」展開該主機，先在 Claude Code 或 Codex 列點擊「安裝」（會附帶 Node.js），再建立 Pi 任務。",
+      "contextOverflow": "這則訊息本身已超過模型上下文上限，無法在目前 Agent 中自動換窗繼續。請縮短輸入或去掉過大附件後再試。"
     },
     "backgroundActivity": {
       "status": "後臺子任務執行中，模型用量仍在消耗…",
@@ -7177,6 +7390,13 @@
         "handoffTitleEnglishSource": "交接內容——切換時傳送給新引擎的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)",
         "resumedBadge": "已續接原任務"
       },
+      "contextRebuild": {
+        "labelOverflow": "已整理上下文並繼續",
+        "labelTimeout": "上一輪沒有回應，已整理後繼續",
+        "toggleHint": "檢視交接內容",
+        "handoffTitle": "交接內容——整理後傳送給後續對話的上下文摘要(不計入對話記錄，僅在此展示)",
+        "handoffTitleEnglishSource": "交接內容——整理後傳送給後續對話的上下文摘要，原文為英文(不計入對話記錄，僅在此展示)"
+      },
       "review": {
         "running": "正在審查當前成果",
         "completed": "審查完成",
@@ -7346,6 +7566,7 @@
       "REMOTE_COMPAT_MODE_UNSUPPORTED": "遠端 Claude Code 會話無法透過本地相容 Proxy 路由(內部錯誤，請反饋)。",
       "REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE": "Cindy AI 憑據尚未就緒(登入後由服務端自動下發)。請稍候重試；若持續出現，請到 設定 → 模型供應商 檢查 Cindy AI 連線狀態。",
       "REMOTE_LOCAL_ONLY_PROVIDER": "此模型供應商是本機專屬服務（如 Ollama），SSH 遠端任務無法存取本機位址。請改用 Cindy AI 閘道，或選擇遠端主機可達的模型供應商。",
+      "LOCAL_OLLAMA_NOT_READY": "本機 Ollama 尚未就緒。請打開設定 → 模型供應商 → Ollama。",
       "DEVICE_LINK_CONTROL_DISABLED": "已關閉對該裝置的控制，訊息未傳送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件傳輸失敗，訊息未傳送。請重試。"
     },
@@ -8200,6 +8421,7 @@
     }
   },
   "effortLevels": {
+    "off": "關閉",
     "minimal": "最小",
     "low": "低",
     "medium": "中",

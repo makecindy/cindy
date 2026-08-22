@@ -12,7 +12,7 @@
  *     必须静态维护的——活在 `catalog/providers.json`(仓内正本 = OSS 发布物 = dev 直读),
  *     此处从 json 引入作 bundled 兜底。
  *
- * 身份卡(id / auth / access / routing / titleModel / 媒体模型清单)是随代码走的事实:
+ * 身份卡(id / auth / access / routing / titleModel)是随代码走的事实:
  * 改它们必然伴随发版(SDK 集成 / 翻译桥 / 网关协议都是代码),所以写死在这里,
  * 不再经 OSS 下发。OSS `cfg/providers.json`(v2)只承载 xai 清单 + presets 模板,
  * 模型元数据与参考价只走同目录下严格版本化的 `model-registry.json`。
@@ -186,27 +186,6 @@ const XD_PROVIDER: Provider = {
   auth: { method: 'managed' },
   access: { kind: 'managed' },
   titleModel: 'gpt-5.4-mini',
-  imageModels: [
-    { id: 'gpt-image-2', name: 'GPT Image 2' },
-    { id: 'gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
-    { id: 'gemini-3.1-flash-image', name: 'Gemini 3.1 Flash Image' },
-  ],
-  imageDefaults: {
-    standard: 'gpt-image-2',
-    draft: 'gemini-3.1-flash-image',
-  },
-  videoModels: [
-    { id: 'seedance-fast', name: 'Seedance 快速' },
-    { id: 'seedance-pro', name: 'Seedance Pro' },
-    { id: 'bytedance/seedance-2.5', name: 'Seedance 2.5' },
-    { id: 'happyhorse', name: 'HappyHorse 1.0' },
-  ],
-  // 2.5 刻意不接管 best:它只到 720p,而 seedance-pro 有 1080p —— 让 tier=best
-  // 指向 2.5 会把"要 1080p"的单子从可用变成明拒。2.5 需显式点名。
-  videoDefaults: {
-    standard: 'seedance-fast',
-    best: 'seedance-pro',
-  },
   // 向量模型:id 必须与 @cindy/embedding-client 的 EmbeddingModelId 逐字一致
   // (执行侧按 id 查 catalog 拿 provider 做 input_type 值域翻译,对不上就翻译不了)。
   // 只列 2026-08-04 经网关实测确认可用的型号 + 同族高置信的 3-large。

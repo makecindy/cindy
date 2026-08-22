@@ -513,6 +513,9 @@ describe('SubagentModelSection Codex row', () => {
     expect(selector.dataset.effort).toBe('high');
     expect(selector.dataset.currentProvider).toBe('openai');
     expect(selector.dataset.model).toBe('gpt-5.6-terra');
+    expect(
+      screen.getByText('settings.subagentModels.codexOauthCompatibilityHint'),
+    ).toBeTruthy();
     // 锁定路由由 Proxy 在子线程请求上应用实际 Provider / wire 协议，因此不得隐藏
     // DeepSeek、Kimi、GLM 等 Chat 兼容桥模型。
     expect(selector.dataset.excludeBridged).toBe('false');

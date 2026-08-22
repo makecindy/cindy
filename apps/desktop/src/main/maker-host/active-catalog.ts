@@ -136,9 +136,8 @@ export interface XdGatewayAgentOverride {
 
 /**
  * 服务端下发的 XD 网关模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。
- * 命名沿用历史("聊天"),但条目本身不保证是聊天模型——是否聊天模型看 mode,
- * 服务端目前只透传已经过它自己 chat 过滤的条目,过滤范围以后可能放开(issue #882);
- * 客户端一律用 isChatEligible 判定,不依赖本类型名字或服务端过滤范围。
+ * 命名沿用历史("聊天"),但条目本身不保证是聊天模型——v4 同时包含 chat 与媒体模型，
+ * 客户端一律按 agents/mode 投影到对应消费面，不从 id 猜测类型。
  *
  * 能力字段已由服务端一次归一化,客户端不再二次转换(见 model-access/index.ts)。
  */
@@ -790,6 +789,38 @@ function withEmptyModels(p: Provider): Provider {
   return { ...p, models };
 }
 
+function projectXdGatewayMediaModels(
+  provider: Provider,
+  gatewayModels: readonly XdGatewayModelInfo[],
+): Provider {
+  const imageModels = gatewayModels
+    .filter((model) => model.mode === 'image_generation')
+    .map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      ...(model.modalities ? { modalities: model.modalities } : {}),
+    }));
+  const videoModels = gatewayModels
+    .filter((model) => model.mode === 'video_generation')
+    .map((model) => ({
+      id: model.id,
+      name: model.name ?? model.id,
+      ...(model.modalities ? { modalities: model.modalities } : {}),
+    }));
+  const identity = { ...provider };
+  delete identity.imageModels;
+  delete identity.imageDefaults;
+  delete identity.videoModels;
+  delete identity.videoDefaults;
+  return {
+    ...identity,
+    imageModels,
+    videoModels,
+    ...(imageModels[0] ? { imageDefaults: { standard: imageModels[0].id } } : {}),
+    ...(videoModels[0] ? { videoDefaults: { standard: videoModels[0].id } } : {}),
+  };
+}
+
 function computeMerged(): Catalog {
   const source = base ?? BUNDLED_CATALOG;
   const b =
@@ -836,9 +867,8 @@ function computeMerged(): Catalog {
   // 作者错误隔离进 warnings,由刷新路径读走打日志,不拖垮其余条目。
   const plan = planRegistryRoots(b.modelRegistry);
   lastPlanWarnings = plan.warnings;
-  // XD 的对话模型成员仍由下方 `/models` 权威重建，但 provider 壳中的媒体清单、
-  // 默认项和显式空值必须服从当前 Catalog。只有目录本身缺少 XD（生产加载经
-  // mergeWithBundled 后通常不会发生）才回落与 evidence 同级安全的 bundled 壳。
+  // XD 的模型成员与媒体清单都由下方 `/models` 权威重建。Catalog 只保留 provider
+  // 身份壳；其中残留的旧媒体字段不得成为第二事实源。
   const fallbackXdCatalog =
     baseCapabilityEvidence === 'current'
       ? projectUnverifiedCatalogFallbackForBuildRegion(
@@ -1161,7 +1191,7 @@ function computeMerged(): Catalog {
         )
         .map(({ model }) => model);
     }
-    return { ...p, models };
+    return { ...projectXdGatewayMediaModels(p, gwModels), models };
   });
 
   if (providers === b.providers) return b; // 无 augment、无 custom → 原样返回

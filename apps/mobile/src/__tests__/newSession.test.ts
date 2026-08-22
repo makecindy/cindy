@@ -1612,6 +1612,20 @@ describe('new session composer surface', () => {
     expect(newSource).not.toContain('marginHorizontal: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).not.toContain('left: (MOBILE_COMPOSER_CONTROL_SIZE - MOBILE_COMPOSER_MIN_TOUCH_TARGET) / 2');
     expect(newSource).toContain('const renderComposerToolbar = () => (');
+    // 左侧组包住 [+][权限][计划][模型],再接 spacer;右段 语音占位 → 创建。
+    const newToolbarStart = newSource.indexOf('const renderComposerToolbar = () => (');
+    const newToolbarEnd = newSource.indexOf('const renderComposerInputOverlay', newToolbarStart);
+    const newToolbarSource = newSource.slice(newToolbarStart, newToolbarEnd);
+    const newToolbarLeftGroupStart = newToolbarSource.indexOf('<ComposerToolbarLeftGroup testID="newSession.composerToolbarLeft">');
+    const newToolbarLeftGroupEnd = newToolbarSource.indexOf('</ComposerToolbarLeftGroup>');
+    const newToolbarModelIndex = newToolbarSource.indexOf('testID="newSession.modelIndicator"');
+    const newToolbarSpacerIndex = newToolbarSource.indexOf('<ComposerToolbarSpacer />');
+    const newToolbarVoiceSlotIndex = newToolbarSource.indexOf('<ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />');
+    expect(newToolbarLeftGroupStart).toBeGreaterThan(-1);
+    expect(newToolbarModelIndex).toBeGreaterThan(newToolbarLeftGroupStart);
+    expect(newToolbarLeftGroupEnd).toBeGreaterThan(newToolbarModelIndex);
+    expect(newToolbarSpacerIndex).toBeGreaterThan(newToolbarLeftGroupEnd);
+    expect(newToolbarVoiceSlotIndex).toBeGreaterThan(newToolbarSpacerIndex);
     expect(newSource).toContain('PaperPlaneIcon');
     expect(newSource).not.toContain('ArrowUp');
     expect(attachmentButtonSource).toContain('contextSheetOpen && styles.composerIconButtonActive');

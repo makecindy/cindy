@@ -312,6 +312,44 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     });
   });
 
+  it('routes an Anthropic Subagent by its pinned provider instead of the OpenAI parent route', async () => {
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    setSessionProvider('sess-pi', 'openai');
+    setProviderOAuthTokenReader((providerId, agent) =>
+      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('pi-claude-token') : null,
+    );
+    registerPiProxySession(
+      'sess-pi',
+      'anthropic-subagent-secret',
+      () => 'anthropic',
+      { scope: 'subagent-route' },
+    );
+    const decision = createModelRoutingTransform()(
+      { model: 'claude-fable-5' },
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'anthropic-subagent-secret',
+        'x-cindy-pi-provider-id': 'anthropic',
+        'x-api-key': 'cindy-pi-provider-auth-placeholder',
+      }),
+    );
+
+    await expect(Promise.resolve(decision)).resolves.toEqual({
+      upstreamOverride: 'https://api.anthropic.com',
+      headerOverride: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'oauth-2025-04-20',
+        authorization: 'Bearer pi-claude-token',
+      },
+      headerDelete: [
+        'x-api-key',
+        'x-cindy-pi-session-id',
+        'x-cindy-pi-session-token',
+        'x-cindy-pi-provider-id',
+      ],
+    });
+  });
+
   it.each([
     ['openai', '/codex/responses'],
     ['xai', '/v1/responses'],
@@ -329,6 +367,45 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     );
 
     expect(decision).toEqual({ localHandler: expect.any(Function) });
+  });
+
+  it('allows a provider-pinned Subagent token to cross the parent session route only for its provider', async () => {
+    setSessionProvider('sess-pi', 'openai');
+    registerPiProxySession('sess-pi', 'root-session-secret', () => 'openai');
+    registerPiProxySession(
+      'sess-pi',
+      'xai-subagent-secret',
+      () => 'xai',
+      { scope: 'subagent-route' },
+    );
+
+    const allowed = createModelRoutingTransform()(
+      undefined,
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'xai-subagent-secret',
+        'x-cindy-pi-provider-id': 'xai',
+      }, '/v1/responses'),
+    );
+    expect(allowed).toEqual({ localHandler: expect.any(Function) });
+
+    const rejected = await createModelRoutingTransform()(
+      undefined,
+      ctxWith({
+        'x-cindy-pi-session-id': 'sess-pi',
+        'x-cindy-pi-session-token': 'xai-subagent-secret',
+        'x-cindy-pi-provider-id': 'openai',
+      }, '/codex/responses'),
+    );
+    const response = {
+      status: 0,
+      body: '',
+      writeHead(status: number) { this.status = status; },
+      end(body: string) { this.body = body; },
+    };
+    await rejected?.localHandler?.({ res: response } as never);
+    expect(response.status).toBe(403);
+    expect(response.body).toContain('pi_provider_mismatch');
   });
 
   it.each([

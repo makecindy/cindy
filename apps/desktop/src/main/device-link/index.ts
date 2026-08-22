@@ -133,6 +133,7 @@ import {
 } from './linkRecovery';
 import {
   createResponsivenessTracker,
+  isDeviceResponsivenessProbeEligible,
   OPEN_LINK_OBSERVATION_CHANNEL,
   type DeviceResponsivenessTracker,
 } from './responsivenessTracker';
@@ -612,13 +613,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         replayActiveSubscriptions(`responsiveness-recovered:${deviceId.slice(0, 8)}`, deviceId);
       }
     },
-    // 探测同样遵守本机「关闭对该设备的控制」的 fail-closed 偏好,不给禁用目标发任何帧。
-    isProbeEligible: (deviceId) =>
-      client?.getStatus() === 'online' &&
-      arbiter?.isOwner() === true &&
-      presenceAvailableByDevice.get(deviceId) === true &&
-      !revokedByRemote.has(deviceId) &&
-      !readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+    // 探测只在熔断器已经放行 half-open 单飞席位后到达这里；presence 的未知态
+    // 必须允许这一个探测穿过，否则 relay 重连清空 presence 后熔断会永久自锁。
+    // 只有当代 presence 明确为 false 才阻止，且仍叠加 relay/owner/撤权/本机禁用门。
+    isProbeEligible: (deviceId) => isDeviceResponsivenessProbeEligible({
+      relayOnline: client?.getStatus() === 'online',
+      ownsRelay: arbiter?.isOwner() === true,
+      presenceAvailable: presenceAvailableByDevice.get(deviceId),
+      revoked: revokedByRemote.has(deviceId),
+      locallyDisabled: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+    }),
     // observed:false 且是唯一豁免熔断快速拒绝的建链入口:recoverLink 是探测
     // 周期的延伸(业务/探测超时已由 tracker 记账,不重复观测),且 open 期间
     // 必须真正上线重建 link——否则「探测超时→重开 link→下次探测走新链路」的

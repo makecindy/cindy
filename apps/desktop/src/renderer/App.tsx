@@ -29,6 +29,10 @@ import { ProjectAutomationNotifyBridge } from '@/features/scheduler/components/P
 import { GhostConfirmDialogHost } from '@/cindy-brain/GhostConfirmDialogHost';
 import { PluginMarketPermissionReviewHost } from '@/features/plugin/PluginMarketPermissionReviewHost';
 import { makerChatStore } from '@/lib/makerChatStore';
+import {
+  initializePromptRecommendationStore,
+  setPromptRecommendationOwner,
+} from '@/lib/promptRecommendationStore';
 import { installSystemNetworkErrorToastListener } from '@/lib/systemNetworkErrorToast';
 import { installSilentInstallToastListener } from '@/lib/silentInstallToast';
 import { installProviderUpstreamErrorToastListener } from '@/lib/providerUpstreamErrorToast';
@@ -54,6 +58,7 @@ import {
   setProviderModelChoice,
   setProviderModelEffort,
   setProviderModelFast,
+  setProviderModelThinking,
   subscribeProviderModelMemory,
 } from '@/state/providerModelMemory';
 import {
@@ -89,9 +94,14 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
 }
 
 function MakerBootstrap() {
-  const { isAuthenticated, dataOwnerId } = useAuth();
+  const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
+
+  useEffect(() => {
+    setPromptRecommendationOwner(`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`);
+    initializePromptRecommendationStore();
+  }, [dataOwnerId, dataOwnerRecoveryEpoch]);
 
   useEffect(() => {
     makerChatStore.syncActiveTurnsFromMain();
@@ -233,7 +243,7 @@ export function App() {
   // 通过 providerModelMemory 同步。写入触发上面的镜像 effect → NEW_MAKER_DRAFT_CHANGED 回流控制端。
   useEffect(() => {
     const offDraft = window.electronAPI.onMakerDraftPrefApply(
-      ({ agent, providerId, modelId, active, effort, fast, markModelChoice }) => {
+      ({ agent, providerId, modelId, active, effort, fast, thinking, markModelChoice }) => {
         const vendor = agentKindToVendor(agent);
         if (active) {
           const patch =
@@ -262,6 +272,9 @@ export function App() {
         if (fast !== undefined) {
           setProviderModelFast(agent, providerId, modelId, fast);
           if (active) setFastModeForModel(modelId, fast); // 旧层兜底保持一致
+        }
+        if (thinking !== undefined) {
+          setProviderModelThinking(agent, providerId, modelId, thinking);
         }
       },
     );

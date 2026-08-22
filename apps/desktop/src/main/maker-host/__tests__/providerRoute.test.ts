@@ -45,6 +45,7 @@ import {
   setXdGatewayModels,
 } from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
+import { migrateManagedOllamaProvider } from '../../local-model-runtime/managedOllamaProvider.js';
 import { ANTHROPIC_DIRECT_UPSTREAM } from '../claude-gateway-config.js';
 
 // CODEX_OAUTH_UPSTREAM 不直接 import —— codex-proxy-host.ts 在 import 期触电(app.getPath),
@@ -1263,6 +1264,74 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
         type: 'provider_route_disabled',
         code: 'provider_route_disabled',
       },
+    });
+  });
+
+  it('catalog refresh 形态:旧 Responses 行迁完后 Codex 选 Chat 桥', () => {
+    const migrated = migrateManagedOllamaProvider({
+      id: 'cindy-local-ollama',
+      name: 'Ollama',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+        'claude-code': {
+          baseUrl: 'http://127.0.0.1:11434',
+          wireProtocol: 'anthropic-messages',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+        codex: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+      },
+    });
+    expect(migrated).not.toBeNull();
+    setCustomProviders([buildUserProvider(migrated!)]);
+    setSessionProvider('s-user', 'cindy-local-ollama');
+    const routing = getSessionRoutingDescriptor('s-user', 'codex', 'qwen3.8:27b-mxfp8');
+    expect(routing?.wireProtocol).toBe('openai-chat');
+    expect(routing?.upstream).toBe('http://127.0.0.1:11434/v1');
+  });
+
+  it('managed Ollama: Codex 打本机 11434 并剥掉订阅凭证', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'cindy-local-ollama',
+        name: 'Ollama',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+          'claude-code': {
+            baseUrl: 'http://127.0.0.1:11434',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+          codex: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+        },
+      }),
+    ]);
+    setSessionProvider('s-user', 'cindy-local-ollama');
+
+    expect(isUserProviderSession('s-user')).toBe(true);
+    expect(
+      getSessionRoutingDescriptor('s-user', 'codex', 'qwen3.8:27b-mxfp8')?.wireProtocol,
+    ).toBe('openai-chat');
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'qwen3.8:27b-mxfp8')).toEqual({
+      upstreamOverride: 'http://127.0.0.1:11434/v1',
+      headerDelete: ['authorization', 'x-api-key', ...CODEX_ACCOUNT_HEADER_DELETE],
     });
   });
 

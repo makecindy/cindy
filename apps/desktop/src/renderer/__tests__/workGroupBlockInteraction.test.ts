@@ -21,6 +21,18 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     resolve(__dirname, '..', 'components', 'chat', 'WorkGroupBlock.tsx'),
     'utf8',
   );
+  const chrome = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'activityRowChrome.ts'),
+    'utf8',
+  );
+  const actionRow = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'AgentActionRow.tsx'),
+    'utf8',
+  );
+  const systemCard = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'SystemCard.tsx'),
+    'utf8',
+  );
 
   it('onToggle 不再批量 seed 后代工作组展开态', () => {
     // 外层 click 只能翻外层自身;内层「已工作」仍由用户单独展开。
@@ -44,6 +56,38 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     );
     expect(source).toMatch(
       /function ExpandedThinkingRow[\s\S]*data-message-client-id=\{message\.clientId\}/,
+    );
+  });
+
+  it('thinking 行右侧三角与工具行共用同一套槽和 hover 浮起', () => {
+    expect(chrome).toMatch(/group-hover:bg-\[var\(--cmd-palette-item-hover\)\]/);
+    expect(chrome).toMatch(/hover:bg-\[var\(--msg-code-inline-bg\)\]/);
+    expect(chrome).toMatch(/h-\[18px\] w-\[18px\]/);
+    expect(chrome).toMatch(/ACTIVITY_ROW_RADIUS_CLASS = 'rounded-\[8px\]'/);
+    expect(chrome).toMatch(/rounded-\[8px\]/);
+    expect(chrome).toMatch(/duration-\[var\(--motion-fast,150ms\)\]/);
+    expect(chrome).toMatch(/ease-\[var\(--motion-ease-out\)\]/);
+    expect(chrome).not.toMatch(/rounded-lg/);
+    expect(chrome).not.toMatch(/var\(--radius\)/);
+    expect(chrome).not.toMatch(/rounded-\[4px\]/);
+    expect(source).toMatch(/from '\.\/activityRowChrome'/);
+    expect(source).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
+    expect(source).toMatch(/ACTIVITY_ROW_HOVER_SURFACE_CLASS/);
+    expect(source).toMatch(/ACTIVITY_ROW_RADIUS_CLASS/);
+    expect(source).toMatch(/ACTIVITY_ROW_COLOR_TRANSITION_CLASS/);
+    expect(source).not.toMatch(/function ThinkingActivityRow[\s\S]*rounded-\[6px\]/);
+    expect(actionRow).toMatch(/from '\.\/activityRowChrome'/);
+    expect(actionRow).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
+    expect(actionRow).toMatch(/ACTIVITY_ROW_RADIUS_CLASS/);
+    expect(actionRow).toMatch(/ACTIVITY_ROW_COLOR_TRANSITION_CLASS/);
+    expect(systemCard).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
+    // 槽位始终占位;只有可展开时才画三角。旧写法把整个 span 按 canExpand 卸掉,
+    // 短思考行 / 仅有 outcome 的中断行会比工具行更靠右。
+    expect(source).not.toMatch(
+      /\{canExpand && \(\s*<span aria-hidden="true" className="inline-flex h-\[18px\]/,
+    );
+    expect(systemCard).not.toMatch(
+      /\{canExpand && \(\s*<span aria-hidden="true" className=\{ACTIVITY_ROW_CHEVRON_SLOT_CLASS\}/,
     );
   });
 

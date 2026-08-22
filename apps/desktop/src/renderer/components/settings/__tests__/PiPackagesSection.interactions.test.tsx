@@ -148,10 +148,15 @@ describe('PiPackagesSection interaction state machine', () => {
 
   it('routes install directly into the Main-owned confirmation flow and keeps retry state on failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
+    const enabledPackage = { ...packageView(1), enabled: true };
     const mutatePiPackage = vi
       .fn()
       .mockImplementationOnce(() => firstMutation.promise)
-      .mockResolvedValueOnce({ available: true, packages: [packageView(1)] });
+      .mockResolvedValueOnce({
+        available: true,
+        packages: [enabledPackage],
+        affectedPackage: enabledPackage,
+      });
     installElectronApi({
       listPiPackages: vi.fn(async () => ({ available: true, packages: [] })),
       mutatePiPackage,
@@ -189,6 +194,41 @@ describe('PiPackagesSection interaction state machine', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
     await waitFor(() => expect(screen.getByText('sample-extension-1')).toBeTruthy());
     expect(mutatePiPackage).toHaveBeenCalledTimes(2);
+    expect(toastMocks.success).toHaveBeenCalledWith(
+      'settings.piPackages.success.installEnabled',
+    );
+  });
+
+  it('does not claim enablement when an installed package remains disabled', async () => {
+    const disabledPackage: PiPackageView = {
+      ...packageView(1),
+      enabled: false,
+      canToggle: false,
+      resources: [],
+      warning: 'inspection-failed',
+    };
+    installElectronApi({
+      listPiPackages: vi.fn(async () => ({ available: true, packages: [] })),
+      mutatePiPackage: vi.fn(async () => ({
+        available: true,
+        packages: [disabledPackage],
+        affectedPackage: disabledPackage,
+      })),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('settings.piPackages.empty');
+
+    fireEvent.change(screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder'), {
+      target: { value: disabledPackage.source },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
+
+    await waitFor(() =>
+      expect(toastMocks.success).toHaveBeenCalledWith('settings.piPackages.success.install'),
+    );
+    expect(toastMocks.success).not.toHaveBeenCalledWith(
+      'settings.piPackages.success.installEnabled',
+    );
   });
 
   it('routes remove directly into the Main-owned confirmation flow and retries after failure', async () => {

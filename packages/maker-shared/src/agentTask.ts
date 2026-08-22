@@ -29,6 +29,7 @@ export interface AgentTaskUsage {
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+  costUsd?: number;
 }
 
 /**
@@ -235,6 +236,7 @@ export function normalizeAgentTaskUpdate(
         ...(typeof usageRaw.totalTokens === 'number' ? { totalTokens: usageRaw.totalTokens } : {}),
         ...(typeof usageRaw.toolUses === 'number' ? { toolUses: usageRaw.toolUses } : {}),
         ...(typeof usageRaw.durationMs === 'number' ? { durationMs: usageRaw.durationMs } : {}),
+        ...(typeof usageRaw.costUsd === 'number' ? { costUsd: usageRaw.costUsd } : {}),
       }
     : undefined;
   const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
@@ -411,6 +413,10 @@ export function subagentSpawnResultIndicatesRunning(
   // Claude's asynchronous Agent tool returns a textual launch receipt while the
   // child is still running. Treat it like the structured Codex V1 receipt so a
   // paired stale `running` update does not close the task prematurely.
+  if (toolName === PI_SUBAGENT_TOOL_NAME
+    && trimmed === 'Cindy subagent launched. The agent is working in the background.') {
+    return true;
+  }
   if ((toolName === 'Agent' || toolName === 'Task')
     && (
       trimmed === 'Async agent launched successfully.'
