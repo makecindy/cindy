@@ -552,6 +552,183 @@ describe('ModelSelector trigger variants', () => {
     });
   };
 
+  it('uses the selected provider model name when duplicate model ids have source-specific names', () => {
+    const modelId = 'deepseek/deepseek-v4-pro';
+    const originalModels = visibleModelsRef.models;
+    const originalProviders = providersRef.providers;
+
+    // 拍平后的模型名称来自第一个来源，复现 issue #1644 的关键前提。
+    visibleModelsRef.models = [
+      {
+        id: modelId,
+        displayName: '火山 DeepSeek-V4-Pro',
+        contextWindow: 1048576,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
+    providersRef.providers = [
+      {
+        id: 'volcengine-ark',
+        name: 'Volcengine Ark',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: modelId,
+              name: '火山 DeepSeek-V4-Pro',
+              contextWindow: 1048576,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+      {
+        id: 'cindy-gateway',
+        name: 'Cindy Gateway',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: modelId,
+              name: 'Cindy DeepSeek-V4-Pro',
+              contextWindow: 1048576,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ];
+
+    const props = {
+      modelId,
+      effort: 'medium' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      currentProviderId: 'volcengine-ark',
+    };
+    const view = render(React.createElement(ModelSelector, props));
+
+    try {
+      let trigger = screen.getByRole('button', {
+        name: 'Select model. Current: 火山 DeepSeek-V4-Pro',
+      });
+      expect(trigger.textContent).toContain('火山 DeepSeek-V4-Pro');
+      expect(trigger.getAttribute('aria-label')).toBe(
+        'Select model. Current: 火山 DeepSeek-V4-Pro',
+      );
+
+      view.rerender(
+        React.createElement(ModelSelector, {
+          ...props,
+          currentProviderId: 'cindy-gateway',
+        }),
+      );
+
+      trigger = screen.getByRole('button', {
+        name: 'Select model. Current: Cindy DeepSeek-V4-Pro',
+      });
+      expect(trigger.textContent).toContain('Cindy DeepSeek-V4-Pro');
+      expect(trigger.textContent).not.toContain('火山 DeepSeek-V4-Pro');
+      expect(trigger.getAttribute('aria-label')).toBe(
+        'Select model. Current: Cindy DeepSeek-V4-Pro',
+      );
+    } finally {
+      view.unmount();
+      visibleModelsRef.models = originalModels;
+      providersRef.providers = originalProviders;
+    }
+  });
+
+  it('keeps remote status labels when the provider catalog arrives before visible models', () => {
+    const modelId = 'deepseek/deepseek-v4-pro';
+    const providerModelName = 'Remote catalog DeepSeek-V4-Pro';
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalCapabilitiesLoading = agentCapabilitiesRef.loading;
+    const originalCapabilitiesError = agentCapabilitiesRef.error;
+    const originalModels = visibleModelsRef.models;
+    const originalDeviceProviders = deviceProvidersRef.providers;
+    const originalProvidersLoading = deviceProvidersRef.loading;
+    const originalProvidersError = deviceProvidersRef.error;
+
+    // provider 目录可能先于远程 capability/visibleModels 到达。
+    deviceProvidersRef.providers = [
+      {
+        id: 'remote-ark',
+        name: 'Remote Ark',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: modelId,
+              name: providerModelName,
+              contextWindow: 1048576,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ];
+    deviceProvidersRef.loading = false;
+    deviceProvidersRef.error = null;
+    visibleModelsRef.models = [];
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.loading = true;
+    agentCapabilitiesRef.error = null;
+
+    const props = {
+      modelId,
+      effort: 'medium' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      deviceId: 'dev-a',
+      currentProviderId: 'remote-ark',
+    };
+    const view = render(React.createElement(ModelSelector, props));
+
+    try {
+      let trigger = screen.getByRole('button', {
+        name: 'Select model. Current: 正在从远程设备读取模型…',
+      });
+      expect(trigger.textContent).toContain('正在从远程设备读取模型…');
+      expect(trigger.textContent).not.toContain(providerModelName);
+      expect(trigger.getAttribute('aria-label')).toBe(
+        'Select model. Current: 正在从远程设备读取模型…',
+      );
+
+      agentCapabilitiesRef.loading = false;
+      agentCapabilitiesRef.error = 'offline';
+      view.rerender(React.createElement(ModelSelector, props));
+
+      trigger = screen.getByRole('button', {
+        name: 'Select model. Current: 模型读取失败',
+      });
+      expect(trigger.textContent).toContain('模型读取失败');
+      expect(trigger.textContent).not.toContain(providerModelName);
+      expect(trigger.getAttribute('aria-label')).toBe('Select model. Current: 模型读取失败');
+    } finally {
+      view.unmount();
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.loading = originalCapabilitiesLoading;
+      agentCapabilitiesRef.error = originalCapabilitiesError;
+      visibleModelsRef.models = originalModels;
+      deviceProvidersRef.providers = originalDeviceProviders;
+      deviceProvidersRef.loading = originalProvidersLoading;
+      deviceProvidersRef.error = originalProvidersError;
+    }
+  });
+
   it('remote loading replaces the placeholder and no-results empty state', async () => {
     const originalCapabilities = agentCapabilitiesRef.capabilities;
     const originalModels = visibleModelsRef.models;

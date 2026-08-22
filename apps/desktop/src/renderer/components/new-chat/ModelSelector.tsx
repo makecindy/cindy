@@ -3302,38 +3302,6 @@ export function ModelSelector({
   // 给出诊断性文案(通常是裸 id),行为与本组件接管前一致。
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
   const unknownLabel = modelId && unknownModelLabel ? unknownModelLabel(modelId).trim() : '';
-  const displayLabel = fallbackOption?.active
-    ? fallbackOption.label
-    : (currentModel?.displayName ??
-      (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
-      (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
-      (unknownLabel !== '' ? unknownLabel : null) ??
-      t('newChat.modelSelector.trigger.placeholder'));
-  const agentName =
-    agentIdentity && !fallbackOption?.active
-      ? agentIdentity.vendorKey === 'cc'
-        ? t('newChat.modelSelector.trigger.agent.claudeCode')
-        : agentIdentity.vendorKey === 'pi'
-          ? t('newChat.modelSelector.trigger.agent.pi')
-          : t('newChat.modelSelector.trigger.agent.codex')
-      : null;
-  const agentIdentityLabel =
-    agentName && agentIdentity?.state === 'pending'
-      ? t('newChat.modelSelector.trigger.agent.pending', { agent: agentName })
-      : agentName;
-  const baseDisplayIdentityLabel = agentIdentityLabel
-    ? `${agentIdentityLabel} · ${displayLabel}`
-    : displayLabel;
-  const remoteStatusLabel = currentModel
-    ? remoteModelLoading
-      ? t('newChat.modelSelector.remoteLoading')
-      : remoteModelLoadFailed
-        ? t('newChat.modelSelector.remoteLoadFailedShort')
-        : null
-    : null;
-  const displayIdentityLabel = remoteStatusLabel
-    ? `${baseDisplayIdentityLabel} · ${remoteStatusLabel}`
-    : baseDisplayIdentityLabel;
   const efforts = currentModel?.efforts ?? [];
 
   const currentAgentKind: AgentKind | null = useMemo(() => {
@@ -3415,12 +3383,13 @@ export function ModelSelector({
   const triggerActiveProvider = activeSourceId
     ? providers.find((p) => p.id === activeSourceId)
     : undefined;
+  const triggerActiveModel =
+    triggerActiveProvider && currentAgentKind
+      ? getModel(triggerActiveProvider, modelId, currentAgentKind)
+      : undefined;
   // trigger 图标的统一规则:当前 (来源, 模型) 条目的 icon(AI Gateway / 目录设定)优先,
   // 缺省回落来源供应商标 —— 与列表行、手机版同一套口径(ModelIconMark)。
-  const triggerModelIcon =
-    triggerActiveProvider && currentAgentKind
-      ? getModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
-      : undefined;
+  const triggerModelIcon = triggerActiveModel?.icon;
   const disconnectedProvider = currentProviderId
     ? providers.find((p) => p.id === currentProviderId)
     : undefined;
@@ -3436,6 +3405,44 @@ export function ModelSelector({
   // 断开态仅在「非 noSource」时生效:全部来源都断开时 noSource CTA 优先(下拉已无可选行,
   // 跳设置才是正确恢复路径);还有别的已连接来源时,下拉换源就是恢复路径,trigger 保持可点。
   const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
+
+  // 仅在普通可用态用当前生效来源的名称。currentModel gate 保证远程列表尚未就绪时
+  // 不会拿 provider 缓存提前覆盖 loading/error;断开态继续沿用既有拍平名称 / modelId 语义。
+  const sourceSpecificModelName =
+    currentModel && !showSourceDisconnected ? triggerActiveModel?.name : undefined;
+  const displayLabel = fallbackOption?.active
+    ? fallbackOption.label
+    : (sourceSpecificModelName ??
+      currentModel?.displayName ??
+      (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
+      (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
+      (unknownLabel !== '' ? unknownLabel : null) ??
+      t('newChat.modelSelector.trigger.placeholder'));
+  const agentName =
+    agentIdentity && !fallbackOption?.active
+      ? agentIdentity.vendorKey === 'cc'
+        ? t('newChat.modelSelector.trigger.agent.claudeCode')
+        : agentIdentity.vendorKey === 'pi'
+          ? t('newChat.modelSelector.trigger.agent.pi')
+          : t('newChat.modelSelector.trigger.agent.codex')
+      : null;
+  const agentIdentityLabel =
+    agentName && agentIdentity?.state === 'pending'
+      ? t('newChat.modelSelector.trigger.agent.pending', { agent: agentName })
+      : agentName;
+  const baseDisplayIdentityLabel = agentIdentityLabel
+    ? `${agentIdentityLabel} · ${displayLabel}`
+    : displayLabel;
+  const remoteStatusLabel = currentModel
+    ? remoteModelLoading
+      ? t('newChat.modelSelector.remoteLoading')
+      : remoteModelLoadFailed
+        ? t('newChat.modelSelector.remoteLoadFailedShort')
+        : null
+    : null;
+  const displayIdentityLabel = remoteStatusLabel
+    ? `${baseDisplayIdentityLabel} · ${remoteStatusLabel}`
+    : baseDisplayIdentityLabel;
   const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceDisconnected
