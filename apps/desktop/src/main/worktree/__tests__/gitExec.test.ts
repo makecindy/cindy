@@ -540,4 +540,111 @@ describe('gitExec timeoutMs', () => {
     await expect(p).resolves.toEqual({ stdout: 'ok', stderr: '' });
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('dubious ownership only adds an absent exact safe.directory', async () => {
+    vi.useRealTimers();
+    setPlatform('linux');
+    const calls: Array<{ args: string[]; cb: ExecCb }> = [];
+    mocks.execFile.mockImplementation((_file: string, args: string[], _opts: unknown, cb: ExecCb) => {
+      calls.push({ args, cb });
+      return Object.assign(new EventEmitter(), {
+        pid: 4242,
+        kill: vi.fn(),
+        exitCode: null,
+        signalCode: null,
+      });
+    });
+
+    const operation = gitExec(['status'], '/owned/repo');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const dubious = Object.assign(new Error('dubious'), { code: 128 });
+    calls[0].cb(
+      dubious,
+      '',
+      "fatal: detected dubious ownership in repository at '/owned/repo'",
+    );
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    const missing = Object.assign(new Error('missing'), { code: 1 });
+    calls[1].cb(missing, '', '');
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    calls[2].cb(null, '', '');
+    await vi.waitFor(() => expect(calls).toHaveLength(4));
+    calls[3].cb(null, 'clean', '');
+
+    await expect(operation).resolves.toEqual({ stdout: 'clean', stderr: '' });
+    expect(calls.map(({ args }) => args)).toEqual([
+      ['status'],
+      ['config', '--global', '--get-all', 'safe.directory'],
+      ['config', '--global', '--add', 'safe.directory', '/owned/repo'],
+      ['status'],
+    ]);
+  });
+
+  it('dubious ownership reuses an existing exact safe.directory', async () => {
+    vi.useRealTimers();
+    setPlatform('linux');
+    const calls: Array<{ args: string[]; cb: ExecCb }> = [];
+    mocks.execFile.mockImplementation((_file: string, args: string[], _opts: unknown, cb: ExecCb) => {
+      calls.push({ args, cb });
+      return Object.assign(new EventEmitter(), {
+        pid: 4242,
+        kill: vi.fn(),
+        exitCode: null,
+        signalCode: null,
+      });
+    });
+
+    const operation = gitExec(['status'], '/manual/repo');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    calls[0].cb(
+      Object.assign(new Error('dubious'), { code: 128 }),
+      '',
+      "fatal: detected dubious ownership in repository at '/manual/repo'",
+    );
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    calls[1].cb(null, '/manual/repo\n', '');
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    calls[2].cb(null, 'clean', '');
+
+    await expect(operation).resolves.toEqual({ stdout: 'clean', stderr: '' });
+    expect(calls.some(({ args }) => args.includes('--add'))).toBe(false);
+  });
+
+  it('ignores safe.directory values that precede an empty reset', async () => {
+    vi.useRealTimers();
+    setPlatform('linux');
+    const calls: Array<{ args: string[]; cb: ExecCb }> = [];
+    mocks.execFile.mockImplementation((_file: string, args: string[], _opts: unknown, cb: ExecCb) => {
+      calls.push({ args, cb });
+      return Object.assign(new EventEmitter(), {
+        pid: 4242,
+        kill: vi.fn(),
+        exitCode: null,
+        signalCode: null,
+      });
+    });
+
+    const operation = gitExec(['status'], '/reset/repo');
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    calls[0].cb(
+      Object.assign(new Error('dubious'), { code: 128 }),
+      '',
+      "fatal: detected dubious ownership in repository at '/reset/repo'",
+    );
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    calls[1].cb(null, '/reset/repo\n\n', '');
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    calls[2].cb(null, '', '');
+    await vi.waitFor(() => expect(calls).toHaveLength(4));
+    calls[3].cb(null, 'clean', '');
+
+    await expect(operation).resolves.toEqual({ stdout: 'clean', stderr: '' });
+    expect(calls[2].args).toEqual([
+      'config',
+      '--global',
+      '--add',
+      'safe.directory',
+      '/reset/repo',
+    ]);
+  });
 });

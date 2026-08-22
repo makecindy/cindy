@@ -106,6 +106,13 @@ describe('createWorktree naming authority', () => {
       },
     });
     expect(storeMap.get('session-1')).toEqual(result.ok ? result.meta : undefined);
+    expect(gitExecMock).not.toHaveBeenCalledWith([
+      'config',
+      '--global',
+      '--add',
+      'safe.directory',
+      path.join(baseRepo, '.cindy-worktrees', 'auto-abc123'),
+    ]);
   });
 
   it('preserves an explicit legal name and still rejects an explicit illegal name', async () => {
