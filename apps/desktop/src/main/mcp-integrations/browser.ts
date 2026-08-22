@@ -39,6 +39,7 @@ import {
 } from '../rsb-browser-bridge/active-session.js';
 import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
+import { createLocalhostGuardedRuntime } from './browser-localhost-runtime-guard.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 
@@ -96,7 +97,15 @@ const vendoredRuntime = trackBrowserRuntimeUsage(
   }),
 );
 
-const externalBackend = new ExternalChromeBackend(vendoredRuntime, logger);
+// The agent-facing runtime goes through the localhost guard: it re-checks
+// navigate/open/act *results* for sensitive loopback ports, public→localhost
+// redirects, and interaction-triggered localhost navigations that the
+// pre-dispatch approval policy cannot see. Internal host calls (availability
+// probe, login helper, dispose) use `vendoredRuntime` directly — they are not
+// agent-initiated and must not be gated by tab-state tracking.
+const agentRuntime = createLocalhostGuardedRuntime(vendoredRuntime, logger);
+
+const externalBackend = new ExternalChromeBackend(agentRuntime, logger);
 
 type SessionUploadRootResolver = (sessionId: string) => Promise<string[]>;
 

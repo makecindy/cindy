@@ -333,4 +333,103 @@ describe('desktop MCP approval policy', () => {
       }),
     ).toBe('auto-approve');
   });
+
+  it('requires approval before a trusted browser call can enter localhost', () => {
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: {
+          name: 'browser',
+          args: { action: 'navigate', url: 'http://localhost:3000/' },
+        },
+      }),
+    ).toBe('prompt-each-time');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: {
+          name: 'browser',
+          args: { action: 'open', targetUrl: 'https://localhost:5173/' },
+        },
+      }),
+    ).toBe('prompt-each-time');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'recipe', recipeId: 'local-preview' } },
+      }),
+    ).toBe('prompt-each-time');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'navigate', url: 'https://example.com/' } },
+      }),
+    ).toBe('auto-approve');
+  });
+
+  it('still requires approval when Codex omits the outer tool_name (P1: nameless call_tool bypass)', () => {
+    // Codex 0.142.5 / 0.144.5 may omit `tool_name` while retaining the
+    // validated progressive `tool_params`. An omitted name must be treated as
+    // `call_tool`, otherwise the localhost check bails before inspecting the
+    // URL and the call falls through to the trusted-server auto-approve.
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolParams: {
+          name: 'browser',
+          args: { action: 'navigate', url: 'http://localhost:5173/' },
+        },
+      }),
+    ).toBe('prompt-each-time');
+    // Sanity: a nameless public navigation stays auto-approved.
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolParams: {
+          name: 'browser',
+          args: { action: 'navigate', url: 'https://example.com/' },
+        },
+      }),
+    ).toBe('auto-approve');
+  });
+
+  it('normalizes trailing-dot / IPv6 / 127.0.0.0/8 loopback forms like the SSRF guard', () => {
+    // `http://localhost./` — the URL parser keeps the trailing dot, so a literal
+    // `=== 'localhost'` comparison missed it (P1).
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'navigate', url: 'http://localhost./' } },
+      }),
+    ).toBe('prompt-each-time');
+    // Whole 127.0.0.0/8 block, not just 127.0.0.1.
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'navigate', url: 'http://127.0.1.1:8080/' } },
+      }),
+    ).toBe('prompt-each-time');
+    // Bracketed IPv6 loopback.
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'open', targetUrl: 'http://[::1]:3000/' } },
+      }),
+    ).toBe('prompt-each-time');
+    // Uppercase localhost.
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy_browser',
+        toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'navigate', url: 'http://LOCALHOST:4173/' } },
+      }),
+    ).toBe('prompt-each-time');
+  });
 });

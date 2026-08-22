@@ -9,17 +9,19 @@ import { createBrowserControlRuntime } from '../index.js';
 // fell back to the vendored DEFAULT profiles ("openclaw"/"user") and every
 // host-set profile (name, color, ports) was ignored. This locks the fix in.
 describe('host config application', () => {
-  it('preserves narrow fake-IP SSRF allowances through vendored config resolution', () => {
+  it('preserves narrow fake-IP and localhost SSRF allowances through vendored config resolution', () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowRfc2544BenchmarkRange: true,
         allowIpv6UniqueLocalRange: true,
+        allowedHostnames: ['localhost'],
       },
     });
 
     expect(resolved.ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
+      allowedHostnames: ['localhost'],
     });
   });
 

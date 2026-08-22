@@ -3126,9 +3126,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
    */
   it('honors a hot switch to Full access ahead of the MCP policy branch', async () => {
     const review = vi.fn(async () => ({ verdict: 'block' as const }));
+    // `prompt` (not `prompt-each-time`) is the per-session consent whose
+    // "don't ask again" semantics Full access honors by short-circuiting —
+    // cindy_ssh resolves to this policy in production.
     const handle = await start('ask', review, false, {
       serverNames: ['cindy_ssh'],
-      policy: () => 'prompt-each-time',
+      policy: () => 'prompt',
     });
     let resolverCalls = 0;
     handle.setInteractionResolver?.(async () => {
@@ -3146,6 +3149,32 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
     expect(resolverCalls).toBe(0);
     expect(review).not.toHaveBeenCalled();
+  });
+
+  it('still prompts for a prompt-each-time MCP call even under Full access', async () => {
+    // localhost browser navigation returns `prompt-each-time`: it is a per-call
+    // consent boundary that Full access must NOT silently auto-confirm (or
+    // silently deny without invoking the resolver). The user's decision is
+    // surfaced and honored (PR #2445 Codex P1).
+    const handle = await start('ask', undefined, false, {
+      serverNames: ['cindy_browser'],
+      policy: () => 'prompt-each-time',
+    });
+    let resolverCalls = 0;
+    handle.setInteractionResolver?.(async () => {
+      resolverCalls++;
+      return { kind: 'permission', behavior: 'allow' } as never;
+    });
+    await handle.setPermissionMode?.('bypassPermissions');
+    firePermissionRequest('r23b', 'mcp__cindy_browser__call_tool', {
+      name: 'browser',
+    });
+    expect(await waitForResponse('r23b')).toEqual({
+      type: 'extension_ui_response',
+      id: 'r23b',
+      confirmed: true,
+    });
+    expect(resolverCalls).toBe(1);
   });
 
   it('allows a Full access call whose session has no interaction resolver at all', async () => {

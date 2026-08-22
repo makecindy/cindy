@@ -28,31 +28,31 @@ agent 调 browser 工具
 playwright-core → 托管 Chrome(Cindy profile, 持久 user-data-dir)
 ```
 
-| 层 | 路径 | 职责 / 关键文件 |
-|---|---|---|
-| **L1 vendored runtime** | `packages/browser-control-runtime/` | `src/types.ts`(中性契约 `BrowserControlRuntime` / `BrowserRuntimeConfig` / Request / Result)、`src/runtime.ts`(`createBrowserControlRuntime` 把 vendored dispatcher 包到契约后面)、`src/unavailable.ts`(未配置时的安全 stub)、`src/shim/**`(手写替换上游 plugin-sdk 面,见 `shim-spec.md`)、`_generated/**`(**生成物,禁止手改**) |
-| **L2 MCP 面** | `packages/lizi-mcps/src/browser/` | `tools.ts`(唯一一个 `browser` 工具,17 个 action,`rules:['browser-workflow']`)、`server.ts`(`list_tools`/`call_tool` + 把 rules 打进响应)、`tool-registry.ts`、`index.ts`(`createBrowserMcpServer`)、`prompts/rules/browser-workflow.md`(**喂给 agent 的用法规则**)。在 `packages/lizi-mcps/src/providers.ts` 注册成 `cindy_browser` provider |
-| **L3 desktop host** | `apps/desktop/src/main/mcp-integrations/` | `browser-runtime-env.ts`(**import 前置副作用**,见坑 #2)、`browser-managed-config.ts`(托管 config)、`browser.ts`(runtime 单例 + `getBrowserMcpDeps`/`getBrowserAvailability`/`openBrowserForLogin`)、`browser-availability.ts`(status → UI 数据)。IPC:`maker-ipc/{channels,register}.ts` 的 `BROWSER_STATUS` + `BROWSER_OPEN_FOR_LOGIN`。UI:`renderer/components/settings/ComputerUseSection.tsx`(设置 →「自动操作」)+ 4 语言 i18n。开关 gate:`maker-host/plugins/plugin-registry.ts`(plugin id `browser`) |
+| 层                      | 路径                                      | 职责 / 关键文件                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **L1 vendored runtime** | `packages/browser-control-runtime/`       | `src/types.ts`(中性契约 `BrowserControlRuntime` / `BrowserRuntimeConfig` / Request / Result)、`src/runtime.ts`(`createBrowserControlRuntime` 把 vendored dispatcher 包到契约后面)、`src/unavailable.ts`(未配置时的安全 stub)、`src/shim/**`(手写替换上游 plugin-sdk 面,见 `shim-spec.md`)、`_generated/**`(**生成物,禁止手改**)                                                                                                                                                                           |
+| **L2 MCP 面**           | `packages/lizi-mcps/src/browser/`         | `tools.ts`(唯一一个 `browser` 工具,17 个 action,`rules:['browser-workflow']`)、`server.ts`(`list_tools`/`call_tool` + 把 rules 打进响应)、`tool-registry.ts`、`index.ts`(`createBrowserMcpServer`)、`prompts/rules/browser-workflow.md`(**喂给 agent 的用法规则**)。在 `packages/lizi-mcps/src/providers.ts` 注册成 `cindy_browser` provider                                                                                                                                                              |
+| **L3 desktop host**     | `apps/desktop/src/main/mcp-integrations/` | `browser-runtime-env.ts`(**import 前置副作用**,见坑 #2)、`browser-managed-config.ts`(托管 config)、`browser.ts`(runtime 单例 + `getBrowserMcpDeps`/`getBrowserAvailability`/`openBrowserForLogin`)、`browser-availability.ts`(status → UI 数据)。IPC:`maker-ipc/{channels,register}.ts` 的 `BROWSER_STATUS` + `BROWSER_OPEN_FOR_LOGIN`。UI:`renderer/components/settings/ComputerUseSection.tsx`(设置 →「自动操作」)+ 4 语言 i18n。开关 gate:`maker-host/plugins/plugin-registry.ts`(plugin id `browser`) |
 
 ## 3. 配置流(以及那个静默 bug)
 
-host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, ssrfPolicy:{ allowRfc2544BenchmarkRange:true, allowIpv6UniqueLocalRange:true }, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。这两个窄开关只豁免 Surge/Clash/sing-box 等代理使用的 fake-IP DNS(`198.18.0.0/15` 与 IPv6 ULA),避免普通公网域名被误拦;localhost、RFC1918、cloud metadata、link-local 与其它 special-use 地址继续由 SSRF guard 阻断。上游 SSRF 层已经支持这两个字段,但 config resolver 尚未透传,所以 `sync.mjs` 用 fail-loud `LOCAL_PATCHES` 保留它们。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
+host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, ssrfPolicy:{ allowRfc2544BenchmarkRange:true, allowIpv6UniqueLocalRange:true, allowedHostnames:['localhost'] }, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。这两个窄开关只豁免 Surge/Clash/sing-box 等代理使用的 fake-IP DNS(`198.18.0.0/15` 与 IPv6 ULA),避免普通公网域名被误拦;`localhost` 是唯一的本地预览例外,但 Desktop 的 MCP 审批策略会对 `navigate`/`open`/`recipe` 的 localhost 目标逐次要求用户确认,因此 trusted browser server 不能静默探测任意本机端口;RFC1918、cloud metadata、link-local 与其它 special-use 地址继续由 SSRF guard 阻断。上游 SSRF 层已经支持这些字段,但 config resolver 尚未透传 fake-IP/hostname 配置,所以 `sync.mjs` 用 fail-loud `LOCAL_PATCHES` 保留它们。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
 `getRuntimeConfigSourceSnapshot() ?? getRuntimeConfig()` 再取 `.browser` 拿到它。
 
 > ⚠️ **不变量(踩过的最大的坑):** `src/shim/runtime-config-snapshot.ts` 的 `getRuntimeConfigSourceSnapshot()` **必须返回 `OpenClawConfig | null`**(默认 `return null`)。它一旦返回 `{config, source}` 这种 wrapper,上面的 `?? getRuntimeConfig()` 永远短路、`.browser` 取到 `undefined`,**host 注入的整份 config 被静默丢弃、runtime 跑纯 vendored 默认值**(于是 profile 显示成上游默认名、颜色/目录全不对)。由 `src/__tests__/runtime-config-application.test.ts` 守护——别删那条测试。
 
 ## 4. 踩坑清单(症状 → 根因 → 铁律)
 
-| # | 症状 | 根因 | 铁律 |
-|---|---|---|---|
-| 1 | config 不生效 / profile 显示上游默认名 | 见 §3,`getRuntimeConfigSourceSnapshot` 返回了 wrapper | 该 shim 必须返回 `OpenClawConfig \| null` |
-| 2 | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | `CONFIG_DIR` 是 `shim/_local/text-utils.ts` 里**模块加载即求值**的 const,读 `XDT_BROWSER_RUNTIME_DIR` | 必须在 **import runtime 之前**设好 env——靠 `browser.ts` 顶部 `import './browser-runtime-env.js'` 保持**第一行**,别重排 import(无 import-order autofix) |
-| 3 | `profile must define cdpPort or cdpUrl` | vendored 只给"名叫上游默认名"的 profile 自动分配 CDP 端口;自定义名的托管 profile 不会 | 自定义托管 profile 必须显式给 `cdpPort`(现用 18800,vendored 端口段起点) |
-| 4 | 明明给了中性/白色,Chrome 工具栏却是浑浊蓝绿 | Chrome 把 profile `color` 当 **Material-You 种子色**生成色板,不是字面色;中性/近黑种子被它和成灰蓝 | 用**高饱和**色做种子(现 `#00D9C5` TapTap teal);想要纯灰度做不到(灰度开关在不可改的 vendored decorate 里) |
-| 5 | 「打开 Agent 专用浏览器」每次开两个标签页 | `start` 本身已带初始标签页,再 `open` 在冷启动时会和它抢 | `openBrowserForLogin` 只 `start` + 尽力 `focus`,**绝不** `open` |
-| 6 | profile 没有自定义头像 | Chrome 只认内置头像 / Google 账号头像,不能塞本地图 | 已知限制,接受;别为它改 vendored decorate |
-| 7 | 改了 `browser-workflow.md` 但 agent 还按旧文案 | 这份 md 经 `?raw` 静态打进**进程内** MCP server;且 agent 只在调 `list_tools` 时读 rules | 改完要 **(a) 重启桌面端**(main/package 改动不热更)+ **(b) 开新 agent 会话**(老会话 context 里是旧 rules) |
-| 8 | 远端 Codex 会话里浏览器不可用 | lizi MCP 桥接只对**本地** Codex 生效(见 §7) | 不是 bug;所有 `lizi_*` 工具对远端 Codex 都一样 |
+| #   | 症状                                                 | 根因                                                                                                  | 铁律                                                                                                                                                   |
+| --- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | config 不生效 / profile 显示上游默认名               | 见 §3,`getRuntimeConfigSourceSnapshot` 返回了 wrapper                                                 | 该 shim 必须返回 `OpenClawConfig \| null`                                                                                                              |
+| 2   | 数据目录落到 `~/.xdt-maker` 而非 Electron `userData` | `CONFIG_DIR` 是 `shim/_local/text-utils.ts` 里**模块加载即求值**的 const,读 `XDT_BROWSER_RUNTIME_DIR` | 必须在 **import runtime 之前**设好 env——靠 `browser.ts` 顶部 `import './browser-runtime-env.js'` 保持**第一行**,别重排 import(无 import-order autofix) |
+| 3   | `profile must define cdpPort or cdpUrl`              | vendored 只给"名叫上游默认名"的 profile 自动分配 CDP 端口;自定义名的托管 profile 不会                 | 自定义托管 profile 必须显式给 `cdpPort`(现用 18800,vendored 端口段起点)                                                                                |
+| 4   | 明明给了中性/白色,Chrome 工具栏却是浑浊蓝绿          | Chrome 把 profile `color` 当 **Material-You 种子色**生成色板,不是字面色;中性/近黑种子被它和成灰蓝     | 用**高饱和**色做种子(现 `#00D9C5` TapTap teal);想要纯灰度做不到(灰度开关在不可改的 vendored decorate 里)                                               |
+| 5   | 「打开 Agent 专用浏览器」每次开两个标签页            | `start` 本身已带初始标签页,再 `open` 在冷启动时会和它抢                                               | `openBrowserForLogin` 只 `start` + 尽力 `focus`,**绝不** `open`                                                                                        |
+| 6   | profile 没有自定义头像                               | Chrome 只认内置头像 / Google 账号头像,不能塞本地图                                                    | 已知限制,接受;别为它改 vendored decorate                                                                                                               |
+| 7   | 改了 `browser-workflow.md` 但 agent 还按旧文案       | 这份 md 经 `?raw` 静态打进**进程内** MCP server;且 agent 只在调 `list_tools` 时读 rules               | 改完要 **(a) 重启桌面端**(main/package 改动不热更)+ **(b) 开新 agent 会话**(老会话 context 里是旧 rules)                                               |
+| 8   | 远端 Codex 会话里浏览器不可用                        | lizi MCP 桥接只对**本地** Codex 生效(见 §7)                                                           | 不是 bug;所有 `lizi_*` 工具对远端 Codex 都一样                                                                                                         |
 
 ## 5. UI 开关模型(设置 →「自动操作」)
 
@@ -63,6 +63,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browse
 ## 6. 产品中性(硬约束)
 
 "OpenClaw" / 🦞 **不得出现在任何产品可见处**:Chrome profile UI、日志、报错文案、喂 agent 的 rules、Settings、i18n。
+
 - `browser-managed-config.ts` 里 `MANAGED_DRIVER = 'openclaw'` 是 vendored 要求的**内部 enum 值**,从不进入用户可见面,保留即可。
 - 上游名**只允许**出现在:`_generated/**`、`upstream/**` 元数据、`scripts/browser-runtime/sync.mjs`、以及 shim 内部实现细节。改动后用 `grep -ri "openclaw\|🦞" <产品可见路径>` 自查。
 
