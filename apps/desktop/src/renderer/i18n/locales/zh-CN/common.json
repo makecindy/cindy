@@ -2075,7 +2075,9 @@
         "hint": "微信首次对话或发送 /new 后使用。更改不会移动当前上下文。",
         "managed": "使用 Cindy 管理的专用目录",
         "reset": "恢复默认",
-        "unavailable": "已选目录当前不可访问；新对话将暂时使用 Cindy 管理的专用目录。"
+        "unavailable": "已选目录当前不可访问，新对话将暂时使用 Cindy 管理的专用目录；请恢复访问或重新选择。",
+        "chooseAria": "选择新对话工作目录",
+        "chooseAriaWithDir": "选择新对话工作目录，当前：{{dir}}"
       },
       "unbind": {
         "title": "解绑个人微信？",
@@ -2197,6 +2199,18 @@
       "saveFailed": "保存失败：{{message}}",
       "disconnected": "已解绑企业微信机器人",
       "disconnectFailed": "解绑失败：{{message}}",
+      "workingDir": {
+        "title": "新对话工作目录",
+        "hint": "企业微信首次对话或发送 /new 后使用。更改不会移动当前上下文。",
+        "managed": "使用 Cindy 管理的专用目录",
+        "reset": "恢复默认",
+        "unavailable": "已选目录当前不可访问，新对话将暂时使用 Cindy 管理的专用目录；请恢复访问或重新选择。",
+        "chooseAria": "选择新对话工作目录",
+        "chooseAriaWithDir": "选择新对话工作目录，当前：{{dir}}"
+      },
+      "workingDirSaved": "企业微信新对话工作目录已更新",
+      "workingDirReset": "企业微信新对话已恢复使用默认目录",
+      "workingDirFailed": "更新工作目录失败，请重新选择",
       "connected": {
         "heading": "企业微信机器人已连接",
         "awaitingOwner": "请使用你的企业微信账号向机器人发送一条单聊消息，完成 owner 绑定。",

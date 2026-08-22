@@ -64,7 +64,8 @@ export interface ImSessionRow {
    *
    * schema 里 workspaceKind 与路径是解耦的 —— 只比对目录等于不等于渠道托管目录
    * 判不出来(接管一条 desktop 的 dialogue 会话时路径根本不是渠道自己那条)。
-   * 只读路径按需带出, 建会话路径不填(那时归属由 ns.workspaceKind 决定)。
+   * 只读路径按需带出;prepareNewSession 也带出渠道声明值(只读展示用),
+   * 建行落列仍由 ns.workspaceKind 决定。
    */
   workspaceKind?: 'project' | 'dialogue' | null;
 }
@@ -332,12 +333,19 @@ export function createImSessionRepo(
 
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
-      const workingDir = ns.ensureWorkingDir(botContextId);
+      // 「首次对话 / /new」边界才解析实际目录: 设置页可改托管目录的渠道
+      // (微信/企微)异步读配置 + 探测用户盘, 其余渠道走同步稳定托管目录。
+      const workingDir =
+        (await ns.resolveWorkingDirForNew?.(botContextId)) ?? ns.ensureWorkingDir(botContextId);
       const row = rowFromDefaults(
         id,
         workingDir,
         await resolveImSessionDefaults(config, providerSnapshot, ns.source),
       );
+      // 只读路径(/settings 无会话行时)也要能报对归属分组: 带出渠道声明值,
+      // 否则「无会话行 + 用户已选目录」会被 workspaceDisplayName 误当项目名。
+      // 建行走 createSession 的 ns.workspaceKind 落列, 不读这里的值。
+      if (ns.workspaceKind) row.workspaceKind = ns.workspaceKind;
       // 渠道可按 userId 覆写新会话权限档(telegram guest lane → 只读探索;
       // feishu 群 lane → 渠道设置「群聊新建任务权限档」)。
       const overridden = ns.permissionModeFor?.(userId) ?? null;
@@ -504,6 +512,14 @@ export async function clearContext(sessionId: string): Promise<void> {
     .where(eq(sessions.id, sessionId));
 }
 
+/** resetSessionToDefaults 的渠道选项 — 由调用方从 adapter 上取,不再按渠道名硬编码。 */
+export interface ResetSessionToDefaultsOptions {
+  /** 渠道 scope 的 IM 默认设置(见 resolveImSessionDefaults)。 */
+  channel?: ImSessionNamespace['source'];
+  /** 渠道声明 `/new` 边界刷新工作目录(ImSessionNamespace.refreshWorkingDirOnNew)。 */
+  refreshWorkingDir?: boolean;
+}
+
 /**
  * `/new` 语义:保留同一个 IM 会话行,但按当前渠道的 IM 默认重新开始一条新对话。
  *
@@ -515,8 +531,9 @@ export async function resetSessionToDefaults(
   sessionId: string,
   config: ImOrchestratorConfig,
   prepared?: ImSessionRow,
-  channel?: ImSessionNamespace['source'],
+  options: ResetSessionToDefaultsOptions = {},
 ): Promise<void> {
+  const { channel, refreshWorkingDir = false } = options;
   const defaults =
     prepared ??
     rowFromDefaults(sessionId, '', await resolveImSessionDefaults(config, undefined, channel));
@@ -530,10 +547,9 @@ export async function resetSessionToDefaults(
       providerId: defaults.providerId,
       permissionMode: defaults.permissionMode,
       fastMode: defaults.fastMode,
-      // Personal WeChat exposes a user-selected channel working directory.
-      // It applies only at the explicit `/new` boundary; existing context is
-      // never moved silently.
-      ...(channel === 'wechat' && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
+      // 渠道把托管目录暴露给设置页(个人微信/企业微信,ns.refreshWorkingDirOnNew)
+      // 时,新目录只在 `/new` 这个显式边界生效;已有上下文永不静默移动。
+      ...(refreshWorkingDir && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),

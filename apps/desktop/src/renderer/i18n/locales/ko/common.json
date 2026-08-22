@@ -2075,7 +2075,9 @@
         "hint": "WeChat 첫 대화와 /new 이후에 사용합니다. 변경해도 현재 컨텍스트는 이동하지 않습니다.",
         "managed": "Cindy 관리 전용 디렉터리 사용",
         "reset": "기본값 복원",
-        "unavailable": "선택한 디렉터리에 접근할 수 없습니다. 새 대화는 임시로 Cindy 관리 디렉터리를 사용합니다."
+        "unavailable": "선택한 디렉터리에 접근할 수 없습니다. 새 대화는 임시로 Cindy 관리 디렉터리를 사용합니다. 접근을 복원하거나 다른 디렉터리를 선택하세요.",
+        "chooseAria": "새 대화 작업 디렉터리 선택",
+        "chooseAriaWithDir": "새 대화 작업 디렉터리 선택, 현재: {{dir}}"
       },
       "unbind": {
         "title": "개인 WeChat 연동을 해제하시겠습니까?",
@@ -2197,6 +2199,18 @@
       "saveFailed": "저장 실패: {{message}}",
       "disconnected": "WeCom 봇 연결을 해제했습니다",
       "disconnectFailed": "연결 해제 실패: {{message}}",
+      "workingDir": {
+        "title": "새 대화 작업 디렉터리",
+        "hint": "WeCom 첫 대화와 /new 이후에 사용합니다. 변경해도 현재 컨텍스트는 이동하지 않습니다.",
+        "managed": "Cindy 관리 전용 디렉터리 사용",
+        "reset": "기본값 복원",
+        "unavailable": "선택한 디렉터리에 접근할 수 없습니다. 새 대화는 임시로 Cindy 관리 디렉터리를 사용합니다. 접근을 복원하거나 다른 디렉터리를 선택하세요.",
+        "chooseAria": "새 대화 작업 디렉터리 선택",
+        "chooseAriaWithDir": "새 대화 작업 디렉터리 선택, 현재: {{dir}}"
+      },
+      "workingDirSaved": "WeCom 새 대화 작업 디렉터리가 업데이트되었습니다",
+      "workingDirReset": "WeCom 새 대화가 기본 디렉터리를 사용합니다",
+      "workingDirFailed": "작업 디렉터리를 업데이트하지 못했습니다. 다시 선택하세요.",
       "connected": {
         "heading": "WeCom 봇 연결됨",
         "awaitingOwner": "WeCom 계정에서 봇으로 DM을 보내 owner를 연결하세요.",

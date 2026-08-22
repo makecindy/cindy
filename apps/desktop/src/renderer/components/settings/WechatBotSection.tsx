@@ -1,5 +1,5 @@
-import { Check, FolderOpen, Loader2, RotateCw, Trash2, Unplug } from 'lucide-react';
-import { useCallback } from 'react';
+import { Check, Loader2, RotateCw, Trash2, Unplug } from 'lucide-react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -7,6 +7,7 @@ import { useWechatBot } from '@/hooks/useWechatBot';
 import { cn } from '@/lib/utils';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import { ImWorkingDirectorySection } from './ImWorkingDirectorySection';
 
 const STATUS_KEYS: Record<WechatBotPhase, string> = {
   disconnected: 'settings.wechatBot.status.disconnected',
@@ -60,8 +61,28 @@ export function WechatBotSection({
     unbind,
     chooseWorkingDirectory,
     resetWorkingDirectory,
+    refreshChannelSettings,
   } = useWechatBot();
   const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('wechat');
+
+  // 展开设置卡 / 窗口重新聚焦时重拉渠道设置(与企微同款): 目录可能在折叠或
+  // 失焦期间被删/拔盘/收回权限, 只在挂载时读一次会让「不可用」警告永远不
+  // 出现。展开首帧由 hook 的挂载请求覆盖, 跳过避免双拉。
+  const firstExpandRun = useRef(true);
+  useEffect(() => {
+    if (firstExpandRun.current) {
+      firstExpandRun.current = false;
+      return;
+    }
+    if (expanded) void refreshChannelSettings();
+  }, [expanded, refreshChannelSettings]);
+  useEffect(() => {
+    const refreshOnFocus = (): void => {
+      void refreshChannelSettings();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    return () => window.removeEventListener('focus', refreshOnFocus);
+  }, [refreshChannelSettings]);
 
   const authorizationSteps = (
     <ol className="mt-1 grid gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12 leading-[1.55] text-[var(--text-secondary)]">
@@ -149,7 +170,8 @@ export function WechatBotSection({
 
       <div className="h-px w-full bg-[var(--border-default)]" />
 
-      <WechatWorkingDirectory
+      <ImWorkingDirectorySection
+        i18nKeyPrefix="settings.wechatBot"
         settings={channelSettings}
         pending={isUpdatingWorkingDir}
         onChoose={() => void chooseWorkingDirectory()}
@@ -270,66 +292,5 @@ export function WechatBotSection({
         </div>
       )}
     </ImChannelSettingsCard>
-  );
-}
-
-function WechatWorkingDirectory({
-  settings,
-  pending,
-  onChoose,
-  onReset,
-}: {
-  settings: WechatChannelSettingsState | null;
-  pending: boolean;
-  onChoose: () => void;
-  onReset: () => void;
-}) {
-  const { t } = useTranslation();
-  const configured = settings?.workingDir ?? null;
-
-  return (
-    <section className="flex flex-col gap-3" aria-label={t('settings.wechatBot.workingDir.title')}>
-      <div>
-        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-          {t('settings.wechatBot.workingDir.title')}
-        </h3>
-        <p className="mt-1 text-12 leading-[1.55] text-[var(--settings-section-desc)]">
-          {t('settings.wechatBot.workingDir.hint')}
-        </p>
-      </div>
-      <div className="flex min-w-0 items-center gap-2">
-        <button
-          type="button"
-          onClick={onChoose}
-          disabled={pending}
-          className={cn(
-            'flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full px-3 text-left',
-            'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-            'text-12 text-[var(--settings-input-text)]',
-            pending && 'cursor-not-allowed opacity-50',
-          )}
-        >
-          <FolderOpen size={15} className="shrink-0 text-[var(--text-tertiary)]" />
-          <span className="truncate" title={configured ?? undefined} dir="auto">
-            {configured ?? t('settings.wechatBot.workingDir.managed')}
-          </span>
-        </button>
-        {configured && (
-          <button
-            type="button"
-            onClick={onReset}
-            disabled={pending}
-            className="h-10 shrink-0 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-4 text-12 font-medium text-[var(--settings-btn-secondary-text)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {t('settings.wechatBot.workingDir.reset')}
-          </button>
-        )}
-      </div>
-      {settings && !settings.workingDirAvailable && (
-        <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-          {t('settings.wechatBot.workingDir.unavailable')}
-        </p>
-      )}
-    </section>
   );
 }
