@@ -318,6 +318,7 @@ import {
   shouldBumpSendFollowCancelOnScroll,
   subscribeFollowLatestRequests,
   REPIN_AT_BOTTOM_PX,
+  isVerticalScrollbarPress,
   shouldRepinOnDownIntent,
   shouldRepinOnWheel,
   shouldUnpinOnScrollbarDrag,
@@ -4496,9 +4497,17 @@ export function MessageStream({
     const onTouchEnd = () => {
       userHistoryTouchStartYRef.current = null;
     };
-    const onMouseDown = () => {
+    const onMouseDown = (event: MouseEvent) => {
       clearChipJumpSuppression();
-      scrollbarDragStartTopRef.current = root.scrollTop;
+      if (
+        isVerticalScrollbarPress({
+          targetIsRoot: event.target === root,
+          offsetX: event.offsetX,
+          clientWidth: root.clientWidth,
+        })
+      ) {
+        scrollbarDragStartTopRef.current = root.scrollTop;
+      }
     };
     const onMouseMove = () => {
       const startTop = scrollbarDragStartTopRef.current;

@@ -27,6 +27,7 @@ import {
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
   selectTailUserMessageId,
+  isVerticalScrollbarPress,
   shouldRepinOnDownIntent,
   shouldRepinOnWheel,
   shouldUnpinOnScrollbarDrag,
@@ -161,6 +162,26 @@ describe('shouldUnpinOnScrollbarDrag', () => {
         directionDeadZonePx: 1,
       }),
     ).toBe(false);
+  });
+});
+
+describe('isVerticalScrollbarPress', () => {
+  it('点在容器自身且 offsetX 落在滚动条槽 → 进入拖拽', () => {
+    expect(isVerticalScrollbarPress({ targetIsRoot: true, offsetX: 800, clientWidth: 784 })).toBe(
+      true,
+    );
+    expect(isVerticalScrollbarPress({ targetIsRoot: true, offsetX: 784, clientWidth: 784 })).toBe(
+      true,
+    );
+  });
+
+  it('点在正文后代 / 容器内容区 → 不进入拖拽', () => {
+    expect(isVerticalScrollbarPress({ targetIsRoot: false, offsetX: 800, clientWidth: 784 })).toBe(
+      false,
+    );
+    expect(isVerticalScrollbarPress({ targetIsRoot: true, offsetX: 400, clientWidth: 784 })).toBe(
+      false,
+    );
   });
 });
 

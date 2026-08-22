@@ -118,6 +118,32 @@ export function shouldUnpinOnScrollbarDrag({
   return pointerDown && scrollDelta < -directionDeadZonePx;
 }
 
+export interface VerticalScrollbarPressArgs {
+  /** mousedown 的 target 是否就是滚动容器本身。 */
+  targetIsRoot: boolean;
+  /** 相对滚动容器的 offsetX。 */
+  offsetX: number;
+  /** 滚动容器 clientWidth(不含纵向滚动条)。 */
+  clientWidth: number;
+}
+
+/**
+ * 这次 mousedown 是否落在纵向滚动条上。
+ *
+ * 滚动条生命周期不变量:
+ *  - 进入拖拽:只有点到滑块/槽(target === 容器且 offsetX ≥ clientWidth);
+ *    正文、链接、按钮上的按下不能进拖拽态,否则长按选字会停 pin、松手又被钉回;
+ *  - 拖拽中:抑制 pin,scrollTop 上移过死区才 unpin;
+ *  - 松开:若仍在跟随,补一次 pin(按住期间最后一批 token 可能已经 settle)。
+ */
+export function isVerticalScrollbarPress({
+  targetIsRoot,
+  offsetX,
+  clientWidth,
+}: VerticalScrollbarPressArgs): boolean {
+  return targetIsRoot && offsetX >= clientWidth;
+}
+
 export interface WheelRepinArgs {
   /** wheel 事件的 deltaX(水平分量,用于主轴判定) */
   deltaX: number;
