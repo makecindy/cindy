@@ -167,6 +167,11 @@ export interface AgentTaskUpdate {
  * Derive the visible task status from the live update and its paired tool result.
  * A result is a terminal fact, so it closes a stale `running` update without
  * overriding an explicit failure or stopped state.
+ *
+ * 历史回放(Desktop 重载 / Mobile 断线重连)拿不到 live-only 的 agent_task_update,
+ * 卡片只能靠持久化的工具结果推导。若结果带 Claude 工具协议的
+ * `<tool_use_error>` 标记，说明工具调用以失败收尾 —— 必须推导成 `failed`,不能判成 `completed`
+ * (否则刚显示失败的启动任务恢复后变成“已完成”,Mobile 错过实时帧则从未显示失败)。
  */
 export function deriveAgentTaskStatus(
   updateStatus: AgentTaskStatus | undefined,
@@ -174,13 +179,35 @@ export function deriveAgentTaskStatus(
   options?: {
     resultIsLaunchReceipt?: boolean;
     persistedStatus?: AgentTaskTerminalStatus;
+    resultIsError?: boolean;
   },
 ): AgentTaskStatus {
   const persistedStatus = normalizeAgentTaskTerminalStatus(options?.persistedStatus);
   if (persistedStatus) return persistedStatus;
   const hasResult = typeof result === 'string' && result.trim().length > 0;
+  // 显式 live 终态优先:只有 running / 无 update 时才允许错误结果把任务判成
+  // failed —— completed/stopped 等 live 状态是权威,错误结果不覆盖它们。
+  if (
+    options?.resultIsError &&
+    hasResult &&
+    updateStatus !== 'completed' &&
+    updateStatus !== 'stopped' &&
+    updateStatus !== 'failed'
+  ) {
+    return 'failed';
+  }
   if (updateStatus === 'running' && hasResult && !options?.resultIsLaunchReceipt) return 'completed';
   return updateStatus ?? (hasResult ? 'completed' : 'running');
+}
+
+/**
+ * 历史回放只能从 Claude 工具协议写入的 `<tool_use_error>` 标记恢复失败。
+ * Subagent 的正常返回是任意工作产物：JSON 的 error/errors/stderr 字段、甚至以
+ * “Error/启动失败”开头的报告正文，都不能证明工具调用本身失败。
+ */
+export function isSubagentResultError(result: string | undefined): boolean {
+  const text = typeof result === 'string' ? result.trim() : '';
+  return text.startsWith('<tool_use_error>');
 }
 
 /**
@@ -446,6 +473,8 @@ export function buildAgentTaskCardModel(input: {
     resultIsLaunchReceipt:
       subagentSpawnReceiptName(toolName, toolInput, result) !== undefined
       || subagentSpawnResultIndicatesRunning(toolName, result),
+    // 历史回放:无 live update 时只从协议错误标记恢复 failed(而不是解析任意正文)。
+    resultIsError: update === undefined && isSubagentResultError(result),
   });
   const provider: 'claude-code' | 'codex' | 'pi' =
     update?.provider

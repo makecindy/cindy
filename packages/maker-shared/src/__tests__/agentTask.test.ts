@@ -5,6 +5,7 @@ import {
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  isSubagentResultError,
   isSubagentSpawnToolName,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
@@ -112,6 +113,22 @@ describe('deriveAgentTaskStatus', () => {
     expect(deriveAgentTaskStatus(undefined, 'done', {
       persistedStatus: 'cancelled' as never,
     })).toBe('completed');
+  });
+});
+
+describe('isSubagentResultError', () => {
+  it('does not infer execution failure from arbitrary structured report content', () => {
+    expect(isSubagentResultError('{"items":[],"errors":[]}')).toBe(false);
+    expect(isSubagentResultError('{"stderr":[],"error":{}}')).toBe(false);
+    expect(isSubagentResultError('{"errors":["发现一处问题"]}')).toBe(false);
+    expect(isSubagentResultError('{"stderr":"example diagnostic"}')).toBe(false);
+    expect(isSubagentResultError('启动失败：这是报告中发现的问题')).toBe(false);
+    expect(isSubagentResultError('Error: reproduced by the successful audit')).toBe(false);
+  });
+
+  it('recognizes the persisted Claude tool-result error marker', () => {
+    expect(isSubagentResultError('<tool_use_error>Unable to start subagent</tool_use_error>'))
+      .toBe(true);
   });
 });
 
@@ -441,6 +458,44 @@ describe('buildAgentTaskCardModel', () => {
       .toBe('failed');
     expect(buildAgentTaskCardModel({ ...input, update: { ...input.update, status: 'stopped' } }).status)
       .toBe('stopped');
+  });
+
+  it('history replay: treats a successful structured report as completed', () => {
+    // Subagent 正文是任意工作产物；字段名 errors 不能代替工具协议终态。
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { description: 'launch', prompt: 'run' },
+      result: JSON.stringify({ errors: ['发现一处问题'], summary: 'audit complete' }),
+    });
+    expect(model.status).toBe('completed');
+  });
+
+  it('history replay: recovers failed from a <tool_use_error> result with no live update', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { prompt: 'run' },
+      result: '<tool_use_error>Unable to start subagent: quota exceeded</tool_use_error>',
+    });
+    expect(model.status).toBe('failed');
+  });
+
+  it('history replay: an explicit live completed update wins over an error-looking result', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { prompt: 'run' },
+      result: '<tool_use_error>stale</tool_use_error>',
+      update: { provider: 'claude-code', taskId: 't', parentToolUseId: 't', status: 'completed' },
+    });
+    expect(model.status).toBe('completed');
+  });
+
+  it('history replay: a plain result with no live update still derives completed (no false failed)', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      toolInput: { prompt: 'run' },
+      result: 'subagent finished successfully',
+    });
+    expect(model.status).toBe('completed');
   });
 
   it('falls back the title through update → tool input description → prompt', () => {

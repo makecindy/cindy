@@ -19,6 +19,7 @@
 import {
   deriveAgentTaskStatus,
   isAgentTaskToolName,
+  isSubagentResultError,
   subagentSpawnReceiptName,
   subagentSpawnResultIndicatesRunning,
 } from '@cindy/maker-shared/agent-task';
@@ -342,7 +343,9 @@ export function listSessionTasks(input: {
               subagentSpawnReceiptName(toolName, toolInput, resultText) !== undefined
               || subagentSpawnResultIndicatesRunning(toolName, resultText),
           })
-        : (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped');
+        : (settled && isSubagentResultError(resultText)
+          ? 'failed'
+          : (settled ? 'completed' : isSessionStreaming ? 'running' : 'stopped'));
     const provider: SessionTaskItem['provider'] =
       update?.provider ?? (toolName.startsWith('collab:') ? 'codex' : 'claude-code');
 

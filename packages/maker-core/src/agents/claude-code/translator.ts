@@ -141,6 +141,17 @@ export interface RuntimeState {
   publishedSubagentModelByParentToolUseId: Map<string, string>;
   /** parent tool_use.id 对应的最近任务状态；晚到的模型观测不能把终态倒退成 running。 */
   subagentStatusByParentToolUseId: Map<string, AgentTaskStatus>;
+  /**
+   * 每个 sidechain (parent_tool_use_id) 的可重试 API-error 观察状态。api_retry 事件
+   * 没有 parent 身份，也没有可与 assistant.error 的内层 message.id 安全配对的字段，
+   * 因此不能用它收口任意 sidechain；带身份的 task_started / child assistant 会清除
+   * 该状态，未收到权威终态时由 turn 边界清理。tag/errorMessage 仅用于诊断。
+   * projected = 已投影过失败终态（幂等防重）。
+   */
+  subagentRetryStateByParentToolUseId: Map<
+    string,
+    { tag: string; errorMessage: string; projected: boolean }
+  >;
   /** task_id 到启动它的 Agent tool_use.id 的别名映射。 */
   subagentParentToolUseIdByTaskId: Map<string, string>;
   /**
@@ -180,6 +191,7 @@ export function newRuntimeState(): RuntimeState {
     resolvedSubagentModelByParentToolUseId: new Map(),
     publishedSubagentModelByParentToolUseId: new Map(),
     subagentStatusByParentToolUseId: new Map(),
+    subagentRetryStateByParentToolUseId: new Map(),
     subagentParentToolUseIdByTaskId: new Map(),
     confirmedSubagentTaskIds: new Set(),
     excludedSubagentTaskIds: new Set(),
@@ -211,7 +223,7 @@ function ccLiveStatus(
  * 清掉一个 turn 的非 usage 累积状态(usage 由 UsageTracker.endTurn 内部 reset)。
  * turn 收尾共用:正常 Done/done 路径与 empty-response 终态 error 提前 return 路径。
  */
-function resetTurnState(turn: TurnState): void {
+function resetTurnState(turn: TurnState, rt: RuntimeState): void {
   turn.text = '';
   turn.toolUses = 0;
   turn.apiCalls = 0;
@@ -222,6 +234,8 @@ function resetTurnState(turn: TurnState): void {
   turn.interruptRequested = false;
   turn.lastAssistantMsgHadSubstance = true;
   turn.lastAssistantRequestId = undefined;
+  // 终态到达后必须丢弃本轮未决 sidechain，避免下一 turn 收口陈旧任务。
+  rt.subagentRetryStateByParentToolUseId.clear();
   // generation / interruptGeneration 刻意不清: 代际跨 turn 单调递增(见字段注释)。
 }
 
@@ -647,6 +661,9 @@ export function translateSdkMessage(
           ?? ctx.rt.resolvedSubagentModelByParentToolUseId.get(parentToolUseId)
           ?? ctx.rt.streamModelByParentToolUseId.get(parentToolUseId);
         ctx.rt.subagentParentToolUseIdByTaskId.set(taskId, parentToolUseId);
+        // 拿到 task_id = launch 成功（可重试错误已自愈）：清除该 sidechain 的
+        // retry 收口状态，避免晚到的 api_retry 耗尽把它误补发 failed 终态。
+        ctx.rt.subagentRetryStateByParentToolUseId.delete(parentToolUseId);
         ctx.rt.confirmedSubagentTaskIds.add(taskId);
         ctx.rt.excludedSubagentTaskIds.delete(taskId);
         // 迟到的 async_launched 回执（status=running）不得把已有终态降级回 running：
@@ -881,6 +898,10 @@ function handleSystem(
       retryAttempt: msg.attempt,
       maxRetries: msg.max_retries,
     };
+    // api_retry 的 uuid 是该 SDK system 事件的 transcript 标识，不是
+    // assistant.error 内层 message.id 的 API 请求标识；它不能安全地关联到某个
+    // parent_tool_use_id。即使 attempt 达到 max_retries，也只能保留诊断信息，不能
+    // 把失败投影给猜出的 sidechain。带 parent 身份的 assistant/task 终态仍由各自路径处理。
     ctx.log.info('SDK API request retrying', {
       attempt: msg.attempt,
       maxRetries: msg.max_retries,
@@ -962,6 +983,11 @@ function handleSystem(
   ) {
     const update = toClaudeTaskUpdate(msg, ctx.rt, ctx.getSubagentTaskUsage);
     if (update) {
+      // task_started is authoritative evidence that the retryable launch recovered;
+      // remove the pending candidate before any unrelated api_retry can inspect it.
+      if (msg.subtype === 'task_started' && update.parentToolUseId) {
+        ctx.rt.subagentRetryStateByParentToolUseId.delete(update.parentToolUseId);
+      }
       queue.push({
         type: 'agent_task_update',
         data: update,
@@ -1186,10 +1212,98 @@ function assistantBlockHasSubstance(block: Record<string, unknown>): boolean {
   return true;
 }
 
+/**
+ * SDK 自己会退避重试的 API-error tag（见 shared/overload-error.ts：Claude Code
+ * SDK 对 529/rate_limit 自带 api_retry）。这类 sidechain envelope 之后仍可能
+ * 自愈并发出 task_started，立即投影 failed 会把「可能自愈」的启动锁死成失败。
+ */
+const RETRYABLE_SDK_ERROR_TAGS = new Set(['rate_limit', 'server_error', 'unknown']);
+
+/**
+ * 子 Agent launch 阶段失败的父会话可见投影：先用 spawn 创建 failed durable run，
+ * 再补同一身份的 terminal 观测。launch 失败往往没有更早的 spawn，而持久化层不允许
+ * terminal 凭空建子任务；但消息历史又只把 terminal 当作可回放终态。两帧按队列顺序
+ * 同步发出，既创建 run，也确保 Desktop 重载 / Mobile 重连后仍恢复为 failed。
+ *
+ * 不发 title：标题由渲染层 AgentTaskCard 按 locale 从结构化失败状态生成
+ * （chat.agentTask.emptyTitle + status.failed），maker-core 不下发单语言文案。
+ */
+function emitSubagentLaunchFailure(
+  queue: EventQueue,
+  parentToolUseId: string,
+  options: { errorMessage: string; model?: string },
+): void {
+  const baseData = {
+    provider: 'claude-code' as const,
+    // launch 失败发生在 task_started 之前，没有真实 task_id；与
+    // extractSubagentToolResult 同口径回退到 parent tool_use id。
+    taskId: parentToolUseId,
+    parentToolUseId,
+    status: 'failed' as const,
+    description: options.errorMessage,
+    ...(options.model ? { model: options.model } : {}),
+  };
+  for (const kind of ['spawn', 'terminal'] as const) {
+    queue.push({
+      type: 'agent_task_update',
+      data: {
+        ...baseData,
+        subagentObservation: {
+          kind,
+          logicalSubagentId: parentToolUseId,
+          parentToolUseId,
+        },
+      },
+      source: 'claude-code',
+    });
+  }
+}
+
+function projectSubagentLaunchFailure(
+  queue: EventQueue,
+  ctx: TranslateContext,
+  parentToolUseId: string,
+  options: { errorMessage: string; model?: string },
+): void {
+  emitSubagentLaunchFailure(queue, parentToolUseId, {
+    errorMessage: options.errorMessage,
+    model: options.model ?? ctx.rt.streamModelByParentToolUseId.get(parentToolUseId),
+  });
+  const existing = ctx.rt.subagentRetryStateByParentToolUseId.get(parentToolUseId);
+  ctx.rt.subagentRetryStateByParentToolUseId.set(parentToolUseId, {
+    tag: existing?.tag ?? 'unknown',
+    errorMessage: existing?.errorMessage ?? options.errorMessage,
+    projected: true,
+  });
+}
+
+/**
+ * A failed ResultMessage is the first turn-level fact proving that retryable
+ * pre-task sidechains did not recover. `api_retry` itself has no parent identity,
+ * so projecting earlier can lock a different concurrent sidechain into failed.
+ */
+function projectPendingSubagentLaunchFailures(
+  queue: EventQueue,
+  ctx: TranslateContext,
+): void {
+  const startedParentToolUseIds = new Set(ctx.rt.subagentParentToolUseIdByTaskId.values());
+  for (const [parentToolUseId, state] of ctx.rt.subagentRetryStateByParentToolUseId) {
+    if (state.projected) continue;
+    if (startedParentToolUseIds.has(parentToolUseId)) {
+      ctx.rt.subagentRetryStateByParentToolUseId.delete(parentToolUseId);
+      continue;
+    }
+    projectSubagentLaunchFailure(queue, ctx, parentToolUseId, {
+      errorMessage: state.errorMessage,
+    });
+  }
+}
+
 function handleAssistant(
   msg: {
     message?: { content?: Array<Record<string, unknown>> };
     error?: string;
+    uuid?: string;
     parent_tool_use_id?: string | null;
   },
   queue: EventQueue,
@@ -1232,6 +1346,58 @@ function handleAssistant(
       .trim();
     const errorMessage = errorText || `SDK error: ${msg.error}`;
     const errorSignals = extractNonSecretErrorSignals(errorMessage);
+    const sidechainParentToolUseId =
+      typeof msg.parent_tool_use_id === 'string' && msg.parent_tool_use_id
+        ? msg.parent_tool_use_id
+        : undefined;
+    // 子 Agent（sidechain）的 API-error envelope：launch 阶段失败（如显式指定当前
+    // 账号无权访问的模型 → 403 authentication_failed）发生在 task_started 之前，SDK
+    // 不会发出任何 task_id，现有 task_notification:failed 通道收不到它，父会话因此既
+    // 看不到失败任务、也没有终态通知（#2967）。这里把它规范化为父会话可见的 failed
+    // 任务。已有 taskId 的执行期失败由 task_notification:failed 收口，不重复上报。
+    // 可重试的 tag（rate_limit / server_error / unknown）SDK 会自己退避重试并可能
+    // 自愈，立即投影 failed 会把自愈任务锁死成失败。api_retry 没有 parent 身份，且
+    // 其事件 uuid 不能与 assistant.error 的内层 message.id 安全配对，因此不能把
+    // 重试耗尽投影给这个 sidechain；只有带身份的非重试错误或任务终态才能收口。
+    if (sidechainParentToolUseId) {
+      let knownTaskId: string | undefined;
+      for (const [candidateTaskId, candidateParentId] of ctx.rt.subagentParentToolUseIdByTaskId) {
+        if (candidateParentId !== sidechainParentToolUseId) continue;
+        knownTaskId = candidateTaskId;
+        break;
+      }
+      const retryable = RETRYABLE_SDK_ERROR_TAGS.has(msg.error ?? '');
+      const state = ctx.rt.subagentRetryStateByParentToolUseId.get(sidechainParentToolUseId);
+      if (state?.projected) {
+        // 已投影过失败终态；幂等，不再重复上报也不清状态（防迟到 envelope 重投）。
+        return;
+      }
+      if (!knownTaskId && !retryable) {
+        projectSubagentLaunchFailure(queue, ctx, sidechainParentToolUseId, {
+          errorMessage: redactSensitiveText(errorMessage),
+          model:
+            typeof assistantMeta.model === 'string' && assistantMeta.model
+              ? assistantMeta.model
+              : undefined,
+        });
+        return;
+      }
+      if (retryable && !knownTaskId) {
+        // SDK 仍可能退避重试自愈：记 open，等 task_started / 正常 child
+        // assistant 清除。api_retry 没有 parent identity，不能作为该 sidechain
+        // 的失败终态证据；未能收到权威终态时由 turn 边界清理这个观察状态。
+        ctx.rt.subagentRetryStateByParentToolUseId.set(sidechainParentToolUseId, {
+          tag: msg.error ?? 'unknown',
+          errorMessage: redactSensitiveText(errorMessage),
+          projected: false,
+        });
+        return;
+      }
+      ctx.rt.subagentRetryStateByParentToolUseId.delete(sidechainParentToolUseId);
+      // 侧链错误不落主 turn 的 pendingApiError：主 turn 收尾若恰好也 is_error，会把
+      // 子 Agent 的错误误报成主会话错误，污染错误归属。
+      return;
+    }
     ctx.turn.pendingApiError = {
       ...ctx.turn.pendingApiError,
       message: redactSensitiveText(errorMessage),
@@ -1257,6 +1423,11 @@ function handleAssistant(
   // 子代理完整 assistant 没有 message_delta 时，result.usage 仍含其子输出，
   // 而父级 Agent 工具区间已从分母排除。与 message_delta 路径同样 fail-closed。
   if (parentToolUseId) markClaudeGenerationUnreliable(ctx.rt.generation);
+  // 正常 child assistant 证明该 sidechain 已从可重试错误中自愈（或从未失败）：
+  // 清除它的 retry 收口状态，避免晚到的 api_retry 耗尽把它误补发 failed 终态。
+  if (parentToolUseId) {
+    ctx.rt.subagentRetryStateByParentToolUseId.delete(parentToolUseId);
+  }
   // 完整 child assistant 是实际执行模型的正式观测来源。SDK 不保证 child 的
   // partial message_start 一定向外暴露，所以不能只靠 handleStreamEvent 填模型；
   // 同时保持 main 新增的 loop guard 按 parent scope 读取同一张 stream model 表。
@@ -1968,6 +2139,12 @@ function handleResult(
       resultTextLen: full.length,
     });
   }
+  // 可重试 sidechain envelope 不能靠 identity-less api_retry 提前归因；但整个 turn
+  // 已权威失败时，仍未 task_started / 正常 child assistant 自愈的 pending sidechain
+  // 已没有成功终态可等，必须在 resetTurnState 清理前补发 parent-visible failed。
+  if (msg.is_error && !ctx.turn.interruptRequested) {
+    projectPendingSubagentLaunchFailures(queue, ctx);
+  }
   // 空响应兜底: isEmptyResponseTurn 已在上方(endTurn 之前)算好并解释。命中即"本轮发起过
   // API call 但 0 产出且 usage 增量全 0", 典型是模型网关短路返回空 SSE。此前这种 turn 会
   // 静默走 Done, 用户侧表现为"发了消息啥也没发生 / 会话假死"。这里显式 surface 成 error。
@@ -1998,7 +2175,7 @@ function handleResult(
     // 还原 aggregate 基线: 本轮空响应的 result.usage(0)不能成为下一轮 delta 的基线,
     // 否则下一真实 turn 会从 0 起算、把整段历史 token 全算到那一轮(Codex P2)。
     ctx.rt.lastResultUsageAggregate = aggregateBeforeThisResult;
-    resetTurnState(ctx.turn);
+    resetTurnState(ctx.turn, ctx.rt);
     resetClaudeGenerationTiming(ctx.rt.generation);
     ctx.onTurnEnd?.();
     return;
@@ -2099,7 +2276,7 @@ function handleResult(
     source: 'claude-code',
   });
   // reset turn 累积 (tracker 内部已经在 endTurn 里 reset 了 currentTurn,这里只清非 usage 状态)
-  resetTurnState(ctx.turn);
+  resetTurnState(ctx.turn, ctx.rt);
   resetClaudeGenerationTiming(ctx.rt.generation);
   // turn 结束钩子 — agent 用来清 turnInFlight 标记 (rewind preview/commit 前置守卫读它)
   ctx.onTurnEnd?.();

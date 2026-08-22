@@ -1352,3 +1352,444 @@ describe('Claude Code translator subagent model attribution', () => {
     });
   });
 });
+
+describe('Claude Code sidechain launch failure projection', () => {
+  it('projects a pre-task sidechain error envelope as a failed parent-visible task', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'authentication_failed',
+        parent_tool_use_id: 'toolu_launch_fail',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'The requested model is not available for your account.' },
+          ],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(2);
+    expect(taskUpdates[0].data).toMatchObject({
+      provider: 'claude-code',
+      taskId: 'toolu_launch_fail',
+      parentToolUseId: 'toolu_launch_fail',
+      status: 'failed',
+      subagentObservation: {
+        kind: 'spawn',
+        logicalSubagentId: 'toolu_launch_fail',
+        parentToolUseId: 'toolu_launch_fail',
+      },
+    });
+    expect(taskUpdates[0].data.description).toContain('not available for your account');
+    // 标题不下发：由渲染层按 locale 生成，避免 maker-core 输出单语言文案。
+    expect(taskUpdates[0].data).not.toHaveProperty('title');
+    expect(taskUpdates[1].data).toMatchObject({
+      provider: 'claude-code',
+      taskId: 'toolu_launch_fail',
+      parentToolUseId: 'toolu_launch_fail',
+      status: 'failed',
+      subagentObservation: {
+        kind: 'terminal',
+        logicalSubagentId: 'toolu_launch_fail',
+        parentToolUseId: 'toolu_launch_fail',
+      },
+    });
+  });
+
+  it('does not project a retryable sidechain error before the SDK retries', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    // rate_limit / server_error / unknown 是 SDK 自己退避重试的 tag；SDK 仍可能
+    // 自愈并发出 task_started，所以这里不得提前锁死成 failed。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retryable',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited, retrying.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(0);
+    expect(ctx.turn.pendingApiError).toBeNull();
+  });
+
+  it('projects a pending retryable sidechain when the authoritative turn result fails', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retry_exhausted',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited after all retries.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result: 'API retries exhausted.',
+        usage: { input_tokens: 10, output_tokens: 0 },
+        modelUsage: {
+          'claude-opus-4-6': { inputTokens: 10, outputTokens: 0, contextWindow: 200_000 },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(2);
+    expect(taskUpdates[0].data).toMatchObject({
+      taskId: 'toolu_retry_exhausted',
+      parentToolUseId: 'toolu_retry_exhausted',
+      status: 'failed',
+      subagentObservation: { kind: 'spawn' },
+    });
+    expect(taskUpdates[1].data).toMatchObject({
+      taskId: 'toolu_retry_exhausted',
+      parentToolUseId: 'toolu_retry_exhausted',
+      status: 'failed',
+      subagentObservation: { kind: 'terminal' },
+    });
+    expect(taskUpdates[0].data.description).toContain('all retries');
+  });
+
+  it('does not infer a sidechain failure from an identity-less exhausted api_retry', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    // api_retry 没有 parent_tool_use_id，不能把它归给后续到达的 sidechain。
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+        retry_delay_ms: 100,
+      },
+      queue,
+      ctx,
+    );
+    // 即使随后收到同 tag 的 sidechain envelope，也只能等待带身份的生命周期事件。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retry_exhausted',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(0);
+  });
+
+  it('does not use transcript UUIDs to attribute an exhausted api_retry', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    // SDK assistant.uuid identifies the transcript event; the Anthropic response
+    // has its own message.id, while api_retry.uuid identifies a separate system
+    // event. Matching the two fabricated UUIDs would misattribute a retry.
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        uuid: 'assistant-transcript-event',
+        parent_tool_use_id: 'toolu_retry_exhausted',
+        message: {
+          id: 'msg_api_request_1',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        uuid: 'retry-system-event',
+        error_status: 429,
+        retry_delay_ms: 100,
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(0);
+    expect(ctx.rt.subagentRetryStateByParentToolUseId.has('toolu_retry_exhausted')).toBe(true);
+  });
+
+  it('does not attribute exhausted retry to one of multiple same-tag sidechains', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    for (const parentToolUseId of ['toolu_retry_a', 'toolu_retry_b']) {
+      translateSdkMessage(
+        {
+          type: 'assistant',
+          error: 'rate_limit',
+          parent_tool_use_id: parentToolUseId,
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Rate limited.' }] },
+        },
+        queue,
+        ctx,
+      );
+    }
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(0);
+  });
+
+  it('does not project a retryable sidechain error while the SDK is still retrying (then self-heals)', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_retryable',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited, retrying.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    // 仍在重试（attempt < max_retries），随后自愈产生真实 task_id：不得投影失败。
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+        retry_delay_ms: 100,
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'agent-self-healed',
+        tool_use_id: 'toolu_retryable',
+        task_type: 'local_agent',
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    // 只有 task_started 的 running 帧，没有 failed 投影。
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data).toMatchObject({
+      taskId: 'agent-self-healed',
+      status: 'running',
+    });
+    expect(ctx.rt.subagentRetryStateByParentToolUseId.has('toolu_retryable')).toBe(false);
+  });
+
+  it('clears pending retry state before the next turn', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    // 第一轮 api_retry 没有 parent_tool_use_id，不能形成 sidechain 终态证据。
+    // 轮次正常结束后，未决 sidechain 状态也不能污染下一轮。
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-opus-4-6', usage: { input_tokens: 100 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        error: 'rate_limit',
+        error_status: 429,
+      },
+      queue,
+      ctx,
+    );
+    // 建立一个未决 sidechain，验证 turn 收尾时 retry map 也不会残留。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_old_turn',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.subagentRetryStateByParentToolUseId.has('toolu_old_turn')).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: false,
+        result: 'First turn recovered.',
+        usage: { input_tokens: 100, output_tokens: 4 },
+        modelUsage: {
+          'claude-opus-4-6': { inputTokens: 100, outputTokens: 4, contextWindow: 200_000 },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    // 第二轮第一次收到同标签错误时，仍应等待 SDK 重试，而不能直接投影 failed。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'rate_limit',
+        parent_tool_use_id: 'toolu_next_turn',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Rate limited, retrying.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates.filter((event) => event.data.taskId === 'toolu_next_turn')).toHaveLength(0);
+  });
+
+  it('does not leak a sidechain error into the main turn pendingApiError', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'authentication_failed',
+        parent_tool_use_id: 'toolu_launch_fail',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Model unavailable.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    await collect(queue);
+
+    expect(ctx.turn.pendingApiError).toBeNull();
+  });
+
+  it('does not re-emit a failed task when the parent already has a known task id', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+
+    // 先有 task_started：登记 taskId → parentToolUseId 映射。
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'agent-a',
+        tool_use_id: 'toolu_launch_fail',
+        task_type: 'local_agent',
+      },
+      queue,
+      ctx,
+    );
+    // 再遇 sidechain error envelope：已有 taskId，执行期失败由
+    // task_notification:failed 收口，不应再合成一条 failed 任务。
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'server_error',
+        parent_tool_use_id: 'toolu_launch_fail',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Boom.' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const taskUpdates = (await collect(queue)).filter(
+      (event): event is AgentTaskUpdateEvent => event.type === 'agent_task_update',
+    );
+    expect(taskUpdates).toHaveLength(1);
+    expect(taskUpdates[0].data.status).toBe('running');
+  });
+});
