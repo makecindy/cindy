@@ -4305,3 +4305,135 @@ describe('GoalController', () => {
   });
 
 });
+
+// ── dispose / GoalControllerDisposedError ───────────────────────────────────
+
+describe('GoalController disposal', () => {
+  it('setGoal rejects after dispose', async () => {
+    const h = makeController();
+    h.controller.dispose();
+    await expect(
+      h.controller.setGoal({ sessionId: 's1', objective: 'x', agentKind: 'claude-code' }),
+    ).rejects.toThrow('GoalController has been disposed');
+  });
+
+  it('resumeGoal is no-op after dispose (auto)', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // resumeGoal with auto:true returns early when turns map is empty (no throw).
+    await expect(h.controller.resumeGoal('s1', { auto: true })).resolves.toBeUndefined();
+  });
+
+  it('clearGoal is no-op after dispose', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // clearGoal does not call assertActive — it is a safe cleanup operation.
+    // After dispose it should not throw; the turns map is already empty.
+    await expect(h.controller.clearGoal('s1')).resolves.toBeUndefined();
+  });
+
+  it('all public lifecycle entry points stay inert after dispose', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused' }));
+    h.controller.dispose();
+
+    await expect(h.controller.updateGoal('s1', { objective: 'later' })).resolves.toBeNull();
+    await expect(h.controller.pauseGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.maybeContinueActiveGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeOnOpen('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeActiveGoals()).resolves.toBeUndefined();
+    await expect(h.controller.getStatus('s1')).resolves.toBeNull();
+    await expect(
+      h.controller.applyClarificationAnswer(
+        's1',
+        { objective: 'later' },
+        [{ options: [{ label: 'task' }] }],
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      objective: 'old objective',
+    });
+    expect(h.session.sends).toHaveLength(0);
+    expect(h.updates).toHaveLength(0);
+  });
+
+  it('dispose clears turns and listeners', async () => {
+    const h = makeController();
+    await startGoal(h);
+    // Start a turn to register listeners.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 100 });
+    await new Promise((r) => setTimeout(r, 0));
+    const updatesBefore = h.updates.length;
+    h.controller.dispose();
+    // After dispose, no more status updates should be emitted.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 200 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.updates.length).toBe(updatesBefore);
+  });
+
+  it('dispose is idempotent', () => {
+    const h = makeController();
+    h.controller.dispose();
+    h.controller.dispose(); // should not throw
+  });
+
+  it('does not persist a create marker when disposal wins the storage race', async () => {
+    const h = makeController();
+    const originalUpsert = h.storage.upsert.bind(h.storage);
+    let markUpsertStarted!: () => void;
+    const upsertStarted = new Promise<void>((resolve) => {
+      markUpsertStarted = resolve;
+    });
+    let releaseUpsert!: () => void;
+    const blockedUpsert = new Promise<void>((resolve) => {
+      releaseUpsert = resolve;
+    });
+    vi.spyOn(h.storage, 'upsert').mockImplementationOnce(async (state) => {
+      markUpsertStarted();
+      await blockedUpsert;
+      return originalUpsert(state);
+    });
+
+    const create = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing objective' });
+    await upsertStarted;
+    h.controller.dispose();
+    releaseUpsert();
+
+    await expect(create).resolves.toBeNull();
+    expect(h.userMessages).toHaveLength(0);
+    expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('does not persist an edit marker when disposal wins the storage race', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused', objective: 'old objective' }));
+    const originalUpdate = h.storage.update.bind(h.storage);
+    let markUpdateStarted!: () => void;
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve;
+    });
+    let releaseUpdate!: () => void;
+    const blockedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(h.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markUpdateStarted();
+      await blockedUpdate;
+      return originalUpdate(sessionId, patch);
+    });
+
+    const edit = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing edit' });
+    await updateStarted;
+    h.controller.dispose();
+    releaseUpdate();
+
+    await expect(edit).resolves.toBeNull();
+    expect(h.userMessages).toHaveLength(0);
+    expect(h.session.sends).toHaveLength(0);
+  });
+});

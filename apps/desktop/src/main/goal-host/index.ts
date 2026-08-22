@@ -36,6 +36,10 @@ export interface StartGoalControllerDeps {
 
 let _controller: GoalController | null = null;
 
+/** Incremented on every resetGoalController call. attemptStartScheduler uses
+ * this to bail out if a teardown raced its await. */
+let _teardownGeneration = 0;
+
 export function startGoalController(deps: StartGoalControllerDeps): GoalController {
   if (_controller) return _controller;
   const logger = createLogger('goal-host');
@@ -144,4 +148,11 @@ export function getGoalController(): GoalController | null {
 export function resetGoalController(): void {
   if (_controller) _controller.dispose();
   _controller = null;
+  _teardownGeneration++;
+}
+
+/** Return current teardown generation. Callers that await across a teardown
+ * boundary should compare before/after to detect stale continuations. */
+export function getGoalTeardownGeneration(): number {
+  return _teardownGeneration;
 }

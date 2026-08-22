@@ -52,6 +52,16 @@ export class GoalControllerInputError extends Error {
   readonly code = 'INVALID_PARAMS';
 }
 
+/** GoalController has been disposed; all public entry points should reject. */
+export class GoalControllerDisposedError extends Error {
+  readonly code = 'GONE';
+
+  constructor() {
+    super('GoalController has been disposed');
+    this.name = 'GoalControllerDisposedError';
+  }
+}
+
 /** Goal 已保守收敛，但本次入口无法恢复其底层 Agent Session。 */
 export class GoalSessionRestoreError extends Error {
   readonly code = 'PRECONDITION_FAILED';
@@ -444,6 +454,12 @@ export class GoalController {
   private readonly consecutiveOverloadTurns = new Map<string, number>();
   private readonly now: () => number;
   private readonly debounceMs: number;
+  private disposed = false;
+
+  /** Throw if the controller has been disposed. */
+  private assertActive(): void {
+    if (this.disposed) throw new GoalControllerDisposedError();
+  }
 
   constructor(private readonly deps: GoalControllerDeps) {
     this.now = deps.now ?? (() => Date.now());
@@ -454,6 +470,7 @@ export class GoalController {
 
   /** `/goal X` 入口:无既有 goal 直接创建;已有 goal 直接改 objective 并续跑。 */
   async setGoal(input: SetGoalInput): Promise<GoalState | null> {
+    this.assertActive();
     const sessionId = input.sessionId;
     const objective = input.objective.trim();
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
@@ -522,6 +539,8 @@ export class GoalController {
       throw error;
     }
     if (this.turns.get(sessionId) !== entryBoundary) return null;
+    // Guard: dispose() may have been called during the await above.
+    this.assertActive();
     const ts = this.now();
 
     if (existing) {
@@ -533,6 +552,7 @@ export class GoalController {
       let session: SessionLike | undefined;
       try {
         session = await this.deps.ensureSession(sessionId);
+        this.assertActive();
       } catch (error) {
         if (this.turns.get(sessionId) !== failureBoundary) return null;
         this.deps.logger.warn('[goal] setGoal edit: session restore failed', {
@@ -713,6 +733,7 @@ export class GoalController {
   }
 
   async updateGoal(sessionId: string, patch: GoalUpdatePatch): Promise<GoalState | null> {
+    if (this.disposed) return null;
     const normalized = normalizeGoalUpdatePatch(patch);
     const existingBoundary = this.turns.get(sessionId);
     const operationBoundary = existingBoundary ?? freshTurn();
@@ -749,10 +770,13 @@ export class GoalController {
     const reconcileLifecycleChange = async (): Promise<GoalState | null> => {
       const readSettledState = async (): Promise<GoalState | null> => {
         while (true) {
+          if (this.disposed) return null;
           const boundary = this.turns.get(sessionId);
           await this.awaitPendingLifecycle(boundary);
+          if (this.disposed) return null;
           if (this.turns.get(sessionId) !== boundary) continue;
           const current = await this.deps.storage.get(sessionId);
+          if (this.disposed) return null;
           if (this.turns.get(sessionId) === boundary) return current;
         }
       };
@@ -971,6 +995,7 @@ export class GoalController {
     answers: Record<string, string>,
     questions?: readonly GoalClarifyQuestion[],
   ): Promise<void> {
+    if (this.disposed) return;
     if (this.clarificationApplied.has(sessionId)) return; // 每目标只澄清改写一次
     const next = deriveObjectiveFromAnswers(answers);
     if (!next) return;
@@ -1036,6 +1061,7 @@ export class GoalController {
 
   /** 清除目标(用户主动)。删行 + 停止一切续跑 + 取消 usage 自动续 + 通知 renderer 隐藏指示器。 */
   async clearGoal(sessionId: string): Promise<void> {
+    if (this.disposed) return;
     this.clarificationApplied.delete(sessionId);
     this.consecutiveOverloadTurns.delete(sessionId);
     this.cancelDeferredManualResume(sessionId);
@@ -1081,6 +1107,7 @@ export class GoalController {
    * reason 供 UI 展示(如 rewind 传 "paused: conversation rewound")。
    */
   async pauseGoal(sessionId: string, reason?: string): Promise<void> {
+    if (this.disposed) return;
     // Stop 的控制边界不能排在存储 IO 后面：读写一旦卡住，在途 turn 的终态事件仍会
     // 落到旧 listener，idle 兜底会把 active goal 立即续起来。先同步 detach listener、
     // continuation timer 与 firing 状态，再用同一 turns owner 留下 cancelled 边界，
@@ -1136,6 +1163,7 @@ export class GoalController {
    * /已 active 不处理。
    */
   async resumeGoal(sessionId: string, opts?: { auto?: boolean }): Promise<void> {
+    if (this.disposed) return;
     let existingBoundary = this.turns.get(sessionId);
     let state: GoalState | null | undefined;
     if (existingBoundary?.cancelled) {
@@ -1295,6 +1323,7 @@ export class GoalController {
    * dormant(没挂 listener)的 goal 不归这里管,由 resume-on-open 处理。
    */
   async maybeContinueActiveGoal(sessionId: string): Promise<void> {
+    if (this.disposed) return;
     if (this.deferredManualResumes.has(sessionId)) {
       this.scheduleDeferredManualResume(sessionId);
       return;
@@ -1302,6 +1331,7 @@ export class GoalController {
     if (!this.unsubscribers.has(sessionId)) return;
     if (this.firing.has(sessionId)) return;
     const state = await this.deps.storage.get(sessionId);
+    if (this.disposed) return;
     if (!state || state.status !== 'active') return;
     // 不在这里查 isBusy:本方法由 turn 收尾 observer 调用,而 turn idle 标记是延迟生效的
     // (scheduleIdleAfterTerminalBroadcast),此刻查 isBusy 多半仍为真。改走防抖续跑:
@@ -1338,7 +1368,9 @@ export class GoalController {
 
   /** GET_GOAL_STATUS:返回当前状态扁平 payload(无 goal 返回 null)。 */
   async getStatus(sessionId: string): Promise<GoalStatusPayload | null> {
+    if (this.disposed) return null;
     const state = await this.deps.storage.get(sessionId);
+    if (this.disposed) return null;
     return state ? toPayload(state) : null;
   }
 
@@ -1354,6 +1386,7 @@ export class GoalController {
     sessionId: string,
     opts?: { waitForDispatch?: boolean },
   ): Promise<void> {
+    if (this.disposed) return;
     const pendingFailure = this.unpersistedDispatchFailures.get(sessionId);
     if (pendingFailure) {
       const persisted = await this.blockDispatchFailure(
@@ -1362,6 +1395,7 @@ export class GoalController {
         pendingFailure.lastReason,
         () => this.turns.get(sessionId) === pendingFailure.boundary,
       );
+      if (this.disposed) return;
       if (!persisted) throw new GoalSessionRestoreError();
       return;
     }
@@ -1375,6 +1409,7 @@ export class GoalController {
       if (this.turns.get(sessionId) === lifecycleBoundary) this.turns.delete(sessionId);
       throw error;
     }
+    if (this.disposed) return;
     if (this.turns.get(sessionId) !== lifecycleBoundary) return;
     if (!state || state.status !== 'active') {
       if (this.turns.get(sessionId) === lifecycleBoundary) this.turns.delete(sessionId);
@@ -1390,8 +1425,10 @@ export class GoalController {
     try {
       releaseAgentSwitchLock =
         (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+      if (this.disposed) return;
       if (this.turns.get(sessionId) !== lifecycleBoundary) return;
       session = await this.deps.ensureSession(sessionId);
+      if (this.disposed) return;
       if (this.turns.get(sessionId) !== lifecycleBoundary) return;
       if (session) {
         // 锁内先建立 listener 身份。释放后即使 queued SET_MODEL 立刻关闭该 session，
@@ -1420,6 +1457,7 @@ export class GoalController {
         'turn dispatch failed: unable to restore the agent session',
         () => this.turns.get(sessionId) === lifecycleBoundary,
       );
+      if (this.disposed) return;
       if (!persisted) throw new GoalSessionRestoreError(restoreError);
       return;
     }
@@ -1430,6 +1468,7 @@ export class GoalController {
         'turn dispatch failed: unable to restore the agent session',
         () => this.turns.get(sessionId) === lifecycleBoundary,
       );
+      if (this.disposed) return;
       if (!persisted) throw new GoalSessionRestoreError();
       return;
     }
@@ -1458,12 +1497,20 @@ export class GoalController {
    * "active 却永远不动"的 dormant 死状态。
    */
   async resumeActiveGoals(): Promise<void> {
+    // Startup recovery is intentionally fire-and-forget. A logout/account
+    // switch can dispose the controller while either storage query is waiting;
+    // check the terminal fence after every await so the old maker cannot be
+    // reattached or receive a resumed turn after teardown.
+    if (this.disposed) return;
     const active = await this.deps.storage.listActive();
+    if (this.disposed) return;
     let resumed = 0;
     for (const snapshot of active) {
+      if (this.disposed) return;
       // listActive 是启动扫描快照；并发 Stop 可能已经立 cancelled boundary 或写成 paused。
       if (this.turns.has(snapshot.sessionId)) continue;
       const state = await this.deps.storage.get(snapshot.sessionId);
+      if (this.disposed) return;
       if (!state || state.status !== 'active' || this.turns.has(snapshot.sessionId)) continue;
       // 保守:只对**已经活着**的会话重挂 + 续跑;不在启动时强行 spawn agent
       //(开机就偷偷跑目标过于激进)。没活的留 dormant,等用户重发 /goal 时由
@@ -1494,9 +1541,12 @@ export class GoalController {
 
     // usageLimited 行:重启后 timer 丢了,按存档的 usageResetAt 重排自动续跑
     //(已过点 → delay 0 触发;未知 resetAt → 不排,留待手动 resume)。
+    if (this.disposed) return;
     const limited = await this.deps.storage.listUsageLimited();
+    if (this.disposed) return;
     let rescheduled = 0;
     for (const g of limited) {
+      if (this.disposed) return;
       if (g.usageResetAt == null) continue;
       this.scheduleUsageResume(g.sessionId, g.usageResetAt);
       rescheduled += 1;
@@ -1508,6 +1558,7 @@ export class GoalController {
 
   /** 关停所有监听 + 计时器(测试 / 进程退出)。 */
   dispose(): void {
+    this.disposed = true;
     for (const sessionId of [...this.unsubscribers.keys()]) {
       this.stopSession(sessionId);
     }
@@ -1577,6 +1628,11 @@ export class GoalController {
     afterPersist?: (value: T) => void | Promise<void>,
   ): Promise<T> {
     const committed = operation.then(async (value) => {
+      // Account teardown makes disposal terminal. The storage write may already
+      // be in flight and cannot be cancelled, but its follow-up callback must
+      // not start a new account-scoped message write after the controller has
+      // been detached from its owner.
+      if (this.disposed) return value;
       await afterPersist?.(value);
       return value;
     });
@@ -1650,6 +1706,7 @@ export class GoalController {
   }
 
   private emit(state: GoalState): void {
+    if (this.disposed) return;
     this.deps.emitStatus({ sessionId: state.sessionId, goal: toPayload(state) });
   }
 
@@ -1660,6 +1717,7 @@ export class GoalController {
    * listener 再重挂到新 session,保证新引擎 turn 的 done/error 事件仍进 finalizeTurn。
    */
   private attachListener(sessionId: string): void {
+    if (this.disposed) return;
     const session = this.deps.getSession(sessionId);
     if (!session) return;
     if (this.unsubscribers.has(sessionId)) {
@@ -1679,6 +1737,7 @@ export class GoalController {
   }
 
   private onEvent(sessionId: string, event: AgentEvent): void {
+    if (this.disposed) return;
     let turn = this.turns.get(sessionId);
     if (!turn) {
       turn = freshTurn();
@@ -1989,6 +2048,7 @@ export class GoalController {
   }
 
   private scheduleContinuation(sessionId: string): void {
+    if (this.disposed) return;
     const existing = this.timers.get(sessionId);
     if (existing) clearTimeout(existing);
     const rejectionRetry = this.dispatchRejectionRetries.get(sessionId);
@@ -2064,6 +2124,7 @@ export class GoalController {
   }
 
   private scheduleDeferredManualResume(sessionId: string): void {
+    if (this.disposed) return;
     if (!this.deferredManualResumes.has(sessionId)) return;
     const existing = this.deferredManualResumeTimers.get(sessionId);
     if (existing) clearTimeout(existing);
@@ -2087,6 +2148,7 @@ export class GoalController {
    */
   private scheduleUsageResume(sessionId: string, resetAtMs: number | null): void {
     this.cancelUsageResume(sessionId);
+    if (this.disposed) return;
     if (resetAtMs == null) return;
     // clamp 到 setTimeout 的 32-bit 上限(~24.8 天):否则超大 delay 会溢出、被当成 1ms
     // 立刻触发(限额窗口正常是 5h / weekly,远小于上限;clamp 只是防御异常 resetAt)。
@@ -2119,6 +2181,7 @@ export class GoalController {
    */
   private async autoResumeFromUsageLimit(sessionId: string): Promise<void> {
     this.usageResumeTimers.delete(sessionId);
+    if (this.disposed) return;
     // usageLimited 停驻态正常没有 turn owner。为本次 timer 建一代临时 owner，所有 await
     // 都用对象身份复核；Stop 会同步换成 fresh cancelled owner，旧自动恢复因而不能落提示、
     // 不能恢复，也不会误删 Stop 的新边界。已有 owner 表示其它生命周期操作正在接管。
@@ -2196,6 +2259,7 @@ export class GoalController {
       throwOnUnpersistedRestoreFailure?: boolean;
     },
   ): Promise<void> {
+    if (this.disposed) return;
     const lifecycleBoundary = this.turns.get(sessionId);
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) return;
     const lifecycleGeneration = lifecycleBoundary.generation;
