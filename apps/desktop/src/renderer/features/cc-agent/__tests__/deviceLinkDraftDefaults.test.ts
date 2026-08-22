@@ -188,6 +188,25 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.permissionMode).toBeUndefined();
   });
 
+  it('计划模式仅在远端支持且明确开启时进入远程种子', () => {
+    const supported = caps({ planMode: { supported: true } });
+    expect(
+      resolveDeviceLinkDraftDefaults(supported, {
+        model: 'claude-opus-4-8',
+        planMode: true,
+      }).planMode,
+    ).toBe(true);
+    expect(
+      resolveDeviceLinkDraftDefaults(supported, { model: 'claude-opus-4-8' }).planMode,
+    ).toBeUndefined();
+    expect(
+      resolveDeviceLinkDraftDefaults(caps(), {
+        model: 'claude-opus-4-8',
+        planMode: true,
+      }).planMode,
+    ).toBeUndefined();
+  });
+
   // ─── targetModel:切到列表里其它模型时,还原被控端 per-model 记忆 ───────────────
   it('切到非当前选中模型 → 用被控端 per-model 记忆,而非沿用上一个模型', () => {
     const sel = resolveDeviceLinkDraftDefaults(

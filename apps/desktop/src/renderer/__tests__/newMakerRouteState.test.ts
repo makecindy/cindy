@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   consumeNewMakerDialogueTargetRequest,
   consumeNewMakerFolderPickerRequest,
+  consumeNewMakerSessionTargetRequest,
   makeDialogueNewMakerRouteState,
   makeFolderPickerNewMakerRouteState,
+  makeSessionTargetRouteState,
   readNewMakerDialogueTargetRequest,
   readNewMakerFolderPickerRequest,
+  readNewMakerSessionTargetRequest,
 } from '@/features/cc-agent/lib/newMakerRouteState';
 
 describe('new maker dialogue route target request', () => {
@@ -99,5 +102,65 @@ describe('new maker folder picker request', () => {
     expect(consumed).toEqual({ workspacePrompt: 'generic', preserved: true });
     expect(readNewMakerFolderPickerRequest(consumed)).toBeNull();
     expect(readNewMakerFolderPickerRequest(original)).toEqual({ requestId: 'picker-1' });
+  });
+});
+
+describe('new maker session target request', () => {
+  const seed = {
+    target: {
+      deviceId: null,
+      deviceName: null,
+      workingDir: '/Users/demo/project',
+      remoteHostId: 'ssh-host',
+    },
+    runtime: {
+      vendor: 'codex' as const,
+      model: 'model-x',
+      effort: 'high' as const,
+      providerId: 'openai',
+      permissionMode: 'auto' as const,
+      planMode: true,
+      fastMode: true,
+    },
+  };
+
+  it('encodes and consumes a one-shot selected-task seed', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(9102);
+    const state = makeSessionTargetRouteState(seed, 'generic');
+    expect(readNewMakerSessionTargetRequest(state)).toMatchObject({
+      deviceId: null,
+      workingDir: '/Users/demo/project',
+      remoteHostId: 'ssh-host',
+      runtime: seed.runtime,
+    });
+
+    const consumed = consumeNewMakerSessionTargetRequest({
+      ...state,
+      preserved: true,
+    });
+    expect(consumed).toEqual({ workspacePrompt: 'generic', preserved: true });
+    expect(readNewMakerSessionTargetRequest(consumed)).toBeNull();
+  });
+
+  it('generates a fresh request for an already-mounted route', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(9103);
+    const first = readNewMakerSessionTargetRequest(makeSessionTargetRouteState(seed, 'generic'));
+    const second = readNewMakerSessionTargetRequest(makeSessionTargetRouteState(seed, 'generic'));
+    expect(first?.requestId).not.toBe(second?.requestId);
+  });
+
+  it('rejects malformed runtime instead of seeding an invalid engine', () => {
+    expect(
+      readNewMakerSessionTargetRequest({
+        sessionTargetRequest: {
+          requestId: 'seed-1',
+          deviceId: null,
+          deviceName: null,
+          workingDir: null,
+          remoteHostId: null,
+          runtime: { vendor: 'unknown', model: '' },
+        },
+      }),
+    ).toBeNull();
   });
 });

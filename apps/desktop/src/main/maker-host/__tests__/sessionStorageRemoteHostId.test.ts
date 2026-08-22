@@ -138,6 +138,37 @@ describe('DesktopSessionStorage.create Review purpose', () => {
   });
 });
 
+describe('DesktopSessionStorage.create plan mode', () => {
+  beforeEach(() => {
+    h.captured = null;
+  });
+
+  it('persists inherited plan mode with the new session', async () => {
+    const storage = new DesktopSessionStorage();
+    await storage.create({
+      id: 'plan-mode-session',
+      title: 'New Maker',
+      workDir: '/repo',
+      model: 'gpt-5.5',
+      agentKind: 'codex',
+      planMode: true,
+    });
+    expect(h.captured?.planModeEnabled).toBe(true);
+  });
+
+  it('defaults plan mode to false when it is not inherited', async () => {
+    const storage = new DesktopSessionStorage();
+    await storage.create({
+      id: 'normal-session',
+      title: 'New Maker',
+      workDir: '/repo',
+      model: 'gpt-5.5',
+      agentKind: 'codex',
+    });
+    expect(h.captured?.planModeEnabled).toBe(false);
+  });
+});
+
 describe('DesktopSessionStorage.create workingDir 规范化', () => {
   beforeEach(() => {
     h.captured = null;

@@ -400,6 +400,22 @@ describe('resolveDeviceLinkSubmission', () => {
     expect(args.id).toBe('preset-id');
   });
 
+  it('计划模式仅在开启时进入远端 create payload', () => {
+    const base = {
+      agentKind: 'cc' as const,
+      workingDir: '/peer/proj',
+      deviceProviders: [deviceProvider('anthropic', true, ['claude-sonnet-4-6'])],
+      capabilityAgentKind: AGENT,
+    };
+    expect(
+      resolveDeviceLinkSubmission({ ...base, candidate: { ...candidate, planMode: true } })
+        .planMode,
+    ).toBe(true);
+    expect(
+      'planMode' in resolveDeviceLinkSubmission({ ...base, candidate }),
+    ).toBe(false);
+  });
+
   it('同一组候选值:发送路径与建目标路径的输出必须完全一致', () => {
     // 两条路径的差别只在候选值**从哪来**(ChatInput 回传 / 组件派生),不在如何校准与组装。
     // 喂同一组值就必须得到同一份 args —— 这正是第 25 轮那类「只在一条路径上复现」的缺陷

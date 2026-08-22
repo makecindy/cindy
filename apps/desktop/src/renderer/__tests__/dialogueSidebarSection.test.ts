@@ -149,7 +149,10 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     // 无显式目标时仍走作用域推断(pending 守卫 + resolution.target);显式目标见下一条。
     expect(handler).toContain('if (deviceTarget === undefined)');
     expect(handler).toContain('target = selectedDialogueDeviceResolution.target;');
-    expect(handler).toContain('state: makeDialogueNewMakerRouteState(target)');
+    expect(handler).toContain(
+      'state: makeSeededDialogueRouteState(sourceSession, target)',
+    );
+    expect(sidebarSource).toContain('getSessionFor(sourceSessionId)');
     expect(handler).not.toContain('resetDraftWorkspaceTargets');
     expect(handler).not.toContain('patchNewMakerDraft');
     expect(newMakerDraftRouteSource).toContain('readNewMakerDialogueTargetRequest(location.state)');

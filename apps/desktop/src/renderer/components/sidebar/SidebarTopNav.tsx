@@ -31,6 +31,7 @@ import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
+import { useNewMakerFromActiveSession } from '@/features/cc-agent/hooks/useNewMakerFromActiveSession';
 
 /** 列表行通用样式 —— 各行同款 pill 行。 */
 const ROW_CLASS =
@@ -63,17 +64,15 @@ export function SidebarTopNav({
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
+  const { startGeneric: startNewMakerFromActiveSession } = useNewMakerFromActiveSession();
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasGhostUnread = useAnyGhostUnread();
 
-  // 通用「新建」入口:只 navigate 到草稿页,不清空 newMakerDraft。
-  // 之前这里会把 workingDir / remoteHostId / extraDirs 清成默认,导致用户在草稿页
-  // 选好「对话或选择项目」后,切到别的会话再点「新建」回来时选择被重置为默认、需要
-  // 重新选。草稿页的选择由 newMakerDraft store 持久化(见 state/newMakerDraft.ts),
-  // 通用新建应保留上次选择;「新建对话」等显式入口才负责清空(见 CCAgentSidebarUpper)。
+  // 通用「新建」入口:有当前任务时以它为一次性种子(引擎/模型/运行目标),没有任务才回落
+  // 到 newMakerDraft 的持久偏好。目标迁移统一交给 NewMakerDraftRoute,这里不做第二份状态。
   const handleNew = () => {
-    navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });
+    startNewMakerFromActiveSession();
   };
 
   // 搜索结果 overlay 只在 cc-agent 视图(CCAgentSidebarUpper)绘制;本行却在所有非 rail 视图都渲染。

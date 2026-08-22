@@ -16,6 +16,11 @@ const sidebarSource = readFileSync(
   'utf8',
 );
 
+const newMakerHookSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'hooks', 'useNewMakerFromActiveSession.ts'),
+  'utf8',
+);
+
 describe('sidebar 顶部 + New 单按钮(delayed-create)', () => {
   it('顶部 + 不再暴露 vendor 下拉选项', () => {
     // SidebarUpper 仍可为其它入口（如 Automations 右键菜单）使用 DropdownMenu；
@@ -32,10 +37,16 @@ describe('sidebar 顶部 + New 单按钮(delayed-create)', () => {
   it("通用新建进入 /cc-agent/new,并带 generic workspace 提示", () => {
     // sidebar 重构后 expanded 态的“+ New”上移到 shell 的 SidebarTopNav;
     // CCAgentSidebarUpper 内只剩 CollapsedView(rail 态)自带的 handleNewCCS 一处。
-    const matches = sidebarSource.match(/navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('generic'\)\s*\}\)/g);
-    expect(matches).not.toBeNull();
-    expect(matches!.length).toBeGreaterThanOrEqual(1);
-    expect(sidebarSource).toContain("function makeNewMakerRouteState(workspacePrompt: 'generic' | 'dialogue')");
+    expect(sidebarSource).toContain(
+      'const { startGeneric: startNewMakerFromActiveSession } = useNewMakerFromActiveSession();',
+    );
+    expect(sidebarSource).toContain('startNewMakerFromActiveSession();');
+    expect(newMakerHookSource).toContain(
+      "navigate('/cc-agent/new', { state: { workspacePrompt: 'generic' } });",
+    );
+    expect(newMakerHookSource).toContain(
+      "buildNewMakerSessionSeed(activeSession, { mode: 'generic' })",
+    );
     expect(sidebarSource).not.toContain('requestId: Date.now()');
   });
 

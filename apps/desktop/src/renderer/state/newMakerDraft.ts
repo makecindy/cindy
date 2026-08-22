@@ -3,7 +3,8 @@
  *
  * 设计：
  *   - sidebar 顶部 "+ New Maker" 不再立即 createSession；改为 navigate('/cc-agent/new')
- *     并由 NewMakerDraftRoute 消费此 store 的状态。
+ *     并由 NewMakerDraftRoute 消费此 store 的状态。有当前任务时会先携带一次性种子请求，
+ *     继承该任务的引擎 / 模型 / 运行目标；没有当前任务才回落这里的持久偏好。
  *   - vendor 当前选择 + 每个 vendor 上次的 model/effort/permissionMode 都存这里。
  *     Fast Mode 按模型记忆;workingDir 也存这里(初次为 null,Project 行内 + 会预填到此)。
  *   - 文本内容仍由 ChatInput 自己的 composerDraftStore 按 sessionId='new' 持久化,本 store 不掺和。
