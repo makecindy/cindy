@@ -3328,26 +3328,34 @@ describe('DeviceLinkClient', () => {
   });
 
   it('非 pong 的有效入站流量也能阻止心跳误判共享连接', async () => {
-    const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
-    h.client.start();
-    await tick();
-    const ws = h.current();
-    ws.ack();
+    // 这条验证的是 heartbeat tick 与入站活动的逻辑顺序，不是宿主定时器精度。
+    // Windows 高负载 runner 会把 4ms/8ms 真实 timer 一起推迟，再先执行较早注册的
+    // heartbeat，制造测试自身的假空闲窗口；用 fake timers 固定每个周期的先后关系。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
 
-    // 模拟 relay 仍在持续推送 presence，但 pong 偶发丢失；有效业务帧证明
-    // 共享 socket 仍有入站流量，不应因单独的 pong 计数拆掉所有 peer。
-    const activity = setInterval(() => {
-      ws.push({
-        v: PROTOCOL_VERSION,
-        kind: 'presence-changed',
-        payload: { deviceId: 'dev-b', online: true, deviceName: 'Test' },
-      });
-    }, 4);
-    await tick(50);
-    clearInterval(activity);
-    expect(ws.terminated).toBe(false);
-    expect(h.client.getStatus()).toBe('online');
-    h.client.stop();
+      // 模拟 relay 仍在持续推送 presence，但 pong 偶发丢失；有效业务帧证明
+      // 共享 socket 仍有入站流量，不应因单独的 pong 计数拆掉所有 peer。
+      const activity = setInterval(() => {
+        ws.push({
+          v: PROTOCOL_VERSION,
+          kind: 'presence-changed',
+          payload: { deviceId: 'dev-b', online: true, deviceName: 'Test' },
+        });
+      }, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+      expect(ws.terminated).toBe(false);
+      expect(h.client.getStatus()).toBe('online');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('多 peer 心跳:一个 peer 静默时健康 peer 的 link 与在途请求零感知', async () => {
