@@ -2399,6 +2399,7 @@ describe('codex proxy host', () => {
         // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), stripNonAnthropicFields]
         transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
+        retryProvenWebSocketUpgrades: true,
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
           expect.objectContaining({ id: 'image_generation_id' }),
@@ -2436,6 +2437,27 @@ describe('codex proxy host', () => {
     expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBe(
       'https://chatgpt.com/backend-api/codex',
     );
+  });
+
+  it('forgets only the closing session websocket proofs before a provider-route resume', async () => {
+    const host = await freshCodexProxyHost();
+    const forgetWebSocketStateForThread = vi.fn(() => 1);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      forgetWebSocketStateForThread,
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-switching', 'thread-switching', 'PRODUCT_PROMPT');
+    host.registerChildThread('thread-switching', 'thread-switching-child');
+    host.registerComposed('session-untouched', 'thread-untouched', 'PRODUCT_PROMPT');
+
+    host.unregister('session-switching');
+
+    expect(forgetWebSocketStateForThread).toHaveBeenCalledTimes(2);
+    expect(forgetWebSocketStateForThread).toHaveBeenCalledWith('thread-switching');
+    expect(forgetWebSocketStateForThread).toHaveBeenCalledWith('thread-switching-child');
+    expect(forgetWebSocketStateForThread).not.toHaveBeenCalledWith('thread-untouched');
   });
 
   it('declines the next websocket upgrade after a body recovery error is armed', async () => {

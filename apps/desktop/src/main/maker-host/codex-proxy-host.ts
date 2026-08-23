@@ -2785,6 +2785,9 @@ function createCodexProxyHandle(
     recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
     logger: log,
     resolveOutboundProxy: resolveDesktopOutboundProxy,
+    // 仅 resolveWebSocketUpstream 真正返回 OAuth 上游时生效。已成功走过 WS 的单个 thread
+    // 在瞬时断网后由 Cindy 原地回探，不让 Codex 因握手失败把该 session 固定到 HTTP。
+    retryProvenWebSocketUpgrades: true,
     /**
      * WS upgrade 的上游固定为 ChatGPT 订阅后端。
      *
@@ -3074,6 +3077,10 @@ function clearSessionThreads(sessionId: string): string[] {
   reviewerModelBySession.delete(sessionId);
   for (const threadId of threadIds) {
     if (threadToSession.get(threadId) === sessionId) {
+      // Session 关闭既可能是普通释放，也可能是 OAuth ↔ 第三方模型的 route 切换。
+      // 两种情况都必须撤销旧 thread 的 WS 成功证明：第三方恢复使用 cindy_gateway/HTTP，
+      // 迟到的旧 upgrade 不能命中本次新增的 Cindy 侧 WS 保活；其他 thread 不受影响。
+      _handle?.forgetWebSocketStateForThread?.(threadId);
       threadToSession.delete(threadId);
       registry.delete(threadId);
       subagentRouteByParentThread.delete(threadId);
