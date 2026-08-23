@@ -26,6 +26,7 @@ export type SidebarMainViewMode = 'text' | 'list';
 
 const STORAGE_KEY = 'sidebar.cardMode';
 const MAIN_STORAGE_KEY = 'sidebar.mainListMode';
+const PINNED_SOURCE_LABEL_STORAGE_KEY = 'sidebar.pinnedSourceLabelVisible';
 const DEFAULT_MODE: SidebarViewMode = 'text';
 const DEFAULT_MAIN_MODE: SidebarMainViewMode = 'list';
 
@@ -49,6 +50,7 @@ function parseMainMode(raw: string | null): SidebarMainViewMode | null {
  */
 let memoryValue: SidebarViewMode | null = null;
 let mainMemoryValue: SidebarMainViewMode | null = null;
+let pinnedSourceLabelMemoryValue: boolean | null = null;
 
 /** 同步读(置顶段)——给非 hook 路径用。 */
 export function getSidebarViewMode(): SidebarViewMode {
@@ -197,4 +199,41 @@ export function useSidebarMainViewMode(): {
   }, []);
 
   return { mode, setMode };
+}
+
+/** 置顶平铺任务的项目来源标签；默认保留既有展示，用户可显式关闭。 */
+export function usePinnedSourceLabelPreference(): {
+  visible: boolean;
+  setVisible: (next: boolean) => void;
+} {
+  const read = (): boolean => {
+    if (pinnedSourceLabelMemoryValue !== null) return pinnedSourceLabelMemoryValue;
+    try {
+      const raw = localStorage.getItem(PINNED_SOURCE_LABEL_STORAGE_KEY);
+      if (raw === 'true' || raw === 'false') return (pinnedSourceLabelMemoryValue = raw === 'true');
+    } catch {
+      // localStorage unavailable: retain the compatible default.
+    }
+    return true;
+  };
+  const [visible, setVisibleState] = useState(read);
+  const setVisible = useCallback((next: boolean) => {
+    pinnedSourceLabelMemoryValue = next;
+    setVisibleState(next);
+    try {
+      localStorage.setItem(PINNED_SOURCE_LABEL_STORAGE_KEY, String(next));
+    } catch {
+      /* memory stays authoritative */
+    }
+  }, []);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== PINNED_SOURCE_LABEL_STORAGE_KEY) return;
+      pinnedSourceLabelMemoryValue = event.newValue !== 'false';
+      setVisibleState(pinnedSourceLabelMemoryValue);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+  return { visible, setVisible };
 }

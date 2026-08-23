@@ -42,6 +42,7 @@ vi.mock('@/hooks/useFontSettings', async (importOriginal) => ({
 vi.mock('@/hooks/useSidebarCardMode', () => ({
   useSidebarCardMode: () => ({ mode: 'text', setMode: vi.fn() }),
   useSidebarMainViewMode: () => ({ mode: 'list', setMode: vi.fn() }),
+  usePinnedSourceLabelPreference: () => ({ visible: true, setVisible: vi.fn() }),
 }));
 
 vi.mock('@/themes/local-themes', () => ({
@@ -64,12 +65,15 @@ vi.mock('@/components/ui/tooltip', () => ({
 vi.mock('@/components/ui/slider', () => ({
   Slider: ({
     value,
-    onValueChange: _onValueChange,
+    onValueChange,
     ...props
   }: React.InputHTMLAttributes<HTMLInputElement> & {
     value?: number[];
     onValueChange?: (value: number[]) => void;
-  }) => <input type="range" value={value?.[0]} readOnly {...props} />,
+  }) => {
+    void onValueChange;
+    return <input type="range" value={value?.[0]} readOnly {...props} />;
+  },
 }));
 
 vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));

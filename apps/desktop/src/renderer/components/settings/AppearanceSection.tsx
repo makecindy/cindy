@@ -26,9 +26,11 @@ import {
 import {
   useSidebarCardMode,
   useSidebarMainViewMode,
+  usePinnedSourceLabelPreference,
   type SidebarMainViewMode,
   type SidebarViewMode,
 } from '@/hooks/useSidebarCardMode';
+import { Switch } from '@/components/ui/switch';
 import {
   useGhostPanelRestoreMode,
   type GhostPanelRestoreMode,
@@ -321,6 +323,8 @@ export function AppearanceSection() {
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
+  const { visible: pinnedSourceLabelVisible, setVisible: setPinnedSourceLabelVisible } =
+    usePinnedSourceLabelPreference();
   const { mode: ghostPanelRestoreMode, setMode: setGhostPanelRestoreMode } =
     useGhostPanelRestoreMode();
   const { t } = useTranslation();
@@ -856,6 +860,22 @@ export function AppearanceSection() {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
+              {t('settings.appearance.pinnedSourceLabel.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+              {t('settings.appearance.pinnedSourceLabel.hint')}
+            </p>
+          </div>
+          <Switch
+            checked={pinnedSourceLabelVisible}
+            onCheckedChange={setPinnedSourceLabelVisible}
+            aria-label={t('settings.appearance.pinnedSourceLabel.aria')}
+          />
         </div>
 
         <div className="flex items-center justify-between gap-3">

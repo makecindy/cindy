@@ -476,6 +476,11 @@
         "hint": "Display style for the main sidebar list (below Pinned): Text is a compact single row; List is a two-line row with a preview.",
         "aria": "Switch session list style"
       },
+      "pinnedSourceLabel": {
+        "label": "Show project source for pinned tasks",
+        "hint": "Turn this off to give task titles more horizontal space.",
+        "aria": "Toggle project source for pinned tasks"
+      },
       "ghostPanelRestore": {
         "label": "Plugin panel restore entry",
         "hint": "Choose where minimized plugin panels can be restored.",
