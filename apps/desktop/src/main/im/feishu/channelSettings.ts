@@ -34,7 +34,7 @@ export function readFeishuChannelSettings(rootPath?: string): FeishuChannelSetti
   } catch (error) {
     log.warn('failed to read Feishu channel settings; using defaults', {
       path: maskPath(file),
-      errorCode: nodeErrorCode(error),
+      errorCode: feishuChannelSettingsErrorCode(error),
     });
     return { ...DEFAULTS, workingDirAvailable: true };
   }
@@ -103,7 +103,7 @@ function isAccessibleDirectory(candidate: string): boolean {
   }
 }
 
-function nodeErrorCode(error: unknown): string {
+export function feishuChannelSettingsErrorCode(error: unknown): string {
   return typeof error === 'object' && error !== null && 'code' in error
     ? String((error as { code?: unknown }).code ?? 'UNKNOWN')
     : 'UNKNOWN';

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  feishuChannelSettingsErrorCode,
   readFeishuChannelSettings,
   resetFeishuWorkingDir,
   resolveFeishuWorkingDir,
@@ -19,6 +20,16 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe('Feishu channel settings', () => {
+  it('reduces filesystem failures to a non-path error code', () => {
+    const error = Object.assign(new Error(`ENOENT: ${path.join(root, 'private-project')}`), {
+      code: 'ENOENT',
+    });
+
+    expect(feishuChannelSettingsErrorCode(error)).toBe('ENOENT');
+    expect(feishuChannelSettingsErrorCode(error)).not.toContain(root);
+    expect(feishuChannelSettingsErrorCode(new Error('private path'))).toBe('UNKNOWN');
+  });
+
   it('persists a selected directory and can reset it', () => {
     const selected = path.join(root, 'project');
     fs.mkdirSync(selected);

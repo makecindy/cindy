@@ -94,7 +94,7 @@ import { getAuthState } from '../authManager';
 import { getUpdateStatus, isUpdateRelaunchImminent } from '../updateService';
 import { throwIpcError } from '../utils/ipcValidate';
 
-import { createLogger } from '../logger';
+import { createLogger, maskPath } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import {
   readWechatChannelSettings,
@@ -102,6 +102,7 @@ import {
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
 import {
+  feishuChannelSettingsErrorCode,
   readFeishuChannelSettings,
   resetFeishuWorkingDir,
   writeFeishuWorkingDir,
@@ -261,7 +262,8 @@ export function startImOrchestrators(): void {
       return { canceled: false as const, state: writeFeishuWorkingDir(result.filePaths[0]) };
     } catch (error) {
       log.warn('failed to save user-picked Feishu working directory', {
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorCode: feishuChannelSettingsErrorCode(error),
+        selectedPath: maskPath(result.filePaths[0]),
       });
       throwIpcError('INTERNAL', 'Failed to update the Feishu working directory');
     }
