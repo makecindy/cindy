@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
@@ -29,6 +29,32 @@ import { loadScheduleSidebarIndexSnapshot } from '../../scheduler/lib/scheduleSi
 import { subscribeScheduleRunReadSync } from '../../scheduler/lib/scheduleRunReadSync';
 
 const log = createLogger('AutomationScheduleSessionIndex');
+
+/** 侧栏 hook 写入、会话视图只读。避免每个聊天窗再跑一遍全量 listSidebarIndexRuns。 */
+let publishedIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
+const publishedIndexListeners = new Set<() => void>();
+
+function publishIndex(next: ReadonlyMap<string, AutomationScheduleSessionInfo>): void {
+  publishedIndex = next;
+  for (const listener of publishedIndexListeners) listener();
+}
+
+function subscribePublishedIndex(listener: () => void): () => void {
+  publishedIndexListeners.add(listener);
+  return () => {
+    publishedIndexListeners.delete(listener);
+  };
+}
+
+export function useAutomationScheduleSessionInfo(
+  sessionId: string | undefined,
+): AutomationScheduleSessionInfo | undefined {
+  return useSyncExternalStore(
+    subscribePublishedIndex,
+    () => (sessionId ? publishedIndex.get(sessionId) : undefined),
+    () => (sessionId ? publishedIndex.get(sessionId) : undefined),
+  );
+}
 
 /**
  * refresh 失败后的退避重试节奏。这次拉取同时承担抑制标记的对账(见 refresh 内注释),
@@ -118,6 +144,7 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
         });
       }
       setIndex(next);
+      publishIndex(next);
       retryAttemptRef.current = 0;
     } catch (error) {
       log.warn('failed to build automation schedule session index', {

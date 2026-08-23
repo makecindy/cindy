@@ -89,7 +89,7 @@ import {
   InterruptedTurnBanner,
   UnreadFailedScheduleBanner,
 } from '@/components/chat/InterruptedTurnBanner';
-import { useAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
+import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
@@ -1782,15 +1782,16 @@ export function CCAgentSessionView({
   //     →「重试/关闭」
   // 后面有新消息 = 任务已被推进,判定自然不命中。此时消息流内不重复渲染该行
   // (MessageStream 对尾部未忽略 error 行返回 null,由本条独家承载)。
-  const scheduleSessionIndex = useAutomationScheduleSessionIndex();
-  const unreadFailedScheduleRunIds = useMemo(() => {
-    if (!sessionId) return EMPTY_UNREAD_FAILED_RUN_IDS;
-    return scheduleSessionIndex.get(sessionId)?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
-  }, [scheduleSessionIndex, sessionId]);
-  const handleUnreadFailedScheduleDismiss = useCallback(() => {
+  const scheduleSessionInfo = useAutomationScheduleSessionInfo(sessionId);
+  const unreadFailedScheduleRunIds =
+    scheduleSessionInfo?.unreadFailedRunIds ?? EMPTY_UNREAD_FAILED_RUN_IDS;
+  const markUnreadFailedScheduleRunsRead = useCallback(() => {
     if (unreadFailedScheduleRunIds.length === 0) return;
     void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds);
   }, [unreadFailedScheduleRunIds]);
+  const handleUnreadFailedScheduleDismiss = useCallback(() => {
+    markUnreadFailedScheduleRunsRead();
+  }, [markUnreadFailedScheduleRunsRead]);
   const errorTailMsg = useMemo(() => {
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
     return last && last.role === 'error' && !last.errorDismissed ? last : null;
@@ -1885,11 +1886,20 @@ export function CCAgentSessionView({
       // 本机会话才清:远程会话的红点靠隧道回执清被控端,而本机库里没有它的行,
       // 重算恢复不了 —— 那条腿延后到 pending 落回 false 且横幅确实消失后再 ack。
       if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
+      // 中断/失败横幅优先于未读失败 schedule 横幅。用户已经处置这一次事故,
+      // 不要再立刻换成第二条「标为已读」。
+      markUnreadFailedScheduleRunsRead();
     } catch (err) {
       setErrorTailBannerHiddenFor(null);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [errorTailKind, errorTailMsg, rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
+  }, [
+    errorTailKind,
+    errorTailMsg,
+    markUnreadFailedScheduleRunsRead,
+    rebuildClaudeSubscriptionSessionBeforeRetry,
+    sessionId,
+  ]);
   const handleErrorTailDismiss = useCallback(() => {
     if (!sessionId || !errorTailMsg) return;
     // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
@@ -1906,9 +1916,10 @@ export function CCAgentSessionView({
         // 此时清红点会再造成「横幅在、红点没」(PR #879 review P1)。
         // 本机会话由下面的重算收敛,不重复 ack。
         if (persisted && remoteDeviceId) ackErrorAlertHandled(sessionId);
+        if (persisted) markUnreadFailedScheduleRunsRead();
         return refreshPendingAlerts();
       });
-  }, [errorTailMsg, remoteDeviceId, sessionId]);
+  }, [errorTailMsg, markUnreadFailedScheduleRunsRead, remoteDeviceId, sessionId]);
   // interrupted-turn-resume(简化版):「疑似中断」由 session 行的双时间戳驱动
   // (startedAt > endedAt 且未被 /clear 越过,见 sessionActiveTurn.ts 文件头),
   // 不再依赖持久化中断消息行。判定是打开会话时的一次性快照:本窗口 turn 一旦
@@ -1999,11 +2010,12 @@ export function CCAgentSessionView({
       // dispatch 成功,而横幅已隐藏 —— 先临时清点保持一致,排队被取消时由 pending
       // 落回 false 的 effect 重算恢复。远程会话同样延后(见那里的说明)。
       if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
+      markUnreadFailedScheduleRunsRead();
     } catch (err) {
       setSessionInterruptAcked(false);
       toast.error(err instanceof Error ? err.message : String(err));
     }
-  }, [sessionId]);
+  }, [markUnreadFailedScheduleRunsRead, remoteDeviceId, sessionId]);
   const handleSessionInterruptDismiss = useCallback(() => {
     if (!sessionId) return;
     setSessionInterruptAcked(true);
@@ -2013,6 +2025,7 @@ export function CCAgentSessionView({
         // 这个会话,派生腿管不到它的红点 —— 显式 ack。本机会话靠 ended 落库广播的
         // sessions:patched(lastTurnEndedAt)收敛,不重复 ack。
         if (remoteDeviceId) ackErrorAlertHandled(sessionId);
+        markUnreadFailedScheduleRunsRead();
       })
       .catch((err) => {
         // 落库失败(典型:device-link 断连时忽略远程中断)必须复位闩锁 —— 否则横幅
@@ -2021,7 +2034,7 @@ export function CCAgentSessionView({
         setSessionInterruptAcked(false);
         toast.error(err instanceof Error ? err.message : String(err));
       });
-  }, [remoteDeviceId, sessionId]);
+  }, [markUnreadFailedScheduleRunsRead, remoteDeviceId, sessionId]);
   // device-link 远程会话首屏:历史/元数据经隧道往返(网络),慢网下 historyLoaded=false
   // 期间消息区空白。仅远程 + 延迟防闪后给「正在从被控端加载」提示(本机会话恒 false)。
   // 冷缓存已经把最近一页画出来时(messages 非空)不再显示覆盖层 —— 它会盖住可读内容。
