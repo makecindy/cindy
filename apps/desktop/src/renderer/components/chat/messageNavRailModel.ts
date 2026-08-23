@@ -129,8 +129,8 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  * 回答不再盖到上一问(旧的 first-wins 碰巧挡住了这条;改 last-wins 后必须显式切)。
  * steer 插话不是边界,回答仍归上一问。
  *
- * 每根刻度只规范化一条候选正文(最后一条收尾,没有则最后一条非空),避免流式
- * 每次重算都对整段历史跑一遍 normalizeExcerpt。
+ * 候选只在「可能成为本轮摘要」时才规范化;规范化后为空则丢掉,保留上一条
+ * 有效摘要。避免流式每次重算都对整段历史跑一遍 normalizeExcerpt。
  *
  * 注意输入是全量已加载 messages 而非 visibleRenderItems —— 导航条要覆盖
  * 整段已加载历史,渲染窗口外的目标由跳转侧扩窗解决(见 MessageStream 的
@@ -141,16 +141,12 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
   const entries: NavRailEntry[] = [];
   let lastOwnsAnswers = false;
   let lastExcerptSealed = false;
-  let pendingAnswer: ChatMessage | null = null;
+  let pendingExcerpt: string | null = null;
 
   const flushPendingAnswer = () => {
-    if (!pendingAnswer) return;
     const last = entries[entries.length - 1];
-    if (last) {
-      const excerpt = normalizeExcerpt(pendingAnswer.content);
-      if (excerpt) last.answerExcerpt = excerpt;
-    }
-    pendingAnswer = null;
+    if (last && pendingExcerpt) last.answerExcerpt = pendingExcerpt;
+    pendingExcerpt = null;
   };
 
   const closeAnswerTurn = () => {
@@ -206,7 +202,9 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
     if (!lastOwnsAnswers || !isNavRailAnswerCandidate(m)) continue;
     const sealed = isSealedAssistantAnswer(m);
     if (sealed || !lastExcerptSealed) {
-      pendingAnswer = m;
+      const excerpt = normalizeExcerpt(m.content);
+      if (!excerpt) continue;
+      pendingExcerpt = excerpt;
       lastExcerptSealed = sealed;
     }
   }

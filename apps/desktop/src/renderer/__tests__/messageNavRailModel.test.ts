@@ -233,6 +233,15 @@ describe('deriveNavRailEntries', () => {
     expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
   });
 
+  it('规范化后为空的尾条不冲掉已有有效摘要', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '第一问' }),
+      msg({ clientId: 'a1', role: 'assistant', content: '真正的回答' }),
+      msg({ clientId: 'a2', role: 'assistant', content: '<!-- hidden -->\n`**`' }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
+  });
+
   it('hook 消息(带 userText):预览取干净原文,不取 content 里的 agent prompt', () => {
     const messages = [
       msg({
