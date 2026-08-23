@@ -480,7 +480,8 @@
         "label": "显示置顶任务的项目来源",
         "hint": "关闭后让任务标题使用更多横向空间。",
         "aria": "切换置顶任务的项目来源显示",
-        "reset": "恢复默认"
+        "reset": "恢复默认",
+        "resetUnavailable": "当前已使用默认设置"
       },
       "ghostPanelRestore": {
         "label": "插件面板恢复入口",

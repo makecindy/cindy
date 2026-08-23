@@ -480,7 +480,8 @@
         "label": "顯示置頂任務的專案來源",
         "hint": "關閉後可讓任務標題使用更多橫向空間。",
         "aria": "切換置頂任務的專案來源顯示",
-        "reset": "恢復預設"
+        "reset": "恢復預設",
+        "resetUnavailable": "目前已使用預設設定"
       },
       "ghostPanelRestore": {
         "label": "插件面板恢復入口",

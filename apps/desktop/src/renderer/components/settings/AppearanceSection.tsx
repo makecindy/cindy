@@ -876,18 +876,29 @@ export function AppearanceSection() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Tip text={t('settings.appearance.pinnedSourceLabel.reset')}>
+            <Tip
+              text={
+                pinnedSourceLabelIsOverridden
+                  ? t('settings.appearance.pinnedSourceLabel.reset')
+                  : t('settings.appearance.pinnedSourceLabel.resetUnavailable')
+              }
+            >
               <button
                 type="button"
                 aria-label={t('settings.appearance.pinnedSourceLabel.reset')}
-                onClick={resetPinnedSourceLabel}
-                disabled={!pinnedSourceLabelIsOverridden}
+                aria-disabled={!pinnedSourceLabelIsOverridden}
+                onClick={() => {
+                  if (pinnedSourceLabelIsOverridden) {
+                    resetPinnedSourceLabel();
+                  }
+                }}
                 className={cn(
                   'flex h-8 w-8 items-center justify-center rounded-xl',
                   'border border-[var(--settings-input-border)]',
                   'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
                   'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                  'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
+                  !pinnedSourceLabelIsOverridden &&
+                    'cursor-default opacity-40 hover:bg-[var(--settings-input-bg)]',
                 )}
               >
                 <RefreshCw size={14} aria-hidden />

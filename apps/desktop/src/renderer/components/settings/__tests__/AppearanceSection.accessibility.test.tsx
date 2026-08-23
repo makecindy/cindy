@@ -99,8 +99,12 @@ describe('AppearanceSection accessibility', () => {
   it('labels the pinned project-source reset control', () => {
     render(<AppearanceSection />);
 
-    expect(
-      screen.getByRole('button', { name: 'settings.appearance.pinnedSourceLabel.reset' }),
-    ).toBeTruthy();
+    const reset = screen.getByRole('button', {
+      name: 'settings.appearance.pinnedSourceLabel.reset',
+    });
+
+    expect(reset).toBeTruthy();
+    expect(reset.getAttribute('aria-disabled')).toBe('true');
+    expect(reset.hasAttribute('disabled')).toBe(false);
   });
 });
