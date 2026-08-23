@@ -1006,9 +1006,13 @@ export function closeAgentIslandSessionPreservingUnread(
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
   // pending 交互随进程一起失效(service 侧同时会 deletePermissionRequestsForSession)。
-  // 留着会让用户对着一张永远不会被响应的审批卡片点按钮,所以这类条目整条删掉 —— 要保的
-  // 只是「已经发生完、还没被看到」的终态通知。
+  // 留着会让用户对着一张永远不会被响应的审批卡片点按钮。岛条目可以丢,但旧的
+  // completed/error 账本不是这次审批,进程关闭不等于已读。
   if (session.pendingInteractionIds.size > 0) {
+    if (state.remoteUnreadTerminals.has(sessionId)) {
+      forgetAgentIslandSession(state, sessionId);
+      return;
+    }
     removeAgentIslandSession(state, sessionId);
     return;
   }

@@ -2394,6 +2394,33 @@ describe('会话进程关闭不该抹掉正在展示的通知', () => {
     expect(buildAgentIslandDisplayState(state, 1_300).totalCount).toBe(0);
   });
 
+  it('进程关闭丢掉失效审批卡时,仍保留尚未看过的旧 error 账本', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'err', title: 'Err' }, terminalErrorEvent('boom'), 1_000);
+    applyAgentIslandUserPrompt(state, { sessionId: 'err', title: 'Err' }, 'retry', 2_000);
+    applyAgentIslandInteractionRequest(
+      state,
+      { sessionId: 'err', title: 'Err' },
+      {
+        kind: 'permission',
+        requestId: 'r1',
+        toolName: 'Bash',
+        input: { command: 'rm -rf dist' },
+      },
+      2_100,
+    );
+    expect(state.remoteUnreadTerminals.get('err')).toMatchObject({ phase: 'error' });
+
+    closeAgentIslandSessionPreservingUnread(state, 'err', 2_200);
+
+    expect(state.sessions.has('err')).toBe(false);
+    expect(state.remoteUnreadTerminals.get('err')).toMatchObject({ phase: 'error' });
+    expect(acknowledgeAgentIslandSessionRead(state, 'err', 2_300, { source: 'passive' })).toBe('error-immune');
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'err', phase: 'error', attention: true, activityLines: [] }),
+    ]);
+  });
+
   it('已经没有展示需求的会话,进程关闭时照常删除', () => {
     const state = createAgentIslandState();
     applyAgentIslandEvent(state, { sessionId: 'read', title: '已读' }, doneEvent(), 2_000);
