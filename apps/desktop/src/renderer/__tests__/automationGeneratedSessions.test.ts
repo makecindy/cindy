@@ -531,7 +531,11 @@ describe('automation-generated sessions', () => {
     expect(sessionViewSource).toContain('unreadFailedScheduleRunIds.length > 0');
     expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
     expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
-    expect(sessionViewSource).toContain('markUnreadFailedScheduleRunsRead()');
+    expect(sessionViewSource).toContain('latestUnreadFailedRunId');
+    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
+    expect(sessionViewSource).not.toContain(
+      'void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds)',
+    );
     expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
     expect(zh.chat.unreadFailedScheduleBanner.text).toBe('这次定时任务没有完成。');
     expect(zh.chat.unreadFailedScheduleBanner.markAsRead).toBe('标为已读');

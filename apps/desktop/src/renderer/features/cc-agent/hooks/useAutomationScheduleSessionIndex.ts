@@ -117,6 +117,7 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
       }
 
       const next = new Map<string, AutomationScheduleSessionInfo>();
+      const latestFailedFiredAt = new Map<string, number>();
       for (const run of runs) {
         if (!run.sessionId) continue;
         const existing = next.get(run.sessionId);
@@ -128,7 +129,15 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
         // 未读 run 拉高本 session 的 urgency 让侧栏涂红而不是涂绿。
         const isRunUnread = isUnreadScheduleRun(run);
         if (isRunUnread) unreadRunIds.push(run.runId);
-        if (isUnreadFailedScheduleRun(run)) unreadFailedRunIds.push(run.runId);
+        let latestUnreadFailedRunId = existing?.latestUnreadFailedRunId;
+        if (isUnreadFailedScheduleRun(run)) {
+          unreadFailedRunIds.push(run.runId);
+          const firedAt = run.firedAt ?? 0;
+          if (firedAt >= (latestFailedFiredAt.get(run.sessionId) ?? Number.NEGATIVE_INFINITY)) {
+            latestFailedFiredAt.set(run.sessionId, firedAt);
+            latestUnreadFailedRunId = run.runId;
+          }
+        }
         next.set(run.sessionId, {
           scheduleId: run.scheduleId,
           scheduleName: run.scheduleName,
@@ -139,6 +148,7 @@ export function useAutomationScheduleSessionIndex(): ReadonlyMap<string, Automat
           projectConfigId: run.projectConfigId,
           unreadRunIds,
           unreadFailedRunIds,
+          latestUnreadFailedRunId,
           hasUnreadRun: unreadRunIds.length > 0,
           hasUnreadFailedRun: unreadFailedRunIds.length > 0,
         });

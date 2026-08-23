@@ -28,6 +28,11 @@ export interface AutomationScheduleSessionInfo {
    */
   unreadFailedRunIds: string[];
   /**
+   * 该 session 上最近一次未读失败/中断 run。会话内横幅只清这一条;
+   * 清整组仍走组菜单。
+   */
+  latestUnreadFailedRunId?: string;
+  /**
    * 是否至少有一个未读失败 run —— 侧栏右侧据此涂红,而不是和成功完成一样涂绿。
    */
   hasUnreadFailedRun: boolean;
