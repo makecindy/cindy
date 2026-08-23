@@ -5849,7 +5849,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       requestId: string,
       // InteractionDecision union (permission/ask_user_question/plan_review,按 kind 分支)
       decision: Record<string, unknown>,
-    ): Promise<void> => ipcRenderer.invoke('maker:resolve-interaction', requestId, decision),
+    ): Promise<{ accepted: boolean }> =>
+      ipcRenderer.invoke('maker:resolve-interaction', requestId, decision),
 
     /** Local-only Secret handoff; Main verifies this is Cindy's trusted top-level frame. */
     submitPluginSetupInline: (request: {

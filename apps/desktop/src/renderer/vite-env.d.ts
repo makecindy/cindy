@@ -5397,7 +5397,10 @@ interface ElectronAPI {
     };
 
     /** Resolve a pending interaction (permission / ask_user_question / plan_review). */
-    resolveInteraction: (requestId: string, decision: Record<string, unknown>) => Promise<void>;
+    resolveInteraction: (
+      requestId: string,
+      decision: Record<string, unknown>,
+    ) => Promise<{ accepted: boolean }>;
 
     /** Submit one inline plugin Secret through the local trusted-frame-only IPC. */
     submitPluginSetupInline: (request: {

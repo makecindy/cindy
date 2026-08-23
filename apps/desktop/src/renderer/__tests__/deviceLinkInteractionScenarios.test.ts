@@ -1332,9 +1332,14 @@ describe('远程交互接线不变式', () => {
   //    状态变更未广播收敛」家族残留,锁住防回归 ──────────────────────────────────────────
   const mainSrc = (rel: string) => readFileSync(resolve(__dirname, '../../main', rel), 'utf8');
 
-  it('F1: makerChatStore 的 ask/plan answered 写库远程跳过(被控端权威落库,避免 dead write)', () => {
+  it('F1: ask 本地远程都只由 main 落库；plan answered 写库仍远程跳过', () => {
     const src = read('lib/makerChatStore.ts');
-    expect(src).toContain('if (askMsg && !isRemoteSession(sessionId))');
+    const askStart = src.indexOf('function answerUserQuestion(');
+    expect(askStart).toBeGreaterThan(-1);
+    const askEnd = src.indexOf('\nfunction ', askStart + 1);
+    const askBody = src.slice(askStart, askEnd === -1 ? undefined : askEnd);
+    expect(askBody).not.toContain('askMsg');
+    expect(askBody).not.toContain('messageService');
     expect(src).toContain('if (planMsg && !isRemoteSession(sessionId))');
   });
 

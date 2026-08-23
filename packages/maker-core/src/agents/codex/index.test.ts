@@ -16835,13 +16835,360 @@ describe('CodexAgent MCP thread context hooks', () => {
       success: false,
       contentItems: [{ type: 'inputText', text: `Request cancelled: ${reason}` }],
     });
-    await waitForExpectation(() => {
-      expect(debug).toHaveBeenCalledWith(
-        'joined duplicate same-turn user input request cancelled',
-        { requestId: 'req-joined', turnId: 'turn-1' },
-      );
-    });
+    if (lifecycle !== 'turn completion') {
+      await waitForExpectation(() => {
+        expect(debug).toHaveBeenCalledWith(
+          'joined duplicate same-turn user input request cancelled',
+          { requestId: 'req-joined', turnId: 'turn-1' },
+        );
+      });
+    }
     if (lifecycle !== 'session close') await handle.close();
+  });
+
+  function askUserTurnStartCalls(host: ReturnType<typeof installFakeHost>) {
+    return host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+  }
+
+  async function collectAgentEvents(handle: AgentSessionHandle): Promise<AgentEvent[]> {
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        events.push(event);
+      }
+    })();
+    return events;
+  }
+
+  it('does not dismiss a pending ask_user on successful turn completion and continues once after the answer', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ask-user-detached-continue',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const ownerDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => ownerDecision.promise);
+    const events = await collectAgentEvents(handle);
+
+    const resultPromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-ask',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'q1',
+          header: '词典编辑',
+          question: '桌面版这次要采用哪种范围？',
+          options: [{ label: '完整编辑（推荐）' }],
+        }],
+      },
+    }, { requestId: 'req-ask' });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await expect(resultPromise).resolves.toEqual({
+      success: false,
+      contentItems: [{ type: 'inputText', text: 'Request cancelled: turn_completed' }],
+    });
+    await waitForExpectation(() => {
+      expect(events.some((event) => event.type === 'done')).toBe(true);
+    });
+    expect(events.filter((event) => event.type === 'interaction_dismissed')).toEqual([]);
+    expect(askUserTurnStartCalls(host)).toHaveLength(0);
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { '桌面版这次要采用哪种范围？': '完整编辑（推荐）' },
+    });
+
+    await vi.waitFor(() => {
+      expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    });
+    const [, params] = askUserTurnStartCalls(host)[0] as [string, {
+      input: Array<{ type: string; text?: string }>;
+    }];
+    expect(params.input[0]?.text).toContain('The user answered the pending question.');
+    expect(params.input[0]?.text).toContain('完整编辑（推荐）');
+    expect(params.input[0]?.text).toContain('Continue from the previous turn.');
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { '桌面版这次要采用哪种范围？': '只展示和搜索' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('does not start a continuation when the user answers before turn completion', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ask-user-answer-before-complete',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput) throw new Error('expected requestUserInput');
+    const ownerDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => ownerDecision.promise);
+
+    const resultPromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-native',
+      questions: [{
+        id: 'native-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: [{ label: 'A', description: null }],
+      }],
+    }, { requestId: 'req-native' });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'A' },
+    });
+    await expect(resultPromise).resolves.toEqual({
+      answers: { 'native-q1': { answers: ['A'] } },
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(askUserTurnStartCalls(host)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('still dismisses ask_user and does not continue after a failed turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ask-user-failed-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const ownerDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => ownerDecision.promise);
+    const events = await collectAgentEvents(handle);
+
+    const resultPromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-ask-fail',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{ question: 'Pick one' }],
+      },
+    }, { requestId: 'req-ask-fail' });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'failed' },
+    });
+
+    await expect(resultPromise).resolves.toEqual({
+      success: false,
+      contentItems: [{ type: 'inputText', text: 'Request cancelled: turn_failed' }],
+    });
+    await waitForExpectation(() => {
+      expect(events.some((event) => (
+        event.type === 'interaction_dismissed'
+        && (event.data as { requestId?: string }).requestId === 'req-ask-fail'
+      ))).toBe(true);
+    });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'A' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(askUserTurnStartCalls(host)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('emits a terminal event when the detached ask_user continuation cannot start', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        throw new Error('Codex send cannot be accepted: stale host before turn/start');
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-ask-user-continue-start-fails',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const ownerDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => ownerDecision.promise);
+    const events = await collectAgentEvents(handle);
+
+    void handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-ask-fail-start',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: { questions: [{ question: 'Pick one' }] },
+    }, { requestId: 'req-ask-fail-start' });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      expect(events.some((event) => event.type === 'done')).toBe(true);
+    });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'A' },
+    });
+
+    await waitForExpectation(() => {
+      expect(events.some((event) => (
+        event.type === 'error'
+        && String((event.data as { message?: string }).message ?? '').includes(
+          'ask_user continuation turn failed to start',
+        )
+      ))).toBe(true);
+    });
+    await handle.close();
+  });
+
+  it('starts a continuation when every detached question is skipped', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ask-user-skip-continue',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall');
+    const ownerDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => ownerDecision.promise);
+
+    void handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-ask-skip',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: { questions: [{ question: 'Pick one' }] },
+    }, { requestId: 'req-ask-skip' });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      expect(askUserTurnStartCalls(host)).toHaveLength(0);
+    });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': '' },
+    });
+
+    await vi.waitFor(() => {
+      expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    });
+    const [, params] = askUserTurnStartCalls(host)[0] as [string, {
+      input: Array<{ type: string; text?: string }>;
+    }];
+    expect(params.input[0]?.text).toContain('The user answered the pending question.');
+    expect(params.input[0]?.text).toContain('(no answer)');
+    await handle.close();
+  });
+
+  it('keeps the originating turn auto-review intent on detached continuation', async () => {
+    const seenIntents: string[] = [];
+    const reviewAutoPermissionAction = vi.fn<AutoReviewDelegate>(async (request) => {
+      seenIntents.push(request.userIntent);
+      return { verdict: 'allow' as const };
+    });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        turnSeq += 1;
+        return { turn: { id: `turn-${turnSeq}` } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-ask-user-intent-snapshot',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall || !handlers.commandExecutionApproval) {
+      throw new Error('expected ask and approval handlers');
+    }
+    const ownerDecision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => ownerDecision.promise);
+
+    await handle.send({ type: 'user', content: 'ORIGINAL_INTENT_MARKER' });
+    void handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-ask-intent',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: { questions: [{ question: 'Pick one' }] },
+    }, { requestId: 'req-ask-intent' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.send({ type: 'user', content: 'DRIFT_INTENT_MARKER' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-2', status: 'completed' },
+    });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'Keep going' },
+    });
+    await vi.waitFor(() => {
+      expect(askUserTurnStartCalls(host)).toHaveLength(3);
+    });
+
+    await handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-3',
+      itemId: 'cmd-intent',
+      approvalId: 'approval-intent',
+      command: 'npm install express',
+      cwd: '/repo',
+    });
+    expect(seenIntents.at(-1)).toContain('ORIGINAL_INTENT_MARKER');
+    expect(seenIntents.at(-1)).not.toContain('DRIFT_INTENT_MARKER');
+    await handle.close();
   });
 
   it('updates the registered vendorOptions object by reference on setVendorOptions', async () => {

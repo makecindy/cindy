@@ -665,12 +665,29 @@ export function applyAgentIslandEvent(
   if (event.type === 'done') {
     clearAssistantStream(session);
     session.running = false;
-    session.pendingInteractionIds.clear();
-    clearPendingInteractionMetadata(session);
-    session.permissionRequestId = null;
-    session.permissionCanAllowForSession = false;
     session.currentToolUseId = null;
     session.toolDetailUntil = null;
+    // Codex ask_user / plan_review can outlive a successful turn. Permission
+    // cards belong to the dead turn and must not keep the island waiting.
+    for (const [requestId, kind] of [...session.pendingInteractionKinds.entries()]) {
+      if (kind === 'ask_user_question' || kind === 'plan_review') continue;
+      dismissPendingInteraction(state, session, requestId, now, { requirePending: true });
+    }
+    if (session.pendingInteractionIds.size > 0) {
+      session.phase = 'needs-interaction';
+      restorePendingInteractionKind(session);
+      session.detail = session.interactionKind
+        ? (session.pendingInteractionDetails.get(
+            [...session.pendingInteractionIds][0] ?? '',
+          ) ?? session.detail)
+        : session.detail;
+      session.detailSource = 'interaction';
+      session.completedUntil = null;
+      session.lastActivityAt = now;
+      return true;
+    }
+    session.permissionRequestId = null;
+    session.permissionCanAllowForSession = false;
     session.detailSource = null;
     completeAgentIslandSession(state, session, now, {
       suppressAttention: options.suppressCompletionAttention === true,
