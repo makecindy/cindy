@@ -3664,7 +3664,14 @@ function isValidInboundEnvelope(value: Envelope): boolean {
         && typeof payload.code === 'string'
         && typeof payload.message === 'string';
     case 'invoke':
-      return isRecord(payload)
+      // Desktop dispatch requires relay-injected src + request id before it can
+      // deliver an invoke. A legacy-looking frame without either identifier is
+      // therefore not usable inbound activity and must not keep a dead socket online.
+      return typeof value.src === 'string'
+        && value.src.length > 0
+        && typeof value.id === 'string'
+        && value.id.length > 0
+        && isRecord(payload)
         && typeof payload.channel === 'string'
         && Array.isArray(payload.args);
     case 'invoke-result':

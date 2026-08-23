@@ -3472,6 +3472,32 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('缺少 src 或 id 的 legacy invoke 不会喂活 heartbeat', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const ws = h.current();
+      ws.ack();
+
+      const malformed = {
+        v: PROTOCOL_VERSION,
+        kind: 'invoke',
+        payload: { channel: 'maker:valid-looking', args: [] },
+      } as unknown as Envelope;
+      const activity = setInterval(() => ws.push(malformed), 4);
+      await vi.advanceTimersByTimeAsync(50);
+      clearInterval(activity);
+
+      expect(ws.terminated).toBe(true);
+      expect(h.client.getStatus()).toBe('connecting');
+      h.client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('可靠 invoke 分片在重组前也算入站活性', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
     h.client.start();
