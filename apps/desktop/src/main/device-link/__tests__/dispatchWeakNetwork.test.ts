@@ -35,19 +35,25 @@ vi.mock('../settings-store', () => ({
 
 import {
   __testing,
+  deactivateAllControllers,
+  deactivateController,
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
+  setControllersChangedListener,
   setDispatchPresenceOfflineCheck,
 } from '../dispatch';
+import * as subscriptions from '../subscriptions';
 
 function mkClient(
   over: Partial<{
+    getConnectionEpoch: ReturnType<typeof vi.fn>;
     getStatus: ReturnType<typeof vi.fn>;
     sendInvokeResult: ReturnType<typeof vi.fn>;
     sendLinkAccept: ReturnType<typeof vi.fn>;
   }> = {},
 ) {
   return {
+    getConnectionEpoch: over.getConnectionEpoch ?? vi.fn(() => 1),
     getStatus: over.getStatus ?? vi.fn(() => 'online'),
     sendInvokeResult: over.sendInvokeResult ?? vi.fn(),
     sendLinkAccept: over.sendLinkAccept ?? vi.fn(),
@@ -470,5 +476,72 @@ describe('[5] orphan 截止时间按 channel 收窄', () => {
     expect(__testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session')).toBe(
       compactBudget * 2,
     );
+  });
+});
+
+describe('[6] active controller 生命周期与故障半径', () => {
+  it('A 离线只清 A，B 的控制态与 remembered 路由不受影响', () => {
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', ['cap-a']);
+    subscriptions.subscribe('ctrl-b', ['session:b'], 'B', ['cap-b']);
+
+    deactivateController('ctrl-a', 'peer-offline');
+
+    expect(__testing.getActiveControllers().map((controller) => controller.deviceId)).toEqual([
+      'ctrl-b',
+    ]);
+    expect(__testing.getUpdateRelaunchControllers().map((controller) => controller.deviceId)).toEqual([
+      'ctrl-b',
+    ]);
+    expect(subscriptions.getKnownControllersForTopic('session:a')).toEqual(['ctrl-a']);
+    expect(subscriptions.getKnownControllersForTopic('session:b')).toEqual(['ctrl-b']);
+    expect(__testing.controllerSupports('ctrl-a', 'cap-a')).toBe(true);
+  });
+
+  it('relay 断开清空所有 active projection，但保留 remembered topics/capabilities', () => {
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', ['cap-a']);
+    subscriptions.subscribe('ctrl-b', ['fs-watch:/repo'], 'B', ['cap-b']);
+    const changes: Array<{ active: string[]; updateRelaunch: string[] }> = [];
+    setControllersChangedListener((active, updateRelaunch) => {
+      changes.push({
+        active: active.map((controller) => controller.deviceId),
+        updateRelaunch: updateRelaunch.map((controller) => controller.deviceId),
+      });
+    });
+
+    deactivateAllControllers('relay-disconnected');
+
+    expect(__testing.getActiveControllers()).toEqual([]);
+    expect(__testing.getUpdateRelaunchControllers()).toEqual([]);
+    expect(subscriptions.getKnownControllersForTopic('session:a')).toEqual(['ctrl-a']);
+    expect(subscriptions.getKnownControllersForTopic('fs-watch:/repo')).toEqual(['ctrl-b']);
+    expect(__testing.controllerSupports('ctrl-a', 'cap-a')).toBe(true);
+    expect(__testing.controllerSupports('ctrl-b', 'cap-b')).toBe(true);
+    expect(changes.at(-1)).toEqual({ active: [], updateRelaunch: [] });
+  });
+
+  it('旧 connection epoch 的 offline 事件不能清掉新 link-open 的 active controller', () => {
+    let connectionEpoch = 1;
+    const client = mkClient({ getConnectionEpoch: vi.fn(() => connectionEpoch) });
+    __testing.setActiveClient(client as never);
+
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-old', undefined);
+    connectionEpoch = 2;
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-new', undefined);
+
+    handleControllerOffline('ctrl-a', {
+      deviceId: 'ctrl-a',
+      state: 'offline',
+      connectionEpoch: 1,
+    });
+    expect(__testing.getActiveControllers().map((controller) => controller.deviceId)).toEqual([
+      'ctrl-a',
+    ]);
+
+    handleControllerOffline('ctrl-a', {
+      deviceId: 'ctrl-a',
+      state: 'offline',
+      connectionEpoch: 2,
+    });
+    expect(__testing.getActiveControllers()).toEqual([]);
   });
 });
