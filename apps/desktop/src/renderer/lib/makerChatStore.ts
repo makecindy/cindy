@@ -6994,16 +6994,27 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
                   throw new Error('model-access credentials retry failed');
                 }
               }
-              if (preSnap.remoteHostId) {
-                const localKey = await window.electronAPI.safeStorageRead(
-                  providerSecretStorageKey('xd'),
-                );
-                if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
-                if (!localKey) {
-                  throw new Error('no local api key available');
+              // 本机 Claude gateway-spawn 把 ANTHROPIC_API_KEY 冻在子进程里，
+              // proxy 对隐式/默认 Cindy 网关是 x-api-key passthrough。只重拉凭据
+              // 不重建会话的话，retryLastError 仍会带上已被拒的旧 token。
+              const recreateLocalClaudeGatewaySession =
+                isGatewayProxyTokenInvalid &&
+                !preSnap.remoteHostId &&
+                preSnap.agentKind === 'claude-code';
+              if (preSnap.remoteHostId || recreateLocalClaudeGatewaySession) {
+                if (preSnap.remoteHostId) {
+                  const localKey = await window.electronAPI.safeStorageRead(
+                    providerSecretStorageKey('xd'),
+                  );
+                  if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
+                  if (!localKey) {
+                    throw new Error('no local api key available');
+                  }
                 }
                 await makerApiFor(sessionId).closeSession(sessionId, { preserveWorkspace: true });
-                await new Promise((r) => setTimeout(r, 1500));
+                if (preSnap.remoteHostId) {
+                  await new Promise((r) => setTimeout(r, 1500));
+                }
                 if (!isDataOwnerGenerationCurrent(dataOwnerAtIngress)) return;
               }
               if (isGatewayProxyTokenInvalid) {

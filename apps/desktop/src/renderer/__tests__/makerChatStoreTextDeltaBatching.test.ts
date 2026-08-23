@@ -2284,7 +2284,9 @@ describe('makerChatStore text delta batching', () => {
 
     expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
     expect(window.electronAPI.modelAccess.rotate).not.toHaveBeenCalled();
-    expect(window.electronAPI.maker.closeSession).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.closeSession).toHaveBeenCalledWith(SESSION_ID, {
+      preserveWorkspace: true,
+    });
     expect(input.retryLastError).toHaveBeenCalledOnce();
     expect(input.enqueue).not.toHaveBeenCalled();
     expect(input.persistTurnErrorDeferred).not.toHaveBeenCalled();
@@ -2304,6 +2306,7 @@ describe('makerChatStore text delta batching', () => {
       reason: 'gateway-proxy-token-invalid',
       message: LITELLM_INVALID_PROXY_TOKEN,
     });
+    await flushPromises();
     await flushPromises();
     expect(window.electronAPI.modelAccess.retry).toHaveBeenCalledOnce();
 
