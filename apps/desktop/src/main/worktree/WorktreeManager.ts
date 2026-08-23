@@ -26,7 +26,8 @@ import {
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { classifyError, type ClassifyInput } from './errorClassifier';
-import { gitExec, GitExecError } from './gitExec';
+import { gitExec, GitExecError, globalSafeDirectoryLockPath, safeDirectorySpellings } from './gitExec';
+import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
 import {
@@ -102,6 +103,212 @@ function isExpectedQuarantinePath(meta: WorktreeMeta, candidate: string): boolea
 
 function activeWorktreePath(meta: WorktreeMeta): string {
   return meta.quarantinePath ?? meta.path;
+}
+
+/**
+ * 在持有全局 safe.directory 跨进程锁的前提下, 按精确值移除一组路径的 safe.directory
+ * 条目(#2627)。每个目标按 safeDirectorySpellings 展开成「规范化 + 原生」两种拼写逐一
+ * --unset-all(Windows 上 add 写 C:/...、历史条目可能写 C:\..., 只删一种会残留另一种)。
+ * 返回实际成功清理或本就不存在(exit 5)的目标; 其余失败仅告警、不算已清理, 由调用方
+ * 决定是否落盘推迟到下次启动再试。
+ */
+async function unsetSafeDirectoryEntriesLocked(
+  targets: Iterable<string>,
+): Promise<string[]> {
+  const cleaned: string[] = [];
+  for (const target of targets) {
+    let failed = false;
+    for (const spelling of safeDirectorySpellings(target)) {
+      try {
+        await gitExec([
+          'config',
+          '--global',
+          '--unset-all',
+          '--fixed-value',
+          'safe.directory',
+          spelling,
+        ]);
+      } catch (err) {
+        // exit 5 = 该值本就不存在(常见:正常创建从未写 safe.directory), 无需告警
+        if (err instanceof GitExecError && err.exitCode === 5) continue;
+        failed = true;
+        log.warn(
+          `[worktree] remove safe.directory entry for ${spelling} failed:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+    if (!failed) cleaned.push(target);
+  }
+  return cleaned;
+}
+
+/**
+ * 计算一组候选路径需要精确清理的全部 safe.directory 拼写:
+ *   - 逻辑拼写: meta 里记录的 path.join 产物;
+ *   - 物理拼写: baseRepo 是 symlink/junction 时, git 在 dubious-ownership 报错里
+ *     给的是 realpath 后的物理路径, ensureGlobalSafeDirectory 写的正是这个值,
+ *     只按逻辑拼写会漏删 —— 用 fs.realpath(baseRepo) + 相对后缀补出物理拼写。
+ * 每种拼写再经 safeDirectorySpellings 展开正/反斜杠两种形式。
+ */
+async function resolveSafeDirectorySpellings(
+  candidates: Iterable<string>,
+  baseRepo: string,
+): Promise<string[]> {
+  const spellings = new Set<string>();
+  let physicalBase: string | null = null;
+  try {
+    physicalBase = await fs.realpath(baseRepo);
+  } catch {
+    physicalBase = null; // baseRepo 解析不到时只清逻辑拼写
+  }
+  for (const candidate of candidates) {
+    for (const s of safeDirectorySpellings(candidate)) spellings.add(s);
+    if (physicalBase) {
+      const rel = path.relative(baseRepo, candidate);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+        for (const s of safeDirectorySpellings(path.join(physicalBase, rel))) spellings.add(s);
+      }
+    }
+  }
+  return [...spellings];
+}
+
+/**
+ * 删除/归档成功后, 清理该 worktree 路径残留在全局 git config 里的 safe.directory
+ * 条目(#2627)。只按精确值移除, 不触碰用户其它仓库的手动配置; 失败仅日志, 不影响
+ * 删除主流程。传入本次删除涉及的所有候选路径:原始 path + 已持久化的 quarantinePath
+ * + 本轮实际 removalPath —— 其中 removalPath 可能是 preserveDirty 现场生成的
+ * `.xdt-removing-*` 目录, 它在 ignored-file 扫描 / 所有权复核时触发过 gitExec 的
+ * 按需 safe.directory, 必须一并清理, 否则会永久残留。
+ *
+ * 写前日志: 先把全部拼写(逻辑 + 物理)落盘到 pendingSafeDirectoryCleanups, 再执行
+ * 精确 --unset-all, 成功后只移除已清理的那部分。调用方保证在 store.del(sessionId)
+ * **之前**调用本函数 —— 这样即便进程在本函数与 store.del 之间崩溃, 队列里仍有这份
+ * 路径, 启动对账还能补清; 反过来(先删元数据再落盘)一旦崩溃就永久丢路径。
+ *
+ * 与 gitExec 的 ensureGlobalSafeDirectory(--add)共用同一把跨进程锁: 两种写操作必须
+ * 串行, 否则并发写全局 config 会因 .gitconfig.lock 冲突失败。拿不到锁时不无锁
+ * --unset-all, 候选路径已在前一步入队, 留给启动对账补清。
+ */
+async function removeWorktreeSafeDirectory(
+  baseRepo: string,
+  ...paths: (string | null | undefined)[]
+): Promise<void> {
+  const candidates = new Set(
+    paths.filter((p): p is string => typeof p === 'string' && p.length > 0),
+  );
+  if (candidates.size === 0) return;
+
+  const spellings = await resolveSafeDirectorySpellings(candidates, baseRepo);
+
+  // 写前日志: 在 store.del 之前先持久化清理意图。
+  try {
+    await store.addPendingSafeDirectoryCleanups(spellings);
+  } catch (err) {
+    // 落盘失败只是丢失「崩溃后补清」的机会, 不能反向中断删除主流程; 继续尝试即时清理。
+    log.warn(
+      '[worktree] persist safe.directory cleanup intent failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  const cleaned = await withCrossProcessLock(
+    globalSafeDirectoryLockPath(),
+    { label: 'git-safe-directory', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) return [];
+      return unsetSafeDirectoryEntriesLocked(spellings);
+    },
+  );
+
+  if (cleaned.length > 0) {
+    try {
+      await store.removePendingSafeDirectoryCleanups(cleaned);
+    } catch (err) {
+      log.warn(
+        '[worktree] remove cleaned safe.directory paths from store failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+}
+
+/**
+ * 计算当前仍被活跃 worktree 占用的全部 safe.directory 拼写。对账清理前用于区分
+ * 「孤儿条目」与「路径已被同名新 worktree 复用」: 删除把路径留在待办队列后, 同名
+ * 预创建 worktree 可能重建并依赖(或重新 add)同一 safe.directory 值, 此时旧待办
+ * 绝不能再 --unset-all(会删掉新条目, 让 Agent 在异所有权环境再次报 dubious
+ * ownership)。git config 条目本身没有代际信息, store 的活跃 meta 是唯一权威。
+ */
+async function computeInUseSafeDirectorySpellings(): Promise<Set<string>> {
+  const inUse = new Set<string>();
+  for (const meta of store.getAll()) {
+    const candidates = [meta.path, meta.quarantinePath].filter(
+      (p): p is string => typeof p === 'string' && p.length > 0,
+    );
+    if (candidates.length === 0) continue;
+    for (const spelling of await resolveSafeDirectorySpellings(candidates, meta.baseRepo)) {
+      inUse.add(spelling);
+    }
+  }
+  return inUse;
+}
+
+/**
+ * 启动期对账: 补清 removeWorktreeSafeDirectory 因拿不到锁(或 --unset-all 失败)而
+ * 落盘的 safe.directory 残留路径。成功(exit 0)或本就不存在(exit 5)的路径从 store
+ * 移除; 仍失败的留待下次启动。fire-and-forget, 不阻塞启动。
+ *
+ * 清理前先剔除仍被活跃 worktree 占用的路径(同名复用场景): 这些待办已作废——条目
+ * 归新一代 worktree 所有, 由它自己的删除流程负责, 这里只出队不清理。占用判定必须
+ * 在**持锁临界区内**重估: 快照算在锁外时, 两个 Cindy 实例重叠的场景下, 新 worktree
+ * 可以在快照之后、拿到锁之前认领待办路径, 锁内照删就复现误删新条目的问题。
+ */
+export async function reconcilePendingSafeDirectoryCleanups(): Promise<void> {
+  const pending = store.getPendingSafeDirectoryCleanups();
+  if (pending.length === 0) return;
+
+  const { cleaned, reclaimed } = await withCrossProcessLock(
+    globalSafeDirectoryLockPath(),
+    { label: 'git-safe-directory', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) return { cleaned: [] as string[], reclaimed: [] as string[] };
+      // 持锁后重估占用: 确保不被快照与持锁之间认领路径的新 worktree 抢先。
+      const inUse = await computeInUseSafeDirectorySpellings();
+      const targets = pending.filter((p) => !inUse.has(p));
+      const reclaimedNow = pending.filter((p) => inUse.has(p));
+      const cleanedNow = await unsetSafeDirectoryEntriesLocked(targets);
+      return { cleaned: cleanedNow, reclaimed: reclaimedNow };
+    },
+  );
+
+  // 复用路径的旧待办作废: 只出队, 不动 git config(条目归新 worktree)。
+  if (reclaimed.length > 0) {
+    log.info(
+      '[worktree] drop stale safe.directory cleanups for re-created paths:',
+      reclaimed.join(', '),
+    );
+    try {
+      await store.removePendingSafeDirectoryCleanups(reclaimed);
+    } catch (err) {
+      log.warn(
+        '[worktree] remove reclaimed safe.directory paths from store failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  if (cleaned.length > 0) {
+    try {
+      await store.removePendingSafeDirectoryCleanups(cleaned);
+    } catch (err) {
+      log.warn(
+        '[worktree] remove cleaned safe.directory paths from store failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 }
 
 async function timed<T>(label: string, fn: () => Promise<T>): Promise<T> {
@@ -659,8 +866,9 @@ export async function copyClaudeSiviDirs(
  *   6. configureHooksPath
  *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
  *   8. applyWorktreeIncludeFile
- *   9. git config --global --add safe.directory <path>
- *  10. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
+ *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
 export async function createWorktree(req: CreateWorktreeReq): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => createWorktreeInner(req));
@@ -856,20 +1064,7 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
       );
     }
 
-    // 9. safe.directory
-    try {
-      await timed('add safe.directory', () =>
-        gitExec(['config', '--global', '--add', 'safe.directory', worktreePath]),
-      );
-    } catch (err) {
-      // 非致命 — 仅日志
-      log.warn(
-        `[worktree] add safe.directory failed:`,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-
-    // 10. store + DB
+    // 9. store + DB
     const meta: WorktreeMeta = {
       sessionId: req.sessionId,
       name,
@@ -1293,6 +1488,8 @@ async function removeWorktreeForSessionInner(
     }
 
     if (removedByGit) {
+      // 写前日志: 先落盘清理意图(物理 + 逻辑拼写), 再删最后一份元数据。
+      await removeWorktreeSafeDirectory(meta.baseRepo, meta.path, meta.quarantinePath, removalPath);
       store.del(sessionId);
     } else if (snapshotted) {
       // Both removal paths failed: put WIP back before restoring the live registration. If apply

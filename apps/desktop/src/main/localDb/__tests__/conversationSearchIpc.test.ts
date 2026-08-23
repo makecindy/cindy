@@ -43,6 +43,21 @@ beforeEach(() => {
   });
 });
 
+describe('local-db:conversations:search — agentKind=pi', () => {
+  it('accepts filters.agentKind pi so remote Pi search is not rejected', async () => {
+    await handler()(null, {
+      query: 'needle',
+      filters: { agentKind: 'pi' },
+    });
+
+    expect(h.searchConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ agentKind: 'pi' }),
+      }),
+    );
+  });
+});
+
 describe('local-db:conversations:search — workingDirs 透传', () => {
   it('keeps filters.workingDirs so project search is not widened to all sessions', async () => {
     await handler()(null, {

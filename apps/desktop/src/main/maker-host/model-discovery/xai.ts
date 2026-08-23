@@ -362,7 +362,19 @@ async function runRefresh(
   const connectionSource = deps.getConnectionSource();
   if (connectionSource !== 'explicit-provider-oauth') return false;
   const scopeKey = deps.getScopeKey();
-  let token = await deps.getAccessToken();
+  let token: string;
+  try {
+    token = await deps.getAccessToken();
+  } catch (error) {
+    // getGrokAccessToken throws when xAI is not logged in or its token cannot
+    // be refreshed — the bridge turns that into a 502 per request. Discovery
+    // runs from startup/readiness paths that have no catch site, so degrade to
+    // a clean skip instead of surfacing as an unhandled rejection.
+    deps.log.warn('xAI account model discovery skipped: no usable access token', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
   onAccessTokenResolved?.(token);
   if (!isCurrent(deps, scopeKey, token)) return false;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -393,7 +405,14 @@ async function runRefresh(
       });
       if (outcome !== 'refreshed' && outcome !== 'superseded') return false;
       if (deps.getScopeKey() !== scopeKey || !deps.hasLogin()) return false;
-      token = await deps.getAccessToken();
+      try {
+        token = await deps.getAccessToken();
+      } catch (tokenError) {
+        deps.log.warn('xAI account model discovery: token refresh after invalidate failed', {
+          error: tokenError instanceof Error ? tokenError.message : String(tokenError),
+        });
+        return false;
+      }
       if (!isCurrent(deps, scopeKey, token)) return false;
     }
   }

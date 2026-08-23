@@ -3590,12 +3590,16 @@ const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set([
   'local-db:sessions:interrupted-pending',
   'maker:git-safety:get',
 ]);
+const UNLINKED_LEGACY_PUSH_CHANNELS = new Set([
+  'device-link:voice:dictionary:snapshot',
+]);
 
 function isUnlinkedLegacyEnvelope(env: Envelope): boolean {
-  if (env.kind !== 'invoke') return false;
-  const payload = env.payload as Partial<InvokePayload> | undefined;
-  return typeof payload?.channel === 'string'
-    && UNLINKED_LEGACY_INVOKE_CHANNELS.has(payload.channel);
+  const payload = env.payload as { channel?: unknown } | undefined;
+  if (typeof payload?.channel !== 'string') return false;
+  if (env.kind === 'invoke') return UNLINKED_LEGACY_INVOKE_CHANNELS.has(payload.channel);
+  if (env.kind === 'push') return UNLINKED_LEGACY_PUSH_CHANNELS.has(payload.channel);
+  return false;
 }
 
 function isLegacyBusinessFrame(kind: Envelope['kind']): boolean {

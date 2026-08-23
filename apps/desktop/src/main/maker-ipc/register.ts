@@ -943,6 +943,7 @@ import {
   hasEnabledUserMessageHookGhost,
   screenGhostUserMessage,
   setGhostAgentTurnRunner,
+  setGhostSessionRevealer,
   setGhostErrandRunner,
   setGhostWorkspaceSessionService,
   notifyGhostSessionEvent,
@@ -9387,6 +9388,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       disposition: 'forked',
     };
   });
+  setGhostSessionRevealer((sessionId) => openMainWindowSession(sessionId));
 
   // Ghost 的派活取件(agent 槽 errand 加档):守门在 cindy-brain/errandSlot,
   // 这里注入真实执行链——专属会话确保/统一投递/turn 收口。投递仍走
@@ -9640,6 +9642,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     shouldQueueNewTurn: (sessionId): boolean => inputCoordinator.shouldQueueNewTurn(sessionId),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
+    withSendToSessionLock,
+    prepareUnhealthySession: (sessionId) =>
+      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
     buildCreateOptsForQueuedSession,
     enqueueQueuedMessage: (sessionId, item) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
@@ -14111,7 +14116,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
     const defaultPath = path.join(app.getPath('documents'), 'cindy-session.html');
     const picked = await dialog.showSaveDialog(parent!, {
-      title: 'Export session to HTML',
+      title: t('ccAgent.sidebar.sessionMenu.exportHtml'),
       defaultPath,
       filters: [{ name: 'HTML', extensions: ['html'] }],
     });

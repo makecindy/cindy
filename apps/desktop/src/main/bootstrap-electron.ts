@@ -19,6 +19,19 @@ import {
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
+import {
+  rememberResolvedAppTheme,
+  resolveAppThemeIsDark,
+} from './resolved-app-theme';
+import {
+  parseWindowThemeVibrancyPayload,
+  readWindowThemeSnapshot,
+  writeWindowThemeSnapshot,
+} from './window-theme-mode-store';
+import {
+  createWindowBackdropMaterialArgument,
+  WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+} from '../shared/windowBackdrop.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -370,9 +383,7 @@ import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
-import {
-  attachWorkLouderCodexWindowReveal,
-} from './worklouder-codex/index.js';
+import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
 import {
   disposeInputDevices,
   resumeInputDeviceTaskSlots,
@@ -425,6 +436,7 @@ import {
   registerWorktreeIpc,
   WorktreePool,
   reconcileWorktreesForDeletedSessions,
+  reconcilePendingSafeDirectoryCleanups,
 } from './worktree';
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
 import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
@@ -523,6 +535,7 @@ import {
   setIsDetachedForBackend,
 } from './mcp-integrations/browser.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
+import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
 import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
@@ -1025,10 +1038,7 @@ const _scheduleIpcRegistered = new WeakSet<object>();
  */
 function isChatEmbeddingAvailable(): boolean {
   try {
-    return isCindyEmbeddingModelAvailable(
-      getDesktopSelectableCatalog(),
-      CHAT_EMBED_MODEL_ID,
-    );
+    return isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), CHAT_EMBED_MODEL_ID);
   } catch {
     return false;
   }
@@ -1123,7 +1133,9 @@ function scheduleChatEmbeddingRuntimeReconcile(): void {
       }
     })
     .catch((err: unknown) => {
-      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', { error: String(err) });
+      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', {
+        error: String(err),
+      });
     });
 }
 
@@ -1235,10 +1247,8 @@ async function teardownGhostProjectionBoundary(reason: string): Promise<void> {
     }
   };
 
-  await run('interruptGhostCallsForAccountBoundary', () =>
-    withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
-  await run('waitForGhostMutations', () =>
-    withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
+  await run('interruptGhostCallsForAccountBoundary', () => withAuthBoundaryTimeout('interrupt Ghost calls', interruptGhostCallsForAccountBoundary));
+  await run('waitForGhostMutations', () => withAuthBoundaryTimeout('wait for Ghost mutations', waitForGhostMutations));
   await run('suspendAllGhosts', suspendAllGhosts);
 
   if (failures.length > 0) {
@@ -1667,7 +1677,10 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   }
 
   if (blockingFailures.length > 0) {
-    throw new AggregateError(blockingFailures, `account boundary teardown on ${reason} was incomplete`);
+    throw new AggregateError(
+      blockingFailures,
+      `account boundary teardown on ${reason} was incomplete`,
+    );
   }
   // Reached only when the handover ran all the way through, which is exactly
   // when a previous abort's blocking state stops being true.
@@ -1823,6 +1836,7 @@ const rsbWindowController = new RsbWindowController({
   tabHandoffChannel: MAKER_PUSH.RSB_WINDOW_TAB_HANDOFF,
   isQuitting: () => isQuitting,
   canCloseWindow: () => !hasActiveRsbNativePopupSurfaces(),
+  resolveHostContext: resolveRsbHostContextFromSession,
   log: createLogger('right-sidebar-window-controller'),
 });
 
@@ -1994,7 +2008,11 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
     }
   },
   sendToWindow: (win, channel, payload) => {
-    try { win.webContents.send(channel, payload); } catch { /* ignore */ }
+    try {
+      win.webContents.send(channel, payload);
+    } catch {
+      /* ignore */
+    }
   },
   isQuitting: () => isQuitting,
   log: createLogger('ghost-panel-window-controller'),
@@ -2073,7 +2091,9 @@ registerTabOpResultHandler({
 // an automation tab-op pop the sidebar window first when the user prefers
 // detached mode but has the window closed.
 setMainWindowAccessorForBackend(() => rsbWindowController.getHostWebContents());
-setEnsureHostForBackend(() => rsbWindowController.ensureOpenForAutomation());
+setEnsureHostForBackend((sessionId) =>
+  rsbWindowController.ensureOpenForAutomation({ sessionId }),
+);
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
   try {
@@ -3176,18 +3196,22 @@ const createWindow = () => {
   // 效果由 renderer 的 swallowActivationClick DOM adapter 承接,即时生效。
   const swallowActivationClick = readWindowBehaviorSettings().swallowActivationClick;
 
-  // Use nativeTheme to pick initial background color matching OS preference,
-  // avoiding white flash on startup for dark mode users.
+  // Windows uses the renderer theme-mode mirror before the first BrowserWindow exists;
+  // missing/invalid mirrors and other platforms keep the native OS-theme fallback.
   // mac:创建期即透明底+sidebar 材质(Electron setBackgroundColor 运行时改 alpha 不可靠,是 vibrancy 不透壁纸的根因;非 CINDY 皮肤 body 不透明会自然盖住,视觉无影响)
+  const persistedTheme = process.platform === 'win32' ? readWindowThemeSnapshot() : null;
+  const isDark = process.platform === 'win32'
+    ? resolveAppThemeIsDark(
+        nativeTheme.shouldUseDarkColors,
+        persistedTheme?.mode,
+        persistedTheme?.resolvedIsDark,
+      )
+    : nativeTheme.shouldUseDarkColors;
   const bgColor =
-    process.platform === 'darwin'
-      ? '#00000000'
-      : nativeTheme.shouldUseDarkColors
-        ? '#1f1f1e'
-        : '#f8f8f6';
+    process.platform === 'darwin' ? '#00000000' : isDark ? '#1f1f1e' : '#f8f8f6';
   const winBackdropConfig = resolveVibrancyConfig(
-    'cindy',
-    nativeTheme.shouldUseDarkColors,
+    persistedTheme?.familyId ?? 'cindy',
+    isDark,
     process.platform,
   );
 
@@ -3228,6 +3252,9 @@ const createWindow = () => {
     ...platformOptions,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: [
+        createWindowBackdropMaterialArgument(winBackdropConfig.backgroundMaterial ?? 'none'),
+      ],
       spellcheck: false,
       // 默认保留 Chromium 后台节流；只有 active turn 或 terminal grace 期间才由
       // setMainWindowBackgroundThrottlingForActiveTurn 临时关闭，避免后台 idle 常驻耗电。
@@ -3704,14 +3731,34 @@ const registerIpcHandlers = () => {
     }
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);
+      win.webContents.send(
+        WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
+        config.backgroundMaterial,
+      );
     }
     win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
 
-  ipcMain.on('theme:apply-vibrancy', (_event, payload: { familyId: string; isDark: boolean }) => {
-    applyWindowVibrancy(payload.familyId, payload.isDark);
-  });
+  ipcMain.on(
+    'theme:apply-vibrancy',
+    (event, rawPayload: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const payload = parseWindowThemeVibrancyPayload(rawPayload);
+      if (!payload) return;
+      if (payload.mode === undefined || payload.systemModeFollowsSystem === undefined) return;
+      if (process.platform === 'win32') {
+        writeWindowThemeSnapshot(
+          payload.mode,
+          payload.isDark,
+          payload.familyId,
+          payload.systemModeFollowsSystem,
+        );
+      }
+      rememberResolvedAppTheme(payload.isDark);
+      applyWindowVibrancy(payload.familyId, payload.isDark);
+    },
+  );
 
   ipcMain.on('get-app-version', (event) => {
     event.returnValue = app.getVersion();
@@ -5162,6 +5209,10 @@ const registerIpcHandlers = () => {
     // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
     void reconcileWorktreesForDeletedSessions().catch((err) => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
+    });
+    // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
+    void reconcilePendingSafeDirectoryCleanups().catch((err) => {
+      console.error('[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):', err);
     });
     // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
     // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
@@ -7203,6 +7254,16 @@ app.on('ready', async () => {
   registerLocalDbIpc({
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
+    closeIdleSessionForMove: async (sessionId) => {
+      const maker = getMakerIfReady();
+      if (maker?.getSession(sessionId)?.isTurnRunning()) return false;
+      if (maker) {
+        await rehydrateCloseSuppression.withSuppressed(sessionId, () =>
+          maker.closeSession(sessionId),
+        );
+      }
+      return true;
+    },
     reconcilePersistedSessionRuntimes: reconcilePersistedIOSSimulatorOwnership,
     withSessionLock: withSendToSessionLock,
     // Mirrors exactly what the resume handler requires (`maker-ipc/register.ts`):
@@ -7626,11 +7687,7 @@ app.on('ready', async () => {
       setAccountProviderReadinessReadyHandler((ownerId) => {
         startAccountIntegrationsAfterOwnerDbReady(ownerId, {
           isOwnerCurrent: (id) =>
-            isLocalDbOwnerCurrent(
-              authManager.getAuthState(),
-              id,
-              isAppSessionBoundaryPending(),
-            ),
+            isLocalDbOwnerCurrent(authManager.getAuthState(), id, isAppSessionBoundaryPending()),
           startHookControlAccount,
           startImConnection,
           log: dbClientLog,
@@ -7640,7 +7697,8 @@ app.on('ready', async () => {
       });
       accountProviderReadinessArm.publish(userId, startProviderReadiness, resumeIncompleteDiscovery);
       if (makerProviderRefreshConfigured) startProviderReadiness();
-      else startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
+      else
+        startPendingAccountProviderReadiness = { ownerId: userId, start: startProviderReadiness };
       logStartupPhase('post-db-hooks-scheduled');
     },
   });
@@ -8324,7 +8382,10 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
     // trim 后拒绝空白元素，避免脏值（" deepseek " / "  "）落盘。
     const trimmed = input.targetModels.map((m) => (typeof m === 'string' ? m.trim() : ''));
     if (trimmed.some((m) => m.length === 0)) {
-      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a non-blank string array');
+      throwIpcError(
+        'INVALID_PARAMS',
+        'vision bridge targetModels must be a non-blank string array',
+      );
     }
     patch.targetModels = trimmed;
   }
@@ -8336,11 +8397,17 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
       continue;
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     const ref = value as Record<string, unknown>;
     if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     // trim 后拒绝纯空白，避免脏配置（空白串）落盘。
     const providerId = ref.providerId.trim();

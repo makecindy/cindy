@@ -81,6 +81,8 @@ export interface RegisterLocalDbIpcOpts {
   cancelSessionOperations?: (sessionId: string) => Promise<void>;
   /** Release Host-owned runtime and ownership after task removal is revalidated. */
   cleanupRemovedSession?: (sessionId: string) => Promise<void>;
+  /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
+  closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
   /** Reconcile persisted Host-owned task runtimes once the owner DB is readable. */
   reconcilePersistedSessionRuntimes?: () => Promise<void>;
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
@@ -234,7 +236,9 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     return result;
   });
 
-  registerSessionIpc(getCurrentDbClientUserId);
+  registerSessionIpc(getCurrentDbClientUserId, {
+    closeIdleSessionForMove: opts.closeIdleSessionForMove,
+  });
   registerMessageIpc();
   registerRemoteHistoryIpc();
   registerSessionImportIpc();

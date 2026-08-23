@@ -222,5 +222,46 @@
     },
     "inlineFormAction": "在电脑端填写{{label}}",
     "inlineFormActionGeneric": "在电脑端填写一项配置"
+  },
+  "presentation": {
+    "action": { "submitting": "提交中" },
+    "permission": {
+      "highRiskTitle": "高风险授权需要二次确认",
+      "highRiskDetail": "先核对命令内容，再点一次确认允许；不确定就拒绝。",
+      "sessionAllowTitle": "可以只允许一次，也可以本任务总是允许",
+      "allowTitle": "允许后电脑端会继续执行",
+      "tool": "工具：{{tool}}",
+      "title": "允许使用 {{tool}}？",
+      "risk": "这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。"
+    },
+    "ask": {
+      "progress": "第 {{current}}/{{total}} 个问题",
+      "multiSelect": "可多选，也可以输入其他回答。",
+      "singleSelect": "选择一个回答，或输入其他回答。",
+      "emptyTitle": "没有具体问题",
+      "emptyDetail": "可以提交空回答让电脑端继续。",
+      "waiting": "Agent 正在等待确认"
+    },
+    "plan": {
+      "outlineCount": "{{count}} 个章节",
+      "noOutline": "无章节目录",
+      "hasFile": "有计划文件",
+      "noFile": "无计划文件路径",
+      "editedTitle": "已编辑计划，批准后按当前版本执行",
+      "approveTitle": "批准后电脑端会按计划继续执行"
+    },
+    "queue": {
+      "count": "{{count}} 个",
+      "readOnlyHint": "协同只读模式，仅展示电脑端请求。",
+      "empty": "没有待处理请求",
+      "hint": {
+        "plan_review": "先看计划，必要时反馈修改，确认后电脑端才继续执行。",
+        "permission": "只把本次决定回传给当前电脑端任务。",
+        "ask_user_question": "回答会保存草稿，提交后电脑端继续。",
+        "issue_confirm": "确认标题和正文后再提交。",
+        "plugin_setup": "配置要在电脑端完成，这里可以取消这次请求。",
+        "fallback": "手机版会按桌面端的请求顺序处理。"
+      }
+    }
   }
 }

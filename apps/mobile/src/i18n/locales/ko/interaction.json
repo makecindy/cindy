@@ -222,5 +222,46 @@
     },
     "inlineFormAction": "컴퓨터에서 {{label}} 입력",
     "inlineFormActionGeneric": "컴퓨터에서 설정 입력"
+  },
+  "presentation": {
+    "action": { "submitting": "제출 중" },
+    "permission": {
+      "highRiskTitle": "고위험 권한은 한 번 더 확인해야 합니다",
+      "highRiskDetail": "명령 내용을 확인한 뒤 허용을 다시 누르세요. 확실하지 않으면 거부하세요.",
+      "sessionAllowTitle": "한 번만 허용하거나 이 작업에서 항상 허용할 수 있습니다",
+      "allowTitle": "허용하면 컴퓨터에서 실행을 계속합니다",
+      "tool": "도구: {{tool}}",
+      "title": "{{tool}} 사용을 허용할까요?",
+      "risk": "이 명령은 시스템, 저장소 또는 외부 서비스 상태를 변경할 수 있습니다. 허용하기 전에 현재 작업과 명령을 신뢰할 수 있는지 확인하세요."
+    },
+    "ask": {
+      "progress": "질문 {{current}}/{{total}}",
+      "multiSelect": "여러 답을 선택하거나 다른 답을 입력할 수 있습니다.",
+      "singleSelect": "답 하나를 선택하거나 다른 답을 입력하세요.",
+      "emptyTitle": "구체적인 질문 없음",
+      "emptyDetail": "빈 답을 제출해 컴퓨터가 계속 진행하도록 할 수 있습니다.",
+      "waiting": "Agent가 확인을 기다리는 중"
+    },
+    "plan": {
+      "outlineCount": "섹션 {{count}}개",
+      "noOutline": "목차 없음",
+      "hasFile": "계획 파일 있음",
+      "noFile": "계획 파일 경로 없음",
+      "editedTitle": "계획이 편집되었습니다. 승인하면 현재 버전으로 실행합니다",
+      "approveTitle": "승인하면 컴퓨터에서 이 계획대로 계속 실행합니다"
+    },
+    "queue": {
+      "count": "{{count}}개",
+      "readOnlyHint": "협업은 읽기 전용이며 컴퓨터의 요청만 표시합니다.",
+      "empty": "대기 중인 요청 없음",
+      "hint": {
+        "plan_review": "계획을 확인하고 필요하면 수정을 요청하세요. 승인한 뒤 컴퓨터에서 계속 실행합니다.",
+        "permission": "이번 결정만 컴퓨터의 현재 작업으로 보냅니다.",
+        "ask_user_question": "답은 초안으로 저장되며 제출한 뒤 컴퓨터에서 계속 진행합니다.",
+        "issue_confirm": "제출하기 전에 제목과 본문을 확인하세요.",
+        "plugin_setup": "설정은 컴퓨터에서 완료해야 합니다. 여기에서는 이 요청을 취소할 수 있습니다.",
+        "fallback": "모바일은 데스크톱에서 보낸 순서대로 원격 요청을 처리합니다."
+      }
+    }
   }
 }

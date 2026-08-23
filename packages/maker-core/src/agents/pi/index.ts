@@ -146,7 +146,7 @@ import {
   rewriteContextModeDoctorPath,
   shouldRewriteContextModeDoctorNotification,
 } from './context-mode-doctor-path.js';
-import { AutoCompactController } from '../shared/auto-compact-controller.js';
+import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { resolveMcpToolTarget } from '../shared/mcp-tool-target.js';
@@ -3283,13 +3283,7 @@ export class PiAgent extends BaseAgent {
             workdir: opts.workingDir,
             agentKind: 'pi',
             getThresholdPct: getAutoCompactThresholdPct,
-            // 远端没有 overflow rollover,必须保留 host compact。
-            ...(opts.remoteHostId
-              ? {}
-              : {
-                  shouldHandoffAfterContextAssessment:
-                    this.deps.runtimeConfig.shouldHandoffAfterContextAssessment,
-                }),
+            compactWhenFull: Boolean(opts.remoteHostId),
           });
     // compact / 所有 prompt(/plan、分支切换、用户发送) / set_model / set_thinking_level
     // 共用一条双向串行链。只等 compact 再发控制 RPC 是单向的。
@@ -3343,9 +3337,14 @@ export class PiAgent extends BaseAgent {
         })
         .catch((err) => {
           ctx.hostAutoCompactInFlight = false;
-          autoCompactController.onCompactCanceled('host_auto_compact_failed');
+          const message = err instanceof Error ? err.message : String(err);
+          if (!opts.remoteHostId && isDeterministicHostCompactFailure(message)) {
+            autoCompactController.markNeedsRollover('host_auto_compact_failed');
+          } else {
+            autoCompactController.onCompactCanceled('host_auto_compact_failed');
+          }
           this.deps.logger.warn('pi host auto-compact failed', {
-            message: err instanceof Error ? err.message : String(err),
+            message,
           });
         });
     };
@@ -3856,9 +3855,22 @@ export class PiAgent extends BaseAgent {
           if (autoCompactController) {
             if (event.type === 'compaction_end') {
               if (isFailedOrAbortedPiCompaction(event)) {
-                autoCompactController.onCompactCanceled(
-                  event.aborted === true ? 'compaction_aborted' : 'compaction_failed',
-                );
+                const hostAutoFailed = ctx.hostAutoCompactInFlight && event.aborted !== true;
+                const failureText = [
+                  typeof event.errorMessage === 'string' ? event.errorMessage : '',
+                  'Error during compaction',
+                ].join(': ');
+                if (
+                  !opts.remoteHostId &&
+                  hostAutoFailed &&
+                  isDeterministicHostCompactFailure(failureText)
+                ) {
+                  autoCompactController.markNeedsRollover('compaction_failed');
+                } else {
+                  autoCompactController.onCompactCanceled(
+                    event.aborted === true ? 'compaction_aborted' : 'compaction_failed',
+                  );
+                }
               } else {
                 autoCompactController.onCompactBoundary();
               }
@@ -5260,7 +5272,10 @@ export class PiAgent extends BaseAgent {
       },
 
       getUsageSnapshot(): UsageSnapshot {
-        return usageSnapshotOf(ctx);
+        return {
+          ...usageSnapshotOf(ctx),
+          ...(autoCompactController?.needsRollover() ? { needsRollover: true } : {}),
+        };
       },
 
       setInteractionResolver(resolver: InteractionResolver): void {

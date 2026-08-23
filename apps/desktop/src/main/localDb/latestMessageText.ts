@@ -86,7 +86,9 @@ export async function latestVisiblePreviewRow(
         eq(messages.sessionId, sessionId),
         sql`${messages.role} IN ('user', 'assistant')`,
         isNull(messages.rewindAt),
-        sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
+        // SQLite may still evaluate json_extract when OR json_valid is false.
+        // CASE keeps malformed historical agent_meta from failing the whole query.
+        sql`(${messages.agentMeta} IS NULL OR CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1)`,
         or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
       ),
     )

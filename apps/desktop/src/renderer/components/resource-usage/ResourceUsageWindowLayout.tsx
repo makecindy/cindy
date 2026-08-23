@@ -120,10 +120,18 @@ export function ResourceUsageWindowLayout() {
     report();
   }, []);
 
-  useAppShortcut('close-tab-or-window', () => {
+  const closeWindow = useCallback(() => {
+    // 走资源窗口专用关闭通道(controller.close → hideWindow + 焦点回归主窗口),
+    // 与快捷键一致;不用通用 windowClose() —— 后者在某些子窗口状态下可能落入主窗口
+    // 关闭流程。#3183:之前鼠标点标题栏 X 与快捷键走两条路径,关闭后焦点回不到主窗口,
+    // 用户感知为"打开用量后无法回去"。
     void window.electronAPI.resourceUsageWindow.close().catch((err) => {
-      log.warn('close window via shortcut failed', err);
+      log.warn('close window failed', err);
     });
+  }, []);
+
+  useAppShortcut('close-tab-or-window', () => {
+    closeWindow();
     return true;
   });
 
@@ -146,7 +154,7 @@ export function ResourceUsageWindowLayout() {
             className="flex h-full shrink-0 items-center"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            <WindowControls key={windowChromeRevision} />
+            <WindowControls key={windowChromeRevision} onClose={closeWindow} />
           </div>
         )}
       </div>

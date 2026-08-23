@@ -1161,10 +1161,10 @@
       "summary": {
         "total": "표시됨",
         "totalHint": "가져오기로 선택 가능",
-        "projects": "Existing project sessions",
-        "projectsHint": "Sessions under current sidebar projects",
-        "dialogue": "New folder sessions",
-        "dialogueHint": "Sessions that will create project groups",
+        "projects": "기존 프로젝트 세션",
+        "projectsHint": "현재 사이드바 프로젝트에 속한 세션",
+        "dialogue": "새 폴더 세션",
+        "dialogueHint": "프로젝트 그룹을 생성할 세션",
         "filtered": "건너뜀",
         "filteredHint": "내부 세션이거나 이미 앱에 있음"
       },
@@ -1175,7 +1175,7 @@
         "codex": "Codex",
         "claude": "Claude",
         "project": "기존 프로젝트",
-        "dialogue": "New folders"
+        "dialogue": "새 폴더"
       },
       "toast": {
         "scanFailed": "스캔 실패",
@@ -1968,7 +1968,7 @@
         "note": "현재 QR 스캔 사용자에 바인딩되어 있으며, 다른 사람의 개인 메시지는 자동으로 무시됩니다.",
         "serviceLabel": "서비스",
         "appIdLabel": "App ID",
-        "ownerLabel": "Owner",
+        "ownerLabel": "소유자",
         "ownerWaiting": "첫 개인 메시지 바인딩 대기 중",
         "reconnect": "{{service}} 봇 다시 연결",
         "clear": "연동 해제"
@@ -5295,18 +5295,18 @@
         "title": "패널 시작하기",
         "desc": "왼쪽 채팅과 나란히 작업할 수 있도록 파일, 리뷰, 활성 상태 보기, 내장 브라우저, 터미널을 여기에 여세요.",
         "openFile": "파일 열기",
-        "fileSub": "Files",
+        "fileSub": "파일",
         "openReview": "리뷰 열기",
-        "reviewSub": "Review",
+        "reviewSub": "리뷰",
         "openSubagents": "하위 에이전트 열기",
         "subagentsSub": "나중에도 볼 수 있는 하위 작업",
         "openBackgroundTasks": "백그라운드 작업 열기",
-        "backgroundTasksSub": "Background tasks",
+        "backgroundTasksSub": "백그라운드 작업",
         "openResourceUsage": "활성 상태 보기 열기",
         "openBrowser": "브라우저 열기",
-        "browserSub": "Browser",
+        "browserSub": "브라우저",
         "openTerminal": "터미널 열기",
-        "terminalSub": "Terminal",
+        "terminalSub": "터미널",
         "addMoreHint": "위쪽 + 버튼에서 다른 패널 유형을 선택할 수 있어요"
       },
       "placeholderHint": "{{kind}} — 콘텐츠는 이후 단계에서 추가됩니다"
@@ -5500,6 +5500,7 @@
     },
     "browser": {
       "newTab": "새 탭",
+      "audible": "오디오 재생 중",
       "urlPlaceholder": "URL 입력 또는 검색",
       "goBack": "뒤로",
       "goForward": "앞으로",
@@ -5612,7 +5613,7 @@
       "sessionRunningWriteBlocked": "에이전트가 실행 중이라 git 쓰기 작업을 일시적으로 사용할 수 없습니다.",
       "renamePartialNotice": "v1에서는 이름이 변경된 파일은 파일 전체 스테이지/스테이지 해제/되돌리기만 지원합니다.",
       "typechangePartialNotice": "이 유형의 파일은 파일 전체 스테이지/스테이지 해제/되돌리기만 지원합니다.",
-      "aheadBehindTooltip": "{{upstream}}: {{ahead}} ahead, {{behind}} behind",
+      "aheadBehindTooltip": "{{upstream}}: {{ahead}}개 앞섬, {{behind}}개 뒤처짐",
       "writeDisabledNotice": "읽기 전용 상태: {{reasons}}. git 변경 사항은 계속 표시됩니다.",
       "writeDisabledReasons": {
         "detached": "detached HEAD",
@@ -6083,6 +6084,12 @@
     }
   },
   "sidebar": {
+    "vendorReadiness": {
+      "loading": "사용 가능 여부 확인 중",
+      "ready": "준비됨",
+      "unauthenticated": "로그인 필요",
+      "binary-missing": "구성 요소를 사용할 수 없음"
+    },
     "ariaLabel": "사이드바 네비게이션",
     "horizontalTabbarAria": "메인 뷰 전환",
     "tabs": {
@@ -6122,10 +6129,10 @@
         "enabled": "켜짐"
       },
       "close": "다운로드 화면 닫기"
-    },
-    "vendorReadiness": {
-      "loading": "로딩 중"
     }
+  },
+  "common": {
+    "dismiss": "닫기"
   },
   "commonUi": {
     "crossAgentConvert": {
@@ -6577,6 +6584,7 @@
       "popoverTitle": "Worker 부르기",
       "startButton": "협업 시작",
       "startFailed": "협업을 시작하지 못했습니다",
+      "stopFailed": "협업을 중지하지 못했습니다",
       "startFailedContinue": "협업을 시작하지 못했습니다. 단일 세션으로 계속합니다.",
       "createWorkerRefreshFailed": "Worker 상태를 새로 고칠 수 없습니다. 다시 시도해 주세요.",
       "assignmentFailed": "Worker를 만들었지만 작업 할당 여부를 확인할 수 없습니다. 다시 시도하기 전에 Worker 패널을 확인하세요.",
@@ -6622,6 +6630,7 @@
     "chatInput": {
       "defaultPlaceholder": "오늘은 무엇을 할까요~",
       "createAgentPlaceholder": "안녕하세요, {{appName}}!",
+      "recommendationShortcut": "Tab",
       "voiceInput": {
         "start": "음성 입력 시작",
         "stop": "음성 입력 중지",
@@ -6857,6 +6866,8 @@
     "verificationFailed": "ChatGPT 로그인이 복구되었는지 확인할 수 없습니다. 다시 확인해 주세요."
   },
   "chat": {
+    "jumpToBottom": "맨 아래로 이동",
+    "prevMessageJump": "이전 질문으로 이동: {{preview}}",
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
       "skippedAnswer": "건너뜀",
@@ -7093,6 +7104,10 @@
       "dismissTitle": "나중에"
     },
     "media": {
+      "clickToZoom": "클릭하여 확대",
+      "audioPlay": "오디오 재생",
+      "audioPause": "오디오 일시 정지",
+      "modelPreviewAlt": "3D 모델 미리보기",
       "imageCopied": "이미지를 복사했습니다",
       "copyFailed": "복사에 실패했습니다",
       "openFolderFailed": "폴더를 열지 못했습니다",
@@ -7683,6 +7698,8 @@
       "waiting": "잠시만 기다려 주세요…",
       "working": "작업 중…",
       "running": "실행 중…",
+      "waitingWorkflow": "Workflow 대기 중…",
+      "waitingWorkflowProgress": "Workflow 대기 중 · {{done}}/{{total}} Agent",
       "turnStart": "{{name}}님, 처리 중이에요…",
       "issueTip": "{{name}}님, /issue로 피드백이나 제안을 보내 주세요",
       "runningTool": "{{tool}} 실행 중…"
@@ -7759,6 +7776,9 @@
         "cancel": "취소"
       },
       "chatPlaceholder": "계속 이야기해 봐요…",
+      "worktreeCreating": "worktree 생성 중",
+      "worktreeFailed": "worktree 생성 실패",
+      "extraDirsSaveFailed": "추가 디렉터리를 저장하지 못했습니다",
       "chatDropAreaAria": "채팅 파일 드롭 영역",
       "openWorkingDirAria": "작업 디렉터리를 시스템 파일 관리자에서 열기",
       "projectContextLoaded": "프로젝트 지식베이스 로드됨",
@@ -7887,8 +7907,9 @@
       },
       "filterVendor": {
         "all": "전체",
-        "cc": "Claude",
-        "codex": "Codex"
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
       },
       "filterGroupBy": {
         "project": "프로젝트별 그룹",
@@ -8298,6 +8319,8 @@
         "revealFolder": "폴더에서 보기"
       },
       "fileBody": {
+        "drawioLoading": "draw.io 미리보기를 불러오는 중…",
+        "pdfLoading": "PDF 미리보기를 불러오는 중…",
         "selectFile": "미리 볼 파일을 선택하세요",
         "readFailed": "파일 읽기 실패: {{message}}",
         "truncatedNotice": "파일이 너무 큽니다. 처음 2 MB만 표시 — 전체 내용은 시스템에서 여세요",
@@ -8409,7 +8432,7 @@
       },
       "filterAria": "검색 필터 및 정렬(정렬: {{sort}}, 상태: {{status}}, 에이전트: {{agent}}, 최근 활성: {{lastActivity}}, 프로젝트: {{projects}})",
       "filter": {
-        "label": "필터",
+        "label": "검색 조건",
         "active": "필터 {{count}}개",
         "reset": "초기화",
         "allProjects": "모든 프로젝트"
@@ -8427,6 +8450,48 @@
     "ultra": "극한"
   },
   "scheduler": {
+    "presentation": {
+      "status": {
+        "active": "활성",
+        "paused": "일시 중지",
+        "expired": "일회성",
+        "running": "실행 중"
+      },
+      "summary": {
+        "hourly": "매시간",
+        "daily": "매일 {{time}}",
+        "weekly": "매주 {{weekday}} {{time}}",
+        "weekdays": "평일 {{time}}",
+        "weekends": "주말 {{time}}",
+        "monthly": "매월 {{day}}일 {{time}}",
+        "custom": "사용자 지정"
+      },
+      "weekday": {
+        "full": { "0": "일요일", "1": "월요일", "2": "화요일", "3": "수요일", "4": "목요일", "5": "금요일", "6": "토요일" },
+        "short": { "0": "일", "1": "월", "2": "화", "3": "수", "4": "목", "5": "금", "6": "토" }
+      },
+      "time": {
+        "last": "마지막 {{value}}",
+        "today": "오늘 · {{time}}",
+        "yesterday": "어제 · {{time}}",
+        "daysAgo": "{{count}}일 전 · {{time}}",
+        "startedSeconds": "{{count}}초 전에 시작",
+        "startedMinutes": "{{count}}분 전에 시작",
+        "startedHours": "{{count}}시간 전에 시작",
+        "intervalMinutes": "{{count}}분",
+        "intervalHours": "{{count}}시간",
+        "intervalDays": "{{count}}일",
+        "nextLessThanMinute": "다음 실행까지 1분 미만",
+        "next": "다음 {{when}}（{{interval}} 후）"
+      },
+      "destination": {
+        "boundSession": "작업 {{id}}에 연결",
+        "newDialogue": "새 대화",
+        "newWorktreeSession": "새 worktree 작업",
+        "newSession": "새 작업",
+        "inDirectory": "{{base}} · "
+      }
+    },
     "page": {
       "title": "자동화",
       "totalCount": "총 {{count}}개",
@@ -8899,17 +8964,17 @@
         "nightly-test-heal": {
           "name": "야간 자가 복구 테스트",
           "description": "매일 밤 테스트를 실행하고 실패 항목을 격리 워크트리에서 최소 수정",
-          "prompt": "Run the project's test suite. If there are failures, attempt a minimal fix in an isolated worktree.\nConstraints:\n- Determine the standard test command from the repo docs or package scripts before running the full suite\n- Only fix issues backed by clear failing evidence; prefer the smallest possible change and avoid drive-by refactoring\n- Re-run the affected tests after fixing to confirm they pass, and review the full diff\n- Deliver fixes through the repo's workflow (e.g. create a branch and open a PR); never commit directly to the main branch\n- For failures that cannot be fixed safely, report the cause, suspicious files, and suggested next steps"
+        "prompt": "프로젝트의 테스트 스위트를 실행하고, 실패 항목이 있으면 격리된 worktree에서 최소한의 수정을 시도하세요.\n제약 사항:\n- 전체 테스트를 실행하기 전에 저장소 문서나 package 스크립트에서 표준 테스트 명령을 확인합니다\n- 명확한 실패 증거가 있는 문제만 수정하고, 영향 범위가 가장 작은 변경을 우선하며 관련 없는 리팩터링은 피합니다\n- 수정 후 관련 테스트를 다시 실행해 통과 여부를 확인하고 전체 diff를 검토합니다\n- 저장소의 작업 흐름에 따라 수정 사항을 전달합니다(예: 브랜치를 만들고 PR 열기). main 브랜치를 직접 변경하지 않습니다\n- 안전하게 수정할 수 없는 실패 항목은 원인, 의심되는 파일, 권장 조사 단계를 보고합니다"
         },
         "pr-gatekeeper": {
           "name": "PR 게이트키퍼",
           "description": "평일마다 오픈 PR의 새 변경을 사전 리뷰하고 심각도별로 위험 보고",
-          "prompt": "Review the repository's open PRs and pre-screen their new changes.\nConstraints:\n- Go through open PRs with new commits in the past 24 hours (on Monday, look back over the whole weekend), citing PR numbers, file paths, and concrete diffs\n- Focus on correctness, security, data-loss, and compatibility issues, graded by severity\n- Only report issues backed by evidence and describe the failure scenario; do not nitpick on style preferences\n- Unless explicitly authorized, only output review conclusions; do not comment on PRs or change code"
+        "prompt": "저장소에서 현재 열려 있는 PR을 확인하고 새 변경 사항을 사전 검토하세요.\n제약 사항:\n- 지난 24시간 동안 새 커밋이 추가된 열린 PR을 하나씩 확인합니다(월요일에는 주말 전체를 확인). PR 번호, 파일 경로, 구체적인 diff를 인용합니다\n- 정확성, 보안, 데이터 손실, 호환성 문제를 중점적으로 찾고 심각도별로 분류합니다\n- 증거로 뒷받침되는 문제만 보고하고 실패 시나리오를 설명합니다. 스타일 취향만으로 지적하지 않습니다\n- 사용자가 명시적으로 허용하지 않는 한 검토 결과만 출력하고 PR에 댓글을 달거나 코드를 변경하지 않습니다"
         },
         "domain-radar": {
           "name": "관심 분야 레이더",
           "description": "관심 분야의 최신 동향을 정기 수집해 관점 있는 요약 제공",
-          "prompt": "Collect the latest developments about \"{{topic}}\" from the past 24 hours (on Monday, look back over the whole weekend) and produce an opinionated digest.\nConstraints:\n- Use web search, cross-check multiple sources before trusting a claim, and cite the source link for every item\n- Prefer substantive developments (releases, research, policy, notable discussions); filter out marketing fluff and reposts\n- For each item, add a one-line judgement on why it matters instead of dumping links\n- When information is scarce or sources are questionable, say so honestly; never fabricate",
+        "prompt": "주제 \"{{topic}}\"에 관한 지난 24시간의 최신 동향을 수집하고(월요일에는 주말 전체를 확인) 관점이 담긴 요약을 작성하세요.\n제약 사항:\n- Web 검색을 사용하고 여러 출처를 교차 확인한 뒤 정보를 채택하며, 각 항목에 출처 링크를 표시합니다\n- 출시, 연구, 정책, 주요 논의처럼 실질적인 진전을 우선하고 홍보성 글과 중복 게시물은 제외합니다\n- 링크만 나열하지 말고 각 동향이 왜 중요한지 한 문장으로 판단을 덧붙입니다\n- 정보가 부족하거나 출처가 의심스러우면 솔직히 밝히고 지어내지 않습니다",
           "params": {
             "topic": {
               "label": "관심 주제",
@@ -8920,7 +8985,7 @@
         "competitor-watch": {
           "name": "경쟁사 동향 추적",
           "description": "경쟁사의 제품·시장 동향을 매주 정리하고 영향 분석",
-          "prompt": "Track the past week's activity of these competitors: {{competitors}}.\nConstraints:\n- Use web search to cover product updates, releases, pricing changes, market moves, and user sentiment, citing sources\n- Distinguish official information from third-party accounts; clearly mark unverified rumors\n- For each significant update, analyze what it means for us and suggest a response\n- If nothing substantive happened, say so honestly instead of padding the report",
+        "prompt": "다음 경쟁사의 지난 일주일간 동향을 추적하세요: {{competitors}}.\n제약 사항:\n- Web 검색으로 제품 업데이트, 출시, 가격 변경, 시장 움직임, 사용자 반응을 조사하고 출처를 표시합니다\n- 공식 정보와 제3자 전언을 구분하고 확인되지 않은 소문은 명확히 표시합니다\n- 중요한 동향마다 우리에게 어떤 의미가 있는지 분석하고 대응 방안을 제안합니다\n- 실질적인 동향이 없다면 내용을 부풀리지 말고 솔직히 밝힙니다",
           "params": {
             "competitors": {
               "label": "경쟁사 목록",
@@ -8931,12 +8996,12 @@
         "weekly-work-draft": {
           "name": "주간 보고서 초안 도우미",
           "description": "작업 디렉터리의 문서와 산출물로 주간 보고서 초안 생성",
-          "prompt": "Based on this week's changes to documents, notes, and deliverables in the working directory, compile a weekly report draft.\nConstraints:\n- Only use content with actual modification traces in the working directory as evidence, citing the files\n- Organize as \"Done this week / In progress / Next week / Needs coordination\", concise enough to submit directly\n- Separate substantive progress from routine chores and highlight valuable output\n- Leave placeholders with notes where the material is insufficient so the user can fill them in"
+        "prompt": "작업 디렉터리에서 이번 주에 변경된 문서, 메모, 결과물을 바탕으로 주간 보고서 초안을 작성하세요.\n제약 사항:\n- 작업 디렉터리에 실제 변경 흔적이 있는 내용만 근거로 사용하고 해당 파일을 표시합니다\n- \"이번 주 완료 / 진행 중 / 다음 주 계획 / 협의 필요\" 구조로, 바로 제출할 수 있을 만큼 간결하게 작성합니다\n- 실질적인 진전과 반복 업무를 구분하고 가치 있는 결과물을 강조합니다\n- 판단할 자료가 부족한 부분에는 설명과 함께 자리 표시자를 남겨 사용자가 보완할 수 있게 합니다"
         },
         "knowledge-freshness": {
           "name": "지식 베이스 신선도 점검",
           "description": "매월 문서를 점검해 오래된 내용과 모순 찾기",
-          "prompt": "Health-check the documents in the working directory and find content that needs updating.\nConstraints:\n- Look for outdated information (stale dates, dead links, deprecated processes or tools), contradictions, and duplication\n- Cite the file path and location for every issue and explain the reasoning\n- Categorize as \"update / merge / delete\" suggestions and produce a revision checklist\n- Only output the report; do not modify the documents"
+        "prompt": "작업 디렉터리의 문서를 점검하고 업데이트가 필요한 내용을 찾으세요.\n제약 사항:\n- 오래된 정보(지난 날짜, 끊어진 링크, 폐기된 절차나 도구), 모순, 중복 내용을 확인합니다\n- 각 문제의 파일 경로와 구체적인 위치를 표시하고 판단 근거를 설명합니다\n- \"업데이트 권장 / 병합 권장 / 삭제 권장\"으로 분류하고 수정 체크리스트를 작성합니다\n- 점검 보고서만 출력하고 문서 자체는 수정하지 않습니다"
         }
       }
     }
@@ -9525,7 +9590,7 @@
       "skillNameRequired": "스킬 이름은 필수입니다",
       "skillNameFormat": "형식: [a-z0-9-]+",
       "displayNameLabel": "표시 이름",
-      "displayNamePlaceholder": "My Skill",
+      "displayNamePlaceholder": "내 스킬",
       "displayNameLimit": "최대 64자",
       "descriptionLabel": "설명",
       "descriptionPlaceholder": "이 skill 의 용도를 간단히 설명",
@@ -9958,6 +10023,7 @@
       "enableCollabSubmit": "협업 시작"
     },
     "rolePill": {
+      "unread": "읽지 않은 업데이트",
       "worker": "Worker",
       "workersHeader": "Workers",
       "workerCountSummary_other": "전체 Worker {{totalCount}} · 활성 {{activeCount}}",
@@ -9971,6 +10037,10 @@
       "layoutMenuLabel": "Worker 목록 표시 방식",
       "layoutTabs": "탭",
       "layoutDropdown": "드롭다운",
+      "scrollWorkersLeft": "이전 Worker 보기",
+      "scrollWorkersRight": "다음 Worker 보기",
+      "scrollWorkersLeftEdge": "이미 첫 Worker 를 표시하고 있습니다",
+      "scrollWorkersRightEdge": "이미 마지막 Worker 를 표시하고 있습니다",
       "errorBadge": "오류",
       "errorBadgeAria": "오류가 발생한 Worker 가 있습니다"
     },

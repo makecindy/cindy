@@ -73,7 +73,7 @@ import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
-import { readDictionaryProjectionForMobile } from '../voice-input/dictionarySyncDriver.js';
+import { buildMobileDictionarySnapshot } from '../voice-input/dictionarySyncDriver.js';
 import {
   setBroadcastTapListener,
 } from './broadcast-tap';
@@ -2808,7 +2808,7 @@ export async function runInvoke(
   // 不参与合并,避免移动端维护一份会分叉的词典。
   if (payload.channel === DL_VOICE_DICTIONARY_GET_CHANNEL) {
     try {
-      return { ok: true, result: { ok: true, ...readDictionaryProjectionForMobile() } };
+      return { ok: true, result: buildMobileDictionarySnapshot() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`voice:dictionary:get failed from ${shortId(src)}: ${message}`);

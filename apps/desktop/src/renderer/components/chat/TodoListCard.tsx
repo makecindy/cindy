@@ -20,7 +20,7 @@
  *   --msg-tool-card-chevron: secondary(completed 置灰)
  */
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -248,7 +248,7 @@ export function TodoListCard({
    */
   animated?: boolean;
   /** Composer/chat column width. Keeps the flyout inside clipped compact panes. */
-  maxWidth?: number;
+  maxWidth?: CSSProperties['maxWidth'];
   /** Hide the current rendered snapshot without mutating the agent's plan state. */
   onDismiss?: () => void;
 }) {
@@ -301,7 +301,9 @@ export function TodoListCard({
   const flyoutMaxWidth =
     typeof maxWidth === 'number' && Number.isFinite(maxWidth) && maxWidth > 0
       ? `${Math.floor(maxWidth)}px`
-      : null;
+      : typeof maxWidth === 'string' && maxWidth.length > 0
+        ? maxWidth
+        : null;
 
   return (
     <div className="pointer-events-none flex w-auto shrink-0 justify-center">
@@ -417,56 +419,55 @@ export function TodoListCard({
               >
                 {todos.map((todo, i) => (
                   <div key={i} className="flex h-[30px] items-center gap-[10px]">
-                      {/* Icon */}
-                      {todo.status === 'completed' && (
-                        <CircleCheck
-                          size={18}
-                          strokeWidth={1.5}
-                          className="shrink-0 text-[var(--msg-tool-card-chevron)]"
-                        />
-                      )}
-                      {todo.status === 'in_progress' && (
-                        // 呼吸表达"正在干活":挂侧栏运行态同款动画。按 SVG 常驻
-                        // 动画红线,动画在 span wrapper 上,SVG 本体保持静态。
-                        // 会话空闲(停止/失败/中断后计划仍留屏)时静止:动画只在
-                        // 确有 running 语义时挂载,否则等于谎报该步骤仍在执行。
-                        <span
-                          data-plan-step-active="true"
-                          data-plan-step-breathing={animated ? 'true' : 'false'}
-                          className={cn(
-                            'inline-flex shrink-0',
-                            animated && 'session-status-breathing',
-                          )}
-                        >
-                          <CircleDot
-                            size={18}
-                            strokeWidth={1.5}
-                            className="shrink-0 text-[var(--msg-tool-card-text)]"
-                          />
-                        </span>
-                      )}
-                      {todo.status === 'pending' && (
-                        <Circle
+                    {/* Icon */}
+                    {todo.status === 'completed' && (
+                      <CircleCheck
+                        size={18}
+                        strokeWidth={1.5}
+                        className="shrink-0 text-[var(--msg-tool-card-chevron)]"
+                      />
+                    )}
+                    {todo.status === 'in_progress' && (
+                      // 呼吸表达"正在干活":挂侧栏运行态同款动画。按 SVG 常驻
+                      // 动画红线,动画在 span wrapper 上,SVG 本体保持静态。
+                      // 会话空闲(停止/失败/中断后计划仍留屏)时静止:动画只在
+                      // 确有 running 语义时挂载,否则等于谎报该步骤仍在执行。
+                      <span
+                        data-plan-step-active="true"
+                        data-plan-step-breathing={animated ? 'true' : 'false'}
+                        className={cn(
+                          'inline-flex shrink-0',
+                          animated && 'session-status-breathing',
+                        )}
+                      >
+                        <CircleDot
                           size={18}
                           strokeWidth={1.5}
                           className="shrink-0 text-[var(--msg-tool-card-text)]"
                         />
-                      )}
-
-                      {/* Text — 对齐 Codex:completed 置灰,in_progress 高亮,pending 正常。 */}
-                      <span
-                        className={cn(
-                          'mt-px truncate text-13',
-                          todo.status === 'completed' &&
-                            'font-normal text-[var(--msg-tool-card-chevron)]',
-                          todo.status === 'in_progress' &&
-                            'font-semibold text-[var(--msg-tool-card-text)]',
-                          todo.status === 'pending' &&
-                            'font-normal text-[var(--msg-tool-card-text)]',
-                        )}
-                      >
-                        {todo.content}
                       </span>
+                    )}
+                    {todo.status === 'pending' && (
+                      <Circle
+                        size={18}
+                        strokeWidth={1.5}
+                        className="shrink-0 text-[var(--msg-tool-card-text)]"
+                      />
+                    )}
+
+                    {/* Text — 对齐 Codex:completed 置灰,in_progress 高亮,pending 正常。 */}
+                    <span
+                      className={cn(
+                        'mt-px truncate text-13',
+                        todo.status === 'completed' &&
+                          'font-normal text-[var(--msg-tool-card-chevron)]',
+                        todo.status === 'in_progress' &&
+                          'font-semibold text-[var(--msg-tool-card-text)]',
+                        todo.status === 'pending' && 'font-normal text-[var(--msg-tool-card-text)]',
+                      )}
+                    >
+                      {todo.content}
+                    </span>
                   </div>
                 ))}
               </div>

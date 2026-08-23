@@ -390,7 +390,7 @@ async function reconcileClaimedSessionForEdit(task: InternalTask): Promise<boole
   failTask(
     task,
     'enqueue-failed',
-    i18n.t('session.new.firstMessageNotSent'),
+    i18n.t('session.screen.firstMessageNotSent'),
   );
   return true;
 }

@@ -296,6 +296,9 @@ describe('turn-done list preview refresh', () => {
     expect(latestSource).toContain(
       '.orderBy(desc(messages.createdAt), desc(joinedMessageRowid))',
     );
+    expect(latestSource).toContain(
+      "CASE WHEN json_valid(${messages.agentMeta}) THEN json_extract(${messages.agentMeta}, '$.autoResume') END IS NOT 1",
+    );
   });
 });
 

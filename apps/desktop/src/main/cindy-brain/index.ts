@@ -1594,6 +1594,12 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
   getGhostAgentSlot().setRunner(runner);
 }
 
+/** maker-ipc 完成初始化后注入「切到这条可见任务」；保持 cindy-brain 不反向依赖 deepLink。 */
+export function setGhostSessionRevealer(reveal: ((sessionId: string) => void) | null): void {
+  getGhostAgentSlot().setRevealSession(reveal);
+  getGhostErrandSlot().setRevealSession(reveal);
+}
+
 let errandSlotSingleton: GhostErrandSlot | null = null;
 
 /** 派活取件槽单例(agent 槽 errand 加档):资格审/频控/任务表的统一守门点。 */
@@ -1605,6 +1611,8 @@ export function getGhostErrandSlot(): GhostErrandSlot {
       holdPipeCall: (ghostId, callId, budgetMs) =>
         getGhostPipeDispatcher().holdCall(ghostId, callId, budgetMs),
       releasePipeCall: (ghostId, callId) => getGhostPipeDispatcher().releaseCall(ghostId, callId),
+      consumeUserActionToken: (token, ghostId) =>
+        getGhostAgentSlot().consumeUserActionToken(token, ghostId),
       log,
     });
   }
@@ -1622,6 +1630,11 @@ export function hasRunningGhostCindyWork(ghostId: string): boolean {
 /** maker-ipc 完成初始化后注入真实派活 runner;传 null 用于退出清理。 */
 export function setGhostErrandRunner(runner: GhostErrandRunner | null): void {
   getGhostErrandSlot().setRunner(runner);
+}
+
+/** 宿主确认的面板/卡片点击。派活只在这之后才切任务。 */
+export function noteGhostUserGesture(ghostId: string): void {
+  getGhostErrandSlot().noteUserGesture(ghostId);
 }
 
 /** 插件展示名(errand 会话默认标题等宿主侧使用;未装返回 null)。 */

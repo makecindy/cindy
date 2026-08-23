@@ -341,6 +341,11 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
+  /**
+   * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
+   * 只由 Claude Code / Pi 的 AutoCompactController 锁存。
+   */
+  needsRollover?: boolean;
 }
 
 /**

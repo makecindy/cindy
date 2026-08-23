@@ -1,8 +1,8 @@
 {
+  "id": "270033b2-a162-45d5-88a7-0d8bc92d6a95",
+  "prevId": "69107681-c10d-468b-ab20-f20b5cacd802",
   "version": "6",
   "dialect": "sqlite",
-  "id": "980b0014-b4f2-4821-8a33-2e2a48b8bba7",
-  "prevId": "69107681-c10d-468b-ab20-f20b5cacd802",
   "tables": {
     "account_usage_snapshots": {
       "name": "account_usage_snapshots",
@@ -65,15 +65,15 @@
         "agent_input_queue_snapshots_session_id_sessions_id_fk": {
           "name": "agent_input_queue_snapshots_session_id_sessions_id_fk",
           "tableFrom": "agent_input_queue_snapshots",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -924,15 +924,15 @@
         "im_bindings_target_session_id_sessions_id_fk": {
           "name": "im_bindings_target_session_id_sessions_id_fk",
           "tableFrom": "im_bindings",
-          "tableTo": "sessions",
           "columnsFrom": [
             "target_session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {
@@ -1201,15 +1201,15 @@
         "media_refs_hash_media_blobs_hash_fk": {
           "name": "media_refs_hash_media_blobs_hash_fk",
           "tableFrom": "media_refs",
-          "tableTo": "media_blobs",
           "columnsFrom": [
             "hash"
           ],
+          "tableTo": "media_blobs",
           "columnsTo": [
             "hash"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -1327,15 +1327,15 @@
         "messages_session_id_sessions_id_fk": {
           "name": "messages_session_id_sessions_id_fk",
           "tableFrom": "messages",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -1457,8 +1457,8 @@
           "columns": [
             "lead_session_id"
           ],
-          "isUnique": true,
-          "where": "\"orca_teams\".\"status\" = 'active'"
+          "where": "\"orca_teams\".\"status\" = 'active'",
+          "isUnique": true
         },
         "idx_orca_teams_status": {
           "name": "idx_orca_teams_status",
@@ -1472,15 +1472,15 @@
         "orca_teams_lead_session_id_sessions_id_fk": {
           "name": "orca_teams_lead_session_id_sessions_id_fk",
           "tableFrom": "orca_teams",
-          "tableTo": "sessions",
           "columnsFrom": [
             "lead_session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -1547,15 +1547,15 @@
         "orca_worker_creation_reservations_team_id_orca_teams_id_fk": {
           "name": "orca_worker_creation_reservations_team_id_orca_teams_id_fk",
           "tableFrom": "orca_worker_creation_reservations",
-          "tableTo": "orca_teams",
           "columnsFrom": [
             "team_id"
           ],
+          "tableTo": "orca_teams",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -1667,8 +1667,8 @@
           "columns": [
             "team_id"
           ],
-          "isUnique": true,
-          "where": "\"orca_workers\".\"focused\" = true"
+          "where": "\"orca_workers\".\"focused\" = true",
+          "isUnique": true
         },
         "idx_orca_workers_team_id": {
           "name": "idx_orca_workers_team_id",
@@ -1689,28 +1689,28 @@
         "orca_workers_team_id_orca_teams_id_fk": {
           "name": "orca_workers_team_id_orca_teams_id_fk",
           "tableFrom": "orca_workers",
-          "tableTo": "orca_teams",
           "columnsFrom": [
             "team_id"
           ],
+          "tableTo": "orca_teams",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         },
         "orca_workers_session_id_sessions_id_fk": {
           "name": "orca_workers_session_id_sessions_id_fk",
           "tableFrom": "orca_workers",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -1895,23 +1895,23 @@
           "columns": [
             "session_id"
           ],
-          "isUnique": true,
-          "where": "\"right_sidebar_tabs\".\"kind\" = 'subagents'"
+          "where": "\"right_sidebar_tabs\".\"kind\" = 'subagents'",
+          "isUnique": true
         }
       },
       "foreignKeys": {
         "right_sidebar_tabs_session_id_sessions_id_fk": {
           "name": "right_sidebar_tabs_session_id_sessions_id_fk",
           "tableFrom": "right_sidebar_tabs",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -2068,28 +2068,28 @@
         "schedule_runs_schedule_id_schedules_id_fk": {
           "name": "schedule_runs_schedule_id_schedules_id_fk",
           "tableFrom": "schedule_runs",
-          "tableTo": "schedules",
           "columnsFrom": [
             "schedule_id"
           ],
+          "tableTo": "schedules",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         },
         "schedule_runs_session_id_sessions_id_fk": {
           "name": "schedule_runs_session_id_sessions_id_fk",
           "tableFrom": "schedule_runs",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},
@@ -2417,28 +2417,28 @@
         "schedules_target_session_id_sessions_id_fk": {
           "name": "schedules_target_session_id_sessions_id_fk",
           "tableFrom": "schedules",
-          "tableTo": "sessions",
           "columnsFrom": [
             "target_session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         },
         "schedules_skip_log_session_id_sessions_id_fk": {
           "name": "schedules_skip_log_session_id_sessions_id_fk",
           "tableFrom": "schedules",
-          "tableTo": "sessions",
           "columnsFrom": [
             "skip_log_session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},
@@ -2564,15 +2564,15 @@
         "session_goals_session_id_sessions_id_fk": {
           "name": "session_goals_session_id_sessions_id_fk",
           "tableFrom": "session_goals",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -2663,15 +2663,15 @@
         "session_pr_refs_session_id_sessions_id_fk": {
           "name": "session_pr_refs_session_id_sessions_id_fk",
           "tableFrom": "session_pr_refs",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -2815,14 +2815,6 @@
         },
         "plan_mode_enabled": {
           "name": "plan_mode_enabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "search_mode_enabled": {
-          "name": "search_mode_enabled",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -3099,15 +3091,15 @@
         "sessions_parent_session_id_sessions_id_fk": {
           "name": "sessions_parent_session_id_sessions_id_fk",
           "tableFrom": "sessions",
-          "tableTo": "sessions",
           "columnsFrom": [
             "parent_session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},
@@ -3293,15 +3285,15 @@
         "skill_usage_exposures_raw_file_path_skill_usage_sources_raw_file_path_fk": {
           "name": "skill_usage_exposures_raw_file_path_skill_usage_sources_raw_file_path_fk",
           "tableFrom": "skill_usage_exposures",
-          "tableTo": "skill_usage_sources",
           "columnsFrom": [
             "raw_file_path"
           ],
+          "tableTo": "skill_usage_sources",
           "columnsTo": [
             "raw_file_path"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -3462,28 +3454,28 @@
         "subagent_run_aliases_session_id_sessions_id_fk": {
           "name": "subagent_run_aliases_session_id_sessions_id_fk",
           "tableFrom": "subagent_run_aliases",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         },
         "subagent_run_aliases_run_id_subagent_runs_id_fk": {
           "name": "subagent_run_aliases_run_id_subagent_runs_id_fk",
           "tableFrom": "subagent_run_aliases",
-          "tableTo": "subagent_runs",
           "columnsFrom": [
             "run_id"
           ],
+          "tableTo": "subagent_runs",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {
@@ -3729,15 +3721,15 @@
         "subagent_runs_session_id_sessions_id_fk": {
           "name": "subagent_runs_session_id_sessions_id_fk",
           "tableFrom": "subagent_runs",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -3892,41 +3884,41 @@
         "wechat_file_attachments_binding_epoch_wechat_sync_state_binding_epoch_fk": {
           "name": "wechat_file_attachments_binding_epoch_wechat_sync_state_binding_epoch_fk",
           "tableFrom": "wechat_file_attachments",
-          "tableTo": "wechat_sync_state",
           "columnsFrom": [
             "binding_epoch"
           ],
+          "tableTo": "wechat_sync_state",
           "columnsTo": [
             "binding_epoch"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         },
         "wechat_file_attachments_task_id_wechat_inbox_id_fk": {
           "name": "wechat_file_attachments_task_id_wechat_inbox_id_fk",
           "tableFrom": "wechat_file_attachments",
-          "tableTo": "wechat_inbox",
           "columnsFrom": [
             "task_id"
           ],
+          "tableTo": "wechat_inbox",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         },
         "wechat_file_attachments_session_id_sessions_id_fk": {
           "name": "wechat_file_attachments_session_id_sessions_id_fk",
           "tableFrom": "wechat_file_attachments",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},
@@ -4107,36 +4099,36 @@
             "binding_epoch",
             "session_id"
           ],
-          "isUnique": true,
-          "where": "\"wechat_inbox\".\"session_id\" IS NOT NULL AND \"wechat_inbox\".\"status\" IN ('dispatching', 'accepted_running', 'waiting_desktop', 'delivery_pending')"
+          "where": "\"wechat_inbox\".\"session_id\" IS NOT NULL AND \"wechat_inbox\".\"status\" IN ('dispatching', 'accepted_running', 'waiting_desktop', 'delivery_pending')",
+          "isUnique": true
         }
       },
       "foreignKeys": {
         "wechat_inbox_binding_epoch_wechat_sync_state_binding_epoch_fk": {
           "name": "wechat_inbox_binding_epoch_wechat_sync_state_binding_epoch_fk",
           "tableFrom": "wechat_inbox",
-          "tableTo": "wechat_sync_state",
           "columnsFrom": [
             "binding_epoch"
           ],
+          "tableTo": "wechat_sync_state",
           "columnsTo": [
             "binding_epoch"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         },
         "wechat_inbox_session_id_sessions_id_fk": {
           "name": "wechat_inbox_session_id_sessions_id_fk",
           "tableFrom": "wechat_inbox",
-          "tableTo": "sessions",
           "columnsFrom": [
             "session_id"
           ],
+          "tableTo": "sessions",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "set null"
         }
       },
       "compositePrimaryKeys": {},
@@ -4273,28 +4265,28 @@
         "wechat_outbox_binding_epoch_wechat_sync_state_binding_epoch_fk": {
           "name": "wechat_outbox_binding_epoch_wechat_sync_state_binding_epoch_fk",
           "tableFrom": "wechat_outbox",
-          "tableTo": "wechat_sync_state",
           "columnsFrom": [
             "binding_epoch"
           ],
+          "tableTo": "wechat_sync_state",
           "columnsTo": [
             "binding_epoch"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         },
         "wechat_outbox_task_id_wechat_inbox_id_fk": {
           "name": "wechat_outbox_task_id_wechat_inbox_id_fk",
           "tableFrom": "wechat_outbox",
-          "tableTo": "wechat_inbox",
           "columnsFrom": [
             "task_id"
           ],
+          "tableTo": "wechat_inbox",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -4355,8 +4347,8 @@
           "columns": [
             "is_active"
           ],
-          "isUnique": true,
-          "where": "\"wechat_sync_state\".\"is_active\" = 1"
+          "where": "\"wechat_sync_state\".\"is_active\" = 1",
+          "isUnique": true
         }
       },
       "foreignKeys": {},
@@ -4368,9 +4360,9 @@
   "views": {},
   "enums": {},
   "_meta": {
+    "columns": {},
     "schemas": {},
-    "tables": {},
-    "columns": {}
+    "tables": {}
   },
   "internal": {
     "indexes": {

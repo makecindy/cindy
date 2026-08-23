@@ -222,5 +222,46 @@
     },
     "inlineFormAction": "在電腦端填寫{{label}}",
     "inlineFormActionGeneric": "在電腦端填寫一項配置"
+  },
+  "presentation": {
+    "action": { "submitting": "提交中" },
+    "permission": {
+      "highRiskTitle": "高風險授權需要二次確認",
+      "highRiskDetail": "先核對指令內容，再點一次確認允許；不確定就拒絕。",
+      "sessionAllowTitle": "可以只允許一次，也可以本任務總是允許",
+      "allowTitle": "允許後電腦端會繼續執行",
+      "tool": "工具：{{tool}}",
+      "title": "允許使用 {{tool}}？",
+      "risk": "這個指令可能修改系統、倉庫或外部服務狀態。允許前請確認你信任目前任務和指令內容。"
+    },
+    "ask": {
+      "progress": "第 {{current}}/{{total}} 個問題",
+      "multiSelect": "可多選，也可以輸入其它回答。",
+      "singleSelect": "選擇一個回答，或輸入其它回答。",
+      "emptyTitle": "沒有具體問題",
+      "emptyDetail": "可以提交空回答讓電腦端繼續。",
+      "waiting": "Agent 正在等待確認"
+    },
+    "plan": {
+      "outlineCount": "{{count}} 個章節",
+      "noOutline": "無章節目錄",
+      "hasFile": "有計畫檔案",
+      "noFile": "無計畫檔案路徑",
+      "editedTitle": "已編輯計畫，批准後按目前版本執行",
+      "approveTitle": "批准後電腦端會按計畫繼續執行"
+    },
+    "queue": {
+      "count": "{{count}} 個",
+      "readOnlyHint": "協同唯讀模式，僅顯示電腦端請求。",
+      "empty": "沒有待處理請求",
+      "hint": {
+        "plan_review": "先看計畫，必要時回饋修改，確認後電腦端才繼續執行。",
+        "permission": "只把本次決定回傳給目前電腦端任務。",
+        "ask_user_question": "回答會儲存草稿，提交後電腦端繼續。",
+        "issue_confirm": "確認標題和正文後再提交。",
+        "plugin_setup": "設定要在電腦端完成，這裡可以取消這次請求。",
+        "fallback": "手機版會按桌面端的請求順序處理。"
+      }
+    }
   }
 }

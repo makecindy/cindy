@@ -1968,7 +1968,7 @@
         "note": "已绑定当前扫码用户，其他人私聊会被自动忽略。",
         "serviceLabel": "服务",
         "appIdLabel": "App ID",
-        "ownerLabel": "Owner",
+        "ownerLabel": "主人",
         "ownerWaiting": "等待首次私聊绑定",
         "reconnect": "重新连接 {{service}} 机器人",
         "clear": "解绑"
@@ -5295,18 +5295,18 @@
         "title": "开始一个面板",
         "desc": "在右侧打开文件、审查、资源监视器、内置浏览器或终端，与左侧对话并行工作。",
         "openFile": "打开文件",
-        "fileSub": "Files",
+        "fileSub": "文件",
         "openReview": "打开审查",
-        "reviewSub": "Review",
+        "reviewSub": "审查",
         "openSubagents": "打开 Subagent",
         "subagentsSub": "可持续回看的子任务",
         "openBackgroundTasks": "打开后台任务",
-        "backgroundTasksSub": "Background tasks",
+        "backgroundTasksSub": "后台任务",
         "openResourceUsage": "打开资源监视器",
         "openBrowser": "打开浏览器",
-        "browserSub": "Browser",
+        "browserSub": "浏览器",
         "openTerminal": "打开终端",
-        "terminalSub": "Terminal",
+        "terminalSub": "终端",
         "addMoreHint": "可通过顶部 + 按钮选择更多面板类型"
       },
       "placeholderHint": "{{kind}} — 内容将在后续阶段加入"
@@ -5500,6 +5500,7 @@
     },
     "browser": {
       "newTab": "新标签",
+      "audible": "正在播放音频",
       "urlPlaceholder": "输入网址或搜索关键词",
       "goBack": "后退",
       "goForward": "前进",
@@ -6083,6 +6084,12 @@
     }
   },
   "sidebar": {
+    "vendorReadiness": {
+      "loading": "正在检查可用状态",
+      "ready": "已就绪",
+      "unauthenticated": "需要登录",
+      "binary-missing": "组件不可用"
+    },
     "ariaLabel": "侧边栏导航",
     "horizontalTabbarAria": "主区域视图切换",
     "tabs": {
@@ -6122,10 +6129,10 @@
         "enabled": "已开启"
       },
       "close": "关闭"
-    },
-    "vendorReadiness": {
-      "loading": "加载中"
     }
+  },
+  "common": {
+    "dismiss": "关闭"
   },
   "commonUi": {
     "crossAgentConvert": {
@@ -6577,6 +6584,7 @@
       "popoverTitle": "召集 Worker 协作",
       "startButton": "开启协同",
       "startFailed": "开启协同失败",
+      "stopFailed": "关闭协同失败",
       "startFailedContinue": "开启协同失败，已改为单任务继续",
       "createWorkerRefreshFailed": "Worker 状态刷新失败，请稍后重试",
       "assignmentFailed": "Worker 已创建，但无法确认任务是否派发成功。请先查看 Worker 面板，再决定是否重试",
@@ -6622,6 +6630,7 @@
     "chatInput": {
       "defaultPlaceholder": "今天我们做点什么呢~",
       "createAgentPlaceholder": "你好，{{appName}}！",
+      "recommendationShortcut": "Tab",
       "voiceInput": {
         "start": "开始语音输入",
         "stop": "停止语音输入",
@@ -6857,6 +6866,8 @@
     "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
   },
   "chat": {
+    "jumpToBottom": "跳到底部",
+    "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
       "skippedAnswer": "已跳过",
@@ -7093,6 +7104,10 @@
       "dismissTitle": "暂不恢复"
     },
     "media": {
+      "clickToZoom": "点击放大",
+      "audioPlay": "播放音频",
+      "audioPause": "暂停音频",
+      "modelPreviewAlt": "3D 模型预览",
       "imageCopied": "图片已复制",
       "copyFailed": "复制失败",
       "openFolderFailed": "打开目录失败",
@@ -7683,6 +7698,8 @@
       "waiting": "请稍候…",
       "working": "正在工作…",
       "running": "运行中…",
+      "waitingWorkflow": "正在等待 Workflow…",
+      "waitingWorkflowProgress": "正在等待 Workflow · {{done}}/{{total}} Agent",
       "turnStart": "正在处理，{{name}}",
       "issueTip": "{{name}}，试试用 /issue 给我们提反馈或建议",
       "runningTool": "{{tool}} 运行中…"
@@ -7759,6 +7776,9 @@
         "cancel": "取消"
       },
       "chatPlaceholder": "继续聊一聊…",
+      "worktreeCreating": "正在创建 worktree",
+      "worktreeFailed": "Worktree 创建失败",
+      "extraDirsSaveFailed": "附加目录保存失败",
       "chatDropAreaAria": "对话区文件拖放区域",
       "openWorkingDirAria": "在系统文件管理器中打开工作目录",
       "projectContextLoaded": "项目知识库已加载",
@@ -7887,8 +7907,9 @@
       },
       "filterVendor": {
         "all": "全部",
-        "cc": "Claude",
-        "codex": "Codex"
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
       },
       "filterGroupBy": {
         "project": "按项目分组",
@@ -8298,6 +8319,8 @@
         "revealFolder": "显示所在文件夹"
       },
       "fileBody": {
+        "drawioLoading": "正在加载 draw.io 预览…",
+        "pdfLoading": "正在加载 PDF 预览…",
         "selectFile": "选择一个文件进行预览",
         "readFailed": "读取文件失败：{{message}}",
         "truncatedNotice": "文件较大，已截断显示前 2 MB —— 在系统中打开查看完整内容",
@@ -8409,7 +8432,7 @@
       },
       "filterAria": "搜索筛选与排序（排序：{{sort}}，状态：{{status}}，Agent：{{agent}}，最近活跃：{{lastActivity}}，项目：{{projects}}）",
       "filter": {
-        "label": "筛选",
+        "label": "搜索条件",
         "active": "筛选 {{count}}",
         "reset": "重置",
         "allProjects": "所有项目"
@@ -8427,6 +8450,48 @@
     "ultra": "极致"
   },
   "scheduler": {
+    "presentation": {
+      "status": {
+        "active": "启用",
+        "paused": "已暂停",
+        "expired": "单次",
+        "running": "运行中"
+      },
+      "summary": {
+        "hourly": "每小时",
+        "daily": "每天 {{time}}",
+        "weekly": "每周{{weekday}} {{time}}",
+        "weekdays": "工作日 {{time}}",
+        "weekends": "周末 {{time}}",
+        "monthly": "每月 {{day}} 日 {{time}}",
+        "custom": "自定义"
+      },
+      "weekday": {
+        "full": { "0": "星期日", "1": "星期一", "2": "星期二", "3": "星期三", "4": "星期四", "5": "星期五", "6": "星期六" },
+        "short": { "0": "日", "1": "一", "2": "二", "3": "三", "4": "四", "5": "五", "6": "六" }
+      },
+      "time": {
+        "last": "上次 {{value}}",
+        "today": "今天 · {{time}}",
+        "yesterday": "昨天 · {{time}}",
+        "daysAgo": "{{count}} 天前 · {{time}}",
+        "startedSeconds": "{{count}} 秒前开始",
+        "startedMinutes": "{{count}} 分钟前开始",
+        "startedHours": "{{count}} 小时前开始",
+        "intervalMinutes": "{{count}}分钟",
+        "intervalHours": "{{count}}小时",
+        "intervalDays": "{{count}}天",
+        "nextLessThanMinute": "下次不到 1 分钟",
+        "next": "下次 {{when}}（{{interval}}后）"
+      },
+      "destination": {
+        "boundSession": "绑定到任务 {{id}}",
+        "newDialogue": "新对话",
+        "newWorktreeSession": "新建 worktree 任务",
+        "newSession": "新任务",
+        "inDirectory": "{{base}}，位于 "
+      }
+    },
     "page": {
       "title": "自动化",
       "totalCount": "共 {{count}} 条",
@@ -9525,7 +9590,7 @@
       "skillNameRequired": "技能名必填",
       "skillNameFormat": "格式：[a-z0-9-]+",
       "displayNameLabel": "显示名",
-      "displayNamePlaceholder": "My Skill",
+      "displayNamePlaceholder": "我的技能",
       "displayNameLimit": "最多 64 字符",
       "descriptionLabel": "描述",
       "descriptionPlaceholder": "简要描述该 Skill 的用途",
@@ -9950,7 +10015,7 @@
       "modelLabel": "模型",
       "permissionLabel": "权限模式",
       "noAvailableModels": "没有可用的 {{agent}} 模型，请在设置中检查供应商连接和凭证。",
-      "effortLabel": "Effort",
+      "effortLabel": "推理强度",
       "initialTaskLabel": "初始任务",
       "optional": "（可选）",
       "initialTaskPlaceholder": "给这个 Worker 的可选第一条任务",
@@ -9958,6 +10023,7 @@
       "enableCollabSubmit": "开启协同"
     },
     "rolePill": {
+      "unread": "未读更新",
       "worker": "Worker",
       "workersHeader": "Workers",
       "workerCountSummary_other": "{{totalCount}} 个 Worker · {{activeCount}} 运行中",
@@ -9971,6 +10037,10 @@
       "layoutMenuLabel": "Worker 列表显示方式",
       "layoutTabs": "平铺",
       "layoutDropdown": "下拉",
+      "scrollWorkersLeft": "向左查看更多 Worker",
+      "scrollWorkersRight": "向右查看更多 Worker",
+      "scrollWorkersLeftEdge": "已是最左侧的 Worker",
+      "scrollWorkersRightEdge": "已是最右侧的 Worker",
       "errorBadge": "错误",
       "errorBadgeAria": "有 Worker 出错"
     },

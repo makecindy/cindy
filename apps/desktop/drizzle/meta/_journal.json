@@ -663,8 +663,15 @@
     {
       "idx": 94,
       "version": "6",
-      "when": 1787212800000,
-      "tag": "0094_add_session_search_mode",
+      "when": 1787387261372,
+      "tag": "0094_repair_custom_provider_timestamps",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "6",
+      "when": 1787472000000,
+      "tag": "0095_add_session_search_mode",
       "breakpoints": true
     }
   ]
