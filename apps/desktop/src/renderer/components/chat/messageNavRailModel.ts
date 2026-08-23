@@ -124,10 +124,13 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  * - isSyntheticTrigger:合成指令行渲染 null,没有可滚动的锚点;
  * - systemCardType:user 位次上的系统卡(compact / learn …),不是用户提问。
  *
- * 回答摘要取该提问之后的最终 assistant 正文(thinking / tool / 系统卡不算):
- * 有收尾标记(turnCompleted / 费用 / 用量)时用最后一条收尾正文,没有则用
- * 最后一条非空正文。一轮里先写开工叙述、再写结论时预览卡必须显示结论;
- * 流式中途只有叙述时先用叙述,结论到达后覆盖,后续未收尾的过程句不再回盖。
+ * 回答摘要只属于最近一根可见刻度,且只在该刻度仍「拥有」后续回答时更新。
+ * 合成续跑 / 系统卡 user 行不画刻度,但会结束上一根刻度的归属 —— 其后的
+ * 回答不再盖到上一问(旧的 first-wins 碰巧挡住了这条;改 last-wins 后必须显式切)。
+ * steer 插话不是边界,回答仍归上一问。
+ *
+ * 每根刻度只规范化一条候选正文(最后一条收尾,没有则最后一条非空),避免流式
+ * 每次重算都对整段历史跑一遍 normalizeExcerpt。
  *
  * 注意输入是全量已加载 messages 而非 visibleRenderItems —— 导航条要覆盖
  * 整段已加载历史,渲染窗口外的目标由跳转侧扩窗解决(见 MessageStream 的
@@ -136,14 +139,35 @@ export const NAV_RAIL_MIN_AVAIL_HEIGHT_PX = NAV_RAIL_MIN_ENTRIES * NAV_RAIL_TICK
  */
 export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailEntry[] {
   const entries: NavRailEntry[] = [];
+  let lastOwnsAnswers = false;
   let lastExcerptSealed = false;
+  let pendingAnswer: ChatMessage | null = null;
+
+  const flushPendingAnswer = () => {
+    if (!pendingAnswer) return;
+    const last = entries[entries.length - 1];
+    if (last) {
+      const excerpt = normalizeExcerpt(pendingAnswer.content);
+      if (excerpt) last.answerExcerpt = excerpt;
+    }
+    pendingAnswer = null;
+  };
+
+  const closeAnswerTurn = () => {
+    flushPendingAnswer();
+    lastOwnsAnswers = false;
+    lastExcerptSealed = false;
+  };
+
   for (const m of messages) {
     if (m.role === 'user') {
-      if (m.isSyntheticTrigger) continue;
-      if (m.systemCardType) continue;
       // 运行中插话(steer)不是新一轮问答:MessageStream 的轮次语义也不把
       // 它当边界,算成刻度会把进行中的回答错挂到插话名下(PR #830 review)。
       if (m.delivery === 'steer') continue;
+      if (m.isSyntheticTrigger || m.systemCardType) {
+        closeAnswerTurn();
+        continue;
+      }
       // 预览来源按序:显示文本(hook 消息取 userText / 剥 <thread_context>,
       // Orca 通信行解包 JSON,与 UserMessage 气泡正文同源,见
       // userMessageDisplayText.ts;PR #830 review)→ ChatMessage 顶层
@@ -159,33 +183,34 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       if (!preview) preview = attachmentNames.join(' · ');
       const attachmentCount = (m.images?.length ?? 0) + (m.files?.length ?? 0);
       if (preview) {
+        closeAnswerTurn();
         entries.push({ id: m.clientId, preview, isAutomation: Boolean(m.automationOrigin) });
-        lastExcerptSealed = false;
+        lastOwnsAnswers = true;
       } else if (attachmentCount > 0) {
         // 有附件但一个名字都取不到(粘贴截图):仍是真实提问,保留刻度,
         // 预览文案由组件按 attachmentsOnly 用 i18n 兜底。
+        closeAnswerTurn();
         entries.push({
           id: m.clientId,
           preview: '',
           attachmentsOnly: attachmentCount,
           isAutomation: Boolean(m.automationOrigin),
         });
-        lastExcerptSealed = false;
+        lastOwnsAnswers = true;
+      } else {
+        // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
+        closeAnswerTurn();
       }
-      // 无文本、无附件 → 无法识别的空刻度,不当成提问(PR #830 review)。
       continue;
     }
-    if (!isNavRailAnswerCandidate(m)) continue;
-    const last = entries[entries.length - 1];
-    if (!last) continue;
-    const excerpt = normalizeExcerpt(m.content);
-    if (!excerpt) continue;
+    if (!lastOwnsAnswers || !isNavRailAnswerCandidate(m)) continue;
     const sealed = isSealedAssistantAnswer(m);
     if (sealed || !lastExcerptSealed) {
-      last.answerExcerpt = excerpt;
+      pendingAnswer = m;
       lastExcerptSealed = sealed;
     }
   }
+  flushPendingAnswer();
   return entries;
 }
 

@@ -192,6 +192,30 @@ describe('deriveNavRailEntries', () => {
     expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
   });
 
+  it('合成续跑之后的回答不再盖到上一根可见刻度', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '这个点不到吧' }),
+      msg({
+        clientId: 'a1',
+        role: 'assistant',
+        content: '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+        turnCompleted: true,
+      }),
+      msg({ clientId: 'syn', role: 'user', content: '继续', isSyntheticTrigger: true }),
+      msg({
+        clientId: 'a2',
+        role: 'assistant',
+        content: '续跑后的另一轮结论,不该出现在上一问预览里。',
+        turnCompleted: true,
+      }),
+    ];
+    const entries = deriveNavRailEntries(messages);
+    expect(entries.map((e) => e.id)).toEqual(['u1']);
+    expect(entries[0].answerExcerpt).toBe(
+      '对，那个 0 尺寸节点本身点不到。入口是定时器按钮的右键。',
+    );
+  });
+
   it('提问之前的 assistant 消息不会挂到任何条目上', () => {
     const messages = [
       msg({ clientId: 'a0', role: 'assistant', content: '开场白' }),
