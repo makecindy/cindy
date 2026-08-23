@@ -970,14 +970,18 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
-  it('locks the Pi price variant at each provider request boundary', () => {
+  it('locks the Pi price variant from bridge usage metadata at each provider request boundary', () => {
     const ctx = createPiTranslateContext(noopLogger);
     let fast = false;
     ctx.getPriceVariant = () => (fast ? 'priority' : 'standard');
     const { queue, events } = makeQueue();
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
-    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({ type: 'message_start', message: { usage: { service_tier: 'default' } } }),
+      queue,
+      ctx,
+    );
     fast = true;
     translatePiEvent(
       ev({
@@ -986,14 +990,18 @@ describe('pi translator', () => {
           role: 'assistant',
           model: 'gpt-5.6-sol',
           content: [{ type: 'text', text: 'standard request' }],
-          usage: { input: 10, output: 2 },
+          usage: { input: 10, output: 2, service_tier: 'default' },
         },
       }),
       queue,
       ctx,
     );
 
-    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({ type: 'message_start', message: { usage: { service_tier: 'priority' } } }),
+      queue,
+      ctx,
+    );
     translatePiEvent(
       ev({
         type: 'message_end',
@@ -1001,7 +1009,7 @@ describe('pi translator', () => {
           role: 'assistant',
           model: 'gpt-5.6-sol',
           content: [{ type: 'text', text: 'priority request' }],
-          usage: { input: 20, output: 3 },
+          usage: { input: 20, output: 3, service_tier: 'priority' },
         },
       }),
       queue,

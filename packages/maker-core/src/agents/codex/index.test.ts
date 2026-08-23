@@ -4640,6 +4640,81 @@ describe('CodexAgent fast mode service tier', () => {
     ]);
     await handle.close();
   });
+
+  it('calibrates the accepted tier before replaying buffered usage notifications', async () => {
+    const agent = new CodexAgent(createDeps());
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<{ turn: { id: string }; serviceTier: 'default' }>();
+    let attempt = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        return attempt === 1 ? firstStart.promise : secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-tier-buffer-replay',
+      model: 'gpt-5.4',
+      fastMode: true,
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+      throw new Error('expected usage handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const firstSend = handle.send({ type: 'user', content: 'first' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(true);
+    });
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await firstSend;
+    expect(await iterator.next()).toMatchObject({ value: { type: 'status', data: { isRunning: true } } });
+    expect(await iterator.next()).toMatchObject({ value: { type: 'error', data: { isTerminal: true } } });
+    expect(await iterator.next()).toMatchObject({ value: { type: 'status', data: { status: 'Done', isRunning: false } } });
+
+    const events: AgentEvent[] = [];
+    const secondSend = handle.send({ type: 'user', content: 'buffered tier' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    });
+
+    // All three notifications arrive before turn/start responds.  They must
+    // replay only after the response's authoritative default tier is applied.
+    handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-buffer-tier' } });
+    handlers.tokenUsageUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-buffer-tier',
+      tokenUsage: {
+        total: { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedInputTokens: 0 },
+        last: { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedInputTokens: 0 },
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-buffer-tier', status: 'completed' },
+    });
+
+    secondStart.resolve({ turn: { id: 'turn-buffer-tier' }, serviceTier: 'default' });
+    await secondSend;
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) break;
+      events.push(next.value);
+      if (next.value.type === 'done') break;
+    }
+    await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+
+    const done = events.find((event) => event.type === 'done') as
+      | { type: 'done'; data: { usage?: { segments?: unknown[] } } }
+      | undefined;
+    expect((done?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toEqual([
+      expect.objectContaining({ inputTokens: 20, outputTokens: 10, priceVariant: 'standard' }),
+    ]);
+    await handle.close();
+  });
 });
 
 describe('CodexAgent thread/settings/update channel', () => {

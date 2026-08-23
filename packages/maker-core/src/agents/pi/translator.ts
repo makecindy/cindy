@@ -57,6 +57,8 @@ interface PiUsage {
   cacheRead?: number;
   cacheWrite?: number;
   cost?: { total?: number };
+  /** Anthropic bridge metadata: the tier accepted for this concrete request. */
+  service_tier?: string;
 }
 
 interface PiAssistantMessage {
@@ -88,7 +90,7 @@ interface PiThinkingBlock {
 
 export interface PiTranslateContext {
   logger: Logger;
-  /** Host-owned live tariff selector, sampled at request boundaries. */
+  /** Host-owned live tariff selector fallback when the provider response has no accepted tier. */
   getPriceVariant?: () => 'standard' | 'priority';
   /** get_state 拿到的 contextWindow(模型切换时更新)。 */
   contextWindow: number;
@@ -338,6 +340,12 @@ function applyUsage(
   });
 }
 
+function priceVariantFromServiceTier(value: unknown): 'standard' | 'priority' | undefined {
+  if (value === 'priority') return 'priority';
+  if (value === 'default' || value === 'standard') return 'standard';
+  return undefined;
+}
+
 /**
  * 把子代理(委派)的用量并进本 turn 的记账。
  *
@@ -572,7 +580,9 @@ export function translatePiEvent(
     case 'message_start': {
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
-      ctx.pendingPriceVariants.push(ctx.getPriceVariant?.() ?? 'standard');
+      const message = event.message as { usage?: PiUsage } | undefined;
+      const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
+      ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
       // Tell the UI generation is active so it can tick the TPS denominator
       // locally between sparse message_end usage reports.
@@ -590,8 +600,10 @@ export function translatePiEvent(
     case 'message_end': {
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
+      const pendingPriceVariant = ctx.pendingPriceVariants.shift();
+      const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
       const priceVariant =
-        ctx.pendingPriceVariants.shift() ?? ctx.getPriceVariant?.() ?? 'standard';
+        pendingPriceVariant ?? reportedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard';
       applyUsage(ctx, message.usage, message.model, priceVariant);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);

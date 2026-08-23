@@ -10645,6 +10645,25 @@ export class CodexAgent extends BaseAgent {
             // 墓碑: 该 turn 的终态已抢在本响应之前到达 (典型: 收紧补中断后
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
+            // The app-server's response is the first authoritative proof of the
+            // tier it accepted.  Calibrate the per-turn origin before replaying
+            // any notifications that arrived while turn/start was in flight;
+            // otherwise a buffered tokenUsageUpdated can be priced with the
+            // requested Fast tier even when the server downgraded the turn.
+            if (Object.hasOwn(resp, 'serviceTier')) {
+              const acceptedServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+              const startEntry = inFlightStarts.get(ownerSeq);
+              if (startEntry) startEntry.serviceTier = acceptedServiceTier;
+              const origin = turnOriginByTurnId.get(resp.turn.id);
+              if (origin) origin.serviceTier = acceptedServiceTier;
+              mutableServiceTier = acceptedServiceTier;
+              log.debug('turn/start response serviceTier', {
+                turnId: resp.turn.id,
+                serviceTier: mutableServiceTier,
+                fastMode: isFastServiceTier(mutableServiceTier),
+                note: 'serviceTier calibrated before buffered turn replay',
+              });
+            }
             // 强退守卫 (Greptile P1 on #1720): hostForcedRetire 已把本会话终态收口
             // (eventQueue.end), 迟到的 turn/start 成功响应不得重新激活。正常流程里
             // client.close() 会 reject 挂起 RPC 且 quarantine 已在 adoptUnidentifiedDeadTurn
@@ -10708,24 +10727,6 @@ export class CodexAgent extends BaseAgent {
               pendingTightenInterrupt = false;
               if (!alreadyCompleted) void interruptTurnForPermissionTighten(resp.turn.id);
             }
-          }
-          if (Object.hasOwn(resp, 'serviceTier')) {
-            const acceptedServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
-            const startEntry = inFlightStarts.get(ownerSeq);
-            if (startEntry) startEntry.serviceTier = acceptedServiceTier;
-            if (resp.turn?.id) {
-              const origin = turnOriginByTurnId.get(resp.turn.id);
-              if (origin) {
-                origin.serviceTier = acceptedServiceTier;
-              }
-            }
-            mutableServiceTier = acceptedServiceTier;
-            log.debug('turn/start response serviceTier', {
-              turnId: resp.turn?.id ?? null,
-              serviceTier: mutableServiceTier,
-              fastMode: isFastServiceTier(mutableServiceTier),
-              note: 'serviceTier returned by app-server turn/start response',
-            });
           }
         };
         // 登记本轮的过载重投器。闭包持有 turnParams 与本轮的响应处理逻辑，因此
