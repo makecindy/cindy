@@ -1091,6 +1091,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       ? this.deps.getClaudeProxySessionAuth?.(opts.sessionId, opts.sessionInstanceId) ?? null
       : null;
 
+    try {
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
@@ -1102,26 +1103,20 @@ export class ClaudeCodeAgent extends BaseAgent {
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
     );
-    let env: Record<string, string>;
-    try {
-      env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
-        credentialMode,
-        sessionProviderId: opts.providerId ?? null,
-        proxyHeaders: proxySessionAuth
-          ? {
-              'x-cindy-cc-session-id': proxySessionAuth.sessionId,
-              'x-cindy-cc-session-token': proxySessionAuth.token,
-            }
-          : undefined,
-        modelContextWindows: providerRoutedModels,
-        // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
-        // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
-        subagentModel: null,
-      });
-    } catch (error) {
-      proxySessionAuth?.dispose();
-      throw error;
-    }
+    const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
+      credentialMode,
+      sessionProviderId: opts.providerId ?? null,
+      proxyHeaders: proxySessionAuth
+        ? {
+            'x-cindy-cc-session-id': proxySessionAuth.sessionId,
+            'x-cindy-cc-session-token': proxySessionAuth.token,
+          }
+        : undefined,
+      modelContextWindows: providerRoutedModels,
+      // 先按「不设」建好 env(顺带删掉可能从 process.env 继承来的残留),真正的判定在下面
+      // 拿到这份 env 之后做 —— 扫描需要 env 里的 CLAUDE_CONFIG_DIR 才能找对目录。
+      subagentModel: null,
+    });
 
     // 「Subagent 模型」设置的默认值语义(见 subagent-model-default.ts):
     // 平台的 CLAUDE_CODE_SUBAGENT_MODEL 是最高优先级**强制覆盖**,会静默盖掉用户手写
@@ -6526,6 +6521,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
 
     return handle;
+    } catch (error) {
+      // No handle escapes a failed startup, so this is its only lifecycle owner.
+      proxySessionAuth?.dispose();
+      throw error;
+    }
   }
 
   // ── Memory 实现 ────────────────────────────────────────────────────────

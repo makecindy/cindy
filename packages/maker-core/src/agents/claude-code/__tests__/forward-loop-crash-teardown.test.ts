@@ -212,6 +212,32 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent forward loop crash teardown', () => {
+  it('revokes proxy auth when query construction fails before a handle is returned', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const disposeProxySession = vi.fn();
+    sdkMock.query.mockImplementation(() => {
+      throw new Error('query startup failed');
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      getClaudeProxySessionAuth: () => ({
+        sessionId: 'session-startup-failure',
+        token: 'proxy-token',
+        dispose: disposeProxySession,
+      }),
+    }));
+
+    await expect(agent.startSession({
+      sessionId: 'session-startup-failure',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'acceptEdits',
+    })).rejects.toThrow('query startup failed');
+
+    expect(disposeProxySession).toHaveBeenCalledTimes(1);
+  });
+
   it('mid-turn stream crash tears the handle down with a full failure tail', async () => {
     const disposeProxySession = vi.fn();
     const { handle, stream, events, collected } = await startCrashableSession({
