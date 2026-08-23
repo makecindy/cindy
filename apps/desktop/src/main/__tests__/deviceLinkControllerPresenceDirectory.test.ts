@@ -151,6 +151,46 @@ describe('controller presence directory snapshot', () => {
     expect(h.exchanged).not.toHaveBeenCalled();
   });
 
+  it('目录离线快照不把实时 presence 已确认的在线设备降级', () => {
+    const h = createHarness();
+    h.onlineByDevice.set('peer-desktop', true);
+    h.platformByDevice.set('peer-desktop', 'darwin');
+
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        selfName: 'Directory Name',
+        online: false,
+        platform: 'win32',
+        isSelf: false,
+      },
+    ]);
+
+    expect(h.onlineByDevice.get('peer-desktop')).toBe(true);
+    expect(h.platformByDevice.get('peer-desktop')).toBe('darwin');
+    expect(h.nameByDevice.get('peer-desktop')).toBe('Directory Name');
+    expect(h.exchanged).not.toHaveBeenCalled();
+  });
+
+  it('目录在线快照不把实时 presence 已确认的离线设备升级', () => {
+    const h = createHarness();
+    h.onlineByDevice.set('peer-desktop', false);
+    h.platformByDevice.set('peer-desktop', 'win32');
+
+    h.apply([
+      {
+        deviceId: 'peer-desktop',
+        online: true,
+        platform: 'darwin',
+        isSelf: false,
+      },
+    ]);
+
+    expect(h.onlineByDevice.get('peer-desktop')).toBe(false);
+    expect(h.platformByDevice.get('peer-desktop')).toBe('win32');
+    expect(h.exchanged).not.toHaveBeenCalled();
+  });
+
   it('连接代重置后允许新目录重新初始化同一设备', () => {
     const h = createHarness();
     const oldRequestEpoch = h.freshness.epoch;
