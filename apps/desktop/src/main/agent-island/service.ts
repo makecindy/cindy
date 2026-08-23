@@ -795,12 +795,12 @@ export class AgentIslandService {
       this.scheduleSilencedRunClearForSession(hydrated.sessionId, SILENCED_COMPLETION_CLEAR_MS);
     }
     if (!changed) return;
-    if (event.type === 'done' || event.type === 'error') {
-      this.bumpUnreadAttentionGeneration(hydrated.sessionId);
-    }
     this.ensureMetadata(hydrated.sessionId);
     if (!suppressCompletionAttention) {
       this.syncSessionAttention(hydrated.sessionId);
+    }
+    if (this.state.remoteUnreadTerminals.has(hydrated.sessionId)) {
+      this.bumpUnreadAttentionGeneration(hydrated.sessionId);
     }
     if (isStreamingPreviewEvent(event)) {
       this.scheduleStreamingPreviewPublish();
@@ -1108,6 +1108,7 @@ export class AgentIslandService {
     if (options.reason === 'process-closed') {
       closeAgentIslandSessionPreservingUnread(this.state, sessionId, Date.now());
     } else {
+      this.unreadAttentionGenerationBySession.delete(sessionId);
       removeAgentIslandSession(this.state, sessionId);
     }
     this.deletePermissionRequestsForSession(sessionId);
@@ -1130,6 +1131,7 @@ export class AgentIslandService {
     this.replacementTurnDispatchingSessionIds.delete(sessionId);
     this.clearSilencedRunForSession(sessionId);
     this.sessionHadAttentionAtRunStart.delete(sessionId);
+    this.unreadAttentionGenerationBySession.delete(sessionId);
     for (const key of this.userPromptRollbackTokens.keys()) {
       if (key.startsWith(`${sessionId}:`)) {
         this.userPromptRollbackTokens.delete(key);

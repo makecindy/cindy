@@ -1042,6 +1042,42 @@ describe('AgentIslandService native publishing', () => {
     );
   });
 
+  it('does not let a retrying error bump generation and drop a stale not-found clear', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let releaseSnapshot: ((row: { status: string; title: string | null; userSendAt: number | null; workingDir: string | null; workspaceKind: string | null } | null) => void) | undefined;
+    mocks.getSessionRowSnapshot.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseSnapshot = resolve;
+      }),
+    );
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+
+    service.handleSessionAttentionCleared('s1', 'passive');
+    // 重启后内存空、只有异步 not-found 查询在飞。可恢复 error 会建一条
+    // running:false 的临时条目并立刻被 prune,不得因此 bump generation 把旧收尾包作废。
+    service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, recoverableErrorEvent('retrying'));
+    mocks.tapWindowBroadcast.mockClear();
+
+    releaseSnapshot?.({
+      status: 'active',
+      title: 'stale',
+      userSendAt: null,
+      workingDir: '/tmp/x',
+      workspaceKind: null,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: 's1', attention: false }),
+    );
+  });
+
   it('broadcasts a terminal clear when a read receipt clears unread completion attention', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({
@@ -5709,6 +5745,25 @@ describe('会话关闭原因决定条目去留', () => {
 
     service.handleSessionClosed('plain', { reason: 'process-closed' });
     expect(sessions.has('plain')).toBe(false);
+  });
+
+  it('drops unread generation when a session is discarded without leftover attention', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+    service.handleUserPrompt({ sessionId: 'gone', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 'gone', agentKind: 'codex' }, doneEvent());
+    const generations = (
+      service as unknown as { unreadAttentionGenerationBySession: Map<string, number> }
+    ).unreadAttentionGenerationBySession;
+    expect(generations.has('gone')).toBe(true);
+
+    service.handleSessionClosed('gone');
+    expect(generations.has('gone')).toBe(false);
   });
 
   it('TTL prune 后再 process-close 仍保留远程未读,直到真正 ack', async () => {

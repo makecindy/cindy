@@ -2090,6 +2090,11 @@ describe('Agent Island error read semantics (已读以 App 内真实展示为准
     expect(acknowledgeAgentIslandSessionRead(state, 'err', 3_100, { source: 'passive' })).toBe('error-immune');
     expect(state.remoteUnreadTerminals.get('err')).toMatchObject({ phase: 'error' });
     expect(state.sessions.get('err')?.phase).toBe('running');
+    // 远程侧栏同一 session 只能挂一帧:新一轮 running 是当前活档,绿/红点让位给转圈。
+    // 账本仍在,所以 passive 清不掉旧 error;下一轮终态或 explicit ack 再收敛。
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'err', phase: 'running' }),
+    ]);
 
     expect(acknowledgeAgentIslandSessionRead(state, 'err', 3_200, { source: 'explicit' })).toBe('cleared');
     expect(state.remoteUnreadTerminals.has('err')).toBe(false);
@@ -2109,6 +2114,9 @@ describe('Agent Island error read semantics (已读以 App 内真实展示为准
     expect(state.sessions.get('err')?.phase).toBe('running');
     expect(state.sessions.get('err')?.unread).toBe(true);
     expect(state.remoteUnreadTerminals.get('err')).toMatchObject({ phase: 'error' });
+    expect(buildAllSessionActivitySnapshots(state)).toEqual([
+      expect.objectContaining({ sessionId: 'err', phase: 'running' }),
+    ]);
     expect(acknowledgeAgentIslandSessionRead(state, 'err', afterExpiryAt + 20, { source: 'passive' })).toBe('error-immune');
     expect(state.remoteUnreadTerminals.get('err')).toMatchObject({ phase: 'error' });
 
