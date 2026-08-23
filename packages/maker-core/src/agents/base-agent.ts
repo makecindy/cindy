@@ -476,6 +476,12 @@ export interface PiExtensionUiStrings {
 }
 
 export interface AgentDeps {
+  /**
+   * Attests a local Claude Code session to the Desktop loopback proxy before
+   * the SDK has emitted its own session id. The token is host-owned and never
+   * reaches an upstream provider.
+   */
+  getClaudeProxySessionAuth?: (sessionId: string) => { sessionId: string; token: string } | null;
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;

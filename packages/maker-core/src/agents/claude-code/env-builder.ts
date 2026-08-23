@@ -21,6 +21,8 @@ interface ModelContextWindowSource {
 }
 
 interface ClaudeEnvBuildOptions {
+  /** Host-managed headers for the local loopback proxy. They are not forwarded upstream. */
+  proxyHeaders?: Readonly<Record<string, string>>;
   /**
    * Host-provided model context windows for provider-routed models.
    *
@@ -52,6 +54,23 @@ interface ClaudeEnvBuildOptions {
    *     subagentModelForRoute 时按 sessionProviderId/credentialMode 走路由感知入口)。
    */
   subagentModel?: string | null;
+}
+
+function appendProxyHeaders(env: Record<string, string>, headers: Readonly<Record<string, string>> | undefined): void {
+  if (!headers || Object.keys(headers).length === 0) return;
+  const managedNames = new Set(Object.keys(headers).map((name) => name.toLowerCase()));
+  const existing = (env.ANTHROPIC_CUSTOM_HEADERS ?? '')
+    .split('\n')
+    .filter((line) => {
+      const separator = line.indexOf(':');
+      return separator < 0 || !managedNames.has(line.slice(0, separator).trim().toLowerCase());
+    })
+    .filter(Boolean);
+  for (const [name, value] of Object.entries(headers)) {
+    if (!/^[A-Za-z0-9-]+$/.test(name) || /[\r\n]/.test(value)) continue;
+    existing.push(`${name}: ${value}`);
+  }
+  if (existing.length > 0) env.ANTHROPIC_CUSTOM_HEADERS = existing.join('\n');
 }
 
 function serializeModelContextWindows(
@@ -322,6 +341,7 @@ export async function buildClaudeEnv(
     delete authEnv.CLAUDE_CONFIG_DIR;
   }
   Object.assign(env, authEnv);
+  appendProxyHeaders(env, options.proxyHeaders);
 
   // Claude Code's documented child-agent model override.
   //

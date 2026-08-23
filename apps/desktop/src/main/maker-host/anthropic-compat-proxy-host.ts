@@ -41,6 +41,7 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
@@ -114,6 +115,35 @@ const log = createMakerLogger('cc-proxy');
 
 let _handle: ProxyHandle | null = null;
 let _initialized = false;
+
+const CC_PROXY_SESSION_ID_HEADER = 'x-cindy-cc-session-id';
+const CC_PROXY_SESSION_TOKEN_HEADER = 'x-cindy-cc-session-token';
+const CC_PROXY_INTERNAL_HEADERS = [CC_PROXY_SESSION_ID_HEADER, CC_PROXY_SESSION_TOKEN_HEADER];
+const ccProxySessionTokens = new Map<string, string>();
+
+/** Mint the per-process proof that lets a fresh CC request select its Cindy session route. */
+export function getClaudeProxySessionAuth(sessionId: string): { sessionId: string; token: string } | null {
+  const id = sessionId.trim();
+  if (!id) return null;
+  let token = ccProxySessionTokens.get(id);
+  if (!token) {
+    token = randomBytes(32).toString('base64url');
+    ccProxySessionTokens.set(id, token);
+  }
+  return { sessionId: id, token };
+}
+
+/** Internal proxy headers are only safe when this process owns the loopback hop. */
+export function isAnthropicCompatProxyReady(): boolean {
+  return _handle !== null;
+}
+
+function authenticateClaudeProxySession(sessionId: string | null, token: string | null): string | null {
+  if (!sessionId || !token) return null;
+  const expected = ccProxySessionTokens.get(sessionId);
+  if (!expected || expected.length !== token.length) return null;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(token)) ? sessionId : null;
+}
 
 // gateway api key reader —— 由 host 注入(readClaudeApiKey),避免 proxy-host 直接 import
 // auth-adapters(重模块)。oauth-spawn 下走网关的请求(默认 / 选 XD)要把鉴权头换成它。
@@ -317,11 +347,25 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
+    const claimedCcSessionId = headerValue(ctx.headers, CC_PROXY_SESSION_ID_HEADER);
+    const claimedCcSessionToken = headerValue(ctx.headers, CC_PROXY_SESSION_TOKEN_HEADER);
+    const authenticatedCcSessionId = authenticateClaudeProxySession(
+      claimedCcSessionId,
+      claimedCcSessionToken,
+    );
+    if ((claimedCcSessionId !== null || claimedCcSessionToken !== null) && !authenticatedCcSessionId) {
+      return {
+        localHandler: async ({ res }) => {
+          res.writeHead(401, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+          res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', code: 'invalid_cc_session_token', message: 'Invalid Claude Code proxy session token.' } }));
+        },
+      };
+    }
     const sdkSessionId = ctx.headers['x-claude-code-session-id'];
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
-    const sessionId = piSessionId ?? ccSessionId;
+    const sessionId = piSessionId ?? authenticatedCcSessionId ?? ccSessionId;
     if (sdkSessionId) {
       recordClaudeApiActivity(
         sdkSessionId,
@@ -506,8 +550,17 @@ export function createModelRoutingTransform(): RoutingTransform {
       headerValue(ctx.headers, 'x-cindy-pi-session-id') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-session-token') !== null
       || headerValue(ctx.headers, 'x-cindy-pi-provider-id') !== null;
-    if (!hasInternalPiHeader) return decision;
-    const stripInternalPiHeaders = (
+    const hasInternalCcHeader =
+      headerValue(ctx.headers, CC_PROXY_SESSION_ID_HEADER) !== null
+      || headerValue(ctx.headers, CC_PROXY_SESSION_TOKEN_HEADER) !== null;
+    if (!hasInternalPiHeader && !hasInternalCcHeader) return decision;
+    const internalHeadersToDelete = [
+      ...(hasInternalPiHeader
+        ? ['x-cindy-pi-session-id', 'x-cindy-pi-session-token', 'x-cindy-pi-provider-id']
+        : []),
+      ...(hasInternalCcHeader ? CC_PROXY_INTERNAL_HEADERS : []),
+    ];
+    const stripInternalHeaders = (
       resolved: RoutingDecision | null,
     ): RoutingDecision | null => {
       if (resolved?.localHandler) return resolved;
@@ -516,16 +569,14 @@ export function createModelRoutingTransform(): RoutingTransform {
         headerDelete: [
           ...new Set([
             ...(resolved?.headerDelete ?? []),
-            'x-cindy-pi-session-id',
-            'x-cindy-pi-session-token',
-            'x-cindy-pi-provider-id',
+            ...internalHeadersToDelete,
           ]),
         ],
       };
     };
     return decision instanceof Promise
-      ? decision.then(stripInternalPiHeaders)
-      : stripInternalPiHeaders(decision);
+      ? decision.then(stripInternalHeaders)
+      : stripInternalHeaders(decision);
   };
 }
 
