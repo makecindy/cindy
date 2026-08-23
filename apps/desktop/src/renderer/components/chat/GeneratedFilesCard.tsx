@@ -26,7 +26,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, FileText } from 'lucide-react';
+import { ChevronDown, ChevronUp, FileText } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -144,13 +144,7 @@ function GeneratedFileChip({ file }: { file: GeneratedFileRef }) {
               </span>
             </span>
             <span className="flex shrink-0 items-start pt-1 text-[var(--text-tertiary)]">
-              {artifact.qa?.status === 'warning' ? (
-                <AlertTriangle size={15} aria-label={t('chat.generatedFiles.qaWarning')} />
-              ) : artifact.qa?.status === 'passed' ? (
-                <CheckCircle2 size={15} aria-label={t('chat.generatedFiles.qaPassed')} />
-              ) : (
-                <FileText size={15} aria-label={t('chat.generatedFiles.qaPending')} />
-              )}
+              <FileText size={15} aria-hidden="true" />
             </span>
           </>
         ) : (

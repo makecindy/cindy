@@ -315,7 +315,6 @@ export function registerMakePptxTool(
               (slide) => (slide.layout ?? DEFAULT_PPTX_LAYOUT) === 'cover',
             ),
             summary: { kind: 'slides', value: slides.length },
-            qa: { status: 'pending' },
           }),
         });
       } catch (err) {

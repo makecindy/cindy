@@ -426,7 +426,6 @@ export function registerMakeXlsxTool(
             ...(sheets[0]?.name ? { title: sheets[0].name } : {}),
             theme,
             summary: { kind: 'sheets', value: sheets.length },
-            qa: { status: 'pending' },
           }),
         });
       } catch (err) {

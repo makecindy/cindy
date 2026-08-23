@@ -32,10 +32,6 @@ export interface DocsArtifactMetadata {
     kind: 'pages' | 'slides' | 'sheets' | 'rows';
     value: number;
   };
-  qa?: {
-    status: 'pending' | 'passed' | 'warning';
-    warning?: string;
-  };
 }
 
 export function artifactMetadata(

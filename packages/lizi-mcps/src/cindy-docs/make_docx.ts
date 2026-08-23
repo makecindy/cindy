@@ -114,7 +114,6 @@ export function registerMakeDocxTool(
             ...(subtitle?.trim() ? { subtitle: subtitle.trim() } : {}),
             theme,
             cover: useCover,
-            qa: { status: 'pending' },
           }),
         });
       } catch (err) {

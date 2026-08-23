@@ -7577,10 +7577,7 @@
       "showLess": "折りたたむ",
       "artifactLabel": "成果物",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} ページ", "slides": "{{count}} 枚のスライド", "sheets": "{{count}} シート", "rows": "{{count}} 行" },
-      "qaPassed": "確認済み",
-      "qaWarning": "要確認",
-      "qaPending": "確認待ち"
+      "summary": { "pages": "{{count}} ページ", "slides": "{{count}} 枚のスライド", "sheets": "{{count}} シート", "rows": "{{count}} 行" }
     },
     "turnChanges": {
       "title": "{{count}} ファイルを変更",

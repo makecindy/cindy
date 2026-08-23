@@ -257,10 +257,6 @@ export function registerRenderPdfTool(
             format: 'pdf',
             title: extractHtmlTitle(sourceHtml),
             theme,
-            qa: {
-              status: warnings.length > 0 ? 'warning' : 'pending',
-              ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
-            },
           }),
           ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
         });

@@ -43,7 +43,6 @@ export type DocumentArtifactSummary = {
   kind: 'pages' | 'slides' | 'sheets' | 'rows';
   value: number;
 };
-export type DocumentArtifactQaStatus = 'pending' | 'passed' | 'warning';
 
 export interface DocumentArtifactMetadata {
   format: DocumentArtifactFormat;
@@ -52,7 +51,6 @@ export interface DocumentArtifactMetadata {
   theme?: 'light' | 'dark' | 'navy';
   cover?: boolean;
   summary?: DocumentArtifactSummary;
-  qa?: { status: DocumentArtifactQaStatus; warning?: string };
 }
 
 interface ToolUseLike {
@@ -148,19 +146,6 @@ export function extractDocumentArtifactMetadata(
         : name === 'make_xlsx' && Array.isArray(inputRecord?.sheets)
           ? { kind: 'sheets' as const, value: inputRecord.sheets.length }
           : undefined;
-  const rawQa = asRecord(resultArtifact?.qa) ?? asRecord(result?.qa);
-  const qaStatus = rawQa?.status;
-  const warning = stringField(rawQa, 'warning') ?? stringField(result, 'warning');
-  const qa =
-    qaStatus === 'passed' || qaStatus === 'warning' || qaStatus === 'pending'
-      ? {
-          status: qaStatus as DocumentArtifactQaStatus,
-          ...(warning ? { warning } : {}),
-        }
-      : {
-          status: warning ? ('warning' as const) : ('pending' as const),
-          ...(warning ? { warning } : {}),
-        };
   return {
     format,
     ...(title ? { title } : {}),
@@ -172,7 +157,6 @@ export function extractDocumentArtifactMetadata(
         ? { cover: inputRecord.cover }
         : {}),
     ...(summary ? { summary: summary as DocumentArtifactSummary } : {}),
-    qa,
   };
 }
 

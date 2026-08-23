@@ -7580,10 +7580,7 @@
       "showLess": "Show less",
       "artifactLabel": "Artifact",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows" },
-      "qaPassed": "Checked",
-      "qaWarning": "Review needed",
-      "qaPending": "Check pending"
+      "summary": { "pages": "{{count}} pages", "slides": "{{count}} slides", "sheets": "{{count}} sheets", "rows": "{{count}} rows" }
     },
     "turnChanges": {
       "title": "Changed {{count}} files",

@@ -7576,10 +7576,7 @@
       "showLess": "收起",
       "artifactLabel": "成品",
       "formats": { "pdf": "PDF", "docx": "Word", "pptx": "PPT", "xlsx": "Excel" },
-      "summary": { "pages": "{{count}} 頁", "slides": "{{count}} 張投影片", "sheets": "{{count}} 個工作表", "rows": "{{count}} 列" },
-      "qaPassed": "已完成檢查",
-      "qaWarning": "需要留意",
-      "qaPending": "待檢查"
+      "summary": { "pages": "{{count}} 頁", "slides": "{{count}} 張投影片", "sheets": "{{count}} 個工作表", "rows": "{{count}} 列" }
     },
     "turnChanges": {
       "title": "已更改 {{count}} 個檔案",

@@ -37,7 +37,6 @@ describe('collectGeneratedFiles', () => {
               title: '产品路线图',
               theme: 'navy',
               summary: { kind: 'slides', value: 5 },
-              qa: { status: 'pending' },
             },
           }),
         },
@@ -50,7 +49,6 @@ describe('collectGeneratedFiles', () => {
       title: '产品路线图',
       theme: 'navy',
       summary: { kind: 'slides', value: 5 },
-      qa: { status: 'pending' },
     });
   });
 
@@ -67,7 +65,6 @@ describe('collectGeneratedFiles', () => {
       title: '季度报告',
       subtitle: '内部版',
       theme: 'light',
-      qa: { status: 'pending' },
     });
   });
 
