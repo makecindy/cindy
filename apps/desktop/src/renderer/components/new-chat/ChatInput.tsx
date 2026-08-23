@@ -2369,6 +2369,24 @@ export function ChatInput({
           return true;
         }
 
+        // Enter — 推荐可见时等同点击发送按钮：先填入推荐词，再走完整发送链。
+        // 放在 palette 之后，避免 Enter 抢走候选项确认；仅接管裸 Enter，保留
+        // Shift/Alt+Enter 换行、Cmd/Ctrl+Enter 快捷键与 IME 输入。
+        if (
+          event.key === 'Enter' &&
+          !event.shiftKey &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          !event.repeat &&
+          !event.isComposing &&
+          showRecommendationRef.current
+        ) {
+          event.preventDefault();
+          void voiceInputStopAndSendRef.current();
+          return true;
+        }
+
         // Tab — 填入推荐提示词(编辑器为空 + 推荐激活 + 无修饰键)。
         // 放在 captureKey 之后:palette 打开时 Tab 归 palette。
         // 放在 cycle-permission-mode 之前:裸 Tab 不会误触 Shift+Tab 权限轮切。
