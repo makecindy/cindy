@@ -45,9 +45,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { isCuratedQwen38Tag } from '../../shared/localModelRuntime.js';
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
-import { getActiveCatalog, getCatalogModelContextWindow } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  getCatalogModelContextWindow,
+  getXdGatewayModelAccessSnapshot,
+} from './active-catalog.js';
 import {
   gatewayDefaultRouteDecision,
   getProviderRoutingDescriptor,
@@ -310,6 +315,26 @@ function subagentRouteFromHeaders(
   const threadId = selectedThreadIdFromHeaders(headers);
   if (threadId === 'unknown') return undefined;
   return subagentRouteByThread.get(threadId);
+}
+
+/**
+ * Resolve only the independent Subagent route carried by this WS upgrade.
+ *
+ * A registered child already owns a frozen route snapshot. Its first
+ * collab_spawn upgrade can race thread/started, so fall back to the explicit
+ * parent header without mutating thread ownership from the handshake path.
+ */
+function subagentRouteForWebSocketUpgrade(
+  headers: Readonly<Record<string, string>>,
+): CodexSubagentRouteSnapshot | undefined {
+  const registeredRoute = subagentRouteFromHeaders(headers);
+  if (registeredRoute) return registeredRoute;
+  if (!isCollabSpawnRequest(headers)) return undefined;
+
+  const parentThreadId = headerValue(headers, 'x-codex-parent-thread-id');
+  if (!parentThreadId) return undefined;
+  return subagentRouteByThread.get(parentThreadId)
+    ?? subagentRouteByParentThread.get(parentThreadId);
 }
 
 interface ProviderRequestContext {
@@ -832,11 +857,15 @@ function createChatBridgeDecision(
         googleThoughtSignaturePlaceholder: true,
     }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
-  const capabilities = chatBridgeCapabilitiesForRoute(
+  const routedCapabilities = chatBridgeCapabilitiesForRoute(
     route.routing.upstream,
     realModel,
     baseCapabilities,
   );
+  const capabilities =
+    route.providerId === 'cindy-local-ollama' && isCuratedQwen38Tag(realModel)
+      ? { ...routedCapabilities, systemMessagePolicy: 'coalesce-leading' as const }
+      : routedCapabilities;
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -1322,7 +1351,36 @@ const XAI_SUPPORTED_TOOL_TYPES = new Set([
   'shell',
 ]);
 
-function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown> | null {
+function xaiToolChoiceAfterSanitize(
+  toolChoice: unknown,
+  tools: readonly unknown[],
+): unknown {
+  if (!isPlainObject(toolChoice) || typeof toolChoice.type !== 'string') return toolChoice;
+
+  const referencesSurvivingTool = (choice: Record<string, unknown>) => tools.some((tool) => {
+    if (!isPlainObject(tool) || tool.type !== choice.type) return false;
+    if (choice.type !== 'function') return true;
+    return typeof choice.name === 'string' && tool.name === choice.name;
+  });
+
+  if (toolChoice.type === 'allowed_tools' && Array.isArray(toolChoice.tools)) {
+    const allowedTools = toolChoice.tools.filter(
+      (choice): choice is Record<string, unknown> => isPlainObject(choice) && referencesSurvivingTool(choice),
+    );
+    return allowedTools.length > 0 ? { ...toolChoice, tools: allowedTools } : 'none';
+  }
+
+  // Fail closed: a forced choice that references a removed tool (e.g. a
+  // cache-only web_search that was dropped, or an unsupported namespace tool)
+  // must NOT widen into 'auto', which would let the model call surviving tools
+  // the caller never authorized. Collapse to 'none' so no tool is callable.
+  return referencesSurvivingTool(toolChoice) ? toolChoice : 'none';
+}
+
+function sanitizeXaiTools(
+  body: Record<string, unknown>,
+  options: { preserveNoneToolChoice?: boolean; preserveSerialToolCalls?: boolean } = {},
+): Record<string, unknown> | null {
   if (!Array.isArray(body.tools)) return null;
 
   let changed = false;
@@ -1333,9 +1391,16 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
       continue;
     }
     if (tool.type === 'web_search') {
+      // A cache-only request must not silently become a live web-search request
+      // just because xAI/Grok cannot represent external_web_access=false.
+      const toolRecord = tool as Record<string, unknown>;
+      if (toolRecord.external_web_access === false) {
+        changed = true;
+        continue;
+      }
       const nextTool: Record<string, unknown> = { type: 'web_search' };
       for (const key of ['filters', 'enable_image_understanding', 'enable_image_search']) {
-        if (key in tool) nextTool[key] = tool[key];
+        if (key in tool) nextTool[key] = toolRecord[key];
       }
       if (Object.keys(nextTool).length !== Object.keys(tool).length) changed = true;
       tools.push(nextTool);
@@ -1346,8 +1411,38 @@ function sanitizeXaiTools(body: Record<string, unknown>): Record<string, unknown
   if (!changed) return null;
 
   const next: Record<string, unknown> = { ...body };
-  if (tools.length > 0) next.tools = tools;
-  else delete next.tools;
+  if (tools.length > 0) {
+    next.tools = tools;
+    next.tool_choice = xaiToolChoiceAfterSanitize(next.tool_choice, tools);
+  } else {
+    delete next.tools;
+    // All declared tools were filtered out. When server-side x_search is
+    // re-injected afterwards, a tool_choice that *references a removed tool*
+    // (an object forced choice, an emptied allowed_tools, or 'required') must
+    // collapse to 'none' so the model cannot widen the caller's authorization
+    // by auto-calling the injected search. 'auto' does NOT reference a
+    // specific tool — it means "choose any available tool" — so it stays,
+    // letting Grok use the re-injected x_search as the caller intended; a
+    // request that had no tool_choice (or already 'none') is left untouched.
+    // When nothing is re-injected (Guardian / cache-only search), drop the
+    // control field entirely — a 'none' with no tools is still an invalid xAI
+    // request (PR #2444 Codex P1/P2).
+    if (options.preserveNoneToolChoice) {
+      const choice = next.tool_choice;
+      if (
+        choice !== undefined
+        && choice !== 'none'
+        && choice !== 'auto'
+      ) {
+        next.tool_choice = 'none';
+      }
+    } else {
+      delete next.tool_choice;
+    }
+    if (!options.preserveSerialToolCalls) {
+      delete next.parallel_tool_calls;
+    }
+  }
   return next;
 }
 
@@ -1378,11 +1473,25 @@ function narrowXaiForcedToolChoice(
   return { ...body, tool_choice: { type: 'function', name: only.name } };
 }
 
+function hasCacheOnlySearchProhibition(body: Record<string, unknown>): boolean {
+  if (!Array.isArray(body.tools)) return false;
+  return body.tools.some(
+    (tool) => {
+      if (!isPlainObject(tool) || tool.type !== 'web_search') return false;
+      return (tool as Record<string, unknown>).external_web_access === false;
+    },
+  );
+}
+
 function ensureXaiServerSideTools(body: Record<string, unknown>): Record<string, unknown> | null {
   const realModel = xaiRealModelId(body.model);
   if (!realModel) return null;
   const serverTools = xaiServerSideTools(realModel);
   if (serverTools.length === 0) return null;
+  // A cache-only web_search (external_web_access: false) must not be silently
+  // upgraded to a live x_search. xAI cannot represent the prohibition, so we
+  // dropped the web_search in sanitizeXaiTools; do not re-add a live search.
+  if (hasCacheOnlySearchProhibition(body)) return null;
 
   const existing = Array.isArray(body.tools) ? body.tools : [];
   const declaredTypes = new Set(
@@ -1502,6 +1611,15 @@ const STRICT_GATEWAY_TOOL_HISTORY_MODELS = new Set([
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-v4-flash',
 ]);
+// DeepSeek V4's Responses compatibility endpoint accepts the host's patch
+// custom tool, but rejects every other custom tool (notably Codex's `exec`).
+// Keep ordinary function tools untouched: the restriction is specifically on
+// the Responses `custom` tool dialect, not on function calling as a whole.
+const DEEPSEEK_V4_MODELS = new Set([
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+]);
+const DEEPSEEK_V4_SUPPORTED_CUSTOM_TOOL_NAMES = new Set(['apply_patch']);
 const RESPONSE_TOOL_CALL_TYPES = new Set(['function_call', 'custom_tool_call']);
 const RESPONSE_TOOL_OUTPUT_TYPES = new Set(['function_call_output', 'custom_tool_call_output']);
 
@@ -1660,6 +1778,58 @@ function createStrictGatewayHistoryCompatTransform(): RequestTransform {
   };
 }
 
+function deepSeekToolChoiceReferencesRemovedCustomTool(
+  toolChoice: unknown,
+  tools: readonly unknown[],
+): boolean {
+  if (!isPlainObject(toolChoice) || toolChoice.type !== 'custom' || typeof toolChoice.name !== 'string') {
+    return false;
+  }
+  return !tools.some((tool) =>
+    tool === toolChoice.name ||
+    (isPlainObject(tool) && tool.type === 'custom' && tool.name === toolChoice.name),
+  );
+}
+
+/**
+ * DeepSeek V4 rejects Codex's general-purpose custom `exec` tool before it
+ * reaches the model, while accepting `apply_patch`. Filter only that custom
+ * tool dialect so function/MCP declarations keep their existing semantics.
+ */
+function sanitizeDeepSeekV4CustomTools(body: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(body)) return null;
+  if (!DEEPSEEK_V4_MODELS.has(typeof body.model === 'string' ? body.model : '')) return null;
+  if (!Array.isArray(body.tools)) return null;
+
+  let changed = false;
+  const tools: unknown[] = [];
+  for (const tool of body.tools) {
+    const customToolName =
+      typeof tool === 'string'
+        ? tool
+        : isPlainObject(tool) && tool.type === 'custom' && typeof tool.name === 'string'
+          ? tool.name
+          : null;
+    if (customToolName !== null && !DEEPSEEK_V4_SUPPORTED_CUSTOM_TOOL_NAMES.has(customToolName)) {
+      changed = true;
+      continue;
+    }
+    tools.push(tool);
+  }
+  if (!changed) return null;
+
+  const next: Record<string, unknown> = { ...body };
+  if (tools.length > 0) {
+    next.tools = tools;
+    if (deepSeekToolChoiceReferencesRemovedCustomTool(next.tool_choice, tools)) next.tool_choice = 'auto';
+  } else {
+    delete next.tools;
+    delete next.tool_choice;
+    delete next.parallel_tool_calls;
+  }
+  return next;
+}
+
 /** Seed accepts the reasoning effort, but rejects Responses' summary selector. */
 function sanitizeByteDanceSeedReasoning(body: Record<string, unknown>): Record<string, unknown> | null {
   if (!isPlainObject(body.reasoning) || !('summary' in body.reasoning)) {
@@ -1720,7 +1890,24 @@ function createXaiResponsesCompatTransform(): RequestTransform {
     if (current) changed = true;
     else current = body;
 
-    const withSanitizedTools = sanitizeXaiTools(current);
+    // Preserve tool_choice:'none' / parallel_tool_calls only when server-side
+    // x_search will be re-injected afterwards. For Guardian requests and
+    // cache-only search prohibitions (external_web_access:false) no x_search
+    // is added, so leaving control fields on a now-empty tools list produces
+    // an invalid request. Clean them instead.
+    // Detect cache-only on the ORIGINAL body because sanitizeXaiTools removes
+    // the web_search descriptor before we inspect the result.
+    const isGuardian = Boolean(guardianParentThreadIdFromHeaders(ctx.headers));
+    const realModelId = xaiRealModelId(requestModel);
+    const canInjectServerTools =
+      realModelId !== null && xaiServerSideTools(realModelId).length > 0;
+    const willReinjectTools =
+      !isGuardian && canInjectServerTools && !hasCacheOnlySearchProhibition(body);
+
+    const withSanitizedTools = sanitizeXaiTools(current, {
+      preserveNoneToolChoice: willReinjectTools,
+      preserveSerialToolCalls: willReinjectTools,
+    });
     if (withSanitizedTools) {
       current = withSanitizedTools;
       changed = true;
@@ -1730,7 +1917,9 @@ function createXaiResponsesCompatTransform(): RequestTransform {
     // 保证注入项不会被同一轮的裁剪逻辑改形或丢掉。
     // Guardian must retain xAI's schema/input compatibility, but it must not
     // gain provider-hosted search tools while reviewing another action.
-    if (!guardianParentThreadIdFromHeaders(ctx.headers)) {
+    // Cache-only search (external_web_access:false) must not silently become
+    // a live x_search — skip injection on that path too.
+    if (willReinjectTools) {
       const withServerSideTools = ensureXaiServerSideTools(current);
       if (withServerSideTools) {
         current = withServerSideTools;
@@ -1752,6 +1941,111 @@ function createXaiResponsesCompatTransform(): RequestTransform {
       changed = true;
     }
     return changed ? current : null;
+  };
+}
+
+/**
+ * The XD Gateway claims this wire model for its codex routing when the active
+ * catalog exposes it under `xd.models.codex`. We use the catalog membership
+ * (not `providerRoutingServesWireModel`, which only consults routing
+ * descriptors and is universal for `xd`) so that a non-xd provider that also
+ * lists the same id stays authoritative for its own compat transform.
+ *
+ * When the catalog is non-authoritative (a /models fetch is pending or
+ * failed), an empty codex list must NOT be used as negative evidence: an
+ * implicit session still defaults to the XD Gateway, so skipping cleanup here
+ * would let namespace tools reach Grok untouched and re-trigger the schema 400
+ * this transform exists to prevent. In that state clean unconditionally for
+ * implicit routes (PR #2444 Codex P1).
+ */
+function xdProviderClaimsWireModel(wireModel: string): boolean {
+  if (!wireModel.startsWith('x-ai/grok')) return false;
+  const { authoritative, models } = getXdGatewayModelAccessSnapshot();
+  if (!authoritative) {
+    // Negative evidence is unavailable. The env-key default route and the
+    // implicit-default both resolve to XD when no provider is explicitly
+    // selected, so treat an unverified grok wire model as gateway-owned.
+    return true;
+  }
+  const xdProvider = getActiveCatalog().providers.find((provider) => provider.id === 'xd');
+  if (xdProvider?.models.codex?.some((candidate) => candidate.id === wireModel)) return true;
+  // Authoritative gateway snapshot may also carry wire models outside the
+  // static catalog codex list.
+  return models.some((m) => m.id === wireModel);
+}
+
+/**
+ * The XD Gateway also exposes Grok models under the `x-ai/` namespace. They
+ * stay on the gateway route (unlike the first-party `xai/` OAuth provider),
+ * but the upstream Grok Responses schema still rejects Codex namespace tools.
+ * Keep this transform deliberately narrow: gateway routing and the model
+ * namespace must both match before applying the same tool-shape cleanup.
+ */
+/**
+ * Whether the request's session provider route is actually adopted by the
+ * router for the current auth injection. Mirrors createModelRoutingTransform's
+ * canUseExplicitSessionRoute: under `env-key`, a built-in session provider
+ * (e.g. the default `openai` catalog entry) is NOT adopted — the request
+ * falls through decideCodexRoute/gateway default and lands on the XD gateway
+ * even though the session records a providerId. Trusting that provider's
+ * (universal) routing descriptor would skip Grok cleanup and let namespace
+ * tools reach Grok (PR #2444 Codex P2).
+ */
+function explicitProviderRouteIsAdopted(
+  sessionId: string | undefined,
+  subagentRoute: { providerId: string } | undefined,
+  authInjection: CodexProxyAuthInjection,
+): boolean {
+  if (subagentRoute) return true;
+  if (!sessionId) return false;
+  return (
+    authInjection === 'oauth-bearer'
+    || isUserProviderSession(sessionId)
+    || isHostInjectedAuthSession(sessionId, 'codex')
+  );
+}
+
+function createGatewayGrokResponsesCompatTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RequestTransform {
+  return (body, ctx) => {
+    if (!isPlainObject(body)) return null;
+    const requestModel = typeof body.model === 'string' ? body.model : '';
+    if (!requestModel.startsWith('x-ai/grok')) return null;
+    // Use providerContextForRequest so subagent-frozen routes resolve to xd
+    // even when the parent session belongs to a different provider. Only
+    // clean tools when the effective provider for THIS request is xd.
+    const providerContext = providerContextForRequest(ctx.headers, requestModel);
+    if (providerContext.providerId === 'xd') return sanitizeXaiTools(body);
+    // An explicit non-xd provider owns this request only when (a) the router
+    // actually adopts the session route for this auth mode, and (b) that
+    // provider natively serves the wire model. A built-in `openai` session
+    // under env-key is NOT adopted (the request passes through to XD), and a
+    // provider-oauth xAI session with an out-of-scope `x-ai/grok*` request
+    // falls back to XD via gatewayDefaultRouteDecision — in both cases the
+    // namespace tools must still be cleaned (PR #2444 Codex P2).
+    if (
+      providerContext.providerId !== null
+      && explicitProviderRouteIsAdopted(
+        providerContext.sessionId,
+        providerContext.subagentRoute,
+        frozenAuthInjection ?? getCodexProxyAuthInjection(),
+      )
+      && providerRoutingServesWireModel(
+        providerContext.providerId,
+        'codex',
+        providerContext.catalogModel ?? requestModel,
+      )
+    ) {
+      return null;
+    }
+    // Implicit session (no explicit provider), or an explicit session that is
+    // not adopted under the current auth mode. The request still lands on the
+    // XD gateway when the xd catalog owns this wire model (env-key default
+    // route, or an implicit default that resolves to xd). Clean whenever xd
+    // owns the catalog entry, matching the routing scope.
+    if (!xdProviderClaimsWireModel(requestModel)) return null;
+    return sanitizeXaiTools(body);
   };
 }
 
@@ -2174,6 +2468,17 @@ export function createModelRoutingTransform(
         selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
       );
+    if (explicitProviderId === 'cindy-local-ollama') {
+      log.debug('codex managed ollama route', {
+        sessionId,
+        providerId: explicitProviderId,
+        wireProtocol: selectedRouting?.wireProtocol ?? null,
+        bridgeKind: selectedUsesLocalBridge ? 'local-bridge' : 'passthrough',
+        upstream: selectedRouting?.upstream ?? null,
+        method: ctx.method,
+        path: ctx.url.split('?', 1)[0],
+      });
+    }
 
     if (subagentRoute) {
       if (
@@ -2339,7 +2644,9 @@ function createTransformRequestChain(
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
     // ModelInput deserialize 前洗 input[]。订阅直连那条会再洗一次（幂等）。
     createXaiModelInputSanitizeTransform(),
+    sanitizeDeepSeekV4CustomTools,
     createXaiResponsesCompatTransform(),
+    createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
     createByteDanceSeedResponsesCompatTransform(),
     createMiniMaxResponsesCompatTransform(),
     createProviderModelRewriteTransform(),
@@ -2507,20 +2814,18 @@ function createCodexProxyHandle(
         });
         return null;
       }
-      // 独立子代理 Provider 路由的主防线是在 app-server spawn 配置里整体关闭 WS，
-      // 因为 startup-prewarm 的匿名共享连接无法按 thread 安全切分。这里保留线程级
-      // fail-closed 作为第二道防线：若旧调用方或配置漂移仍发来 upgrade，就回 null →
-      // 426，让 Codex 降到 HTTP，避免恢复 codex/ 折扣前缀、换鉴权与档位路由的整条
-      // transform 链被 socket 级透传绕过。
-      if (threadId !== 'unknown') {
-        const carriesSubagentRoute = subagentRouteByThread.has(threadId)
-          || subagentRouteByParentThread.has(threadId);
-        const isCollabSpawn = headerValue(headers, 'x-openai-subagent')
-          .toLowerCase() === CODEX_COLLAB_SPAWN_SUBAGENT;
-        if (carriesSubagentRoute || isCollabSpawn) {
-          log.info('codex websocket declined for subagent HTTP routing', { threadId });
-          return null;
-        }
+      // 独立 Subagent Provider 需要 HTTP body transform，但父 thread 不需要。
+      // bundled Codex 在每次 upgrade 都带 thread/session 身份，collab_spawn 还带
+      // parent thread id；只拒绝确实命中路由快照的子 thread，426 会让该子会话
+      // 自己降到 HTTP，不影响父 thread 的预热/复用 socket。
+      const subagentRoute = subagentRouteForWebSocketUpgrade(headers);
+      if (subagentRoute) {
+        log.info('codex websocket declined for subagent HTTP routing', {
+          threadId,
+          providerId: subagentRoute.providerId,
+          catalogModel: subagentRoute.catalogModel,
+        });
+        return null;
       }
       return CODEX_OAUTH_UPSTREAM;
     },

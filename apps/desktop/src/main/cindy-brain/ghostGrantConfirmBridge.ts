@@ -19,10 +19,9 @@
  * 本模块保持 electron-free(broadcast 由 register.ts 注入),单测直接 new。
  */
 
-import { randomUUID } from 'node:crypto';
-
 import { MAKER_PUSH } from '../maker-ipc/channels';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
+import { createDesktopOnlyConfirmationRequestId } from './desktopOnlyConfirmationProjection.js';
 
 /**
  * 过户通道:attachments = 媒体文件进总仓;dir = 上行读票据;save_dir = 下行
@@ -101,7 +100,7 @@ export class GhostGrantConfirmBridge {
     sessionId: string,
     payload: GhostGrantConfirmPayload,
   ): Promise<GhostGrantConfirmDecision> {
-    const requestId = randomUUID();
+    const requestId = createDesktopOnlyConfirmationRequestId();
     const request: GhostGrantConfirmInteractionSnapshot = {
       kind: 'ghost_grant_confirm',
       requestId,

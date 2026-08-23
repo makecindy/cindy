@@ -81,6 +81,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.send('theme:apply-vibrancy', { familyId, isDark });
     },
   },
+  // 资源监视器是独立 renderer，localStorage 默认是空的。没有这条主进程线索时，
+  // 首启亮色门会把已登录用户的暗色主题锁成浅色。
+  authHasPersistedSessionHintSync: (): boolean =>
+    ipcRenderer.sendSync('auth:has-persisted-session-hint-sync') === true,
   resourceUsageWindow: {
     close: (): Promise<void> => ipcRenderer.invoke(RESOURCE_USAGE_WINDOW_CLOSE_CHANNEL),
     rendererReady: (): Promise<void> =>

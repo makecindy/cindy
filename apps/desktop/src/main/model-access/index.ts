@@ -11,7 +11,11 @@ import {
   finalizeCodexAfterAuthModeChange,
   cancelCodexAuthModeChange,
 } from '../maker-host/index.js';
-import { setXdGatewayModels } from '../maker-host/active-catalog.js';
+import {
+  markXdGatewayModelAccessUnknown,
+  setXdGatewayModels,
+} from '../maker-host/active-catalog.js';
+import { migrateLegacyNamespacedModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { replaceGatewayModelPricing, trackGatewayModelPricingSync } from '../usage/modelPricing.js';
 import { isPricedGatewayModel } from '../../shared/modelPriceQuote.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -152,7 +156,11 @@ let authGeneration = 0;
 let lastAuthUserId: string | null = null;
 let lastAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 
-function applyGatewayModels(models: ModelAccessGatewayModel[], authenticatedUserId?: string): void {
+function applyGatewayModels(
+  models: ModelAccessGatewayModel[],
+  authenticatedUserId?: string,
+  authoritative = false,
+): void {
   // 同一次 /models 响应建立 XD 模型与价格投影。空成功响应会同时清空模型和价格；请求失败不会调用本函数，
   // 因而保留上一份完整成功快照。
   const pricing = replaceGatewayModelPricing(models, authenticatedUserId);
@@ -171,8 +179,24 @@ function applyGatewayModels(models: ModelAccessGatewayModel[], authenticatedUser
   // 一次归一化成 contextWindow / agents / efforts / supportsFastMode / modalities,
   // 同一含义只下发一个字段。这里直接用下发值，唯一事实源在服务端。
   // active-catalog 统一收口会原地刷新 Maker capabilities，再广播同一 revision。
+  try {
+    migrateLegacyNamespacedModelDisableOverrides(
+      'xd',
+      models
+        .filter(
+          (model) =>
+            model.mode === 'image_generation' || model.mode === 'video_generation',
+        )
+        .map((model) => model.id),
+    );
+  } catch (error) {
+    // 偏好迁移失败不能拖垮权威模型目录；读路径仍保留唯一 basename 兼容判定。
+    log.warn('legacy media model disable override migration failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   resetExecutableMediaModelCache();
-  setXdGatewayModels(models);
+  setXdGatewayModels(models, { authoritative });
 }
 
 async function runModelsSync(
@@ -180,6 +204,9 @@ async function runModelsSync(
   authenticatedUserId: string,
   myAttempt: number,
 ): Promise<void> {
+  // 新请求开始后，旧 LKG 仍可展示但不再能证明“当前账号明确没有某模型”。
+  // 只有本次同认证世代的成功响应会重新把三态提升为 authoritative。
+  markXdGatewayModelAccessUnknown();
   let models: ModelAccessGatewayModel[];
   try {
     const request = buildModelsSyncRequest(() => getClientEndpoint('modelAccessApiBaseUrl'));
@@ -203,12 +230,12 @@ async function runModelsSync(
   if (myGen !== authGeneration) return; // 响应归属旧账号,丢弃
   if (models.length === 0) {
     log.warn('xd gateway models fetch returned empty list; clearing current list');
-    applyGatewayModels([], authenticatedUserId);
+    applyGatewayModels([], authenticatedUserId, true);
     lastModelsSyncSucceededAttempt = myAttempt;
     return;
   }
   log.info(`xd gateway models synced: ${models.length}`);
-  applyGatewayModels(models, authenticatedUserId);
+  applyGatewayModels(models, authenticatedUserId, true);
   try {
     const availability = await listExecutableMediaModels([], {
       includeDisabled: true,

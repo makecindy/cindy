@@ -4,6 +4,7 @@ import {
   PROTOCOL_VERSION,
   METHODS,
   NOTIFICATIONS,
+  SERVER_METHODS,
   isRpcMessage,
   isRpcRequest,
   isRpcResponse,
@@ -17,8 +18,8 @@ describe('protocol constants', () => {
     expect(PROTOCOL_VERSION).toBeGreaterThan(0);
   });
 
-  it('requires v3 so old daemons cannot ignore root-only host tool guards', () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+  it('requires v4 so old daemons cannot ignore subagent model preflight', () => {
+    expect(PROTOCOL_VERSION).toBe(4);
   });
 
   it('METHODS has expected method names', () => {
@@ -35,6 +36,10 @@ describe('protocol constants', () => {
     expect(NOTIFICATIONS.QUERY_EVENT).toBe('query/event');
     expect(NOTIFICATIONS.SESSION_CLOSED).toBe('session/closed');
     expect(NOTIFICATIONS.CLIENT_REPLACED).toBe('client/replaced');
+  });
+
+  it('declares the live subagent model access reverse request', () => {
+    expect(SERVER_METHODS.SUBAGENT_MODEL_ACCESS).toBe('subagent/model-access');
   });
 });
 

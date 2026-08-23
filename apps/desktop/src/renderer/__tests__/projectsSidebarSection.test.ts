@@ -144,13 +144,11 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain('{!deviceGroupingActive && projectsOverflow && (');
   });
 
-  // 2026-08-13 复核 P1:manual 与设备分组"渲染不叠加"是定稿,生效判定必须跟着
-  // 排除——否则机器标签被藏、批量折叠键按逐设备派生、折叠状态机进入
-  // collapse-devices 却没有可见效果(派生态以为在设备分组、渲染实际是单段)。
-  it('deviceGroupingActive excludes manual sort so derived state matches the rendered mode', () => {
+  it('device grouping can stay on with custom project order', () => {
     expect(projectsSectionSource).toContain(
-      "deviceGroupingAvailable && filter.groupDevice && filter.sortBy !== 'manual'",
+      'const deviceGroupingActive = deviceGroupingAvailable && filter.groupDevice;',
     );
+    expect(projectsSectionSource).not.toContain("filter.sortBy !== 'manual'");
   });
 
   it('renders pre-grouped automation entries as one flat-list row', () => {

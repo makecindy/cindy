@@ -1354,7 +1354,7 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
 写一个意识。**流程:先取手册目录 → 按 §0 用提问卡片和用户对齐设计 → 按需用 section
-读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
+读透相关章(动手前至少读完 §2 卡槽总览、"沙箱红线"与"打包与测试"三章) → 在工作目录写源码文件 →
 ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
@@ -1415,6 +1415,17 @@ my-ghost/
 ├── panel.js
 └── settings.html ← 自定义设置区(声明了 settingsHtml 时必须,见 §4.8)
 \`\`\`
+
+想看**真实完整范例**,浏览官方插件源码仓
+\`github.com/makecindy/cindy-official-plugins\`:仓库根下每个**含 ghost.json 的
+一级目录**(cindy-art、cindy-github、cindy-web-search……)都是一个已上架插件的
+全部源码,各槽(卡槽/
+面板/网络/设置页)都有现成写法可对照;\`.tests\`、\`docs\` 等无 ghost.json 的
+目录是仓库自身的基础设施,不是插件。需要理解宿主侧能力实现(某个槽的代发
+细节、校验器行为)时可参考主仓 \`github.com/makecindy/cindy\`(插件基座在
+\`apps/desktop/src/main/cindy-brain/\`),但**API 契约一律以本手册为准**——
+线上 main 分支可能领先或落后用户当前安装的主机版本,照 main 写码可能装进
+旧版就不工作。
 
 ## 2. ghost.json 身份卡
 
@@ -1571,7 +1582,9 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`badge\`
 (在插件入口留一颗持久的未读绿点,与 notify 并列、互不为前置,见 §4.9.1)、\`confirm\`(弹主机
 同款确认框征求用户同意并拿回真实点击,见 §4.18)、\`fs\`(请主机
-代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
+代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`library\`
+(持久作品库:用户作品级存储,不受 fs 配额约束、卸载不删,含受控 SQLite,
+见 §4.10.1)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
 可信 session_id / workdir / 只读状态注入 args,见 §4.13)、\`pick\`(请主机弹系统选文件夹窗口,
 用户亲选即授权,见 §4.14)、\`preview\`(请主机在右侧栏内置浏览器打开白名单网站的
@@ -3061,15 +3074,21 @@ tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任�
 settingsHeight(此时主机不注入上述响应式规则,超出部分由你的页面内部滚动)。
 意识沉睡时设置区不渲染(显示沉睡提示),唤醒后可用。
 
-**外链(前往控制台)**:设置区/面板里可以放 \`<a href="https://…">\` 链接,但
-只有 **href 与身份卡 \`network.secrets[].url\` 声明逐字一致**的地址会被主机放行
-——点击时主机拦下导航、转系统浏览器打开(沙箱页自身永远不离开自己协议)。
-声明之外的任何外链点了没反应(主机静默拦下),脚本自动跳转也无效(须用户
-真点击且页面持有焦点,同一意识 1s 内至多放行一次)。href 直接从身份卡声明里
-**原样复制**——浏览器会把导航地址归一化(域名转小写、根路径补尾斜杠),声明
-写成非规范形态会导致比对永远失配、链接点了没反应,所以声明本身也用规范形态
-(小写域名、根路径带 \`/\`)。典型用法:输入行下方放一条
-\`<a class="console-link" href="…">前往控制台获取 ↗</a>\`,方便用户一键去申请 key。
+**外链(前往控制台)**:设置区/面板里可以放普通同页
+\`<a href="https://…">\`。主机会拦下导航并交给系统默认浏览器,沙箱页自身永远
+不离开 \`cindy-ghost://\`。合法地址按以下顺序处理:
+
+1. href 与身份卡既有 \`network.secrets[].url\` 或 \`node.secretBindings[].url\`
+   **逐字一致**时直接打开(保持存量插件兼容);href 最好从声明原样复制;
+2. URL 解析后的主机是 \`xd.com\` / \`xd.cn\` 根域或任意层级子域,或精确
+   \`workers.xd.team\`,直接打开;
+3. 其它合法 HTTPS 地址会显示完整规范化 URL,由用户二次确认后才打开。
+
+非 HTTPS、畸形 URL、内嵌用户名/密码的地址一律拒绝。只支持普通同页链接:
+\`target="_blank"\` 与 \`window.open()\` 不支持。页面必须持有焦点,同一意识
+1s 内至多处理一次外链尝试,且同一意识同时最多一个确认框。典型用法:输入行
+下方放一条 \`<a class="console-link" href="…">前往控制台获取 ↗</a>\`,方便用户
+一键去申请 key。
 
 **自定义参数持久化(/kv)**:每段意识有一份主机代管的 JSON 参数(单意识一份,
 互相隔离),设置页 / 面板 / 电子脑同源共用,读写都走 \`fetch('/kv')\`:
@@ -3242,6 +3261,74 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
   想拿二进制回传 \`encoding:'base64'\`);单次写入上限 16MB,超了拆多个文件;
 - 符号链接一律不穿透:目标是 symlink、或路径经 symlink 逃出根目录,直接拒。
 
+### 4.10.1 持久作品库(library 槽)
+
+声明 \`"slots": [..., "library"]\` 后,你获得一个**用户作品级**的持久存储区——
+和 fs 槽的私有储物柜(256MB 配额、卸载即回收)是两个语义:Library 不受配额
+约束(只受磁盘水位约束),**卸载插件不删数据**(用户必须在 Cindy 设置里单独
+确认才删除)。适合画布、素材库、项目文件这类"用户会心疼"的数据。
+
+位置由用户与宿主决定(装入时可选、随时可在设置里迁移),你**看不到也无需
+知道**绝对路径——所有 \`path\`/\`dbPath\` 都是库内相对路径,段数放宽到 32、
+总长 512(比 fs 槽宽,够 \`canvases/<id>/assets/objects/<shard>/<hash>\` 深度)。
+
+\`\`\`js
+// 语法糖:cindy.library({...}) ≡ cindy.send({ type:'library-request', ... })
+const open = await cindy.library({ op: 'open' });   // 建议启动即调(幂等)
+const st = await cindy.library({ op: 'status' });
+// st = { ok:true, state:'ready', usedBytes, fileCount, diskFreeBytes,
+//        softLimitBytes, softLimitExceeded, location:'default'|'custom' }
+
+// 文件操作(全 Family;写入原子化,大文件走分块流)
+await cindy.library({ op: 'write', path: 'canvases/c1/state.json', content: s });
+await cindy.library({ op: 'read', path: 'canvases/c1/state.json', encoding: 'base64' });
+await cindy.library({ op: 'list', recursive: true, cursor: st.nextCursor, limit: 500 });
+await cindy.library({ op: 'stat' }); / mkdir / delete({ recursive:true }) / rename({ overwrite:true })
+
+// 大文件分块流(>16MB 必须走这里;sha256 由宿主实算回传,做完整性对账)
+const b = await cindy.library({ op: 'writeBegin', path: 'assets/video.bin',
+  totalBytes: blob.size, sha256: expectedHash });
+for (const chunk of chunks) {
+  await cindy.library({ op: 'writeChunk', streamId: b.streamId, seq: n, content: chunkB64, encoding: 'base64' });
+}
+const done = await cindy.library({ op: 'writeCommit', streamId: b.streamId });
+// done = { ok:true, path, bytes, sha256 }; 中断/放弃用 writeAbort
+
+// SQLite:参数化语句 + 首词白名单(SELECT/WITH/INSERT/REPLACE/UPDATE/DELETE/
+// CREATE/DROP/ALTER/REINDEX/ANALYZE);ATTACH/PRAGMA/VACUUM/事务语句一律拒,
+// 事务由宿主管理(db.batch 整批原子),迁移按 user_version 幂等续跑
+await cindy.library({ op: 'db.open', dbPath: 'library.sqlite' });
+await cindy.library({ op: 'db.exec', dbPath: 'library.sqlite',
+  sql: 'CREATE TABLE canvases (id TEXT PRIMARY KEY, name TEXT)' });
+await cindy.library({ op: 'db.batch', dbPath: 'library.sqlite', statements: [
+  { sql: 'INSERT INTO canvases VALUES (?, ?)', params: ['c1', '我的画布'] },
+] });
+await cindy.library({ op: 'db.migrate', dbPath: 'canvas.sqlite', targetVersion: 2,
+  steps: [{ toVersion: 1, sql: ['CREATE TABLE v1 (a TEXT)'] },
+          { toVersion: 2, sql: ['CREATE TABLE v2 (a TEXT)'] }] });
+await cindy.library({ op: 'db.backup', dbPath: 'library.sqlite' });  // 宿主命名空间
+await cindy.library({ op: 'db.check',  dbPath: 'library.sqlite' });  // quick_check
+\`\`\`
+
+关键语义(全部由宿主强制):
+
+- **失败是结构化的**:\`{ ok:false, errorCode, message }\`,常用码
+  \`LIBRARY_UNAVAILABLE\`(含 reason:binding-moved/disk-missing/corrupt)、
+  \`LIBRARY_READONLY\`、\`DISK_FULL\`、\`PATH_INVALID\`、\`NOT_FOUND\`、
+  \`ALREADY_EXISTS\`、\`TOO_LARGE\`、\`STREAM_INVALID\`、\`DB_STATEMENT_REJECTED\`、
+  \`DB_ROW_LIMIT\`(结果集超 2000 行,自己加 LIMIT)、\`DB_MIGRATION_CONFLICT\`;
+- **不可用 ≠ 空**:\`state:'unavailable'\` 时**不要**当空库重建、不要触发
+  清理、不要把素材判成已删——如实向用户展示状态,等位置恢复;
+- **无跨库事务**:多个 .sqlite 之间没有 ATTACH;跨库一致性用幂等 + 墓碑
+  自行设计(每库独立,反而是独立同步/删除的好边界);
+- **推荐"先字节后记账"**:先写 asset 文件、再 batch 写元数据行——崩溃只会
+  留无账文件(内容寻址可自愈),绝不出现有账无文件;
+- **面板展示库内文件**:\`cindy-ghost://<你的id>/library/<相对路径>\`(只读,
+  支持视频 Range)——与 /media/ 的内容寻址缓存不同,这个地址内容可变。
+
+\`write\`/\`writeCommit\`/\`read\` 都回 \`sha256\`(宿主对实字节计算)——
+外自称的哈希只当对账参考,不是凭证。
+
 ## 4.11 发起 Agent 新回合(agent 槽)
 
 这个槽让你的 \`main.js\` 把一段文字作为**普通用户消息**交给 Cindy Agent，适合
@@ -3318,6 +3405,7 @@ const r = await cindy.agent.errand({
   //                             // 适合按业务对象各聊各的(如每条 PR 一间,标题
   //                             // 在该间首次创建时用 title 定,正好带上对象编号)
   // mode: 'wait',               // 同步等到完成(30 分钟顶);默认不传 = 异步
+  // userActionToken: msg.userActionToken, // 卡片点击票；校验后切到 errand 任务，一次性
   callId: msg.callId,
 });
 // 受理:{ ok:true, jobId, status:'running', sessionId }
@@ -3345,6 +3433,10 @@ const q = await cindy.agent.queryErrand({ jobId: r.jobId });
 - 每插件同时 1 单在途、相邻提交至少隔 10 秒;结果超过 64K 字符会截断(尾部带
   标记);完成结果保留 30 分钟,应用重启后查无此单(按可重新提交处理);
   \`sessionKey\` 只是分间,**不放大并发**——不同钥匙的两单同样要排队;
+- 可选 \`userActionToken\`:把 \`card-action\` 里主机签发的点击票原样带上。
+  主机校验通过才把这次派活当成用户发起并切到 errand 任务;票一次性消费,
+  不能再拿去 \`agent.run\` 或再派一次。面板上的真实点击由主机自己记账,
+  必须紧挨着这次派活,不能靠几分钟前点过输入框来顶替;
 - \`errorCode:'BUSY'\` = 你已有一单在途,或用户恰好正在 errand 会话里说话;
   \`'NO_CANDIDATE'\` 不存在于此——但会话创建/派发失败有 \`'SESSION_UNAVAILABLE'\`,
   超时有 \`'TIMEOUT'\`(任务可能仍在会话里继续,提示用户打开会话查看)。
@@ -4107,7 +4199,8 @@ const opened = await cindy.iosSimulator.request({
 
 ### 8.1 发布到官方插件仓的额外门禁
 
-要提交到官方插件仓 \`makecindy/cindy-official-plugins\` 的插件,除本手册的打包/装入
+官方插件仓:\`github.com/makecindy/cindy-official-plugins\`(公开,合入即自动上架
+插件市场)。要提交到该仓的插件,除本手册的打包/装入
 校验外还有仓级 CI 硬门禁,过不了整次发布被拦:
 
 - **四语言 locale 缺一不可**:\`locales\` 必须**恰好**包含 \`zh-CN\` / \`en\` / \`ja\` /

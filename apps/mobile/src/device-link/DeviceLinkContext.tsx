@@ -63,7 +63,11 @@ import {
 } from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
-import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
+import {
+  DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL,
+  type MobileGoalStatusPayload,
+  type MobileVoiceDictionarySnapshotResult,
+} from '@cindy/maker-shared/device-link-contract';
 import {
   DeviceLinkTopicRegistry,
   markHeldRemoteTopicsSubscribed,
@@ -71,7 +75,13 @@ import {
   normalizeDeviceLinkTopics,
   topicsMissingRemoteAck,
 } from '@/device-link/topicRegistry';
+import {
+  applyRemoteProjectOrderPush,
+  resetRemoteProjectOrderPushFence,
+  SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL,
+} from '@/session/remoteProjectOrder';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { applyMobileVoiceDictionarySnapshot } from '@/session/mobileVoiceDictionaryCache';
 import { revokedDevicesStore } from '@/device-link/revokedDevicesStore';
 import {
   acquireDeviceSendSlot,
@@ -259,6 +269,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }
 
   const auth = useAuth();
+  const currentDataOwnerIdRef = useRef<string | null>(auth.user?.id ?? null);
+  currentDataOwnerIdRef.current = auth.user?.id ?? null;
   const clientRef = useRef<DeviceLinkClient | null>(null);
   const registryRef = useRef(new DeviceLinkTopicRegistry());
   const remoteSubscribedTopicsRef = useRef(new Map<string, Set<Topic>>());
@@ -719,6 +731,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         );
       }
       setConnectionEpoch((n) => n + 1);
+      resetRemoteProjectOrderPushFence();
       void rehydrateWithClient(client);
     });
     const offPresence = client.onPresenceChanged((snap) => {
@@ -789,8 +802,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (presence.recovered) void rehydrateWithClient(client);
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
+      currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
       onLinkClosed: (deviceId, reason) => {
+        resetRemoteProjectOrderPushFence(deviceId);
         updateRehydrateSuppressionOnLinkClose(
           rehydrateSuppressedDeviceIds,
           deviceId,
@@ -1136,6 +1151,7 @@ function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
 }
 
 export function routeFrame(env: Envelope, handlers: {
+  currentDataOwnerId?: string | null;
   onAccessRevoked?: (deviceId: string) => void;
   onLinkClosed?: (deviceId: string, reason?: string) => void;
   onProviderChanged?: (deviceId: string) => void;
@@ -1158,9 +1174,26 @@ export function routeFrame(env: Envelope, handlers: {
   if (push.channel === 'maker:schedule:event') {
     remoteScheduleEventStore.apply(env.src, push.payload);
   }
+  if (push.channel === SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL) {
+    applyRemoteProjectOrderPush(env.src, push.payload, {
+      controllerDataOwnerId: handlers.currentDataOwnerId ?? null,
+      ownerStamp: push.ownerStamp,
+      ownerStampPresent: Object.prototype.hasOwnProperty.call(push, 'ownerStamp'),
+    });
+    return;
+  }
   if (push.channel === FILE_BROWSER_EVENT_CHANNEL) {
     // 文件树变更是 workdir 域事件,与会话 store 无关,单独分发给文件浏览页。
     dispatchFileBrowserWatchEvent(push.payload);
+    return;
+  }
+  if (push.channel === DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL) {
+    // 只读全量快照由桌面主动推送，不经过 remoteControlEnabled 控制门禁。
+    // env.src 是 relay 写入的来源设备，缓存按它分片，不能信任 payload 自报 host。
+    void applyMobileVoiceDictionarySnapshot(
+      env.src,
+      push.payload as MobileVoiceDictionarySnapshotResult,
+    );
     return;
   }
   remoteSessionStore.applyRemotePush(env.src, push.channel, push.payload);
@@ -1554,6 +1587,7 @@ function markOfflineDeviceMirror(deviceId: string): void {
 }
 
 function wipeUnavailableDeviceMirror(deviceId: string): void {
+  resetRemoteProjectOrderPushFence(deviceId);
   invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   remoteScheduleEventStore.clearDevice(deviceId);

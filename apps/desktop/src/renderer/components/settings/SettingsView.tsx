@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useOutletContext, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
 import { ArrowLeft, ChevronRight, Puzzle } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
-import { SettingsContentHeaderRegistration } from './SettingsContentHeader';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
@@ -49,6 +49,8 @@ import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BillingSettingsSection } from '@/features/billing/BillingPage';
 import { canAccessBillingSettings } from './billingVisibility';
+import { canAccessUsageSettings } from './usageVisibility';
+import { UsageHistorySection } from './usage/UsageHistorySection';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -57,6 +59,7 @@ interface SettingsOutletContext {
 }
 
 export function SettingsView() {
+  const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
@@ -75,6 +78,9 @@ export function SettingsView() {
     membershipKind: user?.membershipKind ?? null,
   });
   const shouldRedirectLegacyPluginTabs = rawTab === 'api-keys' || rawTab === 'connections';
+  // 用量历史对所有**已登录**身份开放 (local / cloud personal / cloud org),
+  // 与 billing 的 canAccessBillingSettings 无关 —— #2785 维护者裁决。
+  const canAccessUsage = canAccessUsageSettings({ mode });
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;
@@ -85,9 +91,10 @@ export function SettingsView() {
     // legacy 别名:旧独立「Tina」(tina) 已并入「IM 机器人」(im-bot)。
     if (raw === 'tina') return 'im-bot';
     if (raw === 'billing' && !canAccessBilling) return 'general';
+    if (raw === 'usage' && !canAccessUsage) return 'general';
     if (raw === 'agent-island' && !isMac) return 'general';
     return isSettingsTab(raw) ? raw : 'general';
-  }, [canAccessBilling, isMac, rawTab]);
+  }, [canAccessBilling, canAccessUsage, isMac, rawTab]);
   const piExtensionsPanelOpen =
     activeTab === 'general' &&
     (rawTab === 'pi-extensions' || searchParams.get('openPanel') === 'pi-extensions');
@@ -173,9 +180,12 @@ export function SettingsView() {
   const visibleTabIds = useMemo(
     () =>
       TAB_IDS.filter(
-        (tabId) => (isMac || tabId !== 'agent-island') && (canAccessBilling || tabId !== 'billing'),
+        (tabId) =>
+          (isMac || tabId !== 'agent-island') &&
+          (canAccessBilling || tabId !== 'billing') &&
+          (canAccessUsage || tabId !== 'usage'),
       ),
-    [canAccessBilling, isMac],
+    [canAccessBilling, canAccessUsage, isMac],
   );
 
   // deep-link: ?section=... → scroll to a section inside the active tab.
@@ -205,16 +215,32 @@ export function SettingsView() {
       role="main"
       aria-label={t('settings.title')}
     >
-      {/* 返回 + 标题注入 46px ContentHeader，与聊天标题栏同高，不再额外叠顶栏留白。 */}
-      <SettingsContentHeaderRegistration />
-      {/* Outer container — page itself does not scroll; columns own their scroll behavior. */}
+      {/* Outer container — page itself does not scroll; columns own their scroll behavior.
+          左侧保留原来的页头位置；右侧不再为页头预留 56px，贴着 46px 标题栏起排。 */}
       <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          className="flex h-full min-h-0 shrink-0 flex-col overflow-y-auto pl-6 pr-4"
+          className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
         >
+          {/* Back navigation — gap 10, pb 18, aligned with menu items via px-3 */}
+          <div className="flex items-center gap-2.5 px-3 pb-[18px]">
+            <Tip text={t('settings.back')} side="bottom">
+              <button
+                type="button"
+                onClick={() => navigate('/')}
+                aria-label={t('settings.back')}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--settings-back-icon)] transition-[color,background-color,transform] duration-150 hover:bg-titlebar-button-hover hover:text-[var(--settings-back-text)] active:scale-[0.98]"
+              >
+                <ArrowLeft size={20} />
+              </button>
+            </Tip>
+            <h1 className="text-24 font-medium leading-[1.1] text-[var(--settings-back-text)]">
+              {t('settings.title')}
+            </h1>
+          </div>
+
           <SettingsSidebarNav
             tabIds={visibleTabIds}
             activeTab={activeTab}
@@ -226,7 +252,7 @@ export function SettingsView() {
             Most tabs scroll as a page; Session Import and Plugins use a fixed-height
             workspace so only their inner lists scroll.
             right padding mirrors sidebar's 24px left inset.
-            顶栏已收进 ContentHeader，内容与左侧第一个导航项顶对齐。
+            右侧贴 46px 标题栏起排，不跟随左侧页头高度下移。
             scrollbar-gutter:stable —— 所有分区都预留同一滚动条槽位；即使
             Session Import 自身不滚动，也要保持与普通滚动页相同的内容宽度。 */}
         <div
@@ -385,6 +411,14 @@ export function SettingsView() {
                     key={`billing:${dataOwnerId ?? 'none'}`}
                     accountId={dataOwnerId}
                   />
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'usage' && (
+              <div role="tabpanel" id="settings-panel-usage" aria-labelledby="settings-tab-usage">
+                <section aria-label={t('settings.tabs.usage')}>
+                  <UsageHistorySection />
                 </section>
               </div>
             )}

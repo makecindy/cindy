@@ -89,7 +89,10 @@ describe('PiAgent host auto-compact', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  function buildDeps(threshold: number | undefined): AgentDeps {
+  function buildDeps(
+    threshold: number | undefined,
+    extra?: { shouldHandoff?: (tokens: number, window: number) => boolean },
+  ): AgentDeps {
     return {
       auth: {
         getState: async () => ({ authenticated: true, identity: 't', authSource: 'api-key' as const }),
@@ -100,6 +103,9 @@ describe('PiAgent host auto-compact', () => {
       runtimeConfig: {
         endpoint: 'http://127.0.0.1:9',
         ...(threshold === undefined ? {} : { autoCompactThresholdPct: threshold }),
+        ...(extra?.shouldHandoff
+          ? { shouldHandoffAfterContextAssessment: extra.shouldHandoff }
+          : {}),
       },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
@@ -114,8 +120,11 @@ describe('PiAgent host auto-compact', () => {
     };
   }
 
-  async function start(threshold: number | undefined): Promise<AgentSessionHandle> {
-    return new PiAgent(buildDeps(threshold)).startSession({
+  async function start(
+    threshold: number | undefined,
+    extra?: { shouldHandoff?: (tokens: number, window: number) => boolean },
+  ): Promise<AgentSessionHandle> {
+    return new PiAgent(buildDeps(threshold, extra)).startSession({
       sessionId: 's1',
       workingDir: cwd,
       model: 'm',
@@ -150,6 +159,47 @@ describe('PiAgent host auto-compact', () => {
     const handle = await start(75);
     // 160k / 200k = 80%
     settleWithUsage(160_000);
+    await vi.waitFor(() => expect(knobs.compactCalls).toEqual([{ type: 'compact' }]));
+    await handle.close();
+  });
+
+  it('still compacts at 75% even if the model-switch handoff callback would fire', async () => {
+    const handle = await start(75, { shouldHandoff: () => true });
+    settleWithUsage(160_000);
+    await vi.waitFor(() => expect(knobs.compactCalls).toEqual([{ type: 'compact' }]));
+    await handle.close();
+  });
+
+  it('does not compact when occupancy is already full', async () => {
+    const handle = await start(75);
+    settleWithUsage(200_000);
+    await Promise.resolve();
+    expect(knobs.compactCalls).toEqual([]);
+    await handle.close();
+  });
+
+
+  it('does not retry compact after a deterministic host compact failure', async () => {
+    knobs.compactResponse = {
+      success: false,
+      error: 'Error during compaction: summarization produced empty response',
+    };
+    const handle = await start(75);
+    settleWithUsage(160_000);
+    await waitForCompactCalls(1);
+    knobs.compactResponse = { success: true, data: {} };
+    settleWithUsage(161_000);
+    await Promise.resolve();
+    expect(knobs.compactCalls).toHaveLength(1);
+    expect(handle.getUsageSnapshot().needsRollover).toBe(true);
+    await handle.close();
+  });
+
+  it('compacts after setModel when the smaller window crosses the threshold but is not full', async () => {
+    const handle = await start(75);
+    // 80k / 200k = 40%;切到 100k 后是 80%。
+    settleWithUsage(80_000);
+    await handle.setModel!('n');
     await vi.waitFor(() => expect(knobs.compactCalls).toEqual([{ type: 'compact' }]));
     await handle.close();
   });

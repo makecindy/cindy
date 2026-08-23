@@ -1,7 +1,7 @@
 /**
  * mainListModel — 主列表混排模型单测(sidebar-redesign D 期)。
- * 覆盖:混排口径(项目行与散排对话平级竞争位置)、四种排序、对话组开关、
- * flat 平铺、手动排序只管项目行的收窄语义。
+ * 覆盖:混排口径(项目行与散排对话平级竞争位置)、任务排序、对话组开关、
+ * flat 平铺、自定义项目顺序只管项目行的收窄语义。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -389,6 +389,27 @@ describe('buildMainListEntries — 排序口径', () => {
     expect(labels(entries)).toEqual(['s:needs-input', 's:done-unread', 's:running', 's:idle']);
   });
 
+  it('keeps a just-sent session at the top of running before the agent is actually live', () => {
+    // 组装层把 starting 并进 runningSessionIds。新发送比已在跑的更新,应压在运行中档顶;
+    // 更新的空闲任务仍在其余档,不能因为它更新就插到运行中前面。
+    const justSent = session({ updatedAt: '2026-08-12T12:00:00Z', title: 'just-sent' });
+    const runningOlder = session({ updatedAt: '2026-08-12T11:00:00Z', title: 'running-older' });
+    const idleNewer = session({ updatedAt: '2026-08-12T13:00:00Z', title: 'idle-newer' });
+    const entries = buildMainListEntries({
+      projects: [],
+      dialogues: [idleNewer, runningOlder, justSent],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      manualProjectOrder: [],
+      priorityContext: {
+        runningSessionIds: new Set([justSent.id, runningOlder.id]),
+        attentionSessionIds: new Set<string>(),
+      },
+    });
+    expect(labels(entries)).toEqual(['s:just-sent', 's:running-older', 's:idle-newer']);
+  });
+
   it('keeps the open unread task in place, then parks it at the top of the rest tier after leave', () => {
     const unread = session({ updatedAt: '2026-07-01T00:00:00Z', title: 'just-read' });
     const olderRest = session({ updatedAt: '2026-08-12T00:00:00Z', title: 'older-rest' });
@@ -705,7 +726,8 @@ describe('buildMainListEntries — 排序口径', () => {
       dialogues: [dlgActiveOld, dlgArchivedNew],
       groupBy: 'project',
       groupDialogue: true,
-      sortBy: 'manual',
+      sortBy: 'recency',
+      projectOrder: 'custom',
       manualProjectOrder: ['local:alpha'],
     });
     const projectEntry = entries.find((entry) => entry.kind === 'project');
@@ -727,12 +749,35 @@ describe('buildMainListEntries — 排序口径', () => {
       dialogues: [dlg],
       groupBy: 'project',
       groupDialogue: false,
-      sortBy: 'manual',
+      sortBy: 'recency',
+      projectOrder: 'custom',
       manualProjectOrder: ['local:beta', 'local:alpha'],
       priorityContext: NO_PRIORITY,
     });
-    // 项目按手动顺序;最新的散排对话也排在项目之后(手动排序只管项目行)。
+    // 项目按自定义顺序;最新的散排对话也排在项目之后(自定义只管项目行)。
     expect(labels(entries)).toEqual(['p:beta', 'p:alpha', 's:newest-dlg']);
+  });
+
+  it('stacks custom project order with priority sort for tasks after the project block', () => {
+    const waitingDlg = session({ id: 'wait', updatedAt: '2026-08-01T00:00:00Z', title: 'wait' });
+    const idleDlg = session({ id: 'idle', updatedAt: '2026-08-13T00:00:00Z', title: 'idle' });
+    const projA = project('alpha', [session({ updatedAt: '2026-08-12T00:00:00Z' })]);
+    const projB = project('beta', [session({ updatedAt: '2026-08-10T00:00:00Z' })]);
+    const entries = buildMainListEntries({
+      projects: [projA, projB],
+      dialogues: [idleDlg, waitingDlg],
+      groupBy: 'project',
+      groupDialogue: false,
+      sortBy: 'priority',
+      projectOrder: 'custom',
+      manualProjectOrder: ['local:beta', 'local:alpha'],
+      priorityContext: {
+        runningSessionIds: new Set<string>(),
+        attentionSessionIds: new Set([waitingDlg.id]),
+        waitingSessionIds: new Set([waitingDlg.id]),
+      },
+    });
+    expect(labels(entries)).toEqual(['p:beta', 'p:alpha', 's:wait', 's:idle']);
   });
 });
 

@@ -24,8 +24,149 @@
     "voiceStopRecording": "녹음 중지",
     "capabilitiesUnsupported": "지원되지 않는 원격 기능 형식입니다"
   },
+  "presentation": {
+    "collaboration": {
+      "labelLead": "협업 Lead",
+      "labelWorker": "협업 Worker",
+      "labelRole": "협업 {{role}}",
+      "noticeLead": "컴퓨터의 Orca Lead 세션입니다. 휴대폰에서 메시지를 계속 보낼 수 있습니다. Worker 생성, 포커스 변경, Fork/Rewind, 대기열 편집 및 세션 설정 변경은 컴퓨터에서 진행하세요.",
+      "noticeWorker": "컴퓨터의 Orca Worker 세션입니다. 모바일 첫 버전은 읽기 전용이며 메시지 전송, Worker 포커스 변경, Worker 보관 또는 협업 중지를 지원하지 않습니다.",
+      "noticeOther": "컴퓨터의 협업 세션입니다. 모바일 첫 버전은 읽기 전용이므로 협업 관리는 컴퓨터에서 진행하세요.",
+      "readOnlyReason": "모바일 첫 버전에서 협업 모드는 읽기 전용입니다. 확인 처리, 대기열 편집 및 세션 변경은 컴퓨터에서 진행하세요.",
+      "composerReadOnlyReason": "이 협업 하위 작업은 모바일에서 읽기 전용입니다. 컴퓨터에서 메시지를 보내세요."
+    },
+    "composer": {
+      "voice": {
+        "listening": "듣는 중",
+        "submitting": "받아쓰는 중",
+        "refining": "다듬는 중",
+        "error": "음성 입력 오류",
+        "idle": "음성 입력",
+        "sendingReason": "메시지를 컴퓨터로 보내는 중입니다. 완료된 후 녹음하세요.",
+        "processingReason": "음성 입력을 처리 중입니다. 완료된 후 다시 녹음하세요."
+      },
+      "attachment": {
+        "count": "첨부 파일 {{count}}개",
+        "collapse": "첨부 파일 접기",
+        "label": "첨부 파일",
+        "busyReason": "첨부 파일을 처리 중입니다. 완료된 후 더 추가하세요.",
+        "sendingReason": "메시지를 컴퓨터로 보내는 중입니다. 완료된 후 첨부 파일을 변경하세요."
+      },
+      "input": {
+        "sendingReason": "메시지를 컴퓨터로 보내는 중입니다."
+      },
+      "send": {
+        "sendingReason": "메시지를 컴퓨터로 보내는 중입니다.",
+        "attachmentBusyReason": "첨부 파일을 업로드 중입니다. 완료된 후 보내세요.",
+        "voiceBusyReason": "음성 입력을 처리 중입니다. 완료된 후 보내세요.",
+        "emptyReason": "텍스트를 입력하거나 첨부 파일 또는 인용을 추가한 후 보내세요.",
+        "sending": "보내는 중",
+        "label": "보내기"
+      },
+      "stop": {
+        "queueBusyReason": "대기열 변경 사항을 동기화 중이므로 아직 실행을 중지할 수 없습니다.",
+        "unavailableReason": "컴퓨터에서 중지할 수 있는 실행이 없습니다.",
+        "processing": "처리 중",
+        "label": "중지"
+      },
+      "placeholder": {
+        "listening": "듣는 중…",
+        "submitting": "음성을 받아쓰는 중",
+        "refining": "음성 입력을 다듬는 중",
+        "default": "계속 입력하세요…"
+      },
+      "guidance": {
+        "sending": "메시지를 컴퓨터의 대기열에 추가하는 중입니다. 완료될 때까지 중복으로 보내지 마세요.",
+        "queueBusy": "대기열 변경 사항을 동기화 중입니다. 완료되면 대기열 상태가 새로 고쳐집니다.",
+        "listeningWithDraft": "보내기를 누르면 음성 입력을 끝내고 현재 텍스트를 보냅니다. 입력란을 누르면 음성 입력을 끝내고 키보드를 엽니다.",
+        "listening": "듣는 중입니다. 보내기를 누르면 음성 입력을 끝내고 인식된 텍스트를 보냅니다. 입력란을 누르면 음성 입력을 끝내고 키보드를 엽니다.",
+        "submitting": "음성을 받아쓰는 중입니다. 입력란이 잠시 잠깁니다.",
+        "refining": "음성 입력을 다듬는 중입니다. 완료되면 입력란이 업데이트됩니다.",
+        "attachmentBusy": "첨부 파일을 확인하거나 업로드 중입니다. 준비되면 첨부 파일 목록에 표시됩니다.",
+        "attachmentsWithText": "첨부 파일 {{count}}개와 입력란의 텍스트를 보냅니다.",
+        "attachmentsOnly": "첨부 파일 {{count}}개만 보냅니다. 보내기 전에 설명을 추가할 수도 있습니다.",
+        "attachmentPickerOpen": "휴대폰의 사진, 스크린샷 또는 파일을 추가할 수 있습니다.",
+        "draft": "보내기를 누르면 현재 작업 설정에 따라 메시지가 컴퓨터의 대기열에 추가됩니다.",
+        "quotesOnly": "인용 {{count}}개를 보냅니다. 보내기 전에 설명을 추가할 수도 있습니다.",
+        "canStop": "컴퓨터에서 실행 중입니다. 다른 메시지를 대기열에 추가하거나 중지를 눌러 현재 대기열을 유지할 수 있습니다.",
+        "empty": "텍스트를 입력하여 시작하세요. /로 명령을 사용하고 @로 프로젝트 리소스를 참조할 수 있습니다."
+      },
+      "status": {
+        "sending": "컴퓨터로 보내는 중",
+        "queueBusy": "대기열 변경 사항 처리 중",
+        "attachmentBusy": "첨부 파일 처리 중",
+        "ready": "준비됨"
+      },
+      "operation": {
+        "sessionSyncing": "이 작업은 아직 동기화가 완료되지 않았습니다.",
+        "pendingInteraction": "계속 입력하기 전에 컴퓨터의 보류 중인 요청을 처리하세요."
+      }
+    },
+    "overview": {
+      "unavailable": "사용할 수 없음",
+      "pendingCount": "보류 중 {{count}}개",
+      "readOnly": "읽기 전용",
+      "queuePaused": "대기열 일시 중지됨",
+      "status": { "active": "활성", "archived": "보관됨", "deleted": "삭제됨" },
+      "actions": {
+        "settings": { "label": "설정", "a11y": "작업 설정 열기" },
+        "usage": { "label": "사용량", "a11y": "작업 사용량 보기" },
+        "files": { "label": "파일", "a11y": "원격 파일 탐색" },
+        "queue": { "label": "대기열", "a11y": "대기열 패널 열기" },
+        "search": { "label": "검색", "openA11y": "메시지 검색", "closeA11y": "메시지 검색 닫기" }
+      },
+      "disabled": {
+        "files": "이 작업에는 원격 작업 디렉터리가 없어 파일을 탐색할 수 없습니다.",
+        "search": "검색할 메시지가 아직 없습니다.",
+        "queueUnavailable": "제어 중인 컴퓨터를 일시적으로 사용할 수 없습니다. 다시 동기화한 후 대기열을 확인하세요.",
+        "queuePending": "먼저 보류 중인 요청을 처리하세요. 완료되면 대기열 패널을 사용할 수 있습니다.",
+        "queuePausedEmpty": "대기열이 일시 중지되었지만 다시 시작할 메시지가 없습니다.",
+        "queueEmpty": "대기열에 메시지가 없습니다.",
+        "queueDefault": "현재 상태에서는 대기열 패널을 열 수 없습니다."
+      },
+      "actionCopy": {
+        "pending": "먼저 보류 중인 요청을 처리하세요. 완료되면 입력 영역을 사용할 수 있습니다.",
+        "archived": "이 작업은 보관되었습니다. 복원한 후 메시지를 보내세요.",
+        "deleted": "이 작업은 삭제되어 더 이상 변경할 수 없습니다.",
+        "queuePaused": "대기열이 일시 중지되었습니다. 대기열 패널에서 다시 시작할 수 있습니다."
+      }
+    },
+    "controls": {
+      "spend": {
+        "title": "작업 사용량",
+        "unavailable": "아직 작업 사용량이 없습니다",
+        "taskCost": "이 작업 {{cost}}",
+        "contextWithLimit": "컨텍스트 {{used}} / {{total}} · {{percentage}}",
+        "context": "컨텍스트 {{used}} tokens"
+      },
+      "context": {
+        "title": "컨텍스트 사용량",
+        "unavailable": "컨텍스트 데이터 없음"
+      },
+      "rateLimit": {
+        "plan": "요금제",
+        "remaining": "{{percent}} 남음",
+        "used": "{{percent}} 사용",
+        "resetsAt": "{{time}}에 재설정",
+        "status": "상태",
+        "reached": "계정 한도에 도달했습니다",
+        "account": "계정",
+        "availableResets": "사용 가능한 재설정",
+        "resetCount": "{{count}}회",
+        "earliestExpiry": "가장 이른 만료",
+        "window": {
+          "default": "한도",
+          "days": "{{count}}일",
+          "week": "주"
+        }
+      }
+    }
+  },
   "screen": {
     "thinking": "생각 중…",
+    "tokenCount": "{{tokens}} tok",
+    "tokenCountFull": "{{tokens}} tokens",
+    "tokenRate": "{{rate}} tok/s",
     "networkReconnecting": "다시 연결하는 중…",
     "modelBusyRetrying": "모델 서비스 혼잡, 다시 시도 중…",
     "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 다시 시도 중…",

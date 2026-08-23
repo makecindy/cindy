@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { i18n } from '@/i18n';
 import { DeviceLinkError, type DeviceView } from '@cindy/device-link';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { toDeviceListItems } from '@/device-link/devices';
@@ -47,6 +48,10 @@ import type { InputProjection, PendingInteraction, QueuedRemoteMessage, RemoteMe
 
 const DEVICE_ID = 'host-mac';
 const SESSION_ID = 'smoke-session-1';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function device(patch: Partial<DeviceView> = {}): DeviceView {
   return {

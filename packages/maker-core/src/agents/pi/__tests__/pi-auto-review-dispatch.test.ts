@@ -29,7 +29,11 @@ const captured = vi.hoisted(() => ({
   onEvent: null as ((event: unknown) => void) | null,
   requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
-  proxyRegistration: null as { sessionId: string; token: string } | null,
+  proxyRegistrations: [] as Array<{
+    sessionId: string;
+    token: string;
+    scope: 'session' | 'subagent-route';
+  }>,
   mcpVendorOptions: undefined as Record<string, unknown> | undefined,
   failSetModel: false,
   rejectSetModel: false,
@@ -167,7 +171,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onEvent = null;
     captured.requests = [];
     captured.sent = [];
-    captured.proxyRegistration = null;
+    captured.proxyRegistrations = [];
     captured.mcpVendorOptions = undefined;
     captured.failSetModel = false;
     captured.rejectSetModel = false;
@@ -282,8 +286,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
-      registerPiProxySession: (sessionId, token) => {
-        captured.proxyRegistration = { sessionId, token };
+      registerPiProxySession: (sessionId, token, _resolveProviderId, options) => {
+        captured.proxyRegistrations.push({
+          sessionId,
+          token,
+          scope: options?.scope === 'subagent-route' ? 'subagent-route' : 'session',
+        });
       },
       reviewAutoPermissionAction,
     };
@@ -333,6 +341,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     });
   }
 
+  function firePermissionInputRequest(
+    id: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ): void {
+    captured.onEvent!({
+      type: 'extension_ui_request',
+      method: 'input',
+      id,
+      title: 'cindy:permission',
+      placeholder: JSON.stringify({ toolName, input }),
+    });
+  }
+
   function fireManagedPackageRequest(id: string, action: 'install' | 'update' | 'remove', source: string): void {
     captured.onEvent!({
       type: 'extension_ui_request',
@@ -367,10 +389,18 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(privateRgPath).toBe(path.join(captured.env.PI_CODING_AGENT_DIR!, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg'));
     expect(path.isAbsolute(privateRgPath!)).toBe(true);
     expect(readFileSync(privateRgPath!, 'utf8')).toBe('fake managed ripgrep');
-    expect(captured.proxyRegistration).toEqual({
-      sessionId: 's1',
-      token: captured.env.CINDY_PI_SESSION_TOKEN,
-    });
+    expect(captured.proxyRegistrations).toEqual([
+      {
+        sessionId: 's1',
+        token: captured.env.CINDY_PI_SESSION_TOKEN,
+        scope: 'session',
+      },
+      {
+        sessionId: 's1',
+        token: expect.not.stringMatching(captured.env.CINDY_PI_SESSION_TOKEN!),
+        scope: 'subagent-route',
+      },
+    ]);
     expect(captured.env.CINDY_PI_SESSION_TOKEN).toMatch(/^[A-Za-z0-9_-]{40,}$/);
     expect(JSON.parse(captured.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]')).toEqual(
       expect.arrayContaining([
@@ -382,6 +412,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         // 让后续每次委派打到攻击者选定的 endpoint。与 permission file 同类,必须从
         // bash/模型工具的 spawn 边界剥离(review)。
         'CINDY_PI_SUBAGENT_RUNTIME_FILE',
+        'CINDY_PI_SUBAGENT_OWNER_ID',
       ]),
     );
     const noProxy = (captured.env.NO_PROXY ?? '').split(',');
@@ -775,6 +806,140 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         data: expect.objectContaining({ status: 'Done', isRunning: false }),
         source: 'pi',
       });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('rewrites context-mode doctor notify paths to the managed package root', async () => {
+    const packageRoot = path.join(agentHome, 'managed-context-mode');
+    const extensionPath = path.join(packageRoot, 'extension.js');
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(extensionPath, '// extension');
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'context-mode' }));
+    captured.commandCatalog = [
+      {
+        name: 'ctx-doctor',
+        description: 'Run context-mode diagnostics',
+        source: 'extension',
+        sourceInfo: { path: extensionPath, source: 'extension' },
+      },
+    ];
+    captured.onPrompt = (command) => {
+      if (command.message !== '/ctx-doctor') return;
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'other-ext-notify',
+        method: 'notify',
+        notifyType: 'warning',
+        message: 'other-ext: (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+      });
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'ctx-doctor-notify',
+        method: 'notify',
+        notifyType: 'info',
+        message: [
+          'context-mode doctor',
+          '',
+          '[OK] Hook support: Pi hooks are wired via the context-mode Pi extension (~/.pi/extensions/context-mode/), not via JSON-stdio.',
+        ].join('\n'),
+      });
+    };
+    const deps = buildDeps();
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [extensionPath],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [packageRoot],
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-doctor-path-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+    try {
+      const deadline = Date.now() + 2_000;
+      while (handle.getRuntimeCapabilities?.()?.status !== 'loaded') {
+        if (Date.now() > deadline) throw new Error('managed command catalog did not load');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await handle.send({ type: 'user', content: '/ctx-doctor' });
+      await new Promise((resolve) => setImmediate(resolve));
+      await flush();
+      const texts = events
+        .filter((event) => event.type === 'text')
+        .map((event) => (event.data as { text?: string }).text ?? '');
+      expect(texts.some((text) => text.includes('other-ext') && text.includes('~/.pi/extensions/context-mode'))).toBe(true);
+      expect(texts.some((text) => text.includes('Hook support') && text.includes(packageRoot))).toBe(true);
+      expect(texts.some((text) => text.includes('Hook support') && text.includes('~/.pi/extensions/context-mode'))).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('leaves non-doctor extension notify text containing the stale path unchanged', async () => {
+    const packageRoot = path.join(agentHome, 'managed-context-mode');
+    const extensionPath = path.join(packageRoot, 'extension.js');
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(extensionPath, '// extension');
+    writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: 'context-mode' }));
+    captured.commandCatalog = [
+      {
+        name: 'ctx-stats',
+        description: 'Show context-mode stats',
+        source: 'extension',
+        sourceInfo: { path: extensionPath, source: 'extension' },
+      },
+    ];
+    const stale = '[OK] Hook support: (~/.pi/extensions/context-mode/), not via JSON-stdio.';
+    captured.onPrompt = (command) => {
+      if (command.message !== '/ctx-stats') return;
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'ctx-stats-notify',
+        method: 'notify',
+        message: stale,
+      });
+    };
+    const deps = buildDeps();
+    deps.resolvePiManagedPackageResources = async () => ({
+      extensions: [extensionPath],
+      skills: [],
+      promptTemplates: [],
+      packageRoots: [packageRoot],
+    });
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-stats-path-unchanged-session',
+      workingDir: cwd,
+      model: 'm',
+    });
+    const events: Array<Record<string, unknown>> = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+    try {
+      const deadline = Date.now() + 2_000;
+      while (handle.getRuntimeCapabilities?.()?.status !== 'loaded') {
+        if (Date.now() > deadline) throw new Error('managed command catalog did not load');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      await handle.send({ type: 'user', content: '/ctx-stats' });
+      await new Promise((resolve) => setImmediate(resolve));
+      await flush();
+      const texts = events
+        .filter((event) => event.type === 'text')
+        .map((event) => (event.data as { text?: string }).text ?? '');
+      expect(texts).toContain(stale);
+      expect(texts.some((text) => text.includes(packageRoot) && text.includes('Hook support'))).toBe(false);
     } finally {
       await handle.close();
     }
@@ -2200,6 +2365,126 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       confirmed: true,
     });
     expect(resolverCalls).toBe(0);
+  });
+
+  it('auto mode silently approves first-party Subagent spawn through the source-aware envelope', async () => {
+    const handle = await start('auto');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-auto', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+    });
+
+    expect(await waitForResponse('subagent-auto')).toEqual({
+      type: 'extension_ui_response',
+      id: 'subagent-auto',
+      value: 'allow',
+    });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('allows an Auto Subagent to select fork context without a second spawn approval', async () => {
+    const handle = await start('auto');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-fork', 'subagent', {
+      agent: 'worker',
+      task: 'continue the parent investigation',
+      context: 'fork',
+    });
+
+    expect(await waitForResponse('subagent-fork')).toMatchObject({ value: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('allows an Auto Subagent to select a child model without a second spawn approval', async () => {
+    const handle = await start('auto', undefined, true);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-model', 'subagent', {
+      tasks: [{ agent: 'worker', task: 'inspect the repository', model: 'm-next' }],
+    });
+
+    expect(await waitForResponse('subagent-model')).toMatchObject({ value: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit current-model Subagent silent in Auto', async () => {
+    const handle = await start('auto');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-current-model', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+      model: 'm',
+    });
+
+    expect(await waitForResponse('subagent-current-model')).toMatchObject({ value: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('keeps Subagent spawn user-confirmed outside Auto mode', async () => {
+    const handle = await start('ask');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-ask', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+    });
+
+    expect(await waitForResponse('subagent-ask')).toEqual({
+      type: 'extension_ui_response',
+      id: 'subagent-ask',
+      value: 'user-deny',
+    });
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it('keeps Subagent spawn unprompted in Full Access', async () => {
+    const handle = await start('bypassPermissions');
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
+    handle.setInteractionResolver?.(resolver as never);
+
+    firePermissionInputRequest('subagent-bypass', 'subagent', {
+      agent: 'worker',
+      task: 'inspect the repository',
+    });
+    await flush();
+
+    expect(captured.sent).toContainEqual({
+      type: 'extension_ui_response',
+      id: 'subagent-bypass',
+      value: 'allow',
+    });
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('reports Auto-review, user, and system denials without conflating their source', async () => {
+    const autoHandle = await start('auto', async () => ({ verdict: 'block' as const }));
+    firePermissionInputRequest('deny-auto', 'write', { path: '/tmp/blocked.txt' });
+    expect(await waitForResponse('deny-auto')).toMatchObject({ value: 'auto-review-deny' });
+    await autoHandle.close();
+
+    const userHandle = await start('ask');
+    userHandle.setInteractionResolver?.(async () => ({
+      kind: 'permission',
+      behavior: 'deny',
+      reason: 'User denied',
+    }) as never);
+    firePermissionInputRequest('deny-user', 'write', { path: '/tmp/user-denied.txt' });
+    expect(await waitForResponse('deny-user')).toMatchObject({ value: 'user-deny' });
+    await userHandle.close();
+
+    const systemHandle = await start('ask');
+    firePermissionInputRequest('deny-system', 'write', { path: '/tmp/no-resolver.txt' });
+    expect(await waitForResponse('deny-system')).toMatchObject({ value: 'system-deny' });
+    await systemHandle.close();
   });
 
   it('fails closed when a readonly bridge request omits canonical-path evidence', async () => {

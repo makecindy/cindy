@@ -72,6 +72,7 @@ import {
   gatewayDefaultRouteDecision,
   getUserProviderIdForSession,
   resolvePendingSessionRouteDecision,
+  resolveProviderRouteDecision,
   resolveSessionRouteDecision,
 } from './provider-route.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
@@ -84,6 +85,7 @@ import {
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { createOllamaAnthropicSystemTransform } from './ollamaAnthropicSystem.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import {
   createClaudeFastModeRequestTransform,
@@ -102,7 +104,9 @@ import {
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
+import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
 
 // scope = 'cc-proxy' → logger.ts 的 emit() 路由把这条流量并入统一 agent 流
 // (agent-*.ndjson, source=proxy)。child(sub) 会继续保持 'cc-proxy/sub' 前缀, routing 一致。
@@ -184,6 +188,26 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
   return null;
 }
 
+function unavailablePiProviderRoute(providerId: string): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      const payload = JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'routing_error',
+          code: 'pi_provider_unavailable',
+          message: `PI provider route is unavailable: ${providerId}`,
+        },
+      });
+      res.writeHead(503, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(payload);
+    },
+  };
+}
+
 /**
  * per-request 路由 transform。两段:
  *   ① 会话显式选了供应商 → 据 catalog 统一路由(per-session,取代全局开关推断)。
@@ -203,11 +227,12 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
 export function createModelRoutingTransform(): RoutingTransform {
   const route: RoutingTransform = (body, ctx) => {
     const claimedPiSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
+    const claimedPiSessionToken = headerValue(ctx.headers, 'x-cindy-pi-session-token');
     if (
       claimedPiSessionId
       && !authenticatePiProxySession(
         claimedPiSessionId,
-        headerValue(ctx.headers, 'x-cindy-pi-session-token'),
+        claimedPiSessionToken,
       )
     ) {
       // Loopback is not an authentication boundary: another local process can
@@ -236,28 +261,31 @@ export function createModelRoutingTransform(): RoutingTransform {
       ? headerValue(ctx.headers, 'x-cindy-pi-provider-id')
       : null;
     const registeredPiProviderId = piSessionId
-      ? getPiProxySessionProvider(piSessionId)
+      ? getPiProxySessionProvider(piSessionId, claimedPiSessionToken)
       : null;
+    const subagentRoute = piSessionId
+      ? isPiProxySubagentRoute(piSessionId, claimedPiSessionToken)
+      : false;
     const selectedPiProviderId = piSessionId ? getSessionProvider(piSessionId) : null;
     if (
       piSessionId
       && (
         piProviderId !== registeredPiProviderId
-        || (
+        || (!subagentRoute && (
           piProviderId !== null
           && selectedPiProviderId !== null
           && piProviderId !== selectedPiProviderId
-        )
-        || (
+        ))
+        || (!subagentRoute && (
           (selectedPiProviderId === 'openai' || selectedPiProviderId === 'xai')
           && piProviderId !== selectedPiProviderId
-        )
+        ))
       )
     ) {
-      // A valid loopback session token authorizes only the provider that the
-      // host resolved for this exact Pi process. The persisted session choice
-      // remains a second constraint when present. Do not let a child process or
-      // extension swap this header and borrow another subscription credential.
+      // A valid loopback token authorizes only its registered provider. Root
+      // tokens remain additionally pinned to the persisted session choice;
+      // subagent-route tokens are separately generated for one frozen child
+      // provider and therefore may cross that parent-session choice.
       return {
         localHandler: async ({ res }) => {
           const payload = JSON.stringify({
@@ -373,6 +401,16 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
 
     const gatewayKey = _readGatewayKey();
+
+    if (subagentRoute && piProviderId) {
+      // A provider-pinned child token is both the authorization boundary and
+      // the route source. Re-reading the parent session provider here would
+      // authenticate Anthropic but still route through an OpenAI/XD parent,
+      // eventually falling into the proxy's default upstream.
+      return resolveProviderRouteDecision(piProviderId, 'pi', gatewayKey)
+        .then((resolved) => resolved?.decision ?? unavailablePiProviderRoute(piProviderId))
+        .catch(() => unavailablePiProviderRoute(piProviderId));
+    }
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
@@ -596,6 +634,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
         // 旧 #794 strip 继续兜底。
         buildVisionBridgeProxyTransform(log),
+        createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。
         createActiveStripTransform({
@@ -604,6 +643,12 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           strip: sanitizeXaiModelInputFromBody,
         }),
         createXaiModelInputSanitizeTransform(),
+        createOllamaAnthropicSystemTransform((headers) => {
+          const sdkSessionId = headers['x-claude-code-session-id'];
+          return sdkSessionId && _resolveCcSessionId
+            ? _resolveCcSessionId(sdkSessionId)
+            : null;
+        }),
         stripNonAnthropicFields,
       ],
       recoveryRules: [

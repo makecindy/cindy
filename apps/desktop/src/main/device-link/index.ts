@@ -36,6 +36,7 @@ import {
   DeviceLinkError,
   INVOKE_TIMEOUT_OVERRIDES_MS,
 } from '@cindy/device-link';
+import { DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
 import * as authManager from '../authManager';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { createLogger } from '../logger';
@@ -84,6 +85,7 @@ import {
 import {
   clearControllerPlatforms,
   getControllerPlatform,
+  isMobilePlatform,
   setControllerPlatform,
 } from './controllerPlatform';
 import {
@@ -103,6 +105,7 @@ import {
   broadcastDictionaryNow,
   handleDesktopPeerOnline,
   handleIncomingDictionaryState,
+  handleMobilePeerOnline,
   initVoiceDictionarySync,
   notifyLocalDictionaryChanged,
   shouldExchangeDictionaryWith,
@@ -133,6 +136,7 @@ import {
 } from './linkRecovery';
 import {
   createResponsivenessTracker,
+  isDeviceResponsivenessProbeEligible,
   OPEN_LINK_OBSERVATION_CHANNEL,
   type DeviceResponsivenessTracker,
 } from './responsivenessTracker';
@@ -155,7 +159,12 @@ export function deviceLinkApiBase(): string {
 }
 
 type DeviceDirectoryResponse = {
-  devices?: Array<{ deviceId?: unknown; name?: unknown }>;
+  devices?: Array<{
+    deviceId?: unknown;
+    name?: unknown;
+    online?: unknown;
+    platform?: unknown;
+  }>;
 };
 let controllerDisplayNameRefreshGeneration = 0;
 const controllerDisplayNameFreshness = createControllerDisplayNameFreshnessTracker();
@@ -268,6 +277,25 @@ async function runControllerDisplayNamesFromDirectory(
         void forgetLastKnownDeviceName(deviceId);
       },
     });
+    // presence 是增量:桌面刚连上 relay 时,已在线手机不会再发一帧上线。
+    // 目录补齐展示名的同时,给这些手机补一次只读词典投影。
+    for (const device of result.devices ?? []) {
+      const deviceId = typeof device.deviceId === 'string' ? device.deviceId : '';
+      const platform = typeof device.platform === 'string' ? device.platform : '';
+      if (
+        !deviceId
+        || device.online !== true
+        || !isMobilePlatform(platform)
+        || isDeviceRevoked(deviceId)
+      ) {
+        continue;
+      }
+      // 目录发现也要写回后续广播读的那份在线集合,否则只补发一次,
+      // 词典变更 / 开关切换时 listOnlineMobileDevices 仍是空的。
+      presenceOnlineByDevice.set(deviceId, true);
+      setControllerPlatform(deviceId, platform);
+      handleMobilePeerOnline(deviceId);
+    }
   } catch (err) {
     // 目录补齐是展示层 best-effort；失败时保留控制帧自报名 / 短 ID 回退，不影响建链。
     log.warn(`device directory display-name refresh failed (non-fatal): ${String(err)}`);
@@ -612,13 +640,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         replayActiveSubscriptions(`responsiveness-recovered:${deviceId.slice(0, 8)}`, deviceId);
       }
     },
-    // 探测同样遵守本机「关闭对该设备的控制」的 fail-closed 偏好,不给禁用目标发任何帧。
-    isProbeEligible: (deviceId) =>
-      client?.getStatus() === 'online' &&
-      arbiter?.isOwner() === true &&
-      presenceAvailableByDevice.get(deviceId) === true &&
-      !revokedByRemote.has(deviceId) &&
-      !readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+    // 探测只在熔断器已经放行 half-open 单飞席位后到达这里；presence 的未知态
+    // 必须允许这一个探测穿过，否则 relay 重连清空 presence 后熔断会永久自锁。
+    // 只有当代 presence 明确为 false 才阻止，且仍叠加 relay/owner/撤权/本机禁用门。
+    isProbeEligible: (deviceId) => isDeviceResponsivenessProbeEligible({
+      relayOnline: client?.getStatus() === 'online',
+      ownsRelay: arbiter?.isOwner() === true,
+      presenceAvailable: presenceAvailableByDevice.get(deviceId),
+      revoked: revokedByRemote.has(deviceId),
+      locallyDisabled: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+    }),
     // observed:false 且是唯一豁免熔断快速拒绝的建链入口:recoverLink 是探测
     // 周期的延伸(业务/探测超时已由 tracker 记账,不重复观测),且 open 期间
     // 必须真正上线重建 link——否则「探测超时→重开 link→下次探测走新链路」的
@@ -766,6 +797,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     ) {
       handleDesktopPeerOnline(snap.deviceId);
     }
+    // 手机只接收只读投影:push 不属于 relay 的 CONTROL_KINDS,因此不要求桌面
+    // 打开「允许被控」。来源平台只用于体验分流,撤销状态仍是实际准入边界。
+    if (
+      wasOnline !== true &&
+      snap.online &&
+      isMobilePlatform(snap.platform) &&
+      !isDeviceRevoked(snap.deviceId)
+    ) {
+      handleMobilePeerOnline(snap.deviceId);
+    }
   });
 
   let updateRelaunchControllersBusy = false;
@@ -883,6 +924,17 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
             platform: getControllerPlatform(deviceId),
             revoked: isDeviceRevoked(deviceId),
           }),
+        )
+        .map(([deviceId]) => deviceId),
+    sendMobileSnapshot: (deviceId, payload) => {
+      client?.sendPush(deviceId, DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL, payload);
+    },
+    listOnlineMobileDevices: () =>
+      [...presenceOnlineByDevice.entries()]
+        .filter(([deviceId, online]) =>
+          online &&
+          isMobilePlatform(getControllerPlatform(deviceId)) &&
+          !isDeviceRevoked(deviceId),
         )
         .map(([deviceId]) => deviceId),
   });

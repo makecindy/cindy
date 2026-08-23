@@ -64,8 +64,9 @@ describe('sidebar project sorting', () => {
         project({ workingDir: '/p/beta', displayName: 'beta' }),
         project({ workingDir: '/p/gamma', displayName: 'gamma' }),
       ],
-      'manual',
+      'recency',
       ['local:/p/gamma', 'local:/p/alpha'],
+      'custom',
     );
 
     expect(sorted.map((p) => p.workingDir)).toEqual(['/p/gamma', '/p/alpha', '/p/beta']);

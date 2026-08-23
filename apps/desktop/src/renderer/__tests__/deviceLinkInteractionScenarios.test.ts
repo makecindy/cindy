@@ -105,6 +105,9 @@ function makeFakeHost(deviceId: string) {
       arr.push({ request, persistId });
       pending.set(sessionId, arr);
     },
+    clearPending(sessionId: string): void {
+      pending.delete(sessionId);
+    },
     registerPush(cb: (p: RemotePush) => void): () => void {
       pushCb = (push) => cb({ ...push, ownerStamp: push.ownerStamp ?? TEST_OWNER_STAMP });
       return () => {
@@ -319,71 +322,123 @@ describe('device-link 远程交互往返 — plan_review', () => {
   });
 });
 
-describe('device-link 远程交互往返 — issue_confirm draft', () => {
-  const issueRequest = {
-    kind: 'issue_confirm',
-    requestId: 'issue-draft-1',
-    draft: { title: '原始标题', body: '原始正文', type: 'bug' },
-    env: {
-      appVersion: '0.1.18',
-      platform: 'darwin',
-      arch: 'arm64',
-      osVersion: '15.0',
-    },
-    submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
-    suggestedPublicName: '当前昵称',
-  };
-
-  it('逐键保存不通知 makerChatStore 全局订阅,响应后清除草稿', async () => {
-    const s = openRemoteSession();
-    host.hostInteraction(s, issueRequest);
-    await flush();
-    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('issue-draft-1');
-    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toMatchObject({
-      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
-      suggestedPublicName: '当前昵称',
-    });
-
-    const globalListener = vi.fn();
-    const unsubscribe = makerChatStore.subscribeAll(globalListener);
-    saveIssueConfirmDraft(s, 'issue-draft-1', {
-      title: '编辑后的标题',
-      body: '编辑后的正文',
-      type: 'feature',
-      publicName: '匿名',
-    });
-
-    expect(getIssueConfirmDraft(s, 'issue-draft-1')).toMatchObject({
-      title: '编辑后的标题',
-      body: '编辑后的正文',
-      type: 'feature',
-      publicName: '匿名',
-    });
-    expect(globalListener).not.toHaveBeenCalled();
-
-    makerChatStore.respondToIssueConfirm(s, { confirmed: false });
-    await flush();
-    expect(getIssueConfirmDraft(s, 'issue-draft-1')).toBeUndefined();
-    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
-    unsubscribe();
-    makerChatStore.purgeSession(s);
+describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
+  it('只读提示展示期间保留 ChatInput，不把控制端锁死', () => {
+    const src = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
+      'utf8',
+    );
+    const branchStart = src.indexOf('/* 互斥:控制端能终结的 pending interaction');
+    const chatInput = src.indexOf('<ChatInput', branchStart);
+    expect(branchStart).toBeGreaterThan(-1);
+    expect(chatInput).toBeGreaterThan(branchStart);
+    expect(src.slice(branchStart, chatInput)).not.toContain(
+      'pendingRemoteDesktopConfirmation',
+    );
   });
 
-  it('interaction dismissed 时清除对应草稿', async () => {
+  it.each(['issue_confirm', 'rename_sessions_confirm', 'ghost_grant_confirm'] as const)(
+    '%s live push 只建立不可操作状态，dismissal 后清除',
+    async (kind) => {
+      const s = openRemoteSession();
+      const requestId = `opaque-${kind}`;
+
+      host.hostInteraction(s, {
+        kind,
+        requestId,
+      });
+      await flush();
+
+      const state = makerChatStore.getSnapshot(s);
+      expect(state.pendingRemoteDesktopConfirmation).toEqual({ kind, requestId });
+      expect(state.pendingIssueConfirm).toBeNull();
+      expect(state.pendingRenameSessionsConfirm).toBeNull();
+      expect(state.pendingGhostGrantConfirm).toBeNull();
+      expect(host.resolved).toHaveLength(0);
+      expect(local.localResolveInteraction).not.toHaveBeenCalled();
+
+      host.hostDismiss(s, requestId, 'resolved');
+      await flush();
+      expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toBeNull();
+    },
+  );
+
+  it('远程来源即使误带完整 payload 也不能获得可操作确认能力', async () => {
     const s = openRemoteSession();
-    host.hostInteraction(s, issueRequest);
+    host.hostInteraction(s, {
+      kind: 'issue_confirm',
+      requestId: 'opaque-full-payload',
+      draft: { title: '敏感标题', body: '敏感正文', type: 'bug' },
+      env: { appVersion: '1', platform: 'darwin', arch: 'arm64', osVersion: '1' },
+      submissionIdentity: { kind: 'platform', login: 'private' },
+    });
     await flush();
-    saveIssueConfirmDraft(s, 'issue-draft-1', {
-      title: '未提交标题',
-      body: '未提交正文',
-      type: 'bug',
+
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'issue_confirm',
+      requestId: 'opaque-full-payload',
+    });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
+  });
+
+  it('并发确认按到达顺序排队，关闭任一项都不会丢失其余确认', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, { kind: 'issue_confirm', requestId: 'opaque-a' });
+    host.hostInteraction(s, { kind: 'ghost_grant_confirm', requestId: 'opaque-b' });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'issue_confirm',
+      requestId: 'opaque-a',
     });
 
-    host.hostDismiss(s, 'issue-draft-1', 'timeout');
+    host.hostDismiss(s, 'opaque-b', 'resolved');
     await flush();
-    expect(getIssueConfirmDraft(s, 'issue-draft-1')).toBeUndefined();
-    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
-    makerChatStore.purgeSession(s);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation?.requestId).toBe(
+      'opaque-a',
+    );
+
+    host.hostInteraction(s, { kind: 'ghost_grant_confirm', requestId: 'opaque-b' });
+    await flush();
+    host.hostDismiss(s, 'opaque-a', 'resolved');
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'ghost_grant_confirm',
+      requestId: 'opaque-b',
+    });
+  });
+
+  it('重连快照可重建多个只读状态，后续权威快照将其逐项收口', async () => {
+    const s = openRemoteSession();
+    host.seedPending(s, {
+      kind: 'issue_confirm',
+      requestId: 'opaque-snapshot-a',
+    });
+    host.seedPending(s, {
+      kind: 'rename_sessions_confirm',
+      requestId: 'opaque-snapshot-b',
+    });
+
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'issue_confirm',
+      requestId: 'opaque-snapshot-a',
+    });
+
+    host.clearPending(s);
+    host.seedPending(s, {
+      kind: 'rename_sessions_confirm',
+      requestId: 'opaque-snapshot-b',
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toEqual({
+      kind: 'rename_sessions_confirm',
+      requestId: 'opaque-snapshot-b',
+    });
+
+    host.clearPending(s);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation).toBeNull();
   });
 });
 

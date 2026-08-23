@@ -24,12 +24,52 @@ export const membershipSchema = z.object({
 });
 export type AuthMembership = z.infer<typeof membershipSchema>;
 
+/**
+ * 人机验证（CAPTCHA）配置：auth-server 开启时经 GET /api/auth/providers 下发。
+ * requiredFor 声明哪些动作发起前必须先完成挑战。
+ * 客户端预认邮箱与短信发码；服务端当前可只下发邮箱动作，后续下发短信动作
+ * 即可启用既有客户端闸门，无需变更 wire 结构。
+ * 关闭时服务端整字段省略 → undefined = 不需要人机验证。
+ */
+export const captchaRequiredActionSchema = z.enum([
+  "email_request_code",
+  "phone_request_code",
+]);
+export type CaptchaRequiredAction = z.infer<typeof captchaRequiredActionSchema>;
+
+export const captchaConfigSchema = z.object({
+  provider: z.literal("turnstile"),
+  siteKey: z.string().min(1),
+  // 服务端可 append-only 扩展动作；当前客户端预认邮箱与短信发码，其他未知
+  // 动作忽略，避免一个未来动作让整份 providers 响应解析失败。
+  requiredFor: z
+    .array(z.string())
+    .transform((actions) =>
+      actions.filter(
+        (action): action is CaptchaRequiredAction =>
+          captchaRequiredActionSchema.safeParse(action).success,
+      ),
+    ),
+});
+export type CaptchaConfig = z.infer<typeof captchaConfigSchema>;
+
+/**
+ * auth-server 托管 Turnstile 挑战页的固定路径(wire 契约)。
+ * 完整地址 = authApiBaseUrl + 本路径 +
+ * `?action=<email_request_code|phone_request_code>&theme=<light|dark>&lang=<BCP-47>`;
+ * 页面把结果写进 location.hash(`cindy-captcha=ok.<token>` / `err.<code>`)
+ * 或经 ReactNativeWebView.postMessage 回传(双宿主同页兼容)。
+ */
+export const CAPTCHA_CHALLENGE_PAGE_PATH = "/captcha/turnstile";
+
 export const providerConfigSchema = z.object({
   region: authRegionSchema,
   attribution: z.enum(["phone", "email"]),
   email: z.boolean(),
   phone: z.boolean(),
   social: z.array(socialProviderSchema),
+  // optional 兼容尚未升级的旧 auth-server 响应(缺字段不整份拒绝)。
+  captcha: captchaConfigSchema.optional(),
 });
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 
@@ -236,6 +276,13 @@ export type DesktopAuthorizationPoll = z.infer<
 export type AuthClientType = "desktop" | "mobile" | "web";
 export type VerificationKind = "email" | "phone";
 export type SsoVerificationChannel = "email" | "sms";
+
+/** 发码类型到 providers.captcha.requiredFor wire action 的唯一映射。 */
+export function captchaRequiredActionForVerificationKind(
+  kind: VerificationKind,
+): CaptchaRequiredAction {
+  return kind === "email" ? "email_request_code" : "phone_request_code";
+}
 
 export type AuthFlowState =
   | { step: "identifier"; providers: ProviderConfig }

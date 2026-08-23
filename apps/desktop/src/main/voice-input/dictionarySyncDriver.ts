@@ -11,11 +11,12 @@
  * 交换的是整份 CRDT 状态,合并幂等且可交换,这次没送到,下次任一触发时机再送一次
  * 就收敛。为此触发点铺了三层:对端上线、本地变更(去抖)、以及长周期兜底。
  *
- * 手机不参与这条通道:移动端在后台不维持 WebSocket,收不到 push。它改用
- * `device-link:voice:dictionary:get` 主动向在线桌面拉一份只读快照。
+ * 手机不参与 CRDT 通道:移动端在后台不维持 WebSocket,不持有可写副本。手机上线和
+ * 桌面词典变化时,桌面改推一份只读全量快照;原有 invoke 拉取保留给旧版兼容兜底。
  */
 
 import { MAX_FRAME_BYTES } from '@cindy/device-link';
+import type { MobileVoiceDictionarySnapshotResult } from '@cindy/maker-shared/device-link-contract';
 import { buildStateVersionVector, type VoiceDictionarySyncState } from '@cindy/voice-input-core';
 
 import { createLogger } from '../logger.js';
@@ -63,11 +64,17 @@ export interface DictionarySyncTransport {
   sendState(deviceId: string, payload: DictionarySyncFramePayload): void;
   /** 当前在线的同账号**桌面**设备。 */
   listOnlineDesktopDevices(): string[];
+  /** 给手机发送只读全量快照(push 不经过远程控制门禁)。 */
+  sendMobileSnapshot(deviceId: string, payload: MobileVoiceDictionarySnapshotResult): void;
+  /** 当前在线、未撤销的同账号手机。 */
+  listOnlineMobileDevices(): string[];
 }
 
 let transport: DictionarySyncTransport | null = null;
 let debounceTimer: NodeJS.Timeout | null = null;
 let intervalTimer: NodeJS.Timeout | null = null;
+/** 同进程内快照发出序号:取墙上时间与上一发+1 的较大值,时钟回拨也不会倒序。 */
+let lastEmittedAt = 0;
 
 export function isDesktopPlatform(platform: string | undefined | null): boolean {
   return typeof platform === 'string' && DESKTOP_PLATFORMS.has(platform);
@@ -107,6 +114,7 @@ export function stopVoiceDictionarySync(): void {
   if (intervalTimer) clearInterval(intervalTimer);
   debounceTimer = null;
   intervalTimer = null;
+  lastEmittedAt = 0;
 }
 
 /** 对端桌面上线:立刻单发一次,让它尽快拿到本机状态(它也会回发自己的)。 */
@@ -114,6 +122,11 @@ export function handleDesktopPeerOnline(deviceId: string): void {
   if (!isSyncEnabled()) return;
   // 对端刚上线,它离线期间本机的状态可能已经落后于它 —— 一并索取回发。
   sendStateTo(deviceId, 'peer-online', { requestReply: true });
+}
+
+/** 手机上线时立即推送一次只读全量快照，不要求桌面打开「允许被控」。 */
+export function handleMobilePeerOnline(deviceId: string): void {
+  sendMobileSnapshotTo(deviceId, 'mobile-online');
 }
 
 /**
@@ -127,17 +140,22 @@ export function broadcastDictionaryNow(): void {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
+  // 手机是只读消费者:开关刚切换时也要立即收到当前投影(关闭时为空表)。
+  broadcastMobileSnapshots('sync-setting-changed');
   // 索取回发:本机可能在关闭同步期间落后了,而对端不会主动告诉我们。
   broadcastToAllPeers('sync-enabled', { requestReply: true });
 }
 
 /** 本地词典变更:去抖后广播。连续学习事件不会打出一连串帧。 */
 export function notifyLocalDictionaryChanged(): void {
+  // 开关关闭后桌面 CRDT 与手机投影都保持静默。空投影只在开关切换或手机上线时
+  // 推一次,用来清旧缓存;本地学习/编辑若继续推空表,只会制造无效流量和重绘。
   if (!isSyncEnabled()) return;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
     broadcastToAllPeers('local-change');
+    broadcastMobileSnapshots('local-change');
   }, BROADCAST_DEBOUNCE_MS);
   debounceTimer.unref?.();
 }
@@ -185,16 +203,71 @@ export function readDictionaryProjectionForMobile(): {
   entries: Array<{ text: string; frequency: number; aliases: Array<{ text: string; count: number }> }>;
   stateVector?: Record<string, string>;
 } {
-  if (!isSyncEnabled()) return { entries: [] };
+  // 版本向量对合并单调(逐节点取 max),所以「逐节点 ≥」等价于「已经见过对方的
+  // 全部事件」—— 这才是手机可以拿一份替代另一份的条件,而不是谁的时间戳大。
+  // 同步关闭时仍带上当前向量:空表是清缓存指令,但必须证明自己不比手机已有的
+  // 快照更旧,否则晚到的空投影会把更新的词表抹掉。
+  const vector = buildStateVersionVector(voiceDictionarySyncStore.getState());
+  const stateVector = Object.keys(vector).length > 0 ? vector : undefined;
+  if (!isSyncEnabled()) {
+    return stateVector ? { entries: [], stateVector } : { entries: [] };
+  }
   const entries = voiceDictionarySyncStore.materialize().entries.map((entry) => ({
     text: entry.text,
     frequency: entry.frequency,
     aliases: entry.aliases.map((alias) => ({ text: alias.text, count: alias.count })),
   }));
-  // 版本向量对合并单调(逐节点取 max),所以「逐节点 ≥」等价于「已经见过对方的
-  // 全部事件」—— 这才是手机可以拿一份替代另一份的条件,而不是谁的时间戳大。
-  const vector = buildStateVersionVector(voiceDictionarySyncStore.getState());
-  return Object.keys(vector).length > 0 ? { entries, stateVector: vector } : { entries };
+  return stateVector ? { entries, stateVector } : { entries };
+}
+
+function broadcastMobileSnapshots(reason: string): void {
+  if (!transport) return;
+  const peers = transport.listOnlineMobileDevices();
+  if (peers.length === 0) return;
+  const payload = buildMobileSnapshot();
+  if (!payload) return;
+  for (const deviceId of peers) sendMobileSnapshotTo(deviceId, reason, payload);
+}
+
+function sendMobileSnapshotTo(
+  deviceId: string,
+  reason: string,
+  payload?: MobileVoiceDictionarySnapshotResult | null,
+): void {
+  if (!transport) return;
+  const snapshot = payload === undefined ? buildMobileSnapshot() : payload;
+  if (!snapshot) return;
+  try {
+    transport.sendMobileSnapshot(deviceId, snapshot);
+  } catch (error) {
+    // push 是尽力而为的全量状态镜像；下次上线、变更或主动 invoke 会补齐。
+    log.warn(`mobile dictionary snapshot push failed (${reason}) to ${deviceId.slice(0, 8)}`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** push 与主动 GET 共用：同一份投影必须带上发出时间，否则同代向量的兜底拉取盖不掉已有 push。 */
+export function buildMobileDictionarySnapshot(): MobileVoiceDictionarySnapshotResult {
+  lastEmittedAt = Math.max(Date.now(), lastEmittedAt + 1);
+  return {
+    ok: true,
+    emittedAt: lastEmittedAt,
+    ...readDictionaryProjectionForMobile(),
+  };
+}
+
+function buildMobileSnapshot(): MobileVoiceDictionarySnapshotResult | null {
+  const payload = buildMobileDictionarySnapshot();
+  const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+  if (bytes <= MAX_STATE_FRAME_BYTES) return payload;
+  // 与桌面 CRDT 同一条上限:超限帧会被 relay 拒绝。这里不另造分片协议,
+  // 手机保留上次缓存,词典缩小后下一次上线/变更再推。
+  log.error(
+    `mobile dictionary snapshot is too large to push (${bytes} bytes > ${MAX_STATE_FRAME_BYTES}); `
+    + 'phones will keep their last cache until the dictionary shrinks',
+  );
+  return null;
 }
 
 function broadcastToAllPeers(reason: string, options?: { requestReply?: boolean }): void {
@@ -260,5 +333,6 @@ export const __testing = {
     clearTimeout(debounceTimer);
     debounceTimer = null;
     broadcastToAllPeers('test-flush');
+    broadcastMobileSnapshots('test-flush');
   },
 };

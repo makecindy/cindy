@@ -92,6 +92,7 @@ import {
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
+import { useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { useAttachedSessionIds } from '@/hooks/useAttachedSessionIds';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
@@ -108,7 +109,8 @@ import {
 } from '@/lib/sessionAttentionStore';
 import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
-import { requestConversationSearch } from '@/state/conversationSearchRequest';
+import { requestConversationSearch, useConversationSearchRequest } from '@/state/conversationSearchRequest';
+import { searchDevicesFromSwitcher } from '@/lib/conversationSearchFanout';
 
 import { emitRefresh, onPatch } from '@/lib/sessionsBus';
 
@@ -141,6 +143,13 @@ import {
 import { sessionActivityMs } from './lib/dateSessionGrouping';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
+import { resolveDisplayedProjectOrder } from '@cindy/maker-shared/project-order-sync';
+import {
+  controllerManualOrderForDevice,
+  projectOrderWriteScopeForSelection,
+  useLocalHostProjectOrder,
+  useRemoteHostProjectOrders,
+} from './hooks/useRemoteHostProjectOrders';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
   buildProjectKeyComparisonSet,
@@ -411,9 +420,17 @@ export function CCAgentSidebarUpper() {
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
   const { sessions: allSessionsForAttention } = useCCSessions({ includeArchived: 'all' });
+  const remoteProjectSessions = useRemoteProjectSessions();
+  const remoteDevices = useRemoteDevices();
+  const selectedMachineId = useEffectiveSelectedMachineId();
   const searchProjectSessions = useMemo(
-    () => allSessionsForAttention.filter((s) => !isOrcaWorkerSession(s)),
-    [allSessionsForAttention],
+    () =>
+      selectVisibleSessions(
+        allSessionsForAttention,
+        remoteProjectSessions,
+        selectedMachineId,
+      ).filter((session) => !isOrcaWorkerSession(session)),
+    [allSessionsForAttention, remoteProjectSessions, selectedMachineId],
   );
   const projectAliases = useProjectAliases();
   const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
@@ -581,9 +598,6 @@ export function CCAgentSidebarUpper() {
   // 否则置顶的远程会话一拖进 rail 模式就消失、也无法从 rail 打开(codex review)。
   // 机器切换栏选中某机器后按 selectedMachineId 整体过滤(本机 → 只本地;远程 → 只该机器),
   // rail 与展开态共用同一选择态,保证 rail 折叠后仍尊重选中机器。
-  const remoteProjectSessions = useRemoteProjectSessions();
-  const remoteDevices = useRemoteDevices();
-  const selectedMachineId = useEffectiveSelectedMachineId();
   useEffect(() => {
     if (filter.status === 'active') return;
     const selectedRemoteIds =
@@ -932,6 +946,8 @@ function ExpandedView({
       projectKey: project.projectKey,
       projectName: projectDisplayLabelWithMachine(project),
       sessionIds: project.sessions.map((session) => session.id),
+      workingDir: project.workingDir,
+      deviceLinkDeviceId: project.deviceLinkDeviceId,
     });
   }, []);
   // Archived All（右键菜单）走全局 ConfirmDialogProvider —— 与单条 archive 的 inline
@@ -1208,21 +1224,35 @@ function ExpandedView({
   // handleMoveSession 的运行中拦截闸门,后台活动不得静默扩大行为闸门的口径
   // (move / 归档 / 通知语义都保持只认真 running)。
   const backgroundActivitySessionIds = useBackgroundActivitySessionIds();
+  // 刚发送尚未 isRunning 的任务并进 display running:排序与呼吸点马上进运行中档,
+  // 但不扩大 effectiveRunningSessionIds 的归档 / 移动闸门。
+  const startingSessionIds = useStartingSessionIds(runningSessionIds);
   const displayRunningSessionIds = useMemo(() => {
-    if (backgroundActivitySessionIds.size === 0) return effectiveRunningSessionIds;
+    if (backgroundActivitySessionIds.size === 0 && startingSessionIds.size === 0) {
+      return effectiveRunningSessionIds;
+    }
     const next = new Set(effectiveRunningSessionIds);
     for (const id of backgroundActivitySessionIds) next.add(id);
+    for (const id of startingSessionIds) next.add(id);
     for (const [leadSessionId, workerSessionIds] of orcaLeadWorkerMap) {
       if (next.has(leadSessionId)) continue;
       for (const workerSessionId of workerSessionIds) {
-        if (backgroundActivitySessionIds.has(workerSessionId)) {
+        if (
+          backgroundActivitySessionIds.has(workerSessionId) ||
+          startingSessionIds.has(workerSessionId)
+        ) {
           next.add(leadSessionId);
           break;
         }
       }
     }
     return next;
-  }, [effectiveRunningSessionIds, backgroundActivitySessionIds, orcaLeadWorkerMap]);
+  }, [
+    effectiveRunningSessionIds,
+    backgroundActivitySessionIds,
+    startingSessionIds,
+    orcaLeadWorkerMap,
+  ]);
   const collapsedAttentionToneFor = useCallback(
     (sessions: readonly Session[]) =>
       resolveCollapsedProjectAttentionTone({
@@ -1259,6 +1289,11 @@ function ExpandedView({
   // 机器切换栏选中机器后整体过滤:本机 → 只本地会话;远程 → 只该机器会话。
   // 过滤在源头做,下游 grouping / pinned / projects / dialogues / date-grouped / search 自动继承。
   const selectedMachineId = useEffectiveSelectedMachineId();
+  const localHostProjectOrder = useLocalHostProjectOrder({
+    custom: filter.projectOrder === 'custom',
+    keys: filter.manualProjectOrder,
+  });
+  const { orders: remoteHostProjectOrders } = useRemoteHostProjectOrders(selectedMachineId);
   const switcherDevices = useSwitcherDevices();
   // E 期「按设备分组」:远程设备顺序 + 名称/在线状态(设备切换栏同序同源)。
   // 空 map = 没有远程设备 → ProjectsSection 隐藏该分组选项、不切段。
@@ -1706,6 +1741,38 @@ function ExpandedView({
     [visibleDialogues, dialogueSortBy],
   );
 
+  const hostProjectSort = useMemo(() => {
+    const scope = projectOrderWriteScopeForSelection(selectedMachineId);
+    const hostSnapshot = scope.kind === 'host' && scope.deviceId === null
+      ? localHostProjectOrder.snapshot
+      : scope.kind === 'host' && scope.deviceId
+        ? remoteHostProjectOrders.get(scope.deviceId)
+        : undefined;
+    const hostManual = scope.kind === 'host' && scope.deviceId === null
+      ? localHostProjectOrder.snapshot.manualProjectOrder
+      : scope.kind === 'host' && scope.deviceId
+        ? controllerManualOrderForDevice(scope.deviceId, hostSnapshot) ?? []
+        : [];
+    const displayed = resolveDisplayedProjectOrder(
+      scope,
+      hostSnapshot,
+      filter,
+      hostManual,
+    );
+    return {
+      order: displayed.manualProjectOrder,
+      projectOrder: displayed.projectOrder,
+      sortBy: filter.sortBy,
+    };
+  }, [
+    filter.manualProjectOrder,
+    filter.projectOrder,
+    filter.sortBy,
+    localHostProjectOrder.snapshot,
+    remoteHostProjectOrders,
+    selectedMachineId,
+  ]);
+
   const visibleProjectsWithVendor = useMemo(() => {
     const unpinnedProjects = visibleProjects.filter(
       (project) => !pinnedProjectKeys.has(project.projectKey),
@@ -1722,13 +1789,17 @@ function ExpandedView({
         },
       ];
     });
-    return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
+    return sortProjectsForSidebar(
+      projects,
+      hostProjectSort.sortBy,
+      hostProjectSort.order,
+      hostProjectSort.projectOrder,
+    );
   }, [
     visibleProjects,
     pinnedProjectKeys,
     vendorPredicate,
-    filter.sortBy,
-    filter.manualProjectOrder,
+    hostProjectSort,
   ]);
 
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
@@ -1746,8 +1817,13 @@ function ExpandedView({
         },
       ];
     });
-    return sortProjectsForSidebar(projects, filter.sortBy, filter.manualProjectOrder);
-  }, [visibleProjects, vendorPredicate, filter.sortBy, filter.manualProjectOrder]);
+    return sortProjectsForSidebar(
+      projects,
+      hostProjectSort.sortBy,
+      hostProjectSort.order,
+      hostProjectSort.projectOrder,
+    );
+  }, [visibleProjects, vendorPredicate, hostProjectSort]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
@@ -2582,9 +2658,14 @@ function ExpandedView({
         return;
       }
       // 同 handleRename:回滚值刻意仍读 sessions,不换成 sessionsById。
-      const oldPinnedAt = sessionsRef.current.find((s) => s.id === sessionId)?.pinnedAt ?? null;
+      const current = sessionsRef.current.find((s) => s.id === sessionId);
+      const oldPinnedAt = current?.pinnedAt ?? null;
+      const oldSummary = current?.summary ?? null;
       const newPinnedAt = currentlyPinned ? null : new Date().toISOString();
-      patchLocal(sessionId, { pinnedAt: newPinnedAt });
+      patchLocal(
+        sessionId,
+        currentlyPinned ? { pinnedAt: null, summary: null } : { pinnedAt: newPinnedAt },
+      );
       // pin / re-pin 时把它顶到 manualPinnedOrder 首位，否则带着老 rank 会卡回原位。
       // unpin 不主动从 order 里删（无害,下次 drag 触发的 normalize 会顺手 GC）。
       if (!currentlyPinned) {
@@ -2599,7 +2680,12 @@ function ExpandedView({
       } catch (err) {
         log.error('[session pin]', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
-        patchLocal(sessionId, { pinnedAt: oldPinnedAt });
+        patchLocal(
+          sessionId,
+          currentlyPinned
+            ? { pinnedAt: oldPinnedAt, summary: oldSummary }
+            : { pinnedAt: oldPinnedAt },
+        );
       }
     },
     // 只依赖 filter.promotePin(useCallback 稳定),不要整个 filter ——
@@ -3768,12 +3854,21 @@ function CollapsedView({
   manualPinnedOrder,
   onReorderPinned,
 }: CollapsedProps) {
+  const isCollapsed = useSidebarCollapsedState();
+  const projectFilterRequest = useConversationSearchRequest();
+  const selectedMachineId = useEffectiveSelectedMachineId();
+  const switcherDevices = useSwitcherDevices();
+  const searchDevices = useMemo(
+    () => searchDevicesFromSwitcher(switcherDevices),
+    [switcherDevices],
+  );
   const { t } = useTranslation();
   // 只读 running 快照——**不传 options**：通知副作用（onSessionDone 等）由
   // ExpandedView 的实例独家持有，两个视图常驻挂载，双回调会重复发桌面通知。
   const { runningSessionIds } = useSessionRunningStatus(activeSessionId);
   // 后台子任务活跃会话同样点亮呼吸(与 ExpandedView 同口径,纯视觉合并)。
   const backgroundActivitySessionIds = useBackgroundActivitySessionIds();
+  const startingSessionIds = useStartingSessionIds(runningSessionIds);
   // 瓷砖未读点颜色按 attention kind(done 绿 / awaiting TapTap 蓝 / error 红);组件层
   // 取一次,renderItem 里查表(renderItem 非组件,不能 per-item 用 hook)。
   const attentionKinds = useSessionAttentionKinds();
@@ -3807,7 +3902,11 @@ function CollapsedView({
   // 却不亮」(codex review)。
   const orcaLeadWorkerMap = useOrcaLeadWorkerMap(sessions);
   const railRunningIds = useMemo(() => {
-    const next = new Set([...runningSessionIds, ...backgroundActivitySessionIds]);
+    const next = new Set([
+      ...runningSessionIds,
+      ...backgroundActivitySessionIds,
+      ...startingSessionIds,
+    ]);
     for (const [leadSessionId, workerSessionIds] of orcaLeadWorkerMap) {
       if (next.has(leadSessionId)) continue;
       for (const workerSessionId of workerSessionIds) {
@@ -3818,7 +3917,7 @@ function CollapsedView({
       }
     }
     return next;
-  }, [runningSessionIds, backgroundActivitySessionIds, orcaLeadWorkerMap]);
+  }, [runningSessionIds, backgroundActivitySessionIds, startingSessionIds, orcaLeadWorkerMap]);
 
   return (
     <div
@@ -3868,6 +3967,9 @@ function CollapsedView({
         allKnownProjects={allSearchProjects}
         allowedSessionIds={searchableSessionIds}
         hiddenProjectKeys={hiddenProjectKeys}
+        projectFilterRequest={isCollapsed ? projectFilterRequest : null}
+        machineSelection={selectedMachineId}
+        searchDevices={searchDevices}
         triggerClassName={SIDEBAR_RAIL_ICON_BUTTON_CLASS}
       />
 

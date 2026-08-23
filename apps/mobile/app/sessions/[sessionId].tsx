@@ -34,6 +34,7 @@ import {
 } from 'expo-audio';
 import {
   addScreenshotListener,
+  renderConversationShareHtmlToPng,
 } from 'xdt-screenshot-monitor';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
@@ -100,6 +101,8 @@ import {
   type ShareableMessageViewport,
 } from '@/session/MessageRenderer';
 import {
+  bundledAssetToDataUri,
+  cleanupConversationSharePngTemps,
   deleteConversationSharePngTemp,
   writeConversationSharePngTemp,
 } from '@/session/ConversationShareWebView';
@@ -108,6 +111,7 @@ import {
   type ConversationShareSvgHandle,
 } from '@/session/ConversationShareSvg';
 import {
+  buildConversationShareHtml,
   type ConversationShareMessage,
   type ConversationShareWebViewColors,
 } from '@/session/conversationShareWebViewHtml';
@@ -119,6 +123,7 @@ import {
   isFoldableBlockExpanded,
   useFoldableExpandedBlocksSnapshot,
 } from '@/session/expandedBlockMemory';
+import { ShareSelectAllButton } from '@/session/ShareSelectAllButton';
 import { ShareSelectionBar } from '@/session/ShareSelectionBar';
 import {
   shareSelectionStore,
@@ -313,6 +318,7 @@ import {
 } from '@cindy/maker-shared/synthetic-trigger';
 import {
   ComposerResizeGrabber,
+  ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
   MOBILE_COMPOSER_CONTROL_SIZE,
@@ -607,6 +613,15 @@ const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // 覆盖 settling 窗口上限(10s)之后仍无任何在途证据的场景。
 const TAIL_RETRY_HIDE_TIMEOUT_MS = 15_000;
 const SCREENSHOT_SHARE_ACTIVATION_DEBOUNCE_MS = 1_200;
+const nativeConversationShareAvailable = Platform.OS === 'ios';
+
+// 原生 WKWebView 只能稳定读取 data URI；SVG 兜底直接使用同一组 bundle asset。
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareCharacterAsset = require('../../assets/share/cindy-share-character.jpg');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareLogoLightAsset = require('../../assets/login/login-wordmark.png');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const shareLogoDarkAsset = require('../../assets/login/login-wordmark-dark.png');
 
 /**
  * 排队消息「复用 composer 编辑」的会话内状态:clientId 定位队列条目,
@@ -1001,6 +1016,9 @@ export default function SessionScreen() {
   const shareOperationSeqRef = useRef(0);
   const [conversationShareBusy, setConversationShareBusy] = useState(false);
   const [shareSelectionTriggeredByScreenshot, setShareSelectionTriggeredByScreenshot] = useState(false);
+  const [shareCharacterSrc, setShareCharacterSrc] = useState<string | null>(null);
+  const [shareLogoSrc, setShareLogoSrc] = useState<string | null>(null);
+  const shareLogoModeRef = useRef<string | null>(null);
   // chat-text-quote:待随下一条消息发送的选中文字引用(全局 store,消息流选区
   // 按钮 / 文件预览页写入;发送时拼进正文,命中本地命令时保留)。
   const quotes = useSessionQuotes(sessionId);
@@ -1080,6 +1098,28 @@ export default function SessionScreen() {
       };
     }, [sessionId]),
   );
+  useEffect(() => {
+    if (!nativeConversationShareAvailable || !shareSelectionActive) return undefined;
+    let cancelled = false;
+    const logoNeedsLoad = shareLogoModeRef.current !== mode || !shareLogoSrc;
+    void Promise.all([
+      shareCharacterSrc
+        ? Promise.resolve(shareCharacterSrc)
+        : bundledAssetToDataUri(shareCharacterAsset, 'image/jpeg'),
+      logoNeedsLoad
+        ? bundledAssetToDataUri(
+            mode === 'dark' ? shareLogoDarkAsset : shareLogoLightAsset,
+            'image/png',
+          )
+        : Promise.resolve(shareLogoSrc),
+    ]).then(([character, logo]) => {
+      if (cancelled) return;
+      shareLogoModeRef.current = mode;
+      setShareCharacterSrc(character);
+      setShareLogoSrc(logo);
+    });
+    return () => { cancelled = true; };
+  }, [mode, shareCharacterSrc, shareLogoSrc, shareSelectionActive]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
@@ -1991,12 +2031,12 @@ export default function SessionScreen() {
   // 写编排只读 reason(fork/rewind、队列编辑、会话设置写、pending interaction):对 lead + worker 都返回。
   const collaborationReadOnlyReason = useMemo(
     () => sessionCollaborationReadOnlyReason(currentSession),
-    [currentSession?.orcaRole],
+    [currentSession?.orcaRole, i18nInstance.language],
   );
   // composer(发消息)只读 reason:仅非 lead 的协作角色只读;Lead 返回 null → 可在手机上发文字消息。
   const composerReadOnlyReason = useMemo(
     () => sessionCollaborationComposerReadOnlyReason(currentSession),
-    [currentSession?.orcaRole],
+    [currentSession?.orcaRole, i18nInstance.language],
   );
   const activePendingInteraction = useMemo(() => {
     return selectPendingInteractionByRequestId(pending, pendingInteractionActiveRequestId);
@@ -2035,7 +2075,7 @@ export default function SessionScreen() {
   const pendingInteractionBlocksComposer = pendingInteractionsBlockRemoteComposer(pending);
   const remoteUnavailableReason = useMemo(
     () => describeRemoteError(connectionError),
-    [connectionError],
+    [connectionError, i18nInstance.language],
   );
   // 自动恢复类错误只影响 outbox 派发，不锁 composer；确定性错误（撤权、关闭远程
   // 控制、版本不兼容等）仍按原规则禁发。连接 issue 沿用 banner 的 active 判定，
@@ -2385,6 +2425,7 @@ export default function SessionScreen() {
     composerQuoteCount,
     composerSendUnavailableReason,
     draft,
+    i18nInstance.language,
     queueBusy,
     sending,
     voiceState,
@@ -2544,7 +2585,10 @@ export default function SessionScreen() {
   }, [navigation, sessionListDrawerOverlayMounted]);
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
-    if (targetSession.id === sessionId) {
+    const focusClientId = 'searchFocusClientId' in item
+      ? (item as { searchFocusClientId?: string }).searchFocusClientId
+      : undefined;
+    if (targetSession.id === sessionId && !focusClientId) {
       closeSessionListDrawer();
       return;
     }
@@ -2572,6 +2616,7 @@ export default function SessionScreen() {
         deviceId: targetDeviceId,
         deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
         sessionId: targetSession.id,
+        ...(focusClientId ? { focusClientId } : {}),
       });
     });
   }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);
@@ -2767,51 +2812,54 @@ export default function SessionScreen() {
     );
   };
 
-  // 工具条布局(对齐 Codex):左 = [+][权限图标][计划 chip];右 = [模型][语音][动作]。
+  // 工具条布局:左 = [+][权限][计划 chip][模型];右 = [停止][语音][发送]。
+  // 模型放左侧组,不随发送/停止出现而横向跳动。
   const renderComposerToolbar = () => (
     <>
-      {renderComposerAttachmentButton()}
-      {renderSessionPermissionButton()}
-      {planModeOn ? (
-        <PlanModeChip
-          disabled={controlBusy || !canUseRemoteSessionControls}
-          onExit={() => togglePlanMode(false)}
-          testID="session.planModeChip"
-        />
-      ) : null}
+      <ComposerToolbarLeftGroup testID="session.composerToolbarLeft">
+        {renderComposerAttachmentButton()}
+        {renderSessionPermissionButton()}
+        {planModeOn ? (
+          <PlanModeChip
+            disabled={controlBusy || !canUseRemoteSessionControls}
+            onExit={() => togglePlanMode(false)}
+            testID="session.planModeChip"
+          />
+        ) : null}
+        {composerRuntimeSummary ? (
+          <ComposerRuntimePill
+            disabled={controlBusy || !canUseRemoteSessionControls}
+            fastOn={composerPillFastOn}
+            label={composerRuntimeLabel}
+            leading={agentSwitchIntent ? (
+              <MobileAgentMark
+                agentKind={agentSwitchIntent.targetAgentKind}
+                color={colors.textSecondary}
+                size={iconSize.sm}
+              />
+            ) : composerPillSourceId ? (
+              // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
+              // 不静默换成 activeSourceId 的默认回退 Logo。
+              <MobileModelIconMark
+                color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
+                icon={currentSession && composerPillSourceProvider
+                  ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
+                  : undefined}
+                name={composerPillSourceProvider?.name ?? composerPillSourceId}
+                providerId={composerPillSourceId}
+                routing={composerPillSourceProvider?.routing}
+                logoKind={composerPillSourceProvider?.logoKind}
+              />
+            ) : null}
+            onPress={toggleComposerModelPicker}
+            testID="session.composerModelButton"
+          />
+        ) : null}
+      </ComposerToolbarLeftGroup>
       <ComposerToolbarSpacer />
-      {composerRuntimeSummary ? (
-        <ComposerRuntimePill
-          disabled={controlBusy || !canUseRemoteSessionControls}
-          fastOn={composerPillFastOn}
-          label={composerRuntimeLabel}
-          leading={agentSwitchIntent ? (
-            <MobileAgentMark
-              agentKind={agentSwitchIntent.targetAgentKind}
-              color={colors.textSecondary}
-              size={iconSize.sm}
-            />
-          ) : composerPillSourceId ? (
-            // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
-            // 不静默换成 activeSourceId 的默认回退 Logo。
-            <MobileModelIconMark
-              color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
-              icon={currentSession && composerPillSourceProvider
-                ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
-                : undefined}
-              name={composerPillSourceProvider?.name ?? composerPillSourceId}
-              providerId={composerPillSourceId}
-              routing={composerPillSourceProvider?.routing}
-              logoKind={composerPillSourceProvider?.logoKind}
-            />
-          ) : null}
-          onPress={toggleComposerModelPicker}
-          testID="session.composerModelButton"
-        />
-      ) : null}
-      {/* 工具排右段顺序:[模型][停止任务][语音占位][发送槽](spacer 已在模型左侧,
-          模型右对齐对齐 Codex)。停止任务在语音左边(对齐桌面),语音占位宽度随录音
-          胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽的邻接关系全程不变。 */}
+      {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边(对齐桌面),
+          语音占位宽度随录音胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽
+          的邻接关系全程不变。模型在 spacer 左侧,不随右段显隐横向跳动。 */}
       {renderComposerInlineStop()}
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
@@ -5925,6 +5973,7 @@ export default function SessionScreen() {
       });
     },
     [
+      i18nInstance.language,
       inputProjection,
       outboxDisplayItems,
       queueBusy,
@@ -6000,6 +6049,30 @@ export default function SessionScreen() {
     textTertiary: colors.textTertiary,
     dark: mode === 'dark',
   }), [colors, mode]);
+  const conversationShareHtml = useMemo(() => {
+    if (
+      !nativeConversationShareAvailable
+      || !shareSelectionActive
+      || selectedShareMessages.length === 0
+    ) return '';
+    return buildConversationShareHtml({
+      allShareableIds,
+      characterSrc: shareCharacterSrc ?? undefined,
+      colors: conversationShareColors,
+      contentWidth: windowDimensions.width,
+      logoSrc: shareLogoModeRef.current === mode ? shareLogoSrc ?? undefined : undefined,
+      selectedMessages: selectedShareMessages,
+    });
+  }, [
+    allShareableIds,
+    conversationShareColors,
+    mode,
+    selectedShareMessages,
+    shareCharacterSrc,
+    shareLogoSrc,
+    shareSelectionActive,
+    windowDimensions.width,
+  ]);
   const enterShareSelection = useCallback((clientId: string) => {
     Keyboard.dismiss();
     setShareSelectionTriggeredByScreenshot(false);
@@ -6012,10 +6085,30 @@ export default function SessionScreen() {
     shareSelectionStore.exit();
   }, []);
   const exportConversationSharePng = useCallback(async () => {
+    const nativeShareAssetsReady = Boolean(
+      nativeConversationShareAvailable
+      && shareCharacterSrc
+      && shareLogoSrc
+      && shareLogoModeRef.current === mode,
+    );
+    if (conversationShareHtml && nativeShareAssetsReady) {
+      try {
+        const nativeBase64 = await renderConversationShareHtmlToPng({
+          html: conversationShareHtml,
+          width: windowDimensions.width,
+        });
+        if (nativeBase64) {
+          console.info('[conversation-share] native webview export succeeded');
+          return nativeBase64;
+        }
+      } catch (error) {
+        console.warn('[conversation-share] native webview export failed; falling back to svg', error);
+      }
+    }
     const svg = conversationShareSvgRef.current;
     if (!svg) throw new Error('conversation share svg renderer is unavailable');
     return svg.exportPng();
-  }, []);
+  }, [conversationShareHtml, mode, shareCharacterSrc, shareLogoSrc, windowDimensions.width]);
   const shareSelectedConversation = useCallback(async () => {
     if (
       conversationShareBusy
@@ -6030,8 +6123,12 @@ export default function SessionScreen() {
       && shareSelectionActiveRef.current
       && shareSelectionRevisionRef.current === operationSelectionRevision;
     let localUri: string | null = null;
+    let shareCompleted = false;
     setConversationShareBusy(true);
     try {
+      // 成功分享的 PNG 要保留给系统扩展读取；回收更早的产物，限制 cache
+      // 目录增长，并不触碰本次尚未生成的文件。
+      await cleanupConversationSharePngTemps();
       if (!isShareOperationActive()) return;
       const base64 = await exportConversationSharePng();
       if (!isShareOperationActive()) return;
@@ -6042,6 +6139,7 @@ export default function SessionScreen() {
       if (!isShareOperationActive()) return;
       await sharing.shareAsync(localUri, { mimeType: 'image/png' });
       if (!isShareOperationActive()) return;
+      shareCompleted = true;
       setShareSelectionTriggeredByScreenshot(false);
       shareSelectionStore.exit();
     } catch (error) {
@@ -6049,9 +6147,9 @@ export default function SessionScreen() {
       console.warn('[conversation-share] failed to generate or open share image', error);
       Alert.alert(t('session.screen.shareFailedTitle'), t('session.screen.shareImageFailed'));
     } finally {
-      if (localUri && Platform.OS !== 'android') {
-        await deleteConversationSharePngTemp(localUri);
-      }
+      // shareAsync 返回后，iOS 分享扩展仍可能继续读取该 URL。成功写入的文件留在
+      // cache 目录交给下一次有界清理；失败、取消或中途失活则立即删除当前产物。
+      if (!shareCompleted && localUri) await deleteConversationSharePngTemp(localUri);
       if (shareOperationSeqRef.current === operationSeq) setConversationShareBusy(false);
     }
   }, [conversationShareBusy, exportConversationSharePng, selectedShareMessages.length, shareSelectionActive, shareSelectionRevision, t]);
@@ -8742,6 +8840,12 @@ export default function SessionScreen() {
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
+              shareSelectionLeadingInset={nativeShellLayout.wideViewport
+                ? Math.max(0, (windowDimensions.width - nativeShellLayout.contentMaxWidth) / 2)
+                : 0}
+              shareSelectAllNode={shareSelectionActive ? (
+                <ShareSelectAllButton busy={conversationShareBusy} shareableIds={allShareableIds} />
+              ) : undefined}
               syncing={showSyncingIndicator}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               onBack={goBackToHome}
@@ -9390,6 +9494,10 @@ export default function SessionScreen() {
                     sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}
                     startedAt={composerActivityStartedAtMs}
                     tokenUsage={composerActivityTokenUsage}
+                    outputTokens={remoteSessionRunStatus.outputTokens}
+                    generationDurationMs={remoteSessionRunStatus.generationDurationMs}
+                    generationReliable={remoteSessionRunStatus.generationReliable}
+                    generationActive={remoteSessionRunStatus.generationActive}
                     visible={showComposerActivity}
                   />
                 </View>
@@ -9508,7 +9616,7 @@ export default function SessionScreen() {
                       <ComposerRichInput
                         ref={composerInputRef}
                         accessibilityHint={composerLayout.input.disabledReason ?? undefined}
-                        accessibilityLabel="输入远程消息"
+                        accessibilityLabel={t('session.screen.composerPlaceholder')}
                         document={composerDocument}
                         editable={!composerLayout.input.disabled}
                         height={composerInputVisibleHeight}
@@ -9580,7 +9688,6 @@ export default function SessionScreen() {
             <ShareSelectionBar
               busy={conversationShareBusy}
               count={shareSelectionCount}
-              shareableIds={allShareableIds}
               screenshotTriggered={shareSelectionTriggeredByScreenshot}
               onCancel={cancelShareSelection}
               onShare={() => void shareSelectedConversation()}
@@ -9629,6 +9736,8 @@ function SessionHeaderBar({
   currentSession,
   diffCount,
   isDeviceAccessRevoked,
+  shareSelectionLeadingInset,
+  shareSelectAllNode,
   syncing,
   messageCount,
   onBack,
@@ -9649,6 +9758,10 @@ function SessionHeaderBar({
   currentSession: RemoteSession | null;
   diffCount: number;
   isDeviceAccessRevoked: boolean;
+  /** 宽屏下与消息内容列共用的左侧 inset。 */
+  shareSelectionLeadingInset: number;
+  /** 分享选择模式下替换头部动作区。 */
+  shareSelectAllNode?: ReactNode;
   syncing: boolean;
   messageCount: number;
   onBack(): void;
@@ -9704,6 +9817,20 @@ function SessionHeaderBar({
     session: currentSession,
   });
 
+  // 分享选择模式只保留全选；底部关闭按钮负责退出。
+  if (shareSelectAllNode) {
+    return (
+      <View
+        style={[
+          styles.sessionHeaderBar,
+          { paddingLeft: shareSelectionLeadingInset + spacing.sm },
+        ]}
+        testID="session.summary"
+      >
+        {shareSelectAllNode}
+      </View>
+    );
+  }
   return (
     <View style={styles.sessionHeaderBar} testID="session.summary">
       {onOpenSessionList ? (
@@ -10245,12 +10372,20 @@ function ComposerActivityStatus({
   sideTaskRunning,
   startedAt,
   tokenUsage,
+  outputTokens,
+  generationDurationMs,
+  generationReliable,
+  generationActive,
   visible,
 }: {
   reconnectAttempt: RemoteSessionRunStatus['reconnectAttempt'];
   sideTaskRunning: boolean;
   startedAt: number | null;
   tokenUsage: number;
+  outputTokens: number;
+  generationDurationMs: number;
+  generationReliable: boolean;
+  generationActive: boolean;
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -10274,7 +10409,18 @@ function ComposerActivityStatus({
   if (!visible) return null;
 
   const elapsedText = formatComposerActivityElapsed(elapsed);
-  const tokenText = formatComposerActivityTokens(tokenUsage);
+  const tokenCount = formatComposerActivityTokenCount(tokenUsage);
+  const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
+  const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
+  const rateValue = formatComposerActivityRateValue(
+    outputTokens,
+    generationDurationMs,
+    generationReliable,
+  );
+  const rateText = rateValue
+    ? t('session.screen.tokenRate', { rate: rateValue })
+    : null;
+  const showUsageMeta = Boolean(rateText) || tokenUsage > 0;
   // 三类进度共用这一个 attempt 字段, 但说法必须分开: 模型容量、请求限流与传输层重连
   // 的用户含义不同，混用会把用户引向错误的排查方向。
   const activityText = reconnectAttempt
@@ -10304,11 +10450,27 @@ function ComposerActivityStatus({
       </View>
       <View style={styles.composerActivityMeta}>
         <Text style={styles.composerActivityMetaText}>{elapsedText}</Text>
-        {!sideTaskRunning ? (
+        {!sideTaskRunning && showUsageMeta ? (
           <>
             <Text style={styles.composerActivityMetaText}>·</Text>
-            <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
-            <Text style={styles.composerActivityMetaText}>{tokenText}</Text>
+            {rateText ? (
+              <Text
+                accessibilityLabel={rateText}
+                style={styles.composerActivityMetaText}
+              >
+                {rateText}
+              </Text>
+            ) : (
+              <>
+                <ArrowDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                <Text
+                  accessibilityLabel={tokenA11yText}
+                  style={styles.composerActivityMetaText}
+                >
+                  {tokenText}
+                </Text>
+              </>
+            )}
           </>
         ) : null}
       </View>
@@ -10323,10 +10485,22 @@ function formatComposerActivityElapsed(seconds: number): string {
   return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
 }
 
-function formatComposerActivityTokens(tokenUsage: number): string {
+function formatComposerActivityTokenCount(tokenUsage: number): string {
   const safeTokens = Math.max(0, Math.round(tokenUsage));
-  if (safeTokens >= 1000) return `${(safeTokens / 1000).toFixed(1)}k tokens`;
-  return `${safeTokens} tokens`;
+  return safeTokens >= 1000 ? `${(safeTokens / 1000).toFixed(1)}k` : `${safeTokens}`;
+}
+
+function formatComposerActivityRateValue(
+  outputTokens: number,
+  durationMs: number,
+  generationReliable: boolean,
+): string | null {
+  if (!generationReliable || outputTokens <= 0 || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+  const rate = (outputTokens * 1000) / durationMs;
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  return rate < 0.1 ? '<0.1' : rate >= 100 ? rate.toFixed(0) : rate.toFixed(1).replace(/\.0$/, '');
 }
 
 function ComposerPaletteRow({

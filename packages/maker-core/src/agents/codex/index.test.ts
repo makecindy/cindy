@@ -244,13 +244,17 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
 
   const createdTransports: MockCodexTransport[] = [];
   const createdStdioOptions: Array<{
+    extraArgs?: string[];
     onProcessSpawned?: (pid: number) => void | (() => void);
   }> = [];
   return { MockCodexTransport, createdTransports, createdStdioOptions };
 });
 
 vi.mock('./app-server/stdioTransport.js', () => ({
-  createStdioTransport: (opts: { onProcessSpawned?: (pid: number) => void | (() => void) }) => {
+  createStdioTransport: (opts: {
+    extraArgs?: string[];
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
     createdStdioOptions.push(opts);
     opts.onProcessSpawned?.(7_000 + createdStdioOptions.length);
     const transport = new MockCodexTransport();
@@ -337,6 +341,33 @@ function createDeps(
   };
 }
 
+describe('CodexAgent spawn configuration', () => {
+  it('keeps host-enforced plugin disabling when dynamic spawn preparation fails', async () => {
+    const prepareCodexExtraSpawnConfig = vi.fn(async () => {
+      throw new Error('bridge unavailable');
+    });
+    const agent = new CodexAgent(createDeps({}, {
+      disableCodexPluginRuntime: true,
+      prepareCodexExtraSpawnConfig,
+    }));
+
+    const handle = await agent.startSession({
+      sessionId: 'session-plugin-runtime-fallback',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    expect(createdStdioOptions[0]?.extraArgs).toEqual([
+      '--disable',
+      'plugins',
+      '--disable',
+      'remote_plugin',
+    ]);
+    await handle.close();
+    await agent.dispose();
+  });
+});
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -346,6 +377,37 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+const ROOT_TURN_START_ORDER_CASES = [
+  {
+    name: 'response-first',
+    sessionSuffix: 'response-first',
+    steps: [
+      { kind: 'response', at: 2_000 },
+      { kind: 'started', at: 3_000 },
+    ],
+    expectedDurationMs: 2_000,
+  },
+  {
+    name: 'notification-first',
+    sessionSuffix: 'notification-first',
+    steps: [
+      { kind: 'started', at: 2_000 },
+      { kind: 'response', at: 3_000 },
+    ],
+    expectedDurationMs: 3_000,
+  },
+  {
+    name: 'duplicate turn/started',
+    sessionSuffix: 'duplicate-started',
+    steps: [
+      { kind: 'response', at: 2_000 },
+      { kind: 'started', at: 3_000 },
+      { kind: 'started', at: 3_500 },
+    ],
+    expectedDurationMs: 2_000,
+  },
+] as const;
 
 async function waitForExpectation(assertion: () => void | Promise<void>, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -3130,6 +3192,78 @@ describe('CodexAgent reference directories', () => {
     await handle.close();
   });
 
+  it('accepts lower usage totals after stale-daemon resume starts a new execution generation', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnStartCount = 0;
+    let activeTurnId = '';
+    const host = installFakeHost(agent, (method) => {
+      if (method !== Method.TurnStart) return undefined;
+      turnStartCount += 1;
+      if (turnStartCount === 2) throw new Error('thread not found');
+      activeTurnId = `turn-${turnStartCount}`;
+      return { turn: { id: activeTurnId } };
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-usage-after-stale-daemon',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+      throw new Error('expected usage handlers');
+    }
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    await handle.send({ type: 'user', content: 'first turn' });
+    handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: activeTurnId } });
+    handlers.tokenUsageUpdated({
+      threadId: 'start-thread-id',
+      turnId: activeTurnId,
+      tokenUsage: {
+        total: { totalTokens: 100, inputTokens: 80, outputTokens: 20, cachedInputTokens: 0 },
+        last: { totalTokens: 100, inputTokens: 80, outputTokens: 20, cachedInputTokens: 0 },
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: activeTurnId, status: 'completed' },
+    });
+    await waitForExpectation(() =>
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(1),
+    );
+
+    await handle.send({ type: 'user', content: 'after daemon restart' });
+    handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: activeTurnId } });
+    handlers.tokenUsageUpdated({
+      threadId: 'start-thread-id',
+      turnId: activeTurnId,
+      tokenUsage: {
+        total: { totalTokens: 10, inputTokens: 8, outputTokens: 2, cachedInputTokens: 0 },
+        last: { totalTokens: 10, inputTokens: 8, outputTokens: 2, cachedInputTokens: 0 },
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: activeTurnId, status: 'completed' },
+    });
+    await waitForExpectation(() =>
+      expect(events.filter((event) => event.type === 'done')).toHaveLength(2),
+    );
+
+    const doneEvents = events.filter((event): event is Extract<AgentEvent, { type: 'done' }> =>
+      event.type === 'done',
+    );
+    expect((doneEvents[0]?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toHaveLength(1);
+    expect((doneEvents[1]?.data as { usage?: { segments?: Array<{ inputTokens: number; outputTokens: number }> } }).usage?.segments).toEqual([
+      expect.objectContaining({ inputTokens: 8, outputTokens: 2 }),
+    ]);
+
+    await handle.close();
+  });
+
   it('retries a stale reference turn with its frozen permission profile', async () => {
     const agent = new CodexAgent(createDeps());
     const firstTurnGate = deferred<never>();
@@ -3453,6 +3587,51 @@ describe('CodexAgent.refreshLocalModels', () => {
 });
 
 describe('CodexAgent.startSession developerInstructions', () => {
+  it.each([
+    { action: 'start', resumeSessionId: undefined, expectedProvider: 'cindy_gateway' },
+    {
+      action: 'resume',
+      resumeSessionId: '11111111-1111-1111-1111-111111111111',
+      expectedProvider: 'cindy_openai',
+    },
+  ])('exposes the actual thread model provider returned by $action', async ({
+    resumeSessionId,
+    expectedProvider,
+  }) => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'cindy_gateway',
+          cwd: '/repo',
+        };
+      }
+      if (method === Method.ThreadResume) {
+        return {
+          thread: { id: 'resume-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'cindy_openai',
+          cwd: '/repo',
+          approvalPolicy: 'never',
+          sandbox: { type: 'dangerFullAccess' },
+        };
+      }
+      return undefined;
+    });
+
+    const handle = await agent.startSession({
+      sessionId: `session-provider-response-${expectedProvider}`,
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+    });
+
+    expect(handle.codexThreadModelProviderId).toBe(expectedProvider);
+    await handle.close();
+  });
+
   it('rejects session creation when thread/start fails', async () => {
     const workingDir = path.join('workspace', 'repo');
     const agent = new CodexAgent(createDeps());
@@ -3846,7 +4025,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await handle.close();
   });
 
-  it('uses HTTP prompt injection when OpenAI WebSocket is disabled for subagent routing', async () => {
+  it('uses HTTP prompt injection when the host reports OpenAI WebSocket unavailable', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
@@ -4405,6 +4584,135 @@ describe('CodexAgent fast mode service tier', () => {
     await handle.send({ type: 'user', content: 'hello' });
 
     expect(handle.getFastMode?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('keeps a Codex turn on its accepted service tier across a mid-start Fast toggle', async () => {
+    const agent = new CodexAgent(createDeps());
+    const turnStartGate = deferred<{ turn: { id: string }; serviceTier: 'default' }>();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return turnStartGate.promise;
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-tier-lock',
+      model: 'gpt-5.4',
+      fastMode: false,
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+      throw new Error('expected usage handlers');
+    }
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const sendPromise = handle.send({ type: 'user', content: 'tier lock' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(true);
+    });
+    // The turn/start request was already sent with the standard tier. Changing
+    // the session setting must not re-price the usage that follows it.
+    await handle.setFastMode?.(true);
+    turnStartGate.resolve({ turn: { id: 'turn-tier-lock' }, serviceTier: 'default' });
+    handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-tier-lock' } });
+    handlers.tokenUsageUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-tier-lock',
+      tokenUsage: {
+        total: { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedInputTokens: 0 },
+        last: { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedInputTokens: 0 },
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-tier-lock', status: 'completed' },
+    });
+    await sendPromise;
+    await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+
+    const done = events.find((event): event is Extract<AgentEvent, { type: 'done' }> => event.type === 'done');
+    expect((done?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toEqual([
+      expect.objectContaining({ inputTokens: 20, outputTokens: 10, priceVariant: 'standard' }),
+    ]);
+    await handle.close();
+  });
+
+  it('calibrates the accepted tier before replaying buffered usage notifications', async () => {
+    const agent = new CodexAgent(createDeps());
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<{ turn: { id: string }; serviceTier: 'default' }>();
+    let attempt = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        return attempt === 1 ? firstStart.promise : secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-tier-buffer-replay',
+      model: 'gpt-5.4',
+      fastMode: true,
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+      throw new Error('expected usage handlers');
+    }
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const firstSend = handle.send({ type: 'user', content: 'first' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(true);
+    });
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await firstSend;
+    expect(await iterator.next()).toMatchObject({ value: { type: 'status', data: { isRunning: true } } });
+    expect(await iterator.next()).toMatchObject({ value: { type: 'error', data: { isTerminal: true } } });
+    expect(await iterator.next()).toMatchObject({ value: { type: 'status', data: { status: 'Done', isRunning: false } } });
+
+    const events: AgentEvent[] = [];
+    const secondSend = handle.send({ type: 'user', content: 'buffered tier' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(2);
+    });
+
+    // All three notifications arrive before turn/start responds.  They must
+    // replay only after the response's authoritative default tier is applied.
+    handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-buffer-tier' } });
+    handlers.tokenUsageUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-buffer-tier',
+      tokenUsage: {
+        total: { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedInputTokens: 0 },
+        last: { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedInputTokens: 0 },
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-buffer-tier', status: 'completed' },
+    });
+
+    secondStart.resolve({ turn: { id: 'turn-buffer-tier' }, serviceTier: 'default' });
+    await secondSend;
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) break;
+      events.push(next.value);
+      if (next.value.type === 'done') break;
+    }
+    await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+
+    const done = events.find((event) => event.type === 'done') as
+      | { type: 'done'; data: { usage?: { segments?: unknown[] } } }
+      | undefined;
+    expect((done?.data as { usage?: { segments?: unknown[] } }).usage?.segments).toEqual([
+      expect.objectContaining({ inputTokens: 20, outputTokens: 10, priceVariant: 'standard' }),
+    ]);
     await handle.close();
   });
 });
@@ -5858,7 +6166,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports).toHaveLength(1);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledTimes(1);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
-      remoteHostId: undefined, credentialMode: 'oauth-bearer',
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'gateway-key',
     });
     await xdHandle.close();
     await oauthHandle.close();
@@ -5966,7 +6276,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(createdTransports).toHaveLength(1);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledTimes(2);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(1, [], {
-      remoteHostId: undefined, credentialMode: 'oauth-bearer',
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'gateway-key',
     });
     expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
       remoteHostId: undefined, credentialMode: 'gateway-key',
@@ -6189,8 +6501,207 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
       remoteHostId: undefined,
       credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'provider-oauth',
     });
     await handle.close();
+    await agent.dispose();
+  });
+
+  it('reuses a host when both main-task modes resolve to the default Subagent profile', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async () => ({
+        extraArgs: [],
+        extraEnv: {},
+        codexProxyActive: true,
+        codexSubagentRoutingProfile: 'default' as const,
+      }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const oauth = await agent.startSession({
+      sessionId: 'session-profile-default-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    });
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-default-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    expect(createdTransports).toHaveLength(1);
+    expect(createdTransports[0].closed).toBe(false);
+    await thirdParty.close();
+    await oauth.close();
+    await agent.dispose();
+  });
+
+  it('rebuilds an OAuth-default host when the next main task requires configured Subagent routing', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async (_providers, ctx) => ({
+        extraArgs: [],
+        extraEnv: {},
+        codexProxyActive: true,
+        codexSubagentRoutingProfile:
+          (ctx.requestedCredentialMode ?? ctx.credentialMode) === 'oauth-bearer'
+            ? 'oauth-default' as const
+            : 'configured' as const,
+      }));
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const oauth = await agent.startSession({
+      sessionId: 'session-profile-non-chatgpt-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    });
+    await oauth.close();
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-non-chatgpt-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(true);
+    expect(createdTransports[1].closed).toBe(false);
+    await thirdParty.close();
+    await agent.dispose();
+  });
+
+  it('does not reuse a host whose Subagent routing profile belongs to the opposite main-task mode', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async (_providers, ctx) => {
+        const requestedCredentialMode = ctx.requestedCredentialMode ?? ctx.credentialMode;
+        if (
+          requestedCredentialMode === 'provider-oauth'
+          && ctx.credentialMode === 'provider-oauth'
+        ) {
+          return {
+            extraArgs: [],
+            extraEnv: {},
+            codexProxyActive: true,
+            requiredSpawnCredentialMode: 'oauth-bearer' as const,
+          };
+        }
+        return {
+          extraArgs: [],
+          extraEnv: {},
+          codexProxyActive: true,
+          codexSubagentRoutingProfile:
+            requestedCredentialMode === 'oauth-bearer'
+              ? 'oauth-default' as const
+              : 'configured' as const,
+        };
+      });
+    const agent = new CodexAgent(createDeps({}, { prepareCodexExtraSpawnConfig }));
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+    await thirdParty.close();
+
+    const oauth = await agent.startSession({
+      sessionId: 'session-profile-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    });
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(true);
+    await oauth.close();
+
+    const thirdPartyAgain = await agent.startSession({
+      sessionId: 'session-profile-provider-oauth-again',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai-again',
+    });
+    expect(createdTransports).toHaveLength(3);
+    expect(createdTransports[1].closed).toBe(true);
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'provider-oauth',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(3, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(5, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      requestedCredentialMode: 'provider-oauth',
+    });
+
+    await thirdPartyAgain.close();
+    await agent.dispose();
+  });
+
+  it('does not retire an active host when only the Subagent routing profile must change', async () => {
+    const prepareCodexExtraSpawnConfig: NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']> =
+      vi.fn(async (_providers, ctx) => {
+        const requestedCredentialMode = ctx.requestedCredentialMode ?? ctx.credentialMode;
+        if (
+          requestedCredentialMode === 'provider-oauth'
+          && ctx.credentialMode === 'provider-oauth'
+        ) {
+          return {
+            extraArgs: [],
+            extraEnv: {},
+            codexProxyActive: true,
+            requiredSpawnCredentialMode: 'oauth-bearer' as const,
+          };
+        }
+        return {
+          extraArgs: [],
+          extraEnv: {},
+          codexProxyActive: true,
+          codexSubagentRoutingProfile:
+            requestedCredentialMode === 'oauth-bearer'
+              ? 'oauth-default' as const
+              : 'configured' as const,
+        };
+      });
+    const prepareCodexLocalCredentialModeSwitch: NonNullable<
+      AgentDeps['prepareCodexLocalCredentialModeSwitch']
+    > = vi.fn(async () => undefined);
+    const agent = new CodexAgent(createDeps({}, {
+      prepareCodexExtraSpawnConfig,
+      prepareCodexLocalCredentialModeSwitch,
+    }));
+
+    const thirdParty = await agent.startSession({
+      sessionId: 'session-profile-busy-provider-oauth',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    await expect(agent.startSession({
+      sessionId: 'session-profile-busy-oauth',
+      providerId: 'openai',
+      model: 'gpt-5.4',
+      workingDir: '/repo-oauth',
+    })).rejects.toThrow(/still attached/i);
+
+    expect(prepareCodexLocalCredentialModeSwitch).toHaveBeenCalledWith({
+      fromMode: 'oauth-bearer',
+      fromModeEffective: 'oauth-bearer',
+      toMode: 'oauth-bearer',
+      activeSubscriptions: 1,
+    });
+    expect(createdTransports).toHaveLength(1);
+    expect(createdTransports[0].closed).toBe(false);
+
+    await thirdParty.close();
     await agent.dispose();
   });
 
@@ -15062,12 +15573,83 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('excludes a server-resolved approval wait from the completed turn duration', async () => {
+  it.each(ROOT_TURN_START_ORDER_CASES)(
+    'starts generation timing once for $name root-turn activation',
+    async ({ sessionSuffix, steps, expectedDurationMs }) => {
+      let now = 1_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const turnStartResponse = deferred<{ turn: { id: string } }>();
+        const agent = new CodexAgent(createDeps());
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) return turnStartResponse.promise;
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: `session-turn-start-order-${sessionSuffix}`,
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.turnStarted || !handlers.turnCompleted) {
+          throw new Error('expected turn lifecycle handlers');
+        }
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        const sendPromise = handle.send({ type: 'user', content: 'hello' });
+        await waitForExpectation(() => {
+          expect(host.request).toHaveBeenCalledWith(
+            Method.TurnStart,
+            expect.any(Object),
+            expect.any(Object),
+          );
+        });
+
+        for (const step of steps) {
+          now = step.at;
+          if (step.kind === 'response') {
+            turnStartResponse.resolve({ turn: { id: 'turn-ordering' } });
+            await sendPromise;
+          } else {
+            handlers.turnStarted({
+              threadId: 'start-thread-id',
+              turn: { id: 'turn-ordering' },
+            });
+          }
+        }
+
+        now = 5_000;
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-ordering', status: 'completed' },
+        });
+        await waitForExpectation(() => {
+          expect(events.some((event) => event.type === 'done')).toBe(true);
+        });
+        const done = events.find((event) => event.type === 'done');
+        expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs)
+          .toBe(expectedDurationMs);
+
+        await handle.close();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it('starts response-first generation timing at turn/started and excludes an approval wait', async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
       const agent = new CodexAgent(createDeps());
-      const host = installFakeHost(agent);
+      const turnStartResponse = deferred<{ turn: { id: string } }>();
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return turnStartResponse.promise;
+        return undefined;
+      });
       const handle = await agent.startSession({
         sessionId: 'session-approval-generation-timing',
         model: 'gpt-5.4',
@@ -15090,8 +15672,24 @@ describe('CodexAgent MCP thread context hooks', () => {
       const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
       handle.setInteractionResolver(interactionResolver);
 
+      const sendPromise = handle.send({ type: 'user', content: 'run pwd' });
+      await waitForExpectation(() => {
+        expect(host.request).toHaveBeenCalledWith(
+          Method.TurnStart,
+          expect.any(Object),
+          expect.any(Object),
+        );
+      });
+      now = 5_000;
+      turnStartResponse.resolve({ turn: { id: 'turn-1' } });
+      await sendPromise;
+
+      // The RPC response only establishes ownership. Generation timing starts
+      // from the later turn/started notification, matching the real app-server
+      // response-first sequence.
+      now = 7_000;
       handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
-      now = 2_000;
+      now = 8_000;
       const approvalPromise = handlers.commandExecutionApproval({
         threadId: 'start-thread-id',
         turnId: 'turn-1',
@@ -15101,17 +15699,17 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
       await waitForExpectation(() => expect(interactionResolver).toHaveBeenCalledTimes(1));
 
-      now = 10_000;
+      now = 16_000;
       handlers.serverRequestResolved({
         threadId: 'start-thread-id',
         requestId: 'approval-item-1',
       });
       await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
 
-      now = 12_000;
+      now = 18_000;
       handlers.turnCompleted({
         threadId: 'start-thread-id',
-        turn: { id: 'turn-1', status: 'completed', durationMs: 11_000 },
+        turn: { id: 'turn-1', status: 'completed', durationMs: 17_000 },
       });
       await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
       const done = events.find((event) => event.type === 'done');
@@ -15121,6 +15719,377 @@ describe('CodexAgent MCP thread context hooks', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('resets prior generation timing on response without starting before turnStarted', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const firstStart = deferred<unknown>();
+      const secondStart = deferred<unknown>();
+      let attempt = 0;
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) {
+          attempt += 1;
+          if (attempt === 1) return firstStart.promise;
+          return secondStart.promise;
+        }
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-generation-timing-start-resp-before-started',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+        throw new Error('expected generation timing handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const send1 = handle.send({ type: 'user', content: 'first' });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+        await Promise.resolve();
+      }
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+      now = 4_000;
+      handlers.tokenUsageUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        tokenUsage: {
+          last: { inputTokens: 10, outputTokens: 20, cachedInputTokens: 0 },
+        },
+      });
+      now = 5_000;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed', durationMs: 4_000 },
+      });
+      firstStart.resolve({ turn: { id: 'turn-1' } });
+      await send1;
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      events.length = 0;
+
+      const send2 = handle.send({ type: 'user', content: 'second' });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+        await Promise.resolve();
+      }
+      now = 6_000;
+      secondStart.resolve({ turn: { id: 'turn-2' } });
+      await send2;
+      now = 7_000;
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+      now = 8_000;
+      handlers.tokenUsageUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        tokenUsage: {
+          last: { inputTokens: 10, outputTokens: 40, cachedInputTokens: 0 },
+        },
+      });
+      now = 8_500;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-2', status: 'completed', durationMs: 2_500 },
+      });
+      await waitForExpectation(() =>
+        expect(events.some((event) => event.type === 'done')).toBe(true),
+      );
+      const done = events.find((event) => event.type === 'done');
+      expect((done?.data as { usage?: { durationMs?: number } }).usage?.durationMs).toBe(1_500);
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('attaches throttled token usage to the Done snapshot without an extra running frame', async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-generation-usage-flush',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+        throw new Error('expected generation usage handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const sendPromise = handle.send({ type: 'user', content: 'fast' });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+        await Promise.resolve();
+      }
+      now = 1_050;
+      handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-fast' } });
+      now = 1_200;
+      handlers.tokenUsageUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-fast',
+        tokenUsage: {
+          total: { totalTokens: 50, inputTokens: 10, outputTokens: 40, cachedInputTokens: 0 },
+          last: { inputTokens: 10, outputTokens: 40, cachedInputTokens: 0 },
+        },
+      });
+      now = 1_300;
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-fast', status: 'completed', durationMs: 300 },
+      });
+      await sendPromise;
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+
+      const extraRunningLive = events.filter(
+        (event) =>
+          event.type === 'status'
+          && (event.data as { isRunning?: boolean }).isRunning === true
+          && (event.data as { outputTokens?: number }).outputTokens === 40,
+      );
+      expect(extraRunningLive).toHaveLength(0);
+      const doneStatus = events.find(
+        (event) =>
+          event.type === 'status'
+          && (event.data as { status?: string }).status === 'Done',
+      );
+      expect(doneStatus?.data).toMatchObject({
+        isRunning: false,
+        outputTokens: 40,
+        generationDurationMs: 250,
+      });
+
+      await handle.close();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('emits only monotonic request segments and keeps reasoning as a non-additive detail', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-usage-segments',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+      throw new Error('expected usage segment handlers');
+    }
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: 'turn-segments' } });
+    const first = {
+      threadId: 'start-thread-id',
+      turnId: 'turn-segments',
+      tokenUsage: {
+        total: {
+          totalTokens: 60_007,
+          inputTokens: 60_000,
+          cachedInputTokens: 10_000,
+          outputTokens: 7,
+          reasoningOutputTokens: 3,
+        },
+        last: {
+          totalTokens: 60_007,
+          inputTokens: 60_000,
+          cachedInputTokens: 10_000,
+          outputTokens: 7,
+          reasoningOutputTokens: 3,
+        },
+      },
+    };
+    handlers.tokenUsageUpdated(first);
+    // Exact replay plus an older frame must not create billable segments.
+    handlers.tokenUsageUpdated(first);
+    handlers.tokenUsageUpdated({
+      ...first,
+      tokenUsage: {
+        ...first.tokenUsage,
+        total: { ...first.tokenUsage.total, totalTokens: 59_000 },
+      },
+    });
+    handlers.tokenUsageUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-segments',
+      tokenUsage: {
+        total: {
+          totalTokens: 115_011,
+          inputTokens: 115_000,
+          cachedInputTokens: 15_000,
+          outputTokens: 11,
+          reasoningOutputTokens: 5,
+        },
+        last: {
+          totalTokens: 55_004,
+          inputTokens: 55_000,
+          cachedInputTokens: 5_000,
+          outputTokens: 4,
+          reasoningOutputTokens: 2,
+        },
+      },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-segments', status: 'completed' },
+    });
+    await waitForExpectation(() =>
+      expect(events.some((event) => event.type === 'done')).toBe(true),
+    );
+
+    const done = events.find((event) => event.type === 'done');
+    expect((done?.data as { usage?: unknown }).usage).toMatchObject({
+      promptTokens: 100_000,
+      completionTokens: 11,
+      reasoningTokens: 5,
+      cachedTokens: 15_000,
+      segments: [
+        {
+          inputTokens: 50_000,
+          outputTokens: 7,
+          cacheReadTokens: 10_000,
+          cacheCreateTokens: 0,
+          reasoningTokens: 3,
+        },
+        {
+          inputTokens: 50_000,
+          outputTokens: 4,
+          cacheReadTokens: 5_000,
+          cacheCreateTokens: 0,
+          reasoningTokens: 2,
+        },
+      ],
+    });
+    await handle.close();
+  });
+
+  it('replays 108 audited usage notifications as 92 billable request segments', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-audited-usage-fixture',
+      model: 'codex/gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.turnStarted || !handlers.tokenUsageUpdated || !handlers.turnCompleted) {
+      throw new Error('expected usage handlers');
+    }
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const turnId = 'turn-audited-usage-fixture';
+    handlers.turnStarted({ threadId: 'start-thread-id', turn: { id: turnId } });
+    let cumulativeInput = 0;
+    let cumulativeOutput = 0;
+    let notificationCount = 0;
+    for (let index = 0; index < 92; index += 1) {
+      const uncachedInput = 7_987 + (index < 68 ? 1 : 0);
+      const cachedInput = 86_234 + (index < 40 ? 1 : 0);
+      const output = 401 + (index < 61 ? 1 : 0);
+      const input = uncachedInput + cachedInput;
+      cumulativeInput += input;
+      cumulativeOutput += output;
+      const notification = {
+        threadId: 'start-thread-id',
+        turnId,
+        tokenUsage: {
+          total: {
+            totalTokens: cumulativeInput + cumulativeOutput,
+            inputTokens: cumulativeInput,
+            cachedInputTokens:
+              index < 40 ? (index + 1) * 86_235 : 40 * 86_235 + (index - 39) * 86_234,
+            outputTokens: cumulativeOutput,
+            reasoningOutputTokens: 0,
+          },
+          last: {
+            totalTokens: input + output,
+            inputTokens: input,
+            cachedInputTokens: cachedInput,
+            outputTokens: output,
+            reasoningOutputTokens: 0,
+          },
+        },
+      };
+      handlers.tokenUsageUpdated(notification);
+      notificationCount += 1;
+      if (index < 15) {
+        handlers.tokenUsageUpdated(notification);
+        notificationCount += 1;
+      }
+    }
+    const finalTotal = {
+      totalTokens: cumulativeInput + cumulativeOutput,
+      inputTokens: cumulativeInput,
+      cachedInputTokens: 7_933_568,
+      outputTokens: cumulativeOutput,
+      reasoningOutputTokens: 0,
+    };
+    handlers.tokenUsageUpdated({
+      threadId: 'start-thread-id',
+      turnId,
+      tokenUsage: {
+        total: finalTotal,
+        last: {
+          totalTokens: 18_694,
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+          reasoningOutputTokens: 0,
+        },
+      },
+    });
+    notificationCount += 1;
+    expect(notificationCount).toBe(108);
+
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: turnId, status: 'completed' },
+    });
+    await waitForExpectation(() =>
+      expect(events.some((event) => event.type === 'done')).toBe(true),
+    );
+    const usage = (
+      events.find((event) => event.type === 'done')?.data as {
+        usage?: {
+          promptTokens: number;
+          completionTokens: number;
+          cachedTokens: number;
+          segments: Array<{ inputTokens: number; cacheReadTokens: number }>;
+        };
+      }
+    ).usage;
+    expect(usage).toMatchObject({
+      promptTokens: 734_872,
+      cachedTokens: 7_933_568,
+      completionTokens: 36_953,
+    });
+    expect(usage?.segments).toHaveLength(92);
+    expect(
+      Math.max(
+        ...(usage?.segments ?? []).map((segment) => segment.inputTokens + segment.cacheReadTokens),
+      ),
+    ).toBeLessThan(272_001);
+    await handle.close();
   });
 
   it('keeps descendant approval waits out of the root generation timer', async () => {
@@ -16702,6 +17671,114 @@ describe('CodexAgent rewind', () => {
 });
 
 describe('CodexAgent turn lifecycle', () => {
+  it.each(ROOT_TURN_START_ORDER_CASES)(
+    'preserves same-turn retry state across $name activation signals',
+    async ({ sessionSuffix, steps }) => {
+      const agent = new CodexAgent(createDeps());
+      const turnStartResponse = deferred<{ turn: { id: string } }>();
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return turnStartResponse.promise;
+        if (method === Method.TurnInterrupt) return {};
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-turn-retry-state-${sessionSuffix}`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnStarted || !handlers.error) {
+        throw new Error('expected turn lifecycle and error handlers');
+      }
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const sendPromise = handle.send({ type: 'user', content: 'hello' });
+      await waitForExpectation(() => {
+        expect(host.request).toHaveBeenCalledWith(
+          Method.TurnStart,
+          expect.any(Object),
+          expect.any(Object),
+        );
+      });
+      const applyStep = async (step: (typeof steps)[number]) => {
+        if (step.kind === 'response') {
+          turnStartResponse.resolve({ turn: { id: 'turn-retry-state' } });
+          await sendPromise;
+        } else {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-retry-state' },
+          });
+        }
+      };
+
+      await applyStep(steps[0]);
+      const authError = {
+        threadId: 'start-thread-id',
+        turnId: 'turn-retry-state',
+        willRetry: true,
+        error: { message: 'unexpected status 401 Unauthorized: Missing bearer' },
+      } as const;
+      const rateLimitError = {
+        threadId: 'start-thread-id',
+        turnId: 'turn-retry-state',
+        willRetry: true,
+        error: { message: 'unexpected status 429 Too Many Requests' },
+      } as const;
+      const backendError = {
+        threadId: 'start-thread-id',
+        turnId: 'turn-retry-state',
+        willRetry: true,
+        error: { message: 'unexpected status 403 Forbidden, url: https://chatgpt.com/backend-api/codex/responses' },
+      } as const;
+
+      handlers.error(authError);
+      handlers.error(rateLimitError);
+      handlers.error(rateLimitError);
+      for (let index = 0; index < 29; index += 1) {
+        handlers.error(backendError);
+      }
+
+      for (const step of steps.slice(1)) {
+        await applyStep(step);
+      }
+      handlers.error(authError);
+      handlers.error(rateLimitError);
+      handlers.error(backendError);
+
+      await waitForExpectation(() => {
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'error'
+              && (event.data as { isTerminal?: boolean }).isTerminal === true,
+          ),
+        ).toBe(true);
+      });
+      const errorEvents = events.filter((event) => event.type === 'error');
+      expect(
+        errorEvents.filter(
+          (event) => (event.data as { isTerminal?: boolean }).isTerminal === false,
+        ),
+      ).toHaveLength(2);
+      expect(errorEvents.at(-1)?.data).toMatchObject({
+        isTerminal: true,
+        message: expect.stringContaining('Codex backend unreachable'),
+      });
+      await waitForExpectation(() => {
+        expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+          threadId: 'start-thread-id',
+          turnId: 'turn-retry-state',
+        });
+      });
+
+      await handle.close();
+    },
+  );
+
   it('escalates a persistent willRetry retry-loop to a terminal error (issue #677)', async () => {
     // 远端摸不到 Codex 后端时 daemon 无限发 willRetry=true — 升级逻辑应在阈值处
     // 合成终态错误并复位 turn (isTurnRunning=false + Done status), 消息里带原始
@@ -18713,7 +19790,7 @@ describe('CodexAgent turn lifecycle', () => {
         modelContextWindow: 272000,
       },
     });
-    expect(handle.getUsageSnapshot().tokenUsage).toBe(71);
+    expect(handle.getUsageSnapshot().tokenUsage).toBe(67);
     handlers.error?.({
       threadId: 'start-thread-id',
       turnId: 'turn-a',
@@ -18739,10 +19816,10 @@ describe('CodexAgent turn lifecycle', () => {
       turnId: 'turn-b',
       tokenUsage: {
         total: {
-          totalTokens: 52,
-          inputTokens: 50,
-          cachedInputTokens: 10,
-          outputTokens: 2,
+          totalTokens: 143,
+          inputTokens: 130,
+          cachedInputTokens: 30,
+          outputTokens: 9,
           reasoningOutputTokens: 0,
         },
         last: {
@@ -18861,7 +19938,7 @@ describe('CodexAgent turn lifecycle', () => {
         modelContextWindow: 272000,
       },
     });
-    expect(handle.getUsageSnapshot().tokenUsage).toBe(71);
+    expect(handle.getUsageSnapshot().tokenUsage).toBe(67);
     handlers.error?.({
       threadId: 'start-thread-id',
       turnId: 'turn-a',
@@ -18963,10 +20040,10 @@ describe('CodexAgent turn lifecycle', () => {
       turnId: 'turn-b',
       tokenUsage: {
         total: {
-          totalTokens: 52,
-          inputTokens: 50,
-          cachedInputTokens: 10,
-          outputTokens: 2,
+          totalTokens: 143,
+          inputTokens: 130,
+          cachedInputTokens: 30,
+          outputTokens: 9,
           reasoningOutputTokens: 0,
         },
         last: {
@@ -23426,6 +24503,102 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  it.each(ROOT_TURN_START_ORDER_CASES)(
+    'clears prior diffs once for $name root-turn activation',
+    async ({ sessionSuffix, steps }) => {
+      const currentTurnResponse = deferred<{ turn: { id: string } }>();
+      let turnStartCount = 0;
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, (method) => {
+        if (method !== Method.TurnStart) return undefined;
+        turnStartCount += 1;
+        if (turnStartCount === 1) return { turn: { id: 'turn-previous-diff' } };
+        if (turnStartCount === 2) return currentTurnResponse.promise;
+        throw new Error('unexpected extra turn/start');
+      });
+      const handle = await agent.startSession({
+        sessionId: `session-turn-diff-isolation-${sessionSuffix}`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+      const handlers = host.getThreadHandlers();
+      if (
+        !handlers?.turnStarted
+        || !handlers.turnCompleted
+        || !handlers.turnDiffUpdated
+        || !handlers.descendantThreadStarted
+        || !handlers.descendantNotification
+      ) {
+        throw new Error('expected turn and descendant handlers');
+      }
+
+      await handle.send({ type: 'user', content: 'first turn' });
+      handlers.turnStarted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-previous-diff' },
+      });
+      handlers.descendantThreadStarted({
+        thread: { id: 'child-previous-diff', parentThreadId: 'start-thread-id' },
+      });
+      handlers.descendantNotification('child-previous-diff', 'turn/diff/updated', {
+        threadId: 'child-previous-diff',
+        turnId: 'child-previous-turn',
+        diff: 'diff --git a/previous-child.txt b/previous-child.txt\n--- a/previous-child.txt\n+++ b/previous-child.txt\n@@ -1 +1 @@\n-old\n+previous-child\n',
+      });
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-previous-diff', status: 'completed' },
+      });
+
+      const sendPromise = handle.send({ type: 'user', content: 'second turn' });
+      await waitForExpectation(() => expect(turnStartCount).toBe(2));
+      const applyStep = async (step: (typeof steps)[number]) => {
+        if (step.kind === 'response') {
+          currentTurnResponse.resolve({ turn: { id: 'turn-current-diff' } });
+          await sendPromise;
+        } else {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-current-diff' },
+          });
+        }
+      };
+
+      await applyStep(steps[0]);
+      handlers.turnDiffUpdated({
+        threadId: 'start-thread-id',
+        turnId: 'turn-current-diff',
+        diff: 'diff --git a/current-root.txt b/current-root.txt\n--- a/current-root.txt\n+++ b/current-root.txt\n@@ -1 +1 @@\n-old\n+current-root\n',
+      });
+      for (const step of steps.slice(1)) {
+        await applyStep(step);
+      }
+      handlers.descendantThreadStarted({
+        thread: { id: 'child-current-diff', parentThreadId: 'start-thread-id' },
+      });
+      handlers.descendantNotification('child-current-diff', 'turn/diff/updated', {
+        threadId: 'child-current-diff',
+        turnId: 'child-current-turn',
+        diff: 'diff --git a/current-child.txt b/current-child.txt\n--- a/current-child.txt\n+++ b/current-child.txt\n@@ -1 +1 @@\n-old\n+current-child\n',
+      });
+
+      await vi.waitFor(() => {
+        const last = events.filter((event) => event.type === 'turn_diff').at(-1);
+        const diff = (last?.data as { diff?: string } | undefined)?.diff ?? '';
+        expect(last?.data).toMatchObject({ turnId: 'turn-current-diff' });
+        expect(diff).toContain('+current-root');
+        expect(diff).toContain('+current-child');
+        expect(diff).not.toContain('+previous-child');
+      });
+
+      await handle.close();
+    },
+  );
+
   it('ignores descendant diffs that arrive after the child turn is terminal', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -24332,7 +25505,12 @@ describe('CodexAgent compaction storm escalation', () => {
       turnId,
       tokenUsage: {
         // total 是累加值,与 last 不同量级 —— 不把两者设成相同,否则测不出字段映射。
-        total: { inputTokens: usageTotal, cachedInputTokens: 0, outputTokens: 0 },
+        total: {
+          totalTokens: usageTotal,
+          inputTokens: usageTotal,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+        },
         last: { inputTokens, cachedInputTokens: 0, outputTokens: 0 },
         // 上游的 bug:切模型后仍报旧模型的 258400。
         modelContextWindow: 258_400,

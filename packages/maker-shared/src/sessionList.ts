@@ -1,5 +1,6 @@
 import { messageContentToPreview } from './messageNormalize.js';
 import { stripTrailingPathSeparators } from './pathText.js';
+import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import type { RemoteSchedule, RemoteScheduleRun, RemoteScheduleRunStatus } from './scheduleTypes.js';
 import { toMillis } from './scheduleModel.js';
@@ -142,11 +143,9 @@ export interface RemoteSessionListContext {
 }
 
 export type RemoteSessionStatusFilter = 'active' | 'waiting' | 'automation' | 'archived' | 'all';
-export type RemoteSessionGroupMode = 'project' | 'date';
 
 export interface RemoteSessionListOptions {
   statusFilter?: RemoteSessionStatusFilter;
-  groupMode?: RemoteSessionGroupMode;
   messagePreviewIndex?: ReadonlyMap<string, string>;
   liveActivityIndex?: ReadonlyMap<string, RemoteSessionLiveActivity>;
   pendingInteractionIndex?: ReadonlyMap<string, number>;
@@ -171,7 +170,6 @@ export function buildRemoteSessionSections(
   options: RemoteSessionListOptions = {},
 ): RemoteSessionSection[] {
   const statusFilter = options.statusFilter ?? 'all';
-  const groupMode = options.groupMode ?? 'project';
   const groupAutomations = options.groupAutomations ?? true;
   const query = normalizeSearchQuery(options.searchQuery);
   const items = [...sessions]
@@ -200,11 +198,6 @@ export function buildRemoteSessionSections(
 
   if (pinned.length > 0) {
     sections.push({ key: 'pinned', title: '置顶', data: pinned });
-  }
-
-  if (groupMode === 'date') {
-    sections.push(...buildDateSections(rest, now, groupAutomations));
-    return sections;
   }
 
   sections.push(...buildProjectSections(rest, now, groupAutomations));
@@ -268,26 +261,19 @@ export function remoteSessionFilterBaseLabel(value: RemoteSessionStatusFilter): 
   return '全部';
 }
 
-export function remoteSessionGroupModeLabel(value: RemoteSessionGroupMode): string {
-  return value === 'project' ? '项目' : '时间';
-}
-
 export function remoteSessionControlsSummary(
   statusFilter: RemoteSessionStatusFilter,
-  groupMode: RemoteSessionGroupMode,
   overview: RemoteSessionOverview,
 ): string {
-  return `${remoteSessionFilterLabel(statusFilter, overview)} · ${remoteSessionGroupModeLabel(groupMode)}分组`;
+  return `${remoteSessionFilterLabel(statusFilter, overview)} · 项目分组`;
 }
 
 export function buildRemoteSessionListContext({
-  groupMode,
   overview,
   searchQuery,
   sections,
   statusFilter,
 }: {
-  groupMode: RemoteSessionGroupMode;
   overview: RemoteSessionOverview;
   searchQuery: string;
   sections: readonly RemoteSessionSection[];
@@ -304,7 +290,7 @@ export function buildRemoteSessionListContext({
       : '当前筛选无结果';
   const rowCopy = rowCount > 0 && rowCount !== resultCount ? ` · ${rowCount} 行` : '';
   return {
-    detail: `${resultCopy}${rowCopy} · ${remoteSessionFilterLabel(statusFilter, overview)} · ${remoteSessionGroupModeLabel(groupMode)}分组`,
+    detail: `${resultCopy}${rowCopy} · ${remoteSessionFilterLabel(statusFilter, overview)} · 项目分组`,
     hint: remoteSessionListHint(statusFilter, normalizedQuery),
     resultCount,
     rowCount,
@@ -401,25 +387,6 @@ function buildProjectSections(
     });
   }
   return sections;
-}
-
-function buildDateSections(
-  items: readonly RemoteSessionListItem[],
-  now: number,
-  groupAutomations = true,
-): RemoteSessionSection[] {
-  const buckets = [
-    { key: 'date:today', title: '今天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:yesterday', title: '昨天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:last7', title: '最近 7 天', data: [] as RemoteSessionListItem[] },
-    { key: 'date:earlier', title: '更早', data: [] as RemoteSessionListItem[] },
-  ];
-  for (const item of items) {
-    buckets[dateBucketIndex(item.lastActivityAt, now)].data.push(item);
-  }
-  return buckets
-    .map((section) => ({ ...section, data: groupAutomationListItems(section.data, now, groupAutomations) }))
-    .filter((section) => section.data.length > 0);
 }
 
 /**
@@ -562,7 +529,7 @@ function remoteSessionListItemIsRunning(
 
 export function buildRemoteSessionCardPreview(
   item: RemoteSessionListItem,
-  options: { running?: boolean } = {},
+  options: { running?: boolean; localizer?: PresentationLocalizer } = {},
 ): string | null {
   // 等待交互优先于一切:此时 compactDetail 往往是过期的 tool 状态行(典型
   // 'ask_user_question running...'),和"在等你"的语义打架。与桌面卡片 awaitingText
@@ -572,17 +539,49 @@ export function buildRemoteSessionCardPreview(
     || (live != null && isActiveLiveActivity(live) && live.phase === 'needs-interaction');
   if (awaiting) {
     const kind = live?.interactionKind;
-    if (kind === 'permission') return '等待授权';
-    if (kind === 'plan_review') return '等待计划审阅';
-    if (kind === 'ask_user_question') return '等待你的回复';
-    return '等待你处理';
+    if (kind === 'permission') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.permission',
+        '等待授权',
+      );
+    }
+    if (kind === 'plan_review') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.planReview',
+        '等待计划审阅',
+      );
+    }
+    if (kind === 'ask_user_question') {
+      return presentationText(
+        options.localizer,
+        'devices.presentation.sessionList.preview.answer',
+        '等待你的回复',
+      );
+    }
+    return presentationText(
+      options.localizer,
+      'devices.presentation.sessionList.preview.attention',
+      '等待你处理',
+    );
   }
   if (options.running === true) {
     if (live && isActiveLiveActivity(live)) {
       const text = normalizeInlinePreview(live.compactDetail);
       if (text) return text;
     }
-    return item.scheduleInfo?.running || item.session.source === 'scheduler' ? '自动化执行中' : '运行中';
+    return item.scheduleInfo?.running || item.session.source === 'scheduler'
+      ? presentationText(
+          options.localizer,
+          'devices.presentation.sessionList.preview.automationRunning',
+          '自动化执行中',
+        )
+      : presentationText(
+          options.localizer,
+          'devices.presentation.sessionList.preview.running',
+          '运行中',
+        );
   }
   // idle:展示最近一条消息预览。messagePreview 来自已 load 的消息(打开过的会话),
   // 或由首页构建时回退到 device-link 带的 session.preview(见 buildMobileHomePresentation /
@@ -682,7 +681,7 @@ function matchesStatusFilter(
   return session.status === filter;
 }
 
-function matchesSearchQuery(
+export function matchesSearchQuery(
   session: RemoteSession,
   query: string,
   options: {
@@ -738,23 +737,6 @@ function compareSessions(a: RemoteSession, b: RemoteSession): number {
 
 function normalizeSearchQuery(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? '';
-}
-
-function dateBucketIndex(iso: string, now: number): number {
-  const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return 3;
-  const start = startOfLocalDay(now);
-  const itemStart = startOfLocalDay(ts);
-  const diffDays = Math.floor((start - itemStart) / 86_400_000);
-  if (diffDays <= 0) return 0;
-  if (diffDays === 1) return 1;
-  if (diffDays < 7) return 2;
-  return 3;
-}
-
-function startOfLocalDay(ms: number): number {
-  const date = new Date(ms);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
 function isDialogueSession(session: RemoteSession): boolean {

@@ -33,7 +33,6 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
-import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
@@ -62,7 +61,9 @@ import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import type { Session } from '@/lib/ccAgent.types';
 import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
-import { buildSessionInfoPieces, SessionInfoMeta } from './SessionInfoMeta';
+import { buildSessionInfoPieces, SessionInfoMeta, type SessionInfoPiece } from './SessionInfoMeta';
+import { useTaskInfoWorktree, type SessionWorktreeInfo } from './sessionWorktreeInfo';
+import type { SessionPrRef } from '@/lib/gitContext.types';
 import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
@@ -79,6 +80,7 @@ import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -87,10 +89,7 @@ import {
   scheduleFocusPath,
 } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
-import {
-  projectSidebarSessionActivity,
-  resolveSidebarRightStatus,
-} from './sidebarRightStatus';
+import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import { shouldPrefetchSessionOnPointerDown } from './sessionSwitchPrefetch';
@@ -201,9 +200,14 @@ export function SessionCard({
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
-  // 卡片/列表的正文固定给预览区域。list 保留 main 既有实时执行文案;
-  // card 模式不跟随 runningDetail 跳动,只显示稳定任务摘要 / 最近消息,完成后由 summary 更新。
-  const summaryPreview = session.summary ?? session.preview ?? null;
+  // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;
+  // card + 置顶才用稳定任务摘要,完成后由 summary 更新。
+  const bodyPreview = resolveSessionCardBody({
+    variant,
+    pinned: isPinned,
+    summary: session.summary,
+    preview: session.preview,
+  });
 
   // awaiting 角标数据源:优先 Agent Island 的实时活动(mac);但 Agent Island 仅在
   // macOS Sonoma+ 可用(service 在其它平台 return null),故非 mac / 旧系统平台中立兜底
@@ -229,20 +233,29 @@ export function SessionCard({
     islandActivity?.phase === 'running' && islandActivity.compactDetail
       ? islandActivity.compactDetail
       : null;
-  const listPreview = awaitingText ?? runningDetail ?? summaryPreview;
-  const cardPreview = awaitingText ?? summaryPreview;
-  const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2;
+  const listPreview = awaitingText ?? runningDetail ?? bodyPreview;
+  const cardPreview = awaitingText ?? bodyPreview;
+  const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary);
+  const cardPreviewLineClamp = usesPinnedCardSummary
+    ? 3
+    : isRunning
+      ? 2
+      : isAutomationGenerated
+        ? 1
+        : 2;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
   const cardPrRefs = usePrRefsForSession(session.id);
   const cardInfoPrRef = taskInfoFields.includes('pr') ? cardPrRefs[0] : undefined;
-  // 传 hasPrRef 让 PR 参与「按勾选顺序」排列(否则它恒在最前)。
+  const cardInfoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));
+  // 传 hasPrRef / hasWorktree 让它们参与「按勾选顺序」排列。
   const cardInfoPieces = buildSessionInfoPieces(
     session,
     taskInfoFields,
     activityIso,
     t,
     cardInfoPrRef != null,
+    cardInfoWorktree != null,
   );
   // 勾选 pr 且行渲染时注册为 PR 消费者:注册即拉取(远程会话含引用补拉),
   // 此后 Provider 周期/聚焦统一刷新,失败自愈(与 SessionItem 同一条路径)。
@@ -636,6 +649,7 @@ export function SessionCard({
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
           onClick(session.id);
@@ -794,9 +808,9 @@ export function SessionCard({
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
             {!isEditing && (
               <TimeActionsSlot
-                sessionId={session.id}
-                session={session}
-                activityIso={activityIso}
+                pieces={cardInfoPieces}
+                prRef={cardInfoPrRef}
+                worktree={cardInfoWorktree ?? undefined}
                 isActive={isActive}
                 isArchived={isArchived}
                 canQuickArchive={canQuickArchive}
@@ -1006,11 +1020,11 @@ export function SessionCard({
                 }
               />
             )}
-            <WorktreeBadge sessionId={session.id} size={11} className="size-3.5" />
-            {/* 任务信息复选(C / C' 期):卡片版右下角与 list/text 同源;默认仅 time 与旧渲染等价。 */}
+            {/* 任务信息复选:卡片版右下角与 list/text 同源;默认仅 time 与旧渲染等价。 */}
             <SessionInfoMeta
               pieces={cardInfoPieces}
               prRef={cardInfoPrRef}
+              worktree={cardInfoWorktree ?? undefined}
               isActive={isActive}
               className={cn(
                 'ml-auto shrink-0 text-11 font-medium leading-none',
@@ -1176,9 +1190,9 @@ export function SessionCard({
  *  交互逻辑与对话列表(SessionItem)一致。Agent 身份 / 草稿由左侧 SessionStatusIcon 承担；
  *  list 的右下状态指示器由 SidebarRightStatusIndicator 单独承担。 */
 function TimeActionsSlot({
-  sessionId,
-  session,
-  activityIso,
+  pieces,
+  prRef,
+  worktree,
   isActive,
   isArchived,
   canQuickArchive,
@@ -1193,10 +1207,9 @@ function TimeActionsSlot({
   yieldToOrdinalBadge = false,
   ordinalBadgeLabel,
 }: {
-  sessionId: string;
-  /** 任务信息复选(C 期)需要读 totalTokenUsage / totalMoney 等字段。 */
-  session: Session;
-  activityIso: string;
+  pieces: readonly SessionInfoPiece[];
+  prRef?: SessionPrRef;
+  worktree?: SessionWorktreeInfo;
   isActive: boolean;
   isArchived: boolean;
   canQuickArchive: boolean;
@@ -1213,18 +1226,6 @@ function TimeActionsSlot({
   ordinalBadgeLabel?: string | null;
 }) {
   const { t } = useTranslation();
-  // 任务信息复选(C / C' 期):与 SessionItem 的时间槽同源;默认仅 time 与旧渲染等价。
-  const { fields: taskInfoFields } = useTaskInfoFields();
-  const prRefs = usePrRefsForSession(session.id);
-  const infoPrRef = taskInfoFields.includes('pr') ? prRefs[0] : undefined;
-  // 传 hasPrRef 让 PR 参与「按勾选顺序」排列(否则它恒在最前)。
-  const infoPieces = buildSessionInfoPieces(
-    session,
-    taskInfoFields,
-    activityIso,
-    t,
-    infoPrRef != null,
-  );
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1239,10 +1240,10 @@ function TimeActionsSlot({
             archivePending && 'invisible opacity-0',
           )}
         >
-          <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />
           <SessionInfoMeta
-            pieces={infoPieces}
-            prRef={infoPrRef}
+            pieces={pieces}
+            prRef={prRef}
+            worktree={worktree}
             isActive={isActive}
             className="leading-none"
           />

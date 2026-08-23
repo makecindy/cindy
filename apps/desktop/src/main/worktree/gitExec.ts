@@ -4,7 +4,8 @@
  * 职责:
  *   - 用 child_process.execFile 调用 git, 保留 stderr/stdout/exitCode
  *   - 自动处理 dubious-ownership: 若 stderr 含 "dubious ownership", 提取路径,
- *     `git config --global --add safe.directory <path>`, 重试**一次**原命令
+ *     幂等地 `git config --global --add safe.directory <path>`(已存在则不重复添加),
+ *     重试**一次**原命令
  *   - 抛出 GitExecError 让上层 errorClassifier 解析为 WorktreeError
  *
  * 不在这里做 errorClassifier — 那是上层 createWorktree/removeWorktree 的职责,
@@ -12,8 +13,14 @@
  */
 
 import { execFile, type ExecFileOptions } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 
 import { killProcessTree } from '../scheduler-host/proc-util';
+import { withCrossProcessLock } from '../device-link/crossProcessLock';
+import { createLogger } from '../logger';
+
+const log = createLogger('gitExec');
 
 export interface GitExecResult {
   stdout: string;
@@ -447,6 +454,86 @@ function extractDubiousPath(stderr: string): string | null {
 }
 
 /**
+ * safe.directory 全局配置「读改写」的跨进程锁文件路径。
+ *
+ * 读(get-all)与写(add)是两条独立的 git config 命令,本身不互斥:两个 Cindy 实例
+ * 并发触发同一仓库的 dubious-ownership 时可能都读到「不存在」再各加一条,堆积出
+ * 重复条目(#2627)。用跨进程锁把这两步圈成原子区。锁文件用 os.tmpdir() 落地;
+ * Linux 的 /tmp 多用户共享,用 uid(Windows 无 uid 时退回 0)区分用户,避免不同用户
+ * 串扰同一把锁。
+ */
+export function globalSafeDirectoryLockPath(): string {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  return path.join(os.tmpdir(), `cindy-git-safe-directory-${uid}.lock`);
+}
+
+/**
+ * 把一条路径规范成 git 呈现/比较 safe.directory 时用的拼写。
+ *
+ * Windows 上 git 在错误信息里以 `C:/...`(正斜杠)输出路径, 而 `path.join` 产出的是
+ * 原生 `C:\...`。`git config --fixed-value` 是字符串精确相等, 若 add 写正斜杠、清理
+ * 用反斜杠, 会永远匹配不到并残留条目。所以 add 与清理都必须经过同一个规范化函数。
+ */
+export function normalizeSafeDirectorySpelling(p: string): string {
+  return process.platform === 'win32' ? p.replace(/\\/g, '/') : p;
+}
+
+/**
+ * 给定一个逻辑路径, 返回需要精确清理的 safe.directory 拼写集合。覆盖两类来源:
+ *   - 规范化拼写(C:/...): gitExec 从 dubious-ownership 报错提取并 add 的拼写;
+ *   - 原生拼写(C:\...): 历史版本无条件 add、或 gitExec 用 cwd 兜底时写下的拼写。
+ * 两边都删, 才能把历史遗留的反斜杠条目一并清掉。
+ */
+export function safeDirectorySpellings(p: string): string[] {
+  const normalized = normalizeSafeDirectorySpelling(p);
+  return normalized === p ? [p] : [normalized, p];
+}
+
+/**
+ * 读取当前全局 safe.directory 的值列表。仅当「键不存在」(git config --get-all 对
+ * 缺失键返回退出码 1)时按空列表处理;其余读取错误(配置锁冲突/权限/配置损坏/spawn
+ * 失败)必须向上抛,否则会把「读不到」误判成「未配置」而重复 --add,反而制造出
+ * 本条修复要避免的重复条目。
+ */
+async function readGlobalSafeDirectories(): Promise<string[]> {
+  try {
+    const { stdout } = await execFileOnce(['config', '--global', '--get-all', 'safe.directory']);
+    return stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  } catch (err) {
+    if (err instanceof GitExecError && err.exitCode === 1) return [];
+    throw err;
+  }
+}
+
+/**
+ * 幂等地把 targetPath 加入全局 safe.directory: 已存在则不再 --add, 避免同一路径
+ * 因多个 git 操作反复触发 dubious-ownership 而用 --add 堆积出重复记录(#2627)。
+ *
+ * 读+写放在 withCrossProcessLock 里保证跨进程原子。**未持锁绝不无锁读改写**:其它
+ * 实例长期持锁 / 锁基础设施不可用时 fail-closed 抛错,让 gitExec 把原始
+ * dubious-ownership 错误还给调用方,而不是退化成并发写入重复条目。用底层
+ * execFileOnce 而非 gitExec, 防止递归进入 dubious-ownership 分支。
+ */
+async function ensureGlobalSafeDirectory(targetPath: string): Promise<void> {
+  await withCrossProcessLock(
+    globalSafeDirectoryLockPath(),
+    { label: 'git-safe-directory', waitMs: 1_000 },
+    async (status) => {
+      if (!status.held) {
+        throw new Error('could not acquire the global safe.directory lock');
+      }
+      // 统一成 git 的拼写再读写: 让幂等检查与后续清理命中同一个值。
+      const normalized = normalizeSafeDirectorySpelling(targetPath);
+      if ((await readGlobalSafeDirectories()).some((p) => p === normalized)) return;
+      await execFileOnce(['config', '--global', '--add', 'safe.directory', normalized]);
+    },
+  );
+}
+
+/**
  * 主 API: 执行 git 命令, 自动处理 dubious-ownership。
  *
  * 行为:
@@ -471,13 +558,17 @@ export async function gitExec(
       const dubiousPath = extractDubiousPath(err.stderr) ?? cwd;
       if (dubiousPath) {
         try {
-          await execFileOnce(
-            ['config', '--global', '--add', 'safe.directory', dubiousPath],
-          );
+          await ensureGlobalSafeDirectory(dubiousPath);
           // 配完 safe.directory 后重试原命令
           return await execFileOnce(args, cwd, opts);
-        } catch {
-          // 重试或配置失败都直接抛原始错误(让 classifier 报 dubious-ownership)
+        } catch (cause) {
+          // 对外错误契约不变: 调用方/classifier 仍拿到原始 dubious-ownership 错误。
+          // 但 ensureGlobalSafeDirectory 的真实失败(--get-all 权限/锁冲突/配置损坏,
+          // 或拿不到跨进程锁)不能被静默吞掉 —— 先落日志保住诊断信息, 再抛原始错误。
+          log.warn(
+            `gitExec auto safe.directory add failed for ${dubiousPath}:`,
+            cause instanceof Error ? cause.message : String(cause),
+          );
           throw err;
         }
       }

@@ -6,6 +6,10 @@ appId: ${APP_ID}
 - takeScreenshot:
     path: visual-devices
 - assertVisible:
+    id: "home.chromeMenu"
+- tapOn:
+    id: "home.chromeMenu"
+- assertVisible:
     id: "devices.settingsButton"
 - tapOn:
     id: "devices.settingsButton"

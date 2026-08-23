@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
     selectLimit,
     webContentsSend: vi.fn(),
     tapWindowBroadcast: vi.fn(),
+    retireDeletedPiSubagentState: vi.fn(async () => undefined),
   };
 });
 
@@ -76,6 +77,9 @@ vi.mock('../../../localDb/schema', () => ({
     workingDir: 'sessions.working_dir',
     workspaceKind: 'sessions.workspace_kind',
   },
+}));
+vi.mock('../../../localDb/ipc/piSubagentDeletion', () => ({
+  retireDeletedPiSubagentState: mocks.retireDeletedPiSubagentState,
 }));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   setSessionProvider: vi.fn(),
@@ -150,6 +154,7 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
     mocks.tapWindowBroadcast.mockClear();
     mocks.selectLimit.mockReset();
     mocks.selectLimit.mockResolvedValue([]);
+    mocks.retireDeletedPiSubagentState.mockClear();
   });
 
   it.each(['archived', 'deleted'] as const)(
@@ -183,6 +188,11 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
         sessionId: 'feishu_bot_user',
       });
       expect(routeLock).toHaveBeenCalledWith('feishu_bot_user', expect.any(Function));
+      if (status === 'deleted') {
+        expect(mocks.retireDeletedPiSubagentState).toHaveBeenCalledWith('feishu_bot_user');
+      } else {
+        expect(mocks.retireDeletedPiSubagentState).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -221,6 +231,13 @@ describe('sessionRepo.createSession upsert 兜竞态(#748)', () => {
     mocks.insertConflict.mockClear();
     mocks.selectLimit.mockReset();
     mocks.selectLimit.mockResolvedValue([]);
+    mocks.retireDeletedPiSubagentState.mockClear();
+  });
+
+  it('冲突撞到 deleted 残留行时先撤回墓碑再 upsert', async () => {
+    mocks.selectLimit.mockResolvedValue([dbRow('deleted')]);
+    await makeRepo().createSession('bot', 'user', undefined, preparedDefaults);
+    expect(mocks.retireDeletedPiSubagentState).toHaveBeenCalledWith('feishu_bot_user');
   });
 
   it('INSERT 带 onConflictDoUpdate:冲突时只翻 status/渠道列,不碰上下文列', async () => {
