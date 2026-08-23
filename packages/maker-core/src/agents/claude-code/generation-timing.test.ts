@@ -66,6 +66,7 @@ function createTurnState(): TurnState {
     generation: 0,
     interruptGeneration: 0,
     lastAssistantMsgHadSubstance: true,
+    nextRequestPriceVariant: 'standard',
   };
 }
 
@@ -370,6 +371,82 @@ describe('claude generation pause boundaries', () => {
         },
       ],
     });
+  });
+
+  it('keeps a Claude request on its accepted price variant across a pre-response Fast toggle', () => {
+    let fastMode = false;
+    const ctx = {
+      ...createTranslatorCtx(),
+      getFastMode: () => fastMode,
+    };
+    const queue = createAsyncQueue<AgentEvent>();
+    // The first request was accepted on standard before its message_start
+    // arrived; the user toggles Fast while that response is still in flight.
+    ctx.turn.nextRequestPriceVariant = 'standard';
+    fastMode = true;
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 100 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 100,
+            output_tokens: 25,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    // The next provider request is accepted after Fast is enabled and gets
+    // its own priority segment.
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 200 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: {
+            input_tokens: 200,
+            output_tokens: 10,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    expect(ctx.tracker.getTurnUsageSegments()).toEqual([
+      expect.objectContaining({ inputTokens: 100, outputTokens: 25, priceVariant: 'standard' }),
+      expect.objectContaining({ inputTokens: 200, outputTokens: 10, priceVariant: 'priority' }),
+    ]);
+    queue.end();
   });
 
   it('fails closed when a resumed result aggregate cannot prove streamed segment completeness', async () => {

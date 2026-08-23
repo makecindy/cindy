@@ -3279,6 +3279,8 @@ export class CodexAgent extends BaseAgent {
        * 不算收紧，会把延迟中断标记清掉，而冻结的 Full access 仍然更宽）。
        */
       launchedPermissionMode: PermissionMode;
+      /** Service tier frozen for the logical send and any safe retry. */
+      serviceTier?: ServiceTier | null;
       /**
        * 在途 RPC 期间又收到容量失败 → 那条错误被延后处理（既没排计时器也没收口）。
        * RPC settle 且新 turn 没能激活时，必须凭这个标记补排一次，否则逻辑 send
@@ -3310,6 +3312,8 @@ export class CodexAgent extends BaseAgent {
       capabilitySelectionText: string;
       /** Catalog model frozen for this turn/start request. */
       model?: string;
+      /** Service tier frozen for this turn/start request. */
+      serviceTier?: ServiceTier | null;
       sendGen: number;
       startedAtMs: number;
     }>();
@@ -3329,6 +3333,7 @@ export class CodexAgent extends BaseAgent {
     const beginTurnStart = (
       ownerSendGen: number,
       capabilitySelectionText: string,
+      serviceTier?: ServiceTier | null,
     ): number => {
       const seq = ++turnStartSeq;
       inFlightStarts.set(seq, {
@@ -3336,6 +3341,7 @@ export class CodexAgent extends BaseAgent {
         terminalSettled: false,
         capabilitySelectionText,
         ...(activeTurnModel ? { model: activeTurnModel } : {}),
+        ...(serviceTier !== undefined ? { serviceTier } : {}),
         sendGen: ownerSendGen,
         startedAtMs: Date.now(),
       });
@@ -3387,6 +3393,8 @@ export class CodexAgent extends BaseAgent {
       startedAtMs: number;
       /** Catalog model accepted for this turn; spawn cards freeze inheritance from this value. */
       model?: string;
+      /** Service tier accepted for this turn; usage segments must read this, not mutable session state. */
+      serviceTier?: ServiceTier | null;
     }>();
 
     const hasOtherInFlightStart = (seq: number): boolean => {
@@ -9426,6 +9434,10 @@ export class CodexAgent extends BaseAgent {
           : undefined;
         const existingTurnOrigin = turnOriginByTurnId.get(params.turn.id);
         const turnModel = startedOwner?.[1].model ?? existingTurnOrigin?.model ?? activeTurnModel;
+        const startedServiceTier = startedOwner?.[1].serviceTier;
+        const turnServiceTier = startedServiceTier !== undefined
+          ? startedServiceTier
+          : existingTurnOrigin?.serviceTier;
         turnOriginByTurnId.set(params.turn.id, {
           startSeq: startedOwner?.[0] ?? null,
           sendGen: startedOwner?.[1].sendGen ?? sendGeneration,
@@ -9435,6 +9447,7 @@ export class CodexAgent extends BaseAgent {
               ? existingTurnOrigin.startedAtMs
               : (startedOwnerEntries.length === 0 ? Date.now() : 0)),
           ...(turnModel ? { model: turnModel } : {}),
+          ...(turnServiceTier !== undefined ? { serviceTier: turnServiceTier } : {}),
         });
         // Notifications may arrive before the turn/start RPC response. Bind the
         // selector at the same unique-owner boundary as turnOrigin so an early
@@ -9514,6 +9527,7 @@ export class CodexAgent extends BaseAgent {
           cumulativeTotal.totalTokens > 0 &&
           (previousTotal === undefined || cumulativeTotal.totalTokens > previousTotal.totalTokens);
         if (isNewUsageSegment) {
+          const turnServiceTier = turnOriginByTurnId.get(params.turnId)?.serviceTier;
           acceptedUsageTotalByThread.set(params.threadId, {
             generation: usageExecutionGeneration,
             total: { ...cumulativeTotal },
@@ -9527,7 +9541,11 @@ export class CodexAgent extends BaseAgent {
             cacheCreateTokens: 0,
             reasoningTokens: last.reasoningOutputTokens ?? 0,
             model: turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
-            priceVariant: isFastServiceTier(mutableServiceTier) ? 'priority' : 'standard',
+            priceVariant: isFastServiceTier(
+              turnServiceTier !== undefined ? turnServiceTier : mutableServiceTier,
+            )
+              ? 'priority'
+              : 'standard',
           });
           maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
@@ -10558,6 +10576,7 @@ export class CodexAgent extends BaseAgent {
                 sendGen: startEntry.sendGen,
                 startedAtMs: startEntry.startedAtMs,
                 ...(startEntry.model ? { model: startEntry.model } : {}),
+                ...(startEntry.serviceTier !== undefined ? { serviceTier: startEntry.serviceTier } : {}),
               });
             }
             // 缓冲的歧义 started 对账 (codex R9 P2): 本响应确立在飞 RPC 的
@@ -10641,6 +10660,9 @@ export class CodexAgent extends BaseAgent {
               );
               // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
               const turnModel = startEntry?.model ?? activeTurnModel;
+              const turnServiceTier = startEntry?.serviceTier !== undefined
+                ? startEntry.serviceTier
+                : turnOriginByTurnId.get(resp.turn.id)?.serviceTier;
               turnOriginByTurnId.set(resp.turn.id, {
                 startSeq: ownerSeq,
                 sendGen: mySendGen,
@@ -10649,6 +10671,7 @@ export class CodexAgent extends BaseAgent {
                   ?? turnOriginByTurnId.get(resp.turn.id)?.startedAtMs
                   ?? Date.now(),
                 ...(turnModel ? { model: turnModel } : {}),
+                ...(turnServiceTier !== undefined ? { serviceTier: turnServiceTier } : {}),
               });
               activateRootTurn(resp.turn.id);
               currentTurnPlanModeActive = turnStartsInPlanMode;
@@ -10687,7 +10710,16 @@ export class CodexAgent extends BaseAgent {
             }
           }
           if (Object.hasOwn(resp, 'serviceTier')) {
-            mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+            const acceptedServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
+            const startEntry = inFlightStarts.get(ownerSeq);
+            if (startEntry) startEntry.serviceTier = acceptedServiceTier;
+            if (resp.turn?.id) {
+              const origin = turnOriginByTurnId.get(resp.turn.id);
+              if (origin) {
+                origin.serviceTier = acceptedServiceTier;
+              }
+            }
+            mutableServiceTier = acceptedServiceTier;
             log.debug('turn/start response serviceTier', {
               turnId: resp.turn?.id ?? null,
               serviceTier: mutableServiceTier,
@@ -10711,6 +10743,7 @@ export class CodexAgent extends BaseAgent {
           inFlight: false,
           isCancelled: () => sendOpts?.signal?.aborted === true,
           launchedPermissionMode: mutablePermissionMode,
+          ...(turnParams.serviceTier !== undefined ? { serviceTier: turnParams.serviceTier } : {}),
           sendGen: mySendGen,
           deferredCapacityFailure: null,
           disposeSignalWatch: null,
@@ -10732,6 +10765,7 @@ export class CodexAgent extends BaseAgent {
             const retryStartSeq = beginTurnStart(
               state.sendGen,
               capabilitySelectionText,
+              state.serviceTier,
             );
             // RPC 是否走完了成功路径。补排延后的容量失败**只能**在成功路径上做:
             // finally 先于外层 state.retry().catch 执行, 若 RPC 已经 reject 却在这里
@@ -10838,6 +10872,7 @@ export class CodexAgent extends BaseAgent {
         const initialStartSeq = beginTurnStart(
           mySendGen,
           capabilitySelectionText,
+          turnParams.serviceTier,
         );
         let initialStartSettledOk = false;
         /** 本次请求是否已被 Stop / 撤单收口过(条目会在 finally 里删掉, 所以先取出来)。 */

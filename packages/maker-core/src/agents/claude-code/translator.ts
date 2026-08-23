@@ -119,6 +119,13 @@ export interface TurnState {
    */
   lastAssistantMsgHadSubstance: boolean;
   /**
+   * The price variant captured when the current turn's next provider request
+   * was accepted. The SDK may deliver message_start after a runtime Fast-mode
+   * toggle, so usage translation must not read the mutable session setting for
+   * that already-dispatched request.
+   */
+  nextRequestPriceVariant?: 'standard' | 'priority';
+  /**
    * 本 turn 最近一条 assistant API message id。Vertex 路由用 `msg_vrtx_`
    * 前缀作为输出 token 延迟结算的确定性证据；result 本身不携带该 id，
    * 因此必须在 assistant 消息到达时按 turn 暂存，再随 done 交给 host。
@@ -171,6 +178,10 @@ export interface RuntimeState {
   streamStopTokenByKey: Map<string, StandaloneStopTokenHold>;
   /** Per-parent active provider request used to merge message_start + message_delta usage. */
   activeUsageSegmentByParent: Map<string, string>;
+  /** Price variant frozen for the active request of each parent stream. */
+  activeUsagePriceVariantByParent: Map<string, 'standard' | 'priority'>;
+  /** Price variant captured for the next request before its message_start arrives. */
+  pendingUsagePriceVariantByParent: Map<string, 'standard' | 'priority'>;
   usageSegmentSeq: number;
   generation: ClaudeGenerationState;
 }
@@ -190,6 +201,8 @@ export function newRuntimeState(): RuntimeState {
     lastResultUsageAggregate: null,
     streamStopTokenByKey: new Map(),
     activeUsageSegmentByParent: new Map(),
+    activeUsagePriceVariantByParent: new Map(),
+    pendingUsagePriceVariantByParent: new Map(),
     usageSegmentSeq: 0,
     generation: newClaudeGenerationState(),
   };
@@ -1546,6 +1559,11 @@ function handleStreamEvent(
         ctx.rt.activeUsageSegmentByParent.get(parentStreamKey) ??
         `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
       ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
+      const priceVariant =
+        ctx.rt.activeUsagePriceVariantByParent.get(parentStreamKey) ??
+        ctx.rt.pendingUsagePriceVariantByParent.get(parentStreamKey) ??
+        ctx.turn.nextRequestPriceVariant ??
+        (ctx.getFastMode?.() ? 'priority' : 'standard');
       const hasCompleteUsageSnapshot = [
         'input_tokens',
         'output_tokens',
@@ -1555,13 +1573,20 @@ function handleStreamEvent(
       ctx.tracker.upsertApiCallUsage(segmentId, {
         id: segmentId,
         model: streamModel ?? ctx.getModel(),
-        priceVariant: ctx.getFastMode?.() ? 'priority' : 'standard',
+        priceVariant,
         inputTokens: dIn,
         outputTokens: dOut,
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
         complete: hasCompleteUsageSnapshot,
       });
+      // A completed message is the acceptance boundary for the next Claude
+      // request. Capture the then-current setting for that next request, but
+      // keep the active segment's variant immutable until its final frame.
+      ctx.rt.pendingUsagePriceVariantByParent.set(
+        parentStreamKey,
+        ctx.getFastMode?.() ? 'priority' : 'standard',
+      );
       if (parentToolUseId && dOut > 0) markClaudeGenerationUnreliable(ctx.rt.generation);
       // 每次 API 回合的 token 增量打一行 —— 一个 turn 可能多个 message_delta(工具循环),
       // 让人看日志能直观看到 token 是怎么涨上去的, 而不是只在 turn end 看到一个总数。
@@ -1595,6 +1620,12 @@ function handleStreamEvent(
     ctx.turn.apiCalls += 1;
     const segmentId = `claude:${++ctx.rt.usageSegmentSeq}:${parentStreamKey}`;
     ctx.rt.activeUsageSegmentByParent.set(parentStreamKey, segmentId);
+    const priceVariant =
+      ctx.rt.pendingUsagePriceVariantByParent.get(parentStreamKey) ??
+      ctx.turn.nextRequestPriceVariant ??
+      (ctx.getFastMode?.() ? 'priority' : 'standard');
+    ctx.rt.pendingUsagePriceVariantByParent.delete(parentStreamKey);
+    ctx.rt.activeUsagePriceVariantByParent.set(parentStreamKey, priceVariant);
 
     // 第三方 proxy(如 litellm)或官方端点通常在 message_start 给出 input_tokens
     const usage = event.message?.usage as Record<string, number> | undefined;
@@ -1606,7 +1637,7 @@ function handleStreamEvent(
         ctx.tracker.upsertApiCallUsage(segmentId, {
           id: segmentId,
           model: event.message?.model ?? streamModel ?? ctx.getModel(),
-          priceVariant: ctx.getFastMode?.() ? 'priority' : 'standard',
+          priceVariant,
           inputTokens: dIn,
           outputTokens: 0,
           cacheReadTokens: dCacheRead,

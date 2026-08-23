@@ -2345,14 +2345,18 @@ export class ClaudeCodeAgent extends BaseAgent {
       generation: 0,
       interruptGeneration: 0,
       lastAssistantMsgHadSubstance: true,
+      nextRequestPriceVariant: 'standard',
     };
     const runtimeState: RuntimeState = newRuntimeState();
-    const beginNewTurn = (): void => {
+    const beginNewTurn = (priceVariant: 'standard' | 'priority' = mutableFastMode ? 'priority' : 'standard'): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮状态。
       usageTracker.beginTurn();
       resetClaudeGenerationTiming(runtimeState.generation);
       runtimeState.activeUsageSegmentByParent.clear();
+      runtimeState.activeUsagePriceVariantByParent.clear();
+      runtimeState.pendingUsagePriceVariantByParent.clear();
+      turnState.nextRequestPriceVariant = priceVariant;
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;
@@ -2637,7 +2641,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         contextWindow: snapshot?.contextWindow,
         sdkSessionId,
       });
-      beginNewTurn();
+      beginNewTurn(mutableFastMode ? 'priority' : 'standard');
       resetToolLoopGuards();
       turnInFlight = true;
       if (origin === 'idle') hostAutoCompactInFlight = true;
@@ -4512,7 +4516,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 rawType,
                 sdkSessionId,
               });
-              beginNewTurn();
+              beginNewTurn(mutableFastMode ? 'priority' : 'standard');
               resetToolLoopGuards();
               turnInFlight = true;
             }
@@ -4937,7 +4941,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // turnInFlight,否则 isTurnRunning() 会在没有 turn 运行时误报为忙。无 replay 的
       // 全新 query + startForwardLoop 等价于 startSession 首次起 q 的空闲态。
       if (replayInput) {
-        beginNewTurn();
+        beginNewTurn(runtimeSnapshot.fastMode ? 'priority' : 'standard');
         resetToolLoopGuards();
         turnInFlight = true;
       }
@@ -5474,7 +5478,7 @@ export class ClaudeCodeAgent extends BaseAgent {
 
         // 兜底重置 currentTurn —— 上一 turn 异常 / abort 时 endTurn 可能没跑,
         // 防止 currentTurn 残留累加到下一 turn (lastApi / contextWindow / cost 跨 turn 保留)
-        beginNewTurn();
+        beginNewTurn(mutableFastMode ? 'priority' : 'standard');
         resetToolLoopGuards();
         // 标记 turn 进入 in-flight 态 (translator.onTurnEnd 在 result 事件回调时清);
         // rewind preview/commit 守卫读 isTurnRunning() 决定能否操作。
