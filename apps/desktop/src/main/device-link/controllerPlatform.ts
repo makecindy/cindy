@@ -37,9 +37,10 @@ export function isMobilePlatform(platform: string | undefined | null): boolean {
 
 const platformByDevice = new Map<string, string>();
 
-/** presence 变更时登记(唯一写入点在 device-link/index.ts 的 onPresenceChanged)。 */
-export function setControllerPlatform(deviceId: string, platform: string): void {
-  platformByDevice.set(deviceId, platform);
+/** presence / 冷启动目录快照变更时登记；未知值删除旧连接代残留，保持 fail-closed。 */
+export function setControllerPlatform(deviceId: string, platform: string | null): void {
+  if (platform) platformByDevice.set(deviceId, platform);
+  else platformByDevice.delete(deviceId);
 }
 
 /** 未登记(presence 未到 / 已清空)返回 undefined —— 调用方按未知处理,不要猜。 */
