@@ -981,6 +981,7 @@ interface LiveAskUserRequest {
   questions: ToolRequestUserInputQuestion[];
   detached: boolean;
   continuationStarted: boolean;
+  decision: Extract<InteractionDecision, { kind: 'ask_user_question' }> | null;
   permissionPolicy: TurnPermissionPolicy | null;
   capabilitySelectionText: string;
   autoReviewIntent: string;
@@ -6007,13 +6008,51 @@ export class CodexAgent extends BaseAgent {
       });
     };
 
+    function detachedAskUserCohort(live: LiveAskUserRequest): LiveAskUserRequest[] {
+      if (live.turnId == null) return [live];
+      return [...liveAskUserByRequestId.values()]
+        .filter((item) => item.detached && item.turnId === live.turnId)
+        .sort((a, b) => a.requestId.localeCompare(b.requestId));
+    }
+
+    function maybeStartDetachedAskUserContinuation(live: LiveAskUserRequest): void {
+      const cohort = detachedAskUserCohort(live);
+      if (cohort.length === 0 || cohort.some((item) => item.continuationStarted || item.decision == null)) {
+        return;
+      }
+      const settleCohort = (): void => {
+        for (const item of cohort) {
+          item.continuationStarted = true;
+          liveAskUserByRequestId.delete(item.requestId);
+        }
+      };
+      const continuing = cohort.filter((item) => item.decision?.dismissed !== true);
+      if (continuing.length === 0) {
+        settleCohort();
+        return;
+      }
+      const answers = Object.fromEntries(
+        continuing.flatMap((item) => Object.entries(item.decision?.answers ?? {})),
+      );
+      const questions = continuing.flatMap((item) => item.questions);
+      const lead = continuing[0] ?? live;
+      const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
+        lead.autoReviewIntent,
+        Object.entries(answers).map(([question, answer]) => ({ question, answer })),
+      );
+      setAutoReviewIntent(continuationAutoReviewIntent);
+      settleCohort();
+      void startAskUserContinuation(lead, answers, continuationAutoReviewIntent, questions);
+    }
+
     async function startAskUserContinuation(
       live: LiveAskUserRequest,
       answers: Record<string, string>,
       autoReviewIntent?: string,
+      questions: readonly ToolRequestUserInputQuestion[] = live.questions,
     ): Promise<void> {
       if (closed) return;
-      const message = formatAskUserContinuationMessage(live.questions, answers);
+      const message = formatAskUserContinuationMessage(questions, answers);
       const sendOptions: CodexInternalSendOptions = {
         ...(live.permissionPolicy ? { turnPermissionPolicy: live.permissionPolicy } : {}),
         ...(live.capabilitySelectionText
@@ -7328,6 +7367,7 @@ export class CodexAgent extends BaseAgent {
           questions,
           detached: false,
           continuationStarted: false,
+          decision: null,
           permissionPolicy: activeTurnPermissionPolicy,
           capabilitySelectionText: (
             (turnId ? capabilitySelectionTextByTurnId.get(turnId) : undefined)
@@ -7342,11 +7382,16 @@ export class CodexAgent extends BaseAgent {
           ...(toolUseId ? { toolUseId } : {}),
           questions: questionsToAskUserItems(questions),
         });
+        const live = liveAskUserByRequestId.get(requestId);
         if (decision.kind !== 'ask_user_question') {
           log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
+          if (live) {
+            live.decision = { kind: 'ask_user_question', answers: {}, dismissed: true };
+            if (live.detached) maybeStartDetachedAskUserContinuation(live);
+          }
           return questions.map(() => []);
         }
-        const live = liveAskUserByRequestId.get(requestId);
+        if (live) live.decision = decision;
         // 澄清必须锚在发起提问那一轮的审查意图上。卡片挂起期间后续 turn 可能改写
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
@@ -7358,15 +7403,7 @@ export class CodexAgent extends BaseAgent {
           questions,
           responseFromAskUserAnswers(questions, decision.answers),
         );
-        if (
-          live
-          && live.detached
-          && !live.continuationStarted
-          && decision.dismissed !== true
-        ) {
-          live.continuationStarted = true;
-          void startAskUserContinuation(live, decision.answers ?? {}, continuationAutoReviewIntent);
-        }
+        if (live?.detached) maybeStartDetachedAskUserContinuation(live);
         return answersByPosition;
       })();
 
@@ -7412,7 +7449,14 @@ export class CodexAgent extends BaseAgent {
         }
         return responseFromUserInputAnswersByPosition(questions, answersByPosition);
       } finally {
-        liveAskUserByRequestId.delete(requestId);
+        const live = liveAskUserByRequestId.get(requestId);
+        const waitingForSiblings = Boolean(
+          live?.detached
+          && live.decision != null
+          && !live.continuationStarted
+          && detachedAskUserCohort(live).some((item) => item.decision == null),
+        );
+        if (!waitingForSiblings) liveAskUserByRequestId.delete(requestId);
         const ownedPending = pendingUserInputOwnerByRequestId.get(requestId);
         if (ownedPending?.pendingInteraction === pendingInteraction) {
           pendingUserInputOwnerByRequestId.delete(requestId);
