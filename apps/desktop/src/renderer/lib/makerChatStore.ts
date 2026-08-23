@@ -14562,20 +14562,26 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
  */
 function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi'): void {
   if (!sessionId) return;
-  setState(sessionId, (s) =>
-    s.agentKind === agentKind && s.sdkSessionId === null && s.agentSwitchIntent === null
-      ? s
-      : {
-          ...s,
-          agentKind,
-          sdkSessionId: null,
-          agentSwitchIntent: null,
-          // 意图被真实切换消费掉也是一次变更,在途读回据此作废。
-          ...(s.agentSwitchIntent === null
-            ? {}
-            : { agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }),
-        },
-  );
+  setState(sessionId, (s) => {
+    const nextProviderId = s.agentSwitchIntent ? s.agentSwitchIntent.providerId : s.sessionProviderId;
+    if (
+      s.agentKind === agentKind &&
+      s.sdkSessionId === null &&
+      s.agentSwitchIntent === null &&
+      s.sessionProviderId === nextProviderId
+    ) {
+      return s;
+    }
+    return {
+      ...s,
+      agentKind,
+      sdkSessionId: null,
+      agentSwitchIntent: null,
+      ...(s.agentSwitchIntent ? { sessionProviderId: s.agentSwitchIntent.providerId } : {}),
+      // 意图被真实切换消费掉也是一次变更,在途读回据此作废。
+      ...(s.agentSwitchIntent === null ? {} : { agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }),
+    };
+  });
 }
 
 /**
@@ -14759,6 +14765,7 @@ function mirrorSessionFields(
         fastMode?: unknown;
         planModeEnabled?: unknown;
         agentKind?: unknown;
+        providerId?: unknown;
         agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
       }
@@ -14786,11 +14793,29 @@ function mirrorSessionFields(
         agentKind: nextKind,
         sdkSessionId: null,
         // 意图被真实切换消费 = 一次意图变更,推进修订号让在途读回作废。
+        // 同时把目标 provider 写进 createOpts 快照,避免后续排队项仍带旧来源。
         ...(intentApplied
-          ? { agentSwitchIntent: null, agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }
+          ? {
+              agentSwitchIntent: null,
+              agentSwitchIntentRev: s.agentSwitchIntentRev + 1,
+              sessionProviderId: s.agentSwitchIntent?.providerId,
+            }
           : {}),
       };
     });
+  }
+  if ('providerId' in patch) {
+    const nextProviderId =
+      typeof patch.providerId === 'string'
+        ? patch.providerId
+        : patch.providerId === null
+          ? null
+          : undefined;
+    if (nextProviderId !== undefined) {
+      setState(sessionId, (s) =>
+        s.sessionProviderId === nextProviderId ? s : { ...s, sessionProviderId: nextProviderId },
+      );
+    }
   }
   if (typeof patch.fastMode === 'boolean') {
     const next = patch.fastMode;
