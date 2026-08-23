@@ -7917,6 +7917,7 @@
         "archived": "Archived",
         "all": "All"
       },
+      "archivedSessions": "Archived tasks",
       "filterVendor": {
         "all": "All",
         "cc": "Claude Code",
