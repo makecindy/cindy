@@ -88,6 +88,8 @@ interface PiThinkingBlock {
 
 export interface PiTranslateContext {
   logger: Logger;
+  /** Host-owned live tariff selector, sampled at request boundaries. */
+  getPriceVariant?: () => 'standard' | 'priority';
   /** get_state 拿到的 contextWindow(模型切换时更新)。 */
   contextWindow: number;
   /** turn 内累计 input+output;turn 结束 reset。 */
@@ -100,6 +102,8 @@ export interface PiTranslateContext {
   turnUsageSegments: UsageSegment[];
   turnUsageSegmentsComplete: boolean;
   turnUsageSegmentSeq: number;
+  /** Price variants latched by message_start until their matching message_end. */
+  pendingPriceVariants: Array<'standard' | 'priority'>;
   turnSettled: boolean;
   /** 最后一次 API call 的 context 占用(input + cacheRead + cacheWrite)。 */
   contextTokens: number;
@@ -170,6 +174,7 @@ export interface PiTranslateContext {
 export function createPiTranslateContext(logger: Logger): PiTranslateContext {
   return {
     logger,
+    getPriceVariant: undefined,
     contextWindow: 0,
     turnTokens: 0,
     turnInput: 0,
@@ -179,6 +184,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     turnUsageSegments: [],
     turnUsageSegmentsComplete: true,
     turnUsageSegmentSeq: 0,
+    pendingPriceVariants: [],
     turnSettled: false,
     contextTokens: 0,
     costUsd: 0,
@@ -301,7 +307,12 @@ function takeCompactTurnScope(
   return idleCompactScope(ctx);
 }
 
-function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined, model?: string): void {
+function applyUsage(
+  ctx: PiTranslateContext,
+  usage: PiUsage | undefined,
+  model?: string,
+  priceVariant?: 'standard' | 'priority',
+): void {
   if (!usage) return;
   const input = usage.input ?? 0;
   const output = usage.output ?? 0;
@@ -323,6 +334,7 @@ function applyUsage(ctx: PiTranslateContext, usage: PiUsage | undefined, model?:
     cacheReadTokens: cacheRead,
     cacheCreateTokens: cacheWrite,
     ...(typeof cost === 'number' && Number.isFinite(cost) ? { costUsd: cost } : {}),
+    ...(priceVariant ? { priceVariant } : {}),
   });
 }
 
@@ -534,6 +546,7 @@ export function translatePiEvent(
       ctx.turnUsageSegments = [];
       ctx.turnUsageSegmentsComplete = true;
       ctx.turnUsageSegmentSeq = 0;
+      ctx.pendingPriceVariants = [];
       ctx.turnSettled = false;
       ctx.finalAssistantText = '';
       ctx.pendingAssistantError = null;
@@ -559,6 +572,7 @@ export function translatePiEvent(
     case 'message_start': {
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
+      ctx.pendingPriceVariants.push(ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
       // Tell the UI generation is active so it can tick the TPS denominator
       // locally between sparse message_end usage reports.
@@ -576,7 +590,9 @@ export function translatePiEvent(
     case 'message_end': {
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
-      applyUsage(ctx, message.usage, message.model);
+      const priceVariant =
+        ctx.pendingPriceVariants.shift() ?? ctx.getPriceVariant?.() ?? 'standard';
+      applyUsage(ctx, message.usage, message.model, priceVariant);
       const hadGenerationHeartbeat = ctx.generationHeartbeatAt > 0;
       samplePiGenerationHeartbeat(ctx);
       const messageDurationMs =
@@ -777,6 +793,7 @@ export function translatePiEvent(
       if (ctx.turnSettled) return;
       ctx.turnSettled = true;
       ctx.isStreaming = false;
+      ctx.pendingPriceVariants = [];
       stopPiGenerationHeartbeat(ctx);
       const pendingAssistantError = ctx.pendingAssistantError;
       ctx.pendingAssistantError = null;
@@ -827,6 +844,10 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_start': {
+      // A provider retry may begin without a matching message_end for the
+      // failed request. Drop any stale latch so the next request samples its
+      // own tariff at message_start.
+      ctx.pendingPriceVariants = [];
       // 走 CC/Codex 同一套 `(auto-retry N/M)` 跨 agent 协议。这个后缀在 mobile /
       // Telegram 投影里**只表示过载**，不能拿去编码未分类 5xx —— 否则手机会把普通
       // 供应商故障显示成「模型服务繁忙」。

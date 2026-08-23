@@ -970,6 +970,54 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
+  it('locks the Pi price variant at each provider request boundary', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    let fast = false;
+    ctx.getPriceVariant = () => (fast ? 'priority' : 'standard');
+    const { queue, events } = makeQueue();
+
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    fast = true;
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          model: 'gpt-5.6-sol',
+          content: [{ type: 'text', text: 'standard request' }],
+          usage: { input: 10, output: 2 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+
+    translatePiEvent(ev({ type: 'message_start' }), queue, ctx);
+    translatePiEvent(
+      ev({
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          model: 'gpt-5.6-sol',
+          content: [{ type: 'text', text: 'priority request' }],
+          usage: { input: 20, output: 3 },
+        },
+      }),
+      queue,
+      ctx,
+    );
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+
+    const usage = (events.find((event) => event.type === 'done')!.data as {
+      usage: { segments: Array<{ priceVariant?: string }> };
+    }).usage;
+    expect(usage.segments.map((segment) => segment.priceVariant)).toEqual([
+      'standard',
+      'priority',
+    ]);
+  });
+
   it('marks generation active on message_start so the UI can tick live TPS', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();

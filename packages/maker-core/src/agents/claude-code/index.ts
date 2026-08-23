@@ -2747,7 +2747,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       // resume 优先用当前的 sdkSessionId (rewind 重启时它指向上一轮 SDK 给的 id);
       // 缺省回到 startSession 入参的 resumeSessionId (新会话首次起 query 时用)。
       let resumeSdkSid = sdkSessionId ?? configuredResumeSessionId;
-      const modelUsageCumulativeStartsAtZero = !resumeSdkSid;
+      let modelUsageCumulativeStartsAtZero = !resumeSdkSid;
 
       // ── 远端 cc 分支 (Phase 4.3) ──
       // session 标了 remoteHostId 且 host 注入了 remoteCcQueryFactory → 走远端
@@ -3326,6 +3326,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               resumeRecoveryAttempted = false;
               freshSessionValidationPending = true;
               resumeSdkSid = undefined;
+              modelUsageCumulativeStartsAtZero = true;
             } else {
               log.warn('resume transcript not found in any project dir (CLI resume may fail)', {
                 resumeSdkSid,

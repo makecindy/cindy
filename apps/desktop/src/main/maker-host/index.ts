@@ -79,6 +79,7 @@ import { resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider
 import { resolveSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
+import { getSessionFastMode } from './session-effort-store.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool, broadcastSilentInstallStatus } from '../remote-ssh/index.js';
 import {
@@ -2081,6 +2082,9 @@ export function getMaker(): Maker {
               opts.model,
             );
             if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
+          }
+          if (opts.agentKind === 'pi') {
+            opts.getPriceVariant = () => (getSessionFastMode(sessionId) ? 'priority' : 'standard');
           }
           if (opts.agentKind === 'codex') {
             const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(

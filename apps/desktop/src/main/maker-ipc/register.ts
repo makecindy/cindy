@@ -5203,9 +5203,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // usage 事实无论价格是否可解析都持久化，保证新模型也能看到 cache 命中明细。
       if (event.type === 'done' && event.source === 'pi') {
         const sessionProvider = getSessionProvider(session.id);
-        // Pi's responses bridge receives Fast through host-side session prefs,
-        // not through the Pi RPC payload. Capture the request tariff at the
-        // synchronous done boundary before any later setting change can race it.
+        // New Pi payloads carry the tariff on every request segment. Keep the
+        // turn-start snapshot only as a compatibility fallback for older or
+        // incomplete payloads that have no explicit priceVariant.
         const piPriceVariant =
           (turnPiFastModeBySession.get(session.id) ?? getSessionFastMode(session.id))
             ? 'priority'
