@@ -47,6 +47,47 @@ describe('shouldShowComposerPromptRecommendation', () => {
     expect(dismissAt).toBeLessThan(clearContentAt);
   });
 
+  it('推荐可见时启用发送，并在点击后直接作为正文发送', () => {
+    expect(CHAT_INPUT_SOURCE).toContain(
+      'const canSend = hasComposerPayload || showRecommendationOverlay;',
+    );
+
+    const acceptStart = CHAT_INPUT_SOURCE.indexOf('const acceptPromptRecommendation = useCallback');
+    const acceptEnd = CHAT_INPUT_SOURCE.indexOf('const handleClickSend = useCallback', acceptStart);
+    const acceptBlock = CHAT_INPUT_SOURCE.slice(acceptStart, acceptEnd);
+    expect(acceptStart).toBeGreaterThanOrEqual(0);
+    expect(acceptBlock).toContain('!showRecommendationRef.current');
+    expect(acceptBlock).toContain('!composerFullyEmptyRef.current()');
+    expect(acceptBlock).toContain('composerMutationLockedRef.current');
+    expect(acceptBlock).toContain('showRecommendationRef.current = false;');
+    expect(acceptBlock).toContain(
+      'dismissPromptRecommendation(sessionId, activeRecommendation.revision)',
+    );
+    expect(acceptBlock).toContain('editor.view.dispatch(editor.state.tr.insertText(prompt));');
+    expect(acceptBlock).toContain("editor.commands.focus('end');");
+    expect(acceptBlock).toContain(
+      'acceptPromptRecommendationRef.current = acceptPromptRecommendation;',
+    );
+
+    const clickStart = acceptEnd;
+    const clickEnd = CHAT_INPUT_SOURCE.indexOf(
+      'voiceInputStopAndSendRef.current = handleClickSend;',
+      clickStart,
+    );
+    const clickBlock = CHAT_INPUT_SOURCE.slice(clickStart, clickEnd);
+    expect(clickBlock.lastIndexOf('acceptPromptRecommendation();')).toBeLessThan(
+      clickBlock.lastIndexOf('await dispatchSend(deliveryMode);'),
+    );
+  });
+
+  it('键盘 Tab 与可点击 keycap 共用同一个推荐接受动作', () => {
+    expect(CHAT_INPUT_SOURCE).toContain(
+      'const acceptPromptRecommendationRef = useRef<() => boolean>(() => false);',
+    );
+    expect(CHAT_INPUT_SOURCE).toContain('acceptPromptRecommendationRef.current()');
+    expect(CHAT_INPUT_SOURCE).toContain('onClick={acceptPromptRecommendation}');
+  });
+
   it('等待目标 session 草稿水合后才判断 candidate 是否为空输入', () => {
     expect(CHAT_INPUT_SOURCE).toContain('storageKeyForDraftRef.current !== storageKey');
     expect(CHAT_INPUT_SOURCE).toContain(

@@ -1121,6 +1121,7 @@ export function ChatInput({
   const recommendationRef = useRef(recommendation);
   recommendationRef.current = recommendation;
   const showRecommendationRef = useRef(false);
+  const acceptPromptRecommendationRef = useRef<() => boolean>(() => false);
   // session 切换时 ChatInput/Editor 会复用；推荐资格必须等目标草稿完成水合后再判断。
   const [composerHydrationGeneration, setComposerHydrationGeneration] = useState(0);
   // 完整输入框空判断:不仅检查 ProseMirror 文档是否为空,还检查附件、浏览器评论和语音稿。
@@ -2379,23 +2380,10 @@ export function ChatInput({
           !event.altKey &&
           !event.repeat &&
           !event.isComposing &&
-          showRecommendationRef.current &&
-          recommendedPromptRef.current &&
-          !composerMutationLockedRef.current
+          acceptPromptRecommendationRef.current()
         ) {
-          if (composerFullyEmptyRef.current()) {
-            const prompt = recommendedPromptRef.current;
-            if (!prompt) return false;
-            event.preventDefault();
-            const activeRecommendation = recommendationRef.current;
-            // 先消费 Store 条目(overlay 与正文同位置,不先撤会有一帧重叠),再插入文本。
-            showRecommendationRef.current = false;
-            if (sessionId && activeRecommendation) {
-              dismissPromptRecommendation(sessionId, activeRecommendation.revision);
-            }
-            view.dispatch(view.state.tr.insertText(prompt));
-            return true;
-          }
+          event.preventDefault();
+          return true;
         }
 
         // cycle-permission-mode (registry 默认 Shift+Tab, 用户可改绑) —— 输入框
@@ -5625,6 +5613,31 @@ export function ChatInput({
     [onQueueSteer],
   );
 
+  const acceptPromptRecommendation = useCallback((): boolean => {
+    if (
+      !editor ||
+      editor.isDestroyed ||
+      !showRecommendationRef.current ||
+      !recommendedPromptRef.current ||
+      !composerFullyEmptyRef.current() ||
+      composerMutationLockedRef.current
+    ) {
+      return false;
+    }
+    const prompt = recommendedPromptRef.current;
+    const activeRecommendation = recommendationRef.current;
+    // 与 Tab 接受保持同一消费顺序：先撤 overlay，再同步写入正文，让本次点击
+    // 复用完整发送链；若后续预检失败，推荐词仍作为普通草稿留在输入框供重试。
+    showRecommendationRef.current = false;
+    if (sessionId && activeRecommendation) {
+      dismissPromptRecommendation(sessionId, activeRecommendation.revision);
+    }
+    editor.view.dispatch(editor.state.tr.insertText(prompt));
+    editor.commands.focus('end');
+    return true;
+  }, [editor, sessionId]);
+  acceptPromptRecommendationRef.current = acceptPromptRecommendation;
+
   const handleClickSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (voiceBusyOnCurrentComposer) {
@@ -5654,9 +5667,11 @@ export function ChatInput({
         await stopAndSend;
         return;
       }
+      acceptPromptRecommendation();
       await dispatchSend(deliveryMode);
     },
     [
+      acceptPromptRecommendation,
       dispatchSend,
       editor,
       handleVoiceInputStop,
@@ -5826,7 +5841,9 @@ export function ChatInput({
       const markModelChoice = opts.markModelChoice === true;
       if (!remoteDeviceId) {
         const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
-        const persistPrefs = markModelChoice ? patchVendorPrefs : patchVendorPrefsPreservingModelChoice;
+        const persistPrefs = markModelChoice
+          ? patchVendorPrefs
+          : patchVendorPrefsPreservingModelChoice;
         persistPrefs(vendor, {
           // 换模才带配对并打标记。本机只改思考档 / Fast 不写回活动模型,
           // 避免未打标用户把区域默认改成当前任务模型。
@@ -6035,7 +6052,8 @@ export function ChatInput({
         hasSwitchIntent:
           !!sessionId &&
           !!targetAgent &&
-          runtimeAgentKind != null && runtimeAgentKind === targetAgent,
+          runtimeAgentKind != null &&
+          runtimeAgentKind === targetAgent,
         confirm: confirmDialog,
         copy: {
           title: t('newChat.chatInput.agentSwitch.confirmation.title'),
@@ -6612,10 +6630,7 @@ export function ChatInput({
 
       // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
       // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(
-        newModelId,
-        effectiveSourceId,
-      );
+      const { efforts, defaultEffort } = resolveModelEfforts(newModelId, effectiveSourceId);
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
@@ -7491,7 +7506,7 @@ export function ChatInput({
 
   const hasMessage = !isEditorEmpty(editor);
   renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
-  const canSend = hasMessage || hasAttachments || browserComments.length > 0;
+  const hasComposerPayload = hasMessage || hasAttachments || browserComments.length > 0;
   const hasVoiceDraftText = voiceBusyOnCurrentComposer && voiceInput.draftText.trim().length > 0;
   // 推荐 overlay 的可见判据:开关开启 + 有推荐词 + 输入框空 + 无附件/浏览器评论/语音草稿 + 输入框未锁定。
   // composerMutationLocked 涵盖 disabled、sendDispatchInFlight、当前输入框所属语音及远程只读/锁定状态。
@@ -7510,6 +7525,8 @@ export function ChatInput({
   });
   // handleKeyDown 的稳定闭包只按真实可见性接受 Tab，避免隐藏推荐被误填入。
   showRecommendationRef.current = showRecommendationOverlay;
+  // 可见推荐本身就是一次可发送输入：按钮点击时会先把它同步写入正文，再走现有发送链。
+  const canSend = hasComposerPayload || showRecommendationOverlay;
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   const sendButtonDisabled = Boolean(
     disabled ||
@@ -7974,23 +7991,27 @@ export function ChatInput({
                 {showRecommendationOverlay && (
                   <div
                     className={cn(
-                      'pointer-events-none absolute left-0 top-0 flex w-full min-w-0 items-center truncate py-[3px]',
+                      'pointer-events-none absolute left-0 top-0 inline-flex max-w-full min-w-0 items-center py-[3px]',
                       'text-15 leading-[1.467] font-normal',
                       'text-[var(--chat-input-placeholder-subtle)]',
                     )}
-                    aria-hidden="true"
                   >
-                    <span className="min-w-0 flex-1 truncate">{recommendedPrompt}</span>
-                    <kbd
+                    <span className="min-w-0 truncate" aria-hidden="true">
+                      {recommendedPrompt}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`${t('newChat.chatInput.recommendationShortcut')}: ${recommendedPrompt ?? ''}`}
                       className={cn(
-                        'ml-1.5 inline-flex shrink-0 items-center rounded-full border',
-                        'border-[var(--chat-input-border)] bg-[var(--perm-code-bg)]',
-                        'px-1 py-[1px] text-11 font-normal',
-                        'text-[var(--status-bar-meta)]',
+                        'pointer-events-auto ml-1 inline-flex h-[18px] min-w-[24px] shrink-0 cursor-pointer items-center justify-center rounded-[4px] border border-current',
+                        'bg-transparent px-1 text-11 font-normal leading-none text-inherit',
+                        'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-current',
                       )}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={acceptPromptRecommendation}
                     >
                       {t('newChat.chatInput.recommendationShortcut')}
-                    </kbd>
+                    </button>
                   </div>
                 )}
               </div>
