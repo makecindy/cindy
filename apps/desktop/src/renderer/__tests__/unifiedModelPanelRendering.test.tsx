@@ -433,6 +433,26 @@ describe('统一面板 · 会话内形态', () => {
     );
   });
 
+  it('同引擎轨选中行:全局 override 指向别的引擎时仍显示并点选 live 引擎', async () => {
+    setModelEngineOverride('xd', 'gpt-5.5', 'codex');
+    renderPanel({
+      sessionEngineFilter: {
+        currentAgent: 'claude-code' as const,
+        runtimeAgent: 'claude-code' as const,
+        onCrossEngineSelect,
+      },
+      currentProviderId: 'xd',
+      modelId: 'gpt-5.5',
+    });
+    const triple = rowFor('GPT-5.5').querySelector('[data-unified-triple]');
+    expect(triple?.getAttribute('title')).toContain('Claude');
+    await act(async () => {
+      fireEvent.click(rowFor('GPT-5.5'));
+    });
+    // 选中行再点是同引擎重选,绝不能被 leftover override 误判成跨引擎。
+    expect(onCrossEngineSelect).not.toHaveBeenCalled();
+  });
+
   /**
    * Chris 2026-08-19 实测「一次打开内切 rail,面板弹开一些,感觉有点怪」:面板是 `w-max`
    * 且 morph 宿主 stickyWidth 只进不退,默认停在**最窄**的同引擎视图,切「全部」时二次撑宽。

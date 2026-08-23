@@ -472,12 +472,14 @@ export function UnifiedModelPanel({
           modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
         agentFastModeCapable,
         // 会话内:无主场(或主场就在当前引擎)的模型默认落在**当前会话引擎**上。
-        // 同引擎轨再加一道:没写过引擎 override 的行钉在轨上显示/点选
-        // (Chris 2026-08-23:「π 轨里点就是 Pi」)。浮层里显式点过其它引擎的,
-        // override 必须赢 —— 否则胶囊当场弹回、点行仍走轨引擎,确认链路被短路。
-        // 排序用的 effectiveEngineOf 不钉,主场在别处的行仍排在后面。
+        // 同引擎轨再加一道:没写过引擎 override 的**未选中**行钉在轨上显示/点选。
+        // 选中行必须先钉 live 引擎(草稿/另一会话留下的全局 override 不能改写正在跑的那一行)。
+        // 未选中行的浮层显式换引擎:override 赢,否则胶囊弹回、点行仍走轨引擎。
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(() => {
+          if (isSelectedModelRow && liveEngineAgent) {
+            return { forceEngine: engineOfAgentKind(liveEngineAgent) };
+          }
           const override = getModelEngineOverride(entry.providerId, entry.modelId);
           const overrideUsable =
             override !== undefined && entry.candidates.includes(agentKindOfEngine(override));
@@ -487,9 +489,6 @@ export function UnifiedModelPanel({
             !overrideUsable
           ) {
             return { forceEngine: engineOfAgentKind(railForConfig.agent) };
-          }
-          if (isSelectedModelRow && liveEngineAgent) {
-            return { forceEngine: engineOfAgentKind(liveEngineAgent) };
           }
           return {};
         })(),
