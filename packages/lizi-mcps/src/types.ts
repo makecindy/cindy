@@ -452,7 +452,7 @@ export type SessionSearchFn = (
 // 接替退役的 cindy-slack 意识。
 // 'cindy_docs'(文档工坊)2026-08-19 上线: PDF / Word / Excel / PPT 的生成与
 // 检查原语。**零系统依赖**——不走任何需要用户先装 LibreOffice / Office 的路径,
-// 对应可关插件 id 'docs'。
+// 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
 export type LiziMcpId =
   | 'android'
   | 'ios_simulator'

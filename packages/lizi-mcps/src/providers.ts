@@ -95,7 +95,7 @@ export interface CreateLiziMcpProvidersOptions {
    * 与 xdtHelper 同款 —— 无外部账号依赖,host 仍需显式传(即使 {})才启用。
    * renderHtmlToPdf 缺省时 render_pdf 工具不注册(本包不 import electron,
    * Chromium printToPDF 只能由 desktop main 闭包注入)。
-   * 对应可关插件 id 'docs'。
+   * 对应宿主内置能力开关 id 'docs'(不是需要安装的外置 .cindy 插件)。
    */
   docs?: DocsMcpDeps;
 }
@@ -394,7 +394,7 @@ export function createLiziMcpProviders(
     providers.push({
       name: 'cindy_docs',
       // 无 isEnabled 门控:plugin 系统已在 host 层(mcp-providers.ts wrap)按
-      // plugin id 'docs' 包了 isEnabled 检查,这里再加就是双重门(同 cindy_ssh / cindy_orca)。
+      // 宿主内置能力开关 id 'docs' 已包了 isEnabled 检查,这里再加就是双重门(同 cindy_ssh / cindy_orca)。
       // ctx 闭包绑定 workingDir/sessionId —— 所有文件路径都以它为根做边界钳制;
       // Codex / Pi 的 HTTP bridge 在 tool-call 阶段由 AsyncLocalStorage 恢复真实 ctx,
       // 恢复不出来时 _paths.resolveSessionRoot 会 fail closed 返 NO_SESSION_CONTEXT。

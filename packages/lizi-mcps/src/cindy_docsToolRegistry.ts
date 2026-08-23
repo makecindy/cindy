@@ -2,9 +2,8 @@
  * cindy_docsToolRegistry.ts
  * ---------------------------------------------------------------------------
  * 与 XdtHelperToolRegistry / SchedulerToolRegistry 同构:cindy_docs 的细粒度工具
- * 注册在这里,而不是直接挂到 McpServer 上。MCP server 只暴露 `list_tools` +
- * `call_tool` 两个入口工具,让六个文档工具的完整描述与 schema 不进系统提示,
- * 只在模型真的要做文档时才被拉取。
+ * 注册在这里,而不是直接挂到 McpServer 上。MCP server 会把注册结果投影成六个
+ * 顶层文档工具；registry 只负责统一 schema 校验、错误格式和 handler 分派。
  *
  * Category 分三类:
  *  - 'author'  : 从结构化输入直接生成 Office 文件 (make_docx / make_pptx / make_xlsx)
@@ -12,8 +11,8 @@
  *  - 'read'    : 只读解析已有表格文件 (read_sheet)
  *
  * 拆成三类而不是一锅端,是因为模型的意图天然分这三种:「我有内容要出文件」、
- * 「我有文件要转格式」、「我要读表格里的数」。list_tools(category) 的结果越贴意图,
- * 选错工具的概率越低。
+ * 「我有文件要转格式」、「我要读表格里的数」。工具描述直接进入模型上下文，
+ * 因此每个工具的 description 必须把选型与排版工序说完整。
  */
 
 import { z } from 'zod';
@@ -98,7 +97,7 @@ export class DocsToolRegistry {
               data: {
                 requested: name,
                 available: Array.from(this.tools.keys()),
-                hint: '调用 list_tools 查看完整工具列表',
+                hint: '请确认工具名称和参数 schema 后重试',
               },
             }),
           },

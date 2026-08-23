@@ -104,7 +104,7 @@ export type InspectPdfFn = (input: {
  *
  * renderHtmlToPdf / inspectPdf 缺省 = host 没接该能力(如纯 Node 宿主复用本包)→
  * 对应工具不注册,与 memory 的 session_search / contacts 的系统通讯录同模式:
- * 能力不具备就不出现在 list_tools 里,而不是注册了再运行期报错。
+ * 能力不具备就不注册该顶层工具,而不是注册了再运行期报错。
  */
 export interface DocsMcpDeps {
   renderHtmlToPdf?: RenderHtmlToPdfFn;

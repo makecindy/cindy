@@ -5,8 +5,9 @@
  * 变成真文件的一组格式原语。
  *
  * 设计:
- *  - server name = `cindy_docs`,对应可关插件 id 'docs'(不是 essential —— 不做文档的
- *    用户应该能关掉,省下入口工具的那点上下文)。
+ *  - server name = `cindy_docs`,对应 Cindy 内部可开关的 built-in provider id 'docs'。
+ *    这里的 id 只是宿主能力开关,不是需要用户安装的外置 `.cindy` 文档插件；不做文档的
+ *    用户仍可关闭它,省下入口工具的那点上下文。
  *  - **六个工具全部顶层直接注册**,不做渐进式发现(2026-08-21 真机实证后改回):
  *    伙伴会话里 cindy_docs 挂载成功、日志 instance_resolved,但 make_pptx 与
  *    list_tools 的调用次数都是 0 —— 模型看见的只是一个泛泛的 `list_tools` 入口,
