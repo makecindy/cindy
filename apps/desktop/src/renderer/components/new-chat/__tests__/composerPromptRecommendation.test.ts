@@ -88,23 +88,30 @@ describe('shouldShowComposerPromptRecommendation', () => {
     expect(CHAT_INPUT_SOURCE).toContain('onClick={acceptPromptRecommendation}');
   });
 
-  it('推荐可见时裸 Enter 与点击发送按钮走同一条发送链', () => {
-    const paletteAt = CHAT_INPUT_SOURCE.indexOf('if (bridge?.captureKey(event))');
-    const enterAt = CHAT_INPUT_SOURCE.indexOf("event.key === 'Enter'", paletteAt);
-    const tabAt = CHAT_INPUT_SOURCE.indexOf("event.key === 'Tab'", paletteAt);
-    const enterBlock = CHAT_INPUT_SOURCE.slice(enterAt, tabAt);
+  it('所有配置为发送的 Enter 快捷键都与点击按钮走同一条发送链', () => {
+    const editorEnterStart = CHAT_INPUT_SOURCE.indexOf(
+      '// Resolve the configurable send shortcut after structured list handling.',
+    );
+    const editorEnterEnd = CHAT_INPUT_SOURCE.indexOf('return false;\n      },', editorEnterStart);
+    const editorEnterBlock = CHAT_INPUT_SOURCE.slice(editorEnterStart, editorEnterEnd);
+    const windowEnterStart = CHAT_INPUT_SOURCE.indexOf(
+      'const enterIntent = resolveComposerEnterIntent(',
+      editorEnterEnd,
+    );
+    const windowEnterEnd = CHAT_INPUT_SOURCE.indexOf(
+      "if (\n        currentState === 'listening'",
+      windowEnterStart,
+    );
+    const windowEnterBlock = CHAT_INPUT_SOURCE.slice(windowEnterStart, windowEnterEnd);
 
-    expect(paletteAt).toBeGreaterThanOrEqual(0);
-    expect(enterAt).toBeGreaterThan(paletteAt);
-    expect(tabAt).toBeGreaterThan(enterAt);
-    expect(enterBlock).toContain('!event.shiftKey');
-    expect(enterBlock).toContain('!event.metaKey');
-    expect(enterBlock).toContain('!event.ctrlKey');
-    expect(enterBlock).toContain('!event.altKey');
-    expect(enterBlock).toContain('!event.repeat');
-    expect(enterBlock).toContain('!event.isComposing');
-    expect(enterBlock).toContain('showRecommendationRef.current');
-    expect(enterBlock).toContain('void voiceInputStopAndSendRef.current();');
+    expect(editorEnterStart).toBeGreaterThanOrEqual(0);
+    expect(editorEnterBlock).toContain("if (enterIntent === 'native') return false;");
+    expect(editorEnterBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
+    expect(editorEnterBlock).not.toContain('void dispatchSendRef.current(enterIntent);');
+    expect(windowEnterStart).toBeGreaterThan(editorEnterEnd);
+    expect(windowEnterBlock).toContain('panelBridgeRef.current?.captureKey(event)');
+    expect(windowEnterBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
+    expect(windowEnterBlock).not.toContain('void dispatchSendRef.current(enterIntent);');
   });
 
   it('等待目标 session 草稿水合后才判断 candidate 是否为空输入', () => {
