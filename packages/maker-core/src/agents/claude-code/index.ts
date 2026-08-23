@@ -1102,7 +1102,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const providerRoutedModels = this.capabilities.availableModels.filter((model) =>
       isProviderRoutedModel(model.id),
     );
-    let env: NodeJS.ProcessEnv;
+    let env: Record<string, string>;
     try {
       env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
         credentialMode,
@@ -3493,6 +3493,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       runningBackgroundTasks.clear();
       terminalBackgroundTaskIds.clear();
       closed = true;
+      proxySessionAuth?.dispose();
       try { dismissAllPending('session_closed', 'deny'); } catch (e) {
         log.warn(`${logLabel}: dismissAllPending threw`, { error: String(e) });
       }
